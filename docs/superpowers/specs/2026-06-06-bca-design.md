@@ -21,9 +21,16 @@ A modernized, Rust-based behavioral code analysis tool. Mines git history to pro
 - **Function-level entity baseline** via tree-sitter; file-level rollups derive trivially.
 - **Vendored fork of Mozilla's `rust-code-analysis`** in `crates/bca-rca/` for complexity (Cyclomatic, Cognitive, Halstead, MI, NOM, NEXITS, LOC variants) across supported languages.
 - **Kamei 14-feature change vector** as the canonical change-record schema.
-- **Tier-1 languages** (default-on, ship in the standard binary): Rust, TypeScript/JavaScript, Python, Java, Go.
-- **Tier-2 languages** (opt-in via `--features lang-*`, not in standard binary): C, C++, C#, Ruby, Kotlin.
+- **Tier-1 languages** (default-on, ship in the standard binary): Rust, TypeScript/JavaScript, Python, Java, **Go**. Note: Go is NOT in upstream `mozilla/rust-code-analysis`; we implement Go support ourselves in `crates/bca-rca/` as Phase 0 work (5–8 engineer-days budgeted). All other Tier-1 langs inherit RCA's existing implementations.
+- **Tier-2 languages** (opt-in via `--features lang-*`, not in standard binary): C, C++, Ruby, **Kotlin (file detection only — every RCA Kotlin metric is currently a no-op stub; metrics return 0/empty until proper impl lands in v1.5)**. **C# dropped from v1 Tier-2** because RCA has no C# implementation at all (see Validation Stream 2); deferred to v1.5 alongside Kotlin metric impls.
 - **~10 core analyses**: hotspots, change-coupling (Fisher exact, default p < 0.05), code-ownership (Fractal Value), code-age, abs-churn, author-churn, entity-churn, communication, code-health composite, summary.
+- **Hotspot ranking — publicly documented formula** (the transparency wedge vs. CodeScene's ML-based opaque ranking):
+  ```
+  hotspot_score(entity) = percentile_rank(revisions)
+                        × percentile_rank(cognitive_complexity)
+                        × (10 − code_health) / 10
+  ```
+  Sorted descending. All inputs are also emitted alongside the score so users can verify.
 - **Canonical default thresholds** (code-maat parity): `min_revs = 5`, `min_shared_revs = 5`, `min_coupling_pct = 30`, `max_coupling_pct = 100`, `max_changeset_size = 30`, `fisher_significance = 0.05`.
 - **Default merge-commit behavior**: merge commits (`is_merge = true`, `parent_count > 1`) are **excluded** from coupling, churn, and ownership analyses by default; included in `summary` and `code-age`. Configurable via `--include-merges`. Choice recorded in provenance as `merge_handling`.
 - **Default architectural-grouping behavior** (`-g`): files matching no group expression are **dropped silently** (code-maat parity), with a warning emitted to stderr listing how many files were dropped. Configurable to fail-fast via `--strict-grouping`.
@@ -85,39 +92,67 @@ bca-lib/src/
 └── config/         # TOML config parsing
 ```
 
-### 2.2 External dependencies
+### 2.2 External dependencies (versions locked to mid-2026 reality)
 
-| Crate | Version pin policy | Purpose |
-|---|---|---|
-| `gix` (`features = ["max-performance"]`) | minor-pin (Tier-2 stability window) | Read .git |
-| `duckdb` (bundled feature; `frozen-duckdb` default for fast builds) | minor-pin | Fact store, SQL queries |
-| `arrow` | matches DuckDB Arrow version | Columnar IPC |
-| `tree-sitter` + per-language grammars | per-grammar minor pin | AST-based metrics |
-| `rayon` | latest | Parallel complexity scanning |
-| `fishers_exact` | latest | Fisher exact test |
-| `time` (NOT chrono) | 0.3.x | Date arithmetic |
-| `regex` | latest | Boundary mapping, message regex |
-| `serde` + `serde_json` + `serde_yaml` | latest | Serialization |
-| `clap` (derive) | latest | CLI |
-| `anyhow` 2.x | latest | CLI errors |
-| `thiserror` 2.x | latest | Library errors |
-| `tracing` + `tracing-subscriber` + `tracing-indicatif` + `indicatif` | latest | Logging + progress |
+Versions confirmed via Validation Stream 3 (gix + DuckDB + Arrow integration audit, 2026-06-06):
+
+| Crate | Locked version | Pin policy | Purpose |
+|---|---|---|---|
+| `gix` (`features = ["max-performance"]`) | **0.84.0** | minor-pin | Read .git directly (zlib-ng, parallel pack caches) |
+| `duckdb` (`features = ["bundled", "appender-arrow", "parquet", "json"]`) | **1.10503.1** (DuckDB 1.5.3) | exact-pin | Fact store, SQL, Arrow ingest |
+| `arrow` (re-exported via `bca-lib::arrow_facade`) | **58.3.0** | **bumped in lockstep with `duckdb` releases** — see §2.6 | Columnar in-flight format |
+| `tree-sitter` | **=0.25.3** (exact, pinned for RCA compatibility) | exact-pin | AST parsing core |
+| per-language `tree-sitter-*` grammars | per-grammar minor pin | minor-pin | Per-language AST |
+| `polars` (behind `query-backend` trait, bridges via Arrow IPC bytes, NOT direct) | 0.54.4 | minor-pin | Optional Polars query path |
+| `rayon` | latest | latest | Parallel complexity scanning |
+| `crossbeam-channel` | latest | latest | gix-worker → Appender pipeline |
+| `fishers_exact` | latest | latest | Fisher exact significance |
+| `time` (NOT chrono) | 0.3.x | minor-pin | Date arithmetic |
+| `regex` | latest | latest | Boundary mapping, message regex |
+| `serde` + `serde_json` + `serde_yaml` | latest | latest | Serialization |
+| `clap` (derive) | latest | latest | CLI |
+| `anyhow` 2.x | latest | latest | CLI errors |
+| `thiserror` 2.x | latest | latest | Library errors |
+| `tracing` + `tracing-subscriber` + `tracing-indicatif` + `indicatif` | latest | latest | Logging + progress |
+
+**Critical pinning notes:**
+- `tree-sitter = "=0.25.3"` is an **exact-version pin** matching RCA's working revision. Upstream RCA's attempted bump to 0.26.3 (PR #1207) was reverted within 24 hours (#1212). We hold at 0.25.3 until upstream lands a clean bump.
+- `duckdb` is **exact-pinned** because it locks `arrow` to a specific minor (currently 58.x). If `arrow = "59"` ships and `duckdb` still pins 58, naive consumers get a hard build error. The `bca-lib::arrow_facade` module re-exports all Arrow types so we update in one place.
+- **`frozen-duckdb` REMOVED from spec.** Validation found it has 3 stars, 17 commits, 0 published releases — personal hack, not viable. Replacement: `sccache` on CI for dependency caching; `cargo build --profile dev` for iteration; accept ~8–14 min cold release builds (DuckDB bundled C++ dominates).
+
+### 2.6 Arrow facade pattern (CRITICAL — version-pin insulation)
+
+```rust
+// bca-lib/src/arrow_facade/mod.rs
+//! Single source of truth for Arrow types throughout the workspace.
+//! Re-exports the version of arrow-rs that the duckdb crate currently
+//! depends on, so a duckdb release that bumps Arrow doesn't fragment
+//! the workspace. Bump in lockstep with duckdb-rs major releases.
+
+pub use arrow::array::*;
+pub use arrow::record_batch::RecordBatch;
+pub use arrow::datatypes::*;
+// ... etc
+```
+
+All `use arrow::*` in workspace crates becomes `use bca_lib::arrow_facade::*`. CI lint rule (custom clippy) forbids direct `arrow::*` imports outside the facade module.
 
 ### 2.3 Feature flags
 
-- `lang-{rust,typescript,python,java,go}` — default-on per-language tree-sitter grammars
-- `lang-{cpp,csharp,kotlin,ruby,c}` — opt-in
+- `lang-{rust,typescript,python,java,go}` — default-on per-language tree-sitter grammars (Go support is bca-implemented; rest are RCA-vendored)
+- `lang-{cpp,kotlin,ruby,c}` — opt-in Tier-2 (Kotlin is file-detection-only until v1.5 per §1.1)
 - `sarif` — default on; small surface
-- `mcp` — default off in v1; placeholder for v2
-- `frozen-duckdb` — **default on** for fast contributor builds (~30s cold vs 5min bundled)
-- `bundled-duckdb` — opt-in for users patching DuckDB internals
+- `mcp` — promoted from v2 to **v1.5** per Validation Stream 1; default off in v1, on in v1.5
+- `metrics-experimental` — gates JS/TS Halstead and MI metrics (RCA bugs #528 and #1183 produce unreliable values; opt-in only for research / debugging until upstream fixes or we patch)
+- `query-backend-polars` — opt-in Polars query path through Arrow IPC bridge (default off; DuckDB SQL is the v1 path)
 
 ### 2.4 Release infrastructure
 
 - `dist` v0.24+ → multi-platform binaries + Homebrew + shell installer + dist-manifest.json
 - `cargo-binstall` reads dist-manifest.json automatically
 - `cargo-pgo` (PGO + BOLT) wired into release CI for v1.1 (not v1.0; needs benchmark suite first)
-- Distroless container image (~15 MB)
+- **`sccache` on CI** for dependency caching (replaces deleted `frozen-duckdb`). On a cold CI runner, full build is 8–14 min (DuckDB C++ ~4–6 min); `sccache` recovers most of that on subsequent runs.
+- Distroless container image (~35–55 MB — DuckDB bundled is ~20 MB of that; Polars (if enabled) adds ~10 MB). Optimize with `lto = "fat"`, `codegen-units = 1`, `panic = "abort"`, `strip = true` to shave 15–25%.
 - SLSA Level 3 provenance via `slsa-framework/slsa-github-generator`
 
 ### 2.5 Quality gates in CI
@@ -279,6 +314,36 @@ The following invariants are baked into every analysis SQL view that touches `ch
 
 These six invariants together close the methodological gap that 2025 MSR research (Spadoni et al.) flagged as the root of the 500% inter-tool disagreement. Every applied filter is recorded in the provenance manifest.
 
+### 3.2.2 Concurrency pattern (locked from Validation Stream 3)
+
+```
+┌──────────────┐
+│  N gix       │
+│  workers     │──┐
+│  (rayon)     │  │
+└──────────────┘  │
+┌──────────────┐  │
+│  N gix       │  │      bounded crossbeam_channel<RecordBatch>
+│  workers     │──┼─────────────────────────────────────────────┐
+│  (rayon)     │  │      capacity = 64 batches × ~8K rows = 512K│
+└──────────────┘  │                                              │
+       ...        │                                              ▼
+                  │                                       ┌──────────────┐
+                  │                                       │  1 DuckDB    │
+                  │                                       │  Appender    │
+                  │                                       │  thread      │
+                  │                                       │ (append_     │
+                  │                                       │  record_     │
+                  │                                       │  batch)      │
+                  │                                       └──────────────┘
+```
+
+Why N→1, not N→N: DuckDB's Appender serializes commits per table internally — N→N producers fighting one Appender mutex erases the parallelism gain. Single dedicated Appender thread + bounded backpressure channel is the validated production pattern.
+
+`gix::Repository` is `Send` but not `Sync`. Per-worker handle pattern: `repo.into_sync().clone()` per worker; object database shared via `Arc`, pack files mmap'd zero-copy.
+
+RecordBatch size: **8K–64K rows per batch**, matching DuckDB's internal vector size (2048) at an even multiple. Smaller batches starve the Appender; larger ones increase peak memory.
+
 ### 3.3 Pipeline as Rust function signatures
 
 ```rust
@@ -307,18 +372,84 @@ pub fn emit(df: &DataFrame, format: OutputFormat, dest: Dest, provenance: &Prove
 
 ## 4. Complexity & language strategy
 
-### 4.1 RCA fork
+### 4.1 RCA fork (hard caveats from Validation Stream 2)
 
-- Vendor Mozilla's `rust-code-analysis` as `crates/bca-rca/` from day one (Phase 0 work).
-- License: MPL-2.0 → GPL-3.0 is a clean one-way relicense.
-- Retain ability to merge upstream fixes; new files added by us are GPL-3.0.
+**State of upstream `mozilla/rust-code-analysis`** as of mid-2026:
+- Last release: **v0.0.25 on 2023-01-13** (3+ years without a release).
+- Last commit: 2026-01-20 (dependabot bump).
+- 412 stars / 68 forks / 54 open issues / 15 open PRs.
+- **Bug #528** (JS arrow function Halstead broken) open since March 2021 with zero triage.
+- **`cargo install rust-code-analysis-cli` does not compile** on current toolchains. Vendoring from `master` is the only path.
+- No community fork to align with.
 
-### 4.2 Language tiers
+**Vendoring procedure (Phase 0):**
 
-- **Default-on (v1):** Rust, TypeScript/JavaScript, Python, Java, Go.
-- **Opt-in feature flags (v1):** C, C++, C#, Ruby, Kotlin.
-- **v1.5:** Swift, PHP, Scala (waiting on grammar stabilization).
-- **Out of scope:** Lisp/Clojure, R, Elixir, Haskell.
+1. Copy `master` into `crates/bca-rca/`. Last-good commit: 2026-01-20 `37e5d83` (or successor as of Phase 0).
+2. **Drop from vendor**:
+   - `rust-code-analysis-web/` (pulls actix-web; unused)
+   - `rust-code-analysis-cli/` (we expose RCA through our own CLI)
+   - Vendored `tree-sitter-mozcpp/` (~25 MB) — Mozilla's tree-sitter-cpp fork with custom macro handling; we don't need it
+   - Vendored `tree-sitter-mozjs/` (~2.7 MB) — same rationale
+   - `.gitmodules` and integration-test submodules (~GB total)
+3. Replace integration-test fixtures with small reproducible repos.
+4. **Strip unused per-language trait impls**: ABC, WMC, NPA, NPM (all Java-only specializations not in our spec).
+5. **Add Go support ourselves** (5–8 engineer-days; see §4.2).
+6. Pin `tree-sitter = "=0.25.3"` per §2.2.
+7. Tag licenses per §4.1.1.
+
+**Upstream merge cadence** (year-1 maintenance budget ~8 days):
+- **Cherry-pick, do not full-rebase.** Mozilla's tempo is so slow (most 2026 commits are dependabot) that re-bases are cheap; the cost is reviewing what merged and deciding what to take.
+- Pull only correctness fixes and grammar bumps. Ignore feature noise.
+- Budget ~1 day/month for review + selective pick.
+
+### 4.1.1 License precision
+
+Per [Mozilla's MPL-2.0 FAQ Q14](https://www.mozilla.org/en-US/MPL/2.0/FAQ/) and the [combining-MPL-and-GPL guide](https://www.mozilla.org/en-US/MPL/2.0/combining-mpl-and-gpl/), this is exactly the use case MPL-2.0 §3.3 was written for. Confirmed legal pattern.
+
+- `crates/bca-rca/Cargo.toml`: `license = "MPL-2.0 AND GPL-3.0-only"` (NOT `OR` — we distribute under BOTH simultaneously, not as a downstream choice).
+- All original RCA files retain MPL-2.0 headers untouched.
+- Any modifications WE make to original RCA files remain MPL-2.0 (so we can push fixes upstream).
+- NEW files (our Go impl, our test harness, our wrappers) carry GPL-3.0-only headers.
+- `bca-lib/Cargo.toml` and `bca-cli/Cargo.toml`: `license = "GPL-3.0-only"`.
+- Add `crates/bca-rca/LICENSE-MPL` (verbatim MPL-2.0 text).
+
+**Watch-out:** if upstream patches we accept introduce GPL-only logic into MPL files, those files lose pushability. Discipline: never mix.
+
+### 4.2 Language tiers (validated against RCA's actual per-language impl table)
+
+Tree-sitter grammar quality + RCA metric coverage drives the tiering. Stream 2 verified every `impl X for YCode` in RCA's `src/`; the table below reflects **what's actually computed**, not what's listed in marketing:
+
+| Tier | Language | Cyclomatic | Cognitive | Halstead | LOC | MI | NOM | NEXITS | Source |
+|---|---|---|---|---|---|---|---|---|---|
+| **v1 Tier-1** | Rust | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | RCA |
+| **v1 Tier-1** | TypeScript/JavaScript | ✓ | ✓ | ⚠️ buggy | ✓ | ⚠️ buggy | ✓ | ✓ | RCA + `metrics-experimental` |
+| **v1 Tier-1** | Python | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | RCA |
+| **v1 Tier-1** | Java | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | RCA |
+| **v1 Tier-1** | **Go** | bca-impl | bca-impl | bca-impl | bca-impl | bca-impl | bca-impl | bca-impl | **bca-rca additions (Phase 0)** |
+| v1 Tier-2 | C | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | RCA |
+| v1 Tier-2 | C++ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | RCA |
+| v1 Tier-2 | Ruby | bca-impl | bca-impl | bca-impl | bca-impl | bca-impl | bca-impl | bca-impl | bca-rca additions (Phase 0 stretch) |
+| v1 Tier-2 | **Kotlin (file detection only)** | stub | stub | stub | stub | stub | stub | stub | RCA stubs return 0/empty — v1.5 work |
+| **DROPPED from v1** | **C#** | — | — | — | — | — | — | — | RCA has no C# impl. Deferred to v1.5 with Kotlin metric impls. |
+| v1.5 | Swift, PHP, Scala | — | — | — | — | — | — | — | Tree-sitter grammar stabilization wait |
+
+**Key consequences:**
+
+1. **Go is Phase 0 work** (5–8 days): vendor `tree-sitter-go`, regenerate `src/languages/language_go.rs` via RCA's `enums/` build script, write `impl Cyclomatic for GoCode`, `impl Cognitive`, `impl Halstead`, `impl Loc`, `impl Exit`, `impl Nom` — ~50 LOC × 6 trait impls + snapshot tests. Pattern: copy `language_rust.rs` and adapt to Go AST node names.
+
+2. **JS/TS Halstead and MI** are quarantined behind `--features metrics-experimental` until upstream fixes or we patch (issues #528 since 2021, #1183 since Aug 2025). SARIF default output excludes them; verified-by-tests metrics only.
+
+3. **Kotlin in v1 is file detection only**. Release notes must say: *"Kotlin: file detection working; complexity metrics return 0/empty pending implementation. Tracked as v1.5 work."* Same caveat for C# but it's not even file-detection in v1.
+
+### 4.2.1 Honest metric stance (Stream 2 recommendation)
+
+- **Cyclomatic + Cognitive** are the headline metrics. Both are tree-sitter friendly and have decades of empirical study (Cyclomatic 1976; Cognitive Complexity, SonarSource 2017).
+- **Halstead and MI** are exposed for compatibility with code-maat / industry tooling but **do not oversell their predictive validity**. Recent research (Muñoz Barón et al., JSS 2022) shows Cognitive Complexity is at best modestly better than Cyclomatic for defect prediction when controlling for size.
+- **Don't claim numeric defect-correlation rates** in our docs unless we ship our own validation dataset.
+
+### 4.2.2 Alternative reference monitoring
+
+Validation Stream 2 identified **`StrangeDaysTech/arborist-metrics`** (Apache-2.0/MIT, active 2026-05, supports Go natively, Cognitive + Cyclomatic + SLOC only) as the most plausible v2 swap-in. Track it for 12 months. If it grows Halstead + MI and stays active, plan v2 evaluation — license is more permissive than ours.
 
 ### 4.3 Per-entity metrics (computed via tree-sitter)
 
@@ -405,6 +536,20 @@ Analysis-specific flags: `--verbose-results` on `bca analyze --analysis coupling
 | SQLite | Shareable, queryable artifact | DuckDB `ATTACH` |
 | **SARIF 2.1.0** | **GitHub Code Scanning UI — the differentiator** | Custom emitter, ~200 LOC |
 | Markdown | `$GITHUB_STEP_SUMMARY` in Actions | Custom emitter, ~150 LOC |
+
+### 5.3.1 Naming hygiene (CodeScene trademark watch)
+
+Per Validation Stream 1: CodeScene holds product marks on **CodeHealth™, X-Ray, ACE, System Mastery, and Code Biomarkers**. We must use neutral terms in CLI, docs, and outputs:
+
+| Avoid | Use instead |
+|---|---|
+| Code Health™ / CodeHealth™ | `code-health` (lowercase, generic noun) |
+| X-Ray | `function-analysis` |
+| ACE | (we don't ship LLM refactoring; N/A) |
+| System Mastery™ | `system-mastery-index` |
+| Code Biomarkers | `code-smells` |
+
+Headers, docs, and CLI subcommand names already follow this; review on every new doc page.
 
 ### 5.4 Behavioral SARIF rule taxonomy
 
@@ -544,10 +689,17 @@ Every feature mentioned in research, brainstorming, or improvement passes that d
 
 | Feature | Why deferred | Source / citation |
 |---|---|---|
-| Remaining 13 analyses (main-dev, refactoring-main-dev, entity-effort, main-dev-by-revs, fragmentation, soc, messages, identity-dump, fn-coupling, fn-ownership, fn-hotspot, code-age-trend, hotspot-trend, complexity-trend) | Spine v1 ships 10; rest stack on stable architecture. **`main-dev` (file → main author by LOC added) was previously missing from this list and is now restored.** | code-maat porting catalog (validation pass 2026-06-06) |
+| Remaining 13 analyses (main-dev, refactoring-main-dev, entity-effort, main-dev-by-revs, fragmentation, soc, messages, identity-dump, fn-coupling, fn-ownership, fn-hotspot, code-age-trend, hotspot-trend, complexity-trend) | Spine v1 ships 10; rest stack on stable architecture. | code-maat porting catalog (validation pass 2026-06-06) |
 | `bca refactor-targets` ranked-list subcommand | Composes codehealth + churn + ownership into actionable refactor-ROI ranking | DDD Europe 2019 talk premise |
-| Knowledge-map analysis (per-module → who knows it) | Distinct from knowledge-graph *output* in v2 — this is the analysis itself | CodeScene how-it-works |
-| AI-authored code tracking (`ai_attribution` commit column + `--track-ai-authorship` flag) | New 2026 reality: significant code is AI-assisted. Distinct from bot filtering. | Industry shift; gap surfaced during validation |
+| Knowledge-map analysis (per-module → who knows it; deep-history replay through renames via `git log --follow`) | Distinct from knowledge-graph *output* in v2 | CodeScene how-it-works |
+| **Knowledge Island detection** (single-author × hotspot × low-code-health three-way join) | Promoted from v2 per Validation Stream 1 — cheap SQL given fact store; high product value | CodeScene Knowledge Distribution |
+| **MCP server mode** with 5–6 tools (`hotspots`, `coupling`, `code_health`, `ownership`, `refactor_targets`, `explain`) | **PROMOTED from v2 to v1.5.** CodeScene shipped `codescene-oss/codescene-mcp-server` in Jan 2026 with 11 tools; MCP is now table-stakes per Validation Stream 1. Cheap given DuckDB backend (5–6 thin tools wrapping SQL views). | CodeScene MCP (Jan 2026); Stream 1 |
+| **Ticket-ID cross-repo coupling** (regex over commit messages for `JIRA-1234` / `#123` tokens + UNION across repos) | The trick CodeScene's X-Ray uses to span microservices. ~50 LOC in DuckDB. | CodeScene X-Ray docs |
+| **Bumpy Road biomarker** (multiple sibling logic chunks in one function — Tornhill-coined; tree-sitter computable) | Formalized as v1.5 work — high diagnostic value, low cost given tree-sitter visitors already built | CodeScene Biomarkers |
+| AI-authored code tracking (`ai_attribution` commit column + `--track-ai-authorship` flag) | New 2026 reality: significant code is AI-assisted. No public CodeScene equivalent — we're ahead. | Industry shift |
+| RCA Kotlin metric impls (currently stubs in upstream) | Tier-2 language with no working metrics in v1 — implement properly | RCA validation (Stream 2) |
+| RCA C# language support (currently absent from upstream) | Tier-2 language not in RCA at all — add ourselves | RCA validation (Stream 2) |
+| Fix RCA JS/TS Halstead bug (#528, open since 2021) | Required to drop `metrics-experimental` gate on JS/TS Halstead | RCA validation (Stream 2) |
 | Co-change graph entropy as first-class hotspot feature | Strong v1 candidate, deferred to keep v1 shippable | Ma et al. arXiv:2504.18511 |
 | RefactoringMiner integration for refactoring-aware filtering | Correctness fix; correctness wins compound; ~1–2 weeks of work | Tsantalis TSE 2022 |
 | Bootstrap CIs (≥100 iterations) on ranked outputs | Methodological table stakes per academic stream | Tantithamthavorn TSE 2017 |
@@ -560,11 +712,21 @@ Every feature mentioned in research, brainstorming, or improvement passes that d
 
 | Feature | Why deferred | Source / citation |
 |---|---|---|
-| **MCP server mode** | Table stakes per competitive stream; deferred only because Spine v1 prioritizes architecture | Competitive research; SonarQube 2026.1 + DX precedents |
-| **Knowledge-graph JSON output** (nodes/edges) — the *output format* | Distinct from knowledge-map *analysis* (v1.5). This is the emitter that lets any analysis produce nodes/edges for graph-of-code consumers (Greptile, Graphify, GitNexus). | Competitive + architecture streams |
-| Cost-of-change / refactoring-ROI prediction | Composes codehealth + churn velocity + complexity to produce "this refactor saves N dev-hours over Q quarters" | CodeScene how-it-works |
-| System Mastery metric (per-developer codebase comprehension score) | Distinct from per-file ownership; CodeScene tracks; defer because requires PR-review data | CodeScene how-it-works |
-| Code biomarkers (validated code smells: brain method, excessive arguments, deep nesting, etc.) | Concept needs unpacking — CodeScene marketing term for a defined set of code smells with empirical defect-correlation. Research before promising. | CodeScene how-it-works |
+| **Knowledge-graph JSON output** (nodes/edges) — the *output format* | Distinct from knowledge-map *analysis* (v1.5). Emitter for graph-of-code consumers (Greptile, Graphify, GitNexus). | Competitive + architecture streams |
+| Cost-of-change / refactoring-ROI regression (own model, NOT CodeScene's 15×/9× numbers) | Empirically calibrated linear/quantile regression of merge-time vs. our code-health composite + hotspot rank. Cite Tornhill/Borg "Code Red" arXiv:2203.04374 as prior art. | CodeScene whitepaper 2026 |
+| **System Mastery–like index** (project/component-level aggregation of knowledge-loss + fragmentation) | Trivially derivable as `1 − (w_kl·knowledge_loss + w_frag·fragmentation)` once v1.5 Knowledge Island ships. Mark as "inspired by, not equivalent to" CodeScene's System Mastery™. | CodeScene Status Badges; Stream 1 |
+| **Code smells full set (≥15 named)**: Brain Class, Low Cohesion (LCOM4), Developer Congestion, Complex Code by Former Contributors, Brain Method, DRY Violations (co-change-aware), Primitive Obsession, Large Method, Complex Conditional, Large Assertion Blocks, Duplicated Assertion Blocks, Knowledge Loss, Knowledge Island. Bumpy Road and Nested Complexity already in v1.5. | All tree-sitter computable. Defer because v1.5 ships Bumpy Road; rest is incremental. | CodeScene Biomarkers (concrete list validated Stream 1) |
+| **Proximity-as-intermediate-functions metric** (distance = number of intermediate functions between coupled methods) | Novel CodeScene X-Ray metric; expose for compatibility | CodeScene X-Ray docs |
+| **Clone detection × co-change** (only flag clones that also change together) | Kills dead-clone noise; requires both clone detection (new) and coupling (existing) | CodeScene X-Ray docs |
+| **Code coverage analysis (LCOV input, hotspot-weighted)** — "low-coverage hotspots" rather than aggregate % | CodeScene shipped in 2025; agent-relevant. Requires LCOV parser. | CodeScene 2025 release |
+| **Delivery analysis (DORA-adjacent flow metric)** | CodeScene v7.2.0 Oct 2025. Measures "how efficiently dev work becomes shippable code." | CodeScene 7.2.0 release notes |
+| Pluggable SZZ for bug-link induction (start AG-SZZ; allow Neural-SZZ/LLM4SZZ later) | Defer LLM-based; ship pass-through interface | Tang et al. ASE 2023; arXiv:2504.01404 |
+| Pluggable tangled-commit untangling (ship pass-through) | Embed interface; defer impl | Shen et al. FSE 2021 (SmartCommit); UTango FSE 2022 |
+| Salsa-style incremental memoization | v1 stages designed to allow retrofit | Rust-analyzer architecture |
+| LSP server mode | Optional per industry-standards stream; analytics shape | Architecture stream |
+| LLM-based commit classification | Pluggable model interface; hold to ACE-style auditable/rejectable loop | CommitBERT/CC2Vec literature; CodeScene ACE pattern |
+| CodeBERT/GraphCodeBERT semantic coupling | Optional analyzer | Wu et al. FSE 2024 |
+| Track `arborist-metrics` for v2 RCA swap evaluation | Apache-2.0, supports Go natively, currently only 3 metrics — re-evaluate if it grows Halstead/MI | Stream 2 |
 | Pluggable SZZ for bug-link induction (start AG-SZZ; allow Neural-SZZ/LLM4SZZ later) | Defer LLM-based; ship pass-through interface | Tang et al. ASE 2023; arXiv:2504.01404 |
 | Pluggable tangled-commit untangling (ship pass-through) | Embed interface; defer impl | Shen et al. FSE 2021 (SmartCommit); UTango FSE 2022 |
 | Salsa-style incremental memoization | v1 stages designed to allow retrofit | Rust-analyzer architecture |
@@ -640,6 +802,12 @@ Every feature mentioned in research, brainstorming, or improvement passes that d
 | Whether to maintain Mozilla RCA upstream-merge cadence or hard-fork | Phase 0 | Maintain merge cadence; revisit if Mozilla cadence breaks down |
 
 ---
+
+## 10.5 Architecture references (Stream 3)
+
+**Design analog: InfluxDB 3 / FDAP architecture** (Flight + DataFusion + Arrow + Parquet, [InfluxData FDAP post](https://www.influxdata.com/blog/flight-datafusion-arrow-parquet-fdap-architecture-influxdb/), [InfoQ writeup](https://www.infoq.com/articles/timeseries-db-rust/)). Production-validated (GA April 2025). Lessons: Arrow as in-memory format end-to-end; Parquet as cold storage between runs; modular execution.
+
+**Documented alternative path** (if DuckDB's C++ toolchain becomes a CI burden in v1.x or v2): swap DuckDB for Apache DataFusion. Pure Rust (no C++ toolchain), arrow-rs native, used in production by InfluxDB 3 and Apple Comet. Trade-off: weaker end-user SQL ergonomics than DuckDB. We picked DuckDB for the SQL-surface-as-power-user-feature win, but the abstraction layer (Arrow IPC handoff) makes a future swap cheap if needed.
 
 ## 10. References
 
