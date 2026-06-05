@@ -393,7 +393,7 @@ bca version                 # human + --format json
 
 Global flags: `-r/--repo`, `-c/--config`, `--after`, `--before`, `--commit-range`, `--format`, `-o/--output`, `--rows N` (limit output rows — code-maat parity), `--log-format`, `--no-progress`, `-v/--verbose`, `-q/--quiet`.
 
-Analysis-specific flags: `--verbose` on `bca analyze --analysis coupling` emits per-entity revision counts and shared-revision counts alongside the degree (code-maat `--verbose-results` parity). `--include-merges` overrides default merge-commit exclusion. `--strict-grouping` causes `-g` mismatch to error rather than warn.
+Analysis-specific flags: `--verbose-results` on `bca analyze --analysis coupling` emits per-entity revision counts and shared-revision counts alongside the degree (code-maat exact parity; named distinctly from the global `-v/--verbose` to avoid conflict). `--include-merges` overrides default merge-commit exclusion. `--strict-grouping` causes `-g` mismatch to error rather than warn. `--no-significance-filter` disables Fisher exact filtering on coupling (debugging / research only).
 
 ### 5.3 Output formats
 
