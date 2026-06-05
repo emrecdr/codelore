@@ -25,6 +25,11 @@ A modernized, Rust-based behavioral code analysis tool. Mines git history to pro
 - **Tier-2 languages** (opt-in via `--features lang-*`, not in standard binary): C, C++, C#, Ruby, Kotlin.
 - **~10 core analyses**: hotspots, change-coupling (Fisher exact, default p < 0.05), code-ownership (Fractal Value), code-age, abs-churn, author-churn, entity-churn, communication, code-health composite, summary.
 - **Canonical default thresholds** (code-maat parity): `min_revs = 5`, `min_shared_revs = 5`, `min_coupling_pct = 30`, `max_coupling_pct = 100`, `max_changeset_size = 30`, `fisher_significance = 0.05`.
+- **Default merge-commit behavior**: merge commits (`is_merge = true`, `parent_count > 1`) are **excluded** from coupling, churn, and ownership analyses by default; included in `summary` and `code-age`. Configurable via `--include-merges`. Choice recorded in provenance as `merge_handling`.
+- **Default architectural-grouping behavior** (`-g`): files matching no group expression are **dropped silently** (code-maat parity), with a warning emitted to stderr listing how many files were dropped. Configurable to fail-fast via `--strict-grouping`.
+- **Input encoding**: git-only via gix, which handles UTF-8 and falls back to byte-string for non-UTF-8 paths. No `--input-encoding` flag (code-maat's was needed for VCS log files; we read .git directly).
+- **`authors` and `revisions`** are addressable standalone via `bca analyze --analysis authors` and `bca analyze --analysis revisions` (each is a SQL view over the fact store), in addition to being inputs to `hotspots`. Code-maat parity preserved.
+- **Performance targets (v1)**: process the Linux kernel (~1.4M commits, ~70k files) in **under 10 minutes** on M3 / Ryzen 7-class hardware with **peak memory under 4 GB** (DuckDB spill enabled). Stretch: <5 minutes. Tracked as a release blocker; benchmarked weekly in CI against a cached Linux kernel snapshot.
 - **Provenance manifest** alongside every analysis output — machine-readable record of every mining choice.
 - **Identity resolution** via `.mailmap` + `bots.toml` (default-deny bot list) + canonical-author config (Faros-style).
 - **Outputs**: CSV, JSON, **SARIF 2.1.0** (the differentiator), Markdown for `$GITHUB_STEP_SUMMARY`, Parquet, SQLite (via DuckDB ATTACH).
@@ -189,6 +194,10 @@ CREATE TABLE commits (
     author_name  TEXT NOT NULL,
     committer_email TEXT NOT NULL,
     canonical_author TEXT NOT NULL,
+    -- ai_attribution populated when --track-ai-authorship is enabled (v1.5)
+    -- distinguishes human-authored / AI-assisted / AI-authored commits via
+    -- committer_email pattern + signed-by trailers (Copilot, Claude Code, Cursor patterns)
+    ai_attribution TEXT,    -- 'human' | 'ai-assisted' | 'ai-authored' | NULL = unknown
     date DATE NOT NULL,
     message TEXT NOT NULL,
     is_merge BOOLEAN NOT NULL,
@@ -233,7 +242,8 @@ CREATE TABLE complexity_metrics (
     mi DOUBLE,
     nom INTEGER, nexits INTEGER,
     loc INTEGER, sloc INTEGER,
-    max_nesting INTEGER, mean_nesting DOUBLE,
+    -- nesting metrics (Tornhill whitespace-complexity equivalents + AST refinement)
+    max_nesting INTEGER, mean_nesting DOUBLE, sd_nesting DOUBLE, total_nesting INTEGER,
     PRIMARY KEY (path, name, rev)
 );
 
@@ -250,6 +260,24 @@ CREATE TABLE provenance (
 ```
 
 Provenance populated with: `schema_version`, `bca_version`, `gix_version`, `duckdb_version`, `repo_head_sha`, `inputs_fingerprint` (sha256 of options + head_sha), `after_date`, `before_date`, `commit_range`, `merge_handling`, `rename_similarity_threshold`, `bot_filter_pattern`, `squash_unwrap_strategy`, `mailmap_source`, `temporal_period_days`, `group_file`, `team_map_file`, `min_revs`, `min_shared_revs`, `fisher_significance`, `max_changeset_size`, `complexity_sample_strategy`, `run_started_at`, `run_completed_at`.
+
+### 3.2.1 Correctness invariants enforced in SQL views
+
+The following invariants are baked into every analysis SQL view that touches `changes` or coupling. **These are not optional config — they are the algorithmic equivalent of code-maat's most important correctness moves**, hoisted from the Clojure pipeline (`coupling_algos.clj`) into the SQL layer:
+
+1. **`max-changeset-size` pre-filter for coupling pairs.** Any commit touching more than `max_changeset_size` files (default 30) is **excluded before generating coupling pairs**. Without this, a single license-header sweep across N files produces O(N²) spurious pairs. SQL implementation: `WHERE rev IN (SELECT rev FROM changes GROUP BY rev HAVING COUNT(*) <= :max_changeset_size)`.
+
+2. **Mirrored pair dedup.** Coupling self-joins use `e1 < e2` canonical ordering to drop `(B,A)` when `(A,B)` is present.
+
+3. **Empty-changeset filter.** Commits with zero file changes are excluded from all analyses (matches code-maat `summary.clj:1648-1649`).
+
+4. **Merge-commit exclusion** per §1.1 default (unless `--include-merges`).
+
+5. **`min_revs` / `min_shared_revs` post-filters.** Applied AFTER computation but BEFORE Fisher significance testing.
+
+6. **Fisher exact significance.** Applied to coupling pairs that pass thresholds 1–5. Pairs with `p ≥ fisher_significance` (default 0.05) are dropped from the output unless `--no-significance-filter` is set.
+
+These six invariants together close the methodological gap that 2025 MSR research (Spadoni et al.) flagged as the root of the 500% inter-tool disagreement. Every applied filter is recorded in the provenance manifest.
 
 ### 3.3 Pipeline as Rust function signatures
 
@@ -363,7 +391,9 @@ bca doctor                  # diagnose common issues
 bca version                 # human + --format json
 ```
 
-Global flags: `-r/--repo`, `-c/--config`, `--after`, `--before`, `--commit-range`, `--format`, `-o/--output`, `--log-format`, `--no-progress`, `-v/--verbose`, `-q/--quiet`.
+Global flags: `-r/--repo`, `-c/--config`, `--after`, `--before`, `--commit-range`, `--format`, `-o/--output`, `--rows N` (limit output rows — code-maat parity), `--log-format`, `--no-progress`, `-v/--verbose`, `-q/--quiet`.
+
+Analysis-specific flags: `--verbose` on `bca analyze --analysis coupling` emits per-entity revision counts and shared-revision counts alongside the degree (code-maat `--verbose-results` parity). `--include-merges` overrides default merge-commit exclusion. `--strict-grouping` causes `-g` mismatch to error rather than warn.
 
 ### 5.3 Output formats
 
@@ -424,6 +454,12 @@ Repos built programmatically via `gix` for exact reproducibility.
 ### 6.3 Benchmarks
 
 `criterion` benchmarks against the three reference repos. CI tracks regression; >5% requires explicit approval.
+
+**Release-blocking performance targets** (per §1.1):
+- Linux kernel (~1.4M commits, ~70k files): full hotspot + coupling analysis in **<10 minutes** on M3 / Ryzen 7-class hardware
+- Peak memory: **<4 GB** with DuckDB spill enabled
+- Stretch: <5 minutes for Linux kernel
+- Weekly CI job runs against cached Linux kernel snapshot; PRs regressing >10% on this metric require explicit perf-approval label
 
 ### 6.4 Observability
 
@@ -508,7 +544,10 @@ Every feature mentioned in research, brainstorming, or improvement passes that d
 
 | Feature | Why deferred | Source / citation |
 |---|---|---|
-| Remaining 12 analyses (refactoring-main-dev, entity-effort, main-dev-by-revs, fragmentation, soc, messages, identity-dump, fn-coupling, fn-ownership, fn-hotspot, code-age-trend, hotspot-trend) | Spine v1 ships 10; rest stack on stable architecture | code-maat porting catalog |
+| Remaining 13 analyses (main-dev, refactoring-main-dev, entity-effort, main-dev-by-revs, fragmentation, soc, messages, identity-dump, fn-coupling, fn-ownership, fn-hotspot, code-age-trend, hotspot-trend, complexity-trend) | Spine v1 ships 10; rest stack on stable architecture. **`main-dev` (file → main author by LOC added) was previously missing from this list and is now restored.** | code-maat porting catalog (validation pass 2026-06-06) |
+| `bca refactor-targets` ranked-list subcommand | Composes codehealth + churn + ownership into actionable refactor-ROI ranking | DDD Europe 2019 talk premise |
+| Knowledge-map analysis (per-module → who knows it) | Distinct from knowledge-graph *output* in v2 — this is the analysis itself | CodeScene how-it-works |
+| AI-authored code tracking (`ai_attribution` commit column + `--track-ai-authorship` flag) | New 2026 reality: significant code is AI-assisted. Distinct from bot filtering. | Industry shift; gap surfaced during validation |
 | Co-change graph entropy as first-class hotspot feature | Strong v1 candidate, deferred to keep v1 shippable | Ma et al. arXiv:2504.18511 |
 | RefactoringMiner integration for refactoring-aware filtering | Correctness fix; correctness wins compound; ~1–2 weeks of work | Tsantalis TSE 2022 |
 | Bootstrap CIs (≥100 iterations) on ranked outputs | Methodological table stakes per academic stream | Tantithamthavorn TSE 2017 |
@@ -522,7 +561,10 @@ Every feature mentioned in research, brainstorming, or improvement passes that d
 | Feature | Why deferred | Source / citation |
 |---|---|---|
 | **MCP server mode** | Table stakes per competitive stream; deferred only because Spine v1 prioritizes architecture | Competitive research; SonarQube 2026.1 + DX precedents |
-| **Knowledge-graph JSON output** (nodes/edges) | 2024–26 AI-agent integration direction (Greptile, Graphify, GitNexus) | Competitive + architecture streams |
+| **Knowledge-graph JSON output** (nodes/edges) — the *output format* | Distinct from knowledge-map *analysis* (v1.5). This is the emitter that lets any analysis produce nodes/edges for graph-of-code consumers (Greptile, Graphify, GitNexus). | Competitive + architecture streams |
+| Cost-of-change / refactoring-ROI prediction | Composes codehealth + churn velocity + complexity to produce "this refactor saves N dev-hours over Q quarters" | CodeScene how-it-works |
+| System Mastery metric (per-developer codebase comprehension score) | Distinct from per-file ownership; CodeScene tracks; defer because requires PR-review data | CodeScene how-it-works |
+| Code biomarkers (validated code smells: brain method, excessive arguments, deep nesting, etc.) | Concept needs unpacking — CodeScene marketing term for a defined set of code smells with empirical defect-correlation. Research before promising. | CodeScene how-it-works |
 | Pluggable SZZ for bug-link induction (start AG-SZZ; allow Neural-SZZ/LLM4SZZ later) | Defer LLM-based; ship pass-through interface | Tang et al. ASE 2023; arXiv:2504.01404 |
 | Pluggable tangled-commit untangling (ship pass-through) | Embed interface; defer impl | Shen et al. FSE 2021 (SmartCommit); UTango FSE 2022 |
 | Salsa-style incremental memoization | v1 stages designed to allow retrofit | Rust-analyzer architecture |
