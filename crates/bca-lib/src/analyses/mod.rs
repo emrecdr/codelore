@@ -4,5 +4,6 @@
 pub mod churn;
 pub mod code_age;
 pub mod code_health;
+pub mod communication;
 pub mod hotspots;
 pub mod revisions;
