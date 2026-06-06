@@ -420,6 +420,7 @@ dependencies = [
  "bca-rca",
  "crossbeam-channel",
  "duckdb",
+ "fishers_exact",
  "gix",
  "serde",
  "tempfile",
@@ -1048,6 +1049,12 @@ name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
+
+[[package]]
+name = "fishers_exact"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "64993467e77edcbfce160dae38337b4c538aa0e8027039c6eabba8fa335c7b1e"
 
 [[package]]
 name = "fixedbitset"

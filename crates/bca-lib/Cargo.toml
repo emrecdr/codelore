@@ -20,6 +20,7 @@ tempfile = { version = "3", optional = true }
 duckdb = { version = "=1.10503.1", features = ["bundled", "appender-arrow"] }
 crossbeam-channel = "0.5"
 bca-rca = { path = "../bca-rca", version = "0.1.0-alpha.1" }
+fishers_exact = "1"
 
 [features]
 default = []
@@ -74,4 +75,8 @@ required-features = ["test-support"]
 
 [[test]]
 name = "ownership_test"
+required-features = ["test-support"]
+
+[[test]]
+name = "coupling_test"
 required-features = ["test-support"]
