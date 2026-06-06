@@ -398,6 +398,143 @@ fn analyze_emits_sqlite_dump() {
 }
 
 #[test]
+fn analyze_emits_provenance_sidecar_for_csv_output() {
+    let tiny = bca_lib::test_support::tiny_repo::build();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("hotspots.csv");
+    Command::cargo_bin("bca")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "hotspots",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "csv",
+            "--min-revs",
+            "1",
+            "--output",
+            path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let sidecar = dir.path().join("hotspots.csv.provenance.json");
+    assert!(sidecar.exists(), "provenance sidecar should be written");
+    let body = std::fs::read_to_string(&sidecar).unwrap();
+    assert!(
+        body.contains("\"bca_version\""),
+        "manifest should include bca_version"
+    );
+    assert!(
+        body.contains("\"analysis\""),
+        "manifest should include analysis"
+    );
+    assert!(
+        body.contains("hotspots"),
+        "manifest should record the analysis name"
+    );
+}
+
+#[test]
+fn analyze_emits_provenance_sidecar_for_parquet_output() {
+    let tiny = bca_lib::test_support::tiny_repo::build();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("hotspots.parquet");
+    Command::cargo_bin("bca")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "hotspots",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "parquet",
+            "--min-revs",
+            "1",
+            "--output",
+            path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let sidecar = dir.path().join("hotspots.parquet.provenance.json");
+    assert!(
+        sidecar.exists(),
+        "provenance sidecar should be written next to parquet"
+    );
+}
+
+#[test]
+fn analyze_skips_sidecar_for_sqlite_output() {
+    let tiny = bca_lib::test_support::tiny_repo::build();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("dump.db");
+    Command::cargo_bin("bca")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "revisions",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "sqlite",
+            "--min-revs",
+            "1",
+            "--output",
+            path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // Provenance is inside the .db (via ATTACH); no sidecar required.
+    let sidecar = dir.path().join("dump.db.provenance.json");
+    assert!(
+        !sidecar.exists(),
+        "no sidecar for sqlite — provenance lives in the DB"
+    );
+}
+
+#[test]
+fn analyze_skips_sidecar_for_stdout() {
+    let tiny = bca_lib::test_support::tiny_repo::build();
+    let dir = tempfile::tempdir().unwrap();
+    // Run from inside the tempdir so any accidental relative-path sidecar shows up.
+    let assert = Command::cargo_bin("bca")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "analyze",
+            "--analysis",
+            "revisions",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "csv",
+            "--min-revs",
+            "1",
+            // no --output
+        ])
+        .assert()
+        .success();
+    drop(assert);
+
+    let entries: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
+    let names: Vec<String> = entries
+        .into_iter()
+        .filter_map(|e| e.ok().and_then(|de| de.file_name().into_string().ok()))
+        .collect();
+    let has_sidecar = names.iter().any(|n| n.ends_with(".provenance.json"));
+    assert!(
+        !has_sidecar,
+        "stdout output should not create a sidecar: found {names:?}"
+    );
+}
+
+#[test]
 fn parquet_requires_output_flag() {
     let tiny = bca_lib::test_support::tiny_repo::build();
     Command::cargo_bin("bca")
