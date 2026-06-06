@@ -87,8 +87,6 @@ impl Alterator for PythonCode {}
 impl Alterator for JavaCode {}
 impl Alterator for KotlinCode {}
 
-
-
 impl Alterator for JavascriptCode {
     fn alterate(node: &Node, code: &[u8], span: bool, children: Vec<AstNode>) -> AstNode {
         match Javascript::from(node.kind_id()) {

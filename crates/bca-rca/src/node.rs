@@ -92,6 +92,7 @@ impl<'a> Node<'a> {
         })
     }
 
+    #[allow(dead_code)]
     pub(crate) fn previous_sibling(&self) -> Option<Node<'a>> {
         self.0.prev_sibling().map(Node)
     }

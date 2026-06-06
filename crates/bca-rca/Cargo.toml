@@ -60,6 +60,9 @@ metrics-experimental = []
 # Upstream doc examples use `use rust_code_analysis::*` (old crate name); suppress until renamed.
 doctest = false
 
+[[test]]
+name = "tier1_languages_smoke"
+
 [dev-dependencies]
 insta = { version = "1", features = ["json"] }
 pretty_assertions = "1"
