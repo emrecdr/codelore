@@ -4,4 +4,6 @@
 pub mod csv;
 pub mod json;
 pub mod markdown;
+pub mod parquet;
 pub mod sarif;
+pub mod sqlite;

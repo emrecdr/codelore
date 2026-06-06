@@ -97,3 +97,11 @@ name = "output_json_test"
 
 [[test]]
 name = "output_sarif_test"
+
+[[test]]
+name = "output_parquet_test"
+required-features = ["test-support"]
+
+[[test]]
+name = "output_sqlite_test"
+required-features = ["test-support"]
