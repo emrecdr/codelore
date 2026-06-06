@@ -59,3 +59,30 @@ fn code_health_ranks_least_healthy_first() {
         );
     }
 }
+
+#[test]
+fn code_health_penalizes_churn() {
+    let tiny = bca_lib::test_support::tiny_repo::build();
+    let repo = GixRepo::open(tiny.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: tiny.dir.path().to_path_buf(),
+        min_revs: 1,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let rows = run_code_health(&db, &opts).expect("run");
+    // tiny_repo has src/main.rs (4 commits = high churn) and src/lib.rs (1 commit = low churn).
+    // src/main.rs should rank LOWER (less healthy) than src/lib.rs in Code Health.
+    let main = rows.iter().find(|r| r.path == "src/main.rs");
+    let lib = rows.iter().find(|r| r.path == "src/lib.rs");
+    if let (Some(m), Some(l)) = (main, lib) {
+        assert!(
+            m.score <= l.score,
+            "src/main.rs (4 commits) should rank <= src/lib.rs (1 commit) in code health, got main={} lib={}",
+            m.score,
+            l.score
+        );
+    }
+}
