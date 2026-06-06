@@ -22,6 +22,8 @@ duckdb = { version = "=1.10503.1", features = ["bundled", "appender-arrow"] }
 crossbeam-channel = "0.5"
 bca-rca = { path = "../bca-rca", version = "0.1.0-alpha.1" }
 fishers_exact = "1"
+sha2 = "0.10"
+hex = "0.4"
 
 [features]
 default = []
@@ -92,3 +94,6 @@ required-features = ["test-support"]
 
 [[test]]
 name = "output_json_test"
+
+[[test]]
+name = "output_sarif_test"
