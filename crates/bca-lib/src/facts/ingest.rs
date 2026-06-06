@@ -32,7 +32,7 @@ impl FactsDb {
         // Plan 4 will fan out N producers.
         let (tx, rx) = bounded::<CommitEvent>(CHANNEL_CAPACITY);
 
-        std::thread::scope(|s| -> Result<IngestStats> {
+        let stats = std::thread::scope(|s| -> Result<IngestStats> {
             // Producer: runs in a scoped thread. Repo: Send + Sync, opts borrows fine.
             let producer = s.spawn(|| -> Result<()> {
                 let walk = repo.walk_commits(opts)?;
@@ -50,8 +50,149 @@ impl FactsDb {
 
             producer.join().expect("producer panicked")?;
             Ok(stats)
-        })
+        })?;
+
+        // Plan 3: populate entities + complexity_metrics from the working tree at HEAD.
+        // Plan 4 will replace this with proper gix blob reading.
+        self.ingest_complexity_at_head(opts)?;
+
+        Ok(stats)
     }
+
+    fn ingest_complexity_at_head(&self, opts: &Options) -> Result<()> {
+        use crate::complexity::{Tier1Language, compute_for_file};
+
+        let path_rows = query_live_paths(self)?;
+
+        let mut entities_app = self
+            .conn()
+            .appender("entities")
+            .map_err(|e| BcaError::Analysis(format!("appender entities: {e}")))?;
+        let mut metrics_app = self
+            .conn()
+            .appender("complexity_metrics")
+            .map_err(|e| BcaError::Analysis(format!("appender complexity_metrics: {e}")))?;
+
+        for (path, head_rev) in path_rows {
+            let Some(lang) = Tier1Language::from_path(&path) else {
+                continue;
+            };
+            let full_path = opts.repo_path.join(&path);
+            let Ok(source) = std::fs::read(&full_path) else {
+                continue;
+            };
+            let Ok(entities) = compute_for_file(&full_path, &source, lang) else {
+                continue; // skip unparseable files; Plan 4 may log
+            };
+
+            // De-duplicate by name (bca-rca may emit duplicate names such as
+            // "<anonymous>"); keep first occurrence, preserve order.
+            let deduped = dedup_entities(entities);
+            for ent in deduped {
+                append_entity_row(&mut entities_app, &path, &ent, &head_rev)?;
+                append_metric_row(&mut metrics_app, &path, &ent, &head_rev)?;
+            }
+        }
+
+        entities_app
+            .flush()
+            .map_err(|e| BcaError::Analysis(format!("flush entities: {e}")))?;
+        metrics_app
+            .flush()
+            .map_err(|e| BcaError::Analysis(format!("flush metrics: {e}")))?;
+        Ok(())
+    }
+}
+
+/// Query all paths from `changes` that are not deleted, with their most recent rev.
+fn query_live_paths(db: &FactsDb) -> Result<Vec<(String, String)>> {
+    let sql = "
+        SELECT changes.path, MAX(changes.rev) AS head_rev
+        FROM changes
+        WHERE changes.change_type != 'deleted'
+        GROUP BY changes.path
+    ";
+    let mut stmt = db
+        .conn()
+        .prepare(sql)
+        .map_err(|e| BcaError::Analysis(format!("prepare path query: {e}")))?;
+    stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .map_err(|e| BcaError::Analysis(format!("query paths: {e}")))?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| BcaError::Analysis(format!("collect paths: {e}")))
+}
+
+/// De-duplicate a list of entities by name, preserving first-occurrence order.
+fn dedup_entities(
+    entities: Vec<crate::complexity::ComplexityEntity>,
+) -> Vec<crate::complexity::ComplexityEntity> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::with_capacity(entities.len());
+    for ent in entities {
+        if seen.insert(ent.name.clone()) {
+            out.push(ent);
+        }
+    }
+    out
+}
+
+/// Safely clamp a finite non-negative f64 to i32 range.
+fn f64_to_i32_clamped(v: f64) -> i32 {
+    if v.is_finite() && v >= 0.0 {
+        #[allow(clippy::cast_possible_truncation)]
+        let clamped = v.round().min(f64::from(i32::MAX)) as i32;
+        clamped
+    } else {
+        0
+    }
+}
+
+fn append_entity_row(
+    app: &mut duckdb::Appender<'_>,
+    path: &str,
+    ent: &crate::complexity::ComplexityEntity,
+    rev: &str,
+) -> Result<()> {
+    use duckdb::params;
+    app.append_row(params![
+        path,
+        ent.name,
+        ent.kind,
+        i32::try_from(ent.start_line).unwrap_or(i32::MAX),
+        i32::try_from(ent.end_line).unwrap_or(i32::MAX),
+        rev,
+        rev,
+    ])
+    .map_err(|e| BcaError::Analysis(format!("append entity: {e}")))
+}
+
+fn append_metric_row(
+    app: &mut duckdb::Appender<'_>,
+    path: &str,
+    ent: &crate::complexity::ComplexityEntity,
+    rev: &str,
+) -> Result<()> {
+    use duckdb::params;
+    app.append_row(params![
+        path,
+        ent.name,
+        rev,
+        f64_to_i32_clamped(ent.cyclomatic),
+        f64_to_i32_clamped(ent.cognitive),
+        ent.halstead_volume,
+        ent.halstead_difficulty,
+        ent.halstead_effort,
+        ent.mi,
+        i32::try_from(ent.nom).unwrap_or(i32::MAX),
+        i32::try_from(ent.nexits).unwrap_or(i32::MAX),
+        i32::try_from(ent.loc).unwrap_or(i32::MAX),
+        i32::try_from(ent.sloc).unwrap_or(i32::MAX),
+        i32::try_from(ent.max_nesting).unwrap_or(i32::MAX),
+        ent.mean_nesting,
+        ent.sd_nesting,
+        i32::try_from(ent.total_nesting).unwrap_or(i32::MAX),
+    ])
+    .map_err(|e| BcaError::Analysis(format!("append metric: {e}")))
 }
 
 fn ingest_loop(db: &FactsDb, rx: crossbeam_channel::Receiver<CommitEvent>) -> Result<IngestStats> {
