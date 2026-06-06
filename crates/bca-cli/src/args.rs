@@ -33,7 +33,9 @@ pub struct AnalyzeArgs {
     #[arg(short, long, default_value = ".")]
     pub repo: PathBuf,
 
-    /// Output format (Plan 1 supports: csv).
+    /// Output format: csv | json | sarif | markdown | parquet | sqlite.
+    /// sarif: hotspots only. parquet: hotspots, revisions, summary; requires --output.
+    /// sqlite: full fact-store dump; requires --output.
     #[arg(short, long, default_value = "csv")]
     pub format: String,
 

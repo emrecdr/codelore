@@ -6,9 +6,7 @@ use std::io::Write;
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
-use bca_lib::analyses::revisions::run_revisions;
 use bca_lib::facts::FactsDb;
-use bca_lib::output::csv::write_revisions_csv;
 use bca_lib::repo::GixRepo;
 use bca_lib::{AnalysisName, Options};
 use clap::Parser;
@@ -34,7 +32,7 @@ fn run() -> Result<()> {
     init_logging(cli.verbose);
 
     match cli.command {
-        Command::Analyze(args) => analyze(args),
+        Command::Analyze(args) => analyze(&args),
     }
 }
 
@@ -50,14 +48,27 @@ fn init_logging(verbose: bool) {
         .init();
 }
 
-fn analyze(args: AnalyzeArgs) -> Result<()> {
+#[allow(clippy::too_many_lines)]
+fn analyze(args: &AnalyzeArgs) -> Result<()> {
     let analysis = AnalysisName::from_str(&args.analysis)
         .with_context(|| format!("parsing --analysis {:?}", args.analysis))?;
-    if args.format != "csv" {
+
+    let format = args.format.as_str();
+    match format {
+        "csv" | "json" | "sarif" | "markdown" | "parquet" | "sqlite" => {}
+        other => anyhow::bail!(
+            "unknown --format {other:?}. Supported: csv, json, sarif, markdown, parquet, sqlite"
+        ),
+    }
+
+    // Format constraints
+    if matches!(format, "parquet" | "sqlite") && args.output.is_none() {
         anyhow::bail!(
-            "Plan 3 walking skeleton only supports --format csv. \
-             JSON, SARIF, Markdown, Parquet, SQLite land in Plan 5."
+            "--format {format} requires --output PATH (binary format, cannot stream to stdout)"
         );
+    }
+    if format == "sarif" && !matches!(analysis, AnalysisName::Hotspots) {
+        anyhow::bail!("--format sarif currently supports --analysis hotspots only (Plan 5 scope)");
     }
 
     let complexity_sample = match args.complexity_sample.as_str() {
@@ -81,72 +92,254 @@ fn analyze(args: AnalyzeArgs) -> Result<()> {
     let db = FactsDb::new_in_memory().context("open fact store")?;
     db.ingest(&repo, &opts).context("ingest commits")?;
 
-    let mut out: Box<dyn Write> = match args.output {
+    // Parquet + SQLite write to file directly through DuckDB, not via Write trait.
+    if format == "parquet" {
+        let path = args.output.as_ref().expect("validated above");
+        return write_parquet(&db, &opts, analysis, path);
+    }
+    if format == "sqlite" {
+        let path = args.output.as_ref().expect("validated above");
+        bca_lib::output::sqlite::write_full_fact_store_sqlite(&db, &opts, path)
+            .context("write sqlite")?;
+        return Ok(());
+    }
+
+    // csv / json / sarif / markdown: stream through Write
+    let mut out: Box<dyn Write> = match args.output.as_ref() {
         Some(path) => Box::new(std::fs::File::create(path)?),
         None => Box::new(std::io::stdout().lock()),
     };
 
-    match analysis {
-        AnalysisName::Revisions => {
-            let rows = run_revisions(&db, &opts).context("run revisions analysis")?;
-            write_revisions_csv(&rows, &mut out).context("write csv")?;
+    match (format, &analysis) {
+        // --- revisions ---
+        ("csv", AnalysisName::Revisions) => {
+            let rows =
+                bca_lib::analyses::revisions::run_revisions(&db, &opts).context("run revisions")?;
+            bca_lib::output::csv::write_revisions_csv(&rows, &mut out).context("write csv")?;
         }
-        AnalysisName::Hotspots => {
-            let rows = bca_lib::analyses::hotspots::run_hotspots(&db, &opts)
-                .context("run hotspots analysis")?;
+        ("json", AnalysisName::Revisions) => {
+            let rows =
+                bca_lib::analyses::revisions::run_revisions(&db, &opts).context("run revisions")?;
+            bca_lib::output::json::write_revisions_json(&rows, &mut out).context("write json")?;
+        }
+        ("markdown", AnalysisName::Revisions) => {
+            let rows =
+                bca_lib::analyses::revisions::run_revisions(&db, &opts).context("run revisions")?;
+            bca_lib::output::markdown::write_revisions_markdown(&rows, &mut out)
+                .context("write markdown")?;
+        }
+        // --- hotspots ---
+        ("csv", AnalysisName::Hotspots) => {
+            let rows =
+                bca_lib::analyses::hotspots::run_hotspots(&db, &opts).context("run hotspots")?;
             bca_lib::output::csv::write_hotspots_csv(&rows, &mut out).context("write csv")?;
         }
-        AnalysisName::CodeHealth => {
+        ("json", AnalysisName::Hotspots) => {
+            let rows =
+                bca_lib::analyses::hotspots::run_hotspots(&db, &opts).context("run hotspots")?;
+            bca_lib::output::json::write_hotspots_json(&rows, &mut out).context("write json")?;
+        }
+        ("markdown", AnalysisName::Hotspots) => {
+            let rows =
+                bca_lib::analyses::hotspots::run_hotspots(&db, &opts).context("run hotspots")?;
+            bca_lib::output::markdown::write_hotspots_markdown(&rows, &mut out)
+                .context("write markdown")?;
+        }
+        ("sarif", AnalysisName::Hotspots) => {
+            let rows =
+                bca_lib::analyses::hotspots::run_hotspots(&db, &opts).context("run hotspots")?;
+            let repo_root = args.repo.display().to_string();
+            bca_lib::output::sarif::write_hotspots_sarif(&rows, &repo_root, &mut out)
+                .context("write sarif")?;
+        }
+        // --- code-health ---
+        ("csv", AnalysisName::CodeHealth) => {
             let rows = bca_lib::analyses::code_health::run_code_health(&db, &opts)
-                .context("run code-health analysis")?;
+                .context("run code-health")?;
             bca_lib::output::csv::write_code_health_csv(&rows, &mut out).context("write csv")?;
         }
-        AnalysisName::CodeAge => {
-            let rows = bca_lib::analyses::code_age::run_code_age(&db, &opts)
-                .context("run code-age analysis")?;
+        ("json", AnalysisName::CodeHealth) => {
+            let rows = bca_lib::analyses::code_health::run_code_health(&db, &opts)
+                .context("run code-health")?;
+            bca_lib::output::json::write_code_health_json(&rows, &mut out).context("write json")?;
+        }
+        ("markdown", AnalysisName::CodeHealth) => {
+            let rows = bca_lib::analyses::code_health::run_code_health(&db, &opts)
+                .context("run code-health")?;
+            bca_lib::output::markdown::write_code_health_markdown(&rows, &mut out)
+                .context("write markdown")?;
+        }
+        // --- code-age ---
+        ("csv", AnalysisName::CodeAge) => {
+            let rows =
+                bca_lib::analyses::code_age::run_code_age(&db, &opts).context("run code-age")?;
             bca_lib::output::csv::write_code_age_csv(&rows, &mut out).context("write csv")?;
         }
-        AnalysisName::AbsChurn => {
-            let rows = bca_lib::analyses::churn::run_abs_churn(&db, &opts)
-                .context("run abs-churn analysis")?;
+        ("json", AnalysisName::CodeAge) => {
+            let rows =
+                bca_lib::analyses::code_age::run_code_age(&db, &opts).context("run code-age")?;
+            bca_lib::output::json::write_code_age_json(&rows, &mut out).context("write json")?;
+        }
+        ("markdown", AnalysisName::CodeAge) => {
+            let rows =
+                bca_lib::analyses::code_age::run_code_age(&db, &opts).context("run code-age")?;
+            bca_lib::output::markdown::write_code_age_markdown(&rows, &mut out)
+                .context("write markdown")?;
+        }
+        // --- abs-churn ---
+        ("csv", AnalysisName::AbsChurn) => {
+            let rows =
+                bca_lib::analyses::churn::run_abs_churn(&db, &opts).context("run abs-churn")?;
             bca_lib::output::csv::write_abs_churn_csv(&rows, &mut out).context("write csv")?;
         }
-        AnalysisName::AuthorChurn => {
+        ("json", AnalysisName::AbsChurn) => {
+            let rows =
+                bca_lib::analyses::churn::run_abs_churn(&db, &opts).context("run abs-churn")?;
+            bca_lib::output::json::write_abs_churn_json(&rows, &mut out).context("write json")?;
+        }
+        ("markdown", AnalysisName::AbsChurn) => {
+            let rows =
+                bca_lib::analyses::churn::run_abs_churn(&db, &opts).context("run abs-churn")?;
+            bca_lib::output::markdown::write_abs_churn_markdown(&rows, &mut out)
+                .context("write markdown")?;
+        }
+        // --- author-churn ---
+        ("csv", AnalysisName::AuthorChurn) => {
             let rows = bca_lib::analyses::churn::run_author_churn(&db, &opts)
-                .context("run author-churn analysis")?;
+                .context("run author-churn")?;
             bca_lib::output::csv::write_author_churn_csv(&rows, &mut out).context("write csv")?;
         }
-        AnalysisName::EntityChurn => {
+        ("json", AnalysisName::AuthorChurn) => {
+            let rows = bca_lib::analyses::churn::run_author_churn(&db, &opts)
+                .context("run author-churn")?;
+            bca_lib::output::json::write_author_churn_json(&rows, &mut out)
+                .context("write json")?;
+        }
+        ("markdown", AnalysisName::AuthorChurn) => {
+            let rows = bca_lib::analyses::churn::run_author_churn(&db, &opts)
+                .context("run author-churn")?;
+            bca_lib::output::markdown::write_author_churn_markdown(&rows, &mut out)
+                .context("write markdown")?;
+        }
+        // --- entity-churn ---
+        ("csv", AnalysisName::EntityChurn) => {
             let rows = bca_lib::analyses::churn::run_entity_churn(&db, &opts)
-                .context("run entity-churn analysis")?;
+                .context("run entity-churn")?;
             bca_lib::output::csv::write_entity_churn_csv(&rows, &mut out).context("write csv")?;
         }
-        AnalysisName::Communication => {
+        ("json", AnalysisName::EntityChurn) => {
+            let rows = bca_lib::analyses::churn::run_entity_churn(&db, &opts)
+                .context("run entity-churn")?;
+            bca_lib::output::json::write_entity_churn_json(&rows, &mut out)
+                .context("write json")?;
+        }
+        ("markdown", AnalysisName::EntityChurn) => {
+            let rows = bca_lib::analyses::churn::run_entity_churn(&db, &opts)
+                .context("run entity-churn")?;
+            bca_lib::output::markdown::write_entity_churn_markdown(&rows, &mut out)
+                .context("write markdown")?;
+        }
+        // --- communication ---
+        ("csv", AnalysisName::Communication) => {
             let rows = bca_lib::analyses::communication::run_communication(&db, &opts)
-                .context("run communication analysis")?;
+                .context("run communication")?;
             bca_lib::output::csv::write_communication_csv(&rows, &mut out).context("write csv")?;
         }
-        AnalysisName::Ownership => {
-            let rows = bca_lib::analyses::ownership::run_ownership(&db, &opts)
-                .context("run code-ownership analysis")?;
+        ("json", AnalysisName::Communication) => {
+            let rows = bca_lib::analyses::communication::run_communication(&db, &opts)
+                .context("run communication")?;
+            bca_lib::output::json::write_communication_json(&rows, &mut out)
+                .context("write json")?;
+        }
+        ("markdown", AnalysisName::Communication) => {
+            let rows = bca_lib::analyses::communication::run_communication(&db, &opts)
+                .context("run communication")?;
+            bca_lib::output::markdown::write_communication_markdown(&rows, &mut out)
+                .context("write markdown")?;
+        }
+        // --- ownership ---
+        ("csv", AnalysisName::Ownership) => {
+            let rows =
+                bca_lib::analyses::ownership::run_ownership(&db, &opts).context("run ownership")?;
             bca_lib::output::csv::write_ownership_csv(&rows, &mut out).context("write csv")?;
         }
-        AnalysisName::Coupling => {
-            let rows = bca_lib::analyses::coupling::run_coupling(&db, &opts)
-                .context("run change-coupling analysis")?;
+        ("json", AnalysisName::Ownership) => {
+            let rows =
+                bca_lib::analyses::ownership::run_ownership(&db, &opts).context("run ownership")?;
+            bca_lib::output::json::write_ownership_json(&rows, &mut out).context("write json")?;
+        }
+        ("markdown", AnalysisName::Ownership) => {
+            let rows =
+                bca_lib::analyses::ownership::run_ownership(&db, &opts).context("run ownership")?;
+            bca_lib::output::markdown::write_ownership_markdown(&rows, &mut out)
+                .context("write markdown")?;
+        }
+        // --- coupling ---
+        ("csv", AnalysisName::Coupling) => {
+            let rows =
+                bca_lib::analyses::coupling::run_coupling(&db, &opts).context("run coupling")?;
             bca_lib::output::csv::write_coupling_csv(&rows, &mut out).context("write csv")?;
         }
-        AnalysisName::Summary => {
-            let rows = bca_lib::analyses::summary::run_summary(&db, &opts)
-                .context("run summary analysis")?;
+        ("json", AnalysisName::Coupling) => {
+            let rows =
+                bca_lib::analyses::coupling::run_coupling(&db, &opts).context("run coupling")?;
+            bca_lib::output::json::write_coupling_json(&rows, &mut out).context("write json")?;
+        }
+        ("markdown", AnalysisName::Coupling) => {
+            let rows =
+                bca_lib::analyses::coupling::run_coupling(&db, &opts).context("run coupling")?;
+            bca_lib::output::markdown::write_coupling_markdown(&rows, &mut out)
+                .context("write markdown")?;
+        }
+        // --- summary ---
+        ("csv", AnalysisName::Summary) => {
+            let rows =
+                bca_lib::analyses::summary::run_summary(&db, &opts).context("run summary")?;
             bca_lib::output::csv::write_summary_csv(&rows, &mut out).context("write csv")?;
         }
-        AnalysisName::Authors => anyhow::bail!(
+        ("json", AnalysisName::Summary) => {
+            let rows =
+                bca_lib::analyses::summary::run_summary(&db, &opts).context("run summary")?;
+            bca_lib::output::json::write_summary_json(&rows, &mut out).context("write json")?;
+        }
+        ("markdown", AnalysisName::Summary) => {
+            let rows =
+                bca_lib::analyses::summary::run_summary(&db, &opts).context("run summary")?;
+            bca_lib::output::markdown::write_summary_markdown(&rows, &mut out)
+                .context("write markdown")?;
+        }
+        // --- authors (reserved) ---
+        (_, AnalysisName::Authors) => anyhow::bail!(
             "Plan 4 supports 11 analyses: revisions, hotspots, code-health, \
              code-age, abs-churn, author-churn, entity-churn, communication, \
              code-ownership, change-coupling, summary. \
              The 'authors' analysis lands in Plan 5."
         ),
+        _ => unreachable!("format/analysis combination should have been validated above"),
     }
+
     Ok(())
+}
+
+fn write_parquet(
+    db: &FactsDb,
+    opts: &Options,
+    analysis: AnalysisName,
+    path: &std::path::Path,
+) -> Result<()> {
+    match analysis {
+        AnalysisName::Hotspots => bca_lib::output::parquet::write_hotspots_parquet(db, opts, path)
+            .context("write parquet"),
+        AnalysisName::Revisions => {
+            bca_lib::output::parquet::write_revisions_parquet(db, opts, path)
+                .context("write parquet")
+        }
+        AnalysisName::Summary => {
+            bca_lib::output::parquet::write_summary_parquet(db, opts, path).context("write parquet")
+        }
+        other => anyhow::bail!(
+            "--format parquet currently supports hotspots, revisions, summary only \
+             (Plan 5 scope); got {other:?}"
+        ),
+    }
 }

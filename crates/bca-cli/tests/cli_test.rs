@@ -278,3 +278,163 @@ fn analyze_summary_emits_csv() {
         .success()
         .stdout(predicate::str::contains("metric,value"));
 }
+
+#[test]
+fn analyze_hotspots_emits_sarif() {
+    let tiny = bca_lib::test_support::tiny_repo::build();
+    Command::cargo_bin("bca")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "hotspots",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "sarif",
+            "--min-revs",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("BCA-HOTSPOT"))
+        .stdout(predicate::str::contains("schemastore.azurewebsites.net"));
+}
+
+#[test]
+fn analyze_revisions_emits_json() {
+    let tiny = bca_lib::test_support::tiny_repo::build();
+    Command::cargo_bin("bca")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "revisions",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "json",
+            "--min-revs",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("[").or(predicate::str::contains("\"entity\"")));
+}
+
+#[test]
+fn analyze_hotspots_emits_markdown() {
+    let tiny = bca_lib::test_support::tiny_repo::build();
+    Command::cargo_bin("bca")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "hotspots",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "markdown",
+            "--min-revs",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("# bca hotspots"));
+}
+
+#[test]
+fn analyze_hotspots_emits_parquet() {
+    let tiny = bca_lib::test_support::tiny_repo::build();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("hotspots.parquet");
+    Command::cargo_bin("bca")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "hotspots",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "parquet",
+            "--min-revs",
+            "1",
+            "--output",
+            path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    assert!(path.exists(), "parquet file should be written");
+    assert!(
+        path.metadata().unwrap().len() > 0,
+        "parquet file should be non-empty"
+    );
+}
+
+#[test]
+fn analyze_emits_sqlite_dump() {
+    let tiny = bca_lib::test_support::tiny_repo::build();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("dump.db");
+    Command::cargo_bin("bca")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "revisions",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "sqlite",
+            "--min-revs",
+            "1",
+            "--output",
+            path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    assert!(path.exists(), "sqlite file should be written");
+}
+
+#[test]
+fn parquet_requires_output_flag() {
+    let tiny = bca_lib::test_support::tiny_repo::build();
+    Command::cargo_bin("bca")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "hotspots",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "parquet",
+            "--min-revs",
+            "1",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("requires --output"));
+}
+
+#[test]
+fn sarif_rejects_non_hotspots_analysis() {
+    let tiny = bca_lib::test_support::tiny_repo::build();
+    Command::cargo_bin("bca")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "revisions",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "sarif",
+            "--min-revs",
+            "1",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("hotspots only"));
+}
