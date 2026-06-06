@@ -3,7 +3,7 @@
 > Rust-based modernization of Adam Tornhill's [code-maat](https://github.com/adamtornhill/code-maat).
 > Mines git history to produce hotspots, change coupling, ownership topology, and code-health metrics.
 
-**Status: alpha (Plan 3 complete).** Architecture validated end-to-end; hotspot ranking and Code Health composite shipping; feature parity with code-maat lands across Plans 4–6.
+**Status: alpha (Plan 4 complete).** Architecture validated end-to-end; 11 analyses shipping including hotspot ranking, full Code Health composite, identity resolution, and Kamei 14-feature vector; feature parity with code-maat lands across Plans 5–6.
 
 ## Quick start
 
@@ -31,11 +31,21 @@ src/lib.rs,38
 - Runs the `revisions` SQL view (file → distinct commit count)
 - Emits code-maat-compatible CSV (`entity,n-revs` header)
 
-236 tests pass across the workspace (199 RCA unit + 6 Tier-1 smoke + 31 bca-lib/bca-cli).
+268 tests pass across the workspace (199 RCA unit + 6 Tier-1 smoke + 63 bca-lib/bca-cli Plan 1–4 suite).
 - Per-language complexity metrics (Cyclomatic, Cognitive, Halstead, MI) for Rust, TypeScript/JavaScript, Python, Java via vendored `bca-rca/` (Mozilla rust-code-analysis fork)
-- `bca analyze --analysis hotspots --format csv` — file-level hotspot ranking with the published §1.1 formula (revisions × complexity × code-health)
-- `bca analyze --analysis code-health --format csv` — Code Health composite (cognitive input only in Plan 3; full formula in Plan 4)
-- Function-level entity extraction at HEAD for Tier-1 source files (`entities` and `complexity_metrics` tables now populated)
+- `bca analyze --analysis NAME --format csv` for 11 analyses:
+  - `revisions` — file → commit count
+  - `hotspots` — published §1.1 formula (percentile_rank(revs) × percentile_rank(cognitive) × (10 − code_health) / 10)
+  - `code-health` — full §4.6 composite (cognitive, churn, fragmentation, coupling)
+  - `code-age` — months since last modification
+  - `abs-churn`, `author-churn`, `entity-churn` — three churn views
+  - `communication` — Conway's law shared-work author pairs
+  - `code-ownership` — Fractal Value (1−HHI) + main developer
+  - `change-coupling` — Fisher exact-filtered logical coupling
+  - `summary` — 4-row repo overview
+- `.mailmap` resolution + bot filtering + AI attribution stub
+- Kamei 14-feature change vector populated per commit
+- Function-level entity extraction at HEAD for Tier-1 languages
 
 ## Architecture
 
@@ -53,10 +63,10 @@ Key design choices (see [`docs/superpowers/specs/2026-06-06-bca-design.md`](docs
 
 ## Roadmap
 
-This walking skeleton (Plan 1 of 6) proves the spine. Subsequent plans:
+Plans 1–4 complete. Subsequent plans:
 - **Plan 2** ✅ — vendored Mozilla's `rust-code-analysis` as `bca-rca/`, Tier-1 metric smoke tests
 - **Plan 3** ✅ — complexity integration via bca-rca, hotspot ranking (published §1.1 formula), Code Health composite
-- **Plan 4** — 9 other code-maat analyses + Fisher exact significance + identity resolution
+- **Plan 4** ✅ — 8 new analyses + Kamei vector + identity resolution + full Code Health composite
 - **Plan 5** — SARIF + Markdown + Parquet + SQLite outputs + provenance manifest
 - **Plan 6** — differential test harness + performance benchmarks + release infrastructure
 

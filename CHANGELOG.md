@@ -4,6 +4,30 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Added (Plan 4: Analyses + Identity + Kamei + Code Health completion)
+- **Identity resolution**:
+  - `.mailmap` lookup via gix mailmap API in `GixRepo::resolve_alias`
+  - `bots.toml` default-deny bot list (dependabot, github-actions, copilot, claude-code, renovate, pre-commit-ci)
+  - AI attribution stub (`ai-authored` / `ai-assisted` / `human`) on every commit
+- **Kamei 14-feature change vector** (Kamei et al. JIT-SDP canonical) populated via SQL UPDATE pass after ingest:
+  - Diffusion: NS, ND, NF, entropy
+  - Size: LA, LD, LT (LT stubbed to 0 — Plan 5 may improve)
+  - Purpose: FIX (regex on bug/fix/defect keywords)
+  - History: NDEV, AGE, NUC
+  - Experience: EXP, REXP, SEXP
+- **8 new analyses**:
+  - `code-age` — months since last modification per file (spec §1.1)
+  - `abs-churn` — date-grouped lines added/deleted/commits
+  - `author-churn` — canonical-author-grouped churn (uses .mailmap resolution)
+  - `entity-churn` — file-grouped churn
+  - `communication` — Conway's law author-pair shared-work + strength
+  - `code-ownership` — Fractal Value (1−HHI complement) + main developer per file
+  - `change-coupling` — per spec §3.2.1 correctness invariants (max-changeset-size pre-filter, mirrored pair dedup, Fisher exact significance at p<0.05 default)
+  - `summary` — 4-row repo overview (commits/changes/entities/authors)
+- **Code Health composite** now uses all 4 inputs from spec §4.6 (cognitive 0.40 + churn 0.25 + fragmentation 0.15 + coupling 0.20). Verified: src/main.rs (4 commits) now ranks lower than src/lib.rs (1 commit) in Code Health.
+- CLI: `bca analyze --analysis NAME --format csv` works for all 11 analyses.
+- `--complexity-sample {head|adaptive|full}` flag (Plan 4 ships head only; adaptive/full land in Plan 5)
+
 ### Added (Plan 3: Complexity Integration + Hotspots + Code Health)
 - `bca-lib::complexity` module — wraps `bca-rca` for Tier-1 languages (Rust, TS/JS, Python, Java)
 - Path-based language dispatch (`Tier1Language::from_path`) maps file extensions to bca-rca parsers
@@ -53,6 +77,6 @@ Conventional Commits format. All notable changes documented here.
 ### Pending (subsequent plans)
 - Plan 2: RCA vendor (Mozilla rust-code-analysis fork) + Go support ✅
 - Plan 3: complexity integration + hotspots + Code Health composite ✅
-- Plan 4: 9 other analyses + Fisher significance + identity resolution
+- Plan 4: 8 new analyses + Kamei vector + identity resolution + full Code Health composite ✅
 - Plan 5: SARIF + Markdown + Parquet + SQLite + provenance manifest
 - Plan 6: differential testing harness + perf benchmarks + release infra
