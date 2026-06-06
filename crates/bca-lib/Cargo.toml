@@ -71,3 +71,7 @@ required-features = ["test-support"]
 [[test]]
 name = "communication_test"
 required-features = ["test-support"]
+
+[[test]]
+name = "ownership_test"
+required-features = ["test-support"]
