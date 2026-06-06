@@ -1,3 +1,4 @@
+use bca_lib::AnalysisName;
 use bca_lib::BcaError;
 use bca_lib::types::{ChangeType, CommitEvent, FileChange, Hunk, SCHEMA_VERSION};
 use time::macros::date;
@@ -44,4 +45,43 @@ fn bca_error_exit_codes_match_spec() {
     // Io variant: construct via a real io::Error
     let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "x");
     assert_eq!(BcaError::Io(io_err).exit_code(), 5);
+}
+
+#[test]
+fn analysis_name_roundtrip() {
+    for name in &[
+        "hotspots",
+        "coupling",
+        "ownership",
+        "code-age",
+        "abs-churn",
+        "author-churn",
+        "entity-churn",
+        "communication",
+        "code-health",
+        "summary",
+        "revisions",
+        "authors", // standalone code-maat parity
+    ] {
+        let parsed: AnalysisName = name.parse().unwrap();
+        assert_eq!(parsed.as_str(), *name, "roundtrip for {name}");
+    }
+}
+
+#[test]
+fn analysis_name_rejects_unknown() {
+    let r: Result<AnalysisName, _> = "not-a-real-analysis".parse();
+    assert!(r.is_err());
+}
+
+#[test]
+fn default_options_match_code_maat_thresholds() {
+    use bca_lib::Options;
+    let opts = Options::default();
+    assert_eq!(opts.min_revs, 5);
+    assert_eq!(opts.min_shared_revs, 5);
+    assert_eq!(opts.min_coupling_pct, 30);
+    assert_eq!(opts.max_coupling_pct, 100);
+    assert_eq!(opts.max_changeset_size, 30);
+    assert_eq!(opts.fisher_significance, 0.05);
 }
