@@ -61,5 +61,9 @@ name = "kamei_test"
 required-features = ["test-support"]
 
 [[test]]
+name = "churn_test"
+required-features = ["test-support"]
+
+[[test]]
 name = "code_age_test"
 required-features = ["test-support"]
