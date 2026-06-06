@@ -73,8 +73,23 @@ impl Repo for GixRepo {
     }
 
     fn resolve_alias(&self, email: &str) -> String {
-        // .mailmap support lands in Plan 4 — identity resolution
-        email.to_string()
+        use gix::bstr::ByteSlice as _;
+
+        let repo = self.inner.to_thread_local();
+        let mailmap = repo.open_mailmap();
+
+        // Build a minimal SignatureRef: empty name, the email under test, and a
+        // dummy time string (gix_actor::SignatureRef::time is &str, not parsed).
+        let sig_ref = gix::actor::SignatureRef {
+            name: b"".as_bstr(),
+            email: email.as_bytes().as_bstr(),
+            time: "0 +0000",
+        };
+
+        match mailmap.try_resolve(sig_ref) {
+            Some(resolved) => resolved.email.to_str().unwrap_or(email).to_string(),
+            None => email.to_string(),
+        }
     }
 
     fn commit_metadata(&self, rev: &str) -> Result<CommitMetadata> {
