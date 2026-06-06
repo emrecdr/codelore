@@ -14,3 +14,4 @@ workspace = true
 time = { version = "0.3", features = ["serde", "macros"] }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
+arrow = "58.3"

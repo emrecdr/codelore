@@ -5,6 +5,7 @@
 #![doc(html_no_source)]
 
 pub mod analysis;
+pub mod arrow_facade;
 pub mod error;
 pub mod options;
 pub mod types;
