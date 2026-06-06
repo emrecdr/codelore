@@ -19,6 +19,11 @@ pub struct CommitEvent {
     pub message: String,
     pub parents: Vec<String>,
     pub changes: Vec<FileChange>,
+    /// Canonical author email after .mailmap resolution. None means not yet resolved.
+    pub canonical_author: Option<String>,
+    /// AI authorship classification. None means not yet classified.
+    /// Values: "human" | "ai-assisted" | "ai-authored"
+    pub ai_attribution: Option<String>,
     /// Populated by the `enrich_kamei` pipeline stage (Plan 4), NOT at gix walk-time.
     pub kamei: Option<KameiFeatures>,
 }

@@ -30,6 +30,8 @@ fn commit_event_construction() {
                 new_lines: 10,
             }],
         }],
+        canonical_author: None,
+        ai_attribution: None,
         kamei: None,
     };
     assert_eq!(event.rev, "abcdef1");

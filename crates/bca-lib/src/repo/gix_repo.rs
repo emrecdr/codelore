@@ -60,6 +60,35 @@ impl Repo for GixRepo {
             let id_string = oid.to_hex().to_string();
             let mut event = commit_event_from_gix(&commit)?;
             event.changes = compute_changed_files(&inner_clone, &id_string)?;
+
+            // Resolve mailmap alias and classify AI attribution in the producer thread
+            // (where the Repo is in scope), storing results on the event for the consumer.
+            let canonical = {
+                use gix::bstr::ByteSlice as _;
+                let repo_local = inner_clone.to_thread_local();
+                let mailmap = repo_local.open_mailmap();
+                let sig_ref = gix::actor::SignatureRef {
+                    name: b"".as_bstr(),
+                    email: event.author_email.as_bytes().as_bstr(),
+                    time: "0 +0000",
+                };
+                match mailmap.try_resolve(sig_ref) {
+                    Some(resolved) => resolved
+                        .email
+                        .to_str()
+                        .unwrap_or(&event.author_email)
+                        .to_string(),
+                    None => event.author_email.clone(),
+                }
+            };
+            let ai_attr = crate::identity::ai_attribution(
+                &event.author_email,
+                &event.author_name,
+                &event.message,
+            );
+            event.canonical_author = Some(canonical);
+            event.ai_attribution = Some(ai_attr.to_string());
+
             Ok(event)
         })))
     }
@@ -272,7 +301,9 @@ fn commit_event_from_gix(commit: &gix::Commit<'_>) -> Result<CommitEvent> {
         date,
         message,
         parents,
-        changes: vec![], // Populated by the caller; see walk_commits.
+        changes: vec![],        // Populated by the caller; see walk_commits.
+        canonical_author: None, // Populated by walk_commits after mailmap resolution.
+        ai_attribution: None,   // Populated by walk_commits after identity classification.
         kamei: None,
     })
 }

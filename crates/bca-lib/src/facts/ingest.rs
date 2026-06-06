@@ -12,6 +12,7 @@ use crossbeam_channel::bounded;
 use duckdb::Appender;
 
 use super::FactsDb;
+use crate::identity;
 use crate::repo::Repo;
 use crate::{BcaError, ChangeType, CommitEvent, Options, Result};
 
@@ -196,6 +197,8 @@ fn append_metric_row(
 }
 
 fn ingest_loop(db: &FactsDb, rx: crossbeam_channel::Receiver<CommitEvent>) -> Result<IngestStats> {
+    use std::collections::HashMap;
+
     let mut stats = IngestStats::default();
     let mut commits_app = db
         .conn()
@@ -206,7 +209,21 @@ fn ingest_loop(db: &FactsDb, rx: crossbeam_channel::Receiver<CommitEvent>) -> Re
         .appender("changes")
         .map_err(|e| BcaError::Analysis(format!("appender changes: {e}")))?;
 
+    // Collect unique (raw_email, canonical, is_bot) for deferred author_aliases insert.
+    let mut alias_map: HashMap<String, (String, bool)> = HashMap::new();
+
     for event in rx {
+        // Track alias mapping for this author.
+        let canonical = event
+            .canonical_author
+            .as_deref()
+            .unwrap_or(&event.author_email)
+            .to_string();
+        let bot = identity::is_bot(&event.author_email, &event.author_name);
+        alias_map
+            .entry(event.author_email.clone())
+            .or_insert((canonical, bot));
+
         append_commit(&mut commits_app, &event)?;
         for ch in &event.changes {
             append_change(&mut changes_app, &event.rev, ch)?;
@@ -220,6 +237,22 @@ fn ingest_loop(db: &FactsDb, rx: crossbeam_channel::Receiver<CommitEvent>) -> Re
     changes_app
         .flush()
         .map_err(|e| BcaError::Analysis(format!("flush changes: {e}")))?;
+
+    // Populate author_aliases table.
+    let mut aliases_app = db
+        .conn()
+        .appender("author_aliases")
+        .map_err(|e| BcaError::Analysis(format!("appender author_aliases: {e}")))?;
+    for (raw_email, (canonical, is_bot)) in &alias_map {
+        use duckdb::params;
+        aliases_app
+            .append_row(params![raw_email, canonical, is_bot])
+            .map_err(|e| BcaError::Analysis(format!("append author_alias: {e}")))?;
+    }
+    aliases_app
+        .flush()
+        .map_err(|e| BcaError::Analysis(format!("flush author_aliases: {e}")))?;
+
     Ok(stats)
 }
 
@@ -234,13 +267,19 @@ fn format_date(date: time::Date) -> String {
 fn append_commit(app: &mut Appender<'_>, e: &CommitEvent) -> Result<()> {
     use duckdb::params;
     let date_str = format_date(e.date);
+    let canonical = e
+        .canonical_author
+        .as_deref()
+        .unwrap_or(&e.author_email)
+        .to_string();
+    let ai_attr = e.ai_attribution.as_deref().map(str::to_string);
     app.append_row(params![
         e.rev,
         e.author_email,
         e.author_name,
         e.committer_email,
-        e.author_email,         // canonical_author — Plan 4 fills properly
-        Option::<String>::None, // ai_attribution
+        canonical,
+        ai_attr,
         date_str,
         e.message,
         e.parents.len() > 1,
