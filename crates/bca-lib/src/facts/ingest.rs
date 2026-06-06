@@ -57,6 +57,9 @@ impl FactsDb {
         // Plan 4 will replace this with proper gix blob reading.
         self.ingest_complexity_at_head(opts)?;
 
+        // Plan 4: populate the Kamei 14-feature change vector via SQL UPDATE pass.
+        crate::kamei::enrich(self)?;
+
         Ok(stats)
     }
 

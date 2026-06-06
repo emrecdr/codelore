@@ -11,6 +11,7 @@ pub mod complexity;
 pub mod error;
 pub mod facts;
 pub mod identity;
+pub mod kamei;
 pub mod options;
 pub mod output;
 pub mod repo;

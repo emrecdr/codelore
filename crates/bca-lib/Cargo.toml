@@ -55,3 +55,7 @@ required-features = ["test-support"]
 [[test]]
 name = "mailmap_test"
 required-features = ["test-support"]
+
+[[test]]
+name = "kamei_test"
+required-features = ["test-support"]
