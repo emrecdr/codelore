@@ -8,3 +8,11 @@
 *.swo
 .envrc
 .direnv/
+
+# Coverage artifacts (cargo-llvm-cov, Task 3+)
+*.profraw
+lcov.info
+coverage/
+
+# Misc generated artifacts
+flamegraph.svg
