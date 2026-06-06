@@ -4,6 +4,20 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Added (Plan 3: Complexity Integration + Hotspots + Code Health)
+- `bca-lib::complexity` module — wraps `bca-rca` for Tier-1 languages (Rust, TS/JS, Python, Java)
+- Path-based language dispatch (`Tier1Language::from_path`) maps file extensions to bca-rca parsers
+- Function-level entity extraction via `bca-rca::FuncSpace` traversal (file + function + class scopes)
+- `FactsDb::ingest()` now populates `entities` and `complexity_metrics` tables at HEAD by reading working-tree files
+- `hotspots` analysis (`bca_lib::analyses::hotspots::run_hotspots`) per spec §1.1 published formula:
+  `percentile_rank(revisions) × percentile_rank(cognitive_complexity) × (10 − code_health) / 10`
+- `code-health` composite analysis (`bca_lib::analyses::code_health::run_code_health`) per spec §4.6
+  - Plan 3 wires cognitive input only; churn/fragmentation/coupling inputs land in Plan 4
+  - Reduced formula: `100 × (1 − 0.40 × normalize(cognitive))`
+  - Range: [0, 100], higher = healthier
+- CLI: `bca analyze --analysis hotspots --format csv` and `bca analyze --analysis code-health --format csv`
+- New CSV emitters: `write_hotspots_csv`, `write_code_health_csv` with shared `quote_if_needed` helper
+
 ### Added (Plan 2: RCA Vendor)
 - `crates/bca-rca/` — vendored fork of mozilla/rust-code-analysis
   - SPDX: `MPL-2.0 AND GPL-3.0-only`
@@ -37,8 +51,8 @@ Conventional Commits format. All notable changes documented here.
 - Justfile, deny.toml, renovate.json, rust-toolchain.toml
 
 ### Pending (subsequent plans)
-- Plan 2: RCA vendor (Mozilla rust-code-analysis fork) + Go support
-- Plan 3: complexity integration + hotspots + Code Health composite
+- Plan 2: RCA vendor (Mozilla rust-code-analysis fork) + Go support ✅
+- Plan 3: complexity integration + hotspots + Code Health composite ✅
 - Plan 4: 9 other analyses + Fisher significance + identity resolution
 - Plan 5: SARIF + Markdown + Parquet + SQLite + provenance manifest
 - Plan 6: differential testing harness + perf benchmarks + release infra

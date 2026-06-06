@@ -3,7 +3,7 @@
 > Rust-based modernization of Adam Tornhill's [code-maat](https://github.com/adamtornhill/code-maat).
 > Mines git history to produce hotspots, change coupling, ownership topology, and code-health metrics.
 
-**Status: alpha (Plan 1 walking skeleton).** Architecture validated end-to-end; feature parity with code-maat lands across Plans 2–6.
+**Status: alpha (Plan 3 complete).** Architecture validated end-to-end; hotspot ranking and Code Health composite shipping; feature parity with code-maat lands across Plans 4–6.
 
 ## Quick start
 
@@ -31,8 +31,11 @@ src/lib.rs,38
 - Runs the `revisions` SQL view (file → distinct commit count)
 - Emits code-maat-compatible CSV (`entity,n-revs` header)
 
-227 tests pass across the workspace (199 RCA unit + 6 Tier-1 smoke + 22 bca-lib/bca-cli).
+236 tests pass across the workspace (199 RCA unit + 6 Tier-1 smoke + 31 bca-lib/bca-cli).
 - Per-language complexity metrics (Cyclomatic, Cognitive, Halstead, MI) for Rust, TypeScript/JavaScript, Python, Java via vendored `bca-rca/` (Mozilla rust-code-analysis fork)
+- `bca analyze --analysis hotspots --format csv` — file-level hotspot ranking with the published §1.1 formula (revisions × complexity × code-health)
+- `bca analyze --analysis code-health --format csv` — Code Health composite (cognitive input only in Plan 3; full formula in Plan 4)
+- Function-level entity extraction at HEAD for Tier-1 source files (`entities` and `complexity_metrics` tables now populated)
 
 ## Architecture
 
@@ -52,7 +55,7 @@ Key design choices (see [`docs/superpowers/specs/2026-06-06-bca-design.md`](docs
 
 This walking skeleton (Plan 1 of 6) proves the spine. Subsequent plans:
 - **Plan 2** ✅ — vendored Mozilla's `rust-code-analysis` as `bca-rca/`, Tier-1 metric smoke tests
-- **Plan 3** — complexity metrics integration; hotspot ranking; Code Health composite
+- **Plan 3** ✅ — complexity integration via bca-rca, hotspot ranking (published §1.1 formula), Code Health composite
 - **Plan 4** — 9 other code-maat analyses + Fisher exact significance + identity resolution
 - **Plan 5** — SARIF + Markdown + Parquet + SQLite outputs + provenance manifest
 - **Plan 6** — differential test harness + performance benchmarks + release infrastructure
