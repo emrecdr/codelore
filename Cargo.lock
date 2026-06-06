@@ -340,6 +340,7 @@ name = "bca-lib"
 version = "0.1.0-alpha.1"
 dependencies = [
  "arrow",
+ "crossbeam-channel",
  "duckdb",
  "gix",
  "serde",

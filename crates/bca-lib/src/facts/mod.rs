@@ -1,6 +1,9 @@
 //! `DuckDB`-backed fact store. See spec §3.2 + §3.2.1 invariants.
 
+pub mod ingest;
 pub mod schema;
+
+pub use ingest::IngestStats;
 
 use duckdb::Connection;
 

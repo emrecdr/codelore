@@ -18,6 +18,7 @@ arrow = "58.3"
 gix = { version = "0.84", features = ["max-performance", "blob-diff"] }
 tempfile = { version = "3", optional = true }
 duckdb = { version = "=1.10503.1", features = ["bundled", "appender-arrow"] }
+crossbeam-channel = "0.5"
 
 [features]
 default = []
@@ -25,4 +26,8 @@ test-support = ["dep:tempfile"]
 
 [[test]]
 name = "gix_repo_test"
+required-features = ["test-support"]
+
+[[test]]
+name = "ingest_test"
 required-features = ["test-support"]
