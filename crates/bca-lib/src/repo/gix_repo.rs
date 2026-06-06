@@ -32,9 +32,9 @@ impl Repo for GixRepo {
 
         // Collect OIDs up-front: gix::Repository is !Sync so the Walk iterator
         // cannot be made Send. Collecting OIDs is cheap (they're 20-byte hashes).
-        // NOTE(Plan 11): full traversal happens here before any consumer sees commits.
-        // When the channel pipeline lands, consider a lazy walk with OIDs collected
-        // into a bounded channel instead. Current design is correct for Plan 1.
+        // NOTE(Plan 4): full traversal happens here before any consumer sees commits.
+        // When the channel pipeline lands (Plan 4), consider a lazy walk with OIDs
+        // collected into a bounded channel instead. Current design is correct for Plan 1.
         let oids: Vec<gix::ObjectId> = repo
             .rev_walk([head])
             .all()

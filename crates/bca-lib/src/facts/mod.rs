@@ -57,6 +57,7 @@ impl FactsDb {
             .map_err(|e| BcaError::Analysis(format!("collect: {e}")))
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn query_one_value(&self, sql: &str) -> Result<String> {
         let mut stmt = self
             .conn
