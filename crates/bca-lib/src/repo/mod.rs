@@ -29,3 +29,6 @@ pub trait Repo: Send + Sync {
     /// Commit metadata not in `CommitEvent` (signed-by, signoffs).
     fn commit_metadata(&self, rev: &str) -> Result<CommitMetadata>;
 }
+
+pub mod gix_repo;
+pub use gix_repo::GixRepo;

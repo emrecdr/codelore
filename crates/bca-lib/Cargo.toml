@@ -15,3 +15,4 @@ time = { version = "0.3", features = ["serde", "macros"] }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 arrow = "58.3"
+gix = { version = "0.84", features = ["max-performance"] }

@@ -3,7 +3,21 @@
 
 use bca_lib::CommitEvent;
 use bca_lib::Options;
-use bca_lib::repo::{CommitMetadata, Repo};
+use bca_lib::repo::{CommitMetadata, GixRepo, Repo};
+
+#[test]
+fn gix_repo_walks_self_repo() {
+    // CARGO_MANIFEST_DIR points to the crate root; the git repo is two levels up.
+    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir.parent().unwrap().parent().unwrap();
+    let repo = GixRepo::open(repo_root).expect("open self repo");
+    let opts = Options::default();
+    let commits: Vec<_> = repo.walk_commits(&opts).expect("walk").collect();
+    assert!(
+        !commits.is_empty(),
+        "expected at least one commit in the bca repo"
+    );
+}
 
 #[allow(
     dead_code,
