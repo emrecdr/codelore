@@ -1,7 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/bca-lib", "crates/bca-cli"]
-# crates/bca-rca added in Plan 2
+members = ["crates/bca-lib", "crates/bca-cli", "crates/bca-rca"]
 
 [workspace.package]
 version = "0.1.0-alpha.1"
