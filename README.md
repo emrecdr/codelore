@@ -1,7 +1,9 @@
-# CodeLore — Behavioral Code Analyzer
+# CodeLore
 
-> Rust-based modernization of Adam Tornhill's [code-maat](https://github.com/adamtornhill/code-maat).
-> Mines git history to produce hotspots, change coupling, ownership topology, and code-health metrics.
+> **Read the lore of your codebase.**
+> Every commit is a fragment of tribal knowledge: who wrote the code, who *understands* it, where the scars are, and which corners hide secrets nobody's read in years. CodeLore reads those fragments from git history and turns them into hotspots, change-coupling, ownership maps, and code-health scores — the socio-technical signal your linter can't see.
+
+A Rust-based modernization of Adam Tornhill's [code-maat](https://github.com/adamtornhill/code-maat). Powered by [gix](https://github.com/GitoxideLabs/gitoxide), [DuckDB](https://duckdb.org), and a vendored fork of Mozilla's [rust-code-analysis](https://github.com/mozilla/rust-code-analysis).
 
 **Status: alpha (Plans 1–5 complete, Plan 6 in progress).** 11 analyses × 6 output formats (CSV, JSON, **SARIF 2.1.0**, Markdown, Parquet, SQLite). Provenance manifest sidecars ship with every file output. Plan 6 (differential testing, perf benchmarks, release infra) is the final gate before v1.0 — currently shipping `GitCliRepo` differential oracle + 50-commit fixture.
 
@@ -92,6 +94,10 @@ Plans 1–5 complete. Plan 6 in progress (final plan before v1.0):
 
 Phase 0 deliverable target: full v1.0 in ~10 weeks of focused work.
 
+## Why "CodeLore"?
+
+Behavioral code analysis isn't about lines of code — it's about the *lore*: who wrote the code, who understands it now, what secrets are hidden in the commits, and which corners of the codebase carry tribal knowledge nobody's documented. CodeLore surfaces that lore as hotspots, ownership maps, change-coupling, and code-health composites. The technical category is "behavioral code analysis"; the metaphor is reading the legends a codebase tells about itself.
+
 ## License
 
-GPL-3.0-only. Will include a vendored fork of Mozilla's `rust-code-analysis` under MPL-2.0 starting Plan 2 — see `crates/codelore-rca/LICENSE-MPL` (when it lands).
+GPL-3.0-only. Bundles a vendored fork of Mozilla's `rust-code-analysis` under MPL-2.0 — see `crates/codelore-rca/LICENSE-MPL`.
