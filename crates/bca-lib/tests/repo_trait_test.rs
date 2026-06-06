@@ -12,7 +12,11 @@ fn gix_repo_walks_self_repo() {
     let repo_root = manifest_dir.parent().unwrap().parent().unwrap();
     let repo = GixRepo::open(repo_root).expect("open self repo");
     let opts = Options::default();
-    let commits: Vec<_> = repo.walk_commits(&opts).expect("walk").collect();
+    let commits: Vec<_> = repo
+        .walk_commits(&opts)
+        .expect("walk")
+        .map(|r| r.expect("commit")) // surfaces any per-commit errors
+        .collect();
     assert!(
         !commits.is_empty(),
         "expected at least one commit in the bca repo"

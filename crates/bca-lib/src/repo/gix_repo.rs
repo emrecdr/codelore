@@ -30,6 +30,9 @@ impl Repo for GixRepo {
 
         // Collect OIDs up-front: gix::Repository is !Sync so the Walk iterator
         // cannot be made Send. Collecting OIDs is cheap (they're 20-byte hashes).
+        // NOTE(Plan 11): full traversal happens here before any consumer sees commits.
+        // When the channel pipeline lands, consider a lazy walk with OIDs collected
+        // into a bounded channel instead. Current design is correct for Plan 1.
         let oids: Vec<gix::ObjectId> = repo
             .rev_walk([head])
             .all()
@@ -44,6 +47,10 @@ impl Repo for GixRepo {
         // ThreadSafeRepository — both are Send.
         let inner_clone = self.inner.clone();
         Ok(Box::new(oids.into_iter().map(move |oid| {
+            // to_thread_local() is per-iteration because gix::Repository is !Send.
+            // The `+ Send` bound on the trait return type forces all captures to be Send,
+            // so the Repository must be reconstructed each step from the (Send-able)
+            // ThreadSafeRepository clone. Do not hoist this out.
             let repo = inner_clone.to_thread_local();
             let commit = repo
                 .find_commit(oid)
@@ -60,7 +67,7 @@ impl Repo for GixRepo {
     }
 
     fn diff_hunks(&self, _rev: &str, _path: &str) -> Result<Vec<Hunk>> {
-        Ok(vec![]) // Plan 5 lands real hunk extraction
+        Ok(vec![]) // Task 9 / Plan 4 lands real hunk extraction
     }
 
     fn resolve_alias(&self, email: &str) -> String {
@@ -90,6 +97,8 @@ fn commit_event_from_gix(commit: &gix::Commit<'_>) -> Result<CommitEvent> {
     let author_ref = commit
         .author()
         .map_err(|e| BcaError::Repo(format!("author: {e}")))?;
+    // CommitEvent only carries committer_email per spec §3.1; we decode the
+    // SignatureRef anyway because it's the only way to access the email field.
     let committer_ref = commit
         .committer()
         .map_err(|e| BcaError::Repo(format!("committer: {e}")))?;
