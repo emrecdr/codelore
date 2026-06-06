@@ -6,7 +6,7 @@
 use crate::facts::FactsDb;
 use crate::{BcaError, Options, Result};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct AbsChurnRow {
     pub date: String,
     pub added: i64,
@@ -14,7 +14,7 @@ pub struct AbsChurnRow {
     pub commits: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct AuthorChurnRow {
     pub author: String,
     pub added: i64,
@@ -22,7 +22,7 @@ pub struct AuthorChurnRow {
     pub commits: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct EntityChurnRow {
     pub path: String,
     pub added: i64,

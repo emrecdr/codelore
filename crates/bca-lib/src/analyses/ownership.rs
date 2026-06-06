@@ -8,7 +8,7 @@
 use crate::facts::FactsDb;
 use crate::{BcaError, Options, Result};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct OwnershipRow {
     pub path: String,
     pub main_author: String,

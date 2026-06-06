@@ -18,7 +18,7 @@
 use crate::facts::FactsDb;
 use crate::{BcaError, Options, Result};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct CodeHealthRow {
     pub path: String,
     pub name: String,

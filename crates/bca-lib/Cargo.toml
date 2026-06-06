@@ -89,3 +89,6 @@ required-features = ["test-support"]
 [[test]]
 name = "provenance_test"
 required-features = ["test-support"]
+
+[[test]]
+name = "output_json_test"

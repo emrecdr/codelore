@@ -2,3 +2,4 @@
 //! `SQLite`, etc. land in Plan 5.
 
 pub mod csv;
+pub mod json;

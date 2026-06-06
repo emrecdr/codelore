@@ -5,7 +5,7 @@
 use crate::facts::FactsDb;
 use crate::{BcaError, Options, Result};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct CodeAgeRow {
     pub path: String,
     pub age_months: i32,
