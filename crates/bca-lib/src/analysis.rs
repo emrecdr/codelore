@@ -1,6 +1,7 @@
 //! The closed set of analyses bca supports. Enum, not string,
 //! so the compiler catches typos that code-maat's string dispatch silently misroutes.
 
+use std::fmt;
 use std::str::FromStr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -56,6 +57,12 @@ impl AnalysisName {
             Self::Revisions,
             Self::Authors,
         ]
+    }
+}
+
+impl fmt::Display for AnalysisName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 

@@ -49,22 +49,10 @@ fn bca_error_exit_codes_match_spec() {
 
 #[test]
 fn analysis_name_roundtrip() {
-    for name in &[
-        "hotspots",
-        "coupling",
-        "ownership",
-        "code-age",
-        "abs-churn",
-        "author-churn",
-        "entity-churn",
-        "communication",
-        "code-health",
-        "summary",
-        "revisions",
-        "authors", // standalone code-maat parity
-    ] {
-        let parsed: AnalysisName = name.parse().unwrap();
-        assert_eq!(parsed.as_str(), *name, "roundtrip for {name}");
+    for &name in AnalysisName::all() {
+        let s = name.as_str();
+        let parsed: AnalysisName = s.parse().unwrap();
+        assert_eq!(parsed, name, "roundtrip for {s}");
     }
 }
 
@@ -72,6 +60,13 @@ fn analysis_name_roundtrip() {
 fn analysis_name_rejects_unknown() {
     let r: Result<AnalysisName, _> = "not-a-real-analysis".parse();
     assert!(r.is_err());
+}
+
+#[test]
+fn analysis_name_display_matches_as_str() {
+    for &name in AnalysisName::all() {
+        assert_eq!(format!("{name}"), name.as_str());
+    }
 }
 
 #[test]
@@ -83,5 +78,8 @@ fn default_options_match_code_maat_thresholds() {
     assert_eq!(opts.min_coupling_pct, 30);
     assert_eq!(opts.max_coupling_pct, 100);
     assert_eq!(opts.max_changeset_size, 30);
-    assert_eq!(opts.fisher_significance, 0.05);
+    #[allow(clippy::float_cmp)]
+    {
+        assert_eq!(opts.fisher_significance, 0.05);
+    }
 }
