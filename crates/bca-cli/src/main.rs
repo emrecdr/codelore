@@ -48,7 +48,7 @@ fn analyze(args: AnalyzeArgs) -> Result<()> {
     // Validate analysis name early — produces a clean error message
     // even though Plan 1 only runs `revisions`.
     let analysis = AnalysisName::from_str(&args.analysis)
-        .with_context(|| format!("unknown analysis: {}", args.analysis))?;
+        .with_context(|| format!("parsing --analysis {:?}", args.analysis))?;
     if analysis != AnalysisName::Revisions {
         anyhow::bail!(
             "Plan 1 walking skeleton only supports --analysis revisions. \

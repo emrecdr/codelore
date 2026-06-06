@@ -115,8 +115,8 @@ Versions confirmed via Validation Stream 3 (gix + DuckDB + Arrow integration aud
 | `regex` | latest | latest | Boundary mapping, message regex |
 | `serde` + `serde_json` + `serde_yaml` | latest | latest | Serialization |
 | `clap` (derive) | latest | latest | CLI |
-| `anyhow` 2.x | latest | latest | CLI errors |
-| `thiserror` 2.x | latest | latest | Library errors |
+| `anyhow` 1.x | latest | latest | CLI errors (anyhow remains on 1.x; no 2.0 release exists) |
+| `thiserror` 2.x | latest | latest | Library errors (moved to 2.x in last cycle) |
 | `tracing` + `tracing-subscriber` + `tracing-indicatif` + `indicatif` | latest | latest | Logging + progress |
 
 **Critical pinning notes:**
@@ -630,7 +630,7 @@ Repos built programmatically via `gix` for exact reproducibility.
 ### 6.6 Error handling
 
 - `thiserror` 2.0 in `bca-lib`
-- `anyhow` 2.0 in `bca-cli`
+- `anyhow` 1.x in `bca-cli` (anyhow remains on 1.x; no 2.0 release exists)
 - `BcaError` enum at lib/cli boundary drives exit codes (provenance violation = 2, repo = 3, analysis = 4, output = 5, IO = 5)
 
 ### 6.7 Fuzzing (v1.5)
