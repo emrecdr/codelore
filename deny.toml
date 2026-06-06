@@ -18,6 +18,7 @@ allow = [
     "Unicode-3.0",
     "Zlib",
     "CC0-1.0",
+    "CDLA-Permissive-2.0",  # webpki-roots (transitive via gix HTTP transports)
     "GPL-3.0-only",  # our own crates (SPDX canonical form)
 ]
 confidence-threshold = 0.93
