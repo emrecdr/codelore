@@ -48,4 +48,9 @@ pub struct AnalyzeArgs {
     /// Limit output to N rows.
     #[arg(long)]
     pub rows: Option<u32>,
+
+    /// Complexity sampling strategy: head (default) | adaptive | full.
+    /// Plan 4 ships head only; adaptive and full land in Plan 5.
+    #[arg(long, default_value = "head")]
+    pub complexity_sample: String,
 }

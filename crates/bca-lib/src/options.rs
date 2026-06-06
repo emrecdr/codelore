@@ -4,6 +4,19 @@
 use std::path::PathBuf;
 use time::Date;
 
+/// Complexity sampling strategy. See spec §4.4.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ComplexitySample {
+    /// Parse every file at HEAD only. Plan 3 default; Plan 4 ships this.
+    #[default]
+    Head,
+    /// Adaptive: every commit for low-revision files; sampled for high-revision.
+    /// Plan 5 work.
+    Adaptive,
+    /// Parse every revision of every changed file. Plan 5 work.
+    Full,
+}
+
 #[derive(Debug, Clone)]
 pub struct Options {
     // Input
@@ -34,6 +47,7 @@ pub struct Options {
     pub verbose_results: bool,
     pub include_merges: bool,
     pub strict_grouping: bool,
+    pub complexity_sample: ComplexitySample,
 }
 
 impl Default for Options {
@@ -58,6 +72,7 @@ impl Default for Options {
             verbose_results: false,
             include_merges: false,
             strict_grouping: false,
+            complexity_sample: ComplexitySample::Head,
         }
     }
 }

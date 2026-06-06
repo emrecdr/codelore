@@ -60,10 +60,20 @@ fn analyze(args: AnalyzeArgs) -> Result<()> {
         );
     }
 
+    let complexity_sample = match args.complexity_sample.as_str() {
+        "head" => bca_lib::options::ComplexitySample::Head,
+        "adaptive" | "full" => anyhow::bail!(
+            "Plan 4 walking skeleton only supports --complexity-sample head. \
+             adaptive and full land in Plan 5."
+        ),
+        other => anyhow::bail!("unknown complexity-sample value: {other:?}"),
+    };
+
     let opts = Options {
         repo_path: args.repo.clone(),
         min_revs: args.min_revs,
         rows_limit: args.rows,
+        complexity_sample,
         ..Options::default()
     };
 
