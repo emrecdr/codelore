@@ -21,8 +21,12 @@ A modernized, Rust-based behavioral code analysis tool. Mines git history to pro
 - **Function-level entity baseline** via tree-sitter; file-level rollups derive trivially.
 - **Vendored fork of Mozilla's `rust-code-analysis`** in `crates/bca-rca/` for complexity (Cyclomatic, Cognitive, Halstead, MI, NOM, NEXITS, LOC variants) across supported languages.
 - **Kamei 14-feature change vector** as the canonical change-record schema.
-- **Tier-1 languages** (default-on, ship in the standard binary): Rust, TypeScript/JavaScript, Python, Java, **Go**. Note: Go is NOT in upstream `mozilla/rust-code-analysis`; we implement Go support ourselves in `crates/bca-rca/` as Phase 0 work (5–8 engineer-days budgeted). All other Tier-1 langs inherit RCA's existing implementations.
-- **Tier-2 languages** (opt-in via `--features lang-*`, not in standard binary): C, C++, Ruby, **Kotlin (file detection only — every RCA Kotlin metric is currently a no-op stub; metrics return 0/empty until proper impl lands in v1.5)**. **C# dropped from v1 Tier-2** because RCA has no C# implementation at all (see Validation Stream 2); deferred to v1.5 alongside Kotlin metric impls.
+- **Tier-1 languages** (default-on, ship in the standard binary, full RCA metric set): Rust, TypeScript/JavaScript, Python, Java. All four inherit RCA's existing implementations — zero extra engineering cost in Plan 2. JS/TS Halstead + MI gated behind `--features metrics-experimental` (RCA bugs #528 + #1183).
+- **Tier-2 languages** (opt-in via `--features lang-*`, not in standard binary):
+  - **Go** — uses **whitespace fallback** (nesting-depth heuristic, code-maat parity) in v1. Tree-sitter-go grammar is loaded, but RCA-quality metrics require ~5–8 engineer-days of `impl X for GoCode` work that we defer to v1.5. Rationale (revision 2026-06-06): Plan 2 cost reduction; whitespace fallback gives Go users the same experience code-maat offered. Real Go metrics tracked in §8.1.
+  - C, C++, Ruby — RCA-provided.
+  - **Kotlin** — file detection only; every RCA Kotlin metric is currently a no-op stub. Metrics return 0/empty until proper impl lands in v1.5.
+  - **C# dropped from v1 Tier-2** because RCA has no C# implementation at all (see Validation Stream 2); deferred to v1.5 alongside Kotlin and Go metric impls.
 - **~10 core analyses**: hotspots, change-coupling (Fisher exact, default p < 0.05), code-ownership (Fractal Value), code-age, abs-churn, author-churn, entity-churn, communication, code-health composite, summary.
 - **Hotspot ranking — publicly documented formula** (the transparency wedge vs. CodeScene's ML-based opaque ranking):
   ```
@@ -422,24 +426,26 @@ Tree-sitter grammar quality + RCA metric coverage drives the tiering. Stream 2 v
 | Tier | Language | Cyclomatic | Cognitive | Halstead | LOC | MI | NOM | NEXITS | Source |
 |---|---|---|---|---|---|---|---|---|---|
 | **v1 Tier-1** | Rust | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | RCA |
-| **v1 Tier-1** | TypeScript/JavaScript | ✓ | ✓ | ⚠️ buggy | ✓ | ⚠️ buggy | ✓ | ✓ | RCA + `metrics-experimental` |
+| **v1 Tier-1** | TypeScript/JavaScript | ✓ | ✓ | ⚠️ buggy | ✓ | ⚠️ buggy | ✓ | ✓ | RCA + `metrics-experimental` gate |
 | **v1 Tier-1** | Python | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | RCA |
 | **v1 Tier-1** | Java | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | RCA |
-| **v1 Tier-1** | **Go** | bca-impl | bca-impl | bca-impl | bca-impl | bca-impl | bca-impl | bca-impl | **bca-rca additions (Phase 0)** |
+| v1 Tier-2 | **Go** | nesting | nesting | — | ✓ (via gix) | — | — | — | **Whitespace fallback (code-maat parity).** RCA-quality metrics in v1.5. |
 | v1 Tier-2 | C | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | RCA |
 | v1 Tier-2 | C++ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | RCA |
-| v1 Tier-2 | Ruby | bca-impl | bca-impl | bca-impl | bca-impl | bca-impl | bca-impl | bca-impl | bca-rca additions (Phase 0 stretch) |
+| v1 Tier-2 | Ruby | bca-impl | bca-impl | bca-impl | bca-impl | bca-impl | bca-impl | bca-impl | bca-rca additions (v1.5 stretch) |
 | v1 Tier-2 | **Kotlin (file detection only)** | stub | stub | stub | stub | stub | stub | stub | RCA stubs return 0/empty — v1.5 work |
-| **DROPPED from v1** | **C#** | — | — | — | — | — | — | — | RCA has no C# impl. Deferred to v1.5 with Kotlin metric impls. |
+| **DROPPED from v1** | **C#** | — | — | — | — | — | — | — | RCA has no C# impl. Deferred to v1.5 with Kotlin and Go metric impls. |
 | v1.5 | Swift, PHP, Scala | — | — | — | — | — | — | — | Tree-sitter grammar stabilization wait |
 
 **Key consequences:**
 
-1. **Go is Phase 0 work** (5–8 days): vendor `tree-sitter-go`, regenerate `src/languages/language_go.rs` via RCA's `enums/` build script, write `impl Cyclomatic for GoCode`, `impl Cognitive`, `impl Halstead`, `impl Loc`, `impl Exit`, `impl Nom` — ~50 LOC × 6 trait impls + snapshot tests. Pattern: copy `language_rust.rs` and adapt to Go AST node names.
+1. **Go uses whitespace fallback in v1** (revision 2026-06-06): nesting-depth-based complexity computed by counting consecutive leading whitespace per line. Same heuristic code-maat ships. RCA-quality Go metrics (`impl Cyclomatic for GoCode`, `impl Cognitive`, etc. — ~50 LOC × 6 trait impls) deferred to v1.5. Release notes for v1.0 must say: *"Go: file detection + whitespace-based complexity (code-maat parity). RCA-quality metrics land in v1.5."*
 
 2. **JS/TS Halstead and MI** are quarantined behind `--features metrics-experimental` until upstream fixes or we patch (issues #528 since 2021, #1183 since Aug 2025). SARIF default output excludes them; verified-by-tests metrics only.
 
 3. **Kotlin in v1 is file detection only**. Release notes must say: *"Kotlin: file detection working; complexity metrics return 0/empty pending implementation. Tracked as v1.5 work."* Same caveat for C# but it's not even file-detection in v1.
+
+4. **Plan 2 cost reduction**: with Go demoted, Plan 2 (RCA vendor) is now ~10 engineer-days (down from ~16–18). Just clean vendor + JS/TS bug quarantine. Rust + Python + TS/JS + Java all work immediately.
 
 ### 4.2.1 Honest metric stance (Stream 2 recommendation)
 
@@ -699,6 +705,7 @@ Every feature mentioned in research, brainstorming, or improvement passes that d
 | AI-authored code tracking (`ai_attribution` commit column + `--track-ai-authorship` flag) | New 2026 reality: significant code is AI-assisted. No public CodeScene equivalent — we're ahead. | Industry shift |
 | RCA Kotlin metric impls (currently stubs in upstream) | Tier-2 language with no working metrics in v1 — implement properly | RCA validation (Stream 2) |
 | RCA C# language support (currently absent from upstream) | Tier-2 language not in RCA at all — add ourselves | RCA validation (Stream 2) |
+| **RCA Go metric impls** — `impl Cyclomatic/Cognitive/Halstead/Loc/Exit/Nom for GoCode` | Promoted demotion (2026-06-06): Go ships whitespace fallback in v1.0 to save Plan 2 budget; real metrics land here. 5–8 engineer-days. | Spec revision 2026-06-06 |
 | Fix RCA JS/TS Halstead bug (#528, open since 2021) | Required to drop `metrics-experimental` gate on JS/TS Halstead | RCA validation (Stream 2) |
 | Co-change graph entropy as first-class hotspot feature | Strong v1 candidate, deferred to keep v1 shippable | Ma et al. arXiv:2504.18511 |
 | RefactoringMiner integration for refactoring-aware filtering | Correctness fix; correctness wins compound; ~1–2 weeks of work | Tsantalis TSE 2022 |
