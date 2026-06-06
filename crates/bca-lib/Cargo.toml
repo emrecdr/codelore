@@ -19,6 +19,7 @@ gix = { version = "0.84", features = ["max-performance", "blob-diff"] }
 tempfile = { version = "3", optional = true }
 duckdb = { version = "=1.10503.1", features = ["bundled", "appender-arrow"] }
 crossbeam-channel = "0.5"
+bca-rca = { path = "../bca-rca", version = "0.1.0-alpha.1" }
 
 [features]
 default = []
