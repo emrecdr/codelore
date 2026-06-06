@@ -631,7 +631,7 @@ Repos built programmatically via `gix` for exact reproducibility.
 
 - `thiserror` 2.0 in `bca-lib`
 - `anyhow` 2.0 in `bca-cli`
-- `BcaError` enum at lib/cli boundary drives exit codes (provenance violation = 2, parser = 3, analysis = 4, IO = 5)
+- `BcaError` enum at lib/cli boundary drives exit codes (provenance violation = 2, repo = 3, analysis = 4, output = 5, IO = 5)
 
 ### 6.7 Fuzzing (v1.5)
 

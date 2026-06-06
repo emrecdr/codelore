@@ -1,3 +1,4 @@
+use bca_lib::BcaError;
 use bca_lib::types::{ChangeType, CommitEvent, FileChange, Hunk, SCHEMA_VERSION};
 use time::macros::date;
 
@@ -32,4 +33,15 @@ fn commit_event_construction() {
     };
     assert_eq!(event.rev, "abcdef1");
     assert_eq!(event.changes.len(), 1);
+}
+
+#[test]
+fn bca_error_exit_codes_match_spec() {
+    assert_eq!(BcaError::Provenance("x".into()).exit_code(), 2);
+    assert_eq!(BcaError::Repo("x".into()).exit_code(), 3);
+    assert_eq!(BcaError::Analysis("x".into()).exit_code(), 4);
+    assert_eq!(BcaError::Output("x".into()).exit_code(), 5);
+    // Io variant: construct via a real io::Error
+    let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "x");
+    assert_eq!(BcaError::Io(io_err).exit_code(), 5);
 }

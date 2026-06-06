@@ -2,6 +2,8 @@
 //!
 //! See `docs/superpowers/specs/2026-06-06-bca-design.md`.
 
+#![doc(html_no_source)]
+
 pub mod error;
 pub mod types;
 
