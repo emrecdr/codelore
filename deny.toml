@@ -18,8 +18,7 @@ allow = [
     "Unicode-3.0",
     "Zlib",
     "CC0-1.0",
-    "GPL-3.0",       # our own crates
-    "GPL-3.0-only",  # SPDX form
+    "GPL-3.0-only",  # our own crates (SPDX canonical form)
 ]
 confidence-threshold = 0.93
 

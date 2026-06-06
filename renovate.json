@@ -10,6 +10,12 @@
       "schedule": ["before 6am on Monday"]
     },
     {
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["major"],
+      "groupName": "rust major updates",
+      "schedule": ["before 6am on Monday"]
+    },
+    {
       "matchPackageNames": ["duckdb"],
       "rangeStrategy": "pin",
       "description": "duckdb exact-pinned because it pins arrow"
