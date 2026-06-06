@@ -11,4 +11,6 @@ description = "Behavioral Code Analyzer — library"
 workspace = true
 
 [dependencies]
-# Added incrementally in later tasks
+time = { version = "0.3", features = ["serde", "macros"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
