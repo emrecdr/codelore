@@ -423,6 +423,7 @@ dependencies = [
  "fishers_exact",
  "gix",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror",
  "time",
