@@ -40,3 +40,6 @@ required-features = ["test-support"]
 [[test]]
 name = "revisions_test"
 required-features = ["test-support"]
+
+[[test]]
+name = "complexity_test"
