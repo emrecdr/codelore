@@ -47,3 +47,7 @@ name = "complexity_test"
 [[test]]
 name = "hotspots_test"
 required-features = ["test-support"]
+
+[[test]]
+name = "code_health_test"
+required-features = ["test-support"]
