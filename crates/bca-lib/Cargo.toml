@@ -109,3 +109,7 @@ required-features = ["test-support"]
 [[test]]
 name = "git_cli_repo_test"
 required-features = ["test-support"]
+
+[[test]]
+name = "differential_repo_test"
+required-features = ["test-support"]
