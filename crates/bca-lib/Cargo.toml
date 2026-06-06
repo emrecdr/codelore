@@ -31,3 +31,7 @@ required-features = ["test-support"]
 [[test]]
 name = "ingest_test"
 required-features = ["test-support"]
+
+[[test]]
+name = "revisions_test"
+required-features = ["test-support"]

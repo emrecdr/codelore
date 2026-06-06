@@ -4,6 +4,7 @@
 
 #![doc(html_no_source)]
 
+pub mod analyses;
 pub mod analysis;
 pub mod arrow_facade;
 pub mod error;
