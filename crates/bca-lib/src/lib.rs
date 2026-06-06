@@ -10,6 +10,7 @@ pub mod arrow_facade;
 pub mod error;
 pub mod facts;
 pub mod options;
+pub mod output;
 pub mod repo;
 #[cfg(feature = "test-support")]
 pub mod test_support;
