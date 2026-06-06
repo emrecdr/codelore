@@ -1,0 +1,42 @@
+//! Compile-time test: confirms Repo trait shape exists.
+//! Real integration tests against a fixture repo land in Task 9.
+
+use codelore_lib::CommitEvent;
+use codelore_lib::Options;
+use codelore_lib::repo::{CommitMetadata, GixRepo, Repo};
+
+#[test]
+fn gix_repo_walks_self_repo() {
+    // CARGO_MANIFEST_DIR points to the crate root; the git repo is two levels up.
+    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir.parent().unwrap().parent().unwrap();
+    let repo = GixRepo::open(repo_root).expect("open self repo");
+    let opts = Options::default();
+    let commits: Vec<_> = repo
+        .walk_commits(&opts)
+        .expect("walk")
+        .map(|r| r.expect("commit")) // surfaces any per-commit errors
+        .collect();
+    assert!(
+        !commits.is_empty(),
+        "expected at least one commit in the test repo"
+    );
+}
+
+#[allow(
+    dead_code,
+    unreachable_code,
+    unused_variables,
+    clippy::diverging_sub_expression
+)]
+fn _trait_object_compiles<R: Repo>(r: &R) {
+    let _: Box<dyn Iterator<Item = codelore_lib::Result<CommitEvent>>> = unimplemented!();
+    let opts = Options::default();
+    let _: codelore_lib::Result<
+        Box<dyn Iterator<Item = codelore_lib::Result<CommitEvent>> + Send + '_>,
+    > = r.walk_commits(&opts);
+    let _: codelore_lib::Result<Vec<codelore_lib::FileChange>> = r.changed_files("abc");
+    let _: codelore_lib::Result<Vec<codelore_lib::Hunk>> = r.diff_hunks("abc", "src/main.rs");
+    let _: String = r.resolve_alias("a@b.com");
+    let _: codelore_lib::Result<CommitMetadata> = r.commit_metadata("abc");
+}

@@ -4,19 +4,26 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Changed (project rename)
+- **Project rebranded `bca` → `CodeLore`.** Cargo crates `bca-lib` / `bca-cli` / `bca-rca` renamed to `codelore-lib` / `codelore-cli` / `codelore-rca`; binary `bca` → `codelore`; `BcaError` → `CodeLoreError`; SARIF rule `BCA-HOTSPOT` → `CODELORE-HOTSPOT`; SARIF tool name `bca` → `codelore`; SARIF property keys `bca/*` → `codelore/*`; provenance field `bca_version` → `codelore_version`; markdown headings `# bca <analysis>` → `# CodeLore <analysis>`; spec + plan filenames `2026-06-06-bca-*` → `2026-06-06-codelore-*`. Workspace dir kept as `codescene` to avoid breaking local path bookmarks. No semantic change — only naming.
+
+### Added (Plan 6 in progress: Differential testing + Perf + Release infra)
+- **`GitCliRepo`** — shell-out impl of the `Repo` trait, treats C git as ground truth. 11 integration tests cover open, walk, mailmap resolution, `changed_files`, hunk extraction, and `commit_metadata`.
+- **`differential_repo` fixture** — 50-commit generated test repo with `.mailmap` (3 alias mappings), 3 authors + 1 bot, 1 rename (`src/old_name.rs` → `src/new_name.rs`), 1 `--no-ff` merge, deterministic per-hour-offset commit dates. 7 of 8 differential property tests pass: walk identity, per-commit field equivalence, `resolve_alias`, `changed_files`, `commit_metadata`, bot-commit visibility, rename visibility. The 8th test caught a **real `GitCliRepo` parser bug** (commit after a merge with empty name-status is silently dropped); marked `#[ignore]` and documented for P6.T03.
+
 ### Added (Plan 5: Output formats + Provenance)
 - **5 new output formats** alongside CSV (all 11 analyses unless noted):
   - `--format json` — structured JSON (pretty-printed, serde-derived)
-  - `--format sarif` — **SARIF 2.1.0 with `BCA-HOTSPOT` rule** (hotspots only — the published Behavioral SARIF differentiator). Security severity proxy: `(100 − code_health) / 10`; stable `partialFingerprints` via `sha256(repo_root|path)`
+  - `--format sarif` — **SARIF 2.1.0 with `CODELORE-HOTSPOT` rule** (hotspots only — the published Behavioral SARIF differentiator). Security severity proxy: `(100 − code_health) / 10`; stable `partialFingerprints` via `sha256(repo_root|path)`
   - `--format markdown` — GitHub-Flavored Markdown pipe tables, designed for `$GITHUB_STEP_SUMMARY`
   - `--format parquet --output FILE` — DuckDB-native `COPY ... TO ... (FORMAT PARQUET)`. Plan 5 ships hotspots, revisions, summary; binary format requires `--output`
   - `--format sqlite --output FILE` — full 7-table fact-store dump via `ATTACH '...' (TYPE SQLITE)`. Provenance table is included inside the DB; no sidecar needed. Requires explicit `INSTALL sqlite; LOAD sqlite;` (DuckDB bundled build doesn't auto-load)
-- **Provenance manifest sidecar** (`bca_lib::provenance::Manifest`) — 18-field reproducibility receipt:
-  - `bca_version`, `gix_version`, `arrow_version`, `duckdb_version`, `run_started_at` (UTC RFC3339)
+- **Provenance manifest sidecar** (`codelore_lib::provenance::Manifest`) — 18-field reproducibility receipt:
+  - `codelore_version`, `gix_version`, `arrow_version`, `duckdb_version`, `run_started_at` (UTC RFC3339)
   - `repo_path`, `analysis`, `after_date`, `before_date`, `age_time_now`, `merge_handling`, `include_merges`
   - All threshold knobs: `min_revs`, `min_shared_revs`, `min_coupling_pct`, `max_changeset_size`, `fisher_significance`, `complexity_sample`
   - Emitted as `{output}.provenance.json` next to every file output **except** `--format sqlite` (where the provenance table lives inside the DB) and stdout output (where no path exists). Addresses Spadoni 2025's 500% inter-tool disagreement problem
-- CLI: `bca analyze --format {csv | json | sarif | markdown | parquet | sqlite}` — 2-level (format × analysis) dispatch with validated constraints:
+- CLI: `codelore analyze --format {csv | json | sarif | markdown | parquet | sqlite}` — 2-level (format × analysis) dispatch with validated constraints:
   - `parquet`/`sqlite` require `--output PATH` (binary; can't stream stdout)
   - `sarif` requires `--analysis hotspots` (Plan 5 scope; coupling SARIF lands in Plan 6)
 
@@ -41,25 +48,25 @@ Conventional Commits format. All notable changes documented here.
   - `change-coupling` — per spec §3.2.1 correctness invariants (max-changeset-size pre-filter, mirrored pair dedup, Fisher exact significance at p<0.05 default)
   - `summary` — 4-row repo overview (commits/changes/entities/authors)
 - **Code Health composite** now uses all 4 inputs from spec §4.6 (cognitive 0.40 + churn 0.25 + fragmentation 0.15 + coupling 0.20). Verified: src/main.rs (4 commits) now ranks lower than src/lib.rs (1 commit) in Code Health.
-- CLI: `bca analyze --analysis NAME --format csv` works for all 11 analyses.
+- CLI: `codelore analyze --analysis NAME --format csv` works for all 11 analyses.
 - `--complexity-sample {head|adaptive|full}` flag (Plan 4 ships head only; adaptive/full land in Plan 5)
 
 ### Added (Plan 3: Complexity Integration + Hotspots + Code Health)
-- `bca-lib::complexity` module — wraps `bca-rca` for Tier-1 languages (Rust, TS/JS, Python, Java)
-- Path-based language dispatch (`Tier1Language::from_path`) maps file extensions to bca-rca parsers
-- Function-level entity extraction via `bca-rca::FuncSpace` traversal (file + function + class scopes)
+- `codelore-lib::complexity` module — wraps `codelore-rca` for Tier-1 languages (Rust, TS/JS, Python, Java)
+- Path-based language dispatch (`Tier1Language::from_path`) maps file extensions to codelore-rca parsers
+- Function-level entity extraction via `codelore-rca::FuncSpace` traversal (file + function + class scopes)
 - `FactsDb::ingest()` now populates `entities` and `complexity_metrics` tables at HEAD by reading working-tree files
-- `hotspots` analysis (`bca_lib::analyses::hotspots::run_hotspots`) per spec §1.1 published formula:
+- `hotspots` analysis (`codelore_lib::analyses::hotspots::run_hotspots`) per spec §1.1 published formula:
   `percentile_rank(revisions) × percentile_rank(cognitive_complexity) × (10 − code_health) / 10`
-- `code-health` composite analysis (`bca_lib::analyses::code_health::run_code_health`) per spec §4.6
+- `code-health` composite analysis (`codelore_lib::analyses::code_health::run_code_health`) per spec §4.6
   - Plan 3 wires cognitive input only; churn/fragmentation/coupling inputs land in Plan 4
   - Reduced formula: `100 × (1 − 0.40 × normalize(cognitive))`
   - Range: [0, 100], higher = healthier
-- CLI: `bca analyze --analysis hotspots --format csv` and `bca analyze --analysis code-health --format csv`
+- CLI: `codelore analyze --analysis hotspots --format csv` and `codelore analyze --analysis code-health --format csv`
 - New CSV emitters: `write_hotspots_csv`, `write_code_health_csv` with shared `quote_if_needed` helper
 
 ### Added (Plan 2: RCA Vendor)
-- `crates/bca-rca/` — vendored fork of mozilla/rust-code-analysis
+- `crates/codelore-rca/` — vendored fork of mozilla/rust-code-analysis
   - SPDX: `MPL-2.0 AND GPL-3.0-only`
   - Dropped `-web`, mozjs grammar, ABC/WMC/NPA/NPM impls
   - Mozjs fully excised (Option B from UPSTREAM.md); standard `tree-sitter-javascript` covers everything we need
@@ -70,13 +77,13 @@ Conventional Commits format. All notable changes documented here.
   - 5 Tier-1 language smoke tests (Rust/Python/Java/TS/JS) + 1 conditional for metrics-experimental
 
 ### Fixed (Plan 1 carry-over)
-- `BcaError::exit_code()` now wired into `bca` CLI per spec §6.6 (Plan 1 always exited 1)
+- `CodeLoreError::exit_code()` now wired into `codelore` CLI per spec §6.6 (Plan 1 always exited 1)
 - `FactsDb::query_one_value` gated behind `test-support` feature (no longer in production builds)
 - `gix_repo.rs` "Plan 11" comment typo → "Plan 4"
 - Added file-backed `FactsDb::open()` roundtrip test (was untested in Plan 1)
 
 ### Added (Plan 1: Phase 0 + Walking Skeleton)
-- 3-crate Cargo workspace (`bca-lib`, `bca-cli`, future `bca-rca`)
+- 3-crate Cargo workspace (`codelore-lib`, `codelore-cli`, future `codelore-rca`)
 - Core types: `CommitEvent`, `FileChange`, `Hunk`, `ChangeType`, `KameiFeatures`
 - `AnalysisName` enum and `Options` struct with code-maat parity defaults
 - `arrow_facade` module — single re-export point for `arrow-rs`
@@ -86,7 +93,7 @@ Conventional Commits format. All notable changes documented here.
 - Commit ingestion pipeline (gix → crossbeam channel → DuckDB Appender)
 - `revisions` analysis (SQL view + Rust orchestrator)
 - CSV output emitter (code-maat header parity)
-- `bca analyze --analysis revisions --format csv` CLI
+- `codelore analyze --analysis revisions --format csv` CLI
 - GitHub Actions CI (fmt, clippy, test on 3 OSes, cargo-deny)
 - Justfile, deny.toml, renovate.json, rust-toolchain.toml
 

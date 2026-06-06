@@ -1,4 +1,4 @@
-# bca task runner
+# CodeLore task runner
 # Install just: cargo install just
 
 set positional-arguments
@@ -42,5 +42,5 @@ coverage:
 ci: fmt-check lint deny test
 
 # Run the binary
-bca *ARGS:
-    cargo run --release -p bca-cli -- "$@"
+codelore *ARGS:
+    cargo run --release -p codelore-cli -- "$@"
