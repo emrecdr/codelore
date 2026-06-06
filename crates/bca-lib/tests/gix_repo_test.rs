@@ -8,7 +8,11 @@ fn walks_tiny_repo_5_commits() {
     let tiny = bca_lib::test_support::tiny_repo::build();
     let repo = GixRepo::open(tiny.dir.path()).expect("open");
     let opts = Options::default();
-    let commits: Vec<_> = repo.walk_commits(&opts).expect("walk").collect();
+    let commits: Vec<_> = repo
+        .walk_commits(&opts)
+        .expect("walk")
+        .map(|r| r.expect("commit"))
+        .collect();
     assert_eq!(commits.len(), 5);
 }
 

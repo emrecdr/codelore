@@ -16,8 +16,12 @@ serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 arrow = "58.3"
 gix = { version = "0.84", features = ["max-performance", "blob-diff"] }
-tempfile = "3"
+tempfile = { version = "3", optional = true }
 
 [features]
 default = []
-test-support = []
+test-support = ["dep:tempfile"]
+
+[[test]]
+name = "gix_repo_test"
+required-features = ["test-support"]

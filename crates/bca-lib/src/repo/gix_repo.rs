@@ -69,7 +69,7 @@ impl Repo for GixRepo {
     }
 
     fn diff_hunks(&self, _rev: &str, _path: &str) -> Result<Vec<Hunk>> {
-        Ok(vec![]) // Task 9 / Plan 4 lands real hunk extraction
+        Ok(vec![]) // Plan 4 lands real hunk extraction
     }
 
     fn resolve_alias(&self, email: &str) -> String {
@@ -257,7 +257,7 @@ fn commit_event_from_gix(commit: &gix::Commit<'_>) -> Result<CommitEvent> {
         date,
         message,
         parents,
-        changes: vec![], // Filled by Task 9 — tree-diff against parent
+        changes: vec![], // Populated by the caller; see walk_commits.
         kamei: None,
     })
 }

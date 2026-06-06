@@ -5,7 +5,7 @@
 //! (not gix-write) because gix-write is still maturing for trivial init in 0.84,
 //! and shell-out is fast + predictable for tests.
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(feature = "test-support")]
 pub mod tiny_repo {
     use std::path::PathBuf;
     use tempfile::TempDir;
