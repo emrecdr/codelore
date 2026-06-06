@@ -101,9 +101,51 @@ fn analyze(args: AnalyzeArgs) -> Result<()> {
                 .context("run code-health analysis")?;
             bca_lib::output::csv::write_code_health_csv(&rows, &mut out).context("write csv")?;
         }
-        _ => anyhow::bail!(
-            "Plan 3 supports --analysis revisions | hotspots | code-health. \
-             Other analyses land in Plan 4."
+        AnalysisName::CodeAge => {
+            let rows = bca_lib::analyses::code_age::run_code_age(&db, &opts)
+                .context("run code-age analysis")?;
+            bca_lib::output::csv::write_code_age_csv(&rows, &mut out).context("write csv")?;
+        }
+        AnalysisName::AbsChurn => {
+            let rows = bca_lib::analyses::churn::run_abs_churn(&db, &opts)
+                .context("run abs-churn analysis")?;
+            bca_lib::output::csv::write_abs_churn_csv(&rows, &mut out).context("write csv")?;
+        }
+        AnalysisName::AuthorChurn => {
+            let rows = bca_lib::analyses::churn::run_author_churn(&db, &opts)
+                .context("run author-churn analysis")?;
+            bca_lib::output::csv::write_author_churn_csv(&rows, &mut out).context("write csv")?;
+        }
+        AnalysisName::EntityChurn => {
+            let rows = bca_lib::analyses::churn::run_entity_churn(&db, &opts)
+                .context("run entity-churn analysis")?;
+            bca_lib::output::csv::write_entity_churn_csv(&rows, &mut out).context("write csv")?;
+        }
+        AnalysisName::Communication => {
+            let rows = bca_lib::analyses::communication::run_communication(&db, &opts)
+                .context("run communication analysis")?;
+            bca_lib::output::csv::write_communication_csv(&rows, &mut out).context("write csv")?;
+        }
+        AnalysisName::Ownership => {
+            let rows = bca_lib::analyses::ownership::run_ownership(&db, &opts)
+                .context("run code-ownership analysis")?;
+            bca_lib::output::csv::write_ownership_csv(&rows, &mut out).context("write csv")?;
+        }
+        AnalysisName::Coupling => {
+            let rows = bca_lib::analyses::coupling::run_coupling(&db, &opts)
+                .context("run change-coupling analysis")?;
+            bca_lib::output::csv::write_coupling_csv(&rows, &mut out).context("write csv")?;
+        }
+        AnalysisName::Summary => {
+            let rows = bca_lib::analyses::summary::run_summary(&db, &opts)
+                .context("run summary analysis")?;
+            bca_lib::output::csv::write_summary_csv(&rows, &mut out).context("write csv")?;
+        }
+        AnalysisName::Authors => anyhow::bail!(
+            "Plan 4 supports 11 analyses: revisions, hotspots, code-health, \
+             code-age, abs-churn, author-churn, entity-churn, communication, \
+             code-ownership, change-coupling, summary. \
+             The 'authors' analysis lands in Plan 5."
         ),
     }
     Ok(())
