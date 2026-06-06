@@ -43,3 +43,20 @@ fn version_flag_works() {
         .success()
         .stdout(predicate::str::contains("0.1.0-alpha.1"));
 }
+
+#[test]
+fn invalid_repo_exits_with_code_3() {
+    let output = Command::cargo_bin("bca")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "revisions",
+            "--repo",
+            "/tmp/definitely-does-not-exist-bca-test",
+        ])
+        .output()
+        .unwrap();
+    // BcaError::Repo → exit 3 per spec §6.6
+    assert_eq!(output.status.code(), Some(3));
+}

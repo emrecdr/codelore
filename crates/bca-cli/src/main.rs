@@ -19,7 +19,13 @@ use crate::args::{AnalyzeArgs, Cli, Command};
 fn main() {
     if let Err(e) = run() {
         eprintln!("error: {e:#}");
-        std::process::exit(1);
+        // Map BcaError to its spec §6.6 exit code if present in the chain.
+        // Falls back to 1 for non-BcaError errors (e.g. clap parse errors).
+        let code = e
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<bca_lib::BcaError>())
+            .map_or(1, bca_lib::BcaError::exit_code);
+        std::process::exit(code);
     }
 }
 
