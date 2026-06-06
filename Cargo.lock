@@ -408,6 +408,7 @@ dependencies = [
  "bca-lib",
  "clap",
  "predicates",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
 ]

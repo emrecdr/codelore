@@ -32,3 +32,6 @@ pub trait Repo: Send + Sync {
 
 pub mod gix_repo;
 pub use gix_repo::GixRepo;
+
+pub mod git_cli_repo;
+pub use git_cli_repo::GitCliRepo;
