@@ -25,6 +25,10 @@ default = []
 test-support = ["dep:tempfile"]
 
 [[test]]
+name = "facts_test"
+required-features = ["test-support"]
+
+[[test]]
 name = "gix_repo_test"
 required-features = ["test-support"]
 
