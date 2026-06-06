@@ -3,7 +3,7 @@
 > Rust-based modernization of Adam Tornhill's [code-maat](https://github.com/adamtornhill/code-maat).
 > Mines git history to produce hotspots, change coupling, ownership topology, and code-health metrics.
 
-**Status: alpha (Plan 4 complete).** Architecture validated end-to-end; 11 analyses shipping including hotspot ranking, full Code Health composite, identity resolution, and Kamei 14-feature vector; feature parity with code-maat lands across Plans 5–6.
+**Status: alpha (Plan 5 complete).** 11 analyses × 6 output formats (CSV, JSON, **SARIF 2.1.0**, Markdown, Parquet, SQLite). Provenance manifest sidecars ship with every file output. Plan 6 (differential testing, perf benchmarks, release infra) is the final gate before v1.0.
 
 ## Quick start
 
@@ -25,13 +25,32 @@ src/lib.rs,38
 
 ## What works today
 
-`bca analyze --analysis revisions --format csv` end-to-end:
-- Walks git history via `gix 0.84` (libgit2-free, pure Rust)
-- Stores commits + file-changes in an in-memory DuckDB fact store
-- Runs the `revisions` SQL view (file → distinct commit count)
-- Emits code-maat-compatible CSV (`entity,n-revs` header)
+End-to-end pipeline: gix walk → DuckDB fact store → analysis → 6 output formats.
 
-268 tests pass across the workspace (199 RCA unit + 6 Tier-1 smoke + 63 bca-lib/bca-cli Plan 1–4 suite).
+```bash
+# CSV (code-maat parity, the default)
+bca analyze --analysis hotspots --repo . --min-revs 5
+
+# JSON (structured, machine-readable)
+bca analyze --analysis hotspots --repo . --format json
+
+# SARIF 2.1.0 — drop into GitHub Code Scanning, GitLab, Defectdojo
+bca analyze --analysis hotspots --repo . --format sarif --output hotspots.sarif
+
+# Markdown — pipe directly into $GITHUB_STEP_SUMMARY
+bca analyze --analysis hotspots --repo . --format markdown >> "$GITHUB_STEP_SUMMARY"
+
+# Parquet — for downstream analytics in DuckDB, Polars, pandas, Spark
+bca analyze --analysis hotspots --repo . --format parquet --output hotspots.parquet
+
+# SQLite — full 7-table fact-store dump (commits, changes, hunks, entities,
+# complexity_metrics, author_aliases, provenance) for ad-hoc SQL exploration
+bca analyze --analysis revisions --repo . --format sqlite --output facts.db
+```
+
+Every file output gets a `{output}.provenance.json` sidecar (except SQLite, where the `provenance` table lives inside the DB). The sidecar records the bca/gix/duckdb versions, every threshold knob, and the UTC run timestamp — addresses Spadoni 2025's 500% inter-tool disagreement problem.
+
+292 tests pass across the workspace (199 RCA unit + 6 Tier-1 smoke + 87 bca-lib/bca-cli Plan 1–5 suite).
 - Per-language complexity metrics (Cyclomatic, Cognitive, Halstead, MI) for Rust, TypeScript/JavaScript, Python, Java via vendored `bca-rca/` (Mozilla rust-code-analysis fork)
 - `bca analyze --analysis NAME --format csv` for 11 analyses:
   - `revisions` — file → commit count
@@ -63,12 +82,12 @@ Key design choices (see [`docs/superpowers/specs/2026-06-06-bca-design.md`](docs
 
 ## Roadmap
 
-Plans 1–4 complete. Subsequent plans:
+Plans 1–5 complete. Final plan before v1.0:
 - **Plan 2** ✅ — vendored Mozilla's `rust-code-analysis` as `bca-rca/`, Tier-1 metric smoke tests
 - **Plan 3** ✅ — complexity integration via bca-rca, hotspot ranking (published §1.1 formula), Code Health composite
 - **Plan 4** ✅ — 8 new analyses + Kamei vector + identity resolution + full Code Health composite
-- **Plan 5** — SARIF + Markdown + Parquet + SQLite outputs + provenance manifest
-- **Plan 6** — differential test harness + performance benchmarks + release infrastructure
+- **Plan 5** ✅ — SARIF 2.1.0 + JSON + Markdown + Parquet + SQLite outputs + provenance manifest sidecar
+- **Plan 6** — differential test harness against C git + code-maat goldens, criterion perf benchmarks (Linux kernel scale), release infrastructure (`cargo-dist`, SLSA L3, distroless container, PGO)
 
 Phase 0 deliverable target: full v1.0 in ~10 weeks of focused work.
 

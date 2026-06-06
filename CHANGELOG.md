@@ -4,6 +4,22 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Added (Plan 5: Output formats + Provenance)
+- **5 new output formats** alongside CSV (all 11 analyses unless noted):
+  - `--format json` — structured JSON (pretty-printed, serde-derived)
+  - `--format sarif` — **SARIF 2.1.0 with `BCA-HOTSPOT` rule** (hotspots only — the published Behavioral SARIF differentiator). Security severity proxy: `(100 − code_health) / 10`; stable `partialFingerprints` via `sha256(repo_root|path)`
+  - `--format markdown` — GitHub-Flavored Markdown pipe tables, designed for `$GITHUB_STEP_SUMMARY`
+  - `--format parquet --output FILE` — DuckDB-native `COPY ... TO ... (FORMAT PARQUET)`. Plan 5 ships hotspots, revisions, summary; binary format requires `--output`
+  - `--format sqlite --output FILE` — full 7-table fact-store dump via `ATTACH '...' (TYPE SQLITE)`. Provenance table is included inside the DB; no sidecar needed. Requires explicit `INSTALL sqlite; LOAD sqlite;` (DuckDB bundled build doesn't auto-load)
+- **Provenance manifest sidecar** (`bca_lib::provenance::Manifest`) — 18-field reproducibility receipt:
+  - `bca_version`, `gix_version`, `arrow_version`, `duckdb_version`, `run_started_at` (UTC RFC3339)
+  - `repo_path`, `analysis`, `after_date`, `before_date`, `age_time_now`, `merge_handling`, `include_merges`
+  - All threshold knobs: `min_revs`, `min_shared_revs`, `min_coupling_pct`, `max_changeset_size`, `fisher_significance`, `complexity_sample`
+  - Emitted as `{output}.provenance.json` next to every file output **except** `--format sqlite` (where the provenance table lives inside the DB) and stdout output (where no path exists). Addresses Spadoni 2025's 500% inter-tool disagreement problem
+- CLI: `bca analyze --format {csv | json | sarif | markdown | parquet | sqlite}` — 2-level (format × analysis) dispatch with validated constraints:
+  - `parquet`/`sqlite` require `--output PATH` (binary; can't stream stdout)
+  - `sarif` requires `--analysis hotspots` (Plan 5 scope; coupling SARIF lands in Plan 6)
+
 ### Added (Plan 4: Analyses + Identity + Kamei + Code Health completion)
 - **Identity resolution**:
   - `.mailmap` lookup via gix mailmap API in `GixRepo::resolve_alias`
@@ -78,5 +94,5 @@ Conventional Commits format. All notable changes documented here.
 - Plan 2: RCA vendor (Mozilla rust-code-analysis fork) + Go support ✅
 - Plan 3: complexity integration + hotspots + Code Health composite ✅
 - Plan 4: 8 new analyses + Kamei vector + identity resolution + full Code Health composite ✅
-- Plan 5: SARIF + Markdown + Parquet + SQLite + provenance manifest
+- Plan 5: SARIF + Markdown + Parquet + SQLite + provenance manifest ✅
 - Plan 6: differential testing harness + perf benchmarks + release infra
