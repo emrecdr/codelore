@@ -9,6 +9,8 @@ pub mod arrow_facade;
 pub mod error;
 pub mod options;
 pub mod repo;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 pub mod types;
 
 pub use analysis::{AnalysisName, UnknownAnalysisError};

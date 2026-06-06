@@ -306,6 +306,7 @@ dependencies = [
  "arrow",
  "gix",
  "serde",
+ "tempfile",
  "thiserror",
  "time",
 ]

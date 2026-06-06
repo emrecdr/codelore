@@ -2,8 +2,10 @@
 
 use std::path::Path;
 
+use gix::diff::tree_with_rewrites::Change as GixChange;
+
 use crate::repo::{CommitMetadata, Repo};
-use crate::{BcaError, CommitEvent, FileChange, Hunk, Options, Result};
+use crate::{BcaError, ChangeType, CommitEvent, FileChange, Hunk, Options, Result};
 
 pub struct GixRepo {
     inner: gix::ThreadSafeRepository,
@@ -55,15 +57,15 @@ impl Repo for GixRepo {
             let commit = repo
                 .find_commit(oid)
                 .map_err(|e| BcaError::Repo(format!("find_commit: {e}")))?;
-            commit_event_from_gix(&commit)
+            let id_string = oid.to_hex().to_string();
+            let mut event = commit_event_from_gix(&commit)?;
+            event.changes = compute_changed_files(&inner_clone, &id_string)?;
+            Ok(event)
         })))
     }
 
-    fn changed_files(&self, _rev: &str) -> Result<Vec<FileChange>> {
-        // Stub for Plan 1 walking skeleton — Task 9 fills this in via gix tree-diff.
-        // The `revisions` analysis (counting commits per HEAD-tracked path)
-        // doesn't depend on this for now.
-        Ok(vec![])
+    fn changed_files(&self, rev: &str) -> Result<Vec<FileChange>> {
+        compute_changed_files(&self.inner, rev)
     }
 
     fn diff_hunks(&self, _rev: &str, _path: &str) -> Result<Vec<Hunk>> {
@@ -82,6 +84,137 @@ impl Repo for GixRepo {
             signed_by: None,
             signoffs: vec![],
         })
+    }
+}
+
+/// Compute the per-file changes for a single commit identified by `rev`.
+///
+/// Strategy: parse `rev` → look up commit → get commit tree and parent tree
+/// → call `repo.diff_tree_to_tree(parent_tree, commit_tree, options)` which
+/// returns `Vec<ChangeDetached>` (= `gix_diff::tree_with_rewrites::Change`).
+///
+/// For Plan 1 we set `loc_added`/`loc_deleted` to 0 and `hunks` to empty;
+/// Plan 4 will add real blob-diff line counting.
+fn compute_changed_files(inner: &gix::ThreadSafeRepository, rev: &str) -> Result<Vec<FileChange>> {
+    let repo = inner.to_thread_local();
+
+    // Parse the rev string to an ObjectId.
+    let oid = rev
+        .parse::<gix::ObjectId>()
+        .map_err(|e| BcaError::Repo(format!("parse rev {rev:?}: {e}")))?;
+
+    let commit = repo
+        .find_commit(oid)
+        .map_err(|e| BcaError::Repo(format!("find_commit {rev}: {e}")))?;
+
+    let tree = commit
+        .tree()
+        .map_err(|e| BcaError::Repo(format!("commit tree {rev}: {e}")))?;
+
+    // Get the first parent's tree, or use the empty tree for root commits.
+    let parent_tree = commit
+        .parent_ids()
+        .next()
+        .map(|pid| {
+            let parent_commit = repo
+                .find_commit(pid)
+                .map_err(|e| BcaError::Repo(format!("find_parent_commit {rev}: {e}")))?;
+            parent_commit
+                .tree()
+                .map_err(|e| BcaError::Repo(format!("parent tree {rev}: {e}")))
+        })
+        .transpose()?;
+
+    // Configure diff options: track full paths, no rewrite detection for Plan 1.
+    let mut diff_opts = gix::diff::Options::default();
+    diff_opts.track_rewrites(None);
+
+    let changes: Vec<_> = repo
+        .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), diff_opts)
+        .map_err(|e| BcaError::Repo(format!("diff_tree_to_tree {rev}: {e}")))?;
+
+    let file_changes = changes
+        .into_iter()
+        .filter_map(|change| gix_change_to_file_change(change, rev))
+        .collect();
+
+    Ok(file_changes)
+}
+
+/// Convert a `gix_diff::tree_with_rewrites::Change` to our `FileChange`.
+/// Returns `None` for tree entries (directories) — we only care about blobs.
+fn gix_change_to_file_change(change: GixChange, _rev: &str) -> Option<FileChange> {
+    use gix::objs::tree::EntryKind;
+
+    let is_blob = |mode: gix::objs::tree::EntryMode| {
+        matches!(mode.kind(), EntryKind::Blob | EntryKind::BlobExecutable)
+    };
+
+    match change {
+        GixChange::Addition {
+            location,
+            entry_mode,
+            ..
+        } if is_blob(entry_mode) => Some(FileChange {
+            path: location.to_string(),
+            change_type: ChangeType::Added,
+            loc_added: 0,
+            loc_deleted: 0,
+            hunks: vec![],
+        }),
+        GixChange::Deletion {
+            location,
+            entry_mode,
+            ..
+        } if is_blob(entry_mode) => Some(FileChange {
+            path: location.to_string(),
+            change_type: ChangeType::Deleted,
+            loc_added: 0,
+            loc_deleted: 0,
+            hunks: vec![],
+        }),
+        GixChange::Modification {
+            location,
+            entry_mode,
+            ..
+        } if is_blob(entry_mode) => Some(FileChange {
+            path: location.to_string(),
+            change_type: ChangeType::Modified,
+            loc_added: 0,
+            loc_deleted: 0,
+            hunks: vec![],
+        }),
+        GixChange::Rewrite {
+            location,
+            source_location,
+            entry_mode,
+            copy,
+            ..
+        } if is_blob(entry_mode) => {
+            let path = location.to_string();
+            let from = source_location.to_string();
+            // Sentinel similarity for Plan 1; Plan 4 wires real similarity from `diff` field.
+            let change_type = if copy {
+                ChangeType::Copied {
+                    from,
+                    similarity: 100,
+                }
+            } else {
+                ChangeType::Renamed {
+                    from,
+                    similarity: 100,
+                }
+            };
+            Some(FileChange {
+                path,
+                change_type,
+                loc_added: 0,
+                loc_deleted: 0,
+                hunks: vec![],
+            })
+        }
+        // Skip non-blob entries (trees / submodules / symlinks treated as non-blob).
+        _ => None,
     }
 }
 
