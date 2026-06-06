@@ -15,5 +15,5 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
-bca-lib = { path = "../bca-lib" }
+bca-lib = { path = "../bca-lib", version = "0.1.0-alpha.1" }
 # Added incrementally in later tasks

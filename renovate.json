@@ -1,0 +1,23 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "rangeStrategy": "bump",
+  "packageRules": [
+    {
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "groupName": "rust patch+minor updates",
+      "schedule": ["before 6am on Monday"]
+    },
+    {
+      "matchPackageNames": ["duckdb"],
+      "rangeStrategy": "pin",
+      "description": "duckdb exact-pinned because it pins arrow"
+    },
+    {
+      "matchPackageNames": ["tree-sitter"],
+      "enabled": false,
+      "description": "tree-sitter pinned to =0.25.3 for RCA compat — manual bump only"
+    }
+  ]
+}
