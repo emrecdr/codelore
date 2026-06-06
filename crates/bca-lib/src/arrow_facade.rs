@@ -10,10 +10,11 @@
 
 pub use arrow::array::{
     Array, ArrayBuilder, ArrayRef, BinaryBuilder, BooleanBuilder, Date32Builder, Float64Builder,
-    GenericByteBuilder, Int32Builder, Int64Builder, StringBuilder, UInt32Builder, UInt64Builder,
+    Int32Builder, Int64Builder, LargeBinaryBuilder, StringBuilder, UInt32Builder, UInt64Builder,
 };
 pub use arrow::buffer::Buffer;
 pub use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
+pub use arrow::error::ArrowError;
 pub use arrow::record_batch::RecordBatch;
 
 /// Version reported by the runtime (for provenance manifests in Plan 5).
