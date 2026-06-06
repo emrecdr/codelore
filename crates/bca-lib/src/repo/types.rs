@@ -1,7 +1,7 @@
 //! Public types for the Repo trait. Distinct from the
 //! main types module to keep gix-coupled types isolated.
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommitMetadata {
     pub rev: String,
     pub signed: bool,
