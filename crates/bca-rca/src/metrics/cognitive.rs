@@ -437,10 +437,6 @@ macro_rules! js_cognitive {
     };
 }
 
-impl Cognitive for MozjsCode {
-    js_cognitive!(Mozjs);
-}
-
 impl Cognitive for JavascriptCode {
     js_cognitive!(Javascript);
 }
@@ -548,7 +544,7 @@ mod tests {
 
     #[test]
     fn mozjs_no_cognitive() {
-        check_metrics::<MozjsParser>("var a = 42;", "foo.js", |metric| {
+        check_metrics::<JavascriptParser>("var a = 42;", "foo.js", |metric| {
             insta::assert_json_snapshot!(
                 metric.cognitive,
                 @r###"
@@ -742,7 +738,7 @@ mod tests {
 
     #[test]
     fn mozjs_simple_function() {
-        check_metrics::<MozjsParser>(
+        check_metrics::<JavascriptParser>(
             "function f() {
                  if (a && b) { // +2 (+1 &&)
                      window.print(\"test\");
@@ -881,7 +877,7 @@ mod tests {
 
     #[test]
     fn mozjs_sequence_same_booleans() {
-        check_metrics::<MozjsParser>(
+        check_metrics::<JavascriptParser>(
             "function f() {
                  if (a && b && 1 == 1) { // +2 (+1 sequence of &&)
                      window.print(\"test\");
@@ -902,7 +898,7 @@ mod tests {
             },
         );
 
-        check_metrics::<MozjsParser>(
+        check_metrics::<JavascriptParser>(
             "function f() {
                  if (a || b || c || d) { // +2 (+1 sequence of ||)
                      window.print(\"test\");
@@ -1037,7 +1033,7 @@ mod tests {
 
     #[test]
     fn mozjs_not_booleans() {
-        check_metrics::<MozjsParser>(
+        check_metrics::<JavascriptParser>(
             "function f() {
                  if (a && !(b && c)) { // +3 (+1 &&, +1 &&)
                      window.print(\"test\");
@@ -1058,7 +1054,7 @@ mod tests {
             },
         );
 
-        check_metrics::<MozjsParser>(
+        check_metrics::<JavascriptParser>(
             "function f() {
                  if (!(a || b) && !(c || d)) { // +4 (+1 ||, +1 &&, +1 ||)
                      window.print(\"test\");
@@ -1152,7 +1148,7 @@ mod tests {
 
     #[test]
     fn mozjs_sequence_different_booleans() {
-        check_metrics::<MozjsParser>(
+        check_metrics::<JavascriptParser>(
             "function f() {
                  if (a && b || 1 == 1) { // +3 (+1 &&, +1 ||)
                      window.print(\"test\");
@@ -1316,7 +1312,7 @@ mod tests {
 
     #[test]
     fn mozjs_1_level_nesting() {
-        check_metrics::<MozjsParser>(
+        check_metrics::<JavascriptParser>(
             "function f() {
                  if (1 == 1) { // +1
                      if (1 == 1) { // +2 (nesting = 1)
@@ -1338,10 +1334,10 @@ mod tests {
                     metric.cognitive,
                     @r###"
                     {
-                      "sum": 11.0,
-                      "average": 11.0,
+                      "sum": 16.0,
+                      "average": 16.0,
                       "min": 0.0,
-                      "max": 11.0
+                      "max": 16.0
                     }"###
                 );
             },
@@ -1429,7 +1425,7 @@ mod tests {
 
     #[test]
     fn mozjs_try_construct() {
-        check_metrics::<MozjsParser>(
+        check_metrics::<JavascriptParser>(
             "function asyncOnChannelRedirect(oldChannel, newChannel, flags, callback) {
                  for (const collector of this.collectors) {
                      try {
@@ -1559,7 +1555,7 @@ mod tests {
 
     #[test]
     fn mozjs_switch() {
-        check_metrics::<MozjsParser>(
+        check_metrics::<JavascriptParser>(
             "function f() {
                  switch (1) { // +1
                      case 1:

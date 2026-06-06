@@ -204,7 +204,6 @@ where
 implement_metric_trait!(
     [Nom],
     PythonCode,
-    MozjsCode,
     JavascriptCode,
     TypescriptCode,
     TsxCode,

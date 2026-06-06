@@ -438,67 +438,6 @@ mod tests {
     }
 
     #[test]
-    fn mozjs_ops() {
-        check_ops(
-            LANG::Mozjs,
-            "var a, b, c, avg;
-             let x = 1;
-             a = 5; b = 5; c = 5;
-             avg = (a + b + c) / 3;
-             console.log(\"{}\", avg);",
-            "foo.js",
-            &mut ["()", "var", "let", "=", "+", "/", ",", ".", ";"],
-            &mut [
-                "a",
-                "b",
-                "c",
-                "avg",
-                "x",
-                "1",
-                "3",
-                "5",
-                "console.log",
-                "console",
-                "log",
-                "\"{}\"",
-            ],
-        );
-    }
-
-    #[test]
-    fn mozjs_function_ops() {
-        check_ops(
-            LANG::Mozjs,
-            "function main() {
-              var a, b, c, avg;
-              let x = 1;
-              a = 5; b = 5; c = 5;
-              avg = (a + b + c) / 3;
-              console.log(\"{}\", avg);
-            }",
-            "foo.js",
-            &mut [
-                "function", "()", "{}", "var", "let", "=", "+", "/", ",", ".", ";",
-            ],
-            &mut [
-                "main",
-                "a",
-                "b",
-                "c",
-                "avg",
-                "x",
-                "1",
-                "3",
-                "5",
-                "console.log",
-                "console",
-                "log",
-                "\"{}\"",
-            ],
-        );
-    }
-
-    #[test]
     fn typescript_ops() {
         check_ops(
             LANG::Typescript,

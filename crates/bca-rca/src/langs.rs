@@ -17,16 +17,7 @@ mk_langs!(
     // 6) tree-sitter function to call to get a Language
     // 7) file extensions
     // 8) emacs modes
-    (
-        Mozjs,
-        "The `Mozjs` language is variant of the `JavaScript` language",
-        "javascript",
-        MozjsCode,
-        MozjsParser,
-        tree_sitter_mozjs,
-        [js, jsm, mjs, jsx],
-        ["js", "js2"]
-    ),
+    // Mozjs removed: Mozilla-specific tree-sitter-js fork (bca vendor drop)
     (
         Javascript,
         "The `JavaScript` language",
@@ -34,8 +25,8 @@ mk_langs!(
         JavascriptCode,
         JavascriptParser,
         tree_sitter_javascript,
-        [],
-        []
+        [js, jsm, mjs, jsx],
+        ["js", "js2"]
     ),
     (
         Java,

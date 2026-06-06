@@ -232,7 +232,6 @@ impl NArgs for CppCode {
 implement_metric_trait!(
     [NArgs],
     PythonCode,
-    MozjsCode,
     JavascriptCode,
     TypescriptCode,
     TsxCode,

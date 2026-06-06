@@ -122,14 +122,6 @@ impl Exit for PythonCode {
     }
 }
 
-impl Exit for MozjsCode {
-    fn compute(node: &Node, stats: &mut Stats) {
-        if matches!(node.kind_id().into(), Mozjs::ReturnStatement) {
-            stats.exit += 1;
-        }
-    }
-}
-
 impl Exit for JavascriptCode {
     fn compute(node: &Node, stats: &mut Stats) {
         if matches!(node.kind_id().into(), Javascript::ReturnStatement) {

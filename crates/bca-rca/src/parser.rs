@@ -2,7 +2,6 @@ use std::marker::PhantomData;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::abc::Abc;
 use crate::checker::Checker;
 use crate::cognitive::Cognitive;
 use crate::cyclomatic::Cyclomatic;
@@ -12,9 +11,6 @@ use crate::loc::Loc;
 use crate::mi::Mi;
 use crate::nargs::NArgs;
 use crate::nom::Nom;
-use crate::npa::Npa;
-use crate::npm::Npm;
-use crate::wmc::Wmc;
 
 use crate::alterator::Alterator;
 use crate::getter::Getter;
@@ -31,7 +27,6 @@ pub struct Parser<
         + Alterator
         + Checker
         + Getter
-        + Abc
         + Cognitive
         + Cyclomatic
         + Exit
@@ -39,10 +34,7 @@ pub struct Parser<
         + Loc
         + Mi
         + NArgs
-        + Nom
-        + Npa
-        + Npm
-        + Wmc,
+        + Nom,
 > {
     code: Vec<u8>,
     tree: Tree,
@@ -100,7 +92,6 @@ impl<
         + Alterator
         + Checker
         + Getter
-        + Abc
         + Cognitive
         + Cyclomatic
         + Exit
@@ -108,10 +99,7 @@ impl<
         + Loc
         + Mi
         + NArgs
-        + Nom
-        + Npa
-        + Npm
-        + Wmc,
+        + Nom,
 > ParserTrait for Parser<T>
 {
     type Checker = T;
@@ -124,10 +112,6 @@ impl<
     type Mi = T;
     type NArgs = T;
     type Exit = T;
-    type Wmc = T;
-    type Abc = T;
-    type Npm = T;
-    type Npa = T;
 
     fn new(code: Vec<u8>, path: &Path, pr: Option<Arc<PreprocResults>>) -> Self {
         let fake_code = get_fake_code::<T>(&code, path, pr);

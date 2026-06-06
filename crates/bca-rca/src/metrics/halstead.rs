@@ -286,12 +286,6 @@ impl Halstead for PythonCode {
     }
 }
 
-impl Halstead for MozjsCode {
-    fn compute<'a>(node: &Node<'a>, code: &'a [u8], halstead_maps: &mut HalsteadMaps<'a>) {
-        compute_halstead::<Self>(node, code, halstead_maps);
-    }
-}
-
 impl Halstead for JavascriptCode {
     fn compute<'a>(node: &Node<'a>, code: &'a [u8], halstead_maps: &mut HalsteadMaps<'a>) {
         compute_halstead::<Self>(node, code, halstead_maps);
@@ -494,7 +488,7 @@ mod tests {
 
     #[test]
     fn mozjs_operators_and_operands() {
-        check_metrics::<MozjsParser>(
+        check_metrics::<JavascriptParser>(
             "function main() {
               var a, b, c, avg;
               a = 5; b = 5; c = 5;

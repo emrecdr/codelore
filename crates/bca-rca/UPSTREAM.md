@@ -38,32 +38,67 @@ The following were REMOVED from the vendored tree:
   The `pub mod abc`, `pub mod wmc`, `pub mod npa`, `pub mod npm` declarations in
   `src/metrics/mod.rs` were removed.
 
-## Known residual references (to be resolved in Task 5/6)
+## Task 5 excision (completed 2026-06-06)
 
-Dropping the above files leaves broken `use` statements in several files. These are
-catalogued here for Task 5's implementer:
+**Option B chosen: fully excise Mozjs and dropped metrics.**
 
-- `src/spaces.rs` — imports `crate::abc`, `crate::npa`, `crate::npm`, `crate::wmc`;
-  references `metrics.abc`, `metrics.wmc`, `metrics.npm`, `metrics.npa` fields
-- `src/traits.rs` — imports `crate::abc::Abc`, `crate::npa::Npa`, `crate::npm::Npm`, `crate::wmc::Wmc`
-- `src/parser.rs` — imports `crate::abc::Abc`, `crate::npa::Npa`, `crate::npm::Npm`, `crate::wmc::Wmc`
-- `src/output/dump_metrics.rs` — imports `crate::abc`, `crate::npa`, `crate::npm`, `crate::wmc`;
-  calls `dump_abc`, `dump_wmc`, `dump_npm`, `dump_npa`
-- `src/macros.rs` — `implement_metric_trait!(Abc, ...)` and `implement_metric_trait!(Wmc, ...)`
-  macro arms reference dropped trait types (Abc, Wmc)
-- `src/langs.rs` — `Mozjs` / `MozjsCode` / `MozjsParser` / `tree_sitter_mozjs` referenced
-  via the `mk_langs!` macro; depends on both `language_mozjs.rs` (dropped) and the
-  `tree_sitter-mozjs` external crate
-- `src/macros.rs` — `get_language!(tree_sitter_cpp)` arm references `tree_sitter_mozcpp::LANGUAGE`;
-  requires the `tree-sitter-mozcpp` external crate in Cargo.toml
-- Multiple metric files (`cognitive.rs`, `loc.rs`, `exit.rs`, `halstead.rs`, `cyclomatic.rs`,
-  `nargs.rs`, `nom.rs`, `mi.rs`) reference `MozjsCode`/`MozjsParser`/`Mozjs` — these come from
-  `language_mozjs.rs` (dropped) via `langs.rs`
+The dangling references from Task 4's file drops were resolved by:
 
-Task 5 options for resolution:
-  a) Re-add `tree-sitter-mozjs` as external dep + stub out `language_mozjs.rs` with just the enum
-  b) Fully excise Mozjs from all metric impls and `langs.rs` (larger surgery, out of scope for Task 4)
-  c) Feature-gate Mozjs behind a `mozjs` cargo feature
+### Mozjs excision
+- `src/langs.rs` — removed Mozjs entry from `mk_langs!`; moved js/jsm/mjs/jsx extensions to Javascript
+- `src/macros.rs` — restored mozcpp special-case for `get_language!(tree_sitter_cpp)`;
+  removed `implement_metric_trait!(Abc, ...)` and `implement_metric_trait!(Wmc, ...)` macro arms
+- `src/checker.rs` — removed `impl Checker for MozjsCode` block
+- `src/getter.rs` — removed `impl Getter for MozjsCode` block; fixed `Mozjs::Pair` /
+  `Mozjs::VariableDeclarator` references in JS/TS/TSX impl blocks to use correct enum namespaces
+- `src/alterator.rs` — removed `impl Alterator for MozjsCode` block
+- `src/metrics/cognitive.rs` — removed `impl Cognitive for MozjsCode`; updated MozjsParser tests
+  to use JavascriptParser (snapshot adjusted for JS grammar difference: sum 11→16)
+- `src/metrics/cyclomatic.rs` — removed `impl Cyclomatic for MozjsCode`
+- `src/metrics/exit.rs` — removed `impl Exit for MozjsCode`
+- `src/metrics/halstead.rs` — removed `impl Halstead for MozjsCode`; updated MozjsParser test refs
+- `src/metrics/loc.rs` — removed `impl Loc for MozjsCode`; updated MozjsParser test refs
+- `src/metrics/mi.rs` — removed MozjsCode from `implement_metric_trait!([Mi], ...)`
+- `src/metrics/nargs.rs` — removed MozjsCode from `implement_metric_trait!([NArgs], ...)`
+- `src/metrics/nom.rs` — removed MozjsCode from `implement_metric_trait!([Nom], ...)`
+- `src/ops.rs` — removed `mozjs_ops` and `mozjs_function_ops` tests
+
+### Abc/Wmc/Npa/Npm excision
+- `src/spaces.rs` — removed imports, struct fields, merge/compute calls
+- `src/traits.rs` — removed Abc/Wmc/Npa/Npm from ParserTrait associated types
+- `src/parser.rs` — removed trait bounds and associated type assignments
+- `src/output/dump_metrics.rs` — removed imports and dump_abc/wmc/npm/npa functions
+
+**Files modified: 15 source files + Cargo.toml + UPSTREAM.md**
+
+### Tree-sitter grammar version notes
+
+The `language_*.rs` enum files were generated from specific grammar versions. Using mismatched
+grammar versions causes node-ID mismatches and silent metric failures. Pinned versions verified
+by checking root node kind_id against enum constants:
+
+| Grammar | Version | Key node |
+|---------|---------|----------|
+| tree-sitter-javascript | =0.23.1 | program id=133 |
+| tree-sitter-typescript | =0.23.1 | program id=166/172 |
+| tree-sitter-python | =0.23.6 | module id=108 |
+| tree-sitter-java | =0.23.5 | program id=138 |
+| tree-sitter-rust | =0.23.2 | source_file id=155 |
+| tree-sitter-kotlin-ng | 1.1.0 | source_file id=142 |
+| bca-tree-sitter-mozcpp | 1.1.0 | translation_unit id=308 |
+| bca-tree-sitter-ccomment | 1.1.0 | (aliased as tree-sitter-ccomment) |
+| bca-tree-sitter-preproc | 1.1.0 | (aliased as tree-sitter-preproc) |
+
+C++ uses `bca-tree-sitter-mozcpp` (aliased as `tree-sitter-mozcpp`) because `language_cpp.rs`
+was generated from the mozcpp grammar. The `get_language!(tree_sitter_cpp)` macro arm routes
+to `tree_sitter_mozcpp::LANGUAGE`.
+
+When upgrading grammar versions in future, verify node IDs by running:
+```
+let root = tree.root_node();
+println!("{} id: {}", root.kind(), root.kind_id());
+```
+and comparing against the enum constants in `src/languages/language_*.rs`.
 
 ## License
 

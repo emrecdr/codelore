@@ -1,7 +1,6 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::abc::Abc;
 use crate::alterator::Alterator;
 use crate::checker::Checker;
 use crate::cognitive::Cognitive;
@@ -15,11 +14,8 @@ use crate::mi::Mi;
 use crate::nargs::NArgs;
 use crate::node::Node;
 use crate::nom::Nom;
-use crate::npa::Npa;
-use crate::npm::Npm;
 use crate::parser::Filter;
 use crate::preproc::PreprocResults;
-use crate::wmc::Wmc;
 
 /// A trait for callback functions.
 ///
@@ -54,10 +50,6 @@ pub trait ParserTrait {
     type Mi: Mi;
     type NArgs: NArgs;
     type Exit: Exit;
-    type Wmc: Wmc;
-    type Abc: Abc;
-    type Npm: Npm;
-    type Npa: Npa;
 
     fn new(code: Vec<u8>, path: &Path, pr: Option<Arc<PreprocResults>>) -> Self;
     fn get_language(&self) -> LANG;

@@ -615,32 +615,6 @@ impl Loc for PythonCode {
     }
 }
 
-impl Loc for MozjsCode {
-    fn compute(node: &Node, stats: &mut Stats, is_func_space: bool, is_unit: bool) {
-        use Mozjs::*;
-
-        let (start, end) = init(node, stats, is_func_space, is_unit);
-
-        match node.kind_id().into() {
-            String | DQUOTE | Program => {}
-            Comment => {
-                add_cloc_lines(stats, start, end);
-            }
-            ExpressionStatement | ExportStatement | ImportStatement | StatementBlock
-            | IfStatement | SwitchStatement | ForStatement | ForInStatement | WhileStatement
-            | DoStatement | TryStatement | WithStatement | BreakStatement | ContinueStatement
-            | DebuggerStatement | ReturnStatement | ThrowStatement | EmptyStatement
-            | StatementIdentifier => {
-                stats.lloc.logical_lines += 1;
-            }
-            _ => {
-                check_comment_ends_on_code_line(stats, start);
-                stats.ploc.lines.insert(start);
-            }
-        }
-    }
-}
-
 impl Loc for JavascriptCode {
     fn compute(node: &Node, stats: &mut Stats, is_func_space: bool, is_unit: bool) {
         use Javascript::*;
@@ -2575,7 +2549,7 @@ mod tests {
 
     #[test]
     fn mozjs_real_loc() {
-        check_metrics::<MozjsParser>(
+        check_metrics::<JavascriptParser>(
             "assert.throws(Test262Error, function() {
                for (let { poisoned: x = ++initEvalCount } = poisonedProperty; ; ) {
                  return;

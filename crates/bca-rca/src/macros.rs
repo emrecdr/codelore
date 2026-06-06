@@ -1,4 +1,5 @@
 macro_rules! get_language {
+    // language_cpp.rs was generated from mozcpp grammar; node IDs differ from standard tree-sitter-cpp.
     (tree_sitter_cpp) => {
         tree_sitter_mozcpp::LANGUAGE.into()
     };
@@ -14,13 +15,6 @@ macro_rules! get_language {
 }
 
 macro_rules! implement_metric_trait {
-    (Abc, $($code:ident),+) => (
-        $(
-           impl Abc for $code {
-               fn compute(_node: &Node, _stats: &mut Stats) {}
-           }
-        )+
-    );
     (Cognitive, $($code:ident),+) => (
         $(
            impl Cognitive for $code {
@@ -39,13 +33,6 @@ macro_rules! implement_metric_trait {
         $(
            impl Loc for $code {
                fn compute(_node: &Node, _stats: &mut Stats, _is_func_space: bool, _is_unit: bool) {}
-           }
-        )+
-    );
-    (Wmc, $($code:ident),+) => (
-        $(
-           impl Wmc for $code {
-               fn compute(_space_kind: SpaceKind, _cyclomatic: &cyclomatic::Stats, _stats: &mut Stats) {}
            }
         )+
     );

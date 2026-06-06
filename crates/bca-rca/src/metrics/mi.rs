@@ -105,7 +105,6 @@ where
 implement_metric_trait!(
     [Mi],
     PythonCode,
-    MozjsCode,
     JavascriptCode,
     TypescriptCode,
     TsxCode,

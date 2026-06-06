@@ -130,19 +130,6 @@ impl Cyclomatic for PythonCode {
     }
 }
 
-impl Cyclomatic for MozjsCode {
-    fn compute(node: &Node, stats: &mut Stats) {
-        use Mozjs::*;
-
-        match node.kind_id().into() {
-            If | For | While | Case | Catch | TernaryExpression | AMPAMP | PIPEPIPE => {
-                stats.cyclomatic += 1.;
-            }
-            _ => {}
-        }
-    }
-}
-
 impl Cyclomatic for JavascriptCode {
     fn compute(node: &Node, stats: &mut Stats) {
         use Javascript::*;

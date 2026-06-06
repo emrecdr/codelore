@@ -91,74 +91,6 @@ impl Getter for PythonCode {
     }
 }
 
-impl Getter for MozjsCode {
-    fn get_space_kind(node: &Node) -> SpaceKind {
-        use Mozjs::*;
-
-        match node.kind_id().into() {
-            FunctionExpression
-            | MethodDefinition
-            | GeneratorFunction
-            | FunctionDeclaration
-            | GeneratorFunctionDeclaration
-            | ArrowFunction => SpaceKind::Function,
-            Class | ClassDeclaration => SpaceKind::Class,
-            Program => SpaceKind::Unit,
-            _ => SpaceKind::Unknown,
-        }
-    }
-
-    fn get_func_space_name<'a>(node: &Node, code: &'a [u8]) -> Option<&'a str> {
-        if let Some(name) = node.child_by_field_name("name") {
-            let code = &code[name.start_byte()..name.end_byte()];
-            std::str::from_utf8(code).ok()
-        } else {
-            // We can be in a pair: foo: function() {}
-            // Or in a variable declaration: var aFun = function() {}
-            if let Some(parent) = node.parent() {
-                match parent.kind_id().into() {
-                    Mozjs::Pair => {
-                        if let Some(name) = parent.child_by_field_name("key") {
-                            let code = &code[name.start_byte()..name.end_byte()];
-                            return std::str::from_utf8(code).ok();
-                        }
-                    }
-                    Mozjs::VariableDeclarator => {
-                        if let Some(name) = parent.child_by_field_name("name") {
-                            let code = &code[name.start_byte()..name.end_byte()];
-                            return std::str::from_utf8(code).ok();
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            Some("<anonymous>")
-        }
-    }
-
-    fn get_op_type(node: &Node) -> HalsteadType {
-        use Mozjs::*;
-
-        match node.kind_id().into() {
-            Export | Import | Import2 | Extends | DOT | From | LPAREN | COMMA | As | STAR
-            | GTGT | GTGTGT | COLON | Return | Delete | Throw | Break | Continue | If | Else
-            | Switch | Case | Default | Async | For | In | Of | While | Try | Catch | Finally
-            | With | EQ | AT | AMPAMP | PIPEPIPE | PLUS | DASH | DASHDASH | PLUSPLUS | SLASH
-            | PERCENT | STARSTAR | PIPE | AMP | LTLT | TILDE | LT | LTEQ | EQEQ | BANGEQ | GTEQ
-            | GT | PLUSEQ | BANG | BANGEQEQ | EQEQEQ | DASHEQ | STAREQ | SLASHEQ | PERCENTEQ
-            | STARSTAREQ | GTGTEQ | GTGTGTEQ | LTLTEQ | AMPEQ | CARET | CARETEQ | PIPEEQ
-            | Yield | LBRACK | LBRACE | Await | QMARK | QMARKQMARK | New | Let | Var | Const
-            | Function | FunctionExpression | SEMI => HalsteadType::Operator,
-            Identifier | Identifier2 | MemberExpression | MemberExpression2
-            | PropertyIdentifier | String | String2 | Number | True | False | Null | Void
-            | This | Super | Undefined | Set | Get | Typeof | Instanceof => HalsteadType::Operand,
-            _ => HalsteadType::Unknown,
-        }
-    }
-
-    get_operator!(Mozjs);
-}
-
 impl Getter for JavascriptCode {
     fn get_space_kind(node: &Node) -> SpaceKind {
         use Javascript::*;
@@ -185,13 +117,13 @@ impl Getter for JavascriptCode {
             // Or in a variable declaration: var aFun = function() {}
             if let Some(parent) = node.parent() {
                 match parent.kind_id().into() {
-                    Mozjs::Pair => {
+                    Javascript::Pair => {
                         if let Some(name) = parent.child_by_field_name("key") {
                             let code = &code[name.start_byte()..name.end_byte()];
                             return std::str::from_utf8(code).ok();
                         }
                     }
-                    Mozjs::VariableDeclarator => {
+                    Javascript::VariableDeclarator => {
                         if let Some(name) = parent.child_by_field_name("name") {
                             let code = &code[name.start_byte()..name.end_byte()];
                             return std::str::from_utf8(code).ok();
@@ -254,13 +186,13 @@ impl Getter for TypescriptCode {
             // Or in a variable declaration: var aFun = function() {}
             if let Some(parent) = node.parent() {
                 match parent.kind_id().into() {
-                    Mozjs::Pair => {
+                    Typescript::Pair => {
                         if let Some(name) = parent.child_by_field_name("key") {
                             let code = &code[name.start_byte()..name.end_byte()];
                             return std::str::from_utf8(code).ok();
                         }
                     }
-                    Mozjs::VariableDeclarator => {
+                    Typescript::VariableDeclarator => {
                         if let Some(name) = parent.child_by_field_name("name") {
                             let code = &code[name.start_byte()..name.end_byte()];
                             return std::str::from_utf8(code).ok();
@@ -323,13 +255,13 @@ impl Getter for TsxCode {
             // Or in a variable declaration: var aFun = function() {}
             if let Some(parent) = node.parent() {
                 match parent.kind_id().into() {
-                    Mozjs::Pair => {
+                    Tsx::Pair => {
                         if let Some(name) = parent.child_by_field_name("key") {
                             let code = &code[name.start_byte()..name.end_byte()];
                             return std::str::from_utf8(code).ok();
                         }
                     }
-                    Mozjs::VariableDeclarator => {
+                    Tsx::VariableDeclarator => {
                         if let Some(name) = parent.child_by_field_name("name") {
                             let code = &code[name.start_byte()..name.end_byte()];
                             return std::str::from_utf8(code).ok();

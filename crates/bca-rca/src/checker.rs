@@ -363,63 +363,6 @@ impl Checker for JavaCode {
     }
 }
 
-impl Checker for MozjsCode {
-    fn is_comment(node: &Node) -> bool {
-        node.kind_id() == Mozjs::Comment
-    }
-
-    fn is_useful_comment(_: &Node, _: &[u8]) -> bool {
-        false
-    }
-
-    fn is_func_space(node: &Node) -> bool {
-        matches!(
-            node.kind_id().into(),
-            Mozjs::Program
-                | Mozjs::FunctionExpression
-                | Mozjs::Class
-                | Mozjs::GeneratorFunction
-                | Mozjs::FunctionDeclaration
-                | Mozjs::MethodDefinition
-                | Mozjs::GeneratorFunctionDeclaration
-                | Mozjs::ClassDeclaration
-                | Mozjs::ArrowFunction
-        )
-    }
-
-    is_js_func_and_closure_checker!(MozjsParser, Mozjs);
-
-    fn is_call(node: &Node) -> bool {
-        node.kind_id() == Mozjs::CallExpression
-    }
-
-    fn is_non_arg(node: &Node) -> bool {
-        matches!(
-            node.kind_id().into(),
-            Mozjs::LPAREN | Mozjs::COMMA | Mozjs::RPAREN
-        )
-    }
-
-    fn is_string(node: &Node) -> bool {
-        node.kind_id() == Mozjs::String || node.kind_id() == Mozjs::TemplateString
-    }
-
-    #[inline(always)]
-    fn is_else_if(node: &Node) -> bool {
-        if node.kind_id() != Mozjs::IfStatement {
-            return false;
-        }
-        if let Some(parent) = node.parent() {
-            return parent.kind_id() == Mozjs::ElseClause;
-        }
-        false
-    }
-
-    fn is_primitive(_id: u16) -> bool {
-        false
-    }
-}
-
 impl Checker for JavascriptCode {
     fn is_comment(node: &Node) -> bool {
         node.kind_id() == Javascript::Comment
