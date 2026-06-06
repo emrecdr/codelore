@@ -60,3 +60,47 @@ fn invalid_repo_exits_with_code_3() {
     // BcaError::Repo → exit 3 per spec §6.6
     assert_eq!(output.status.code(), Some(3));
 }
+
+#[test]
+fn analyze_hotspots_emits_csv() {
+    let tiny = bca_lib::test_support::tiny_repo::build();
+    Command::cargo_bin("bca")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "hotspots",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "csv",
+            "--min-revs",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "entity,name,revisions,cognitive,code-health,hotspot-score",
+        ));
+}
+
+#[test]
+fn analyze_code_health_emits_csv() {
+    let tiny = bca_lib::test_support::tiny_repo::build();
+    Command::cargo_bin("bca")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "code-health",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "csv",
+            "--min-revs",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("entity,name,cognitive,score"));
+}

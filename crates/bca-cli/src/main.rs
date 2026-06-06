@@ -51,19 +51,11 @@ fn init_logging(verbose: bool) {
 }
 
 fn analyze(args: AnalyzeArgs) -> Result<()> {
-    // Validate analysis name early — produces a clean error message
-    // even though Plan 1 only runs `revisions`.
     let analysis = AnalysisName::from_str(&args.analysis)
         .with_context(|| format!("parsing --analysis {:?}", args.analysis))?;
-    if analysis != AnalysisName::Revisions {
-        anyhow::bail!(
-            "Plan 1 walking skeleton only supports --analysis revisions. \
-             Full analysis set lands in Plan 4."
-        );
-    }
     if args.format != "csv" {
         anyhow::bail!(
-            "Plan 1 walking skeleton only supports --format csv. \
+            "Plan 3 walking skeleton only supports --format csv. \
              JSON, SARIF, Markdown, Parquet, SQLite land in Plan 5."
         );
     }
@@ -78,12 +70,31 @@ fn analyze(args: AnalyzeArgs) -> Result<()> {
     let repo = GixRepo::open(&args.repo).context("open repo")?;
     let db = FactsDb::new_in_memory().context("open fact store")?;
     db.ingest(&repo, &opts).context("ingest commits")?;
-    let rows = run_revisions(&db, &opts).context("run revisions analysis")?;
 
     let mut out: Box<dyn Write> = match args.output {
         Some(path) => Box::new(std::fs::File::create(path)?),
         None => Box::new(std::io::stdout().lock()),
     };
-    write_revisions_csv(&rows, &mut out).context("write csv")?;
+
+    match analysis {
+        AnalysisName::Revisions => {
+            let rows = run_revisions(&db, &opts).context("run revisions analysis")?;
+            write_revisions_csv(&rows, &mut out).context("write csv")?;
+        }
+        AnalysisName::Hotspots => {
+            let rows = bca_lib::analyses::hotspots::run_hotspots(&db, &opts)
+                .context("run hotspots analysis")?;
+            bca_lib::output::csv::write_hotspots_csv(&rows, &mut out).context("write csv")?;
+        }
+        AnalysisName::CodeHealth => {
+            let rows = bca_lib::analyses::code_health::run_code_health(&db, &opts)
+                .context("run code-health analysis")?;
+            bca_lib::output::csv::write_code_health_csv(&rows, &mut out).context("write csv")?;
+        }
+        _ => anyhow::bail!(
+            "Plan 3 supports --analysis revisions | hotspots | code-health. \
+             Other analyses land in Plan 4."
+        ),
+    }
     Ok(())
 }
