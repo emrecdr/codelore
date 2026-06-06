@@ -1,6 +1,8 @@
 # bca task runner
 # Install just: cargo install just
 
+set positional-arguments
+
 default:
     @just --list
 
@@ -32,7 +34,7 @@ fmt:
 deny:
     cargo deny check
 
-# Coverage report
+# Coverage report — requires: cargo install cargo-llvm-cov
 coverage:
     cargo llvm-cov --workspace --html
 
@@ -41,4 +43,4 @@ ci: fmt-check lint deny test
 
 # Run the binary
 bca *ARGS:
-    cargo run --release -p bca-cli -- {{ARGS}}
+    cargo run --release -p bca-cli -- "$@"
