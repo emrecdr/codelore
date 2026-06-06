@@ -17,6 +17,7 @@ thiserror = "2"
 arrow = "58.3"
 gix = { version = "0.84", features = ["max-performance", "blob-diff"] }
 tempfile = { version = "3", optional = true }
+duckdb = { version = "=1.10503.1", features = ["bundled", "appender-arrow"] }
 
 [features]
 default = []
