@@ -1,0 +1,64 @@
+name: bench
+
+on:
+  schedule:
+    - cron: '0 6 * * MON'  # Mondays 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: bench-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache Linux kernel snapshot
+        id: kernel-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/linux-kernel-snapshot
+          key: linux-kernel-snapshot-2026-06
+
+      - name: Fetch Linux kernel snapshot
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth=10000 --filter=blob:none \
+            https://github.com/torvalds/linux.git /tmp/linux-kernel-snapshot
+
+      - name: Run criterion benches
+        env:
+          CODELORE_BENCH_LINUX_KERNEL_PATH: /tmp/linux-kernel-snapshot
+        run: |
+          cargo bench -p codelore-lib --all-features --bench end_to_end -- \
+            --output-format bencher | tee bench-output.txt
+
+      - name: Upload bench results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-output
+          path: bench-output.txt
+
+      # Regression gate: track results in gh-pages and fail PRs that regress
+      # baseline benches (tiny + medium) by >10%. The kernel bench is informational
+      # only — too noisy on shared CI runners to gate on.
+      - name: Track regression
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          tool: cargo
+          output-file-path: bench-output.txt
+          alert-threshold: '110%'
+          fail-on-alert: false  # advisory on weekly runs; PRs would set true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: false
+          comment-on-alert: true

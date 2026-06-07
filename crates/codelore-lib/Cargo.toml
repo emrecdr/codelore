@@ -29,6 +29,14 @@ hex = "0.4"
 default = []
 test-support = ["dep:tempfile"]
 
+[dev-dependencies]
+criterion = "0.8"
+
+[[bench]]
+name = "end_to_end"
+harness = false
+required-features = ["test-support"]
+
 [[test]]
 name = "facts_test"
 required-features = ["test-support"]

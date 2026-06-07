@@ -366,3 +366,132 @@ pub mod differential_repo {
         std::fs::write(p, content).unwrap();
     }
 }
+
+#[cfg(feature = "test-support")]
+pub mod medium_repo {
+    //! 500-commit fixture for criterion benchmarks. Heavier than `differential_repo`
+    //! (which is 50 commits, optimized for differential-test edge-case coverage) but
+    //! still small enough for a CI bench to iterate on in under ~10 seconds.
+    //!
+    //! Structure: 500 commits, 3 authors, 25 files, round-robin author×file, no
+    //! merges, no renames, deterministic dates. Intended use: measure ingest+walk
+    //! throughput without any of the edge cases `differential_repo` exercises.
+
+    use std::path::PathBuf;
+    use std::process::Command;
+    use tempfile::TempDir;
+
+    pub struct MediumRepo {
+        pub dir: TempDir,
+        pub head_sha: String,
+    }
+
+    /// Build a 500-commit fixture for criterion benches.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any git command fails.
+    #[must_use]
+    pub fn build() -> MediumRepo {
+        const COMMIT_COUNT: usize = 500;
+        const FILE_COUNT: usize = 25;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path: PathBuf = dir.path().to_path_buf();
+        run_git(&path, &["init", "-b", "main", "--quiet"]);
+        run_git(&path, &["config", "user.email", "bench@example.com"]);
+        run_git(&path, &["config", "user.name", "Bench"]);
+        // Disable auto-gc: 500 rapid commits can trigger gc and prune loose
+        // blobs between `git add` and the next `git commit`, producing
+        // "invalid object" errors. Disable upfront for the bench fixture.
+        run_git(&path, &["config", "gc.auto", "0"]);
+
+        let authors = [
+            ("Alice", "alice@example.com"),
+            ("Bob", "bob@example.com"),
+            ("Carol", "carol@example.com"),
+        ];
+
+        for i in 0..COMMIT_COUNT {
+            let file_idx = i % FILE_COUNT;
+            let rel = format!("src/mod_{file_idx:02}.rs");
+            let content = format!(
+                "// commit {i}\npub fn fn_{i}() -> u32 {{ {i} }}\n\n\
+                 #[cfg(test)]\nmod tests {{\n    use super::*;\n    \
+                 #[test] fn t_{i}() {{ assert_eq!(fn_{i}(), {i}); }}\n}}\n"
+            );
+            write(&path, &rel, &content);
+            let (name, email) = authors[i % 3];
+            commit_at(&path, name, email, i, &format!("touch {rel}"), &[&rel]);
+        }
+
+        let head_sha = String::from_utf8(
+            Command::new("git")
+                .arg("-C")
+                .arg(&path)
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .expect("git rev-parse")
+                .stdout,
+        )
+        .expect("utf8")
+        .trim()
+        .to_string();
+
+        MediumRepo { dir, head_sha }
+    }
+
+    fn commit_at(
+        path: &std::path::Path,
+        name: &str,
+        email: &str,
+        sequence: usize,
+        msg: &str,
+        files: &[&str],
+    ) {
+        for f in files {
+            run_git(path, &["add", f]);
+        }
+        let date = format!(
+            "2026-01-{:02}T{:02}:{:02}:00Z",
+            1 + (sequence / (24 * 60)),
+            (sequence / 60) % 24,
+            sequence % 60
+        );
+        let author = format!("{name} <{email}>");
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args([
+                "commit",
+                "-m",
+                msg,
+                "--author",
+                &author,
+                "--quiet",
+            ])
+            .env("GIT_AUTHOR_DATE", &date)
+            .env("GIT_COMMITTER_DATE", &date)
+            .status()
+            .expect("git commit");
+        assert!(status.success(), "commit failed: {msg}");
+    }
+
+    fn run_git(path: &std::path::Path, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .status()
+            .expect("git");
+        assert!(status.success(), "git {args:?} failed");
+    }
+
+    fn write(root: &std::path::Path, rel: &str, content: &str) {
+        let p = root.join(rel);
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(p, content).unwrap();
+    }
+}
