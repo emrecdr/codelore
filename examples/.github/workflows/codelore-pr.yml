@@ -1,9 +1,9 @@
 name: CodeLore PR Analysis
 
-# Plan 8 §7 example: run CodeLore in `diff` mode on every PR, surface
-# findings via $GITHUB_STEP_SUMMARY (always) and the GitHub Security tab
-# (when the SARIF action is wired below). The `codelore diff` subcommand
-# lands in Plan 8 §7; this example shows the deployment pattern.
+# Run CodeLore in `diff` mode on every PR. Findings surface via
+# $GITHUB_STEP_SUMMARY (always) and the GitHub Security tab (when the
+# SARIF action is wired below). See docs/advanced-usage.md §4 for the
+# semantics of each finding category and §11 for quality-gate rollout.
 
 on:
   pull_request:
@@ -49,7 +49,7 @@ jobs:
       # since the branch was created.
       #
       # `--analysis all` runs hotspots + coupling (absent-change-pattern) +
-      # clones in one pass (Plan 8 §7 supports the `all` shorthand).
+      # clones in one pass.
       #
       # The Markdown stream lands in the GitHub Actions run summary tab,
       # visible to anyone with read access — no PR write needed.

@@ -9,12 +9,14 @@ This guide is the developer-facing reference for CodeLore. The [README](../READM
 3. [Every CLI flag explained](#3-every-cli-flag-explained)
 4. [PR-mode: `codelore diff`](#4-pr-mode-codelore-diff)
 5. [Configuration: `.codeloreignore` + thresholds](#5-configuration-codeloreignore--thresholds)
-6. [Persistent cache mechanics](#6-persistent-cache-mechanics)
-7. [Tool stack: why these choices](#7-tool-stack-why-these-choices)
-8. [Performance characteristics](#8-performance-characteristics)
-9. [CI/CD integration patterns](#9-cicd-integration-patterns)
-10. [Troubleshooting](#10-troubleshooting)
-11. [Workspace layout](#11-workspace-layout)
+6. [Identity resolution (mailmap, bot filtering, AI authorship)](#6-identity-resolution-mailmap-bot-filtering-ai-authorship)
+7. [Kamei change-feature vector](#7-kamei-change-feature-vector)
+8. [Persistent cache mechanics](#8-persistent-cache-mechanics)
+9. [Tool stack: why these choices](#9-tool-stack-why-these-choices)
+10. [Performance characteristics](#10-performance-characteristics)
+11. [CI/CD integration patterns](#11-cicd-integration-patterns)
+12. [Troubleshooting](#12-troubleshooting)
+13. [Workspace layout](#13-workspace-layout)
 
 ---
 
@@ -177,7 +179,83 @@ These thresholds match code-maat unless noted. Override via CLI flags (some) or 
 | `clone_similarity_floor` | 0.70 | SourcererCC BCB benchmark optimum |
 | `clone_skip_same_dir` | true | drops intentional mirroring like `foo_test.rs ↔ foo.rs` |
 
-## 6. Persistent cache mechanics
+## 6. Identity resolution (mailmap, bot filtering, AI authorship)
+
+CodeLore's author-based analyses (`code-ownership`, `authors`, `author-churn`, `communication`) depend on resolving the *same person* across the different identities they commit under. Three layers do this work:
+
+### 6.1 Mailmap consolidation
+
+If a developer commits under multiple emails (`alice@oldcorp.com`, `alice@newcorp.com`, `alice.smith@personal.dev`), the repository's `.mailmap` file is the canonical place to declare them as one person. CodeLore reads `.mailmap` at the repo root and applies it before any author-based aggregation. Both name-and-email and email-only lines are supported per git's mailmap format.
+
+Example `.mailmap`:
+
+```
+Alice Smith <alice@canonical.dev> <alice@oldcorp.com>
+Alice Smith <alice@canonical.dev> <alice@newcorp.com>
+Alice Smith <alice@canonical.dev> Alice S. <alice.smith@personal.dev>
+```
+
+After resolution, all three of Alice's identities count as one author in every output.
+
+### 6.2 Bot filtering
+
+Automated commits (dependency-bump bots, CI bots, release bots) skew Conway-style metrics — a Dependabot PR that touches 47 files isn't a human collaboration signal. Each commit is checked against a built-in substring-match list (`identity/bots.rs::DEFAULT_BOT_PATTERNS`); a match in either the author email or the author name marks the commit as a bot commit:
+
+- `dependabot[bot]`
+- `github-actions[bot]`
+- `claude-code[bot]`
+- `copilot[bot]`
+- `renovate[bot]`
+- `pre-commit-ci[bot]`
+
+Match is plain substring containment, so `dependabot[bot]@noreply.github.com` matches `dependabot[bot]`. Bot commits still land in the fact store (so you can still query them in SQL via the SQLite/Parquet export) but they get the `ai-authored` attribution and the author-based analyses treat them as automated agents rather than human contributors.
+
+### 6.3 AI-authorship classification
+
+Each commit is classified into one of three buckets and stamped in the `commits.ai_attribution` column:
+
+| Class | Trigger (in priority order) |
+|---|---|
+| `ai-authored` | Author or committer matches one of the bot patterns above |
+| `ai-assisted` | Commit message contains `Co-Authored-By: Claude`, `Co-Authored-By: Copilot`, or `Co-Authored-By: GitHub Copilot` |
+| `human` | Default — no AI signals found |
+
+The bot list and the assisted-trailer list are intentionally narrow; tools that don't publish a standardized trailer (or that you don't want to count as AI-assisted) won't be detected. The classification is informational today — no published analysis filters by it — but every commit carries the column so you can query it directly from the SQLite/Parquet export:
+
+```sql
+SELECT ai_attribution, COUNT(*) AS n FROM commits GROUP BY 1 ORDER BY n DESC;
+```
+
+## 7. Kamei change-feature vector
+
+Every commit ingested by CodeLore is enriched with the 14-feature change vector from [Kamei et al.'s JIT-SDP work](https://ieeexplore.ieee.org/document/6341763) (Just-In-Time Software Defect Prediction). These features describe the *shape* of each change and are written to the `commits` table, so any analysis can join against them in SQL.
+
+| # | Feature | Description |
+|---|---|---|
+| 1 | `ns` | Number of modified subsystems (top-level directories) |
+| 2 | `nd` | Number of modified directories |
+| 3 | `nf` | Number of modified files |
+| 4 | `entropy` | Shannon entropy of the per-file change distribution — high entropy = tangled change across many files |
+| 5 | `la` | Lines of code added |
+| 6 | `ld` | Lines of code deleted |
+| 7 | `lt` | Average size of touched files at the pre-change state |
+| 8 | `fix` | 1 if the commit message matches bug/fix regex patterns, else 0 |
+| 9 | `ndev` | Number of distinct developers who previously modified the touched files |
+| 10 | `age` | Average days since the last modification of each touched file |
+| 11 | `nuc` | Number of historical commits touching the same files (their "history density") |
+| 12 | `exp` | Author's lifetime commit count in the repo as of this commit |
+| 13 | `rexp` | Same as `exp` but with recent commits weighted higher (exponential decay) |
+| 14 | `sexp` | Author's prior commit count in the **same subsystem** as the touched files |
+
+These features land in `commits` for every commit. The published analyses don't yet expose them directly via CLI flags — they're foundation for future bug-prediction work — but you can query them right now via `--format sqlite` or `--format parquet` and the columns are there:
+
+```sql
+SELECT rev, fix, entropy, la, ld, ndev FROM commits WHERE fix = 1 ORDER BY entropy DESC LIMIT 10;
+```
+
+This surfaces the 10 highest-entropy bug-fix commits — useful for retrospective "tangled fix" detection.
+
+## 8. Persistent cache mechanics
 
 CodeLore caches the DuckDB fact store at `$XDG_CACHE_HOME/codelore/<repo_hash_8>/<cache_key_16>.duckdb`. Second invocation on the same `(repo_path, HEAD sha, options, schema_version, codelore_version)` opens read-only in ≈ 10 ms instead of re-walking history.
 
@@ -196,7 +274,7 @@ Eviction: 5 entries per repo + 2 GB global cap (LRU). Pruning runs after every s
 
 **Parquet + SQLite formats bypass the cache** by design — they need a writable DuckDB connection to run `INSTALL/LOAD sqlite` and `COPY TO parquet`.
 
-## 7. Tool stack: why these choices
+## 9. Tool stack: why these choices
 
 Every dependency in CodeLore was picked for a specific reason. The short version:
 
@@ -219,7 +297,7 @@ Every dependency in CodeLore was picked for a specific reason. The short version
 - **No LLM** — we're transparency-first. CodeScene's ML hotspot ranking is the opposite of what we ship. (LLM-based bug-link induction is a long-horizon research item with a pluggable interface.)
 - **No web UI** — explicitly out-of-scope. Power users want SQL access to the fact store and SARIF in their existing CI dashboard; both are first-class outputs.
 
-## 8. Performance characteristics
+## 10. Performance characteristics
 
 Per `docs/perf-evidence-v1.md` (warm-cache numbers):
 
@@ -240,7 +318,7 @@ Tree-sitter parsing + AST traversal dominate RSS for the Tier-1 file complexity 
 
 The complexity-extraction pass uses Rayon by default (one task per source file). On the `medium_repo` fixture (25 Rust files), parallel vs serial measure within bench noise (≈ 56 ms either way) because the bottleneck is the commit walk + change-feature enrichment SQL, not the parse pass. The parallel pass beats serial measurably on codebases with hundreds of Tier-1 files. Set `RAYON_NUM_THREADS=1` in the env before invoking `codelore` to force serial mode for comparison runs.
 
-## 9. CI/CD integration patterns
+## 11. CI/CD integration patterns
 
 ### GitHub Actions (the canonical pattern)
 
@@ -260,7 +338,7 @@ See [`examples/.github/workflows/codelore-pr.yml`](../examples/.github/workflows
 | Strict | `score-increase` | PRs that worsen any existing hotspot | Once your codebase has stabilised |
 | Maximum | `any` | Anything (including new clones + missing co-changes) | Mature teams in active refactor |
 
-## 10. Troubleshooting
+## 12. Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
@@ -274,7 +352,7 @@ See [`examples/.github/workflows/codelore-pr.yml`](../examples/.github/workflows
 | Disk space warning during `cargo test` | DuckDB bundled build is heavy (~3-4 GB target dir) | `cargo clean -p codelore-lib` to free; the next build is faster than a full clean |
 | `cargo bench` errors on parallel/serial benches | rayon `build_global()` can only run once per process | The bench file uses per-iteration `pool.install()` which sidesteps this; only an issue if you write your own bench |
 
-## 11. Workspace layout
+## 13. Workspace layout
 
 ```
 codescene/

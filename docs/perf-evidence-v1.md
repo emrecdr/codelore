@@ -20,14 +20,14 @@ All wall times below are the **mean of 4 warm-cache runs** (filesystem cache war
 
 | Repository | Commits | Files | On-disk | Wall (warm) | Wall (cold) | Peak RSS | Notes |
 |---|---:|---:|---:|---:|---:|---:|---|
-| codescene (this workspace) | 90 | 155 | 37 GB (mostly `target/`) | **0.24 s** | 0.93 s | **89 MB** | 5-sample mean — refreshed 2026-06-07 post-Plan-7 (`tree-sitter` deps + `walkdir`). Cold first run 0.93 s reflects filesystem cache warmup. |
+| codescene (this workspace) | 90 | 155 | 37 GB (mostly `target/`) | **0.24 s** | 0.93 s | **89 MB** | 5-sample mean — refreshed 2026-06-07 after the clone-detection landing (`tree-sitter` deps + `walkdir`). Cold first run 0.93 s reflects filesystem cache warmup. |
 | gitoxide (shallow 2000) | 9,985 | 2,903 | 199 MB | **1.16 s** | ~1.35 s | **75 MB** | 5-sample mean (1.15 – 1.18 s, σ ≈ 12 ms) |
 | tokio (shallow 3000) | 4,523 | 854 | 26 MB | 2.09 s | (n/a) | 230 MB | single run; first-run timing not separately captured |
 | **Linux kernel (shallow 1000)** | **TBD** | **TBD** | **TBD** | **TBD** | **TBD** | **TBD** | **kernel measurement pending — see below** |
 
 ### Why tokio uses more memory than gitoxide despite fewer commits
 
-Tree-sitter parse + `FuncSpace` traversal dominates RSS for Tier-1 file complexity extraction. tokio has ~3.5× the C/C++/Rust source-line density per commit (lots of generic tokio-tower internals) compared to gitoxide. The walk-time work scales with commit count; the complexity-extraction RSS scales with the number of Tier-1 files at HEAD. v1 budget is generous enough (4 GB ceiling) for this divergence not to matter; for v1.x we may add a streaming complexity pass to keep RSS linear in file size rather than file count.
+Tree-sitter parsing + AST traversal dominate RSS for Tier-1 file complexity extraction. tokio has roughly 3.5× the Rust source-line density per commit (deep generics in the runtime internals) compared to gitoxide. The walk-time work scales with commit count; the complexity-extraction RSS scales with the number of Tier-1 files at HEAD. The 4 GB ceiling is generous enough for this divergence not to matter; a streaming complexity pass (RSS linear in file size rather than file count) is on the open backlog.
 
 ### Criterion harness results (synthetic fixtures)
 
@@ -54,7 +54,7 @@ Neither failure indicates a CodeLore bug — both are network/disk constraints o
 
 Two methodology notes for the kernel run:
 
-1. **Shallow clones lose ancestry**: a `--depth=N` clone truncates parent chains, so analyses that walk back through `commit.parent()` (notably `coupling`) will fail at the boundary with `find_parent_commit ... could not be found`. For the kernel evidence, we measure `hotspots` (which doesn't need full ancestry) on the shallow snapshot, and document the full-history result only once we have a full clone available. This is a deliberate scope choice for v1 release blockers; v1.x will add graceful shallow-clone handling (graft + boundary stub) tracked in the Feature Registry.
+1. **Shallow clones lose ancestry**: a `--depth=N` clone truncates parent chains, so analyses that walk back through `commit.parent()` (notably `coupling`) will fail at the boundary with `find_parent_commit ... could not be found`. For the kernel evidence, we measure `hotspots` (which doesn't need full ancestry) on the shallow snapshot, and document the full-history result only once we have a full clone available. Graceful shallow-clone handling (graft + boundary stub) is on the open backlog.
 2. **DuckDB spill**: the in-memory FactsDb is the v1 default. For the kernel run we'll enable spill-to-disk via `PRAGMA temp_directory = '/tmp/codelore-spill'` to verify the 4 GB ceiling. The `--temp-dir` CLI flag for this is in scope for v1 release (or as a v1.0.1 follow-up if not landed before tag).
 
 The full kernel numbers (wall, peak RSS, parquet output size, hotspot row count) will be appended below when the clone completes.
@@ -71,7 +71,7 @@ To rule out artifact-of-measurement effects:
 ## Conclusions (preliminary, pending kernel data)
 
 - On modest-to-medium open-source repos (gitoxide @ ~10k commits, tokio @ ~4.5k), CodeLore runs hotspots end-to-end in **1-2 seconds** with sub-256 MB peak RSS — well inside the release-blocker envelope.
-- Memory scales with **file count and tree-sitter complexity** more than commit count. That matches expectation: the gix walk + DuckDB ingest is streamed and bounded, while complexity extraction parses the full HEAD into FuncSpaces.
+- Memory scales with **file count and tree-sitter complexity** more than commit count. That matches expectation: the gix walk + DuckDB ingest is streamed and bounded, while complexity extraction parses the full HEAD into the AST data structures.
 - The criterion bench harness + weekly CI job (`.github/workflows/bench.yml`) catches >10% regression drift automatically once a baseline lands on `main`.
 
 A v1.0 tag is reasonable to push **before** the kernel evidence finalizes, because:
