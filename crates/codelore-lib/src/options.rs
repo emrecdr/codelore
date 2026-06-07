@@ -54,6 +54,11 @@ pub struct Options {
     // statements after identifier/literal normalization — keeps trivial
     // getters/setters and empty constructors out of clone reports.
     pub min_clone_node_count: u32,
+
+    // Plan 8 §2 Task 8: path-glob patterns to exclude from analyses.
+    // Built from `--exclude` flags + any `.codeloreignore` file in repo_path.
+    // Currently honored by `clones`; other analyses gain support in Plan 9.
+    pub exclude_patterns: Vec<String>,
 }
 
 impl Default for Options {
@@ -80,6 +85,7 @@ impl Default for Options {
             strict_grouping: false,
             complexity_sample: ComplexitySample::Head,
             min_clone_node_count: 30,
+            exclude_patterns: Vec::new(),
         }
     }
 }

@@ -176,3 +176,56 @@ fn sarif_empty_rows() {
     assert_eq!(parsed["version"], "2.1.0");
     assert_eq!(parsed["runs"][0]["results"].as_array().unwrap().len(), 0);
 }
+
+#[test]
+fn write_clones_sarif_emits_well_formed_doc() {
+    use codelore_lib::analyses::clones::ClonesRow;
+    let rows = vec![
+        ClonesRow {
+            clone_group_id: 1,
+            fingerprint: "abcd1234".repeat(8),
+            entity: "src/a.rs".into(),
+            function: "add".into(),
+            start_line: 10,
+            end_line: 20,
+            node_count: 42,
+            similarity: 1.0,
+            family_size: 2,
+        },
+        ClonesRow {
+            clone_group_id: 1,
+            fingerprint: "abcd1234".repeat(8),
+            entity: "src/b.rs".into(),
+            function: "mul".into(),
+            start_line: 5,
+            end_line: 15,
+            node_count: 42,
+            similarity: 1.0,
+            family_size: 2,
+        },
+    ];
+    let mut buf = Vec::new();
+    codelore_lib::output::sarif::write_clones_sarif(&rows, "/repo", &mut buf).unwrap();
+    let s = String::from_utf8(buf).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&s).expect("well-formed JSON");
+
+    assert_eq!(v["version"], "2.1.0");
+    assert_eq!(v["runs"][0]["tool"]["driver"]["name"], "codelore");
+    assert_eq!(
+        v["runs"][0]["tool"]["driver"]["rules"][0]["id"],
+        "CODELORE-CLONE"
+    );
+    // 2 rows in 1 family → 1 result, 2 locations
+    assert_eq!(v["runs"][0]["results"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        v["runs"][0]["results"][0]["locations"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    // partialFingerprints uses the versioned key per Plan 8 §6 research brief
+    assert!(
+        v["runs"][0]["results"][0]["partialFingerprints"]["cloneGroupFingerprint/v1"].is_string()
+    );
+}

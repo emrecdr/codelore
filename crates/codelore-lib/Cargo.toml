@@ -33,6 +33,7 @@ tree-sitter-java = "=0.23.5"
 tree-sitter-javascript = "=0.23.1"
 tree-sitter-typescript = "=0.23.1"
 walkdir = "2"
+globset = "0.4"
 
 [features]
 default = []
@@ -107,6 +108,10 @@ required-features = ["test-support"]
 
 [[test]]
 name = "authors_test"
+required-features = ["test-support"]
+
+[[test]]
+name = "clones_exclude_test"
 required-features = ["test-support"]
 
 [[test]]

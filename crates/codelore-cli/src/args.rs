@@ -55,4 +55,17 @@ pub struct AnalyzeArgs {
     /// Plan 4 ships head only; adaptive and full land in Plan 5.
     #[arg(long, default_value = "head")]
     pub complexity_sample: String,
+
+    /// Architectural grouping file (one `glob => group` mapping per line, code-maat parity).
+    /// Plan 8 §2 Task 7: flag is parsed and forwarded into Options; the actual
+    /// aggregation logic (rewrite entity paths to group names) lands in Plan 9.
+    /// Today the flag is accepted but produces a warning.
+    #[arg(short = 'g', long)]
+    pub group_file: Option<PathBuf>,
+
+    /// Path patterns to exclude from analyses (repeatable). Plan 8 §2 Task 8.
+    /// Honored by `clones` today; other analyses gain support in Plan 9.
+    /// A `.codeloreignore` file in the repo root is also honored when present.
+    #[arg(long = "exclude")]
+    pub exclude: Vec<String>,
 }

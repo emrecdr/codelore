@@ -35,6 +35,11 @@ pub struct ClonesRow {
 /// reads each Tier-1 file, fingerprints every function, groups, and returns
 /// one `ClonesRow` per clone-family member.
 pub fn run_clones(opts: &Options) -> Result<Vec<ClonesRow>> {
+    // Plan 8 §2 Task 8: combine --exclude patterns with any .codeloreignore
+    // file at the repo root into one GlobSet, then short-circuit per-file walks
+    // that match. The .git/target/node_modules hard-skips are kept as defaults.
+    let exclude_set = build_exclude_set(opts)?;
+
     let mut all_fns = Vec::new();
     for entry in WalkDir::new(&opts.repo_path)
         .into_iter()
@@ -44,8 +49,8 @@ pub fn run_clones(opts: &Options) -> Result<Vec<ClonesRow>> {
             continue;
         }
         let path = entry.path();
-        // Skip the .git directory and anything inside `target/` to keep the
-        // walk tractable on real workspaces.
+        // Default hard-skip: vendored / build-output directories that virtually
+        // never contain user-meaningful clones.
         if path.components().any(|c| {
             matches!(
                 c.as_os_str().to_str(),
@@ -57,10 +62,14 @@ pub fn run_clones(opts: &Options) -> Result<Vec<ClonesRow>> {
         let Some(lang) = CloneLanguage::from_path(path) else {
             continue;
         };
+        let rel = relative(&opts.repo_path, path);
+        // User-configured exclusions (--exclude + .codeloreignore).
+        if exclude_set.is_match(&rel) {
+            continue;
+        }
         let Ok(code) = fs::read(path) else {
             continue; // unreadable file — silently skip
         };
-        let rel = relative(&opts.repo_path, path);
         let fns = extract_functions(&rel, &code, lang)
             .map_err(|e| CodeLoreError::Analysis(format!("clones: extract {rel}: {e}")))?;
         all_fns.extend(fns);
@@ -92,6 +101,33 @@ fn relative(root: &Path, abs: &Path) -> String {
         |_| abs.to_string_lossy().into_owned(),
         |p| p.to_string_lossy().into_owned(),
     )
+}
+
+/// Build the combined exclude `GlobSet` from `opts.exclude_patterns` plus
+/// any `.codeloreignore` file at the repo root. Lines starting with `#` and
+/// blank lines are ignored, matching .gitignore convention.
+fn build_exclude_set(opts: &Options) -> Result<globset::GlobSet> {
+    let mut b = globset::GlobSetBuilder::new();
+    for pat in &opts.exclude_patterns {
+        let g = globset::Glob::new(pat)
+            .map_err(|e| CodeLoreError::Analysis(format!("clones: --exclude {pat:?}: {e}")))?;
+        b.add(g);
+    }
+    let ignore_path = opts.repo_path.join(".codeloreignore");
+    if let Ok(contents) = std::fs::read_to_string(&ignore_path) {
+        for line in contents.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let g = globset::Glob::new(line).map_err(|e| {
+                CodeLoreError::Analysis(format!(".codeloreignore line {line:?}: {e}"))
+            })?;
+            b.add(g);
+        }
+    }
+    b.build()
+        .map_err(|e| CodeLoreError::Analysis(format!("clones: build globset: {e}")))
 }
 
 #[cfg(test)]

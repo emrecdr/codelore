@@ -67,8 +67,11 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
             "--format {format} requires --output PATH (binary format, cannot stream to stdout)"
         );
     }
-    if format == "sarif" && !matches!(analysis, AnalysisName::Hotspots) {
-        anyhow::bail!("--format sarif currently supports --analysis hotspots only (Plan 5 scope)");
+    // SARIF was hotspots-only in Plan 5; Plan 8 §2 Task 10 adds clones.
+    if format == "sarif" && !matches!(analysis, AnalysisName::Hotspots | AnalysisName::Clones) {
+        anyhow::bail!(
+            "--format sarif currently supports --analysis hotspots and --analysis clones (other analyses land in Plan 8 §6 for clone-coupling / Plan 9 for coupling)"
+        );
     }
 
     let complexity_sample = match args.complexity_sample.as_str() {
@@ -80,11 +83,20 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
         other => anyhow::bail!("unknown complexity-sample value: {other:?}"),
     };
 
+    // --group-file is parsed but inert: aggregation lands in Plan 9.
+    if args.group_file.is_some() {
+        eprintln!(
+            "warning: --group-file is recognized but architectural-grouping aggregation lands in Plan 9; flag has no effect yet"
+        );
+    }
+
     let opts = Options {
         repo_path: args.repo.clone(),
         min_revs: args.min_revs,
         rows_limit: args.rows,
         complexity_sample,
+        group_file: args.group_file.clone(),
+        exclude_patterns: args.exclude.clone(),
         ..Options::default()
     };
 
@@ -365,9 +377,16 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
                 codelore_lib::output::markdown::write_clones_markdown(&rows, &mut out)
                     .context("write markdown")?;
             }
-            (fmt, AnalysisName::Clones) => anyhow::bail!(
-                "clones analysis supports csv|json|markdown; sarif lands in Plan 8 §2 Task 10; got {fmt:?}"
-            ),
+            ("sarif", AnalysisName::Clones) => {
+                let rows =
+                    codelore_lib::analyses::clones::run_clones(&opts).context("run clones")?;
+                let repo_root = args.repo.display().to_string();
+                codelore_lib::output::sarif::write_clones_sarif(&rows, &repo_root, &mut out)
+                    .context("write sarif")?;
+            }
+            (fmt, AnalysisName::Clones) => {
+                anyhow::bail!("clones analysis supports csv|json|markdown|sarif; got {fmt:?}")
+            }
             // --- authors (Plan 8 §2 Task 6) ---
             ("csv", AnalysisName::Authors) => {
                 let rows = codelore_lib::analyses::authors::run_authors(&db, &opts)
@@ -387,9 +406,9 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
                 codelore_lib::output::markdown::write_authors_markdown(&rows, &mut out)
                     .context("write markdown")?;
             }
-            (fmt, AnalysisName::Authors) => anyhow::bail!(
-                "authors analysis supports csv|json|markdown; got {fmt:?}"
-            ),
+            (fmt, AnalysisName::Authors) => {
+                anyhow::bail!("authors analysis supports csv|json|markdown; got {fmt:?}")
+            }
             _ => unreachable!("format/analysis combination should have been validated above"),
         }
     } // out is dropped here, flushing any buffered writes
