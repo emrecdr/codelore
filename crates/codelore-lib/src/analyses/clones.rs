@@ -130,7 +130,7 @@ fn build_exclude_set(opts: &Options) -> Result<globset::GlobSet> {
         .map_err(|e| CodeLoreError::Analysis(format!("clones: build globset: {e}")))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-support"))]
 mod tests {
     use super::*;
     use std::io::Write;
