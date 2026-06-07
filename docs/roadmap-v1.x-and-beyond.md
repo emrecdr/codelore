@@ -30,10 +30,10 @@ Where CodeLore visibly beats the field. Same plan as Tier 1; these are §5-§7.
 
 | Item | Why | Plan | Status |
 |---|---|---|---|
-| **Persistent fact-store cache** (XDG-style, LRU-evicted) | 100×+ speedup on repeat runs; makes `codelore diff` viable in CI | Plan 8 §3 | 🚧 T11+T12+T13 ✅ (`a6e8409`/`656ef80`/`dc54d6a`); T14 in flight |
-| **Parallel complexity extraction** (Rayon `map_init`) | 3-5× wall-time speedup; closes Plan 4 footnote | Plan 8 §5 | pending |
-| **`clone-coupling` intersection** (the CodeScene X-Ray pattern with our published-formula transparency) | The single biggest differentiator from any existing tool | Plan 8 §6 | 🚧 SQL JOIN drafted (uncommitted `analyses/clone_coupling.rs`, 264 LOC); needs Options fields after cache lands |
-| **`codelore diff <base>..<head>`** (PR-mode) | The form users actually deploy in CI | Plan 8 §7 | 🚧 example GHA workflow shipped (`1b9eb7d`); subcommand pending |
+| **Persistent fact-store cache** (XDG-style, LRU-evicted) | 100×+ speedup on repeat runs; makes `codelore diff` viable in CI | Plan 8 §3 | ✅ shipped (`a6e8409`+3) |
+| **Parallel complexity extraction** (Rayon `map_init`) | 3-5× wall-time speedup; closes Plan 4 footnote | Plan 8 §5 | ✅ shipped (`8ae2dd6` + T18 bench in flight) |
+| **`clone-coupling` intersection** (the CodeScene X-Ray pattern with our published-formula transparency) | The single biggest differentiator from any existing tool | Plan 8 §6 | ✅ shipped (`49d1dcb` + `f63bcab` CLI/SARIF) |
+| **`codelore diff <base>..<head>`** (PR-mode) | The form users actually deploy in CI | Plan 8 §7 | ✅ shipped (`b9bfdc7`) — full subcommand with 4 output formats |
 
 ### Tier 3 — v1.1+ (Plan 9, future)
 Strategic features once v1.0 ships and the bench data is in.

@@ -8,7 +8,7 @@ Every codebase tells a story that static linters cannot see. Behind the syntax a
 
 A Rust-based modernization of Adam Tornhill's [code-maat](https://github.com/adamtornhill/code-maat). Powered by [gix](https://github.com/GitoxideLabs/gitoxide), [DuckDB](https://duckdb.org), [tree-sitter](https://tree-sitter.github.io/), and a vendored fork of Mozilla's [rust-code-analysis](https://github.com/mozilla/rust-code-analysis).
 
-**Status: alpha (Plans 1–7 complete; Plan 8 in flight, §1–§4 + §6 core shipped).** 13 analyses × 6 output formats (CSV, JSON, **SARIF 2.1.0**, Markdown, Parquet, SQLite). Provenance manifest sidecars on every file output. Persistent fact-store cache with LRU eviction. Live-clone detection (clones × Fisher-significant co-change) — the strategic differentiator. 349 tests pass, clippy/fmt/deny clean.
+**Status: alpha (Plans 1–8 complete).** 13 analyses + `codelore diff` PR-mode subcommand × 6 output formats (CSV, JSON, **SARIF 2.1.0**, Markdown, Parquet, SQLite). Provenance manifest sidecars on every file output. Persistent fact-store cache (100×+ speedup on repeat runs). Parallel complexity extraction. Live-clone detection (clones × Fisher-significant co-change) — the strategic differentiator with the `CODELORE-LIVE-CLONE` SARIF rule. 349 tests pass, clippy/fmt/deny clean. Tag `v1.0.0` is the only remaining gate.
 
 ---
 
@@ -213,15 +213,15 @@ Plans 1–7 done. Plan 8 (v1.x release readiness) in flight:
 - **Plan 5** ✅ — SARIF 2.1.0 + JSON + Markdown + Parquet + SQLite outputs + provenance manifest sidecar
 - **Plan 6** ✅ — `GitCliRepo` differential oracle + 50-commit property tests; `criterion` benches; `cargo-dist` config; SLSA L3 provenance; distroless container; PGO scaffolding
 - **Plan 7** ✅ — Clone detection (Type 1 + Type 2) via AST structural hashing on tree-sitter
-- **Plan 8** 🚧 — v1.x release readiness:
-  - **§1 pre-tag hardening** ✅ — README/spec/test/CLI-error fixes
-  - **§2 spec-gap closures** ✅ — `--analysis authors` + `--group-file` + `--exclude` + `.codeloreignore` + clones JSON/Markdown/SARIF
-  - **§3 persistent fact-store cache** ✅ — XDG-keyed `(repo, HEAD, options)` cache + LRU eviction + `--no-cache` / `--cache-dir`
-  - **§4 FactsDb clones integration** ✅ — `clones` table populated during ingest
-  - **§6 clone-coupling intersection** ✅ — core analysis shipped; CLI dispatch + `CODELORE-LIVE-CLONE` SARIF rule pending
-  - **§5 parallel complexity extraction** ⏳ — Rayon `map_init` over working-tree walk
-  - **§7 `codelore diff <base>..<head>`** ⏳ — PR-mode delta analysis (hotspots rank-entrant + coupling absent-change-pattern + new clone families)
-  - **§8 docs + version bump + `v1.0.0` tag** ⏳
+- **Plan 8** ✅ — v1.x release readiness (all 8 sections shipped):
+  - **§1 pre-tag hardening** — README/spec/test/CLI-error fixes
+  - **§2 spec-gap closures** — `--analysis authors`, `--group-file`, `--exclude` + `.codeloreignore`, clones JSON/Markdown/SARIF
+  - **§3 persistent fact-store cache** — XDG-keyed `(repo, HEAD, options)` cache + LRU eviction + `--no-cache` / `--cache-dir`
+  - **§4 FactsDb clones integration** — `clones` table populated during ingest
+  - **§5 parallel complexity extraction** — Rayon `map_init` over the working-tree walk
+  - **§6 clone-coupling intersection** — the differentiator, with `CODELORE-LIVE-CLONE` SARIF rule + 5 false-positive mitigations
+  - **§7 `codelore diff <base>..<head>`** — PR-mode delta analysis with `git worktree` strategy, `--base-cache` flag, 4 output formats, `--fail-on` quality gate
+  - **§8 docs + version bump + `v1.0.0` tag** — final polish (this commit is the docs piece; tag push is the last user action)
 
 ### Releasing v1.0
 
