@@ -116,8 +116,26 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
     }
 
     let repo = GixRepo::open(&args.repo).context("open repo")?;
-    let db = FactsDb::new_in_memory().context("open fact store")?;
-    db.ingest(&repo, &opts).context("ingest commits")?;
+
+    // Parquet and SQLite formats require a writable DuckDB connection
+    // (for INSTALL/LOAD sqlite extension and COPY TO parquet). These formats
+    // always use fresh in-memory ingest and bypass the read-only cache.
+    // For all other formats (csv/json/markdown/sarif) the persistent cache is used.
+    let needs_writable_db = matches!(format, "parquet" | "sqlite");
+
+    let db = if args.no_cache || needs_writable_db {
+        // --no-cache (or writable-format requirement): always fresh in-memory.
+        let db = FactsDb::new_in_memory().context("open fact store (in-memory)")?;
+        db.ingest(&repo, &opts).context("ingest commits")?;
+        db
+    } else if let Some(cache_dir) = &args.cache_dir {
+        // --cache-dir PATH: use a custom XDG root instead of the default.
+        FactsDb::open_or_ingest_with_cache_root(&opts, &repo, cache_dir)
+            .context("open or ingest (cache-dir)")?
+    } else {
+        // Default: use the XDG cache (read-only after first ingest).
+        FactsDb::open_or_ingest(&opts, &repo).context("open or ingest")?
+    };
 
     // Parquet + SQLite write to file directly through DuckDB, not via Write trait.
     if format == "parquet" {

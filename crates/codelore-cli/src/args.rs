@@ -65,7 +65,20 @@ pub struct AnalyzeArgs {
 
     /// Path patterns to exclude from analyses (repeatable). Plan 8 §2 Task 8.
     /// Honored by `clones` today; other analyses gain support in Plan 9.
-    /// A `.codeloreignore` file in the repo root is also honored when present.
+    /// A `.codeleignore` file in the repo root is also honored when present.
     #[arg(long = "exclude")]
     pub exclude: Vec<String>,
+
+    /// Skip the persistent fact-store cache and always run a fresh in-memory
+    /// ingest. Useful when you suspect a stale cache or want reproducible timing.
+    /// Plan 8 §3 Task 14.
+    #[arg(long, default_value_t = false)]
+    pub no_cache: bool,
+
+    /// Override the XDG cache root for the persistent fact-store.
+    /// Defaults to `$XDG_CACHE_HOME/codelore` (or the OS equivalent).
+    /// Useful in CI environments that want per-job caches on a shared runner.
+    /// Plan 8 §3 Task 14.
+    #[arg(long)]
+    pub cache_dir: Option<PathBuf>,
 }

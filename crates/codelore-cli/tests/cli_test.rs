@@ -598,3 +598,74 @@ fn unknown_analysis_lists_supported_names() {
         .stderr(predicate::str::contains("hotspots"))
         .stderr(predicate::str::contains("clones"));
 }
+
+// ---------------------------------------------------------------------------
+// Plan 8 §3 Task 14 — --no-cache + --cache-dir
+// ---------------------------------------------------------------------------
+
+/// `--no-cache` must succeed and produce the same CSV output as the default path.
+#[test]
+fn no_cache_flag_produces_valid_output() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "revisions",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "csv",
+            "--min-revs",
+            "1",
+            "--no-cache",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("entity,n-revs"))
+        .stdout(predicate::str::contains("src/main.rs"));
+}
+
+/// `--cache-dir` must succeed and write the cache file under the given dir.
+#[test]
+fn cache_dir_flag_writes_cache_to_custom_location() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let cache_dir = tempfile::tempdir().expect("tempdir");
+
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "revisions",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "csv",
+            "--min-revs",
+            "1",
+            "--cache-dir",
+            cache_dir.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("entity,n-revs"));
+
+    // At least one .duckdb file must have been created under the custom cache dir.
+    let count = walkdir::WalkDir::new(cache_dir.path())
+        .into_iter()
+        .flatten()
+        .filter(|e| {
+            e.path()
+                .extension()
+                .and_then(|x| x.to_str())
+                .is_some_and(|x| x == "duckdb")
+        })
+        .count();
+
+    assert!(
+        count >= 1,
+        "expected at least 1 .duckdb file under cache_dir, got {count}"
+    );
+}
