@@ -63,12 +63,17 @@ impl Repo for GixRepo {
 
             // Resolve mailmap alias and classify AI attribution in the producer thread
             // (where the Repo is in scope), storing results on the event for the consumer.
+            //
+            // Plan 8 §2 T6 finding fix: pass the actual author_name (not b"") so
+            // .mailmap entries of the form `Canonical <c@x> Original <o@x>` —
+            // which match by Name+Email — also resolve. Email-only entries
+            // (`Canonical <c@x> <o@x>`) work either way.
             let canonical = {
                 use gix::bstr::ByteSlice as _;
                 let repo_local = inner_clone.to_thread_local();
                 let mailmap = repo_local.open_mailmap();
                 let sig_ref = gix::actor::SignatureRef {
-                    name: b"".as_bstr(),
+                    name: event.author_name.as_bytes().as_bstr(),
                     email: event.author_email.as_bytes().as_bstr(),
                     time: "0 +0000",
                 };

@@ -39,18 +39,40 @@ fn authors_against_differential_fixture() {
     // the implicit `noop@example.com` committer set via `git config user.email`
     // before any --author override. So 5 raw + 0 canonicalized for Alice/Carol.
     //
-    // KNOWN BUG (Plan 8 §2.T6 finding): `GixRepo::resolve_alias(email)` only
-    // passes the email, but Alice's and Carol's .mailmap entries require
-    // `Name <email>` matching. Bob's entry uses email-only matching so it
-    // works. Real fix: extend `resolve_alias` to accept the name too. Tracked
-    // as a finding for Plan 8 follow-up / v1.x.
+    // After the Plan 8 §2 T6 mailmap fix (ingest now passes author_name into
+    // the gix mailmap lookup), all 3 humans + 1 bot canonicalize correctly:
+    //   - alice-old@example.com → canonical-alice@example.com
+    //   - bob-aliased@example.com → canonical-bob@example.com
+    //   - c.lee@example.com → carol@example.com
+    //   - 49699333+dependabot[bot]@users.noreply.github.com (bot, no mailmap)
     //
-    // Today this test asserts a loose lower bound + sort invariants only.
-    assert!(
-        rows.len() >= 3,
-        "expected ≥ 3 distinct canonical authors, got {}: {:?}",
+    // A 5th author appears: `noop@example.com`. This is `git merge --no-ff`'s
+    // default author behavior — the merge commit (commit 49) doesn't carry
+    // a `--author` override, so it inherits the repo's user.email config
+    // (`noop@example.com`, set during `git init` in differential_repo::build).
+    // This faithfully mirrors real-world git behavior where merge commits
+    // are authored by the developer or CI bot that ran `git merge`. Counting
+    // them as a distinct author is correct.
+    assert_eq!(
+        rows.len(),
+        5,
+        "expected 5 distinct canonical authors (3 humans + 1 bot + 1 merge-committer), got {}: {:?}",
         rows.len(),
         rows.iter().map(|r| &r.author).collect::<Vec<_>>()
+    );
+    let names: std::collections::HashSet<&str> =
+        rows.iter().map(|r| r.author.as_str()).collect();
+    assert!(
+        names.contains("canonical-alice@example.com"),
+        "Alice's old email should canonicalize via .mailmap"
+    );
+    assert!(
+        names.contains("canonical-bob@example.com"),
+        "Bob's aliased email should canonicalize via .mailmap"
+    );
+    assert!(
+        names.contains("carol@example.com"),
+        "Carol's email should canonicalize via .mailmap"
     );
     // Sorted desc by commit count
     for w in rows.windows(2) {
