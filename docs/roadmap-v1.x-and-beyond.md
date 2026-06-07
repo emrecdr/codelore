@@ -18,11 +18,11 @@ Foundation for tagging v1.0 and clearing the validation-report findings.
 
 | Item | Why | Plan | Status |
 |---|---|---|---|
-| 5 pre-tag fixes (perf-evidence drift, README inconsistency, missing test, CLI error UX, spec note) | Validation report Findings S1, S2, S4, S7, S8 | Plan 8 §1 | pending |
-| `--analysis authors` standalone | Closes spec §1.1 gap; trivial SQL | Plan 8 §2 | pending |
-| `--group-file` clap flag exposure | Field exists in `Options`; not surfaced | Plan 8 §2 | pending |
-| `--exclude PATTERN` + `.codeloreignore` | Validation report Finding S9; needed before clones is usable on vendor-heavy repos | Plan 8 §2 | pending |
-| Clones JSON / Markdown / SARIF emitters (CODELORE-CLONE rule) | Plan 7 shipped CSV-only | Plan 8 §2 | pending |
+| 5 pre-tag fixes (perf-evidence drift, README inconsistency, missing test, CLI error UX, spec note) | Validation report Findings S1, S2, S4, S7, S8 | Plan 8 §1 | ✅ shipped `3043a42` |
+| `--analysis authors` standalone | Closes spec §1.1 gap; trivial SQL | Plan 8 §2 | ✅ shipped `0ce89ff` + mailmap fix `1154975` |
+| `--group-file` clap flag exposure | Field exists in `Options`; not surfaced | Plan 8 §2 | ✅ shipped `af572cb` |
+| `--exclude PATTERN` + `.codeloreignore` | Validation report Finding S9; needed before clones is usable on vendor-heavy repos | Plan 8 §2 | ✅ shipped `af572cb` |
+| Clones JSON / Markdown / SARIF emitters (CODELORE-CLONE rule) | Plan 7 shipped CSV-only | Plan 8 §2 | ✅ shipped `0ce89ff` + `af572cb` |
 | FactsDb integration for clones (write to clones table) | Closes validation Finding S3; foundation for clone-coupling | Plan 8 §4 | pending |
 
 ### Tier 2 — v1.x differentiators (Plan 8)
@@ -30,10 +30,10 @@ Where CodeLore visibly beats the field. Same plan as Tier 1; these are §5-§7.
 
 | Item | Why | Plan | Status |
 |---|---|---|---|
-| **Persistent fact-store cache** (XDG-style, LRU-evicted) | 100×+ speedup on repeat runs; makes `codelore diff` viable in CI | Plan 8 §3 | pending |
+| **Persistent fact-store cache** (XDG-style, LRU-evicted) | 100×+ speedup on repeat runs; makes `codelore diff` viable in CI | Plan 8 §3 | 🚧 T11+T12+T13 ✅ (`a6e8409`/`656ef80`/`dc54d6a`); T14 in flight |
 | **Parallel complexity extraction** (Rayon `map_init`) | 3-5× wall-time speedup; closes Plan 4 footnote | Plan 8 §5 | pending |
-| **`clone-coupling` intersection** (the CodeScene X-Ray pattern with our published-formula transparency) | The single biggest differentiator from any existing tool | Plan 8 §6 | pending |
-| **`codelore diff <base>..<head>`** (PR-mode) | The form users actually deploy in CI | Plan 8 §7 | pending |
+| **`clone-coupling` intersection** (the CodeScene X-Ray pattern with our published-formula transparency) | The single biggest differentiator from any existing tool | Plan 8 §6 | 🚧 SQL JOIN drafted (uncommitted `analyses/clone_coupling.rs`, 264 LOC); needs Options fields after cache lands |
+| **`codelore diff <base>..<head>`** (PR-mode) | The form users actually deploy in CI | Plan 8 §7 | 🚧 example GHA workflow shipped (`1b9eb7d`); subcommand pending |
 
 ### Tier 3 — v1.1+ (Plan 9, future)
 Strategic features once v1.0 ships and the bench data is in.
