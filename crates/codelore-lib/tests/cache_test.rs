@@ -112,6 +112,43 @@ fn prune_repo_cache_removes_oldest_beyond_max() {
     );
 }
 
+/// Global-cache pruner: create files exceeding the byte cap, assert they are pruned.
+#[test]
+fn prune_global_cache_removes_oldest_beyond_byte_cap() {
+    use codelore_lib::cache::prune_global_cache;
+
+    let root = tempfile::tempdir().expect("tempdir");
+    // Create the codelore/fakerepohash8/ directory structure.
+    let repo_dir = root.path().join("codelore").join("aabbccdd");
+    std::fs::create_dir_all(&repo_dir).unwrap();
+
+    // Write 3 files of 10 bytes each = 30 bytes total.
+    for i in 0..3u64 {
+        let path = repo_dir.join(format!("{i:016x}.duckdb"));
+        std::fs::write(&path, b"0123456789").unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    // Prune with a cap of 15 bytes — should remove the 1 oldest file to get under cap.
+    prune_global_cache(root.path(), 15);
+
+    let remaining = std::fs::read_dir(&repo_dir)
+        .unwrap()
+        .flatten()
+        .filter(|e| {
+            e.path()
+                .extension()
+                .and_then(|x| x.to_str())
+                .is_some_and(|x| x == "duckdb")
+        })
+        .count();
+
+    assert!(
+        remaining <= 2,
+        "expected at most 2 files after global prune with 15-byte cap, got {remaining}"
+    );
+}
+
 /// Verify that different opts produce different cache paths (different keys).
 #[test]
 fn different_opts_produce_different_cache_paths() {
