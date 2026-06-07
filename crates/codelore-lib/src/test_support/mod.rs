@@ -423,6 +423,19 @@ pub mod medium_repo {
             write(&path, &rel, &content);
             let (name, email) = authors[i % 3];
             commit_at(&path, name, email, i, &format!("touch {rel}"), &[&rel]);
+
+            // Pack loose objects every 50 commits to prevent "invalid object"
+            // errors on macOS/APFS where the OS may delay flushing loose blob
+            // writes to the object store. `git repack -d` packs all loose
+            // objects into a single packfile and prunes the loose originals,
+            // eliminating the race between `git add` (write loose object) and
+            // `git commit` (write-tree reads that same object). We use
+            // `repack -d` instead of `gc --quiet` because `gc` has additional
+            // phases (expire, reflog) that can fail when packfiles are created
+            // concurrently on macOS/APFS.
+            if i > 0 && i % 50 == 49 {
+                run_git(&path, &["repack", "-d", "--quiet"]);
+            }
         }
 
         let head_sha = String::from_utf8(
