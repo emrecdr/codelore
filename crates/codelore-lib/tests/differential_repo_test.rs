@@ -58,16 +58,7 @@ fn opts_with_merges() -> Options {
 // ---------------------------------------------------------------------------
 
 /// Both impls must return the same set of commit SHAs and at least ~50 commits.
-///
-/// KNOWN DIVERGENCE (P6 finding): `GitCliRepo`'s `parse_git_log_stream` drops
-/// the commit immediately after a merge commit that has an empty name-status
-/// block.  The merge commit's `\x1e` chunk contains no `\n\n` separator, so the
-/// parser mis-classifies the following commit's pretty block as name-status and
-/// silently discards it.  `GixRepo`'s `rev_walk` correctly returns all reachable
-/// commits.  The missing SHA is the `feature/x` tip (commit 48 in the fixture).
-/// This will be fixed in the next task (P6.T03).
 #[test]
-#[ignore = "P6.T03 — GitCliRepo parser drops commit after merge with empty name-status"]
 fn walk_commits_produces_same_rev_set() {
     let (gix, cli) = open_both();
     let opts = opts_with_merges();

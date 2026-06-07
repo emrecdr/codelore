@@ -256,8 +256,29 @@ fn parse_git_log_stream(raw: &str) -> Vec<CommitEvent> {
     events
 }
 
+/// Returns `true` if the first non-empty line of `s` looks like a pretty-format block
+/// (i.e. it contains a US `\x1f` field separator), meaning there is no name-status prefix.
+///
+/// This is used to detect the case where a merge commit has an empty name-status block:
+/// the chunk after the merge's `\x1e` starts directly with the next commit's pretty block
+/// instead of the usual `\n<name-status>\n\n<pretty>` structure.
+fn starts_with_pretty_block(s: &str) -> bool {
+    s.trim_start_matches('\n')
+        .lines()
+        .next()
+        .is_some_and(|l| l.contains('\x1f'))
+}
+
 /// From a chunk that starts with `\n<name-status>\n\n<pretty>`, return the pretty portion.
+///
+/// Special case: if the chunk starts directly with a pretty block (no name-status lines,
+/// no `\n\n` separator — as happens after a merge commit with empty name-status), return
+/// the entire chunk so the commit is not silently dropped.
 fn split_off_name_status_prefix(chunk: &str) -> &str {
+    // Fast path: if the chunk starts with a pretty block, there is no name-status prefix.
+    if starts_with_pretty_block(chunk) {
+        return chunk;
+    }
     // Find the blank line ("\n\n") that separates name-status from the next pretty block.
     // The chunk starts with '\n', then name-status lines, then '\n\n', then the pretty block.
     if let Some(pos) = find_double_newline(chunk) {
@@ -269,7 +290,15 @@ fn split_off_name_status_prefix(chunk: &str) -> &str {
 }
 
 /// From a chunk that starts with `\n<name-status>\n\n<pretty or end>`, extract just the name-status.
+///
+/// Special case: if the chunk starts directly with a pretty block (no name-status), return
+/// an empty string so the previous commit gets an empty (correct) name-status for a merge.
 fn extract_name_status_prefix(chunk: &str) -> &str {
+    // If the chunk is actually a pretty block (merge with empty name-status case),
+    // the "name-status" for the previous commit is empty.
+    if starts_with_pretty_block(chunk) {
+        return "";
+    }
     let chunk = chunk.trim_start_matches('\n');
     if let Some(pos) = find_double_newline(chunk) {
         &chunk[..pos]
@@ -445,4 +474,84 @@ fn parse_iso_date(s: &str) -> Option<Date> {
     let day: u8 = s[8..10].parse().ok()?;
     let month = Month::try_from(month).ok()?;
     Date::from_calendar_date(year, month, day).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Reproducer for the bug where `parse_git_log_stream` silently drops the commit
+    /// immediately following a merge commit that has an empty name-status block.
+    ///
+    /// The hand-crafted stream below mirrors the exact byte layout that `git log
+    /// --pretty=format:%H%x1f%P%x1f%ae%x1f%an%x1f%ce%x1f%aI%x1f%B%x1e --name-status`
+    /// emits for three commits: a regular commit, a no-ff merge with no file changes,
+    /// and a subsequent regular commit.
+    ///
+    /// Splitting on `\x1e` yields four chunks:
+    ///   `chunk[0]` = `A_pretty`
+    ///   `chunk[1]` = `\nA_name_status\n\nB_pretty`
+    ///   `chunk[2]` = `\nC_pretty` ← no name-status prefix, no `\n\n`
+    ///   `chunk[3]` = `\nC_name_status\n\n`
+    ///
+    /// Before the fix, `split_off_name_status_prefix(chunk[2])` found no `\n\n` and
+    /// returned `""`, causing commit C to be silently dropped.
+    #[test]
+    fn parser_does_not_drop_commit_after_empty_name_status_merge() {
+        // Fake but structurally valid SHAs (40 hex chars each).
+        let sha_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let sha_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let sha_x = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"; // branch tip merged into B
+        let sha_c = "cccccccccccccccccccccccccccccccccccccccc";
+
+        // Build the raw stream exactly as git would emit it.
+        // The structure (using ↵ for \n, ␟ for \x1f, ␞ for \x1e) is:
+        //
+        //   A_pretty ␞ ↵ M↵src/foo.rs ↵↵ B_pretty ␞ ↵ C_pretty ␞ ↵ A↵src/bar.rs ↵↵
+        //
+        // chunk[0]: A_pretty
+        // chunk[1]: \n<A name-status>\n\nB_pretty
+        // chunk[2]: \nC_pretty            ← starts directly with pretty (no \n\n)
+        // chunk[3]: \nA\tsrc/bar.rs\n\n
+        let raw = format!(
+            "{sha_a}\x1f\x1fa@x\x1fAlice\x1fce@x\x1f2025-01-01T00:00:00+00:00\x1fmsg A\n\x1e\nM\tsrc/foo.rs\n\n\
+            {sha_b}\x1f{sha_a} {sha_x}\x1fa@x\x1fAlice\x1fce@x\x1f2025-01-02T00:00:00+00:00\x1fmsg B\n\x1e\n\
+            {sha_c}\x1f{sha_b}\x1fa@x\x1fAlice\x1fce@x\x1f2025-01-03T00:00:00+00:00\x1fmsg C\n\x1e\nA\tsrc/bar.rs\n\n"
+        );
+
+        let events = parse_git_log_stream(&raw);
+
+        let revs: Vec<&str> = events.iter().map(|e| e.rev.as_str()).collect();
+        assert_eq!(
+            revs,
+            vec![sha_a, sha_b, sha_c],
+            "expected all 3 commits; got: {revs:?}"
+        );
+
+        // Commit A should have one changed file.
+        assert_eq!(
+            events[0].changes.len(),
+            1,
+            "commit A should have 1 changed file"
+        );
+
+        // Commit B (merge) should have zero changed files.
+        assert_eq!(
+            events[1].changes.len(),
+            0,
+            "merge commit B should have 0 changed files"
+        );
+        assert_eq!(
+            events[1].parents.len(),
+            2,
+            "merge commit B should have 2 parents"
+        );
+
+        // Commit C should have one changed file.
+        assert_eq!(
+            events[2].changes.len(),
+            1,
+            "commit C should have 1 changed file"
+        );
+    }
 }
