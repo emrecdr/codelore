@@ -462,14 +462,7 @@ pub mod medium_repo {
         let status = Command::new("git")
             .arg("-C")
             .arg(path)
-            .args([
-                "commit",
-                "-m",
-                msg,
-                "--author",
-                &author,
-                "--quiet",
-            ])
+            .args(["commit", "-m", msg, "--author", &author, "--quiet"])
             .env("GIT_AUTHOR_DATE", &date)
             .env("GIT_COMMITTER_DATE", &date)
             .status()

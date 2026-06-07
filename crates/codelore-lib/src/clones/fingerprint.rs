@@ -1,0 +1,165 @@
+//! Structural AST fingerprinting for clone detection.
+//!
+//! Walks a tree-sitter parse tree in pre-order, emitting `(node_kind_id,
+//! child_count)` pairs while skipping identifier + literal nodes. The
+//! resulting byte sequence is SHA-256-hashed to yield a 256-bit
+//! `Fingerprint::digest` that:
+//!   - is identical for Type 1 (exact) clones
+//!   - is identical for Type 2 (renamed/parameterized) clones — names and
+//!     literals are normalized away
+//!   - diverges for structurally different code
+//!
+//! The full pre-order `sequence` is kept so the optional Type 3 detector
+//! (`MinHash + LSH`; Plan 7 Task 4) can shingle it without re-parsing.
+
+use sha2::{Digest, Sha256};
+use std::collections::HashSet;
+use tree_sitter::{Node, Parser, TreeCursor};
+
+use crate::clones::language::CloneLanguage;
+use crate::{CodeLoreError, Result};
+
+/// One function-or-file's structural fingerprint.
+#[derive(Debug, Clone)]
+pub struct Fingerprint {
+    /// 256-bit SHA-256 of the pre-order `(kind_id, child_count)` byte
+    /// sequence (identifiers + literals omitted).
+    pub digest: [u8; 32],
+    /// Pre-order sequence of `(kind_id, child_count)` pairs that produced
+    /// `digest`. Kept for future `MinHash` shingling.
+    pub sequence: Vec<(u16, u16)>,
+    /// Number of AST nodes that contributed to the fingerprint (i.e. the
+    /// nodes that survived the identifier/literal skip filter). Use this as
+    /// the minimum-fragment-size knob to drop trivial getters/setters.
+    pub node_count: u32,
+}
+
+impl Fingerprint {
+    /// Render the digest as lowercase hex for CSV/JSON output.
+    #[must_use]
+    pub fn hex(&self) -> String {
+        hex::encode(self.digest)
+    }
+}
+
+/// Compute a structural fingerprint over the full source of `code` for
+/// language `lang`. Returns `Err` if tree-sitter fails to load the language
+/// (should never happen for the pinned grammars) or to parse (returns an
+/// empty-tree fingerprint, not an error, since tree-sitter is permissive).
+pub fn fingerprint_source(code: &[u8], lang: CloneLanguage) -> Result<Fingerprint> {
+    let mut parser = Parser::new();
+    parser
+        .set_language(&lang.language())
+        .map_err(|e| CodeLoreError::Analysis(format!("clone-fingerprint: set_language: {e}")))?;
+    let tree = parser
+        .parse(code, None)
+        .ok_or_else(|| CodeLoreError::Analysis("clone-fingerprint: parse returned None".into()))?;
+
+    let skip: HashSet<&'static str> = lang.skip_kinds().iter().copied().collect();
+
+    let mut sequence: Vec<(u16, u16)> = Vec::new();
+    let root = tree.root_node();
+    walk_preorder(root, &skip, &mut sequence);
+
+    let mut hasher = Sha256::new();
+    for (kind, arity) in &sequence {
+        hasher.update(kind.to_le_bytes());
+        hasher.update(arity.to_le_bytes());
+    }
+    let mut digest = [0u8; 32];
+    digest.copy_from_slice(&hasher.finalize());
+
+    let node_count = u32::try_from(sequence.len()).unwrap_or(u32::MAX);
+
+    Ok(Fingerprint {
+        digest,
+        sequence,
+        node_count,
+    })
+}
+
+/// Pre-order walk: emit `(kind_id, child_count)` for nodes whose kind is
+/// not in the skip set; always recurse so children of a skipped node still
+/// contribute (a literal node is a leaf so this has no effect, but a
+/// future skip-set might include non-leaf kinds).
+fn walk_preorder(node: Node, skip: &HashSet<&'static str>, out: &mut Vec<(u16, u16)>) {
+    let kind = node.kind();
+    let arity = u16::try_from(node.child_count()).unwrap_or(u16::MAX);
+    if !skip.contains(kind) {
+        out.push((node.kind_id(), arity));
+    }
+    let mut cursor: TreeCursor<'_> = node.walk();
+    if cursor.goto_first_child() {
+        loop {
+            walk_preorder(cursor.node(), skip, out);
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fp(lang: CloneLanguage, code: &str) -> Fingerprint {
+        fingerprint_source(code.as_bytes(), lang).expect("fingerprint")
+    }
+
+    #[test]
+    fn identical_rust_functions_share_fingerprint() {
+        let a = fp(
+            CloneLanguage::Rust,
+            "fn add(a: i32, b: i32) -> i32 { a + b }",
+        );
+        let b = fp(
+            CloneLanguage::Rust,
+            "fn add(a: i32, b: i32) -> i32 { a + b }",
+        );
+        assert_eq!(a.digest, b.digest);
+    }
+
+    #[test]
+    fn type2_renamed_rust_functions_share_fingerprint() {
+        // Same shape, different names + types + literals — Type 2 clone.
+        let a = fp(
+            CloneLanguage::Rust,
+            "fn add(a: i32, b: i32) -> i32 { a + b }",
+        );
+        let b = fp(
+            CloneLanguage::Rust,
+            "fn mul(x: u64, y: u64) -> u64 { x + y }",
+        );
+        assert_eq!(a.digest, b.digest, "Type 2 clones should share fingerprint");
+    }
+
+    #[test]
+    fn structurally_different_rust_functions_diverge() {
+        let a = fp(CloneLanguage::Rust, "fn id(x: i32) -> i32 { x }");
+        let b = fp(CloneLanguage::Rust, "fn id(x: i32) -> i32 { x + 1 }");
+        assert_ne!(
+            a.digest, b.digest,
+            "different shape ⇒ different fingerprint"
+        );
+    }
+
+    #[test]
+    fn identical_python_functions_share_fingerprint() {
+        let a = fp(CloneLanguage::Python, "def add(a, b):\n    return a + b\n");
+        let b = fp(CloneLanguage::Python, "def mul(x, y):\n    return x + y\n");
+        // Different identifiers — should match (Type 2).
+        assert_eq!(a.digest, b.digest);
+    }
+
+    #[test]
+    fn fingerprint_carries_sequence_and_node_count() {
+        let f = fp(
+            CloneLanguage::Rust,
+            "fn add(a: i32, b: i32) -> i32 { a + b }",
+        );
+        assert!(!f.sequence.is_empty(), "sequence should not be empty");
+        assert_eq!(f.node_count as usize, f.sequence.len());
+        assert_eq!(f.hex().len(), 64, "hex digest is 64 chars");
+    }
+}

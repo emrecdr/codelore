@@ -7,6 +7,7 @@
 pub mod analyses;
 pub mod analysis;
 pub mod arrow_facade;
+pub mod clones;
 pub mod complexity;
 pub mod error;
 pub mod facts;
