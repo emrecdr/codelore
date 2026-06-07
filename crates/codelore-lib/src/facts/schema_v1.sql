@@ -67,3 +67,23 @@ CREATE TABLE IF NOT EXISTS provenance (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- Plan 7: clone-detection results, populated at HEAD by clones::grouper.
+-- clone_group_id groups identical AST fingerprints (Type 1 + Type 2 clones).
+-- For Type 3 near-miss (MinHash, Plan 7 Task 4) the similarity column drops
+-- below 1.0 and rows in the same group share an LSH bucket but differ in
+-- digest.
+CREATE TABLE IF NOT EXISTS clones (
+    clone_group_id  INTEGER NOT NULL,
+    fingerprint     BLOB NOT NULL,
+    rev             TEXT NOT NULL,
+    path            TEXT NOT NULL,
+    function        TEXT NOT NULL,
+    start_line      INTEGER NOT NULL,
+    end_line        INTEGER NOT NULL,
+    node_count      INTEGER NOT NULL,
+    similarity      DOUBLE NOT NULL,
+    PRIMARY KEY (clone_group_id, path, function, start_line)
+);
+CREATE INDEX IF NOT EXISTS idx_clones_group ON clones(clone_group_id);
+CREATE INDEX IF NOT EXISTS idx_clones_fp ON clones(fingerprint);
