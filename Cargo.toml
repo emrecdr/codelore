@@ -9,6 +9,32 @@ rust-version = "1.87"
 license = "GPL-3.0-only"
 repository = "https://github.com/<owner>/codelore"
 
+# cargo-dist config (https://opensource.axo.dev/cargo-dist/).
+# Owner runs `cargo dist init` once to refresh .github/workflows/release.yml.
+# This block locks the platforms + installers in advance so the regenerated
+# workflow stays consistent across machines.
+[workspace.metadata.dist]
+cargo-dist-version = "0.28.0"
+ci = "github"
+installers = ["shell", "powershell", "msi", "homebrew"]
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+]
+# Homebrew tap (placeholder; replace before first release)
+tap = "<owner>/homebrew-codelore"
+publish-jobs = ["homebrew"]
+# Generate a binstall manifest so `cargo binstall codelore` works day one
+pr-run-mode = "plan"
+install-updater = false
+# Pinned runners for reproducibility
+[workspace.metadata.dist.github-custom-runners]
+aarch64-unknown-linux-gnu = "ubuntu-24.04-arm"
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 

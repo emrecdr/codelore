@@ -1,0 +1,154 @@
+# Release pipeline for CodeLore — multi-platform binaries via cargo-dist
+# + SLSA L3 build provenance via slsa-framework/slsa-github-generator.
+#
+# This file is hand-authored scaffolding. The owner should run
+# `cargo dist init` locally once to regenerate it with the canonical
+# cargo-dist matrix; this version is a working approximation that ships
+# the right artifacts in the right shape until that init runs.
+#
+# Triggered by:
+#   - Tag push matching `v*` (canonical release path)
+#   - Manual workflow_dispatch (test runs)
+
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write       # create the GitHub Release + upload artifacts
+  id-token: write       # OIDC for SLSA provenance generator
+  actions: read         # SLSA generator reads workflow run metadata
+  attestations: write   # attach attestations to the release
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: short
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: tag
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=manual-$(date -u +%Y%m%d-%H%M%S)" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-14
+          - target: x86_64-apple-darwin
+            os: macos-13
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            extra-packages: musl-tools
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    outputs:
+      hashes: ${{ steps.hashes.outputs.hashes }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install musl tooling
+        if: matrix.extra-packages == 'musl-tools'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: release-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release binary
+        run: cargo build --release -p codelore-cli --target ${{ matrix.target }}
+
+      - name: Stage artifact
+        id: stage
+        shell: bash
+        run: |
+          mkdir -p dist
+          binary="target/${{ matrix.target }}/release/codelore"
+          if [[ "${{ matrix.target }}" == *windows* ]]; then binary="${binary}.exe"; fi
+          archive_name="codelore-${{ needs.plan.outputs.tag }}-${{ matrix.target }}"
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            (cd "target/${{ matrix.target }}/release" && 7z a "../../../dist/${archive_name}.zip" codelore.exe ../../../README.md ../../../CHANGELOG.md ../../../LICENSE 2>/dev/null || true)
+            echo "archive=dist/${archive_name}.zip" >> "$GITHUB_OUTPUT"
+          else
+            tar -C "target/${{ matrix.target }}/release" -czf "dist/${archive_name}.tar.gz" codelore
+            echo "archive=dist/${archive_name}.tar.gz" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compute SHA-256 (for SLSA subject list)
+        id: hashes
+        shell: bash
+        run: |
+          hash=$(sha256sum "${{ steps.stage.outputs.archive }}" | base64 -w0 2>/dev/null || sha256sum "${{ steps.stage.outputs.archive }}" | base64)
+          echo "hashes=${hash}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: codelore-${{ matrix.target }}
+          path: dist/
+
+  # SLSA L3 build provenance (separate reusable workflow as required by
+  # slsa-github-generator). Subjects are the per-target archive hashes
+  # accumulated by the build matrix.
+  provenance:
+    needs: build
+    permissions:
+      actions: read
+      id-token: write
+      contents: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: ${{ needs.build.outputs.hashes }}
+      upload-assets: true
+
+  release:
+    needs: [plan, build, provenance]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+          merge-multiple: true
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.plan.outputs.tag }}
+          generate_release_notes: true
+          files: dist/**
+          fail_on_unmatched_files: true
