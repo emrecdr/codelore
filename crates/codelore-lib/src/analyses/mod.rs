@@ -2,6 +2,7 @@
 //! plus a thin Rust orchestrator.
 
 pub mod churn;
+pub mod clones;
 pub mod code_age;
 pub mod code_health;
 pub mod communication;

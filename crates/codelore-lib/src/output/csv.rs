@@ -3,6 +3,7 @@
 use std::io::Write;
 
 use crate::analyses::churn::{AbsChurnRow, AuthorChurnRow, EntityChurnRow};
+use crate::analyses::clones::ClonesRow;
 use crate::analyses::code_age::CodeAgeRow;
 use crate::analyses::code_health::CodeHealthRow;
 use crate::analyses::communication::CommunicationRow;
@@ -185,6 +186,31 @@ pub fn write_summary_csv<W: Write>(rows: &[SummaryRow], w: &mut W) -> Result<()>
     writeln!(w, "metric,value").map_err(CodeLoreError::Io)?;
     for row in rows {
         writeln!(w, "{},{}", quote_if_needed(&row.metric), row.value).map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+pub fn write_clones_csv<W: Write>(rows: &[ClonesRow], w: &mut W) -> Result<()> {
+    writeln!(
+        w,
+        "clone-group,fingerprint,entity,function,start-line,end-line,node-count,similarity,family-size"
+    )
+    .map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{},{},{},{},{},{:.4},{}",
+            row.clone_group_id,
+            row.fingerprint,
+            quote_if_needed(&row.entity),
+            quote_if_needed(&row.function),
+            row.start_line,
+            row.end_line,
+            row.node_count,
+            row.similarity,
+            row.family_size
+        )
+        .map_err(CodeLoreError::Io)?;
     }
     Ok(())
 }

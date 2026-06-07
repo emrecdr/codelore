@@ -88,11 +88,24 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
         ..Options::default()
     };
 
+    let analysis_name = args.analysis.as_str();
+
+    // Plan 7 clones is HEAD-only filesystem walk — no git history needed.
+    // Short-circuit before opening the repo so shallow clones, untracked
+    // working trees, and "not a git repo" cases all work for clones.
+    if matches!(analysis, AnalysisName::Clones) && format == "csv" {
+        let mut out: Box<dyn Write> = match args.output.as_ref() {
+            Some(path) => Box::new(std::fs::File::create(path)?),
+            None => Box::new(std::io::stdout().lock()),
+        };
+        let rows = codelore_lib::analyses::clones::run_clones(&opts).context("run clones")?;
+        codelore_lib::output::csv::write_clones_csv(&rows, &mut out).context("write csv")?;
+        return Ok(());
+    }
+
     let repo = GixRepo::open(&args.repo).context("open repo")?;
     let db = FactsDb::new_in_memory().context("open fact store")?;
     db.ingest(&repo, &opts).context("ingest commits")?;
-
-    let analysis_name = args.analysis.as_str();
 
     // Parquet + SQLite write to file directly through DuckDB, not via Write trait.
     if format == "parquet" {
@@ -333,6 +346,16 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
                 codelore_lib::output::markdown::write_summary_markdown(&rows, &mut out)
                     .context("write markdown")?;
             }
+            // --- clones (Plan 7) ---
+            ("csv", AnalysisName::Clones) => {
+                let rows =
+                    codelore_lib::analyses::clones::run_clones(&opts).context("run clones")?;
+                codelore_lib::output::csv::write_clones_csv(&rows, &mut out)
+                    .context("write csv")?;
+            }
+            (fmt, AnalysisName::Clones) => anyhow::bail!(
+                "clones analysis currently supports --format csv only (json/markdown/sarif land in Plan 7.x); got {fmt:?}"
+            ),
             // --- authors (reserved) ---
             (_, AnalysisName::Authors) => anyhow::bail!(
                 "Plan 4 supports 11 analyses: revisions, hotspots, code-health, \

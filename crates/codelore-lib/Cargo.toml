@@ -32,6 +32,7 @@ tree-sitter-python = "=0.23.6"
 tree-sitter-java = "=0.23.5"
 tree-sitter-javascript = "=0.23.1"
 tree-sitter-typescript = "=0.23.1"
+walkdir = "2"
 
 [features]
 default = []

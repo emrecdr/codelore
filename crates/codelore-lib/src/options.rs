@@ -48,6 +48,12 @@ pub struct Options {
     pub include_merges: bool,
     pub strict_grouping: bool,
     pub complexity_sample: ComplexitySample,
+
+    // Plan 7: clone detection. Minimum AST node count (post-skip) for a
+    // function to be eligible as a clone-family member. Default 30 ≈ 5-8
+    // statements after identifier/literal normalization — keeps trivial
+    // getters/setters and empty constructors out of clone reports.
+    pub min_clone_node_count: u32,
 }
 
 impl Default for Options {
@@ -73,6 +79,7 @@ impl Default for Options {
             include_merges: false,
             strict_grouping: false,
             complexity_sample: ComplexitySample::Head,
+            min_clone_node_count: 30,
         }
     }
 }

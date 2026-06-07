@@ -20,6 +20,8 @@ pub enum AnalysisName {
     // code-maat parity (computed as side-data on hotspots, addressable standalone)
     Revisions,
     Authors,
+    // Plan 7: clone detection (T1+T2 via AST structural hashing)
+    Clones,
 }
 
 impl AnalysisName {
@@ -38,6 +40,7 @@ impl AnalysisName {
             Self::Summary => "summary",
             Self::Revisions => "revisions",
             Self::Authors => "authors",
+            Self::Clones => "clones",
         }
     }
 
@@ -56,6 +59,7 @@ impl AnalysisName {
             Self::Summary,
             Self::Revisions,
             Self::Authors,
+            Self::Clones,
         ]
     }
 }
