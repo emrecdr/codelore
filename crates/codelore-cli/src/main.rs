@@ -353,15 +353,42 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
                 codelore_lib::output::csv::write_clones_csv(&rows, &mut out)
                     .context("write csv")?;
             }
+            ("json", AnalysisName::Clones) => {
+                let rows =
+                    codelore_lib::analyses::clones::run_clones(&opts).context("run clones")?;
+                codelore_lib::output::json::write_clones_json(&rows, &mut out)
+                    .context("write json")?;
+            }
+            ("markdown", AnalysisName::Clones) => {
+                let rows =
+                    codelore_lib::analyses::clones::run_clones(&opts).context("run clones")?;
+                codelore_lib::output::markdown::write_clones_markdown(&rows, &mut out)
+                    .context("write markdown")?;
+            }
             (fmt, AnalysisName::Clones) => anyhow::bail!(
-                "clones analysis currently supports --format csv only (json/markdown/sarif land in Plan 7.x); got {fmt:?}"
+                "clones analysis supports csv|json|markdown; sarif lands in Plan 8 §2 Task 10; got {fmt:?}"
             ),
-            // --- authors (reserved) ---
-            (_, AnalysisName::Authors) => anyhow::bail!(
-                "Plan 4 supports 11 analyses: revisions, hotspots, code-health, \
-             code-age, abs-churn, author-churn, entity-churn, communication, \
-             code-ownership, change-coupling, summary. \
-             The 'authors' analysis lands in Plan 5."
+            // --- authors (Plan 8 §2 Task 6) ---
+            ("csv", AnalysisName::Authors) => {
+                let rows = codelore_lib::analyses::authors::run_authors(&db, &opts)
+                    .context("run authors")?;
+                codelore_lib::output::csv::write_authors_csv(&rows, &mut out)
+                    .context("write csv")?;
+            }
+            ("json", AnalysisName::Authors) => {
+                let rows = codelore_lib::analyses::authors::run_authors(&db, &opts)
+                    .context("run authors")?;
+                codelore_lib::output::json::write_authors_json(&rows, &mut out)
+                    .context("write json")?;
+            }
+            ("markdown", AnalysisName::Authors) => {
+                let rows = codelore_lib::analyses::authors::run_authors(&db, &opts)
+                    .context("run authors")?;
+                codelore_lib::output::markdown::write_authors_markdown(&rows, &mut out)
+                    .context("write markdown")?;
+            }
+            (fmt, AnalysisName::Authors) => anyhow::bail!(
+                "authors analysis supports csv|json|markdown; got {fmt:?}"
             ),
             _ => unreachable!("format/analysis combination should have been validated above"),
         }

@@ -90,13 +90,8 @@ impl std::error::Error for UnknownAnalysisError {}
 impl fmt::Display for UnknownAnalysisError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Enumerate every public analysis name so the user sees what they can
-        // pick from. Omit `Authors` while it still bails — listing it would
-        // mislead the user.
-        let names: Vec<&str> = AnalysisName::all()
-            .iter()
-            .filter(|a| !matches!(a, AnalysisName::Authors))
-            .map(|a| a.as_str())
-            .collect();
+        // pick from. Plan 8 §2 Task 6 wired `Authors`, so it's no longer filtered out.
+        let names: Vec<&str> = AnalysisName::all().iter().map(|a| a.as_str()).collect();
         write!(
             f,
             "unknown analysis {:?}. Supported: {}",

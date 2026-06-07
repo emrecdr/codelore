@@ -3,7 +3,9 @@
 //! Each writer takes a slice of typed rows + writer; serializes as a JSON array.
 
 use crate::analyses::{
+    authors::AuthorsRow,
     churn::{AbsChurnRow, AuthorChurnRow, EntityChurnRow},
+    clones::ClonesRow,
     code_age::CodeAgeRow,
     code_health::CodeHealthRow,
     communication::CommunicationRow,
@@ -72,5 +74,13 @@ pub fn write_coupling_json<W: Write>(rows: &[CouplingRow], w: &mut W) -> Result<
 }
 
 pub fn write_summary_json<W: Write>(rows: &[SummaryRow], w: &mut W) -> Result<()> {
+    write_json(rows, w)
+}
+
+pub fn write_clones_json<W: Write>(rows: &[ClonesRow], w: &mut W) -> Result<()> {
+    write_json(rows, w)
+}
+
+pub fn write_authors_json<W: Write>(rows: &[AuthorsRow], w: &mut W) -> Result<()> {
     write_json(rows, w)
 }

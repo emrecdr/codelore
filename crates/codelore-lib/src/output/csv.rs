@@ -2,6 +2,7 @@
 
 use std::io::Write;
 
+use crate::analyses::authors::AuthorsRow;
 use crate::analyses::churn::{AbsChurnRow, AuthorChurnRow, EntityChurnRow};
 use crate::analyses::clones::ClonesRow;
 use crate::analyses::code_age::CodeAgeRow;
@@ -211,6 +212,15 @@ pub fn write_clones_csv<W: Write>(rows: &[ClonesRow], w: &mut W) -> Result<()> {
             row.family_size
         )
         .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+pub fn write_authors_csv<W: Write>(rows: &[AuthorsRow], w: &mut W) -> Result<()> {
+    // Header matches code-maat's `authors` analysis ("name,n-commits") for parity.
+    writeln!(w, "name,n-commits").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(w, "{},{}", quote_if_needed(&row.author), row.commits).map_err(CodeLoreError::Io)?;
     }
     Ok(())
 }

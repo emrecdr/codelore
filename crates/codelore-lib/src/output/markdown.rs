@@ -2,7 +2,9 @@
 //! CI artifacts.
 
 use crate::analyses::{
+    authors::AuthorsRow,
     churn::{AbsChurnRow, AuthorChurnRow, EntityChurnRow},
+    clones::ClonesRow,
     code_age::CodeAgeRow,
     code_health::CodeHealthRow,
     communication::CommunicationRow,
@@ -172,6 +174,42 @@ pub fn write_summary_markdown<W: Write>(rows: &[SummaryRow], w: &mut W) -> Resul
     writeln!(w, "|---|---|").map_err(CodeLoreError::Io)?;
     for row in rows {
         writeln!(w, "| {} | {} |", row.metric, row.value).map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+pub fn write_clones_markdown<W: Write>(rows: &[ClonesRow], w: &mut W) -> Result<()> {
+    header(w, "CodeLore clones")?;
+    writeln!(
+        w,
+        "| Clone group | Entity | Function | Lines | Nodes | Similarity | Family size |"
+    )
+    .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---|---|---|---:|---:|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| {} | `{}` | `{}` | {}-{} | {} | {:.4} | {} |",
+            row.clone_group_id,
+            row.entity,
+            row.function,
+            row.start_line,
+            row.end_line,
+            row.node_count,
+            row.similarity,
+            row.family_size,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+pub fn write_authors_markdown<W: Write>(rows: &[AuthorsRow], w: &mut W) -> Result<()> {
+    header(w, "CodeLore authors")?;
+    writeln!(w, "| Author | Commits |").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(w, "| {} | {} |", row.author, row.commits).map_err(CodeLoreError::Io)?;
     }
     Ok(())
 }

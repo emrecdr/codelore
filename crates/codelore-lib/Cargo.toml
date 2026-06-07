@@ -106,6 +106,10 @@ name = "summary_test"
 required-features = ["test-support"]
 
 [[test]]
+name = "authors_test"
+required-features = ["test-support"]
+
+[[test]]
 name = "provenance_test"
 required-features = ["test-support"]
 
