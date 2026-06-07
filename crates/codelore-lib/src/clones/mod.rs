@@ -13,8 +13,10 @@
 //! at Fisher-significant rates — is the differentiating signal `CodeScene`
 //! calls "X-Ray", with our published-formula transparency wedge applied.
 
+pub mod extractor;
 pub mod fingerprint;
 pub mod language;
 
+pub use extractor::{CloneGroup, FunctionFingerprint, extract_functions, group_clones};
 pub use fingerprint::{Fingerprint, fingerprint_source};
 pub use language::CloneLanguage;

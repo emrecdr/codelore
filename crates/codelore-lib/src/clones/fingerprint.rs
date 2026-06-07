@@ -40,6 +40,27 @@ impl Fingerprint {
     pub fn hex(&self) -> String {
         hex::encode(self.digest)
     }
+
+    /// Build a `Fingerprint` directly from a pre-computed `(kind_id, arity)`
+    /// sequence. Used by the function extractor in `clones::extractor` so it
+    /// can run the same walk over a subtree (the function body) instead of
+    /// the full file.
+    #[must_use]
+    pub fn from_sequence(sequence: Vec<(u16, u16)>) -> Self {
+        let mut hasher = Sha256::new();
+        for (kind, arity) in &sequence {
+            hasher.update(kind.to_le_bytes());
+            hasher.update(arity.to_le_bytes());
+        }
+        let mut digest = [0u8; 32];
+        digest.copy_from_slice(&hasher.finalize());
+        let node_count = u32::try_from(sequence.len()).unwrap_or(u32::MAX);
+        Self {
+            digest,
+            sequence,
+            node_count,
+        }
+    }
 }
 
 /// Compute a structural fingerprint over the full source of `code` for
@@ -59,30 +80,22 @@ pub fn fingerprint_source(code: &[u8], lang: CloneLanguage) -> Result<Fingerprin
 
     let mut sequence: Vec<(u16, u16)> = Vec::new();
     let root = tree.root_node();
-    walk_preorder(root, &skip, &mut sequence);
-
-    let mut hasher = Sha256::new();
-    for (kind, arity) in &sequence {
-        hasher.update(kind.to_le_bytes());
-        hasher.update(arity.to_le_bytes());
-    }
-    let mut digest = [0u8; 32];
-    digest.copy_from_slice(&hasher.finalize());
-
-    let node_count = u32::try_from(sequence.len()).unwrap_or(u32::MAX);
-
-    Ok(Fingerprint {
-        digest,
-        sequence,
-        node_count,
-    })
+    walk_preorder_internal(root, &skip, &mut sequence);
+    Ok(Fingerprint::from_sequence(sequence))
 }
 
 /// Pre-order walk: emit `(kind_id, child_count)` for nodes whose kind is
 /// not in the skip set; always recurse so children of a skipped node still
 /// contribute (a literal node is a leaf so this has no effect, but a
 /// future skip-set might include non-leaf kinds).
-fn walk_preorder(node: Node, skip: &HashSet<&'static str>, out: &mut Vec<(u16, u16)>) {
+///
+/// Exposed at crate visibility so `clones::extractor` can run the same walk
+/// over a function-body subtree.
+pub(crate) fn walk_preorder_internal(
+    node: Node,
+    skip: &HashSet<&'static str>,
+    out: &mut Vec<(u16, u16)>,
+) {
     let kind = node.kind();
     let arity = u16::try_from(node.child_count()).unwrap_or(u16::MAX);
     if !skip.contains(kind) {
@@ -91,7 +104,7 @@ fn walk_preorder(node: Node, skip: &HashSet<&'static str>, out: &mut Vec<(u16, u
     let mut cursor: TreeCursor<'_> = node.walk();
     if cursor.goto_first_child() {
         loop {
-            walk_preorder(cursor.node(), skip, out);
+            walk_preorder_internal(cursor.node(), skip, out);
             if !cursor.goto_next_sibling() {
                 break;
             }

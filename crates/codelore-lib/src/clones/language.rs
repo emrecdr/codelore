@@ -110,4 +110,27 @@ impl CloneLanguage {
             ],
         }
     }
+
+    /// Per-language set of node-kind names that mark a *function* boundary.
+    /// Each match becomes a standalone clone-detection unit.
+    #[must_use]
+    pub fn function_kinds(self) -> &'static [&'static str] {
+        match self {
+            Self::Rust => &[
+                "function_item",
+                "function_signature_item",
+                "closure_expression",
+            ],
+            Self::Python => &["function_definition"],
+            Self::Java => &["method_declaration", "constructor_declaration"],
+            Self::JavaScript | Self::TypeScript => &[
+                "function_declaration",
+                "method_definition",
+                "arrow_function",
+                "function_expression",
+                "generator_function",
+                "generator_function_declaration",
+            ],
+        }
+    }
 }
