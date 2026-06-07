@@ -121,6 +121,10 @@ name = "clones_factsdb_test"
 required-features = ["test-support"]
 
 [[test]]
+name = "clone_coupling_test"
+required-features = ["test-support"]
+
+[[test]]
 name = "provenance_test"
 required-features = ["test-support"]
 

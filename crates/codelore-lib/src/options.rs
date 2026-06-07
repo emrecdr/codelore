@@ -18,6 +18,7 @@ pub enum ComplexitySample {
 }
 
 #[derive(Debug, Clone)]
+#[allow(clippy::struct_excessive_bools)] // CLI config bag mirrors many independent knobs
 pub struct Options {
     // Input
     pub repo_path: PathBuf,
@@ -59,6 +60,22 @@ pub struct Options {
     // Built from `--exclude` flags + any `.codeloreignore` file in repo_path.
     // Currently honored by `clones`; other analyses gain support in Plan 9.
     pub exclude_patterns: Vec<String>,
+
+    // Plan 8 §6: clone-coupling false-positive mitigations (research brief
+    // a0a6cf3534a65a643). Defaults locked from the brief.
+    //
+    /// Minimum `shared_revs` for a clone pair to count as "live". Below this
+    /// floor the Fisher test is unreliable (small contingency-table cells).
+    /// Default 3.
+    pub min_clone_shared_revs: u32,
+    /// Minimum similarity for a clone pair to enter the coupling intersection.
+    /// `SourcererCC`'s BCB benchmark found precision/recall optimum at 0.70.
+    /// Default 0.70. T1+T2 always = 1.0 today; this matters once T3 (`MinHash`) lands.
+    pub clone_similarity_floor: f64,
+    /// Skip clone pairs whose two files share the same parent directory
+    /// (intentional structural mirroring like `foo_test.rs` ↔ `foo.rs`).
+    /// Default `true`.
+    pub clone_skip_same_dir: bool,
 }
 
 impl Default for Options {
@@ -86,6 +103,9 @@ impl Default for Options {
             complexity_sample: ComplexitySample::Head,
             min_clone_node_count: 30,
             exclude_patterns: Vec::new(),
+            min_clone_shared_revs: 3,
+            clone_similarity_floor: 0.70,
+            clone_skip_same_dir: true,
         }
     }
 }
