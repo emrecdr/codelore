@@ -8,7 +8,9 @@ Every codebase tells a story that static linters cannot see. Behind the syntax a
 
 A Rust-based modernization of Adam Tornhill's [code-maat](https://github.com/adamtornhill/code-maat). Powered by [gix](https://github.com/GitoxideLabs/gitoxide), [DuckDB](https://duckdb.org), [tree-sitter](https://tree-sitter.github.io/), and a vendored fork of Mozilla's [rust-code-analysis](https://github.com/mozilla/rust-code-analysis).
 
-**Status: alpha (Plans 1–8 complete).** 13 analyses + `codelore diff` PR-mode subcommand × 6 output formats (CSV, JSON, **SARIF 2.1.0**, Markdown, Parquet, SQLite). Provenance manifest sidecars on every file output. Persistent fact-store cache (100×+ speedup on repeat runs). Parallel complexity extraction. Live-clone detection (clones × Fisher-significant co-change) — the strategic differentiator with the `CODELORE-LIVE-CLONE` SARIF rule. 349 tests pass, clippy/fmt/deny clean. Tag `v1.0.0` is the only remaining gate.
+**Status: alpha (Plans 1–8 complete).** 13 analyses + `codelore diff` PR-mode subcommand × 6 output formats (CSV, JSON, **SARIF 2.1.0**, Markdown, Parquet, SQLite). Provenance manifest sidecars on every file output. Persistent fact-store cache (100×+ speedup on repeat runs). Parallel complexity extraction via Rayon. Live-clone detection (clones × Fisher-significant co-change) — the strategic differentiator with the `CODELORE-LIVE-CLONE` SARIF rule. 349 tests pass, clippy/fmt/deny clean. Tag `v1.0.0` is the only remaining gate.
+
+> See [`docs/codebase_analysis_report.md`](docs/codebase_analysis_report.md) for the deep-dive architecture review and the v1.x improvement backlog (4 open items: `Options` builder + cross-field validation, `csv` crate migration, rename-tracking in analyses, parallel clone extraction).
 
 ---
 
@@ -204,7 +206,7 @@ Gates: `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `
 
 ## 6. Roadmap
 
-Plans 1–7 done. Plan 8 (v1.x release readiness) in flight:
+Plans 1–8 complete. v1.0.0 tag is the only remaining gate.
 
 - **Plan 1** ✅ — Phase 0 walking skeleton (workspace, gix walker, DuckDB fact store, revisions analysis)
 - **Plan 2** ✅ — vendored Mozilla `rust-code-analysis` as `codelore-rca/`; Tier-1 metric smoke tests
@@ -243,8 +245,18 @@ The tag push triggers `.github/workflows/release.yml` (cargo-dist multi-platform
 
 ---
 
-## 7. Advanced usage
+## 7. Known limitations (the honest list)
 
+The full breakdown lives in [`docs/codebase_analysis_report.md`](docs/codebase_analysis_report.md) — re-validated against the post-Plan-8 codebase. The headline gaps for v1.x:
+
+- **Rename tracking** — `ChangeType::Renamed { from, similarity }` is captured at ingest but the analyses (revisions / coupling / churn) don't follow renames. A renamed file's history splits across pre- and post-rename paths. Code-maat has the same gap (documented in their FAQ).
+- **`Options` cross-field validation** — the 26-field struct has no `validate()` guard. Pathological combinations like `min_revs > max_changeset_size` or `fisher_significance > 1.0` silently produce empty / wrong results. Builder pattern + validation is on the v1.x list.
+- **Hand-rolled CSV emitter** — quoting is handled correctly by a `quote_if_needed` helper, but the surface is fragile. Migration to the `csv` crate is on the v1.x list.
+- **Clone extraction is single-threaded** — Plan 8 §5 parallelized the heavier complexity-extraction pass; the lighter clone pass uses the same Rayon pattern in v1.x.
+
+## 8. Advanced usage
+
+- [`docs/codebase_analysis_report.md`](docs/codebase_analysis_report.md) — deep-dive architecture review + validated improvement backlog
 - [`docs/superpowers/specs/2026-06-06-codelore-design.md`](docs/superpowers/specs/2026-06-06-codelore-design.md) — full design spec (~1100 lines) covering every analysis, threshold, identity rule, and Kamei feature
 - [`docs/roadmap-v1.x-and-beyond.md`](docs/roadmap-v1.x-and-beyond.md) — prioritized backlog of v1.x and v2 work
 - [`docs/perf-evidence-v1.md`](docs/perf-evidence-v1.md) — release-blocker performance evidence
@@ -255,12 +267,12 @@ For the algorithmic detail on each analysis (formulas, default thresholds, edge 
 
 ---
 
-## 8. Why "CodeLore"?
+## 9. Why "CodeLore"?
 
 The technical category is "behavioral code analysis." The metaphor is reading the legends a codebase tells about itself. Every commit is tribal lore: who knew this code, who burned themselves on it, where the workarounds calcified, which functions are quietly cloned across a dozen files because everyone fixed the same bug in their corner. CodeLore surfaces that lore as data you can act on.
 
 ---
 
-## 9. License
+## 10. License
 
 **GPL-3.0-only.** Bundles a vendored fork of Mozilla's `rust-code-analysis` under **MPL-2.0** — see [`crates/codelore-rca/LICENSE-MPL`](crates/codelore-rca/LICENSE-MPL) and [`crates/codelore-rca/UPSTREAM.md`](crates/codelore-rca/UPSTREAM.md) for vendoring history and modification notes.
