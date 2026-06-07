@@ -1,13 +1,12 @@
 //! Integration tests for the persistent fact-store cache (Plan 8 §3 T11-T13).
 
-use std::path::Path;
 use std::time::{Duration, Instant};
 
 use codelore_lib::cache::{cache_key, cache_path_with_root, prune_repo_cache};
 use codelore_lib::facts::FactsDb;
 use codelore_lib::repo::GixRepo;
 use codelore_lib::test_support::tiny_repo;
-use codelore_lib::Options;
+use codelore_lib::{Options, Repo};
 
 /// Verify that the cache hit path is exercised by the second `open_or_ingest`
 /// call and that the cache file persists on disk.
@@ -29,9 +28,8 @@ fn open_or_ingest_second_call_is_a_cache_hit() {
 
     // First call: cache miss — should ingest and write the .duckdb file.
     let t0 = Instant::now();
-    let _db1 =
-        FactsDb::open_or_ingest_with_cache_root(&opts, &gix, cache_root.path())
-            .expect("first open_or_ingest");
+    let _db1 = FactsDb::open_or_ingest_with_cache_root(&opts, &gix, cache_root.path())
+        .expect("first open_or_ingest");
     let first_duration = t0.elapsed();
 
     // Derive the expected cache file path.
@@ -47,22 +45,19 @@ fn open_or_ingest_second_call_is_a_cache_hit() {
 
     // Second call: cache hit — should be significantly faster than the first.
     let t1 = Instant::now();
-    let _db2 =
-        FactsDb::open_or_ingest_with_cache_root(&opts, &gix, cache_root.path())
-            .expect("second open_or_ingest");
+    let _db2 = FactsDb::open_or_ingest_with_cache_root(&opts, &gix, cache_root.path())
+        .expect("second open_or_ingest");
     let second_duration = t1.elapsed();
 
     // The second call must be a hit and therefore much faster.
     // We assert < 500ms as a generous upper bound (cache open should be < 5ms in practice).
     assert!(
         second_duration < Duration::from_millis(500),
-        "second call (cache hit) took {:?}, expected < 500ms; first call took {:?}",
-        second_duration,
-        first_duration
+        "second call (cache hit) took {second_duration:?}, expected < 500ms; first call took {first_duration:?}",
     );
 }
 
-/// Verify that `--no-cache` always returns a fresh in-memory FactsDb.
+/// Verify that `--no-cache` always returns a fresh in-memory `FactsDb`.
 #[test]
 fn open_or_ingest_no_cache_always_ingests() {
     let repo = tiny_repo::build();
@@ -77,8 +72,7 @@ fn open_or_ingest_no_cache_always_ingests() {
     let gix = GixRepo::open(&repo_path).expect("open gix repo");
 
     // Call once to populate cache.
-    let _ =
-        FactsDb::open_or_ingest_with_cache_root(&opts, &gix, cache_root.path()).unwrap();
+    let _ = FactsDb::open_or_ingest_with_cache_root(&opts, &gix, cache_root.path()).unwrap();
 
     // Now call with no_cache=true — the cache file should NOT be read.
     // We verify by checking the new db is a fresh in-memory instance (no path).

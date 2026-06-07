@@ -134,6 +134,14 @@ impl Repo for GixRepo {
             signoffs: vec![],
         })
     }
+
+    fn head_sha(&self) -> Result<String> {
+        let repo = self.inner.to_thread_local();
+        let oid = repo
+            .head_id()
+            .map_err(|e| CodeLoreError::Repo(format!("head_id: {e}")))?;
+        Ok(oid.to_hex().to_string())
+    }
 }
 
 /// Compute the per-file changes for a single commit identified by `rev`.

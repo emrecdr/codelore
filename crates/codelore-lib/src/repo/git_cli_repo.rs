@@ -184,6 +184,21 @@ impl Repo for GitCliRepo {
             signoffs,
         })
     }
+
+    fn head_sha(&self) -> Result<String> {
+        let output = self.run_git(&["rev-parse", "HEAD"])?;
+        if !output.status.success() {
+            return Err(CodeLoreError::Repo(format!(
+                "git rev-parse HEAD: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+        let sha = String::from_utf8(output.stdout)
+            .map_err(|e| CodeLoreError::Repo(format!("git rev-parse HEAD not utf-8: {e}")))?
+            .trim()
+            .to_string();
+        Ok(sha)
+    }
 }
 
 // ---------------------------------------------------------------------------

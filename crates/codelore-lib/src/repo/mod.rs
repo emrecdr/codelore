@@ -28,6 +28,10 @@ pub trait Repo: Send + Sync {
 
     /// Commit metadata not in `CommitEvent` (signed-by, signoffs).
     fn commit_metadata(&self, rev: &str) -> Result<CommitMetadata>;
+
+    /// Return the full SHA-1 hex string of HEAD.
+    /// Used by the persistent cache (Plan 8 §3) to build the cache key.
+    fn head_sha(&self) -> Result<String>;
 }
 
 pub mod gix_repo;

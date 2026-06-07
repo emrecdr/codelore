@@ -4,9 +4,9 @@
 //! Cache path layout:
 //!   `$XDG_CACHE_HOME/codelore/<repo_hash_8>/<cache_key_16>.duckdb`
 //!
-//! Cache key covers: canonical_repo_path, HEAD SHA, crate version, options
+//! Cache key covers: `canonical_repo_path`, HEAD SHA, crate version, options
 //! thresholds, schema version. Excludes: `rows_limit`, `repo_path` (already
-//! folded into repo_hash_8), cosmetic flags.
+//! folded into `repo_hash_8`), cosmetic flags.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -16,20 +16,20 @@ use sha2::{Digest, Sha256};
 
 use crate::Options;
 
-/// Schema version sentinel. Bump whenever the DuckDB schema changes so that
+/// Schema version sentinel. Bump whenever the `DuckDB` schema changes so that
 /// old cache files are not opened with a new schema.
 const SCHEMA_VERSION: &str = "schema_v1";
 
 /// Compute a 32-byte SHA-256 cache key from:
-///   canonical_repo_path || NUL || head_sha || NUL || CARGO_PKG_VERSION || NUL
-///   || opts_hash(opts) || NUL || SCHEMA_VERSION
+///   `canonical_repo_path || NUL || head_sha || NUL || CARGO_PKG_VERSION || NUL`
+///   `|| opts_hash(opts) || NUL || SCHEMA_VERSION`
 ///
 /// The key is deterministic for identical inputs and changes whenever any
 /// threshold knob or schema version changes.
+#[must_use]
 pub fn cache_key(repo_path: &Path, head_sha: &str, opts: &Options) -> [u8; 32] {
     let mut hasher = Sha256::new();
-    let canonical =
-        fs::canonicalize(repo_path).unwrap_or_else(|_| repo_path.to_path_buf());
+    let canonical = fs::canonicalize(repo_path).unwrap_or_else(|_| repo_path.to_path_buf());
     hasher.update(canonical.to_string_lossy().as_bytes());
     hasher.update(b"\x00");
     hasher.update(head_sha.as_bytes());
@@ -47,12 +47,14 @@ pub fn cache_key(repo_path: &Path, head_sha: &str, opts: &Options) -> [u8; 32] {
 /// Resolve the on-disk path for a cache entry:
 ///   `<cache_root>/codelore/<repo_hash_8>/<cache_key_16>.duckdb`
 ///
-/// `cache_root` defaults to `dirs::cache_dir()` but can be overridden (Task 14).
+/// `cache_root` defaults to [`dirs::cache_dir()`] but can be overridden (Task 14).
+#[must_use]
 pub fn cache_path(key: &[u8; 32], repo_path: &Path) -> PathBuf {
     cache_path_with_root(key, repo_path, &default_cache_root())
 }
 
 /// Same as [`cache_path`] but with an explicit root (for `--cache-dir` override).
+#[must_use]
 pub fn cache_path_with_root(key: &[u8; 32], repo_path: &Path, root: &Path) -> PathBuf {
     let mut repo_hash = Sha256::new();
     repo_hash.update(repo_path.to_string_lossy().as_bytes());
@@ -63,8 +65,9 @@ pub fn cache_path_with_root(key: &[u8; 32], repo_path: &Path, root: &Path) -> Pa
         .join(format!("{key_short}.duckdb"))
 }
 
-/// Return `dirs::cache_dir()` or fall back to `/tmp` when the XDG dirs are
+/// Return [`dirs::cache_dir()`] or fall back to `/tmp` when the XDG dirs are
 /// unavailable (headless CI, containers, etc.).
+#[must_use]
 pub fn default_cache_root() -> PathBuf {
     dirs::cache_dir().unwrap_or_else(|| PathBuf::from("/tmp"))
 }
@@ -78,21 +81,14 @@ pub fn default_cache_root() -> PathBuf {
 fn opts_hash(opts: &Options) -> String {
     let after = opts
         .after
-        .map(|d| d.to_string())
-        .unwrap_or_else(|| "none".to_string());
+        .map_or_else(|| "none".to_string(), |d| d.to_string());
     let before = opts
         .before
-        .map(|d| d.to_string())
-        .unwrap_or_else(|| "none".to_string());
+        .map_or_else(|| "none".to_string(), |d| d.to_string());
     let age_time_now = opts
         .age_time_now
-        .map(|d| d.to_string())
-        .unwrap_or_else(|| "none".to_string());
-    let message_regex = opts
-        .message_regex
-        .as_deref()
-        .unwrap_or("none")
-        .to_string();
+        .map_or_else(|| "none".to_string(), |d| d.to_string());
+    let message_regex = opts.message_regex.as_deref().unwrap_or("none").to_string();
     let complexity_sample = format!("{:?}", opts.complexity_sample);
 
     // Stable serialisation: field=value pairs joined by ";", fields in fixed order.
@@ -190,7 +186,10 @@ pub fn prune_global_cache(root: &Path, max_bytes: u64) {
             break;
         }
         if let Err(e) = fs::remove_file(&path) {
-            tracing::warn!("prune_global_cache: failed to remove {}: {e}", path.display());
+            tracing::warn!(
+                "prune_global_cache: failed to remove {}: {e}",
+                path.display()
+            );
         } else {
             tracing::info!("prune_global_cache: removed {}", path.display());
             remaining = remaining.saturating_sub(size);
@@ -319,7 +318,7 @@ mod tests {
         let path = cache_path_with_root(&key, Path::new("/tmp/test-repo"), &root);
 
         // Must be under <root>/codelore/
-        assert!(path.starts_with(&root.join("codelore")));
+        assert!(path.starts_with(root.join("codelore")));
         // File must end in .duckdb
         assert_eq!(path.extension().and_then(|x| x.to_str()), Some("duckdb"));
         // Filename stem must be exactly 16 hex chars
@@ -330,7 +329,13 @@ mod tests {
             "stem must be all hex chars"
         );
         // Repo hash component must be exactly 8 hex chars
-        let repo_component = path.parent().unwrap().file_name().unwrap().to_str().unwrap();
+        let repo_component = path
+            .parent()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert_eq!(
             repo_component.len(),
             8,

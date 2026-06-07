@@ -5,9 +5,13 @@ pub mod schema;
 
 pub use ingest::IngestStats;
 
-use duckdb::Connection;
+use std::path::Path;
 
-use crate::{CodeLoreError, Result};
+use duckdb::{AccessMode, Config, Connection};
+
+use crate::cache;
+use crate::repo::Repo;
+use crate::{CodeLoreError, Options, Result};
 
 pub struct FactsDb {
     conn: Connection,
@@ -28,6 +32,102 @@ impl FactsDb {
         let db = Self { conn };
         db.create_schema()?;
         Ok(db)
+    }
+
+    /// Open (or create) a read-write `DuckDB` file at `path`.
+    /// Unlike `open()`, this does NOT call `create_schema` — the caller is
+    /// responsible for schema initialisation (used internally by `open_or_ingest`).
+    pub fn open_file(path: &Path) -> Result<Self> {
+        let conn = Connection::open(path)
+            .map_err(|e| CodeLoreError::Analysis(format!("open_file duckdb: {e}")))?;
+        Ok(Self { conn })
+    }
+
+    /// Open an existing `DuckDB` file in read-only mode.
+    pub fn open_read_only(path: &Path) -> Result<Self> {
+        let config = Config::default()
+            .access_mode(AccessMode::ReadOnly)
+            .map_err(|e| CodeLoreError::Analysis(format!("duckdb config read-only: {e}")))?;
+        let conn = Connection::open_with_flags(path, config)
+            .map_err(|e| CodeLoreError::Analysis(format!("open_read_only duckdb: {e}")))?;
+        Ok(Self { conn })
+    }
+
+    /// Flush any pending writes to disk.
+    /// Called before an atomic rename to ensure durability (APFS gotcha).
+    pub fn flush(&self) -> Result<()> {
+        self.conn
+            .execute_batch("CHECKPOINT")
+            .map_err(|e| CodeLoreError::Analysis(format!("duckdb checkpoint: {e}")))?;
+        Ok(())
+    }
+
+    /// Content-addressed persistent cache constructor.
+    ///
+    /// Cache key: `(canonical_repo_path, head_sha, pkg_version, opts_thresholds, schema_v1)`.
+    ///
+    /// Hit path: open existing `.duckdb` file in read-only mode.
+    /// Miss path: ingest to `.duckdb.tmp`, `CHECKPOINT`, `sync_all`, atomic rename,
+    ///            prune stale entries, open result in read-only mode.
+    ///
+    /// Use `--no-cache` in the CLI to bypass this constructor.
+    pub fn open_or_ingest<R: Repo>(opts: &Options, repo: &R) -> Result<Self> {
+        Self::open_or_ingest_with_cache_root(opts, repo, &cache::default_cache_root())
+    }
+
+    /// Same as [`open_or_ingest`] but with an explicit cache root for testing
+    /// and for the `--cache-dir` CLI flag.
+    pub fn open_or_ingest_with_cache_root<R: Repo>(
+        opts: &Options,
+        repo: &R,
+        cache_root: &Path,
+    ) -> Result<Self> {
+        let head_sha = repo.head_sha()?;
+        let key = cache::cache_key(&opts.repo_path, &head_sha, opts);
+        let cache_p = cache::cache_path_with_root(&key, &opts.repo_path, cache_root);
+
+        if cache_p.exists() {
+            tracing::info!("cache hit: {}", cache_p.display());
+            return Self::open_read_only(&cache_p);
+        }
+
+        tracing::info!("cache miss: ingesting to {}", cache_p.display());
+
+        // Create the parent directory if it doesn't exist yet.
+        if let Some(parent) = cache_p.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| CodeLoreError::Analysis(format!("create cache dir: {e}")))?;
+        }
+
+        // Write to a .tmp file first; atomic-rename on success.
+        let tmp = cache_p.with_extension("duckdb.tmp");
+        // Remove any leftover .tmp from a prior aborted run.
+        let _ = std::fs::remove_file(&tmp);
+
+        let db = Self::open_file(&tmp)?;
+        db.create_schema()?;
+        db.ingest(repo, opts)?;
+        // CHECKPOINT flushes DuckDB's WAL to the file before we open() it.
+        db.flush()?;
+        // Drop the connection before rename so DuckDB releases the file lock.
+        drop(db);
+        // sync_all: required on macOS APFS to make the rename durable.
+        {
+            let f = std::fs::File::open(&tmp)
+                .map_err(|e| CodeLoreError::Analysis(format!("sync_all open .tmp: {e}")))?;
+            f.sync_all()
+                .map_err(|e| CodeLoreError::Analysis(format!("sync_all .tmp: {e}")))?;
+        }
+        std::fs::rename(&tmp, &cache_p)
+            .map_err(|e| CodeLoreError::Analysis(format!("rename .tmp → .duckdb: {e}")))?;
+
+        // LRU eviction: prune this repo's cache dir (max 5), then the global cap (2 GB).
+        if let Some(repo_dir) = cache_p.parent() {
+            cache::prune_repo_cache(repo_dir, 5);
+            cache::prune_global_cache(cache_root, 2 * 1024 * 1024 * 1024);
+        }
+
+        Self::open_read_only(&cache_p)
     }
 
     fn create_schema(&self) -> Result<()> {
