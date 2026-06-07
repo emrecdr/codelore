@@ -101,23 +101,32 @@ A `--exclude PATTERN` (or `.codeloreignore`) flag would let users opt vendored d
 
 **The implementation is functionally complete for everything explicitly documented as "in v1 scope."** The gates are clean, the bench harness compiles, the release pipeline is wired (just never executed), and the deferred items are all named in CHANGELOG + spec.
 
-**Pre-tag fix list (all small)**:
-- S1: refresh `docs/perf-evidence-v1.md` codescene-workspace number
-- S2: fix `README.md` line 55 "11 analyses" → "12 analyses"
-- S4: add `write_clones_csv` snapshot test
-- S7: one-line update to spec §8
-- S8: better unknown-analysis error message
+**Pre-tag fix list (all small) — all ✅ closed in Plan 8 §1**:
+- ~~S1: refresh `docs/perf-evidence-v1.md` codescene-workspace number~~ → done in `3043a42`. **Finding update:** the "4× drift" claim was wrong — it was a cold-cache first-run artifact, not real drift. Doc now distinguishes warm/cold timings.
+- ~~S2: fix `README.md` line 55 "11 analyses" → "12 analyses"~~ → done in `3043a42`.
+- ~~S4: add `write_clones_csv` snapshot test~~ → done in `3043a42`.
+- ~~S7: one-line update to spec §8~~ → done in `3043a42`.
+- ~~S8: better unknown-analysis error message~~ → done in `3043a42` (now enumerates all 12 supported names).
+
+**Spec-gap closures — all ✅ closed in Plan 8 §2**:
+- **`--analysis authors`** standalone (was bailed; spec §1.1 gap) → `0ce89ff`. Surfaced as a bonus: a real mailmap bug — `GixRepo`'s ingest used `name: b""` so .mailmap entries of the form `Canonical <c@x> Original <o@x>` (Name+Email match) didn't resolve. Fixed in `1154975`.
+- **`-g` / `--group-file` flag** parsed (aggregation deferred to Plan 9) → `af572cb`.
+- **`--exclude PATTERN` + `.codeloreignore`** for path-filter → `af572cb`. Closes Finding **S9** (clones scanning vendored RCA code).
+- **Clones JSON + Markdown emitters** → `0ce89ff`.
+- **`CODELORE-CLONE` SARIF 2.1.0 rule** → `af572cb`. Closes part of the Plan 7 DoD gap.
 
 **Pre-tag, not blocking but high-value**:
 - S5: dry-run the release workflow via `workflow_dispatch` before pushing the actual tag
 - S6: add a "known limitations" section in README mentioning rename-tracking
 - S10: scrub `Cargo.lock` of unintended deps; decide what to do with `README_v2.md`
 
-**Deferred to v1.x** (architectural):
-- S3: wire `clones` extraction into `FactsDb::ingest`
-- The clone-coupling intersection analysis (the differentiator)
-- T3 near-miss clones via MinHash
-- The `--exclude` CLI flag (S9)
+**Deferred to v1.x** (architectural — addressed in Plan 8 §3–§7, in flight at the time of this update):
+- S3: wire `clones` extraction into `FactsDb::ingest` → Plan 8 §4 Tasks 15-16
+- The clone-coupling intersection analysis (the differentiator) → Plan 8 §6 Tasks 19-22
+- T3 near-miss clones via MinHash → Plan 8 §6 Task 4 (or v1.x follow-up per the plan's optional gate)
+- Persistent fact-store cache → Plan 8 §3 Tasks 11-14 (subagent in flight)
+- Parallel complexity extraction → Plan 8 §5 Tasks 17-18
+- `codelore diff <base>..<head>` PR-mode subcommand → Plan 8 §7 Tasks 23-29
 
 ---
 
