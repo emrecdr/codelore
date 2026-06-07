@@ -220,7 +220,8 @@ pub fn write_authors_csv<W: Write>(rows: &[AuthorsRow], w: &mut W) -> Result<()>
     // Header matches code-maat's `authors` analysis ("name,n-commits") for parity.
     writeln!(w, "name,n-commits").map_err(CodeLoreError::Io)?;
     for row in rows {
-        writeln!(w, "{},{}", quote_if_needed(&row.author), row.commits).map_err(CodeLoreError::Io)?;
+        writeln!(w, "{},{}", quote_if_needed(&row.author), row.commits)
+            .map_err(CodeLoreError::Io)?;
     }
     Ok(())
 }

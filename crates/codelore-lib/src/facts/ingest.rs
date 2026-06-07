@@ -22,6 +22,10 @@ const CHANNEL_CAPACITY: usize = 64;
 pub struct IngestStats {
     pub commits_ingested: usize,
     pub changes_ingested: usize,
+    /// Plan 8 §4: number of clone-family member rows inserted into the
+    /// `clones` table during HEAD-time extraction. `0` if no clones found
+    /// or no Tier-1 source files exist.
+    pub clones_ingested: usize,
 }
 
 impl FactsDb {
@@ -60,6 +64,14 @@ impl FactsDb {
         // Plan 4: populate the Kamei 14-feature change vector via SQL UPDATE pass.
         crate::kamei::enrich(self)?;
 
+        // Plan 8 §4: populate the `clones` table at HEAD so the
+        // `clone-coupling` analysis (§6) can JOIN against it. Honors
+        // `opts.min_clone_node_count` and `opts.exclude_patterns` (set via
+        // `--exclude` + `.codeloreignore`).
+        let clones_n = self.populate_clones_at_head(opts)?;
+
+        let mut stats = stats;
+        stats.clones_ingested = clones_n;
         Ok(stats)
     }
 
@@ -105,6 +117,142 @@ impl FactsDb {
             .flush()
             .map_err(|e| CodeLoreError::Analysis(format!("flush metrics: {e}")))?;
         Ok(())
+    }
+
+    /// Plan 8 §4 Task 15: walk the working tree at HEAD, fingerprint every
+    /// function in every Tier-1 file, group by structural digest, and INSERT
+    /// one row per clone-family member into the `clones` table. Returns the
+    /// number of rows inserted (0 if no clones found or no Tier-1 sources).
+    ///
+    /// Honors `opts.min_clone_node_count` (default 30) and `opts.exclude_patterns`
+    /// (built from `--exclude` flags + `.codeloreignore`).
+    fn populate_clones_at_head(&self, opts: &Options) -> Result<usize> {
+        use crate::clones::{CloneLanguage, extract_functions, group_clones};
+        use walkdir::WalkDir;
+
+        // Compile the exclude globset once (.git / target / node_modules are
+        // hard-skipped always; the user globs and .codeloreignore are added).
+        let exclude_set = build_clones_exclude_set(opts)?;
+
+        let head_rev = current_head_rev(self)?;
+
+        // First pass: walk the working tree, collect FunctionFingerprints.
+        let mut all_fns = Vec::new();
+        for entry in WalkDir::new(&opts.repo_path)
+            .into_iter()
+            .filter_map(std::result::Result::ok)
+        {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let path = entry.path();
+            if path.components().any(|c| {
+                matches!(
+                    c.as_os_str().to_str(),
+                    Some(".git" | "target" | "node_modules")
+                )
+            }) {
+                continue;
+            }
+            let Some(lang) = CloneLanguage::from_path(path) else {
+                continue;
+            };
+            let rel = path.strip_prefix(&opts.repo_path).map_or_else(
+                |_| path.to_string_lossy().into_owned(),
+                |p| p.to_string_lossy().into_owned(),
+            );
+            if exclude_set.is_match(&rel) {
+                continue;
+            }
+            let Ok(code) = std::fs::read(path) else {
+                continue;
+            };
+            let fns = extract_functions(&rel, &code, lang)
+                .map_err(|e| CodeLoreError::Analysis(format!("clones: extract {rel}: {e}")))?;
+            all_fns.extend(fns);
+        }
+
+        let groups = group_clones(all_fns, opts.min_clone_node_count);
+        if groups.is_empty() {
+            return Ok(0);
+        }
+
+        // Second pass: INSERT one row per family member into `clones`.
+        let mut app = self
+            .conn()
+            .appender("clones")
+            .map_err(|e| CodeLoreError::Analysis(format!("appender clones: {e}")))?;
+        let mut n = 0usize;
+        for group in groups {
+            let clone_group_id = i64::from(group.clone_group_id);
+            for member in &group.members {
+                use duckdb::params;
+                let fp_bytes: Vec<u8> = member.fingerprint.digest.to_vec();
+                app.append_row(params![
+                    clone_group_id,
+                    fp_bytes,
+                    head_rev,
+                    member.path,
+                    member.function_name,
+                    i32::try_from(member.start_line).unwrap_or(i32::MAX),
+                    i32::try_from(member.end_line).unwrap_or(i32::MAX),
+                    i32::try_from(member.fingerprint.node_count).unwrap_or(i32::MAX),
+                    1.0_f64, // Type 1 + Type 2 → exact match; T3 MinHash lands in v1.x
+                ])
+                .map_err(|e| CodeLoreError::Analysis(format!("append clone row: {e}")))?;
+                n += 1;
+            }
+        }
+        app.flush()
+            .map_err(|e| CodeLoreError::Analysis(format!("flush clones appender: {e}")))?;
+        Ok(n)
+    }
+}
+
+/// Build the exclude `GlobSet` mirroring `analyses::clones::run_clones`'s
+/// behavior so the two paths produce the same filter set.
+fn build_clones_exclude_set(opts: &Options) -> Result<globset::GlobSet> {
+    let mut b = globset::GlobSetBuilder::new();
+    for pat in &opts.exclude_patterns {
+        let g = globset::Glob::new(pat)
+            .map_err(|e| CodeLoreError::Analysis(format!("clones: --exclude {pat:?}: {e}")))?;
+        b.add(g);
+    }
+    let ignore_path = opts.repo_path.join(".codeloreignore");
+    if let Ok(contents) = std::fs::read_to_string(&ignore_path) {
+        for line in contents.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let g = globset::Glob::new(line).map_err(|e| {
+                CodeLoreError::Analysis(format!(".codeloreignore line {line:?}: {e}"))
+            })?;
+            b.add(g);
+        }
+    }
+    b.build()
+        .map_err(|e| CodeLoreError::Analysis(format!("clones: build globset: {e}")))
+}
+
+/// Resolve HEAD's rev from the commits table (most recent commit by date).
+/// Used to stamp the `rev` column on inserted clone rows.
+fn current_head_rev(db: &FactsDb) -> Result<String> {
+    let sql = "SELECT rev FROM commits ORDER BY date DESC, rev DESC LIMIT 1";
+    let mut stmt = db
+        .conn()
+        .prepare(sql)
+        .map_err(|e| CodeLoreError::Analysis(format!("prepare head rev: {e}")))?;
+    let mut rows = stmt
+        .query([])
+        .map_err(|e| CodeLoreError::Analysis(format!("query head rev: {e}")))?;
+    if let Some(row) = rows
+        .next()
+        .map_err(|e| CodeLoreError::Analysis(format!("head rev row: {e}")))?
+    {
+        Ok(row.get::<_, String>(0).unwrap_or_default())
+    } else {
+        Ok(String::new())
     }
 }
 

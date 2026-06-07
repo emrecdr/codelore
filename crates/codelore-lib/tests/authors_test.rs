@@ -60,8 +60,7 @@ fn authors_against_differential_fixture() {
         rows.len(),
         rows.iter().map(|r| &r.author).collect::<Vec<_>>()
     );
-    let names: std::collections::HashSet<&str> =
-        rows.iter().map(|r| r.author.as_str()).collect();
+    let names: std::collections::HashSet<&str> = rows.iter().map(|r| r.author.as_str()).collect();
     assert!(
         names.contains("canonical-alice@example.com"),
         "Alice's old email should canonicalize via .mailmap"
