@@ -1,0 +1,89 @@
+name: CodeLore PR Analysis
+
+# Plan 8 §7 example: run CodeLore in `diff` mode on every PR, surface
+# findings via $GITHUB_STEP_SUMMARY (always) and the GitHub Security tab
+# (when the SARIF action is wired below). The `codelore diff` subcommand
+# lands in Plan 8 §7; this example shows the deployment pattern.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Permissions needed:
+#   contents: read         — checkout
+#   security-events: write — SARIF upload to Code Scanning
+#   pull-requests: write   — sticky comment on quality-gate failure
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: write
+
+jobs:
+  codelore-diff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # --depth: 0 is mandatory — without full history, hotspot scores are
+      # truncated to one commit and the analysis returns meaningless results.
+      # This is the single most common CodeLore-in-CI failure mode.
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.head_ref }}
+
+      # `actions/checkout` only fetches the PR branch by default; we need
+      # the base branch explicitly so `git log <base>...HEAD` (three-dot
+      # merge-base) resolves correctly.
+      - name: Fetch base branch
+        run: git fetch origin ${{ github.base_ref }}
+
+      - name: Install CodeLore
+        uses: cargo-bins/cargo-binstall@v1
+      - run: cargo binstall codelore --no-confirm
+
+      # Three-dot notation `origin/main...HEAD` anchors to the merge-base,
+      # isolating only commits in the PR branch even if main has advanced
+      # since the branch was created.
+      #
+      # `--analysis all` runs hotspots + coupling (absent-change-pattern) +
+      # clones in one pass (Plan 8 §7 supports the `all` shorthand).
+      #
+      # The Markdown stream lands in the GitHub Actions run summary tab,
+      # visible to anyone with read access — no PR write needed.
+      - name: Run CodeLore diff (Markdown summary)
+        run: |
+          codelore diff origin/${{ github.base_ref }}...${{ github.sha }} \
+            --analysis all \
+            --top-n 10 \
+            --output markdown >> "$GITHUB_STEP_SUMMARY"
+
+      # SARIF output goes to the GitHub Security tab and annotates the PR
+      # diff inline for findings whose line falls in the PR's changed lines.
+      - name: Run CodeLore diff (SARIF for Code Scanning)
+        run: |
+          codelore diff origin/${{ github.base_ref }}...${{ github.sha }} \
+            --analysis hotspots \
+            --output sarif > codelore-results.sarif
+
+      - name: Upload SARIF to Code Scanning
+        if: always()  # surface findings even on later step failures
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: codelore-results.sarif
+          category: codelore-hotspots
+
+      # Optional: enforce a quality gate. `--fail-on rank-entrant` exits
+      # non-zero if this PR introduces any file into the top-N hotspot
+      # list. Configure to taste: `score-increase` is gentler; `any`
+      # catches anything (loudest).
+      - name: Quality gate (rank-entrant — drop to advisory mode initially)
+        continue-on-error: true  # remove this when you trust the signal
+        run: |
+          codelore diff origin/${{ github.base_ref }}...${{ github.sha }} \
+            --analysis hotspots \
+            --top-n 10 \
+            --fail-on rank-entrant \
+            --output text
