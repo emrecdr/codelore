@@ -5,7 +5,7 @@
 
 A Rust-based modernization of Adam Tornhill's [code-maat](https://github.com/adamtornhill/code-maat). Powered by [gix](https://github.com/GitoxideLabs/gitoxide), [DuckDB](https://duckdb.org), and a vendored fork of Mozilla's [rust-code-analysis](https://github.com/mozilla/rust-code-analysis).
 
-**Status: alpha (Plans 1–5 complete, Plan 6 in progress).** 11 analyses × 6 output formats (CSV, JSON, **SARIF 2.1.0**, Markdown, Parquet, SQLite). Provenance manifest sidecars ship with every file output. Plan 6 (differential testing, perf benchmarks, release infra) is the final gate before v1.0 — currently shipping `GitCliRepo` differential oracle + 50-commit fixture.
+**Status: alpha (Plans 1–5 complete, Plan 6 in late stage).** 11 analyses × 6 output formats (CSV, JSON, **SARIF 2.1.0**, Markdown, Parquet, SQLite). Provenance manifest sidecars on every file output. Plan 6 ships: `GitCliRepo` differential oracle (validates `GixRepo` against C git on a 50-commit fixture, 8 / 8 property tests passing), `criterion` bench harness (`ingest_tiny`, `ingest/medium_500_commits`, `ingest_kernel/linux_kernel_snapshot`), `cargo-dist` release config for 6 targets, SLSA L3 build provenance, distroless container image (~30 MB), and PGO scaffolding. Two release-gating tasks deferred to owner: code-maat golden parity (needs Leiningen) + Linux-kernel perf evidence (needs the kernel snapshot).
 
 ## Quick start
 
@@ -52,7 +52,7 @@ codelore analyze --analysis revisions --repo . --format sqlite --output facts.db
 
 Every file output gets a `{output}.provenance.json` sidecar (except SQLite, where the `provenance` table lives inside the DB). The sidecar records the codelore/gix/duckdb versions, every threshold knob, and the UTC run timestamp — addresses Spadoni 2025's 500% inter-tool disagreement problem.
 
-310 tests pass across the workspace (199 RCA unit + 6 Tier-1 smoke + 105 codelore-lib/codelore-cli Plan 1–6 suite), 1 ignored (P6.T03 — documented `GitCliRepo` parser bug).
+312 tests pass across the workspace (199 RCA unit + 6 Tier-1 smoke + 107 codelore-lib/codelore-cli Plan 1–6 suite, including the differential `GixRepo` ≡ `GitCliRepo` property tests). 1 ignored test is unrelated RCA upstream. Criterion bench harness wired; `cargo bench -p codelore-lib --all-features` reports `ingest_tiny ≈ 22 ms`.
 - Per-language complexity metrics (Cyclomatic, Cognitive, Halstead, MI) for Rust, TypeScript/JavaScript, Python, Java via vendored `codelore-rca/` (Mozilla rust-code-analysis fork)
 - `codelore analyze --analysis NAME --format csv` for 11 analyses:
   - `revisions` — file → commit count
@@ -84,15 +84,34 @@ Key design choices (see [`docs/superpowers/specs/2026-06-06-codelore-design.md`]
 
 ## Roadmap
 
-Plans 1–5 complete. Plan 6 in progress (final plan before v1.0):
+Plans 1–5 complete. Plan 6 in late stage; two tasks deferred to owner before v1.0 tag:
+
 - **Plan 1** ✅ — Phase 0 walking skeleton (workspace, gix walker, DuckDB fact store, revisions analysis)
 - **Plan 2** ✅ — vendored Mozilla's `rust-code-analysis` as `codelore-rca/`, Tier-1 metric smoke tests
-- **Plan 3** ✅ — complexity integration via codelore-rca, hotspot ranking (published §1.1 formula), Code Health composite
+- **Plan 3** ✅ — complexity integration via `codelore-rca`, hotspot ranking (published §1.1 formula), Code Health composite
 - **Plan 4** ✅ — 8 new analyses + Kamei vector + identity resolution + full Code Health composite
 - **Plan 5** ✅ — SARIF 2.1.0 + JSON + Markdown + Parquet + SQLite outputs + provenance manifest sidecar
-- **Plan 6** 🚧 — differential test harness (`GitCliRepo` ≡ `GixRepo`), code-maat golden parity tests, criterion perf benchmarks (Linux kernel scale), release infrastructure (`cargo-dist`, SLSA L3, distroless container, PGO)
+- **Plan 6** 🚧 — `GitCliRepo` differential oracle + 50-commit fixture (8/8 property tests pass), real parser bug surfaced and fixed; `criterion` bench harness (tiny/medium/kernel targets) + weekly CI bench job; `cargo-dist` config + 6-target release workflow + SLSA L3 build provenance; distroless container with attested build provenance; PGO scaffolding. **Deferred:** code-maat golden parity tests (needs Leiningen) and Linux-kernel perf evidence (needs the kernel snapshot).
 
-Phase 0 deliverable target: full v1.0 in ~10 weeks of focused work.
+### Releasing v1.0
+
+The remaining gate for the `v1.0.0` tag:
+
+```bash
+# 1. Generate code-maat goldens (one-time; needs lein installed)
+bash scripts/capture-code-maat-goldens.sh   # to be authored alongside the test
+
+# 2. Run the kernel bench, capture wall-time + RSS, write evidence
+git clone --depth=10000 --filter=blob:none https://github.com/torvalds/linux /tmp/linux-snapshot
+CODELORE_BENCH_LINUX_KERNEL_PATH=/tmp/linux-snapshot \
+  cargo bench -p codelore-lib --all-features --bench end_to_end -- ingest_kernel
+
+# 3. Bump workspace version + tag
+sed -i '' 's/0.1.0-alpha.1/1.0.0/' Cargo.toml crates/*/Cargo.toml
+git commit -am "release: v1.0.0" && git tag -s v1.0.0 && git push --follow-tags
+```
+
+The tag push triggers `.github/workflows/release.yml` (cargo-dist multi-platform binaries + SLSA L3 provenance) and `.github/workflows/container.yml` (distroless image to `ghcr.io/<owner>/codelore`).
 
 ## Why "CodeLore"?
 
