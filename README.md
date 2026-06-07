@@ -5,7 +5,7 @@
 
 A Rust-based modernization of Adam Tornhill's [code-maat](https://github.com/adamtornhill/code-maat). Powered by [gix](https://github.com/GitoxideLabs/gitoxide), [DuckDB](https://duckdb.org), and a vendored fork of Mozilla's [rust-code-analysis](https://github.com/mozilla/rust-code-analysis).
 
-**Status: alpha (Plans 1–5 complete, Plan 6 in late stage).** 11 analyses × 6 output formats (CSV, JSON, **SARIF 2.1.0**, Markdown, Parquet, SQLite). Provenance manifest sidecars on every file output. Plan 6 ships: `GitCliRepo` differential oracle (validates `GixRepo` against C git on a 50-commit fixture, 8 / 8 property tests passing), `criterion` bench harness (`ingest_tiny`, `ingest/medium_500_commits`, `ingest_kernel/linux_kernel_snapshot`), `cargo-dist` release config for 6 targets, SLSA L3 build provenance, distroless container image (~30 MB), and PGO scaffolding. Two release-gating tasks deferred to owner: code-maat golden parity (needs Leiningen) + Linux-kernel perf evidence (needs the kernel snapshot).
+**Status: alpha (Plans 1–6 complete, Plan 7 v1 scope shipped).** 12 analyses × 6 output formats (CSV, JSON, **SARIF 2.1.0**, Markdown, Parquet, SQLite). Provenance manifest sidecars on every file output. Plan 6 shipped: `GitCliRepo` differential oracle (validates `GixRepo` against C git on a 50-commit fixture, 8 / 8 property tests passing), `criterion` bench harness, `cargo-dist` release config for 6 targets, SLSA L3 build provenance, distroless container image (~30 MB), PGO scaffolding, code-maat golden parity (revisions + summary). Plan 7 ships **clone detection** (Type 1 + Type 2 via AST structural hashing on tree-sitter; CSV emitter; HEAD-only — works on shallow clones). Linux-kernel perf evidence deferred to weekly CI bench.
 
 ## Quick start
 
@@ -64,6 +64,7 @@ Every file output gets a `{output}.provenance.json` sidecar (except SQLite, wher
   - `code-ownership` — Fractal Value (1−HHI) + main developer
   - `change-coupling` — Fisher exact-filtered logical coupling
   - `summary` — 4-row repo overview
+  - **`clones`** — Type 1 + Type 2 clone-family detection via AST structural hashing (Plan 7)
 - `.mailmap` resolution + bot filtering + AI attribution stub
 - Kamei 14-feature change vector populated per commit
 - Function-level entity extraction at HEAD for Tier-1 languages
