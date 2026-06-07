@@ -577,7 +577,9 @@ fn sarif_rejects_unsupported_analysis() {
         ])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("hotspots, clones, and clone-coupling"))
+        .stderr(predicate::str::contains(
+            "hotspots, clones, and clone-coupling",
+        ))
         .stderr(predicate::str::contains("clones"));
 }
 

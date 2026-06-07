@@ -36,6 +36,7 @@ walkdir = "2"
 globset = "0.4"
 dirs = "5"
 tracing = "0.1"
+rayon = "1"
 
 [features]
 default = []

@@ -77,9 +77,53 @@ impl FactsDb {
 
     fn ingest_complexity_at_head(&self, opts: &Options) -> Result<()> {
         use crate::complexity::{Tier1Language, compute_for_file};
+        use rayon::prelude::*;
 
         let path_rows = query_live_paths(self)?;
 
+        // ── Parallel pass ────────────────────────────────────────────────────────
+        // Each worker thread reads the file, dispatches the tree-sitter parser,
+        // and de-duplicates entities.  `map_init(|| (), ...)` matches the plan's
+        // design: no per-thread state is needed because `Parser::new()` is ~3 µs
+        // and tree-sitter 0.25.x is both `Send + Sync`.
+        // Per-file failures are logged via `tracing::warn!` but do NOT abort the
+        // parallel scan; they surface as `None` entries that the serial drain skips.
+        //
+        // Return type: Vec<Option<(String, String, Vec<ComplexityEntity>)>>
+        //   - None  → file skipped (no Tier-1 lang, unreadable, or parse error)
+        //   - Some  → (path, head_rev, deduped_entities)
+        let batches: Vec<Option<(String, String, Vec<crate::complexity::ComplexityEntity>)>> =
+            path_rows
+                .into_par_iter()
+                .map_init(
+                    || (),
+                    |_state, (path, head_rev)| {
+                        let lang = Tier1Language::from_path(&path)?;
+                        let full_path = opts.repo_path.join(&path);
+                        let source = match std::fs::read(&full_path) {
+                            Ok(b) => b,
+                            Err(e) => {
+                                tracing::warn!("complexity: cannot read {path}: {e}");
+                                return None;
+                            }
+                        };
+                        let entities = match compute_for_file(&full_path, &source, lang) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                tracing::warn!("complexity: parse error {path}: {e}");
+                                return None;
+                            }
+                        };
+                        let deduped = dedup_entities(entities);
+                        Some((path, head_rev, deduped))
+                    },
+                )
+                .collect();
+
+        // ── Serial drain ─────────────────────────────────────────────────────────
+        // `duckdb::Appender<'conn>` is `!Send + !Sync`; it MUST live on the same
+        // thread that owns the `Connection`.  We create the Appenders here (on the
+        // calling/connection-owning thread) and feed them from the collected Vec.
         let mut entities_app = self
             .conn()
             .appender("entities")
@@ -89,24 +133,13 @@ impl FactsDb {
             .appender("complexity_metrics")
             .map_err(|e| CodeLoreError::Analysis(format!("appender complexity_metrics: {e}")))?;
 
-        for (path, head_rev) in path_rows {
-            let Some(lang) = Tier1Language::from_path(&path) else {
+        for batch in batches {
+            let Some((path, head_rev, entities)) = batch else {
                 continue;
             };
-            let full_path = opts.repo_path.join(&path);
-            let Ok(source) = std::fs::read(&full_path) else {
-                continue;
-            };
-            let Ok(entities) = compute_for_file(&full_path, &source, lang) else {
-                continue; // skip unparseable files; Plan 4 may log
-            };
-
-            // De-duplicate by name (codelore-rca may emit duplicate names such as
-            // "<anonymous>"); keep first occurrence, preserve order.
-            let deduped = dedup_entities(entities);
-            for ent in deduped {
-                append_entity_row(&mut entities_app, &path, &ent, &head_rev)?;
-                append_metric_row(&mut metrics_app, &path, &ent, &head_rev)?;
+            for ent in &entities {
+                append_entity_row(&mut entities_app, &path, ent, &head_rev)?;
+                append_metric_row(&mut metrics_app, &path, ent, &head_rev)?;
             }
         }
 
