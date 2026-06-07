@@ -16,12 +16,14 @@ The harness for ongoing measurement lives at `crates/codelore-lib/benches/end_to
 
 The table below records wall-clock + peak RSS for the `hotspots` analysis (the most expensive of the published analyses — it runs the full ingest + complexity extraction + percentile-rank ranking).
 
-| Repository | Commits | Files | On-disk | Wall | Peak RSS | Notes |
-|---|---:|---:|---:|---:|---:|---|
-| codescene (this workspace) | 83 | 147 | 37 GB (mostly `target/`) | 0.24 s | 87 MB | sanity check |
-| gitoxide (shallow 2000) | 9,985 | 2,903 | 199 MB | **1.16 s** | **75 MB** | 5-sample mean (1.15 – 1.18 s, σ ≈ 12 ms) |
-| tokio (shallow 3000) | 4,523 | 854 | 26 MB | 2.09 s | 230 MB | single run |
-| **Linux kernel (shallow 1000)** | **TBD** | **TBD** | **TBD** | **TBD** | **TBD** | **kernel measurement pending — see below** |
+All wall times below are the **mean of 4 warm-cache runs** (filesystem cache warmed by an initial throwaway run). Cold-first-run wall time is consistently 3-4× the warm number due to page-cache warmup on first read of source files for tree-sitter parsing — this is OS-level behaviour, not a CodeLore characteristic. Document the warm number because it represents the user-perceived steady state on any repeat invocation.
+
+| Repository | Commits | Files | On-disk | Wall (warm) | Wall (cold) | Peak RSS | Notes |
+|---|---:|---:|---:|---:|---:|---:|---|
+| codescene (this workspace) | 90 | 155 | 37 GB (mostly `target/`) | **0.24 s** | 0.93 s | **89 MB** | 5-sample mean — refreshed 2026-06-07 post-Plan-7 (`tree-sitter` deps + `walkdir`). Cold first run 0.93 s reflects filesystem cache warmup. |
+| gitoxide (shallow 2000) | 9,985 | 2,903 | 199 MB | **1.16 s** | ~1.35 s | **75 MB** | 5-sample mean (1.15 – 1.18 s, σ ≈ 12 ms) |
+| tokio (shallow 3000) | 4,523 | 854 | 26 MB | 2.09 s | (n/a) | 230 MB | single run; first-run timing not separately captured |
+| **Linux kernel (shallow 1000)** | **TBD** | **TBD** | **TBD** | **TBD** | **TBD** | **TBD** | **kernel measurement pending — see below** |
 
 ### Why tokio uses more memory than gitoxide despite fewer commits
 

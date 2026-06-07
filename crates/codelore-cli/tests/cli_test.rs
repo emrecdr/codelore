@@ -575,3 +575,22 @@ fn sarif_rejects_non_hotspots_analysis() {
         .failure()
         .stderr(predicate::str::contains("hotspots only"));
 }
+
+#[test]
+fn unknown_analysis_lists_supported_names() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "definitelybogus",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unknown analysis"))
+        .stderr(predicate::str::contains("hotspots"))
+        .stderr(predicate::str::contains("clones"));
+}

@@ -52,9 +52,9 @@ codelore analyze --analysis revisions --repo . --format sqlite --output facts.db
 
 Every file output gets a `{output}.provenance.json` sidecar (except SQLite, where the `provenance` table lives inside the DB). The sidecar records the codelore/gix/duckdb versions, every threshold knob, and the UTC run timestamp — addresses Spadoni 2025's 500% inter-tool disagreement problem.
 
-312 tests pass across the workspace (199 RCA unit + 6 Tier-1 smoke + 107 codelore-lib/codelore-cli Plan 1–6 suite, including the differential `GixRepo` ≡ `GitCliRepo` property tests). 1 ignored test is unrelated RCA upstream. Criterion bench harness wired; `cargo bench -p codelore-lib --all-features` reports `ingest_tiny ≈ 22 ms`.
+322 tests pass across the workspace (199 RCA unit + 6 Tier-1 smoke + 117 codelore-lib/codelore-cli Plan 1–7 suite, including the differential `GixRepo` ≡ `GitCliRepo` property tests). 3 ignored: 1 unrelated RCA upstream + 2 code-maat parity tests gated on `CODE_MAAT_PATH`. Criterion bench harness wired; `cargo bench -p codelore-lib --all-features` reports `ingest_tiny ≈ 22 ms`.
 - Per-language complexity metrics (Cyclomatic, Cognitive, Halstead, MI) for Rust, TypeScript/JavaScript, Python, Java via vendored `codelore-rca/` (Mozilla rust-code-analysis fork)
-- `codelore analyze --analysis NAME --format csv` for 11 analyses:
+- `codelore analyze --analysis NAME --format csv` for **12 analyses** (the `authors` standalone variant is reserved and lands in Plan 8):
   - `revisions` — file → commit count
   - `hotspots` — published §1.1 formula (percentile_rank(revs) × percentile_rank(cognitive) × (10 − code_health) / 10)
   - `code-health` — full §4.6 composite (cognitive, churn, fragmentation, coupling)

@@ -82,6 +82,26 @@ impl FromStr for AnalysisName {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error("unknown analysis: {0}")]
+#[derive(Debug)]
 pub struct UnknownAnalysisError(pub String);
+
+impl std::error::Error for UnknownAnalysisError {}
+
+impl fmt::Display for UnknownAnalysisError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Enumerate every public analysis name so the user sees what they can
+        // pick from. Omit `Authors` while it still bails — listing it would
+        // mislead the user.
+        let names: Vec<&str> = AnalysisName::all()
+            .iter()
+            .filter(|a| !matches!(a, AnalysisName::Authors))
+            .map(|a| a.as_str())
+            .collect();
+        write!(
+            f,
+            "unknown analysis {:?}. Supported: {}",
+            self.0,
+            names.join(", ")
+        )
+    }
+}
