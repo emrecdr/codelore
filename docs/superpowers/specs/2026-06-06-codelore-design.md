@@ -3,7 +3,7 @@
 **Design specification, v1 (Spine release)**
 Status: draft for sign-off
 Date: 2026-06-06
-Author: emre + Claude
+Author: Emre
 
 A modernized, Rust-based behavioral code analysis tool. Mines git history to produce hotspots, temporal coupling, ownership topology, code-age, code-health, and team-communication metrics. Inspired by Adam Tornhill's `code-maat` (the open-source seed of CodeScene). Rebuilt around 2026 industry-standard tooling and statistical methodology.
 
