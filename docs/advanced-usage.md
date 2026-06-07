@@ -4,7 +4,7 @@ This guide is the developer-facing reference for CodeLore. The [README](../READM
 
 ## Table of contents
 
-1. [The 13 analyses (what they tell you)](#1-the-13-analyses-what-they-tell-you)
+1. [The 14 analyses (what they tell you)](#1-the-14-analyses-what-they-tell-you)
 2. [Output formats deep-dive](#2-output-formats-deep-dive)
 3. [Every CLI flag explained](#3-every-cli-flag-explained)
 4. [PR-mode: `codelore diff`](#4-pr-mode-codelore-diff)
@@ -18,7 +18,7 @@ This guide is the developer-facing reference for CodeLore. The [README](../READM
 
 ---
 
-## 1. The 13 analyses (what they tell you)
+## 1. The 14 analyses (what they tell you)
 
 | Analysis | What you ask it | Formula / source | When to reach for it |
 |---|---|---|---|
@@ -73,7 +73,7 @@ All three use versioned `partialFingerprints` so cross-run identity stays stable
 ```
 codelore analyze [OPTIONS]
   -a, --analysis NAME       Which analysis [default: revisions]
-                            (any of the 13 above)
+                            (any of the 14 above)
   -r, --repo PATH           Git repo path [default: .]
   -f, --format FORMAT       Output format [default: csv]
                             csv | json | sarif | markdown | parquet | sqlite
@@ -83,7 +83,10 @@ codelore analyze [OPTIONS]
       --complexity-sample STRATEGY
                             head (default) | adaptive | full
                             (only `head` is wired up today; the other two parse but warn)
-  -g, --group-file PATH     Architectural grouping (parsed today; analyses don't yet honour groupings)
+  -g, --group-file PATH     Architectural grouping definition file. Both the
+                            flag and the file are parsed today, but the
+                            resulting groups aren't yet wired into the
+                            analyses themselves
       --exclude PATTERN     Path glob to exclude (repeatable)
       --no-cache            Skip the persistent cache; always fresh ingest
       --cache-dir PATH      Override XDG cache root
@@ -99,6 +102,9 @@ codelore diff <RANGE> [OPTIONS]
                             (three-dot recommended for PR mode)
 
   -a, --analysis KIND       hotspots | coupling | clones | all  [default: hotspots]
+                            (NB: diff's `coupling` corresponds to analyze's
+                            `change-coupling`; the diff subcommand uses the
+                            shorter form throughout)
   -r, --repo PATH           Git repo path [default: .]
       --top-n N             Hotspot rank threshold for entrant detection [default: 10]
       --score-threshold F   Min hotspot score delta to report [default: 0.05]
@@ -208,7 +214,7 @@ Every dependency in CodeLore was picked for a specific reason. The short version
 
 ### What we deliberately don't use
 
-- **No async runtime** — workload is CPU-bound batch; `tokio` would be 200 KB of binary bloat for no gain.
+- **No async runtime** — workload is CPU-bound batch; an async runtime would add binary size and `Send` constraints for no measurable throughput gain.
 - **No libgit2** — gix already does everything we need, and pure-Rust matters for our supply chain story.
 - **No LLM** — we're transparency-first. CodeScene's ML hotspot ranking is the opposite of what we ship. (LLM-based bug-link induction is a long-horizon research item with a pluggable interface.)
 - **No web UI** — explicitly out-of-scope. Power users want SQL access to the fact store and SARIF in their existing CI dashboard; both are first-class outputs.
@@ -217,18 +223,22 @@ Every dependency in CodeLore was picked for a specific reason. The short version
 
 Per `docs/perf-evidence-v1.md` (warm-cache numbers):
 
-| Repository | Commits | Files | On-disk | Wall (warm) | Peak RSS |
-|---|---:|---:|---:|---:|---:|
-| codescene (this workspace) | ~95 | ~150 | 37 GB target | 0.24 s | 89 MB |
-| gitoxide (shallow 2000) | 9,985 | 2,903 | 199 MB | 1.16 s | 75 MB |
-| tokio (shallow 3000) | 4,523 | 854 | 26 MB | 2.09 s | 230 MB |
-| Linux kernel | 1.4M | 70k | — | < 10 min target | < 4 GB target |
+| Repository | Commits | Source files | Wall (warm) | Peak RSS |
+|---|---:|---:|---:|---:|
+| codescene (this workspace) | ~95 | 131 .rs | 0.24 s | 89 MB |
+| gitoxide (shallow 2000) | 9,985 | 2,903 | 1.16 s | 75 MB |
+| tokio (shallow 3000) | 4,523 | 854 | 2.09 s | 230 MB |
+| Linux kernel | 1.4M | 70k | < 10 min target | < 4 GB target |
 
-Linux kernel measurement runs in the weekly CI bench job (`.github/workflows/bench.yml`); first-pass numbers will publish to this table once the cache lands its first run.
+The Linux kernel row is the spec's release-blocker target; the weekly CI bench job (`.github/workflows/bench.yml`) publishes the actual measurement once the cached snapshot reaches a stable baseline.
 
 ### Why tokio uses more memory than gitoxide despite fewer commits
 
-Tree-sitter parse + `FuncSpace` traversal dominates RSS for Tier-1 file complexity extraction. tokio has ~3.5× the Rust source-line density per commit (lots of generic tokio-tower internals) compared to gitoxide. The walk-time work scales with commit count; the complexity-extraction RSS scales with the number of Tier-1 files at HEAD.
+Tree-sitter parsing + AST traversal dominate RSS for the Tier-1 file complexity extraction pass. tokio has roughly 3.5× the Rust source-line density per commit (deep generics in the runtime internals) compared to gitoxide. The commit-walk work scales with commit count; the complexity-extraction RSS scales with the number of Tier-1 source files at HEAD.
+
+### Parallel vs serial complexity extraction
+
+The complexity-extraction pass uses Rayon by default (one task per source file). On the `medium_repo` fixture (25 Rust files), parallel vs serial measure within bench noise (≈ 56 ms either way) because the bottleneck is the commit walk + change-feature enrichment SQL, not the parse pass. The parallel pass beats serial measurably on codebases with hundreds of Tier-1 files. Set `RAYON_NUM_THREADS=1` in the env before invoking `codelore` to force serial mode for comparison runs.
 
 ## 9. CI/CD integration patterns
 
@@ -278,7 +288,7 @@ codescene/
 │   ├── codelore-lib/                     # the library
 │   │   ├── src/
 │   │   │   ├── facts/                    # DuckDB fact store + ingest pipeline
-│   │   │   ├── analyses/                 # the 13 analyses (one file each)
+│   │   │   ├── analyses/                 # the 14 analyses (one file each)
 │   │   │   ├── output/                   # 6 format emitters
 │   │   │   ├── repo/                     # GixRepo + GitCliRepo + Repo trait
 │   │   │   ├── complexity/               # tree-sitter dispatch + ComplexityEntity
@@ -287,7 +297,7 @@ codescene/
 │   │   │   ├── kamei/                    # 14-feature change vector
 │   │   │   ├── cache.rs                  # persistent fact-store cache
 │   │   │   ├── provenance/               # manifest sidecar
-│   │   │   └── options.rs                # the 26-field config
+│   │   │   └── options.rs                # the 25-field runtime config
 │   │   ├── tests/                        # integration tests
 │   │   └── benches/end_to_end.rs         # criterion harness
 │   ├── codelore-cli/                     # clap CLI

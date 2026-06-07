@@ -80,7 +80,7 @@ DuckDB connections in Rust (`duckdb::Connection`) are `!Send` and `!Sync` due to
 
 ### 3.5. Code Quality: Options Builder & Cross-Field Validations — 🚧 OPEN (grown larger)
 
-* **Status (2026-06-08)**: The `Options` struct has grown from 18 fields to **26 fields** with recent additions (`min_clone_node_count`, `exclude_patterns`, `min_clone_shared_revs`, `clone_similarity_floor`, `clone_skip_same_dir`). Still constructed via struct literals; still no builder; still no `validate()` method.
+* **Status (2026-06-08)**: The `Options` struct has grown from 18 fields to **25 fields** with recent additions (`min_clone_node_count`, `exclude_patterns`, `min_clone_shared_revs`, `clone_similarity_floor`, `clone_skip_same_dir`). Still constructed via struct literals; still no builder; still no `validate()` method.
 * **Verified pathological combinations** that compile and run today without surfacing an error:
   * `min_revs > max_changeset_size` — the SQL silently returns empty results
   * `clone_similarity_floor > 1.0` — JOIN returns empty rows
@@ -97,7 +97,7 @@ DuckDB connections in Rust (`duckdb::Connection`) are `!Send` and `!Sync` due to
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | ~~**1**~~ | Parallelize complexity walk via Rayon | High (3-5× cold-run speedup) | Medium | `codelore-lib/src/facts/ingest.rs` | ✅ shipped `8ae2dd6` |
 | ~~**2**~~ | Complete `codelore diff` CLI subcommand | Critical for CI/CD adoption | High | `codelore-cli` / `codelore-lib` | ✅ shipped `b9bfdc7` |
-| **1** | Introduce `Options` validation + builder | Medium (DX / robustness) | Low | `codelore-lib/src/options.rs` | 🚧 open (struct has grown to 26 fields) |
+| **1** | Introduce `Options` validation + builder | Medium (DX / robustness) | Low | `codelore-lib/src/options.rs` | 🚧 open (struct has grown to 25 fields) |
 | **2** | Migrate to standard `csv` crate for outputs | Medium (correctness, removes `quote_if_needed` boilerplate) | Low | `codelore-lib/src/output/csv.rs` | 🚧 open (28 `writeln!` calls; quote helper mitigates the worst case) |
 | **3** | Rename tracking in analyses (canonical-lineage SQL view) | High (analytical accuracy on renamed files) | Hard | `codelore-lib/src/analyses/` (SQL views) | 🚧 partial — rename data captured at ingest, analyses don't follow yet |
 | **4** | Parallelize **clone** extraction too | Medium (lighter than complexity but same pattern) | Low | `codelore-lib/src/facts/ingest.rs::populate_clones_at_head` | 🚧 open |
