@@ -18,7 +18,7 @@ use crate::{CodeLoreError, Result};
 
 /// One row in the clones analysis output. Members of the same clone family
 /// share `clone_group_id` and `fingerprint`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct ClonesRow {
     pub clone_group_id: u32,
     pub fingerprint: String,

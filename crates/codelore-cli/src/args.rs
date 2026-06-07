@@ -21,6 +21,8 @@ pub struct Cli {
 pub enum Command {
     /// Run an analysis and emit results.
     Analyze(AnalyzeArgs),
+    /// Run analyses at two revisions and emit the delta. Plan 8 §7.
+    Diff(DiffArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -81,4 +83,68 @@ pub struct AnalyzeArgs {
     /// Plan 8 §3 Task 14.
     #[arg(long)]
     pub cache_dir: Option<PathBuf>,
+}
+
+/// PR-mode delta analysis: run analyses at `<base>` and `<head>`, emit the diff.
+/// Plan 8 §7.
+///
+/// Rev range accepts two forms:
+///   - `<base>..<head>` (two-dot): straight comparison
+///   - `<base>...<head>` (three-dot): anchored to the merge-base — preferred
+///     for PR mode because it scopes to PR-only commits even when the base
+///     branch has moved since branch creation
+#[derive(clap::Args, Debug)]
+pub struct DiffArgs {
+    /// Rev range: `<base>..<head>` or `<base>...<head>`. Three-dot uses
+    /// the merge-base of `<base>` and `<head>` as the actual base SHA.
+    pub range: String,
+
+    /// Path to the git repo (default: cwd).
+    #[arg(short, long, default_value = ".")]
+    pub repo: PathBuf,
+
+    /// Analysis to diff. `all` runs hotspots + coupling-absences + clones.
+    /// Valid values: hotspots, coupling, clones, all.
+    #[arg(short, long, default_value = "hotspots")]
+    pub analysis: String,
+
+    /// Hotspot rank threshold. A file is a "rank-entrant" if it appears in
+    /// the head's top-N hotspots but not the base's.
+    #[arg(long, default_value_t = 10)]
+    pub top_n: u32,
+
+    /// Minimum hotspot-score delta (head - base) to report a
+    /// "score-increased" finding.
+    #[arg(long, default_value_t = 0.05)]
+    pub score_threshold: f64,
+
+    /// Path to a JSON file caching the BASE-rev analysis. If the file
+    /// exists, the base analysis is loaded from it instead of recomputed.
+    /// If absent, the freshly-computed base analysis is written there so
+    /// the next PR run on the same base SHA hits the cache.
+    #[arg(long)]
+    pub base_cache: Option<PathBuf>,
+
+    /// Output format. `text` is human-friendly terminal output;
+    /// `markdown` is designed for `$GITHUB_STEP_SUMMARY`.
+    #[arg(short, long, default_value = "text")]
+    pub format: String,
+
+    /// Write output to file instead of stdout.
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+
+    /// Exit non-zero when condition met. Values: `none`, `rank-entrant`,
+    /// `score-increase`, `any`.
+    #[arg(long, default_value = "none")]
+    pub fail_on: String,
+
+    /// Minimum revisions per entity for the underlying hotspot analyses.
+    #[arg(long, default_value_t = 5)]
+    pub min_revs: u32,
+
+    /// Path patterns to exclude (repeatable). Same semantics as
+    /// `analyze --exclude`.
+    #[arg(long)]
+    pub exclude: Vec<String>,
 }

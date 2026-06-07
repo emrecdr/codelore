@@ -1,6 +1,8 @@
 //! codelore — Behavioral Code Analyzer CLI.
 
 mod args;
+mod diff;
+mod diff_output;
 
 use std::io::Write;
 use std::str::FromStr;
@@ -12,7 +14,7 @@ use codelore_lib::repo::GixRepo;
 use codelore_lib::{AnalysisName, Options};
 use tracing_subscriber::EnvFilter;
 
-use crate::args::{AnalyzeArgs, Cli, Command};
+use crate::args::{AnalyzeArgs, Cli, Command, DiffArgs};
 
 fn main() {
     if let Err(e) = run() {
@@ -33,7 +35,25 @@ fn run() -> Result<()> {
 
     match cli.command {
         Command::Analyze(args) => analyze(&args),
+        Command::Diff(args) => run_diff_cmd(&args),
     }
+}
+
+fn run_diff_cmd(args: &DiffArgs) -> Result<()> {
+    let output = diff::run_diff(args).context("codelore diff")?;
+
+    let mut out: Box<dyn Write> = match args.output.as_ref() {
+        Some(path) => Box::new(std::fs::File::create(path)?),
+        None => Box::new(std::io::stdout().lock()),
+    };
+    diff_output::emit(&mut out, &output, &args.format)?;
+    drop(out);
+
+    if diff::should_fail(args, &output) {
+        // Per spec §6.6: analysis-failure exit code is 4.
+        std::process::exit(4);
+    }
+    Ok(())
 }
 
 fn init_logging(verbose: bool) {

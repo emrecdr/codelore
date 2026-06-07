@@ -368,6 +368,7 @@ fn build_clone_coupling_sarif(rows: &[CloneCouplingRow], repo_root: &str) -> ser
     })
 }
 
+#[allow(clippy::too_many_lines)]
 fn build_live_clone_result(row: &CloneCouplingRow, repo_root: &str) -> serde_json::Value {
     use serde_json::json;
 

@@ -15,7 +15,7 @@ use crate::facts::FactsDb;
 use crate::{CodeLoreError, Options, Result};
 
 /// A single coupling pair produced by [`run_coupling`].
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CouplingRow {
     /// Lexicographically smaller path of the pair (canonical ordering).
     pub entity_a: String,

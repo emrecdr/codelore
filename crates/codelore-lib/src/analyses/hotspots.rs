@@ -13,7 +13,7 @@
 use crate::facts::FactsDb;
 use crate::{CodeLoreError, Options, Result};
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct HotspotRow {
     pub path: String,
     pub name: String,
