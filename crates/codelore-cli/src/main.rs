@@ -67,10 +67,15 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
             "--format {format} requires --output PATH (binary format, cannot stream to stdout)"
         );
     }
-    // SARIF was hotspots-only in Plan 5; Plan 8 §2 Task 10 adds clones.
-    if format == "sarif" && !matches!(analysis, AnalysisName::Hotspots | AnalysisName::Clones) {
+    // SARIF: hotspots (Plan 5), clones (Plan 8 §2 T10), clone-coupling (Plan 8 §6 T21).
+    if format == "sarif"
+        && !matches!(
+            analysis,
+            AnalysisName::Hotspots | AnalysisName::Clones | AnalysisName::CloneCoupling
+        )
+    {
         anyhow::bail!(
-            "--format sarif currently supports --analysis hotspots and --analysis clones (other analyses land in Plan 8 §6 for clone-coupling / Plan 9 for coupling)"
+            "--format sarif currently supports --analysis hotspots, clones, and clone-coupling (other analyses land in Plan 9)"
         );
     }
 
@@ -426,6 +431,39 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
             }
             (fmt, AnalysisName::Authors) => {
                 anyhow::bail!("authors analysis supports csv|json|markdown; got {fmt:?}")
+            }
+            // --- clone-coupling (Plan 8 §6) ---
+            ("csv", AnalysisName::CloneCoupling) => {
+                let rows = codelore_lib::analyses::clone_coupling::run_clone_coupling(&db, &opts)
+                    .context("run clone-coupling")?;
+                codelore_lib::output::csv::write_clone_coupling_csv(&rows, &mut out)
+                    .context("write csv")?;
+            }
+            ("json", AnalysisName::CloneCoupling) => {
+                let rows = codelore_lib::analyses::clone_coupling::run_clone_coupling(&db, &opts)
+                    .context("run clone-coupling")?;
+                codelore_lib::output::json::write_clone_coupling_json(&rows, &mut out)
+                    .context("write json")?;
+            }
+            ("markdown", AnalysisName::CloneCoupling) => {
+                let rows = codelore_lib::analyses::clone_coupling::run_clone_coupling(&db, &opts)
+                    .context("run clone-coupling")?;
+                codelore_lib::output::markdown::write_clone_coupling_markdown(&rows, &mut out)
+                    .context("write markdown")?;
+            }
+            ("sarif", AnalysisName::CloneCoupling) => {
+                let rows = codelore_lib::analyses::clone_coupling::run_clone_coupling(&db, &opts)
+                    .context("run clone-coupling")?;
+                let repo_root = args.repo.display().to_string();
+                codelore_lib::output::sarif::write_clone_coupling_sarif(
+                    &rows, &repo_root, &mut out,
+                )
+                .context("write sarif")?;
+            }
+            (fmt, AnalysisName::CloneCoupling) => {
+                anyhow::bail!(
+                    "clone-coupling analysis supports csv|json|markdown|sarif; got {fmt:?}"
+                )
             }
             _ => unreachable!("format/analysis combination should have been validated above"),
         }

@@ -4,6 +4,7 @@
 use crate::analyses::{
     authors::AuthorsRow,
     churn::{AbsChurnRow, AuthorChurnRow, EntityChurnRow},
+    clone_coupling::CloneCouplingRow,
     clones::ClonesRow,
     code_age::CodeAgeRow,
     code_health::CodeHealthRow,
@@ -210,6 +211,33 @@ pub fn write_authors_markdown<W: Write>(rows: &[AuthorsRow], w: &mut W) -> Resul
     writeln!(w, "|---|---:|").map_err(CodeLoreError::Io)?;
     for row in rows {
         writeln!(w, "| {} | {} |", row.author, row.commits).map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+pub fn write_clone_coupling_markdown<W: Write>(rows: &[CloneCouplingRow], w: &mut W) -> Result<()> {
+    header(
+        w,
+        "CodeLore live clones (clone × Fisher-significant co-change)",
+    )?;
+    writeln!(
+        w,
+        "| Group | File A | File B | Shared | Degree | Combined |"
+    )
+    .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---|---|---:|---:|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| {} | `{}` | `{}` | {} | {:.2}% | {:.4} |",
+            row.clone_group_id,
+            row.file_a,
+            row.file_b,
+            row.shared_revs,
+            row.degree_pct * 100.0,
+            row.combined_score,
+        )
+        .map_err(CodeLoreError::Io)?;
     }
     Ok(())
 }

@@ -283,3 +283,205 @@ fn build_clones_result(
         }
     })
 }
+
+// =============================================================================
+// CODELORE-LIVE-CLONE (Plan 8 §6 Task 21)
+//
+// The high-severity intersection of clones × Fisher-significant change-coupling.
+// One SARIF result per (clone_group_id, file_a, file_b) — see research brief
+// a0a6cf3534a65a643. Designed to surface inline in GitHub Code Scanning on PRs
+// that touch any participating file.
+// =============================================================================
+
+use crate::analyses::clone_coupling::CloneCouplingRow;
+
+const LIVE_CLONE_RULE_ID: &str = "CODELORE-LIVE-CLONE";
+const LIVE_CLONE_AUTOMATION_ID: &str = "codelore/clone-coupling/run";
+
+/// Emit a SARIF 2.1.0 document for live clone-coupling findings.
+///
+/// Schema per the research brief:
+///
+/// - One SARIF `result` per (`clone_group_id`, `file_a`, `file_b`) pair.
+/// - `locations[0]` = higher-`support_a` partner (the more-frequently-changed
+///   file); `locations[1]` = lower partner. Matches GitHub Code Scanning's
+///   "first location is primary" rendering convention.
+/// - `partialFingerprints` keys: `cloneGroupFingerprint/v1` (AST digest) +
+///   `filePairHash/v1` (`sha256` of sorted file pair).
+///   - `properties.security-severity` derived from `combined_score * 10`
+///     (0-10 scale per SARIF spec §3.27.17). Live clones get higher severity
+///     than the bare CODELORE-CLONE rule because the co-change signal proves
+///     this is real debt, not dead lookalike code.
+pub fn write_clone_coupling_sarif<W: Write>(
+    rows: &[CloneCouplingRow],
+    repo_root: &str,
+    w: &mut W,
+) -> Result<()> {
+    let doc = build_clone_coupling_sarif(rows, repo_root);
+    serde_json::to_writer_pretty(w, &doc)
+        .map_err(|e| CodeLoreError::Output(format!("clone-coupling sarif: {e}")))?;
+    Ok(())
+}
+
+fn build_clone_coupling_sarif(rows: &[CloneCouplingRow], repo_root: &str) -> serde_json::Value {
+    use serde_json::{Value, json};
+
+    let rule = json!({
+        "id": LIVE_CLONE_RULE_ID,
+        "shortDescription": {
+            "text": "Live clone: cloned function whose copies co-change at Fisher-significant rates"
+        },
+        "fullDescription": {
+            "text": "A pair of cloned functions whose containing files are also \
+                     coupled at Fisher-exact p < 0.05. The combined_score \
+                     (similarity × coupling_degree × (1 − p_value)) ranks how \
+                     actionable the finding is. Live clones are real technical \
+                     debt; dead clones (filtered out) are noise."
+        },
+        "helpUri": "https://github.com/emre/codescene/blob/main/docs/superpowers/plans/2026-06-07-codelore-plan-8-v1.x-readiness.md",
+        "properties": {
+            "precision": "high",
+            "tags": ["behavioral", "clone", "live-clone", "co-change", "x-ray"]
+        }
+    });
+
+    let results: Vec<Value> = rows
+        .iter()
+        .map(|row| build_live_clone_result(row, repo_root))
+        .collect();
+
+    json!({
+        "$schema": SARIF_SCHEMA,
+        "version": "2.1.0",
+        "runs": [{
+            "automationDetails": { "id": LIVE_CLONE_AUTOMATION_ID },
+            "tool": {
+                "driver": {
+                    "name": "codelore",
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "informationUri": "https://github.com/emre/codescene",
+                    "rules": [rule]
+                }
+            },
+            "results": results
+        }]
+    })
+}
+
+fn build_live_clone_result(row: &CloneCouplingRow, repo_root: &str) -> serde_json::Value {
+    use serde_json::json;
+
+    // Higher support → primary location. Ties broken alphabetically so the
+    // SARIF output is deterministic across runs.
+    let (
+        primary_file,
+        primary_entity,
+        primary_start,
+        primary_end,
+        secondary_file,
+        secondary_entity,
+        secondary_start,
+        secondary_end,
+    ) = if (row.support_a, &row.file_a) >= (row.support_b, &row.file_b) {
+        (
+            &row.file_a,
+            &row.entity_a,
+            row.start_line_a,
+            row.end_line_a,
+            &row.file_b,
+            &row.entity_b,
+            row.start_line_b,
+            row.end_line_b,
+        )
+    } else {
+        (
+            &row.file_b,
+            &row.entity_b,
+            row.start_line_b,
+            row.end_line_b,
+            &row.file_a,
+            &row.entity_a,
+            row.start_line_a,
+            row.end_line_a,
+        )
+    };
+
+    let mk_uri = |p: &str| {
+        format!(
+            "{}/{}",
+            repo_root.trim_end_matches('/'),
+            p.trim_start_matches('/')
+        )
+    };
+
+    // security-severity = combined_score * 10, clamped to [0, 10] per SARIF spec.
+    let security_severity = (row.combined_score * 10.0).clamp(0.0, 10.0);
+    let level = if security_severity >= 7.0 {
+        "error"
+    } else if security_severity >= 4.0 {
+        "warning"
+    } else {
+        "note"
+    };
+
+    // partialFingerprints — versioned keys per research brief for stable
+    // cross-run identity even when family sizes fluctuate.
+    let mut file_pair_hasher = Sha256::new();
+    let mut pair = [row.file_a.as_str(), row.file_b.as_str()];
+    pair.sort_unstable();
+    file_pair_hasher.update(pair[0].as_bytes());
+    file_pair_hasher.update(b"|");
+    file_pair_hasher.update(pair[1].as_bytes());
+    let file_pair_hash = format!("sha256:{}", hex::encode(file_pair_hasher.finalize()));
+
+    json!({
+        "ruleId": LIVE_CLONE_RULE_ID,
+        "level": level,
+        "message": {
+            "text": format!(
+                "Live clone family {} — {} ({}:{}) and {} ({}:{}) co-change at \
+                 {:.0}% degree (combined_score {:.3}; similarity {:.2}, {} shared revs)",
+                row.clone_group_id,
+                primary_entity,
+                primary_file, primary_start,
+                secondary_entity,
+                secondary_file, secondary_start,
+                row.degree_pct * 100.0,
+                row.combined_score,
+                row.similarity,
+                row.shared_revs,
+            )
+        },
+        "locations": [
+            {
+                "physicalLocation": {
+                    "artifactLocation": { "uri": mk_uri(primary_file) },
+                    "region": { "startLine": primary_start, "endLine": primary_end }
+                },
+                "message": { "text": format!("primary: {primary_entity}") }
+            },
+            {
+                "physicalLocation": {
+                    "artifactLocation": { "uri": mk_uri(secondary_file) },
+                    "region": { "startLine": secondary_start, "endLine": secondary_end }
+                },
+                "message": { "text": format!("partner: {secondary_entity}") }
+            }
+        ],
+        "partialFingerprints": {
+            "cloneGroupFingerprint/v1": row.fingerprint,
+            "filePairHash/v1": file_pair_hash,
+            "cloneGroupId/v1": format!("{}", row.clone_group_id)
+        },
+        "properties": {
+            "security-severity": security_severity,
+            "codelore/clone-group-id": row.clone_group_id,
+            "codelore/similarity": row.similarity,
+            "codelore/shared-revs": row.shared_revs,
+            "codelore/degree-pct": row.degree_pct,
+            "codelore/p-value": row.p_value,
+            "codelore/combined-score": row.combined_score,
+            "tags": ["behavioral", "clone", "live-clone", "co-change", "x-ray"]
+        }
+    })
+}

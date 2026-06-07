@@ -22,6 +22,8 @@ pub enum AnalysisName {
     Authors,
     // Plan 7: clone detection (T1+T2 via AST structural hashing)
     Clones,
+    // Plan 8 §6: live-clone × Fisher-significant co-change intersection
+    CloneCoupling,
 }
 
 impl AnalysisName {
@@ -41,6 +43,7 @@ impl AnalysisName {
             Self::Revisions => "revisions",
             Self::Authors => "authors",
             Self::Clones => "clones",
+            Self::CloneCoupling => "clone-coupling",
         }
     }
 
@@ -60,6 +63,7 @@ impl AnalysisName {
             Self::Revisions,
             Self::Authors,
             Self::Clones,
+            Self::CloneCoupling,
         ]
     }
 }

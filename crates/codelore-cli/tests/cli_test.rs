@@ -558,6 +558,7 @@ fn parquet_requires_output_flag() {
 #[test]
 fn sarif_rejects_unsupported_analysis() {
     // Plan 8 §2 Task 10 widened SARIF support to {hotspots, clones}.
+    // Plan 8 §6 Task 21 added clone-coupling.
     // `revisions` is still unsupported and must bail with a helpful
     // message naming the supported analyses.
     let tiny = codelore_lib::test_support::tiny_repo::build();
@@ -576,7 +577,7 @@ fn sarif_rejects_unsupported_analysis() {
         ])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("hotspots and"))
+        .stderr(predicate::str::contains("hotspots, clones, and clone-coupling"))
         .stderr(predicate::str::contains("clones"));
 }
 
