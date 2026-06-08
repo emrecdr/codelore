@@ -39,23 +39,23 @@ const SQL: &str = "
     ),
     file_churn AS (
         SELECT path, COALESCE(SUM(loc_added), 0) + COALESCE(SUM(loc_deleted), 0) AS churn
-        FROM changes
+        FROM {src}
         GROUP BY path
     ),
     file_revs AS (
         SELECT path, COUNT(DISTINCT rev) AS revs
-        FROM changes
+        FROM {src}
         GROUP BY path
         HAVING revs >= ?
     ),
     author_revs AS (
         SELECT
-            changes.path,
+            c.path,
             commits.canonical_author AS author,
-            COUNT(DISTINCT changes.rev) AS revs
-        FROM changes
-        INNER JOIN commits ON changes.rev = commits.rev
-        GROUP BY changes.path, commits.canonical_author
+            COUNT(DISTINCT c.rev) AS revs
+        FROM {src} c
+        INNER JOIN commits ON c.rev = commits.rev
+        GROUP BY c.path, commits.canonical_author
     ),
     file_fv AS (
         SELECT
@@ -162,12 +162,24 @@ fn materialize_centrality(db: &FactsDb, opts: &Options) -> Result<()> {
 
 pub fn run_code_health(db: &FactsDb, opts: &Options) -> Result<Vec<CodeHealthRow>> {
     // Materialize Fisher-filtered coupling centrality before the SQL runs.
+    // `materialize_centrality` -> `run_coupling` ALSO materializes
+    // `changes_lineage` when canonical lineage is on; the outer SQL below
+    // must read from the same source so the JOIN on path matches the
+    // canonical centrality entries (otherwise renamed files lose their
+    // centrality term silently).
     materialize_centrality(db, opts)?;
 
+    let src = if opts.use_canonical_lineage {
+        crate::facts::ingest::materialize_changes_lineage(db)?;
+        "changes_lineage"
+    } else {
+        "changes"
+    };
+    let sql = SQL.replace("{src}", src);
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
     let mut stmt = db
         .conn()
-        .prepare(SQL)
+        .prepare(&sql)
         .map_err(|e| CodeLoreError::Analysis(format!("prepare code-health: {e}")))?;
     let rows = stmt
         .query_map(params![opts.min_revs, row_limit], |r| {

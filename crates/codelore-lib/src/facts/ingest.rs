@@ -635,7 +635,15 @@ pub fn materialize_path_lineage(db: &super::FactsDb) -> Result<()> {
         SELECT orig AS old_path, current AS canonical_path
         FROM (
             SELECT orig, current, depth,
-                   ROW_NUMBER() OVER (PARTITION BY orig ORDER BY depth DESC) AS rn
+                   ROW_NUMBER() OVER (
+                       PARTITION BY orig
+                       -- Secondary order on `current` so ties at the same
+                       -- depth (possible when a non-linear rename graph
+                       -- reaches the same intermediate via multiple paths)
+                       -- break deterministically and run-to-run output stays
+                       -- byte-equal.
+                       ORDER BY depth DESC, current ASC
+                   ) AS rn
             FROM lineage
         )
         WHERE rn = 1 AND orig != current";

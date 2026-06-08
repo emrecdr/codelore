@@ -183,7 +183,14 @@ impl Options {
             })
         };
 
-        let team_map_digest = self.team_map_file.as_deref().and_then(digest_of);
+        // Explicit `--team-map-file` wins; otherwise the same auto-discovery
+        // path `ingest()` uses (`<repo>/.codelore-teams`) must be hashed so
+        // edits to the auto-loaded file also invalidate the cache.
+        let team_map_digest = self
+            .team_map_file
+            .as_deref()
+            .and_then(digest_of)
+            .or_else(|| digest_of(&self.repo_path.join(".codelore-teams")));
         let group_file_digest = self.group_file.as_deref().and_then(digest_of);
         let bots_digest = digest_of(&self.repo_path.join(".codelorebots"));
 
@@ -313,6 +320,28 @@ mod tests {
         assert_ne!(
             v1, v2,
             "canonical_json must differ when team-map content changes"
+        );
+    }
+
+    #[test]
+    fn canonical_json_invalidates_when_auto_discovered_team_map_changes() {
+        // No --team-map-file flag: ingest auto-discovers `<repo>/.codelore-teams`.
+        // canonical_json must hash THAT path's content too — otherwise editing
+        // the auto-discovered file silently keeps the same cache key.
+        let dir = tempfile::tempdir().unwrap();
+        let auto = dir.path().join(".codelore-teams");
+        std::fs::write(&auto, "author,team\nalice@x,Backend\n").unwrap();
+        let opts = Options {
+            repo_path: dir.path().to_path_buf(),
+            team_map_file: None, // auto-discovery path
+            ..Options::default()
+        };
+        let v1 = opts.canonical_json();
+        std::fs::write(&auto, "author,team\nalice@x,Frontend\n").unwrap();
+        let v2 = opts.canonical_json();
+        assert_ne!(
+            v1, v2,
+            "auto-discovered .codelore-teams content must invalidate cache key"
         );
     }
 
