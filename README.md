@@ -17,8 +17,8 @@
 <!-- Release + license meta -->
 [![Version](https://img.shields.io/badge/version-0.1.0-2ea44f?style=flat-square)](CHANGELOG.md)
 [![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue?style=flat-square)](LICENSE)
-[![Rust 1.87+](https://img.shields.io/badge/rust-1.87%2B-dea584?style=flat-square&logo=rust)](https://www.rust-lang.org/)
-[![Tests: 395 passing](https://img.shields.io/badge/tests-395%20passing-2ea44f?style=flat-square)](#status)
+[![Rust 1.96+](https://img.shields.io/badge/rust-1.96%2B-dea584?style=flat-square&logo=rust)](https://www.rust-lang.org/)
+[![Tests: 396 passing](https://img.shields.io/badge/tests-396%20passing-2ea44f?style=flat-square)](#status)
 [![Clippy: clean](https://img.shields.io/badge/clippy-clean-2ea44f?style=flat-square&logo=rust)](#status)
 
 > **Read the lore of your codebase.**
@@ -99,7 +99,7 @@ Use `codelore analyze --analysis NAME` for any of these. Code-maat parity is **c
 ## Quick start
 
 ```bash
-# Build from source (Rust 1.87+ toolchain required)
+# Build from source (Rust 1.96+ toolchain required)
 cargo build --release -p codelore-cli
 
 # Or once a published release lands:
@@ -278,7 +278,7 @@ What we deliberately don't ship: no async runtime, no libgit2 binding, no LLM-ba
 
 ## Status
 
-Release-ready alpha. **21 analyses × 6 output formats × `codelore diff` PR-mode × 4 SARIF rules.** 395 tests pass, clippy / fmt / deny all green. The first stable tag (`v0.1.0`) is the only remaining gate; release pipeline (cargo-dist + SLSA L3 + distroless container + Homebrew tap + binstall) auto-runs on tag push.
+Release-ready alpha. **21 analyses × 6 output formats × `codelore diff` PR-mode × 4 SARIF rules.** 396 tests pass on Rust 1.96.0, clippy / fmt / deny all green. The first stable tag (`v0.1.0`) is the only remaining gate; release pipeline (cargo-dist + SLSA L3 + distroless container + Homebrew tap + binstall) auto-runs on tag push.
 
 **This session's deliverables** (3 sprints + GitHub tags + versioning):
 

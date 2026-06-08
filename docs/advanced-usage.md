@@ -138,6 +138,19 @@ codelore analyze [OPTIONS]
                                 (defaults to system clock UTC; useful for
                                 reproducible historical reports).
 
+  # ── Commit walk filters (R2 / R3 / R4) ────────────────────────────
+      --after YYYY-MM-DD        Only include commits authored on or after
+                                this date. Applied at repo-walk time so
+                                the filter survives across every analysis.
+                                Mirrors `git log --after`. Honored by both
+                                GixRepo (default) and GitCliRepo backends.
+      --before YYYY-MM-DD       Only include commits authored on or before
+                                this date. Mirrors `git log --before`.
+      --include-merges          Include merge commits in coupling / churn /
+                                ownership analyses. Off by default (matches
+                                code-maat semantics: merges duplicate
+                                authorship and inflate co-change pairs).
+
   # ── Architectural grouping (PAR-7) ────────────────────────────────
   -g, --group-file PATH         Architectural grouping definition file with
                                 full lookaround regex support (powered by

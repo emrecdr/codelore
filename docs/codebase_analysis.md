@@ -115,10 +115,10 @@ Spec §3.1 + Kamei et al. 2013 (TSE). Implemented as five SQL UPDATE passes afte
 
 ## 8. Quality posture
 
-- **MSRV**: Rust 1.87+
+- **MSRV**: Rust 1.96+
 - **`unsafe_code = "forbid"`** in `clippy.toml` (forbidden across the whole workspace)
 - **`RUSTFLAGS = "-Dwarnings"`** in CI (all warnings are errors)
-- **CI matrix**: Linux + macOS + Windows on `dtolnay/rust-toolchain@1.89.0` (pinned to match `rust-toolchain.toml`)
+- **CI matrix**: Linux + macOS + Windows on `dtolnay/rust-toolchain@1.96.0` (pinned to match `rust-toolchain.toml`)
 - **Gates**: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test --workspace --all-features`, `cargo deny check`
 - **Release pipeline**: cargo-dist (6 target binaries), SLSA L3 provenance, distroless container at `ghcr.io/emrecdr/codelore`, Homebrew tap at `emrecdr/homebrew-codelore`, `cargo binstall` manifest — all fire on `v*` tag push
 

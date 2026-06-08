@@ -5,7 +5,7 @@ members = ["crates/codelore-lib", "crates/codelore-cli", "crates/codelore-rca"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.87"
+rust-version = "1.96"
 license = "GPL-3.0-only"
 repository = "https://github.com/emrecdr/codelore"
 # crates.io discovery — surfaces in search results + on the package page.
