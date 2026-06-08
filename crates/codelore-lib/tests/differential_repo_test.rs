@@ -322,6 +322,74 @@ fn rename_commit_change_type_matches_across_walkers() {
     );
 }
 
+/// `loc_added` and `loc_deleted` MUST be non-zero across the fixture
+/// (the differential repo has ~50 commits including ordinary file
+/// edits). The pre-A.1 code stubbed both to `0` in every change event
+/// across both walkers, so every churn-driven analysis (`abs-churn`,
+/// `author-churn`, `entity-churn`, `main-dev`-by-lines, Kamei la/ld,
+/// code-health churn term) returned uniformly zero. Regression: assert
+/// the totals are non-zero AND that the two walkers agree on them
+/// (modulo the few edge cases — neither walker invents data).
+#[test]
+fn line_counts_are_non_zero_and_match_across_walkers() {
+    let (gix, cli) = open_both();
+    let opts = opts_with_merges();
+
+    let mut gix_total: u64 = 0;
+    let mut cli_total: u64 = 0;
+    let revs: Vec<String> = gix
+        .walk_commits(&opts)
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+        .into_iter()
+        .map(|e| e.rev)
+        .collect();
+    for rev in &revs {
+        let gix_files = gix.changed_files(rev).unwrap();
+        let cli_files = cli.changed_files(rev).unwrap();
+        for fc in &gix_files {
+            gix_total += u64::from(fc.loc_added) + u64::from(fc.loc_deleted);
+        }
+        for fc in &cli_files {
+            cli_total += u64::from(fc.loc_added) + u64::from(fc.loc_deleted);
+        }
+    }
+
+    assert!(
+        gix_total > 0,
+        "GixRepo aggregated zero line churn across {} commits; \
+         loc_added/loc_deleted are likely still stubbed",
+        revs.len()
+    );
+    assert!(
+        cli_total > 0,
+        "GitCliRepo aggregated zero line churn across {} commits",
+        revs.len()
+    );
+
+    // The two walkers should produce ROUGHLY the same aggregate churn.
+    // Both use the histogram diff algorithm (gix via `gix_diff::blob` =
+    // `imara-diff`; git CLI via `git log --numstat` which is also
+    // Histogram). Small drift is expected for:
+    //   - root commits (gix's empty-parent + content diff sometimes
+    //     differs by 1 line from git's "all lines added" tally)
+    //   - exact-rename detection where gix carries the `diff` field for
+    //     same-content rewrites
+    // 5% is the empirically-derived tolerance from a clean differential
+    // fixture run; tighten this once cross-walker drift is investigated.
+    #[allow(clippy::cast_precision_loss)]
+    let denom = gix_total.max(cli_total) as f64;
+    let drift = gix_total.abs_diff(cli_total);
+    #[allow(clippy::cast_precision_loss)]
+    let drift_pct = (drift as f64 / denom) * 100.0;
+    assert!(
+        drift_pct < 5.0,
+        "walker line-count drift {drift} lines ({drift_pct:.2}%) — \
+         gix={gix_total}, cli={cli_total}"
+    );
+}
+
 #[test]
 fn rename_commit_visible_in_both() {
     let (gix, cli) = open_both();

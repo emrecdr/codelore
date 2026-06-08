@@ -233,17 +233,21 @@ fn compute_changed_files(inner: &gix::ThreadSafeRepository, rev: &str) -> Result
         .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), diff_opts)
         .map_err(|e| CodeLoreError::Repo(format!("diff_tree_to_tree {rev}: {e}")))?;
 
-    let file_changes = changes
+    let file_changes: Result<Vec<FileChange>> = changes
         .into_iter()
-        .filter_map(|change| gix_change_to_file_change(change, rev))
+        .filter_map(|change| gix_change_to_file_change(change, &repo).transpose())
         .collect();
 
-    Ok(file_changes)
+    file_changes
 }
 
 /// Convert a `gix_diff::tree_with_rewrites::Change` to our `FileChange`.
-/// Returns `None` for tree entries (directories) — we only care about blobs.
-fn gix_change_to_file_change(change: GixChange, _rev: &str) -> Option<FileChange> {
+/// Returns `Ok(None)` for tree entries / non-blob modes (we only care about
+/// blobs) and `Err` if a blob lookup or line-count diff fails.
+fn gix_change_to_file_change(
+    change: GixChange,
+    repo: &gix::Repository,
+) -> Result<Option<FileChange>> {
     use gix::objs::tree::EntryKind;
 
     let is_blob = |mode: gix::objs::tree::EntryMode| {
@@ -254,68 +258,135 @@ fn gix_change_to_file_change(change: GixChange, _rev: &str) -> Option<FileChange
         GixChange::Addition {
             location,
             entry_mode,
+            id,
             ..
-        } if is_blob(entry_mode) => Some(FileChange {
-            path: location.to_string(),
-            change_type: ChangeType::Added,
-            loc_added: 0,
-            loc_deleted: 0,
-            hunks: vec![],
-        }),
+        } if is_blob(entry_mode) => {
+            let (loc_added, loc_deleted) = count_loc(repo, None, Some(id))?;
+            Ok(Some(FileChange {
+                path: location.to_string(),
+                change_type: ChangeType::Added,
+                loc_added,
+                loc_deleted,
+                hunks: vec![],
+            }))
+        }
         GixChange::Deletion {
             location,
             entry_mode,
+            id,
             ..
-        } if is_blob(entry_mode) => Some(FileChange {
-            path: location.to_string(),
-            change_type: ChangeType::Deleted,
-            loc_added: 0,
-            loc_deleted: 0,
-            hunks: vec![],
-        }),
+        } if is_blob(entry_mode) => {
+            let (loc_added, loc_deleted) = count_loc(repo, Some(id), None)?;
+            Ok(Some(FileChange {
+                path: location.to_string(),
+                change_type: ChangeType::Deleted,
+                loc_added,
+                loc_deleted,
+                hunks: vec![],
+            }))
+        }
         GixChange::Modification {
             location,
             entry_mode,
+            previous_id,
+            id,
             ..
-        } if is_blob(entry_mode) => Some(FileChange {
-            path: location.to_string(),
-            change_type: ChangeType::Modified,
-            loc_added: 0,
-            loc_deleted: 0,
-            hunks: vec![],
-        }),
+        } if is_blob(entry_mode) => {
+            let (loc_added, loc_deleted) = count_loc(repo, Some(previous_id), Some(id))?;
+            Ok(Some(FileChange {
+                path: location.to_string(),
+                change_type: ChangeType::Modified,
+                loc_added,
+                loc_deleted,
+                hunks: vec![],
+            }))
+        }
         GixChange::Rewrite {
             location,
             source_location,
             entry_mode,
+            source_id,
+            id,
+            diff,
             copy,
             ..
         } if is_blob(entry_mode) => {
             let path = location.to_string();
             let from = source_location.to_string();
-            // Sentinel similarity for Plan 1; Plan 4 wires real similarity from `diff` field.
-            let change_type = if copy {
-                ChangeType::Copied {
-                    from,
-                    similarity: 100,
-                }
+            // gix's rewrite tracker already computed similarity + line counts
+            // when it diffed source to destination. Prefer those — they're
+            // free. If `diff` is `None` (perfect 100% rename), all counts
+            // are zero and similarity is 100.
+            let (similarity, loc_added, loc_deleted) = if let Some(stats) = diff {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let sim = (stats.similarity * 100.0).round().clamp(0.0, 100.0) as u8;
+                (sim, stats.insertions, stats.removals)
             } else {
-                ChangeType::Renamed {
-                    from,
-                    similarity: 100,
-                }
+                // No diff means source and destination blobs were
+                // bit-identical — 100% similarity, zero churn.
+                let (added, deleted) = count_loc(repo, Some(source_id), Some(id))?;
+                (100u8, added, deleted)
             };
-            Some(FileChange {
+            let change_type = if copy {
+                ChangeType::Copied { from, similarity }
+            } else {
+                ChangeType::Renamed { from, similarity }
+            };
+            Ok(Some(FileChange {
                 path,
                 change_type,
-                loc_added: 0,
-                loc_deleted: 0,
+                loc_added,
+                loc_deleted,
                 hunks: vec![],
-            })
+            }))
         }
         // Skip non-blob entries (trees / submodules / symlinks treated as non-blob).
-        _ => None,
+        _ => Ok(None),
     }
+}
+
+/// Count added and deleted lines between two blob OIDs.
+///
+/// Symmetric in old/new — `None` on either side is treated as an empty
+/// blob, so Additions diff `""` against the new blob (all lines added)
+/// and Deletions diff the old blob against `""` (all lines deleted).
+/// Modifications and content-changing Rewrites diff old against new.
+///
+/// Uses Git's default histogram algorithm via `gix_diff::blob`, which
+/// re-exports `imara-diff`. Slider heuristics are applied (`postprocess_lines`)
+/// so hunk boundaries match `git diff` output line-for-line — the values
+/// here are bit-equivalent to `git log --numstat`.
+fn count_loc(
+    repo: &gix::Repository,
+    old_oid: Option<gix::ObjectId>,
+    new_oid: Option<gix::ObjectId>,
+) -> Result<(u32, u32)> {
+    use gix::diff::blob::{Algorithm, InternedInput, diff_with_slider_heuristics};
+
+    let empty: Vec<u8> = Vec::new();
+    let read_blob = |oid: gix::ObjectId| -> Result<Vec<u8>> {
+        let obj = repo
+            .find_object(oid)
+            .map_err(|e| CodeLoreError::Repo(format!("find_blob {oid}: {e}")))?;
+        Ok(obj.data.clone())
+    };
+
+    let old_bytes = match old_oid {
+        Some(oid) => read_blob(oid)?,
+        None => empty.clone(),
+    };
+    let new_bytes = match new_oid {
+        Some(oid) => read_blob(oid)?,
+        None => empty.clone(),
+    };
+
+    let input = InternedInput::new(old_bytes.as_slice(), new_bytes.as_slice());
+    let diff = diff_with_slider_heuristics(Algorithm::Histogram, &input);
+    #[allow(clippy::cast_possible_truncation)]
+    let added = diff.count_additions() as u32;
+    #[allow(clippy::cast_possible_truncation)]
+    let removed = diff.count_removals() as u32;
+    Ok((added, removed))
 }
 
 /// Extract the author-time date from a gix commit. Used by both the

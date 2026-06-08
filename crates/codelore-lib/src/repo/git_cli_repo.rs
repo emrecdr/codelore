@@ -56,7 +56,15 @@ impl Repo for GitCliRepo {
         let mut args = vec![
             "log",
             "--pretty=format:%H%x1f%P%x1f%ae%x1f%an%x1f%ce%x1f%aI%x1f%B%x1e",
-            "--name-status",
+            // `--raw --numstat` together produce a per-commit block of raw
+        // lines (status + paths, `:`-prefixed) immediately followed by
+        // numstat lines (added/deleted/path). They appear in matching
+        // file order so we can zip them by index. We need both because
+        // `--numstat` alone can't distinguish Added from Modified
+        // (zero-delete numstat looks the same), and `--name-status`
+        // alone has no line counts.
+        "--raw",
+        "--numstat",
         ];
         if !opts.include_merges {
             args.push("--no-merges");
@@ -91,7 +99,17 @@ impl Repo for GitCliRepo {
     }
 
     fn changed_files(&self, rev: &str) -> Result<Vec<FileChange>> {
-        let output = self.run_git(&["show", "--name-status", "--pretty=format:", rev])?;
+        // `git show --raw --numstat --pretty=format:` emits the same per-commit
+        // raw + numstat block our streaming `git log` consumer parses,
+        // minus the pretty header. `parse_changes_block` accepts both
+        // (it just ignores empty lines and pairs raw with numstat by order).
+        let output = self.run_git(&[
+            "show",
+            "--raw",
+            "--numstat",
+            "--pretty=format:",
+            rev,
+        ])?;
         if !output.status.success() {
             return Err(CodeLoreError::Repo(format!(
                 "git show: {}",
@@ -100,7 +118,7 @@ impl Repo for GitCliRepo {
         }
         let raw = String::from_utf8(output.stdout)
             .map_err(|e| CodeLoreError::Repo(format!("git show output not utf-8: {e}")))?;
-        Ok(parse_name_status(&raw))
+        Ok(parse_changes_block(&raw))
     }
 
     fn diff_hunks(&self, rev: &str, path: &str) -> Result<Vec<Hunk>> {
@@ -353,7 +371,7 @@ fn parse_pretty_block(pretty: &str, name_status: &str) -> Option<CommitEvent> {
     };
 
     let date = parse_iso_date(&date_str)?;
-    let changes = parse_name_status(name_status);
+    let changes = parse_changes_block(name_status);
 
     Some(CommitEvent {
         rev: sha,
@@ -370,65 +388,122 @@ fn parse_pretty_block(pretty: &str, name_status: &str) -> Option<CommitEvent> {
     })
 }
 
-/// Parse a name-status block such as:
+/// Parse a per-commit raw + numstat block:
+///
 /// ```text
-/// M\tsrc/main.rs
-/// A\tsrc/lib.rs
-/// R90\tsrc/old.rs\tsrc/new.rs
-/// D\tsrc/gone.rs
+/// :100644 100644 d00491f 2b2f2e1 M\tsrc/main.rs
+/// :100644 100644 0cfbf08 0cfbf08 R100\tsrc/old.rs\tsrc/new.rs
+/// 1\t0\tsrc/main.rs
+/// 0\t0\tsrc/old.rs => src/new.rs
 /// ```
-fn parse_name_status(raw: &str) -> Vec<FileChange> {
-    raw.lines().filter_map(parse_name_status_line).collect()
+///
+/// Raw lines (`:`-prefixed) and numstat lines appear in matching file
+/// order; we zip them by index.
+fn parse_changes_block(block: &str) -> Vec<FileChange> {
+    let mut raw_entries: Vec<&str> = Vec::new();
+    let mut numstat_entries: Vec<&str> = Vec::new();
+    for line in block.lines() {
+        let trimmed = line.trim_end();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.starts_with(':') {
+            raw_entries.push(trimmed);
+        } else {
+            numstat_entries.push(trimmed);
+        }
+    }
+    raw_entries
+        .into_iter()
+        .zip(numstat_entries)
+        .filter_map(|(raw, numstat)| parse_raw_numstat_pair(raw, numstat))
+        .collect()
 }
 
-fn parse_name_status_line(line: &str) -> Option<FileChange> {
-    let line = line.trim();
-    if line.is_empty() {
-        return None;
-    }
-    let mut cols = line.splitn(3, '\t');
-    let status = cols.next()?;
-    let path1 = cols.next()?.to_string();
-    let path2 = cols.next().map(str::to_string);
+/// Parse a single raw line paired with its numstat line.
+///
+/// Raw format: `:<mode1> <mode2> <hash1> <hash2> <STATUS>\t<path>[\t<path2>]`
+/// Numstat format: `<added>\t<deleted>\t<path>` — or `<old> => <new>` for renames.
+fn parse_raw_numstat_pair(raw: &str, numstat: &str) -> Option<FileChange> {
+    let raw = raw.strip_prefix(':')?;
+    // The header (`mode mode hash hash STATUS`) is space-separated; paths
+    // follow a tab. Status sits in the last whitespace-separated field
+    // before the tab boundary.
+    let tab = raw.find('\t')?;
+    let header = &raw[..tab];
+    let paths_part = &raw[tab + 1..];
+    let mut header_iter = header.split_whitespace();
+    let _mode_src = header_iter.next()?;
+    let _mode_dst = header_iter.next()?;
+    let _hash_src = header_iter.next()?;
+    let _hash_dst = header_iter.next()?;
+    let status = header_iter.next()?;
 
-    let change_type = if status.starts_with('R') {
+    let mut paths = paths_part.split('\t');
+    let path1 = paths.next()?.to_string();
+    let path2 = paths.next().map(str::to_string);
+
+    let (loc_added, loc_deleted) = parse_numstat_line(numstat).unwrap_or((0, 0));
+
+    if status.starts_with('R') {
         let similarity = parse_similarity(status);
-        let from = path1.clone();
+        let from = path1;
         let path = path2?;
         return Some(FileChange {
             path,
             change_type: ChangeType::Renamed { from, similarity },
-            loc_added: 0,
-            loc_deleted: 0,
+            loc_added,
+            loc_deleted,
             hunks: vec![],
         });
-    } else if status.starts_with('C') {
+    }
+    if status.starts_with('C') {
         let similarity = parse_similarity(status);
-        let from = path1.clone();
+        let from = path1;
         let path = path2?;
         return Some(FileChange {
             path,
             change_type: ChangeType::Copied { from, similarity },
-            loc_added: 0,
-            loc_deleted: 0,
+            loc_added,
+            loc_deleted,
             hunks: vec![],
         });
-    } else {
-        match status {
-            "A" => ChangeType::Added,
-            "D" => ChangeType::Deleted,
-            "M" => ChangeType::Modified,
-            _ => ChangeType::BinaryOrUnknown,
-        }
+    }
+
+    let change_type = match status {
+        "A" => ChangeType::Added,
+        "D" => ChangeType::Deleted,
+        "M" => ChangeType::Modified,
+        _ => ChangeType::BinaryOrUnknown,
     };
 
     Some(FileChange {
         path: path1,
         change_type,
-        loc_added: 0,
-        loc_deleted: 0,
+        loc_added,
+        loc_deleted,
         hunks: vec![],
     })
+}
+
+/// Parse a numstat line. Returns `None` for malformed input. Binary files
+/// emit `-\t-\tpath`; we coerce both to zero (lossy by design — we don't
+/// have line counts for binaries, and zero is the honest value).
+fn parse_numstat_line(line: &str) -> Option<(u32, u32)> {
+    let mut cols = line.split('\t');
+    let added_str = cols.next()?;
+    let deleted_str = cols.next()?;
+    let added = if added_str == "-" {
+        0
+    } else {
+        added_str.parse().ok()?
+    };
+    let deleted = if deleted_str == "-" {
+        0
+    } else {
+        deleted_str.parse().ok()?
+    };
+    Some((added, deleted))
 }
 
 fn parse_similarity(status: &str) -> u8 {
@@ -496,18 +571,18 @@ mod tests {
     use super::*;
 
     /// Reproducer for the bug where `parse_git_log_stream` silently drops the commit
-    /// immediately following a merge commit that has an empty name-status block.
+    /// immediately following a merge commit that has an empty change block.
     ///
-    /// The hand-crafted stream below mirrors the exact byte layout that `git log
-    /// --pretty=format:%H%x1f%P%x1f%ae%x1f%an%x1f%ce%x1f%aI%x1f%B%x1e --name-status`
-    /// emits for three commits: a regular commit, a no-ff merge with no file changes,
-    /// and a subsequent regular commit.
+    /// The hand-crafted stream mirrors what `git log --raw --numstat
+    /// --pretty=format:%H%x1f%P%x1f%ae%x1f%an%x1f%ce%x1f%aI%x1f%B%x1e`
+    /// emits for three commits: a regular commit, a no-ff merge with no
+    /// file changes, and a subsequent regular commit.
     ///
     /// Splitting on `\x1e` yields four chunks:
     ///   `chunk[0]` = `A_pretty`
-    ///   `chunk[1]` = `\nA_name_status\n\nB_pretty`
-    ///   `chunk[2]` = `\nC_pretty` ← no name-status prefix, no `\n\n`
-    ///   `chunk[3]` = `\nC_name_status\n\n`
+    ///   `chunk[1]` = `\nA_changes\n\nB_pretty`
+    ///   `chunk[2]` = `\nC_pretty` ← merge has no changes, so no `\n\n`
+    ///   `chunk[3]` = `\nC_changes\n\n`
     ///
     /// Before the fix, `split_off_name_status_prefix(chunk[2])` found no `\n\n` and
     /// returned `""`, causing commit C to be silently dropped.
@@ -519,19 +594,13 @@ mod tests {
         let sha_x = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"; // branch tip merged into B
         let sha_c = "cccccccccccccccccccccccccccccccccccccccc";
 
-        // Build the raw stream exactly as git would emit it.
-        // The structure (using ↵ for \n, ␟ for \x1f, ␞ for \x1e) is:
-        //
-        //   A_pretty ␞ ↵ M↵src/foo.rs ↵↵ B_pretty ␞ ↵ C_pretty ␞ ↵ A↵src/bar.rs ↵↵
-        //
-        // chunk[0]: A_pretty
-        // chunk[1]: \n<A name-status>\n\nB_pretty
-        // chunk[2]: \nC_pretty            ← starts directly with pretty (no \n\n)
-        // chunk[3]: \nA\tsrc/bar.rs\n\n
+        // Raw + numstat per commit. The `:`-prefixed line is the raw
+        // diff line (status + paths); the bare line after is the numstat
+        // line (added \t deleted \t path).
         let raw = format!(
-            "{sha_a}\x1f\x1fa@x\x1fAlice\x1fce@x\x1f2025-01-01T00:00:00+00:00\x1fmsg A\n\x1e\nM\tsrc/foo.rs\n\n\
+            "{sha_a}\x1f\x1fa@x\x1fAlice\x1fce@x\x1f2025-01-01T00:00:00+00:00\x1fmsg A\n\x1e\n:100644 100644 a000 a001 M\tsrc/foo.rs\n3\t1\tsrc/foo.rs\n\n\
             {sha_b}\x1f{sha_a} {sha_x}\x1fa@x\x1fAlice\x1fce@x\x1f2025-01-02T00:00:00+00:00\x1fmsg B\n\x1e\n\
-            {sha_c}\x1f{sha_b}\x1fa@x\x1fAlice\x1fce@x\x1f2025-01-03T00:00:00+00:00\x1fmsg C\n\x1e\nA\tsrc/bar.rs\n\n"
+            {sha_c}\x1f{sha_b}\x1fa@x\x1fAlice\x1fce@x\x1f2025-01-03T00:00:00+00:00\x1fmsg C\n\x1e\n:000000 100644 0000 c001 A\tsrc/bar.rs\n5\t0\tsrc/bar.rs\n\n"
         );
 
         let events = parse_git_log_stream(&raw);
@@ -568,5 +637,14 @@ mod tests {
             1,
             "commit C should have 1 changed file"
         );
+
+        // Plumbed numstat values must reach the FileChange — the whole
+        // point of the --raw --numstat switch. Commit A's foo.rs gained 3
+        // lines and lost 1.
+        assert_eq!(events[0].changes[0].loc_added, 3, "commit A foo.rs loc_added");
+        assert_eq!(events[0].changes[0].loc_deleted, 1, "commit A foo.rs loc_deleted");
+        // Commit C added bar.rs with 5 lines (deleted=0).
+        assert_eq!(events[2].changes[0].loc_added, 5, "commit C bar.rs loc_added");
+        assert_eq!(events[2].changes[0].loc_deleted, 0, "commit C bar.rs loc_deleted");
     }
 }
