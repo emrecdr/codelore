@@ -101,7 +101,14 @@ jobs:
         id: hashes
         shell: bash
         run: |
-          hash=$(sha256sum "${{ steps.stage.outputs.archive }}" | base64 -w0 2>/dev/null || sha256sum "${{ steps.stage.outputs.archive }}" | base64)
+          archive="${{ steps.stage.outputs.archive }}"
+          # Cross-platform: sha256sum is GNU coreutils (Linux); shasum -a
+          # 256 is Perl-based (macOS, also present on Linux). macOS BSD
+          # base64 doesn't take -w0, so strip the trailing newline with tr.
+          hash=$( { sha256sum "$archive" 2>/dev/null || shasum -a 256 "$archive"; } \
+            | awk '{print $1}' \
+            | base64 \
+            | tr -d '\n' )
           echo "hashes=${hash}" >> "$GITHUB_OUTPUT"
 
       - name: Upload artifact
