@@ -140,7 +140,7 @@ pub mod differential_repo {
         // invocation storms from the same parent process produce
         // intermittent "invalid object" errors even with `gc.auto = 0`.
         // See the BUILD_MUTEX comment above for the full diagnosis.
-        let _guard = BUILD_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = BUILD_MUTEX.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let dir = tempfile::tempdir().expect("tempdir");
         let path: PathBuf = dir.path().to_path_buf();

@@ -263,8 +263,7 @@ fn rename_commit_visible_in_both() {
     // Find the rename commit — the one whose changed files include "new_name".
     let rename_rev = revs.iter().find(|rev| {
         gix.changed_files(rev)
-            .map(|files| files.iter().any(|f| f.path.contains("new_name")))
-            .unwrap_or(false)
+            .is_ok_and(|files| files.iter().any(|f| f.path.contains("new_name")))
     });
 
     let rev = rename_rev.expect("rename commit not found in gix walk");

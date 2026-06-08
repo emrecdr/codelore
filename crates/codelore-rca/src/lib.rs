@@ -1,3 +1,9 @@
+// Vendored MPL-2.0 fork of Mozilla's rust-code-analysis. Don't refactor
+// upstream code to satisfy newer clippy lints — keep the divergence from
+// upstream minimal. Crate-level allows below cover lints introduced in
+// Rust toolchain bumps that the upstream code happens to trigger.
+#![allow(clippy::collapsible_match)]
+
 //! rust-code-analysis is a library to analyze and extract information
 //! from source codes written in many different programming languages.
 //!

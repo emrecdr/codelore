@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.89.0
+      - uses: dtolnay/rust-toolchain@1.96.0
         with:
           components: rustfmt
       - run: cargo fmt --all --check
@@ -27,7 +27,7 @@ jobs:
       RUSTC_WRAPPER: sccache
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.89.0
+      - uses: dtolnay/rust-toolchain@1.96.0
         with:
           components: clippy
       - uses: mozilla-actions/sccache-action@v0.0.6
@@ -52,7 +52,7 @@ jobs:
           # commit's parent. This is the exact gotcha we document for our
           # users in advanced-usage §10 troubleshooting.
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@1.89.0
+      - uses: dtolnay/rust-toolchain@1.96.0
       - uses: mozilla-actions/sccache-action@v0.0.6
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --all-features
