@@ -97,9 +97,15 @@ pub fn run_clones(opts: &Options) -> Result<Vec<ClonesRow>> {
 }
 
 fn relative(root: &Path, abs: &Path) -> String {
+    // Normalize to forward-slash so this path matches the `changes.path`
+    // format (always `/`, from git). On Unix `MAIN_SEPARATOR` is `/` so
+    // the replace is a no-op; on Windows it rewrites `\` to `/`.
     abs.strip_prefix(root).map_or_else(
-        |_| abs.to_string_lossy().into_owned(),
-        |p| p.to_string_lossy().into_owned(),
+        |_| {
+            abs.to_string_lossy()
+                .replace(std::path::MAIN_SEPARATOR, "/")
+        },
+        |p| p.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/"),
     )
 }
 
