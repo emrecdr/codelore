@@ -116,10 +116,13 @@ pub fn run_hotspots(db: &FactsDb, opts: &Options) -> Result<Vec<HotspotRow>> {
     crate::analyses::lineage::materialize_source(db, opts)?;
     let src = crate::analyses::lineage::source_table(opts);
     let sql = build_sql(src);
-    if opts.explain {
-        let plan = db.explain_sql(&sql, params![opts.min_revs, row_limit])?;
-        eprintln!("--- EXPLAIN: hotspots ---\n{plan}---");
-    }
+    crate::analyses::query::explain_if_requested(
+        db,
+        &sql,
+        params![opts.min_revs, row_limit],
+        "hotspots",
+        opts,
+    )?;
     let mut stmt = db
         .conn()
         .prepare(&sql)

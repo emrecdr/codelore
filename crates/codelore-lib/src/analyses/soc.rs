@@ -62,6 +62,13 @@ pub fn run_soc(db: &FactsDb, opts: &Options) -> Result<Vec<SocRow>> {
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
 
     let sql = build_soc_sql(src);
+    crate::analyses::query::explain_if_requested(
+        db,
+        &sql,
+        params![threshold, row_limit],
+        "soc",
+        opts,
+    )?;
     let mut stmt = db
         .conn()
         .prepare(&sql)

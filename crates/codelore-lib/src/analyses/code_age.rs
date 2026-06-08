@@ -40,6 +40,13 @@ pub fn run_code_age(db: &FactsDb, opts: &Options) -> Result<Vec<CodeAgeRow>> {
 
     crate::analyses::lineage::materialize_if_needed(db, opts)?;
     let sql = crate::analyses::lineage::rewrite(SQL, opts);
+    crate::analyses::query::explain_if_requested(
+        db,
+        &sql,
+        params![now_str, opts.min_revs, row_limit],
+        "code-age",
+        opts,
+    )?;
     let mut stmt = db
         .conn()
         .prepare(&sql)

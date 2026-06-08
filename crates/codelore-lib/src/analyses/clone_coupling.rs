@@ -140,6 +140,7 @@ pub fn run_clone_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CloneCoupl
         similarity: f64,
     }
 
+    crate::analyses::query::explain_if_requested(db, CLONE_PAIRS_SQL, [], "clone-coupling", opts)?;
     let mut stmt = db
         .conn()
         .prepare(CLONE_PAIRS_SQL)

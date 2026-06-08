@@ -48,6 +48,13 @@ pub fn run_messages(db: &FactsDb, opts: &Options) -> Result<Vec<MessagesRow>> {
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
     crate::analyses::lineage::materialize_if_needed(db, opts)?;
     let sql = crate::analyses::lineage::rewrite(SQL, opts);
+    crate::analyses::query::explain_if_requested(
+        db,
+        &sql,
+        params![expr, row_limit],
+        "messages",
+        opts,
+    )?;
     let mut stmt = db
         .conn()
         .prepare(&sql)

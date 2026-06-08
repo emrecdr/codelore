@@ -9,7 +9,7 @@ pub struct SummaryRow {
     pub value: i64,
 }
 
-pub fn run_summary(db: &FactsDb, _opts: &Options) -> Result<Vec<SummaryRow>> {
+pub fn run_summary(db: &FactsDb, opts: &Options) -> Result<Vec<SummaryRow>> {
     let sql = "
         SELECT 'commits' AS metric, COUNT(*) AS value FROM commits
         UNION ALL
@@ -19,6 +19,7 @@ pub fn run_summary(db: &FactsDb, _opts: &Options) -> Result<Vec<SummaryRow>> {
         UNION ALL
         SELECT 'authors', COUNT(DISTINCT canonical_author) FROM commits;
     ";
+    crate::analyses::query::explain_if_requested(db, sql, [], "summary", opts)?;
     let mut stmt = db
         .conn()
         .prepare(sql)

@@ -167,6 +167,20 @@ pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
 
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
     let coupling_sql = build_coupling_sql(src);
+    crate::analyses::query::explain_if_requested(
+        db,
+        &coupling_sql,
+        params![
+            opts.max_changeset_size,
+            opts.min_revs,
+            opts.min_shared_revs,
+            opts.min_coupling_pct,
+            opts.max_coupling_pct,
+            row_limit
+        ],
+        "coupling",
+        opts,
+    )?;
     let mut stmt = db
         .conn()
         .prepare(&coupling_sql)

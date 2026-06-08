@@ -15,7 +15,7 @@
 //! ```
 
 use crate::facts::FactsDb;
-use crate::{CodeLoreError, Result};
+use crate::{CodeLoreError, Options, Result};
 
 /// Prepare + `query_map` + collect, with uniform `CodeLoreError::Analysis`
 /// error context at each step. `label` is interpolated into the error
@@ -45,4 +45,28 @@ where
         .map_err(|e| CodeLoreError::Analysis(format!("query {label}: {e}")))?;
     rows.collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|e| CodeLoreError::Analysis(format!("collect {label}: {e}")))
+}
+
+/// Emit the `DuckDB` EXPLAIN plan for `sql` + `params` to stderr if
+/// `opts.explain` is on. No-op otherwise. Shared so every analysis can
+/// add `--explain` support in one line instead of copying the
+/// `if opts.explain { db.explain_sql(...)?; eprintln!(...); }` block.
+///
+/// # Errors
+///
+/// Returns [`CodeLoreError::Analysis`] only if `--explain` is on AND
+/// `db.explain_sql` fails. Off path is infallible.
+pub fn explain_if_requested<P: duckdb::Params>(
+    db: &FactsDb,
+    sql: &str,
+    params: P,
+    label: &str,
+    opts: &Options,
+) -> Result<()> {
+    if !opts.explain {
+        return Ok(());
+    }
+    let plan = db.explain_sql(sql, params)?;
+    eprintln!("--- EXPLAIN: {label} ---\n{plan}---");
+    Ok(())
 }

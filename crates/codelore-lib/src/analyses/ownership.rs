@@ -82,6 +82,13 @@ pub fn run_ownership(db: &FactsDb, opts: &Options) -> Result<Vec<OwnershipRow>> 
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
     crate::analyses::lineage::materialize_if_needed(db, opts)?;
     let sql = crate::analyses::lineage::rewrite(SQL, opts);
+    crate::analyses::query::explain_if_requested(
+        db,
+        &sql,
+        params![opts.min_revs, row_limit],
+        "ownership",
+        opts,
+    )?;
     let mut stmt = db
         .conn()
         .prepare(&sql)

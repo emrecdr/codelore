@@ -96,6 +96,7 @@ pub fn run_abs_churn(db: &FactsDb, opts: &Options) -> Result<Vec<AbsChurnRow>> {
     materialize(db, opts)?;
     let sql = build_abs_churn_sql(source_table(opts));
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
+    crate::analyses::query::explain_if_requested(db, &sql, params![row_limit], "abs-churn", opts)?;
     let mut stmt = db
         .conn()
         .prepare(&sql)
@@ -118,6 +119,13 @@ pub fn run_author_churn(db: &FactsDb, opts: &Options) -> Result<Vec<AuthorChurnR
     materialize(db, opts)?;
     let sql = build_author_churn_sql(source_table(opts));
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
+    crate::analyses::query::explain_if_requested(
+        db,
+        &sql,
+        params![row_limit],
+        "author-churn",
+        opts,
+    )?;
     let mut stmt = db
         .conn()
         .prepare(&sql)
@@ -140,6 +148,13 @@ pub fn run_entity_churn(db: &FactsDb, opts: &Options) -> Result<Vec<EntityChurnR
     materialize(db, opts)?;
     let sql = build_entity_churn_sql(source_table(opts));
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
+    crate::analyses::query::explain_if_requested(
+        db,
+        &sql,
+        params![opts.min_revs, row_limit],
+        "entity-churn",
+        opts,
+    )?;
     let mut stmt = db
         .conn()
         .prepare(&sql)

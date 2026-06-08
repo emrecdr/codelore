@@ -24,6 +24,7 @@ const SQL: &str = "
 
 pub fn run_authors(db: &FactsDb, opts: &Options) -> Result<Vec<AuthorsRow>> {
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
+    super::query::explain_if_requested(db, SQL, params![row_limit], "authors", opts)?;
     super::query::query_map_collect(db, SQL, params![row_limit], "authors", |r| {
         Ok(AuthorsRow {
             author: r.get::<_, String>(0)?,

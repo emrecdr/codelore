@@ -110,6 +110,13 @@ fn run(db: &FactsDb, opts: &Options, metric: MainDevMetric) -> Result<Vec<MainDe
 
     crate::analyses::lineage::materialize_if_needed(db, opts)?;
     let sql = crate::analyses::lineage::rewrite(&sql, opts);
+    crate::analyses::query::explain_if_requested(
+        db,
+        &sql,
+        params![opts.min_revs, row_limit],
+        "main-dev",
+        opts,
+    )?;
     let mut stmt = db
         .conn()
         .prepare(&sql)

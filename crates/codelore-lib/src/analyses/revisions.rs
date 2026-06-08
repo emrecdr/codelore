@@ -37,6 +37,13 @@ pub fn run_revisions(db: &FactsDb, opts: &Options) -> Result<Vec<(String, u32)>>
     super::lineage::materialize_if_needed(db, opts)?;
     let sql = super::lineage::rewrite(SQL_RAW, opts);
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
+    super::query::explain_if_requested(
+        db,
+        &sql,
+        params![opts.min_revs, row_limit],
+        "revisions",
+        opts,
+    )?;
     super::query::query_map_collect(
         db,
         &sql,

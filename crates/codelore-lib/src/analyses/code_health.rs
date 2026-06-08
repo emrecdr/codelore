@@ -174,6 +174,13 @@ pub fn run_code_health(db: &FactsDb, opts: &Options) -> Result<Vec<CodeHealthRow
     let src = crate::analyses::lineage::source_table(opts);
     let sql = SQL.replace("{src}", src);
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
+    crate::analyses::query::explain_if_requested(
+        db,
+        &sql,
+        params![opts.min_revs, row_limit],
+        "code-health",
+        opts,
+    )?;
     let mut stmt = db
         .conn()
         .prepare(&sql)

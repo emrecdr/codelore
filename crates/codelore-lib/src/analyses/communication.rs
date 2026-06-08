@@ -61,6 +61,13 @@ const SQL: &str = "
 
 pub fn run_communication(db: &FactsDb, opts: &Options) -> Result<Vec<CommunicationRow>> {
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
+    crate::analyses::query::explain_if_requested(
+        db,
+        SQL,
+        params![opts.min_shared_revs, row_limit],
+        "communication",
+        opts,
+    )?;
     let mut stmt = db
         .conn()
         .prepare(SQL)
