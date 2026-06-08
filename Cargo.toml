@@ -8,6 +8,22 @@ edition = "2024"
 rust-version = "1.87"
 license = "GPL-3.0-only"
 repository = "https://github.com/<owner>/codelore"
+# crates.io discovery — surfaces in search results + on the package page.
+# Mirrors the GitHub topic tags configured on the repository (see README
+# badges + docs/CONTRIBUTING for the same tag list).
+keywords = [
+    "behavioral-code-analysis",
+    "code-analysis",
+    "repository-mining",
+    "technical-debt",
+    "code-maat",
+]
+# https://crates.io/category_slugs — pick the most-applicable buckets so
+# crates.io's category filter surfaces us.
+categories = [
+    "command-line-utilities",
+    "development-tools",
+]
 
 # cargo-dist config (https://opensource.axo.dev/cargo-dist/).
 # Owner runs `cargo dist init` once to refresh .github/workflows/release.yml.

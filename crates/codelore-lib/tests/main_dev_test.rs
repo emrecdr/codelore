@@ -1,7 +1,7 @@
 //! `main-dev` / `main-dev-by-revs` / `main-dev-by-deletions` integration tests.
 //!
 //! Verifies the three metric variants pick the correct top author per file
-//! and that the FromStr alias `refactoring-main-dev` resolves to the
+//! and that the `FromStr` alias `refactoring-main-dev` resolves to the
 //! deletions variant.
 
 use codelore_lib::Options;
@@ -119,7 +119,7 @@ fn main_dev_picks_top_author_by_each_metric() {
     // sort order. Both already asserted above.
 }
 
-/// `refactoring-main-dev` is code-maat's name; CodeLore accepts it as an
+/// `refactoring-main-dev` is code-maat's name; `CodeLore` accepts it as an
 /// alias to the honest `main-dev-by-deletions` analysis.
 #[test]
 fn refactoring_main_dev_aliases_main_dev_by_deletions() {
