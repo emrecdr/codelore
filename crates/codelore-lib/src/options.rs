@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use time::Date;
 
 /// Complexity sampling strategy. See spec §4.4.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ComplexitySample {
     /// Parse every file at HEAD only. Plan 3 default; Plan 4 ships this.
     #[default]
@@ -17,7 +18,7 @@ pub enum ComplexitySample {
     Full,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[allow(clippy::struct_excessive_bools)] // CLI config bag mirrors many independent knobs
 pub struct Options {
     // Input
@@ -76,6 +77,40 @@ pub struct Options {
     /// (intentional structural mirroring like `foo_test.rs` ↔ `foo.rs`).
     /// Default `true`.
     pub clone_skip_same_dir: bool,
+}
+
+impl Options {
+    /// Stable JSON-serialized snapshot of the full struct, used for cache
+    /// keying and provenance manifest recording.
+    ///
+    /// Adding a new field to `Options` automatically propagates to BOTH the
+    /// cache key and the provenance manifest with zero per-field maintenance
+    /// — fixes a historical drift where new fields silently weren't hashed.
+    ///
+    /// Normalizations applied to keep the canonical form stable:
+    /// - `exclude_patterns` is sorted (insertion order from CLI flags vs.
+    ///   `.codeloreignore` parsing doesn't perturb the form).
+    /// - `rows_limit` is dropped (cosmetic — affects only output truncation,
+    ///   not the underlying data; setting `--rows 10` on a cached analysis
+    ///   should still hit the cache).
+    /// - `verbose_results` is dropped (logging knob, not a data knob).
+    ///
+    /// # Panics
+    ///
+    /// Panics only if `Options` ever gains a field whose type does not
+    /// implement `Serialize`. Caught at compile time via the derive on the
+    /// struct; this panic is unreachable in well-formed code.
+    #[must_use]
+    pub fn canonical_json(&self) -> serde_json::Value {
+        let mut snapshot = self.clone();
+        snapshot.exclude_patterns.sort();
+        // Cosmetic knobs — exclude from canonical form so the cache hits
+        // when they change.
+        snapshot.rows_limit = None;
+        snapshot.verbose_results = false;
+        serde_json::to_value(&snapshot)
+            .expect("Options derives Serialize and all fields are Serialize")
+    }
 }
 
 impl Default for Options {

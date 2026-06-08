@@ -72,42 +72,17 @@ pub fn default_cache_root() -> PathBuf {
     dirs::cache_dir().unwrap_or_else(|| PathBuf::from("/tmp"))
 }
 
-/// Produce a stable, order-deterministic string from the options knobs that
-/// should invalidate the cache when changed. Deliberately excludes:
-///   - `rows_limit` (cosmetic / output-only)
-///   - `repo_path`  (already hashed separately in the key)
-///   - `group_file`, `team_map_file`, `verbose_results`, `strict_grouping`
-///     (aggregation flags; not yet influencing ingest SQL)
+/// Produce a stable canonical string from the full Options struct to use as
+/// the per-options cache fingerprint. Defers to `Options::canonical_json()`
+/// which serializes every field (including clone-detection options, exclude
+/// patterns, etc.) and applies normalizations (sorted `exclude_patterns`,
+/// dropped cosmetic knobs like `rows_limit` / `verbose_results`).
+///
+/// Replaces the pre-2026-06-08 hand-curated 11-field allowlist that silently
+/// omitted clone-detection options and produced cache collisions when those
+/// options changed. The new behavior auto-propagates as Options grows.
 fn opts_hash(opts: &Options) -> String {
-    let after = opts
-        .after
-        .map_or_else(|| "none".to_string(), |d| d.to_string());
-    let before = opts
-        .before
-        .map_or_else(|| "none".to_string(), |d| d.to_string());
-    let age_time_now = opts
-        .age_time_now
-        .map_or_else(|| "none".to_string(), |d| d.to_string());
-    let message_regex = opts.message_regex.as_deref().unwrap_or("none").to_string();
-    let complexity_sample = format!("{:?}", opts.complexity_sample);
-
-    // Stable serialisation: field=value pairs joined by ";", fields in fixed order.
-    format!(
-        "min_revs={};min_shared_revs={};min_coupling_pct={};max_changeset_size={};\
-         fisher_significance={:.6};include_merges={};after={};before={};\
-         message_regex={};age_time_now={};complexity_sample={}",
-        opts.min_revs,
-        opts.min_shared_revs,
-        opts.min_coupling_pct,
-        opts.max_changeset_size,
-        opts.fisher_significance,
-        opts.include_merges,
-        after,
-        before,
-        message_regex,
-        age_time_now,
-        complexity_sample,
-    )
+    opts.canonical_json().to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -308,6 +283,49 @@ mod tests {
         let k1 = cache_key(Path::new("/tmp/test-repo"), "sha", &opts_a);
         let k2 = cache_key(Path::new("/tmp/test-repo"), "sha", &opts_b);
         assert_eq!(k1, k2, "rows_limit is cosmetic and must not affect the key");
+    }
+
+    // Regression tests for the cache-key collision bug — before the
+    // canonical_json() fix, every clone-detection option was silently
+    // dropped from the cache key, so a user changing --min-clone-node-count
+    // got a cache HIT against the old database.
+    #[test]
+    fn cache_key_changes_when_min_clone_node_count_changes() {
+        let opts_a = Options { min_clone_node_count: 30, ..base_opts() };
+        let opts_b = Options { min_clone_node_count: 60, ..base_opts() };
+        let k1 = cache_key(Path::new("/tmp/test-repo"), "sha", &opts_a);
+        let k2 = cache_key(Path::new("/tmp/test-repo"), "sha", &opts_b);
+        assert_ne!(k1, k2, "min_clone_node_count must affect the cache key");
+    }
+
+    #[test]
+    fn cache_key_changes_when_exclude_patterns_change() {
+        let mut a = base_opts(); a.exclude_patterns = vec!["vendor/**".into()];
+        let mut b = base_opts(); b.exclude_patterns = vec!["target/**".into()];
+        let k1 = cache_key(Path::new("/tmp/test-repo"), "sha", &a);
+        let k2 = cache_key(Path::new("/tmp/test-repo"), "sha", &b);
+        assert_ne!(k1, k2, "exclude_patterns must affect the cache key");
+    }
+
+    #[test]
+    fn cache_key_invariant_to_exclude_pattern_order() {
+        // Order coming in from CLI vs .codeloreignore must not perturb the key.
+        let mut a = base_opts();
+        a.exclude_patterns = vec!["vendor/**".into(), "target/**".into()];
+        let mut b = base_opts();
+        b.exclude_patterns = vec!["target/**".into(), "vendor/**".into()];
+        let k1 = cache_key(Path::new("/tmp/test-repo"), "sha", &a);
+        let k2 = cache_key(Path::new("/tmp/test-repo"), "sha", &b);
+        assert_eq!(k1, k2, "exclude_patterns order must not affect the key (canonical sort)");
+    }
+
+    #[test]
+    fn cache_key_changes_when_clone_similarity_floor_changes() {
+        let opts_a = Options { clone_similarity_floor: 0.70, ..base_opts() };
+        let opts_b = Options { clone_similarity_floor: 0.85, ..base_opts() };
+        let k1 = cache_key(Path::new("/tmp/test-repo"), "sha", &opts_a);
+        let k2 = cache_key(Path::new("/tmp/test-repo"), "sha", &opts_b);
+        assert_ne!(k1, k2, "clone_similarity_floor must affect the cache key");
     }
 
     #[test]

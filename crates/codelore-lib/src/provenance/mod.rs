@@ -25,6 +25,11 @@ pub struct Manifest {
     pub age_time_now: Option<String>,
     pub merge_handling: String,
     pub complexity_sample: String,
+    /// Complete canonical JSON of every Options field at run time. Source
+    /// of truth for reproducibility — auto-derives so newly-added Options
+    /// fields propagate without per-field maintenance. The flat fields above
+    /// remain for human readability and grep-ability.
+    pub options: serde_json::Value,
 }
 
 impl Manifest {
@@ -71,6 +76,7 @@ impl Manifest {
             }
             .to_string(),
             complexity_sample: complexity_sample.to_string(),
+            options: opts.canonical_json(),
         })
     }
 
