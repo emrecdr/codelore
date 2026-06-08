@@ -337,6 +337,53 @@ fn emit_sarif(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
         }));
     }
 
+    // CodeScene-signature "absent change pattern": a file historically and
+    // significantly coupled with the file touched in this PR was NOT
+    // touched. Often indicates a forgotten test, migration, or doc update.
+    for a in &output.coupling_absences {
+        // Canonical fingerprint pairs files alphabetically so the same pair
+        // gets the same fingerprint regardless of which side was the
+        // touched_file in any given PR.
+        let (lo, hi) = if a.touched_file <= a.expected_partner {
+            (&a.touched_file, &a.expected_partner)
+        } else {
+            (&a.expected_partner, &a.touched_file)
+        };
+        hotspot_results.push(json!({
+            "ruleId": "CODELORE-MISSING-COCHANGE",
+            "level": "note",
+            "message": {
+                "text": format!(
+                    "PR modifies '{}' but historically '{}' co-changes with it \
+                     (shared_revs={}, degree={:.1}%, fisher_p={:.4}). \
+                     Verify the absence is intentional.",
+                    a.touched_file,
+                    a.expected_partner,
+                    a.historical_shared_revs,
+                    a.historical_coupling,
+                    a.fisher_p,
+                )
+            },
+            "locations": [{
+                "physicalLocation": {
+                    "artifactLocation": { "uri": a.touched_file },
+                    "region": { "startLine": 1 }
+                }
+            }],
+            "partialFingerprints": {
+                "couplingPair/v1": format!("{lo}::{hi}")
+            },
+            "properties": {
+                "codelore/diff-classification": "missing-cochange",
+                "codelore/missing-partner": a.expected_partner.clone(),
+                "codelore/historical-coupling-pct": a.historical_coupling,
+                "codelore/historical-shared-revs": a.historical_shared_revs,
+                "codelore/fisher-p": a.fisher_p,
+                "tags": ["behavioral", "coupling", "absent-change-pattern", "pr-diff"]
+            }
+        }));
+    }
+
     let doc = json!({
         "$schema": "https://schemastore.azurewebsites.net/schemas/json/sarif-2.1.0.json",
         "version": "2.1.0",
@@ -357,6 +404,14 @@ fn emit_sarif(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
                             "id": "CODELORE-CLONE",
                             "shortDescription": { "text": "New clone family in PR" },
                             "properties": { "tags": ["behavioral", "clone", "pr-diff"] }
+                        },
+                        {
+                            "id": "CODELORE-MISSING-COCHANGE",
+                            "name": "MissingCoChange",
+                            "shortDescription": { "text": "Coupled file omitted from PR" },
+                            "fullDescription": { "text": "A file historically and significantly coupled (Fisher-significant) with the file modified in this PR was NOT modified. The 'absent change pattern' often indicates a forgotten test, migration script, or documentation update." },
+                            "defaultConfiguration": { "level": "note" },
+                            "properties": { "tags": ["behavioral", "coupling", "absent-change-pattern", "pr-diff"] }
                         }
                     ]
                 }
@@ -367,4 +422,92 @@ fn emit_sarif(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
 
     serde_json::to_writer_pretty(out, &doc).context("diff sarif")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diff::{CouplingAbsence, DiffOutput};
+
+    #[test]
+    fn emit_sarif_includes_missing_cochange_rule_and_results() {
+        let output = DiffOutput {
+            base_sha: "deadbeef".into(),
+            head_sha: "cafef00d".into(),
+            merge_base_used: false,
+            coupling_absences: vec![CouplingAbsence {
+                touched_file: "src/auth/login.rs".into(),
+                expected_partner: "src/auth/session.rs".into(),
+                historical_coupling: 87.5,
+                fisher_p: 0.001,
+                historical_shared_revs: 12,
+            }],
+            ..DiffOutput::default()
+        };
+
+        let mut buf = Vec::new();
+        emit_sarif(&mut buf, &output).expect("emit_sarif");
+        let sarif: serde_json::Value = serde_json::from_slice(&buf).expect("valid SARIF JSON");
+
+        // Rule must be declared in the tool driver registry.
+        let rules = sarif["runs"][0]["tool"]["driver"]["rules"]
+            .as_array()
+            .expect("rules array present");
+        assert!(
+            rules.iter().any(|r| r["id"] == "CODELORE-MISSING-COCHANGE"),
+            "CODELORE-MISSING-COCHANGE rule must be declared, got: {rules:?}"
+        );
+
+        // And a corresponding result must be emitted for the absence.
+        let results = sarif["runs"][0]["results"]
+            .as_array()
+            .expect("results array present");
+        let absence_results: Vec<_> = results
+            .iter()
+            .filter(|r| r["ruleId"] == "CODELORE-MISSING-COCHANGE")
+            .collect();
+        assert_eq!(
+            absence_results.len(),
+            1,
+            "exactly one CODELORE-MISSING-COCHANGE result expected for one absence"
+        );
+
+        let r = absence_results[0];
+        // Message mentions both files
+        let msg = r["message"]["text"].as_str().expect("message present");
+        assert!(msg.contains("src/auth/login.rs"));
+        assert!(msg.contains("src/auth/session.rs"));
+
+        // Location uses the touched file
+        assert_eq!(r["locations"][0]["physicalLocation"]["artifactLocation"]["uri"], "src/auth/login.rs");
+
+        // Versioned partialFingerprint for stable cross-run identity, pair is
+        // alphabetical regardless of which side touched_file was
+        let fp = r["partialFingerprints"]["couplingPair/v1"].as_str().expect("fp present");
+        assert_eq!(fp, "src/auth/login.rs::src/auth/session.rs");
+
+        // Properties expose the missing partner + numeric thresholds for CI consumers
+        assert_eq!(r["properties"]["codelore/diff-classification"], "missing-cochange");
+        assert_eq!(r["properties"]["codelore/missing-partner"], "src/auth/session.rs");
+        assert_eq!(r["properties"]["codelore/historical-shared-revs"], 12);
+    }
+
+    #[test]
+    fn emit_sarif_zero_absences_zero_results() {
+        // Empty input must not emit a CODELORE-MISSING-COCHANGE result
+        // (the rule definition still appears in the tool driver, but
+        // results section is empty for that rule).
+        let output = DiffOutput::default();
+        let mut buf = Vec::new();
+        emit_sarif(&mut buf, &output).expect("emit_sarif");
+        let sarif: serde_json::Value = serde_json::from_slice(&buf).unwrap();
+        let results = sarif["runs"][0]["results"].as_array().unwrap();
+        assert_eq!(
+            results
+                .iter()
+                .filter(|r| r["ruleId"] == "CODELORE-MISSING-COCHANGE")
+                .count(),
+            0
+        );
+    }
 }
