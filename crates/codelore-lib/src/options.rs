@@ -18,6 +18,31 @@ pub enum ComplexitySample {
     Full,
 }
 
+/// Time-bucket granularity for coupling-family analyses (modern replacement
+/// for code-maat's `--temporal-period`). Backed by `DuckDB`'s `date_trunc`
+/// — produces clean non-overlapping buckets rather than the sliding-window
+/// duplication code-maat does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TimeBucket {
+    Day,
+    Week,
+    Month,
+}
+
+impl TimeBucket {
+    /// SQL string for `date_trunc(?, date)`. Lowercase per `DuckDB`'s
+    /// `datepart` accepted values.
+    #[must_use]
+    pub fn as_sql_unit(self) -> &'static str {
+        match self {
+            Self::Day => "day",
+            Self::Week => "week",
+            Self::Month => "month",
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 #[allow(clippy::struct_excessive_bools)] // CLI config bag mirrors many independent knobs
 pub struct Options {
@@ -77,6 +102,25 @@ pub struct Options {
     /// (intentional structural mirroring like `foo_test.rs` ↔ `foo.rs`).
     /// Default `true`.
     pub clone_skip_same_dir: bool,
+
+    // code-maat parity additions (2026-06-08 parity sprint).
+    /// `SoC` threshold for the `soc` analysis. `None` = drop solo commits
+    /// (default 1). Modern replacement for code-maat's overloaded use of
+    /// `--min-revs` to mean "minimum `SoC` sum" in this one analysis.
+    pub min_soc: Option<u32>,
+
+    /// Time-bucket granularity for coupling-family analyses. `None` = raw
+    /// commit grain (no bucketing). When set, coupling and friends aggregate
+    /// changes by the bucket-truncated date.
+    pub time_bucket: Option<TimeBucket>,
+
+    /// Migration-helper flag. When `true`, flips internal defaults to match
+    /// legacy code-maat output bit-for-bit (lying column headers, arbitrary
+    /// tiebreaks, sliding-window temporal-period, etc.). Off by default —
+    /// the modern surface is the recommendation; this flag exists so users
+    /// with dashboards parsing code-maat CSV verbatim aren't broken on day
+    /// one of migration.
+    pub code_maat_compat: bool,
 }
 
 impl Options {
@@ -141,6 +185,10 @@ impl Default for Options {
             min_clone_shared_revs: 3,
             clone_similarity_floor: 0.70,
             clone_skip_same_dir: true,
+            // code-maat parity additions
+            min_soc: None,
+            time_bucket: None,
+            code_maat_compat: false,
         }
     }
 }
