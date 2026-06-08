@@ -210,4 +210,19 @@ pub struct DiffArgs {
     /// `analyze --exclude`.
     #[arg(long)]
     pub exclude: Vec<String>,
+
+    /// Minimum historical shared revisions for a coupling pair to count as
+    /// a candidate for an absent-change warning. Pairs below this threshold
+    /// have too-noisy a historical signal to act on. Default 5 (research
+    /// brief mitigation 3); raise to 10+ for very large repos where weak
+    /// pairs accumulate.
+    #[arg(long, default_value_t = 5)]
+    pub absence_min_shared: u32,
+
+    /// Fisher exact p-value gate for coupling absences. Pairs with
+    /// p ≥ this value are not statistically significant; we don't warn
+    /// about their absences. Default 0.05 (conventional significance
+    /// threshold); 0.01 for stricter signal.
+    #[arg(long, default_value_t = 0.05)]
+    pub absence_fisher_p: f64,
 }

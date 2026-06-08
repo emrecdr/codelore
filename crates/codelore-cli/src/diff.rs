@@ -304,11 +304,15 @@ fn compute_hotspots_delta(
 fn compute_coupling_absences(
     base_coupling: &[CouplingRow],
     pr_files: &std::collections::HashSet<String>,
+    min_shared: u32,
+    fisher_p_gate: f64,
 ) -> Vec<CouplingAbsence> {
-    // Strong historical signal only: shared >= 5 (mitigation 3 from research brief).
+    // Strong historical signal only: shared >= --absence-min-shared
+    // (default 5 per research brief mitigation 3) AND Fisher-significant
+    // at --absence-fisher-p (default 0.05).
     base_coupling
         .iter()
-        .filter(|c| c.shared >= 5 && c.fisher_p < 0.05)
+        .filter(|c| c.shared >= min_shared && c.fisher_p < fisher_p_gate)
         .filter_map(|c| {
             let a_in = pr_files.contains(&c.entity_a);
             let b_in = pr_files.contains(&c.entity_b);
@@ -499,7 +503,12 @@ pub fn run_diff(args: &DiffArgs) -> Result<DiffOutput> {
         HotspotsDelta::default()
     };
     let coupling_absences = if want_coupling {
-        compute_coupling_absences(&base_analyses.coupling, &pr_files)
+        compute_coupling_absences(
+            &base_analyses.coupling,
+            &pr_files,
+            args.absence_min_shared,
+            args.absence_fisher_p,
+        )
     } else {
         Vec::new()
     };
