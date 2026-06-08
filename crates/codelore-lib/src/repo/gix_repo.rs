@@ -305,8 +305,6 @@ fn gix_change_to_file_change(
             location,
             source_location,
             entry_mode,
-            source_id,
-            id,
             diff,
             copy,
             ..
@@ -323,9 +321,10 @@ fn gix_change_to_file_change(
                 (sim, stats.insertions, stats.removals)
             } else {
                 // No diff means source and destination blobs were
-                // bit-identical — 100% similarity, zero churn.
-                let (added, deleted) = count_loc(repo, Some(source_id), Some(id))?;
-                (100u8, added, deleted)
+                // bit-identical (gix-diff documents this exact contract).
+                // No need to read the blobs and run a histogram pass —
+                // the result is always (100% similarity, 0 added, 0 removed).
+                (100u8, 0, 0)
             };
             let change_type = if copy {
                 ChangeType::Copied { from, similarity }

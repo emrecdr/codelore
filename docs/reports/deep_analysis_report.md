@@ -1,6 +1,6 @@
 # CodeLore — Deep Codebase Analysis Report
 
-This document presents a deep, read-only analysis of the **CodeLore** codebase. It highlights core architectural patterns, identifies implementation gaps and potential bugs, and outlines concrete recommendations for improvements.
+This document presents a deep, read-only analysis of the **CodeLore** codebase. It highlights core architectural patterns, documents the validation status of recent fixes, and outlines remaining and newly identified recommendations for further improvement.
 
 ---
 
@@ -39,156 +39,150 @@ graph TD
 
 ---
 
-## 2. Critical Implementation Gaps & Potential Bugs
+## 2. Validation Status of Previously Documented Findings
 
-### 🚨 Major Issue: Lines Added/Deleted (`loc_added`/`loc_deleted`) are Stubbed to 0
+### 1. Lines Added/Deleted (`loc_added`/`loc_deleted`) are Stubbed to 0
+*   **Status**: **FULLY FIXED** ([commit `54040de`](file:///Users/emrec/Projects/playground/codescene/commit/54040de14a04d8bd8a4eb5c1cca60330620aad9a))
+    *   `GitCliRepo` now issues `git log --raw --numstat` to extract exact added and deleted lines.
+    *   `GixRepo` fetches parent and current blobs and uses `gix_diff::blob::diff_with_slider_heuristics` to run standard histogram diffs and calculate line counts.
 
-**The Problem**:
-Several behavioral analyses rely on line-based churn metrics:
-*   `abs-churn`, `author-churn`, and `entity-churn` in [churn.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/analyses/churn.rs) sum `loc_added` and `loc_deleted`.
-*   `main-dev` in [main_dev.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/analyses/main_dev.rs) ranks developers by `SUM(loc_added)`.
-*   `entity-ownership` in [entity_ownership.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/analyses/entity_ownership.rs) calculates added and deleted lines per author.
-*   `code-health` in [code_health.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/analyses/code_health.rs) uses churn rate as a penalty metric.
-*   `kamei` in [mod.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/kamei/mod.rs) calculates diffusion entropy, size (`la`, `ld`), and experience features based on lines changed.
+### 2. Propagated `rows_limit` Parameter Distorting Composite / Derived Analyses
+*   **Status**: **FULLY FIXED** ([commit `6414aa0`](file:///Users/emrec/Projects/playground/codescene/commit/6414aa0))
+    *   The `Options` struct exposes a `with_no_row_limit()` helper.
+    *   `run_code_health` and `run_clone_coupling` now invoke the nested `run_coupling` call with a row-unlimited options bag, ensuring calculations like `coupling_centrality` are done on the complete graph.
 
-However, during repository traversal:
-1.  In [gix_repo.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/repo/gix_repo.rs#L237-L312), [gix_change_to_file_change](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/repo/gix_repo.rs#L239) sets both `loc_added` and `loc_deleted` to **`0`** for all change events (additions, modifications, renames, copies).
-2.  In [git_cli_repo.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/repo/git_cli_repo.rs), [walk_commits](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/repo/git_cli_repo.rs#L47) constructs the change event stream using `git log --name-status`, which only yields file path and status, setting `loc_added` and `loc_deleted` to **`0`** in [parse_name_status_line](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/repo/git_cli_repo.rs#L384).
+### 3. Unused `max_coupling_pct` Filter
+*   **Status**: **FULLY FIXED** ([commit `6414aa0`](file:///Users/emrec/Projects/playground/codescene/commit/6414aa0))
+    *   `run_coupling`'s SQL query was updated to bind and restrict the maximum threshold: `AND degree <= ?`.
 
-Because these fields are always zero, **every churn-based metric, size score, and code health churn penalty in the default production flow evaluates to 0**.
+### 4. Discrepancy in Rename/Copy Tracking between Repository Walkers
+*   **Status**: **FULLY FIXED** ([commit `06a21b5`](file:///Users/emrec/Projects/playground/codescene/commit/06a21b5))
+    *   `GixRepo`'s diff options were configured to enable rewrite tracking matching git defaults (`diff_opts.track_rewrites(Some(gix::diff::Rewrites::default()))`), ensuring parity with `GitCliRepo`.
 
-**Suggested Fix**:
-*   **For `GixRepo`**: Obtain raw blob diffs for modified files. Fetch the parent and current blob objects from the database and use `gix_diff::blob::platform` or similar `gitoxide` APIs to count added and deleted lines. For additions/deletions, count the total lines in the single referenced blob.
-*   **For `GitCliRepo`**: Use `git log --numstat` instead of `--name-status` to extract exact added/deleted line counts directly from git CLI logs.
-
----
-
-### 🚨 Major Issue: Propagated `rows_limit` Parameter Distorting Composite / Derived Analyses
-
-**The Problem**:
-The `Options.rows_limit` field restricts the maximum number of rows returned in the final output (e.g. `--rows 10`). However, both [run_code_health](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/analyses/code_health.rs#L159) and [run_clone_coupling](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/analyses/clone_coupling.rs#L77) call `coupling::run_coupling(db, opts)` internally.
-Since the parent `opts` structure is passed down directly:
-1.  The query in `run_coupling` receives `rows_limit` and applies `LIMIT ?` to the SQL query.
-2.  Thus, `run_coupling` only returns the top 10 coupling pairs in the entire repository.
-3.  In `code_health`, the `coupling_centrality` term (which counts the number of Fisher-significant coupling partners for each file) is computed over this truncated subset of 10 pairs instead of the entire coupled pair space, rendering the metric completely incorrect/spurious.
-4.  In `clone_coupling`, clone pairs are only matched against the top 10 coupled pairs, causing other valid coupled clone pairs to be discarded.
-
-**Suggested Fix**:
-In both `run_code_health` and `run_clone_coupling`, clone/construct a modified version of the `Options` struct with `rows_limit` set to `None` before invoking `coupling::run_coupling`. The original `rows_limit` should only be applied to the final result set of the parent analysis.
+### 5. History Splitting due to Renames
+*   **Status**: **PARTIALLY FIXED** ([commit `4c1c3b7`](file:///Users/emrec/Projects/playground/codescene/commit/4c1c3b7))
+    *   A recursive CTE was introduced to build `path_lineage` mappings, and a temporary `changes_lineage` table resolves old paths to canonical post-rename paths.
+    *   **The Remaining Gap**: This has only been wired into **3** out of 12 path-aggregating analyses (`revisions`, `hotspots`, `coupling`). The remaining **9** analyses (`churn`, `code_health`, `code_age`, `entity_ownership`, `main_dev`, `ownership`, `entity_effort`, `messages`, `soc`) still query literal paths from `changes` directly and suffer from split-history aggregation errors.
 
 ---
 
-### 🐛 Bug: Unused `max_coupling_pct` Filter
+## 3. Newly Identified Critical Gaps & Recommendations
+
+### 🚨 Major Issue: `.mailmap` Edits Do Not Invalidate Persistent Cache (Stale / Poisoned Cache)
 
 **The Problem**:
-The `max_coupling_pct` option (represented in CLI as `--max-coupling` and parsed into [Options.max_coupling_pct](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/options.rs#L63)) is completely ignored. 
+CodeLore uses the repository's `.mailmap` file during commit ingestion to resolve author names and emails to canonical identities. However, `Options::canonical_json()` (which computes the persistent cache key) does not hash the contents of the `.mailmap` file.
+As a result, if a user edits `.mailmap` to canonicalize or merge author identities, subsequent runs of CodeLore will hit the cache, returning stale, unmapped historical data.
 
-In [run_coupling](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/analyses/coupling.rs#L143-L220), only `min_coupling_pct` is bound and filtered:
+**Suggested Fix**:
+Include the content digest of the repository's `.mailmap` file in `Options::canonical_json()`'s hash calculations:
 ```rust
-         WHERE 100.0 * p.shared / NULLIF((fr_a.revs + fr_b.revs) / 2.0, 0) >= ?
+let mailmap_digest = digest_of(&self.repo_path.join(".mailmap"));
+map.insert("mailmap_digest".to_string(), json!(mailmap_digest));
 ```
-No condition exists in the SQL view or the Rust post-filtering loop to check if the coupling degree exceeds `max_coupling_pct`. Thus, pairs exceeding the upper threshold are incorrectly returned.
+
+---
+
+### 🚨 Major Issue: `.codeloreignore` Edits Do Not Invalidate Persistent Cache
+
+**The Problem**:
+Similar to the mailmap issue, `.codeloreignore` is parsed dynamically from disk in `build_clones_exclude_set` to filter out files during the clones extraction pass. However, the `.codeloreignore` file's content hash is not included in the cache key computed by `Options::canonical_json()`. If a user modifies `.codeloreignore` to exclude directories from analysis, they will get a stale cache hit and see outdated metrics.
 
 **Suggested Fix**:
-Modify the SQL query built by [build_coupling_sql](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/analyses/coupling.rs#L64-L104) to bound the degree range on both sides:
+Include the content digest of the repository's `.codeloreignore` file in the cache key:
+```rust
+let codeloreignore_digest = digest_of(&self.repo_path.join(".codeloreignore"));
+map.insert("codeloreignore_digest".to_string(), json!(codeloreignore_digest));
+```
+
+---
+
+### 🚨 Major Issue: Parquet Output Emitters Bypass Rename Lineage (Correctness Bug)
+
+**The Problem**:
+In [parquet.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/output/parquet.rs), the `write_hotspots_parquet` and `write_revisions_parquet` functions query the raw `changes` table directly. If the user requests `--format parquet` combined with `--use-canonical-lineage` (default true), the output Parquet files will completely ignore the rename-lineage mapping and output split histories, despite standard CSV/Markdown queries resolving them correctly.
+
+**Suggested Fix**:
+Re-route the Parquet SQL builders to respect `opts.use_canonical_lineage`. Instead of duplicating the SQL string inline in `parquet.rs`, invoke the public `build_sql` helper from `hotspots` or build equivalent schema tables over the canonical `changes_lineage` table.
+
+---
+
+### ⚡ Performance Bottleneck: Missing Indexes on the Temporary `changes_lineage` Table
+
+**The Problem**:
+When `--use-canonical-lineage` is enabled, the system constructs a temporary table called `changes_lineage` to map old paths to their canonical names. This temporary table is created using `CREATE TEMPORARY TABLE changes_lineage AS SELECT ...` and has no primary key or indexes.
+Because of this, downstream aggregation queries on `changes_lineage` (like those in `revisions`, `hotspots`, and `coupling`) must perform full table scans instead of leveraging the indexes on `changes(path)` and `changes(rev)` (`idx_changes_path` and `idx_changes_rev`). On large repositories, this will lead to a query performance regression.
+
+**Suggested Fix**:
+After materializing `changes_lineage` in `materialize_changes_lineage`, explicitly create indexes on it:
 ```sql
-         WHERE degree >= ? AND degree <= ?
+CREATE INDEX IF NOT EXISTS idx_changes_lineage_path ON changes_lineage(path);
+CREATE INDEX IF NOT EXISTS idx_changes_lineage_rev ON changes_lineage(rev);
 ```
-And bind `opts.max_coupling_pct` alongside `opts.min_coupling_pct`.
 
 ---
 
-### 🐛 Bug: Discrepancy in Rename/Copy Tracking between Repository Walkers
+### ⚡ Performance Bottleneck: Redundant `count_loc` for Bit-Identical Blobs
 
 **The Problem**:
-In [gix_repo.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/repo/gix_repo.rs#L221-L223), the Pure-Rust `gitoxide` walker disables rewrite tracking completely:
-```rust
-    let mut diff_opts = gix::diff::Options::default();
-    diff_opts.track_rewrites(None);
-```
-Consequently, `GixRepo` (the default engine) never generates `ChangeType::Renamed` or `ChangeType::Copied` events. A rename will always show up as a `Deleted` event for the old path and an `Added` event for the new path.
-However, `GitCliRepo` (the CLI-based fallback) walks commits via `git log --name-status`, which detects renames and copies based on Git's defaults or user configurations. It then parses these into `ChangeType::Renamed` and `ChangeType::Copied`.
-This creates a significant discrepancy in the database ingestion depending on the chosen repo walker, leading to silent splits in file revision history under `GixRepo`.
+In [gix_repo.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/repo/gix_repo.rs#L320-L329), when processing `GixChange::Rewrite`, if `diff` is `None` (representing a perfect 100% rename with identical blob hashes), the code still executes `count_loc(repo, Some(source_id), Some(id))` (which reads both blobs and runs a histogram diff).
 
 **Suggested Fix**:
-Enable and configure rewrite tracking in `GixRepo`'s `diff_opts` (e.g. `diff_opts.track_rewrites(Some(gix::diff::rewrites::Options::default()))` or equivalent settings matching Git defaults) so both walker backends emit consistent rename events.
+If `diff` is `None`, directly return `(100u8, 0, 0)` rather than invoking `count_loc`. This eliminates redundant disk reads and diff computations.
 
 ---
+
+### ⚡ Performance Bottleneck: Double `find_commit` per Commit Event
+
+**The Problem**:
+In `GixRepo::walk_commits` ([gix_repo.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/repo/gix_repo.rs#L51-L98)), the walker performs `repo.find_commit(oid)` once during the initial OID collection phase (to check merge status and author date), and then performs a second `find_commit(oid)` inside the mapped iterator step to parse the full commit event metadata.
+
+**Suggested Fix**:
+Parse the commit metadata (constructing a Send-able `CommitEvent` without changes) in the first pass where `repo` is in scope, and collect a list of events. The mapped iterator step then only needs to populate the `changes` field via `compute_changed_files`. This cuts commit object parsing overhead by **50%**.
+
+---
+
+### ⚙️ DX/Feature Gap: Unwired `--explain` Query Plans
+
+**The Problem**:
+The new `--explain` flag is only wired into `run_hotspots` ([hotspots.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/analyses/hotspots.rs#L106-L109)). The remaining 20 queries cannot output their DuckDB optimizer plan to stderr.
+
+**Suggested Fix**:
+Wire the general `FactsDb::explain_sql` helper into all analyses run functions.
+
+---
+
+## 4. General Codebase Health & Roadmap Recommendations
 
 ### ⚠️ Concern: Hand-rolled CSV Quoting in `output/csv.rs`
-
-**The Problem**:
 Instead of using the standard `csv` crate, [csv.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/output/csv.rs) relies on 28 hand-rolled `writeln!` calls and a custom [quote_if_needed](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/output/csv.rs#L18-L26) escaping utility.
 
-While this helper covers basic characters like commas, double quotes, and newlines, hand-rolling CSV formatting is error-prone. If a developer introduces a new emitter function and forgets to wrap a string with `quote_if_needed`, it can lead to malformed CSV outputs, parser crashes, or security/injection vulnerabilities.
-
-**Suggested Fix**:
-Refactor `csv.rs` to use standard writers from the `csv` crate:
-```rust
-let mut wtr = csv::WriterBuilder::new().flexible(false).from_writer(w);
-```
-This is already recognized on the roadmap as a Tier 2 hygiene target and should be scheduled.
-
----
-
-### ⚠️ Concern: Parquet SQL Duplication in `output/parquet.rs`
-
-**The Problem**:
-[parquet.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/output/parquet.rs) contains duplicate inline SQL queries of [hotspots.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/analyses/hotspots.rs#L44-L87) and [revisions.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/analyses/revisions.rs). If the calculation details or columns change in the analyses, the Parquet outputs will silently drift.
-
-**Suggested Fix**:
-Extract the SQL query templates as package-internal constants (e.g. `pub(crate) const SQL`) inside the respective analysis modules, or export a query builder function that can be shared between the analysis logic and the Parquet emitter.
-
----
-
 ### ⚠️ Concern: Hardcoded Dependency Metadata
-
-**The Problem**:
-Provenance generation in [provenance/mod.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/provenance/mod.rs) and [arrow_facade.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/arrow_facade.rs) hardcodes version tags (e.g. `gix_version: "0.84.0"`, `duckdb_version: "1.10503.1"`, `ARROW_RUNTIME_VERSION: "58.3.0"`). Utilizing hardcoded strings will lead to desynchronization when dependencies are upgraded.
-
-**Suggested Fix**:
-*   **For DuckDB**: Query `SELECT version();` dynamically at runtime on the connection to retrieve the actual DuckDB runtime version.
-*   **For `gix`/`arrow`**: Utilize compile-time environment variables or generate constant definitions using a custom build script (`build.rs`) that parses dependency configurations from Cargo workspace metadata.
-
----
-
-### ⚠️ Functional Gap: History Splitting due to Renames
-
-**The Problem**:
-Ingestion logs capture file renames via `ChangeType::Renamed { from, similarity }` and save the origin path under `changes.rename_from` in the DB.
-
-However, all aggregation queries in the 21 analyses (such as `revisions`, `coupling`, `churn`, etc.) group directly on `changes.path` (e.g. `GROUP BY changes.path`). This means that when a file is renamed, its history splits into two separate file names. Revisions count drops for both, coupling records split, and hotspots detection becomes less accurate.
-
-**Suggested Fix**:
-Construct a canonical-lineage view inside DuckDB. Use a recursive common table expression (CTE) to resolve rename chains and map all historical changes to their latest post-rename path. Aggregate analyses should then run over this resolved path mapping instead of the raw `changes.path` column.
-
----
-
-## 3. General Codebase Health & Roadmap Recommendations
+Provenance generation in [provenance/mod.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/provenance/mod.rs) and [arrow_facade.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/arrow_facade.rs) hardcodes version tags (e.g. `gix_version: "0.84.0"`, `duckdb_version: "1.10503.1"`, `ARROW_RUNTIME_VERSION: "58.3.0"`). Querying DuckDB's version dynamically at runtime (`SELECT version();`) and dependencies' versions via Cargo environment variables/build-scripts would be more robust.
 
 ### ⚡ Parallelize Clones Ingest
-HEAD-time complexity metrics extraction is parallelized using Rayon, which achieves a major speedup. However, [populate_clones_at_head](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/facts/ingest.rs#L164) walks the filesystem and extracts fingerprints sequentially. Parallelizing this walk using `rayon::par_iter` would match the speedups achieved in the complexity pass.
-
-### ⚙️ Strict Options Validation
-The [Options](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/options.rs#L48) structure contains 28 fields. Pathological CLI inputs (e.g. `min_revs > max_changeset_size`, `after > before`, or `clone_similarity_floor > 1.0`) are currently accepted and run silently, producing empty outputs without warning.
-Introducing a builder pattern (e.g., `OptionsBuilder::build() -> Result<Options, OptionsError>`) to perform cross-field validations at the CLI boundary would improve the developer and user experience.
-
-### 🧪 Hardening with Fuzzing/Mutants
-Applying `cargo-mutants` to the query orchestration and adding a `cargo-fuzz` campaign to the tree-sitter AST traversal in [extractor.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/clones/extractor.rs) would help identify edge cases and harden the clone fingerprint logic.
+HEAD-time complexity metrics extraction is parallelized using Rayon, but fingerprint extraction in `populate_clones_at_head` remains sequential. Parallelizing this walk using `rayon::par_iter` would match the speedups achieved in the complexity pass.
 
 ---
 
 ## Summary of Findings
 
-| Category | Finding / Improvement Point | Priority / Risk | Impact |
-|---|---|---|---|
-| **Defect** | `loc_added` / `loc_deleted` are always `0` on `GixRepo`/`GitCliRepo` walks. Churn analyses return zeroed lines. | **High** / Medium | Distorts churn, main-dev (Added), and Kamei vectors. |
-| **Defect** | Propagated `rows_limit` parameter caps nested query results in composite/derived analyses (`code-health` & `clone-coupling`). | **High** / High | Corrupts coupling centrality and clone-coupling matches when `--rows` is set. |
-| **Defect** | `max_coupling_pct` option is ignored in `run_coupling` queries. | **Medium** / Low | High-coupling pairs are not filtered out when specified. |
-| **Defect** | Discrepancy in rename/copy tracking config between `GixRepo` (disabled) and `GitCliRepo` (enabled). | **Medium** / High | Leads to inconsistent analysis outputs depending on repo walker. |
-| **Defect** | Rename tracking splits file histories in SQL aggregation queries. | **Medium** / High | Split history leads to incorrect Revision and Coupling statistics. |
-| **Refactor** | SQL queries are duplicated in `output/parquet.rs` instead of being shared constants/builders. | **Low** / Low | Risk of silent drift between Parquet outputs and standard emitters. |
-| **Refactor** | Dependency metadata versions are hardcoded in the codebase instead of queried dynamically. | **Low** / Low | Desynchronized provenance reports during dependency upgrades. |
-| **Refactor** | Hand-rolled CSV writing in `output/csv.rs` instead of standard `csv` crate. | **Low** / Low | Potential CSV injection or formatting bugs on new features. |
-| **Feature** | Sequential filesystem walk for Clones extraction at HEAD. | **Low** / Low | Lower ingestion throughput on large repositories. |
-| **DX** | Absence of strict validation for option constraints at CLI boundaries. | **Low** / Low | Silently invalid runs return empty results instead of parsing errors. |
+| Category | Finding / Improvement Point | Priority / Risk | Impact | Status / Fix |
+|---|---|---|---|---|
+| **Defect** | `loc_added` / `loc_deleted` are always `0` on walks. Churn analyses return zeroed lines. | **High** / Medium | Distorts churn, main-dev, and Kamei vectors. | **Fixed** in `54040de` |
+| **Defect** | Propagated `rows_limit` parameter caps nested query results in composite/derived analyses (`code-health` & `clone-coupling`). | **High** / High | Corrupts coupling centrality and clone-coupling matches when `--rows` is set. | **Fixed** in `6414aa0` |
+| **Defect** | `.mailmap` edits do not invalidate persistent cache key, leading to stale author aggregations. | **High** / High | Stale cache hit bypasses updated alias associations. | **Active** (New) |
+| **Defect** | `.codeloreignore` edits do not invalidate persistent cache key. | **High** / High | Stale cache hit returns metrics for ignored files. | **Active** (New) |
+| **Defect** | Parquet output emitters bypass rename lineage, outputting raw split histories. | **High** / High | Parquet formats mismatch stdout/CSV/Markdown when lineage is active. | **Active** |
+| **Defect** | `max_coupling_pct` option is ignored in `run_coupling` queries. | **Medium** / Low | High-coupling pairs are not filtered out when specified. | **Fixed** in `6414aa0` |
+| **Defect** | Discrepancy in rename/copy tracking config between `GixRepo` (disabled) and `GitCliRepo` (enabled). | **Medium** / High | Leads to inconsistent analysis outputs depending on repo walker. | **Fixed** in `06a21b5` |
+| **Defect** | Rename tracking splits file histories in SQL aggregation queries. | **Medium** / High | Split history leads to incorrect Revision and Coupling statistics. | **Partially Fixed** in `4c1c3b7` (Wired for 3/12 analyses) |
+| **Performance** | Missing index on `changes_lineage` temporary table. | **Medium** / High | Forces full table scans on path-aggregating queries when lineage is active. | **Active** (New) |
+| **Performance** | Redundant `count_loc` call for bit-identical blobs in imperfect `GixChange::Rewrite`. | **Medium** / Low | Overhead reading/diffing identical blobs. | **Active** |
+| **Performance** | Double `find_commit` lookup/parsing per commit during `GixRepo::walk_commits`. | **Medium** / Low | Double lookup overhead on repositories with large history. | **Active** |
+| **Refactor** | SQL queries are duplicated in `output/parquet.rs` instead of being shared. | **Low** / Low | Risk of silent drift between Parquet outputs and standard emitters. | **Active** |
+| **Refactor** | Dependency metadata versions are hardcoded in the codebase instead of queried dynamically. | **Low** / Low | Desynchronized provenance reports during dependency upgrades. | **Active** |
+| **Refactor** | Hand-rolled CSV writing in `output/csv.rs` instead of standard `csv` crate. | **Low** / Low | Potential CSV injection or formatting bugs on new features. | **Active** |
+| **Feature** | `--explain` is only wired into `run_hotspots`, bypassing other 20 queries. | **Low** / Low | Cannot query other analyses plans for optimization checks. | **Active** |
+| **Feature** | Sequential filesystem walk for Clones extraction at HEAD. | **Low** / Low | Lower ingestion throughput on large repositories. | **Active** |
+| **DX** | Absence of strict validation for option constraints at CLI boundaries. | **Low** / Low | Silently invalid runs return empty results instead of parsing errors. | **Active** |

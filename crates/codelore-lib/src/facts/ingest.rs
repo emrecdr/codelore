@@ -681,6 +681,17 @@ pub fn materialize_changes_lineage(db: &super::FactsDb) -> Result<()> {
     db.conn()
         .execute(sql, params![])
         .map_err(|e| CodeLoreError::Analysis(format!("materialize changes_lineage: {e}")))?;
+    // Without explicit indexes the downstream GROUP BY path / GROUP BY rev
+    // aggregations fall to full scans even when the base `changes` table
+    // has covering indexes. Mirror them on the temp table.
+    for stmt in [
+        "CREATE INDEX IF NOT EXISTS idx_changes_lineage_path ON changes_lineage(path)",
+        "CREATE INDEX IF NOT EXISTS idx_changes_lineage_rev ON changes_lineage(rev)",
+    ] {
+        db.conn().execute(stmt, params![]).map_err(|e| {
+            CodeLoreError::Analysis(format!("index changes_lineage: {e}"))
+        })?;
+    }
     tracing::info!("materialized changes_lineage with canonical rename paths");
     Ok(())
 }

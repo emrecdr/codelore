@@ -193,6 +193,13 @@ impl Options {
             .or_else(|| digest_of(&self.repo_path.join(".codelore-teams")));
         let group_file_digest = self.group_file.as_deref().and_then(digest_of);
         let bots_digest = digest_of(&self.repo_path.join(".codelorebots"));
+        // `.mailmap` is read at walk time by gix to canonicalize author
+        // identities; edits change every author-bearing analysis but were
+        // invisible to the cache key.
+        let mailmap_digest = digest_of(&self.repo_path.join(".mailmap"));
+        // `.codeloreignore` is parsed by clones extraction to filter files;
+        // edits change which files get fingerprinted and were invisible too.
+        let codeloreignore_digest = digest_of(&self.repo_path.join(".codeloreignore"));
 
         if let serde_json::Value::Object(map) = &mut canon {
             // The path strings themselves don't go into the canonical
@@ -204,6 +211,11 @@ impl Options {
             map.insert("team_map_digest".to_string(), json!(team_map_digest));
             map.insert("group_file_digest".to_string(), json!(group_file_digest));
             map.insert("codelorebots_digest".to_string(), json!(bots_digest));
+            map.insert("mailmap_digest".to_string(), json!(mailmap_digest));
+            map.insert(
+                "codeloreignore_digest".to_string(),
+                json!(codeloreignore_digest),
+            );
         }
         canon
     }
@@ -321,6 +333,36 @@ mod tests {
             v1, v2,
             "canonical_json must differ when team-map content changes"
         );
+    }
+
+    #[test]
+    fn canonical_json_invalidates_when_mailmap_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mailmap = dir.path().join(".mailmap");
+        std::fs::write(&mailmap, "Real Name <real@x> <alias@x>\n").unwrap();
+        let opts = Options {
+            repo_path: dir.path().to_path_buf(),
+            ..Options::default()
+        };
+        let v1 = opts.canonical_json();
+        std::fs::write(&mailmap, "Real Name <real@x> <alias2@x>\n").unwrap();
+        let v2 = opts.canonical_json();
+        assert_ne!(v1, v2, ".mailmap edit must invalidate cache key");
+    }
+
+    #[test]
+    fn canonical_json_invalidates_when_codeloreignore_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let ignore = dir.path().join(".codeloreignore");
+        std::fs::write(&ignore, "vendor/\n").unwrap();
+        let opts = Options {
+            repo_path: dir.path().to_path_buf(),
+            ..Options::default()
+        };
+        let v1 = opts.canonical_json();
+        std::fs::write(&ignore, "vendor/\nnode_modules/\n").unwrap();
+        let v2 = opts.canonical_json();
+        assert_ne!(v1, v2, ".codeloreignore edit must invalidate cache key");
     }
 
     #[test]
