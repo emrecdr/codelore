@@ -5,6 +5,10 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use codelore_lib::constants::{
+    DEFAULT_FISHER_SIGNIFICANCE, DEFAULT_MAX_CHANGESET_SIZE, DEFAULT_MAX_COUPLING_PCT,
+    DEFAULT_MIN_COUPLING_PCT, DEFAULT_MIN_REVS, DEFAULT_MIN_SHARED_REVS,
+};
 
 /// Output format for `codelore diff`. Strongly typed so a typo
 /// (`--format mardkown`) is caught at parse time rather than silently
@@ -116,7 +120,7 @@ pub struct AnalyzeArgs {
     pub output: Option<PathBuf>,
 
     /// Minimum revisions per entity (code-maat parity).
-    #[arg(long, default_value_t = 5)]
+    #[arg(long, default_value_t = DEFAULT_MIN_REVS)]
     pub min_revs: u32,
 
     /// Limit output to N rows.
@@ -172,25 +176,25 @@ pub struct AnalyzeArgs {
     // ------------------------------------------------------------------
     /// Minimum shared revisions for a coupling pair (code-maat parity).
     /// Pairs below this floor are dropped before the Fisher gate runs.
-    #[arg(long, default_value_t = 5)]
+    #[arg(long, default_value_t = DEFAULT_MIN_SHARED_REVS)]
     pub min_shared_revs: u32,
 
     /// Minimum coupling degree (0-100%) for a pair to surface in `coupling`.
     /// Code-maat parity; complements --min-shared-revs.
-    #[arg(long = "min-coupling", default_value_t = 30)]
+    #[arg(long = "min-coupling", default_value_t = DEFAULT_MIN_COUPLING_PCT)]
     pub min_coupling_pct: u8,
 
     /// Maximum coupling degree (0-100%) ceiling. Useful for narrowing the
     /// report to non-perfectly-coupled pairs (degree=100 means every
     /// commit modifies both files, often a sign of file split rather than
     /// a real signal).
-    #[arg(long = "max-coupling", default_value_t = 100)]
+    #[arg(long = "max-coupling", default_value_t = DEFAULT_MAX_COUPLING_PCT)]
     pub max_coupling_pct: u8,
 
     /// Drop commits touching more than N files from coupling/soc analyses.
     /// Filters refactor sweeps that create spurious coupling noise.
     /// Code-maat default is 30.
-    #[arg(long, default_value_t = 30)]
+    #[arg(long, default_value_t = DEFAULT_MAX_CHANGESET_SIZE)]
     pub max_changeset_size: u32,
 
     /// Reference "now" for code-age analysis. Format: YYYY-MM-DD. Default:
@@ -349,7 +353,7 @@ pub struct DiffArgs {
     pub fail_on: DiffFailOn,
 
     /// Minimum revisions per entity for the underlying hotspot analyses.
-    #[arg(long, default_value_t = 5)]
+    #[arg(long, default_value_t = DEFAULT_MIN_REVS)]
     pub min_revs: u32,
 
     /// Path patterns to exclude (repeatable). Same semantics as
@@ -362,13 +366,13 @@ pub struct DiffArgs {
     /// have too-noisy a historical signal to act on. Default 5 (research
     /// brief mitigation 3); raise to 10+ for very large repos where weak
     /// pairs accumulate.
-    #[arg(long, default_value_t = 5)]
+    #[arg(long, default_value_t = DEFAULT_MIN_SHARED_REVS)]
     pub absence_min_shared: u32,
 
     /// Fisher exact p-value gate for coupling absences. Pairs with
     /// p ≥ this value are not statistically significant; we don't warn
     /// about their absences. Default 0.05 (conventional significance
     /// threshold); 0.01 for stricter signal.
-    #[arg(long, default_value_t = 0.05)]
+    #[arg(long, default_value_t = DEFAULT_FISHER_SIGNIFICANCE)]
     pub absence_fisher_p: f64,
 }

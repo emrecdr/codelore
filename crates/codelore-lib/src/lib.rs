@@ -10,6 +10,7 @@ pub mod arrow_facade;
 pub mod cache;
 pub mod clones;
 pub mod complexity;
+pub mod constants;
 pub mod error;
 pub mod facts;
 pub mod identity;

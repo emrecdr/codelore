@@ -218,12 +218,12 @@ impl Default for Options {
             commit_range: None,
             group_file: None,
             team_map_file: None,
-            min_revs: 5,
-            min_shared_revs: 5,
-            min_coupling_pct: 30,
-            max_coupling_pct: 100,
-            max_changeset_size: 30,
-            fisher_significance: 0.05,
+            min_revs: crate::constants::DEFAULT_MIN_REVS,
+            min_shared_revs: crate::constants::DEFAULT_MIN_SHARED_REVS,
+            min_coupling_pct: crate::constants::DEFAULT_MIN_COUPLING_PCT,
+            max_coupling_pct: crate::constants::DEFAULT_MAX_COUPLING_PCT,
+            max_changeset_size: crate::constants::DEFAULT_MAX_CHANGESET_SIZE,
+            fisher_significance: crate::constants::DEFAULT_FISHER_SIGNIFICANCE,
             message_regex: None,
             age_time_now: None,
             rows_limit: None,
@@ -231,11 +231,11 @@ impl Default for Options {
             include_merges: false,
             strict_grouping: false,
             complexity_sample: ComplexitySample::Head,
-            min_clone_node_count: 30,
+            min_clone_node_count: crate::constants::DEFAULT_MIN_CLONE_NODE_COUNT,
             exclude_patterns: Vec::new(),
-            min_clone_shared_revs: 3,
-            clone_similarity_floor: 0.70,
-            clone_skip_same_dir: true,
+            min_clone_shared_revs: crate::constants::DEFAULT_MIN_CLONE_SHARED_REVS,
+            clone_similarity_floor: crate::constants::DEFAULT_CLONE_SIMILARITY_FLOOR,
+            clone_skip_same_dir: crate::constants::DEFAULT_CLONE_SKIP_SAME_DIR,
             // code-maat parity additions
             min_soc: None,
             time_bucket: None,
@@ -247,6 +247,22 @@ impl Default for Options {
 #[cfg(test)]
 mod tests {
     use super::Options;
+
+    #[test]
+    fn defaults_use_the_constants_so_drift_is_caught_at_compile_time() {
+        use crate::constants::*;
+        let d = Options::default();
+        assert_eq!(d.min_revs, DEFAULT_MIN_REVS);
+        assert_eq!(d.min_shared_revs, DEFAULT_MIN_SHARED_REVS);
+        assert_eq!(d.min_coupling_pct, DEFAULT_MIN_COUPLING_PCT);
+        assert_eq!(d.max_coupling_pct, DEFAULT_MAX_COUPLING_PCT);
+        assert_eq!(d.max_changeset_size, DEFAULT_MAX_CHANGESET_SIZE);
+        assert!((d.fisher_significance - DEFAULT_FISHER_SIGNIFICANCE).abs() < 1e-12);
+        assert_eq!(d.min_clone_node_count, DEFAULT_MIN_CLONE_NODE_COUNT);
+        assert_eq!(d.min_clone_shared_revs, DEFAULT_MIN_CLONE_SHARED_REVS);
+        assert!((d.clone_similarity_floor - DEFAULT_CLONE_SIMILARITY_FLOOR).abs() < 1e-12);
+        assert_eq!(d.clone_skip_same_dir, DEFAULT_CLONE_SKIP_SAME_DIR);
+    }
 
     #[test]
     fn with_no_row_limit_clears_rows_limit_only() {
