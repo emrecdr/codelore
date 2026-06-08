@@ -386,7 +386,82 @@ fn list_pr_files(
 // Public entry point
 // ---------------------------------------------------------------------------
 
+/// Cache directory cleanup runs only on directories older than this many
+/// hours. The grace window avoids racing with a concurrent in-progress run
+/// that has not yet finished writing into its tempdir.
+const STALE_WORKTREE_AGE_HOURS: u64 = 24;
+
+/// Best-effort cleanup of orphan worktrees from prior aborted runs.
+///
+/// Two passes:
+///   1. `git -C <repo> worktree prune` — clears the git-side registry of
+///      entries pointing to deleted directories (removes the
+///      "already exists" failure mode on the next `git worktree add`).
+///   2. Walks `$XDG_CACHE_HOME/codelore/diff-worktrees/` and removes any
+///      subdirectory whose mtime is older than [`STALE_WORKTREE_AGE_HOURS`].
+///
+/// All errors are logged at warn level — pruning must never fail the caller.
+/// SIGKILL / OOM / disk-full aborts bypass [`Worktree::drop`] so orphans
+/// accumulate over time; this is the recovery path.
+fn prune_stale_worktrees(repo_root: &Path) {
+    // 1. git worktree prune in the user's repo — idempotent, removes orphan
+    //    registry entries that point to deleted directories.
+    let prune_result = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .args(["worktree", "prune"])
+        .output();
+    if let Err(e) = prune_result {
+        tracing::warn!(
+            "git worktree prune failed during startup cleanup: {e}; \
+             continuing — `git worktree add` may report 'already exists'"
+        );
+    }
+
+    // 2. Sweep $XDG_CACHE_HOME/codelore/diff-worktrees/ for old directories.
+    let cache_root = dirs::cache_dir()
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join("codelore")
+        .join("diff-worktrees");
+    if !cache_root.exists() {
+        return;
+    }
+    let Ok(cutoff) = std::time::SystemTime::now()
+        .checked_sub(std::time::Duration::from_secs(STALE_WORKTREE_AGE_HOURS * 3600))
+        .ok_or("subtraction underflow")
+    else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(&cache_root) else {
+        return;
+    };
+    for entry in entries.filter_map(std::result::Result::ok) {
+        let Ok(meta) = entry.metadata() else { continue };
+        if !meta.is_dir() {
+            continue;
+        }
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
+        if modified < cutoff {
+            let path = entry.path();
+            if let Err(e) = std::fs::remove_dir_all(&path) {
+                tracing::warn!(
+                    "failed to remove stale worktree {}: {e}",
+                    path.display()
+                );
+            } else {
+                tracing::info!("pruned stale worktree directory: {}", path.display());
+            }
+        }
+    }
+}
+
 pub fn run_diff(args: &DiffArgs) -> Result<DiffOutput> {
+    // Best-effort cleanup of orphans from prior aborted runs before we add
+    // a new worktree. Idempotent; errors logged only.
+    prune_stale_worktrees(&args.repo);
+
     let (base_sha, head_sha, merge_base_used) = parse_rev_range(&args.repo, &args.range)?;
 
     // Base analysis: load from --base-cache if present, otherwise compute + maybe cache.
@@ -457,5 +532,27 @@ pub fn should_fail(args: &DiffArgs, output: &DiffOutput) -> bool {
         }
         // "none" or anything unknown → never fail
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod prune_tests {
+    use super::*;
+
+    /// `prune_stale_worktrees` is best-effort: must not panic when the
+    /// repo isn't a real git repo (the `git worktree prune` call will
+    /// fail with a non-zero exit; we log and continue).
+    #[test]
+    fn prune_does_not_panic_on_non_git_path() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        prune_stale_worktrees(tmp.path());
+    }
+
+    /// `prune_stale_worktrees` is best-effort: must not panic when the
+    /// cache root is empty (the very first run).
+    #[test]
+    fn prune_is_noop_on_missing_or_empty_cache_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        prune_stale_worktrees(tmp.path()); // doesn't panic
     }
 }
