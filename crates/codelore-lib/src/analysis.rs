@@ -29,6 +29,14 @@ pub enum AnalysisName {
     Soc,
     // PAR-2: commit-message regex matcher.
     Messages,
+    // PAR-3: top-author-per-file analyses (three variants of the same
+    // metric-swap pattern). `refactoring-main-dev` is an alias for
+    // `MainDevByDeletions` — the analysis is just main-dev with metric
+    // = deleted-lines; the "refactoring" name is code-maat's heuristic
+    // framing, not a separate commit-filter.
+    MainDev,
+    MainDevByRevs,
+    MainDevByDeletions,
 }
 
 impl AnalysisName {
@@ -51,6 +59,9 @@ impl AnalysisName {
             Self::CloneCoupling => "clone-coupling",
             Self::Soc => "soc",
             Self::Messages => "messages",
+            Self::MainDev => "main-dev",
+            Self::MainDevByRevs => "main-dev-by-revs",
+            Self::MainDevByDeletions => "main-dev-by-deletions",
         }
     }
 
@@ -73,6 +84,9 @@ impl AnalysisName {
             Self::CloneCoupling,
             Self::Soc,
             Self::Messages,
+            Self::MainDev,
+            Self::MainDevByRevs,
+            Self::MainDevByDeletions,
         ]
     }
 }
@@ -87,6 +101,13 @@ impl FromStr for AnalysisName {
     type Err = UnknownAnalysisError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // PAR-3: `refactoring-main-dev` is code-maat's name for the
+        // metric-by-deletions variant. Accept it as an alias to
+        // `main-dev-by-deletions` (the honest name) for migration
+        // compatibility.
+        if s == "refactoring-main-dev" {
+            return Ok(Self::MainDevByDeletions);
+        }
         Self::all()
             .iter()
             .find(|a| a.as_str() == s)

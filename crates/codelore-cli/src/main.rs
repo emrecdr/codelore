@@ -496,6 +496,72 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
             (fmt, AnalysisName::Messages) => {
                 anyhow::bail!("messages analysis supports csv|json|markdown; got {fmt:?}")
             }
+            // --- main-dev (top author by lines added) ---
+            ("csv", AnalysisName::MainDev) => {
+                let rows = codelore_lib::analyses::main_dev::run_main_dev(&db, &opts)
+                    .context("run main-dev")?;
+                codelore_lib::output::csv::write_main_dev_csv(&rows, &mut out)
+                    .context("write csv")?;
+            }
+            ("json", AnalysisName::MainDev) => {
+                let rows = codelore_lib::analyses::main_dev::run_main_dev(&db, &opts)
+                    .context("run main-dev")?;
+                codelore_lib::output::json::write_main_dev_json(&rows, &mut out)
+                    .context("write json")?;
+            }
+            ("markdown", AnalysisName::MainDev) => {
+                let rows = codelore_lib::analyses::main_dev::run_main_dev(&db, &opts)
+                    .context("run main-dev")?;
+                codelore_lib::output::markdown::write_main_dev_markdown(&rows, &mut out)
+                    .context("write markdown")?;
+            }
+            (fmt, AnalysisName::MainDev) => {
+                anyhow::bail!("main-dev analysis supports csv|json|markdown; got {fmt:?}")
+            }
+            // --- main-dev-by-revs (top author by revision count) ---
+            ("csv", AnalysisName::MainDevByRevs) => {
+                let rows = codelore_lib::analyses::main_dev::run_main_dev_by_revs(&db, &opts)
+                    .context("run main-dev-by-revs")?;
+                codelore_lib::output::csv::write_main_dev_by_revs_csv(&rows, &mut out, opts.code_maat_compat)
+                    .context("write csv")?;
+            }
+            ("json", AnalysisName::MainDevByRevs) => {
+                let rows = codelore_lib::analyses::main_dev::run_main_dev_by_revs(&db, &opts)
+                    .context("run main-dev-by-revs")?;
+                codelore_lib::output::json::write_main_dev_json(&rows, &mut out)
+                    .context("write json")?;
+            }
+            ("markdown", AnalysisName::MainDevByRevs) => {
+                let rows = codelore_lib::analyses::main_dev::run_main_dev_by_revs(&db, &opts)
+                    .context("run main-dev-by-revs")?;
+                codelore_lib::output::markdown::write_main_dev_by_revs_markdown(&rows, &mut out)
+                    .context("write markdown")?;
+            }
+            (fmt, AnalysisName::MainDevByRevs) => {
+                anyhow::bail!("main-dev-by-revs analysis supports csv|json|markdown; got {fmt:?}")
+            }
+            // --- main-dev-by-deletions (alias: refactoring-main-dev) ---
+            ("csv", AnalysisName::MainDevByDeletions) => {
+                let rows = codelore_lib::analyses::main_dev::run_main_dev_by_deletions(&db, &opts)
+                    .context("run main-dev-by-deletions")?;
+                codelore_lib::output::csv::write_main_dev_by_deletions_csv(&rows, &mut out)
+                    .context("write csv")?;
+            }
+            ("json", AnalysisName::MainDevByDeletions) => {
+                let rows = codelore_lib::analyses::main_dev::run_main_dev_by_deletions(&db, &opts)
+                    .context("run main-dev-by-deletions")?;
+                codelore_lib::output::json::write_main_dev_json(&rows, &mut out)
+                    .context("write json")?;
+            }
+            ("markdown", AnalysisName::MainDevByDeletions) => {
+                let rows = codelore_lib::analyses::main_dev::run_main_dev_by_deletions(&db, &opts)
+                    .context("run main-dev-by-deletions")?;
+                codelore_lib::output::markdown::write_main_dev_by_deletions_markdown(&rows, &mut out)
+                    .context("write markdown")?;
+            }
+            (fmt, AnalysisName::MainDevByDeletions) => {
+                anyhow::bail!("main-dev-by-deletions analysis supports csv|json|markdown; got {fmt:?}")
+            }
             // --- clone-coupling (Plan 8 §6) ---
             ("csv", AnalysisName::CloneCoupling) => {
                 let rows = codelore_lib::analyses::clone_coupling::run_clone_coupling(&db, &opts)

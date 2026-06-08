@@ -252,6 +252,63 @@ pub fn write_messages_csv<W: Write>(
     Ok(())
 }
 
+/// Helper for the three main-dev variants — only the column-2 header (and
+/// the value's column-3 / column-4 names) differ. Modern-default headers
+/// (revisions/total-revisions for rev-count variant); code-maat-compat
+/// flag preserves the legacy lying-headers (`added`/`total-added` for revs)
+/// for migration-tooling parity.
+fn write_main_dev_csv_with_headers<W: Write>(
+    rows: &[crate::analyses::main_dev::MainDevRow],
+    w: &mut W,
+    metric_name: &str,
+    total_name: &str,
+) -> Result<()> {
+    writeln!(
+        w,
+        "entity,main-dev,{metric_name},{total_name},ownership"
+    )
+    .map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{},{},{:.2}",
+            quote_if_needed(&row.entity),
+            quote_if_needed(&row.main_dev),
+            row.metric,
+            row.total,
+            row.ownership,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+pub fn write_main_dev_csv<W: Write>(
+    rows: &[crate::analyses::main_dev::MainDevRow],
+    w: &mut W,
+) -> Result<()> {
+    write_main_dev_csv_with_headers(rows, w, "added", "total-added")
+}
+
+pub fn write_main_dev_by_revs_csv<W: Write>(
+    rows: &[crate::analyses::main_dev::MainDevRow],
+    w: &mut W,
+    code_maat_compat: bool,
+) -> Result<()> {
+    if code_maat_compat {
+        write_main_dev_csv_with_headers(rows, w, "added", "total-added")
+    } else {
+        write_main_dev_csv_with_headers(rows, w, "revisions", "total-revisions")
+    }
+}
+
+pub fn write_main_dev_by_deletions_csv<W: Write>(
+    rows: &[crate::analyses::main_dev::MainDevRow],
+    w: &mut W,
+) -> Result<()> {
+    write_main_dev_csv_with_headers(rows, w, "removed", "total-removed")
+}
+
 pub fn write_clone_coupling_csv<W: Write>(rows: &[CloneCouplingRow], w: &mut W) -> Result<()> {
     // 18 columns mirroring the CloneCouplingRow struct.
     writeln!(

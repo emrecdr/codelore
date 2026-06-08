@@ -241,6 +241,61 @@ pub fn write_messages_markdown<W: Write>(
     Ok(())
 }
 
+fn write_main_dev_markdown_with_headers<W: Write>(
+    rows: &[crate::analyses::main_dev::MainDevRow],
+    w: &mut W,
+    title: &str,
+    metric_label: &str,
+    total_label: &str,
+) -> Result<()> {
+    header(w, title)?;
+    writeln!(w, "| Entity | Main Dev | {metric_label} | {total_label} | Ownership |")
+        .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---|---:|---:|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| `{}` | {} | {} | {} | {:.2} |",
+            row.entity, row.main_dev, row.metric, row.total, row.ownership,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+pub fn write_main_dev_markdown<W: Write>(
+    rows: &[crate::analyses::main_dev::MainDevRow],
+    w: &mut W,
+) -> Result<()> {
+    write_main_dev_markdown_with_headers(rows, w, "CodeLore main-dev (by lines added)", "Added", "Total Added")
+}
+
+pub fn write_main_dev_by_revs_markdown<W: Write>(
+    rows: &[crate::analyses::main_dev::MainDevRow],
+    w: &mut W,
+) -> Result<()> {
+    write_main_dev_markdown_with_headers(
+        rows,
+        w,
+        "CodeLore main-dev (by revision count)",
+        "Revisions",
+        "Total Revisions",
+    )
+}
+
+pub fn write_main_dev_by_deletions_markdown<W: Write>(
+    rows: &[crate::analyses::main_dev::MainDevRow],
+    w: &mut W,
+) -> Result<()> {
+    write_main_dev_markdown_with_headers(
+        rows,
+        w,
+        "CodeLore main-dev-by-deletions (alias: refactoring-main-dev)",
+        "Removed",
+        "Total Removed",
+    )
+}
+
 pub fn write_clone_coupling_markdown<W: Write>(rows: &[CloneCouplingRow], w: &mut W) -> Result<()> {
     header(
         w,
