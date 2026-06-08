@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.87"
 license = "GPL-3.0-only"
-repository = "https://github.com/<owner>/codelore"
+repository = "https://github.com/emrecdr/codelore"
 # crates.io discovery — surfaces in search results + on the package page.
 # Mirrors the GitHub topic tags configured on the repository (see README
 # badges + docs/CONTRIBUTING for the same tag list).
@@ -42,7 +42,7 @@ targets = [
     "x86_64-pc-windows-msvc",
 ]
 # Homebrew tap (placeholder; replace before first release)
-tap = "<owner>/homebrew-codelore"
+tap = "emrecdr/homebrew-codelore"
 publish-jobs = ["homebrew"]
 # Generate a binstall manifest so `cargo binstall codelore` works day one
 pr-run-mode = "plan"

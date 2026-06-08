@@ -15,7 +15,7 @@
 [![Topic: developer-tools](https://img.shields.io/badge/topic-developer--tools-7048e8?style=flat-square&logo=github)](https://github.com/topics/developer-tools)
 
 <!-- Release + license meta -->
-[![Version](https://img.shields.io/badge/version-0.1.0--alpha.1-orange?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.1.0-2ea44f?style=flat-square)](CHANGELOG.md)
 [![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue?style=flat-square)](LICENSE)
 [![Rust 1.87+](https://img.shields.io/badge/rust-1.87%2B-dea584?style=flat-square&logo=rust)](https://www.rust-lang.org/)
 [![Tests: 395 passing](https://img.shields.io/badge/tests-395%20passing-2ea44f?style=flat-square)](#status)

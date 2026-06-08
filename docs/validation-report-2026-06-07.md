@@ -57,7 +57,7 @@ The CSV emitter exists and produces output (validated end-to-end), but there's n
 `release.yml`, `container.yml`, and SLSA L3 provenance attestations are committed but have never run. The first tag push (`v1.0.0`) will execute them for the first time — any YAML/Action-version mismatch would surface there, not before. Two specific things to verify post-tag:
 
 - `cargo binstall codelore` actually resolves and installs the published binary
-- The distroless image at `ghcr.io/<owner>/codelore` is `<30 MB` as claimed
+- The distroless image at `ghcr.io/emrecdr/codelore` is `<30 MB` as claimed
 
 ### S6 (Methodology gap) — no rename tracking in revisions/coupling/churn
 

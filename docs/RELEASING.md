@@ -111,10 +111,10 @@ When a `vX.Y.Z` tag lands on `main`:
    - Builds release binaries for 6 platforms (aarch64-darwin, x86_64-darwin, x86_64-linux-gnu, x86_64-linux-musl, aarch64-linux-gnu, x86_64-windows-msvc)
    - Signs with SLSA L3 provenance
    - Uploads as a GitHub Release with the changelog excerpt for that version
-   - Updates the `<owner>/homebrew-codelore` Homebrew tap
+   - Updates the `emrecdr/homebrew-codelore` Homebrew tap
    - Generates a `cargo binstall` manifest so `cargo binstall codelore` works from day one of the release
 
-2. **`.github/workflows/container.yml`** publishes a distroless container image to `ghcr.io/<owner>/codelore:vX.Y.Z` (and `:latest` for non-pre-release tags).
+2. **`.github/workflows/container.yml`** publishes a distroless container image to `ghcr.io/emrecdr/codelore:vX.Y.Z` (and `:latest` for non-pre-release tags).
 
 3. **`.github/workflows/bench.yml`** (weekly) is unaffected — it tracks main, not tags.
 
