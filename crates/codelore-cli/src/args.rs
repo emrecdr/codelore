@@ -136,6 +136,17 @@ pub struct AnalyzeArgs {
     #[arg(short = 'g', long)]
     pub group_file: Option<PathBuf>,
 
+    /// Optional CSV `author,team` mapping that aliases author identities
+    /// to logical teams in every author-bearing analysis (`authors`,
+    /// `author-churn`, `entity-ownership`, `main-dev`, `communication`,
+    /// etc.). Mirrors code-maat's `-p / --team-map-file` flag; applied
+    /// after mailmap normalization and bot filtering, so the resolved
+    /// canonical identity is what gets aliased. If this flag is NOT
+    /// passed, `CodeLore` auto-discovers `<repo>/.codelore-teams` and
+    /// loads it transparently. Unmatched authors pass through unchanged.
+    #[arg(long = "team-map-file", short = 'p')]
+    pub team_map_file: Option<PathBuf>,
+
     /// Path patterns to exclude from analyses (repeatable). Plan 8 §2 Task 8.
     /// Honored by `clones` today; other analyses gain support in Plan 9.
     /// A `.codeleignore` file in the repo root is also honored when present.

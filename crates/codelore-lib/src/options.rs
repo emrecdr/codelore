@@ -144,14 +144,49 @@ impl Options {
     /// struct; this panic is unreachable in well-formed code.
     #[must_use]
     pub fn canonical_json(&self) -> serde_json::Value {
+        use serde_json::json;
+        use sha2::{Digest, Sha256};
+
         let mut snapshot = self.clone();
         snapshot.exclude_patterns.sort();
         // Cosmetic knobs — exclude from canonical form so the cache hits
         // when they change.
         snapshot.rows_limit = None;
         snapshot.verbose_results = false;
-        serde_json::to_value(&snapshot)
-            .expect("Options derives Serialize and all fields are Serialize")
+        let mut canon = serde_json::to_value(&snapshot)
+            .expect("Options derives Serialize and all fields are Serialize");
+
+        // Mutable-config content hashing: PATHS alone don't capture file
+        // edits — a user editing the team-map CSV in place would otherwise
+        // see stale cached results because the cache key would be byte-
+        // equal across the edit. Replace the path strings with sha-256
+        // digests of the file content so any edit invalidates the cache.
+        // Falls back to `null` for missing files (treated as "no
+        // override"), which is what code-maat does today.
+        let digest_of = |path: &std::path::Path| -> Option<String> {
+            std::fs::read(path).ok().map(|bytes| {
+                let mut h = Sha256::new();
+                h.update(&bytes);
+                hex::encode(h.finalize())
+            })
+        };
+
+        let team_map_digest = self.team_map_file.as_deref().and_then(digest_of);
+        let group_file_digest = self.group_file.as_deref().and_then(digest_of);
+        let bots_digest = digest_of(&self.repo_path.join(".codelorebots"));
+
+        if let serde_json::Value::Object(map) = &mut canon {
+            // The path strings themselves don't go into the canonical
+            // form — only the content hash does. Two runs from different
+            // working trees with identical team-map CONTENT must hit the
+            // same cache entry.
+            map.remove("team_map_file");
+            map.remove("group_file");
+            map.insert("team_map_digest".to_string(), json!(team_map_digest));
+            map.insert("group_file_digest".to_string(), json!(group_file_digest));
+            map.insert("codelorebots_digest".to_string(), json!(bots_digest));
+        }
+        canon
     }
 
     /// Clone with `rows_limit = None`. Use this WHENEVER a composite analysis
@@ -228,6 +263,44 @@ mod tests {
         assert_eq!(stripped.min_coupling_pct, 42);
         // Original must be untouched (helper returns a clone).
         assert_eq!(opts.rows_limit, Some(10));
+    }
+
+    #[test]
+    fn canonical_json_invalidates_when_team_map_content_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("team-map.csv");
+        std::fs::write(&path, "author,team\nalice@x,Backend\n").unwrap();
+        let base = Options {
+            team_map_file: Some(path.clone()),
+            ..Options::default()
+        };
+        let v1 = base.canonical_json();
+
+        // Edit the team-map in place — path unchanged, content changes.
+        std::fs::write(&path, "author,team\nalice@x,Frontend\n").unwrap();
+        let v2 = base.canonical_json();
+
+        assert_ne!(
+            v1, v2,
+            "canonical_json must differ when team-map content changes"
+        );
+    }
+
+    #[test]
+    fn canonical_json_strips_team_map_path_keeps_only_digest() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("team-map.csv");
+        std::fs::write(&path, "author,team\n").unwrap();
+        let opts = Options {
+            team_map_file: Some(path),
+            ..Options::default()
+        };
+        let canon = opts.canonical_json();
+        // Two runs from different machines with the same team-map content
+        // must hit the same cache entry. Hence path is stripped.
+        let s = canon.to_string();
+        assert!(!s.contains("team-map.csv"), "path leaked into canonical form: {s}");
+        assert!(s.contains("team_map_digest"), "digest field missing: {s}");
     }
 
     #[test]

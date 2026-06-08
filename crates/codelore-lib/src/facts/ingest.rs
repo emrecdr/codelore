@@ -33,6 +33,16 @@ impl FactsDb {
     ///
     /// Panics if the producer thread panics (internal logic error, not expected in normal use).
     pub fn ingest<R: Repo>(&self, repo: &R, opts: &Options) -> Result<IngestStats> {
+        // Load the team-map ONCE before walk starts. Auto-discover
+        // `.codelore-teams` in the repo root if `--team-map-file` wasn't
+        // passed. Empty map means the projection is a no-op (the apply
+        // helper passes through unmatched authors).
+        let team_map_path = opts
+            .team_map_file
+            .clone()
+            .or_else(|| crate::identity::discover_team_map(&opts.repo_path));
+        let team_map = crate::identity::team_map::load(team_map_path.as_deref())?;
+
         // Plan 1: single producer gix walker → bounded channel → Appender on calling thread.
         // Plan 4 will fan out N producers.
         let (tx, rx) = bounded::<CommitEvent>(CHANNEL_CAPACITY);
@@ -51,7 +61,7 @@ impl FactsDb {
             });
 
             // Consumer: runs on the calling thread — FactsDb / Connection stays single-threaded.
-            let stats = ingest_loop(self, rx)?;
+            let stats = ingest_loop(self, rx, &team_map)?;
 
             producer.join().expect("producer panicked")?;
             Ok(stats)
@@ -399,7 +409,11 @@ fn append_metric_row(
     .map_err(|e| CodeLoreError::Analysis(format!("append metric: {e}")))
 }
 
-fn ingest_loop(db: &FactsDb, rx: crossbeam_channel::Receiver<CommitEvent>) -> Result<IngestStats> {
+fn ingest_loop(
+    db: &FactsDb,
+    rx: crossbeam_channel::Receiver<CommitEvent>,
+    team_map: &identity::TeamMap,
+) -> Result<IngestStats> {
     use std::collections::HashMap;
 
     let mut stats = IngestStats::default();
@@ -415,13 +429,21 @@ fn ingest_loop(db: &FactsDb, rx: crossbeam_channel::Receiver<CommitEvent>) -> Re
     // Collect unique (raw_email, canonical, is_bot) for deferred author_aliases insert.
     let mut alias_map: HashMap<String, (String, bool)> = HashMap::new();
 
-    for event in rx {
-        // Track alias mapping for this author.
-        let canonical = event
+    for mut event in rx {
+        // Resolve canonical author, then apply the team-map projection.
+        // Order matters: mailmap normalization happens at walk time (gix);
+        // bot detection happens in parallel here; team-map is the LAST
+        // projection so it takes the already-normalized identity. The
+        // result lands on `event.canonical_author` so `append_commit`
+        // (which reads that field) picks it up too.
+        let pre_team_canonical = event
             .canonical_author
             .as_deref()
-            .unwrap_or(&event.author_email)
-            .to_string();
+            .unwrap_or(&event.author_email);
+        let canonical = identity::apply_team_map(team_map, pre_team_canonical).to_string();
+        if !team_map.is_empty() {
+            event.canonical_author = Some(canonical.clone());
+        }
         let bot = identity::is_bot(&event.author_email, &event.author_name);
         alias_map
             .entry(event.author_email.clone())

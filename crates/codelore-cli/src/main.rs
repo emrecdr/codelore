@@ -114,6 +114,7 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
         rows_limit: args.rows,
         complexity_sample,
         group_file: args.group_file.clone(),
+        team_map_file: args.team_map_file.clone(),
         exclude_patterns: args.exclude.clone(),
         // PAR-6: code-maat parity flag wiring
         min_shared_revs: args.min_shared_revs,
