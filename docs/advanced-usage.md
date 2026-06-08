@@ -431,6 +431,35 @@ See [`examples/.github/workflows/codelore-pr.yml`](../examples/.github/workflows
 | Strict | `score-increase` | PRs that worsen any existing hotspot | Once your codebase has stabilised |
 | Maximum | `any` | Anything (including new clones + missing co-changes) | Mature teams in active refactor |
 
+## 11.5. Per-stage timing (`RUST_LOG=codelore::bench=info`)
+
+CodeLore instruments the three load-bearing stages of `analyze` —
+opening the repo, looking up the cache (or ingesting from scratch),
+and running the analysis + emitting output — with `tracing` spans
+under the `codelore::bench` target. Default WARN-level filtering
+suppresses them entirely (zero overhead), but opting in produces a
+breakdown without any new flag:
+
+```bash
+RUST_LOG=codelore::bench=info codelore analyze \
+  --repo path/to/repo --analysis hotspots > /dev/null
+```
+
+Each stage prints a `close` event with the elapsed time:
+
+```
+INFO bench.open_repo: close time.busy=2.4ms time.idle=15µs
+INFO bench.cache_or_ingest: close time.busy=187ms time.idle=24µs
+INFO bench.analyze_and_emit: close time.busy=43ms time.idle=18µs
+```
+
+For finer-grained timing, raise the level:
+`RUST_LOG=codelore=debug` also shows the per-analysis spans inside
+`codelore-lib` (cache hit/miss, materialize_changes_bucketed,
+etc.). The default `--verbose` flag enables `info` for
+`codelore` but not `codelore::bench`, so the bench-specific
+spans stay out of normal-verbosity output.
+
 ## 12. Troubleshooting
 
 | Symptom | Cause | Fix |

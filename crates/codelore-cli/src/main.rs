@@ -13,6 +13,7 @@ use codelore_lib::facts::FactsDb;
 use codelore_lib::repo::GixRepo;
 use codelore_lib::{AnalysisName, Options};
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::fmt::format::FmtSpan;
 
 use crate::args::{AnalyzeArgs, Cli, Command, DiffArgs};
 
@@ -62,9 +63,15 @@ fn init_logging(verbose: bool) {
     } else {
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"))
     };
+    // Emit a span-close event with elapsed time whenever a span exits.
+    // Enables `RUST_LOG=codelore::bench=info codelore analyze …` to print
+    // per-stage timing — no `--bench` flag needed. The CLOSE event is
+    // suppressed by default at WARN level, so this has zero overhead for
+    // normal runs.
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
+        .with_span_events(FmtSpan::CLOSE)
         .init();
 }
 
@@ -155,7 +162,10 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
         return Ok(());
     }
 
-    let repo = GixRepo::open(&args.repo).context("open repo")?;
+    let repo = {
+        let _span = tracing::info_span!(target: "codelore::bench", "bench.open_repo").entered();
+        GixRepo::open(&args.repo).context("open repo")?
+    };
 
     // Parquet and SQLite formats require a writable DuckDB connection
     // (for INSTALL/LOAD sqlite extension and COPY TO parquet). These formats
@@ -163,18 +173,21 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
     // For all other formats (csv/json/markdown/sarif) the persistent cache is used.
     let needs_writable_db = matches!(format, "parquet" | "sqlite");
 
-    let db = if args.no_cache || needs_writable_db {
-        // --no-cache (or writable-format requirement): always fresh in-memory.
-        let db = FactsDb::new_in_memory().context("open fact store (in-memory)")?;
-        db.ingest(&repo, &opts).context("ingest commits")?;
-        db
-    } else if let Some(cache_dir) = &args.cache_dir {
-        // --cache-dir PATH: use a custom XDG root instead of the default.
-        FactsDb::open_or_ingest_with_cache_root(&opts, &repo, cache_dir)
-            .context("open or ingest (cache-dir)")?
-    } else {
-        // Default: use the XDG cache (read-only after first ingest).
-        FactsDb::open_or_ingest(&opts, &repo).context("open or ingest")?
+    let db = {
+        let _span = tracing::info_span!(target: "codelore::bench", "bench.cache_or_ingest").entered();
+        if args.no_cache || needs_writable_db {
+            // --no-cache (or writable-format requirement): always fresh in-memory.
+            let db = FactsDb::new_in_memory().context("open fact store (in-memory)")?;
+            db.ingest(&repo, &opts).context("ingest commits")?;
+            db
+        } else if let Some(cache_dir) = &args.cache_dir {
+            // --cache-dir PATH: use a custom XDG root instead of the default.
+            FactsDb::open_or_ingest_with_cache_root(&opts, &repo, cache_dir)
+                .context("open or ingest (cache-dir)")?
+        } else {
+            // Default: use the XDG cache (read-only after first ingest).
+            FactsDb::open_or_ingest(&opts, &repo).context("open or ingest")?
+        }
     };
 
     // Parquet + SQLite write to file directly through DuckDB, not via Write trait.
@@ -194,6 +207,7 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
 
     // csv / json / sarif / markdown: stream through Write
     {
+        let _span = tracing::info_span!(target: "codelore::bench", "bench.analyze_and_emit").entered();
         let mut out: Box<dyn Write> = match args.output.as_ref() {
             Some(path) => Box::new(std::fs::File::create(path)?),
             None => Box::new(std::io::stdout().lock()),
