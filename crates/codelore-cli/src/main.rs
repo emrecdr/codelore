@@ -46,7 +46,7 @@ fn run_diff_cmd(args: &DiffArgs) -> Result<()> {
         Some(path) => Box::new(std::fs::File::create(path)?),
         None => Box::new(std::io::stdout().lock()),
     };
-    diff_output::emit(&mut out, &output, &args.format)?;
+    diff_output::emit(&mut out, &output, args.format.as_str())?;
     drop(out);
 
     if diff::should_fail(args, &output) {

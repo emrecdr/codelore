@@ -483,9 +483,9 @@ pub fn run_diff(args: &DiffArgs) -> Result<DiffOutput> {
 
     let pr_files = list_pr_files(&args.repo, &base_sha, &head_sha)?;
 
-    let want_hotspots = matches!(args.analysis.as_str(), "hotspots" | "all");
-    let want_coupling = matches!(args.analysis.as_str(), "coupling" | "all");
-    let want_clones = matches!(args.analysis.as_str(), "clones" | "all");
+    let want_hotspots = args.analysis.wants_hotspots();
+    let want_coupling = args.analysis.wants_coupling();
+    let want_clones = args.analysis.wants_clones();
 
     let hotspots = if want_hotspots {
         compute_hotspots_delta(
@@ -519,19 +519,21 @@ pub fn run_diff(args: &DiffArgs) -> Result<DiffOutput> {
     })
 }
 
-/// Decide the process exit code based on `--fail-on`.
+/// Decide the process exit code based on `--fail-on`. Returns `true` if the
+/// process should exit non-zero. Exhaustive match on the typed enum — no
+/// silent fall-through on unknown values (clap validates at parse time).
 pub fn should_fail(args: &DiffArgs, output: &DiffOutput) -> bool {
-    match args.fail_on.as_str() {
-        "rank-entrant" => !output.hotspots.rank_entrants.is_empty(),
-        "score-increase" => !output.hotspots.score_increased.is_empty(),
-        "any" => {
+    use crate::args::DiffFailOn;
+    match args.fail_on {
+        DiffFailOn::None => false,
+        DiffFailOn::RankEntrant => !output.hotspots.rank_entrants.is_empty(),
+        DiffFailOn::ScoreIncrease => !output.hotspots.score_increased.is_empty(),
+        DiffFailOn::Any => {
             !output.hotspots.rank_entrants.is_empty()
                 || !output.hotspots.score_increased.is_empty()
                 || !output.coupling_absences.is_empty()
                 || !output.clones.new_families.is_empty()
         }
-        // "none" or anything unknown → never fail
-        _ => false,
     }
 }
 

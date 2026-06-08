@@ -4,7 +4,71 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+
+/// Output format for `codelore diff`. Strongly typed so a typo
+/// (`--format mardkown`) is caught at parse time rather than silently
+/// dispatching to a default.
+#[derive(ValueEnum, Clone, Debug)]
+#[clap(rename_all = "lowercase")]
+pub enum DiffFormat {
+    Text,
+    Json,
+    Sarif,
+    Markdown,
+}
+
+impl DiffFormat {
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Json => "json",
+            Self::Sarif => "sarif",
+            Self::Markdown => "markdown",
+        }
+    }
+}
+
+/// Which analyses to diff. `All` runs hotspots + coupling-absences + clones.
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+#[clap(rename_all = "lowercase")]
+pub enum DiffAnalysisKind {
+    Hotspots,
+    Coupling,
+    Clones,
+    All,
+}
+
+impl DiffAnalysisKind {
+    #[must_use]
+    pub fn wants_hotspots(self) -> bool {
+        matches!(self, Self::Hotspots | Self::All)
+    }
+    #[must_use]
+    pub fn wants_coupling(self) -> bool {
+        matches!(self, Self::Coupling | Self::All)
+    }
+    #[must_use]
+    pub fn wants_clones(self) -> bool {
+        matches!(self, Self::Clones | Self::All)
+    }
+}
+
+/// Quality-gate trigger for `codelore diff --fail-on`.
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+#[clap(rename_all = "kebab-case")]
+pub enum DiffFailOn {
+    /// Never exit non-zero (advisory mode).
+    None,
+    /// Exit non-zero when a file newly enters the top-N hotspots.
+    RankEntrant,
+    /// Exit non-zero when an existing hotspot's score increases ≥ threshold.
+    ScoreIncrease,
+    /// Exit non-zero on ANY finding (rank entrant + score increase + new
+    /// clone family + coupling absence).
+    Any,
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "codelore", version, about = "CodeLore — Behavioral Code Analyzer", long_about = None)]
@@ -104,9 +168,8 @@ pub struct DiffArgs {
     pub repo: PathBuf,
 
     /// Analysis to diff. `all` runs hotspots + coupling-absences + clones.
-    /// Valid values: hotspots, coupling, clones, all.
-    #[arg(short, long, default_value = "hotspots")]
-    pub analysis: String,
+    #[arg(short, long, value_enum, default_value_t = DiffAnalysisKind::Hotspots)]
+    pub analysis: DiffAnalysisKind,
 
     /// Hotspot rank threshold. A file is a "rank-entrant" if it appears in
     /// the head's top-N hotspots but not the base's.
@@ -127,8 +190,8 @@ pub struct DiffArgs {
 
     /// Output format. `text` is human-friendly terminal output;
     /// `markdown` is designed for `$GITHUB_STEP_SUMMARY`.
-    #[arg(short, long, default_value = "text")]
-    pub format: String,
+    #[arg(short, long, value_enum, default_value_t = DiffFormat::Text)]
+    pub format: DiffFormat,
 
     /// Write output to file instead of stdout.
     #[arg(short, long)]
@@ -136,8 +199,8 @@ pub struct DiffArgs {
 
     /// Exit non-zero when condition met. Values: `none`, `rank-entrant`,
     /// `score-increase`, `any`.
-    #[arg(long, default_value = "none")]
-    pub fail_on: String,
+    #[arg(long, value_enum, default_value_t = DiffFailOn::None)]
+    pub fail_on: DiffFailOn,
 
     /// Minimum revisions per entity for the underlying hotspot analyses.
     #[arg(long, default_value_t = 5)]
