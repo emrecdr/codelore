@@ -5,6 +5,10 @@ on:
     - cron: '0 6 * * MON'  # Mondays 06:00 UTC
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false  # bench results are timeline data; don't drop runs
+
 jobs:
   bench:
     runs-on: ubuntu-latest
