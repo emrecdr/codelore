@@ -108,13 +108,6 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
         other => anyhow::bail!("unknown complexity-sample value: {other:?}"),
     };
 
-    // --group-file is parsed but inert: aggregation lands in Plan 9.
-    if args.group_file.is_some() {
-        eprintln!(
-            "warning: --group-file is recognized but architectural-grouping aggregation lands in Plan 9; flag has no effect yet"
-        );
-    }
-
     let opts = Options {
         repo_path: args.repo.clone(),
         min_revs: args.min_revs,

@@ -52,10 +52,9 @@ pub struct Options {
     pub before: Option<Date>,
     pub commit_range: Option<String>,
 
-    // Aggregation (Plan 4 — left here so Options shape is stable from v1)
+    // Aggregation
     pub group_file: Option<PathBuf>,
     pub team_map_file: Option<PathBuf>,
-    pub temporal_period_days: Option<u32>,
 
     // Analysis thresholds — code-maat parity
     pub min_revs: u32,
@@ -116,10 +115,9 @@ pub struct Options {
 
     /// Migration-helper flag. When `true`, flips internal defaults to match
     /// legacy code-maat output bit-for-bit (lying column headers, arbitrary
-    /// tiebreaks, sliding-window temporal-period, etc.). Off by default —
-    /// the modern surface is the recommendation; this flag exists so users
-    /// with dashboards parsing code-maat CSV verbatim aren't broken on day
-    /// one of migration.
+    /// tiebreaks, etc.). Off by default — the modern surface is the
+    /// recommendation; this flag exists so users with dashboards parsing
+    /// code-maat CSV verbatim aren't broken on day one of migration.
     pub code_maat_compat: bool,
 }
 
@@ -166,7 +164,6 @@ impl Default for Options {
             commit_range: None,
             group_file: None,
             team_map_file: None,
-            temporal_period_days: None,
             min_revs: 5,
             min_shared_revs: 5,
             min_coupling_pct: 30,

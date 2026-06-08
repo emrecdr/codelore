@@ -122,10 +122,11 @@ pub struct AnalyzeArgs {
     #[arg(long, default_value = "head")]
     pub complexity_sample: String,
 
-    /// Architectural grouping file (one `glob => group` mapping per line, code-maat parity).
-    /// Plan 8 §2 Task 7: flag is parsed and forwarded into Options; the actual
-    /// aggregation logic (rewrite entity paths to group names) lands in Plan 9.
-    /// Today the flag is accepted but produces a warning.
+    /// Architectural grouping file (one `<lhs> => <group>` mapping per line, code-maat
+    /// parity). Plain-text and regex rules are both accepted; `fancy-regex` powers the
+    /// engine so lookaround is supported. Paths are rewritten at ingest before
+    /// coupling/hotspot/code-health aggregation, so groups appear as first-class
+    /// entities throughout the analysis pipeline.
     #[arg(short = 'g', long)]
     pub group_file: Option<PathBuf>,
 
