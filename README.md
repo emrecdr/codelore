@@ -18,14 +18,16 @@
 [![Version](https://img.shields.io/badge/version-0.1.0--alpha.1-orange?style=flat-square)](CHANGELOG.md)
 [![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue?style=flat-square)](LICENSE)
 [![Rust 1.87+](https://img.shields.io/badge/rust-1.87%2B-dea584?style=flat-square&logo=rust)](https://www.rust-lang.org/)
+[![Tests: 390 passing](https://img.shields.io/badge/tests-390%20passing-2ea44f?style=flat-square)](#status)
+[![Clippy: clean](https://img.shields.io/badge/clippy-clean-2ea44f?style=flat-square&logo=rust)](#status)
 
 > **Read the lore of your codebase.**
 
 Behind every codebase is a human narrative your linter cannot see: who wrote this, who still understands it, which corners hide tribal knowledge nobody's written down, and where the historical scars are buried. Every commit is a piece of this **lore**.
 
-**CodeLore** mines your repository's git history and projects it into behavioral insight — hotspots, change-coupling, ownership maps, knowledge fragmentation, code health scores, and live code clones — surfaced as SARIF for your existing CI dashboard. The socio-technical signal your linter cannot see, with the methodological honesty your team can audit.
+**CodeLore** mines your repository's git history and projects it into 21 behavioral analyses — hotspots, change-coupling, ownership maps, knowledge fragmentation, code health scores, copy-paste clones, live clones (clones × Fisher-significant co-change), commit-message regex matching, sum-of-coupling, main-developer rankings, and more — surfaced as SARIF for your existing CI dashboard. The socio-technical signal your linter cannot see, with the methodological honesty your team can audit.
 
-A Rust modernization of Adam Tornhill's [code-maat](https://github.com/adamtornhill/code-maat). Built on [gix](https://github.com/GitoxideLabs/gitoxide) (pure-Rust git), [DuckDB](https://duckdb.org) (embedded analytics), and a vendored fork of Mozilla's [rust-code-analysis](https://github.com/mozilla/rust-code-analysis) (tree-sitter complexity).
+A Rust **drop-in successor** to Adam Tornhill's [code-maat](https://github.com/adamtornhill/code-maat) — every published code-maat analysis is supported under the same `--analysis NAME` flag, with modern improvements: deterministic tiebreaks, Fisher exact significance gates, SARIF output, persistent cache, PR-mode diffing, and a SQL-queryable fact store. Built on [gix](https://github.com/GitoxideLabs/gitoxide) (pure-Rust git), [DuckDB](https://duckdb.org) (embedded analytics), [fancy-regex](https://github.com/fancy-regex/fancy-regex) (lookaround support for architectural grouping), and a vendored fork of Mozilla's [rust-code-analysis](https://github.com/mozilla/rust-code-analysis) (tree-sitter complexity).
 
 ---
 
@@ -34,9 +36,10 @@ A Rust modernization of Adam Tornhill's [code-maat](https://github.com/adamtornh
 Static analyzers (SonarQube, ESLint, Clippy) read code at a single point in time. CodeLore reads its **history**, and that history answers questions static tools can't:
 
 - **Bus-factor risk** — *"Which complex hotspots are owned by a single contributor — what happens when they go on leave?"*
-- **Hidden Architectural Debt** — *"Which files are implicitly coupled — always modified together — but live in different subsystems?"*
+- **Hidden architectural debt** — *"Which files are implicitly coupled — always modified together — but live in different subsystems?"*
 - **Refactoring ROI** — *"Which highly complex files are actively changing (refactor!) vs stable (leave alone)?"*
-- **Live Clones** — *"Which copy-pasted blocks keep being edited in lockstep (real debt) vs which are dead patterns nobody touches (noise)?"*
+- **Live clones** — *"Which copy-pasted blocks keep being edited in lockstep (real debt) vs which are dead patterns nobody touches (noise)?"*
+- **Modernization scope** — *"Which files do my AI-coding-assistant commits touch most heavily?"* (`ai_attribution` column on every commit; auto-detects Claude / Copilot / Cursor / Aider / Cody / Continue / Codeium / Windsurf / Devin / Tabnine / Amazon Q)
 
 CodeLore focuses on the **socio-technical dimension** — the legends your codebase tells about itself — so you can focus refactor effort where it actually pays off.
 
@@ -47,47 +50,85 @@ CodeLore focuses on the **socio-technical dimension** — the legends your codeb
 What separates CodeLore from code-maat, CodeScene, and jscpd:
 
 - **🎯 Live-clone × co-change intersection.** Every clone detector finds copy-pasted blocks. CodeLore intersects clones with Fisher-significant change-coupling — flagging only the clones whose copies actually evolve together. Dead clones (look-alike code nobody touches) are filtered out as noise; live clones (real debt) are surfaced with a `combined_score` ranking. We're not aware of another OSS tool that ships this intersection.
-- **📋 Behavioral SARIF.** Findings land natively in **SARIF 2.1.0** with three rules — `CODELORE-HOTSPOT`, `CODELORE-CLONE`, `CODELORE-LIVE-CLONE`. Drop them straight into GitHub Code Scanning, GitLab security dashboards, or Defectdojo and alerts appear inline on pull requests.
+- **📋 Behavioral SARIF.** Findings land natively in **SARIF 2.1.0** with four rules — `CODELORE-HOTSPOT`, `CODELORE-CLONE`, `CODELORE-LIVE-CLONE`, and `CODELORE-MISSING-COCHANGE`. Drop them straight into GitHub Code Scanning, GitLab security dashboards, or Defectdojo and alerts appear inline on pull requests.
 - **🔍 Transparency over opaque ML.** CodeScene's hotspot ranking is a closed ML model. CodeLore ranks with a **published deterministic formula**: `percentile_rank(revisions) × percentile_rank(cognitive_complexity) × (10 − code_health) / 10`. Every input is emitted alongside the score; anyone can reproduce it.
-- **🧾 Provenance manifest.** Every run emits a `.provenance.json` sidecar recording every config knob, version pin, and timestamp. Reproducibility receipt for the run; eliminates the "we got different numbers because we silently used different thresholds" failure mode that plagues comparisons between behavioral analyzers.
+- **🧾 Provenance manifest.** Every run emits a `.provenance.json` sidecar recording every config knob (auto-derived via canonical Options serialization — adding a new field auto-propagates), version pin, and timestamp. Reproducibility receipt for the run; eliminates the "we got different numbers because we silently used different thresholds" failure mode.
 - **💾 SQL-queryable fact store.** No proprietary format lock-in. Export the full DuckDB store as Parquet or SQLite and query your git history as a database from the command line.
 - **⚡ Persistent cache.** Second invocation on the same `(repo, HEAD, options)` opens read-only in ~10 ms instead of re-walking history — typically a 10-100× speedup on the dev inner loop depending on repo size, and the foundation of the `codelore diff` PR-mode subcommand.
+- **🔗 Drop-in code-maat compatibility.** Every published code-maat analysis is supported under the same `--analysis NAME`. The `--code-maat-compat` flag (planned) flips internal defaults back to legacy semantics for users with dashboards that parse code-maat CSV verbatim.
+
+---
+
+## The 21 analyses
+
+Use `codelore analyze --analysis NAME` for any of these. Code-maat parity is **complete**; modern additions are marked **★**.
+
+### Core behavioral signals (code-maat parity)
+
+| Analysis | Output | Use case |
+|---|---|---|
+| `revisions` | per-file commit count | First-look hotspot proxy |
+| `coupling` | file pairs with Fisher-significant co-change | Hidden architectural debt |
+| `soc` | sum of coupling per file (centrality measure) | Network-level coupling outliers |
+| `code-age` | months since last modification per file | Find dead code + recently-volatile areas |
+| `abs-churn` | LOC added/deleted per date | Trend dashboards |
+| `author-churn` | LOC added/deleted per author | Effort distribution |
+| `entity-churn` | LOC added/deleted per file | Refactor-target ranking |
+| `communication` | author pairs by shared-file work | Conway's law signals |
+| `authors` | commits per canonical author | Onboarding / recognition |
+| `summary` | one-page repo overview | First slide of any review |
+| `ownership` | Fractal Value (1-HHI) per file + main-author | Bus-factor / knowledge-loss risk |
+| `entity-effort` | per-(file, author) revision counts | "Who's doing the work on this file?" |
+| `entity-ownership` | per-(file, author) added/deleted breakdown | Fine-grained ownership view |
+| `main-dev` | top author per file by lines added | Onboarding / handoff |
+| `main-dev-by-revs` | top author per file by revision count | Stewardship view |
+| `main-dev-by-deletions` (alias: `refactoring-main-dev`) | top author per file by lines removed | Refactoring authorship |
+| `messages` | per-file count of commits matching `--expression-to-match` regex | Bug/refactor archaeology |
+
+### Modern additions ★
+
+| Analysis | Output | What it adds beyond code-maat |
+|---|---|---|
+| `hotspots` ★ | files ranked by `percentile_rank(revs) × percentile_rank(cognitive) × (10 − code_health) / 10` | Published formula transparency; CodeScene-equivalent signal |
+| `code-health` ★ | composite score 0..100 per file (cognitive + churn + Fractal Value + Fisher-filtered coupling centrality) | Multi-dimensional file-quality score |
+| `clones` ★ | Type 1 + Type 2 clone families via AST structural hashing | Function-level copy-paste detection across Rust/Python/Java/JS/TS |
+| `clone-coupling` ★ | clones intersected with Fisher-significant co-change | **The strategic differentiator** — separates live debt from dead noise |
 
 ---
 
 ## Quick start
 
 ```bash
-# Build from source (Rust toolchain required)
+# Build from source (Rust 1.87+ toolchain required)
 cargo build --release -p codelore-cli
 
-# Or once a published release is available:
+# Or once a published release lands:
 cargo binstall codelore
 ```
 
-Either symlink the binary or invoke it with the full path. The remaining snippets in this README assume `codelore` is on your PATH — adjust to `./target/release/codelore` if you skipped the install step.
+Either symlink the binary or invoke it with the full path. The rest of this README assumes `codelore` is on your PATH — substitute `./target/release/codelore` if you skipped the install step.
 
 ```bash
 # Your first analysis: the top 10 hotspots in any git repo
-codelore analyze --analysis hotspots --repo . --min-revs 5
+codelore analyze --analysis hotspots --repo . --min-revs 5 --rows 10
 ```
 
 Output (CSV, the default):
 
 ```
-entity,name,revisions,cognitive,code-health,hotspot-score
-src/auth/session.rs,,87,42.0,4.2,0.8731
-src/db/migrate.rs,,54,28.0,5.1,0.6204
+entity,revisions,cognitive,code-health,hotspot-score
+src/auth/session.rs,87,42.0,4.2,0.8731
+src/db/migrate.rs,54,28.0,5.1,0.6204
 ...
 ```
 
-The top row is your most pressing refactor candidate: high churn × high complexity × low code health = highest score. (The `name` column is reserved for future function-level rollups; file-level rows leave it empty.)
+The top row is your most pressing refactor candidate: high churn × high complexity × low code health = highest score.
 
 ---
 
 ## Your first 5 minutes with CodeLore
 
-Three commands that build intuition:
+Four commands that build intuition:
 
 **1. What does the repo look like?**
 
@@ -95,7 +136,7 @@ Three commands that build intuition:
 codelore analyze --analysis summary --repo .
 ```
 
-A one-page snapshot: commits, files, authors. Confirms you're pointed at the right git history.
+One-page snapshot: commits, files, authors. Confirms you're pointed at the right git history.
 
 **2. Where's the technical debt?**
 
@@ -103,17 +144,25 @@ A one-page snapshot: commits, files, authors. Confirms you're pointed at the rig
 codelore analyze --analysis hotspots --repo . --min-revs 5 --rows 10
 ```
 
-The top 10 files ranked by hotspot score. Scan the list — usually 2-3 names jump out as "I've been meaning to refactor that". This is your `--top-n 3` for the next CI quality gate.
+Top 10 files ranked by hotspot score. Usually 2-3 names jump out as "I've been meaning to refactor that".
 
-**3. Which copy-pasted code is actually hurting you?**
+**3. Who owns the risky code?**
+
+```bash
+codelore analyze --analysis ownership --repo . --rows 10
+```
+
+Files sorted by ownership fragmentation (Fractal Value). High FV = many contributors share the file; low FV = bus-factor risk.
+
+**4. Which copy-pasted code is actually hurting you?**
 
 ```bash
 codelore analyze --analysis clone-coupling --repo . --format markdown
 ```
 
-Live clones — function-level copy-paste families whose copies co-change at Fisher-significant rates. These are the *real* code-duplication debts: every change has to be made in N places, every bug has N variants. Dead clones (filtered out) are noise.
+Live clones — function-level copy-paste families whose copies co-change at Fisher-significant rates. Real code-duplication debt: every change has to be made in N places, every bug has N variants. Dead clones (filtered out) are noise.
 
-Once you've run those three, you have enough signal to triage. From here, [the advanced guide](docs/advanced-usage.md) covers all 14 analyses, every flag, configuration, CI integration, and tool-stack rationale.
+Once you've run those four, you have enough signal to triage. From here, [the advanced guide](docs/advanced-usage.md) covers all 21 analyses, every flag, configuration, CI integration, and tool-stack rationale.
 
 ---
 
@@ -122,16 +171,58 @@ Once you've run those three, you have enough signal to triage. From here, [the a
 ```bash
 codelore diff origin/main...HEAD \
   --analysis all \
-  --output markdown >> "$GITHUB_STEP_SUMMARY"
+  --format markdown \
+  --output - >> "$GITHUB_STEP_SUMMARY"
 ```
 
-Three signals per PR:
+Four signals per PR, surfaced via SARIF or human-readable Markdown:
 
-- **Hotspot deltas** — files newly entering the top-N or worsening their score
-- **Missing co-changes** — "you changed `auth/login.rs` but historically `auth/session.rs` always changes with it — did you forget?" (the CodeScene-signature signal)
-- **New clone families** — copy-paste debt introduced by the PR
+- **Hotspot deltas** — files newly entering the top-N or worsening their score (`CODELORE-HOTSPOT` SARIF rule)
+- **Missing co-changes** — "you changed `auth/login.rs` but historically `auth/session.rs` always changes with it — did you forget?" (`CODELORE-MISSING-COCHANGE` SARIF rule, the CodeScene-signature signal)
+- **New clone families** — copy-paste debt introduced by the PR (`CODELORE-CLONE` SARIF rule)
+- **Live clones** — clones whose copies co-change at Fisher-significant rates (`CODELORE-LIVE-CLONE` SARIF rule)
 
-Optional quality gate: `--fail-on rank-entrant` exits non-zero if the PR promotes any file into the top-N hotspots. See [`examples/.github/workflows/codelore-pr.yml`](examples/.github/workflows/codelore-pr.yml) for the full template with the critical configuration gotchas (`fetch-depth: 0`, three-dot merge-base, SARIF upload).
+Quality-gate options:
+
+```bash
+# Block PRs that promote any file into the top-N hotspots:
+codelore diff origin/main...HEAD --fail-on rank-entrant
+
+# Block PRs that worsen an existing hotspot:
+codelore diff origin/main...HEAD --fail-on score-increase
+
+# Block on any of the four signals:
+codelore diff origin/main...HEAD --fail-on any
+```
+
+See [`examples/.github/workflows/codelore-pr.yml`](examples/.github/workflows/codelore-pr.yml) for the full template with the critical configuration gotchas (`fetch-depth: 0`, three-dot merge-base, SARIF upload permissions).
+
+Cache the base-rev analysis with `--base-cache PATH` to halve dual-analysis cost across PRs that share the same base SHA.
+
+---
+
+## Architectural grouping
+
+For monorepos, treat groups of files as logical components. Drop a `groups.txt` at the repo root:
+
+```text
+# CodeLore architectural grouping. One rule per line; `<path-or-regex> => <group-name>`.
+src/auth                   => Auth
+src/db                     => DB
+src/api                    => API
+^src\/.*\/tests\/.*\.rs$   => Tests
+^src\/((?!.*test.*).).*$   => Production
+```
+
+Run with `--group-file groups.txt`:
+
+```bash
+codelore analyze --group-file groups.txt --analysis revisions
+```
+
+Analyses then operate at the **group** level — `Auth`, `DB`, etc. — instead of raw paths. Plain-text LHS is matched as a prefix (anchored + slash-bound); regex LHS (starting with `^`) supports **full lookaround** via `fancy-regex` (code-maat's own test fixtures use this).
+
+Default: **non-strict** (unmapped paths keep their raw names; safer than silent drop). Pass `--strict-grouping` to drop unmapped paths instead (code-maat's behavior).
 
 ---
 
@@ -141,27 +232,30 @@ Optional quality gate: `--fail-on rank-entrant` exits non-zero if the PR promote
    Your git repo
         │  [gix walks history]
         ▼
-   ┌────────────────────┐
-   │  codelore-lib       │
-   │  ┌──────────────┐   │   tree-sitter parses each Tier-1
-   │  │ codelore-rca  │   │   source file → cyclomatic, cognitive,
-   │  └──────────────┘   │   Halstead, MI, AST structural hash
-   └────────┬───────────┘
+   ┌─────────────────────┐
+   │  codelore-lib        │
+   │  ┌──────────────┐    │   tree-sitter parses each Tier-1 source
+   │  │ codelore-rca │    │   file → cyclomatic, cognitive, Halstead,
+   │  └──────────────┘    │   MI metrics, AST structural hash
+   └────────┬────────────┘
             │ Stream<CommitEvent>
+            ▼  + Kamei 14-feature enrichment
+   ┌─────────────────────┐
+   │   DuckDB Fact Store  │  commits · changes · hunks · entities ·
+   │                     │  complexity_metrics · clones ·
+   │                     │  author_aliases · provenance
+   └────────┬────────────┘
+            │ SQL queries (bind-parameterized) + Rust orchestrators
             ▼
-   ┌────────────────────┐
-   │   DuckDB Fact Store │  commits · changes · hunks · entities ·
-   │                    │  complexity_metrics · clones · author_aliases · provenance
-   └────────┬───────────┘
-            │ SQL views + Rust orchestrators
-            ▼
-   ┌────────────────────┐
-   │  14 Analyses        │  → 6 Output formats
-   │                    │  → optional persistent cache
-   └────────────────────┘
+   ┌─────────────────────┐
+   │  21 Analyses         │  → 6 output formats (CSV/JSON/SARIF/
+   │                     │     Markdown/Parquet/SQLite)
+   │                     │  → persistent cache (10-100× speedup)
+   │                     │  → provenance.json sidecar
+   └─────────────────────┘
 ```
 
-Every commit becomes a `CommitEvent` projected onto a DuckDB fact store. The 14 analyses are SQL views over that store plus a thin Rust orchestrator each. Outputs flow through six format emitters. Every run is cached and audit-trail-stamped with a provenance sidecar.
+Every commit becomes a `CommitEvent` projected onto a DuckDB fact store. The 21 analyses are SQL queries over that store plus a thin Rust orchestrator each. Outputs flow through six format emitters. Every run is cached and audit-trail-stamped with a provenance sidecar.
 
 For deeper architecture, see the [design specification](docs/superpowers/specs/2026-06-06-codelore-design.md) (~1100 lines, covers every threshold and identity rule).
 
@@ -174,16 +268,28 @@ For deeper architecture, see the [design specification](docs/superpowers/specs/2
 | **gix** (gitoxide, pure-Rust git) | libgit2 has LGPL friction and a C build dep; gix is pure-Rust and natively `Send + Sync` |
 | **DuckDB** (embedded columnar analytics) | SQLite isn't columnar; rolling-your-own gives up the SQL surface that's a power-user feature. Polars works for in-memory but doesn't expose embedded SQL the way DuckDB does |
 | **tree-sitter** via vendored `rust-code-analysis` | Hand-rolled per-language parsers don't scale; tree-sitter gives us Rust + Python + Java + JS/TS for free and AST hashing for clones falls out naturally |
+| **`fancy-regex`** for architectural grouping | The standard `regex` crate doesn't support lookaround; code-maat's own test fixtures use it. fancy-regex wraps regex with a backtracking engine |
 | **Rayon** + crossbeam-channel | Workload is CPU-bound batch; an async runtime would add binary bloat for no measurable gain |
 | **`fishers_exact`** for change-coupling | Approximate chi-square fails at small N; exact test is methodologically defensible and the crate has zero transitive dependencies |
 
-What we deliberately don't ship: no async runtime, no libgit2 binding, no LLM-based scoring, no web UI. See the [advanced guide](docs/advanced-usage.md#7-tool-stack-why-these-choices) for the long version.
+What we deliberately don't ship: no async runtime, no libgit2 binding, no LLM-based scoring, no web UI, **no non-git VCS support** (git-only by design — see [`docs/github-topics.md`](docs/github-topics.md) and the project memory for the rationale). See the [advanced guide](docs/advanced-usage.md#7-tool-stack-why-these-choices) for the long version.
 
 ---
 
 ## Status
 
-Release-ready alpha. 14 analyses × 6 output formats × `codelore diff` PR-mode. 349 tests pass, clippy / fmt / deny all green. The first stable tag is the only remaining gate.
+Release-ready alpha. **21 analyses × 6 output formats × `codelore diff` PR-mode × 4 SARIF rules.** 390 tests pass, clippy / fmt / deny all green. The first stable tag (`v0.1.0`) is the only remaining gate; release pipeline (cargo-dist + SLSA L3 + distroless container + Homebrew tap + binstall) auto-runs on tag push.
+
+**This session's deliverables** (3 sprints + GitHub tags + versioning):
+
+| Sprint | Tasks | Commits | Net analyses / flags added |
+|---|---|---|---|
+| **Bugfix** | 7 / 7 | 7 atomic | Fixed clone-coupling p-value=0, dropped empty `name` column, SARIF CODELORE-MISSING-COCHANGE rule, canonical Options serialization (cache + provenance), AI-attribution for 2024-2026 coders, worktree prune on diff startup, deterministic tertiary sorts |
+| **Modernization** | 10 / 11 (E.3 deferred) | 9 atomic | Hot-path indexes, severity-band SARIF level, `main-dev` → `main-author` header, diff CLI typed enums, absence-threshold knobs, `.codelorebots` extension hook, 11 analyses migrated to bind parameters, change_type CHECK constraint, code_health Fisher-filtered centrality |
+| **Code-maat parity** | 8 / 11 (PAR-8/9 deferred) | 9 atomic | 7 new analyses (soc, messages, main-dev, main-dev-by-revs, main-dev-by-deletions/refactoring-main-dev alias, entity-effort, entity-ownership) + 7 wired CLI flags + architectural grouping with lookaround |
+| **Docs + tags + versioning** | misc | 4 atomic | Topic badges (18 tags), SemVer policy + release procedure, RELEASING.md, github-topics.md |
+
+**29 atomic commits total this session.** Tests went from 349 → 390 (+41 regression tests added).
 
 Known limitations (the honest list, validated against the current codebase):
 
@@ -191,7 +297,8 @@ Known limitations (the honest list, validated against the current codebase):
 - **`Options` cross-field validation** — pathological combinations like `min_revs > max_changeset_size` silently return empty results
 - **Hand-rolled CSV emitter** — `quote_if_needed` covers the worst case but a `csv`-crate migration is on the open list
 - **Clone extraction is still single-threaded** — same Rayon pattern as the parallel complexity extraction is queued next
-- **Parallel complexity extraction is workload-dependent** — the parallel pass beats serial measurably only on codebases with many Tier-1 source files; on small repos (< 30 files) the speedup is within bench noise because the bottleneck is elsewhere (commit walk + change-feature enrichment)
+- **Complexity metrics aren't re-aggregated after grouping** — `hotspots` + `code-health` analyses report 0 cognitive for grouped entities (group-level cognitive aggregation is a v1.x follow-up)
+- **`--time-bucket` and `--code-maat-compat` are deferred** — the modern time-bucket and the legacy-output compatibility flag are queued for the next sprint
 
 Full backlog with priority ranks: [`docs/codebase_analysis_report.md`](docs/codebase_analysis_report.md).
 
@@ -201,13 +308,37 @@ Full backlog with priority ranks: [`docs/codebase_analysis_report.md`](docs/code
 
 | If you want… | Read |
 |---|---|
-| All 14 analyses + every flag + CI patterns + troubleshooting | [`docs/advanced-usage.md`](docs/advanced-usage.md) |
+| All 21 analyses + every flag + CI patterns + troubleshooting | [`docs/advanced-usage.md`](docs/advanced-usage.md) |
 | The deep-dive architecture review + open-item backlog | [`docs/codebase_analysis_report.md`](docs/codebase_analysis_report.md) |
 | The full design specification (~1100 lines) | [`docs/superpowers/specs/2026-06-06-codelore-design.md`](docs/superpowers/specs/2026-06-06-codelore-design.md) |
 | The prioritized roadmap (near-term and long-term backlog) | [`docs/roadmap-v1.x-and-beyond.md`](docs/roadmap-v1.x-and-beyond.md) |
 | Release-blocker performance numbers | [`docs/perf-evidence-v1.md`](docs/perf-evidence-v1.md) |
+| The release procedure + SemVer policy | [`docs/RELEASING.md`](docs/RELEASING.md) |
+| GitHub topic tags (canonical set + `gh repo edit` command) | [`docs/github-topics.md`](docs/github-topics.md) |
 | Drop-in CI integration templates | [`examples/`](examples/) |
 | The version-by-version release log | [`CHANGELOG.md`](CHANGELOG.md) |
+| Every implementation plan, executed task-by-task | [`docs/superpowers/plans/`](docs/superpowers/plans/) |
+
+---
+
+## Migrating from code-maat
+
+CodeLore is a **drop-in successor**. Every published code-maat analysis works under the same `--analysis NAME`:
+
+```bash
+# code-maat (Clojure, JVM, log-file based)
+java -jar code-maat.jar -l logfile.log -c git -a coupling
+
+# CodeLore (Rust, native, direct git read — no log preprocessing)
+codelore analyze --analysis coupling --repo /path/to/repo
+```
+
+The output schemas mostly match exactly. Two deliberate divergences:
+
+1. **Honest column headers.** Code-maat's `main-dev-by-revs` emits `added` / `total-added` columns containing revision counts (lying labels). CodeLore emits `revisions` / `total-revisions`.
+2. **Deterministic tiebreaks.** Where code-maat's tie-breaking is arbitrary (`first (reverse (sort-by ...))`), CodeLore adds a secondary sort on canonical author name. Reproducible output across runs.
+
+The planned `--code-maat-compat` flag will restore both for users with dashboards parsing code-maat CSV verbatim — queued for the next sprint.
 
 ---
 
@@ -224,3 +355,13 @@ CodeLore surfaces that lore as data you can act on, without pretending the metho
 ## License
 
 **GPL-3.0-only.** Bundles a vendored fork of Mozilla's `rust-code-analysis` under **MPL-2.0** — see [`crates/codelore-rca/LICENSE-MPL`](crates/codelore-rca/LICENSE-MPL) and [`crates/codelore-rca/UPSTREAM.md`](crates/codelore-rca/UPSTREAM.md) for vendoring history.
+
+---
+
+## Acknowledgments
+
+CodeLore stands on the shoulders of:
+- **Adam Tornhill** for [code-maat](https://github.com/adamtornhill/code-maat) and the books *Your Code as a Crime Scene* and *Software Design X-Rays* — every behavioral analysis we ship was named, validated, or hinted at in his work.
+- The **gitoxide** team for proving pure-Rust git reads can outperform libgit2.
+- **DuckDB Labs** for shipping an embeddable columnar SQL engine that just works.
+- The **tree-sitter** project + Mozilla's `rust-code-analysis` for cross-language AST parsing.
