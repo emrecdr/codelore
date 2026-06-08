@@ -74,6 +74,10 @@ pub struct Options {
     pub include_merges: bool,
     pub strict_grouping: bool,
     pub complexity_sample: ComplexitySample,
+    /// Print the `DuckDB` query plan + raw SQL to stderr before running
+    /// the analysis. Set via `--explain`. Cosmetic — not part of the
+    /// canonical cache key.
+    pub explain: bool,
 
     // Plan 7: clone detection. Minimum AST node count (post-skip) for a
     // function to be eligible as a clone-family member. Default 30 ≈ 5-8
@@ -153,6 +157,7 @@ impl Options {
         // when they change.
         snapshot.rows_limit = None;
         snapshot.verbose_results = false;
+        snapshot.explain = false;
         let mut canon = serde_json::to_value(&snapshot)
             .expect("Options derives Serialize and all fields are Serialize");
 
@@ -229,6 +234,7 @@ impl Default for Options {
             rows_limit: None,
             verbose_results: false,
             include_merges: false,
+            explain: false,
             strict_grouping: false,
             complexity_sample: ComplexitySample::Head,
             min_clone_node_count: crate::constants::DEFAULT_MIN_CLONE_NODE_COUNT,

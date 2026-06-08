@@ -44,3 +44,40 @@ fn hotspots_for_tiny_repo() {
         );
     }
 }
+
+/// `FactsDb::explain_sql` returns a non-empty `DuckDB` optimizer plan for
+/// the hotspots SQL. The CLI's `--explain` flag routes through this
+/// helper; missing or empty plan output would mean `--explain` silently
+/// no-ops.
+#[test]
+fn explain_sql_returns_non_empty_plan() {
+    use codelore_lib::analyses::hotspots::SQL;
+    use duckdb::params;
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let repo = GixRepo::open(tiny.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: tiny.dir.path().to_path_buf(),
+        min_revs: 1,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let plan = db
+        .explain_sql(SQL, params![1u32, i64::MAX])
+        .expect("explain");
+    assert!(
+        !plan.is_empty(),
+        "EXPLAIN plan should not be empty; got {plan:?}"
+    );
+    // DuckDB EXPLAIN output reliably contains either "PROJECTION" or
+    // "HASH_JOIN" or "ORDER_BY" for any non-trivial query.
+    let upper = plan.to_uppercase();
+    assert!(
+        upper.contains("PROJECTION")
+            || upper.contains("ORDER")
+            || upper.contains("JOIN")
+            || upper.contains("AGGREGATE"),
+        "EXPLAIN plan missing common operator names; got {plan:?}"
+    );
+}

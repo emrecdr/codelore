@@ -55,6 +55,40 @@ impl FactsDb {
         Ok(Self { conn })
     }
 
+    /// Run `EXPLAIN <sql>` against the underlying `DuckDB` connection and
+    /// return the optimizer plan as a single string (newline-separated
+    /// rows). Used by `--explain` to emit per-analysis query plans
+    /// without coupling the CLI to `duckdb::params!` macros.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CodeLoreError::Analysis`] if the underlying `EXPLAIN`
+    /// query fails to prepare or iterate.
+    pub fn explain_sql<P: duckdb::Params>(&self, sql: &str, params: P) -> Result<String> {
+        let explain_sql = format!("EXPLAIN {sql}");
+        let mut stmt = self
+            .conn
+            .prepare(&explain_sql)
+            .map_err(|e| CodeLoreError::Analysis(format!("explain prepare: {e}")))?;
+        let mut rows = stmt
+            .query(params)
+            .map_err(|e| CodeLoreError::Analysis(format!("explain query: {e}")))?;
+        let mut out = String::new();
+        while let Some(row) = rows
+            .next()
+            .map_err(|e| CodeLoreError::Analysis(format!("explain next: {e}")))?
+        {
+            // DuckDB's EXPLAIN returns 2 columns: (explain_key, explain_value).
+            // The plan goes in column 1.
+            let line: String = row
+                .get(1)
+                .map_err(|e| CodeLoreError::Analysis(format!("explain col 1: {e}")))?;
+            out.push_str(&line);
+            out.push('\n');
+        }
+        Ok(out)
+    }
+
     /// Flush any pending writes to disk.
     /// Called before an atomic rename to ensure durability (APFS gotcha).
     pub fn flush(&self) -> Result<()> {

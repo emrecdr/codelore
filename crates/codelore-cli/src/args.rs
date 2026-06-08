@@ -170,6 +170,14 @@ pub struct AnalyzeArgs {
     #[arg(long)]
     pub cache_dir: Option<PathBuf>,
 
+    /// Print the `DuckDB` optimizer plan for the analysis's underlying
+    /// SQL to stderr before running the query. Useful for debugging
+    /// performance ("which join was the dominator?") or for verifying
+    /// that an index is being used. Wired for `hotspots` today;
+    /// other analyses gain support in subsequent point releases.
+    #[arg(long, default_value_t = false)]
+    pub explain: bool,
+
     // ------------------------------------------------------------------
     // code-maat parity CLI flags (PAR-6). All target Options fields that
     // existed but weren't surfaced on the CLI.

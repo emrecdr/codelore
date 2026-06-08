@@ -41,7 +41,7 @@ pub struct HotspotRow {
 //   hotspot_score: percent_rank(revs) * percent_rank(cog) * (100 − code_health) / 10
 //                  ∈ [0, 10] — divide by 10 not 100 so emitted values stay
 //                  on the same scale as code_health (0–10 hotspots, ≈10 = on fire).
-pub(crate) const SQL: &str = "
+pub const SQL: &str = "
     WITH file_revs AS (
         SELECT path, COUNT(DISTINCT rev) AS revs
         FROM changes
@@ -88,6 +88,10 @@ pub(crate) const SQL: &str = "
 
 pub fn run_hotspots(db: &FactsDb, opts: &Options) -> Result<Vec<HotspotRow>> {
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
+    if opts.explain {
+        let plan = db.explain_sql(SQL, params![opts.min_revs, row_limit])?;
+        eprintln!("--- EXPLAIN: hotspots ---\n{plan}---");
+    }
     let mut stmt = db
         .conn()
         .prepare(SQL)
