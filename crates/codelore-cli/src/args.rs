@@ -215,6 +215,41 @@ pub struct AnalyzeArgs {
     /// `--code-maat-compat` implies `--strict-grouping`.
     #[arg(long = "strict-grouping", default_value_t = false)]
     pub strict_grouping: bool,
+
+    /// Time-bucket aggregation for coupling-family analyses (`coupling`,
+    /// `clone-coupling`, `soc`). When set, commits within the same
+    /// `date_trunc(<unit>, commit.date)` bucket count as a single
+    /// "logical commit" for pair-counting purposes. Useful when teams
+    /// land related changes across multiple small commits in the same
+    /// day/week instead of one rollup commit.
+    ///
+    /// Modern replacement for code-maat's sliding-window `--temporal-period`
+    /// hack. Backed by `DuckDB`'s `date_trunc()` — clean non-overlapping
+    /// buckets, no commit-duplication artifact.
+    ///
+    /// Default: no bucketing (raw commit grain).
+    #[arg(long = "time-bucket", value_enum)]
+    pub time_bucket: Option<TimeBucketArg>,
+}
+
+/// `TimeBucket` mirror on the CLI surface (clap-friendly value enum).
+/// Maps 1:1 to `codelore_lib::options::TimeBucket`.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+#[clap(rename_all = "lowercase")]
+pub enum TimeBucketArg {
+    Day,
+    Week,
+    Month,
+}
+
+impl From<TimeBucketArg> for codelore_lib::options::TimeBucket {
+    fn from(t: TimeBucketArg) -> Self {
+        match t {
+            TimeBucketArg::Day => Self::Day,
+            TimeBucketArg::Week => Self::Week,
+            TimeBucketArg::Month => Self::Month,
+        }
+    }
 }
 
 /// Parse a YYYY-MM-DD date for the `--age-time-now` flag.

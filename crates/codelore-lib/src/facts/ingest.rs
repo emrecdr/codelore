@@ -524,6 +524,55 @@ fn append_change(app: &mut Appender<'_>, rev: &str, ch: &crate::FileChange) -> R
     Ok(())
 }
 
+/// Materialize a session-temporary `changes_bucketed` table that collapses
+/// commits within the same `date_trunc(<bucket>, commit.date)` window into
+/// a single logical "commit" per (bucket, path). Coupling-family analyses
+/// (`coupling`, `clone-coupling` indirectly, `soc`) query this table when
+/// `opts.time_bucket.is_some()` so commits landed across the same
+/// day/week/month count as one for pair-counting purposes.
+///
+/// The bucket key (a date string like `2024-01-15` for day-buckets) takes
+/// the place of `rev`. Within a bucket, `loc_added` and `loc_deleted` are
+/// summed; `change_type` collapses to MAX (string-alphabetical max — close
+/// enough since the bucketed-table is consumed only by analyses that care
+/// about pair counts, not type details).
+///
+/// Idempotent: `CREATE OR REPLACE TEMPORARY TABLE`. Call once per analysis
+/// run after the main ingest finishes. Cheap — single SQL pass over
+/// `changes` JOIN `commits`.
+///
+/// # Errors
+///
+/// Returns [`CodeLoreError::Analysis`] on any SQL error.
+pub fn materialize_changes_bucketed(
+    db: &super::FactsDb,
+    bucket: super::super::options::TimeBucket,
+) -> Result<()> {
+    use duckdb::params;
+    let unit = bucket.as_sql_unit();
+    // unit comes from a closed enum (Day/Week/Month) so the format!
+    // interpolation is safe — no user-controlled input.
+    let sql = format!(
+        "CREATE OR REPLACE TEMPORARY TABLE changes_bucketed AS \
+         SELECT \
+             CAST(date_trunc('{unit}', m.date) AS TEXT) AS rev, \
+             c.path, \
+             MAX(c.change_type) AS change_type, \
+             ANY_VALUE(c.rename_from) AS rename_from, \
+             ANY_VALUE(c.similarity) AS similarity, \
+             SUM(c.loc_added)::INTEGER AS loc_added, \
+             SUM(c.loc_deleted)::INTEGER AS loc_deleted \
+         FROM changes c \
+         INNER JOIN commits m ON m.rev = c.rev \
+         GROUP BY date_trunc('{unit}', m.date), c.path"
+    );
+    db.conn().execute(&sql, params![]).map_err(|e| {
+        CodeLoreError::Analysis(format!("materialize changes_bucketed ({unit}): {e}"))
+    })?;
+    tracing::info!("materialized changes_bucketed at {unit} granularity");
+    Ok(())
+}
+
 /// Apply architectural grouping in-place on the `changes` table. Called by
 /// [`FactsDb::ingest`] after raw ingest if `opts.group_file.is_some()`.
 ///

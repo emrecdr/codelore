@@ -135,6 +135,8 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
         // analysis / emitter layer.
         code_maat_compat: args.code_maat_compat,
         strict_grouping: args.strict_grouping || args.code_maat_compat,
+        // PAR-8: --time-bucket. Maps from the CLI's enum to the lib's enum.
+        time_bucket: args.time_bucket.map(Into::into),
         ..Options::default()
     };
 

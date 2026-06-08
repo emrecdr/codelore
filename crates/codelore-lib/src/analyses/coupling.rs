@@ -37,57 +37,79 @@ pub struct CouplingRow {
     pub fisher_p: f64,
 }
 
-/// Raw coupling candidates SQL. Bind values (in order):
+/// Source-table selector for the coupling query family. Returns the SQL
+/// identifier name (`"changes"` for raw commit grain or `"changes_bucketed"`
+/// when `--time-bucket` is active). Used to swap the source table in the
+/// coupling and total-commits SQL queries below.
+///
+/// The injection is safe: the returned value is a literal compile-time
+/// string from a closed match, never user-controlled input.
+fn source_table(opts: &Options) -> &'static str {
+    if opts.time_bucket.is_some() {
+        "changes_bucketed"
+    } else {
+        "changes"
+    }
+}
+
+/// Raw coupling candidates SQL builder. Bind values (in order):
 ///   1. `max_changeset_size`  (`good_commits` filter)
 ///   2. `min_revs`            (per-file revs floor)
 ///   3. `min_shared_revs`     (per-pair shared floor)
 ///   4. `min_coupling_pct`    (degree threshold)
 ///   5. `rows_limit`          (`i64::MAX` = unlimited)
-const COUPLING_SQL: &str = "
-    WITH good_commits AS (
-        SELECT rev
-        FROM (SELECT rev, COUNT(*) AS files FROM changes GROUP BY rev) t
-        WHERE files <= ?
-    ),
-    file_revs AS (
-        SELECT path, COUNT(DISTINCT rev) AS revs
-        FROM changes
-        INNER JOIN good_commits USING(rev)
-        GROUP BY path
-        HAVING revs >= ?
-    ),
-    pairs AS (
-        SELECT
-            a.path AS path_a,
-            b.path AS path_b,
-            COUNT(DISTINCT a.rev) AS shared
-        FROM changes a
-        INNER JOIN changes b ON a.rev = b.rev AND a.path < b.path
-        INNER JOIN good_commits ON good_commits.rev = a.rev
-        GROUP BY a.path, b.path
-        HAVING shared >= ?
+///
+/// The `src` parameter is one of `"changes"` or `"changes_bucketed"` —
+/// closed-enum-derived, never user input.
+fn build_coupling_sql(src: &str) -> String {
+    format!(
+        "WITH good_commits AS (
+             SELECT rev
+             FROM (SELECT rev, COUNT(*) AS files FROM {src} GROUP BY rev) t
+             WHERE files <= ?
+         ),
+         file_revs AS (
+             SELECT path, COUNT(DISTINCT rev) AS revs
+             FROM {src}
+             INNER JOIN good_commits USING(rev)
+             GROUP BY path
+             HAVING revs >= ?
+         ),
+         pairs AS (
+             SELECT
+                 a.path AS path_a,
+                 b.path AS path_b,
+                 COUNT(DISTINCT a.rev) AS shared
+             FROM {src} a
+             INNER JOIN {src} b ON a.rev = b.rev AND a.path < b.path
+             INNER JOIN good_commits ON good_commits.rev = a.rev
+             GROUP BY a.path, b.path
+             HAVING shared >= ?
+         )
+         SELECT
+             p.path_a,
+             p.path_b,
+             p.shared,
+             fr_a.revs AS revs_a,
+             fr_b.revs AS revs_b,
+             (fr_a.revs + fr_b.revs) / 2 AS average_revs,
+             100.0 * p.shared / NULLIF((fr_a.revs + fr_b.revs) / 2.0, 0) AS degree
+         FROM pairs p
+         INNER JOIN file_revs fr_a ON fr_a.path = p.path_a
+         INNER JOIN file_revs fr_b ON fr_b.path = p.path_b
+         WHERE 100.0 * p.shared / NULLIF((fr_a.revs + fr_b.revs) / 2.0, 0) >= ?
+         ORDER BY degree DESC, average_revs DESC, p.path_a ASC, p.path_b ASC
+         LIMIT ?"
     )
-    SELECT
-        p.path_a,
-        p.path_b,
-        p.shared,
-        fr_a.revs AS revs_a,
-        fr_b.revs AS revs_b,
-        (fr_a.revs + fr_b.revs) / 2 AS average_revs,
-        100.0 * p.shared / NULLIF((fr_a.revs + fr_b.revs) / 2.0, 0) AS degree
-    FROM pairs p
-    INNER JOIN file_revs fr_a ON fr_a.path = p.path_a
-    INNER JOIN file_revs fr_b ON fr_b.path = p.path_b
-    WHERE 100.0 * p.shared / NULLIF((fr_a.revs + fr_b.revs) / 2.0, 0) >= ?
-    ORDER BY degree DESC, average_revs DESC, p.path_a ASC, p.path_b ASC
-    LIMIT ?
-";
+}
 
-const TOTAL_COMMITS_SQL: &str = "
-    SELECT COUNT(*) FROM (
-        SELECT rev, COUNT(*) AS files FROM changes GROUP BY rev
-    ) t WHERE files <= ?
-";
+fn build_total_commits_sql(src: &str) -> String {
+    format!(
+        "SELECT COUNT(*) FROM (
+             SELECT rev, COUNT(*) AS files FROM {src} GROUP BY rev
+         ) t WHERE files <= ?"
+    )
+}
 
 /// Compute the two-tailed Fisher exact p-value for a coupling pair.
 ///
@@ -119,18 +141,27 @@ fn fisher_two_tail(shared: u32, revs_a: u32, revs_b: u32, total: u32) -> Option<
 ///
 /// Returns [`CodeLoreError::Analysis`] on any SQL error.
 pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
+    // PAR-8: if --time-bucket is active, materialize changes_bucketed and
+    // route the coupling query through it. Raw commit grain otherwise.
+    if let Some(bucket) = opts.time_bucket {
+        crate::facts::ingest::materialize_changes_bucketed(db, bucket)?;
+    }
+    let src = source_table(opts);
+
     // Total commits after the max_changeset_size pre-filter — denominator for
     // the Fisher 2×2 contingency table.
+    let total_sql = build_total_commits_sql(src);
     let total_commits: i64 = db
         .conn()
-        .query_row(TOTAL_COMMITS_SQL, params![opts.max_changeset_size], |r| r.get(0))
+        .query_row(&total_sql, params![opts.max_changeset_size], |r| r.get(0))
         .map_err(|e| CodeLoreError::Analysis(format!("total commits query: {e}")))?;
     let total = u32::try_from(total_commits).unwrap_or(u32::MAX);
 
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
+    let coupling_sql = build_coupling_sql(src);
     let mut stmt = db
         .conn()
-        .prepare(COUPLING_SQL)
+        .prepare(&coupling_sql)
         .map_err(|e| CodeLoreError::Analysis(format!("prepare coupling: {e}")))?;
 
     let raw_rows = stmt
