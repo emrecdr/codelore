@@ -1,10 +1,23 @@
 # CodeLore
 
-[![GitHub topic: behavioral-code-analysis](https://img.shields.io/badge/topic-behavioral--code--analysis-7048e8?style=flat-square&logo=github)](https://github.com/topics/behavioral-code-analysis)
-[![GitHub topic: code-analysis-tool](https://img.shields.io/badge/topic-code--analysis--tool-7048e8?style=flat-square&logo=github)](https://github.com/topics/code-analysis-tool)
-[![GitHub topic: repository-mining](https://img.shields.io/badge/topic-repository--mining-7048e8?style=flat-square&logo=github)](https://github.com/topics/repository-mining)
-[![GitHub topic: technical-debt](https://img.shields.io/badge/topic-technical--debt-7048e8?style=flat-square&logo=github)](https://github.com/topics/technical-debt)
-[![GitHub topic: code-maat](https://img.shields.io/badge/topic-code--maat-7048e8?style=flat-square&logo=github)](https://github.com/topics/code-maat)
+<!-- Primary topic discovery row (mirrors code-maat's own GitHub topics). -->
+[![Topic: behavioral-code-analysis](https://img.shields.io/badge/topic-behavioral--code--analysis-7048e8?style=flat-square&logo=github)](https://github.com/topics/behavioral-code-analysis)
+[![Topic: code-analysis-tool](https://img.shields.io/badge/topic-code--analysis--tool-7048e8?style=flat-square&logo=github)](https://github.com/topics/code-analysis-tool)
+[![Topic: repository-mining](https://img.shields.io/badge/topic-repository--mining-7048e8?style=flat-square&logo=github)](https://github.com/topics/repository-mining)
+[![Topic: technical-debt](https://img.shields.io/badge/topic-technical--debt-7048e8?style=flat-square&logo=github)](https://github.com/topics/technical-debt)
+[![Topic: code-maat](https://img.shields.io/badge/topic-code--maat-7048e8?style=flat-square&logo=github)](https://github.com/topics/code-maat)
+
+<!-- Tech-stack + secondary discovery row -->
+[![Topic: rust](https://img.shields.io/badge/topic-rust-dea584?style=flat-square&logo=rust)](https://github.com/topics/rust)
+[![Topic: sarif](https://img.shields.io/badge/topic-sarif-7048e8?style=flat-square&logo=github)](https://github.com/topics/sarif)
+[![Topic: clone-detection](https://img.shields.io/badge/topic-clone--detection-7048e8?style=flat-square&logo=github)](https://github.com/topics/clone-detection)
+[![Topic: hotspot-analysis](https://img.shields.io/badge/topic-hotspot--analysis-7048e8?style=flat-square&logo=github)](https://github.com/topics/hotspot-analysis)
+[![Topic: developer-tools](https://img.shields.io/badge/topic-developer--tools-7048e8?style=flat-square&logo=github)](https://github.com/topics/developer-tools)
+
+<!-- Release + license meta -->
+[![Version](https://img.shields.io/badge/version-0.1.0--alpha.1-orange?style=flat-square)](CHANGELOG.md)
+[![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue?style=flat-square)](LICENSE)
+[![Rust 1.87+](https://img.shields.io/badge/rust-1.87%2B-dea584?style=flat-square&logo=rust)](https://www.rust-lang.org/)
 
 > **Read the lore of your codebase.**
 
