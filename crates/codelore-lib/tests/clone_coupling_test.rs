@@ -109,6 +109,33 @@ fn live_clone_pair_surfaces_in_clone_coupling() {
         "T1+T2 → exact similarity, got {}",
         r.similarity
     );
+
+    // Regression guard: p_value must carry the real Fisher exact test
+    // result from the upstream CouplingRow, NOT a hard-coded 0.0.
+    // (Earlier shipping code zeroed this out and shipped the fake value
+    // in every CSV/JSON/SARIF row — see bugfix sprint Task 1.)
+    assert!(
+        r.p_value > 0.0,
+        "p_value must be the real Fisher exact test result, not 0.0 — got {}",
+        r.p_value
+    );
+    assert!(
+        r.p_value < 0.05,
+        "Fisher-filtered row should have p < 0.05, got {}",
+        r.p_value
+    );
+
+    // combined_score must equal similarity * degree_pct * (1 - p_value).
+    let expected_score = r.similarity * r.degree_pct * (1.0 - r.p_value);
+    assert!(
+        (r.combined_score - expected_score).abs() < 1e-9,
+        "combined_score formula broken: got {}, expected {} = {} * {} * (1 - {})",
+        r.combined_score,
+        expected_score,
+        r.similarity,
+        r.degree_pct,
+        r.p_value,
+    );
 }
 
 /// Two cloned files that NEVER co-change (modified in different commits) →

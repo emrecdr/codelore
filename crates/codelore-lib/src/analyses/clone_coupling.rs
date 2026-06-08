@@ -180,11 +180,10 @@ pub fn run_clone_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CloneCoupl
         }
 
         let degree_pct = cp.degree / 100.0; // CouplingRow.degree is 0–100 pct (already f64)
-        // Fisher p-value isn't carried in CouplingRow's public surface today;
-        // coupling.rs filters on it internally. For combined_score, approximate
-        // with degree alone (the Fisher filter has already gated this row).
-        let approximated_p = 0.0; // already passed Fisher filter
-        let combined_score = p.similarity * degree_pct * (1.0 - approximated_p);
+        // Carry the real Fisher exact p-value from the upstream coupling
+        // row. Lower p ⇒ stronger co-change signal ⇒ higher combined_score.
+        let fisher_p = cp.fisher_p;
+        let combined_score = p.similarity * degree_pct * (1.0 - fisher_p);
 
         rows.push(CloneCouplingRow {
             clone_group_id: p.clone_group_id,
@@ -203,7 +202,7 @@ pub fn run_clone_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CloneCoupl
             support_a: cp.revs_a,
             support_b: cp.revs_b,
             degree_pct,
-            p_value: approximated_p,
+            p_value: fisher_p,
             combined_score,
         });
     }
