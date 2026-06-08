@@ -45,6 +45,14 @@ const AI_ASSIST_PATTERNS: &[&str] = &[
 
 /// True if the email or name matches any default bot pattern. Comparison
 /// is case-insensitive — `Dependabot[Bot]@noreply.github.com` matches.
+///
+/// **For repos with internal bot accounts** (`our-deploy-bot@example.com`,
+/// `release-bot`, etc.) that aren't covered by the default list, drop a
+/// `.codelorebots` file at the repo root with one extra pattern per line;
+/// use [`BotPatterns::from_repo`] to merge it with the defaults and pass
+/// the result to [`BotPatterns::is_bot`] instead of this free function.
+/// The free function is the zero-config path that the ingest pipeline
+/// uses today.
 #[must_use]
 pub fn is_bot(email: &str, name: &str) -> bool {
     let email_lc = email.to_lowercase();
@@ -52,6 +60,83 @@ pub fn is_bot(email: &str, name: &str) -> bool {
     DEFAULT_BOT_PATTERNS
         .iter()
         .any(|p| email_lc.contains(p) || name_lc.contains(p))
+}
+
+/// User-extensible bot-pattern set. Merges built-in [`DEFAULT_BOT_PATTERNS`]
+/// with any patterns from a project-level `.codelorebots` file at the repo
+/// root. File format mirrors `.codeloreignore`:
+///
+/// ```text
+/// # Comments start with `#`
+/// # One bot pattern per line; substring match in email or name
+/// # (case-insensitive after lowercasing both sides).
+/// our-deploy-bot
+/// release-automation
+/// ```
+///
+/// Blank lines and `#`-prefix comments are ignored.
+#[derive(Debug, Default, Clone)]
+pub struct BotPatterns {
+    /// User patterns from `.codelorebots`, already lowercased.
+    /// `DEFAULT_BOT_PATTERNS` is consulted separately so the user list is
+    /// purely additive (the defaults can never be turned off — preserving
+    /// the project invariant that GitHub-published bots always classify
+    /// as bots).
+    user_patterns: Vec<String>,
+}
+
+impl BotPatterns {
+    /// Read `<repo_root>/.codelorebots` if present, returning a [`BotPatterns`]
+    /// with the user additions parsed. Missing file → empty user set
+    /// (defaults still applied via [`Self::is_bot`]).
+    ///
+    /// I/O errors other than `NotFound` are logged at warn level and a
+    /// default [`BotPatterns`] is returned — bot detection is best-effort.
+    #[must_use]
+    pub fn from_repo(repo_root: &std::path::Path) -> Self {
+        let path = repo_root.join(".codelorebots");
+        match std::fs::read_to_string(&path) {
+            Ok(text) => Self::from_text(&text),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::default(),
+            Err(e) => {
+                tracing::warn!(
+                    "failed to read .codelorebots at {}: {e}; using defaults only",
+                    path.display()
+                );
+                Self::default()
+            }
+        }
+    }
+
+    /// Parse the `.codelorebots` text format.
+    #[must_use]
+    pub fn from_text(text: &str) -> Self {
+        let user_patterns: Vec<String> = text
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(str::to_lowercase)
+            .collect();
+        Self { user_patterns }
+    }
+
+    /// Case-insensitive substring match across both the built-in defaults
+    /// and any user-additions from `.codelorebots`.
+    #[must_use]
+    pub fn is_bot(&self, email: &str, name: &str) -> bool {
+        let email_lc = email.to_lowercase();
+        let name_lc = name.to_lowercase();
+        // Defaults are always checked first — user file can't turn them off.
+        if DEFAULT_BOT_PATTERNS
+            .iter()
+            .any(|p| email_lc.contains(p) || name_lc.contains(p))
+        {
+            return true;
+        }
+        self.user_patterns
+            .iter()
+            .any(|p| email_lc.contains(p) || name_lc.contains(p))
+    }
 }
 
 /// Classifies commit attribution as one of `"ai-authored"`, `"ai-assisted"`,
@@ -178,5 +263,67 @@ mod tests {
         // Some tools / pipelines uppercase headers; some humans typo.
         let msg = "feat: x\n\nCO-AUTHORED-BY: cursor";
         assert_eq!(ai_attribution("alice@example.com", "Alice", msg), "ai-assisted");
+    }
+
+    // BotPatterns: user-extensible bot set via .codelorebots file.
+    #[test]
+    fn bot_patterns_default_matches_built_in_defaults() {
+        let patterns = BotPatterns::default();
+        assert!(patterns.is_bot("dependabot[bot]@noreply.github.com", "dependabot[bot]"));
+        assert!(!patterns.is_bot("alice@example.com", "Alice"));
+    }
+
+    #[test]
+    fn bot_patterns_user_additions_classify_as_bots() {
+        let patterns = BotPatterns::from_text(
+            "# our internal deploy account\n\
+             our-deploy-bot\n\
+             \n\
+             # release automation\n\
+             release-automation\n"
+        );
+        assert!(patterns.is_bot("our-deploy-bot@example.com", "Deploy Bot"));
+        assert!(patterns.is_bot("ci@example.com", "release-automation"));
+        // Defaults are still applied
+        assert!(patterns.is_bot("dependabot[bot]@noreply.github.com", "dependabot[bot]"));
+        // Non-matching is still not a bot
+        assert!(!patterns.is_bot("alice@example.com", "Alice"));
+    }
+
+    #[test]
+    fn bot_patterns_user_additions_case_insensitive() {
+        let patterns = BotPatterns::from_text("OUR-DEPLOY-BOT\n");
+        assert!(patterns.is_bot("Our-Deploy-Bot@example.com", "Deploy Bot"));
+    }
+
+    #[test]
+    fn bot_patterns_blank_lines_and_comments_ignored() {
+        let patterns = BotPatterns::from_text(
+            "\n\n# only comments here\n# and another\n\n"
+        );
+        // No user patterns → behaves like Default
+        assert!(!patterns.is_bot("alice@example.com", "Alice"));
+        // But defaults still apply
+        assert!(patterns.is_bot("dependabot[bot]@x.com", "x"));
+    }
+
+    #[test]
+    fn bot_patterns_from_missing_repo_file_returns_default() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let patterns = BotPatterns::from_repo(tmp.path());
+        // No .codelorebots file → defaults only
+        assert!(patterns.is_bot("dependabot[bot]@x.com", "x"));
+        assert!(!patterns.is_bot("custom-bot@example.com", "custom-bot"));
+    }
+
+    #[test]
+    fn bot_patterns_from_repo_reads_codelorebots() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            tmp.path().join(".codelorebots"),
+            "custom-bot\n"
+        ).expect("write");
+        let patterns = BotPatterns::from_repo(tmp.path());
+        assert!(patterns.is_bot("custom-bot@example.com", "Custom Bot"));
     }
 }
