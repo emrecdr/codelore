@@ -24,6 +24,9 @@ pub enum AnalysisName {
     Clones,
     // Plan 8 §6: live-clone × Fisher-significant co-change intersection
     CloneCoupling,
+    // code-maat parity sprint (PAR-1+): Sum of Coupling — per-entity total
+    // of (commit-size − 1) across every commit the entity appears in.
+    Soc,
 }
 
 impl AnalysisName {
@@ -44,6 +47,7 @@ impl AnalysisName {
             Self::Authors => "authors",
             Self::Clones => "clones",
             Self::CloneCoupling => "clone-coupling",
+            Self::Soc => "soc",
         }
     }
 
@@ -64,6 +68,7 @@ impl AnalysisName {
             Self::Authors,
             Self::Clones,
             Self::CloneCoupling,
+            Self::Soc,
         ]
     }
 }

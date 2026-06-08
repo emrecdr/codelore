@@ -229,6 +229,17 @@ pub fn write_authors_csv<W: Write>(rows: &[AuthorsRow], w: &mut W) -> Result<()>
     Ok(())
 }
 
+pub fn write_soc_csv<W: Write>(
+    rows: &[crate::analyses::soc::SocRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(w, "entity,soc").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(w, "{},{}", quote_if_needed(&row.entity), row.soc).map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_clone_coupling_csv<W: Write>(rows: &[CloneCouplingRow], w: &mut W) -> Result<()> {
     // 18 columns mirroring the CloneCouplingRow struct.
     writeln!(

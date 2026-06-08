@@ -452,6 +452,28 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
             (fmt, AnalysisName::Authors) => {
                 anyhow::bail!("authors analysis supports csv|json|markdown; got {fmt:?}")
             }
+            // --- soc (Sum of Coupling) ---
+            ("csv", AnalysisName::Soc) => {
+                let rows = codelore_lib::analyses::soc::run_soc(&db, &opts)
+                    .context("run soc")?;
+                codelore_lib::output::csv::write_soc_csv(&rows, &mut out)
+                    .context("write csv")?;
+            }
+            ("json", AnalysisName::Soc) => {
+                let rows = codelore_lib::analyses::soc::run_soc(&db, &opts)
+                    .context("run soc")?;
+                codelore_lib::output::json::write_soc_json(&rows, &mut out)
+                    .context("write json")?;
+            }
+            ("markdown", AnalysisName::Soc) => {
+                let rows = codelore_lib::analyses::soc::run_soc(&db, &opts)
+                    .context("run soc")?;
+                codelore_lib::output::markdown::write_soc_markdown(&rows, &mut out)
+                    .context("write markdown")?;
+            }
+            (fmt, AnalysisName::Soc) => {
+                anyhow::bail!("soc analysis supports csv|json|markdown; got {fmt:?}")
+            }
             // --- clone-coupling (Plan 8 §6) ---
             ("csv", AnalysisName::CloneCoupling) => {
                 let rows = codelore_lib::analyses::clone_coupling::run_clone_coupling(&db, &opts)

@@ -12,4 +12,5 @@ pub mod coupling;
 pub mod hotspots;
 pub mod ownership;
 pub mod revisions;
+pub mod soc;
 pub mod summary;

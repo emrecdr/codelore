@@ -215,6 +215,19 @@ pub fn write_authors_markdown<W: Write>(rows: &[AuthorsRow], w: &mut W) -> Resul
     Ok(())
 }
 
+pub fn write_soc_markdown<W: Write>(
+    rows: &[crate::analyses::soc::SocRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore sum-of-coupling")?;
+    writeln!(w, "| Entity | SoC |").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(w, "| `{}` | {} |", row.entity, row.soc).map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_clone_coupling_markdown<W: Write>(rows: &[CloneCouplingRow], w: &mut W) -> Result<()> {
     header(
         w,
