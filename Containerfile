@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 # Distroless container image for CodeLore.
 #
-# Build stage: rust:1.89-bookworm (matches workspace MSRV).
+# Build stage: rust:1.96-bookworm (matches workspace MSRV).
 #   We use cargo-chef to cache the dependency build layer so source-only
 #   changes don't trigger a full DuckDB rebuild (~5 min cold).
 #
@@ -15,7 +15,7 @@
 #   docker build -t codelore .
 #   docker run --rm -v /path/to/repo:/repo:ro codelore analyze --repo /repo --analysis hotspots
 
-ARG RUST_VERSION=1.89
+ARG RUST_VERSION=1.96
 ARG DEBIAN_RELEASE=bookworm
 
 #─── chef stage ─────────────────────────────────────────────────────────────
