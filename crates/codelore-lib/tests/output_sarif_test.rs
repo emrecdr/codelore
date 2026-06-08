@@ -6,7 +6,6 @@ use std::io::Cursor;
 fn sarif_hotspots_valid_2_1_0() {
     let rows = vec![HotspotRow {
         path: "src/main.rs".into(),
-        name: String::new(),
         revisions: 12,
         cognitive: 25.0,
         code_health: 50.0,
@@ -54,7 +53,6 @@ fn sarif_hotspots_valid_2_1_0() {
 fn sarif_level_warning_above_threshold() {
     let rows = vec![HotspotRow {
         path: "src/lib.rs".into(),
-        name: String::new(),
         revisions: 5,
         cognitive: 10.0,
         code_health: 80.0,
@@ -78,7 +76,6 @@ fn sarif_level_warning_above_threshold() {
 fn sarif_level_note_below_threshold() {
     let rows = vec![HotspotRow {
         path: "src/util.rs".into(),
-        name: String::new(),
         revisions: 2,
         cognitive: 3.0,
         code_health: 90.0,
@@ -102,7 +99,6 @@ fn sarif_level_note_below_threshold() {
 fn sarif_security_severity_proxy() {
     let rows = vec![HotspotRow {
         path: "src/danger.rs".into(),
-        name: String::new(),
         revisions: 30,
         cognitive: 100.0,
         code_health: 20.0,
@@ -128,7 +124,6 @@ fn sarif_security_severity_proxy() {
 fn sarif_fingerprint_is_stable() {
     let row = HotspotRow {
         path: "src/main.rs".into(),
-        name: String::new(),
         revisions: 12,
         cognitive: 25.0,
         code_health: 50.0,

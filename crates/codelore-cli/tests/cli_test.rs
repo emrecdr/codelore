@@ -80,7 +80,7 @@ fn analyze_hotspots_emits_csv() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "entity,name,revisions,cognitive,code-health,hotspot-score",
+            "entity,revisions,cognitive,code-health,hotspot-score",
         ));
 }
 
@@ -102,7 +102,7 @@ fn analyze_code_health_emits_csv() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("entity,name,cognitive,score"));
+        .stdout(predicate::str::contains("entity,cognitive,score"));
 }
 
 #[test]

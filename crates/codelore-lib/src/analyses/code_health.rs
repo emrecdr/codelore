@@ -21,7 +21,6 @@ use crate::{CodeLoreError, Options, Result};
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CodeHealthRow {
     pub path: String,
-    pub name: String,
     pub cognitive: f64,
     pub score: f64, // 0..=100; higher = healthier
 }
@@ -110,7 +109,6 @@ pub fn run_code_health(db: &FactsDb, opts: &Options) -> Result<Vec<CodeHealthRow
          )
          SELECT
              path,
-             '' AS name,
              cognitive,
              GREATEST(0.0, LEAST(100.0,
                  100.0 * (1.0
@@ -132,9 +130,8 @@ pub fn run_code_health(db: &FactsDb, opts: &Options) -> Result<Vec<CodeHealthRow
         .query_map([], |r| {
             Ok(CodeHealthRow {
                 path: r.get::<_, String>(0)?,
-                name: r.get::<_, String>(1)?,
-                cognitive: r.get::<_, f64>(2)?,
-                score: r.get::<_, f64>(3)?,
+                cognitive: r.get::<_, f64>(1)?,
+                score: r.get::<_, f64>(2)?,
             })
         })
         .map_err(|e| CodeLoreError::Analysis(format!("query code-health: {e}")))?;

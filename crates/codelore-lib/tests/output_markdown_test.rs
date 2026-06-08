@@ -6,7 +6,6 @@ use std::io::Cursor;
 fn markdown_hotspots_table() {
     let rows = vec![HotspotRow {
         path: "src/main.rs".into(),
-        name: String::new(),
         revisions: 4,
         cognitive: 7.0,
         code_health: 75.5,

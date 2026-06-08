@@ -35,15 +35,14 @@ pub fn write_revisions_csv<W: Write>(rows: &[(String, u32)], w: &mut W) -> Resul
 pub fn write_hotspots_csv<W: Write>(rows: &[HotspotRow], w: &mut W) -> Result<()> {
     writeln!(
         w,
-        "entity,name,revisions,cognitive,code-health,hotspot-score"
+        "entity,revisions,cognitive,code-health,hotspot-score"
     )
     .map_err(CodeLoreError::Io)?;
     for row in rows {
         writeln!(
             w,
-            "{},{},{},{:.2},{:.2},{:.4}",
+            "{},{},{:.2},{:.2},{:.4}",
             quote_if_needed(&row.path),
-            quote_if_needed(&row.name),
             row.revisions,
             row.cognitive,
             row.code_health,
@@ -55,13 +54,12 @@ pub fn write_hotspots_csv<W: Write>(rows: &[HotspotRow], w: &mut W) -> Result<()
 }
 
 pub fn write_code_health_csv<W: Write>(rows: &[CodeHealthRow], w: &mut W) -> Result<()> {
-    writeln!(w, "entity,name,cognitive,score").map_err(CodeLoreError::Io)?;
+    writeln!(w, "entity,cognitive,score").map_err(CodeLoreError::Io)?;
     for row in rows {
         writeln!(
             w,
-            "{},{},{:.2},{:.2}",
+            "{},{:.2},{:.2}",
             quote_if_needed(&row.path),
-            quote_if_needed(&row.name),
             row.cognitive,
             row.score
         )

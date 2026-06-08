@@ -16,7 +16,6 @@ use crate::{CodeLoreError, Options, Result};
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct HotspotRow {
     pub path: String,
-    pub name: String,
     pub revisions: u32,
     pub cognitive: f64,
     pub code_health: f64,
@@ -73,7 +72,6 @@ pub fn run_hotspots(db: &FactsDb, opts: &Options) -> Result<Vec<HotspotRow>> {
          )
          SELECT
              path,
-             '' AS name,
              revs,
              cognitive,
              GREATEST(0.0, LEAST(100.0, 100.0 * (1.0 - 0.40 * norm_cx))) AS code_health,
@@ -92,11 +90,10 @@ pub fn run_hotspots(db: &FactsDb, opts: &Options) -> Result<Vec<HotspotRow>> {
         .query_map([], |r| {
             Ok(HotspotRow {
                 path: r.get::<_, String>(0)?,
-                name: r.get::<_, String>(1)?,
-                revisions: u32::try_from(r.get::<_, i64>(2)?).unwrap_or(u32::MAX),
-                cognitive: r.get::<_, f64>(3)?,
-                code_health: r.get::<_, f64>(4)?,
-                hotspot_score: r.get::<_, f64>(5)?,
+                revisions: u32::try_from(r.get::<_, i64>(1)?).unwrap_or(u32::MAX),
+                cognitive: r.get::<_, f64>(2)?,
+                code_health: r.get::<_, f64>(3)?,
+                hotspot_score: r.get::<_, f64>(4)?,
             })
         })
         .map_err(|e| CodeLoreError::Analysis(format!("query hotspots: {e}")))?;
