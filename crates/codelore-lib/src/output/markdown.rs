@@ -140,7 +140,7 @@ pub fn write_communication_markdown<W: Write>(rows: &[CommunicationRow], w: &mut
 
 pub fn write_ownership_markdown<W: Write>(rows: &[OwnershipRow], w: &mut W) -> Result<()> {
     header(w, "CodeLore code-ownership")?;
-    writeln!(w, "| Entity | Main Dev | Total Revs | Fractal Value |").map_err(CodeLoreError::Io)?;
+    writeln!(w, "| Entity | Main Author | Total Revs | Fractal Value |").map_err(CodeLoreError::Io)?;
     writeln!(w, "|---|---|---|---|").map_err(CodeLoreError::Io)?;
     for row in rows {
         writeln!(

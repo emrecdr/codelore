@@ -231,7 +231,7 @@ fn analyze_ownership_emits_csv() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "entity,main-dev,total-revs,fractal-value",
+            "entity,main-author,total-revs,fractal-value",
         ));
 }
 

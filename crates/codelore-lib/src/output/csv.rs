@@ -143,7 +143,11 @@ pub fn write_communication_csv<W: Write>(rows: &[CommunicationRow], w: &mut W) -
 }
 
 pub fn write_ownership_csv<W: Write>(rows: &[OwnershipRow], w: &mut W) -> Result<()> {
-    writeln!(w, "entity,main-dev,total-revs,fractal-value").map_err(CodeLoreError::Io)?;
+    // Header `main-author` (renamed from `main-dev`) — the column carries
+    // the value of the `main_author` field on OwnershipRow. The old name
+    // was a code-maat hangover; the Rust struct already uses `main_author`,
+    // so the CSV column now matches.
+    writeln!(w, "entity,main-author,total-revs,fractal-value").map_err(CodeLoreError::Io)?;
     for row in rows {
         writeln!(
             w,
