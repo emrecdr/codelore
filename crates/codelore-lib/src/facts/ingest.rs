@@ -70,6 +70,15 @@ impl FactsDb {
         // `--exclude` + `.codeloreignore`).
         let clones_n = self.populate_clones_at_head(opts)?;
 
+        // PAR-7: architectural grouping. After ingest, rewrite the
+        // `changes.path` column to logical group names per --group-file.
+        // Runs last so the rewrite sees all change rows from every commit.
+        if let Some(group_file) = opts.group_file.as_ref() {
+            let group_map = super::groups::GroupMap::from_file(group_file, opts.strict_grouping)
+                .map_err(|e| CodeLoreError::Analysis(format!("--group-file: {e}")))?;
+            apply_grouping(self, &group_map)?;
+        }
+
         let mut stats = stats;
         stats.clones_ingested = clones_n;
         Ok(stats)
@@ -512,5 +521,136 @@ fn append_change(app: &mut Appender<'_>, rev: &str, ch: &crate::FileChange) -> R
         i32::try_from(ch.loc_deleted).unwrap_or(i32::MAX),
     ])
     .map_err(|err| CodeLoreError::Analysis(format!("append change: {err}")))?;
+    Ok(())
+}
+
+/// Apply architectural grouping in-place on the `changes` table. Called by
+/// [`FactsDb::ingest`] after raw ingest if `opts.group_file.is_some()`.
+///
+/// Implementation:
+///   1. Build a `(raw_path → group_name)` mapping in Rust from every distinct
+///      path in `changes` against the [`GroupMap`].
+///   2. Insert the mapping into a temporary table.
+///   3. Build a `changes_grouped` temporary table that JOINs against the
+///      mapping, replaces the path with the group name (or keeps raw under
+///      non-strict mode for unmapped paths), and aggregates `loc_added` /
+///      `loc_deleted` per `(rev, new_path)`.
+///   4. Replace `changes` content with the aggregated rows.
+///   5. Remove `hunks` rows whose `(rev, path)` no longer exists in
+///      `changes` (strict mode + dropped paths produces orphans otherwise).
+///
+/// Strict vs non-strict:
+/// - Strict (`opts.strict_grouping = true` / code-maat default): rows whose
+///   path doesn't match any rule are DROPPED.
+/// - Non-strict (`CodeLore` default): unmapped rows keep their raw path.
+///
+/// # Errors
+///
+/// Returns [`CodeLoreError::Analysis`] on any SQL error.
+pub fn apply_grouping(db: &super::FactsDb, group_map: &super::GroupMap) -> Result<()> {
+    use duckdb::params;
+
+    let conn = db.conn();
+
+    // Step 1: enumerate distinct paths in `changes` and pre-compute the
+    // mapping in Rust. Doing the regex matching here avoids embedding the
+    // GroupMap rules into SQL (DuckDB has regexp_matches but doesn't
+    // support fancy-regex's lookaround that some code-maat fixtures need).
+    let distinct_paths: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT DISTINCT path FROM changes")
+            .map_err(|e| CodeLoreError::Analysis(format!("prepare distinct paths: {e}")))?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(|e| CodeLoreError::Analysis(format!("query distinct paths: {e}")))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| CodeLoreError::Analysis(format!("collect distinct paths: {e}")))?
+    };
+
+    // Step 2: build the mapping table. Mapped paths get the group name; in
+    // non-strict mode, unmapped paths get the raw path back; in strict mode,
+    // unmapped paths get a sentinel NULL group_name that the WHERE filter
+    // in step 3 uses to drop them.
+    conn.execute(
+        "CREATE OR REPLACE TEMPORARY TABLE _grouping_v1 (\
+             raw_path TEXT PRIMARY KEY, group_name TEXT\
+         )",
+        [],
+    )
+    .map_err(|e| CodeLoreError::Analysis(format!("create _grouping_v1: {e}")))?;
+
+    {
+        let mut stmt = conn
+            .prepare("INSERT INTO _grouping_v1 (raw_path, group_name) VALUES (?, ?)")
+            .map_err(|e| CodeLoreError::Analysis(format!("prepare grouping insert: {e}")))?;
+        for path in &distinct_paths {
+            let mapped: Option<&str> = group_map.map_entity(path);
+            // Strict: NULL → row gets dropped in step 3.
+            // Non-strict: fall back to raw path → row keeps its original path.
+            let effective: Option<&str> = if group_map.strict {
+                mapped
+            } else {
+                Some(mapped.unwrap_or(path.as_str()))
+            };
+            stmt.execute(params![path, effective])
+                .map_err(|e| CodeLoreError::Analysis(format!("grouping insert row: {e}")))?;
+        }
+    }
+
+    // Step 3+4: rewrite `changes` in place. CREATE OR REPLACE TEMPORARY
+    // TABLE _changes_grouped + DELETE+INSERT pattern keeps the FK from
+    // hunks happy in step 5 (no period where changes is empty AND the
+    // grouped data isn't yet ready to INSERT).
+    conn.execute(
+        "CREATE OR REPLACE TEMPORARY TABLE _changes_grouped AS \
+         SELECT \
+             c.rev, \
+             g.group_name AS path, \
+             MAX(c.change_type) AS change_type, \
+             ANY_VALUE(c.rename_from) AS rename_from, \
+             ANY_VALUE(c.similarity) AS similarity, \
+             SUM(c.loc_added)::INTEGER AS loc_added, \
+             SUM(c.loc_deleted)::INTEGER AS loc_deleted \
+         FROM changes c \
+         INNER JOIN _grouping_v1 g ON g.raw_path = c.path \
+         WHERE g.group_name IS NOT NULL \
+         GROUP BY c.rev, g.group_name",
+        [],
+    )
+    .map_err(|e| CodeLoreError::Analysis(format!("build _changes_grouped: {e}")))?;
+
+    // Step 5: clean hunks for paths that won't survive the swap. Do BEFORE
+    // the changes-swap so the FK from hunks → changes never sees a missing
+    // referent. Hunks aren't path-rewritten (line-range semantics don't
+    // translate to group level), so they get dropped for any path that
+    // collapsed or got removed.
+    conn.execute(
+        "DELETE FROM hunks WHERE (rev, path) NOT IN (\
+             SELECT c.rev, g.group_name FROM changes c \
+             INNER JOIN _grouping_v1 g ON g.raw_path = c.path \
+             WHERE g.group_name = c.path\
+         )",
+        [],
+    )
+    .map_err(|e| CodeLoreError::Analysis(format!("clean hunks: {e}")))?;
+
+    // Swap the data in changes
+    conn.execute("DELETE FROM changes", [])
+        .map_err(|e| CodeLoreError::Analysis(format!("clear changes: {e}")))?;
+    conn.execute(
+        "INSERT INTO changes (rev, path, change_type, rename_from, similarity, loc_added, loc_deleted) \
+         SELECT rev, path, change_type, rename_from, similarity, loc_added, loc_deleted \
+         FROM _changes_grouped",
+        [],
+    )
+    .map_err(|e| CodeLoreError::Analysis(format!("swap changes: {e}")))?;
+
+    tracing::info!(
+        "grouping applied: {} rules, {} distinct paths, strict={}",
+        group_map.rules.len(),
+        distinct_paths.len(),
+        group_map.strict
+    );
+
     Ok(())
 }
