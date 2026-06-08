@@ -228,6 +228,19 @@ pub fn write_soc_markdown<W: Write>(
     Ok(())
 }
 
+pub fn write_messages_markdown<W: Write>(
+    rows: &[crate::analyses::messages::MessagesRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore messages")?;
+    writeln!(w, "| Entity | Matches |").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(w, "| `{}` | {} |", row.entity, row.matches).map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_clone_coupling_markdown<W: Write>(rows: &[CloneCouplingRow], w: &mut W) -> Result<()> {
     header(
         w,

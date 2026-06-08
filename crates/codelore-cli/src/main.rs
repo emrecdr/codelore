@@ -474,6 +474,28 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
             (fmt, AnalysisName::Soc) => {
                 anyhow::bail!("soc analysis supports csv|json|markdown; got {fmt:?}")
             }
+            // --- messages (commit-message regex matcher) ---
+            ("csv", AnalysisName::Messages) => {
+                let rows = codelore_lib::analyses::messages::run_messages(&db, &opts)
+                    .context("run messages")?;
+                codelore_lib::output::csv::write_messages_csv(&rows, &mut out)
+                    .context("write csv")?;
+            }
+            ("json", AnalysisName::Messages) => {
+                let rows = codelore_lib::analyses::messages::run_messages(&db, &opts)
+                    .context("run messages")?;
+                codelore_lib::output::json::write_messages_json(&rows, &mut out)
+                    .context("write json")?;
+            }
+            ("markdown", AnalysisName::Messages) => {
+                let rows = codelore_lib::analyses::messages::run_messages(&db, &opts)
+                    .context("run messages")?;
+                codelore_lib::output::markdown::write_messages_markdown(&rows, &mut out)
+                    .context("write markdown")?;
+            }
+            (fmt, AnalysisName::Messages) => {
+                anyhow::bail!("messages analysis supports csv|json|markdown; got {fmt:?}")
+            }
             // --- clone-coupling (Plan 8 §6) ---
             ("csv", AnalysisName::CloneCoupling) => {
                 let rows = codelore_lib::analyses::clone_coupling::run_clone_coupling(&db, &opts)

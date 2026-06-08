@@ -240,6 +240,18 @@ pub fn write_soc_csv<W: Write>(
     Ok(())
 }
 
+pub fn write_messages_csv<W: Write>(
+    rows: &[crate::analyses::messages::MessagesRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(w, "entity,matches").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(w, "{},{}", quote_if_needed(&row.entity), row.matches)
+            .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_clone_coupling_csv<W: Write>(rows: &[CloneCouplingRow], w: &mut W) -> Result<()> {
     // 18 columns mirroring the CloneCouplingRow struct.
     writeln!(

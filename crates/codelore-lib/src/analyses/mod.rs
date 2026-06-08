@@ -10,6 +10,7 @@ pub mod code_health;
 pub mod communication;
 pub mod coupling;
 pub mod hotspots;
+pub mod messages;
 pub mod ownership;
 pub mod revisions;
 pub mod soc;

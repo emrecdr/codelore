@@ -37,6 +37,10 @@ globset = "0.4"
 dirs = "5"
 tracing = "0.1"
 rayon = "1"
+# `messages` analysis validates user-supplied --expression-to-match
+# regex eagerly (DuckDB does the actual matching server-side via
+# regexp_matches).
+regex = "1"
 
 [features]
 default = []

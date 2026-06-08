@@ -27,6 +27,8 @@ pub enum AnalysisName {
     // code-maat parity sprint (PAR-1+): Sum of Coupling — per-entity total
     // of (commit-size − 1) across every commit the entity appears in.
     Soc,
+    // PAR-2: commit-message regex matcher.
+    Messages,
 }
 
 impl AnalysisName {
@@ -48,6 +50,7 @@ impl AnalysisName {
             Self::Clones => "clones",
             Self::CloneCoupling => "clone-coupling",
             Self::Soc => "soc",
+            Self::Messages => "messages",
         }
     }
 
@@ -69,6 +72,7 @@ impl AnalysisName {
             Self::Clones,
             Self::CloneCoupling,
             Self::Soc,
+            Self::Messages,
         ]
     }
 }
