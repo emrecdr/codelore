@@ -1,0 +1,36 @@
+# Keeps the GitHub Actions versions in `.github/workflows/*.yml` fresh.
+# Without this, action major versions drift across the workflows over time
+# (we hit v4→v6/v7/v8 jumps during the v0.1.0 release pipeline rebuild).
+#
+# Weekly cadence + grouped PRs means at most one bump-bundle PR per week,
+# with all action updates batched together for a single review pass.
+
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    labels:
+      - dependencies
+      - github-actions
+
+  # Cargo lockfile + crate versions. Same grouping rationale.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      cargo:
+        update-types:
+          - minor
+          - patch
+    labels:
+      - dependencies
+      - rust
