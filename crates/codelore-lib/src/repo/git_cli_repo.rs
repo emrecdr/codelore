@@ -57,14 +57,14 @@ impl Repo for GitCliRepo {
             "log",
             "--pretty=format:%H%x1f%P%x1f%ae%x1f%an%x1f%ce%x1f%aI%x1f%B%x1e",
             // `--raw --numstat` together produce a per-commit block of raw
-        // lines (status + paths, `:`-prefixed) immediately followed by
-        // numstat lines (added/deleted/path). They appear in matching
-        // file order so we can zip them by index. We need both because
-        // `--numstat` alone can't distinguish Added from Modified
-        // (zero-delete numstat looks the same), and `--name-status`
-        // alone has no line counts.
-        "--raw",
-        "--numstat",
+            // lines (status + paths, `:`-prefixed) immediately followed by
+            // numstat lines (added/deleted/path). They appear in matching
+            // file order so we can zip them by index. We need both because
+            // `--numstat` alone can't distinguish Added from Modified
+            // (zero-delete numstat looks the same), and `--name-status`
+            // alone has no line counts.
+            "--raw",
+            "--numstat",
         ];
         if !opts.include_merges {
             args.push("--no-merges");
@@ -123,13 +123,7 @@ impl Repo for GitCliRepo {
         // raw + numstat block our streaming `git log` consumer parses,
         // minus the pretty header. `parse_changes_block` accepts both
         // (it just ignores empty lines and pairs raw with numstat by order).
-        let output = self.run_git(&[
-            "show",
-            "--raw",
-            "--numstat",
-            "--pretty=format:",
-            rev,
-        ])?;
+        let output = self.run_git(&["show", "--raw", "--numstat", "--pretty=format:", rev])?;
         if !output.status.success() {
             return Err(CodeLoreError::Repo(format!(
                 "git show: {}",
@@ -661,10 +655,22 @@ mod tests {
         // Plumbed numstat values must reach the FileChange — the whole
         // point of the --raw --numstat switch. Commit A's foo.rs gained 3
         // lines and lost 1.
-        assert_eq!(events[0].changes[0].loc_added, 3, "commit A foo.rs loc_added");
-        assert_eq!(events[0].changes[0].loc_deleted, 1, "commit A foo.rs loc_deleted");
+        assert_eq!(
+            events[0].changes[0].loc_added, 3,
+            "commit A foo.rs loc_added"
+        );
+        assert_eq!(
+            events[0].changes[0].loc_deleted, 1,
+            "commit A foo.rs loc_deleted"
+        );
         // Commit C added bar.rs with 5 lines (deleted=0).
-        assert_eq!(events[2].changes[0].loc_added, 5, "commit C bar.rs loc_added");
-        assert_eq!(events[2].changes[0].loc_deleted, 0, "commit C bar.rs loc_deleted");
+        assert_eq!(
+            events[2].changes[0].loc_added, 5,
+            "commit C bar.rs loc_added"
+        );
+        assert_eq!(
+            events[2].changes[0].loc_deleted, 0,
+            "commit C bar.rs loc_deleted"
+        );
     }
 }

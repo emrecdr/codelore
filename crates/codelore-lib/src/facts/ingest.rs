@@ -718,9 +718,9 @@ pub fn materialize_changes_lineage(db: &super::FactsDb) -> Result<()> {
         "CREATE INDEX IF NOT EXISTS idx_changes_lineage_path ON changes_lineage(path)",
         "CREATE INDEX IF NOT EXISTS idx_changes_lineage_rev ON changes_lineage(rev)",
     ] {
-        db.conn().execute(stmt, params![]).map_err(|e| {
-            CodeLoreError::Analysis(format!("index changes_lineage: {e}"))
-        })?;
+        db.conn()
+            .execute(stmt, params![])
+            .map_err(|e| CodeLoreError::Analysis(format!("index changes_lineage: {e}")))?;
     }
     tracing::info!("materialized changes_lineage with canonical rename paths");
     Ok(())

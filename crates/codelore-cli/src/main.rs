@@ -180,7 +180,8 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
     let needs_writable_db = matches!(format, "parquet" | "sqlite");
 
     let db = {
-        let _span = tracing::info_span!(target: "codelore::bench", "bench.cache_or_ingest").entered();
+        let _span =
+            tracing::info_span!(target: "codelore::bench", "bench.cache_or_ingest").entered();
         if args.no_cache || needs_writable_db {
             // --no-cache (or writable-format requirement): always fresh in-memory.
             let db = FactsDb::new_in_memory().context("open fact store (in-memory)")?;
@@ -213,7 +214,8 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
 
     // csv / json / sarif / markdown: stream through Write
     {
-        let _span = tracing::info_span!(target: "codelore::bench", "bench.analyze_and_emit").entered();
+        let _span =
+            tracing::info_span!(target: "codelore::bench", "bench.analyze_and_emit").entered();
         let mut out: Box<dyn Write> = match args.output.as_ref() {
             Some(path) => Box::new(std::fs::File::create(path)?),
             None => Box::new(std::io::stdout().lock()),

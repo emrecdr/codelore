@@ -3,8 +3,6 @@
 
 pub mod authors;
 pub mod churn;
-pub mod lineage;
-pub mod query;
 pub mod clone_coupling;
 pub mod clones;
 pub mod code_age;
@@ -14,9 +12,11 @@ pub mod coupling;
 pub mod entity_effort;
 pub mod entity_ownership;
 pub mod hotspots;
+pub mod lineage;
 pub mod main_dev;
 pub mod messages;
 pub mod ownership;
+pub mod query;
 pub mod revisions;
 pub mod soc;
 pub mod summary;

@@ -29,9 +29,7 @@ fn rename_history_merges_under_canonical_path_when_lineage_on() {
 
     // With lineage on: the OLD path must NOT appear in the output
     // because all its revisions have been folded into the new path.
-    let old_appears = rows_on
-        .iter()
-        .any(|(path, _)| path.contains("old_name"));
+    let old_appears = rows_on.iter().any(|(path, _)| path.contains("old_name"));
     assert!(
         !old_appears,
         "old_name.rs should NOT appear when canonical_lineage is on; got rows: {rows_on:?}"
@@ -63,12 +61,8 @@ fn split_history_returns_when_lineage_off() {
     let rows_off = run_revisions(&db, &opts_off).expect("revisions");
 
     // With lineage off: both paths appear (code-maat-parity behaviour).
-    let old_appears = rows_off
-        .iter()
-        .any(|(path, _)| path.contains("old_name"));
-    let new_appears = rows_off
-        .iter()
-        .any(|(path, _)| path.contains("new_name"));
+    let old_appears = rows_off.iter().any(|(path, _)| path.contains("old_name"));
+    let new_appears = rows_off.iter().any(|(path, _)| path.contains("new_name"));
     assert!(
         old_appears && new_appears,
         "both old_name and new_name should appear when canonical_lineage is off; got: {rows_off:?}"

@@ -152,7 +152,10 @@ mod tests {
         let raw = "alice@example.com,Backend\n";
         let err = parse_str(raw).expect_err("must fail");
         let s = format!("{err}");
-        assert!(s.contains("malformed header") || s.contains("header"), "{s}");
+        assert!(
+            s.contains("malformed header") || s.contains("header"),
+            "{s}"
+        );
         // Typed-variant invariant: this is a MalformedTeamMap, not a Provenance bag.
         assert!(matches!(err, CodeLoreError::MalformedTeamMap { .. }));
     }

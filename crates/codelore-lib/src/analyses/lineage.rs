@@ -90,9 +90,8 @@ pub fn rewrite(sql: &str, opts: &Options) -> String {
     // Regex captures the next non-whitespace character after the table name
     // so we can tell a lowercase-letter alias (`c`, `cchg`) from a SQL
     // keyword or newline.
-    let re = RE.get_or_init(|| {
-        regex::Regex::new(r"\b(FROM|JOIN)\s+changes\b(\s*)([A-Za-z_]?)").unwrap()
-    });
+    let re = RE
+        .get_or_init(|| regex::Regex::new(r"\b(FROM|JOIN)\s+changes\b(\s*)([A-Za-z_]?)").unwrap());
 
     re.replace_all(sql, |caps: &regex::Captures<'_>| {
         let kw = &caps[1];
@@ -102,8 +101,7 @@ pub fn rewrite(sql: &str, opts: &Options) -> String {
         // table name is the start of a per-query alias (e.g. `c`, `cchg`,
         // `pchg`). An UPPERCASE letter or no letter signals a keyword
         // (`WHERE`, `ON`, `GROUP`, `LIMIT`, `INNER`, etc.) or a newline.
-        let needs_alias =
-            next.is_empty() || next.chars().next().is_some_and(char::is_uppercase);
+        let needs_alias = next.is_empty() || next.chars().next().is_some_and(char::is_uppercase);
         if needs_alias {
             format!("{kw} {src} AS changes{ws}{next}")
         } else {

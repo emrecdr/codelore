@@ -400,7 +400,10 @@ mod tests {
         // Two runs from different machines with the same team-map content
         // must hit the same cache entry. Hence path is stripped.
         let s = canon.to_string();
-        assert!(!s.contains("team-map.csv"), "path leaked into canonical form: {s}");
+        assert!(
+            !s.contains("team-map.csv"),
+            "path leaked into canonical form: {s}"
+        );
         assert!(s.contains("team_map_digest"), "digest field missing: {s}");
     }
 
