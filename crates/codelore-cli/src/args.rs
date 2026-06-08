@@ -192,6 +192,29 @@ pub struct AnalyzeArgs {
     /// Default: drop solo commits (1).
     #[arg(long)]
     pub min_soc: Option<u32>,
+
+    /// Migration helper: flip internal defaults back to legacy code-maat
+    /// behavior. When set:
+    ///   - `main-dev-by-revs` emits the lying `added`/`total-added` CSV
+    ///     headers (instead of the honest `revisions`/`total-revisions`)
+    ///   - `soc` falls back to `--min-revs` for its threshold (code-maat's
+    ///     semantically-overloaded use) instead of the dedicated `--min-soc`
+    ///   - `--strict-grouping` defaults to true (code-maat's always-strict
+    ///     behavior) instead of `CodeLore`'s safer non-strict default
+    ///
+    /// Use only when dashboards downstream parse code-maat CSV verbatim.
+    /// The modern surface is the recommendation; this flag is the safety
+    /// net for users in migration who can't update their parsers yet.
+    #[arg(long = "code-maat-compat", default_value_t = false)]
+    pub code_maat_compat: bool,
+
+    /// Strict-grouping mode: paths that don't match any rule in the
+    /// `--group-file` are DROPPED from analysis output (code-maat's
+    /// behavior). Default: false — unmapped paths keep their raw names
+    /// (`CodeLore` safety divergence: silent data drop is a 2013 mistake).
+    /// `--code-maat-compat` implies `--strict-grouping`.
+    #[arg(long = "strict-grouping", default_value_t = false)]
+    pub strict_grouping: bool,
 }
 
 /// Parse a YYYY-MM-DD date for the `--age-time-now` flag.

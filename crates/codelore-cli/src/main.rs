@@ -130,6 +130,11 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
         age_time_now: args.age_time_now,
         message_regex: args.message_regex.clone(),
         min_soc: args.min_soc,
+        // PAR-9: --code-maat-compat. Implies --strict-grouping (code-maat
+        // is always-strict). Other compat behaviors are gated at the
+        // analysis / emitter layer.
+        code_maat_compat: args.code_maat_compat,
+        strict_grouping: args.strict_grouping || args.code_maat_compat,
         ..Options::default()
     };
 
