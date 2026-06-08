@@ -16,7 +16,11 @@ use crate::analyses::summary::SummaryRow;
 use crate::{CodeLoreError, Result};
 
 fn quote_if_needed(s: &str) -> String {
-    if s.contains(',') || s.contains('"') || s.contains('\n') {
+    // RFC 4180 §2.5: fields containing `,`, `"`, CR, or LF MUST be quoted.
+    // Missing `\r` here would split a row in two if an author name or commit
+    // metadata carried a bare carriage return (rare but legal in git's byte
+    // stream).
+    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
         let escaped = s.replace('"', "\"\"");
         format!("\"{escaped}\"")
     } else {
@@ -374,4 +378,24 @@ pub fn write_clone_coupling_csv<W: Write>(rows: &[CloneCouplingRow], w: &mut W) 
         .map_err(CodeLoreError::Io)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::quote_if_needed;
+
+    #[test]
+    fn quotes_carriage_return() {
+        assert_eq!(quote_if_needed("a\rb"), "\"a\rb\"");
+    }
+
+    #[test]
+    fn quotes_comma_and_doubles_quotes() {
+        assert_eq!(quote_if_needed("a,\"b\""), "\"a,\"\"b\"\"\"");
+    }
+
+    #[test]
+    fn leaves_plain_string_alone() {
+        assert_eq!(quote_if_needed("plain"), "plain");
+    }
 }

@@ -84,6 +84,11 @@ impl Repo for GixRepo {
         // The returned iterator owns the OID list and a clone of the Arc-based
         // ThreadSafeRepository — both are Send.
         let inner_clone = self.inner.clone();
+        // Parse `.mailmap` ONCE up front; the snapshot is owned bytes (Send + Sync)
+        // and we resolve every author against it inside the closure. Previously
+        // this was re-parsed from disk on every commit — quadratic-ish cost on
+        // repos with large histories.
+        let mailmap = inner_clone.to_thread_local().open_mailmap();
         Ok(Box::new(oids.into_iter().map(move |oid| {
             // to_thread_local() is per-iteration because gix::Repository is !Send.
             // The `+ Send` bound on the trait return type forces all captures to be Send,
@@ -111,8 +116,6 @@ impl Repo for GixRepo {
             // (`Canonical <c@x> <o@x>`) work either way.
             let canonical = {
                 use gix::bstr::ByteSlice as _;
-                let repo_local = inner_clone.to_thread_local();
-                let mailmap = repo_local.open_mailmap();
                 let sig_ref = gix::actor::SignatureRef {
                     name: event.author_name.as_bytes().as_bstr(),
                     email: event.author_email.as_bytes().as_bstr(),

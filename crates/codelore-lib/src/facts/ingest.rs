@@ -192,6 +192,7 @@ impl FactsDb {
     /// (built from `--exclude` flags + `.codeloreignore`).
     fn populate_clones_at_head(&self, opts: &Options) -> Result<usize> {
         use crate::clones::{CloneLanguage, extract_functions, group_clones};
+        use rayon::prelude::*;
         use walkdir::WalkDir;
 
         // Compile the exclude globset once (.git / target / node_modules are
@@ -200,42 +201,53 @@ impl FactsDb {
 
         let head_rev = current_head_rev(self)?;
 
-        // First pass: walk the working tree, collect FunctionFingerprints.
-        let mut all_fns = Vec::new();
-        for entry in WalkDir::new(&opts.repo_path)
-            .into_iter()
-            .filter_map(std::result::Result::ok)
-        {
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            let path = entry.path();
-            if path.components().any(|c| {
-                matches!(
-                    c.as_os_str().to_str(),
-                    Some(".git" | "target" | "node_modules")
-                )
-            }) {
-                continue;
-            }
-            let Some(lang) = CloneLanguage::from_path(path) else {
-                continue;
-            };
-            // Normalise to POSIX `/` so `clones.path` matches `changes.path`
-            // (git always emits `/`). See `crate::paths::to_posix`.
-            let rel = path
-                .strip_prefix(&opts.repo_path)
-                .map_or_else(|_| crate::paths::to_posix(path), crate::paths::to_posix);
-            if exclude_set.is_match(&rel) {
-                continue;
-            }
-            let Ok(code) = std::fs::read(path) else {
-                continue;
-            };
-            let fns = extract_functions(&rel, &code, lang)
-                .map_err(|e| CodeLoreError::Analysis(format!("clones: extract {rel}: {e}")))?;
-            all_fns.extend(fns);
-        }
+        // Phase 1 (serial, fast): walk the working tree, filter to Tier-1 files
+        // that survive the exclude globset, capture (absolute path, POSIX rel, lang).
+        let candidates: Vec<(std::path::PathBuf, String, CloneLanguage)> =
+            WalkDir::new(&opts.repo_path)
+                .into_iter()
+                .filter_map(std::result::Result::ok)
+                .filter_map(|entry| {
+                    if !entry.file_type().is_file() {
+                        return None;
+                    }
+                    let path = entry.path();
+                    if path.components().any(|c| {
+                        matches!(
+                            c.as_os_str().to_str(),
+                            Some(".git" | "target" | "node_modules")
+                        )
+                    }) {
+                        return None;
+                    }
+                    let lang = CloneLanguage::from_path(path)?;
+                    // Normalise to POSIX `/` so `clones.path` matches `changes.path`
+                    // (git always emits `/`). See `crate::paths::to_posix`.
+                    let rel = path
+                        .strip_prefix(&opts.repo_path)
+                        .map_or_else(|_| crate::paths::to_posix(path), crate::paths::to_posix);
+                    if exclude_set.is_match(&rel) {
+                        return None;
+                    }
+                    Some((path.to_path_buf(), rel, lang))
+                })
+                .collect();
+
+        // Phase 2 (parallel): read each file + run tree-sitter fingerprinting on
+        // the rayon pool. Mirrors the complexity pass above. Unreadable files
+        // silently yield no fingerprints; extract errors short-circuit the pass
+        // via `collect::<Result<_>>`.
+        let per_file: Vec<Vec<_>> = candidates
+            .into_par_iter()
+            .map(|(full_path, rel, lang)| -> Result<Vec<_>> {
+                let Ok(code) = std::fs::read(&full_path) else {
+                    return Ok(Vec::new());
+                };
+                extract_functions(&rel, &code, lang)
+                    .map_err(|e| CodeLoreError::Analysis(format!("clones: extract {rel}: {e}")))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let all_fns: Vec<_> = per_file.into_iter().flatten().collect();
 
         let groups = group_clones(all_fns, opts.min_clone_node_count);
         if groups.is_empty() {
