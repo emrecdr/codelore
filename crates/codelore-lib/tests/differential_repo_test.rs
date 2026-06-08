@@ -246,6 +246,82 @@ fn fixture_contains_merge_commit() {
 
 /// The rename commit (`old_name` → `new_name`) must appear in both impls with
 /// matching changed file paths.
+/// Stricter rename invariant: both walkers must agree on `change_type` —
+/// `GixRepo` and `GitCliRepo` must both emit `ChangeType::Renamed { from, .. }`
+/// for the same change rather than one side reporting an Add+Delete pair.
+///
+/// Regression for the pre-fix divergence: `GixRepo` had
+/// `track_rewrites(None)`, so a rename surfaced as `Deleted` on the old
+/// path + `Added` on the new path, while `GitCliRepo` (via `git log
+/// --name-status`'s default `-M` detection) emitted a single `Renamed`
+/// row. Same commit, different events, silent history splits in every
+/// downstream analysis.
+#[test]
+fn rename_commit_change_type_matches_across_walkers() {
+    use codelore_lib::types::ChangeType;
+    let (gix, cli) = open_both();
+    let opts = opts_with_merges();
+
+    let revs: Vec<String> = gix
+        .walk_commits(&opts)
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+        .into_iter()
+        .map(|e| e.rev)
+        .collect();
+
+    // Find the rename commit via `GitCliRepo`'s (already-correct) Renamed
+    // signal — its `git log --name-status` has detected renames since
+    // before this fix. The fixture has exactly one rename
+    // (`old_name.rs` -> `new_name.rs`). Then assert `GixRepo` also emits
+    // Renamed for the same commit.
+    let rev = revs
+        .iter()
+        .find(|rev| {
+            cli.changed_files(rev).is_ok_and(|files| {
+                files
+                    .iter()
+                    .any(|f| matches!(f.change_type, ChangeType::Renamed { .. }))
+            })
+        })
+        .expect("CLI walker should expose at least one Renamed event in the fixture");
+
+    // Both walkers must mark the new-name entry as Renamed (not Added).
+    let gix_files = gix.changed_files(rev).unwrap();
+    let cli_files = cli.changed_files(rev).unwrap();
+
+    let new_name_change_gix = gix_files
+        .iter()
+        .find(|f| f.path.contains("new_name"))
+        .expect("gix: new_name entry missing");
+    let new_name_change_cli = cli_files
+        .iter()
+        .find(|f| f.path.contains("new_name"))
+        .expect("cli: new_name entry missing");
+
+    assert!(
+        matches!(new_name_change_gix.change_type, ChangeType::Renamed { .. }),
+        "`gix` should mark rename as Renamed, got {:?}",
+        new_name_change_gix.change_type
+    );
+    assert!(
+        matches!(new_name_change_cli.change_type, ChangeType::Renamed { .. }),
+        "`cli` should mark rename as Renamed, got {:?}",
+        new_name_change_cli.change_type
+    );
+
+    // The pre-rename path must NOT appear as a stand-alone Deleted entry
+    // when rewrite tracking works.
+    let old_name_deleted = gix_files
+        .iter()
+        .any(|f| !f.path.contains("new_name") && matches!(f.change_type, ChangeType::Deleted));
+    assert!(
+        !old_name_deleted,
+        "`gix` should fold the old path into Renamed, not emit a separate Deleted entry"
+    );
+}
+
 #[test]
 fn rename_commit_visible_in_both() {
     let (gix, cli) = open_both();

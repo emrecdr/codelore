@@ -218,9 +218,16 @@ fn compute_changed_files(inner: &gix::ThreadSafeRepository, rev: &str) -> Result
         })
         .transpose()?;
 
-    // Configure diff options: track full paths, no rewrite detection for Plan 1.
+    // Enable rename tracking with Git's default thresholds (50% similarity,
+    // 1000-file fuzzy-match limit, copies OFF). GitCliRepo gets rename
+    // detection for free via `git log --name-status` (Git's default `-M`
+    // kicks in); leaving GixRepo without it produced divergent change-type
+    // values for the same commit — renames showed up as Delete+Add pairs
+    // and split a file's history. Copies are off intentionally to match
+    // Git's default (`-C` not passed) and keep the two walker backends
+    // bit-equivalent for the differential parity tests.
     let mut diff_opts = gix::diff::Options::default();
-    diff_opts.track_rewrites(None);
+    diff_opts.track_rewrites(Some(gix::diff::Rewrites::default()));
 
     let changes: Vec<_> = repo
         .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), diff_opts)
