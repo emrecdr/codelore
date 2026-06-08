@@ -18,7 +18,7 @@
 [![Version](https://img.shields.io/badge/version-0.1.0--alpha.1-orange?style=flat-square)](CHANGELOG.md)
 [![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue?style=flat-square)](LICENSE)
 [![Rust 1.87+](https://img.shields.io/badge/rust-1.87%2B-dea584?style=flat-square&logo=rust)](https://www.rust-lang.org/)
-[![Tests: 390 passing](https://img.shields.io/badge/tests-390%20passing-2ea44f?style=flat-square)](#status)
+[![Tests: 395 passing](https://img.shields.io/badge/tests-395%20passing-2ea44f?style=flat-square)](#status)
 [![Clippy: clean](https://img.shields.io/badge/clippy-clean-2ea44f?style=flat-square&logo=rust)](#status)
 
 > **Read the lore of your codebase.**
@@ -278,7 +278,7 @@ What we deliberately don't ship: no async runtime, no libgit2 binding, no LLM-ba
 
 ## Status
 
-Release-ready alpha. **21 analyses × 6 output formats × `codelore diff` PR-mode × 4 SARIF rules.** 390 tests pass, clippy / fmt / deny all green. The first stable tag (`v0.1.0`) is the only remaining gate; release pipeline (cargo-dist + SLSA L3 + distroless container + Homebrew tap + binstall) auto-runs on tag push.
+Release-ready alpha. **21 analyses × 6 output formats × `codelore diff` PR-mode × 4 SARIF rules.** 395 tests pass, clippy / fmt / deny all green. The first stable tag (`v0.1.0`) is the only remaining gate; release pipeline (cargo-dist + SLSA L3 + distroless container + Homebrew tap + binstall) auto-runs on tag push.
 
 **This session's deliverables** (3 sprints + GitHub tags + versioning):
 
@@ -286,10 +286,10 @@ Release-ready alpha. **21 analyses × 6 output formats × `codelore diff` PR-mod
 |---|---|---|---|
 | **Bugfix** | 7 / 7 | 7 atomic | Fixed clone-coupling p-value=0, dropped empty `name` column, SARIF CODELORE-MISSING-COCHANGE rule, canonical Options serialization (cache + provenance), AI-attribution for 2024-2026 coders, worktree prune on diff startup, deterministic tertiary sorts |
 | **Modernization** | 10 / 11 (E.3 deferred) | 9 atomic | Hot-path indexes, severity-band SARIF level, `main-dev` → `main-author` header, diff CLI typed enums, absence-threshold knobs, `.codelorebots` extension hook, 11 analyses migrated to bind parameters, change_type CHECK constraint, code_health Fisher-filtered centrality |
-| **Code-maat parity** | 8 / 11 (PAR-8/9 deferred) | 9 atomic | 7 new analyses (soc, messages, main-dev, main-dev-by-revs, main-dev-by-deletions/refactoring-main-dev alias, entity-effort, entity-ownership) + 7 wired CLI flags + architectural grouping with lookaround |
+| **Code-maat parity** | **11 / 11 — feature complete** | 12 atomic | 7 new analyses + 9 wired CLI flags + architectural grouping with lookaround + `--time-bucket DAY/WEEK/MONTH` + `--code-maat-compat` migration helper + `--strict-grouping` |
 | **Docs + tags + versioning** | misc | 4 atomic | Topic badges (18 tags), SemVer policy + release procedure, RELEASING.md, github-topics.md |
 
-**29 atomic commits total this session.** Tests went from 349 → 390 (+41 regression tests added).
+**31 atomic commits total this session.** Tests went from 349 → 395 (+46 regression tests added).
 
 Known limitations (the honest list, validated against the current codebase):
 
@@ -297,8 +297,8 @@ Known limitations (the honest list, validated against the current codebase):
 - **`Options` cross-field validation** — pathological combinations like `min_revs > max_changeset_size` silently return empty results
 - **Hand-rolled CSV emitter** — `quote_if_needed` covers the worst case but a `csv`-crate migration is on the open list
 - **Clone extraction is still single-threaded** — same Rayon pattern as the parallel complexity extraction is queued next
-- **Complexity metrics aren't re-aggregated after grouping** — `hotspots` + `code-health` analyses report 0 cognitive for grouped entities (group-level cognitive aggregation is a v1.x follow-up)
-- **`--time-bucket` and `--code-maat-compat` are deferred** — the modern time-bucket and the legacy-output compatibility flag are queued for the next sprint
+- **Complexity metrics aren't re-aggregated after grouping** — `hotspots` + `code-health` analyses report 0 cognitive for `--group-file`-collapsed entities (group-level cognitive aggregation is a v1.x follow-up)
+- **Code-maat sliding-window `--temporal-period N`** is intentionally **not** emulated under `--code-maat-compat` — the modern `--time-bucket DAY|WEEK|MONTH` (non-overlapping buckets, no commit-duplication artifact) is the recommended surface and what ships; the legacy sliding-window-with-duplication is an opt-in future-work item if migration users hit it
 
 Full backlog with priority ranks: [`docs/codebase_analysis_report.md`](docs/codebase_analysis_report.md).
 

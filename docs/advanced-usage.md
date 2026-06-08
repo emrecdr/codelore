@@ -4,7 +4,7 @@ This guide is the developer-facing reference for CodeLore. The [README](../READM
 
 ## Table of contents
 
-1. [The 14 analyses (what they tell you)](#1-the-14-analyses-what-they-tell-you)
+1. [The 21 analyses (what they tell you)](#1-the-21-analyses-what-they-tell-you)
 2. [Output formats deep-dive](#2-output-formats-deep-dive)
 3. [Every CLI flag explained](#3-every-cli-flag-explained)
 4. [PR-mode: `codelore diff`](#4-pr-mode-codelore-diff)
@@ -20,24 +20,40 @@ This guide is the developer-facing reference for CodeLore. The [README](../READM
 
 ---
 
-## 1. The 14 analyses (what they tell you)
+## 1. The 21 analyses (what they tell you)
+
+The table below is split into the **17 code-maat-parity analyses** (drop-in successors to legacy code-maat) and **4 modern additions** marked ★ that CodeLore introduces.
+
+### Code-maat parity (17)
 
 | Analysis | What you ask it | Formula / source | When to reach for it |
 |---|---|---|---|
 | `revisions` | "Which files change most often?" | `COUNT(DISTINCT rev)` per file | First-look for any unfamiliar repo |
-| `hotspots` | "Which files are both complex AND change a lot?" | `percentile_rank(revs) × percentile_rank(cognitive) × (10 − code_health) / 10` ([see design spec](superpowers/specs/2026-06-06-codelore-design.md)) | The headline ranking signal — refactor priorities |
-| `code-health` | "How healthy is each file's structure?" | 4-input composite: cognitive 0.40 + churn 0.25 + fragmentation 0.15 + coupling 0.20 | Combined with `hotspots`; tracks degradation |
+| `summary` | "Give me the one-page snapshot" | Commits + changes + entities + authors counts | First slide of any review |
+| `authors` | "List all contributors and commit counts" | Canonical authors sorted desc | Onboarding; recognition |
 | `code-age` | "Which files are stale vs. recently churned?" | Months since last commit per file | Find dead code + recently-volatile areas |
 | `abs-churn` | "How fast does the team add/delete code?" | Lines added/deleted/commits grouped by date | Trend dashboards |
 | `author-churn` | "Who contributes how much?" | Same as `abs-churn` grouped by canonical author (post-mailmap) | Effort distribution |
 | `entity-churn` | "Which files churn the most?" | Same grouped by file | Pair with `hotspots` |
+| `entity-effort` | "How much effort has each entity received per author?" | Per-(entity, author) revision counts | Pair with `code-ownership` for bus-factor narratives |
+| `entity-ownership` | "Who has added/deleted what in each entity?" | Per-(entity, author) `added` + `deleted` lines | Fine-grained ownership beyond fractal value |
 | `communication` | "Who works on the same code as whom?" (Conway's Law) | Author pairs by shared-work intensity | Team topology insight |
 | `code-ownership` | "Is each file mainly owned by one person, or fragmented?" | Fractal Value = 1 − Herfindahl-Hirschman Index + main-developer | Bus-factor; knowledge-loss risk |
+| `main-dev` | "Who is the main developer of each entity by lines added?" | Per-entity author with max `added` (default metric) | Knowledge-owner discovery |
+| `main-dev-by-revs` | "Who is the main developer by revision count?" | Per-entity author with max revision count | Use when added-lines is misleading (e.g., reformatters) |
+| `main-dev-by-deletions` (alias: `refactoring-main-dev`) | "Who is the main refactorer of each entity?" | Per-entity author with max `deleted` lines | Spot quiet refactor leaders |
 | `change-coupling` | "Which files always change together?" | Fisher exact-filtered logical (temporal) coupling at `p < 0.05` | Hidden architectural debt |
-| `summary` | "Give me the one-page snapshot" | Commits + changes + entities + authors counts | First slide of any review |
-| `authors` | "List all contributors and commit counts" | Canonical authors sorted desc | Onboarding; recognition |
-| `clones` | "Where is code copy-pasted?" | Type 1 + Type 2 via AST structural hashing on tree-sitter | Refactoring candidates |
-| `clone-coupling` | "Which copy-pasted blocks ALSO change together?" (the differentiator) | Clones JOIN coupling, Fisher-significant only | Live debt that hurts you on every change |
+| `soc` | "Sum of Coupling — how central is each file in the change-coupling graph?" | Σ(N−1) over each commit of size N the file appears in | Find systemic-coupling hubs (high `SoC`) |
+| `messages` | "Which entities co-occur with commits matching this message regex?" | Server-side `regexp_matches(message, --expression-to-match)` join with `changes` | Bug-fix density, label-driven hotspots |
+
+### Modern additions (4 ★)
+
+| Analysis | What you ask it | Formula / source | When to reach for it |
+|---|---|---|---|
+| `hotspots` ★ | "Which files are both complex AND change a lot?" | `percentile_rank(revs) × percentile_rank(cognitive) × (10 − code_health) / 10` ([see design spec](superpowers/specs/2026-06-06-codelore-design.md)) | The headline ranking signal — refactor priorities |
+| `code-health` ★ | "How healthy is each file's structure?" | 4-input composite: cognitive 0.40 + churn 0.25 + fragmentation 0.15 + coupling 0.20 (Fisher-filtered centrality) | Combined with `hotspots`; tracks degradation |
+| `clones` ★ | "Where is code copy-pasted?" | Type 1 + Type 2 via AST structural hashing on tree-sitter | Refactoring candidates |
+| `clone-coupling` ★ | "Which copy-pasted blocks ALSO change together?" (the strategic differentiator) | Clones JOIN coupling, Fisher-significant only | Live debt that hurts you on every change |
 
 All analyses are pure SQL views over the DuckDB fact store + thin Rust orchestrators. You can run any analysis at any output format.
 
@@ -52,7 +68,7 @@ codelore analyze --analysis <NAME> --format <FORMAT>
 | `csv` (default) | Code-maat compatibility; pipe into other tools | Headers match code-maat exactly |
 | `json` | Programmatic consumption | Pretty-printed; serde-derived |
 | `markdown` | `$GITHUB_STEP_SUMMARY` in CI | GFM tables; one analysis per `# CodeLore <name>` header |
-| `sarif` | GitHub Code Scanning / GitLab security / Defectdojo | SARIF 2.1.0; supported for `hotspots`, `clones`, `clone-coupling` today |
+| `sarif` | GitHub Code Scanning / GitLab security / Defectdojo | SARIF 2.1.0; supported for `hotspots`, `clones`, `clone-coupling`, and `codelore diff` (CODELORE-MISSING-COCHANGE) today |
 | `parquet` | DuckDB / Polars / pandas / Spark | `--output PATH` required; binary format |
 | `sqlite` | Ad-hoc SQL exploration of the full fact store | `--output PATH` required; dumps all 8 tables |
 
@@ -62,11 +78,12 @@ Every file output (except SQLite, where it lives inside the DB) emits a `{output
 
 | Rule ID | Tags | When it fires |
 |---|---|---|
-| `CODELORE-HOTSPOT` | `behavioral`, `hotspot` | One result per hotspot row, `security-severity = (100 − code_health) / 10` |
+| `CODELORE-HOTSPOT` | `behavioral`, `hotspot` | One result per hotspot row; `security-severity = (100 − code_health) / 10`; `level` derived from severity band (≥7 = error, ≥4 = warning, else note) |
 | `CODELORE-CLONE` | `behavioral`, `clone`, `type-1`, `type-2` | One result per clone family; `security-severity = 3 + family_size`, capped at 6 |
 | `CODELORE-LIVE-CLONE` | `behavioral`, `clone`, `live-clone`, `co-change`, `x-ray` | One result per `(clone_group_id, file_a, file_b)`; `security-severity = combined_score × 10` |
+| `CODELORE-MISSING-COCHANGE` | `behavioral`, `coupling`, `diff` | One result per absence: a historically-Fisher-significant coupling pair where this PR touched only one side. Surfaces missing partner-file edits |
 
-All three use versioned `partialFingerprints` so cross-run identity stays stable.
+All four use versioned `partialFingerprints` so cross-run identity stays stable.
 
 ## 3. Every CLI flag explained
 
@@ -74,25 +91,81 @@ All three use versioned `partialFingerprints` so cross-run identity stays stable
 
 ```
 codelore analyze [OPTIONS]
-  -a, --analysis NAME       Which analysis [default: revisions]
-                            (any of the 14 above)
-  -r, --repo PATH           Git repo path [default: .]
-  -f, --format FORMAT       Output format [default: csv]
-                            csv | json | sarif | markdown | parquet | sqlite
-  -o, --output PATH         Write to file instead of stdout
-      --min-revs N          Min revisions per entity [default: 5]
-      --rows N              Cap output to N rows
+  -a, --analysis NAME           Which analysis [default: revisions]
+                                (any of the 21 above; passing an unknown
+                                name prints the full valid list)
+  -r, --repo PATH               Git repo path [default: .]
+  -f, --format FORMAT           Output format [default: csv]
+                                csv | json | sarif | markdown | parquet | sqlite
+  -o, --output PATH             Write to file instead of stdout
+      --min-revs N              Min revisions per entity [default: 5]
+      --rows N                  Cap output to N rows
       --complexity-sample STRATEGY
-                            head (default) | adaptive | full
-                            (only `head` is wired up today; the other two parse but warn)
-  -g, --group-file PATH     Architectural grouping definition file. Both the
-                            flag and the file are parsed today, but the
-                            resulting groups aren't yet wired into the
-                            analyses themselves
-      --exclude PATTERN     Path glob to exclude (repeatable)
-      --no-cache            Skip the persistent cache; always fresh ingest
-      --cache-dir PATH      Override XDG cache root
-  -v, --verbose             Verbose logging (info,codelore=debug)
+                                head (default) | adaptive | full
+                                (only `head` is wired up today; the other two parse but warn)
+
+  # ── Coupling-family thresholds (PAR-6) ────────────────────────────
+      --min-shared-revs N       Per-pair shared-commit floor [default: 2]
+      --min-coupling N          Min coupling degree percentage [default: 30]
+      --max-coupling N          Max coupling degree percentage [default: 100]
+      --max-changeset-size N    Drop commits touching more than N files
+                                (refactor-sweep filter) [default: 30]
+
+  # ── SoC threshold (PAR-1 + PAR-9) ─────────────────────────────────
+      --min-soc N               Minimum Sum-of-Coupling per entity for `soc`
+                                analysis [default: 1]. Under
+                                --code-maat-compat, --min-revs falls back to
+                                the legacy "minimum SoC sum" semantic.
+
+  # ── Messages analysis (PAR-2) ─────────────────────────────────────
+  -e, --expression-to-match REGEX
+                                Required for `--analysis messages`.
+                                Server-side `regexp_matches(message, REGEX)`
+                                (RE2 flavor) joined with `changes`.
+
+  # ── Time-bucket coupling (PAR-8) ──────────────────────────────────
+      --time-bucket UNIT        day | week | month
+                                Modern replacement for code-maat's
+                                sliding-window --temporal-period. Materializes
+                                `changes_bucketed` via DuckDB
+                                `date_trunc(<unit>, commit.date)` and routes
+                                the coupling-family analyses through it.
+                                Non-overlapping buckets — no commit-duplication
+                                artifact.
+
+  # ── Code-age cutoff (PAR-6) ───────────────────────────────────────
+      --age-time-now YYYY-MM-DD Override "now" for the `code-age` analysis
+                                (defaults to system clock UTC; useful for
+                                reproducible historical reports).
+
+  # ── Architectural grouping (PAR-7) ────────────────────────────────
+  -g, --group-file PATH         Architectural grouping definition file with
+                                full lookaround regex support (powered by
+                                fancy-regex 0.14). Rewrites file paths at
+                                ingest BEFORE coupling/hotspot/code-health
+                                aggregation, so groups show up as first-class
+                                entities. First-match-wins; plain-text LHS is
+                                escaped + prefix-anchored + slash-bound;
+                                explicit ^...$ regex on LHS is used as-is.
+
+      --strict-grouping         When set, fail-fast if any change path matches
+                                no group rule (default: paths with no rule are
+                                kept under their original filename).
+                                Auto-implied by --code-maat-compat.
+
+  # ── Code-maat compatibility (PAR-9) ───────────────────────────────
+      --code-maat-compat        Migration helper for code-maat scripts. Flips:
+                                  • --strict-grouping ON
+                                  • `main-dev-by-revs` CSV emits legacy
+                                    `added`/`total-added` headers (matches
+                                    code-maat output for piped tooling)
+                                  • `soc` falls back to --min-revs for its
+                                    threshold (the legacy overloaded semantic)
+
+      --exclude PATTERN         Path glob to exclude (repeatable)
+      --no-cache                Skip the persistent cache; always fresh ingest
+      --cache-dir PATH          Override XDG cache root
+  -v, --verbose                 Verbose logging (info,codelore=debug)
 ```
 
 ### `codelore diff` (PR-mode)
@@ -116,9 +189,16 @@ codelore diff <RANGE> [OPTIONS]
   -o, --output PATH         Write to file instead of stdout
       --fail-on CONDITION   Exit non-zero (4) when condition fires:
                             none (default) | rank-entrant | score-increase | any
+      --absence-min-shared N
+                            Min historical shared-revs for a coupling-absence
+                            finding to be reportable [default: 3]
+      --absence-fisher-p F  Max Fisher p-value for coupling-absence finding
+                            [default: 0.05]
       --min-revs N          Same as analyze [default: 5]
       --exclude PATTERN     Same as analyze (repeatable)
 ```
+
+The diff subcommand emits four SARIF rule types: CODELORE-HOTSPOT (newly-entering or score-rising hotspots), CODELORE-CLONE (PR-introduced clone families), CODELORE-LIVE-CLONE (PR-introduced live-clones), and CODELORE-MISSING-COCHANGE (historically-coupled partner files this PR didn't touch).
 
 ## 4. PR-mode: `codelore diff`
 
@@ -366,7 +446,7 @@ codescene/
 │   ├── codelore-lib/                     # the library
 │   │   ├── src/
 │   │   │   ├── facts/                    # DuckDB fact store + ingest pipeline
-│   │   │   ├── analyses/                 # the 14 analyses (one file each)
+│   │   │   ├── analyses/                 # the 21 analyses (one file each)
 │   │   │   ├── output/                   # 6 format emitters
 │   │   │   ├── repo/                     # GixRepo + GitCliRepo + Repo trait
 │   │   │   ├── complexity/               # tree-sitter dispatch + ComplexityEntity
