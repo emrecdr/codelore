@@ -87,3 +87,19 @@ CREATE TABLE IF NOT EXISTS clones (
 );
 CREATE INDEX IF NOT EXISTS idx_clones_group ON clones(clone_group_id);
 CREATE INDEX IF NOT EXISTS idx_clones_fp ON clones(fingerprint);
+
+-- Hot-path indexes for analysis queries (added during the modernization
+-- sweep — prior to this only clones had indexes, so every JOIN against
+-- changes/commits did a full table scan).
+--
+-- changes(path): scanned by every per-file aggregation analysis
+--   (revisions, hotspots, ownership, code-health, entity-churn, etc.).
+-- changes(rev):  primary JOIN column with commits; PK is (rev, path),
+--   so a rev-prefix scan benefits from a dedicated index too.
+-- commits(canonical_author): scanned by author-based analyses (authors,
+--   author-churn, ownership, communication, code-health).
+-- commits(date): scanned by abs-churn and code-age.
+CREATE INDEX IF NOT EXISTS idx_changes_path     ON changes(path);
+CREATE INDEX IF NOT EXISTS idx_changes_rev      ON changes(rev);
+CREATE INDEX IF NOT EXISTS idx_commits_author   ON commits(canonical_author);
+CREATE INDEX IF NOT EXISTS idx_commits_date     ON commits(date);
