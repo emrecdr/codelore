@@ -4,6 +4,10 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+(no changes yet)
+
+## [0.1.0] - 2026-06-08
+
 ### 2026-06-08 — Three-sprint deliverable: bugfix + modernization + code-maat parity
 
 **Headline:** 14 → 21 analyses (every published code-maat analysis is now supported), 41 new regression tests (349 → 390), 29 atomic commits.
