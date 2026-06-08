@@ -51,11 +51,17 @@ fn sarif_hotspots_valid_2_1_0() {
 
 #[test]
 fn sarif_level_warning_above_threshold() {
+    // SARIF level derives from security-severity bands (matches the
+    // live-clone rule pattern). security-severity = (100 - code_health) / 10:
+    //   ≥ 7.0 → error
+    //   ≥ 4.0 → warning
+    //   < 4.0 → note
+    // For "warning" we need code_health ≤ 60.
     let rows = vec![HotspotRow {
         path: "src/lib.rs".into(),
         revisions: 5,
         cognitive: 10.0,
-        code_health: 80.0,
+        code_health: 55.0, // → severity 4.5 → warning band
         hotspot_score: 0.6,
     }];
 
@@ -70,6 +76,30 @@ fn sarif_level_warning_above_threshold() {
     let parsed: serde_json::Value = serde_json::from_str(&String::from_utf8(buf).unwrap()).unwrap();
     let result = &parsed["runs"][0]["results"][0];
     assert_eq!(result["level"], "warning");
+}
+
+#[test]
+fn sarif_level_error_for_severe_findings() {
+    // Severity ≥ 7.0 → error level (the most severe SARIF band).
+    let rows = vec![HotspotRow {
+        path: "src/severe.rs".into(),
+        revisions: 50,
+        cognitive: 100.0,
+        code_health: 20.0, // → severity 8.0 → error band
+        hotspot_score: 0.9,
+    }];
+
+    let mut buf = Vec::new();
+    write_hotspots_sarif(
+        &rows,
+        "https://github.com/example/repo",
+        &mut Cursor::new(&mut buf),
+    )
+    .expect("write");
+
+    let parsed: serde_json::Value = serde_json::from_str(&String::from_utf8(buf).unwrap()).unwrap();
+    let result = &parsed["runs"][0]["results"][0];
+    assert_eq!(result["level"], "error");
 }
 
 #[test]

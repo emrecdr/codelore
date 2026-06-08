@@ -70,7 +70,20 @@ fn build_sarif(rows: &[HotspotRow], repo_root: &str) -> serde_json::Value {
 fn build_result(row: &HotspotRow, repo_root: &str) -> serde_json::Value {
     use serde_json::json;
 
-    let level = if row.hotspot_score >= 0.5 {
+    // security-severity proxy: (100 - code_health) / 10  (range 0.0–10.0)
+    let security_severity = (100.0 - row.code_health) / 10.0;
+
+    // SARIF `level` derived from the same security-severity scale that
+    // populates `properties.security-severity`. One source of truth —
+    // mirrors build_live_clone_result. Was previously a separate threshold
+    // on row.hotspot_score (a percentile-rank value bound to the current
+    // run's repo), which produced inconsistent rendering: a small repo
+    // where the top hotspot scored 0.4 emitted zero "warning" findings, a
+    // larger repo emitted many. Severity-bands are absolute and align with
+    // how SARIF consumers actually grade results.
+    let level = if security_severity >= 7.0 {
+        "error"
+    } else if security_severity >= 4.0 {
         "warning"
     } else {
         "note"
@@ -84,9 +97,6 @@ fn build_result(row: &HotspotRow, repo_root: &str) -> serde_json::Value {
         hasher.update(row.path.as_bytes());
         format!("sha256:{}", hex::encode(hasher.finalize()))
     };
-
-    // security-severity proxy: (100 - code_health) / 10  (range 0.0–10.0)
-    let security_severity = (100.0 - row.code_health) / 10.0;
 
     // Artifact URI: repo_root + "/" + path (strip leading slash from path if any)
     let artifact_uri = format!(
