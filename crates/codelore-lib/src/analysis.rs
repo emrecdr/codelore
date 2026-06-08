@@ -37,6 +37,9 @@ pub enum AnalysisName {
     MainDev,
     MainDevByRevs,
     MainDevByDeletions,
+    // PAR-4 + PAR-5: per-(entity, author) row analyses.
+    EntityEffort,
+    EntityOwnership,
 }
 
 impl AnalysisName {
@@ -62,6 +65,8 @@ impl AnalysisName {
             Self::MainDev => "main-dev",
             Self::MainDevByRevs => "main-dev-by-revs",
             Self::MainDevByDeletions => "main-dev-by-deletions",
+            Self::EntityEffort => "entity-effort",
+            Self::EntityOwnership => "entity-ownership",
         }
     }
 
@@ -87,6 +92,8 @@ impl AnalysisName {
             Self::MainDev,
             Self::MainDevByRevs,
             Self::MainDevByDeletions,
+            Self::EntityEffort,
+            Self::EntityOwnership,
         ]
     }
 }

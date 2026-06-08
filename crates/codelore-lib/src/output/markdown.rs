@@ -296,6 +296,42 @@ pub fn write_main_dev_by_deletions_markdown<W: Write>(
     )
 }
 
+pub fn write_entity_effort_markdown<W: Write>(
+    rows: &[crate::analyses::entity_effort::EntityEffortRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore entity-effort")?;
+    writeln!(w, "| Entity | Author | Author Revs | Total Revs |").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---|---:|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| `{}` | {} | {} | {} |",
+            row.entity, row.author, row.author_revs, row.total_revs,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+pub fn write_entity_ownership_markdown<W: Write>(
+    rows: &[crate::analyses::entity_ownership::EntityOwnershipRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore entity-ownership")?;
+    writeln!(w, "| Entity | Author | Added | Deleted |").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---|---:|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| `{}` | {} | {} | {} |",
+            row.entity, row.author, row.added, row.deleted,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_clone_coupling_markdown<W: Write>(rows: &[CloneCouplingRow], w: &mut W) -> Result<()> {
     header(
         w,

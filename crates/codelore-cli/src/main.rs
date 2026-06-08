@@ -562,6 +562,50 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
             (fmt, AnalysisName::MainDevByDeletions) => {
                 anyhow::bail!("main-dev-by-deletions analysis supports csv|json|markdown; got {fmt:?}")
             }
+            // --- entity-effort (per-author revs per file) ---
+            ("csv", AnalysisName::EntityEffort) => {
+                let rows = codelore_lib::analyses::entity_effort::run_entity_effort(&db, &opts)
+                    .context("run entity-effort")?;
+                codelore_lib::output::csv::write_entity_effort_csv(&rows, &mut out)
+                    .context("write csv")?;
+            }
+            ("json", AnalysisName::EntityEffort) => {
+                let rows = codelore_lib::analyses::entity_effort::run_entity_effort(&db, &opts)
+                    .context("run entity-effort")?;
+                codelore_lib::output::json::write_entity_effort_json(&rows, &mut out)
+                    .context("write json")?;
+            }
+            ("markdown", AnalysisName::EntityEffort) => {
+                let rows = codelore_lib::analyses::entity_effort::run_entity_effort(&db, &opts)
+                    .context("run entity-effort")?;
+                codelore_lib::output::markdown::write_entity_effort_markdown(&rows, &mut out)
+                    .context("write markdown")?;
+            }
+            (fmt, AnalysisName::EntityEffort) => {
+                anyhow::bail!("entity-effort analysis supports csv|json|markdown; got {fmt:?}")
+            }
+            // --- entity-ownership (per-author churn per file) ---
+            ("csv", AnalysisName::EntityOwnership) => {
+                let rows = codelore_lib::analyses::entity_ownership::run_entity_ownership(&db, &opts)
+                    .context("run entity-ownership")?;
+                codelore_lib::output::csv::write_entity_ownership_csv(&rows, &mut out)
+                    .context("write csv")?;
+            }
+            ("json", AnalysisName::EntityOwnership) => {
+                let rows = codelore_lib::analyses::entity_ownership::run_entity_ownership(&db, &opts)
+                    .context("run entity-ownership")?;
+                codelore_lib::output::json::write_entity_ownership_json(&rows, &mut out)
+                    .context("write json")?;
+            }
+            ("markdown", AnalysisName::EntityOwnership) => {
+                let rows = codelore_lib::analyses::entity_ownership::run_entity_ownership(&db, &opts)
+                    .context("run entity-ownership")?;
+                codelore_lib::output::markdown::write_entity_ownership_markdown(&rows, &mut out)
+                    .context("write markdown")?;
+            }
+            (fmt, AnalysisName::EntityOwnership) => {
+                anyhow::bail!("entity-ownership analysis supports csv|json|markdown; got {fmt:?}")
+            }
             // --- clone-coupling (Plan 8 §6) ---
             ("csv", AnalysisName::CloneCoupling) => {
                 let rows = codelore_lib::analyses::clone_coupling::run_clone_coupling(&db, &opts)

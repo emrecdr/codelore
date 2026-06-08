@@ -9,6 +9,8 @@ pub mod code_age;
 pub mod code_health;
 pub mod communication;
 pub mod coupling;
+pub mod entity_effort;
+pub mod entity_ownership;
 pub mod hotspots;
 pub mod main_dev;
 pub mod messages;

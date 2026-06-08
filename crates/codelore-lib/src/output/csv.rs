@@ -309,6 +309,44 @@ pub fn write_main_dev_by_deletions_csv<W: Write>(
     write_main_dev_csv_with_headers(rows, w, "removed", "total-removed")
 }
 
+pub fn write_entity_effort_csv<W: Write>(
+    rows: &[crate::analyses::entity_effort::EntityEffortRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(w, "entity,author,author-revs,total-revs").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{},{}",
+            quote_if_needed(&row.entity),
+            quote_if_needed(&row.author),
+            row.author_revs,
+            row.total_revs,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+pub fn write_entity_ownership_csv<W: Write>(
+    rows: &[crate::analyses::entity_ownership::EntityOwnershipRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(w, "entity,author,added,deleted").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{},{}",
+            quote_if_needed(&row.entity),
+            quote_if_needed(&row.author),
+            row.added,
+            row.deleted,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_clone_coupling_csv<W: Write>(rows: &[CloneCouplingRow], w: &mut W) -> Result<()> {
     // 18 columns mirroring the CloneCouplingRow struct.
     writeln!(

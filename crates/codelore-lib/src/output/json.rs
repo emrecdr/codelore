@@ -107,6 +107,20 @@ pub fn write_main_dev_json<W: Write>(
     write_json(rows, w)
 }
 
+pub fn write_entity_effort_json<W: Write>(
+    rows: &[crate::analyses::entity_effort::EntityEffortRow],
+    w: &mut W,
+) -> Result<()> {
+    write_json(rows, w)
+}
+
+pub fn write_entity_ownership_json<W: Write>(
+    rows: &[crate::analyses::entity_ownership::EntityOwnershipRow],
+    w: &mut W,
+) -> Result<()> {
+    write_json(rows, w)
+}
+
 pub fn write_clone_coupling_json<W: Write>(rows: &[CloneCouplingRow], w: &mut W) -> Result<()> {
     write_json(rows, w)
 }
