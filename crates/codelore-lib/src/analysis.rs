@@ -108,12 +108,20 @@ impl FromStr for AnalysisName {
     type Err = UnknownAnalysisError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        // PAR-3: `refactoring-main-dev` is code-maat's name for the
-        // metric-by-deletions variant. Accept it as an alias to
-        // `main-dev-by-deletions` (the honest name) for migration
-        // compatibility.
-        if s == "refactoring-main-dev" {
-            return Ok(Self::MainDevByDeletions);
+        // code-maat compatibility aliases. Canonical names describe what
+        // the analysis actually computes; aliases preserve code-maat's
+        // surface for migration. `refactoring-main-dev` → main-dev with
+        // deletions as the ranking metric; `fragmentation` → ownership,
+        // which already emits the same Herfindahl-Hirschman fractal-value
+        // alongside a superset of code-maat's columns.
+        match s {
+            "refactoring-main-dev" => return Ok(Self::MainDevByDeletions),
+            // `fragmentation` is code-maat's name; `code-ownership` is the
+            // name CodeLore's own user-facing docs use to disambiguate
+            // from `entity-ownership`. Both resolve to the canonical
+            // `ownership` enum variant.
+            "fragmentation" | "code-ownership" => return Ok(Self::Ownership),
+            _ => {}
         }
         Self::all()
             .iter()

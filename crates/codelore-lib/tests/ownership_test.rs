@@ -1,5 +1,8 @@
+use std::str::FromStr;
+
 use codelore_lib::Options;
 use codelore_lib::analyses::ownership::run_ownership;
+use codelore_lib::analysis::AnalysisName;
 use codelore_lib::facts::FactsDb;
 use codelore_lib::repo::GixRepo;
 
@@ -26,5 +29,22 @@ fn ownership_single_author_has_zero_fragmentation() {
             row.path
         );
         assert_eq!(row.main_author, "tiny@example.com", "tiny_repo author");
+    }
+}
+
+/// `fragmentation` is code-maat's name for an analysis that emits
+/// `entity, fractal-value, total-revs`. `CodeLore`'s `ownership` already
+/// computes the same Herfindahl-Hirschman fractal value alongside a
+/// `main-author` column, so the alias resolves to the same enum variant.
+/// `code-ownership` is the name `CodeLore`'s own user-facing docs use to
+/// disambiguate from `entity-ownership`; same target.
+#[test]
+fn ownership_accepts_fragmentation_and_code_ownership_aliases() {
+    let canonical = AnalysisName::from_str("ownership").expect("canonical");
+    for alias_name in ["fragmentation", "code-ownership"] {
+        let resolved = AnalysisName::from_str(alias_name)
+            .unwrap_or_else(|e| panic!("alias {alias_name:?} should resolve: {e}"));
+        assert_eq!(canonical, resolved, "{alias_name} → ownership");
+        assert!(matches!(resolved, AnalysisName::Ownership));
     }
 }

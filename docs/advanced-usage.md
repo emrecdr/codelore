@@ -38,7 +38,7 @@ The table below is split into the **17 code-maat-parity analyses** (drop-in succ
 | `entity-effort` | "How much effort has each entity received per author?" | Per-(entity, author) revision counts | Pair with `code-ownership` for bus-factor narratives |
 | `entity-ownership` | "Who has added/deleted what in each entity?" | Per-(entity, author) `added` + `deleted` lines | Fine-grained ownership beyond fractal value |
 | `communication` | "Who works on the same code as whom?" (Conway's Law) | Author pairs by shared-work intensity | Team topology insight |
-| `code-ownership` | "Is each file mainly owned by one person, or fragmented?" | Fractal Value = 1 − Herfindahl-Hirschman Index + main-developer | Bus-factor; knowledge-loss risk |
+| `ownership` (aliases: `code-ownership`, `fragmentation`) | "Is each file mainly owned by one person, or fragmented?" | Fractal Value = 1 − Herfindahl-Hirschman Index + main-developer | Bus-factor; knowledge-loss risk. `fragmentation` is code-maat's name for the fractal-value-only subset |
 | `main-dev` | "Who is the main developer of each entity by lines added?" | Per-entity author with max `added` (default metric) | Knowledge-owner discovery |
 | `main-dev-by-revs` | "Who is the main developer by revision count?" | Per-entity author with max revision count | Use when added-lines is misleading (e.g., reformatters) |
 | `main-dev-by-deletions` (alias: `refactoring-main-dev`) | "Who is the main refactorer of each entity?" | Per-entity author with max `deleted` lines | Spot quiet refactor leaders |
@@ -70,7 +70,7 @@ codelore analyze --analysis <NAME> --format <FORMAT>
 | `markdown` | `$GITHUB_STEP_SUMMARY` in CI | GFM tables; one analysis per `# CodeLore <name>` header |
 | `sarif` | GitHub Code Scanning / GitLab security / Defectdojo | SARIF 2.1.0; supported for `hotspots`, `clones`, `clone-coupling`, and `codelore diff` (CODELORE-MISSING-COCHANGE) today |
 | `parquet` | DuckDB / Polars / pandas / Spark | `--output PATH` required; binary format |
-| `sqlite` | Ad-hoc SQL exploration of the full fact store | `--output PATH` required; dumps all 8 tables |
+| `sqlite` | Ad-hoc SQL exploration of the full fact store | `--output PATH` required; dumps all 8 tables. Strict superset of code-maat's `--analysis identity` raw-dataset dump (CodeLore exposes complexity, clones, mailmap, and provenance tables alongside `commits`/`changes`). |
 
 Every file output (except SQLite, where it lives inside the DB) emits a `{output}.provenance.json` sidecar with the bca/gix/duckdb versions, every threshold knob, mailmap state, and UTC timestamp. This is your reproducibility receipt.
 
