@@ -10,6 +10,8 @@
 //! the spec §4.6 inputs for churn / fragmentation / coupling have weight 0 until
 //! Plan 4 ships their analyses.
 
+use duckdb::params;
+
 use crate::facts::FactsDb;
 use crate::{CodeLoreError, Options, Result};
 
@@ -22,72 +24,65 @@ pub struct HotspotRow {
     pub hotspot_score: f64,
 }
 
+// PERCENT_RANK() is standard SQL:2003 and is supported by DuckDB ≥0.2.
+// Aggregate per-path:
+//   revisions:   count of distinct commits in changes
+//   cognitive:   MAX of cognitive across all entities in the path's file
+//   code_health: 100 * (1 − 0.40 * normalize(cognitive))
+//   hotspot_score: percent_rank(revs) * percent_rank(cog) * (10 − code_health) / 10
+const SQL: &str = "
+    WITH file_revs AS (
+        SELECT path, COUNT(DISTINCT rev) AS revs
+        FROM changes
+        GROUP BY path
+        HAVING revs >= ?
+    ),
+    file_complexity AS (
+        SELECT path, MAX(cognitive) AS cognitive
+        FROM complexity_metrics
+        GROUP BY path
+    ),
+    joined AS (
+        SELECT
+            fr.path,
+            fr.revs,
+            COALESCE(fc.cognitive, 0) AS cognitive
+        FROM file_revs fr
+        LEFT JOIN file_complexity fc ON fc.path = fr.path
+    ),
+    ranked AS (
+        SELECT
+            path,
+            revs,
+            cognitive,
+            PERCENT_RANK() OVER (ORDER BY revs) AS pr_rev,
+            PERCENT_RANK() OVER (ORDER BY cognitive) AS pr_cx,
+            CASE
+                WHEN MAX(cognitive) OVER () > 0
+                THEN cognitive / MAX(cognitive) OVER ()
+                ELSE 0
+            END AS norm_cx
+        FROM joined
+    )
+    SELECT
+        path,
+        revs,
+        cognitive,
+        GREATEST(0.0, LEAST(100.0, 100.0 * (1.0 - 0.40 * norm_cx))) AS code_health,
+        pr_rev * pr_cx * (10.0 - GREATEST(0.0, LEAST(100.0, 100.0 * (1.0 - 0.40 * norm_cx)))) / 10.0 AS score
+    FROM ranked
+    ORDER BY score DESC, path ASC
+    LIMIT ?
+";
+
 pub fn run_hotspots(db: &FactsDb, opts: &Options) -> Result<Vec<HotspotRow>> {
-    let limit = opts
-        .rows_limit
-        .map(|n| format!(" LIMIT {n}"))
-        .unwrap_or_default();
-
-    // Aggregate per-path:
-    //  - revisions: count of distinct commits in changes
-    //  - cognitive: MAX of cognitive across all entities in the path's file
-    //  - code_health: 100 * (1 - 0.40 * normalize(cognitive))
-    //  - hotspot_score: percent_rank(revs) * percent_rank(cog) * (10 - code_health) / 10
-    //
-    // PERCENT_RANK() is standard SQL:2003 and is supported by DuckDB ≥0.2.
-    // The fallback (RANK()-1)/(COUNT(*) OVER ()-1) is equivalent.
-    let sql = format!(
-        "WITH file_revs AS (
-             SELECT path, COUNT(DISTINCT rev) AS revs
-             FROM changes
-             GROUP BY path
-             HAVING revs >= {min}
-         ),
-         file_complexity AS (
-             SELECT path, MAX(cognitive) AS cognitive
-             FROM complexity_metrics
-             GROUP BY path
-         ),
-         joined AS (
-             SELECT
-                 fr.path,
-                 fr.revs,
-                 COALESCE(fc.cognitive, 0) AS cognitive
-             FROM file_revs fr
-             LEFT JOIN file_complexity fc ON fc.path = fr.path
-         ),
-         ranked AS (
-             SELECT
-                 path,
-                 revs,
-                 cognitive,
-                 PERCENT_RANK() OVER (ORDER BY revs) AS pr_rev,
-                 PERCENT_RANK() OVER (ORDER BY cognitive) AS pr_cx,
-                 CASE
-                     WHEN MAX(cognitive) OVER () > 0
-                     THEN cognitive / MAX(cognitive) OVER ()
-                     ELSE 0
-                 END AS norm_cx
-             FROM joined
-         )
-         SELECT
-             path,
-             revs,
-             cognitive,
-             GREATEST(0.0, LEAST(100.0, 100.0 * (1.0 - 0.40 * norm_cx))) AS code_health,
-             pr_rev * pr_cx * (10.0 - GREATEST(0.0, LEAST(100.0, 100.0 * (1.0 - 0.40 * norm_cx)))) / 10.0 AS score
-         FROM ranked
-         ORDER BY score DESC, path ASC{limit}",
-        min = opts.min_revs,
-        limit = limit,
-    );
-
+    let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
     let mut stmt = db
         .conn()
-        .prepare(&sql)
+        .prepare(SQL)
         .map_err(|e| CodeLoreError::Analysis(format!("prepare hotspots: {e}")))?;
     let rows = stmt
-        .query_map([], |r| {
+        .query_map(params![opts.min_revs, row_limit], |r| {
             Ok(HotspotRow {
                 path: r.get::<_, String>(0)?,
                 revisions: u32::try_from(r.get::<_, i64>(1)?).unwrap_or(u32::MAX),

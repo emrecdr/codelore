@@ -44,6 +44,14 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
+        with:
+          # CodeLore's integration tests walk this repo's own history (e.g.
+          # gix_repo_walks_self_repo). gix needs parent ancestry to walk
+          # commits, so a shallow clone (the default depth-1) fails with
+          # `find_parent_commit ... could not be found` on the most-recent
+          # commit's parent. This is the exact gotcha we document for our
+          # users in advanced-usage §10 troubleshooting.
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - uses: mozilla-actions/sccache-action@v0.0.6
       - uses: Swatinem/rust-cache@v2

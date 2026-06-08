@@ -2,6 +2,8 @@
 //!
 //! Reference date is `opts.age_time_now` if set, else today (UTC).
 
+use duckdb::params;
+
 use crate::facts::FactsDb;
 use crate::{CodeLoreError, Options, Result};
 
@@ -11,12 +13,19 @@ pub struct CodeAgeRow {
     pub age_months: i32,
 }
 
-pub fn run_code_age(db: &FactsDb, opts: &Options) -> Result<Vec<CodeAgeRow>> {
-    let limit = opts
-        .rows_limit
-        .map(|n| format!(" LIMIT {n}"))
-        .unwrap_or_default();
+const SQL: &str = "
+    SELECT
+        changes.path,
+        DATE_DIFF('month', MAX(commits.date), CAST(? AS DATE)) AS age_months
+    FROM changes
+    INNER JOIN commits ON changes.rev = commits.rev
+    GROUP BY changes.path
+    HAVING COUNT(DISTINCT changes.rev) >= ?
+    ORDER BY age_months ASC, changes.path ASC
+    LIMIT ?
+";
 
+pub fn run_code_age(db: &FactsDb, opts: &Options) -> Result<Vec<CodeAgeRow>> {
     // Reference "now" for age calculation
     let age_time_now = opts
         .age_time_now
@@ -27,27 +36,14 @@ pub fn run_code_age(db: &FactsDb, opts: &Options) -> Result<Vec<CodeAgeRow>> {
         u8::from(age_time_now.month()),
         age_time_now.day()
     );
-
-    let sql = format!(
-        "SELECT
-             changes.path,
-             DATE_DIFF('month', MAX(commits.date), DATE '{now}') AS age_months
-         FROM changes
-         INNER JOIN commits ON changes.rev = commits.rev
-         GROUP BY changes.path
-         HAVING COUNT(DISTINCT changes.rev) >= {min}
-         ORDER BY age_months ASC, changes.path ASC{limit}",
-        now = now_str,
-        min = opts.min_revs,
-        limit = limit,
-    );
+    let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
 
     let mut stmt = db
         .conn()
-        .prepare(&sql)
+        .prepare(SQL)
         .map_err(|e| CodeLoreError::Analysis(format!("prepare code-age: {e}")))?;
     let rows = stmt
-        .query_map([], |r| {
+        .query_map(params![now_str, opts.min_revs, row_limit], |r| {
             Ok(CodeAgeRow {
                 path: r.get::<_, String>(0)?,
                 age_months: i32::try_from(r.get::<_, i64>(1)?).unwrap_or(i32::MAX),

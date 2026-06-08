@@ -5,6 +5,8 @@
 //!
 //! Also surfaces the main developer (author with highest revision count) per file.
 
+use duckdb::params;
+
 use crate::facts::FactsDb;
 use crate::{CodeLoreError, Options, Result};
 
@@ -16,81 +18,74 @@ pub struct OwnershipRow {
     pub fractal_value: f64, // [0, 1)
 }
 
+// FV = 1 − Σᵢ (aᵢ / nc)²  (HHI complement)
+// where aᵢ = author i's distinct revision count, nc = total distinct revisions.
+// Window-function FIRST_VALUE + ROW_NUMBER picks the main author (deterministic
+// secondary sort on author ASC).
+const SQL: &str = "
+    WITH author_revs AS (
+        SELECT
+            changes.path,
+            commits.canonical_author AS author,
+            COUNT(DISTINCT changes.rev) AS revs
+        FROM changes
+        INNER JOIN commits ON changes.rev = commits.rev
+        GROUP BY changes.path, commits.canonical_author
+    ),
+    totals AS (
+        SELECT path, SUM(revs) AS total
+        FROM author_revs
+        GROUP BY path
+    ),
+    with_rank AS (
+        SELECT
+            ar.path,
+            ar.author,
+            ar.revs,
+            t.total,
+            ROW_NUMBER() OVER (
+                PARTITION BY ar.path
+                ORDER BY ar.revs DESC, ar.author ASC
+            ) AS rn
+        FROM author_revs ar
+        INNER JOIN totals t ON ar.path = t.path
+    ),
+    main AS (
+        SELECT path, author AS main_author
+        FROM with_rank
+        WHERE rn = 1
+    ),
+    hhi AS (
+        SELECT
+            ar.path,
+            t.total,
+            1.0 - SUM(
+                POWER(CAST(ar.revs AS DOUBLE) / NULLIF(CAST(t.total AS DOUBLE), 0), 2)
+            ) AS fractal_value
+        FROM author_revs ar
+        INNER JOIN totals t ON ar.path = t.path
+        GROUP BY ar.path, t.total
+        HAVING t.total >= ?
+    )
+    SELECT
+        hhi.path,
+        main.main_author,
+        hhi.total,
+        hhi.fractal_value
+    FROM hhi
+    INNER JOIN main ON main.path = hhi.path
+    ORDER BY fractal_value DESC, hhi.path ASC
+    LIMIT ?
+";
+
 pub fn run_ownership(db: &FactsDb, opts: &Options) -> Result<Vec<OwnershipRow>> {
-    let limit = opts
-        .rows_limit
-        .map(|n| format!(" LIMIT {n}"))
-        .unwrap_or_default();
-
-    // We use a window function (FIRST_VALUE + ROW_NUMBER) to pick the main author
-    // rather than ARG_MAX, which is available in DuckDB ≥0.8 but less portable
-    // across the bundled crate versions.
-    //
-    // FV = 1 − Σᵢ (aᵢ / nc)²  (the HHI complement)
-    // where aᵢ = author i's distinct revision count, nc = total distinct revisions.
-    let sql = format!(
-        "WITH author_revs AS (
-             SELECT
-                 changes.path,
-                 commits.canonical_author AS author,
-                 COUNT(DISTINCT changes.rev) AS revs
-             FROM changes
-             INNER JOIN commits ON changes.rev = commits.rev
-             GROUP BY changes.path, commits.canonical_author
-         ),
-         totals AS (
-             SELECT path, SUM(revs) AS total
-             FROM author_revs
-             GROUP BY path
-         ),
-         with_rank AS (
-             SELECT
-                 ar.path,
-                 ar.author,
-                 ar.revs,
-                 t.total,
-                 ROW_NUMBER() OVER (
-                     PARTITION BY ar.path
-                     ORDER BY ar.revs DESC, ar.author ASC
-                 ) AS rn
-             FROM author_revs ar
-             INNER JOIN totals t ON ar.path = t.path
-         ),
-         main AS (
-             SELECT path, author AS main_author
-             FROM with_rank
-             WHERE rn = 1
-         ),
-         hhi AS (
-             SELECT
-                 ar.path,
-                 t.total,
-                 1.0 - SUM(
-                     POWER(CAST(ar.revs AS DOUBLE) / NULLIF(CAST(t.total AS DOUBLE), 0), 2)
-                 ) AS fractal_value
-             FROM author_revs ar
-             INNER JOIN totals t ON ar.path = t.path
-             GROUP BY ar.path, t.total
-             HAVING t.total >= {min}
-         )
-         SELECT
-             hhi.path,
-             main.main_author,
-             hhi.total,
-             hhi.fractal_value
-         FROM hhi
-         INNER JOIN main ON main.path = hhi.path
-         ORDER BY fractal_value DESC, hhi.path ASC{limit}",
-        min = opts.min_revs,
-        limit = limit,
-    );
-
+    let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
     let mut stmt = db
         .conn()
-        .prepare(&sql)
+        .prepare(SQL)
         .map_err(|e| CodeLoreError::Analysis(format!("prepare ownership: {e}")))?;
     let rows = stmt
-        .query_map([], |r| {
+        .query_map(params![opts.min_revs, row_limit], |r| {
             Ok(OwnershipRow {
                 path: r.get::<_, String>(0)?,
                 main_author: r.get::<_, String>(1)?,

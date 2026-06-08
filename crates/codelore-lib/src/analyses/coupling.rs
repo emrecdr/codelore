@@ -11,6 +11,8 @@
 //! The Fisher test guards against spurious coupling from refactor sweeps
 //! that 2025 MSR research identified as the dominant noise source.
 
+use duckdb::params;
+
 use crate::facts::FactsDb;
 use crate::{CodeLoreError, Options, Result};
 
@@ -35,56 +37,57 @@ pub struct CouplingRow {
     pub fisher_p: f64,
 }
 
-/// Build the SQL query that produces raw coupling candidates.
-fn coupling_sql(opts: &Options) -> String {
-    let limit = opts
-        .rows_limit
-        .map(|n| format!(" LIMIT {n}"))
-        .unwrap_or_default();
-    format!(
-        "WITH good_commits AS (
-             SELECT rev
-             FROM (SELECT rev, COUNT(*) AS files FROM changes GROUP BY rev) t
-             WHERE files <= {max}
-         ),
-         file_revs AS (
-             SELECT path, COUNT(DISTINCT rev) AS revs
-             FROM changes
-             INNER JOIN good_commits USING(rev)
-             GROUP BY path
-             HAVING revs >= {min_revs}
-         ),
-         pairs AS (
-             SELECT
-                 a.path AS path_a,
-                 b.path AS path_b,
-                 COUNT(DISTINCT a.rev) AS shared
-             FROM changes a
-             INNER JOIN changes b ON a.rev = b.rev AND a.path < b.path
-             INNER JOIN good_commits ON good_commits.rev = a.rev
-             GROUP BY a.path, b.path
-             HAVING shared >= {min_shared}
-         )
-         SELECT
-             p.path_a,
-             p.path_b,
-             p.shared,
-             fr_a.revs AS revs_a,
-             fr_b.revs AS revs_b,
-             (fr_a.revs + fr_b.revs) / 2 AS average_revs,
-             100.0 * p.shared / NULLIF((fr_a.revs + fr_b.revs) / 2.0, 0) AS degree
-         FROM pairs p
-         INNER JOIN file_revs fr_a ON fr_a.path = p.path_a
-         INNER JOIN file_revs fr_b ON fr_b.path = p.path_b
-         WHERE 100.0 * p.shared / NULLIF((fr_a.revs + fr_b.revs) / 2.0, 0) >= {min_pct}
-         ORDER BY degree DESC, average_revs DESC, p.path_a ASC, p.path_b ASC{limit}",
-        max = opts.max_changeset_size,
-        min_revs = opts.min_revs,
-        min_shared = opts.min_shared_revs,
-        min_pct = opts.min_coupling_pct,
-        limit = limit,
+/// Raw coupling candidates SQL. Bind values (in order):
+///   1. `max_changeset_size`  (`good_commits` filter)
+///   2. `min_revs`            (per-file revs floor)
+///   3. `min_shared_revs`     (per-pair shared floor)
+///   4. `min_coupling_pct`    (degree threshold)
+///   5. `rows_limit`          (`i64::MAX` = unlimited)
+const COUPLING_SQL: &str = "
+    WITH good_commits AS (
+        SELECT rev
+        FROM (SELECT rev, COUNT(*) AS files FROM changes GROUP BY rev) t
+        WHERE files <= ?
+    ),
+    file_revs AS (
+        SELECT path, COUNT(DISTINCT rev) AS revs
+        FROM changes
+        INNER JOIN good_commits USING(rev)
+        GROUP BY path
+        HAVING revs >= ?
+    ),
+    pairs AS (
+        SELECT
+            a.path AS path_a,
+            b.path AS path_b,
+            COUNT(DISTINCT a.rev) AS shared
+        FROM changes a
+        INNER JOIN changes b ON a.rev = b.rev AND a.path < b.path
+        INNER JOIN good_commits ON good_commits.rev = a.rev
+        GROUP BY a.path, b.path
+        HAVING shared >= ?
     )
-}
+    SELECT
+        p.path_a,
+        p.path_b,
+        p.shared,
+        fr_a.revs AS revs_a,
+        fr_b.revs AS revs_b,
+        (fr_a.revs + fr_b.revs) / 2 AS average_revs,
+        100.0 * p.shared / NULLIF((fr_a.revs + fr_b.revs) / 2.0, 0) AS degree
+    FROM pairs p
+    INNER JOIN file_revs fr_a ON fr_a.path = p.path_a
+    INNER JOIN file_revs fr_b ON fr_b.path = p.path_b
+    WHERE 100.0 * p.shared / NULLIF((fr_a.revs + fr_b.revs) / 2.0, 0) >= ?
+    ORDER BY degree DESC, average_revs DESC, p.path_a ASC, p.path_b ASC
+    LIMIT ?
+";
+
+const TOTAL_COMMITS_SQL: &str = "
+    SELECT COUNT(*) FROM (
+        SELECT rev, COUNT(*) AS files FROM changes GROUP BY rev
+    ) t WHERE files <= ?
+";
 
 /// Compute the two-tailed Fisher exact p-value for a coupling pair.
 ///
@@ -118,26 +121,28 @@ fn fisher_two_tail(shared: u32, revs_a: u32, revs_b: u32, total: u32) -> Option<
 pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
     // Total commits after the max_changeset_size pre-filter — denominator for
     // the Fisher 2×2 contingency table.
-    let total_sql = format!(
-        "SELECT COUNT(*) FROM (
-             SELECT rev, COUNT(*) AS files FROM changes GROUP BY rev
-         ) t WHERE files <= {max}",
-        max = opts.max_changeset_size,
-    );
     let total_commits: i64 = db
         .conn()
-        .query_row(&total_sql, [], |r| r.get(0))
+        .query_row(TOTAL_COMMITS_SQL, params![opts.max_changeset_size], |r| r.get(0))
         .map_err(|e| CodeLoreError::Analysis(format!("total commits query: {e}")))?;
     let total = u32::try_from(total_commits).unwrap_or(u32::MAX);
 
-    let sql = coupling_sql(opts);
+    let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
     let mut stmt = db
         .conn()
-        .prepare(&sql)
+        .prepare(COUPLING_SQL)
         .map_err(|e| CodeLoreError::Analysis(format!("prepare coupling: {e}")))?;
 
     let raw_rows = stmt
-        .query_map([], |r| {
+        .query_map(
+            params![
+                opts.max_changeset_size,
+                opts.min_revs,
+                opts.min_shared_revs,
+                opts.min_coupling_pct,
+                row_limit,
+            ],
+            |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, String>(1)?,

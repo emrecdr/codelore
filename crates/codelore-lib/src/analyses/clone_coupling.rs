@@ -96,28 +96,27 @@ pub fn run_clone_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CloneCoupl
     // Pull clone-family member pairs from the clones table.
     // For each family with ≥ 2 members, generate the self-join with
     // `c1.path < c2.path` so each pair appears once.
-    let clone_pairs_sql = format!(
-        "SELECT c1.clone_group_id,
-                hex(c1.fingerprint) AS fingerprint,
-                c1.path AS file_a,
-                c2.path AS file_b,
-                c1.function AS entity_a,
-                c2.function AS entity_b,
-                CAST(c1.start_line AS UINTEGER) AS start_line_a,
-                CAST(c1.end_line AS UINTEGER) AS end_line_a,
-                CAST(c2.start_line AS UINTEGER) AS start_line_b,
-                CAST(c2.end_line AS UINTEGER) AS end_line_b,
-                CAST(c1.node_count AS UINTEGER) AS node_count,
-                c1.similarity
-         FROM clones c1
-         JOIN clones c2
-           ON c1.clone_group_id = c2.clone_group_id
-          AND c1.path < c2.path
-         WHERE c1.node_count >= {min_node_count}
-           AND c1.similarity >= {similarity_floor}",
-        min_node_count = opts.min_clone_node_count,
-        similarity_floor = opts.clone_similarity_floor,
-    );
+    #[allow(clippy::items_after_statements)]
+    const CLONE_PAIRS_SQL: &str = "
+        SELECT c1.clone_group_id,
+               hex(c1.fingerprint) AS fingerprint,
+               c1.path AS file_a,
+               c2.path AS file_b,
+               c1.function AS entity_a,
+               c2.function AS entity_b,
+               CAST(c1.start_line AS UINTEGER) AS start_line_a,
+               CAST(c1.end_line AS UINTEGER) AS end_line_a,
+               CAST(c2.start_line AS UINTEGER) AS start_line_b,
+               CAST(c2.end_line AS UINTEGER) AS end_line_b,
+               CAST(c1.node_count AS UINTEGER) AS node_count,
+               c1.similarity
+        FROM clones c1
+        JOIN clones c2
+          ON c1.clone_group_id = c2.clone_group_id
+         AND c1.path < c2.path
+        WHERE c1.node_count >= ?
+          AND c1.similarity >= ?
+    ";
 
     #[allow(clippy::items_after_statements)]
     struct ClonePair {
@@ -137,10 +136,12 @@ pub fn run_clone_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CloneCoupl
 
     let mut stmt = db
         .conn()
-        .prepare(&clone_pairs_sql)
+        .prepare(CLONE_PAIRS_SQL)
         .map_err(|e| CodeLoreError::Analysis(format!("clone-coupling: prepare: {e}")))?;
     let pairs = stmt
-        .query_map([], |r| {
+        .query_map(
+            duckdb::params![opts.min_clone_node_count, opts.clone_similarity_floor],
+            |r| {
             Ok(ClonePair {
                 clone_group_id: r.get::<_, u32>(0)?,
                 fingerprint: r.get::<_, String>(1)?,
