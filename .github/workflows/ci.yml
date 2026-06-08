@@ -31,7 +31,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: dtolnay/rust-toolchain@1.100.0
         with:
           components: rustfmt
       - run: cargo fmt --all --check
@@ -44,7 +44,7 @@ jobs:
       RUSTC_WRAPPER: sccache
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: dtolnay/rust-toolchain@1.100.0
         with:
           components: clippy
       - uses: mozilla-actions/sccache-action@v0.0.10
@@ -76,7 +76,7 @@ jobs:
           # commit's parent. This is the exact gotcha we document for our
           # users in advanced-usage §10 troubleshooting.
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: dtolnay/rust-toolchain@1.100.0
       - uses: mozilla-actions/sccache-action@v0.0.10
       - uses: Swatinem/rust-cache@v2
       # cargo-nextest: ~20-30% faster than `cargo test` on this workspace
