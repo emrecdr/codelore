@@ -60,7 +60,7 @@ Conventional Commits format. All notable changes documented here.
 
 #### Docs
 
-- New: `docs/RELEASING.md` (SemVer policy + full release procedure), `docs/github-topics.md` (18-topic recommended set + `gh repo edit` command), `docs/modernization_audit_2026-06-08.md`, `docs/updated_analysis_report.md`.
+- New: `docs/RELEASING.md` (SemVer policy + full release procedure), `docs/github-topics.md` (18-topic recommended set + `gh repo edit` command).
 - New plan files in `docs/superpowers/plans/`: `2026-06-08-codelore-bugfix-sprint.md`, `2026-06-08-codelore-modernization-sprint.md`, `2026-06-08-codelore-code-maat-parity.md`.
 - README rewritten for clarity (5-minute pitch + 21-analysis table + `--group-file` example + migration story + acknowledgments).
 - Cargo.toml: 5 keywords + 2 categories added. README badges expanded from 5 → 13.
