@@ -41,6 +41,12 @@ rayon = "1"
 # regex eagerly (DuckDB does the actual matching server-side via
 # regexp_matches).
 regex = "1"
+# Architectural grouping (--group-file) uses fancy-regex because
+# code-maat's own test fixture (regex-layers-definition.txt) uses
+# lookaround patterns like `^src\/((?!.*Test.*).).*$` — the standard
+# Rust `regex` crate doesn't support lookaround. fancy-regex wraps
+# `regex` with a backtracking engine for non-regular features.
+fancy-regex = "0.14"
 
 [features]
 default = []

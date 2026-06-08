@@ -1,8 +1,10 @@
 //! `DuckDB`-backed fact store. See spec §3.2 + §3.2.1 invariants.
 
+pub mod groups;
 pub mod ingest;
 pub mod schema;
 
+pub use groups::{GroupMap, GroupParseError, GroupRule};
 pub use ingest::IngestStats;
 
 use std::path::Path;
