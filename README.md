@@ -293,10 +293,6 @@ Release-ready alpha. **21 analyses × 6 output formats × `codelore diff` PR-mod
 
 Known limitations (the honest list, validated against the current codebase):
 
-- **Rename tracking** — `ChangeType::Renamed` is captured at ingest but analyses don't follow renames yet (a renamed file's history splits across old + new paths)
-- **`Options` cross-field validation** — pathological combinations like `min_revs > max_changeset_size` silently return empty results
-- **Hand-rolled CSV emitter** — `quote_if_needed` covers the worst case but a `csv`-crate migration is on the open list
-- **Clone extraction is still single-threaded** — same Rayon pattern as the parallel complexity extraction is queued next
 - **Complexity metrics aren't re-aggregated after grouping** — `hotspots` + `code-health` analyses report 0 cognitive for `--group-file`-collapsed entities (group-level cognitive aggregation is a post-`0.1.0` follow-up)
 - **Code-maat sliding-window `--temporal-period N`** is intentionally **not** emulated under `--code-maat-compat` — the modern `--time-bucket DAY|WEEK|MONTH` (non-overlapping buckets, no commit-duplication artifact) is the recommended surface and what ships; the legacy sliding-window-with-duplication is an opt-in future-work item if migration users hit it
 
