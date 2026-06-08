@@ -58,14 +58,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # macos-15 (Sequoia, aarch64) is the GitHub-default macOS runner
+          # since mid-2025. Cross-compiles x86_64-apple-darwin via Apple's
+          # bundled cross-target SDK. (macos-13 is deprecated and queues
+          # indefinitely; macos-14 still works but is the prior stable.)
           - target: aarch64-apple-darwin
-            os: macos-14
-          # macos-14 (Sonoma, aarch64) cross-compiles x86_64-apple-darwin
-          # via Apple's bundled cross-target SDK. macos-13 runners are
-          # GitHub-deprecated as of early 2026 and queue indefinitely
-          # without ever picking up a slot.
+            os: macos-15
           - target: x86_64-apple-darwin
-            os: macos-14
+            os: macos-15
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
           - target: aarch64-unknown-linux-gnu
