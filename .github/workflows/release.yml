@@ -1,10 +1,18 @@
-# Release pipeline for CodeLore — multi-platform binaries via cargo-dist
-# + SLSA L3 build provenance via slsa-framework/slsa-github-generator.
+# Release pipeline for CodeLore — multi-platform binaries with per-artifact
+# SLSA v1.0 build provenance attestations.
 #
-# This file is hand-authored scaffolding. The owner should run
-# `cargo dist init` locally once to regenerate it with the canonical
-# cargo-dist matrix; this version is a working approximation that ships
-# the right artifacts in the right shape until that init runs.
+# Attestation pattern: each matrix job runs `actions/attest-build-provenance@v4`
+# on its own staged artifact AFTER staging but BEFORE upload. The action signs
+# via sigstore OIDC and pushes the attestation to GitHub's transparency log;
+# `gh attestation verify codelore-<tag>-<target>.tar.gz --owner emrecdr`
+# confirms provenance against the public Rekor entry.
+#
+# Earlier attempts at SLSA L3 via slsa-framework/slsa-github-generator's
+# reusable workflow failed because that pattern aggregates `outputs.hashes`
+# across the build matrix into a single `base64-subjects` input — and
+# GitHub Actions only preserves the LAST matrix job's outputs, so 4 of 5
+# subject hashes were silently dropped. The per-job v4 attestation flow
+# eliminates the aggregation step entirely.
 #
 # Triggered by:
 #   - Tag push matching `v*` (canonical release path)
@@ -26,9 +34,8 @@ concurrency:
 
 permissions:
   contents: write       # create the GitHub Release + upload artifacts
-  id-token: write       # OIDC for SLSA provenance generator
-  actions: read         # SLSA generator reads workflow run metadata
-  attestations: write   # attach attestations to the release
+  id-token: write       # OIDC token for sigstore attestation signing
+  attestations: write   # write attestations to the sigstore transparency log
 
 env:
   CARGO_TERM_COLOR: always
@@ -73,8 +80,10 @@ jobs:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
     runs-on: ${{ matrix.os }}
-    outputs:
-      hashes: ${{ steps.hashes.outputs.hashes }}
+    permissions:
+      contents: read
+      id-token: write       # per-job OIDC token for sigstore signing
+      attestations: write
     steps:
       - uses: actions/checkout@v6
 
@@ -99,8 +108,6 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          binary="target/${{ matrix.target }}/release/codelore"
-          if [[ "${{ matrix.target }}" == *windows* ]]; then binary="${binary}.exe"; fi
           archive_name="codelore-${{ needs.plan.outputs.tag }}-${{ matrix.target }}"
           if [[ "${{ matrix.target }}" == *windows* ]]; then
             (cd "target/${{ matrix.target }}/release" && 7z a "../../../dist/${archive_name}.zip" codelore.exe ../../../README.md ../../../CHANGELOG.md ../../../LICENSE 2>/dev/null || true)
@@ -110,19 +117,16 @@ jobs:
             echo "archive=dist/${archive_name}.tar.gz" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Compute SHA-256 (for SLSA subject list)
-        id: hashes
-        shell: bash
-        run: |
-          archive="${{ steps.stage.outputs.archive }}"
-          # Cross-platform: sha256sum is GNU coreutils (Linux); shasum -a
-          # 256 is Perl-based (macOS, also present on Linux). macOS BSD
-          # base64 doesn't take -w0, so strip the trailing newline with tr.
-          hash=$( { sha256sum "$archive" 2>/dev/null || shasum -a 256 "$archive"; } \
-            | awk '{print $1}' \
-            | base64 \
-            | tr -d '\n' )
-          echo "hashes=${hash}" >> "$GITHUB_OUTPUT"
+      # SLSA v1.0 build provenance for this matrix entry's artifact. The
+      # action signs with the runner's OIDC token, publishes the attestation
+      # to the sigstore Rekor transparency log, and (because we set
+      # `subject-path`) anchors the attestation to the artifact's content
+      # hash. Consumers verify via:
+      #   gh attestation verify <archive> --owner emrecdr
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: ${{ steps.stage.outputs.archive }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -130,22 +134,8 @@ jobs:
           name: codelore-${{ matrix.target }}
           path: dist/
 
-  # SLSA L3 build provenance (separate reusable workflow as required by
-  # slsa-github-generator). Subjects are the per-target archive hashes
-  # accumulated by the build matrix.
-  provenance:
-    needs: build
-    permissions:
-      actions: read
-      id-token: write
-      contents: write
-    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
-    with:
-      base64-subjects: ${{ needs.build.outputs.hashes }}
-      upload-assets: true
-
   release:
-    needs: [plan, build, provenance]
+    needs: [plan, build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
