@@ -238,6 +238,45 @@ impl Options {
             ..self.clone()
         }
     }
+
+    /// Check cross-field invariants. Caller (typically the CLI boundary)
+    /// runs this once after constructing `Options` so pathological flag
+    /// combinations fail loudly instead of silently producing empty
+    /// output. Each invariant catches a real footgun documented in the
+    /// v0.1.1 roadmap.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::CodeLoreError::Provenance`] (config-violation
+    /// category) with a message naming the offending field pair.
+    pub fn validate(&self) -> crate::Result<()> {
+        if self.min_coupling_pct > self.max_coupling_pct {
+            return Err(crate::CodeLoreError::Provenance(format!(
+                "--min-coupling ({}) must be <= --max-coupling ({})",
+                self.min_coupling_pct, self.max_coupling_pct
+            )));
+        }
+        if !(0.0..=1.0).contains(&self.clone_similarity_floor) {
+            return Err(crate::CodeLoreError::Provenance(format!(
+                "--clone-similarity-floor must be in [0.0, 1.0]; got {}",
+                self.clone_similarity_floor
+            )));
+        }
+        if !(0.0..=1.0).contains(&self.fisher_significance) {
+            return Err(crate::CodeLoreError::Provenance(format!(
+                "--fisher-significance must be in [0.0, 1.0]; got {}",
+                self.fisher_significance
+            )));
+        }
+        if let (Some(after), Some(before)) = (self.after, self.before)
+            && after > before
+        {
+            return Err(crate::CodeLoreError::Provenance(format!(
+                "--after ({after}) must be <= --before ({before})"
+            )));
+        }
+        Ok(())
+    }
 }
 
 impl Default for Options {
@@ -280,6 +319,46 @@ impl Default for Options {
 #[cfg(test)]
 mod tests {
     use super::Options;
+
+    #[test]
+    fn validate_accepts_default_options() {
+        assert!(Options::default().validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_inverted_coupling_range() {
+        let opts = Options {
+            min_coupling_pct: 80,
+            max_coupling_pct: 30,
+            ..Options::default()
+        };
+        let err = opts.validate().expect_err("inverted range must fail");
+        assert!(
+            format!("{err}").contains("min-coupling"),
+            "error must name the offending field: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_clone_similarity_floor_out_of_range() {
+        let opts = Options {
+            clone_similarity_floor: 1.5,
+            ..Options::default()
+        };
+        assert!(opts.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_inverted_date_range() {
+        use time::macros::date;
+        let opts = Options {
+            after: Some(date!(2026 - 06 - 09)),
+            before: Some(date!(2026 - 01 - 01)),
+            ..Options::default()
+        };
+        let err = opts.validate().expect_err("inverted dates must fail");
+        assert!(format!("{err}").contains("after"), "{err}");
+    }
 
     #[test]
     fn defaults_use_the_constants_so_drift_is_caught_at_compile_time() {

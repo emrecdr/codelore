@@ -153,6 +153,11 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
         ..Options::default()
     };
 
+    // Catch pathological flag combinations (e.g. --min-coupling 60
+    // --max-coupling 30) at the boundary rather than silently producing
+    // empty output downstream.
+    opts.validate().context("validate options")?;
+
     let analysis_name = args.analysis.as_str();
 
     // Plan 7 clones is HEAD-only filesystem walk — no git history needed.
