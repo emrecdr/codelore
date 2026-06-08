@@ -1,14 +1,23 @@
-//! Hotspot ranking analysis per spec §1.1 published formula:
+//! Hotspot ranking analysis. `code_health` is on `[0, 100]` (higher = healthier);
+//! `percentile_rank` is on `[0, 1]`; the score formula combines them so unhealthy +
+//! frequently-changed + complex files rank highest. Output range is `[0, 10]`:
 //!
 //! ```text
 //!   hotspot_score(entity) = percentile_rank(revisions)
 //!                         × percentile_rank(cognitive_complexity)
-//!                         × (10 − code_health) / 10
+//!                         × (100 − code_health) / 10
 //! ```
 //!
-//! In Plan 3, `code_health` is computed inline using cognitive complexity only;
-//! the spec §4.6 inputs for churn / fragmentation / coupling have weight 0 until
-//! Plan 4 ships their analyses.
+//! Note: an earlier version used `(10 − code_health) / 10` which produced
+//! negative scores because `code_health` is on the `[0, 100]` scale, not
+//! `[0, 10]`. The published formula now divides by 10 (not 100) so the
+//! resulting `[0, 10]` range matches what consumers (CSV, Markdown, SARIF
+//! emitters) display.
+//!
+//! `code_health` itself is computed inline using cognitive complexity only;
+//! the churn / fragmentation / coupling inputs from `code_health` analysis
+//! aren't reused here — `hotspots` is the lightweight "what to look at first"
+//! ranking, `code-health` is the deeper analysis.
 
 use duckdb::params;
 
@@ -28,9 +37,11 @@ pub struct HotspotRow {
 // Aggregate per-path:
 //   revisions:   count of distinct commits in changes
 //   cognitive:   MAX of cognitive across all entities in the path's file
-//   code_health: 100 * (1 − 0.40 * normalize(cognitive))
-//   hotspot_score: percent_rank(revs) * percent_rank(cog) * (10 − code_health) / 10
-const SQL: &str = "
+//   code_health: 100 * (1 − 0.40 * normalize(cognitive))   ∈ [0, 100]
+//   hotspot_score: percent_rank(revs) * percent_rank(cog) * (100 − code_health) / 10
+//                  ∈ [0, 10] — divide by 10 not 100 so emitted values stay
+//                  on the same scale as code_health (0–10 hotspots, ≈10 = on fire).
+pub(crate) const SQL: &str = "
     WITH file_revs AS (
         SELECT path, COUNT(DISTINCT rev) AS revs
         FROM changes
@@ -69,7 +80,7 @@ const SQL: &str = "
         revs,
         cognitive,
         GREATEST(0.0, LEAST(100.0, 100.0 * (1.0 - 0.40 * norm_cx))) AS code_health,
-        pr_rev * pr_cx * (10.0 - GREATEST(0.0, LEAST(100.0, 100.0 * (1.0 - 0.40 * norm_cx)))) / 10.0 AS score
+        pr_rev * pr_cx * (100.0 - GREATEST(0.0, LEAST(100.0, 100.0 * (1.0 - 0.40 * norm_cx)))) / 10.0 AS score
     FROM ranked
     ORDER BY score DESC, path ASC
     LIMIT ?

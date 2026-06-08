@@ -91,12 +91,29 @@ pub mod tiny_repo {
 pub mod differential_repo {
     use std::path::PathBuf;
     use std::process::Command;
+    use std::sync::Mutex;
     use tempfile::TempDir;
 
     pub struct DifferentialRepo {
         pub dir: TempDir,
         pub head_sha: String,
     }
+
+    /// Serializes concurrent `build()` calls across test threads.
+    ///
+    /// `differential_repo::build()` runs ~100 `git` invocations (50 commits ×
+    /// `add` + `commit`). When multiple tests in the same binary call `build()`
+    /// in parallel (cargo's default), the high rate of `git` invocations
+    /// across distinct tempdirs from the same parent process produces
+    /// intermittent "invalid object … Error building trees" failures even
+    /// with `gc.auto = 0`. The race surfaces a few percent of the time on
+    /// `cargo test --workspace --all-features` and reliably under
+    /// `cargo bench` (~500 commits in `medium_repo` magnifies the rate).
+    ///
+    /// Each test still gets its own tempdir + git history; only the
+    /// build-up of fixtures is serialized. The analysis phase that
+    /// follows is fully parallel.
+    static BUILD_MUTEX: Mutex<()> = Mutex::new(());
 
     /// Build a 50-commit fixture exercising every `Repo` trait method's edge cases:
     /// 3 authors + 1 bot, .mailmap, 1 rename, 1 merge, deterministic dates.
@@ -119,12 +136,21 @@ pub mod differential_repo {
     #[must_use]
     #[allow(clippy::too_many_lines)]
     pub fn build() -> DifferentialRepo {
+        // Serialize fixture builds across test threads — concurrent `git`
+        // invocation storms from the same parent process produce
+        // intermittent "invalid object" errors even with `gc.auto = 0`.
+        // See the BUILD_MUTEX comment above for the full diagnosis.
+        let _guard = BUILD_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
         let dir = tempfile::tempdir().expect("tempdir");
         let path: PathBuf = dir.path().to_path_buf();
 
         run_git(&path, &["init", "-b", "main", "--quiet"]);
         run_git(&path, &["config", "user.email", "noop@example.com"]);
         run_git(&path, &["config", "user.name", "Noop"]);
+        // Disable auto-gc to remove one race source even with the mutex
+        // (other parallel tests may still run their own git operations).
+        run_git(&path, &["config", "gc.auto", "0"]);
 
         // .mailmap — committed as part of commit 1 so resolve_alias works
         write(

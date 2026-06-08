@@ -93,78 +93,133 @@ fn enrich_fix(db: &FactsDb) -> Result<()> {
     Ok(())
 }
 
-/// History: NDEV, AGE, NUC
+/// History: NDEV, AGE, NUC.
+///
+/// Rewritten from N correlated subqueries (one per commit) to two hash-joined
+/// UPDATE…FROM passes. The original was O(N²) on commit count because every
+/// commit ran an independent `SELECT … FROM commits prev … WHERE prev.date <= c.date`.
+/// The new shape lets `DuckDB` resolve the cross-commit join once via a hash
+/// pass, then projects the aggregates back via a join key — orders of
+/// magnitude faster on >10k-commit repos.
+///
+/// Two passes because `age` needs a different grouping (per-file MAX of
+/// `prev.date`, then AVG across files) than `ndev`/`nuc` (distinct counts).
+/// Initial zero-pass ensures commits with no prior history retain `0` /
+/// `0.0` (semantically equivalent to the old `COALESCE(…, 0)` wrap).
 fn enrich_history(db: &FactsDb) -> Result<()> {
-    // Use `date <= c.date AND prev.rev != c.rev` to handle same-day commits
-    // (e.g. test fixtures) without losing history.
-    let sql = "
-        UPDATE commits AS c SET
-          ndev = COALESCE((
-              SELECT COUNT(DISTINCT prev.canonical_author)
-              FROM commits prev
-              INNER JOIN changes pchg ON pchg.rev = prev.rev
-              INNER JOIN changes cchg ON cchg.rev = c.rev AND cchg.path = pchg.path
-              WHERE prev.rev != c.rev AND prev.date <= c.date
-          ), 0),
-          nuc = COALESCE((
-              SELECT COUNT(DISTINCT prev.rev)
-              FROM commits prev
-              INNER JOIN changes pchg ON pchg.rev = prev.rev
-              INNER JOIN changes cchg ON cchg.rev = c.rev AND cchg.path = pchg.path
-              WHERE prev.rev != c.rev AND prev.date <= c.date
-          ), 0),
-          age = COALESCE((
-              SELECT AVG(DATE_DIFF('day', last_date, c.date))
-              FROM (
-                  SELECT MAX(prev.date) AS last_date
-                  FROM commits prev
-                  INNER JOIN changes pchg ON pchg.rev = prev.rev
-                  INNER JOIN changes cchg ON cchg.rev = c.rev AND cchg.path = pchg.path
-                  WHERE prev.rev != c.rev AND prev.date <= c.date
-                  GROUP BY cchg.path
-              )
-          ), 0.0);
+    // Pass 1: zero out — commits with no history retain these defaults.
+    db.conn()
+        .execute_batch("UPDATE commits SET ndev = 0, nuc = 0, age = 0.0;")
+        .map_err(|e| CodeLoreError::Analysis(format!("kamei history reset: {e}")))?;
+
+    // Pass 2: ndev + nuc via single hash-joined aggregation.
+    // Uses `prev.date <= c.date AND prev.rev != c.rev` to match the original's
+    // same-day-commit semantics (strictly-before would drop same-day history).
+    let sql_nd = "
+        UPDATE commits SET ndev = h.ndev, nuc = h.nuc
+        FROM (
+            SELECT
+                c.rev AS curr_rev,
+                COUNT(DISTINCT prev.canonical_author) AS ndev,
+                COUNT(DISTINCT prev.rev) AS nuc
+            FROM commits c
+            INNER JOIN changes cchg ON cchg.rev = c.rev
+            INNER JOIN changes pchg ON pchg.path = cchg.path
+            INNER JOIN commits prev ON prev.rev = pchg.rev
+            WHERE prev.rev != c.rev AND prev.date <= c.date
+            GROUP BY c.rev
+        ) AS h
+        WHERE commits.rev = h.curr_rev;
     ";
     db.conn()
-        .execute_batch(sql)
-        .map_err(|e| CodeLoreError::Analysis(format!("kamei history: {e}")))?;
+        .execute_batch(sql_nd)
+        .map_err(|e| CodeLoreError::Analysis(format!("kamei history ndev/nuc: {e}")))?;
+
+    // Pass 3: age — per-file MAX(prev.date), then AVG across files of the
+    // commit. Two-level subquery so the GROUP BY granularity is right.
+    let sql_age = "
+        UPDATE commits SET age = a.age
+        FROM (
+            SELECT curr_rev, AVG(DATE_DIFF('day', last_prev_date, curr_date)) AS age
+            FROM (
+                SELECT
+                    c.rev AS curr_rev,
+                    c.date AS curr_date,
+                    cchg.path,
+                    MAX(prev.date) AS last_prev_date
+                FROM commits c
+                INNER JOIN changes cchg ON cchg.rev = c.rev
+                INNER JOIN changes pchg ON pchg.path = cchg.path
+                INNER JOIN commits prev ON prev.rev = pchg.rev
+                WHERE prev.rev != c.rev AND prev.date <= c.date
+                GROUP BY c.rev, c.date, cchg.path
+            ) per_file_max
+            GROUP BY curr_rev
+        ) AS a
+        WHERE commits.rev = a.curr_rev;
+    ";
+    db.conn()
+        .execute_batch(sql_age)
+        .map_err(|e| CodeLoreError::Analysis(format!("kamei history age: {e}")))?;
+
     Ok(())
 }
 
-/// Experience: EXP, REXP, SEXP
+/// Experience: EXP, REXP, SEXP.
+///
+/// Rewritten from N correlated subqueries to two hash-joined UPDATE…FROM
+/// passes (same motivation + shape as `enrich_history` above). `prev.date <=
+/// c.date AND prev.rev != c.rev` preserves the same-day-commit semantics —
+/// strictly-before would give EXP=0 for repos with many same-date commits
+/// (test fixtures, bulk imports, ingest-time clusters).
 fn enrich_experience(db: &FactsDb) -> Result<()> {
-    // Use `date <= c.date AND prev.rev != c.rev` to handle repos where many
-    // commits share the same calendar date (e.g. test fixtures, bulk imports).
-    // Strictly-before (`<`) would give EXP=0 for all same-day commits.
-    let sql = "
-        UPDATE commits AS c SET
-          exp = COALESCE((
-              SELECT COUNT(*)
-              FROM commits prev
-              WHERE prev.canonical_author = c.canonical_author
+    db.conn()
+        .execute_batch("UPDATE commits SET exp = 0, rexp = 0.0, sexp = 0;")
+        .map_err(|e| CodeLoreError::Analysis(format!("kamei experience reset: {e}")))?;
+
+    // Pass 1: EXP + REXP via single per-author aggregation.
+    let sql_exp_rexp = "
+        UPDATE commits SET exp = ae.exp, rexp = ae.rexp
+        FROM (
+            SELECT
+                c.rev AS curr_rev,
+                COUNT(*) AS exp,
+                SUM(1.0 / (1.0 + CAST(DATE_DIFF('year', prev.date, c.date) AS DOUBLE))) AS rexp
+            FROM commits c
+            INNER JOIN commits prev
+                ON prev.canonical_author = c.canonical_author
                 AND prev.rev != c.rev
                 AND prev.date <= c.date
-          ), 0),
-          rexp = COALESCE((
-              SELECT SUM(1.0 / (1.0 + CAST(DATE_DIFF('year', prev.date, c.date) AS DOUBLE)))
-              FROM commits prev
-              WHERE prev.canonical_author = c.canonical_author
-                AND prev.rev != c.rev
-                AND prev.date <= c.date
-          ), 0.0),
-          sexp = COALESCE((
-              SELECT COUNT(DISTINCT prev.rev)
-              FROM commits prev
-              INNER JOIN changes pchg ON pchg.rev = prev.rev
-              INNER JOIN changes cchg ON cchg.rev = c.rev
-              WHERE prev.canonical_author = c.canonical_author
-                AND prev.rev != c.rev
-                AND prev.date <= c.date
-                AND SPLIT_PART(pchg.path, '/', 1) = SPLIT_PART(cchg.path, '/', 1)
-          ), 0);
+            GROUP BY c.rev
+        ) AS ae
+        WHERE commits.rev = ae.curr_rev;
     ";
     db.conn()
-        .execute_batch(sql)
-        .map_err(|e| CodeLoreError::Analysis(format!("kamei experience: {e}")))?;
+        .execute_batch(sql_exp_rexp)
+        .map_err(|e| CodeLoreError::Analysis(format!("kamei exp/rexp: {e}")))?;
+
+    // Pass 2: SEXP (subsystem experience) — distinct prior commits by the
+    // same author that touched the same top-level dir as the current commit.
+    let sql_sexp = "
+        UPDATE commits SET sexp = asx.sexp
+        FROM (
+            SELECT
+                c.rev AS curr_rev,
+                COUNT(DISTINCT prev.rev) AS sexp
+            FROM commits c
+            INNER JOIN changes cchg ON cchg.rev = c.rev
+            INNER JOIN changes pchg ON SPLIT_PART(pchg.path, '/', 1) = SPLIT_PART(cchg.path, '/', 1)
+            INNER JOIN commits prev ON prev.rev = pchg.rev
+                AND prev.canonical_author = c.canonical_author
+                AND prev.rev != c.rev
+                AND prev.date <= c.date
+            GROUP BY c.rev
+        ) AS asx
+        WHERE commits.rev = asx.curr_rev;
+    ";
+    db.conn()
+        .execute_batch(sql_sexp)
+        .map_err(|e| CodeLoreError::Analysis(format!("kamei sexp: {e}")))?;
+
     Ok(())
 }

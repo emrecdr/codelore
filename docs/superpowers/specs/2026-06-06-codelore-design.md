@@ -32,7 +32,7 @@ A modernized, Rust-based behavioral code analysis tool. Mines git history to pro
   ```
   hotspot_score(entity) = percentile_rank(revisions)
                         × percentile_rank(cognitive_complexity)
-                        × (10 − code_health) / 10
+                        × (100 − code_health) / 10
   ```
   Sorted descending. All inputs are also emitted alongside the score so users can verify.
 - **Canonical default thresholds** (code-maat parity): `min_revs = 5`, `min_shared_revs = 5`, `min_coupling_pct = 30`, `max_coupling_pct = 100`, `max_changeset_size = 30`, `fisher_significance = 0.05`.

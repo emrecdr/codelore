@@ -121,6 +121,12 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
         max_coupling_pct: args.max_coupling_pct,
         max_changeset_size: args.max_changeset_size,
         age_time_now: args.age_time_now,
+        // R2/R3: date-range filters on the commit walk.
+        after: args.after,
+        before: args.before,
+        // R4: opt-in merge-commit inclusion (default off matches code-maat
+        // semantics and the GitCliRepo backend).
+        include_merges: args.include_merges,
         message_regex: args.message_regex.clone(),
         min_soc: args.min_soc,
         // PAR-9: --code-maat-compat. Implies --strict-grouping (code-maat

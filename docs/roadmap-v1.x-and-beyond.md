@@ -47,7 +47,7 @@ Strategic features once v1.0 ships and the bench data is in.
 | Type 3 near-miss clones (MinHash + LSH @ Jaccard ≥ 0.8) | Plan 7 §2 Task 4; ~100 LOC; catches "renamed + restructured" code | future | pending |
 | **Bus-factor / knowledge-island detector** (hotspots × single-owner × departed-author) | Plan 7 research surfaced this; we already have all the data | future | pending |
 | **Live-clone × knowledge-loss intersection** (clones inside departed-contributor code) | Engineering-director-level signal nobody else produces | future | pending |
-| Rename tracking via `gix_diff::tree::breaks::detect_renames` | Validation Finding S6; revisions/coupling/churn currently split on rename | future | pending |
+| Rename tracking via `gix_diff::tree::breaks::detect_renames` | Validation Finding S6. `ChangeType::Renamed { from, similarity }` is captured at ingest by both `GixRepo` (gix_repo.rs:260) and `GitCliRepo` (git_cli_repo.rs:400). What's missing: no analysis queries the `from` field — `revisions` / `coupling` / `churn` SQL views all `GROUP BY` raw post-rename path, so a renamed file's history splits. Needs a canonical-lineage DuckDB view; rename chains can have cycles so the resolver must detect and break them deterministically. | future | partial (data captured, queries don't follow yet) |
 | Bootstrap confidence intervals on hotspot scores | Methodological honesty wedge; CodeScene reports point estimates | future | pending |
 | `--query SQL` escape hatch | Spec §5 reserved; power-user feature | future | pending |
 | LCOV input → hotspot-weighted coverage | CodeScene shipped this in 2025 | future | pending |
@@ -62,9 +62,10 @@ Always-on hygiene work; no plan required, weave into other plans.
 | `proptest` on parser + fingerprint walker | Catches edge cases | pending |
 | `cargo-mutants` in CI | Hardens test assertion quality | pending |
 | `cargo-fuzz` campaign (spec §6.7 → v1.5) | Parser hardening | pending |
-| Switch CSV writer to `csv` crate | Hand-rolled quoting has bugs waiting | pending |
-| Macro-driven CLI dispatch | Replaces 33-arm match | pending |
-| Builder + validation for `Options` (18 fields, no cross-field checks) | Catches `min_revs > max_changeset_size` silently accepted today | pending |
+| Switch CSV writer to `csv` crate | `output/csv.rs` has 28 hand-rolled `writeln!` calls and zero `csv::Writer`. The `quote_if_needed` helper at the top closes the acute injection vector, but any new emitter forgetting to call it silently breaks valid CSV. Migrate to `csv::WriterBuilder::flexible(false)` with per-emitter round-trip snapshot tests. | pending |
+| Macro-driven CLI dispatch | Replaces 66-arm `match (format, &analysis)` ladder in `main.rs` (grew from 14 as analyses landed) | pending |
+| Builder + validation for `Options` (28 fields, no cross-field checks) | 4 verified pathological combinations silently produce empty results today: `min_revs > max_changeset_size`, `clone_similarity_floor > 1.0`, `after > before`, `fisher_significance > 1.0`. `OptionsBuilder::build() -> Result<Options, OptionsError>` would catch all four at the boundary; also gates future field-additions through a single funnel (currently new fields require updating ~6 struct-literal call sites). | pending |
+| Parallelize clone extraction (`populate_clones_at_head`) | `facts/ingest.rs::populate_clones_at_head` walks Tier-1 files sequentially. Same `rayon::par_iter().map_init` pattern that complexity extraction already uses. `tree_sitter::Parser` is `Send + Sync` so no thread-local pool. ~30 LOC change, low risk. Win is smaller than complexity parallelization (hash-only, no Halstead/MI) but linear in file count. | pending |
 | `gix-write` for test fixtures (5-10× faster than shell-out) | Spec §6 noted gix-write maturing | pending |
 | Better error messages at CLI boundary | "find_parent_commit ..." → "shallow clone is missing parent ancestry" | pending |
 | Reproducible-build verification in CI | Compare binary hashes across runs | pending |

@@ -89,6 +89,12 @@ pub enum Command {
     Diff(DiffArgs),
 }
 
+// AnalyzeArgs accumulates 4+ independent boolean flags (--no-cache, --verbose,
+// --code-maat-compat, --strict-grouping, --include-merges) — each one toggles
+// a semantically distinct, user-visible behavior. Clippy's heuristic that >3
+// bools = "should be an enum" doesn't apply here; the flags are not mutually
+// exclusive states of a single mode.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(clap::Args, Debug)]
 pub struct AnalyzeArgs {
     /// Analysis name (Plan 1 supports: revisions).
@@ -182,6 +188,23 @@ pub struct AnalyzeArgs {
     #[arg(long = "age-time-now", value_parser = parse_date)]
     pub age_time_now: Option<time::Date>,
 
+    /// Only include commits authored on or after this date. Format: YYYY-MM-DD.
+    /// Applied at repo-walk time so the filter survives across every analysis.
+    /// Mirrors `git log --after`.
+    #[arg(long, value_parser = parse_date)]
+    pub after: Option<time::Date>,
+
+    /// Only include commits authored on or before this date. Format: YYYY-MM-DD.
+    /// Applied at repo-walk time. Mirrors `git log --before`.
+    #[arg(long, value_parser = parse_date)]
+    pub before: Option<time::Date>,
+
+    /// Include merge commits in coupling / churn / ownership analyses. Off by
+    /// default (matches code-maat semantics: merges duplicate authorship and
+    /// inflate co-change pairs). Set to opt back in.
+    #[arg(long)]
+    pub include_merges: bool,
+
     /// Commit-message regex for the `messages` analysis. Required when
     /// `--analysis messages` is run; ignored otherwise. RE2-flavor (per
     /// `DuckDB` `regexp_matches`); use `(?i)` for case-insensitive matching.
@@ -253,7 +276,8 @@ impl From<TimeBucketArg> for codelore_lib::options::TimeBucket {
     }
 }
 
-/// Parse a YYYY-MM-DD date for the `--age-time-now` flag.
+/// Parse a YYYY-MM-DD date for the date-valued flags (`--age-time-now`,
+/// `--after`, `--before`).
 fn parse_date(s: &str) -> std::result::Result<time::Date, String> {
     use time::format_description::well_known::Iso8601;
     time::Date::parse(s, &Iso8601::DEFAULT)

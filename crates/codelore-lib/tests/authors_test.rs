@@ -34,29 +34,25 @@ fn authors_against_differential_fixture() {
     db.ingest(&repo, &opts).expect("ingest");
 
     let rows = run_authors(&db, &opts).expect("run authors");
-    // differential_repo authors: Alice (alice-old@), Bob (bob-aliased@ →
-    // canonical-bob@ via .mailmap), Carol (c.lee@), dependabot[bot], and
-    // the implicit `noop@example.com` committer set via `git config user.email`
-    // before any --author override. So 5 raw + 0 canonicalized for Alice/Carol.
-    //
-    // After the Plan 8 §2 T6 mailmap fix (ingest now passes author_name into
-    // the gix mailmap lookup), all 3 humans + 1 bot canonicalize correctly:
-    //   - alice-old@example.com → canonical-alice@example.com
-    //   - bob-aliased@example.com → canonical-bob@example.com
-    //   - c.lee@example.com → carol@example.com
+    // differential_repo has 5 raw author identities across its commits:
+    //   - alice-old@example.com (→ canonical-alice@example.com via .mailmap)
+    //   - bob-aliased@example.com (→ canonical-bob@example.com via .mailmap)
+    //   - c.lee@example.com (→ carol@example.com via .mailmap)
     //   - 49699333+dependabot[bot]@users.noreply.github.com (bot, no mailmap)
+    //   - noop@example.com — the implicit committer of the `git merge --no-ff`
+    //     merge commit, which inherits the repo's `user.email` config because
+    //     `git merge` doesn't accept a `--author` flag.
     //
-    // A 5th author appears: `noop@example.com`. This is `git merge --no-ff`'s
-    // default author behavior — the merge commit (commit 49) doesn't carry
-    // a `--author` override, so it inherits the repo's user.email config
-    // (`noop@example.com`, set during `git init` in differential_repo::build).
-    // This faithfully mirrors real-world git behavior where merge commits
-    // are authored by the developer or CI bot that ran `git merge`. Counting
-    // them as a distinct author is correct.
+    // With default `Options { include_merges: false, .. }` the merge commit is
+    // filtered out at repo-walk time (matches the spec §3.1 default and the
+    // GitCliRepo backend's `--no-merges` semantics), so the merge-committer
+    // never gets ingested and the analysis sees 4 distinct authors. The
+    // 5-author behavior is exercised by the `_with_merges_included` test
+    // below to give R4 (merge-filter) positive coverage in both modes.
     assert_eq!(
         rows.len(),
-        5,
-        "expected 5 distinct canonical authors (3 humans + 1 bot + 1 merge-committer), got {}: {:?}",
+        4,
+        "expected 4 distinct canonical authors with merges filtered (3 humans + 1 bot), got {}: {:?}",
         rows.len(),
         rows.iter().map(|r| &r.author).collect::<Vec<_>>()
     );
@@ -82,6 +78,40 @@ fn authors_against_differential_fixture() {
             w[1].commits
         );
     }
+}
+
+/// R4 positive-coverage test: with `include_merges = true`, the merge
+/// commit is ingested and its committer appears as a 5th distinct author
+/// (the implicit `noop@example.com` set by `git config user.email` during
+/// fixture setup; `git merge --no-ff` doesn't accept an `--author` flag
+/// so the merge inherits the repo config). The default-filtered behavior
+/// (4 authors) is asserted in `authors_against_differential_fixture`
+/// above; this one asserts the flag actually flips the behavior.
+#[test]
+fn authors_against_differential_fixture_with_merges_included() {
+    let fixture = codelore_lib::test_support::differential_repo::build();
+    let repo = GixRepo::open(fixture.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: fixture.dir.path().to_path_buf(),
+        include_merges: true,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let rows = run_authors(&db, &opts).expect("run authors");
+    assert_eq!(
+        rows.len(),
+        5,
+        "with include_merges=true expected 5 distinct authors (3 humans + 1 bot + 1 merge-committer), got {}: {:?}",
+        rows.len(),
+        rows.iter().map(|r| &r.author).collect::<Vec<_>>()
+    );
+    let names: std::collections::HashSet<&str> = rows.iter().map(|r| r.author.as_str()).collect();
+    assert!(
+        names.contains("noop@example.com"),
+        "merge-committer (noop@example.com) should appear when merges are included"
+    );
 }
 
 #[test]

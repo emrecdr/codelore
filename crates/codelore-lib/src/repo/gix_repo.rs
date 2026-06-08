@@ -23,7 +23,7 @@ impl GixRepo {
 impl Repo for GixRepo {
     fn walk_commits<'a>(
         &'a self,
-        _opts: &'a Options,
+        opts: &'a Options,
     ) -> Result<Box<dyn Iterator<Item = Result<CommitEvent>> + Send + 'a>> {
         let repo = self.inner.to_thread_local();
         let head = repo
@@ -32,16 +32,52 @@ impl Repo for GixRepo {
 
         // Collect OIDs up-front: gix::Repository is !Sync so the Walk iterator
         // cannot be made Send. Collecting OIDs is cheap (they're 20-byte hashes).
-        // NOTE(Plan 4): full traversal happens here before any consumer sees commits.
-        // When the channel pipeline lands (Plan 4), consider a lazy walk with OIDs
-        // collected into a bounded channel instead. Current design is correct for Plan 1.
+        //
+        // Apply `Options.after` / `Options.before` (date-range filter) and
+        // `Options.include_merges` (merge filter) at this layer so the
+        // GixRepo and GitCliRepo backends produce identical event streams
+        // for identical Options. Without this, `--after`/`--before` and the
+        // default merge-exclusion would silently no-op on the gix backend.
         let oids: Vec<gix::ObjectId> = repo
             .rev_walk([head])
             .all()
             .map_err(|e| CodeLoreError::Repo(format!("rev_walk: {e}")))?
-            .map(|info| match info {
-                Ok(i) => Ok(i.id),
-                Err(e) => Err(CodeLoreError::Repo(format!("revwalk: {e}"))),
+            .filter_map(|info| {
+                let info = match info {
+                    Ok(i) => i,
+                    Err(e) => return Some(Err(CodeLoreError::Repo(format!("revwalk: {e}")))),
+                };
+                let oid = info.id;
+                let commit = match repo.find_commit(oid) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        return Some(Err(CodeLoreError::Repo(format!(
+                            "find_commit during filter: {e}"
+                        ))));
+                    }
+                };
+                // R4: merge filter (mirrors GitCliRepo's `if !opts.include_merges`).
+                if !opts.include_merges && commit.parent_ids().count() > 1 {
+                    return None;
+                }
+                // R2: date-range filter on author date.
+                if opts.after.is_some() || opts.before.is_some() {
+                    let date = match commit_author_date(&commit) {
+                        Ok(d) => d,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    if let Some(after) = opts.after {
+                        if date < after {
+                            return None;
+                        }
+                    }
+                    if let Some(before) = opts.before {
+                        if date > before {
+                            return None;
+                        }
+                    }
+                }
+                Some(Ok(oid))
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -273,6 +309,22 @@ fn gix_change_to_file_change(change: GixChange, _rev: &str) -> Option<FileChange
         // Skip non-blob entries (trees / submodules / symlinks treated as non-blob).
         _ => None,
     }
+}
+
+/// Extract the author-time date from a gix commit. Used by both the
+/// `CommitEvent` constructor and the pre-filter in `walk_commits`.
+fn commit_author_date(commit: &gix::Commit<'_>) -> Result<time::Date> {
+    use time::OffsetDateTime;
+    let author_ref = commit
+        .author()
+        .map_err(|e| CodeLoreError::Repo(format!("author: {e}")))?;
+    let ts_seconds = author_ref
+        .time()
+        .map_err(|e| CodeLoreError::Repo(format!("author time: {e}")))?
+        .seconds;
+    Ok(OffsetDateTime::from_unix_timestamp(ts_seconds)
+        .map_err(|e| CodeLoreError::Repo(format!("commit timestamp {ts_seconds}: {e}")))?
+        .date())
 }
 
 fn commit_event_from_gix(commit: &gix::Commit<'_>) -> Result<CommitEvent> {

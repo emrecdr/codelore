@@ -50,7 +50,7 @@ The table below is split into the **17 code-maat-parity analyses** (drop-in succ
 
 | Analysis | What you ask it | Formula / source | When to reach for it |
 |---|---|---|---|
-| `hotspots` ★ | "Which files are both complex AND change a lot?" | `percentile_rank(revs) × percentile_rank(cognitive) × (10 − code_health) / 10` ([see design spec](superpowers/specs/2026-06-06-codelore-design.md)) | The headline ranking signal — refactor priorities |
+| `hotspots` ★ | "Which files are both complex AND change a lot?" | `percentile_rank(revs) × percentile_rank(cognitive) × (100 − code_health) / 10` ([see design spec](superpowers/specs/2026-06-06-codelore-design.md)) | The headline ranking signal — refactor priorities |
 | `code-health` ★ | "How healthy is each file's structure?" | 4-input composite: cognitive 0.40 + churn 0.25 + fragmentation 0.15 + coupling 0.20 (Fisher-filtered centrality) | Combined with `hotspots`; tracks degradation |
 | `clones` ★ | "Where is code copy-pasted?" | Type 1 + Type 2 via AST structural hashing on tree-sitter | Refactoring candidates |
 | `clone-coupling` ★ | "Which copy-pasted blocks ALSO change together?" (the strategic differentiator) | Clones JOIN coupling, Fisher-significant only | Live debt that hurts you on every change |
@@ -425,7 +425,7 @@ See [`examples/.github/workflows/codelore-pr.yml`](../examples/.github/workflows
 | `error: ingest commits: repository error: find_parent_commit ... could not be found` | Shallow clone (`--depth=N`) is missing parent ancestry for analyses that walk back | Use a full clone or run only HEAD-only analyses (`clones` works on shallow clones — it short-circuits the ingest) |
 | Hotspot scores are all `0.0` | Repo has only one commit, OR `fetch-depth: 0` not set in CI | Set `fetch-depth: 0` in `actions/checkout` |
 | `codelore analyze --analysis bogus` errors with help-text | Typo on analysis name | The error message lists all 13 supported analyses |
-| Same file appears twice in `revisions` output (e.g. `crates/bca-lib/foo.rs` AND `crates/codelore-lib/foo.rs`) | Git rename split — CodeLore doesn't follow renames yet | Known limitation; see the open-item backlog in [`codebase_analysis_report.md`](codebase_analysis_report.md) |
+| Same file appears twice in `revisions` output (e.g. `crates/bca-lib/foo.rs` AND `crates/codelore-lib/foo.rs`) | Git rename split — CodeLore doesn't follow renames yet | Known limitation; tracked in [`roadmap-v1.x-and-beyond.md`](roadmap-v1.x-and-beyond.md) (Tier 3, "Rename tracking") |
 | `clone-coupling` returns 0 rows on a small repo | Fisher exact test needs ≥ 3 shared commits AND non-degenerate contingency table | Verify with `--analysis coupling` first; if that's empty too, the repo doesn't have enough history |
 | `--format parquet` fails with "requires --output" | Binary format can't stream to stdout | Pass `--output FILE.parquet` |
 | `--format sarif` fails with "supported: hotspots, clones, clone-coupling" | Other analyses don't have a SARIF rule yet | Use one of the supported analyses, or `--format json` |
@@ -467,7 +467,7 @@ codescene/
 │   └── codelore-rca/                     # vendored Mozilla rust-code-analysis (MPL-2.0)
 ├── docs/
 │   ├── advanced-usage.md                 # ← you are here
-│   ├── codebase_analysis_report.md       # validated improvement backlog
+│   ├── codebase_analysis.md              # architecture overview (workspace + data flow)
 │   ├── perf-evidence-v1.md               # release-blocker performance numbers
 │   ├── roadmap-v1.x-and-beyond.md        # near-term and long-term backlog
 │   └── superpowers/
