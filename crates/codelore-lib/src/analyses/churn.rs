@@ -44,7 +44,7 @@ pub fn run_abs_churn(db: &FactsDb, opts: &Options) -> Result<Vec<AbsChurnRow>> {
          FROM commits
          INNER JOIN changes ON changes.rev = commits.rev
          GROUP BY commits.date
-         ORDER BY commits.date ASC{limit}",
+         ORDER BY commits.date ASC, added DESC, deleted DESC{limit}",
     );
     let mut stmt = db
         .conn()
@@ -78,7 +78,7 @@ pub fn run_author_churn(db: &FactsDb, opts: &Options) -> Result<Vec<AuthorChurnR
          FROM commits
          INNER JOIN changes ON changes.rev = commits.rev
          GROUP BY commits.canonical_author
-         ORDER BY added DESC, commits DESC{limit}",
+         ORDER BY added DESC, commits DESC, author ASC{limit}",
     );
     let mut stmt = db
         .conn()
