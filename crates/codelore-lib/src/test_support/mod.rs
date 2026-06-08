@@ -5,9 +5,9 @@
 //! (not gix-write) because gix-write is still maturing for trivial init in 0.84,
 //! and shell-out is fast + predictable for tests.
 //!
-//! `differential_repo::build()` constructs a 50-commit repo exercising every
-//! `Repo`-trait edge case: 3 authors + 1 bot, .mailmap, 1 rename, 1 merge,
-//! deterministic dates — used to assert `GixRepo` ≡ `GitCliRepo`.
+//! `differential_repo::build()` extracts a 50-commit repo from a checked-in
+//! git bundle via a single atomic `git clone`. Used to assert
+//! `GixRepo` ≡ `GitCliRepo`.
 
 #[cfg(feature = "test-support")]
 pub mod tiny_repo {
@@ -89,269 +89,90 @@ pub mod tiny_repo {
 
 #[cfg(feature = "test-support")]
 pub mod differential_repo {
-    use std::path::PathBuf;
+    //! 50-commit fixture exercising every `Repo`-trait method's edge cases:
+    //! 3 authors + 1 bot, `.mailmap`, 1 rename, 1 merge, deterministic dates.
+    //!
+    //! ## Root-cause-fix history
+    //!
+    //! This fixture used to be rebuilt from scratch per test via ~100 sequential
+    //! `git` shell-outs (`git init`, then 50 × `git add` + `git commit`).
+    //! That pattern is timing-dependent: the kernel page cache and git's
+    //! object store can briefly disagree between separate git processes,
+    //! intermittently producing `error: invalid object … Error building
+    //! trees` or `fatal: could not parse HEAD` on CI runners under
+    //! filesystem-cache pressure. A pile of mitigations (`gc.auto = 0`,
+    //! in-process mutex, cross-process file lock, `core.fsync`) each fixed
+    //! some races but not all — because the actual root cause is the
+    //! multi-process construction pattern itself.
+    //!
+    //! Current design: the fixture is captured **once** into a checked-in
+    //! git bundle artifact (`src/test_support/data/differential-repo.bundle`,
+    //! ~15 KB, deterministic SHA across regenerations because all author
+    //! names / emails / dates / file contents are fixed). Each test does
+    //! ONE `git clone` of the bundle into a fresh tempdir — a single
+    //! atomic git invocation with no inter-process state to race over.
+    //! No mutex, no file lock, no fsync knob, no gc disabling needed.
+    //!
+    //! To regenerate the bundle (e.g. when the fixture's commit shape
+    //! needs to change), revive the pre-bundle programmatic builder from
+    //! git history at commit `9df7a42` (it shells out to git for each
+    //! commit), run it to produce a fresh repo, then capture as:
+    //!
+    //! ```text
+    //! git -C <fresh-repo> bundle create \
+    //!     crates/codelore-lib/src/test_support/data/differential-repo.bundle --all
+    //! ```
+    //!
+    //! Commit the updated bundle. A proper non-shell-out regenerator
+    //! (e.g. via `git fast-import` or `gix-object` write APIs) is a
+    //! reasonable `0.1.x` follow-up — see roadmap Tier 2.
+
     use std::process::Command;
-    use std::sync::Mutex;
     use tempfile::TempDir;
+
+    /// The fixture's git bundle, captured once and embedded at compile time.
+    /// 50 commits, deterministic SHAs (HEAD ≈ `64ef547f…` at last regen).
+    static BUNDLE: &[u8] = include_bytes!("data/differential-repo.bundle");
 
     pub struct DifferentialRepo {
         pub dir: TempDir,
         pub head_sha: String,
     }
 
-    /// Serializes concurrent `build()` calls across test threads AND test
-    /// processes (cargo's default runs separate test-binary processes in
-    /// parallel). The in-process `Mutex` covers same-process tests; the
-    /// OS-level file lock taken in `acquire_cross_process_lock` covers
-    /// cross-process. Both layers are needed because cargo test runs each
-    /// test binary (`authors_test`, `differential_repo_test`, …) in its
-    /// own process, and each process has its own copy of this `Mutex`.
-    ///
-    /// `differential_repo::build()` runs ~100 `git` invocations (50 commits
-    /// × `add` + `commit`). Without serialization, multiple concurrent
-    /// builds across processes intermittently fail with "invalid object …
-    /// Error building trees" or "fatal: could not parse HEAD" — the
-    /// kernel-level filesystem state ends up visible to the wrong process
-    /// even though each fixture builds in its own tempdir.
-    ///
-    /// Each test still gets its own tempdir + git history; only the
-    /// fixture-build's git-invocation storm is serialized. The analysis
-    /// phase that follows is fully parallel.
-    static BUILD_MUTEX: Mutex<()> = Mutex::new(());
-
-    /// OS-level cross-process file lock so the fixture-build serialization
-    /// also covers parallel cargo test binaries (each one being a separate
-    /// process). Stable in std since Rust 1.81 (`File::lock`).
-    ///
-    /// Returns a `File` whose drop releases the lock. Stored on the
-    /// returned `DifferentialRepo` so the lock is held for the lifetime
-    /// of the fixture (the caller usually drops the fixture at end of
-    /// test scope, which is exactly when other tests should be allowed
-    /// to start their own build).
-    fn acquire_cross_process_lock() -> std::fs::File {
-        let lock_path = std::env::temp_dir().join("codelore-fixture-build.lock");
-        let file = std::fs::File::options()
-            .create(true)
-            .write(true)
-            .truncate(false)
-            .open(&lock_path)
-            .expect("open fixture build lockfile");
-        file.lock().expect("acquire cross-process fixture lock");
-        file
-    }
-
-    /// Build a 50-commit fixture exercising every `Repo` trait method's edge cases:
-    /// 3 authors + 1 bot, .mailmap, 1 rename, 1 merge, deterministic dates.
-    ///
-    /// Commit layout (counting from 1):
-    ///  1      — init + .mailmap (Alice)
-    ///  2..29  — 28 round-robin commits on 10 files (Alice/Bob/Carol)
-    ///  30     — bot commit (dependabot) bumping `Cargo.lock`
-    ///  31     — rename `src/old_name.rs` → `src/new_name.rs` (Alice)
-    ///  32..47 — 16 more round-robin commits (Alice/Bob/Carol)
-    ///  48     — `feature/x` branch commit (Bob) — `src/api.rs`
-    ///  49     — merge --no-ff `feature/x` into main
-    ///  50     — final docs commit (Carol) — `README.md`
-    ///
-    /// Total: 50 commits (including 1 merge).
+    /// Extract the 50-commit fixture from the embedded bundle into a fresh
+    /// tempdir. Single atomic `git clone` — no multi-process race surface.
     ///
     /// # Panics
     ///
-    /// Panics if any git command fails.
+    /// Panics if `tempfile::tempdir` fails or if `git clone` from the
+    /// bundle fails (either case indicates a broken local git install,
+    /// not a fixture issue).
     #[must_use]
-    #[allow(clippy::too_many_lines)]
     pub fn build() -> DifferentialRepo {
-        // Serialize fixture builds across test threads AND test processes.
-        // See BUILD_MUTEX + acquire_cross_process_lock for the rationale.
-        // Both locks release when `build` returns (mutex guard drops at
-        // end of scope; the file lock's `File` drops when the function
-        // exits because we don't move it into the returned struct).
-        let _cross_process_lock = acquire_cross_process_lock();
-        let _guard = BUILD_MUTEX
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-
         let dir = tempfile::tempdir().expect("tempdir");
-        let path: PathBuf = dir.path().to_path_buf();
 
-        run_git(&path, &["init", "-b", "main", "--quiet"]);
-        run_git(&path, &["config", "user.email", "noop@example.com"]);
-        run_git(&path, &["config", "user.name", "Noop"]);
-        // Disable auto-gc to remove one race source even with the mutex
-        // (other parallel tests may still run their own git operations).
-        run_git(&path, &["config", "gc.auto", "0"]);
+        // Write the bundle to an OS-temp file outside the fixture's tempdir
+        // so `git clone` sees an empty target. The NamedTempFile auto-deletes
+        // on drop at end of this function — we don't need it after the clone.
+        let bundle_file = tempfile::NamedTempFile::new().expect("bundle scratch tempfile");
+        std::fs::write(bundle_file.path(), BUNDLE).expect("write bundle bytes");
 
-        // .mailmap — committed as part of commit 1 so resolve_alias works
-        write(
-            &path,
-            ".mailmap",
-            "Alice Canonical <canonical-alice@example.com> Alice <alice-old@example.com>\n\
-             Bob Canonical <canonical-bob@example.com> <bob-aliased@example.com>\n\
-             Carol Lee <carol@example.com> Carol <c.lee@example.com>\n",
-        );
-
-        let authors: [(&str, &str); 3] = [
-            ("Alice", "alice-old@example.com"), // → canonical-alice
-            ("Bob", "bob-aliased@example.com"), // → canonical-bob
-            ("Carol", "c.lee@example.com"),     // → carol
-        ];
-        let bot_author = (
-            "dependabot[bot]",
-            "49699333+dependabot[bot]@users.noreply.github.com",
-        );
-
-        let base_date = "2026-01-01T12:00:00Z";
-        let mut hour: u32 = 0;
-
-        // ── Commit 1: init ────────────────────────────────────────────────────
-        write(&path, "src/main.rs", "fn main() {}\n");
-        commit_as(
-            &path,
-            &authors[0],
-            base_date,
-            hour,
-            "init",
-            &[".mailmap", "src/main.rs"],
-        );
-        hour += 1;
-
-        // ── Commits 2–29: 28 round-robin on 10 files ─────────────────────────
-        // Note: src/old_name.rs is included here so it exists before the rename.
-        let files: [&str; 10] = [
-            "src/lib.rs",
-            "src/util.rs",
-            "src/parser.rs",
-            "src/format.rs",
-            "src/io.rs",
-            "src/cli.rs",
-            "src/errors.rs",
-            "README.md",
-            "src/old_name.rs",
-            "src/api.rs",
-        ];
-        for i in 0..28_usize {
-            let author = &authors[i % 3];
-            let file = files[i % files.len()];
-            let content = format!("// commit {}\nfn fn_{i}() {{}}\n", i + 2);
-            write(&path, file, &content);
-            commit_as(
-                &path,
-                author,
-                base_date,
-                hour,
-                &format!("change {file}"),
-                &[file],
-            );
-            hour += 1;
-        }
-
-        // ── Commit 30: bot commit ─────────────────────────────────────────────
-        write(&path, "Cargo.lock", "# bumped\n");
-        commit_as(
-            &path,
-            &bot_author,
-            base_date,
-            hour,
-            "deps: bump",
-            &["Cargo.lock"],
-        );
-        hour += 1;
-
-        // ── Commit 31: rename src/old_name.rs → src/new_name.rs ──────────────
-        run_git(&path, &["mv", "src/old_name.rs", "src/new_name.rs"]);
-        commit_as(
-            &path,
-            &authors[0],
-            base_date,
-            hour,
-            "rename old_name to new_name",
-            &[], // empty → git add -A
-        );
-        hour += 1;
-
-        // ── Commits 32–47: 16 more round-robin commits ────────────────────────
-        // old_name.rs is gone — avoid it; use first 8 files (indices 0..7) plus
-        // src/new_name.rs and src/api.rs.
-        let post_rename_files: [&str; 10] = [
-            "src/lib.rs",
-            "src/util.rs",
-            "src/parser.rs",
-            "src/format.rs",
-            "src/io.rs",
-            "src/cli.rs",
-            "src/errors.rs",
-            "README.md",
-            "src/new_name.rs",
-            "src/api.rs",
-        ];
-        for i in 0..16_usize {
-            let author = &authors[i % 3];
-            let file = post_rename_files[i % post_rename_files.len()];
-            let content = format!("// later commit {}\nfn later_{i}() {{}}\n", i + 32);
-            write(&path, file, &content);
-            commit_as(
-                &path,
-                author,
-                base_date,
-                hour,
-                &format!("later change to {file}"),
-                &[file],
-            );
-            hour += 1;
-        }
-
-        // ── Commits 48–49: merge sequence ─────────────────────────────────────
-        // Commit 48: feature/x branch commit
-        run_git(&path, &["checkout", "-b", "feature/x", "--quiet"]);
-        write(&path, "src/api.rs", "// feature x\npub fn feature_x() {}\n");
-        commit_as(
-            &path,
-            &authors[1],
-            base_date,
-            hour,
-            "feat: feature x",
-            &["src/api.rs"],
-        );
-        hour += 1;
-
-        // Commit 49: merge --no-ff back into main
-        run_git(&path, &["checkout", "main", "--quiet"]);
-        let merge_env = commit_env(base_date, hour);
-        let merge_status = Command::new("git")
-            .arg("-C")
-            .arg(&path)
-            .args([
-                "merge",
-                "--no-ff",
-                "-m",
-                "Merge feature/x",
-                "feature/x",
-                "--quiet",
-            ])
-            .envs(merge_env)
+        let status = Command::new("git")
+            .args(["clone", "--quiet"])
+            .arg(bundle_file.path())
+            .arg(dir.path())
             .status()
-            .expect("git merge");
-        assert!(merge_status.success(), "git merge failed");
-        hour += 1;
-
-        // ── Commit 50: final docs commit ──────────────────────────────────────
-        write(&path, "README.md", "# Final\n");
-        commit_as(
-            &path,
-            &authors[2],
-            base_date,
-            hour,
-            "docs: final",
-            &["README.md"],
-        );
+            .expect("spawn git clone");
+        assert!(status.success(), "git clone from embedded bundle failed");
+        drop(bundle_file);
 
         let head_sha = String::from_utf8(
             Command::new("git")
                 .arg("-C")
-                .arg(&path)
+                .arg(dir.path())
                 .args(["rev-parse", "HEAD"])
                 .output()
-                .expect("git rev-parse")
+                .expect("spawn git rev-parse")
                 .stdout,
         )
         .expect("utf8")
@@ -359,66 +180,6 @@ pub mod differential_repo {
         .to_string();
 
         DifferentialRepo { dir, head_sha }
-    }
-
-    /// Compute the ISO-8601 datetime string for `base_date` + `hour_offset` hours.
-    /// Base is 2026-01-01T12:00:00Z; we keep totals ≤ 999 hours for simplicity.
-    fn commit_env(base_date: &str, hour_offset: u32) -> Vec<(String, String)> {
-        // base_date must be "2026-01-01T12:00:00Z"
-        let _ = base_date; // not parsed — we compute directly
-        let total_hours = 12 + hour_offset;
-        let day_extra = total_hours / 24;
-        let hour_of_day = total_hours % 24;
-        let date = format!("2026-01-{:02}T{:02}:00:00Z", 1 + day_extra, hour_of_day);
-        vec![
-            ("GIT_AUTHOR_DATE".to_string(), date.clone()),
-            ("GIT_COMMITTER_DATE".to_string(), date),
-        ]
-    }
-
-    fn commit_as(
-        path: &std::path::Path,
-        author: &(&str, &str),
-        base_date: &str,
-        hour_offset: u32,
-        msg: &str,
-        add_files: &[&str],
-    ) {
-        if add_files.is_empty() {
-            run_git(path, &["add", "-A"]);
-        } else {
-            for f in add_files {
-                run_git(path, &["add", f]);
-            }
-        }
-        let envs = commit_env(base_date, hour_offset);
-        let author_str = format!("{} <{}>", author.0, author.1);
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(path)
-            .args(["commit", "-m", msg, "--author", &author_str, "--quiet"])
-            .envs(envs)
-            .status()
-            .expect("git commit");
-        assert!(status.success(), "commit failed: {msg}");
-    }
-
-    fn run_git(path: &std::path::Path, args: &[&str]) {
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(path)
-            .args(args)
-            .status()
-            .expect("git");
-        assert!(status.success(), "git {args:?} failed");
-    }
-
-    fn write(root: &std::path::Path, rel: &str, content: &str) {
-        let p = root.join(rel);
-        if let Some(parent) = p.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
-        std::fs::write(p, content).unwrap();
     }
 }
 
