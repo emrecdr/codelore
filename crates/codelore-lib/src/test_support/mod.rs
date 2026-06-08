@@ -99,21 +99,46 @@ pub mod differential_repo {
         pub head_sha: String,
     }
 
-    /// Serializes concurrent `build()` calls across test threads.
+    /// Serializes concurrent `build()` calls across test threads AND test
+    /// processes (cargo's default runs separate test-binary processes in
+    /// parallel). The in-process `Mutex` covers same-process tests; the
+    /// OS-level file lock taken in `acquire_cross_process_lock` covers
+    /// cross-process. Both layers are needed because cargo test runs each
+    /// test binary (`authors_test`, `differential_repo_test`, …) in its
+    /// own process, and each process has its own copy of this `Mutex`.
     ///
-    /// `differential_repo::build()` runs ~100 `git` invocations (50 commits ×
-    /// `add` + `commit`). When multiple tests in the same binary call `build()`
-    /// in parallel (cargo's default), the high rate of `git` invocations
-    /// across distinct tempdirs from the same parent process produces
-    /// intermittent "invalid object … Error building trees" failures even
-    /// with `gc.auto = 0`. The race surfaces a few percent of the time on
-    /// `cargo test --workspace --all-features` and reliably under
-    /// `cargo bench` (~500 commits in `medium_repo` magnifies the rate).
+    /// `differential_repo::build()` runs ~100 `git` invocations (50 commits
+    /// × `add` + `commit`). Without serialization, multiple concurrent
+    /// builds across processes intermittently fail with "invalid object …
+    /// Error building trees" or "fatal: could not parse HEAD" — the
+    /// kernel-level filesystem state ends up visible to the wrong process
+    /// even though each fixture builds in its own tempdir.
     ///
     /// Each test still gets its own tempdir + git history; only the
-    /// build-up of fixtures is serialized. The analysis phase that
-    /// follows is fully parallel.
+    /// fixture-build's git-invocation storm is serialized. The analysis
+    /// phase that follows is fully parallel.
     static BUILD_MUTEX: Mutex<()> = Mutex::new(());
+
+    /// OS-level cross-process file lock so the fixture-build serialization
+    /// also covers parallel cargo test binaries (each one being a separate
+    /// process). Stable in std since Rust 1.81 (`File::lock`).
+    ///
+    /// Returns a `File` whose drop releases the lock. Stored on the
+    /// returned `DifferentialRepo` so the lock is held for the lifetime
+    /// of the fixture (the caller usually drops the fixture at end of
+    /// test scope, which is exactly when other tests should be allowed
+    /// to start their own build).
+    fn acquire_cross_process_lock() -> std::fs::File {
+        let lock_path = std::env::temp_dir().join("codelore-fixture-build.lock");
+        let file = std::fs::File::options()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)
+            .expect("open fixture build lockfile");
+        file.lock().expect("acquire cross-process fixture lock");
+        file
+    }
 
     /// Build a 50-commit fixture exercising every `Repo` trait method's edge cases:
     /// 3 authors + 1 bot, .mailmap, 1 rename, 1 merge, deterministic dates.
@@ -136,10 +161,12 @@ pub mod differential_repo {
     #[must_use]
     #[allow(clippy::too_many_lines)]
     pub fn build() -> DifferentialRepo {
-        // Serialize fixture builds across test threads — concurrent `git`
-        // invocation storms from the same parent process produce
-        // intermittent "invalid object" errors even with `gc.auto = 0`.
-        // See the BUILD_MUTEX comment above for the full diagnosis.
+        // Serialize fixture builds across test threads AND test processes.
+        // See BUILD_MUTEX + acquire_cross_process_lock for the rationale.
+        // Both locks release when `build` returns (mutex guard drops at
+        // end of scope; the file lock's `File` drops when the function
+        // exits because we don't move it into the returned struct).
+        let _cross_process_lock = acquire_cross_process_lock();
         let _guard = BUILD_MUTEX
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);

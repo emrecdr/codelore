@@ -66,15 +66,15 @@ impl Repo for GixRepo {
                         Ok(d) => d,
                         Err(e) => return Some(Err(e)),
                     };
-                    if let Some(after) = opts.after {
-                        if date < after {
-                            return None;
-                        }
+                    if let Some(after) = opts.after
+                        && date < after
+                    {
+                        return None;
                     }
-                    if let Some(before) = opts.before {
-                        if date > before {
-                            return None;
-                        }
+                    if let Some(before) = opts.before
+                        && date > before
+                    {
+                        return None;
                     }
                 }
                 Some(Ok(oid))

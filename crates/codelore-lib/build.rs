@@ -5,7 +5,7 @@
 //!
 //! ## Windows: link `Rstrtmgr.lib`
 //!
-//! Bundled DuckDB (>= ~1.10) calls Windows Restart Manager APIs
+//! Bundled `DuckDB` (>= ~1.10) calls Windows Restart Manager APIs
 //! (`RmStartSession`, `RmEndSession`, `RmRegisterResources`, `RmGetList`)
 //! from `duckdb::AdditionalLockInfo` to produce friendlier error messages
 //! when the database file is held by another process. Those symbols live

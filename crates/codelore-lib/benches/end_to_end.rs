@@ -141,6 +141,9 @@ fn ingest_linux_kernel_snapshot(c: &mut Criterion) {
     };
     let mut group = c.benchmark_group("ingest_kernel");
     group.sample_size(10);
+    // clippy 1.96 wants `Duration::from_mins(2)` but that constructor is
+    // still unstable as of stable Rust 1.96. Stick with `from_secs(120)`.
+    #[allow(clippy::duration_suboptimal_units)]
     group.measurement_time(std::time::Duration::from_secs(120));
     group.bench_function("linux_kernel_snapshot", |b| {
         b.iter(|| {

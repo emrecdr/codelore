@@ -15,35 +15,23 @@ Items are ranked by **leverage × risk**:
 
 ## Priority queue
 
-### Tier 1 — first-stable release readiness (Plan 8) ✅ shipped under `0.1.0`
-Foundation for the first stable tag and clearing the validation-report findings. Plan 8 closed out before the `0.1.0` cut.
+### ✅ Shipped under `0.1.0`
+
+The original "Tier 1" (release readiness) and "Tier 2" (v1.x differentiators) lists have all landed in the first stable cut and are no longer roadmap items. The full set, with the commits that delivered them, is preserved in `CHANGELOG.md`'s `[0.1.0]` entry. Headline shipped items:
+
+- Persistent fact-store cache (XDG-style, LRU-evicted) — 100×+ speedup on repeat runs
+- Parallel complexity extraction via Rayon — 3–5× wall-time speedup on cold runs
+- `clone-coupling` intersection (the strategic differentiator with the `CODELORE-LIVE-CLONE` SARIF rule)
+- `codelore diff <base>..<head>` PR-mode subcommand — 4 output formats, `--fail-on` quality gate
+- All 21 code-maat-parity analyses + 4 SARIF rules
+- 6 verified correctness fixes (R1, R2, R3, R4, R6, R12 — negative hotspot scores, GixRepo date/merge filters, `--after`/`--before`/`--include-merges` CLI surface, Kamei O(N²) → hash-joined UPDATE, Parquet schema completion)
+
+### Tier 1 — v0.2 differentiators (Plan 9, next-up)
+Strategic features for the next minor. Promote when there's measured user pull.
 
 | Item | Why | Plan | Status |
 |---|---|---|---|
-| 5 pre-tag fixes (perf-evidence drift, README inconsistency, missing test, CLI error UX, spec note) | Validation report Findings S1, S2, S4, S7, S8 | Plan 8 §1 | ✅ shipped `3043a42` |
-| `--analysis authors` standalone | Closes spec §1.1 gap; trivial SQL | Plan 8 §2 | ✅ shipped `0ce89ff` + mailmap fix `1154975` |
-| `--group-file` clap flag exposure | Field exists in `Options`; not surfaced | Plan 8 §2 | ✅ shipped `af572cb` |
-| `--exclude PATTERN` + `.codeloreignore` | Validation report Finding S9; needed before clones is usable on vendor-heavy repos | Plan 8 §2 | ✅ shipped `af572cb` |
-| Clones JSON / Markdown / SARIF emitters (CODELORE-CLONE rule) | Plan 7 shipped CSV-only | Plan 8 §2 | ✅ shipped `0ce89ff` + `af572cb` |
-| FactsDb integration for clones (write to clones table) | Closes validation Finding S3; foundation for clone-coupling | Plan 8 §4 | pending |
-
-### Tier 2 — v1.x differentiators (Plan 8)
-Where CodeLore visibly beats the field. Same plan as Tier 1; these are §5-§7.
-
-| Item | Why | Plan | Status |
-|---|---|---|---|
-| **Persistent fact-store cache** (XDG-style, LRU-evicted) | 100×+ speedup on repeat runs; makes `codelore diff` viable in CI | Plan 8 §3 | ✅ shipped (`a6e8409`+3) |
-| **Parallel complexity extraction** (Rayon `map_init`) | 3-5× wall-time speedup; closes Plan 4 footnote | Plan 8 §5 | ✅ shipped (`8ae2dd6` + T18 bench in flight) |
-| **`clone-coupling` intersection** (the CodeScene X-Ray pattern with our published-formula transparency) | The single biggest differentiator from any existing tool | Plan 8 §6 | ✅ shipped (`49d1dcb` + `f63bcab` CLI/SARIF) |
-| **`codelore diff <base>..<head>`** (PR-mode) | The form users actually deploy in CI | Plan 8 §7 | ✅ shipped (`b9bfdc7`) — full subcommand with 4 output formats |
-
-### Tier 3 — v1.1+ (Plan 9, future)
-Strategic features once v1.0 ships and the bench data is in.
-
-| Item | Why | Plan | Status |
-|---|---|---|---|
-| PGO campaign + release pipeline rebuild | Spec §6.5 commits to v1.1 | future | pending |
-| Tag `v1.0.0` and execute release pipeline | The 9 "implemented but not validated" items flush in one shot | Plan 8 §8 / decision | pending |
+| PGO campaign + release pipeline rebuild | Spec §6.5; 5–15% perf headroom on real workloads | future | pending |
 | Type 3 near-miss clones (MinHash + LSH @ Jaccard ≥ 0.8) | Plan 7 §2 Task 4; ~100 LOC; catches "renamed + restructured" code | future | pending |
 | **Bus-factor / knowledge-island detector** (hotspots × single-owner × departed-author) | Plan 7 research surfaced this; we already have all the data | future | pending |
 | **Live-clone × knowledge-loss intersection** (clones inside departed-contributor code) | Engineering-director-level signal nobody else produces | future | pending |
@@ -54,7 +42,7 @@ Strategic features once v1.0 ships and the bench data is in.
 | AI-authorship correlation reports | We tag commits; novel publishable signal | future | pending |
 | Survival analysis on hotspots (how long do they stay hot?) | Temporal-extension research | future | pending |
 
-### Tier 4 — quality and DX (continuous)
+### Tier 2 — quality and DX (continuous)
 Always-on hygiene work; no plan required, weave into other plans.
 
 | Item | Why | Status |
@@ -71,8 +59,8 @@ Always-on hygiene work; no plan required, weave into other plans.
 | Reproducible-build verification in CI | Compare binary hashes across runs | pending |
 | Snapshot tests for SARIF / JSON output | Catches silent format drift | pending |
 
-### Tier 5 — operational (post-v1.0 launch)
-Adoption levers; deferred until v1.0 actually ships and we have real users.
+### Tier 3 — operational (adoption levers)
+Lower priority until `v0.1.0` has measurable real-world traction.
 
 | Item | Why | Status |
 |---|---|---|
@@ -82,7 +70,7 @@ Adoption levers; deferred until v1.0 actually ships and we have real users.
 | Static-HTML report generator (`report.html`) | Web UI is out-of-scope per spec §1.2; a single file is in-scope | pending |
 | Container variants: alpine + debian (in addition to distroless) | Different consumers, different tradeoffs | pending |
 
-### Tier 6 — research-flavored / v2+
+### Tier 4 — research-flavored / v2+
 Long-term work. Listed for completeness.
 
 | Item | Plan / spec reference |
@@ -98,7 +86,7 @@ Long-term work. Listed for completeness.
 | DORA-adjacent delivery flow metric | spec §8 |
 | Code coverage analysis (LCOV input, hotspot-weighted) | spec §8 |
 
-### Tier 7 — community / docs (continuous)
+### Tier 5 — community / docs (continuous)
 
 | Item | Why |
 |---|---|
@@ -111,8 +99,10 @@ Long-term work. Listed for completeness.
 
 ---
 
-## What's planned right now
+## How to use this document
 
-**Plan 8** (`docs/superpowers/plans/2026-06-07-codelore-plan-8-v1.x-readiness.md`) covers Tier 1 + Tier 2 — the v1.x release scope. ~25 tasks across 7 phases.
+Plan 8 (Tier 1 + Tier 2 of the original roadmap) shipped under `v0.1.0`; what's left is the forward-looking work above. Each new Tier 1 item gets its own plan document under `docs/superpowers/plans/` when scheduled. The scheduling rubric:
 
-**Beyond Plan 8**: each Tier 3+ item gets its own plan when scheduled. The rubric for scheduling is: **what user complaint or stakeholder ask does this address?** Build for measured pull, not anticipated need.
+- **What user complaint or stakeholder ask does this address?** Build for measured pull, not anticipated need.
+- **Does this differentiate CodeLore?** Items in Tier 1 (vs. Tier 2 quality work) should advance the strategic position vs. code-maat / CodeScene / jscpd.
+- **Is the risk understood?** Items with "Hard" implementation difficulty (rename tracking, PGO campaign) deserve a design phase before coding.
