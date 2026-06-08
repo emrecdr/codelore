@@ -78,6 +78,13 @@ pub struct Options {
     /// the analysis. Set via `--explain`. Cosmetic — not part of the
     /// canonical cache key.
     pub explain: bool,
+    /// When `true` (default), aggregations follow file renames through
+    /// `changes.rename_from`. A file's pre-rename history is merged
+    /// onto its current canonical path. When `false`, every commit's
+    /// path is treated literally — matches code-maat's historic
+    /// behaviour (it uses `--no-renames`). `--code-maat-compat`
+    /// implies `use_canonical_lineage = false` for bit-for-bit parity.
+    pub use_canonical_lineage: bool,
 
     // Plan 7: clone detection. Minimum AST node count (post-skip) for a
     // function to be eligible as a clone-family member. Default 30 ≈ 5-8
@@ -235,6 +242,7 @@ impl Default for Options {
             verbose_results: false,
             include_merges: false,
             explain: false,
+            use_canonical_lineage: true,
             strict_grouping: false,
             complexity_sample: ComplexitySample::Head,
             min_clone_node_count: crate::constants::DEFAULT_MIN_CLONE_NODE_COUNT,

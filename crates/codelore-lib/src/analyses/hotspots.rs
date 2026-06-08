@@ -41,6 +41,14 @@ pub struct HotspotRow {
 //   hotspot_score: percent_rank(revs) * percent_rank(cog) * (100 − code_health) / 10
 //                  ∈ [0, 10] — divide by 10 not 100 so emitted values stay
 //                  on the same scale as code_health (0–10 hotspots, ≈10 = on fire).
+/// `{src}` becomes `changes` (legacy) or `changes_lineage` (canonical
+/// rename-aware). Kept as a `format!()` template so `--use-canonical-lineage`
+/// flips the table without rewriting the rest of the SQL.
+#[must_use]
+pub fn build_sql(src: &str) -> String {
+    SQL.replace("FROM changes\n", &format!("FROM {src}\n"))
+}
+
 pub const SQL: &str = "
     WITH file_revs AS (
         SELECT path, COUNT(DISTINCT rev) AS revs
@@ -88,13 +96,20 @@ pub const SQL: &str = "
 
 pub fn run_hotspots(db: &FactsDb, opts: &Options) -> Result<Vec<HotspotRow>> {
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
+    let src = if opts.use_canonical_lineage {
+        crate::facts::ingest::materialize_changes_lineage(db)?;
+        "changes_lineage"
+    } else {
+        "changes"
+    };
+    let sql = build_sql(src);
     if opts.explain {
-        let plan = db.explain_sql(SQL, params![opts.min_revs, row_limit])?;
+        let plan = db.explain_sql(&sql, params![opts.min_revs, row_limit])?;
         eprintln!("--- EXPLAIN: hotspots ---\n{plan}---");
     }
     let mut stmt = db
         .conn()
-        .prepare(SQL)
+        .prepare(&sql)
         .map_err(|e| CodeLoreError::Analysis(format!("prepare hotspots: {e}")))?;
     let rows = stmt
         .query_map(params![opts.min_revs, row_limit], |r| {

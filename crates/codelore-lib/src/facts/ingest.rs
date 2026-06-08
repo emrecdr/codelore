@@ -605,6 +605,78 @@ pub fn materialize_changes_bucketed(
     Ok(())
 }
 
+/// Materialize the rename-lineage map as a temporary table.
+///
+/// Walks `changes.rename_from` recursively to find the LATEST canonical path
+/// for every path that has ever been renamed. `path_lineage` is a small
+/// `(old_path, canonical_path)` lookup table — typically a handful of rows
+/// even on large repos (renames are rare). Cycles are bounded by `depth < 50`,
+/// far above any realistic rename chain; the `ROW_NUMBER() ... ORDER BY depth
+/// DESC` deterministically picks the last name in the chain. Rows where
+/// `old_path == canonical_path` are filtered out — the join then has nothing
+/// to merge for files that have never been renamed (the common case).
+///
+/// # Errors
+///
+/// Returns [`CodeLoreError::Analysis`] on any SQL error.
+pub fn materialize_path_lineage(db: &super::FactsDb) -> Result<()> {
+    use duckdb::params;
+    let sql = "CREATE OR REPLACE TEMPORARY TABLE path_lineage AS
+        WITH RECURSIVE lineage(orig, current, depth) AS (
+            SELECT DISTINCT rename_from, path, 1
+            FROM changes
+            WHERE rename_from IS NOT NULL
+            UNION ALL
+            SELECT l.orig, c.path, l.depth + 1
+            FROM lineage l
+            INNER JOIN changes c ON c.rename_from = l.current
+            WHERE l.depth < 50
+        )
+        SELECT orig AS old_path, current AS canonical_path
+        FROM (
+            SELECT orig, current, depth,
+                   ROW_NUMBER() OVER (PARTITION BY orig ORDER BY depth DESC) AS rn
+            FROM lineage
+        )
+        WHERE rn = 1 AND orig != current";
+    db.conn()
+        .execute(sql, params![])
+        .map_err(|e| CodeLoreError::Analysis(format!("materialize path_lineage: {e}")))?;
+    Ok(())
+}
+
+/// Materialize `changes_lineage` — `changes` with `path` canonicalized via
+/// the rename-lineage map. Idempotent (`CREATE OR REPLACE`). Calls
+/// [`materialize_path_lineage`] first so the lookup table is in scope.
+///
+/// Analyses that opt into rename-aware aggregation should `FROM
+/// changes_lineage` instead of `FROM changes`. The schema is identical
+/// modulo `path` being the post-rename canonical name.
+///
+/// # Errors
+///
+/// Returns [`CodeLoreError::Analysis`] on any SQL error.
+pub fn materialize_changes_lineage(db: &super::FactsDb) -> Result<()> {
+    use duckdb::params;
+    materialize_path_lineage(db)?;
+    let sql = "CREATE OR REPLACE TEMPORARY TABLE changes_lineage AS
+        SELECT
+            c.rev,
+            COALESCE(pl.canonical_path, c.path) AS path,
+            c.change_type,
+            c.rename_from,
+            c.similarity,
+            c.loc_added,
+            c.loc_deleted
+        FROM changes c
+        LEFT JOIN path_lineage pl ON pl.old_path = c.path";
+    db.conn()
+        .execute(sql, params![])
+        .map_err(|e| CodeLoreError::Analysis(format!("materialize changes_lineage: {e}")))?;
+    tracing::info!("materialized changes_lineage with canonical rename paths");
+    Ok(())
+}
+
 /// Apply architectural grouping in-place on the `changes` table. Called by
 /// [`FactsDb::ingest`] after raw ingest if `opts.group_file.is_some()`.
 ///

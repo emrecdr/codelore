@@ -178,6 +178,14 @@ pub struct AnalyzeArgs {
     #[arg(long, default_value_t = false)]
     pub explain: bool,
 
+    /// Disable rename-aware aggregation. By default, a file's pre-rename
+    /// history is merged onto its current canonical path so renamed
+    /// files don't show split revision counts. Set this flag to fall
+    /// back to code-maat's literal-path behaviour. Implied by
+    /// `--code-maat-compat`.
+    #[arg(long, default_value_t = false)]
+    pub no_canonical_lineage: bool,
+
     // ------------------------------------------------------------------
     // code-maat parity CLI flags (PAR-6). All target Options fields that
     // existed but weren't surfaced on the CLI.

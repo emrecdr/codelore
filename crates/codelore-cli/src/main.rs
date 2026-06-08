@@ -123,6 +123,11 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
         group_file: args.group_file.clone(),
         team_map_file: args.team_map_file.clone(),
         explain: args.explain,
+        // Canonical lineage defaults to ON. `--no-canonical-lineage`
+        // disables it explicitly; `--code-maat-compat` also disables
+        // it to preserve bit-for-bit code-maat output (code-maat uses
+        // `--no-renames` in its git log so it never canonicalizes).
+        use_canonical_lineage: !args.no_canonical_lineage && !args.code_maat_compat,
         exclude_patterns: args.exclude.clone(),
         // PAR-6: code-maat parity flag wiring
         min_shared_revs: args.min_shared_revs,

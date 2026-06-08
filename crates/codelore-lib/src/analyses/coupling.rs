@@ -45,8 +45,15 @@ pub struct CouplingRow {
 /// The injection is safe: the returned value is a literal compile-time
 /// string from a closed match, never user-controlled input.
 fn source_table(opts: &Options) -> &'static str {
+    // `--time-bucket` wins when both knobs are set — bucketing and
+    // lineage compose, but materializing both requires a 4-way matrix
+    // (changes, changes_lineage, changes_bucketed, changes_bucketed_lineage)
+    // that we ship in a later point release. Lineage is the more common
+    // request, so it gets first-class support for the non-bucketed path.
     if opts.time_bucket.is_some() {
         "changes_bucketed"
+    } else if opts.use_canonical_lineage {
+        "changes_lineage"
     } else {
         "changes"
     }
@@ -143,10 +150,14 @@ fn fisher_two_tail(shared: u32, revs_a: u32, revs_b: u32, total: u32) -> Option<
 ///
 /// Returns [`CodeLoreError::Analysis`] on any SQL error.
 pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
-    // PAR-8: if --time-bucket is active, materialize changes_bucketed and
-    // route the coupling query through it. Raw commit grain otherwise.
+    // Source-table dispatch (precedence: --time-bucket > canonical lineage > raw):
+    //   --time-bucket active → materialize `changes_bucketed`
+    //   canonical lineage on → materialize `changes_lineage`
+    //   neither              → query `changes` directly
     if let Some(bucket) = opts.time_bucket {
         crate::facts::ingest::materialize_changes_bucketed(db, bucket)?;
+    } else if opts.use_canonical_lineage {
+        crate::facts::ingest::materialize_changes_lineage(db)?;
     }
     let src = source_table(opts);
 
