@@ -22,7 +22,19 @@ CREATE TABLE IF NOT EXISTS commits (
 CREATE TABLE IF NOT EXISTS changes (
     rev TEXT NOT NULL REFERENCES commits(rev),
     path TEXT NOT NULL,
-    change_type TEXT NOT NULL,
+    -- change_type carries one of: 'added' | 'modified' | 'deleted' |
+    -- 'renamed' | 'copied' | 'binary'. CHECK constraint validates at
+    -- INSERT/Appender time so SQL queries can rely on the closed set
+    -- without typo-checks like `change_type != 'deleted'` failing
+    -- silently against a misspelled enum-like value.
+    --
+    -- DuckDB ENUM would be a tighter encoding (1-byte tag + dictionary)
+    -- but lacks `CREATE TYPE IF NOT EXISTS`, breaking re-open on the
+    -- cached fact store. CHECK is idempotent and gives the same
+    -- correctness invariant at slightly larger storage cost.
+    change_type TEXT NOT NULL CHECK (change_type IN (
+        'added', 'modified', 'deleted', 'renamed', 'copied', 'binary'
+    )),
     rename_from TEXT,
     similarity INTEGER,
     loc_added INTEGER NOT NULL DEFAULT 0,
