@@ -208,8 +208,14 @@ mod tests {
     // paths) didn't classify as a bot. Now case-insensitive.
     #[test]
     fn bot_match_is_case_insensitive() {
-        assert!(is_bot("Dependabot[Bot]@noreply.github.com", "Dependabot[Bot]"));
-        assert!(is_bot("GITHUB-ACTIONS[BOT]@example.com", "GitHub-Actions[Bot]"));
+        assert!(is_bot(
+            "Dependabot[Bot]@noreply.github.com",
+            "Dependabot[Bot]"
+        ));
+        assert!(is_bot(
+            "GITHUB-ACTIONS[BOT]@example.com",
+            "GitHub-Actions[Bot]"
+        ));
     }
 
     // Regression: 2024-2026 AI-coder lineup beyond Claude/Copilot. Each
@@ -217,20 +223,29 @@ mod tests {
     #[test]
     fn detects_cursor_signature() {
         let msg = "feat: refactor auth\n\nCo-Authored-By: Cursor";
-        assert_eq!(ai_attribution("alice@example.com", "Alice", msg), "ai-assisted");
+        assert_eq!(
+            ai_attribution("alice@example.com", "Alice", msg),
+            "ai-assisted"
+        );
     }
 
     #[test]
     fn detects_cody_signature() {
         let msg = "fix: handle null\n\nCo-Authored-By: Sourcegraph Cody";
-        assert_eq!(ai_attribution("alice@example.com", "Alice", msg), "ai-assisted");
+        assert_eq!(
+            ai_attribution("alice@example.com", "Alice", msg),
+            "ai-assisted"
+        );
     }
 
     #[test]
     fn detects_aider_in_message_body() {
         // Aider doesn't use Co-Authored-By; it tags the message body itself.
         let msg = "refactor: extract helper (aider)";
-        assert_eq!(ai_attribution("alice@example.com", "Alice", msg), "ai-assisted");
+        assert_eq!(
+            ai_attribution("alice@example.com", "Alice", msg),
+            "ai-assisted"
+        );
     }
 
     #[test]
@@ -262,7 +277,10 @@ mod tests {
     fn co_authored_by_match_is_case_insensitive() {
         // Some tools / pipelines uppercase headers; some humans typo.
         let msg = "feat: x\n\nCO-AUTHORED-BY: cursor";
-        assert_eq!(ai_attribution("alice@example.com", "Alice", msg), "ai-assisted");
+        assert_eq!(
+            ai_attribution("alice@example.com", "Alice", msg),
+            "ai-assisted"
+        );
     }
 
     // BotPatterns: user-extensible bot set via .codelorebots file.
@@ -280,7 +298,7 @@ mod tests {
              our-deploy-bot\n\
              \n\
              # release automation\n\
-             release-automation\n"
+             release-automation\n",
         );
         assert!(patterns.is_bot("our-deploy-bot@example.com", "Deploy Bot"));
         assert!(patterns.is_bot("ci@example.com", "release-automation"));
@@ -298,9 +316,7 @@ mod tests {
 
     #[test]
     fn bot_patterns_blank_lines_and_comments_ignored() {
-        let patterns = BotPatterns::from_text(
-            "\n\n# only comments here\n# and another\n\n"
-        );
+        let patterns = BotPatterns::from_text("\n\n# only comments here\n# and another\n\n");
         // No user patterns → behaves like Default
         assert!(!patterns.is_bot("alice@example.com", "Alice"));
         // But defaults still apply
@@ -319,10 +335,7 @@ mod tests {
     #[test]
     fn bot_patterns_from_repo_reads_codelorebots() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(
-            tmp.path().join(".codelorebots"),
-            "custom-bot\n"
-        ).expect("write");
+        std::fs::write(tmp.path().join(".codelorebots"), "custom-bot\n").expect("write");
         let patterns = BotPatterns::from_repo(tmp.path());
         assert!(patterns.is_bot("custom-bot@example.com", "Custom Bot"));
     }

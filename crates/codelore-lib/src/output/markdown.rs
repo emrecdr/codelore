@@ -140,7 +140,8 @@ pub fn write_communication_markdown<W: Write>(rows: &[CommunicationRow], w: &mut
 
 pub fn write_ownership_markdown<W: Write>(rows: &[OwnershipRow], w: &mut W) -> Result<()> {
     header(w, "CodeLore code-ownership")?;
-    writeln!(w, "| Entity | Main Author | Total Revs | Fractal Value |").map_err(CodeLoreError::Io)?;
+    writeln!(w, "| Entity | Main Author | Total Revs | Fractal Value |")
+        .map_err(CodeLoreError::Io)?;
     writeln!(w, "|---|---|---|---|").map_err(CodeLoreError::Io)?;
     for row in rows {
         writeln!(
@@ -249,8 +250,11 @@ fn write_main_dev_markdown_with_headers<W: Write>(
     total_label: &str,
 ) -> Result<()> {
     header(w, title)?;
-    writeln!(w, "| Entity | Main Dev | {metric_label} | {total_label} | Ownership |")
-        .map_err(CodeLoreError::Io)?;
+    writeln!(
+        w,
+        "| Entity | Main Dev | {metric_label} | {total_label} | Ownership |"
+    )
+    .map_err(CodeLoreError::Io)?;
     writeln!(w, "|---|---|---:|---:|---:|").map_err(CodeLoreError::Io)?;
     for row in rows {
         writeln!(
@@ -267,7 +271,13 @@ pub fn write_main_dev_markdown<W: Write>(
     rows: &[crate::analyses::main_dev::MainDevRow],
     w: &mut W,
 ) -> Result<()> {
-    write_main_dev_markdown_with_headers(rows, w, "CodeLore main-dev (by lines added)", "Added", "Total Added")
+    write_main_dev_markdown_with_headers(
+        rows,
+        w,
+        "CodeLore main-dev (by lines added)",
+        "Added",
+        "Total Added",
+    )
 }
 
 pub fn write_main_dev_by_revs_markdown<W: Write>(

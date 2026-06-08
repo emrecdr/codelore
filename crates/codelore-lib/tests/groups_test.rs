@@ -75,10 +75,18 @@ fn grouping_rewrites_paths_to_logical_groups() {
     let entities: Vec<&str> = revs.iter().map(|(e, _)| e.as_str()).collect();
 
     // After grouping: only "Auth" and "DB" should appear, not the raw paths.
-    assert!(entities.contains(&"Auth"), "Auth group must appear: {entities:?}");
-    assert!(entities.contains(&"DB"), "DB group must appear: {entities:?}");
     assert!(
-        !entities.iter().any(|e| e.contains("login.rs") || e.contains("session.rs")),
+        entities.contains(&"Auth"),
+        "Auth group must appear: {entities:?}"
+    );
+    assert!(
+        entities.contains(&"DB"),
+        "DB group must appear: {entities:?}"
+    );
+    assert!(
+        !entities
+            .iter()
+            .any(|e| e.contains("login.rs") || e.contains("session.rs")),
         "raw auth paths must NOT appear after grouping: {entities:?}"
     );
 

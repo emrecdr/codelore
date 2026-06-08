@@ -431,7 +431,9 @@ fn prune_stale_worktrees(repo_root: &Path) {
         return;
     }
     let Ok(cutoff) = std::time::SystemTime::now()
-        .checked_sub(std::time::Duration::from_secs(STALE_WORKTREE_AGE_HOURS * 3600))
+        .checked_sub(std::time::Duration::from_secs(
+            STALE_WORKTREE_AGE_HOURS * 3600,
+        ))
         .ok_or("subtraction underflow")
     else {
         return;
@@ -450,10 +452,7 @@ fn prune_stale_worktrees(repo_root: &Path) {
         if modified < cutoff {
             let path = entry.path();
             if let Err(e) = std::fs::remove_dir_all(&path) {
-                tracing::warn!(
-                    "failed to remove stale worktree {}: {e}",
-                    path.display()
-                );
+                tracing::warn!("failed to remove stale worktree {}: {e}", path.display());
             } else {
                 tracing::info!("pruned stale worktree directory: {}", path.display());
             }

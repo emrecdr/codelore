@@ -105,9 +105,18 @@ fn soc_threshold_falls_back_to_min_revs_under_compat() {
     db.ingest(&repo, &opts_modern).expect("ingest");
     let rows_modern = run_soc(&db, &opts_modern).expect("soc modern");
     let entities_modern: Vec<&str> = rows_modern.iter().map(|r| r.entity.as_str()).collect();
-    assert!(entities_modern.contains(&"foo.rs"), "modern: foo (SoC=2 >= 1) kept");
-    assert!(entities_modern.contains(&"bar.rs"), "modern: bar (SoC=2 >= 1) kept");
-    assert!(!entities_modern.contains(&"baz.rs"), "modern: baz (SoC=0 < 1) dropped");
+    assert!(
+        entities_modern.contains(&"foo.rs"),
+        "modern: foo (SoC=2 >= 1) kept"
+    );
+    assert!(
+        entities_modern.contains(&"bar.rs"),
+        "modern: bar (SoC=2 >= 1) kept"
+    );
+    assert!(
+        !entities_modern.contains(&"baz.rs"),
+        "modern: baz (SoC=0 < 1) dropped"
+    );
 
     // Compat: code_maat_compat = true → SoC threshold falls back to min_revs.
     let opts_compat = Options {

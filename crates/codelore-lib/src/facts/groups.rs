@@ -188,7 +188,11 @@ mod tests {
         let g = GroupMap::parse("^src\\/((?!.*Test.*).).*$ => Production\n", false).expect("parse");
         assert_eq!(g.map_entity("src/lib.rs"), Some("Production"));
         assert_eq!(g.map_entity("src/foo/bar.rs"), Some("Production"));
-        assert_eq!(g.map_entity("src/foo/Test.rs"), None, "lookaround excludes Test paths");
+        assert_eq!(
+            g.map_entity("src/foo/Test.rs"),
+            None,
+            "lookaround excludes Test paths"
+        );
     }
 
     #[test]
@@ -200,7 +204,10 @@ mod tests {
         )
         .expect("parse");
         // First rule (more specific) wins for login.rs
-        assert_eq!(g.map_entity("src/auth/login/handler.rs"), Some("LoginSpecial"));
+        assert_eq!(
+            g.map_entity("src/auth/login/handler.rs"),
+            Some("LoginSpecial")
+        );
         // Second rule (broader) catches everything else under src/auth/
         assert_eq!(g.map_entity("src/auth/session.rs"), Some("Auth"));
     }

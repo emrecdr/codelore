@@ -142,21 +142,22 @@ pub fn run_clone_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CloneCoupl
         .query_map(
             duckdb::params![opts.min_clone_node_count, opts.clone_similarity_floor],
             |r| {
-            Ok(ClonePair {
-                clone_group_id: r.get::<_, u32>(0)?,
-                fingerprint: r.get::<_, String>(1)?,
-                file_a: r.get::<_, String>(2)?,
-                file_b: r.get::<_, String>(3)?,
-                entity_a: r.get::<_, String>(4)?,
-                entity_b: r.get::<_, String>(5)?,
-                start_line_a: r.get::<_, u32>(6)?,
-                end_line_a: r.get::<_, u32>(7)?,
-                start_line_b: r.get::<_, u32>(8)?,
-                end_line_b: r.get::<_, u32>(9)?,
-                node_count: r.get::<_, u32>(10)?,
-                similarity: r.get::<_, f64>(11)?,
-            })
-        })
+                Ok(ClonePair {
+                    clone_group_id: r.get::<_, u32>(0)?,
+                    fingerprint: r.get::<_, String>(1)?,
+                    file_a: r.get::<_, String>(2)?,
+                    file_b: r.get::<_, String>(3)?,
+                    entity_a: r.get::<_, String>(4)?,
+                    entity_b: r.get::<_, String>(5)?,
+                    start_line_a: r.get::<_, u32>(6)?,
+                    end_line_a: r.get::<_, u32>(7)?,
+                    start_line_b: r.get::<_, u32>(8)?,
+                    end_line_b: r.get::<_, u32>(9)?,
+                    node_count: r.get::<_, u32>(10)?,
+                    similarity: r.get::<_, f64>(11)?,
+                })
+            },
+        )
         .map_err(|e| CodeLoreError::Analysis(format!("clone-coupling: query: {e}")))?;
 
     // Probe each clone pair against the coupling map; emit a CloneCouplingRow

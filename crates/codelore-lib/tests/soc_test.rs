@@ -71,7 +71,7 @@ fn soc_formula_each_commit_contributes_size_minus_one() {
     let db = FactsDb::new_in_memory().expect("db");
     let opts = Options {
         repo_path: path.to_path_buf(),
-        min_revs: 0, // include all paths regardless of revision count
+        min_revs: 0,      // include all paths regardless of revision count
         min_soc: Some(0), // include solo-commit paths in output
         ..Options::default()
     };
@@ -79,16 +79,32 @@ fn soc_formula_each_commit_contributes_size_minus_one() {
 
     let rows = run_soc(&db, &opts).expect("soc");
 
-    let soc = |e: &str| -> u32 {
-        rows.iter()
-            .find(|r| r.entity == e)
-            .map_or(0, |r| r.soc)
-    };
+    let soc = |e: &str| -> u32 { rows.iter().find(|r| r.entity == e).map_or(0, |r| r.soc) };
 
-    assert_eq!(soc("a.txt"), 6, "a.txt: 2 + 1 + 0 + 3 = 6 (got {})", soc("a.txt"));
-    assert_eq!(soc("b.txt"), 6, "b.txt: 2 + 1 + 0 + 3 = 6 (got {})", soc("b.txt"));
-    assert_eq!(soc("c.txt"), 5, "c.txt: 2 + 0 + 0 + 3 = 5 (got {})", soc("c.txt"));
-    assert_eq!(soc("d.txt"), 3, "d.txt: only c4 → +3 (got {})", soc("d.txt"));
+    assert_eq!(
+        soc("a.txt"),
+        6,
+        "a.txt: 2 + 1 + 0 + 3 = 6 (got {})",
+        soc("a.txt")
+    );
+    assert_eq!(
+        soc("b.txt"),
+        6,
+        "b.txt: 2 + 1 + 0 + 3 = 6 (got {})",
+        soc("b.txt")
+    );
+    assert_eq!(
+        soc("c.txt"),
+        5,
+        "c.txt: 2 + 0 + 0 + 3 = 5 (got {})",
+        soc("c.txt")
+    );
+    assert_eq!(
+        soc("d.txt"),
+        3,
+        "d.txt: only c4 → +3 (got {})",
+        soc("d.txt")
+    );
 
     // Output is sorted by soc DESC, entity ASC.
     // Expected order: a (6), b (6), c (5), d (3).
@@ -131,5 +147,8 @@ fn soc_min_soc_filter_drops_low_scoring_entities() {
     let entities: Vec<&str> = rows.iter().map(|r| r.entity.as_str()).collect();
     assert!(entities.contains(&"a.txt"));
     assert!(entities.contains(&"b.txt"));
-    assert!(!entities.contains(&"c.txt"), "solo path should be dropped by --min-soc 2");
+    assert!(
+        !entities.contains(&"c.txt"),
+        "solo path should be dropped by --min-soc 2"
+    );
 }

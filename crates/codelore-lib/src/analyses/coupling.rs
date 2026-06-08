@@ -174,16 +174,17 @@ pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
                 row_limit,
             ],
             |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, i64>(2)?,
-                r.get::<_, i64>(3)?,
-                r.get::<_, i64>(4)?,
-                r.get::<_, i64>(5)?,
-                r.get::<_, f64>(6)?,
-            ))
-        })
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, i64>(4)?,
+                    r.get::<_, i64>(5)?,
+                    r.get::<_, f64>(6)?,
+                ))
+            },
+        )
         .map_err(|e| CodeLoreError::Analysis(format!("query coupling: {e}")))?;
 
     let mut out = Vec::new();

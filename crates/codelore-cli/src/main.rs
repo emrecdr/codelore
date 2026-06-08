@@ -469,20 +469,16 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
             }
             // --- soc (Sum of Coupling) ---
             ("csv", AnalysisName::Soc) => {
-                let rows = codelore_lib::analyses::soc::run_soc(&db, &opts)
-                    .context("run soc")?;
-                codelore_lib::output::csv::write_soc_csv(&rows, &mut out)
-                    .context("write csv")?;
+                let rows = codelore_lib::analyses::soc::run_soc(&db, &opts).context("run soc")?;
+                codelore_lib::output::csv::write_soc_csv(&rows, &mut out).context("write csv")?;
             }
             ("json", AnalysisName::Soc) => {
-                let rows = codelore_lib::analyses::soc::run_soc(&db, &opts)
-                    .context("run soc")?;
+                let rows = codelore_lib::analyses::soc::run_soc(&db, &opts).context("run soc")?;
                 codelore_lib::output::json::write_soc_json(&rows, &mut out)
                     .context("write json")?;
             }
             ("markdown", AnalysisName::Soc) => {
-                let rows = codelore_lib::analyses::soc::run_soc(&db, &opts)
-                    .context("run soc")?;
+                let rows = codelore_lib::analyses::soc::run_soc(&db, &opts).context("run soc")?;
                 codelore_lib::output::markdown::write_soc_markdown(&rows, &mut out)
                     .context("write markdown")?;
             }
@@ -537,8 +533,12 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
             ("csv", AnalysisName::MainDevByRevs) => {
                 let rows = codelore_lib::analyses::main_dev::run_main_dev_by_revs(&db, &opts)
                     .context("run main-dev-by-revs")?;
-                codelore_lib::output::csv::write_main_dev_by_revs_csv(&rows, &mut out, opts.code_maat_compat)
-                    .context("write csv")?;
+                codelore_lib::output::csv::write_main_dev_by_revs_csv(
+                    &rows,
+                    &mut out,
+                    opts.code_maat_compat,
+                )
+                .context("write csv")?;
             }
             ("json", AnalysisName::MainDevByRevs) => {
                 let rows = codelore_lib::analyses::main_dev::run_main_dev_by_revs(&db, &opts)
@@ -571,11 +571,15 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
             ("markdown", AnalysisName::MainDevByDeletions) => {
                 let rows = codelore_lib::analyses::main_dev::run_main_dev_by_deletions(&db, &opts)
                     .context("run main-dev-by-deletions")?;
-                codelore_lib::output::markdown::write_main_dev_by_deletions_markdown(&rows, &mut out)
-                    .context("write markdown")?;
+                codelore_lib::output::markdown::write_main_dev_by_deletions_markdown(
+                    &rows, &mut out,
+                )
+                .context("write markdown")?;
             }
             (fmt, AnalysisName::MainDevByDeletions) => {
-                anyhow::bail!("main-dev-by-deletions analysis supports csv|json|markdown; got {fmt:?}")
+                anyhow::bail!(
+                    "main-dev-by-deletions analysis supports csv|json|markdown; got {fmt:?}"
+                )
             }
             // --- entity-effort (per-author revs per file) ---
             ("csv", AnalysisName::EntityEffort) => {
@@ -601,20 +605,23 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
             }
             // --- entity-ownership (per-author churn per file) ---
             ("csv", AnalysisName::EntityOwnership) => {
-                let rows = codelore_lib::analyses::entity_ownership::run_entity_ownership(&db, &opts)
-                    .context("run entity-ownership")?;
+                let rows =
+                    codelore_lib::analyses::entity_ownership::run_entity_ownership(&db, &opts)
+                        .context("run entity-ownership")?;
                 codelore_lib::output::csv::write_entity_ownership_csv(&rows, &mut out)
                     .context("write csv")?;
             }
             ("json", AnalysisName::EntityOwnership) => {
-                let rows = codelore_lib::analyses::entity_ownership::run_entity_ownership(&db, &opts)
-                    .context("run entity-ownership")?;
+                let rows =
+                    codelore_lib::analyses::entity_ownership::run_entity_ownership(&db, &opts)
+                        .context("run entity-ownership")?;
                 codelore_lib::output::json::write_entity_ownership_json(&rows, &mut out)
                     .context("write json")?;
             }
             ("markdown", AnalysisName::EntityOwnership) => {
-                let rows = codelore_lib::analyses::entity_ownership::run_entity_ownership(&db, &opts)
-                    .context("run entity-ownership")?;
+                let rows =
+                    codelore_lib::analyses::entity_ownership::run_entity_ownership(&db, &opts)
+                        .context("run entity-ownership")?;
                 codelore_lib::output::markdown::write_entity_ownership_markdown(&rows, &mut out)
                     .context("write markdown")?;
             }

@@ -45,9 +45,7 @@ fn time_bucket_day_collapses_same_day_solo_commits() {
 
     write(path.join("foo.rs"), "v1\n");
     run_git(path, &["add", "."]);
-    let env = format!(
-        "GIT_AUTHOR_DATE={fixed_date} GIT_COMMITTER_DATE={fixed_date}"
-    );
+    let env = format!("GIT_AUTHOR_DATE={fixed_date} GIT_COMMITTER_DATE={fixed_date}");
     // Use env vars via Command directly for the commit
     let out = std::process::Command::new("git")
         .args(["commit", "-m", "foo solo", "--quiet"])
@@ -56,7 +54,11 @@ fn time_bucket_day_collapses_same_day_solo_commits() {
         .current_dir(path)
         .output()
         .expect("commit");
-    assert!(out.status.success(), "git commit failed: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "git commit failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     write(path.join("bar.rs"), "v1\n");
     let out = std::process::Command::new("git")
@@ -105,8 +107,14 @@ fn time_bucket_day_collapses_same_day_solo_commits() {
     };
     let rows_bucket = run_soc(&db, &opts_bucket).expect("soc bucket");
     let entities: Vec<&str> = rows_bucket.iter().map(|r| r.entity.as_str()).collect();
-    assert!(entities.contains(&"foo.rs"), "day-bucket: foo collapsed with bar → SoC>=1. Got: {entities:?}");
-    assert!(entities.contains(&"bar.rs"), "day-bucket: bar collapsed with foo → SoC>=1. Got: {entities:?}");
+    assert!(
+        entities.contains(&"foo.rs"),
+        "day-bucket: foo collapsed with bar → SoC>=1. Got: {entities:?}"
+    );
+    assert!(
+        entities.contains(&"bar.rs"),
+        "day-bucket: bar collapsed with foo → SoC>=1. Got: {entities:?}"
+    );
 }
 
 /// `TimeBucket::as_sql_unit` returns the lowercase strings `DuckDB`'s

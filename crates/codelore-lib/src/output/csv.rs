@@ -33,11 +33,8 @@ pub fn write_revisions_csv<W: Write>(rows: &[(String, u32)], w: &mut W) -> Resul
 }
 
 pub fn write_hotspots_csv<W: Write>(rows: &[HotspotRow], w: &mut W) -> Result<()> {
-    writeln!(
-        w,
-        "entity,revisions,cognitive,code-health,hotspot-score"
-    )
-    .map_err(CodeLoreError::Io)?;
+    writeln!(w, "entity,revisions,cognitive,code-health,hotspot-score")
+        .map_err(CodeLoreError::Io)?;
     for row in rows {
         writeln!(
             w,
@@ -229,10 +226,7 @@ pub fn write_authors_csv<W: Write>(rows: &[AuthorsRow], w: &mut W) -> Result<()>
     Ok(())
 }
 
-pub fn write_soc_csv<W: Write>(
-    rows: &[crate::analyses::soc::SocRow],
-    w: &mut W,
-) -> Result<()> {
+pub fn write_soc_csv<W: Write>(rows: &[crate::analyses::soc::SocRow], w: &mut W) -> Result<()> {
     writeln!(w, "entity,soc").map_err(CodeLoreError::Io)?;
     for row in rows {
         writeln!(w, "{},{}", quote_if_needed(&row.entity), row.soc).map_err(CodeLoreError::Io)?;
@@ -263,11 +257,8 @@ fn write_main_dev_csv_with_headers<W: Write>(
     metric_name: &str,
     total_name: &str,
 ) -> Result<()> {
-    writeln!(
-        w,
-        "entity,main-dev,{metric_name},{total_name},ownership"
-    )
-    .map_err(CodeLoreError::Io)?;
+    writeln!(w, "entity,main-dev,{metric_name},{total_name},ownership")
+        .map_err(CodeLoreError::Io)?;
     for row in rows {
         writeln!(
             w,

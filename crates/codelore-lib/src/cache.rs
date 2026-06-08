@@ -291,8 +291,14 @@ mod tests {
     // got a cache HIT against the old database.
     #[test]
     fn cache_key_changes_when_min_clone_node_count_changes() {
-        let opts_a = Options { min_clone_node_count: 30, ..base_opts() };
-        let opts_b = Options { min_clone_node_count: 60, ..base_opts() };
+        let opts_a = Options {
+            min_clone_node_count: 30,
+            ..base_opts()
+        };
+        let opts_b = Options {
+            min_clone_node_count: 60,
+            ..base_opts()
+        };
         let k1 = cache_key(Path::new("/tmp/test-repo"), "sha", &opts_a);
         let k2 = cache_key(Path::new("/tmp/test-repo"), "sha", &opts_b);
         assert_ne!(k1, k2, "min_clone_node_count must affect the cache key");
@@ -300,8 +306,10 @@ mod tests {
 
     #[test]
     fn cache_key_changes_when_exclude_patterns_change() {
-        let mut a = base_opts(); a.exclude_patterns = vec!["vendor/**".into()];
-        let mut b = base_opts(); b.exclude_patterns = vec!["target/**".into()];
+        let mut a = base_opts();
+        a.exclude_patterns = vec!["vendor/**".into()];
+        let mut b = base_opts();
+        b.exclude_patterns = vec!["target/**".into()];
         let k1 = cache_key(Path::new("/tmp/test-repo"), "sha", &a);
         let k2 = cache_key(Path::new("/tmp/test-repo"), "sha", &b);
         assert_ne!(k1, k2, "exclude_patterns must affect the cache key");
@@ -316,13 +324,22 @@ mod tests {
         b.exclude_patterns = vec!["target/**".into(), "vendor/**".into()];
         let k1 = cache_key(Path::new("/tmp/test-repo"), "sha", &a);
         let k2 = cache_key(Path::new("/tmp/test-repo"), "sha", &b);
-        assert_eq!(k1, k2, "exclude_patterns order must not affect the key (canonical sort)");
+        assert_eq!(
+            k1, k2,
+            "exclude_patterns order must not affect the key (canonical sort)"
+        );
     }
 
     #[test]
     fn cache_key_changes_when_clone_similarity_floor_changes() {
-        let opts_a = Options { clone_similarity_floor: 0.70, ..base_opts() };
-        let opts_b = Options { clone_similarity_floor: 0.85, ..base_opts() };
+        let opts_a = Options {
+            clone_similarity_floor: 0.70,
+            ..base_opts()
+        };
+        let opts_b = Options {
+            clone_similarity_floor: 0.85,
+            ..base_opts()
+        };
         let k1 = cache_key(Path::new("/tmp/test-repo"), "sha", &opts_a);
         let k2 = cache_key(Path::new("/tmp/test-repo"), "sha", &opts_b);
         assert_ne!(k1, k2, "clone_similarity_floor must affect the cache key");

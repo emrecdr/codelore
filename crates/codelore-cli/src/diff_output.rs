@@ -479,16 +479,27 @@ mod tests {
         assert!(msg.contains("src/auth/session.rs"));
 
         // Location uses the touched file
-        assert_eq!(r["locations"][0]["physicalLocation"]["artifactLocation"]["uri"], "src/auth/login.rs");
+        assert_eq!(
+            r["locations"][0]["physicalLocation"]["artifactLocation"]["uri"],
+            "src/auth/login.rs"
+        );
 
         // Versioned partialFingerprint for stable cross-run identity, pair is
         // alphabetical regardless of which side touched_file was
-        let fp = r["partialFingerprints"]["couplingPair/v1"].as_str().expect("fp present");
+        let fp = r["partialFingerprints"]["couplingPair/v1"]
+            .as_str()
+            .expect("fp present");
         assert_eq!(fp, "src/auth/login.rs::src/auth/session.rs");
 
         // Properties expose the missing partner + numeric thresholds for CI consumers
-        assert_eq!(r["properties"]["codelore/diff-classification"], "missing-cochange");
-        assert_eq!(r["properties"]["codelore/missing-partner"], "src/auth/session.rs");
+        assert_eq!(
+            r["properties"]["codelore/diff-classification"],
+            "missing-cochange"
+        );
+        assert_eq!(
+            r["properties"]["codelore/missing-partner"],
+            "src/auth/session.rs"
+        );
         assert_eq!(r["properties"]["codelore/historical-shared-revs"], 12);
     }
 

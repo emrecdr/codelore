@@ -59,7 +59,10 @@ fn messages_matches_regex_against_commit_messages() {
     db.ingest(&repo, &opts).expect("ingest");
     let rows = run_messages(&db, &opts).expect("messages");
     let total: u32 = rows.iter().map(|r| r.matches).sum();
-    assert_eq!(total, 2, "case-sensitive 'bug' → matches commits 1 + 5 (each touches 1 file) — got {rows:?}");
+    assert_eq!(
+        total, 2,
+        "case-sensitive 'bug' → matches commits 1 + 5 (each touches 1 file) — got {rows:?}"
+    );
 
     // Case-insensitive: "(?i)bug" matches all 3 bug-themed commits.
     let opts_i = Options {
@@ -68,7 +71,10 @@ fn messages_matches_regex_against_commit_messages() {
     };
     let rows_i = run_messages(&db, &opts_i).expect("messages case-insensitive");
     let total_i: u32 = rows_i.iter().map(|r| r.matches).sum();
-    assert_eq!(total_i, 3, "(?i)bug → matches commits 1, 3, 5 — got {rows_i:?}");
+    assert_eq!(
+        total_i, 3,
+        "(?i)bug → matches commits 1, 3, 5 — got {rows_i:?}"
+    );
 }
 
 #[test]

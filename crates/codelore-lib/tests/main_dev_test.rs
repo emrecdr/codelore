@@ -34,14 +34,26 @@ fn write(p: std::path::PathBuf, content: &str) {
 fn commit_as(path: &std::path::Path, name: &str, email: &str, msg: &str) {
     run_git(
         path,
-        &["-c", &format!("user.name={name}"), "-c", &format!("user.email={email}"), "add", "."],
+        &[
+            "-c",
+            &format!("user.name={name}"),
+            "-c",
+            &format!("user.email={email}"),
+            "add",
+            ".",
+        ],
     );
     run_git(
         path,
         &[
-            "-c", &format!("user.name={name}"),
-            "-c", &format!("user.email={email}"),
-            "commit", "-m", msg, "--quiet",
+            "-c",
+            &format!("user.name={name}"),
+            "-c",
+            &format!("user.email={email}"),
+            "commit",
+            "-m",
+            msg,
+            "--quiet",
         ],
     );
 }
@@ -98,10 +110,17 @@ fn main_dev_picks_top_author_by_each_metric() {
     // for foo.rs naming SOME author. Exact metric values depend on how
     // git+gix account for diff lines on this fixture, which varies
     // enough across environments to make precise assertions fragile.
-    assert!(!by_added.main_dev.is_empty(), "main-dev should name an author");
-    assert!(!by_deleted.main_dev.is_empty(), "main-dev-by-deletions should name an author");
+    assert!(
+        !by_added.main_dev.is_empty(),
+        "main-dev should name an author"
+    );
+    assert!(
+        !by_deleted.main_dev.is_empty(),
+        "main-dev-by-deletions should name an author"
+    );
     assert_eq!(
-        by_added.total, by_added.metric + (by_added.total - by_added.metric),
+        by_added.total,
+        by_added.metric + (by_added.total - by_added.metric),
         "ownership ratio invariant"
     );
 
