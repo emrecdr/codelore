@@ -9,7 +9,7 @@ use crate::{Options, Result};
 
 /// Per-file revision count, gated on `--min-revs` and capped by
 /// `--rows`. Bound values: `min_revs`, `row_limit` (`i64::MAX` = unlimited).
-const SQL_RAW: &str = "
+pub const SQL_RAW: &str = "
     SELECT path, COUNT(DISTINCT rev) AS n_revs
     FROM changes
     GROUP BY path
@@ -17,6 +17,21 @@ const SQL_RAW: &str = "
     ORDER BY n_revs DESC, path ASC
     LIMIT ?
 ";
+
+/// Returns the revisions SQL with `?` placeholders inlined and the
+/// source table swapped in. Used by the Parquet writer (`DuckDB COPY`
+/// can't accept bind parameters). Sharing the formula with the live
+/// `run_revisions` path eliminates silent-drift risk.
+#[must_use]
+pub fn build_inlined_sql(src: &str, min_revs: u32) -> String {
+    // SQL has two `?` placeholders: min_revs (HAVING) then row_limit (LIMIT).
+    // Parquet output is unbounded by design (binary export), so the
+    // row_limit becomes `i64::MAX`.
+    SQL_RAW
+        .replace("FROM changes\n", &format!("FROM {src}\n"))
+        .replacen('?', &min_revs.to_string(), 1)
+        .replace('?', "9223372036854775807")
+}
 
 pub fn run_revisions(db: &FactsDb, opts: &Options) -> Result<Vec<(String, u32)>> {
     super::lineage::materialize_if_needed(db, opts)?;

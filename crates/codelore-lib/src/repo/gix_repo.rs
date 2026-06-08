@@ -95,7 +95,12 @@ impl Repo for GixRepo {
                 .map_err(|e| CodeLoreError::Repo(format!("find_commit: {e}")))?;
             let id_string = oid.to_hex().to_string();
             let mut event = commit_event_from_gix(&commit)?;
-            event.changes = compute_changed_files(&inner_clone, &id_string)?;
+            // Reuse the already-resolved `commit` instead of re-fetching via
+            // `compute_changed_files(inner, rev)` — cuts one of the three
+            // per-commit `find_commit` lookups flagged by the deep-analysis
+            // perf review. The other two (filter pass + this iterator step's
+            // first call) are needed; this one is pure waste.
+            event.changes = changed_files_for_commit(&repo, &commit, &id_string)?;
 
             // Resolve mailmap alias and classify AI attribution in the producer thread
             // (where the Repo is in scope), storing results on the event for the consumer.
@@ -199,7 +204,19 @@ fn compute_changed_files(inner: &gix::ThreadSafeRepository, rev: &str) -> Result
     let commit = repo
         .find_commit(oid)
         .map_err(|e| CodeLoreError::Repo(format!("find_commit {rev}: {e}")))?;
+    changed_files_for_commit(&repo, &commit, rev)
+}
 
+/// Iterator-step entry point: takes an already-resolved `gix::Commit` so
+/// `walk_commits` doesn't have to call `find_commit` twice per commit
+/// (once for `CommitEvent` metadata, once again here). The public
+/// `compute_changed_files` (used by the `Repo::changed_files` trait
+/// method) is a thin wrapper that resolves the OID first.
+fn changed_files_for_commit(
+    repo: &gix::Repository,
+    commit: &gix::Commit<'_>,
+    rev: &str,
+) -> Result<Vec<FileChange>> {
     let tree = commit
         .tree()
         .map_err(|e| CodeLoreError::Repo(format!("commit tree {rev}: {e}")))?;
@@ -235,7 +252,7 @@ fn compute_changed_files(inner: &gix::ThreadSafeRepository, rev: &str) -> Result
 
     let file_changes: Result<Vec<FileChange>> = changes
         .into_iter()
-        .filter_map(|change| gix_change_to_file_change(change, &repo).transpose())
+        .filter_map(|change| gix_change_to_file_change(change, repo).transpose())
         .collect();
 
     file_changes

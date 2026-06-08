@@ -49,6 +49,20 @@ pub fn build_sql(src: &str) -> String {
     SQL.replace("FROM changes\n", &format!("FROM {src}\n"))
 }
 
+/// Returns the SAME hotspots SQL with `?` placeholders substituted for
+/// inline values — used by the Parquet writer, which routes through
+/// `DuckDB COPY ... TO` and can't accept bind parameters. Sharing the
+/// formula with [`build_sql`] eliminates the silent-drift risk between
+/// the two paths.
+#[must_use]
+pub fn build_inlined_sql(src: &str, min_revs: u32, row_limit: i64) -> String {
+    // SQL has exactly two `?` placeholders: first is min_revs (HAVING),
+    // second is row_limit (LIMIT). Substitute in order.
+    build_sql(src)
+        .replacen('?', &min_revs.to_string(), 1)
+        .replace('?', &row_limit.to_string())
+}
+
 pub const SQL: &str = "
     WITH file_revs AS (
         SELECT path, COUNT(DISTINCT rev) AS revs
