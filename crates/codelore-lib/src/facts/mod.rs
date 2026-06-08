@@ -113,9 +113,19 @@ impl FactsDb {
         db.flush()?;
         // Drop the connection before rename so DuckDB releases the file lock.
         drop(db);
-        // sync_all: required on macOS APFS to make the rename durable.
+        // sync_all forces the file's data and metadata to disk before the
+        // rename, so a crash between rename and the rename being durable
+        // doesn't leave the cache file pointing at unwritten data
+        // (macOS APFS is the classic offender; Linux ext4 + Windows NTFS
+        // benefit too). The handle must be opened with write access on
+        // Windows — `FlushFileBuffers` requires `GENERIC_WRITE` and
+        // rejects a read-only handle with `ERROR_ACCESS_DENIED`.
+        // `File::open` (read-only) would work on Unix but break on Windows.
         {
-            let f = std::fs::File::open(&tmp)
+            let f = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&tmp)
                 .map_err(|e| CodeLoreError::Analysis(format!("sync_all open .tmp: {e}")))?;
             f.sync_all()
                 .map_err(|e| CodeLoreError::Analysis(format!("sync_all .tmp: {e}")))?;
