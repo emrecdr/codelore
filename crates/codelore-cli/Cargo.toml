@@ -15,7 +15,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
-codelore-lib = { path = "../codelore-lib", version = "0.1.0-alpha.1" }
+codelore-lib = { path = "../codelore-lib", version = "0.1.0" }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 tracing = "0.1"
@@ -35,4 +35,4 @@ assert_cmd = "2"
 predicates = "3"
 tempfile = "3"
 walkdir = "2"
-codelore-lib = { path = "../codelore-lib", version = "0.1.0-alpha.1", features = ["test-support"] }
+codelore-lib = { path = "../codelore-lib", version = "0.1.0", features = ["test-support"] }

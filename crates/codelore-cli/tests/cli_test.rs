@@ -41,7 +41,7 @@ fn version_flag_works() {
         .arg("--version")
         .assert()
         .success()
-        .stdout(predicate::str::contains("0.1.0-alpha.1"));
+        .stdout(predicate::str::contains("0.1.0"));
 }
 
 #[test]

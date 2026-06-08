@@ -1,8 +1,10 @@
-# CodeLore — Roadmap (v1.x and beyond)
+# CodeLore — Roadmap (post-`0.1.0` and beyond)
 
-**Status:** living document. Last updated 2026-06-07.
+**Status:** living document. Last updated 2026-06-08.
 
-This doc is the prioritized backlog of *everything* proposed after Plans 1–7 closed out. Each row links to a plan document when one exists.
+This doc is the prioritized backlog of *everything* proposed after the `0.1.0` tag. Each row links to a plan document when one exists.
+
+> The "v1.x" in this file's path is a legacy artifact from when the first stable was planned as `1.0.0`; the project ultimately collapsed the alpha→beta→rc ladder and shipped `0.1.0` as the first stable. See [`RELEASING.md`](RELEASING.md) for the versioning policy.
 
 ## Decision rubric
 
@@ -13,8 +15,8 @@ Items are ranked by **leverage × risk**:
 
 ## Priority queue
 
-### Tier 1 — v1.x release readiness (Plan 8)
-Foundation for tagging v1.0 and clearing the validation-report findings.
+### Tier 1 — first-stable release readiness (Plan 8) ✅ shipped under `0.1.0`
+Foundation for the first stable tag and clearing the validation-report findings. Plan 8 closed out before the `0.1.0` cut.
 
 | Item | Why | Plan | Status |
 |---|---|---|---|

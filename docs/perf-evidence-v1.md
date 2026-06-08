@@ -1,11 +1,11 @@
-# CodeLore v1 — Performance Evidence
+# CodeLore — Performance Evidence
 
-**Status:** v1 evidence — kernel measurement deferred to weekly CI.
-**Date:** 2026-06-07
+**Status:** first-stable-release evidence — kernel measurement deferred to weekly CI and tracked for the `0.1.x` patch cycle.
+**Date:** 2026-06-07 (numbers); methodology current as of `0.1.0` tag.
 **Hardware:** Apple Silicon (Darwin 25.4.0, M-class).
 **Methodology:** `/usr/bin/time -l ./target/release/codelore analyze ...` on release-profile binary (LTO=fat, codegen-units=1, panic=abort).
 
-This document captures the v1 release-blocker performance numbers per spec §1.1. The targets are:
+This document captures the first-stable-release performance numbers (the spec §1.1 release-blockers, originally framed for v1.0; CodeLore now ships these under the `0.1.0` ladder, with the kernel bench tracked for `0.1.x`). The targets are:
 - Linux kernel (~1.4M commits, ~70k files): full hotspot + coupling analysis in **<10 minutes** on M3 / Ryzen 7-class hardware
 - Peak memory: **<4 GB** with DuckDB spill enabled
 - Stretch: <5 minutes for Linux kernel

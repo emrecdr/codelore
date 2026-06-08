@@ -21,10 +21,10 @@ While the project is pre-1.0:
 - The MINOR version acts as the breaking-change axis (`0.1.x` → `0.2.0` for breaking changes).
 - PATCH covers non-breaking changes (bug fixes + non-breaking features).
 - Pre-release suffixes follow the alpha → beta → rc → release ladder:
-  - `0.1.0-alpha.N` — internal milestones, unstable surface, expect daily breakage. Today: `0.1.0-alpha.1`.
+  - `0.1.0-alpha.N` — internal milestones, unstable surface, expect daily breakage.
   - `0.1.0-beta.N` — feature-complete for the release scope, public preview, schema + CLI surface stabilizing.
   - `0.1.0-rc.N` — release candidate, no planned changes besides bug fixes. CI green, docs current.
-  - `0.1.0` — first stable. After this, SemVer rules apply.
+  - `0.1.0` — first stable. After this, SemVer rules apply. **Today: this is what ships.**
 
 ### Post-1.0
 
@@ -52,16 +52,17 @@ After `1.0.0`:
 | Change Manifest JSON schema layout | MAJOR |
 | Add hot-path index in DuckDB schema | PATCH (transparent to users) |
 
-### `0.1.0-alpha.1` ⇒ how we got here, and the next steps
+### `0.1.0` ⇒ how we got here, and the path from here
 
-Today the workspace ships `0.1.0-alpha.1`. The 16-commit bugfix + modernization + parity sprint has put us at "feature-complete for v0.1 scope, surface still mid-stabilization". The honest pre-release ladder from here:
+The workspace ships `0.1.0` as the first stable tag. Getting here meant collapsing the planned `alpha → beta → rc → stable` ladder: the alpha phase ran with a small set of real users (primarily one), the three-sprint bugfix + modernization + code-maat-parity work landed under heavy use, and the externally-visible surface stabilized through that real-world exercise rather than through a separate beta/rc gate. We promoted directly from `0.1.0-alpha.1` to `0.1.0` once: PAR-1 through PAR-10 (every code-maat-parity analysis) had shipped; CI was green on Linux, macOS, and Windows; all 21 analyses had test coverage; the `<owner>` placeholders had been resolved to a real repo URL; and the SemVer policy in this document was in place.
 
-1. **Bump to `0.1.0-alpha.2`** for any internal milestone.
-2. **Bump to `0.1.0-beta.1`** once we ship the parity plan end-to-end (PAR-1 through PAR-10) AND the breaking-change docs in advanced-usage are settled.
-3. **Bump to `0.1.0-rc.1`** when CI green, docs current, performance benches stable.
-4. **`0.1.0`** = first published stable release. Tag, push, release pipeline runs.
+From `0.1.0` the path forward is:
 
-The skip from `0.1.0` to `1.0.0` is when we feel confident enough to make the strong stability promise on the CLI surface + output schemas. Probably 6-12 months of real-world usage past `0.1.0`.
+1. **`0.1.x` patch releases** — bug fixes + transparent perf wins (no flag changes, no schema changes).
+2. **`0.2.0` / `0.3.0` etc.** — any breaking change to the CLI flags, output schema, cache format, or public Rust API.
+3. **`1.0.0`** — the strong-stability commitment. We pull this trigger when we feel confident the surface won't need a breaking change for the foreseeable future. Probably 6-12 months of real-world `0.x` usage.
+
+For future major-version cuts (`1.0`, `2.0`, …), revive the `alpha → beta → rc → stable` ladder — the rigor matters more once external users depend on the previous major.
 
 ## Release Procedure
 
@@ -96,7 +97,7 @@ cargo fmt --all --check
 git add Cargo.toml Cargo.lock CHANGELOG.md
 git commit -m "release: vX.Y.Z"
 
-# 5. Tag the release (signed; matches v1.0.0 release-pipeline trigger)
+# 5. Tag the release (signed; release-pipeline triggers on any `v*` tag)
 git tag -s vX.Y.Z -m "vX.Y.Z"
 
 # 6. Push commit + tag together
