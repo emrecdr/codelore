@@ -20,7 +20,7 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::{CodeLoreError, Result};
 
@@ -32,10 +32,8 @@ pub type TeamMap = HashMap<String, String>;
 ///
 /// # Errors
 ///
-/// - The file does not exist (when `Some(path)` is passed).
-/// - The header row is missing or doesn't match `author,team` (case-insensitive).
-/// - A data row has fewer than two comma-separated fields.
-/// - The same author appears more than once.
+/// Returns [`CodeLoreError::MalformedTeamMap`] for parse problems and
+/// [`CodeLoreError::Io`] for I/O failures.
 pub fn load(path: Option<&Path>) -> Result<TeamMap> {
     let Some(path) = path else {
         return Ok(TeamMap::new());
@@ -49,21 +47,27 @@ pub fn load(path: Option<&Path>) -> Result<TeamMap> {
     parse(&raw, path)
 }
 
+fn malformed(path: &Path, line: usize, reason: impl Into<String>) -> CodeLoreError {
+    CodeLoreError::MalformedTeamMap {
+        path: PathBuf::from(path),
+        line,
+        reason: reason.into(),
+    }
+}
+
 /// Parse team-map CSV text. Separated from [`load`] for round-trip tests.
 fn parse(raw: &str, source: &Path) -> Result<TeamMap> {
     let mut lines = raw.lines().enumerate();
-    let (_, header_line) = lines.next().ok_or_else(|| {
-        CodeLoreError::Provenance(format!(
-            "team-map {} is empty (expected header `author,team` + data rows)",
-            source.display()
-        ))
-    })?;
+    let (_, header_line) = lines
+        .next()
+        .ok_or_else(|| malformed(source, 0, "file is empty (expected `author,team` header)"))?;
     let header = header_line.trim().to_lowercase();
     if header != "author,team" {
-        return Err(CodeLoreError::Provenance(format!(
-            "team-map {} has malformed header — got {header_line:?}, expected `author,team`",
-            source.display()
-        )));
+        return Err(malformed(
+            source,
+            1,
+            format!("malformed header — got {header_line:?}, expected `author,team`"),
+        ));
     }
 
     let mut map = TeamMap::new();
@@ -73,27 +77,27 @@ fn parse(raw: &str, source: &Path) -> Result<TeamMap> {
             continue;
         }
         let (author, team) = line.split_once(',').ok_or_else(|| {
-            CodeLoreError::Provenance(format!(
-                "team-map {} line {}: missing `,` separator — got {line:?}",
-                source.display(),
-                idx + 1
-            ))
+            malformed(
+                source,
+                idx + 1,
+                format!("missing `,` separator — got {line:?}"),
+            )
         })?;
         let author = author.trim().to_string();
         let team = team.trim().to_string();
         if author.is_empty() || team.is_empty() {
-            return Err(CodeLoreError::Provenance(format!(
-                "team-map {} line {}: blank author or team in {line:?}",
-                source.display(),
-                idx + 1
-            )));
+            return Err(malformed(
+                source,
+                idx + 1,
+                format!("blank author or team in {line:?}"),
+            ));
         }
         if let Some(existing) = map.insert(author.clone(), team.clone()) {
-            return Err(CodeLoreError::Provenance(format!(
-                "team-map {} line {}: duplicate author {author:?} (was {existing:?}, now {team:?})",
-                source.display(),
+            return Err(malformed(
+                source,
                 idx + 1,
-            )));
+                format!("duplicate author {author:?} (was {existing:?}, now {team:?})"),
+            ));
         }
     }
     Ok(map)
@@ -147,7 +151,10 @@ mod tests {
     fn rejects_missing_header() {
         let raw = "alice@example.com,Backend\n";
         let err = parse_str(raw).expect_err("must fail");
-        assert!(format!("{err}").contains("header"), "{err}");
+        let s = format!("{err}");
+        assert!(s.contains("malformed header") || s.contains("header"), "{s}");
+        // Typed-variant invariant: this is a MalformedTeamMap, not a Provenance bag.
+        assert!(matches!(err, CodeLoreError::MalformedTeamMap { .. }));
     }
 
     #[test]
@@ -155,6 +162,11 @@ mod tests {
         let raw = "author,team\nalice@example.com,Backend\nalice@example.com,Frontend\n";
         let err = parse_str(raw).expect_err("must fail");
         assert!(format!("{err}").contains("duplicate"), "{err}");
+        if let CodeLoreError::MalformedTeamMap { line, .. } = err {
+            assert_eq!(line, 3, "duplicate is on line 3 of the input (1-indexed)");
+        } else {
+            panic!("expected MalformedTeamMap, got {err:?}");
+        }
     }
 
     #[test]

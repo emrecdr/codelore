@@ -136,6 +136,15 @@ pub struct UnknownAnalysisError(pub String);
 
 impl std::error::Error for UnknownAnalysisError {}
 
+impl From<UnknownAnalysisError> for crate::CodeLoreError {
+    fn from(e: UnknownAnalysisError) -> Self {
+        crate::CodeLoreError::UnknownAnalysisName {
+            name: e.0,
+            supported: AnalysisName::all().iter().map(|a| a.as_str()).collect(),
+        }
+    }
+}
+
 impl fmt::Display for UnknownAnalysisError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Enumerate every public analysis name so the user sees what they can

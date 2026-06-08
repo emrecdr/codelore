@@ -365,9 +365,13 @@ fn count_loc(
 
     let empty: Vec<u8> = Vec::new();
     let read_blob = |oid: gix::ObjectId| -> Result<Vec<u8>> {
-        let obj = repo
-            .find_object(oid)
-            .map_err(|e| CodeLoreError::Repo(format!("find_blob {oid}: {e}")))?;
+        let obj = repo.find_object(oid).map_err(|_e| {
+            // Distinguish "object missing" from other repo errors so a
+            // shallow / corrupted repo can be detected upstream.
+            CodeLoreError::BlobNotFound {
+                oid: oid.to_string(),
+            }
+        })?;
         Ok(obj.data.clone())
     };
 
