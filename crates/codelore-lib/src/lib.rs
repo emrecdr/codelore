@@ -17,6 +17,7 @@ pub mod identity;
 pub mod kamei;
 pub mod options;
 pub mod output;
+pub mod paths;
 pub mod provenance;
 pub mod repo;
 #[cfg(feature = "test-support")]

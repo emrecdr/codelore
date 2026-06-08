@@ -4,7 +4,7 @@
 use duckdb::params;
 
 use crate::facts::FactsDb;
-use crate::{CodeLoreError, Options, Result};
+use crate::{Options, Result};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AuthorsRow {
@@ -24,18 +24,10 @@ const SQL: &str = "
 
 pub fn run_authors(db: &FactsDb, opts: &Options) -> Result<Vec<AuthorsRow>> {
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
-    let mut stmt = db
-        .conn()
-        .prepare(SQL)
-        .map_err(|e| CodeLoreError::Analysis(format!("prepare authors: {e}")))?;
-    let rows = stmt
-        .query_map(params![row_limit], |r| {
-            Ok(AuthorsRow {
-                author: r.get::<_, String>(0)?,
-                commits: r.get::<_, u32>(1)?,
-            })
+    super::query::query_map_collect(db, SQL, params![row_limit], "authors", |r| {
+        Ok(AuthorsRow {
+            author: r.get::<_, String>(0)?,
+            commits: r.get::<_, u32>(1)?,
         })
-        .map_err(|e| CodeLoreError::Analysis(format!("query authors: {e}")))?;
-    rows.collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|e| CodeLoreError::Analysis(format!("collect authors: {e}")))
+    })
 }

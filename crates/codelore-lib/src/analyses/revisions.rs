@@ -5,7 +5,7 @@
 use duckdb::params;
 
 use crate::facts::FactsDb;
-use crate::{CodeLoreError, Options, Result};
+use crate::{Options, Result};
 
 /// Per-file revision count, gated on `--min-revs` and capped by
 /// `--rows`. Bound values: `min_revs`, `row_limit` (`i64::MAX` = unlimited).
@@ -19,21 +19,19 @@ const SQL_RAW: &str = "
 ";
 
 pub fn run_revisions(db: &FactsDb, opts: &Options) -> Result<Vec<(String, u32)>> {
-    crate::analyses::lineage::materialize_if_needed(db, opts)?;
-    let sql = crate::analyses::lineage::rewrite(SQL_RAW, opts);
+    super::lineage::materialize_if_needed(db, opts)?;
+    let sql = super::lineage::rewrite(SQL_RAW, opts);
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
-    let mut stmt = db
-        .conn()
-        .prepare(&sql)
-        .map_err(|e| CodeLoreError::Analysis(format!("prepare revisions: {e}")))?;
-    let rows = stmt
-        .query_map(params![opts.min_revs, row_limit], |r| {
+    super::query::query_map_collect(
+        db,
+        &sql,
+        params![opts.min_revs, row_limit],
+        "revisions",
+        |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 u32::try_from(r.get::<_, i64>(1)?).unwrap_or(u32::MAX),
             ))
-        })
-        .map_err(|e| CodeLoreError::Analysis(format!("query revisions: {e}")))?;
-    rows.collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|e| CodeLoreError::Analysis(format!("collect revisions: {e}")))
+        },
+    )
 }

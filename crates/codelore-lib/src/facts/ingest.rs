@@ -221,20 +221,11 @@ impl FactsDb {
             let Some(lang) = CloneLanguage::from_path(path) else {
                 continue;
             };
-            // Normalize to forward-slash so the `clones.path` strings match
-            // the `changes.path` strings (which git always emits with `/`).
-            // Without this, on Windows the JOIN in `clone_coupling` and the
-            // `same_parent_dir` filter both miss because `to_string_lossy`
-            // returns native separators (`\` on Windows, `/` on Unix).
-            // `std::path::MAIN_SEPARATOR` is `/` on Unix so the replace is
-            // a no-op there.
-            let rel = path.strip_prefix(&opts.repo_path).map_or_else(
-                |_| {
-                    path.to_string_lossy()
-                        .replace(std::path::MAIN_SEPARATOR, "/")
-                },
-                |p| p.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/"),
-            );
+            // Normalise to POSIX `/` so `clones.path` matches `changes.path`
+            // (git always emits `/`). See `crate::paths::to_posix`.
+            let rel = path
+                .strip_prefix(&opts.repo_path)
+                .map_or_else(|_| crate::paths::to_posix(path), crate::paths::to_posix);
             if exclude_set.is_match(&rel) {
                 continue;
             }
