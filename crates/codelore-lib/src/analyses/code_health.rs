@@ -11,12 +11,16 @@
 //! defaults: w_cx = 0.40, w_cn = 0.25, w_au = 0.15, w_cp = 0.20
 //! ```
 //!
-//! All 4 inputs are wired. Normalization uses the in-repo maximum as the
-//! empirical upper bound (min-max over the result set). Score range: [0, 100];
-//! higher = healthier.
+//! All 4 inputs are wired. Coupling centrality uses the Fisher-significant
+//! pairs from `coupling::run_coupling` (the same gate used in the standalone
+//! `coupling` analysis). Normalization uses the in-repo maximum as the
+//! empirical upper bound (min-max). Score range: [0, 100]; higher = healthier.
+
+use std::collections::HashMap;
 
 use duckdb::params;
 
+use crate::analyses::coupling::run_coupling;
 use crate::facts::FactsDb;
 use crate::{CodeLoreError, Options, Result};
 
@@ -62,19 +66,9 @@ const SQL: &str = "
             ON ar.path = t.path
         GROUP BY ar.path
     ),
-    file_coupling AS (
-        SELECT path, COUNT(*) AS centrality FROM (
-            SELECT a.path AS path
-            FROM changes a
-            INNER JOIN changes b ON a.rev = b.rev AND a.path < b.path
-            GROUP BY a.path, b.path
-            UNION ALL
-            SELECT b.path
-            FROM changes a
-            INNER JOIN changes b ON a.rev = b.rev AND a.path < b.path
-            GROUP BY a.path, b.path
-        ) GROUP BY path
-    ),
+    -- coupling_centrality_v1 is a TEMPORARY TABLE populated from
+    -- coupling::run_coupling output (Fisher-filtered pairs) before this
+    -- SQL runs. Centrality = count of Fisher-significant partners.
     joined AS (
         SELECT
             fc.path,
@@ -86,7 +80,7 @@ const SQL: &str = "
         INNER JOIN file_revs fr ON fc.path = fr.path
         LEFT JOIN file_churn fch ON fc.path = fch.path
         LEFT JOIN file_fv ffv ON fc.path = ffv.path
-        LEFT JOIN file_coupling fcp ON fc.path = fcp.path
+        LEFT JOIN coupling_centrality_v1 fcp ON fc.path = fcp.path
     ),
     normalized AS (
         SELECT
@@ -117,7 +111,55 @@ const SQL: &str = "
     LIMIT ?
 ";
 
+/// DDL for the temporary centrality table that backs the composite score's
+/// `n_cp` term. Computed in Rust from the Fisher-filtered output of
+/// `coupling::run_coupling`, then materialized in a session-local temp table
+/// so the main code-health SQL can JOIN it like any other source.
+const CENTRALITY_DDL: &str = "
+    CREATE OR REPLACE TEMPORARY TABLE coupling_centrality_v1 (
+        path TEXT PRIMARY KEY,
+        centrality INTEGER NOT NULL
+    )
+";
+
+/// Build the centrality temp table from Fisher-significant coupling pairs.
+/// Each path appears once with `centrality = count of pairs that include it`.
+fn materialize_centrality(db: &FactsDb, opts: &Options) -> Result<()> {
+    let pairs = run_coupling(db, opts)?;
+
+    // Count Fisher-significant partners per path. Each pair contributes to
+    // both endpoints' centrality.
+    let mut counts: HashMap<String, u32> = HashMap::new();
+    for p in &pairs {
+        *counts.entry(p.entity_a.clone()).or_insert(0) += 1;
+        *counts.entry(p.entity_b.clone()).or_insert(0) += 1;
+    }
+
+    db.conn()
+        .execute(CENTRALITY_DDL, [])
+        .map_err(|e| CodeLoreError::Analysis(format!("create centrality temp table: {e}")))?;
+
+    if counts.is_empty() {
+        return Ok(()); // Nothing to insert; LEFT JOIN handles absence.
+    }
+
+    // Bulk INSERT via prepared statement — small N (typically <= 100s of
+    // distinct paths), so per-row insert is fine without the Appender.
+    let mut stmt = db
+        .conn()
+        .prepare("INSERT INTO coupling_centrality_v1 (path, centrality) VALUES (?, ?)")
+        .map_err(|e| CodeLoreError::Analysis(format!("prepare centrality insert: {e}")))?;
+    for (path, count) in &counts {
+        stmt.execute(params![path, *count])
+            .map_err(|e| CodeLoreError::Analysis(format!("centrality row insert: {e}")))?;
+    }
+    Ok(())
+}
+
 pub fn run_code_health(db: &FactsDb, opts: &Options) -> Result<Vec<CodeHealthRow>> {
+    // Materialize Fisher-filtered coupling centrality before the SQL runs.
+    materialize_centrality(db, opts)?;
+
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
     let mut stmt = db
         .conn()
