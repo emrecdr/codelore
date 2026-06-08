@@ -147,6 +147,58 @@ pub struct AnalyzeArgs {
     /// Plan 8 §3 Task 14.
     #[arg(long)]
     pub cache_dir: Option<PathBuf>,
+
+    // ------------------------------------------------------------------
+    // code-maat parity CLI flags (PAR-6). All target Options fields that
+    // existed but weren't surfaced on the CLI.
+    // ------------------------------------------------------------------
+    /// Minimum shared revisions for a coupling pair (code-maat parity).
+    /// Pairs below this floor are dropped before the Fisher gate runs.
+    #[arg(long, default_value_t = 5)]
+    pub min_shared_revs: u32,
+
+    /// Minimum coupling degree (0-100%) for a pair to surface in `coupling`.
+    /// Code-maat parity; complements --min-shared-revs.
+    #[arg(long = "min-coupling", default_value_t = 30)]
+    pub min_coupling_pct: u8,
+
+    /// Maximum coupling degree (0-100%) ceiling. Useful for narrowing the
+    /// report to non-perfectly-coupled pairs (degree=100 means every
+    /// commit modifies both files, often a sign of file split rather than
+    /// a real signal).
+    #[arg(long = "max-coupling", default_value_t = 100)]
+    pub max_coupling_pct: u8,
+
+    /// Drop commits touching more than N files from coupling/soc analyses.
+    /// Filters refactor sweeps that create spurious coupling noise.
+    /// Code-maat default is 30.
+    #[arg(long, default_value_t = 30)]
+    pub max_changeset_size: u32,
+
+    /// Reference "now" for code-age analysis. Format: YYYY-MM-DD. Default:
+    /// today UTC. Useful for reproducing a historic report or holding
+    /// CI output stable across days.
+    #[arg(long = "age-time-now", value_parser = parse_date)]
+    pub age_time_now: Option<time::Date>,
+
+    /// Commit-message regex for the `messages` analysis. Required when
+    /// `--analysis messages` is run; ignored otherwise. RE2-flavor (per
+    /// `DuckDB` `regexp_matches`); use `(?i)` for case-insensitive matching.
+    #[arg(short = 'e', long = "expression-to-match")]
+    pub message_regex: Option<String>,
+
+    /// Minimum `SoC` value for `soc` to surface a row. Modern replacement
+    /// for code-maat's overloaded use of `--min-revs` in that one analysis.
+    /// Default: drop solo commits (1).
+    #[arg(long)]
+    pub min_soc: Option<u32>,
+}
+
+/// Parse a YYYY-MM-DD date for the `--age-time-now` flag.
+fn parse_date(s: &str) -> std::result::Result<time::Date, String> {
+    use time::format_description::well_known::Iso8601;
+    time::Date::parse(s, &Iso8601::DEFAULT)
+        .map_err(|e| format!("invalid date {s:?} (expected YYYY-MM-DD): {e}"))
 }
 
 /// PR-mode delta analysis: run analyses at `<base>` and `<head>`, emit the diff.

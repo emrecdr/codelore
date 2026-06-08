@@ -122,6 +122,14 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
         complexity_sample,
         group_file: args.group_file.clone(),
         exclude_patterns: args.exclude.clone(),
+        // PAR-6: code-maat parity flag wiring
+        min_shared_revs: args.min_shared_revs,
+        min_coupling_pct: args.min_coupling_pct,
+        max_coupling_pct: args.max_coupling_pct,
+        max_changeset_size: args.max_changeset_size,
+        age_time_now: args.age_time_now,
+        message_regex: args.message_regex.clone(),
+        min_soc: args.min_soc,
         ..Options::default()
     };
 
