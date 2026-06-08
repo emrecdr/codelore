@@ -4,5 +4,5 @@
 pub mod bots;
 pub mod team_map;
 
-pub use bots::{ai_attribution, is_bot};
+pub use bots::{BotPatterns, ai_attribution, ai_attribution_with, is_bot};
 pub use team_map::{TeamMap, apply as apply_team_map, discover as discover_team_map};

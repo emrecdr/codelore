@@ -108,6 +108,8 @@ fn run(db: &FactsDb, opts: &Options, metric: MainDevMetric) -> Result<Vec<MainDe
          LIMIT ?"
     );
 
+    crate::analyses::lineage::materialize_if_needed(db, opts)?;
+    let sql = crate::analyses::lineage::rewrite(&sql, opts);
     let mut stmt = db
         .conn()
         .prepare(&sql)

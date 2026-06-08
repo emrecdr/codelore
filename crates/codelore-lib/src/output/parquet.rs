@@ -24,12 +24,16 @@ pub fn write_hotspots_parquet(db: &FactsDb, opts: &Options, path: &Path) -> Resu
     // computed columns users actually care about. Same formula as
     // `run_hotspots`: score is `percent_rank(revs) * percent_rank(cog) *
     // (100 − code_health) / 10`, range `[0, 10]`.
+    // Route through `changes_lineage` so Parquet output stays in sync with
+    // the CSV/JSON/Markdown emitters when canonical lineage is on.
+    crate::analyses::lineage::materialize_if_needed(db, opts)?;
+    let src = crate::analyses::lineage::source_table(opts);
     let min_revs = opts.min_revs;
     let row_limit = opts.rows_limit.map_or(i64::MAX, i64::from);
     let query = format!(
         "WITH file_revs AS (
              SELECT path, COUNT(DISTINCT rev) AS revs
-             FROM changes GROUP BY path HAVING revs >= {min_revs}
+             FROM {src} GROUP BY path HAVING revs >= {min_revs}
          ),
          file_complexity AS (
              SELECT path, MAX(cognitive) AS cognitive
@@ -71,10 +75,12 @@ pub fn write_hotspots_parquet(db: &FactsDb, opts: &Options, path: &Path) -> Resu
 }
 
 pub fn write_revisions_parquet(db: &FactsDb, opts: &Options, path: &Path) -> Result<()> {
+    crate::analyses::lineage::materialize_if_needed(db, opts)?;
+    let src = crate::analyses::lineage::source_table(opts);
     let min_revs = opts.min_revs;
     let query = format!(
         "SELECT path AS entity, COUNT(DISTINCT rev) AS n_revs
-         FROM changes
+         FROM {src}
          GROUP BY path
          HAVING n_revs >= {min_revs}
          ORDER BY n_revs DESC, path ASC"

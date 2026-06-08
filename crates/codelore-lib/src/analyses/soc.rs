@@ -47,15 +47,15 @@ fn build_soc_sql(src: &str) -> String {
 }
 
 pub fn run_soc(db: &FactsDb, opts: &Options) -> Result<Vec<SocRow>> {
-    // PAR-8: if --time-bucket is active, materialize changes_bucketed first.
+    // Source-table dispatch: --time-bucket wins; canonical lineage second;
+    // raw `changes` otherwise. Shared `lineage` helper materializes the
+    // right table.
     if let Some(bucket) = opts.time_bucket {
         crate::facts::ingest::materialize_changes_bucketed(db, bucket)?;
-    }
-    let src = if opts.time_bucket.is_some() {
-        "changes_bucketed"
     } else {
-        "changes"
-    };
+        crate::analyses::lineage::materialize_if_needed(db, opts)?;
+    }
+    let src = crate::analyses::lineage::source_table(opts);
 
     // Modern: --min-soc N gates the SoC value. Legacy compat: fall back
     // to --min-revs for users who scripted against code-maat's overloaded

@@ -92,9 +92,29 @@ impl Repo for GitCliRepo {
         let raw = String::from_utf8(output.stdout)
             .map_err(|e| CodeLoreError::Repo(format!("git log output not utf-8: {e}")))?;
 
-        let events: Vec<Result<CommitEvent>> =
-            parse_git_log_stream(&raw).into_iter().map(Ok).collect();
+        let mut events = parse_git_log_stream(&raw);
 
+        // Walk-time mailmap resolution. Matches GixRepo's gix-mailmap pass
+        // so the two walkers produce identical `canonical_author` columns
+        // on the same fixture — the differential parity tests depend on
+        // it. Cache by raw email so we only spawn `git check-mailmap` once
+        // per unique author (N events, M ≤ N unique authors).
+        let mut mailmap_cache: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for event in &mut events {
+            let canonical = mailmap_cache
+                .entry(event.author_email.clone())
+                .or_insert_with(|| self.resolve_alias(&event.author_email))
+                .clone();
+            // Only flag a canonical when it actually differs from the raw
+            // email — keeping `None` for non-aliased authors mirrors gix's
+            // behaviour and avoids polluting cache keys with the noop case.
+            if canonical != event.author_email {
+                event.canonical_author = Some(canonical);
+            }
+        }
+
+        let events: Vec<Result<CommitEvent>> = events.into_iter().map(Ok).collect();
         Ok(Box::new(events.into_iter()))
     }
 
@@ -382,8 +402,8 @@ fn parse_pretty_block(pretty: &str, name_status: &str) -> Option<CommitEvent> {
         message,
         parents,
         changes,
-        canonical_author: None, // Not resolved at walk time; matches GixRepo behaviour.
-        ai_attribution: None,   // Not classified at walk time; matches GixRepo behaviour.
+        canonical_author: None, // Filled in by walk_commits' mailmap-cache pass.
+        ai_attribution: None,   // Re-classified in ingest_loop with .codelorebots patterns.
         kamei: None,
     })
 }

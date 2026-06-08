@@ -80,9 +80,11 @@ const SQL: &str = "
 
 pub fn run_ownership(db: &FactsDb, opts: &Options) -> Result<Vec<OwnershipRow>> {
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
+    crate::analyses::lineage::materialize_if_needed(db, opts)?;
+    let sql = crate::analyses::lineage::rewrite(SQL, opts);
     let mut stmt = db
         .conn()
-        .prepare(SQL)
+        .prepare(&sql)
         .map_err(|e| CodeLoreError::Analysis(format!("prepare ownership: {e}")))?;
     let rows = stmt
         .query_map(params![opts.min_revs, row_limit], |r| {

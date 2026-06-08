@@ -64,81 +64,86 @@ graph TD
     *   A recursive CTE was introduced to build `path_lineage` mappings, and a temporary `changes_lineage` table resolves old paths to canonical post-rename paths.
     *   **The Remaining Gap**: This has only been wired into **3** out of 12 path-aggregating analyses (`revisions`, `hotspots`, `coupling`). The remaining **9** analyses (`churn`, `code_health`, `code_age`, `entity_ownership`, `main_dev`, `ownership`, `entity_effort`, `messages`, `soc`) still query literal paths from `changes` directly and suffer from split-history aggregation errors.
 
+### 6. `.mailmap` Edits Do Not Invalidate Persistent Cache (Stale / Poisoned Cache)
+*   **Status**: **FULLY FIXED** ([commit `4503d4b`](file:///Users/emrec/Projects/playground/codescene/commit/4503d4bbc1d9246464d2fd3a51dfb2e6a52774c2))
+    *   The cache key computation `Options::canonical_json()` now reads and digests the `.mailmap` file (or falls back to the auto-discovered `<repo>/.codelore-teams` team mapping) and integrates the hash into the cache key. Edits to `.mailmap` now invalidate the cache key.
+
+### 7. `.codeloreignore` Edits Do Not Invalidate Persistent Cache
+*   **Status**: **FULLY FIXED** ([commit `4503d4b`](file:///Users/emrec/Projects/playground/codescene/commit/4503d4bbc1d9246464d2fd3a51dfb2e6a52774c2))
+    *   The cache key computation `Options::canonical_json()` now digests `.codeloreignore` contents and incorporates the digest into the cache key hash, ensuring edits immediately trigger cache invalidation.
+
+### 8. Missing Indexes on the Temporary `changes_lineage` Table
+*   **Status**: **FULLY FIXED** ([commit `4503d4b`](file:///Users/emrec/Projects/playground/codescene/commit/4503d4bbc1d9246464d2fd3a51dfb2e6a52774c2))
+    *   Added `idx_changes_lineage_path` and `idx_changes_lineage_rev` to `materialize_changes_lineage` immediately after table creation to avoid full-table scans.
+
+### 9. Redundant `count_loc` for Bit-Identical Blobs in `GixChange::Rewrite`
+*   **Status**: **FULLY FIXED** ([commit `4503d4b`](file:///Users/emrec/Projects/playground/codescene/commit/4503d4bbc1d9246464d2fd3a51dfb2e6a52774c2))
+    *   Correctly checks for a `None` diff during rewrites (representing 100% similarity/bit-identical blobs) and returns `(100u8, 0, 0)` immediately, saving redundant disk I/O and CPU diff cycles.
+
 ---
 
 ## 3. Newly Identified Critical Gaps & Recommendations
 
-### 🚨 Major Issue: `.mailmap` Edits Do Not Invalidate Persistent Cache (Stale / Poisoned Cache)
+### 🚨 Critical Defect: Extensible Bot Detection (`.codelorebots`) is Dead Code
 
 **The Problem**:
-CodeLore uses the repository's `.mailmap` file during commit ingestion to resolve author names and emails to canonical identities. However, `Options::canonical_json()` (which computes the persistent cache key) does not hash the contents of the `.mailmap` file.
-As a result, if a user edits `.mailmap` to canonicalize or merge author identities, subsequent runs of CodeLore will hit the cache, returning stale, unmapped historical data.
+While `.codelorebots` is parsed in unit tests and its content hash is correctly verified in the cache key, the production code completely bypasses it. Specifically:
+- Inside the ingestion loop ([ingest.rs:447](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/facts/ingest.rs#L447)), the code calls `identity::is_bot(&event.author_email, &event.author_name)`.
+- Inside `GixRepo::walk_commits` ([gix_repo.rs:125](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/repo/gix_repo.rs#L125)), the code calls `identity::ai_attribution(&event.author_email, &event.author_name, &event.message)`.
+Both of these calls target the free functions defined in `identity::bots`, which strictly query the hardcoded `DEFAULT_BOT_PATTERNS` block. The extensible `BotPatterns` struct is never initialized or consulted in production. Consequently, user-configured internal/custom bots are classified as `human` rather than `ai-authored`.
 
 **Suggested Fix**:
-Include the content digest of the repository's `.mailmap` file in `Options::canonical_json()`'s hash calculations:
-```rust
-let mailmap_digest = digest_of(&self.repo_path.join(".mailmap"));
-map.insert("mailmap_digest".to_string(), json!(mailmap_digest));
-```
+Construct and pass the `BotPatterns::from_repo(&opts.repo_path)` instance into the ingestion and repository walk phases, and utilize `BotPatterns::is_bot` / `BotPatterns::ai_attribution` rather than calling the static free functions.
 
 ---
 
-### 🚨 Major Issue: `.codeloreignore` Edits Do Not Invalidate Persistent Cache
+### 🚨 Correctness Bug: JIT-SDP Kamei History Metrics (`ndev`, `nuc`, `age`) Severed by Renames
 
 **The Problem**:
-Similar to the mailmap issue, `.codeloreignore` is parsed dynamically from disk in `build_clones_exclude_set` to filter out files during the clones extraction pass. However, the `.codeloreignore` file's content hash is not included in the cache key computed by `Options::canonical_json()`. If a user modifies `.codeloreignore` to exclude directories from analysis, they will get a stale cache hit and see outdated metrics.
+The JIT-SDP Kamei feature calculations in `enrich_history` perform SQL `UPDATE`s by joining the current changes with historical changes on literal paths (`pchg.path = cchg.path`). If a file is renamed, all historical revisions, developer counts, and age tracking before the rename are completely lost/severed for that file.
 
 **Suggested Fix**:
-Include the content digest of the repository's `.codeloreignore` file in the cache key:
-```rust
-let codeloreignore_digest = digest_of(&self.repo_path.join(".codeloreignore"));
-map.insert("codeloreignore_digest".to_string(), json!(codeloreignore_digest));
-```
+Route the history queries through the lineage-resolved path mapping (`changes_lineage`) so that history is aggregated across renames.
+
+---
+
+### ⚡ Feature Gap: Time-Bucket and Canonical Lineage Composition Conflict
+
+**The Problem**:
+In `run_coupling`'s `source_table` helper, if `--time-bucket` is active, it takes precedence and selects `"changes_bucketed"`. However, `"changes_bucketed"` is always materialized from the raw `changes` table, completely ignoring the rename lineage. This means rename canonicalization is silently disabled when temporal bucketing is requested.
+
+**Suggested Fix**:
+Support composing lineage and bucketing by materializing bucketing over the lineage-resolved view when both options are set.
+
+---
+
+### ⚠️ Defect: Discrepancy in `.mailmap` Resolution between Repository Walkers
+
+**The Problem**:
+While `GixRepo` resolves mailmap aliases at walk time, the `GitCliRepo` fallback/testing oracle does not resolve them at walk time and sets `canonical_author` to `None`. This means when ingesting with `GitCliRepo` (e.g. during differential tests), mailmap aliases are not resolved in the database.
+
+**Suggested Fix**:
+Implement mailmap resolution for `GitCliRepo` in `walk_commits`.
 
 ---
 
 ### 🚨 Major Issue: Parquet Output Emitters Bypass Rename Lineage (Correctness Bug)
 
 **The Problem**:
-In [parquet.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/output/parquet.rs), the `write_hotspots_parquet` and `write_revisions_parquet` functions query the raw `changes` table directly. If the user requests `--format parquet` combined with `--use-canonical-lineage` (default true), the output Parquet files will completely ignore the rename-lineage mapping and output split histories, despite standard CSV/Markdown queries resolving them correctly.
+In [parquet.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/output/parquet.rs), the `write_hotspots_parquet` and `write_revisions_parquet` functions query the raw `changes` table directly. If the user requests `--format parquet` combined with `--use-canonical-lineage` (default true), the output Parquet files will completely ignore the rename-lineage mapping and output split histories.
 
 **Suggested Fix**:
 Re-route the Parquet SQL builders to respect `opts.use_canonical_lineage`. Instead of duplicating the SQL string inline in `parquet.rs`, invoke the public `build_sql` helper from `hotspots` or build equivalent schema tables over the canonical `changes_lineage` table.
 
 ---
 
-### ⚡ Performance Bottleneck: Missing Indexes on the Temporary `changes_lineage` Table
-
-**The Problem**:
-When `--use-canonical-lineage` is enabled, the system constructs a temporary table called `changes_lineage` to map old paths to their canonical names. This temporary table is created using `CREATE TEMPORARY TABLE changes_lineage AS SELECT ...` and has no primary key or indexes.
-Because of this, downstream aggregation queries on `changes_lineage` (like those in `revisions`, `hotspots`, and `coupling`) must perform full table scans instead of leveraging the indexes on `changes(path)` and `changes(rev)` (`idx_changes_path` and `idx_changes_rev`). On large repositories, this will lead to a query performance regression.
-
-**Suggested Fix**:
-After materializing `changes_lineage` in `materialize_changes_lineage`, explicitly create indexes on it:
-```sql
-CREATE INDEX IF NOT EXISTS idx_changes_lineage_path ON changes_lineage(path);
-CREATE INDEX IF NOT EXISTS idx_changes_lineage_rev ON changes_lineage(rev);
-```
-
----
-
-### ⚡ Performance Bottleneck: Redundant `count_loc` for Bit-Identical Blobs
-
-**The Problem**:
-In [gix_repo.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/repo/gix_repo.rs#L320-L329), when processing `GixChange::Rewrite`, if `diff` is `None` (representing a perfect 100% rename with identical blob hashes), the code still executes `count_loc(repo, Some(source_id), Some(id))` (which reads both blobs and runs a histogram diff).
-
-**Suggested Fix**:
-If `diff` is `None`, directly return `(100u8, 0, 0)` rather than invoking `count_loc`. This eliminates redundant disk reads and diff computations.
-
----
-
 ### ⚡ Performance Bottleneck: Double `find_commit` per Commit Event
 
 **The Problem**:
-In `GixRepo::walk_commits` ([gix_repo.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/repo/gix_repo.rs#L51-L98)), the walker performs `repo.find_commit(oid)` once during the initial OID collection phase (to check merge status and author date), and then performs a second `find_commit(oid)` inside the mapped iterator step to parse the full commit event metadata.
+In `GixRepo::walk_commits` ([gix_repo.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/repo/gix_repo.rs#L51-L98)), the walker performs `repo.find_commit(oid)` once during the initial OID collection phase, and then performs a second `find_commit(oid)` inside the mapped iterator step to parse the full commit event metadata.
 
 **Suggested Fix**:
-Parse the commit metadata (constructing a Send-able `CommitEvent` without changes) in the first pass where `repo` is in scope, and collect a list of events. The mapped iterator step then only needs to populate the `changes` field via `compute_changed_files`. This cuts commit object parsing overhead by **50%**.
+Parse the commit metadata in the first pass where `repo` is in scope, and collect a list of events. The mapped iterator step then only needs to populate the `changes` field via `compute_changed_files`. This cuts commit object parsing overhead by **50%**.
 
 ---
 
@@ -171,14 +176,18 @@ HEAD-time complexity metrics extraction is parallelized using Rayon, but fingerp
 |---|---|---|---|---|
 | **Defect** | `loc_added` / `loc_deleted` are always `0` on walks. Churn analyses return zeroed lines. | **High** / Medium | Distorts churn, main-dev, and Kamei vectors. | **Fixed** in `54040de` |
 | **Defect** | Propagated `rows_limit` parameter caps nested query results in composite/derived analyses (`code-health` & `clone-coupling`). | **High** / High | Corrupts coupling centrality and clone-coupling matches when `--rows` is set. | **Fixed** in `6414aa0` |
-| **Defect** | `.mailmap` edits do not invalidate persistent cache key, leading to stale author aggregations. | **High** / High | Stale cache hit bypasses updated alias associations. | **Active** (New) |
-| **Defect** | `.codeloreignore` edits do not invalidate persistent cache key. | **High** / High | Stale cache hit returns metrics for ignored files. | **Active** (New) |
+| **Defect** | `.mailmap` edits do not invalidate persistent cache key, leading to stale author aggregations. | **High** / High | Stale cache hit bypasses updated alias associations. | **Fixed** in `4503d4b` |
+| **Defect** | `.codeloreignore` edits do not invalidate persistent cache key. | **High** / High | Stale cache hit returns metrics for ignored files. | **Fixed** in `4503d4b` |
+| **Defect** | Extensible Bot Detection (`.codelorebots`) is Dead Code in production. | **High** / High | Custom bots are classified as human instead of `ai-authored`. | **Active** (New) |
+| **Defect** | JIT-SDP Kamei history metrics (`ndev`, `nuc`, `age`) are severed by file renames. | **High** / High | Corrupts SDP predictions for files with commit history across renames. | **Active** (New) |
 | **Defect** | Parquet output emitters bypass rename lineage, outputting raw split histories. | **High** / High | Parquet formats mismatch stdout/CSV/Markdown when lineage is active. | **Active** |
 | **Defect** | `max_coupling_pct` option is ignored in `run_coupling` queries. | **Medium** / Low | High-coupling pairs are not filtered out when specified. | **Fixed** in `6414aa0` |
 | **Defect** | Discrepancy in rename/copy tracking config between `GixRepo` (disabled) and `GitCliRepo` (enabled). | **Medium** / High | Leads to inconsistent analysis outputs depending on repo walker. | **Fixed** in `06a21b5` |
 | **Defect** | Rename tracking splits file histories in SQL aggregation queries. | **Medium** / High | Split history leads to incorrect Revision and Coupling statistics. | **Partially Fixed** in `4c1c3b7` (Wired for 3/12 analyses) |
-| **Performance** | Missing index on `changes_lineage` temporary table. | **Medium** / High | Forces full table scans on path-aggregating queries when lineage is active. | **Active** (New) |
-| **Performance** | Redundant `count_loc` call for bit-identical blobs in imperfect `GixChange::Rewrite`. | **Medium** / Low | Overhead reading/diffing identical blobs. | **Active** |
+| **Defect** | Time-Bucket and Canonical Lineage options ignore each other when both are set. | **Medium** / High | Temporal bucketing bypasses rename lineage mapping. | **Active** (New) |
+| **Defect** | Discrepancy in walk-time `.mailmap` resolution between `GixRepo` (enabled) and `GitCliRepo` (disabled). | **Medium** / Medium | Ingestion with Git CLI fails to canonicalize authors in tests. | **Active** (New) |
+| **Performance** | Missing index on `changes_lineage` temporary table. | **Medium** / High | Forces full table scans on path-aggregating queries when lineage is active. | **Fixed** in `4503d4b` |
+| **Performance** | Redundant `count_loc` call for bit-identical blobs in imperfect `GixChange::Rewrite`. | **Medium** / Low | Overhead reading/diffing identical blobs. | **Fixed** in `4503d4b` |
 | **Performance** | Double `find_commit` lookup/parsing per commit during `GixRepo::walk_commits`. | **Medium** / Low | Double lookup overhead on repositories with large history. | **Active** |
 | **Refactor** | SQL queries are duplicated in `output/parquet.rs` instead of being shared. | **Low** / Low | Risk of silent drift between Parquet outputs and standard emitters. | **Active** |
 | **Refactor** | Dependency metadata versions are hardcoded in the codebase instead of queried dynamically. | **Low** / Low | Desynchronized provenance reports during dependency upgrades. | **Active** |

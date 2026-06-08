@@ -3,6 +3,7 @@
 
 pub mod authors;
 pub mod churn;
+pub mod lineage;
 pub mod clone_coupling;
 pub mod clones;
 pub mod code_age;

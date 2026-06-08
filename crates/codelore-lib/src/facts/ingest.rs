@@ -42,6 +42,14 @@ impl FactsDb {
             .clone()
             .or_else(|| crate::identity::discover_team_map(&opts.repo_path));
         let team_map = crate::identity::team_map::load(team_map_path.as_deref())?;
+        // Same shape as team_map: load `.codelorebots` ONCE here so the
+        // ingest_loop can route bot detection AND ai_attribution through
+        // the user-extensible patterns. Before this, the production code
+        // called the free `identity::is_bot` / `identity::ai_attribution`
+        // functions which only see DEFAULT_BOT_PATTERNS — `.codelorebots`
+        // was loaded into a struct that nothing in production ever
+        // consulted (extension hook was dead code).
+        let bot_patterns = crate::identity::BotPatterns::from_repo(&opts.repo_path);
 
         // Plan 1: single producer gix walker → bounded channel → Appender on calling thread.
         // Plan 4 will fan out N producers.
@@ -61,7 +69,7 @@ impl FactsDb {
             });
 
             // Consumer: runs on the calling thread — FactsDb / Connection stays single-threaded.
-            let stats = ingest_loop(self, rx, &team_map)?;
+            let stats = ingest_loop(self, rx, &team_map, &bot_patterns)?;
 
             producer.join().expect("producer panicked")?;
             Ok(stats)
@@ -72,7 +80,11 @@ impl FactsDb {
         self.ingest_complexity_at_head(opts)?;
 
         // Plan 4: populate the Kamei 14-feature change vector via SQL UPDATE pass.
-        crate::kamei::enrich(self)?;
+        // Kamei history (ndev, nuc, age) joins changes-to-changes on path;
+        // without lineage, renamed files lose all their pre-rename history.
+        // Routing through `changes_lineage` merges histories under the canonical
+        // post-rename name.
+        crate::kamei::enrich(self, opts.use_canonical_lineage)?;
 
         // Plan 8 §4: populate the `clones` table at HEAD so the
         // `clone-coupling` analysis (§6) can JOIN against it. Honors
@@ -413,6 +425,7 @@ fn ingest_loop(
     db: &FactsDb,
     rx: crossbeam_channel::Receiver<CommitEvent>,
     team_map: &identity::TeamMap,
+    bot_patterns: &identity::BotPatterns,
 ) -> Result<IngestStats> {
     use std::collections::HashMap;
 
@@ -444,7 +457,21 @@ fn ingest_loop(
         if !team_map.is_empty() {
             event.canonical_author = Some(canonical.clone());
         }
-        let bot = identity::is_bot(&event.author_email, &event.author_name);
+        let bot = bot_patterns.is_bot(&event.author_email, &event.author_name);
+        // Re-classify ai_attribution through the user-extensible patterns
+        // too. The walker computes it with the defaults-only free function
+        // (no repo_path in scope there); we overwrite here so projects with
+        // internal bot accounts get them tagged as `ai-authored` instead
+        // of being miscounted as human contributors.
+        event.ai_attribution = Some(
+            identity::ai_attribution_with(
+                bot_patterns,
+                &event.author_email,
+                &event.author_name,
+                &event.message,
+            )
+            .to_string(),
+        );
         alias_map
             .entry(event.author_email.clone())
             .or_insert((canonical, bot));

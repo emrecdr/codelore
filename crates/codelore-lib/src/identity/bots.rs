@@ -142,9 +142,34 @@ impl BotPatterns {
 /// Classifies commit attribution as one of `"ai-authored"`, `"ai-assisted"`,
 /// or `"human"`. Bot authors → `ai-authored`; commits with a recognized
 /// AI-assistant signature in the message → `ai-assisted`; otherwise → `human`.
+///
+/// Defaults-only path; user-extensible patterns from `.codelorebots` are
+/// honoured by [`ai_attribution_with`] (the production ingest pipeline
+/// uses that variant).
 #[must_use]
 pub fn ai_attribution(email: &str, name: &str, message: &str) -> &'static str {
     if is_bot(email, name) {
+        return "ai-authored";
+    }
+    let msg_lc = message.to_lowercase();
+    if AI_ASSIST_PATTERNS.iter().any(|p| msg_lc.contains(p)) {
+        return "ai-assisted";
+    }
+    "human"
+}
+
+/// User-extensible variant of [`ai_attribution`]: routes the bot check
+/// through a [`BotPatterns`] instance so a project-level `.codelorebots`
+/// file participates. AI-assist message-pattern detection is unchanged
+/// (the assist patterns are not user-extensible by design).
+#[must_use]
+pub fn ai_attribution_with(
+    patterns: &BotPatterns,
+    email: &str,
+    name: &str,
+    message: &str,
+) -> &'static str {
+    if patterns.is_bot(email, name) {
         return "ai-authored";
     }
     let msg_lc = message.to_lowercase();
