@@ -86,3 +86,49 @@ fn code_health_penalizes_churn() {
         );
     }
 }
+
+/// `--rows N` MUST NOT change the score computed for a path that survives
+/// the truncation. The bug it regression-protects: `materialize_centrality`
+/// used to pass the parent `opts` (with `rows_limit = N`) straight into
+/// `run_coupling`, so the centrality term was computed over a sliver of
+/// the coupling graph and the final score drifted by `rows_limit`.
+#[test]
+fn code_health_score_invariant_under_rows_limit() {
+    let diff_repo = codelore_lib::test_support::differential_repo::build();
+    let repo = GixRepo::open(diff_repo.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts_unlimited = Options {
+        repo_path: diff_repo.dir.path().to_path_buf(),
+        min_revs: 1,
+        fisher_significance: 1.0,
+        rows_limit: None,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts_unlimited).expect("ingest");
+    let baseline = run_code_health(&db, &opts_unlimited).expect("baseline");
+    assert!(baseline.len() >= 2, "need ≥2 rows to test truncation");
+
+    let opts_capped = Options {
+        rows_limit: Some(2),
+        ..opts_unlimited.clone()
+    };
+    let capped = run_code_health(&db, &opts_capped).expect("capped");
+    assert!(capped.len() <= 2, "rows_limit=2 should truncate output");
+
+    // Each capped row's score MUST match the baseline score for the same path.
+    // If the centrality term were computed over a truncated coupling graph,
+    // these would drift.
+    for row in &capped {
+        let baseline_row = baseline
+            .iter()
+            .find(|b| b.path == row.path)
+            .expect("capped path must be in baseline");
+        assert!(
+            (row.score - baseline_row.score).abs() < 1e-9,
+            "score drift for {}: capped={} baseline={} — rows_limit leaked into centrality?",
+            row.path,
+            row.score,
+            baseline_row.score
+        );
+    }
+}

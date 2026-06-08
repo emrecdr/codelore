@@ -53,11 +53,12 @@ fn source_table(opts: &Options) -> &'static str {
 }
 
 /// Raw coupling candidates SQL builder. Bind values (in order):
-///   1. `max_changeset_size`  (`good_commits` filter)
-///   2. `min_revs`            (per-file revs floor)
-///   3. `min_shared_revs`     (per-pair shared floor)
-///   4. `min_coupling_pct`    (degree threshold)
-///   5. `rows_limit`          (`i64::MAX` = unlimited)
+///  1. `max_changeset_size` — `good_commits` filter
+///  2. `min_revs` — per-file revs floor
+///  3. `min_shared_revs` — per-pair shared floor
+///  4. `min_coupling_pct` — lower degree threshold
+///  5. `max_coupling_pct` — upper degree threshold (pairs above are usually file splits or copy/rename pairs)
+///  6. `rows_limit` — `i64::MAX` means unlimited
 ///
 /// The `src` parameter is one of `"changes"` or `"changes_bucketed"` —
 /// closed-enum-derived, never user input.
@@ -98,6 +99,7 @@ fn build_coupling_sql(src: &str) -> String {
          INNER JOIN file_revs fr_a ON fr_a.path = p.path_a
          INNER JOIN file_revs fr_b ON fr_b.path = p.path_b
          WHERE 100.0 * p.shared / NULLIF((fr_a.revs + fr_b.revs) / 2.0, 0) >= ?
+           AND 100.0 * p.shared / NULLIF((fr_a.revs + fr_b.revs) / 2.0, 0) <= ?
          ORDER BY degree DESC, average_revs DESC, p.path_a ASC, p.path_b ASC
          LIMIT ?"
     )
@@ -171,6 +173,7 @@ pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
                 opts.min_revs,
                 opts.min_shared_revs,
                 opts.min_coupling_pct,
+                opts.max_coupling_pct,
                 row_limit,
             ],
             |r| {

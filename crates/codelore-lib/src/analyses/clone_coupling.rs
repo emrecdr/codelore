@@ -81,7 +81,13 @@ pub fn run_clone_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CloneCoupl
     // `coupling::run_coupling` already applies the Fisher-significance filter
     // and the `max_changeset_size` pre-filter — we lean on that work and
     // just JOIN our clone-family pairs against the results.
-    let coupling_rows = crate::analyses::coupling::run_coupling(db, opts)?;
+    //
+    // CRITICAL: strip `rows_limit` for the inner call. `--rows N` is meant
+    // to cap the FINAL clone-coupling rows the user sees; if it propagated
+    // into `run_coupling`, the inner result would truncate to the top N
+    // global coupling pairs and we'd silently miss every clone whose
+    // partner sits outside that window. See `Options::with_no_row_limit`.
+    let coupling_rows = crate::analyses::coupling::run_coupling(db, &opts.with_no_row_limit())?;
 
     // Index coupling pairs by (file_a, file_b) — both orderings, since clone
     // pairs come from the `clones` self-join with `path_a < path_b` ordering

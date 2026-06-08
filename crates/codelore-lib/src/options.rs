@@ -153,6 +153,25 @@ impl Options {
         serde_json::to_value(&snapshot)
             .expect("Options derives Serialize and all fields are Serialize")
     }
+
+    /// Clone with `rows_limit = None`. Use this WHENEVER a composite analysis
+    /// invokes another analysis as an internal step (e.g. `code-health` and
+    /// `clone-coupling` both invoke `run_coupling` to materialize the global
+    /// coupling graph). Without this wrapper, `--rows 10` flows into the
+    /// inner SQL's `LIMIT ?`, the inner result truncates to the top 10 pairs,
+    /// and the composite result is computed over that arbitrary subset —
+    /// e.g. coupling-centrality scores end up counting partners from a
+    /// 10-pair sliver of the full graph. Worse: `canonical_json` deliberately
+    /// drops `rows_limit` from the cache key (because the user-visible
+    /// row-cap is cosmetic), so the corrupted result gets cached under the
+    /// no-row-limit cache key and poisons subsequent runs.
+    #[must_use]
+    pub fn with_no_row_limit(&self) -> Self {
+        Self {
+            rows_limit: None,
+            ..self.clone()
+        }
+    }
 }
 
 impl Default for Options {
@@ -187,5 +206,43 @@ impl Default for Options {
             time_bucket: None,
             code_maat_compat: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Options;
+
+    #[test]
+    fn with_no_row_limit_clears_rows_limit_only() {
+        let opts = Options {
+            rows_limit: Some(10),
+            min_revs: 7,
+            min_coupling_pct: 42,
+            ..Options::default()
+        };
+        let stripped = opts.with_no_row_limit();
+        assert_eq!(stripped.rows_limit, None, "rows_limit must be cleared");
+        // All other knobs must round-trip unchanged.
+        assert_eq!(stripped.min_revs, 7);
+        assert_eq!(stripped.min_coupling_pct, 42);
+        // Original must be untouched (helper returns a clone).
+        assert_eq!(opts.rows_limit, Some(10));
+    }
+
+    #[test]
+    fn canonical_json_drops_rows_limit_so_caches_hit() {
+        let a = Options {
+            rows_limit: Some(10),
+            ..Options::default()
+        };
+        let b = Options {
+            rows_limit: Some(99),
+            ..Options::default()
+        };
+        // The two Options differ only in a cosmetic field; their canonical
+        // forms must be byte-equal so a cached result hits regardless of
+        // the user's `--rows N` choice.
+        assert_eq!(a.canonical_json(), b.canonical_json());
     }
 }

@@ -125,7 +125,11 @@ const CENTRALITY_DDL: &str = "
 /// Build the centrality temp table from Fisher-significant coupling pairs.
 /// Each path appears once with `centrality = count of pairs that include it`.
 fn materialize_centrality(db: &FactsDb, opts: &Options) -> Result<()> {
-    let pairs = run_coupling(db, opts)?;
+    // `--rows N` MUST NOT propagate into the inner coupling query — the
+    // centrality term needs the FULL coupled-pair graph, not the user's
+    // output truncation. See `Options::with_no_row_limit` for the full
+    // bug narrative.
+    let pairs = run_coupling(db, &opts.with_no_row_limit())?;
 
     // Count Fisher-significant partners per path. Each pair contributes to
     // both endpoints' centrality.

@@ -78,6 +78,61 @@ fn coupling_respects_min_shared_revs() {
     }
 }
 
+/// `max_coupling_pct` was wired through `Options` but the SQL only bound
+/// the lower bound, so `--max-coupling N` was silently ignored. Regression:
+/// assert the upper bound actually filters pairs.
+#[test]
+fn coupling_respects_max_coupling_pct() {
+    let diff_repo = codelore_lib::test_support::differential_repo::build();
+    let repo = GixRepo::open(diff_repo.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+
+    // Baseline: collect ALL pairs (degree >= 0) to find what's there.
+    let opts_all = Options {
+        repo_path: diff_repo.dir.path().to_path_buf(),
+        min_revs: 1,
+        min_shared_revs: 1,
+        min_coupling_pct: 0,
+        max_coupling_pct: 100,
+        fisher_significance: 1.0,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts_all).expect("ingest");
+    let baseline = run_coupling(&db, &opts_all).expect("baseline");
+    let max_observed = baseline.iter().map(|r| r.degree).fold(0.0_f64, f64::max);
+    assert!(
+        max_observed > 0.0,
+        "differential_repo should produce at least one coupled pair with degree > 0; \
+         got {} rows max degree = {max_observed}",
+        baseline.len()
+    );
+
+    // Cap below the observed max — MUST drop at least the top pair.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let cap_pct = (max_observed / 2.0).floor() as u8;
+    let opts_capped = Options {
+        max_coupling_pct: cap_pct,
+        ..opts_all.clone()
+    };
+    let capped = run_coupling(&db, &opts_capped).expect("capped");
+
+    assert!(
+        capped.len() < baseline.len(),
+        "max_coupling_pct={cap_pct} should drop ≥1 pair; baseline={}, capped={}",
+        baseline.len(),
+        capped.len()
+    );
+    for row in &capped {
+        assert!(
+            row.degree <= f64::from(cap_pct),
+            "row degree={} exceeds cap={cap_pct} for {}<->{}",
+            row.degree,
+            row.entity_a,
+            row.entity_b
+        );
+    }
+}
+
 #[test]
 fn coupling_fisher_significance_filter() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
