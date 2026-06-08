@@ -40,6 +40,26 @@ pub fn materialize_if_needed(db: &FactsDb, opts: &Options) -> Result<()> {
     Ok(())
 }
 
+/// Unified source-table materialiser that honours BOTH `--time-bucket` AND
+/// `--use-canonical-lineage`. Call this once at the top of an analysis;
+/// follow up with [`source_table`] for the FROM clause.
+///
+/// Composition: when both flags are set, the lineage view is materialised
+/// first and bucketing happens on top, so rename ancestry survives the
+/// temporal collapse.
+///
+/// # Errors
+///
+/// Returns [`crate::CodeLoreError::Analysis`] on materialise failure.
+pub fn materialize_source(db: &FactsDb, opts: &Options) -> Result<()> {
+    if let Some(bucket) = opts.time_bucket {
+        crate::facts::ingest::materialize_changes_bucketed(db, bucket, opts.use_canonical_lineage)?;
+    } else if opts.use_canonical_lineage {
+        crate::facts::ingest::materialize_changes_lineage(db)?;
+    }
+    Ok(())
+}
+
 /// Substitute every standalone `FROM changes` / `JOIN changes` in `sql` with
 /// the lineage-resolved source table when `opts.use_canonical_lineage` is on.
 ///

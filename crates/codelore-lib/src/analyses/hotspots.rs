@@ -96,12 +96,11 @@ pub const SQL: &str = "
 
 pub fn run_hotspots(db: &FactsDb, opts: &Options) -> Result<Vec<HotspotRow>> {
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
-    let src = if opts.use_canonical_lineage {
-        crate::facts::ingest::materialize_changes_lineage(db)?;
-        "changes_lineage"
-    } else {
-        "changes"
-    };
+    // Unified dispatch: honours both --time-bucket and --use-canonical-lineage,
+    // including the composition where both flags are on (bucketing of the
+    // lineage-resolved view).
+    crate::analyses::lineage::materialize_source(db, opts)?;
+    let src = crate::analyses::lineage::source_table(opts);
     let sql = build_sql(src);
     if opts.explain {
         let plan = db.explain_sql(&sql, params![opts.min_revs, row_limit])?;

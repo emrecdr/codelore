@@ -150,15 +150,10 @@ fn fisher_two_tail(shared: u32, revs_a: u32, revs_b: u32, total: u32) -> Option<
 ///
 /// Returns [`CodeLoreError::Analysis`] on any SQL error.
 pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
-    // Source-table dispatch (precedence: --time-bucket > canonical lineage > raw):
-    //   --time-bucket active → materialize `changes_bucketed`
-    //   canonical lineage on → materialize `changes_lineage`
-    //   neither              → query `changes` directly
-    if let Some(bucket) = opts.time_bucket {
-        crate::facts::ingest::materialize_changes_bucketed(db, bucket)?;
-    } else if opts.use_canonical_lineage {
-        crate::facts::ingest::materialize_changes_lineage(db)?;
-    }
+    // Unified dispatch: --time-bucket > canonical lineage > raw. When both
+    // bucketing and lineage are on, lineage is materialised first and
+    // bucketing happens on top so rename ancestry survives.
+    crate::analyses::lineage::materialize_source(db, opts)?;
     let src = source_table(opts);
 
     // Total commits after the max_changeset_size pre-filter — denominator for

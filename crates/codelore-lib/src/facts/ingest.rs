@@ -597,11 +597,23 @@ fn append_change(app: &mut Appender<'_>, rev: &str, ch: &crate::FileChange) -> R
 pub fn materialize_changes_bucketed(
     db: &super::FactsDb,
     bucket: super::super::options::TimeBucket,
+    use_lineage: bool,
 ) -> Result<()> {
     use duckdb::params;
     let unit = bucket.as_sql_unit();
-    // unit comes from a closed enum (Day/Week/Month) so the format!
-    // interpolation is safe — no user-controlled input.
+    // When canonical lineage is on, bucket on top of the lineage-resolved
+    // view so rename ancestry survives the temporal collapse. Without this,
+    // a renamed file's pre- and post-rename commits aggregate under
+    // separate paths inside the same bucket — the composition bug §2.1
+    // flagged by the 2026-06-09 deep-analysis report.
+    let src = if use_lineage {
+        materialize_changes_lineage(db)?;
+        "changes_lineage"
+    } else {
+        "changes"
+    };
+    // unit + src come from closed enums / a small set of literals so the
+    // format! interpolation is safe (no user-controlled input).
     let sql = format!(
         "CREATE OR REPLACE TEMPORARY TABLE changes_bucketed AS \
          SELECT \
@@ -612,14 +624,14 @@ pub fn materialize_changes_bucketed(
              ANY_VALUE(c.similarity) AS similarity, \
              SUM(c.loc_added)::INTEGER AS loc_added, \
              SUM(c.loc_deleted)::INTEGER AS loc_deleted \
-         FROM changes c \
+         FROM {src} c \
          INNER JOIN commits m ON m.rev = c.rev \
          GROUP BY date_trunc('{unit}', m.date), c.path"
     );
     db.conn().execute(&sql, params![]).map_err(|e| {
         CodeLoreError::Analysis(format!("materialize changes_bucketed ({unit}): {e}"))
     })?;
-    tracing::info!("materialized changes_bucketed at {unit} granularity");
+    tracing::info!("materialized changes_bucketed at {unit} granularity (lineage={use_lineage})");
     Ok(())
 }
 

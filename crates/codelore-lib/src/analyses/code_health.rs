@@ -169,12 +169,9 @@ pub fn run_code_health(db: &FactsDb, opts: &Options) -> Result<Vec<CodeHealthRow
     // centrality term silently).
     materialize_centrality(db, opts)?;
 
-    let src = if opts.use_canonical_lineage {
-        crate::facts::ingest::materialize_changes_lineage(db)?;
-        "changes_lineage"
-    } else {
-        "changes"
-    };
+    // Unified dispatch honours both --time-bucket and --use-canonical-lineage.
+    crate::analyses::lineage::materialize_source(db, opts)?;
+    let src = crate::analyses::lineage::source_table(opts);
     let sql = SQL.replace("{src}", src);
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
     let mut stmt = db
