@@ -16,3 +16,27 @@ coverage/
 
 # Misc generated artifacts
 flamegraph.svg
+
+# devt workflow state
+.devt/state/
+
+# devt agent persistent memory (per-project)
+.claude/agent-memory/
+
+# devt memory FTS5 index (regenerable from markdown)
+.devt/memory/index.db
+
+# devt memory auto-index debounce marker (transient)
+.devt/memory/.auto-index-stamp
+
+# devt MCP tool-call trace
+.devt/memory/_mcp-trace.jsonl
+
+# devt memory export bundles (transient — share via explicit channel)
+.devt/memory/export-*.json
+
+# Graphify ephemeral cache
+graphify-out/cache/
+
+# Graphify per-machine manifest
+graphify-out/manifest.json
