@@ -11,6 +11,11 @@ on:
       - 'LICENSE'
       - '.gitignore'
   pull_request:
+  # Manual re-trigger via `gh workflow run CI` or the Actions UI. Useful
+  # when a tagged commit needs CI verification (tags don't fire `push`) or
+  # when an earlier run was cancelled and an empty commit can't re-trigger
+  # because of the `paths-ignore` filter above.
+  workflow_dispatch:
 
 # Cancel superseded runs for the same ref. For PRs this means each new push
 # cancels the in-flight CI for the previous push. For main, sequential
