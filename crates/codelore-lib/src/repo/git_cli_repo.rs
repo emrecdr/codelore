@@ -97,14 +97,22 @@ impl Repo for GitCliRepo {
         // Walk-time mailmap resolution. Matches GixRepo's gix-mailmap pass
         // so the two walkers produce identical `canonical_author` columns
         // on the same fixture — the differential parity tests depend on
-        // it. Cache by raw email so we only spawn `git check-mailmap` once
-        // per unique author (N events, M ≤ N unique authors).
-        let mut mailmap_cache: std::collections::HashMap<String, String> =
+        // it. Cache by (name, email) pair so we only spawn `git check-mailmap`
+        // once per unique identity (N events, M ≤ N unique identities).
+        // The cache key includes name because `.mailmap` name+email rules
+        // mean a single email can resolve differently for different names.
+        let mut mailmap_cache: std::collections::HashMap<(String, String), String> =
             std::collections::HashMap::new();
         for event in &mut events {
+            // Cache key INCLUDES author_name now — a single email can resolve
+            // differently depending on the name it ships with (when the
+            // `.mailmap` uses the name+email rule form). Sharing a single
+            // cache entry across all (name, email) pairs that share an email
+            // would silently apply one name's resolution to all of them.
+            let cache_key = (event.author_name.clone(), event.author_email.clone());
             let canonical = mailmap_cache
-                .entry(event.author_email.clone())
-                .or_insert_with(|| self.resolve_alias(&event.author_email))
+                .entry(cache_key)
+                .or_insert_with(|| self.resolve_alias(&event.author_name, &event.author_email))
                 .clone();
             // Only flag a canonical when it actually differs from the raw
             // email — keeping `None` for non-aliased authors mirrors gix's
@@ -150,8 +158,24 @@ impl Repo for GitCliRepo {
         Ok(parse_hunk_headers(&raw))
     }
 
-    fn resolve_alias(&self, email: &str) -> String {
-        let arg = format!("<{email}>");
+    fn resolve_alias(&self, name: &str, email: &str) -> String {
+        // `git check-mailmap` accepts either `<email>` (email-only match) or
+        // `Name <email>` (name+email match). Passing the full identity lets
+        // `.mailmap` rules of the form
+        //
+        //     Canonical Name <canonical@email> Old Name <old@email>
+        //
+        // resolve correctly. Earlier this method passed only `<{email}>`,
+        // matching email-only rules but silently missing name+email rules
+        // — diverging from `GixRepo::walk_commits`'s inline resolution and
+        // breaking cross-walker parity on any `.mailmap` that used the
+        // 4-token form. If `name` is empty, fall back to the `<email>`
+        // form (matches git's own behaviour for nameless contacts).
+        let arg = if name.is_empty() {
+            format!("<{email}>")
+        } else {
+            format!("{name} <{email}>")
+        };
         let Ok(output) = Command::new("git")
             .args(["check-mailmap", &arg])
             .current_dir(&self.root)

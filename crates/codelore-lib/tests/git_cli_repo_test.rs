@@ -62,7 +62,7 @@ fn git_cli_repo_walk_commits_have_required_fields() {
 fn git_cli_repo_resolve_alias_returns_input_on_no_match() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
     let repo = GitCliRepo::open(tiny.dir.path()).expect("open");
-    let resolved = repo.resolve_alias("unmapped@example.com");
+    let resolved = repo.resolve_alias("", "unmapped@example.com");
     assert_eq!(resolved, "unmapped@example.com");
 }
 
@@ -85,7 +85,7 @@ fn git_cli_repo_resolve_alias_with_mailmap() {
     run_git(path, &["commit", "-m", "init", "--quiet"]);
 
     let repo = GitCliRepo::open(path).expect("open");
-    let canonical = repo.resolve_alias("alice@old.com");
+    let canonical = repo.resolve_alias("", "alice@old.com");
     assert_eq!(canonical, "alice@real.com", "mailmap should map old → real");
 }
 

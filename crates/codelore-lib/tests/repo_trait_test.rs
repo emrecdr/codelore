@@ -37,6 +37,6 @@ fn _trait_object_compiles<R: Repo>(r: &R) {
     > = r.walk_commits(&opts);
     let _: codelore_lib::Result<Vec<codelore_lib::FileChange>> = r.changed_files("abc");
     let _: codelore_lib::Result<Vec<codelore_lib::Hunk>> = r.diff_hunks("abc", "src/main.rs");
-    let _: String = r.resolve_alias("a@b.com");
+    let _: String = r.resolve_alias("Some Name", "a@b.com");
     let _: codelore_lib::Result<CommitMetadata> = r.commit_metadata("abc");
 }

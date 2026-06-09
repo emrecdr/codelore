@@ -39,102 +39,64 @@ graph TD
 
 ---
 
-## 2. Newly Identified Critical Gaps & Recommendations
+## 2. Newly Identified Gaps & Recommendations
 
-### 🚨 Correctness Bug (Regression): CLI Exit Code Mismatch on Pre-flight Failures
+### 🚨 Correctness Bug: `GitCliRepo` Mailmap Name+Email Parity Gap
 
 **The Problem**:
-In the recently introduced pre-flight banner validation inside [main.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-cli/src/main.rs#L741-L843), checks for repository path presence (`!args.repo.exists()`), empty repository (`repo.head_sha()`), and output directory writability (`!parent.exists()`) return generic `anyhow::Error`s via `anyhow::bail!`. Because these errors are not typed or wrapped in `codelore_lib::CodeLoreError` (e.g. `CodeLoreError::Repo` or `CodeLoreError::Output`), the CLI's `main` exit code mapping logic falls back to exit code `1` instead of returning code `3` (for repository errors) or `5` (for output/I/O errors). This breaks the `invalid_repo_exits_with_code_3` integration test and violates spec §6.6.
+In [git_cli_repo.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/repo/git_cli_repo.rs#L107), `GitCliRepo` resolves author aliases during commit walking by calling `self.resolve_alias(&event.author_email)`. The `resolve_alias` function format-wraps ONLY the email address as `<{email}>` and runs `git check-mailmap`.
+However, `GixRepo` resolves mailmap aliases inside [gix_repo.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/repo/gix_repo.rs#L147) using a `gix::actor::SignatureRef` which contains **both** the author's name and email address.
 
 **The Impact**:
-Tool orchestrators, scripts, and test environments expecting standardized exit codes receive `1` on pre-flight errors, causing validation failures and breaking backwards-compatibility.
+For `.mailmap` rules that match on name-and-email combinations (e.g., `Canonical Name <canonical@email.com> Old Name <old@email.com>`), `GixRepo` matches the rule successfully using the name, whereas `GitCliRepo` passes only the email and fails to match the rule. This leads to a differential testing mismatch where `GitCliRepo` and `GixRepo` produce different canonical authors for the same commit history.
 
 **Recommended Fix**:
-In [main.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-cli/src/main.rs), return `Err(codelore_lib::CodeLoreError::Repo(...).into())` or `Err(codelore_lib::CodeLoreError::Output(...).into())` instead of utilizing `anyhow::bail!`.
+Modify the `resolve_alias` signature (or introduce a new identity resolution method) in the [Repo](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/repo/mod.rs) trait to accept both name and email, and change `GitCliRepo` to call `git check-mailmap` passing the full formatted `"Name <email>"` identity.
 
 ---
 
-### 🚨 Correctness Bug: Rename Lineage CTE Ignores Chronological Ordering on Name Reuse
+### 🚨 Correctness / Functional Bug: Nested Functions Ignored in Clones Analysis AST Walk
 
 **The Problem**:
-In [ingest.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/facts/ingest.rs#L735-L767), the `materialize_path_lineage` function builds a rename graph via a recursive CTE `lineage` that joins on `c.rename_from = l.current`. However, it does not join on or filter by the commit date/chronology. If a filename is reused over time (e.g., file `A` is renamed to `B` in commit 1, and much later in commit 10 a new/different file `C` is renamed to `A`), the recursive query joins the lineage of `C` with the historical rename of `A -> B`, producing a false lineage trace of `C -> A -> B`.
-
-**The Impact**:
-Rename-aware aggregations will erroneously merge the metrics/revision counts of chronologically distinct files that happened to share a recycled path, distorting hotspot scoring and change coupling.
-
-**Recommended Fix**:
-Incorporate commit ordering/dates in `materialize_path_lineage`'s recursive join to ensure that renames are only joined if the destination rename occurred chronologically after the current path's introduction.
-
----
-
-### ⚡ Performance Bottleneck: `GixRepo` Walk Lacks Date-Filter Pruning
-
-**The Problem**:
-In [gix_repo.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/repo/gix_repo.rs#L24-L83), applying `after` and `before` date filters requires walking the entire repository commit history (`repo.rev_walk([head]).all()`) and checking each commit's date in Rust. In contrast, the `GitCliRepo` oracle passes date filters directly to `git log` (e.g. `--after`), letting Git prune the commit graph traversal.
-
-**The Impact**:
-For large repositories with hundreds of thousands of commits, running an analysis with a date filter (e.g., `--after 2026-06-01` to check the last week) takes virtually the same time as walking the entire repo history, negating the expected performance gain of date filtering.
-
-**Recommended Fix**:
-Leverage gitoxide's graph-filtering/pruning facilities in `GixRepo::walk_commits` to cut off or prune the traversal once commits fall outside the requested date range, rather than loading every historic commit object.
-
----
-
-### ⚠️ Usability Issue: Inconsistent short-circuit for Clones analysis in non-CSV formats
-
-**The Problem**:
-In [main.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-cli/src/main.rs#L173-L181), there is a short-circuit for `clones` analysis:
+In the tree-sitter walk inside [extractor.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/clones/extractor.rs#L51-L88), the `visit` function returns early immediately upon hitting any function-like node kind (e.g., `function_item` in Rust, `function_definition` in Python):
 ```rust
-if matches!(analysis, AnalysisName::Clones) && format == "csv" {
-    let rows = codelore_lib::analyses::clones::run_clones(&opts).context("run clones")?;
-    codelore_lib::output::csv::write_clones_csv(&rows, &mut out).context("write csv")?;
-    return Ok(());
-}
+    if func_kinds.contains(node.kind()) {
+        ...
+        out.push(FunctionFingerprint { ... });
+        return; // Early return prevents traversing subtree
+    }
 ```
-This short-circuit bypasses opening the git repo and history ingestion completely because `clones` is a head-only filesystem walk.
-However, this check is only active when `format == "csv"`. If the user requests `json`, `markdown`, or `sarif` formats for `clones` analysis, it falls through to the normal path, which opens and ingests the repository.
+Although the comment suggests that nested functions become separate entries via an outer-loop walk, there is actually no outer walk. The early return completely stops traversal for that subtree.
 
 **The Impact**:
-Running clones analysis in formats other than CSV unnecessarily takes much longer (opening/ingesting the git repo history), and fails completely in non-git directories, even though clones analysis does not use git history.
+Any helper functions, nested functions, or closures defined inside the body of an outer function are completely skipped and are not extracted as separate clone candidates.
 
 **Recommended Fix**:
-Modify the short-circuit in `main.rs` to trigger for `AnalysisName::Clones` regardless of `format`, and match on `format` within the short-circuit block to write output using the corresponding clones emitter (`write_clones_csv`, `write_clones_json`, `write_clones_markdown`, `write_clones_sarif`).
+Rather than returning early, continue traversing the children nodes (or specifically search the function body's subtree) for nested function declarations, while ensuring that the outer function's fingerprint sequence still captures them as structure.
 
 ---
 
-### ⚠️ Cache Invalidation Gap: Missing checks for dirty working trees
+### ⚠️ Robustness Issue: Query Rewriter Heuristics Vulnerable to Case Discrepancies
 
 **The Problem**:
-The cache key (computed in `cache_key` in [cache.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/cache.rs#L30)) is derived from the repository path, HEAD SHA, options/knobs, package version, and schema version. It does NOT include any status of the working tree (whether there are uncommitted/unstaged changes, or a hash of the working tree files).
+The regex-based query rewriter in [lineage.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/analyses/lineage.rs#L93) identifies table aliases using a case-based heuristic:
+```rust
+let needs_alias = next.is_empty() || next.chars().next().is_some_and(char::is_uppercase);
+```
+It assumes that keywords following `FROM changes` (e.g. `GROUP BY`, `WHERE`) are capitalized.
 
 **The Impact**:
-If a user runs `codelore analyze` on a repository with uncommitted changes, they get an analysis of the dirty files. If they then modify the files further (without committing) and run `codelore analyze` again, the cache key remains identical because the HEAD SHA has not changed. The cache hit opens the read-only cached DuckDB file, returning stale metrics that do not reflect the new working tree modifications.
+If any SQL query uses lowercase keywords (e.g., `from changes group by`), the rewriter will classify `group` as a table alias, rewriting the query to `FROM changes_lineage group BY ...`, which leads to DuckDB parsing/syntax errors.
 
 **Recommended Fix**:
-Incorporate a fast check of worktree dirtiness (e.g. checking git status or checking mtimes of the monitored directories) or have the CLI warn the user or optionally invalidate cache entries when local modifications are detected.
+Improve the rewriter heuristic by explicitly matching against known SQL keywords case-insensitively, rather than relying on character case rules.
 
 ---
 
-### ⚠️ Functional Gap: Inconsistent Rename-Awareness in `communication` Analysis
+## Summary of Active Findings
 
-**The Problem**:
-The Conway's law shared-work author pairs analysis (`communication` analysis) aggregates paths to find co-authorship on the same files (`COUNT(DISTINCT a.path) AS shared`). However, unlike other path-aggregating analyses (e.g. `entity_effort`, `messages`, `ownership`), `run_communication` in [communication.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/analyses/communication.rs#L62) does NOT materialize the canonical lineage view (`materialize_source`) or call `rewrite` on the SQL query.
-
-**The Impact**:
-If a file was renamed, edits before and after the rename are treated as edits to different files (`src/old.rs` vs `src/new.rs`). Therefore, two authors who co-edited the same file (one before the rename, one after) will not be counted as having a shared file in the communication analysis, underestimating the team's shared work.
-
-**Recommended Fix**:
-Make `communication` analysis rename-aware by materializing the lineage source and rewriting the SQL query inside `run_communication` (similar to how `entity_effort` or `ownership` does it).
-
----
-
-## Summary of Findings
-
-| Category | Finding / Improvement Point | Priority / Risk | Impact | Status / Fix |
+| Category | Finding / Improvement Point | Priority / Risk | Impact | Status |
 |---|---|---|---|---|
-| **Correctness** | Pre-flight error handling returns exit code `1` instead of `3`/`5` due to generic `anyhow::bail!`. | **High** / Medium | Fails `invalid_repo_exits_with_code_3` test; violates exit code spec §6.6. | **Fixed** (Unreleased — pre-flight bails now return typed `CodeLoreError::Repo` / `Output` so `main()`'s chain-walk picks them up) |
-| **Correctness** | Rename lineage CTE ignores chronological ordering, tracing spurious lineages on path reuse. | **High** / Medium | Distorts analysis metrics for recycled paths. | **Fixed** (Unreleased — `materialize_path_lineage` CTE joins `commits.date` and constrains recursion with `co.date > l.current_date`) |
-| **Performance** | `GixRepo` date-range walk filters in memory instead of pruning graph traversal. | **Medium** / Low | Walking with `--after`/`--before` is slow on large history repos. | **Fixed** (Unreleased — `--after` now uses gix `Sorting::ByCommitTimeCutoff` for graph pruning; `--before` retains the in-memory filter since gix has no symmetric primitive) |
-| **Usability** | `clones` analysis only short-circuits repository walk/ingest for CSV format. | **Medium** / Low | JSON/Markdown/SARIF clones runs are slow and fail in non-git dirs. | **Fixed** (Unreleased — short-circuit guard now covers all 4 supported formats: csv/json/markdown/sarif) |
-| **Caching** | Caching system does not track worktree dirtiness (uncommitted modifications). | **Medium** / Low | Stale cached analysis results on subsequent runs in dirty repositories. | **Fixed** (Unreleased — cache hits on dirty worktrees emit a `tracing::warn!` pointing the user at `--no-cache`; uses gix `Repository::status` for `GixRepo` and `git status --porcelain` for `GitCliRepo`. Auto-invalidation via worktree-hash deferred — adding bytes to the cache key on every run carries a perf cost the warn approach avoids.) |
-| **Functional** | `communication` analysis does not support canonical rename lineage tracking. | **Low** / Low | Misses co-authorship on renamed files. | **Fixed** (Unreleased — added `materialize_if_needed` + `lineage::rewrite` pair mirroring peer analyses) |
+| **Correctness** | `GitCliRepo` calls `git check-mailmap` with only email, missing Name+Email mailmap rules matched by `GixRepo`. | **High** / Medium | Causes mismatch between backends on complex mailmaps. | **Fixed** (Unreleased — `Repo::resolve_alias` trait now takes `(name, email)`; both impls fixed; new mailmap test + differential parity test extended with paired-name probes) |
+| **Correctness** | Clones AST extraction skips recursing into function bodies, ignoring nested/inner helper functions. | **High** / Medium | Misses inner/nested function clones entirely. | **Fixed** (Unreleased — removed the early `return;` in `clones/extractor.rs::visit`; nested helpers now get separate fingerprint entries; existing outer-level clone detection unchanged) |
+| **Robustness** | Query rewriter regex assumes uppercase SQL keywords, breaking on lowercase syntax. | **Low** / Low | Potential parser/syntax errors for lowercase queries. | **Active — deferred to v0.1.4** (theoretical: all current SQL uses uppercase keywords; no live trigger; latent risk if future contributor adds lowercase SQL. Fix is a case-insensitive keyword whitelist in the regex post-processing.) |

@@ -130,24 +130,35 @@ fn walk_commits_per_commit_fields_match() {
     }
 }
 
-/// `resolve_alias` must return identical canonical emails for all tested addresses.
+/// `resolve_alias` must return identical canonical emails for all tested
+/// (name, email) pairs. Both an empty-name probe (exercises email-only
+/// `.mailmap` rules) and a paired-name probe (exercises name+email rules)
+/// are tested — the v0.1.3 trait-signature change added the `name`
+/// parameter to close the previously-asymmetric GixRepo/GitCliRepo gap.
 #[test]
 fn resolve_alias_matches() {
     let (gix, cli) = open_both();
 
-    for email in [
-        "alice-old@example.com",
-        "bob-aliased@example.com",
-        "c.lee@example.com",
-        "unmapped@example.com",
-        "canonical-alice@example.com",
-        "49699333+dependabot[bot]@users.noreply.github.com",
-    ] {
-        let gix_result = gix.resolve_alias(email);
-        let cli_result = cli.resolve_alias(email);
+    let probes: &[(&str, &str)] = &[
+        ("", "alice-old@example.com"),
+        ("", "bob-aliased@example.com"),
+        ("", "c.lee@example.com"),
+        ("", "unmapped@example.com"),
+        ("", "canonical-alice@example.com"),
+        ("", "49699333+dependabot[bot]@users.noreply.github.com"),
+        // Paired-name probes — both backends must agree whether the .mailmap
+        // matches name+email rules. Even if the fixture has no name+email
+        // rules, the parity invariant (identical output) must still hold.
+        ("Alice Old", "alice-old@example.com"),
+        ("Bob Bot", "bob-aliased@example.com"),
+    ];
+
+    for (name, email) in probes {
+        let gix_result = gix.resolve_alias(name, email);
+        let cli_result = cli.resolve_alias(name, email);
         assert_eq!(
             gix_result, cli_result,
-            "resolve_alias({email:?}) mismatch: gix={gix_result:?} cli={cli_result:?}"
+            "resolve_alias({name:?}, {email:?}) mismatch: gix={gix_result:?} cli={cli_result:?}"
         );
     }
 }

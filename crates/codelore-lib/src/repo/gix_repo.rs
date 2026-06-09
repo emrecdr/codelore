@@ -178,16 +178,19 @@ impl Repo for GixRepo {
         Ok(vec![]) // Plan 4 lands real hunk extraction
     }
 
-    fn resolve_alias(&self, email: &str) -> String {
+    fn resolve_alias(&self, name: &str, email: &str) -> String {
         use gix::bstr::ByteSlice as _;
 
         let repo = self.inner.to_thread_local();
         let mailmap = repo.open_mailmap();
 
-        // Build a minimal SignatureRef: empty name, the email under test, and a
-        // dummy time string (gix_actor::SignatureRef::time is &str, not parsed).
+        // Pass the actual author name (not `b""`) so name+email mailmap
+        // entries match. Earlier versions of this method built the
+        // SignatureRef with an empty name, which only matched email-only
+        // rules — the same blind spot that bit `GitCliRepo::walk_commits`
+        // and motivated the trait signature change.
         let sig_ref = gix::actor::SignatureRef {
-            name: b"".as_bstr(),
+            name: name.as_bytes().as_bstr(),
             email: email.as_bytes().as_bstr(),
             time: "0 +0000",
         };

@@ -70,11 +70,17 @@ fn visit(
             end_line,
             fingerprint,
         });
-        // Don't recurse into a function — nested functions become separate
-        // entries via the outer-loop walk that follows. Closures inside a
-        // function body are intentionally captured at their definition site
-        // here so the outer function's fingerprint includes them.
-        return;
+        // Fall through (no `return`) so the recursion below ALSO descends
+        // into this function's body. Earlier this site returned early with
+        // a comment claiming an outer-loop walk would pick up nested
+        // function definitions — there is no such outer walk; nested
+        // helpers (Python `def` inside `def`, JS closures, Rust
+        // `fn outer() { fn helper() { ... } }`) were silently invisible
+        // to clone detection. The outer function's own fingerprint
+        // (computed above via `walk_preorder_internal`) already includes
+        // the nested function's structure as part of its sequence — so
+        // emitting nested entries is purely additive, never regresses
+        // outer-level clone detection.
     }
     let mut cursor = node.walk();
     if cursor.goto_first_child() {

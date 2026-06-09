@@ -80,6 +80,18 @@ Before bumping the version, every item must be true:
 
 ### Cut a release
 
+**Recommended: use the `scripts/cut-release.sh` helper.** It codifies the full procedure (pre-flight checks, version bump, CHANGELOG flip, lockfile sync, sanity build, CI gate, the `disable-ruleset → tag → restore` dance with `trap EXIT` cleanup) into one idempotent script:
+
+```bash
+./scripts/cut-release.sh X.Y.Z              # full cut
+./scripts/cut-release.sh X.Y.Z --dry-run    # preview — refuses to take any state-changing action
+./scripts/cut-release.sh X.Y.Z --skip-ci-wait   # re-attempt after CI already green
+```
+
+The script refuses to proceed unless all of: working tree clean, on `main`, in sync with `origin/main`, target tag doesn't exist yet, `X.Y.Z` parses as digit-only semver, `CHANGELOG.md [Unreleased]` has content, `gh` CLI authenticated. The `trap EXIT` registered ruleset-restore runs on ANY exit path (success, error, ^C) so the `protect-release-tags` ruleset is never left disabled.
+
+### Manual procedure (if the script isn't available — emergency fallback only)
+
 ```bash
 # 1. Bump the workspace version
 #    Edit Cargo.toml: [workspace.package].version = "X.Y.Z"
@@ -97,11 +109,34 @@ cargo fmt --all --check
 git add Cargo.toml Cargo.lock CHANGELOG.md
 git commit -m "release: vX.Y.Z"
 
-# 5. Tag the release (signed; release-pipeline triggers on any `v*` tag)
-git tag -s vX.Y.Z -m "vX.Y.Z"
+# 5. Push commit + wait for CI green on it (required by the ruleset)
+git push origin main
+gh run watch $(gh run list --limit 1 --branch main --workflow CI --json databaseId --jq '.[0].databaseId') --exit-status
 
-# 6. Push commit + tag together
-git push --follow-tags
+# 6. Tag the release (annotated; release-pipeline triggers on any `v*` tag)
+git tag -a vX.Y.Z -m "vX.Y.Z"
+
+# 7. Push tag — see "Tag push ruleset dance" below for why this can fail
+git push origin vX.Y.Z
+```
+
+### Tag push ruleset dance
+
+The `protect-release-tags` ruleset requires green status checks on the target commit before a tag-creation push is accepted. GitHub's Check Runs API (what GitHub Actions writes to) and the older Commit Status API don't always cross-talk reliably even with the `integration_id: 15368` (GitHub Actions app) hint set on the ruleset's `required_status_checks` parameters. So tag pushes sometimes fail with `remote: 6 of 6 required status checks are expected.` even when all 6 checks are visibly green on the target commit.
+
+**Fix when this happens:** temporarily disable the ruleset, push the tag, restore the ruleset. `scripts/cut-release.sh` does this automatically via `trap EXIT`. Manual:
+
+```bash
+gh api -X PUT repos/emrecdr/codelore/rulesets/17437461 --input - <<'JSON'
+{ "name": "protect-release-tags", "target": "tag", "enforcement": "disabled",
+  "conditions": { "ref_name": { "include": ["refs/tags/v*"], "exclude": [] } },
+  "rules": [ { "type": "deletion" }, { "type": "non_fast_forward" } ] }
+JSON
+
+git push origin vX.Y.Z
+
+# Restore — see scripts/cut-release.sh's restore_ruleset() function for the
+# canonical body to re-PUT. Always run this before exiting the shell.
 ```
 
 ### What the tag push triggers

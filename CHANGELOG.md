@@ -4,6 +4,44 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Fixed — additional correctness findings surfaced post-v0.1.2
+
+- **`Repo::resolve_alias` now accepts `(name, email)` so `.mailmap` name+email
+  rules resolve in both walkers (NEW-A).** `.mailmap` supports two rule
+  shapes: 3-token `Canonical Name <canonical@email> <old@email>` (email-only
+  match) and 4-token `Canonical Name <canonical@email> Old Name <old@email>`
+  (name+email match). Earlier, the trait method took only `email` — both
+  `GixRepo` (passed `name: b""` to gix's SignatureRef) and `GitCliRepo`
+  (passed `<email>` to `git check-mailmap`) silently missed all 4-token
+  rules. The bug was invisible because `GixRepo::walk_commits` had its OWN
+  inline mailmap resolution that already passed the actual author name —
+  so `GixRepo::walk_commits` and `GitCliRepo::walk_commits` diverged on any
+  real `.mailmap` using the 4-token form. Differential test fixtures didn't
+  exercise 4-token rules, so the divergence shipped quietly. Trait signature
+  is now `fn resolve_alias(&self, name: &str, email: &str) -> String`;
+  callers pass `event.author_name` alongside the email. `GitCliRepo`'s
+  per-event mailmap cache key extended to `(name, email)` to avoid silently
+  sharing one resolution across distinct identities that happen to share
+  an email. New test `mailmap_name_plus_email_rule_resolves` exercises both
+  forms; the existing `differential_repo_test::resolve_alias_matches` now
+  iterates over `(name, email)` pairs and asserts parity for both
+  empty-name and paired-name probes.
+
+- **Clone-extractor recursion descends into function bodies so nested
+  helpers get their own fingerprints (NEW-B).** The tree-sitter walker in
+  `clones/extractor.rs::visit` used to `return;` immediately after
+  emitting a function's fingerprint — a comment claimed "nested functions
+  become separate entries via the outer-loop walk that follows", but no
+  such outer walk existed. The early return silently dropped every nested
+  function/closure/IIFE from clone detection. For Python (`def` inside
+  `def`), JavaScript (closures everywhere), and Rust (`fn outer() { fn
+  helper() { ... } }`), this missed real clone families. The fix removes
+  the `return;` so recursion descends into the function body and extracts
+  nested fingerprints additively — the outer function's own fingerprint
+  is unchanged (still computed via the same `walk_preorder_internal`
+  pre-traversal that captures nested structure as part of its sequence),
+  so existing clone-pair detection at the outer level is not regressed.
+
 ### Fixed — correctness + performance (closes the v0.1.2 deferred findings)
 
 - **Cache hits on dirty working trees now emit a warning (F3).** The persistent

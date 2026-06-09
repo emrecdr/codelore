@@ -23,8 +23,25 @@ pub trait Repo: Send + Sync {
     /// Hunks within one (commit, path) pair.
     fn diff_hunks(&self, rev: &str, path: &str) -> Result<Vec<Hunk>>;
 
-    /// .mailmap-aware author email canonicalization.
-    fn resolve_alias(&self, email: &str) -> String;
+    /// `.mailmap`-aware author identity canonicalization. Returns the canonical
+    /// email for the given (name, email) pair after applying any matching
+    /// `.mailmap` rule.
+    ///
+    /// `name` and `email` are BOTH significant — `.mailmap` supports two
+    /// rule formats:
+    ///   - `Canonical Name <canonical@email> <old@email>`        (email-only match)
+    ///   - `Canonical Name <canonical@email> Old Name <old@email>` (name+email match)
+    ///
+    /// Email-only matches succeed even with `name = ""`, but name+email
+    /// matches REQUIRE the caller to pass the actual author name. Earlier
+    /// versions of this trait passed only `email`; the differential test
+    /// fixtures didn't include name+email rules so the bug was invisible —
+    /// real repos with `.mailmap` files using the name+email form had
+    /// `GitCliRepo` and `GixRepo` produce different canonical authors for
+    /// the same commit (`GixRepo::walk_commits` has its own inline
+    /// resolution that already passes name+email, while `GitCliRepo::walk_commits`
+    /// went through this trait method).
+    fn resolve_alias(&self, name: &str, email: &str) -> String;
 
     /// Commit metadata not in `CommitEvent` (signed-by, signoffs).
     fn commit_metadata(&self, rev: &str) -> Result<CommitMetadata>;
