@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-06-09
+
 ### Fixed — correctness defects discovered post-v0.1.0
 
 - **`.codelorebots` extension hook wired into production (previously dead code).** `BotPatterns::from_repo()` existed and was unit-tested, but the production ingest pipeline called the free `identity::is_bot()` / `identity::ai_attribution()` functions that only consulted `DEFAULT_BOT_PATTERNS`. User-configured patterns from `<repo>/.codelorebots` were silently ignored — internal/custom bots were classified as `human` instead of `ai-authored`, polluting author counts and contribution metrics. `ingest()` now loads `BotPatterns::from_repo(&opts.repo_path)` once and passes it into `ingest_loop`, which routes both the bot flag (used by `author_aliases`) AND ai_attribution through the user-extensible patterns. Added `ai_attribution_with(patterns, …)` as the variant that honors `BotPatterns`.
