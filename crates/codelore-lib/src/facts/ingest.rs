@@ -110,7 +110,11 @@ impl FactsDb {
         use crate::complexity::{Tier1Language, compute_for_file};
         use rayon::prelude::*;
 
-        let path_rows = query_live_paths(self)?;
+        let live_paths = query_live_paths(self)?;
+        // One HEAD rev shared by every row written in this pass — semantically
+        // correct (the complexity was measured against THIS commit, not against
+        // a per-path lex-max-of-SHA approximation).
+        let head_rev = current_head_rev(self)?;
 
         // ── Parallel pass ────────────────────────────────────────────────────────
         // Each worker thread reads the file, dispatches the tree-sitter parser,
@@ -120,36 +124,48 @@ impl FactsDb {
         // Per-file failures are logged via `tracing::warn!` but do NOT abort the
         // parallel scan; they surface as `None` entries that the serial drain skips.
         //
-        // Return type: Vec<Option<(String, String, Vec<ComplexityEntity>)>>
+        // Return type: Vec<Option<(String, Vec<ComplexityEntity>)>>
         //   - None  → file skipped (no Tier-1 lang, unreadable, or parse error)
-        //   - Some  → (path, head_rev, deduped_entities)
-        let batches: Vec<Option<(String, String, Vec<crate::complexity::ComplexityEntity>)>> =
-            path_rows
-                .into_par_iter()
-                .map_init(
-                    || (),
-                    |_state, (path, head_rev)| {
-                        let lang = Tier1Language::from_path(&path)?;
-                        let full_path = opts.repo_path.join(&path);
-                        let source = match std::fs::read(&full_path) {
-                            Ok(b) => b,
-                            Err(e) => {
+        //   - Some  → (path, deduped_entities)
+        let batches: Vec<Option<(String, Vec<crate::complexity::ComplexityEntity>)>> = live_paths
+            .into_par_iter()
+            .map_init(
+                || (),
+                |_state, path| {
+                    let lang = Tier1Language::from_path(&path)?;
+                    let full_path = opts.repo_path.join(&path);
+                    let source = match std::fs::read(&full_path) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            // ENOENT here means the path was tracked at HEAD per
+                            // git history but the file is missing on disk — most
+                            // commonly because the user has uncommitted deletions
+                            // in the working tree. That's user-action territory,
+                            // not a codelore bug, so log at debug not warn to
+                            // avoid drowning the console on dirty trees.
+                            if e.kind() == std::io::ErrorKind::NotFound {
+                                tracing::debug!(
+                                    "complexity: file missing from working tree {path} \
+                                     (likely an uncommitted deletion; skipping)",
+                                );
+                            } else {
                                 tracing::warn!("complexity: cannot read {path}: {e}");
-                                return None;
                             }
-                        };
-                        let entities = match compute_for_file(&full_path, &source, lang) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                tracing::warn!("complexity: parse error {path}: {e}");
-                                return None;
-                            }
-                        };
-                        let deduped = dedup_entities(entities);
-                        Some((path, head_rev, deduped))
-                    },
-                )
-                .collect();
+                            return None;
+                        }
+                    };
+                    let entities = match compute_for_file(&full_path, &source, lang) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            tracing::warn!("complexity: parse error {path}: {e}");
+                            return None;
+                        }
+                    };
+                    let deduped = dedup_entities(entities);
+                    Some((path, deduped))
+                },
+            )
+            .collect();
 
         // ── Serial drain ─────────────────────────────────────────────────────────
         // `duckdb::Appender<'conn>` is `!Send + !Sync`; it MUST live on the same
@@ -165,7 +181,7 @@ impl FactsDb {
             .map_err(|e| CodeLoreError::Analysis(format!("appender complexity_metrics: {e}")))?;
 
         for batch in batches {
-            let Some((path, head_rev, entities)) = batch else {
+            let Some((path, entities)) = batch else {
                 continue;
             };
             for ent in &entities {
@@ -255,15 +271,39 @@ impl FactsDb {
         }
 
         // Second pass: INSERT one row per family member into `clones`.
+        //
+        // `clones` has PRIMARY KEY (clone_group_id, path, function, start_line).
+        // In real source that's unique. In minified/bundled output (e.g. webpack
+        // and Vite ship files like `dist/assets/index-<hash>.js`) many function
+        // expressions are packed onto one line and tree-sitter walks them out
+        // with the same `(function_name, start_line)`, so two members of the
+        // same group collide on the PK and the appender flush fails — which
+        // aborts the entire ingest, even when the user only asked for a non-
+        // clones analysis. Dedup in-memory by the PK columns; log the count of
+        // collapsed duplicates so the signal isn't silent. Users who want the
+        // un-collapsed view should add minified bundles to `.codeloreignore`.
         let mut app = self
             .conn()
             .appender("clones")
             .map_err(|e| CodeLoreError::Analysis(format!("appender clones: {e}")))?;
         let mut n = 0usize;
+        let mut collapsed = 0usize;
+        let mut seen: std::collections::HashSet<(i64, String, String, u32)> =
+            std::collections::HashSet::new();
         for group in groups {
             let clone_group_id = i64::from(group.clone_group_id);
             for member in &group.members {
                 use duckdb::params;
+                let key = (
+                    clone_group_id,
+                    member.path.clone(),
+                    member.function_name.clone(),
+                    member.start_line,
+                );
+                if !seen.insert(key) {
+                    collapsed += 1;
+                    continue;
+                }
                 let fp_bytes: Vec<u8> = member.fingerprint.digest.to_vec();
                 app.append_row(params![
                     clone_group_id,
@@ -279,6 +319,13 @@ impl FactsDb {
                 .map_err(|e| CodeLoreError::Analysis(format!("append clone row: {e}")))?;
                 n += 1;
             }
+        }
+        if collapsed > 0 {
+            tracing::info!(
+                "clones: collapsed {collapsed} duplicate member(s) sharing \
+                 (group, path, function, start_line) — typically minified/bundled \
+                 output; add such files to .codeloreignore to skip them",
+            );
         }
         app.flush()
             .map_err(|e| CodeLoreError::Analysis(format!("flush clones appender: {e}")))?;
@@ -334,18 +381,42 @@ fn current_head_rev(db: &FactsDb) -> Result<String> {
 }
 
 /// Query all paths from `changes` that are not deleted, with their most recent rev.
-fn query_live_paths(db: &FactsDb) -> Result<Vec<(String, String)>> {
+/// Returns the set of paths that exist at HEAD per the recorded change history.
+///
+/// "Live at HEAD" = the path's MOST RECENT change event in the ingested history
+/// is not a deletion. Earlier implementations used
+/// `WHERE change_type != 'deleted' GROUP BY path` which is wrong: it includes
+/// any path that has ever had a non-deleted change, even if a later deletion
+/// removed it. That produced spurious "cannot read" warnings on every working
+/// tree where files had been deleted in commits on the current branch.
+///
+/// Ordering uses `commits.date` (chronology) — NOT `changes.rev`, which is a
+/// SHA-1 hex string whose lex order has no relationship to commit order.
+/// `commits.date DESC` first, then `changes.rev DESC` as a deterministic
+/// tiebreaker when two events share a timestamp.
+fn query_live_paths(db: &FactsDb) -> Result<Vec<String>> {
     let sql = "
-        SELECT changes.path, MAX(changes.rev) AS head_rev
-        FROM changes
-        WHERE changes.change_type != 'deleted'
-        GROUP BY changes.path
+        WITH latest_per_path AS (
+            SELECT
+                c.path,
+                c.change_type,
+                ROW_NUMBER() OVER (
+                    PARTITION BY c.path
+                    ORDER BY commits.date DESC, c.rev DESC
+                ) AS rn
+            FROM changes c
+            INNER JOIN commits ON commits.rev = c.rev
+        )
+        SELECT path
+        FROM latest_per_path
+        WHERE rn = 1 AND change_type != 'deleted'
+        ORDER BY path
     ";
     let mut stmt = db
         .conn()
         .prepare(sql)
         .map_err(|e| CodeLoreError::Analysis(format!("prepare path query: {e}")))?;
-    stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+    stmt.query_map([], |r| r.get::<_, String>(0))
         .map_err(|e| CodeLoreError::Analysis(format!("query paths: {e}")))?
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|e| CodeLoreError::Analysis(format!("collect paths: {e}")))
