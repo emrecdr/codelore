@@ -4,6 +4,81 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Fixed — correctness
+
+- **`complexity_metrics.loc` now records physical lines (ploc), not duplicate
+  source lines (F-LOC).** `crates/codelore-lib/src/complexity/mod.rs` mapped
+  both the `loc` and `sloc` columns to `m.loc.sloc()` — the `loc` column
+  was silently a copy of `sloc`, and the actual physical-LOC count (which
+  includes comments + blanks) was discarded for every ingested file.
+  `rust-code-analysis` already exposed `ploc()` — it just wasn't called.
+  One-character fix: `m.loc.sloc()` → `m.loc.ploc()` on the `loc` mapping
+  only. **Behavioural impact:** the `loc` value in the `complexity_metrics`
+  table changes for every record going forward; cached fact-stores keyed
+  off the prior `loc==sloc` invariant become invalid (the schema-version
+  field in the cache key already invalidates them naturally).
+
+- **`GitCliRepo` invocations pass `-c core.quotepath=false` so non-ASCII
+  paths match `GixRepo` (F-QUOTEPATH).** Git's default behaviour wraps
+  paths with spaces or non-ASCII characters in `"…"` and octal-escapes
+  the non-ASCII bytes (e.g. `café.rs` → `"caf\303\251.rs"`). Gix reads
+  raw bytes directly from the object database and returns `café.rs`. So
+  before this fix, the two backends silently split per-file aggregations
+  (hotspots, churn, ownership) across two `path` values on any repo
+  containing non-ASCII filenames. The injection happens at three sites —
+  the `open()` rev-parse, the central `run_git()` helper, and the
+  `check-mailmap` call inside `resolve_alias()` — covering every git
+  subprocess `GitCliRepo` spawns.
+
+- **`/tmp` fallback for the persistent cache + diff-mode worktrees is now
+  user-namespaced (F-TEMP).** When `dirs::cache_dir()` returns `None`
+  (rare — containers/sandboxes with stripped env vars), the cache root
+  used to fall back to a bare `/tmp` and the per-repo join produced
+  `/tmp/codelore/…` shared across all users. Subsequent users hit
+  `EPERM` on directories owned by whoever ran codelore first. New
+  `fallback_tmp_root()` reads `$USER` / `$LOGNAME` / `$USERNAME` (with
+  a `pid<N>` last-resort suffix) and produces
+  `/tmp/codelore-fallback-<id>`. `diff.rs::add_worktree` routes through
+  the same `default_cache_root()` helper so both fallback paths share
+  one source of truth.
+
+- **`analyses::lineage::rewrite` handles lowercase SQL (NEW-C).** The
+  alias-vs-keyword disambiguator used to test the next character's case
+  (`is_uppercase` → keyword, lowercase → alias). It would silently
+  misclassify `from changes group by …` — treating `group` as an alias
+  and producing `FROM changes_lineage group BY …` (parse error). Fixed
+  by switching the regex to case-insensitive (`(?i)`) and replacing the
+  case heuristic with an explicit SQL-keyword whitelist (WHERE, GROUP,
+  ORDER, LIMIT, JOIN, INNER, LEFT, RIGHT, OUTER, CROSS, NATURAL, ON,
+  USING, UNION, INTERSECT, EXCEPT, WINDOW, QUALIFY, FETCH, SAMPLE,
+  TABLESAMPLE, AS, WITH, ANTI, SEMI, ASOF). Two new regression tests
+  in `analyses::lineage::tests` exercise both lowercase-keyword and
+  lowercase-alias variants.
+
+### Changed — internal
+
+- **`scripts/cut-release.sh` local gate now matches CI's clippy invocation
+  exactly.** Earlier the script ran a narrower `cargo build --release
+  -p codelore-cli` as its sanity check, which missed
+  `clippy::useless_conversion` in the NEW-3 code at v0.1.3 cut time and
+  left CI to surface the failure. Local gate now runs
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+  + `cargo fmt --all --check` before pushing, matching CI byte-for-byte.
+
+- **`scripts/cut-release.sh` no longer trusts `gh run watch
+  --exit-status`.** That command exits 0 for both `success` AND
+  `cancelled` runs — and concurrency-cancelled runs were misread as
+  green CI during v0.1.2 and v0.1.3 cuts, masking real failures.
+  Script now explicitly fetches `gh run view --json conclusion --jq
+  .conclusion` after the watcher returns and aborts unless the
+  conclusion is literally `"success"`. Affected callers see the
+  precise conclusion in the abort message.
+
+- **`docs/codebase_analysis.md`** trait-signature reference updated:
+  `resolve_alias` now shows `(name, email)` (post-NEW-A v0.1.3
+  signature), and `is_worktree_dirty` is added to the listed trait
+  methods (post-F3 v0.1.3).
+
 ## [0.1.3] - 2026-06-09
 
 ### Fixed — additional correctness findings surfaced post-v0.1.2

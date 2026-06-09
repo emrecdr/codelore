@@ -17,7 +17,14 @@ pub struct GitCliRepo {
 impl GitCliRepo {
     pub fn open(root: &Path) -> Result<Self> {
         let output = Command::new("git")
-            .args(["rev-parse", "--git-dir"])
+            // Disable path-quoting so non-ASCII or space-containing paths
+            // come back as raw UTF-8 bytes from `rev-parse` too. Git's
+            // default `core.quotepath=true` wraps such paths in `"..."`
+            // and octal-escapes non-ASCII bytes — fine for git's own UI,
+            // wrong for parity with `GixRepo` which reads raw bytes from
+            // the object database. Matters here only for symmetry with
+            // `run_git`; this call doesn't actually emit paths.
+            .args(["-c", "core.quotepath=false", "rev-parse", "--git-dir"])
             .current_dir(root)
             .stdin(Stdio::null())
             .output()
@@ -34,8 +41,20 @@ impl GitCliRepo {
     }
 
     fn run_git(&self, args: &[&str]) -> Result<std::process::Output> {
+        // `core.quotepath=false` injected on every invocation so non-ASCII
+        // / space-containing paths come back as raw UTF-8, matching the
+        // raw-byte paths that `GixRepo` returns from gitoxide's object DB.
+        // Without this, `git log --raw` for a path like `café.rs` would
+        // emit `"caf\303\251.rs"` (quoted, octal-escaped) while `GixRepo`
+        // emits `café.rs` — splitting per-file aggregations (hotspots,
+        // churn, ownership) silently across two key values for the same
+        // physical file, and breaking cross-walker differential parity.
+        let mut full_args: Vec<&str> = Vec::with_capacity(args.len() + 2);
+        full_args.push("-c");
+        full_args.push("core.quotepath=false");
+        full_args.extend_from_slice(args);
         Command::new("git")
-            .args(args)
+            .args(&full_args)
             .current_dir(&self.root)
             .stdin(Stdio::null())
             .output()
@@ -176,8 +195,12 @@ impl Repo for GitCliRepo {
         } else {
             format!("{name} <{email}>")
         };
+        // `core.quotepath=false` here is informational (check-mailmap output
+        // is identity strings, not paths) — but injected for consistency
+        // with `run_git` so any future change to this command's output
+        // shape gets the same treatment without us forgetting.
         let Ok(output) = Command::new("git")
-            .args(["check-mailmap", &arg])
+            .args(["-c", "core.quotepath=false", "check-mailmap", &arg])
             .current_dir(&self.root)
             .stdin(Stdio::null())
             .output()

@@ -41,38 +41,48 @@ graph TD
 
 ## 2. Newly Identified Gaps & Recommendations
 
-### 🚨 Correctness Bug: `GitCliRepo` Mailmap Name+Email Parity Gap
+### 🚨 Correctness Bug: `complexity_metrics` LOC Column Maps to `sloc()` Instead of `ploc()`
 
 **The Problem**:
-In [git_cli_repo.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/repo/git_cli_repo.rs#L107), `GitCliRepo` resolves author aliases during commit walking by calling `self.resolve_alias(&event.author_email)`. The `resolve_alias` function format-wraps ONLY the email address as `<{email}>` and runs `git check-mailmap`.
-However, `GixRepo` resolves mailmap aliases inside [gix_repo.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/repo/gix_repo.rs#L147) using a `gix::actor::SignatureRef` which contains **both** the author's name and email address.
+In the complexity collection logic inside [mod.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/complexity/mod.rs#L113-L114), the `ComplexityEntity` maps the `loc` field to source lines of code:
+```rust
+        loc: f_to_u32(m.loc.sloc()),
+        sloc: f_to_u32(m.loc.sloc()),
+```
+This maps both fields to `sloc()` (Source Lines of Code), completely ignoring `ploc()` (Physical Lines of Code, which includes comments and blank lines).
 
 **The Impact**:
-For `.mailmap` rules that match on name-and-email combinations (e.g., `Canonical Name <canonical@email.com> Old Name <old@email.com>`), `GixRepo` matches the rule successfully using the name, whereas `GitCliRepo` passes only the email and fails to match the rule. This leads to a differential testing mismatch where `GitCliRepo` and `GixRepo` produce different canonical authors for the same commit history.
+The `loc` column in the database's `complexity_metrics` table is filled with duplicate `sloc` data, and the actual physical LOC count is discarded.
 
 **Recommended Fix**:
-Modify the `resolve_alias` signature (or introduce a new identity resolution method) in the [Repo](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/repo/mod.rs) trait to accept both name and email, and change `GitCliRepo` to call `git check-mailmap` passing the full formatted `"Name <email>"` identity.
+Update `loc` mapping to `f_to_u32(m.loc.ploc())` so that `loc` correctly represents physical lines of code, matching the database schema intent and ensuring parity with other analysis tools.
 
 ---
 
-### 🚨 Correctness / Functional Bug: Nested Functions Ignored in Clones Analysis AST Walk
+### 🚨 Correctness / Parity Bug: `GitCliRepo` Non-ASCII / Quoted Path Parity Gap
 
 **The Problem**:
-In the tree-sitter walk inside [extractor.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/clones/extractor.rs#L51-L88), the `visit` function returns early immediately upon hitting any function-like node kind (e.g., `function_item` in Rust, `function_definition` in Python):
-```rust
-    if func_kinds.contains(node.kind()) {
-        ...
-        out.push(FunctionFingerprint { ... });
-        return; // Early return prevents traversing subtree
-    }
-```
-Although the comment suggests that nested functions become separate entries via an outer-loop walk, there is actually no outer walk. The early return completely stops traversal for that subtree.
+When walking commits or listing changed files, `GitCliRepo` executes `git log` and other commands without disabling `core.quotepath`. When git encounters paths with spaces or non-ASCII characters, it wraps them in double quotes and escapes non-ASCII characters using octal notation (e.g. `"caf\303\251.rs"`).
+Conversely, `GixRepo` (gitoxide-backed) parses raw byte arrays and yields unquoted, unescaped raw paths (e.g. `café.rs`).
 
 **The Impact**:
-Any helper functions, nested functions, or closures defined inside the body of an outer function are completely skipped and are not extracted as separate clone candidates.
+In repositories with non-ASCII filenames or paths containing spaces, the two repository backends will mismatch on the `path` column, causing differential testing to fail and producing inaccurate analytics for those files (such as hotspots and churn).
 
 **Recommended Fix**:
-Rather than returning early, continue traversing the children nodes (or specifically search the function body's subtree) for nested function declarations, while ensuring that the outer function's fingerprint sequence still captures them as structure.
+Pass `-c core.quotepath=false` to git commands inside [git_cli_repo.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/repo/git_cli_repo.rs#L36) to force the git CLI to output unescaped raw UTF-8 paths, aligning its output with `GixRepo`.
+
+---
+
+### ⚠️ Usability / Robustness Issue: Shared Temp/Cache Path Collision Risk in Multi-User Environments
+
+**The Problem**:
+The persistent cache path fallback (`/tmp/codelore/` in [cache.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/cache.rs#L72)) and the temporary worktree checkout path (`/tmp/codelore/diff-worktrees/` in [diff.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-cli/src/diff.rs#L178)) are hardcoded to shared temporary paths without user namespace partitioning.
+
+**The Impact**:
+In shared multi-user systems (like headless build servers or shared developer workstations), the first user to run `codelore` creates the directory `/tmp/codelore` under their own user ownership. Any subsequent users running `codelore` will run into `PermissionDenied` errors when trying to create databases or checkout temporary worktrees inside that folder, causing commands to fail.
+
+**Recommended Fix**:
+Namespace the fallback folders under a user-specific subdirectory by checking the `USER` / `USERNAME` environment variables or using a user-owned temporary directory path.
 
 ---
 
@@ -97,6 +107,7 @@ Improve the rewriter heuristic by explicitly matching against known SQL keywords
 
 | Category | Finding / Improvement Point | Priority / Risk | Impact | Status |
 |---|---|---|---|---|
-| **Correctness** | `GitCliRepo` calls `git check-mailmap` with only email, missing Name+Email mailmap rules matched by `GixRepo`. | **High** / Medium | Causes mismatch between backends on complex mailmaps. | **Fixed** (Unreleased — `Repo::resolve_alias` trait now takes `(name, email)`; both impls fixed; new mailmap test + differential parity test extended with paired-name probes) |
-| **Correctness** | Clones AST extraction skips recursing into function bodies, ignoring nested/inner helper functions. | **High** / Medium | Misses inner/nested function clones entirely. | **Fixed** (Unreleased — removed the early `return;` in `clones/extractor.rs::visit`; nested helpers now get separate fingerprint entries; existing outer-level clone detection unchanged) |
-| **Robustness** | Query rewriter regex assumes uppercase SQL keywords, breaking on lowercase syntax. | **Low** / Low | Potential parser/syntax errors for lowercase queries. | **Active — deferred to v0.1.4** (theoretical: all current SQL uses uppercase keywords; no live trigger; latent risk if future contributor adds lowercase SQL. Fix is a case-insensitive keyword whitelist in the regex post-processing.) |
+| **Correctness** | `complexity_metrics` `loc` field maps to `sloc()` instead of `ploc()`, discarding physical lines of code. | **High** / Low | Loss of true physical LOC count; duplicate sloc values stored. | **Fixed** (Unreleased — `loc` now maps to `m.loc.ploc()`; one-char change in `complexity/mod.rs`) |
+| **Correctness** | `GitCliRepo` does not disable `core.quotepath`, causing non-ASCII/space paths to be quoted/escaped. | **High** / Medium | Divergence in paths between Gix/GitCli backends on non-ASCII paths. | **Fixed** (Unreleased — `-c core.quotepath=false` injected at the three git-subprocess sites: `open()`, `run_git()`, `resolve_alias()`) |
+| **Robustness** | `/tmp/codelore` caching/worktree fallbacks lack user-namespacing, leading to permission conflicts. | **Medium** / Low | Cache/worktree generation crashes on multi-user shared machines. | **Fixed** (Unreleased — `fallback_tmp_root()` reads `$USER`/`$LOGNAME`/`$USERNAME` with PID last-resort; `diff.rs` routes through the same helper) |
+| **Robustness** | Query rewriter regex assumes uppercase SQL keywords, breaking on lowercase syntax. | **Low** / Low | Potential parser/syntax errors for lowercase queries. | **Fixed** (Unreleased — regex switched to case-insensitive; alias-vs-keyword disambiguator replaced by an explicit SQL-keyword whitelist; 2 new regression tests cover lowercase keyword + lowercase alias) |

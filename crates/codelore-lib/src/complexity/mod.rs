@@ -110,7 +110,14 @@ fn collect_entities(space: &FuncSpace, path: &str, out: &mut Vec<ComplexityEntit
         mi: mi_val,
         nom: f_to_u32(m.nom.total()),
         nexits: f_to_u32(m.nexits.exit_sum()),
-        loc: f_to_u32(m.loc.sloc()),
+        // `loc` = physical lines of code (including comments + blanks).
+        // `sloc` = source lines of code (the "code-only" subset).
+        // Before this fix both columns received `sloc()`, silently
+        // discarding the physical-LOC count for every ingested file and
+        // leaving the `loc` column with duplicate `sloc` data. The
+        // `ploc()` API was already exposed by `rust-code-analysis` (see
+        // `crates/codelore-rca/src/metrics/loc.rs`) — just never called.
+        loc: f_to_u32(m.loc.ploc()),
         sloc: f_to_u32(m.loc.sloc()),
         // Nesting is not exposed as a standalone stat in codelore-rca; left as 0.
         max_nesting: 0,

@@ -256,7 +256,16 @@ else
 fi
 
 # Sanity build (catches CHANGELOG flip / Cargo.toml typos before commit)
-log "running cargo build --release to sanity-check..."
+log "running local gate (matching CI's exact invocation)..."
+# v0.1.3 cut failed because the script's narrower local gate
+# (`cargo build --release -p codelore-cli`) didn't run clippy with the
+# same flags CI uses, so a `clippy::useless_conversion` lint surfaced
+# in code that local was happy with. Now we run the EXACT CI clippy
+# command so the local gate is at least as strict as CI's. Tests stay
+# narrow (release builds dominate the time budget here; tests already
+# ran during the dev cycle that landed [Unreleased]).
+run cargo clippy --workspace --all-targets --all-features -- -D warnings
+run cargo fmt --all --check
 run cargo build --release --quiet -p codelore-cli
 if [[ "${DRY_RUN}" != "true" ]]; then
   ACTUAL_VERSION="$(./target/release/codelore --version | awk '{print $2}')"
@@ -301,10 +310,20 @@ else
       die "could not locate a CI run for ${RELEASE_SHA:0:7}. Check 'gh run list' manually."
     fi
     log "watching CI run ${RUN_ID}..."
-    if ! gh run watch "${RUN_ID}" --exit-status >/dev/null; then
-      die "CI failed on the release commit. Fix the failure and re-run the script."
+    # `gh run watch --exit-status` returns 0 for both "success" AND
+    # "cancelled" runs (per gh CLI source — anything that isn't "failure"
+    # exits 0). We've been bitten by that conflation during v0.1.2/v0.1.3
+    # cuts where a concurrency-cancelled prior run was misread as green
+    # CI. Watch the run to block on completion, then verify the actual
+    # conclusion via the API. The script ONLY proceeds to the tag dance
+    # if conclusion == "success" — anything else (failure, cancelled,
+    # timed_out, action_required, neutral, skipped) aborts.
+    gh run watch "${RUN_ID}" >/dev/null || true
+    CONCLUSION="$(gh run view "${RUN_ID}" --json conclusion --jq .conclusion)"
+    if [[ "${CONCLUSION}" != "success" ]]; then
+      die "CI conclusion was '${CONCLUSION}' (not 'success') on the release commit ${RELEASE_SHA:0:7}. Investigate via 'gh run view ${RUN_ID}' and re-run the script with --skip-ci-wait once green, or fix and re-cut."
     fi
-    ok "CI green on ${RELEASE_SHA:0:7}"
+    ok "CI green (conclusion=success) on ${RELEASE_SHA:0:7}"
   fi
 fi
 

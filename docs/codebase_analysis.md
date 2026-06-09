@@ -73,7 +73,8 @@ pub trait Repo {
     ) -> Result<Box<dyn Iterator<Item = Result<CommitEvent>> + Send + 'a>>;
     fn changed_files(&self, rev: &str) -> Result<Vec<FileChange>>;
     fn diff_hunks(&self, rev: &str, path: &str) -> Result<Vec<Hunk>>;
-    fn resolve_alias(&self, email: &str) -> String;
+    fn resolve_alias(&self, name: &str, email: &str) -> String;
+    fn is_worktree_dirty(&self) -> bool;
     fn commit_metadata(&self, rev: &str) -> Result<CommitMetadata>;
     fn head_sha(&self) -> Result<String>;
 }

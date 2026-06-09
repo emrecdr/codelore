@@ -74,9 +74,9 @@ pub fn materialize_source(db: &FactsDb, opts: &Options) -> Result<()> {
 ///
 /// # Panics
 ///
-/// Panics if the embedded `\b(FROM|JOIN)\s+changes\b(\s*)([A-Za-z_]?)` regex
-/// fails to compile — unreachable since the pattern is a compile-time
-/// literal, validated by the unit tests in this module.
+/// Panics if the embedded regex fails to compile — unreachable since the
+/// pattern is a compile-time literal, validated by the unit tests in this
+/// module.
 #[must_use]
 pub fn rewrite(sql: &str, opts: &Options) -> String {
     use std::sync::OnceLock;
@@ -87,21 +87,28 @@ pub fn rewrite(sql: &str, opts: &Options) -> String {
         return sql.to_string();
     }
 
-    // Regex captures the next non-whitespace character after the table name
-    // so we can tell a lowercase-letter alias (`c`, `cchg`) from a SQL
-    // keyword or newline.
-    let re = RE
-        .get_or_init(|| regex::Regex::new(r"\b(FROM|JOIN)\s+changes\b(\s*)([A-Za-z_]?)").unwrap());
+    // Regex is case-INSENSITIVE (`(?i)`) so lowercase SQL (`from changes
+    // group by ...`) gets rewritten the same as the uppercase canonical
+    // form. The next-word capture `\w*` grabs the entire identifier after
+    // `changes` so we can disambiguate "user-supplied alias" from "SQL
+    // keyword like WHERE/GROUP/ORDER" by checking against an explicit
+    // case-insensitive keyword whitelist — the prior case-based heuristic
+    // (lowercase = alias, uppercase = keyword) silently failed on
+    // lowercase SQL by treating `group` as an alias and emitting
+    // `FROM changes_lineage group BY ...` (parse error).
+    let re =
+        RE.get_or_init(|| regex::Regex::new(r"(?i)\b(FROM|JOIN)\s+changes\b(\s*)(\w*)").unwrap());
 
     re.replace_all(sql, |caps: &regex::Captures<'_>| {
         let kw = &caps[1];
         let ws = &caps[2];
         let next = &caps[3];
-        // Heuristic: a single LOWERCASE letter immediately after the
-        // table name is the start of a per-query alias (e.g. `c`, `cchg`,
-        // `pchg`). An UPPERCASE letter or no letter signals a keyword
-        // (`WHERE`, `ON`, `GROUP`, `LIMIT`, `INNER`, etc.) or a newline.
-        let needs_alias = next.is_empty() || next.chars().next().is_some_and(char::is_uppercase);
+        // No next word → end of input / punctuation → no alias present →
+        // need to add one so qualified `changes.col` references remain
+        // valid. Next word is a SQL keyword → no alias present → need
+        // to add one. Otherwise the next word IS the user's alias and
+        // we leave it alone.
+        let needs_alias = next.is_empty() || is_sql_keyword(next);
         if needs_alias {
             format!("{kw} {src} AS changes{ws}{next}")
         } else {
@@ -109,6 +116,54 @@ pub fn rewrite(sql: &str, opts: &Options) -> String {
         }
     })
     .into_owned()
+}
+
+/// SQL keyword whitelist used to distinguish "this token after `changes` is
+/// a keyword that ends the FROM clause" from "this token is the user's
+/// per-query alias". The set covers SQL-92 / SQL-2008 clauses commonly
+/// seen in codelore's analyses plus DuckDB-specific extensions (`QUALIFY`,
+/// `SAMPLE`, `USING`, `TABLESAMPLE`). Matching is case-insensitive.
+///
+/// Conservatism note: erring on the side of `keyword` produces correct SQL
+/// — at worst the rewriter adds an `AS changes` alias the user didn't
+/// need; that's harmless. Erring on the side of `alias` silently produces
+/// broken SQL (the prior bug). So the set is intentionally over-broad:
+/// every plausible token following `FROM <table>` in `DuckDB`'s SQL grammar
+/// is included.
+fn is_sql_keyword(token: &str) -> bool {
+    const KEYWORDS: &[&str] = &[
+        "WHERE",
+        "GROUP",
+        "HAVING",
+        "ORDER",
+        "LIMIT",
+        "OFFSET",
+        "JOIN",
+        "INNER",
+        "LEFT",
+        "RIGHT",
+        "FULL",
+        "OUTER",
+        "CROSS",
+        "NATURAL",
+        "ON",
+        "USING",
+        "UNION",
+        "INTERSECT",
+        "EXCEPT",
+        "WINDOW",
+        "QUALIFY",
+        "FETCH",
+        "SAMPLE",
+        "TABLESAMPLE",
+        "AS",
+        "WITH",
+        "ANTI",
+        "SEMI",
+        "ASOF",
+    ];
+    let upper = token.to_ascii_uppercase();
+    KEYWORDS.contains(&upper.as_str())
 }
 
 #[cfg(test)]
@@ -146,6 +201,51 @@ mod tests {
         let out = rewrite(sql, &opts_with(true));
         assert!(out.contains("INNER JOIN changes_lineage AS changes ON"));
         assert!(out.contains("changes.rev = commits.rev"));
+    }
+
+    /// NEW-C regression: prior to v0.1.4 the rewriter used a case-based
+    /// alias-vs-keyword discriminator (next char uppercase → keyword,
+    /// lowercase → alias). Lowercase SQL therefore parsed `group` as if it
+    /// were a user-supplied alias and produced
+    /// `FROM changes_lineage group BY path` — a parse error. The
+    /// case-insensitive keyword-whitelist replacement handles both
+    /// canonical-case and lowercase variants the same way.
+    #[test]
+    fn rewrite_handles_lowercase_sql_keywords() {
+        let sql = "select path from changes\ngroup by path";
+        let out = rewrite(sql, &opts_with(true));
+        let lower = out.to_lowercase();
+        // Correct behaviour: rewriter sees lowercase `group` as a keyword,
+        // adds `AS changes` alias, leaves `group by` intact afterwards.
+        // Final shape: `from changes_lineage as changes\ngroup by path`.
+        assert!(
+            lower.contains("from changes_lineage as changes"),
+            "lowercase `from changes` must rewrite + add alias: {out}"
+        );
+        assert!(
+            lower.contains("group by path"),
+            "`group by` keyword sequence must survive verbatim: {out}"
+        );
+        // Guard the original NEW-C bug: `from changes_lineage group` would
+        // mean the rewriter treated `group` as an alias and DIDN'T add
+        // `AS changes` — the resulting SQL would be a DuckDB parse error.
+        assert!(
+            !lower.contains("from changes_lineage group"),
+            "lowercase `group` must NOT be treated as an alias: {out}"
+        );
+    }
+
+    /// Companion regression: lowercase aliases should still be preserved
+    /// even when the SQL is otherwise lowercase (`from changes c group by c.path`).
+    #[test]
+    fn rewrite_lowercase_alias_preserved_in_lowercase_sql() {
+        let sql = "select c.path from changes c group by c.path";
+        let out = rewrite(sql, &opts_with(true));
+        assert!(
+            out.to_lowercase().contains("from changes_lineage c"),
+            "lowercase alias `c` must survive: {out}"
+        );
+        assert!(!out.contains("AS changes c"));
     }
 
     #[test]

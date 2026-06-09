@@ -65,11 +65,35 @@ pub fn cache_path_with_root(key: &[u8; 32], repo_path: &Path, root: &Path) -> Pa
         .join(format!("{key_short}.duckdb"))
 }
 
-/// Return [`dirs::cache_dir()`] or fall back to `/tmp` when the XDG dirs are
-/// unavailable (headless CI, containers, etc.).
+/// Return [`dirs::cache_dir()`] or fall back to a user-namespaced subdir of
+/// `/tmp` when the XDG dirs are unavailable (headless CI, containers, etc.).
+///
+/// The fallback used to be a bare `/tmp` — which, combined with the
+/// per-repo `codelore/<repo_hash_8>/<key>.duckdb` join later, produced
+/// `/tmp/codelore/...` under whichever user first invoked codelore on a
+/// shared host. Subsequent users hit `EPERM` because the directory was
+/// owned by user A and lacked group-write. The fallback now namespaces
+/// by `$USER` / `$LOGNAME` / `$USERNAME`, falling back to a process-id
+/// suffix if none are set (the latter case is essentially
+/// containers/sandboxes where the OS already provides isolation, so PID
+/// only needs to avoid same-process collisions).
 #[must_use]
 pub fn default_cache_root() -> PathBuf {
-    dirs::cache_dir().unwrap_or_else(|| PathBuf::from("/tmp"))
+    dirs::cache_dir().unwrap_or_else(fallback_tmp_root)
+}
+
+/// User-namespaced `/tmp` fallback. Prefers `$USER`, then `$LOGNAME`, then
+/// `$USERNAME` (Windows convention), then a process-id suffix as
+/// last-resort. Pure-safe: no FFI required (the workspace forbids `unsafe`),
+/// `std::process::id()` is a stable safe API.
+fn fallback_tmp_root() -> PathBuf {
+    let id = std::env::var("USER")
+        .or_else(|_| std::env::var("LOGNAME"))
+        .or_else(|_| std::env::var("USERNAME"))
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| format!("pid{}", std::process::id()));
+    PathBuf::from(format!("/tmp/codelore-fallback-{id}"))
 }
 
 /// Produce a stable canonical string from the full Options struct to use as

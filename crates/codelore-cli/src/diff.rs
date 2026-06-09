@@ -173,8 +173,11 @@ impl Drop for Worktree {
 
 fn add_worktree(repo: &Path, sha: &str) -> Result<Worktree> {
     // Tempdir under codelore's cache root so cleanup is in our own scope.
-    let cache_root = dirs::cache_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
+    // Routed through `codelore_lib::cache::default_cache_root()` so the
+    // user-namespaced `/tmp` fallback is applied here too — earlier
+    // versions hardcoded a bare `/tmp` which collided across users on
+    // shared hosts when `dirs::cache_dir()` returned `None`.
+    let cache_root = codelore_lib::cache::default_cache_root()
         .join("codelore")
         .join("diff-worktrees");
     std::fs::create_dir_all(&cache_root)?;
