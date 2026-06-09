@@ -20,7 +20,7 @@ tree-sitter = "=0.25.3"
 # Per-language tree-sitter grammars.
 # Versions pinned to exact versions whose node-ID tables match the generated language_*.rs enums.
 # These were verified by checking root node kind_id against enum constants.
-tree-sitter-javascript  = "=0.23.1"   # language_javascript.rs: Program=133
+tree-sitter-javascript  = "=0.25.0"   # language_javascript.rs: Program=133
 tree-sitter-typescript  = "=0.23.1"   # language_typescript.rs: Program=166 / language_tsx.rs: Program=172
 tree-sitter-python      = "=0.23.6"   # language_python.rs: Module=108
 tree-sitter-java        = "=0.23.5"   # language_java.rs: Program=138
