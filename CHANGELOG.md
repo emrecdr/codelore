@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-09
+
 ### Fixed — correctness
 
 - **F8 — `GitCliRepo` raw/numstat zip corrupted line counts on submodule
