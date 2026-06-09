@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-09
+
 ### Changed (BREAKING)
 
 - **`authors` analysis now answers the per-entity Bird et al. (FSE 2011)
