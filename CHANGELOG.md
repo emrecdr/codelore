@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-06-09
+
 ### Fixed — correctness
 
 - **`complexity_metrics.loc` now records physical lines (ploc), not duplicate
