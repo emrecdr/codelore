@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-06-09
+
 ### Fixed — additional correctness findings surfaced post-v0.1.2
 
 - **`Repo::resolve_alias` now accepts `(name, email)` so `.mailmap` name+email
