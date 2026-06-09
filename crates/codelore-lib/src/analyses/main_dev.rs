@@ -26,6 +26,12 @@
 //!   deliberate design choice). Both names dispatch to the same query.
 //! - **`canonical_author`** (post-mailmap) is the grouping key, not raw
 //!   `author_email`.
+//!
+//! Research basis: see `docs/research-foundations.md` entry "main-dev"
+//! (Mockus & Herbsleb, ICSE 2002 — expertise identification;
+//! D'Ambros et al., *Empirical Software Engineering* 2010 — three-metric
+//! decomposition; Tornhill, *Your Code as a Crime Scene*, 2015 — the
+//! refactoring-main-dev heuristic).
 
 use duckdb::params;
 

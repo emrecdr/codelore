@@ -4,6 +4,149 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Changed (BREAKING)
+
+- **`authors` analysis now answers the per-entity Bird et al. (FSE 2011)
+  risk-indicator question instead of the per-author commit leaderboard
+  (PAR-1).** Output columns evolve from `[author, commits]` to
+  `[entity, n_authors, n_humans, n_bots, n_revs, last_author, last_modified]`
+  by default. Under `--code-maat-compat`, the CSV writer emits code-maat's
+  legacy `[entity, n-authors, n-revs]` columns so scripts targeting that
+  contract keep working. The previous per-author leaderboard behaviour
+  moves to a new first-class analysis `top-committers`, enriched with
+  LoC added/deleted, first/last commit dates, and `is_bot` flag from the
+  identity layer. Migration: scripts that ran `codelore -a authors`
+  expecting per-author output should switch to `codelore -a
+  top-committers`; scripts expecting code-maat's per-entity output get
+  it back via `codelore -a authors --code-maat-compat`.
+
+### Fixed — correctness
+
+- **`commits.date` promoted from `DATE` to `TIMESTAMP` so HEAD resolution
+  and same-day chronology are precise (F1).** Schema v2 (cache key bumped
+  from `schema_v1` → `schema_v2`, naturally invalidating existing caches).
+  Previously, two commits sharing a calendar day forced a lexicographical
+  rev tiebreak in `query_live_paths` and `current_head_rev`, silently
+  picking the wrong HEAD on the final day and stamping `complexity_metrics`
+  and `clones` rows with the wrong rev. `CommitEvent.date` carries a full
+  `time::OffsetDateTime` (UTC-normalised; tz offset is currently discarded
+  at the schema boundary — see schema comment for the tz-preservation
+  roadmap). `code-age` and `abs-churn` use explicit `CAST(... AS DATE)` /
+  `date_trunc('day', ...)` where day-grain aggregation is the intent.
+
+- **`code-age` no longer returns negative ages on back-tests (PAR-2).**
+  The SQL now filters commits with `commits.date <= anchor` before
+  computing age, matching code-maat's `changes-within-time-span`. The
+  anchor defaults to `now_utc()` (current instant, second precision);
+  with `--age-time-now <date>` it becomes end-of-day of that date so
+  "as of June 1" includes June 1's commits. The analysis also emits two
+  new columns — `age_days` (whole-day precision; sort tie-break against
+  `age_months`) and `last_modified` (calendar-date context column for
+  triage) — exploiting the schema v2 timestamp precision.
+
+- **`SoC` (Sum of Coupling) now pre-filters changesets by
+  `max_changeset_size` (F5).** A single massive sweep (lockfile bump,
+  monorepo-wide rename, vendored dependency import) no longer dominates
+  the score of every file it touched. Mirrors the `good_commits` CTE
+  pattern used in `coupling.rs`.
+
+- **`clone-coupling` no longer silently drops clone pairs with shared
+  revs between `min-clone-shared-revs` and `min-shared-revs` (F2).** The
+  inner `run_coupling` call now uses
+  `Options::for_clone_coupling_inner_coupling`, which lowers
+  `min_shared_revs` to `min(min_shared_revs, min_clone_shared_revs)`. A
+  clone pair co-changing exactly 3 or 4 times previously vanished from
+  the candidate pool before clone-coupling's own filter ever saw it; it
+  now surfaces correctly.
+
+### Fixed — robustness
+
+- **Persistent cache now skips WRITE when the working tree is dirty
+  (F3 strengthen).** The read-time `tracing::warn!` already existed;
+  the corresponding write-time skip did not, so a first run on a dirty
+  tree would still poison the cache under the clean `head_sha` key. The
+  fix falls back to an in-memory `FactsDb` on cache miss + dirty tree,
+  with a `tracing::warn!` explaining `--no-cache` and "commit changes"
+  as the two ways to suppress the notice.
+
+- **`prune_stale_worktrees` resolves the cache root through
+  `default_cache_root()` instead of bare `/tmp` (F4).** The earlier
+  hardcoded `/tmp` collided across users on shared hosts and missed
+  namespaced worktrees of the current user; routing through the same
+  helper `add_worktree` already used keeps the two paths in sync.
+
+- **`add_worktree` no longer leaks an empty directory under the cache
+  root when `git worktree add` fails (F6).** `tmp.keep()` now runs only
+  after the git command returns success — if git errors out (invalid
+  rev, local corruption, lock error) `tmp` Drops cleanly and the
+  tempdir disappears. Regression test
+  `add_worktree_does_not_leak_tempdir_on_git_failure` locks the
+  contract.
+
+### Added — migration ergonomics
+
+- **`--code-maat-compat` now flips CSV column headers for the four
+  remaining parity-affected analyses (PAR-5).**
+  - `summary`: `metric,value` → `statistic,value` under compat.
+  - `code-age`: `entity,age_months,age_days,last_modified` →
+    `entity,age-months` under compat (drops the extra precision /
+    triage columns for legacy-tooling compatibility).
+  - `communication`: `author-a,author-b,…` → `author,peer,…` under
+    compat.
+  - `ownership`: `entity,main-author,total-revs,fractal-value` →
+    `entity,fractal-value,total-revs` under compat (drops the
+    `main_author` triage column; matches code-maat's column order).
+  - 8 lock-down regression tests in `par5_csv_compat_test.rs` cover
+    both modes for each writer.
+
+- **Migration section of `README.md` rewritten to document the
+  code-maat → CodeLore divergences (PAR-7).** A "Modern defaults vs
+  code-maat compatibility" matrix lists the eight surfaces where the
+  default and the `--code-maat-compat` behaviour differ; a
+  "Short-flag migration map" walks through the 10-flag long-form
+  rewrite. The default `-a` divergence (CodeLore: `revisions`,
+  code-maat: `authors`) is documented; CodeLore does not flip its
+  default under `--code-maat-compat` (the explicit `-a authors` is the
+  one-character rewrite migrating users need).
+
+### Fixed — correctness (Phase 3 polish)
+
+- **`code-age` `age_months` now uses interval-month semantics, not
+  month-boundary-crossing (PAR-4).** Previously DuckDB's `DATE_DIFF(
+  'month', a, b)` counted month-component differences, giving
+  Mar 15 → Apr 1 = 1 month. The reference `joda-time` (and code-maat)
+  semantic counts whole calendar months elapsed: Mar 15 → Apr 1 = 0;
+  Mar 15 → Apr 16 = 1; Mar 31 → Apr 30 = 0 (one day short of a full
+  month). Implemented inline in SQL via `12 * (year - year) + (month -
+  month) - (1 if day_anchor < day_commit else 0)`. Five-case regression
+  table covers boundary semantics.
+
+- **`coupling` `min_revs` pivot now respects `--code-maat-compat`
+  (PAR-6).** Default behaviour (per-file gate) unchanged: a pair where
+  one file has 4 revs and the other has 20 is dropped under `--min-revs
+  5` because the 4-rev file is filtered before pairing — the stricter,
+  more defensible semantic. Under `--code-maat-compat`, the threshold
+  moves to the pair-average level (`(revs_a + revs_b) / 2 >= 5`),
+  matching code-maat's `coupling-algos.clj` `within-threshold?` logic.
+  Both modes share a single SQL builder with stable placeholder
+  positional binding; `min_revs` binds twice, only one branch's gate is
+  live (the other is a `? IS NOT NULL` tautology — small redundancy for
+  a non-branching caller).
+
+### Added — documentation (Phase 3 polish)
+
+- **New `docs/research-foundations.md` curated reference (PAR-9).**
+  Single-source-of-truth doc mapping every behavioural analysis to its
+  primary citation, the question it answers in plain English,
+  practitioner heuristics for "what good values look like", and the
+  source-file location. Each of the 15 parity + ★ analyses in
+  `crates/codelore-lib/src/analyses/` now carries a one-line
+  `Research basis: see docs/research-foundations.md entry "<name>"`
+  rustdoc cross-link so the academic provenance is one hop from any
+  source file. Replaces code-maat's scatter-across-13-Clojure-files
+  citation pattern with a curated reference that doubles as a
+  marketing/education asset.
+
 ## [0.1.4] - 2026-06-09
 
 ### Fixed — correctness

@@ -69,11 +69,33 @@ pub fn write_code_health_csv<W: Write>(rows: &[CodeHealthRow], w: &mut W) -> Res
     Ok(())
 }
 
-pub fn write_code_age_csv<W: Write>(rows: &[CodeAgeRow], w: &mut W) -> Result<()> {
-    writeln!(w, "entity,age-months").map_err(CodeLoreError::Io)?;
-    for row in rows {
-        writeln!(w, "{},{}", quote_if_needed(&row.path), row.age_months)
+pub fn write_code_age_csv<W: Write>(
+    rows: &[CodeAgeRow],
+    w: &mut W,
+    code_maat_compat: bool,
+) -> Result<()> {
+    // PAR-5: code-maat emits `entity,age-months` (hyphenated, single
+    // metric column); CodeLore's modern default surfaces second-level
+    // precision (`age_days`) and a triage context column (`last_modified`).
+    if code_maat_compat {
+        writeln!(w, "entity,age-months").map_err(CodeLoreError::Io)?;
+        for row in rows {
+            writeln!(w, "{},{}", quote_if_needed(&row.path), row.age_months)
+                .map_err(CodeLoreError::Io)?;
+        }
+    } else {
+        writeln!(w, "entity,age_months,age_days,last_modified").map_err(CodeLoreError::Io)?;
+        for row in rows {
+            writeln!(
+                w,
+                "{},{},{},{}",
+                quote_if_needed(&row.path),
+                row.age_months,
+                row.age_days,
+                row.last_modified
+            )
             .map_err(CodeLoreError::Io)?;
+        }
     }
     Ok(())
 }
@@ -126,8 +148,21 @@ pub fn write_entity_churn_csv<W: Write>(rows: &[EntityChurnRow], w: &mut W) -> R
     Ok(())
 }
 
-pub fn write_communication_csv<W: Write>(rows: &[CommunicationRow], w: &mut W) -> Result<()> {
-    writeln!(w, "author-a,author-b,shared,average,strength").map_err(CodeLoreError::Io)?;
+/// PAR-5: under `--code-maat-compat` the header uses code-maat's
+/// `author,peer` column names (matching `communication.clj`'s output);
+/// `CodeLore`'s modern default uses the symmetric `author-a,author-b`
+/// pair which is clearer about the equality of roles.
+pub fn write_communication_csv<W: Write>(
+    rows: &[CommunicationRow],
+    w: &mut W,
+    code_maat_compat: bool,
+) -> Result<()> {
+    let header = if code_maat_compat {
+        "author,peer,shared,average,strength"
+    } else {
+        "author-a,author-b,shared,average,strength"
+    };
+    writeln!(w, "{header}").map_err(CodeLoreError::Io)?;
     for row in rows {
         writeln!(
             w,
@@ -143,22 +178,43 @@ pub fn write_communication_csv<W: Write>(rows: &[CommunicationRow], w: &mut W) -
     Ok(())
 }
 
-pub fn write_ownership_csv<W: Write>(rows: &[OwnershipRow], w: &mut W) -> Result<()> {
-    // Header `main-author` (renamed from `main-dev`) — the column carries
-    // the value of the `main_author` field on OwnershipRow. The old name
-    // was a code-maat hangover; the Rust struct already uses `main_author`,
-    // so the CSV column now matches.
-    writeln!(w, "entity,main-author,total-revs,fractal-value").map_err(CodeLoreError::Io)?;
-    for row in rows {
-        writeln!(
-            w,
-            "{},{},{},{:.2}",
-            quote_if_needed(&row.path),
-            quote_if_needed(&row.main_author),
-            row.total_revs,
-            row.fractal_value
-        )
-        .map_err(CodeLoreError::Io)?;
+/// PAR-5: under `--code-maat-compat`, emit code-maat's exact 3-column
+/// fragmentation output (`entity,fractal-value,total-revs` — note the
+/// column order; code-maat sorts the columns differently from `CodeLore`'s
+/// natural `path / main_author / total_revs / fractal_value` shape).
+/// `CodeLore`'s modern default surfaces `main_author` as a context column
+/// for triage (single-author file? long-tail file? the operator sees
+/// without re-running ownership).
+pub fn write_ownership_csv<W: Write>(
+    rows: &[OwnershipRow],
+    w: &mut W,
+    code_maat_compat: bool,
+) -> Result<()> {
+    if code_maat_compat {
+        writeln!(w, "entity,fractal-value,total-revs").map_err(CodeLoreError::Io)?;
+        for row in rows {
+            writeln!(
+                w,
+                "{},{:.2},{}",
+                quote_if_needed(&row.path),
+                row.fractal_value,
+                row.total_revs,
+            )
+            .map_err(CodeLoreError::Io)?;
+        }
+    } else {
+        writeln!(w, "entity,main-author,total-revs,fractal-value").map_err(CodeLoreError::Io)?;
+        for row in rows {
+            writeln!(
+                w,
+                "{},{},{},{:.2}",
+                quote_if_needed(&row.path),
+                quote_if_needed(&row.main_author),
+                row.total_revs,
+                row.fractal_value
+            )
+            .map_err(CodeLoreError::Io)?;
+        }
     }
     Ok(())
 }
@@ -187,8 +243,21 @@ pub fn write_coupling_csv<W: Write>(rows: &[CouplingRow], w: &mut W) -> Result<(
     Ok(())
 }
 
-pub fn write_summary_csv<W: Write>(rows: &[SummaryRow], w: &mut W) -> Result<()> {
-    writeln!(w, "metric,value").map_err(CodeLoreError::Io)?;
+/// PAR-5: code-maat's `summary` emits `statistic,value`; `CodeLore` uses
+/// the slightly clearer `metric,value`. Under `--code-maat-compat`,
+/// emit the legacy header so downstream tooling (`code-maat`-targeted
+/// dashboards) keeps parsing.
+pub fn write_summary_csv<W: Write>(
+    rows: &[SummaryRow],
+    w: &mut W,
+    code_maat_compat: bool,
+) -> Result<()> {
+    let header = if code_maat_compat {
+        "statistic,value"
+    } else {
+        "metric,value"
+    };
+    writeln!(w, "{header}").map_err(CodeLoreError::Io)?;
     for row in rows {
         writeln!(w, "{},{}", quote_if_needed(&row.metric), row.value).map_err(CodeLoreError::Io)?;
     }
@@ -220,12 +289,74 @@ pub fn write_clones_csv<W: Write>(rows: &[ClonesRow], w: &mut W) -> Result<()> {
     Ok(())
 }
 
-pub fn write_authors_csv<W: Write>(rows: &[AuthorsRow], w: &mut W) -> Result<()> {
-    // Header matches code-maat's `authors` analysis ("name,n-commits") for parity.
-    writeln!(w, "name,n-commits").map_err(CodeLoreError::Io)?;
-    for row in rows {
-        writeln!(w, "{},{}", quote_if_needed(&row.author), row.commits)
+/// Modern columns for the `authors` analysis (per-entity author breakdown
+/// — Bird et al. 2011 risk indicator). Code-maat's parity columns
+/// `entity,n-authors,n-revs` are emitted under `--code-maat-compat`.
+pub fn write_authors_csv<W: Write>(
+    rows: &[AuthorsRow],
+    w: &mut W,
+    code_maat_compat: bool,
+) -> Result<()> {
+    if code_maat_compat {
+        writeln!(w, "entity,n-authors,n-revs").map_err(CodeLoreError::Io)?;
+        for row in rows {
+            writeln!(
+                w,
+                "{},{},{}",
+                quote_if_needed(&row.entity),
+                row.n_authors,
+                row.n_revs
+            )
             .map_err(CodeLoreError::Io)?;
+        }
+    } else {
+        writeln!(
+            w,
+            "entity,n_authors,n_humans,n_bots,n_revs,last_author,last_modified"
+        )
+        .map_err(CodeLoreError::Io)?;
+        for row in rows {
+            writeln!(
+                w,
+                "{},{},{},{},{},{},{}",
+                quote_if_needed(&row.entity),
+                row.n_authors,
+                row.n_humans,
+                row.n_bots,
+                row.n_revs,
+                quote_if_needed(&row.last_author),
+                row.last_modified,
+            )
+            .map_err(CodeLoreError::Io)?;
+        }
+    }
+    Ok(())
+}
+
+/// Per-author commit leaderboard — the previous behaviour of the
+/// `authors` analysis, now exposed as a distinct first-class analysis.
+pub fn write_top_committers_csv<W: Write>(
+    rows: &[crate::analyses::top_committers::TopCommittersRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(
+        w,
+        "author,commits,loc_added,loc_deleted,first_commit,last_commit,is_bot"
+    )
+    .map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{},{},{},{},{}",
+            quote_if_needed(&row.author),
+            row.commits,
+            row.loc_added,
+            row.loc_deleted,
+            row.first_commit,
+            row.last_commit,
+            row.is_bot,
+        )
+        .map_err(CodeLoreError::Io)?;
     }
     Ok(())
 }

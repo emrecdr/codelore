@@ -6,6 +6,12 @@
 //! - strength: 100 × shared / average (percentage)
 //!
 //! Self-pairs are excluded.
+//!
+//! Research basis: see `docs/research-foundations.md` entry
+//! "communication" (Conway, *Datamation* 1968 — original Conway's-law
+//! essay; Bird et al., *Comm. ACM* 2009 — empirical follow-up on
+//! Windows Vista development showing organisational structure shapes
+//! defect density).
 
 use duckdb::params;
 

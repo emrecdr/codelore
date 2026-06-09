@@ -4,7 +4,7 @@ This guide is the developer-facing reference for CodeLore. The [README](../READM
 
 ## Table of contents
 
-1. [The 21 analyses (what they tell you)](#1-the-21-analyses-what-they-tell-you)
+1. [The 22 analyses (what they tell you)](#1-the-22-analyses-what-they-tell-you)
 2. [Output formats deep-dive](#2-output-formats-deep-dive)
 3. [Every CLI flag explained](#3-every-cli-flag-explained)
 4. [PR-mode: `codelore diff`](#4-pr-mode-codelore-diff)
@@ -20,17 +20,18 @@ This guide is the developer-facing reference for CodeLore. The [README](../READM
 
 ---
 
-## 1. The 21 analyses (what they tell you)
+## 1. The 22 analyses (what they tell you)
 
-The table below is split into the **17 code-maat-parity analyses** (drop-in successors to legacy code-maat) and **4 modern additions** marked ★ that CodeLore introduces.
+The table below is split into the **17 code-maat-parity analyses** (drop-in successors to legacy code-maat), **1 modern signal** (`top-committers` — a first-class per-author leaderboard that code-maat approximated via `-a author-churn` + sort), and **4 modern additions** marked ★ that CodeLore introduces (the SARIF-backed differentiators).
 
-### Code-maat parity (17)
+### Code-maat parity (17) + modern signal
 
 | Analysis | What you ask it | Formula / source | When to reach for it |
 |---|---|---|---|
 | `revisions` | "Which files change most often?" | `COUNT(DISTINCT rev)` per file | First-look for any unfamiliar repo |
 | `summary` | "Give me the one-page snapshot" | Commits + changes + entities + authors counts | First slide of any review |
-| `authors` | "List all contributors and commit counts" | Canonical authors sorted desc | Onboarding; recognition |
+| `authors` | "Which files are touched by many authors (defect-risk indicator)?" | Per-entity distinct author count, broken out by humans / bots / AI | Bird et al. 2011 risk signal — pair with `hotspots` for triage |
+| `top-committers` | "Who are the biggest contributors repo-wide?" | Per-author totals: commits, LoC added/deleted, first/last commit, bot flag | Release notes; onboarding; contributor recognition |
 | `code-age` | "Which files are stale vs. recently churned?" | Months since last commit per file | Find dead code + recently-volatile areas |
 | `abs-churn` | "How fast does the team add/delete code?" | Lines added/deleted/commits grouped by date | Trend dashboards |
 | `author-churn` | "Who contributes how much?" | Same as `abs-churn` grouped by canonical author (post-mailmap) | Effort distribution |
@@ -92,7 +93,7 @@ All four use versioned `partialFingerprints` so cross-run identity stays stable.
 ```
 codelore analyze [OPTIONS]
   -a, --analysis NAME           Which analysis [default: revisions]
-                                (any of the 21 above; passing an unknown
+                                (any of the 22 above; passing an unknown
                                 name prints the full valid list)
   -r, --repo PATH               Git repo path [default: .]
   -f, --format FORMAT           Output format [default: csv]
@@ -502,7 +503,7 @@ codescene/
 │   ├── codelore-lib/                     # the library
 │   │   ├── src/
 │   │   │   ├── facts/                    # DuckDB fact store + ingest pipeline
-│   │   │   ├── analyses/                 # the 21 analyses (one file each)
+│   │   │   ├── analyses/                 # the 22 analyses (one file each)
 │   │   │   ├── output/                   # 6 format emitters
 │   │   │   ├── repo/                     # GixRepo + GitCliRepo + Repo trait
 │   │   │   ├── complexity/               # tree-sitter dispatch + ComplexityEntity

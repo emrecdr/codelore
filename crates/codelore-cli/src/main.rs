@@ -334,8 +334,12 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             ("csv", AnalysisName::CodeAge) => {
                 let rows = codelore_lib::analyses::code_age::run_code_age(&db, &opts)
                     .context("run code-age")?;
-                codelore_lib::output::csv::write_code_age_csv(&rows, &mut out)
-                    .context("write csv")?;
+                codelore_lib::output::csv::write_code_age_csv(
+                    &rows,
+                    &mut out,
+                    opts.code_maat_compat,
+                )
+                .context("write csv")?;
             }
             ("json", AnalysisName::CodeAge) => {
                 let rows = codelore_lib::analyses::code_age::run_code_age(&db, &opts)
@@ -410,8 +414,12 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             ("csv", AnalysisName::Communication) => {
                 let rows = codelore_lib::analyses::communication::run_communication(&db, &opts)
                     .context("run communication")?;
-                codelore_lib::output::csv::write_communication_csv(&rows, &mut out)
-                    .context("write csv")?;
+                codelore_lib::output::csv::write_communication_csv(
+                    &rows,
+                    &mut out,
+                    opts.code_maat_compat,
+                )
+                .context("write csv")?;
             }
             ("json", AnalysisName::Communication) => {
                 let rows = codelore_lib::analyses::communication::run_communication(&db, &opts)
@@ -429,8 +437,12 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             ("csv", AnalysisName::Ownership) => {
                 let rows = codelore_lib::analyses::ownership::run_ownership(&db, &opts)
                     .context("run ownership")?;
-                codelore_lib::output::csv::write_ownership_csv(&rows, &mut out)
-                    .context("write csv")?;
+                codelore_lib::output::csv::write_ownership_csv(
+                    &rows,
+                    &mut out,
+                    opts.code_maat_compat,
+                )
+                .context("write csv")?;
             }
             ("json", AnalysisName::Ownership) => {
                 let rows = codelore_lib::analyses::ownership::run_ownership(&db, &opts)
@@ -467,8 +479,12 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             ("csv", AnalysisName::Summary) => {
                 let rows = codelore_lib::analyses::summary::run_summary(&db, &opts)
                     .context("run summary")?;
-                codelore_lib::output::csv::write_summary_csv(&rows, &mut out)
-                    .context("write csv")?;
+                codelore_lib::output::csv::write_summary_csv(
+                    &rows,
+                    &mut out,
+                    opts.code_maat_compat,
+                )
+                .context("write csv")?;
             }
             ("json", AnalysisName::Summary) => {
                 let rows = codelore_lib::analyses::summary::run_summary(&db, &opts)
@@ -511,12 +527,16 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             (fmt, AnalysisName::Clones) => {
                 anyhow::bail!("clones analysis supports csv|json|markdown|sarif; got {fmt:?}")
             }
-            // --- authors (Plan 8 §2 Task 6) ---
+            // --- authors (per-entity Bird et al. risk indicator; modernised) ---
             ("csv", AnalysisName::Authors) => {
                 let rows = codelore_lib::analyses::authors::run_authors(&db, &opts)
                     .context("run authors")?;
-                codelore_lib::output::csv::write_authors_csv(&rows, &mut out)
-                    .context("write csv")?;
+                codelore_lib::output::csv::write_authors_csv(
+                    &rows,
+                    &mut out,
+                    opts.code_maat_compat,
+                )
+                .context("write csv")?;
             }
             ("json", AnalysisName::Authors) => {
                 let rows = codelore_lib::analyses::authors::run_authors(&db, &opts)
@@ -532,6 +552,28 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             }
             (fmt, AnalysisName::Authors) => {
                 anyhow::bail!("authors analysis supports csv|json|markdown; got {fmt:?}")
+            }
+            // --- top-committers (per-author commit leaderboard) ---
+            ("csv", AnalysisName::TopCommitters) => {
+                let rows = codelore_lib::analyses::top_committers::run_top_committers(&db, &opts)
+                    .context("run top-committers")?;
+                codelore_lib::output::csv::write_top_committers_csv(&rows, &mut out)
+                    .context("write csv")?;
+            }
+            ("json", AnalysisName::TopCommitters) => {
+                let rows = codelore_lib::analyses::top_committers::run_top_committers(&db, &opts)
+                    .context("run top-committers")?;
+                codelore_lib::output::json::write_top_committers_json(&rows, &mut out)
+                    .context("write json")?;
+            }
+            ("markdown", AnalysisName::TopCommitters) => {
+                let rows = codelore_lib::analyses::top_committers::run_top_committers(&db, &opts)
+                    .context("run top-committers")?;
+                codelore_lib::output::markdown::write_top_committers_markdown(&rows, &mut out)
+                    .context("write markdown")?;
+            }
+            (fmt, AnalysisName::TopCommitters) => {
+                anyhow::bail!("top-committers analysis supports csv|json|markdown; got {fmt:?}")
             }
             // --- soc (Sum of Coupling) ---
             ("csv", AnalysisName::Soc) => {

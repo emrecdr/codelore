@@ -1,4 +1,6 @@
-//! `authors` analysis tests (Plan 8 §2 Task 6).
+//! `authors` analysis tests — per-entity author breakdown (Bird et al.
+//! 2011 risk indicator). The previous per-author leaderboard behaviour
+//! is exercised in `top_committers_test.rs`.
 
 use codelore_lib::Options;
 use codelore_lib::analyses::authors::run_authors;
@@ -6,112 +8,102 @@ use codelore_lib::facts::FactsDb;
 use codelore_lib::repo::GixRepo;
 
 #[test]
-fn authors_groups_by_canonical_author_and_sorts_desc() {
+fn authors_per_entity_for_tiny_repo() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
     let repo = GixRepo::open(tiny.dir.path()).expect("open");
     let db = FactsDb::new_in_memory().expect("db");
     let opts = Options {
         repo_path: tiny.dir.path().to_path_buf(),
+        min_revs: 1,
         ..Options::default()
     };
     db.ingest(&repo, &opts).expect("ingest");
 
     let rows = run_authors(&db, &opts).expect("run authors");
-    // tiny_repo: 5 commits, 1 author ("Tiny" / tiny@example.com).
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].commits, 5);
+    // tiny_repo has two files: src/main.rs (touched 4 times) and
+    // src/lib.rs (touched once). Single author for both.
+    assert!(!rows.is_empty(), "expected at least one entity");
+    for row in &rows {
+        assert_eq!(
+            row.n_authors, 1,
+            "tiny_repo has one author, got n_authors={} on {}",
+            row.n_authors, row.entity
+        );
+        assert_eq!(row.n_humans, 1, "Tiny is human");
+        assert_eq!(row.n_bots, 0);
+        assert!(row.n_revs >= 1);
+        assert!(!row.last_modified.is_empty());
+        assert!(!row.last_author.is_empty());
+    }
 }
 
 #[test]
-fn authors_against_differential_fixture() {
+fn authors_per_entity_separates_humans_and_bots() {
     let fixture = codelore_lib::test_support::differential_repo::build();
     let repo = GixRepo::open(fixture.dir.path()).expect("open");
     let db = FactsDb::new_in_memory().expect("db");
     let opts = Options {
         repo_path: fixture.dir.path().to_path_buf(),
+        min_revs: 1,
         ..Options::default()
     };
     db.ingest(&repo, &opts).expect("ingest");
 
     let rows = run_authors(&db, &opts).expect("run authors");
-    // differential_repo has 5 raw author identities across its commits:
-    //   - alice-old@example.com (→ canonical-alice@example.com via .mailmap)
-    //   - bob-aliased@example.com (→ canonical-bob@example.com via .mailmap)
-    //   - c.lee@example.com (→ carol@example.com via .mailmap)
-    //   - 49699333+dependabot[bot]@users.noreply.github.com (bot, no mailmap)
-    //   - noop@example.com — the implicit committer of the `git merge --no-ff`
-    //     merge commit, which inherits the repo's `user.email` config because
-    //     `git merge` doesn't accept a `--author` flag.
-    //
-    // With default `Options { include_merges: false, .. }` the merge commit is
-    // filtered out at repo-walk time (matches the spec §3.1 default and the
-    // GitCliRepo backend's `--no-merges` semantics), so the merge-committer
-    // never gets ingested and the analysis sees 4 distinct authors. The
-    // 5-author behavior is exercised by the `_with_merges_included` test
-    // below to give R4 (merge-filter) positive coverage in both modes.
-    assert_eq!(
-        rows.len(),
-        4,
-        "expected 4 distinct canonical authors with merges filtered (3 humans + 1 bot), got {}: {:?}",
-        rows.len(),
-        rows.iter().map(|r| &r.author).collect::<Vec<_>>()
-    );
-    let names: std::collections::HashSet<&str> = rows.iter().map(|r| r.author.as_str()).collect();
     assert!(
-        names.contains("canonical-alice@example.com"),
-        "Alice's old email should canonicalize via .mailmap"
+        !rows.is_empty(),
+        "differential repo must produce at least one entity row"
     );
+
+    // The fixture includes a Dependabot commit. Somewhere across the
+    // repo the bot column must register > 0 — that's the whole point
+    // of the codelore identity-layer enrichment.
+    let total_bot_rows = rows.iter().filter(|r| r.n_bots > 0).count();
     assert!(
-        names.contains("canonical-bob@example.com"),
-        "Bob's aliased email should canonicalize via .mailmap"
+        total_bot_rows > 0,
+        "expected at least one entity to have a bot author, got rows={rows:?}",
     );
-    assert!(
-        names.contains("carol@example.com"),
-        "Carol's email should canonicalize via .mailmap"
-    );
-    // Sorted desc by commit count
-    for w in rows.windows(2) {
-        assert!(
-            w[0].commits >= w[1].commits,
-            "authors must be sorted by commits desc; got {} then {}",
-            w[0].commits,
-            w[1].commits
+
+    // For every row: humans + bots == total distinct authors (closed
+    // partition — no author classified as both).
+    for row in &rows {
+        assert_eq!(
+            row.n_humans + row.n_bots,
+            row.n_authors,
+            "humans+bots must partition n_authors for {}",
+            row.entity,
         );
     }
 }
 
-/// R4 positive-coverage test: with `include_merges = true`, the merge
-/// commit is ingested and its committer appears as a 5th distinct author
-/// (the implicit `noop@example.com` set by `git config user.email` during
-/// fixture setup; `git merge --no-ff` doesn't accept an `--author` flag
-/// so the merge inherits the repo config). The default-filtered behavior
-/// (4 authors) is asserted in `authors_against_differential_fixture`
-/// above; this one asserts the flag actually flips the behavior.
 #[test]
-fn authors_against_differential_fixture_with_merges_included() {
+fn authors_rows_sort_by_n_authors_desc_then_n_revs() {
     let fixture = codelore_lib::test_support::differential_repo::build();
     let repo = GixRepo::open(fixture.dir.path()).expect("open");
     let db = FactsDb::new_in_memory().expect("db");
     let opts = Options {
         repo_path: fixture.dir.path().to_path_buf(),
-        include_merges: true,
+        min_revs: 1,
         ..Options::default()
     };
     db.ingest(&repo, &opts).expect("ingest");
 
     let rows = run_authors(&db, &opts).expect("run authors");
-    assert_eq!(
-        rows.len(),
-        5,
-        "with include_merges=true expected 5 distinct authors (3 humans + 1 bot + 1 merge-committer), got {}: {:?}",
-        rows.len(),
-        rows.iter().map(|r| &r.author).collect::<Vec<_>>()
-    );
-    let names: std::collections::HashSet<&str> = rows.iter().map(|r| r.author.as_str()).collect();
-    assert!(
-        names.contains("noop@example.com"),
-        "merge-committer (noop@example.com) should appear when merges are included"
-    );
+    for w in rows.windows(2) {
+        let primary_ok = w[0].n_authors > w[1].n_authors;
+        let tied_n_authors = w[0].n_authors == w[1].n_authors;
+        let secondary_ok = tied_n_authors && w[0].n_revs >= w[1].n_revs;
+        assert!(
+            primary_ok || secondary_ok,
+            "sort invariant violated: {} (n_authors={}, n_revs={}) then {} (n_authors={}, n_revs={})",
+            w[0].entity,
+            w[0].n_authors,
+            w[0].n_revs,
+            w[1].entity,
+            w[1].n_authors,
+            w[1].n_revs,
+        );
+    }
 }
 
 #[test]
@@ -122,6 +114,7 @@ fn authors_rows_limit_caps_output() {
     let opts = Options {
         repo_path: fixture.dir.path().to_path_buf(),
         rows_limit: Some(2),
+        min_revs: 1,
         ..Options::default()
     };
     db.ingest(&repo, &opts).expect("ingest");

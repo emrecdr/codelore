@@ -8,6 +8,11 @@
 //!
 //! Requires `--expression-to-match REGEX` (the `Options.message_regex`
 //! field). Calling `run_messages` without a regex returns an error.
+//!
+//! Research basis: see `docs/research-foundations.md` entry "messages"
+//! (Mockus & Votta, ICSM 2000 — identifying reasons for software
+//! changes from commit messages; Hindle et al., MSR 2011 — automated
+//! topic naming).
 
 use duckdb::params;
 

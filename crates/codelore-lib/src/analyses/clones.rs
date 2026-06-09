@@ -5,6 +5,11 @@
 //! This analysis is HEAD-only: clones are computed against the working tree
 //! the user has checked out. Historical clone tracking (when did this clone
 //! family appear?) is a v1.x follow-up.
+//!
+//! Research basis: see `docs/research-foundations.md` entry "clones"
+//! (Koschke, Falke & Frenzel, WCRE 2006 — AST suffix-tree clone
+//! detection; Sajnani et al., ICSE 2016 — `SourcererCC`, the
+//! index-then-probe pattern `CodeLore` follows).
 
 use std::fs;
 use std::path::Path;

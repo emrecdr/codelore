@@ -18,7 +18,7 @@ use crate::Options;
 
 /// Schema version sentinel. Bump whenever the `DuckDB` schema changes so that
 /// old cache files are not opened with a new schema.
-const SCHEMA_VERSION: &str = "schema_v1";
+const SCHEMA_VERSION: &str = "schema_v2";
 
 /// Compute a 32-byte SHA-256 cache key from:
 ///   `canonical_repo_path || NUL || head_sha || NUL || CARGO_PKG_VERSION || NUL`

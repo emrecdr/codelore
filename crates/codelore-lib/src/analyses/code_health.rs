@@ -15,6 +15,12 @@
 //! pairs from `coupling::run_coupling` (the same gate used in the standalone
 //! `coupling` analysis). Normalization uses the in-repo maximum as the
 //! empirical upper bound (min-max). Score range: [0, 100]; higher = healthier.
+//!
+//! Research basis: see `docs/research-foundations.md` entry
+//! "code-health" (composite signal developed in `CodeLore`; underlying
+//! inputs cite cognitive complexity (Campbell 2018), churn (Nagappan
+//! & Ball 2005), ownership fragmentation (Mockus & Herbsleb 2002), and
+//! coupling centrality (Tornhill 2018)).
 
 use std::collections::HashMap;
 

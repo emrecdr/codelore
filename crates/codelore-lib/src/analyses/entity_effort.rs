@@ -8,6 +8,11 @@
 //! Output sorted by `entity ASC, author_revs DESC, author ASC` —
 //! deterministic across runs (code-maat sorts only by the first two and
 //! relies on Clojure's stable sort).
+//!
+//! Research basis: see `docs/research-foundations.md` entry
+//! "entity-effort / entity-ownership" (D'Ambros, Gall, Lanza & Pinzger
+//! 2008 — per-author-per-file detail as input to expertise heat maps
+//! and refactoring-task assignment).
 
 use duckdb::params;
 

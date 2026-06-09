@@ -20,3 +20,4 @@ pub mod query;
 pub mod revisions;
 pub mod soc;
 pub mod summary;
+pub mod top_committers;

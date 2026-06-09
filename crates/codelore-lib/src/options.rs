@@ -239,6 +239,33 @@ impl Options {
         }
     }
 
+    /// Like [`with_no_row_limit`], but also lowers `min_shared_revs` to
+    /// at most `min_clone_shared_revs`. Used by `clone-coupling`'s
+    /// internal call to `run_coupling` (F2 fix).
+    ///
+    /// Without this override, the inner coupling call applies the
+    /// default `min_shared_revs = 5` even though `clone-coupling`'s own
+    /// floor is `min_clone_shared_revs = 3`. Clone pairs that
+    /// co-changed exactly 3 or 4 times were silently dropped by the
+    /// inner call — `clone-coupling` then filtered the (already
+    /// trimmed) result by `min_clone_shared_revs`, but the missing
+    /// pairs were already gone.
+    ///
+    /// The min-of-both semantics is the safer choice: if a user
+    /// explicitly LOWERED `--min-shared-revs` below
+    /// `min-clone-shared-revs`, honour that; if they didn't, drop the
+    /// floor to the clone-coupling threshold so we don't lose anything.
+    ///
+    /// [`with_no_row_limit`]: Self::with_no_row_limit
+    #[must_use]
+    pub fn for_clone_coupling_inner_coupling(&self) -> Self {
+        Self {
+            rows_limit: None,
+            min_shared_revs: self.min_shared_revs.min(self.min_clone_shared_revs),
+            ..self.clone()
+        }
+    }
+
     /// Check cross-field invariants. Caller (typically the CLI boundary)
     /// runs this once after constructing `Options` so pathological flag
     /// combinations fail loudly instead of silently producing empty

@@ -1,4 +1,9 @@
 //! Summary analysis per spec §1.1 — 4-row repo overview.
+//!
+//! Research basis: see `docs/research-foundations.md` entry "summary"
+//! (diagnostic analysis; no single foundational citation — used for
+//! ingest sanity-checking, repo-comparison overviews, and CI dashboard
+//! "is the data healthy?" panels).
 
 use crate::facts::FactsDb;
 use crate::{CodeLoreError, Options, Result};

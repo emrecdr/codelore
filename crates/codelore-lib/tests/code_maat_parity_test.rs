@@ -145,7 +145,7 @@ fn summary_matches_code_maat_on_tiny_repo() {
     db.ingest(&repo, &opts).expect("ingest");
     let rows = codelore_lib::analyses::summary::run_summary(&db, &opts).expect("summary");
     let mut buf = Vec::new();
-    codelore_lib::output::csv::write_summary_csv(&rows, &mut buf).expect("csv");
+    codelore_lib::output::csv::write_summary_csv(&rows, &mut buf, false).expect("csv");
     let codelore_csv = String::from_utf8(buf).expect("utf-8");
 
     // code-maat summary emits `statistic,value`; codelore emits `metric,value`.

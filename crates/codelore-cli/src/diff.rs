@@ -185,8 +185,12 @@ fn add_worktree(repo: &Path, sha: &str) -> Result<Worktree> {
         .prefix(&format!("wt-{}-", &sha[..8.min(sha.len())]))
         .tempdir_in(&cache_root)?;
     let path = tmp.path().to_path_buf();
-    // Drop the TempDir handle so we own the path; the Worktree will clean up.
-    let _ = tmp.keep();
+    // F6 fix: run `git worktree add` FIRST, then `tmp.keep()` only on
+    // success. If `keep()` ran first (as the previous code did) and git
+    // failed (invalid rev, local corruption, lock error), the TempDir
+    // had already been demoted to a plain owned path and the directory
+    // leaked under the cache root forever. With this ordering, a git
+    // failure lets `tmp` Drop cleanly and the empty dir disappears.
     let out = Command::new("git")
         .arg("-C")
         .arg(repo)
@@ -201,6 +205,9 @@ fn add_worktree(repo: &Path, sha: &str) -> Result<Worktree> {
             String::from_utf8_lossy(&out.stderr).trim()
         ));
     }
+    // Git succeeded — promote the tempdir to owned. The Worktree's Drop
+    // impl handles `git worktree remove` cleanup from here.
+    let _ = tmp.keep();
     Ok(Worktree {
         repo_root: repo.to_path_buf(),
         path,
@@ -426,8 +433,14 @@ fn prune_stale_worktrees(repo_root: &Path) {
     }
 
     // 2. Sweep $XDG_CACHE_HOME/codelore/diff-worktrees/ for old directories.
-    let cache_root = dirs::cache_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
+    //
+    // F4 fix: route through `codelore_lib::cache::default_cache_root()`
+    // so the user-namespaced `/tmp` fallback applies here too. Earlier
+    // versions hardcoded a bare `/tmp` which collided across users on
+    // shared hosts and missed namespaced worktrees of the current user
+    // (the namespacing fix in `add_worktree` was a no-op for cleanup as
+    // long as the sweep stayed on bare `/tmp`).
+    let cache_root = codelore_lib::cache::default_cache_root()
         .join("codelore")
         .join("diff-worktrees");
     if !cache_root.exists() {
@@ -567,5 +580,44 @@ mod prune_tests {
     fn prune_is_noop_on_missing_or_empty_cache_dir() {
         let tmp = tempfile::tempdir().expect("tempdir");
         prune_stale_worktrees(tmp.path()); // doesn't panic
+    }
+
+    /// F6 regression: when `git worktree add` fails (we point at a
+    /// non-git path so the command errors out), `add_worktree` must NOT
+    /// leak the temp directory it allocated. Earlier code called
+    /// `tmp.keep()` BEFORE running git, which converted the `TempDir` to a
+    /// plain owned path; a subsequent git failure then returned `Err`
+    /// without cleaning up, leaving an empty directory under the cache
+    /// root forever. The fix runs git first and calls `keep()` only on
+    /// success.
+    #[test]
+    fn add_worktree_does_not_leak_tempdir_on_git_failure() {
+        // Point at a real cache root so we can inspect it after the
+        // call. The "repo" is a tempdir that is NOT a git repository —
+        // `git worktree add` will fail loudly.
+        let not_a_repo = tempfile::tempdir().expect("tempdir");
+        let cache_root = codelore_lib::cache::default_cache_root()
+            .join("codelore")
+            .join("diff-worktrees");
+        // Snapshot the cache directory state BEFORE the call so we can
+        // diff against it afterwards. (The dir might not exist yet.)
+        let before: std::collections::HashSet<std::path::PathBuf> = std::fs::read_dir(&cache_root)
+            .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).collect())
+            .unwrap_or_default();
+
+        let result = add_worktree(not_a_repo.path(), "deadbeef");
+        assert!(result.is_err(), "add_worktree on a non-git path must error");
+
+        // After the call, no NEW wt-* entries should exist in the cache
+        // root. Anything that was there before is fine (could be from
+        // concurrent test runs); we only assert about the delta.
+        let after: std::collections::HashSet<std::path::PathBuf> = std::fs::read_dir(&cache_root)
+            .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).collect())
+            .unwrap_or_default();
+        let new_entries: Vec<_> = after.difference(&before).collect();
+        assert!(
+            new_entries.is_empty(),
+            "F6 regression: add_worktree leaked a tempdir on git failure: {new_entries:?}",
+        );
     }
 }

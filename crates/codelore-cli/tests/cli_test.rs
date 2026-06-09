@@ -126,7 +126,9 @@ fn analyze_code_age_emits_csv() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("entity,age-months"));
+        .stdout(predicate::str::contains(
+            "entity,age_months,age_days,last_modified",
+        ));
 }
 
 #[test]

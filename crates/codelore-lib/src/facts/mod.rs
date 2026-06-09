@@ -147,6 +147,30 @@ impl FactsDb {
 
         tracing::info!("cache miss: ingesting to {}", cache_p.display());
 
+        // F3 strengthen: skip cache WRITE when the working tree is dirty.
+        // HEAD-time metrics (complexity, clones) are computed from disk at
+        // ingest time; persisting them under the clean head_sha cache key
+        // would poison the cache — a later run on a CLEAN tree would
+        // cache-hit and silently serve the dirty metrics with no warning
+        // (the read-time warn fires only when the CURRENT tree is dirty).
+        //
+        // Fall back to an in-memory FactsDb so the analysis still runs;
+        // the user just doesn't get the persistent-cache speedup until
+        // they commit (or run with `--no-cache` and accept the slow path
+        // explicitly).
+        if repo.is_worktree_dirty() {
+            tracing::warn!(
+                "working tree has uncommitted changes; skipping persistent \
+                 cache write to avoid caching dirty HEAD-time metrics \
+                 (complexity, clones) under the clean head_sha key. \
+                 Commit changes or pass `--no-cache` to suppress this notice."
+            );
+            let mem = Self::new_in_memory()?;
+            mem.create_schema()?;
+            mem.ingest(repo, opts)?;
+            return Ok(mem);
+        }
+
         // Create the parent directory if it doesn't exist yet.
         if let Some(parent) = cache_p.parent() {
             std::fs::create_dir_all(parent)

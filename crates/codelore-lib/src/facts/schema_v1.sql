@@ -1,5 +1,11 @@
--- Plan 1: walking skeleton schema. Full schema from spec §3.2 lands here.
--- We start with the subset Plan 1 actually populates and lock the rest as empty.
+-- Schema v2: `commits.date` is TIMESTAMP. Promoted from DATE so HEAD
+-- resolution and same-day chronology are precise — previously two
+-- commits sharing a calendar day forced a lexicographical rev tiebreak,
+-- which silently picked the wrong HEAD on the final day and stamped
+-- complexity/clones rows with the wrong rev. The original author tz
+-- offset is discarded at this boundary; a future schema version may
+-- add a sibling `author_tz_offset_seconds INTEGER` for tz-aware
+-- analyses.
 
 CREATE TABLE IF NOT EXISTS commits (
     rev TEXT PRIMARY KEY,
@@ -8,7 +14,7 @@ CREATE TABLE IF NOT EXISTS commits (
     committer_email TEXT NOT NULL,
     canonical_author TEXT NOT NULL,
     ai_attribution TEXT,
-    date DATE NOT NULL,
+    date TIMESTAMP NOT NULL,
     message TEXT NOT NULL,
     is_merge BOOLEAN NOT NULL,
     parent_count INTEGER NOT NULL,

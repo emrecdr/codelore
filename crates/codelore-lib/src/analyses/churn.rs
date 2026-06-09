@@ -2,6 +2,11 @@
 //! - abs-churn: by date (added/deleted/commits)
 //! - author-churn: by `canonical_author` (added/deleted/commits)
 //! - entity-churn: by path (added/deleted/commits)
+//!
+//! Research basis: see `docs/research-foundations.md` entry "churn"
+//! (Nagappan & Ball, ICSE 2005 — relative code churn predicts system
+//! defect density; foundational input to nearly every downstream
+//! behavioural signal).
 
 use duckdb::params;
 
@@ -24,16 +29,20 @@ fn materialize(db: &FactsDb, opts: &Options) -> Result<()> {
 }
 
 fn build_abs_churn_sql(src: &str) -> String {
+    // `commits.date` is `TIMESTAMP` in schema v2 — explicitly truncate to
+    // `DATE` for the per-day aggregation, otherwise two commits one second
+    // apart would each get their own bucket and the output stops being a
+    // daily trend.
     format!(
         "SELECT
-            CAST(commits.date AS TEXT) AS date,
+            CAST(CAST(commits.date AS DATE) AS TEXT) AS date,
             COALESCE(SUM(c.loc_added), 0) AS added,
             COALESCE(SUM(c.loc_deleted), 0) AS deleted,
             COUNT(DISTINCT commits.rev) AS commits
         FROM commits
         INNER JOIN {src} c ON c.rev = commits.rev
-        GROUP BY commits.date
-        ORDER BY commits.date ASC, added DESC, deleted DESC
+        GROUP BY CAST(commits.date AS DATE)
+        ORDER BY CAST(commits.date AS DATE) ASC, added DESC, deleted DESC
         LIMIT ?"
     )
 }

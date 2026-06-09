@@ -2,10 +2,16 @@
 //! pipeline stage agrees on. See spec §3.1.
 
 use serde::{Deserialize, Serialize};
-use time::Date;
+use time::OffsetDateTime;
 
 /// Bumped on any breaking change to facts or output schemas.
-pub const SCHEMA_VERSION: u8 = 1;
+///
+/// Schema 2 promoted `commits.date` from `DATE` to `TIMESTAMP` so HEAD
+/// resolution and same-day chronology are precise — no more lexicographical
+/// rev tiebreaks deciding which commit "is" HEAD when multiple commits
+/// share a calendar day. `CommitEvent.date` carries a full `OffsetDateTime`
+/// (stored as UTC; tz offset is currently discarded at the schema boundary).
+pub const SCHEMA_VERSION: u8 = 2;
 
 /// One commit, as observed by the parser stage. Immutable event.
 // Eq removed: CommitEvent contains Option<KameiFeatures> which has f64 fields (not Eq).
@@ -15,7 +21,10 @@ pub struct CommitEvent {
     pub author_email: String,
     pub author_name: String,
     pub committer_email: String,
-    pub date: Date,
+    /// Author time as a full `OffsetDateTime`. Stored in `DuckDB` as `TIMESTAMP`
+    /// (UTC-normalised). The original tz offset is not currently persisted —
+    /// see the `commits` table comment for the tz-preservation roadmap.
+    pub date: OffsetDateTime,
     pub message: String,
     pub parents: Vec<String>,
     pub changes: Vec<FileChange>,

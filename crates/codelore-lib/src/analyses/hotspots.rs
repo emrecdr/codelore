@@ -27,6 +27,11 @@
 //! the churn / fragmentation / coupling inputs from `code_health` analysis
 //! aren't reused here — `hotspots` is the lightweight "what to look at first"
 //! ranking, `code-health` is the deeper analysis.
+//!
+//! Research basis: see `docs/research-foundations.md` entry "hotspots"
+//! (Tornhill, *Software Design X-Rays*, 2018; `McCabe`, *IEEE TSE* 1976
+//! — cyclomatic complexity; Campbell / `SonarSource` 2018 — cognitive
+//! complexity formalisation).
 
 use duckdb::params;
 

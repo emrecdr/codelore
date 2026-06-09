@@ -1,6 +1,9 @@
 //! `revisions` analysis — file → revision count.
 //! Code-maat parity output: (entity, n-revs).
 //! See spec §1.1 ("authors and revisions are addressable standalone").
+//!
+//! Research basis: see `docs/research-foundations.md` entry "revisions"
+//! (Nagappan & Ball, ICSE 2005 — relative churn predicts defect density).
 
 use duckdb::params;
 

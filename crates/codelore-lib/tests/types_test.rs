@@ -1,11 +1,14 @@
 use codelore_lib::AnalysisName;
 use codelore_lib::CodeLoreError;
 use codelore_lib::types::{ChangeType, CommitEvent, FileChange, Hunk, SCHEMA_VERSION};
-use time::macros::date;
+use time::macros::datetime;
 
 #[test]
-fn schema_version_is_one() {
-    assert_eq!(SCHEMA_VERSION, 1);
+fn schema_version_is_two() {
+    // Schema v2: `commits.date` promoted from DATE to TIMESTAMP so HEAD
+    // resolution and same-day chronology are precise. Cache key includes
+    // this version sentinel so v1 caches are naturally invalidated.
+    assert_eq!(SCHEMA_VERSION, 2);
 }
 
 #[test]
@@ -15,7 +18,7 @@ fn commit_event_construction() {
         author_email: "a@b.com".into(),
         author_name: "A B".into(),
         committer_email: "a@b.com".into(),
-        date: date!(2026 - 06 - 06),
+        date: datetime!(2026-06-06 12:30:45 UTC),
         message: "test".into(),
         parents: vec![],
         changes: vec![FileChange {

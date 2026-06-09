@@ -10,6 +10,10 @@
 //!
 //! The Fisher test guards against spurious coupling from refactor sweeps
 //! that 2025 MSR research identified as the dominant noise source.
+//!
+//! Research basis: see `docs/research-foundations.md` entry "coupling"
+//! (Gall, Hajek & Jazayeri, ICSM 1998 — original logical-coupling paper;
+//! Tornhill, *Your Code as a Crime Scene*, 2015 — productisation).
 
 use duckdb::params;
 
@@ -61,7 +65,8 @@ fn source_table(opts: &Options) -> &'static str {
 
 /// Raw coupling candidates SQL builder. Bind values (in order):
 ///  1. `max_changeset_size` — `good_commits` filter
-///  2. `min_revs` — per-file revs floor
+///  2. `min_revs` — revs floor (semantic depends on `code_maat_compat`,
+///     see PAR-6 doc below)
 ///  3. `min_shared_revs` — per-pair shared floor
 ///  4. `min_coupling_pct` — lower degree threshold
 ///  5. `max_coupling_pct` — upper degree threshold (pairs above are usually file splits or copy/rename pairs)
@@ -75,7 +80,52 @@ fn source_table(opts: &Options) -> &'static str {
 ///
 /// The `src` parameter is one of `"changes"` or `"changes_bucketed"` —
 /// closed-enum-derived, never user input.
-fn build_coupling_sql(src: &str) -> String {
+///
+/// PAR-6: `code_maat_compat` flips the `min_revs` pivot point:
+///
+/// - **Default (`CodeLore`)**: per-file filter in `file_revs` CTE
+///   (`HAVING revs >= ?`). A pair where one file has 4 revs and the
+///   other has 20 is dropped under `--min-revs 5` because the 4-rev
+///   file is filtered out before pairing. Stricter; matches the spec
+///   §3.2.1 invariants documented in this file's header.
+/// - **`--code-maat-compat`**: per-pair-average filter on the final
+///   SELECT (`WHERE average_revs >= ?`). The same pair survives because
+///   its average is 12. Matches code-maat's `coupling-algos.clj`
+///   `within-threshold?` semantic where `revs` is the pair's average,
+///   not either file's individual revs.
+///
+/// Both branches emit exactly 6 `?` placeholders, in fixed positional
+/// order:
+///
+/// 1. `max_changeset_size` — `good_commits` filter
+/// 2. `min_revs` — per-file revs floor (default) or dummy comparison
+///    consumed by `? IS NOT NULL` (compat — placeholder still consumed
+///    so caller's param binding is shape-stable)
+/// 3. `min_shared_revs` — per-pair shared floor
+/// 4. `min_coupling_pct` — lower degree threshold
+/// 5. `max_coupling_pct` — upper degree threshold
+/// 6. `min_revs` — per-pair-average filter (compat) or dummy comparison
+///    consumed by `? IS NOT NULL` (default)
+///
+/// `min_revs` is bound twice; only one branch's gate is "live", the
+/// other is a tautology. Trade-off: a 1-bind redundancy for a single
+/// caller-side `params!` invocation that doesn't branch on the flag.
+fn build_coupling_sql(src: &str, code_maat_compat: bool) -> String {
+    let (file_revs_gate, pair_avg_gate) = if code_maat_compat {
+        // Compat: live gate is per-pair-average on the final SELECT.
+        // `file_revs` consumes its placeholder via a tautology that
+        // succeeds whenever the input is NOT NULL (always true for
+        // a u32-bound `?`).
+        (
+            "HAVING ? IS NOT NULL",
+            "AND (fr_a.revs + fr_b.revs) / 2.0 >= ?",
+        )
+    } else {
+        // Default: live gate is per-file `HAVING revs >= ?`. The
+        // per-pair-average placeholder is consumed by a tautology in
+        // the final SELECT.
+        ("HAVING revs >= ?", "AND ? IS NOT NULL")
+    };
     format!(
         "WITH good_commits AS (
              SELECT rev
@@ -87,7 +137,7 @@ fn build_coupling_sql(src: &str) -> String {
              FROM {src}
              INNER JOIN good_commits USING(rev)
              GROUP BY path
-             HAVING revs >= ?
+             {file_revs_gate}
          ),
          pairs AS (
              SELECT
@@ -113,6 +163,7 @@ fn build_coupling_sql(src: &str) -> String {
          INNER JOIN file_revs fr_b ON fr_b.path = p.path_b
          WHERE 100.0 * p.shared / NULLIF((fr_a.revs + fr_b.revs) / 2.0, 0) >= ?
            AND 100.0 * p.shared / NULLIF((fr_a.revs + fr_b.revs) / 2.0, 0) <= ?
+           {pair_avg_gate}
          ORDER BY degree DESC, average_revs DESC, p.path_a ASC, p.path_b ASC"
     )
 }
@@ -170,7 +221,10 @@ pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
         .map_err(|e| CodeLoreError::Analysis(format!("total commits query: {e}")))?;
     let total = u32::try_from(total_commits).unwrap_or(u32::MAX);
 
-    let coupling_sql = build_coupling_sql(src);
+    // PAR-6: `build_coupling_sql` now takes `code_maat_compat` and the
+    // bind list has 6 entries (min_revs bound twice — only one branch's
+    // gate is live, the other is a tautology). See builder's doc.
+    let coupling_sql = build_coupling_sql(src, opts.code_maat_compat);
     crate::analyses::query::explain_if_requested(
         db,
         &coupling_sql,
@@ -180,6 +234,7 @@ pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
             opts.min_shared_revs,
             opts.min_coupling_pct,
             opts.max_coupling_pct,
+            opts.min_revs,
         ],
         "coupling",
         opts,
@@ -197,6 +252,7 @@ pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
                 opts.min_shared_revs,
                 opts.min_coupling_pct,
                 opts.max_coupling_pct,
+                opts.min_revs,
             ],
             |r| {
                 Ok((

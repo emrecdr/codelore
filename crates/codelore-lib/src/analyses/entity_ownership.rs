@@ -4,6 +4,11 @@
 //! by each author on each file. Differs from `ownership` (Fractal Value
 //! summary per file) by emitting one row per `(entity, author)` pair
 //! instead of one row per entity.
+//!
+//! Research basis: see `docs/research-foundations.md` entry
+//! "entity-effort / entity-ownership" (D'Ambros, Gall, Lanza & Pinzger
+//! 2008 — pipeline input for expertise-heat-map and refactoring-task
+//! assignment workflows).
 
 use duckdb::params;
 

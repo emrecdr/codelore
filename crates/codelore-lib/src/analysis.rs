@@ -40,6 +40,12 @@ pub enum AnalysisName {
     // PAR-4 + PAR-5: per-(entity, author) row analyses.
     EntityEffort,
     EntityOwnership,
+    // PAR-1 (modernise-don't-migrate): codelore's previous per-author
+    // commit leaderboard. The `authors` name now resolves to the
+    // per-entity Bird et al. risk-indicator query; `top-committers`
+    // is the "who commits the most overall" view, enriched with
+    // LoC totals and first/last commit dates.
+    TopCommitters,
 }
 
 impl AnalysisName {
@@ -67,6 +73,7 @@ impl AnalysisName {
             Self::MainDevByDeletions => "main-dev-by-deletions",
             Self::EntityEffort => "entity-effort",
             Self::EntityOwnership => "entity-ownership",
+            Self::TopCommitters => "top-committers",
         }
     }
 
@@ -94,6 +101,7 @@ impl AnalysisName {
             Self::MainDevByDeletions,
             Self::EntityEffort,
             Self::EntityOwnership,
+            Self::TopCommitters,
         ]
     }
 }

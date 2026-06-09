@@ -25,7 +25,7 @@
 
 Behind every codebase is a human narrative your linter cannot see: who wrote this, who still understands it, which corners hide tribal knowledge nobody's written down, and where the historical scars are buried. Every commit is a piece of this **lore**.
 
-**CodeLore** mines your repository's git history and projects it into 21 behavioral analyses — hotspots, change-coupling, ownership maps, knowledge fragmentation, code health scores, copy-paste clones, live clones (clones × Fisher-significant co-change), commit-message regex matching, sum-of-coupling, main-developer rankings, and more — surfaced as SARIF for your existing CI dashboard. The socio-technical signal your linter cannot see, with the methodological honesty your team can audit.
+**CodeLore** mines your repository's git history and projects it into 22 behavioral analyses — hotspots, change-coupling, ownership maps, knowledge fragmentation, code health scores, copy-paste clones, live clones (clones × Fisher-significant co-change), commit-message regex matching, sum-of-coupling, main-developer rankings, and more — surfaced as SARIF for your existing CI dashboard. The socio-technical signal your linter cannot see, with the methodological honesty your team can audit.
 
 A Rust **drop-in successor** to Adam Tornhill's [code-maat](https://github.com/adamtornhill/code-maat) — every published code-maat analysis is supported under the same `--analysis NAME` flag, with modern improvements: deterministic tiebreaks, Fisher exact significance gates, SARIF output, persistent cache, PR-mode diffing, and a SQL-queryable fact store. Built on [gix](https://github.com/GitoxideLabs/gitoxide) (pure-Rust git), [DuckDB](https://duckdb.org) (embedded analytics), [fancy-regex](https://github.com/fancy-regex/fancy-regex) (lookaround support for architectural grouping), and a vendored fork of Mozilla's [rust-code-analysis](https://github.com/mozilla/rust-code-analysis) (tree-sitter complexity).
 
@@ -55,11 +55,11 @@ What separates CodeLore from code-maat, CodeScene, and jscpd:
 - **🧾 Provenance manifest.** Every run emits a `.provenance.json` sidecar recording every config knob (auto-derived via canonical Options serialization — adding a new field auto-propagates), version pin, and timestamp. Reproducibility receipt for the run; eliminates the "we got different numbers because we silently used different thresholds" failure mode.
 - **💾 SQL-queryable fact store.** No proprietary format lock-in. Export the full DuckDB store as Parquet or SQLite and query your git history as a database from the command line.
 - **⚡ Persistent cache.** Second invocation on the same `(repo, HEAD, options)` opens read-only in ~10 ms instead of re-walking history — typically a 10-100× speedup on the dev inner loop depending on repo size, and the foundation of the `codelore diff` PR-mode subcommand.
-- **🔗 Drop-in code-maat compatibility.** Every published code-maat analysis is supported under the same `--analysis NAME`. The `--code-maat-compat` flag (planned) flips internal defaults back to legacy semantics for users with dashboards that parse code-maat CSV verbatim.
+- **🔗 Drop-in code-maat compatibility.** Every published code-maat analysis is supported under the same `--analysis NAME`. The `--code-maat-compat` flag flips internal defaults (`min-revs` pivot, CSV column headers for `summary` / `code-age` / `communication` / `ownership` / `authors`, `--min-soc` overload) back to legacy semantics for users with dashboards that parse code-maat CSV verbatim — see the [migration table](#migrating-from-code-maat) below.
 
 ---
 
-## The 21 analyses
+## The 22 analyses
 
 Use `codelore analyze --analysis NAME` for any of these. Code-maat parity is **complete**; modern additions are marked **★**.
 
@@ -75,7 +75,8 @@ Use `codelore analyze --analysis NAME` for any of these. Code-maat parity is **c
 | `author-churn` | LOC added/deleted per author | Effort distribution |
 | `entity-churn` | LOC added/deleted per file | Refactor-target ranking |
 | `communication` | author pairs by shared-file work | Conway's law signals |
-| `authors` | commits per canonical author | Onboarding / recognition |
+| `authors` | per-file count of distinct authors (humans / bots / AI broken out) | Bird et al. 2011 defect-risk indicator |
+| `top-committers` | per-author leaderboard (commits, LoC, first/last commit, bot flag) | Release notes / contributor recognition |
 | `summary` | one-page repo overview | First slide of any review |
 | `ownership` | Fractal Value (1-HHI) per file + main-author | Bus-factor / knowledge-loss risk |
 | `entity-effort` | per-(file, author) revision counts | "Who's doing the work on this file?" |
@@ -195,7 +196,7 @@ codelore analyze --analysis clone-coupling --repo . --format markdown
 
 Live clones — function-level copy-paste families whose copies co-change at Fisher-significant rates. Real code-duplication debt: every change has to be made in N places, every bug has N variants. Dead clones (filtered out) are noise.
 
-Once you've run those four, you have enough signal to triage. From here, [the advanced guide](docs/advanced-usage.md) covers all 21 analyses, every flag, configuration, CI integration, and tool-stack rationale.
+Once you've run those four, you have enough signal to triage. From here, [the advanced guide](docs/advanced-usage.md) covers all 22 analyses, every flag, configuration, CI integration, and tool-stack rationale.
 
 ---
 
@@ -288,7 +289,7 @@ Default: **non-strict** (unmapped paths keep their raw names; safer than silent 
    └─────────────────────┘
 ```
 
-Every commit becomes a `CommitEvent` projected onto a DuckDB fact store. The 21 analyses are SQL queries over that store plus a thin Rust orchestrator each. Outputs flow through six format emitters. Every run is cached and audit-trail-stamped with a provenance sidecar.
+Every commit becomes a `CommitEvent` projected onto a DuckDB fact store. The 22 analyses are SQL queries over that store plus a thin Rust orchestrator each. Outputs flow through six format emitters. Every run is cached and audit-trail-stamped with a provenance sidecar.
 
 For deeper architecture, see the [design specification](docs/superpowers/specs/2026-06-06-codelore-design.md) (~1100 lines, covers every threshold and identity rule).
 
@@ -311,7 +312,7 @@ What we deliberately don't ship: no async runtime, no libgit2 binding, no LLM-ba
 
 ## Status
 
-Release-ready alpha. **21 analyses × 6 output formats × `codelore diff` PR-mode × 4 SARIF rules.** Full test suite (`codelore-lib` unit + integration, `codelore-cli` integration, differential `GixRepo` vs `GitCliRepo` cross-walker parity) passes on Rust 1.96.0 across Linux, macOS, and Windows; `clippy -D warnings`, `rustfmt --check`, and `cargo deny check` all gate every push. Each tagged release ships prebuilt binaries for five targets (macOS arm64/x86_64, Linux arm64/x86_64-gnu, Windows x86_64-msvc), each with SLSA L3 build provenance attached, a distroless OCI container at `ghcr.io/emrecdr/codelore`, an auto-regenerated formula in the `emrecdr/codelore` Homebrew tap, and a `cargo binstall`-compatible asset layout — all produced by `.github/workflows/release.yml` on every `v*` tag push, gated by the `protect-release-tags` ruleset that requires green CI on the target commit before the tag is accepted.
+Release-ready alpha. **22 analyses × 6 output formats × `codelore diff` PR-mode × 4 SARIF rules.** Full test suite (`codelore-lib` unit + integration, `codelore-cli` integration, differential `GixRepo` vs `GitCliRepo` cross-walker parity) passes on Rust 1.96.0 across Linux, macOS, and Windows; `clippy -D warnings`, `rustfmt --check`, and `cargo deny check` all gate every push. Each tagged release ships prebuilt binaries for five targets (macOS arm64/x86_64, Linux arm64/x86_64-gnu, Windows x86_64-msvc), each with SLSA L3 build provenance attached, a distroless OCI container at `ghcr.io/emrecdr/codelore`, an auto-regenerated formula in the `emrecdr/codelore` Homebrew tap, and a `cargo binstall`-compatible asset layout — all produced by `.github/workflows/release.yml` on every `v*` tag push, gated by the `protect-release-tags` ruleset that requires green CI on the target commit before the tag is accepted.
 
 **This session's deliverables** (3 sprints + GitHub tags + versioning):
 
@@ -337,7 +338,7 @@ Full backlog: [`docs/roadmap-v1.x-and-beyond.md`](docs/roadmap-v1.x-and-beyond.m
 
 | If you want… | Read |
 |---|---|
-| All 21 analyses + every flag + CI patterns + troubleshooting | [`docs/advanced-usage.md`](docs/advanced-usage.md) |
+| All 22 analyses + every flag + CI patterns + troubleshooting | [`docs/advanced-usage.md`](docs/advanced-usage.md) |
 | The architecture overview (workspace shape, pipeline data flow, threading model) | [`docs/codebase_analysis.md`](docs/codebase_analysis.md) |
 | The full design specification (~1100 lines) | [`docs/superpowers/specs/2026-06-06-codelore-design.md`](docs/superpowers/specs/2026-06-06-codelore-design.md) |
 | The prioritized roadmap (near-term and long-term backlog) | [`docs/roadmap-v1.x-and-beyond.md`](docs/roadmap-v1.x-and-beyond.md) |
@@ -362,12 +363,36 @@ java -jar code-maat.jar -l logfile.log -c git -a coupling
 codelore analyze --analysis coupling --repo /path/to/repo
 ```
 
-The output schemas mostly match exactly. Two deliberate divergences:
+### Modern defaults vs code-maat compatibility
 
-1. **Honest column headers.** Code-maat's `main-dev-by-revs` emits `added` / `total-added` columns containing revision counts (lying labels). CodeLore emits `revisions` / `total-revisions`.
-2. **Deterministic tiebreaks.** Where code-maat's tie-breaking is arbitrary (`first (reverse (sort-by ...))`), CodeLore adds a secondary sort on canonical author name. Reproducible output across runs.
+CodeLore's default surface reflects modern stack capabilities; code-maat compatibility is opt-in via `--code-maat-compat`. The divergences below are intentional — see the *Modernise, don't migrate* framing in `docs/reports/deep_analysis_report.md`.
 
-The planned `--code-maat-compat` flag will restore both for users with dashboards parsing code-maat CSV verbatim — queued for the next sprint.
+| Surface | Code-maat | CodeLore default | Reachable via `--code-maat-compat` |
+|---|---|---|---|
+| Default `-a` | `authors` | `revisions` | Pass `-a authors` explicitly under compat to get the per-entity Bird et al. risk indicator. |
+| `-a authors` columns | `[entity, n-authors, n-revs]` | `[entity, n_authors, n_humans, n_bots, n_revs, last_author, last_modified]` — exploits CodeLore's identity layers (humans / bots / AI-author classification) | ✓ — CSV writer emits the legacy three columns under compat. |
+| Per-author leaderboard | Approximated via `-a author-churn` + sort | First-class `-a top-committers` with `commits / loc_added / loc_deleted / first_commit / last_commit / is_bot` | (n/a — distinct analysis; no code-maat equivalent.) |
+| `code-age` columns | `[entity, age-months]` | `[entity, age_months, age_days, last_modified]` — second-precision back-test, recency triage | ✓ — CSV writer emits `entity,age-months` under compat. |
+| Column casing | `n-authors`, `age-months`, `loc-added` (hyphens) | `n_authors`, `age_months`, `added` (snake_case — Rust idiom, also matches JSON/SARIF/parquet) | ✓ — compat-mode CSV writers (`summary`, `code-age`, `communication`, `ownership`, `authors`) emit code-maat's hyphenated names. |
+| Tie-break | Arbitrary | Secondary sort on canonical author name; cross-run reproducibility | (n/a — modernisation, no code-maat equivalent worth restoring.) |
+| Short flags | 13 single-letter flags (`-n -m -i -x -s -t -d -l -c -r`) | Long flags only (4 surviving shorts: `-a -o -g -p -e`) | (n/a — modern CLI convention; migration map below.) |
+
+### Short-flag migration map
+
+Modern CLI design favours long flags; CodeLore does not restore code-maat's 2013-era cryptic shorts. The one-time script rewrite:
+
+| code-maat | CodeLore |
+|---|---|
+| `-l <log>` | (no analog — CodeLore reads git directly) |
+| `-c <vcs>` | (no analog — CodeLore is git-only by design) |
+| `-r N` | `--rows N` |
+| `-n N` | `--min-revs N` |
+| `-m N` | `--min-shared-revs N` |
+| `-i N` | `--min-coupling N` |
+| `-x N` | `--max-coupling N` |
+| `-s N` | `--max-changeset-size N` |
+| `-d <date>` | `--age-time-now <date>` |
+| `-t N` | `--time-bucket DAY|WEEK|MONTH` (cleaner non-overlapping buckets; code-maat's sliding window is not propagated — see deep-analysis report PAR-3) |
 
 ---
 

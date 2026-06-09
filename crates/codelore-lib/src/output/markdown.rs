@@ -69,10 +69,16 @@ pub fn write_code_health_markdown<W: Write>(rows: &[CodeHealthRow], w: &mut W) -
 
 pub fn write_code_age_markdown<W: Write>(rows: &[CodeAgeRow], w: &mut W) -> Result<()> {
     header(w, "CodeLore code-age")?;
-    writeln!(w, "| Entity | Age (months) |").map_err(CodeLoreError::Io)?;
-    writeln!(w, "|---|---|").map_err(CodeLoreError::Io)?;
+    writeln!(w, "| Entity | Age (months) | Age (days) | Last modified |")
+        .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---|---|---|").map_err(CodeLoreError::Io)?;
     for row in rows {
-        writeln!(w, "| `{}` | {} |", row.path, row.age_months).map_err(CodeLoreError::Io)?;
+        writeln!(
+            w,
+            "| `{}` | {} | {} | {} |",
+            row.path, row.age_months, row.age_days, row.last_modified
+        )
+        .map_err(CodeLoreError::Io)?;
     }
     Ok(())
 }
@@ -207,11 +213,54 @@ pub fn write_clones_markdown<W: Write>(rows: &[ClonesRow], w: &mut W) -> Result<
 }
 
 pub fn write_authors_markdown<W: Write>(rows: &[AuthorsRow], w: &mut W) -> Result<()> {
-    header(w, "CodeLore authors")?;
-    writeln!(w, "| Author | Commits |").map_err(CodeLoreError::Io)?;
-    writeln!(w, "|---|---:|").map_err(CodeLoreError::Io)?;
+    header(w, "CodeLore authors (per-entity author breakdown)")?;
+    writeln!(
+        w,
+        "| Entity | Authors | Humans | Bots | Revs | Last author | Last modified |"
+    )
+    .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---:|---:|---:|---:|---|---|").map_err(CodeLoreError::Io)?;
     for row in rows {
-        writeln!(w, "| {} | {} |", row.author, row.commits).map_err(CodeLoreError::Io)?;
+        writeln!(
+            w,
+            "| `{}` | {} | {} | {} | {} | {} | {} |",
+            row.entity,
+            row.n_authors,
+            row.n_humans,
+            row.n_bots,
+            row.n_revs,
+            row.last_author,
+            row.last_modified,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+pub fn write_top_committers_markdown<W: Write>(
+    rows: &[crate::analyses::top_committers::TopCommittersRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore top-committers")?;
+    writeln!(
+        w,
+        "| Author | Commits | LoC added | LoC deleted | First commit | Last commit | Bot |"
+    )
+    .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---:|---:|---:|---|---|---|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| {} | {} | {} | {} | {} | {} | {} |",
+            row.author,
+            row.commits,
+            row.loc_added,
+            row.loc_deleted,
+            row.first_commit,
+            row.last_commit,
+            if row.is_bot { "yes" } else { "no" },
+        )
+        .map_err(CodeLoreError::Io)?;
     }
     Ok(())
 }

@@ -15,6 +15,11 @@
 //!     - exclude generated/vendored paths (handled by `--exclude` + `.codeloreignore`)
 //!     - optional same-dir skip (`opts.clone_skip_same_dir`, default true).
 //!
+//! Research basis: see `docs/research-foundations.md` entry
+//! "clone-coupling" (Tornhill, *Software Design X-Rays*, 2018 —
+//! X-Ray analysis; `CodeScene` productisation). `CodeLore` ships the
+//! same analytical pattern with published-formula transparency.
+//!
 //! NOTE: This analysis assumes Plan 8 §4 (`extract_clones_at_head` populates
 //! the `clones` table during `FactsDb::ingest`) has shipped. Before §4 lands,
 //! the JOIN returns 0 rows because the `clones` table stays empty even though
@@ -82,12 +87,23 @@ pub fn run_clone_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CloneCoupl
     // and the `max_changeset_size` pre-filter — we lean on that work and
     // just JOIN our clone-family pairs against the results.
     //
-    // CRITICAL: strip `rows_limit` for the inner call. `--rows N` is meant
-    // to cap the FINAL clone-coupling rows the user sees; if it propagated
-    // into `run_coupling`, the inner result would truncate to the top N
-    // global coupling pairs and we'd silently miss every clone whose
-    // partner sits outside that window. See `Options::with_no_row_limit`.
-    let coupling_rows = crate::analyses::coupling::run_coupling(db, &opts.with_no_row_limit())?;
+    // CRITICAL: strip `rows_limit` AND drop `min_shared_revs` to the
+    // clone-coupling floor for the inner call.
+    //
+    // - `--rows N` is meant to cap the FINAL clone-coupling rows the user
+    //   sees; if it propagated into `run_coupling`, the inner result would
+    //   truncate to the top N global coupling pairs and we'd silently miss
+    //   every clone whose partner sits outside that window.
+    // - `--min-shared-revs` default (5) would silently drop clone pairs
+    //   that co-changed exactly 3 or 4 times — even though
+    //   `--min-clone-shared-revs` (default 3) explicitly allows them.
+    //   F2 fix: `for_clone_coupling_inner_coupling` lowers the floor to
+    //   the clone-coupling threshold so the candidate pool is correct
+    //   BEFORE we filter by clone-coupling's own threshold below.
+    //
+    // See `Options::for_clone_coupling_inner_coupling`.
+    let coupling_rows =
+        crate::analyses::coupling::run_coupling(db, &opts.for_clone_coupling_inner_coupling())?;
 
     // Index coupling pairs by (file_a, file_b) — both orderings, since clone
     // pairs come from the `clones` self-join with `path_a < path_b` ordering

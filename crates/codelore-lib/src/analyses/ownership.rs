@@ -4,6 +4,11 @@
 //! Inspired by D'Ambros, Gall, Lanza & Pinzger.
 //!
 //! Also surfaces the main developer (author with highest revision count) per file.
+//!
+//! Research basis: see `docs/research-foundations.md` entry "ownership"
+//! (Mockus & Herbsleb, ICSE 2002 — expertise concentration measurement;
+//! Hirschman 1980 — Herfindahl–Hirschman concentration index borrowed
+//! from industrial organisation).
 
 use duckdb::params;
 

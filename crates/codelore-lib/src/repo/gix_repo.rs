@@ -91,19 +91,26 @@ impl Repo for GixRepo {
                 if !opts.include_merges && commit.parent_ids().count() > 1 {
                     return None;
                 }
-                // R2: date-range filter on author date.
+                // R2: date-range filter on author date. `opts.after` /
+                // `opts.before` are `time::Date` (calendar-day precision —
+                // matches git's own `--after`/`--before` semantics). The
+                // author time is now a full `OffsetDateTime` post-schema-v2;
+                // extract its calendar date for the comparison so we stay
+                // day-precise here even though we keep the full timestamp
+                // downstream.
                 if opts.after.is_some() || opts.before.is_some() {
-                    let date = match commit_author_date(&commit) {
+                    let ts = match commit_author_date(&commit) {
                         Ok(d) => d,
                         Err(e) => return Some(Err(e)),
                     };
+                    let calendar_date = ts.date();
                     if let Some(after) = opts.after
-                        && date < after
+                        && calendar_date < after
                     {
                         return None;
                     }
                     if let Some(before) = opts.before
-                        && date > before
+                        && calendar_date > before
                     {
                         return None;
                     }
@@ -488,9 +495,13 @@ fn count_loc(
     Ok((added, removed))
 }
 
-/// Extract the author-time date from a gix commit. Used by both the
-/// `CommitEvent` constructor and the pre-filter in `walk_commits`.
-fn commit_author_date(commit: &gix::Commit<'_>) -> Result<time::Date> {
+/// Extract the author-time as a full `OffsetDateTime` from a gix commit.
+/// Used by both the `CommitEvent` constructor and the pre-filter in
+/// `walk_commits`. Returns UTC-anchored (`from_unix_timestamp` always
+/// yields a UTC instant); the original author tz offset from the gix
+/// signature is currently discarded — see schema v2 doc for the
+/// tz-preservation roadmap.
+fn commit_author_date(commit: &gix::Commit<'_>) -> Result<time::OffsetDateTime> {
     use time::OffsetDateTime;
     let author_ref = commit
         .author()
@@ -499,9 +510,8 @@ fn commit_author_date(commit: &gix::Commit<'_>) -> Result<time::Date> {
         .time()
         .map_err(|e| CodeLoreError::Repo(format!("author time: {e}")))?
         .seconds;
-    Ok(OffsetDateTime::from_unix_timestamp(ts_seconds)
-        .map_err(|e| CodeLoreError::Repo(format!("commit timestamp {ts_seconds}: {e}")))?
-        .date())
+    OffsetDateTime::from_unix_timestamp(ts_seconds)
+        .map_err(|e| CodeLoreError::Repo(format!("commit timestamp {ts_seconds}: {e}")))
 }
 
 fn commit_event_from_gix(commit: &gix::Commit<'_>) -> Result<CommitEvent> {
@@ -527,8 +537,7 @@ fn commit_event_from_gix(commit: &gix::Commit<'_>) -> Result<CommitEvent> {
         .map_err(|e| CodeLoreError::Repo(format!("author time: {e}")))?
         .seconds;
     let date = OffsetDateTime::from_unix_timestamp(ts_seconds)
-        .map_err(|e| CodeLoreError::Repo(format!("commit timestamp {ts_seconds}: {e}")))?
-        .date();
+        .map_err(|e| CodeLoreError::Repo(format!("commit timestamp {ts_seconds}: {e}")))?;
 
     let message = commit
         .message_raw()

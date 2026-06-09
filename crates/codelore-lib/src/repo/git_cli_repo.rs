@@ -5,8 +5,6 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use time::Date;
-
 use crate::repo::{CommitMetadata, Repo};
 use crate::{ChangeType, CodeLoreError, CommitEvent, FileChange, Hunk, Options, Result};
 
@@ -443,7 +441,7 @@ fn parse_pretty_block(pretty: &str, name_status: &str) -> Option<CommitEvent> {
         parents_raw.split_whitespace().map(str::to_string).collect()
     };
 
-    let date = parse_iso_date(&date_str)?;
+    let date = parse_iso_timestamp(&date_str)?;
     let changes = parse_changes_block(name_status);
 
     Some(CommitEvent {
@@ -623,20 +621,50 @@ fn parse_range(s: &str) -> Option<(u32, u32)> {
     }
 }
 
-fn parse_iso_date(s: &str) -> Option<Date> {
-    // ISO 8601 with offset, e.g. "2026-06-06T19:29:04+02:00"
-    // The `time` crate is compiled without the `parsing` feature, so we parse
-    // the date portion (YYYY-MM-DD) manually from the leading 10 characters.
-    use time::Month;
+/// Parse `git log %aI` output (ISO 8601 with offset, e.g.
+/// `"2026-06-06T19:29:04+02:00"`) into a full `OffsetDateTime`.
+///
+/// The `time` crate is compiled without the `parsing` feature in this
+/// workspace (see `codelore-lib/Cargo.toml`), so we hand-parse instead of
+/// using `OffsetDateTime::parse`. The shape `git log --pretty=%aI`
+/// emits is fixed and ASCII-only, so byte slicing is safe.
+///
+/// Returns `None` on any malformed input — caller drops the commit.
+fn parse_iso_timestamp(s: &str) -> Option<time::OffsetDateTime> {
+    use time::{Date, Month, PrimitiveDateTime, Time, UtcOffset};
     let s = s.trim();
-    if s.len() < 10 {
+    // Minimum: `YYYY-MM-DDTHH:MM:SSZ` = 20 chars. We also accept `±HH:MM`
+    // offsets (25 chars).
+    if s.len() < 20 {
         return None;
     }
     let year: i32 = s[0..4].parse().ok()?;
     let month: u8 = s[5..7].parse().ok()?;
     let day: u8 = s[8..10].parse().ok()?;
+    let hour: u8 = s[11..13].parse().ok()?;
+    let minute: u8 = s[14..16].parse().ok()?;
+    let second: u8 = s[17..19].parse().ok()?;
     let month = Month::try_from(month).ok()?;
-    Date::from_calendar_date(year, month, day).ok()
+    let date = Date::from_calendar_date(year, month, day).ok()?;
+    let time = Time::from_hms(hour, minute, second).ok()?;
+    let primitive = PrimitiveDateTime::new(date, time);
+
+    // Offset: `Z` (UTC) or `±HH:MM` starting at byte 19.
+    let offset = match s.as_bytes().get(19)? {
+        b'Z' => UtcOffset::UTC,
+        b'+' | b'-' => {
+            // Need at least `±HH:MM` (6 chars from offset start).
+            if s.len() < 25 {
+                return None;
+            }
+            let sign: i8 = if s.as_bytes()[19] == b'+' { 1 } else { -1 };
+            let off_hour: i8 = s[20..22].parse().ok()?;
+            let off_min: i8 = s[23..25].parse().ok()?;
+            UtcOffset::from_hms(sign * off_hour, sign * off_min, 0).ok()?
+        }
+        _ => return None,
+    };
+    Some(primitive.assume_offset(offset))
 }
 
 #[cfg(test)]

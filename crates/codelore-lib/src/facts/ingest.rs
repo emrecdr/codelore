@@ -582,17 +582,27 @@ fn ingest_loop(
     Ok(stats)
 }
 
-/// Format a `time::Date` as `YYYY-MM-DD` without the `formatting` feature.
-fn format_date(date: time::Date) -> String {
-    let y = date.year();
-    let m = date.month() as u8;
-    let d = date.day();
-    format!("{y:04}-{m:02}-{d:02}")
+/// Format a `time::OffsetDateTime` as `YYYY-MM-DD HH:MM:SS` (UTC, no tz
+/// suffix) for the `DuckDB` `TIMESTAMP` column. We don't enable the `time`
+/// crate's `formatting` feature workspace-wide, so hand-format here.
+///
+/// The input is converted to UTC before formatting — the original tz
+/// offset is discarded at the schema boundary (schema v2 doc explains the
+/// tz-preservation roadmap).
+fn format_timestamp(ts: time::OffsetDateTime) -> String {
+    let utc = ts.to_offset(time::UtcOffset::UTC);
+    let y = utc.year();
+    let m = utc.month() as u8;
+    let d = utc.day();
+    let hh = utc.hour();
+    let mm = utc.minute();
+    let ss = utc.second();
+    format!("{y:04}-{m:02}-{d:02} {hh:02}:{mm:02}:{ss:02}")
 }
 
 fn append_commit(app: &mut Appender<'_>, e: &CommitEvent) -> Result<()> {
     use duckdb::params;
-    let date_str = format_date(e.date);
+    let date_str = format_timestamp(e.date);
     let canonical = e
         .canonical_author
         .as_deref()
