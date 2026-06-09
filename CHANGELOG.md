@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-06-09
+
 ### Fixed — correctness
 
 - **Pre-flight banner failures now exit with the correct typed-error code.**
