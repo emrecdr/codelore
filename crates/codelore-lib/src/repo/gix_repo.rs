@@ -55,17 +55,20 @@ impl Repo for GixRepo {
         // `--after` flag has the same behaviour (it's commit-time based),
         // so GitCliRepo would too. Net: GixRepo and GitCliRepo CONVERGE.
         let mut walk = repo.rev_walk([head]);
-        if let Some(after) = opts.after {
-            let cutoff_seconds = after
-                .with_hms(0, 0, 0)
-                .ok()
-                .and_then(|d| d.assume_utc().unix_timestamp().try_into().ok());
-            if let Some(seconds) = cutoff_seconds {
-                walk = walk.sorting(gix::revision::walk::Sorting::ByCommitTimeCutoff {
-                    seconds,
-                    order: gix::traverse::commit::simple::CommitTimeOrder::NewestFirst,
-                });
-            }
+        if let Some(after) = opts.after
+            && let Ok(start_of_day) = after.with_hms(0, 0, 0)
+        {
+            // `time::Date::with_hms` only fails on invalid HMS components, so
+            // 0,0,0 always succeeds; the `if let Ok` is defensive belt-and-
+            // braces. `unix_timestamp()` returns `i64` which is the exact
+            // type `gix::revision::walk::Sorting::ByCommitTimeCutoff::seconds`
+            // accepts (via the `gix_date::SecondsSinceUnixEpoch = i64` alias),
+            // so no conversion is needed.
+            let seconds = start_of_day.assume_utc().unix_timestamp();
+            walk = walk.sorting(gix::revision::walk::Sorting::ByCommitTimeCutoff {
+                seconds,
+                order: gix::traverse::commit::simple::CommitTimeOrder::NewestFirst,
+            });
         }
         let oids: Vec<gix::ObjectId> = walk
             .all()
