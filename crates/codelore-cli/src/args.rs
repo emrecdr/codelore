@@ -83,6 +83,15 @@ pub struct Cli {
     /// Verbose logging
     #[arg(short, long, global = true)]
     pub verbose: bool,
+
+    /// Suppress the pre-flight banner (the box printed to stderr at the start
+    /// of every analyze run showing version, repo, branch, analysis name, and
+    /// pre-flight status). The banner is also auto-suppressed when stderr is
+    /// not a TTY (e.g. when piping into `tee` or redirecting to a file). When
+    /// a pre-flight CHECK fails the failure banner still prints — error
+    /// feedback is too important to swallow.
+    #[arg(long = "no-banner", global = true, default_value_t = false)]
+    pub no_banner: bool,
 }
 
 #[derive(Subcommand, Debug)]

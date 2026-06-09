@@ -5,6 +5,14 @@ use crate::facts::FactsDb;
 use crate::{CodeLoreError, Options, Result};
 use serde::Serialize;
 
+/// Pinned gix version embedded in every provenance manifest. Surfaced both
+/// in JSON sidecars and the pre-flight banner header. Kept in sync with the
+/// `gix` dep in workspace `Cargo.toml` via `tests/dep_versions_drift_test.rs`,
+/// which fails CI if these constants and `Cargo.lock` drift apart.
+pub const GIX_VERSION: &str = "0.84.0";
+/// Pinned `DuckDB` version — same drift guard applies.
+pub const DUCKDB_VERSION: &str = "1.10503.1";
+
 #[derive(Debug, Serialize)]
 pub struct Manifest {
     pub codelore_version: String,
@@ -54,9 +62,9 @@ impl Manifest {
         };
         Ok(Self {
             codelore_version: env!("CARGO_PKG_VERSION").to_string(),
-            gix_version: "0.84.0".to_string(),
+            gix_version: GIX_VERSION.to_string(),
             arrow_version: crate::arrow_facade::ARROW_RUNTIME_VERSION.to_string(),
-            duckdb_version: "1.10503.1".to_string(),
+            duckdb_version: DUCKDB_VERSION.to_string(),
             run_started_at,
             repo_path: opts.repo_path.display().to_string(),
             after_date: opts.after.map(|d| d.to_string()),

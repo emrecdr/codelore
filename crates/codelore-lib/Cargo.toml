@@ -35,6 +35,10 @@ tree-sitter-typescript = "=0.23.1"
 walkdir = "2"
 globset = "0.4"
 dirs = "6"
+# `anstyle` is what cargo + clap use for ANSI styling. Already in our tree
+# transitively via clap; declaring it as a direct dep lets the banner module
+# import it without bumping the binary footprint (anstyle is ~5KB, all-const).
+anstyle = "1"
 tracing = "0.1"
 rayon = "1"
 # `messages` analysis validates user-supplied --expression-to-match

@@ -188,6 +188,23 @@ impl Repo for GixRepo {
     }
 }
 
+impl GixRepo {
+    /// Returns the short branch name HEAD currently points at, or `None` when
+    /// HEAD is detached (no branch ref). Used by the pre-flight banner.
+    ///
+    /// Lives as an inherent method (not on the `Repository` trait) because
+    /// `GitCliRepo` would have to shell out to `git symbolic-ref` for parity
+    /// and we don't need branch-aware behavior in any analysis — this is a
+    /// presentation-layer accessor only.
+    #[must_use]
+    pub fn head_branch_name(&self) -> Option<String> {
+        let repo = self.inner.to_thread_local();
+        let head = repo.head().ok()?;
+        let referent = head.referent_name()?;
+        Some(referent.shorten().to_string())
+    }
+}
+
 /// Compute the per-file changes for a single commit identified by `rev`.
 ///
 /// Strategy: parse `rev` → look up commit → get commit tree and parent tree

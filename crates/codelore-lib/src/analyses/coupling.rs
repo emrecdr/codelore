@@ -65,7 +65,13 @@ fn source_table(opts: &Options) -> &'static str {
 ///  3. `min_shared_revs` — per-pair shared floor
 ///  4. `min_coupling_pct` — lower degree threshold
 ///  5. `max_coupling_pct` — upper degree threshold (pairs above are usually file splits or copy/rename pairs)
-///  6. `rows_limit` — `i64::MAX` means unlimited
+///
+/// NOTE: there is no `LIMIT` placeholder here on purpose. `rows_limit`
+/// applies AFTER the Rust-side Fisher exact significance filter — applying
+/// it inside SQL would let pairs that fail the significance test consume
+/// "slots" in the top-N, silently truncating the user's `--rows N` result
+/// to fewer than N rows even when more significant pairs exist further
+/// down the degree ranking. See `run_coupling` for the post-filter slice.
 ///
 /// The `src` parameter is one of `"changes"` or `"changes_bucketed"` —
 /// closed-enum-derived, never user input.
@@ -107,8 +113,7 @@ fn build_coupling_sql(src: &str) -> String {
          INNER JOIN file_revs fr_b ON fr_b.path = p.path_b
          WHERE 100.0 * p.shared / NULLIF((fr_a.revs + fr_b.revs) / 2.0, 0) >= ?
            AND 100.0 * p.shared / NULLIF((fr_a.revs + fr_b.revs) / 2.0, 0) <= ?
-         ORDER BY degree DESC, average_revs DESC, p.path_a ASC, p.path_b ASC
-         LIMIT ?"
+         ORDER BY degree DESC, average_revs DESC, p.path_a ASC, p.path_b ASC"
     )
 }
 
@@ -165,7 +170,6 @@ pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
         .map_err(|e| CodeLoreError::Analysis(format!("total commits query: {e}")))?;
     let total = u32::try_from(total_commits).unwrap_or(u32::MAX);
 
-    let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
     let coupling_sql = build_coupling_sql(src);
     crate::analyses::query::explain_if_requested(
         db,
@@ -176,7 +180,6 @@ pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
             opts.min_shared_revs,
             opts.min_coupling_pct,
             opts.max_coupling_pct,
-            row_limit
         ],
         "coupling",
         opts,
@@ -194,7 +197,6 @@ pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
                 opts.min_shared_revs,
                 opts.min_coupling_pct,
                 opts.max_coupling_pct,
-                row_limit,
             ],
             |r| {
                 Ok((
@@ -210,6 +212,11 @@ pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
         )
         .map_err(|e| CodeLoreError::Analysis(format!("query coupling: {e}")))?;
 
+    // Collect ALL candidates first, filter by Fisher exact significance, THEN
+    // truncate to `rows_limit`. The previous in-SQL `LIMIT ?` ran BEFORE the
+    // Fisher filter, so significance failures stole slots from the top-N and
+    // users requesting `--rows 100` could see 0–99 rows even when more
+    // significant pairs existed further down the degree ranking.
     let mut out = Vec::new();
     for raw in raw_rows {
         let (path_a, path_b, shared_raw, count_a, count_b, avg_raw, degree) =
@@ -237,6 +244,10 @@ pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
                 fisher_p,
             });
         }
+    }
+
+    if let Some(n) = opts.rows_limit {
+        out.truncate(n as usize);
     }
 
     Ok(out)

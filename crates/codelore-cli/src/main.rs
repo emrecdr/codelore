@@ -10,7 +10,7 @@ use std::str::FromStr;
 use anyhow::{Context, Result};
 use clap::Parser;
 use codelore_lib::facts::FactsDb;
-use codelore_lib::repo::GixRepo;
+use codelore_lib::repo::{GixRepo, Repo as _};
 use codelore_lib::{AnalysisName, Options};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
@@ -35,7 +35,7 @@ fn run() -> Result<()> {
     init_logging(cli.verbose);
 
     match cli.command {
-        Command::Analyze(args) => analyze(&args),
+        Command::Analyze(args) => analyze(&args, cli.no_banner),
         Command::Diff(args) => run_diff_cmd(&args),
     }
 }
@@ -76,7 +76,14 @@ fn init_logging(verbose: bool) {
 }
 
 #[allow(clippy::too_many_lines)]
-fn analyze(args: &AnalyzeArgs) -> Result<()> {
+fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
+    use codelore_lib::output::banner;
+    // Bracket the whole run with a wall-clock timer so the footer can report
+    // "completed in 4.3s". Started before any work so pre-flight, ingest,
+    // analysis, and emit all count toward the displayed duration — matches
+    // what `cargo build`'s `Finished in Xs` includes.
+    let started_at = std::time::Instant::now();
+
     let analysis = AnalysisName::from_str(&args.analysis)
         .with_context(|| format!("parsing --analysis {:?}", args.analysis))?;
 
@@ -173,9 +180,15 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
         return Ok(());
     }
 
+    // Pre-flight banner: opens the repo, runs cheap validity checks (path
+    // exists, is a git repo, has at least one commit, --output parent dir
+    // is writable), emits the boxed Style-B banner to stderr, and either
+    // returns the opened `GixRepo` (Ready) or bails with a banner-shaped
+    // error explaining what's wrong. Failure banners ALWAYS print even when
+    // `--no-banner` was passed — error feedback is too important to swallow.
     let repo = {
         let _span = tracing::info_span!(target: "codelore::bench", "bench.open_repo").entered();
-        GixRepo::open(&args.repo).context("open repo")?
+        preflight_and_open_repo(args, &opts, analysis_name, no_banner)?
     };
 
     // Parquet and SQLite formats require a writable DuckDB connection
@@ -696,7 +709,155 @@ fn analyze(args: &AnalyzeArgs) -> Result<()> {
         write_provenance_sidecar(&db, &opts, analysis_name, path)?;
     }
 
+    // Footer: closes the bracket opened by the pre-flight banner. Shows total
+    // wall-clock time (humanised: "234ms" / "4.3s" / "2m 34s"). Suppressed
+    // under the same conditions as the header — same `should_print` policy
+    // ensures piped invocations stay clean.
+    if banner::should_print(false, no_banner) {
+        let footer = banner::Footer {
+            analysis: analysis_name,
+            elapsed: started_at.elapsed(),
+            // Row counts plumbed through every (format, analysis) match arm
+            // is a bigger refactor; deferred. The duration + analysis-name
+            // line is the main UX win for v0.1.2.
+            rows: None,
+        };
+        eprint!("{}", footer.render(banner::should_color()));
+    }
+
     Ok(())
+}
+
+/// Pre-flight: cheap validations BEFORE the expensive ingest. Builds the
+/// Style-B banner from `Options` + `GixRepo` state, prints to stderr (always
+/// on failure, conditionally on success per `should_print`), and either
+/// returns the opened repo (Ready) or bails with a clear error.
+///
+/// Checks run in order:
+/// 1. `--repo` path exists on the filesystem
+/// 2. Path opens as a git repository (gix-recognised)
+/// 3. Repository has at least one commit (HEAD resolves)
+/// 4. `--output` parent directory exists (catches typos before the 30s ingest)
+fn preflight_and_open_repo(
+    args: &AnalyzeArgs,
+    opts: &Options,
+    analysis_name: &str,
+    no_banner: bool,
+) -> Result<GixRepo> {
+    use codelore_lib::output::banner::{self, Banner, Preflight};
+    use codelore_lib::provenance::{DUCKDB_VERSION, GIX_VERSION};
+
+    let repo_path_str = args.repo.display().to_string();
+    let options_summary = format_options_summary(opts);
+    let pkg_version = env!("CARGO_PKG_VERSION");
+
+    // Helper: build a Banner with the given pre-flight state. Shared shell
+    // keeps the failure renders consistent regardless of which check tripped.
+    let make_banner =
+        |branch: Option<String>, head_short: Option<String>, preflight: Preflight| Banner {
+            codelore_version: pkg_version,
+            gix_version: GIX_VERSION,
+            duckdb_version: DUCKDB_VERSION,
+            repo_path: repo_path_str.clone(),
+            branch,
+            head_short,
+            analysis: analysis_name,
+            options_summary: options_summary.clone(),
+            preflight,
+        };
+
+    // Step 1: does the path even exist on disk?
+    if !args.repo.exists() {
+        let b = make_banner(
+            None,
+            None,
+            Preflight::RepoPathMissing {
+                repo_path: repo_path_str.clone(),
+            },
+        );
+        eprint!("{}", b.render(banner::should_color()));
+        anyhow::bail!("--repo path does not exist: {repo_path_str}");
+    }
+
+    // Step 2: open as git repo. gix returns an error for non-repo paths;
+    // we translate into the `NotARepository` preflight variant for the user.
+    let repo = match GixRepo::open(&args.repo) {
+        Ok(r) => r,
+        Err(e) => {
+            let b = make_banner(
+                None,
+                None,
+                Preflight::NotARepository {
+                    repo_path: repo_path_str.clone(),
+                },
+            );
+            eprint!("{}", b.render(banner::should_color()));
+            return Err(anyhow::Error::new(e).context("open repo"));
+        }
+    };
+
+    // Step 3: HEAD points to a commit. An empty repo (post `git init`, no
+    // commits yet) makes every history-based analysis return nothing useful.
+    let Ok(head_sha) = repo.head_sha() else {
+        let b = make_banner(repo.head_branch_name(), None, Preflight::EmptyRepository);
+        eprint!("{}", b.render(banner::should_color()));
+        anyhow::bail!("repository has no commits");
+    };
+    let head_short: String = head_sha.chars().take(7).collect();
+    let branch = repo.head_branch_name();
+
+    // Step 4: `--output` parent dir exists. Fail-fast saves the user from
+    // waiting 30s through an ingest only to discover the directory was a
+    // typo. We don't actually try to open a write handle (that races with
+    // legitimate file creation by the emitter); just check the parent dir.
+    if let Some(out_path) = &args.output
+        && let Some(parent) = out_path.parent()
+        && !parent.as_os_str().is_empty()
+        && !parent.exists()
+    {
+        let b = make_banner(
+            branch.clone(),
+            Some(head_short.clone()),
+            Preflight::OutputNotWritable {
+                path: out_path.display().to_string(),
+                reason: format!("parent directory does not exist: {}", parent.display()),
+            },
+        );
+        eprint!("{}", b.render(banner::should_color()));
+        anyhow::bail!(
+            "--output parent directory does not exist: {}",
+            parent.display()
+        );
+    }
+
+    // All green — print the Ready banner if conditions allow (TTY + not
+    // suppressed), then hand the opened repo back to the caller.
+    let b = make_banner(branch, Some(head_short), Preflight::Ready);
+    if banner::should_print(false, no_banner) {
+        eprint!("{}", b.render(banner::should_color()));
+    }
+    Ok(repo)
+}
+
+/// One-line summary of the tuning knobs that mattered for this run. Goes
+/// into the banner's `Analysis:` row alongside the analysis name. We only
+/// surface a small curated set — the full canonical Options JSON lives in
+/// the provenance sidecar for reproducibility audits.
+fn format_options_summary(opts: &Options) -> String {
+    let mut parts = vec![format!("min-revs={}", opts.min_revs)];
+    if let Some(n) = opts.rows_limit {
+        parts.push(format!("rows={n}"));
+    }
+    if opts.include_merges {
+        parts.push("merges=on".to_string());
+    }
+    if opts.code_maat_compat {
+        parts.push("code-maat-compat".to_string());
+    }
+    if opts.explain {
+        parts.push("explain".to_string());
+    }
+    parts.join(", ")
 }
 
 fn write_provenance_sidecar(

@@ -717,6 +717,7 @@ dependencies = [
 name = "codelore-lib"
 version = "0.1.1"
 dependencies = [
+ "anstyle",
  "arrow",
  "codelore-rca",
  "criterion",

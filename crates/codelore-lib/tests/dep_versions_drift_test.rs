@@ -35,28 +35,19 @@ fn arrow_runtime_version_matches_cargo_lock() {
 #[test]
 fn provenance_gix_version_matches_cargo_lock() {
     let resolved = locked_version(CARGO_LOCK, "gix").expect("gix in Cargo.lock");
-    // The hardcoded string is inside `Provenance::capture()`'s struct literal,
-    // not exposed as a constant. Easiest stable assertion: regex out the
-    // literal from the source file. We keep this as a string match against
-    // the lockfile so any change to the literal AND any bump of Cargo.lock
-    // both trigger this test the same way.
-    let src = include_str!("../src/provenance/mod.rs");
-    let needle = format!("gix_version: \"{resolved}\"");
-    assert!(
-        src.contains(&needle),
-        "Cargo.lock resolved gix to {resolved} but provenance/mod.rs hardcodes a different value. \
-         Update the literal in `Provenance::capture` to match."
+    assert_eq!(
+        resolved,
+        codelore_lib::provenance::GIX_VERSION,
+        "provenance::GIX_VERSION drifted from Cargo.lock — bump the constant or pin the dep"
     );
 }
 
 #[test]
 fn provenance_duckdb_version_matches_cargo_lock() {
     let resolved = locked_version(CARGO_LOCK, "duckdb").expect("duckdb in Cargo.lock");
-    let src = include_str!("../src/provenance/mod.rs");
-    let needle = format!("duckdb_version: \"{resolved}\"");
-    assert!(
-        src.contains(&needle),
-        "Cargo.lock resolved duckdb to {resolved} but provenance/mod.rs hardcodes a different value. \
-         Update the literal in `Provenance::capture` to match."
+    assert_eq!(
+        resolved,
+        codelore_lib::provenance::DUCKDB_VERSION,
+        "provenance::DUCKDB_VERSION drifted from Cargo.lock — bump the constant or pin the dep"
     );
 }

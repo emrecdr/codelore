@@ -5,14 +5,23 @@
 //! ```text
 //!   hotspot_score(entity) = percentile_rank(revisions)
 //!                         × percentile_rank(cognitive_complexity)
-//!                         × (100 − code_health) / 10
+//!                         × (100 − code_health) / 4
 //! ```
 //!
-//! Note: an earlier version used `(10 − code_health) / 10` which produced
-//! negative scores because `code_health` is on the `[0, 100]` scale, not
-//! `[0, 10]`. The published formula now divides by 10 (not 100) so the
-//! resulting `[0, 10]` range matches what consumers (CSV, Markdown, SARIF
-//! emitters) display.
+//! Why divide by 4 (not 10)?  `code_health` is computed inline as
+//! `100 × (1 − 0.40 × normalize(cognitive))`, so its empirical range is
+//! `[60, 100]` — the `0.40` weight bounds the deduction. That makes
+//! `(100 − code_health) ∈ [0, 40]`; multiplied by two percent ranks (each
+//! in `[0, 1]`) the unscaled product caps at `40`. Dividing by 4 lands the
+//! score in the documented `[0, 10]` range and matches the `CodeScene`
+//! convention that `≈10 ⇒ "on fire"`.
+//!
+//! Earlier divisor history: the original `(10 − code_health) / 10` produced
+//! NEGATIVE scores (`code_health` is `[0, 100]`, not `[0, 10]`). The previous
+//! fix `(100 − code_health) / 10` kept the sign positive but capped output at
+//! `4.0` instead of `10.0` — so the documented `[0, 10]` scale was never
+//! reached and "on fire" was unreachable. The current `/ 4.0` closes that
+//! documented-range-vs-math drift.
 //!
 //! `code_health` itself is computed inline using cognitive complexity only;
 //! the churn / fragmentation / coupling inputs from `code_health` analysis
@@ -37,10 +46,10 @@ pub struct HotspotRow {
 // Aggregate per-path:
 //   revisions:   count of distinct commits in changes
 //   cognitive:   MAX of cognitive across all entities in the path's file
-//   code_health: 100 * (1 − 0.40 * normalize(cognitive))   ∈ [0, 100]
-//   hotspot_score: percent_rank(revs) * percent_rank(cog) * (100 − code_health) / 10
-//                  ∈ [0, 10] — divide by 10 not 100 so emitted values stay
-//                  on the same scale as code_health (0–10 hotspots, ≈10 = on fire).
+//   code_health: 100 * (1 − 0.40 * normalize(cognitive))   ∈ [60, 100]
+//   hotspot_score: percent_rank(revs) * percent_rank(cog) * (100 − code_health) / 4
+//                  ∈ [0, 10] — see module-level docstring for why the divisor
+//                  is 4, not 10 (code_health bottoms at 60, not 0).
 /// `{src}` becomes `changes` (legacy) or `changes_lineage` (canonical
 /// rename-aware). Kept as a `format!()` template so `--use-canonical-lineage`
 /// flips the table without rewriting the rest of the SQL.
@@ -102,7 +111,7 @@ pub const SQL: &str = "
         revs,
         cognitive,
         GREATEST(0.0, LEAST(100.0, 100.0 * (1.0 - 0.40 * norm_cx))) AS code_health,
-        pr_rev * pr_cx * (100.0 - GREATEST(0.0, LEAST(100.0, 100.0 * (1.0 - 0.40 * norm_cx)))) / 10.0 AS score
+        pr_rev * pr_cx * (100.0 - GREATEST(0.0, LEAST(100.0, 100.0 * (1.0 - 0.40 * norm_cx)))) / 4.0 AS score
     FROM ranked
     ORDER BY score DESC, path ASC
     LIMIT ?

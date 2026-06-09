@@ -4,6 +4,37 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Fixed — correctness
+
+- **`coupling` analysis no longer silently truncates significant pairs.**
+  The SQL query had `LIMIT ?` as its final clause, applied BEFORE the Rust-side
+  Fisher exact significance filter — so when `--rows N` was set, DuckDB
+  returned the top-N pairs by degree, then Fisher dropped the non-significant
+  ones, leaving the user with fewer than N rows even when more significant
+  pairs sat just below the truncation point. Fix: remove `LIMIT` from the
+  SQL builder, collect ALL candidates, apply the Fisher filter, then
+  `Vec::truncate(rows_limit)` in Rust. The composite call sites
+  (`code_health::materialize_centrality`, `clone_coupling::run_clone_coupling`)
+  were already passing `Options::with_no_row_limit()`, so they're unaffected
+  by the change. Memory cost: the in-memory `Vec` grows from `O(rows_limit)`
+  to `O(passing-pairs)` before truncation — bounded by the SQL `WHERE`
+  clauses (`min_revs`, `min_shared_revs`, `min_coupling_pct`,
+  `max_coupling_pct`) so it stays modest in practice.
+
+- **Hotspot score divisor `/10.0` → `/4.0` closes the documented-range gap.**
+  The module-level docstring promised `hotspot_score ∈ [0, 10]` but the math
+  capped output at `4.0`: `code_health` is computed inline as
+  `100 × (1 − 0.40 × normalize(cognitive))`, bounded `[60, 100]` because the
+  `0.40` weight limits the deduction; that makes `(100 − code_health) ∈ [0, 40]`;
+  multiplied by two percent ranks (each `[0, 1]`) the unscaled max is `40`;
+  dividing by 10 capped scores at `4.0`. Dividing by 4 lands them in the
+  documented `[0, 10]` band, matching the CodeScene convention that
+  `≈10 ⇒ "on fire"`. **Behavioural impact:** existing reports with a top
+  hotspot of `3.78` will now report `≈9.45` for the same file — the RANKING
+  is unchanged (only the absolute scale shifts), but anyone with thresholds
+  (e.g. SARIF rule cutoffs, code-review alerts) calibrated against the old
+  `[0, 4]` range needs to rescale them by ×2.5.
+
 ### Added — distribution
 
 - **Homebrew tap actually publishes a working formula.** The `emrecdr/homebrew-codelore` tap was created during v0.1.0 setup but stayed empty through v0.1.1 because the release workflow never produced a `.rb` formula — `[workspace.metadata.dist]` in `Cargo.toml` declared `installers = [..., "homebrew"]` and `publish-jobs = ["homebrew"]` but `.github/workflows/release.yml` is hand-rolled and never invokes `cargo dist`. Now wired end-to-end:
