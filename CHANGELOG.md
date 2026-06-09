@@ -6,6 +6,27 @@ Conventional Commits format. All notable changes documented here.
 
 ### Fixed — correctness
 
+- **Pre-flight banner failures now exit with the correct typed-error code.**
+  The new `analyze` pre-flight gate (path-missing / not-a-repo / empty-repo /
+  output-not-writable) was emitting `anyhow::bail!` without a wrapping
+  `CodeLoreError`, so the chain-walk in `main()` fell through to the default
+  exit code `1` instead of the spec §6.6 codes (`3` for repo errors, `5` for
+  output errors). Replaced each `bail!` with `Err(CodeLoreError::Repo(...))`
+  / `Err(CodeLoreError::Output(...))`. Closes the regression in
+  `invalid_repo_exits_with_code_3` that I introduced in the banner commit
+  earlier in this release.
+
+- **Rename-lineage CTE now respects chronological ordering.**
+  `materialize_path_lineage` walked the rename graph by joining
+  `c.rename_from = l.current` recursively, with no chronological constraint.
+  If a filename was renamed away and a DIFFERENT file later took the same
+  name, the CTE would walk through the old rename and produce a spurious
+  lineage edge — e.g. `A → B` in commit 1 plus `C → A` in commit 10 produced
+  a fictitious `C → A → B` trace that merged two unrelated files' history.
+  Fixed: the CTE now joins `commits.date` in both the seed and recursive
+  step, and the recursive step adds `WHERE co.date > l.current_date` so
+  only chronologically forward renames extend a chain.
+
 - **`coupling` analysis no longer silently truncates significant pairs.**
   The SQL query had `LIMIT ?` as its final clause, applied BEFORE the Rust-side
   Fisher exact significance filter — so when `--rows N` was set, DuckDB
@@ -34,6 +55,24 @@ Conventional Commits format. All notable changes documented here.
   is unchanged (only the absolute scale shifts), but anyone with thresholds
   (e.g. SARIF rule cutoffs, code-review alerts) calibrated against the old
   `[0, 4]` range needs to rescale them by ×2.5.
+
+- **`clones` analysis short-circuit now covers all 4 supported formats.**
+  Previously the `format == "csv"` guard on the early-exit branch meant
+  `--analysis clones --format json|markdown|sarif` fell through to the
+  full git-ingest path even though clones extraction is a HEAD-only
+  filesystem walk — making non-CSV clones runs 10–100× slower and
+  breaking them outright in non-git directories. Expanded the guard to
+  `matches!(format, "csv" | "json" | "markdown" | "sarif")` and added
+  per-format dispatch inside the short-circuit. Parquet/SQLite for
+  clones remain unsupported (no clones emitter for those formats).
+
+- **`communication` analysis is now rename-aware.** Conway's-law shared-
+  work output was the last path-aggregating analysis missing canonical
+  lineage rewrite: two authors who co-edited the same logical file across
+  a rename were counted as if they edited two different files, under-
+  counting team coupling on every history with renames. Added the
+  standard `materialize_if_needed` + `lineage::rewrite` pair, mirroring
+  the pattern in `entity_effort`, `messages`, `ownership`, etc.
 
 ### Added — distribution
 

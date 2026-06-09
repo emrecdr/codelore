@@ -60,17 +60,24 @@ const SQL: &str = "
 ";
 
 pub fn run_communication(db: &FactsDb, opts: &Options) -> Result<Vec<CommunicationRow>> {
+    // Route through `changes_lineage` when canonical lineage is enabled so
+    // two authors who co-edited the SAME logical file across a rename still
+    // count as having shared work. Without this rewrite, Conway's-law output
+    // underreported team coupling on any history with renames. Mirrors the
+    // pattern already in `entity_effort`, `messages`, `ownership`, etc.
+    crate::analyses::lineage::materialize_if_needed(db, opts)?;
+    let sql = crate::analyses::lineage::rewrite(SQL, opts);
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
     crate::analyses::query::explain_if_requested(
         db,
-        SQL,
+        &sql,
         params![opts.min_shared_revs, row_limit],
         "communication",
         opts,
     )?;
     let mut stmt = db
         .conn()
-        .prepare(SQL)
+        .prepare(&sql)
         .map_err(|e| CodeLoreError::Analysis(format!("prepare communication: {e}")))?;
     let rows = stmt
         .query_map(params![opts.min_shared_revs, row_limit], |r| {

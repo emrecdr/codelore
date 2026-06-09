@@ -41,16 +41,42 @@ graph TD
 
 ## 2. Newly Identified Critical Gaps & Recommendations
 
-### 🚨 Correctness Bug: Premature SQL `LIMIT` in `coupling` Analysis
+### 🚨 Correctness Bug (Regression): CLI Exit Code Mismatch on Pre-flight Failures
 
 **The Problem**:
-In [coupling.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/analyses/coupling.rs#L168-L211), the `rows_limit` parameter is passed directly to the SQL query (`LIMIT ?`). The DuckDB query returns at most `rows_limit` rows (sorted by `degree DESC, average_revs DESC, ...`), which are then post-filtered in Rust by the Fisher exact significance test (`fisher_p < opts.fisher_significance`). If some of the top-N pairs fail the Fisher test, they are discarded, leaving the final output size strictly less than `rows_limit` even if there are other significant coupling pairs in the database.
+In the recently introduced pre-flight banner validation inside [main.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-cli/src/main.rs#L741-L843), checks for repository path presence (`!args.repo.exists()`), empty repository (`repo.head_sha()`), and output directory writability (`!parent.exists()`) return generic `anyhow::Error`s via `anyhow::bail!`. Because these errors are not typed or wrapped in `codelore_lib::CodeLoreError` (e.g. `CodeLoreError::Repo` or `CodeLoreError::Output`), the CLI's `main` exit code mapping logic falls back to exit code `1` instead of returning code `3` (for repository errors) or `5` (for output/I/O errors). This breaks the `invalid_repo_exits_with_code_3` integration test and violates spec §6.6.
 
 **The Impact**:
-Users get fewer coupling results than they requested (or even zero), and they miss highly significant co-changing pairs that were ranked slightly lower on degree/average_revs but had significant p-values.
+Tool orchestrators, scripts, and test environments expecting standardized exit codes receive `1` on pre-flight errors, causing validation failures and breaking backwards-compatibility.
 
 **Recommended Fix**:
-Remove `LIMIT ?` from the coupling SQL query builder, and instead truncate the results vector in Rust *after* the Fisher exact significance filter is applied (similar to how `clone_coupling` does it).
+In [main.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-cli/src/main.rs), return `Err(codelore_lib::CodeLoreError::Repo(...).into())` or `Err(codelore_lib::CodeLoreError::Output(...).into())` instead of utilizing `anyhow::bail!`.
+
+---
+
+### 🚨 Correctness Bug: Rename Lineage CTE Ignores Chronological Ordering on Name Reuse
+
+**The Problem**:
+In [ingest.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/facts/ingest.rs#L735-L767), the `materialize_path_lineage` function builds a rename graph via a recursive CTE `lineage` that joins on `c.rename_from = l.current`. However, it does not join on or filter by the commit date/chronology. If a filename is reused over time (e.g., file `A` is renamed to `B` in commit 1, and much later in commit 10 a new/different file `C` is renamed to `A`), the recursive query joins the lineage of `C` with the historical rename of `A -> B`, producing a false lineage trace of `C -> A -> B`.
+
+**The Impact**:
+Rename-aware aggregations will erroneously merge the metrics/revision counts of chronologically distinct files that happened to share a recycled path, distorting hotspot scoring and change coupling.
+
+**Recommended Fix**:
+Incorporate commit ordering/dates in `materialize_path_lineage`'s recursive join to ensure that renames are only joined if the destination rename occurred chronologically after the current path's introduction.
+
+---
+
+### ⚡ Performance Bottleneck: `GixRepo` Walk Lacks Date-Filter Pruning
+
+**The Problem**:
+In [gix_repo.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/repo/gix_repo.rs#L24-L83), applying `after` and `before` date filters requires walking the entire repository commit history (`repo.rev_walk([head]).all()`) and checking each commit's date in Rust. In contrast, the `GitCliRepo` oracle passes date filters directly to `git log` (e.g. `--after`), letting Git prune the commit graph traversal.
+
+**The Impact**:
+For large repositories with hundreds of thousands of commits, running an analysis with a date filter (e.g., `--after 2026-06-01` to check the last week) takes virtually the same time as walking the entire repo history, negating the expected performance gain of date filtering.
+
+**Recommended Fix**:
+Leverage gitoxide's graph-filtering/pruning facilities in `GixRepo::walk_commits` to cut off or prune the traversal once commits fall outside the requested date range, rather than loading every historic commit object.
 
 ---
 
@@ -102,31 +128,13 @@ Make `communication` analysis rename-aware by materializing the lineage source a
 
 ---
 
-### ⚠️ Formula Inconsistency: Score Scale Discrepancy in `hotspots` Analysis
-
-**The Problem**:
-The hotspot score formula is defined in the comments of [hotspots.rs](file:///Users/emrec/Projects/playground/codescene/crates/codelore-lib/src/analyses/hotspots.rs#L1-L15) as:
-`hotspot_score(entity) = percent_rank(revisions) * percent_rank(cognitive_complexity) * (100 - code_health) / 10`
-The comment states that the output range is `[0, 10]`.
-However, `code_health` is computed as:
-`code_health: 100 * (1 - 0.40 * normalize(cognitive)) ∈ [60.0, 100.0]`
-Because `code_health` is always at least 60.0, the term `(100.0 - code_health)` is at most `40.0`.
-Therefore, the final `hotspot_score` is mathematically bounded by `[0.0, 4.0]`, not `[0.0, 10.0]`.
-
-**The Impact**:
-Hotspot scores will never reach or exceed 4.0, which means the upper range of the scale is underutilized, and the "≈10 = on fire" description in the comments is misleading.
-
-**Recommended Fix**:
-To scale the hotspot score to `[0, 10]`, the formula should divide by 4.0 instead of 10.0 (i.e. `(100.0 - code_health) / 4.0`).
-
----
-
 ## Summary of Findings
 
 | Category | Finding / Improvement Point | Priority / Risk | Impact | Status / Fix |
 |---|---|---|---|---|
-| **Correctness** | Premature SQL `LIMIT` in `coupling` analysis filters rows *before* Fisher exact significance test. | **High** / High | Missing significant coupling pairs and truncated results. | **Fixed** (Unreleased — SQL `LIMIT` removed; truncation applied in Rust post-Fisher) |
-| **Usability** | `clones` analysis only short-circuits repository walk/ingest for CSV format. | **Medium** / Low | JSON/Markdown/SARIF clones runs are slow and fail in non-git dirs. | **Active** (Recommended: expand short-circuit to cover all formats) |
-| **Caching** | Caching system does not track worktree dirtiness (uncommitted modifications). | **Medium** / Low | Stale cached analysis results on subsequent runs in dirty repositories. | **Active** (Recommended: warn or invalidate cache on local edits) |
-| **Functional** | `communication` analysis does not support canonical rename lineage tracking. | **Low** / Low | Misses co-authorship on renamed files. | **Active** (Recommended: apply lineage rewrite) |
-| **Formula** | Hotspots score range bounded at `[0.0, 4.0]` instead of documented `[0.0, 10.0]`. | **Low** / Low | Underutilized score scale; misleading "on fire" classification. | **Fixed** (Unreleased — divisor `/10.0 → /4.0`) |
+| **Correctness** | Pre-flight error handling returns exit code `1` instead of `3`/`5` due to generic `anyhow::bail!`. | **High** / Medium | Fails `invalid_repo_exits_with_code_3` test; violates exit code spec §6.6. | **Fixed** (Unreleased — pre-flight bails now return typed `CodeLoreError::Repo` / `Output` so `main()`'s chain-walk picks them up) |
+| **Correctness** | Rename lineage CTE ignores chronological ordering, tracing spurious lineages on path reuse. | **High** / Medium | Distorts analysis metrics for recycled paths. | **Fixed** (Unreleased — `materialize_path_lineage` CTE joins `commits.date` and constrains recursion with `co.date > l.current_date`) |
+| **Performance** | `GixRepo` date-range walk filters in memory instead of pruning graph traversal. | **Medium** / Low | Walking with `--after`/`--before` is slow on large history repos. | **Active — deferred to v0.1.3** (needs gitoxide `rev_walk` ancestor-prune research; not a regression) |
+| **Usability** | `clones` analysis only short-circuits repository walk/ingest for CSV format. | **Medium** / Low | JSON/Markdown/SARIF clones runs are slow and fail in non-git dirs. | **Fixed** (Unreleased — short-circuit guard now covers all 4 supported formats: csv/json/markdown/sarif) |
+| **Caching** | Caching system does not track worktree dirtiness (uncommitted modifications). | **Medium** / Low | Stale cached analysis results on subsequent runs in dirty repositories. | **Active — deferred to v0.1.3** (needs worktree-hash design: gix dirty-check API, perf budget on large trees, auto-invalidate vs opt-in flag) |
+| **Functional** | `communication` analysis does not support canonical rename lineage tracking. | **Low** / Low | Misses co-authorship on renamed files. | **Fixed** (Unreleased — added `materialize_if_needed` + `lineage::rewrite` pair mirroring peer analyses) |

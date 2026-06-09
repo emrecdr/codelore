@@ -167,16 +167,42 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
 
     let analysis_name = args.analysis.as_str();
 
-    // Plan 7 clones is HEAD-only filesystem walk — no git history needed.
-    // Short-circuit before opening the repo so shallow clones, untracked
-    // working trees, and "not a git repo" cases all work for clones.
-    if matches!(analysis, AnalysisName::Clones) && format == "csv" {
+    // Plan 7 clones is a HEAD-only filesystem + tree-sitter walk — no git
+    // history is needed. Short-circuit BEFORE opening the repo so shallow
+    // clones, working trees with uncommitted changes, and "not a git repo"
+    // directories all work for any of the 4 clone-supporting output formats
+    // (csv | json | markdown | sarif). Earlier this short-circuit only
+    // covered `csv`; the other formats fell through to the full git-ingest
+    // path, which was both ~10–100× slower and broke entirely on non-git
+    // directories — a real user-facing bug closed here.
+    if matches!(analysis, AnalysisName::Clones)
+        && matches!(format, "csv" | "json" | "markdown" | "sarif")
+    {
         let mut out: Box<dyn Write> = match args.output.as_ref() {
             Some(path) => Box::new(std::fs::File::create(path)?),
             None => Box::new(std::io::stdout().lock()),
         };
         let rows = codelore_lib::analyses::clones::run_clones(&opts).context("run clones")?;
-        codelore_lib::output::csv::write_clones_csv(&rows, &mut out).context("write csv")?;
+        match format {
+            "csv" => {
+                codelore_lib::output::csv::write_clones_csv(&rows, &mut out)
+                    .context("write csv")?;
+            }
+            "json" => {
+                codelore_lib::output::json::write_clones_json(&rows, &mut out)
+                    .context("write json")?;
+            }
+            "markdown" => {
+                codelore_lib::output::markdown::write_clones_markdown(&rows, &mut out)
+                    .context("write markdown")?;
+            }
+            "sarif" => {
+                let repo_root = args.repo.display().to_string();
+                codelore_lib::output::sarif::write_clones_sarif(&rows, &repo_root, &mut out)
+                    .context("write sarif")?;
+            }
+            _ => unreachable!("format validated by outer matches!()"),
+        }
         return Ok(());
     }
 
@@ -744,6 +770,7 @@ fn preflight_and_open_repo(
     analysis_name: &str,
     no_banner: bool,
 ) -> Result<GixRepo> {
+    use codelore_lib::CodeLoreError;
     use codelore_lib::output::banner::{self, Banner, Preflight};
     use codelore_lib::provenance::{DUCKDB_VERSION, GIX_VERSION};
 
@@ -766,6 +793,13 @@ fn preflight_and_open_repo(
             preflight,
         };
 
+    // Pre-flight failures MUST surface as typed `CodeLoreError` variants so
+    // the spec §6.6 exit-code mapping in `main()` picks them up (Repo → 3,
+    // Output → 5). A bare `anyhow::bail!` here would slip the chain and fall
+    // through to the default exit code 1, breaking integration tests like
+    // `invalid_repo_exits_with_code_3` and surprising any orchestrator that
+    // dispatches on exit codes.
+
     // Step 1: does the path even exist on disk?
     if !args.repo.exists() {
         let b = make_banner(
@@ -776,11 +810,15 @@ fn preflight_and_open_repo(
             },
         );
         eprint!("{}", b.render(banner::should_color()));
-        anyhow::bail!("--repo path does not exist: {repo_path_str}");
+        return Err(
+            CodeLoreError::Repo(format!("--repo path does not exist: {repo_path_str}")).into(),
+        );
     }
 
     // Step 2: open as git repo. gix returns an error for non-repo paths;
     // we translate into the `NotARepository` preflight variant for the user.
+    // `GixRepo::open` already returns a `CodeLoreError::Repo`, so wrapping
+    // with `anyhow::Error::new(e)` preserves the typed variant in the chain.
     let repo = match GixRepo::open(&args.repo) {
         Ok(r) => r,
         Err(e) => {
@@ -801,7 +839,7 @@ fn preflight_and_open_repo(
     let Ok(head_sha) = repo.head_sha() else {
         let b = make_banner(repo.head_branch_name(), None, Preflight::EmptyRepository);
         eprint!("{}", b.render(banner::should_color()));
-        anyhow::bail!("repository has no commits");
+        return Err(CodeLoreError::Repo("repository has no commits".to_string()).into());
     };
     let head_short: String = head_sha.chars().take(7).collect();
     let branch = repo.head_branch_name();
@@ -824,10 +862,11 @@ fn preflight_and_open_repo(
             },
         );
         eprint!("{}", b.render(banner::should_color()));
-        anyhow::bail!(
+        return Err(CodeLoreError::Output(format!(
             "--output parent directory does not exist: {}",
             parent.display()
-        );
+        ))
+        .into());
     }
 
     // All green — print the Ready banner if conditions allow (TTY + not

@@ -734,16 +734,35 @@ pub fn materialize_changes_bucketed(
 /// Returns [`CodeLoreError::Analysis`] on any SQL error.
 pub fn materialize_path_lineage(db: &super::FactsDb) -> Result<()> {
     use duckdb::params;
+    // The recursive CTE walks the rename graph, but a NAIVE join on
+    // `c.rename_from = l.current` would conflate a recycled filename with
+    // its earlier life. Example: commit 1 renames `A → B`; commit 10 takes
+    // a different file `C` and renames it `C → A`. Without a chronological
+    // constraint the CTE would walk `(C, A, depth=1) → (C, B, depth=2)`
+    // by joining `c.rename_from = 'A'` on commit 1's row — producing a
+    // fictitious `C → A → B` lineage that merges two unrelated files'
+    // history into one entity.
+    //
+    // The fix joins each step with `commits.date` and only extends the
+    // chain when the NEXT rename happened AFTER the current step's date.
+    // Date is fetched via `INNER JOIN commits ON commits.rev = c.rev` in
+    // both the seed and the recursive step; the recursive step adds
+    // `WHERE co.date > l.current_date`. `>` (not `>=`) excludes self-edges
+    // within the same commit (which can't happen for a rename anyway, but
+    // guards against equal-second tiebreakers).
     let sql = "CREATE OR REPLACE TEMPORARY TABLE path_lineage AS
-        WITH RECURSIVE lineage(orig, current, depth) AS (
-            SELECT DISTINCT rename_from, path, 1
-            FROM changes
-            WHERE rename_from IS NOT NULL
+        WITH RECURSIVE lineage(orig, current, current_date, depth) AS (
+            SELECT DISTINCT c.rename_from, c.path, co.date, 1
+            FROM changes c
+            INNER JOIN commits co ON co.rev = c.rev
+            WHERE c.rename_from IS NOT NULL
             UNION ALL
-            SELECT l.orig, c.path, l.depth + 1
+            SELECT l.orig, c.path, co.date, l.depth + 1
             FROM lineage l
             INNER JOIN changes c ON c.rename_from = l.current
+            INNER JOIN commits co ON co.rev = c.rev
             WHERE l.depth < 50
+              AND co.date > l.current_date
         )
         SELECT orig AS old_path, current AS canonical_path
         FROM (

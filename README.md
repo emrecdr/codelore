@@ -120,16 +120,42 @@ The rest of this README assumes `codelore` is on your PATH — substitute `./tar
 codelore analyze --analysis hotspots --repo . --min-revs 5 --rows 10
 ```
 
-Output (CSV, the default):
+Before the analysis runs, codelore prints a pre-flight banner to stderr (auto-suppressed when piped; suppress explicitly with `--no-banner`):
+
+```
+────────────────────────────────────────────────────────────────────────
+ codelore 0.1.2                           gix 0.84.0 · duckdb 1.10503.1
+────────────────────────────────────────────────────────────────────────
+ Repo:     /Users/you/code/your-project
+ Branch:   main @ a891295
+ Analysis: hotspots  (min-revs=5, rows=10)
+ Status:   ✓ ready
+────────────────────────────────────────────────────────────────────────
+```
+
+The banner doubles as a fail-fast gate: if the path isn't a git repo, the repo has no commits, or `--output` points at a directory that doesn't exist, the banner renders `Status: ✗ <reason>` with a one-line `Hint:` and codelore exits non-zero — before spending 5–30 seconds on ingest you'd have to abort anyway.
+
+Output (CSV, the default, on stdout — pipeable into other tools):
 
 ```
 entity,revisions,cognitive,code-health,hotspot-score
-src/auth/session.rs,87,42.0,4.2,0.8731
-src/db/migrate.rs,54,28.0,5.1,0.6204
-...
+src/auth/session.rs,87,42.00,60.00,9.1837
+src/db/migrate.rs,54,28.00,71.20,4.6125
+src/api/handlers.rs,38,18.00,80.36,2.4310
 ```
 
-The top row is your most pressing refactor candidate: high churn × high complexity × low code health = highest score.
+- `code-health ∈ [60, 100]` — higher = healthier (60 is the floor because the cognitive-complexity term contributes at most 40 points of deduction).
+- `hotspot-score ∈ [0, 10]` — higher = more pressing refactor candidate. `9.18` means "near the top of the curve on revisions × complexity × poor health" — the canonical "on fire" file.
+
+The top row is the file to look at first: high churn × high complexity × low code health = highest score.
+
+When the analysis completes, codelore prints a footer summary to stderr (same TTY suppression rules):
+
+```
+────────────────────────────────────────────────────────────────────────
+ ✓ hotspots completed in 4.3s
+────────────────────────────────────────────────────────────────────────
+```
 
 ---
 
