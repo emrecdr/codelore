@@ -26,7 +26,7 @@ sha2 = "0.11"
 hex = "0.4"
 # Direct tree-sitter + grammar deps for clone-detection AST walking (Plan 7).
 # All pinned to the exact versions codelore-rca uses, for parser-ABI compat.
-tree-sitter = "=0.25.3"
+tree-sitter = "=0.26.9"
 tree-sitter-rust = "=0.23.2"
 tree-sitter-python = "=0.23.6"
 tree-sitter-java = "=0.23.5"

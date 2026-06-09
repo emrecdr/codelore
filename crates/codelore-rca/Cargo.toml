@@ -15,7 +15,7 @@ description = "Vendored fork of Mozilla rust-code-analysis for CodeLore"
 
 [dependencies]
 # Tree-sitter core — pinned workspace-wide per spec §2.2
-tree-sitter = "=0.25.3"
+tree-sitter = "=0.26.9"
 
 # Per-language tree-sitter grammars.
 # Versions pinned to exact versions whose node-ID tables match the generated language_*.rs enums.
