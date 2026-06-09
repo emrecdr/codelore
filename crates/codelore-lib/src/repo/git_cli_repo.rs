@@ -468,38 +468,102 @@ fn parse_pretty_block(pretty: &str, name_status: &str) -> Option<CommitEvent> {
 /// 0\t0\tsrc/old.rs => src/new.rs
 /// ```
 ///
-/// Raw lines (`:`-prefixed) and numstat lines appear in matching file
-/// order; we zip them by index.
+/// **F8 fix**: previously we zipped raw and numstat lines positionally.
+/// That assumption broke on commits with submodule additions/removals
+/// or binary exclusions where the two streams diverge in length — the
+/// trailing entries got dropped silently and any pre-divergence
+/// mismatch corrupted ALL subsequent rows' line counts. Now we
+/// HashMap-join by the destination path key (extracted from both
+/// streams), tolerating any per-stream length difference cleanly.
 fn parse_changes_block(block: &str) -> Vec<FileChange> {
+    use std::collections::HashMap;
+
     let mut raw_entries: Vec<&str> = Vec::new();
-    let mut numstat_entries: Vec<&str> = Vec::new();
+    let mut numstat_by_path: HashMap<String, (u32, u32)> = HashMap::new();
     for line in block.lines() {
         let trimmed = line.trim_end();
         if trimmed.is_empty() {
             continue;
         }
-        if trimmed.starts_with(':') {
-            raw_entries.push(trimmed);
-        } else {
-            numstat_entries.push(trimmed);
+        if let Some(raw) = trimmed.strip_prefix(':') {
+            raw_entries.push(raw);
+        } else if let Some((key, stat)) = parse_numstat_with_key(trimmed) {
+            numstat_by_path.insert(key, stat);
         }
+        // Unparseable lines are silently skipped — same as the previous
+        // behaviour, just no longer corrupts subsequent rows.
     }
     raw_entries
         .into_iter()
-        .zip(numstat_entries)
-        .filter_map(|(raw, numstat)| parse_raw_numstat_pair(raw, numstat))
+        .filter_map(|raw| {
+            let key = raw_destination_path(raw)?;
+            let stat = numstat_by_path.remove(&key).unwrap_or((0, 0));
+            parse_raw_with_stat(raw, stat)
+        })
         .collect()
 }
 
-/// Parse a single raw line paired with its numstat line.
+/// Parse a numstat line into `(destination_path, (added, deleted))`.
+/// Returns `None` on malformed input. The destination path is the key
+/// for joining against the raw line stream — for non-rename rows it's
+/// just the third tab-separated field; for rename rows the numstat
+/// emits `old => new` and we return the `new` component.
+fn parse_numstat_with_key(line: &str) -> Option<(String, (u32, u32))> {
+    let mut cols = line.split('\t');
+    let added_str = cols.next()?;
+    let deleted_str = cols.next()?;
+    let path_part = cols.next()?;
+    let added = if added_str == "-" {
+        0
+    } else {
+        added_str.parse().ok()?
+    };
+    let deleted = if deleted_str == "-" {
+        0
+    } else {
+        deleted_str.parse().ok()?
+    };
+    // For renames, numstat emits `old => new` — strip to the destination.
+    let key = if let Some((_, new_path)) = path_part.split_once(" => ") {
+        new_path.to_string()
+    } else {
+        path_part.to_string()
+    };
+    Some((key, (added, deleted)))
+}
+
+/// Extract the destination path from a raw line (prefix `:` already
+/// stripped). For `R`/`C` statuses (rename/copy) the destination is
+/// `path2`; for everything else (`A`/`D`/`M`/`T`/`B`/`U`) it's `path1`.
+/// Used as the join key against numstat entries.
+fn raw_destination_path(raw: &str) -> Option<String> {
+    let tab = raw.find('\t')?;
+    let header = &raw[..tab];
+    let paths_part = &raw[tab + 1..];
+    let mut header_iter = header.split_whitespace();
+    let _mode_src = header_iter.next()?;
+    let _mode_dst = header_iter.next()?;
+    let _hash_src = header_iter.next()?;
+    let _hash_dst = header_iter.next()?;
+    let status = header_iter.next()?;
+    let mut paths = paths_part.split('\t');
+    let path1 = paths.next()?.to_string();
+    let path2 = paths.next().map(str::to_string);
+    if status.starts_with('R') || status.starts_with('C') {
+        path2
+    } else {
+        Some(path1)
+    }
+}
+
+/// Parse a single raw line paired with its pre-extracted numstat tuple.
 ///
-/// Raw format: `:<mode1> <mode2> <hash1> <hash2> <STATUS>\t<path>[\t<path2>]`
-/// Numstat format: `<added>\t<deleted>\t<path>` — or `<old> => <new>` for renames.
-fn parse_raw_numstat_pair(raw: &str, numstat: &str) -> Option<FileChange> {
-    let raw = raw.strip_prefix(':')?;
-    // The header (`mode mode hash hash STATUS`) is space-separated; paths
-    // follow a tab. Status sits in the last whitespace-separated field
-    // before the tab boundary.
+/// Raw format: `<mode1> <mode2> <hash1> <hash2> <STATUS>\t<path>[\t<path2>]`
+/// (the leading `:` has already been stripped by the caller). The
+/// `(loc_added, loc_deleted)` tuple comes from `parse_numstat_with_key`
+/// joined by destination path — see `parse_changes_block` for the F8
+/// rationale.
+fn parse_raw_with_stat(raw: &str, stat: (u32, u32)) -> Option<FileChange> {
     let tab = raw.find('\t')?;
     let header = &raw[..tab];
     let paths_part = &raw[tab + 1..];
@@ -514,7 +578,7 @@ fn parse_raw_numstat_pair(raw: &str, numstat: &str) -> Option<FileChange> {
     let path1 = paths.next()?.to_string();
     let path2 = paths.next().map(str::to_string);
 
-    let (loc_added, loc_deleted) = parse_numstat_line(numstat).unwrap_or((0, 0));
+    let (loc_added, loc_deleted) = stat;
 
     if status.starts_with('R') {
         let similarity = parse_similarity(status);
@@ -555,26 +619,6 @@ fn parse_raw_numstat_pair(raw: &str, numstat: &str) -> Option<FileChange> {
         loc_deleted,
         hunks: vec![],
     })
-}
-
-/// Parse a numstat line. Returns `None` for malformed input. Binary files
-/// emit `-\t-\tpath`; we coerce both to zero (lossy by design — we don't
-/// have line counts for binaries, and zero is the honest value).
-fn parse_numstat_line(line: &str) -> Option<(u32, u32)> {
-    let mut cols = line.split('\t');
-    let added_str = cols.next()?;
-    let deleted_str = cols.next()?;
-    let added = if added_str == "-" {
-        0
-    } else {
-        added_str.parse().ok()?
-    };
-    let deleted = if deleted_str == "-" {
-        0
-    } else {
-        deleted_str.parse().ok()?
-    };
-    Some((added, deleted))
 }
 
 fn parse_similarity(status: &str) -> u8 {
@@ -670,6 +714,85 @@ fn parse_iso_timestamp(s: &str) -> Option<time::OffsetDateTime> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // F8 regression: path-key extraction must match between raw and
+    // numstat streams so HashMap-join can correctly pair them.
+
+    #[test]
+    fn f8_numstat_key_plain_path() {
+        let (key, stat) = parse_numstat_with_key("12\t3\tsrc/main.rs").expect("parse");
+        assert_eq!(key, "src/main.rs");
+        assert_eq!(stat, (12, 3));
+    }
+
+    #[test]
+    fn f8_numstat_key_rename_uses_destination() {
+        // numstat rename form: `<added>\t<deleted>\t<old> => <new>`
+        let (key, _stat) = parse_numstat_with_key("0\t0\tsrc/old.rs => src/new.rs").expect("parse");
+        assert_eq!(key, "src/new.rs", "rename key must be the destination");
+    }
+
+    #[test]
+    fn f8_numstat_key_binary_files_normalized_to_zero() {
+        let (_key, stat) = parse_numstat_with_key("-\t-\tassets/logo.png").expect("parse");
+        assert_eq!(stat, (0, 0), "binary `-\\t-` markers must coerce to 0 LoC");
+    }
+
+    #[test]
+    fn f8_raw_destination_uses_path2_for_rename() {
+        let raw = "100644 100644 d00491f 2b2f2e1 R100\tsrc/old.rs\tsrc/new.rs";
+        assert_eq!(
+            raw_destination_path(raw).expect("parse"),
+            "src/new.rs",
+            "rename destination = path2",
+        );
+    }
+
+    #[test]
+    fn f8_raw_destination_uses_path1_for_modify() {
+        let raw = "100644 100644 d00491f 2b2f2e1 M\tsrc/main.rs";
+        assert_eq!(
+            raw_destination_path(raw).expect("parse"),
+            "src/main.rs",
+            "modify uses path1 (only path present)",
+        );
+    }
+
+    /// F8 regression: when raw and numstat streams have UNEQUAL lengths
+    /// (the original positional zip dropped trailing entries and
+    /// corrupted preceding ones), HashMap-join must still produce
+    /// correct line counts for every raw entry. We simulate a submodule
+    /// addition: raw stream has 2 entries, numstat only has 1.
+    #[test]
+    fn f8_unequal_raw_and_numstat_no_corruption() {
+        let block = ":100644 100644 d00491f 2b2f2e1 M\tsrc/main.rs\n\
+                     :160000 160000 0000000 1111111 M\tvendor/libfoo\n\
+                     12\t3\tsrc/main.rs\n";
+        let changes = parse_changes_block(block);
+        assert_eq!(
+            changes.len(),
+            2,
+            "both raw entries must surface (1 with stats, 1 with default 0/0)"
+        );
+        let main_rs = changes
+            .iter()
+            .find(|c| c.path == "src/main.rs")
+            .expect("src/main.rs surfaces");
+        assert_eq!(
+            (main_rs.loc_added, main_rs.loc_deleted),
+            (12, 3),
+            "src/main.rs must NOT be corrupted by the submodule's missing numstat line",
+        );
+        let submodule = changes
+            .iter()
+            .find(|c| c.path == "vendor/libfoo")
+            .expect("submodule surfaces");
+        assert_eq!(
+            (submodule.loc_added, submodule.loc_deleted),
+            (0, 0),
+            "submodule missing numstat → default 0/0 (not corrupted by zip-shift)",
+        );
+    }
 
     /// Reproducer for the bug where `parse_git_log_stream` silently drops the commit
     /// immediately following a merge commit that has an empty change block.

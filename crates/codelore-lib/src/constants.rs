@@ -61,3 +61,17 @@ pub const DEFAULT_CLONE_SIMILARITY_FLOOR: f64 = 0.70;
 /// (e.g., test-fixture duplicates), and they crowd out the cross-module
 /// signal. Users who want them can opt back in.
 pub const DEFAULT_CLONE_SKIP_SAME_DIR: bool = true;
+
+/// F10: maximum source-file size in bytes that we'll feed to tree-sitter
+/// for complexity / clones extraction at HEAD. Files larger than this
+/// are skipped with a tracing-debug log entry and excluded from
+/// AST-based metrics.
+///
+/// 2 MB covers real hand-written source (Linux's `block.c` ~195 KB;
+/// V8 monorepo's largest hand-written .cc ~1.5 MB) while reliably
+/// catching the common offenders: minified JS bundles (5–50 MB),
+/// protobuf-generated .pb.cc (often 10+ MB), and vendored single-file
+/// libraries (sqlite3.c is ~9 MB). Without this cap tree-sitter
+/// occasionally hits stack-overflow or OOM on deeply-nested generated
+/// code; the cap turns those failures into graceful skips.
+pub const DEFAULT_MAX_AST_FILE_BYTES: usize = 2 * 1024 * 1024;

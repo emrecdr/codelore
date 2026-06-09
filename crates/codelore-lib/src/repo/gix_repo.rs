@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use gix::diff::tree_with_rewrites::Change as GixChange;
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::repo::{CommitMetadata, Repo};
 use crate::{ChangeType, CodeLoreError, CommitEvent, FileChange, Hunk, Options, Result};
@@ -119,65 +120,81 @@ impl Repo for GixRepo {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        // The returned iterator owns the OID list and a clone of the Arc-based
-        // ThreadSafeRepository — both are Send.
+        // F9 fix: parallelise commit processing across cores. The OID
+        // sequence is order-preserving (rayon `par_iter().map().collect()`
+        // re-assembles into commit-walk order), so the consumer still
+        // sees events in the same order as before — only the wall-clock
+        // throughput changes.
+        //
+        // Trade-off: this collects all events into memory before returning
+        // an iterator. For typical repos (10k–100k commits × ~200 bytes
+        // per `CommitEvent`) that's 2–20 MB peak — acceptable; the
+        // downstream `FactsDb` ingest pulls every event anyway, so the
+        // streaming-vs-buffered distinction doesn't change peak memory
+        // for the full pipeline.
         let inner_clone = self.inner.clone();
         // Parse `.mailmap` ONCE up front; the snapshot is owned bytes (Send + Sync)
-        // and we resolve every author against it inside the closure. Previously
-        // this was re-parsed from disk on every commit — quadratic-ish cost on
-        // repos with large histories.
+        // and we resolve every author against it inside each worker.
+        // Previously this was re-parsed from disk on every commit — quadratic-ish
+        // cost on repos with large histories.
         let mailmap = inner_clone.to_thread_local().open_mailmap();
-        Ok(Box::new(oids.into_iter().map(move |oid| {
-            // to_thread_local() is per-iteration because gix::Repository is !Send.
-            // The `+ Send` bound on the trait return type forces all captures to be Send,
-            // so the Repository must be reconstructed each step from the (Send-able)
-            // ThreadSafeRepository clone. Do not hoist this out.
-            let repo = inner_clone.to_thread_local();
-            let commit = repo
-                .find_commit(oid)
-                .map_err(|e| CodeLoreError::Repo(format!("find_commit: {e}")))?;
-            let id_string = oid.to_hex().to_string();
-            let mut event = commit_event_from_gix(&commit)?;
-            // Reuse the already-resolved `commit` instead of re-fetching via
-            // `compute_changed_files(inner, rev)` — cuts one of the three
-            // per-commit `find_commit` lookups flagged by the deep-analysis
-            // perf review. The other two (filter pass + this iterator step's
-            // first call) are needed; this one is pure waste.
-            event.changes = changed_files_for_commit(&repo, &commit, &id_string)?;
+        let events: Result<Vec<CommitEvent>> = oids
+            .into_par_iter()
+            .map(|oid| {
+                // Each Rayon worker gets its own thread-local gix repo
+                // handle — `gix::Repository` is !Send, but constructing
+                // one from the Send-able `ThreadSafeRepository` is cheap
+                // (Arc clone + reset of thread-local caches).
+                let repo = inner_clone.to_thread_local();
+                let commit = repo
+                    .find_commit(oid)
+                    .map_err(|e| CodeLoreError::Repo(format!("find_commit: {e}")))?;
+                let id_string = oid.to_hex().to_string();
+                let mut event = commit_event_from_gix(&commit)?;
+                // Reuse the already-resolved `commit` instead of re-fetching
+                // via `compute_changed_files(inner, rev)` — cuts one of the
+                // three per-commit `find_commit` lookups flagged by the
+                // deep-analysis perf review.
+                event.changes = changed_files_for_commit(&repo, &commit, &id_string)?;
 
-            // Resolve mailmap alias and classify AI attribution in the producer thread
-            // (where the Repo is in scope), storing results on the event for the consumer.
-            //
-            // Plan 8 §2 T6 finding fix: pass the actual author_name (not b"") so
-            // .mailmap entries of the form `Canonical <c@x> Original <o@x>` —
-            // which match by Name+Email — also resolve. Email-only entries
-            // (`Canonical <c@x> <o@x>`) work either way.
-            let canonical = {
-                use gix::bstr::ByteSlice as _;
-                let sig_ref = gix::actor::SignatureRef {
-                    name: event.author_name.as_bytes().as_bstr(),
-                    email: event.author_email.as_bytes().as_bstr(),
-                    time: "0 +0000",
+                // Resolve mailmap alias and classify AI attribution in the
+                // worker (where the Repo is in scope), storing results on
+                // the event for the consumer.
+                //
+                // Plan 8 §2 T6 finding fix: pass the actual author_name
+                // (not b"") so .mailmap entries of the form
+                // `Canonical <c@x> Original <o@x>` — which match by
+                // Name+Email — also resolve. Email-only entries
+                // (`Canonical <c@x> <o@x>`) work either way.
+                let canonical = {
+                    use gix::bstr::ByteSlice as _;
+                    let sig_ref = gix::actor::SignatureRef {
+                        name: event.author_name.as_bytes().as_bstr(),
+                        email: event.author_email.as_bytes().as_bstr(),
+                        time: "0 +0000",
+                    };
+                    match mailmap.try_resolve(sig_ref) {
+                        Some(resolved) => resolved
+                            .email
+                            .to_str()
+                            .unwrap_or(&event.author_email)
+                            .to_string(),
+                        None => event.author_email.clone(),
+                    }
                 };
-                match mailmap.try_resolve(sig_ref) {
-                    Some(resolved) => resolved
-                        .email
-                        .to_str()
-                        .unwrap_or(&event.author_email)
-                        .to_string(),
-                    None => event.author_email.clone(),
-                }
-            };
-            let ai_attr = crate::identity::ai_attribution(
-                &event.author_email,
-                &event.author_name,
-                &event.message,
-            );
-            event.canonical_author = Some(canonical);
-            event.ai_attribution = Some(ai_attr.to_string());
+                let ai_attr = crate::identity::ai_attribution(
+                    &event.author_email,
+                    &event.author_name,
+                    &event.message,
+                );
+                event.canonical_author = Some(canonical);
+                event.ai_attribution = Some(ai_attr.to_string());
 
-            Ok(event)
-        })))
+                Ok(event)
+            })
+            .collect();
+        let events = events?;
+        Ok(Box::new(events.into_iter().map(Ok)))
     }
 
     fn changed_files(&self, rev: &str) -> Result<Vec<FileChange>> {
@@ -229,10 +246,18 @@ impl Repo for GixRepo {
     }
 
     fn is_worktree_dirty(&self) -> bool {
-        // gix's `Repository::status(progress)` returns a `Platform` iterator
-        // over differences between (HEAD tree, index, worktree). We want
-        // "ANY difference" — modified files OR untracked files OR staged
-        // changes. Short-circuit on the first non-clean entry.
+        // gix's `Repository::status(progress)` returns a `Platform` whose
+        // `into_iter()` yields a unified stream covering:
+        //   1. Tracked-file modifications (index vs worktree),
+        //   2. Untracked files (via the dirwalk),
+        //   3. Staged-vs-HEAD differences.
+        //
+        // F11 fix: previously we used `into_index_worktree_iter` which
+        // ONLY yields (1) — it SKIPS the dirwalk and therefore reports
+        // untracked-only repos as clean. `GitCliRepo` (via
+        // `git status --porcelain`) DOES report untracked files. The
+        // backends diverged. Switching to the full `into_iter()` brings
+        // them into agreement.
         //
         // Errors are deliberately swallowed (`return false` on any failure):
         // detection is a hint that triggers a tracing::warn!, not a
@@ -242,14 +267,11 @@ impl Repo for GixRepo {
         let Ok(platform) = repo.status(gix::progress::Discard) else {
             return false;
         };
-        let Ok(iter) = platform
-            .index_worktree_options_mut(|_| {})
-            .into_index_worktree_iter(Vec::new())
-        else {
+        let Ok(iter) = platform.into_iter(Vec::new()) else {
             return false;
         };
-        // The iterator yields one item per index-vs-worktree difference.
-        // Any single yielded item means the tree is dirty.
+        // Any single yielded item — modified, untracked, or staged — means
+        // the tree is dirty.
         iter.flatten().next().is_some()
     }
 }

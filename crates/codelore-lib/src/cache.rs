@@ -100,7 +100,7 @@ fn fallback_tmp_root() -> PathBuf {
 /// the per-options cache fingerprint. Defers to `Options::canonical_json()`
 /// which serializes every field (including clone-detection options, exclude
 /// patterns, etc.) and applies normalizations (sorted `exclude_patterns`,
-/// dropped cosmetic knobs like `rows_limit` / `verbose_results`).
+/// dropped cosmetic knobs like `rows_limit`).
 ///
 /// Replaces the pre-2026-06-08 hand-curated 11-field allowlist that silently
 /// omitted clone-detection options and produced cache collisions when those

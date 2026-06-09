@@ -27,7 +27,36 @@ pub struct CommunicationRow {
     pub strength: f64, // 100 * shared / average
 }
 
-const SQL: &str = "
+// DEEP-11 + DEEP-12: communication has two numeric divergences vs
+// code-maat's `communication.clj with-commit-stats`:
+//
+//   - `average`: code-maat uses `(math/ceil (m/average my peer))` — ceiling
+//     rounding. CodeLore's modern default uses integer-div floor `(a+b)/2`
+//     which is more conservative ("you've communicated at least this often").
+//   - `strength`: code-maat uses `(int (m/as-percentage ...))` — truncated
+//     integer. CodeLore's modern default emits a float `XX.XX` for precision.
+//
+// Under `--code-maat-compat`, we honour both code-maat semantics so
+// downstream tools parsing the legacy CSV see identical values.
+fn build_communication_sql(code_maat_compat: bool) -> String {
+    let avg_expr = if code_maat_compat {
+        // CEIL of mean — matches code-maat's `(math/ceil (m/average …))`.
+        "CAST(CEIL((ta.commits + tb.commits) / 2.0) AS UINTEGER)"
+    } else {
+        // Integer floor via DuckDB integer division.
+        "(ta.commits + tb.commits) / 2"
+    };
+    let strength_expr = if code_maat_compat {
+        // Truncated to integer, then re-cast to DOUBLE so the row type
+        // stays uniform; the Rust orchestrator formats as `XX`.
+        "CAST(CAST(100.0 * p.shared / NULLIF((ta.commits + tb.commits) / 2.0, 0) AS INTEGER) \
+         AS DOUBLE)"
+    } else {
+        // Float with two-decimal CSV formatting.
+        "100.0 * p.shared / NULLIF((ta.commits + tb.commits) / 2.0, 0)"
+    };
+    format!(
+        "
     WITH author_files AS (
         SELECT DISTINCT
             changes.path,
@@ -56,14 +85,16 @@ const SQL: &str = "
         p.author_a,
         p.author_b,
         p.shared,
-        (ta.commits + tb.commits) / 2 AS average,
-        100.0 * p.shared / NULLIF((ta.commits + tb.commits) / 2.0, 0) AS strength
+        {avg_expr} AS average,
+        {strength_expr} AS strength
     FROM pairs p
     INNER JOIN totals ta ON ta.author = p.author_a
     INNER JOIN totals tb ON tb.author = p.author_b
     ORDER BY strength DESC, p.author_a ASC, p.author_b ASC
     LIMIT ?
-";
+"
+    )
+}
 
 pub fn run_communication(db: &FactsDb, opts: &Options) -> Result<Vec<CommunicationRow>> {
     // Route through `changes_lineage` when canonical lineage is enabled so
@@ -72,7 +103,8 @@ pub fn run_communication(db: &FactsDb, opts: &Options) -> Result<Vec<Communicati
     // underreported team coupling on any history with renames. Mirrors the
     // pattern already in `entity_effort`, `messages`, `ownership`, etc.
     crate::analyses::lineage::materialize_if_needed(db, opts)?;
-    let sql = crate::analyses::lineage::rewrite(SQL, opts);
+    let base_sql = build_communication_sql(opts.code_maat_compat);
+    let sql = crate::analyses::lineage::rewrite(&base_sql, opts);
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
     crate::analyses::query::explain_if_requested(
         db,

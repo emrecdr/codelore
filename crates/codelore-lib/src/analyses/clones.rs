@@ -75,6 +75,17 @@ pub fn run_clones(opts: &Options) -> Result<Vec<ClonesRow>> {
         let Ok(code) = fs::read(path) else {
             continue; // unreadable file — silently skip
         };
+        // F10: skip oversized files (generated / minified) before
+        // tree-sitter to avoid OOM / stack-overflow on deeply nested
+        // generated code. Same cap used in the ingest-time clones pass.
+        if code.len() > crate::constants::DEFAULT_MAX_AST_FILE_BYTES {
+            tracing::debug!(
+                "clones: skipping {rel} ({size} bytes > {cap}-byte AST cap)",
+                size = code.len(),
+                cap = crate::constants::DEFAULT_MAX_AST_FILE_BYTES,
+            );
+            continue;
+        }
         let fns = extract_functions(&rel, &code, lang)
             .map_err(|e| CodeLoreError::Analysis(format!("clones: extract {rel}: {e}")))?;
         all_fns.extend(fns);

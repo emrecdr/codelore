@@ -111,6 +111,15 @@ fn source_table(opts: &Options) -> &'static str {
 /// other is a tautology. Trade-off: a 1-bind redundancy for a single
 /// caller-side `params!` invocation that doesn't branch on the flag.
 fn build_coupling_sql(src: &str, code_maat_compat: bool) -> String {
+    // DEEP-3: under compat, average_revs uses CEIL((a+b)/2.0) to match
+    // code-maat's `(math/ceil average-revs)`. CodeLore's modern default
+    // uses integer-floor `(a+b)/2` (DuckDB integer division). The
+    // ceiling differs from the floor by 1 for any odd-sum pair.
+    let avg_revs_expr = if code_maat_compat {
+        "CAST(CEIL((fr_a.revs + fr_b.revs) / 2.0) AS UINTEGER)"
+    } else {
+        "(fr_a.revs + fr_b.revs) / 2"
+    };
     let (file_revs_gate, pair_avg_gate) = if code_maat_compat {
         // Compat: live gate is per-pair-average on the final SELECT.
         // `file_revs` consumes its placeholder via a tautology that
@@ -156,7 +165,7 @@ fn build_coupling_sql(src: &str, code_maat_compat: bool) -> String {
              p.shared,
              fr_a.revs AS revs_a,
              fr_b.revs AS revs_b,
-             (fr_a.revs + fr_b.revs) / 2 AS average_revs,
+             {avg_revs_expr} AS average_revs,
              100.0 * p.shared / NULLIF((fr_a.revs + fr_b.revs) / 2.0, 0) AS degree
          FROM pairs p
          INNER JOIN file_revs fr_a ON fr_a.path = p.path_a

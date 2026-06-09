@@ -129,40 +129,97 @@ impl FromStr for AnalysisName {
             // from `entity-ownership`. Both resolve to the canonical
             // `ownership` enum variant.
             "fragmentation" | "code-ownership" => return Ok(Self::Ownership),
+            // code-maat's `-a identity` is a debugging-only passthrough that
+            // dumps the parsed dataset. CodeLore's modern equivalent is the
+            // SQLite output emitter — it dumps the full DuckDB fact store
+            // (8 tables: commits, changes, complexity, clones, mailmap, …),
+            // strictly richer than code-maat's raw-log seq. Rather than
+            // pollute the canonical AnalysisName enum with a debug-only
+            // alias (and risk it appearing in --help as a "supported"
+            // analysis), we intercept here with a dedicated error variant
+            // that points migrating users at the right tool.
+            "identity" => return Err(UnknownAnalysisError::identity_redirect()),
             _ => {}
         }
         Self::all()
             .iter()
             .find(|a| a.as_str() == s)
             .copied()
-            .ok_or_else(|| UnknownAnalysisError(s.to_string()))
+            .ok_or_else(|| UnknownAnalysisError::unknown(s.to_string()))
     }
 }
 
+/// Error returned by `AnalysisName::from_str` when the requested name
+/// doesn't resolve to a registered analysis.
+///
+/// Two variants:
+/// - `Unknown(name)`: garden-variety unknown-name case (typos, etc.)
+/// - `IdentityRedirect`: special-case for code-maat's `-a identity` debug
+///   dump — surfaces a redirect message pointing migrating users at
+///   `--format sqlite` instead of the generic supported-names enum.
 #[derive(Debug)]
-pub struct UnknownAnalysisError(pub String);
+pub enum UnknownAnalysisError {
+    Unknown(String),
+    IdentityRedirect,
+}
+
+impl UnknownAnalysisError {
+    #[must_use]
+    pub fn unknown(name: String) -> Self {
+        Self::Unknown(name)
+    }
+
+    #[must_use]
+    pub fn identity_redirect() -> Self {
+        Self::IdentityRedirect
+    }
+}
 
 impl std::error::Error for UnknownAnalysisError {}
 
 impl From<UnknownAnalysisError> for crate::CodeLoreError {
     fn from(e: UnknownAnalysisError) -> Self {
-        crate::CodeLoreError::UnknownAnalysisName {
-            name: e.0,
-            supported: AnalysisName::all().iter().map(|a| a.as_str()).collect(),
+        match e {
+            UnknownAnalysisError::Unknown(name) => crate::CodeLoreError::UnknownAnalysisName {
+                name,
+                supported: AnalysisName::all().iter().map(|a| a.as_str()).collect(),
+            },
+            UnknownAnalysisError::IdentityRedirect => crate::CodeLoreError::Analysis(
+                "code-maat's `-a identity` (raw data dump) maps to CodeLore's \
+                 SQLite output: `codelore analyze --format sqlite --output facts.db` \
+                 dumps the full DuckDB fact store (commits, changes, complexity, clones, \
+                 mailmap, provenance, hunks, author_aliases — 8 tables, strictly richer \
+                 than code-maat's parsed-log seq). The `identity` analysis name is not \
+                 registered in CodeLore."
+                    .into(),
+            ),
         }
     }
 }
 
 impl fmt::Display for UnknownAnalysisError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Enumerate every public analysis name so the user sees what they can
-        // pick from. Plan 8 §2 Task 6 wired `Authors`, so it's no longer filtered out.
-        let names: Vec<&str> = AnalysisName::all().iter().map(|a| a.as_str()).collect();
-        write!(
-            f,
-            "unknown analysis {:?}. Supported: {}",
-            self.0,
-            names.join(", ")
-        )
+        match self {
+            Self::Unknown(name) => {
+                // Enumerate every public analysis name so the user sees what they
+                // can pick from. Plan 8 §2 Task 6 wired `Authors`, so it's no
+                // longer filtered out.
+                let names: Vec<&str> = AnalysisName::all().iter().map(|a| a.as_str()).collect();
+                write!(
+                    f,
+                    "unknown analysis {name:?}. Supported: {}",
+                    names.join(", ")
+                )
+            }
+            Self::IdentityRedirect => write!(
+                f,
+                "code-maat's `-a identity` (raw data dump) is provided in \
+                 CodeLore via the SQLite output emitter — try: \
+                 `codelore analyze --format sqlite --output facts.db`. This \
+                 dumps the full DuckDB fact store (8 tables: commits, changes, \
+                 complexity, clones, mailmap, provenance, hunks, author_aliases) \
+                 — strictly richer than code-maat's parsed-log seq.",
+            ),
+        }
     }
 }

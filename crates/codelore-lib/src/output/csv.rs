@@ -219,7 +219,52 @@ pub fn write_ownership_csv<W: Write>(
     Ok(())
 }
 
-pub fn write_coupling_csv<W: Write>(rows: &[CouplingRow], w: &mut W) -> Result<()> {
+/// DEEP-1, DEEP-2, DEEP-3: under `--code-maat-compat`, emit code-maat's
+/// verbose 7-column shape with truncated-integer `degree` and the
+/// legacy column-name set (`entity`, `coupled`, `first-entity-revisions`,
+/// `second-entity-revisions`, `shared-revisions`). The Fisher exact p-value
+/// is a `CodeLore` extension with no code-maat equivalent and gets
+/// dropped under compat — migrating tools wouldn't know how to interpret
+/// it anyway. `CodeLore`'s modern default keeps the 8-column shape with
+/// float `degree` and the always-verbose paired columns.
+pub fn write_coupling_csv<W: Write>(
+    rows: &[CouplingRow],
+    w: &mut W,
+    code_maat_compat: bool,
+) -> Result<()> {
+    if code_maat_compat {
+        // Code-maat's verbose-results column order: entity, coupled,
+        // degree, average-revs, first-entity-revisions,
+        // second-entity-revisions, shared-revisions.
+        writeln!(
+            w,
+            "entity,coupled,degree,average-revs,\
+             first-entity-revisions,second-entity-revisions,shared-revisions"
+        )
+        .map_err(CodeLoreError::Io)?;
+        for row in rows {
+            // DEEP-2: degree formatted as truncated integer to match
+            // code-maat's `(int coupling)`. `as u32` performs the
+            // truncation; `f64::min(100.0)` guards against the rare
+            // > 100 round-up case (boundary degenerate from the SQL
+            // float division).
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let degree_int = row.degree.clamp(0.0, 100.0) as u32;
+            writeln!(
+                w,
+                "{},{},{},{},{},{},{}",
+                quote_if_needed(&row.entity_a),
+                quote_if_needed(&row.entity_b),
+                degree_int,
+                row.average_revs,
+                row.revs_a,
+                row.revs_b,
+                row.shared,
+            )
+            .map_err(CodeLoreError::Io)?;
+        }
+        return Ok(());
+    }
     writeln!(
         w,
         "entity-a,entity-b,shared,revs-a,revs-b,average-revs,degree,fisher-p"

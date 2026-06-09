@@ -217,17 +217,21 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         preflight_and_open_repo(args, &opts, analysis_name, no_banner)?
     };
 
-    // Parquet and SQLite formats require a writable DuckDB connection
-    // (for INSTALL/LOAD sqlite extension and COPY TO parquet). These formats
-    // always use fresh in-memory ingest and bypass the read-only cache.
-    // For all other formats (csv/json/markdown/sarif) the persistent cache is used.
-    let needs_writable_db = matches!(format, "parquet" | "sqlite");
+    // F7 (refined): the persistent cache opens its DuckDB file read-only.
+    // SQLite output requires `INSTALL sqlite; LOAD sqlite;` which writes
+    // to the DuckDB extension registry on the connected database — that
+    // cannot run on a read-only connection. Parquet output uses core
+    // DuckDB's built-in `COPY ... TO file.parquet (FORMAT PARQUET)`,
+    // which DOES work on read-only. So the bypass narrows from
+    // `parquet|sqlite` (both) to `sqlite` only — parquet now benefits
+    // from the cache speedup like csv/json/markdown/sarif.
+    let needs_writable_db = format == "sqlite";
 
     let db = {
         let _span =
             tracing::info_span!(target: "codelore::bench", "bench.cache_or_ingest").entered();
         if args.no_cache || needs_writable_db {
-            // --no-cache (or writable-format requirement): always fresh in-memory.
+            // --no-cache or sqlite output: always fresh in-memory.
             let db = FactsDb::new_in_memory().context("open fact store (in-memory)")?;
             db.ingest(&repo, &opts).context("ingest commits")?;
             db
@@ -460,8 +464,12 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             ("csv", AnalysisName::Coupling) => {
                 let rows = codelore_lib::analyses::coupling::run_coupling(&db, &opts)
                     .context("run coupling")?;
-                codelore_lib::output::csv::write_coupling_csv(&rows, &mut out)
-                    .context("write csv")?;
+                codelore_lib::output::csv::write_coupling_csv(
+                    &rows,
+                    &mut out,
+                    opts.code_maat_compat,
+                )
+                .context("write csv")?;
             }
             ("json", AnalysisName::Coupling) => {
                 let rows = codelore_lib::analyses::coupling::run_coupling(&db, &opts)

@@ -154,6 +154,21 @@ impl FactsDb {
                             return None;
                         }
                     };
+                    // F10: skip oversized files before handing to tree-sitter.
+                    // Without this guard, deeply-nested generated/minified
+                    // files (sqlite3.c, .pb.cc, minified .js) can OOM or
+                    // stack-overflow the AST walker. Log at debug — minified
+                    // bundles in `node_modules`-style layouts are the common
+                    // case and we'd otherwise drown the console.
+                    if source.len() > crate::constants::DEFAULT_MAX_AST_FILE_BYTES {
+                        tracing::debug!(
+                            "complexity: skipping {path} ({size} bytes > {cap}-byte AST cap; \
+                             likely generated/minified; excluded from complexity metrics)",
+                            size = source.len(),
+                            cap = crate::constants::DEFAULT_MAX_AST_FILE_BYTES,
+                        );
+                        return None;
+                    }
                     let entities = match compute_for_file(&full_path, &source, lang) {
                         Ok(v) => v,
                         Err(e) => {
@@ -206,6 +221,7 @@ impl FactsDb {
     ///
     /// Honors `opts.min_clone_node_count` (default 30) and `opts.exclude_patterns`
     /// (built from `--exclude` flags + `.codeloreignore`).
+    #[allow(clippy::too_many_lines)]
     fn populate_clones_at_head(&self, opts: &Options) -> Result<usize> {
         use crate::clones::{CloneLanguage, extract_functions, group_clones};
         use rayon::prelude::*;
@@ -259,6 +275,17 @@ impl FactsDb {
                 let Ok(code) = std::fs::read(&full_path) else {
                     return Ok(Vec::new());
                 };
+                // F10: skip oversized files (generated / minified) before
+                // tree-sitter to avoid OOM / stack-overflow on deeply
+                // nested generated code. Same cap as complexity pass.
+                if code.len() > crate::constants::DEFAULT_MAX_AST_FILE_BYTES {
+                    tracing::debug!(
+                        "clones: skipping {rel} ({size} bytes > {cap}-byte AST cap)",
+                        size = code.len(),
+                        cap = crate::constants::DEFAULT_MAX_AST_FILE_BYTES,
+                    );
+                    return Ok(Vec::new());
+                }
                 extract_functions(&rel, &code, lang)
                     .map_err(|e| CodeLoreError::Analysis(format!("clones: extract {rel}: {e}")))
             })

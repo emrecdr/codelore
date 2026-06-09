@@ -44,7 +44,12 @@ pub struct SocRow {
 /// files' scores, producing false-positive "central nodes" that are
 /// really just bystanders of a one-off sweep. Mirrors the `good_commits`
 /// CTE pattern in `coupling.rs`.
-fn build_soc_sql(src: &str) -> String {
+fn build_soc_sql(src: &str, code_maat_compat: bool) -> String {
+    // DEEP-4: code-maat's `as-soc` filter is `(> n min-revs)` — strict
+    // greater-than. Under `--code-maat-compat` we honour that semantic
+    // so threshold-boundary results match exactly. CodeLore's modern
+    // default uses `>=`, which is more intuitive ("SoC of at least N").
+    let threshold_op = if code_maat_compat { ">" } else { ">=" };
     format!(
         "WITH good_commits AS (
              SELECT rev FROM (
@@ -61,7 +66,7 @@ fn build_soc_sql(src: &str) -> String {
          FROM {src} c
          INNER JOIN rev_sizes rs USING (rev)
          GROUP BY c.path
-         HAVING SUM(rs.n - 1) >= ?
+         HAVING SUM(rs.n - 1) {threshold_op} ?
          ORDER BY soc DESC, entity ASC
          LIMIT ?"
     )
@@ -82,7 +87,7 @@ pub fn run_soc(db: &FactsDb, opts: &Options) -> Result<Vec<SocRow>> {
     });
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
 
-    let sql = build_soc_sql(src);
+    let sql = build_soc_sql(src, opts.code_maat_compat);
     crate::analyses::query::explain_if_requested(
         db,
         &sql,

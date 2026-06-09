@@ -4,6 +4,108 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Fixed — correctness
+
+- **F8 — `GitCliRepo` raw/numstat zip corrupted line counts on submodule
+  or binary-mismatch commits.** The previous implementation paired
+  `--raw` and `--numstat` stream entries by positional index, but
+  submodules emit raw lines without matching numstat lines (and
+  vice versa for binary-filtered files). After a length mismatch,
+  every subsequent file got its line counts paired with the WRONG
+  path. Replaced with a `HashMap`-by-destination-path join, where the
+  destination path is extracted from both streams (numstat's `old =>
+  new` syntax becomes `new`; raw's `R`/`C` statuses use `path2`).
+  Six new unit tests in `git_cli_repo::tests::f8_*` lock the path-key
+  semantics and verify the unequal-stream regression.
+
+### Fixed — correctness (compat-mode bit-exactness)
+
+These changes ONLY affect `--code-maat-compat` output. The modern
+default CSV remains unchanged. Each item closes a divergence found in
+the feature-by-feature deep dive vs code-maat's Clojure implementation.
+
+- **DEEP-1, DEEP-2, DEEP-3 — `coupling` CSV under
+  `--code-maat-compat` now matches code-maat's verbose 7-column shape
+  exactly.** Column names: `entity,coupled,degree,average-revs,first-
+  entity-revisions,second-entity-revisions,shared-revisions` (drops
+  `fisher-p` which has no code-maat equivalent). `degree` truncated to
+  integer matching code-maat's `(int coupling)`. `average-revs` uses
+  CEIL `((a+b)/2.0)` matching code-maat's `(math/ceil average-revs)` —
+  previously the modern default's integer-floor differed by 1 from
+  code-maat for any odd-sum pair.
+- **DEEP-4 — `soc` threshold uses strict `>` under compat** matching
+  code-maat's `(> n min-revs)`. Modern default keeps `>=` (more
+  intuitive "SoC of at least N").
+- **DEEP-11, DEEP-12 — `communication` `average` uses CEIL under
+  compat** matching code-maat's `(math/ceil (m/average …))`; `strength`
+  truncated to integer matching code-maat's
+  `(int (m/as-percentage …))`. Modern default keeps floor + float for
+  precision.
+- **DEEP-15 — `summary` row STATISTIC NAMES under compat are
+  hyphenated** `number-of-commits`, `number-of-entities`,
+  `number-of-entities-changed`, `number-of-authors`. Previously PAR-5
+  fixed only the column header (`statistic,value`); the row values
+  still said `commits` etc., breaking downstream tools that filter on
+  `if statistic == "number-of-commits"`.
+
+### Fixed — robustness
+
+- **F11 — `GixRepo::is_worktree_dirty` now includes untracked files.**
+  The previous `into_index_worktree_iter` skipped the dirwalk entirely,
+  reporting untracked-only repos as clean — diverging from
+  `GitCliRepo` (which uses `git status --porcelain`, reporting
+  untracked). Switched to the full `into_iter()` which unifies
+  index-vs-worktree differences AND the dirwalk for untracked-file
+  detection.
+- **F10 — tree-sitter AST parsing now has a 2 MB file-size cap.**
+  Previously oversized files (minified JS bundles, protobuf
+  `.pb.cc` generated code, vendored single-file libraries like
+  `sqlite3.c`) could exhaust stack or heap during tree-sitter parse.
+  Three insertion points: `ingest_complexity_at_head`,
+  `populate_clones_at_head`, and `analyses::clones::run_clones`. Skip
+  is silent at `debug` log level — warning per-file would drown the
+  console on JS-heavy repos.
+
+### Added — performance
+
+- **F7 (refined) — persistent cache now serves Parquet exports.**
+  Previously `--format parquet` and `--format sqlite` bypassed the
+  cache entirely via `needs_writable_db`. Parquet's `COPY ... TO`
+  is built into core DuckDB and works fine on read-only connections;
+  the bypass was over-cautious. SQLite output still bypasses (its
+  `INSTALL sqlite; LOAD sqlite;` writes the extension registry on the
+  source connection — read-only blocks that). Net: re-running
+  `--format parquet` on a clean cache is now sub-second instead of
+  full-history-walk slow.
+- **F9 — `GixRepo::walk_commits` now parallelises commit processing
+  across cores via Rayon.** The OID iteration uses
+  `par_iter().map(...).collect::<Result<Vec<_>>>()` — order-preserving,
+  so consumers see events in commit order. Each worker constructs its
+  own thread-local `gix::Repository` from the `Send`-able
+  `ThreadSafeRepository` clone. Memory cost: ~20 MB peak for a
+  100k-commit repo (acceptable; the downstream `FactsDb` ingest pulls
+  every event anyway). Speedup: roughly N × on N-core boxes for
+  CPU-bound diff calculation, capped by gix object-resolution overhead.
+
+### Added — migration UX
+
+- **NEW-B — `codelore -a identity` now emits a helpful redirect**
+  pointing migrating users at `--format sqlite -o facts.db` (the
+  CodeLore equivalent of code-maat's raw-data dump, strictly richer
+  with 8 fact-store tables vs code-maat's parsed-log seq). Previously
+  the command returned a confusing 22-name enum error. The `identity`
+  name is NOT registered in the canonical `AnalysisName` enum (it's a
+  code-maat debug artifact, not a real analysis); the special-case
+  redirect lives in `FromStr` ahead of the generic lookup.
+
+### Removed
+
+- **NEW-C — Deleted `Options.verbose_results` dead-code field.**
+  The field had been a "soft gap" leftover since v0.1.x — declared but
+  never read by any analysis, not bound to any CLI flag, and
+  explicitly dropped from cache-key serialisation. Four references
+  removed; behaviour unchanged.
+
 ## [0.2.0] - 2026-06-09
 
 ### Changed (BREAKING)

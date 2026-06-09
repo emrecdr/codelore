@@ -15,7 +15,24 @@ pub struct SummaryRow {
 }
 
 pub fn run_summary(db: &FactsDb, opts: &Options) -> Result<Vec<SummaryRow>> {
-    let sql = "
+    // DEEP-15: Under `--code-maat-compat`, emit code-maat's exact statistic
+    // names (hyphenated `number-of-X`) so downstream scripts parsing CSV
+    // like `if statistic == "number-of-commits"` keep working. The
+    // CodeLore modern default uses concise names (`commits`, `entities`)
+    // because the row label is already self-explanatory in the modern
+    // surface where the column header reads `metric`.
+    let sql = if opts.code_maat_compat {
+        "
+        SELECT 'number-of-commits' AS metric, COUNT(*) AS value FROM commits
+        UNION ALL
+        SELECT 'number-of-entities', COUNT(*) FROM entities
+        UNION ALL
+        SELECT 'number-of-entities-changed', COUNT(*) FROM changes
+        UNION ALL
+        SELECT 'number-of-authors', COUNT(DISTINCT canonical_author) FROM commits;
+    "
+    } else {
+        "
         SELECT 'commits' AS metric, COUNT(*) AS value FROM commits
         UNION ALL
         SELECT 'changes', COUNT(*) FROM changes
@@ -23,7 +40,8 @@ pub fn run_summary(db: &FactsDb, opts: &Options) -> Result<Vec<SummaryRow>> {
         SELECT 'entities', COUNT(*) FROM entities
         UNION ALL
         SELECT 'authors', COUNT(DISTINCT canonical_author) FROM commits;
-    ";
+    "
+    };
     crate::analyses::query::explain_if_requested(db, sql, [], "summary", opts)?;
     let mut stmt = db
         .conn()

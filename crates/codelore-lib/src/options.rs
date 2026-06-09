@@ -70,7 +70,6 @@ pub struct Options {
 
     // Output
     pub rows_limit: Option<u32>,
-    pub verbose_results: bool,
     pub include_merges: bool,
     pub strict_grouping: bool,
     pub complexity_sample: ComplexitySample,
@@ -146,7 +145,6 @@ impl Options {
     /// - `rows_limit` is dropped (cosmetic — affects only output truncation,
     ///   not the underlying data; setting `--rows 10` on a cached analysis
     ///   should still hit the cache).
-    /// - `verbose_results` is dropped (logging knob, not a data knob).
     ///
     /// # Panics
     ///
@@ -163,7 +161,6 @@ impl Options {
         // Cosmetic knobs — exclude from canonical form so the cache hits
         // when they change.
         snapshot.rows_limit = None;
-        snapshot.verbose_results = false;
         snapshot.explain = false;
         let mut canon = serde_json::to_value(&snapshot)
             .expect("Options derives Serialize and all fields are Serialize");
@@ -324,7 +321,6 @@ impl Default for Options {
             message_regex: None,
             age_time_now: None,
             rows_limit: None,
-            verbose_results: false,
             include_merges: false,
             explain: false,
             use_canonical_lineage: true,
