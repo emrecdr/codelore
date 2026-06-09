@@ -4,6 +4,10 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Added — internal
+
+- **`scripts/cut-release.sh`** — codifies the release-cut procedure into a single idempotent script. Validates preconditions (clean tree, on main, in sync with origin, no existing tag, non-empty `[Unreleased]`), bumps the workspace version, flips the CHANGELOG section, pushes the release commit, waits for CI green, runs the `disable-ruleset → tag → push → restore` dance (auto-restoring the ruleset via `trap EXIT` so the repo is never left unprotected on interrupt or failure), and prints the release-monitor links. Captures the v0.1.2 lesson that ruleset `required_status_checks` does not reliably consume Check Runs even with `integration_id`. Supports `--dry-run` for safe preview and `--skip-ci-wait` for re-attempts after the commit has already gone green.
+
 ## [0.1.2] - 2026-06-09
 
 ### Fixed — correctness
