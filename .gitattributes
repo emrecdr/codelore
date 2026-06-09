@@ -1,0 +1,4 @@
+# Cargo writes its lockfile with LF; Windows `core.autocrlf=true` would
+# rewrite to CRLF on checkout, breaking string-match tests that
+# `include_str!` the lockfile (see `dep_versions_drift_test.rs`).
+Cargo.lock text eol=lf

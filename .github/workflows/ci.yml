@@ -89,7 +89,14 @@ jobs:
       - name: Run tests (nextest)
         run: cargo nextest run --workspace --all-features --no-fail-fast
       - name: Run doc tests
-        run: cargo test --workspace --all-features --doc
+        # `cargo test --doc --workspace` does NOT honour per-package
+        # `doctest = false` (long-standing cargo behaviour: the flag opts in
+        # to running doctests for every package regardless). The vendored
+        # `codelore-rca` carries Mozilla rust-code-analysis upstream doctests
+        # that import `rust_code_analysis::*` (the pre-fork name) and so
+        # don't compile. Excluded here so our doctests still gate without
+        # forcing edits into the upstream-tracked vendored sources.
+        run: cargo test --workspace --exclude codelore-rca --all-features --doc
       - name: sccache stats
         if: always()
         run: sccache --show-stats
