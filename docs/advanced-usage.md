@@ -519,7 +519,7 @@ codescene/
 ├── .github/workflows/
 │   ├── ci.yml                            # cargo test + clippy + fmt + deny
 │   ├── bench.yml                         # weekly perf regression gate
-│   ├── release.yml                       # cargo-dist + SLSA L3 (on tag push)
+│   ├── release.yml                       # cargo-build matrix + SLSA L3 + Homebrew (on tag push)
 │   └── container.yml                     # distroless image (on tag push)
 └── .codeloreignore                       # optional, user-supplied
 ```

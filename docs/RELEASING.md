@@ -1,6 +1,6 @@
 # Releasing CodeLore
 
-This document captures the versioning policy + the mechanical release procedure. The release pipeline (`cargo-dist` multi-platform binaries + SLSA L3 provenance + distroless container) is configured under `[workspace.metadata.dist]` in the root `Cargo.toml` and triggers on git tag push.
+This document captures the versioning policy + the mechanical release procedure. The release pipeline (multi-platform `cargo build` matrix + SLSA L3 build provenance + distroless container + Homebrew formula regeneration) is a hand-rolled GitHub Actions workflow at `.github/workflows/release.yml` and triggers on git tag push.
 
 ## Versioning Policy
 
@@ -106,26 +106,25 @@ git push --follow-tags
 
 ### What the tag push triggers
 
-When a `vX.Y.Z` tag lands on `main`:
+The `v*` tag-creation ref is also gated by the `protect-release-tags` repo ruleset, which requires all six CI contexts (`rustfmt`, `clippy`, `cargo-deny`, `test (ubuntu/macos/windows-latest)`) green on the target commit before the tag is accepted. If you tag a red commit, the push is rejected — `git tag` succeeds locally, `git push origin vX.Y.Z` fails with a rules-violation message.
 
-1. **`.github/workflows/release.yml`** runs the `cargo-dist` pipeline:
-   - Builds release binaries for 6 platforms (aarch64-darwin, x86_64-darwin, x86_64-linux-gnu, x86_64-linux-musl, aarch64-linux-gnu, x86_64-windows-msvc)
-   - Signs with SLSA L3 provenance
-   - Uploads as a GitHub Release with the changelog excerpt for that version
-   - Updates the `emrecdr/homebrew-codelore` Homebrew tap
-   - Generates a `cargo binstall` manifest so `cargo binstall codelore` works from day one of the release
+Once accepted, three workflows fire in parallel on `vX.Y.Z`:
+
+1. **`.github/workflows/release.yml`** (the release pipeline):
+   - `plan` — resolves the tag string
+   - `build` — matrix of 5 targets (aarch64-darwin, x86_64-darwin, x86_64-linux-gnu, aarch64-linux-gnu, x86_64-windows-msvc), each running `cargo build --release --locked --target $TARGET` and packaging the artifact into a versioned tarball/zip (`actions/attest-build-provenance` attaches SLSA L3 attestation here)
+   - `release` — downloads all 5 build artifacts and publishes the GitHub Release via `softprops/action-gh-release@v3`, with `generate_release_notes: true` pulling the CHANGELOG section automatically
+   - `homebrew-publish` — downloads the same build artifacts (bit-identical to what end-users `brew install`), computes SHA256 of each, renders `Formula/codelore.rb`, checks out `emrecdr/homebrew-codelore` via the `HOMEBREW_TAP_DEPLOY_KEY` SSH deploy key, and pushes the regenerated formula if it changed
 
 2. **`.github/workflows/container.yml`** publishes a distroless container image to `ghcr.io/emrecdr/codelore:vX.Y.Z` (and `:latest` for non-pre-release tags).
 
 3. **`.github/workflows/bench.yml`** (weekly) is unaffected — it tracks main, not tags.
 
+`cargo binstall codelore` works automatically once the GitHub Release exists — `cargo-binstall` scans the Release asset list for the expected `codelore-<tag>-<target>.tar.gz` / `.zip` pattern.
+
 ### Pre-release vs stable
 
-`cargo-dist` recognizes pre-release tags by the SemVer suffix (`-alpha`, `-beta`, `-rc`):
-
-- Tags like `v0.1.0-alpha.2` produce a GitHub Release marked "Pre-release".
-- The Homebrew tap publishes pre-release versions under a separate stable channel.
-- `cargo binstall codelore` defaults to the latest **stable** tag — users must pass `--version 0.1.0-alpha.2` explicitly for pre-releases.
+Use SemVer suffix conventions on the tag (`v0.2.0-alpha.1`, `v0.2.0-beta.2`, `v0.2.0-rc.1`). `softprops/action-gh-release@v3` does NOT automatically mark these as pre-release — if you want the GitHub Release flagged as "Pre-release", either add `prerelease: true` to the `release` step temporarily for that tag, or edit the Release on the GitHub UI after publish. The Homebrew tap formula is unconditionally overwritten on every tag push, so a pre-release tag will move the tap to the pre-release version — if you want the tap to stay on the last stable, either skip the homebrew-publish job for pre-release tags (add an `if: !contains(needs.plan.outputs.tag, '-')` guard) or roll back the formula manually.
 
 ### Yanking a release
 

@@ -25,44 +25,15 @@ categories = [
     "development-tools",
 ]
 
-# cargo-dist config (https://opensource.axo.dev/cargo-dist/).
-# Owner runs `cargo dist init` once to refresh .github/workflows/release.yml.
-# This block locks the platforms + installers in advance so the regenerated
-# workflow stays consistent across machines.
-[workspace.metadata.dist]
-cargo-dist-version = "0.28.0"
-ci = "github"
-installers = ["shell", "powershell", "msi", "homebrew"]
-# `x86_64-unknown-linux-musl` is intentionally NOT in this list. cargo-dist's
-# musl build environment (Ubuntu + `musl-tools` apt package) ships
-# `musl-gcc` for C but does NOT ship `musl-g++` for C++ in any default
-# Ubuntu repo. CodeLore's transitive deps include C++ build scripts
-# (`bca-tree-sitter-preproc`'s scanner.cc, bundled DuckDB's ~6000 .cpp
-# files) that need a C++ cross-compiler — `cc-rs` fails at build-script
-# time with `failed to find tool "x86_64-linux-musl-g++"`. Adding musl
-# back requires either (a) a custom `messense/rust-musl-cross`-style
-# container per target, or (b) a from-source musl-cross toolchain
-# installation step in the workflow. Both are larger surface than
-# v0.1.0 warrants. Alpine users have two interim paths: `cargo install
-# codelore` from source (statically links libgcc), or run the
-# `x86_64-unknown-linux-gnu` binary under `gcompat`. Tracked for 0.1.x
-# in `docs/roadmap-v1.x-and-beyond.md` Tier 2.
-targets = [
-    "aarch64-apple-darwin",
-    "x86_64-apple-darwin",
-    "x86_64-unknown-linux-gnu",
-    "aarch64-unknown-linux-gnu",
-    "x86_64-pc-windows-msvc",
-]
-# Homebrew tap (placeholder; replace before first release)
-tap = "emrecdr/homebrew-codelore"
-publish-jobs = ["homebrew"]
-# Generate a binstall manifest so `cargo binstall codelore` works day one
-pr-run-mode = "plan"
-install-updater = false
-# Pinned runners for reproducibility
-[workspace.metadata.dist.github-custom-runners]
-aarch64-unknown-linux-gnu = "ubuntu-24.04-arm"
+# NOTE: this workspace previously carried a [workspace.metadata.dist] block
+# for cargo-dist. The release pipeline now lives entirely in
+# .github/workflows/release.yml as hand-rolled steps (build matrix, SLSA L3
+# attestation via attest-build-provenance, GitHub Release publish, Homebrew
+# formula regeneration). cargo-dist itself is not invoked anywhere, so the
+# metadata block was inert and has been removed to avoid drift between
+# documented intent and actual behaviour. If cargo-dist is reintroduced
+# later, the workflow needs full audit first — the current SLSA pathway
+# patches around cargo-dist's previously-broken SLSA generator step.
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
