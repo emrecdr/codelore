@@ -36,12 +36,15 @@ fn analyze_rejects_unknown_analysis() {
 
 #[test]
 fn version_flag_works() {
+    // Compare against the package version Cargo resolves at compile time, not
+    // a hardcoded literal — otherwise every version bump fails CI silently
+    // until someone re-reads this test file.
     Command::cargo_bin("codelore")
         .unwrap()
         .arg("--version")
         .assert()
         .success()
-        .stdout(predicate::str::contains("0.1.0"));
+        .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")));
 }
 
 #[test]
