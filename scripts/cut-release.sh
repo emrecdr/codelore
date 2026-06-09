@@ -165,11 +165,25 @@ if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 ok "version '${VERSION}' parses as semver"
 
-if [[ -n "$(git status --porcelain)" ]]; then
-  git status --short >&2
-  die "working tree is not clean. Commit or stash your changes first."
+# Check only TRACKED-file modifications. Untracked files (IDE state,
+# agent-local caches, etc.) don't get added to the release commit
+# because the script's `git add` later is explicit
+# (`Cargo.toml Cargo.lock CHANGELOG.md`) — they can't accidentally
+# slip into the tag's tree. Caring about them here would force devs
+# to maintain a perfectly-tidy worktree just to cut a release,
+# which adds friction without safety value.
+if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
+  git status --short --untracked-files=no >&2
+  die "working tree has uncommitted changes to tracked files. Commit or stash first."
 fi
-ok "working tree is clean"
+ok "no uncommitted changes to tracked files"
+# Surface untracked files as a note so the user knows what's NOT in the
+# release. Silent skipping would hide IDE state they might want to
+# commit before the release.
+if [[ -n "$(git status --porcelain --untracked-files=all 2>/dev/null | grep '^??')" ]]; then
+  warn "untracked files present (will NOT be in the release):"
+  git status --short --untracked-files=all 2>/dev/null | grep '^??' | head -10 >&2
+fi
 
 CURRENT_BRANCH="$(git symbolic-ref --short HEAD 2>/dev/null || echo '')"
 if [[ "${CURRENT_BRANCH}" != "main" ]]; then
