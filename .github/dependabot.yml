@@ -19,6 +19,19 @@ updates:
     labels:
       - dependencies
       - github-actions
+    # `dtolnay/rust-toolchain` is a special-case action whose `@<version>` tag
+    # specifies the Rust toolchain to install (not the action's own version).
+    # The dtolnay repo carries branches for future Rust versions before they
+    # ship as stable — Dependabot reads them as "newer releases" and offers
+    # bumps to versions that don't actually exist on the stable channel yet
+    # (e.g. PR #1: 1.96.0 → 1.100.0, while stable was still 1.96.0). Bumping
+    # the action tag also has to be coordinated with `rust-toolchain.toml`
+    # and `Cargo.toml`'s `rust-version` to take effect — see
+    # `scripts/cut-release.sh` for the coordinated path. Ignore Dependabot
+    # bumps for this one action; the coordinated bump happens deliberately
+    # at release-cut time.
+    ignore:
+      - dependency-name: "dtolnay/rust-toolchain"
 
   # Cargo lockfile + crate versions. Same grouping rationale.
   - package-ecosystem: cargo
