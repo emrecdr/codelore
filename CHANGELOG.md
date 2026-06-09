@@ -4,9 +4,50 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Fixed — correctness + performance (closes the v0.1.2 deferred findings)
+
+- **Cache hits on dirty working trees now emit a warning (F3).** The persistent
+  cache key is hashed from `(canonical_repo_path, head_sha, opts, version,
+  schema)` — explicitly NOT from worktree state. That's correct for the
+  majority of analyses (`revisions`, `coupling`, `ownership`, `churn`,
+  `messages`, etc. all read only committed history), but `hotspots`-style
+  HEAD-time metrics computed by `ingest_complexity_at_head` and
+  `populate_clones_at_head` read files from disk at ingest time and can
+  silently mismatch the current worktree on a cache hit. Now: a
+  `tracing::warn!` fires whenever a cache hit lands on a working tree with
+  uncommitted modifications or untracked Tier-1 source files, telling the
+  user to pass `--no-cache` if the dirty state matters. Detection uses gix's
+  `Repository::status` API for `GixRepo` and `git status --porcelain` for
+  `GitCliRepo`. New `Repo::is_worktree_dirty(&self) -> bool` trait method
+  with a `false` default so future backends can opt in without breaking the
+  existing API contract. Errors during detection are deliberately swallowed
+  (return `false`) — a missed warning is strictly preferable to a hard
+  analyze failure on an edge case like an unusual submodule layout.
+
+- **`--after` date-range walk uses gix's `ByCommitTimeCutoff` for graph
+  pruning (NEW-3 perf).** Previously the walker eagerly traversed the
+  entire reachable commit graph via `repo.rev_walk([head]).all()`, then
+  dropped commits in-memory via `.filter_map`. On large histories
+  (linux-kernel size, 100k+ commits) this turned a "last 7 days" analysis
+  into the same work as a full-history walk. Now: when `opts.after` is
+  set, the walk runs with `Sorting::ByCommitTimeCutoff { seconds, order:
+  NewestFirst }` so gix stops traversing the moment it crosses below the
+  cutoff. The cutoff uses committer time (gix's primitive); the in-memory
+  filter still enforces author-time semantics. Unusual rebases that move
+  commit time far earlier than author time can now be dropped by the
+  cutoff — but git's own `--after` flag has identical behaviour, so this
+  CONVERGES `GixRepo` and `GitCliRepo` rather than diverging them. The 10
+  differential cross-walker tests (which assert event-stream parity) all
+  still pass on the existing fixtures. `--before` falls through to the
+  existing in-memory filter unchanged — gix has no symmetric primitive
+  for "walk forward until newer than" and `--before`-only is the rarer
+  workflow.
+
 ### Added — internal
 
 - **`scripts/cut-release.sh`** — codifies the release-cut procedure into a single idempotent script. Validates preconditions (clean tree, on main, in sync with origin, no existing tag, non-empty `[Unreleased]`), bumps the workspace version, flips the CHANGELOG section, pushes the release commit, waits for CI green, runs the `disable-ruleset → tag → push → restore` dance (auto-restoring the ruleset via `trap EXIT` so the repo is never left unprotected on interrupt or failure), and prints the release-monitor links. Captures the v0.1.2 lesson that ruleset `required_status_checks` does not reliably consume Check Runs even with `integration_id`. Supports `--dry-run` for safe preview and `--skip-ci-wait` for re-attempts after the commit has already gone green.
+
+- **Dependabot ignore for `dtolnay/rust-toolchain`** in `.github/dependabot.yml`. The action's `@<version>` tag names the Rust toolchain to install, not the action's own release version — Dependabot was offering bumps to versions that don't yet ship as stable (closed PR #1 was 1.96.0 → 1.100.0 while 1.96.0 was still current). Coordinated Rust bumps happen deliberately at release-cut time via `scripts/cut-release.sh`, not weekly via Dependabot.
 
 ## [0.1.2] - 2026-06-09
 

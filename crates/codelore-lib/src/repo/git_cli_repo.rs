@@ -231,6 +231,18 @@ impl Repo for GitCliRepo {
             .to_string();
         Ok(sha)
     }
+
+    fn is_worktree_dirty(&self) -> bool {
+        // `git status --porcelain` emits exactly zero bytes for a clean
+        // tree, one short-format line per dirty/untracked path otherwise.
+        // Non-empty stdout therefore means dirty. Errors swallowed per the
+        // trait's contract (`false` on detection failure is preferable to
+        // a hard analyze error).
+        match self.run_git(&["status", "--porcelain"]) {
+            Ok(output) if output.status.success() => !output.stdout.is_empty(),
+            _ => false,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

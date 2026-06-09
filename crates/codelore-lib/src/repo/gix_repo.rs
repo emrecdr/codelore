@@ -38,8 +38,36 @@ impl Repo for GixRepo {
         // GixRepo and GitCliRepo backends produce identical event streams
         // for identical Options. Without this, `--after`/`--before` and the
         // default merge-exclusion would silently no-op on the gix backend.
-        let oids: Vec<gix::ObjectId> = repo
-            .rev_walk([head])
+        //
+        // NEW-3 perf optimisation: when `--after` is set, switch the walk's
+        // sorting to `ByCommitTimeCutoff` so gix stops traversing the commit
+        // graph the moment it crosses below the cutoff. Without this, the
+        // walker eagerly loaded every reachable commit (~O(history-size))
+        // before the in-memory filter dropped most of them — making
+        // `--after 2026-06-01` on a 100k-commit repo do the same work as
+        // walking all 100k. The cutoff is on committer time (gix's primitive),
+        // not author time. The author-time filter inside the closure is
+        // kept exact, so commits whose committer time is below the cutoff
+        // but author time is above are NOT included (the cutoff is a perf
+        // upper bound, not a semantic change — same in-memory predicate
+        // wins). Worst-case for unusual rebases that move commit time far
+        // earlier than author time: we drop those — but git's own
+        // `--after` flag has the same behaviour (it's commit-time based),
+        // so GitCliRepo would too. Net: GixRepo and GitCliRepo CONVERGE.
+        let mut walk = repo.rev_walk([head]);
+        if let Some(after) = opts.after {
+            let cutoff_seconds = after
+                .with_hms(0, 0, 0)
+                .ok()
+                .and_then(|d| d.assume_utc().unix_timestamp().try_into().ok());
+            if let Some(seconds) = cutoff_seconds {
+                walk = walk.sorting(gix::revision::walk::Sorting::ByCommitTimeCutoff {
+                    seconds,
+                    order: gix::traverse::commit::simple::CommitTimeOrder::NewestFirst,
+                });
+            }
+        }
+        let oids: Vec<gix::ObjectId> = walk
             .all()
             .map_err(|e| CodeLoreError::Repo(format!("rev_walk: {e}")))?
             .filter_map(|info| {
@@ -185,6 +213,31 @@ impl Repo for GixRepo {
             .head_id()
             .map_err(|e| CodeLoreError::Repo(format!("head_id: {e}")))?;
         Ok(oid.to_hex().to_string())
+    }
+
+    fn is_worktree_dirty(&self) -> bool {
+        // gix's `Repository::status(progress)` returns a `Platform` iterator
+        // over differences between (HEAD tree, index, worktree). We want
+        // "ANY difference" — modified files OR untracked files OR staged
+        // changes. Short-circuit on the first non-clean entry.
+        //
+        // Errors are deliberately swallowed (`return false` on any failure):
+        // detection is a hint that triggers a tracing::warn!, not a
+        // contract. A missed warning is strictly preferable to a hard
+        // analyze failure on a status-API edge case.
+        let repo = self.inner.to_thread_local();
+        let Ok(platform) = repo.status(gix::progress::Discard) else {
+            return false;
+        };
+        let Ok(iter) = platform
+            .index_worktree_options_mut(|_| {})
+            .into_index_worktree_iter(Vec::new())
+        else {
+            return false;
+        };
+        // The iterator yields one item per index-vs-worktree difference.
+        // Any single yielded item means the tree is dirty.
+        iter.flatten().next().is_some()
     }
 }
 

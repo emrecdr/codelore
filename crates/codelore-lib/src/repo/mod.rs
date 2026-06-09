@@ -32,6 +32,24 @@ pub trait Repo: Send + Sync {
     /// Return the full SHA-1 hex string of HEAD.
     /// Used by the persistent cache (Plan 8 §3) to build the cache key.
     fn head_sha(&self) -> Result<String>;
+
+    /// Whether the working tree carries uncommitted modifications, untracked
+    /// Tier-1 source files, or staged-but-uncommitted changes.
+    ///
+    /// Used by the persistent-cache code path to emit a `tracing::warn!`
+    /// when a cache HIT occurs on a dirty tree — HEAD-time metrics
+    /// (`complexity`, `clones`) are computed from the working tree at
+    /// ingest time, so a cached result keyed off `head_sha` can mismatch
+    /// what the user sees on disk now. The warning recommends `--no-cache`.
+    ///
+    /// Default impl returns `false` (assume clean) so backends without a
+    /// cheap dirty-check can opt out. Implementations that fail to detect
+    /// MUST return `false` rather than propagating an error — a missed
+    /// warning is better than a hard analyze failure on a state-detection
+    /// edge case (e.g. unusual submodule layout).
+    fn is_worktree_dirty(&self) -> bool {
+        false
+    }
 }
 
 pub mod gix_repo;

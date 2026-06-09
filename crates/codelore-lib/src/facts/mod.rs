@@ -124,6 +124,24 @@ impl FactsDb {
 
         if cache_p.exists() {
             tracing::info!("cache hit: {}", cache_p.display());
+            // F3: warn when a cache hit happens on a dirty working tree.
+            // The cache key is (canonical_repo_path, head_sha, opts, version,
+            // schema) — it does NOT hash worktree state, so HEAD-time metrics
+            // (complexity, clones) that were computed from disk at ingest can
+            // be silently stale relative to what's on disk NOW. Most analyses
+            // (revisions, churn, coupling, ownership, etc.) only read commit
+            // history and are unaffected, but the user can't tell from
+            // looking at the output which kind of analysis they're running.
+            // Surface the situation so they know to pass `--no-cache` if it
+            // matters.
+            if repo.is_worktree_dirty() {
+                tracing::warn!(
+                    "cache hit on a working tree with uncommitted changes; \
+                     HEAD-time metrics (hotspots' complexity, clones) may be \
+                     stale relative to disk. Pass `--no-cache` to recompute \
+                     against the current working tree."
+                );
+            }
             return Self::open_read_only(&cache_p);
         }
 
