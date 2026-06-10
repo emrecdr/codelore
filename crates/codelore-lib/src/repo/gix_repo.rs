@@ -306,6 +306,16 @@ fn changed_files_for_commit(
     commit: &gix::Commit<'_>,
     rev: &str,
 ) -> Result<Vec<FileChange>> {
+    // Merge commits (≥2 parents) emit empty change sets to match
+    // `git log --name-status`'s default behaviour, which suppresses
+    // merge diffs unless `-m` / `-c` / `--cc` is passed. GitCliRepo
+    // inherits that suppression for free; without this guard the gix
+    // backend reports a first-parent diff for every merge and the
+    // differential test gate diverges.
+    if commit.parent_ids().count() > 1 {
+        return Ok(Vec::new());
+    }
+
     let tree = commit
         .tree()
         .map_err(|e| CodeLoreError::Repo(format!("commit tree {rev}: {e}")))?;

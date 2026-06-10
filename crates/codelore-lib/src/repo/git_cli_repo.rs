@@ -504,10 +504,19 @@ fn parse_changes_block(block: &str) -> Vec<FileChange> {
 }
 
 /// Parse a numstat line into `(destination_path, (added, deleted))`.
-/// Returns `None` on malformed input. The destination path is the key
-/// for joining against the raw line stream — for non-rename rows it's
-/// just the third tab-separated field; for rename rows the numstat
-/// emits `old => new` and we return the `new` component.
+/// Returns `None` on malformed input.
+///
+/// The destination path is the key for joining against the raw line
+/// stream. Git's numstat emits renames in two shapes:
+///
+///   1. Whole-path arrow: `old/path => new/path` (paths share no common
+///      affix).
+///   2. Brace-collapsed: `prefix/{old => new}/suffix` (git collapses
+///      the unchanged common prefix and suffix into braces). The
+///      destination path is then `prefix/new/suffix`. Either side of
+///      the arrow inside the braces can be empty — `a/{ => sub}/b.rs`
+///      means the destination is `a/sub/b.rs` and the source was
+///      `a/b.rs`.
 fn parse_numstat_with_key(line: &str) -> Option<(String, (u32, u32))> {
     let mut cols = line.split('\t');
     let added_str = cols.next()?;
@@ -523,13 +532,38 @@ fn parse_numstat_with_key(line: &str) -> Option<(String, (u32, u32))> {
     } else {
         deleted_str.parse().ok()?
     };
-    // For renames, numstat emits `old => new` — strip to the destination.
-    let key = if let Some((_, new_path)) = path_part.split_once(" => ") {
-        new_path.to_string()
-    } else {
-        path_part.to_string()
-    };
+    let key = expand_rename_path_destination(path_part);
     Some((key, (added, deleted)))
+}
+
+/// Resolve git's rename path syntax to the destination path. See
+/// [`parse_numstat_with_key`] for the shapes git emits. Handles the
+/// brace-collapsed form by stripping `{old => new}` segments down to
+/// `new` and gracefully collapsing the resulting `//` if `new` is
+/// empty. Non-rename inputs pass through unchanged.
+fn expand_rename_path_destination(path: &str) -> String {
+    // Brace form first: outer-most `{ … => … }` wins. There's at most
+    // one brace pair per path in git's output.
+    if let (Some(open), Some(close)) = (path.find('{'), path.rfind('}'))
+        && open < close
+        && let Some((_, after_arrow)) = path[open + 1..close].split_once(" => ")
+    {
+        let prefix = &path[..open];
+        let suffix = &path[close + 1..];
+        let mut out = String::with_capacity(prefix.len() + after_arrow.len() + suffix.len());
+        out.push_str(prefix);
+        out.push_str(after_arrow);
+        out.push_str(suffix);
+        // Collapse the `//` that appears when `after_arrow` is empty
+        // and prefix already ends with `/` (e.g. `a/{ => sub}/b.rs`
+        // with new side empty becomes `a//b.rs`; want `a/b.rs`).
+        return out.replace("//", "/");
+    }
+    // Whole-path arrow form: `old => new`.
+    if let Some((_, new_path)) = path.split_once(" => ") {
+        return new_path.to_string();
+    }
+    path.to_string()
 }
 
 /// Extract the destination path from a raw line (prefix `:` already
@@ -714,6 +748,70 @@ fn parse_iso_timestamp(s: &str) -> Option<time::OffsetDateTime> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Brace-collapsed renames at various positions in the path must
+    /// expand to the destination so the numstat key joins correctly
+    /// against the raw stream (which always names the destination
+    /// path in its `R` line).
+    #[test]
+    fn brace_rename_at_path_root() {
+        assert_eq!(
+            expand_rename_path_destination("{old.rs => new.rs}"),
+            "new.rs"
+        );
+    }
+
+    #[test]
+    fn brace_rename_with_common_prefix() {
+        assert_eq!(
+            expand_rename_path_destination("src/{old.rs => new.rs}"),
+            "src/new.rs"
+        );
+    }
+
+    #[test]
+    fn brace_rename_with_common_prefix_and_suffix() {
+        assert_eq!(
+            expand_rename_path_destination("src/{old => new}/file.rs"),
+            "src/new/file.rs"
+        );
+    }
+
+    #[test]
+    fn brace_rename_empty_new_side_collapses_slash() {
+        // `a/{sub => }/b.rs` means destination is `a/b.rs`. Without the
+        // // -> / collapse the result would be `a//b.rs`.
+        assert_eq!(expand_rename_path_destination("a/{sub => }/b.rs"), "a/b.rs");
+    }
+
+    #[test]
+    fn brace_rename_empty_old_side() {
+        assert_eq!(
+            expand_rename_path_destination("a/{ => sub}/b.rs"),
+            "a/sub/b.rs"
+        );
+    }
+
+    #[test]
+    fn whole_path_arrow_rename_passes_through() {
+        assert_eq!(
+            expand_rename_path_destination("src/old.rs => other/new.rs"),
+            "other/new.rs"
+        );
+    }
+
+    #[test]
+    fn non_rename_path_unchanged() {
+        assert_eq!(expand_rename_path_destination("src/main.rs"), "src/main.rs");
+    }
+
+    /// `parse_numstat_with_key` end-to-end on a brace rename.
+    #[test]
+    fn numstat_with_brace_rename_produces_destination_key() {
+        let (key, stat) = parse_numstat_with_key("12\t3\tsrc/{old.rs => new.rs}").expect("parse");
+        assert_eq!(key, "src/new.rs");
+        assert_eq!(stat, (12, 3));
+    }
 
     // F8 regression: path-key extraction must match between raw and
     // numstat streams so HashMap-join can correctly pair them.

@@ -45,10 +45,13 @@ pub fn run_entity_effort(db: &FactsDb, opts: &Options) -> Result<Vec<EntityEffor
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
     crate::analyses::lineage::materialize_if_needed(db, opts)?;
     let sql = crate::analyses::lineage::rewrite(SQL, opts);
+    // The SQL has a single `?` placeholder (LIMIT). Param list MUST
+    // match the `query_map` call below — DuckDB's EXPLAIN rejects
+    // length mismatches with `Got N, needed M`.
     crate::analyses::query::explain_if_requested(
         db,
         &sql,
-        params![opts.min_revs, row_limit],
+        params![row_limit],
         "entity-effort",
         opts,
     )?;

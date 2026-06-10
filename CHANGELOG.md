@@ -4,6 +4,47 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Fixed — deep-analysis findings F35-F37 + F39
+
+- **F35 (correctness)** — `GitCliRepo`'s `parse_numstat_with_key` now
+  handles git's brace-collapsed rename syntax. Git emits renames as
+  either whole-path arrow (`old/path => new/path`) or with a common
+  prefix/suffix collapsed into braces (`src/{old => new}/file.rs`,
+  `src/{old.rs => new.rs}`, `a/{ => sub}/b.rs`). Pre-fix, only the
+  whole-path form was handled — brace forms produced keys like
+  `new}/file.rs` that never matched the raw stream's destination
+  path, so the numstat-to-raw HashMap join fell through and reported
+  `(0, 0)` line counts for every directory rename and shared-prefix
+  rename. New helper `expand_rename_path_destination`; 7 unit tests
+  cover all observed git brace shapes plus the legacy whole-path
+  arrow form and the non-rename pass-through.
+
+- **F36 (crash)** — `entity_effort.rs`'s `explain_if_requested` call
+  now passes `params![row_limit]` (1 element), matching the SQL's
+  single `LIMIT ?` placeholder. Pre-fix it passed
+  `params![opts.min_revs, row_limit]` (2 elements), crashing
+  `codelore analyze --analysis entity-effort --explain` with
+  DuckDB's `Got 2, needed 1`.
+
+- **F37 (crash)** — `clone_coupling.rs`'s `explain_if_requested`
+  call now passes
+  `params![opts.min_clone_node_count, opts.clone_similarity_floor]`
+  (2 elements), matching `CLONE_PAIRS_SQL`'s two `?` placeholders.
+  Pre-fix it passed `[]`, crashing
+  `codelore analyze --analysis clone-coupling --explain` with
+  `Got 0, needed 2`.
+
+- **F39 (correctness)** — `gix_repo::changed_files_for_commit` now
+  returns an empty `Vec` for merge commits (parents > 1), matching
+  `git log --name-status`'s default merge-suppression that
+  `GitCliRepo` inherits for free. Pre-fix the gix backend computed
+  a first-parent diff for every merge while the CLI backend
+  reported empty — divergent event streams under `--include-merges`,
+  breaking the differential parity gate and inflating churn /
+  hotspot / coupling metrics whenever merges were included. New
+  regression test in `differential_repo_test.rs` exercises both
+  backends' merge handling.
+
 ## [0.3.2] - 2026-06-10
 
 ### Fixed — deep-analysis findings F29-F34

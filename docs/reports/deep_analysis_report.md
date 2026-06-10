@@ -86,85 +86,72 @@ All previous findings and code-maat parity issues have been validated as **fully
 *   **F27 (Parallel Commit Filtering)**: Resolved. Defer `find_commit` and filtering to parallel Rayon workers inside `process_commit_oid` (returning `Result<Option<CommitEvent>>`), completely eliminating the serial filtering loop on the main thread and preserving the `rowid` walk-order invariant.
 *   **F28 (Worktree Prune Metadata Cleanup)**: Resolved. Swapped the order in `prune_stale_worktrees` to run the directory cleanup sweep *before* executing `git worktree prune`, ensuring Git immediately detects deleted directories and cleans up its administrative metadata in the same run.
 
+### Resolved Core Deep-Analysis Findings (F29–F34)
+*   **F29 (Time-Bucket Changeset Size Pre-Filter)**: Resolved. The `good_commits_cte` now counts files per physical commit before collapsing to a time bucket.
+*   **F30 (Relative-Path Skip Checks for Clones)**: Resolved. The hardcoded directories `.git`, `target`, and `node_modules` are now checked against the repo-relative path rather than the full absolute path of the files.
+*   **F31 (Aliases Duplicate Join Prevention)**: Resolved. Joins on `author_aliases` now use a canonical-deduplicated subquery, preventing inflated churn/revisions counts for multi-email authors.
+*   **F32 (Base Cache SHA Validation)**: Resolved. The base analysis cache loading checks that `cached.sha == base_sha` before cache hit, preventing cache poisoning from stale or branch mismatch commits.
+*   **F33 (Consistent Repo Path Canonicalization)**: Resolved. Both cache key calculation and cache path resolution canonicalize the repository path before hashing, avoiding cache misses when switching between relative (`.`) and absolute paths.
+*   **F34 (Binary/Large File Diff Check)**: Resolved. `count_loc` checks for files larger than 1MB or containing NUL bytes in the first 8KB, and skips diffing, preventing OOM/CPU spikes and returning `(0, 0)`.
+
 ---
 
 ## 3. Newly Identified Gaps & Recommendations
 
-### F29: Correctness / Logic — Time-Bucket Aggregation Silently Discards Active Weeks/Months via Incorrect `max_changeset_size` Filter Order
+### F35: Correctness — Incorrect Numstat Join Key in Renames under `GitCliRepo`
 
 **The Problem**:
-In both [coupling.rs:139](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/coupling.rs#L139) and [soc.rs:54](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/soc.rs#L54), the `good_commits` CTE is built by grouping the source table by `rev` and dropping keys where the count of files exceeds the `max_changeset_size` threshold (default 30). When `--time-bucket` is enabled, the source table is `changes_bucketed` where `rev` is collapsed into time-bucket date strings (e.g. `"2026-06-01 00:00:00"`). As a result, the query evaluates the file count *per time bucket* rather than *per physical commit*.
+In [git_cli_repo.rs:527](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/repo/git_cli_repo.rs#L527), `parse_numstat_with_key` splits the path on `" => "` to find the destination file key. However, Git formats directory or shared-prefix renames with curly braces or parentheses (e.g., `src/{old => new}.rs` or `src/{ => new}/foo.rs`). When this occurs, the split returns a key containing parts of the braces (like `new.rs}`), which does not match the actual path in the raw line stream (e.g., `src/new.rs`).
 
 **The Impact**:
-Any week or month where the total number of distinct changed files across all commits exceeds 30 is discarded entirely. In active repositories, virtually every week/month will exceed this threshold, leading to time-bucketed coupling and SoC analyses silently returning empty or severely truncated results.
+The join between the numstat and raw streams fails for complex renames, silently returning `(0, 0)` line counts for those files.
 
 **Recommended Fix**:
-Apply the `max_changeset_size` filter on the original `changes` (or `changes_lineage`) commit sizes *before* temporal bucket collapsing, rather than filtering on the collapsed bucket size.
+Implement a robust rename path parser in `parse_numstat_with_key` that expands curly braces / parenthesized rename paths (e.g. `path/{old => new}/file.ext` to `path/new/file.ext`) to align the join key with the destination path.
 
----
-
-### F30: Robustness — Clones Analysis and Ingestion Silently Yield Empty Results if the Repository Absolute Path Contains `.git`, `target`, or `node_modules`
+### F36: Correctness / Robustness — Parameter Mismatch Crash in `entity-effort` `--explain` Mode
 
 **The Problem**:
-In both [clones.rs:64](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/clones.rs#L64) and [ingest.rs:247](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/facts/ingest.rs#L247), the candidate file walker skips any path where `path.components().any(...)` matches `.git`, `target`, or `node_modules`. Because this is evaluated on the full absolute path of each file, if the parent directory structure of the repository root contains any of these directory names (e.g., `/Users/user/target/my-repo`), every file in the repository will be skipped.
+In [entity_effort.rs:48](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/entity_effort.rs#L48), `explain_if_requested` is invoked with `params![opts.min_revs, row_limit]`. However, the SQL query used in `entity-effort` only contains a single `?` placeholder (for `LIMIT`).
 
 **The Impact**:
-Clones detection and ingestion silently return zero results, and `clone-coupling` analysis has no data, without any warning or error.
+Running `codelore analyze --analysis entity-effort --explain` crashes with a fatal query error (`Got 2, needed 1`).
 
 **Recommended Fix**:
-Only inspect path components *relative* to the repository root `opts.repo_path` (e.g., by calling `path.strip_prefix(&opts.repo_path)` first) before applying the skip list.
+Update the parameter list passed to `explain_if_requested` in `entity_effort.rs` to only bind `params![row_limit]`.
 
----
-
-### F31: Correctness — Join Duplication and Inflated Stats via Non-Unique `canonical` Joins on `author_aliases`
+### F37: Correctness / Robustness — Parameter Mismatch Crash in `clone-coupling` `--explain` Mode
 
 **The Problem**:
-In [knowledge_islands.rs:155](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/knowledge_islands.rs#L155), [authors.rs:116](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/authors.rs#L116), and [top_committers.rs:80](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/top_committers.rs#L80), the SQL queries join the `author_aliases` table using `ON aa.canonical = commits.canonical_author` (or `pfa.author` / `pa.author`). However, the primary key of `author_aliases` is `email` (the raw email), and `canonical` is non-unique because a developer can commit under multiple email addresses, or multiple developers can map to the same team.
+In [clone_coupling.rs:172](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/clone_coupling.rs#L172), `explain_if_requested` is invoked with `[]` (no parameters). However, the query `CLONE_PAIRS_SQL` contains two `?` placeholders (for `node_count >= ?` and `similarity >= ?`).
 
 **The Impact**:
-If a developer has committed with `N` raw emails in the repository history, their change/commit rows are duplicated `N` times in the join result. This inflates calculated developer commit counts, line churn statistics, and file ownership percentages, leading to distorted bus-factor calculations and leaderboard counts.
+Running `codelore analyze --analysis clone-coupling --explain` crashes with a fatal query error (`Got 0, needed 2`).
 
 **Recommended Fix**:
-Join the tables using `aa.email` against the raw email column (`commits.author_email`), or select from a deduplicated subquery `(SELECT DISTINCT canonical, is_bot FROM author_aliases)` when joining on `canonical`.
+Pass `params![opts.min_clone_node_count, opts.clone_similarity_floor]` to `explain_if_requested` in `clone_coupling.rs`.
 
----
-
-### F32: Correctness / Robustness — Base Cache Cache-Poisoning via Missing SHA Validation in `codelore diff`
+### F38: Performance — Quadratic Complexity in Kamei History and Experience Enrichment
 
 **The Problem**:
-In [diff.rs:263](file:///Users/emrec/Projects/playground/codelore/crates/codelore-cli/src/diff.rs#L263), the function `run_diff` checks if the `--base-cache` file path exists and eagerly loads it without validating that the SHA in the cache file matches `base_sha`.
+In [kamei/mod.rs:130](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/kamei/mod.rs#L130) and [kamei/mod.rs:214](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/kamei/mod.rs#L214), Kamei features (`ndev`, `nuc`, `sexp`) are enriched using cross-commit joins on path matching (`pchg.path = cchg.path`) and directory matching. For very active files (e.g. `package.json`, `Cargo.toml`) changed thousands of times, the join produces a quadratic number of rows (`O(changes_per_path^2)`).
 
 **The Impact**:
-If the base branch (e.g. `main`) moves, or if different PR branches in a shared CI environment use the same cache file path, a PR run will hit the cache and silently use a stale/unrelated commit's analysis as its base analysis. This poisons the delta computation (yielding wrong hotspot entrants, false coupling absences, and wrong clones delta) without any warning.
+Analyzing large repositories with highly active files can lead to severe slowdowns, high memory overhead, and potential DuckDB temporary file/disk space exhaustion.
 
 **Recommended Fix**:
-Verify that the cached `RevAnalyses.sha` matches the resolved `base_sha` before using the cached file. If there is a mismatch, log a warning, discard the cache, and re-compute the analysis.
+Optimize the history and experience enrichment logic by utilizing pre-aggregates or staging temporary tables rather than full self-joins on historical changes.
 
----
-
-### F33: Robustness — Cache Misses via Inconsistent Repo Path Canonicalization in Cache Path Resolution
+### F39: Correctness — Merge Commit Diffs Behavioral Divergence in `GixRepo` vs `GitCliRepo`
 
 **The Problem**:
-In [cache.rs:30](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/cache.rs#L30), `cache_key` canonicalizes `repo_path` using `fs::canonicalize(repo_path)` before hashing it. However, in [cache.rs:58](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/cache.rs#L58), `cache_path_with_root` hashes `repo_path` directly without canonicalizing it first.
+When `--include-merges` is enabled, `GixRepo` calculates file changes for merge commits by diffing the merge commit's tree against its first parent's tree. However, `GitCliRepo` relies on `git log --raw --numstat` which by default omits diffs for merge commits entirely.
 
 **The Impact**:
-If a user runs `codelore` using relative paths (e.g. `codelore analyze .`) vs absolute paths (e.g. `codelore analyze /absolute/path`), `cache_path_with_root` will resolve to different repository subdirectories (e.g., `root/codelore/a1b2c3d4/` vs `root/codelore/e5f6g7h8/`). This leads to cache misses, forcing full database ingestions when switching invocation styles even though the underlying repository is identical.
+Significant discrepancies in results (such as hotspots scores, churn, and coupling metrics) between the `GixRepo` and `GitCliRepo` backends when merge commits are included.
 
 **Recommended Fix**:
-Canonicalize `repo_path` in `cache_path_with_root` before hashing it to derive the subdirectory name.
-
----
-
-### F34: Performance / Correctness — Missing Binary / Large File Diff Protection in `GixRepo` Line-Counting
-
-**The Problem**:
-In [gix_repo.rs:464](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/repo/gix_repo.rs#L464), `count_loc` loads and diffs the contents of modifying blobs using the histogram algorithm without detecting if the file is binary or exceedingly large. Unlike `GitCliRepo` which leverages Git's built-in binary file heuristic (returning `- -` and skipping diffs), `GixRepo` blindly reads the raw blob bytes and performs line-splitting and diffing.
-
-**The Impact**:
-Commits touching large files (e.g., SQLite databases, large images, ZIP archives) will cause the Rayon walker threads to load massive byte arrays into memory and run expensive diff algorithms, causing CPU spikes and potential OOM crashes. Additionally, binary files will be falsely attributed arbitrary `loc_added` and `loc_deleted` based on random newline bytes, polluting hotspots, churn, and code-health analyses.
-
-**Recommended Fix**:
-Implement a binary-detection check in `count_loc` (e.g., check for NUL bytes `\0` in the first 8000 bytes) and a size cap (e.g., skip files larger than 1MB). If binary or too large, return `(0, 0)` immediately.
+Ensure behavior convergence by either passing the `-m` flag to `git log` inside `GitCliRepo` (to force merge diffs against the first parent), or skipping diff generation for merge commits in `GixRepo` when matching standard Git log behavior.
 
 ---
 
@@ -174,31 +161,27 @@ Below is the register of active improvement opportunities and bugs:
 
 | ID | Category | Finding / Improvement Point | Priority / Risk | Impact | Status |
 |---|---|---|---|---|---|
-| **F29** | Correctness | Time-Bucket aggregation incorrect `max_changeset_size` filter order. | **High** / Medium | Silently discards active weeks/months where cumulative file changes exceed 30. | **Fixed (Unreleased)** — New `good_commits_cte(bucket, use_lineage)` helper; bucketing-aware `MAX(files) <= ?` semantic. 2 regression tests. |
-| **F30** | Robustness | Clones analysis skips all candidate files if root path contains `.git`, `target`, etc. | **High** / Low | Silent empty clones and clone-coupling results under certain user file paths. | **Fixed (Unreleased)** — `path.components().any(...)` now runs on the repo-relative path in both `clones.rs` and `ingest::populate_clones_at_head`. |
-| **F31** | Correctness | Duplicate rows and inflated stats in joins on non-unique `canonical` in `author_aliases`. | **High** / Medium | Inflated commit and churn stats, distorted ownership percentages for multi-email authors. | **Fixed (Unreleased)** — All 3 sites (`knowledge_islands.rs`, `authors.rs`, `top_committers.rs`) use a dedup subquery: `LEFT JOIN (SELECT canonical, BOOL_OR(is_bot) AS is_bot FROM author_aliases GROUP BY canonical) aa`. |
-| **F32** | Correctness | Base cache cache-poisoning via missing SHA validation in `codelore diff`. | **High** / Medium | Silently uses stale/unrelated base commits, poisoning delta calculations in CI. | **Fixed (Unreleased)** — `run_diff` now validates `cached.sha == base_sha`; on mismatch warns + recomputes + overwrites cache. |
-| **F33** | Robustness | Cache path uses non-canonicalized repo path while cache key canonicalizes it. | **Medium** / Low | Causes cache misses when switching between relative (`.`) and absolute path invocations. | **Fixed (Unreleased)** — `cache_path_with_root` now `fs::canonicalize`s `repo_path` before hashing. Regression test. |
-| **F34** | Perf/Correct | Missing binary/large file diff protection in `GixRepo::count_loc` walk. | **High** / Medium | Slowdowns/OOMs on large commits, and incorrect line churn statistics for binary files. | **Fixed (Unreleased)** — `count_loc` returns `(0, 0)` for blobs >1 MiB or containing NUL in first 8 KB (matches `git log --numstat`). Regression test with synthetic binary blob. |
+| **F35** | Correctness | Incorrect rename path key parsing for braces/parentheses under `GitCliRepo`. | **High** / Medium | Silence-yield of `(0, 0)` line counts for complex/directory renames. | Active |
+| **F36** | Correctness | Parameter mismatch crash in `entity-effort` `--explain` mode. | **Medium** / Low | Fatal database query crash when executing entity-effort analysis with `--explain`. | Active |
+| **F37** | Correctness | Parameter mismatch crash in `clone-coupling` `--explain` mode. | **Medium** / Low | Fatal database query crash when executing clone-coupling analysis with `--explain`. | Active |
+| **F38** | Performance | Quadratic self-join complexity in Kamei history and experience enrichment. | **Medium** / Medium | Large CPU/disk overhead on massive repositories with highly active files. | Active |
+| **F39** | Correctness | Merge commit changes divergence between `GixRepo` and `GitCliRepo`. | **High** / Medium | Mismatched analysis metrics when merges are included in the walk. | Active |
 
 ---
 
 ## 5. Proposed Verification Plan for New Findings
 
-### F29 (time-bucket changeset size pre-filter)
-*   **Verification**: Run a time-bucketed coupling analysis on a repository where the cumulative files changed in a week exceeds `--max-changeset-size` but individual commits do not. Verify that the bucket is not dropped.
+### F35 (GitCliRepo rename path key parsing)
+*   **Verification**: Run a diff/log analysis under `GitCliRepo` on a repository with a directory rename (e.g. `src/{old_dir => new_dir}/file.rs`). Verify that the parsed line additions and deletions are correctly associated with the file instead of falling back to `(0, 0)`.
 
-### F30 (relative-path skip checks for clones)
-*   **Verification**: Move a repository to a path containing `target` (e.g. `/tmp/target/repo`), run the clones analysis, and verify that candidates are successfully parsed instead of being skipped.
+### F36 (entity-effort explain mode)
+*   **Verification**: Run `codelore analyze --analysis entity-effort --explain`. Verify that the execution prints the DuckDB EXPLAIN plan instead of crashing with a parameter count mismatch.
 
-### F31 (aliases duplicate join prevention)
-*   **Verification**: Create a mock repository with a developer who has committed using two different email addresses. Run `top-committers` and `authors` analyses and verify that their commit/change counts are not duplicated or inflated.
+### F37 (clone-coupling explain mode)
+*   **Verification**: Run `codelore analyze --analysis clone-coupling --explain`. Verify that the execution prints the DuckDB EXPLAIN plan instead of crashing with a parameter count mismatch.
 
-### F32 (base cache SHA validation)
-*   **Verification**: Run `codelore diff` once with `--base-cache cache.json`. Modify the base branch, run again, and verify that codelore detects the SHA mismatch, ignores the cache, and computes a fresh analysis instead of loading stale cache.
+### F38 (Kamei enrichment performance)
+*   **Verification**: Run `codelore` JIT Kamei feature enrichment on a repository with a large commit history containing a file modified >5,000 times. Monitor processing time and verify it finishes within acceptable limits without massive memory leaks or disk blowup.
 
-### F33 (consistent repo path canonicalization)
-*   **Verification**: Run `codelore analyze .` followed by `codelore analyze $(pwd)`. Verify that both invocations hit the exact same cache directory and file instead of generating two separate cache subdirectories.
-
-### F34 (binary/large file diff check)
-*   **Verification**: Commit a 5MB binary/PDF file to a mock repository. Run ingestion with `GixRepo` and verify that traversal does not hang/OOM, and the file gets `loc_added = 0` and `loc_deleted = 0` in the `changes` table.
+### F39 (Merge commit changes divergence)
+*   **Verification**: Run both `GixRepo` and `GitCliRepo` analyses on a repository with `--include-merges` enabled and compare the change counts for a merge commit. Ensure that both backends report identical lists of changed files and line counts.

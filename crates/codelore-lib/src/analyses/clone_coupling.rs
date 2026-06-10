@@ -169,7 +169,16 @@ pub fn run_clone_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CloneCoupl
         similarity: f64,
     }
 
-    crate::analyses::query::explain_if_requested(db, CLONE_PAIRS_SQL, [], "clone-coupling", opts)?;
+    // `CLONE_PAIRS_SQL` has two `?` placeholders (node_count + similarity
+    // floor). Param list MUST match — DuckDB's EXPLAIN rejects length
+    // mismatches with `Got N, needed M`.
+    crate::analyses::query::explain_if_requested(
+        db,
+        CLONE_PAIRS_SQL,
+        duckdb::params![opts.min_clone_node_count, opts.clone_similarity_floor],
+        "clone-coupling",
+        opts,
+    )?;
     let mut stmt = db
         .conn()
         .prepare(CLONE_PAIRS_SQL)

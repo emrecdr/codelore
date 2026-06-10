@@ -255,6 +255,51 @@ fn fixture_contains_merge_commit() {
     );
 }
 
+/// Merge commits must report an EMPTY change set in BOTH backends
+/// when `--include-merges` is on. `git log --name-status` (used by
+/// `GitCliRepo`) suppresses merge diffs by default; the gix walker
+/// previously surfaced a first-parent diff for every merge, breaking
+/// differential parity and causing every churn / hotspots / coupling
+/// metric to diverge whenever merges were included.
+#[test]
+fn merge_commits_report_empty_changes_in_both_walkers() {
+    let (gix, cli) = open_both();
+    let opts = opts_with_merges();
+
+    let events: Vec<_> = gix
+        .walk_commits(&opts)
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+
+    let merge_revs: Vec<&str> = events
+        .iter()
+        .filter(|e| e.parents.len() == 2)
+        .map(|e| e.rev.as_str())
+        .collect();
+    assert!(
+        !merge_revs.is_empty(),
+        "fixture must contain at least one merge commit"
+    );
+
+    for rev in &merge_revs {
+        let gix_changes = events
+            .iter()
+            .find(|e| e.rev == *rev)
+            .map(|e| e.changes.clone())
+            .unwrap_or_default();
+        let cli_changes = cli.changed_files(rev).expect("cli changed_files");
+        assert!(
+            gix_changes.is_empty(),
+            "gix backend must report 0 changes for merge {rev}, got {gix_changes:?}"
+        );
+        assert!(
+            cli_changes.is_empty(),
+            "cli backend must report 0 changes for merge {rev}, got {cli_changes:?}"
+        );
+    }
+}
+
 /// The rename commit (`old_name` → `new_name`) must appear in both impls with
 /// matching changed file paths.
 /// Stricter rename invariant: both walkers must agree on `change_type` —
