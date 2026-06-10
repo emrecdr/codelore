@@ -28,6 +28,15 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-Dwarnings"
+  # T10: disable incremental compilation in CI. Incremental compile
+  # artifacts are problematic in cached environments — they get written
+  # to disk + cached but invalidated on the next run (because hashes
+  # change), wasting cache hit rate AND build time recomputing what
+  # incremental was supposed to skip. The Rust CI consensus (cargo
+  # docs, Swatinem/rust-cache README, ripgrep/cargo/clippy workflows)
+  # is to disable it explicitly for CI runs. Saves ~30-60s per cold
+  # job AND improves cache hit rate.
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   fmt:
