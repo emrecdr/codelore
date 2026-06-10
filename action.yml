@@ -1,0 +1,178 @@
+name: 'CodeLore'
+description: >
+  Behavioural code analysis — hotspots, knowledge-islands, live clones,
+  change coupling, and more. Drop-in successor to code-maat with modern
+  improvements: Fisher significance, SARIF output, persistent cache,
+  automatic bus-factor detection.
+author: 'CodeLore contributors'
+branding:
+  icon: 'git-branch'
+  color: 'purple'
+
+inputs:
+  analysis:
+    description: 'Which analysis to run (e.g. hotspots, knowledge-islands, clone-coupling, code-health, summary).'
+    required: false
+    default: 'hotspots'
+  format:
+    description: 'Output format (csv | json | sarif | markdown | parquet | sqlite | html).'
+    required: false
+    default: 'sarif'
+  output:
+    description: 'Output file path (relative to GITHUB_WORKSPACE). Empty = stdout.'
+    required: false
+    default: 'codelore-result'
+  repo:
+    description: 'Path to the repository to analyse (defaults to the workspace root checked out by actions/checkout).'
+    required: false
+    default: '.'
+  args:
+    description: 'Additional CLI flags appended verbatim to the `codelore analyze` invocation. Use for --rows, --min-revs, --departed-threshold-days, --code-maat-compat, --age-time-now, etc.'
+    required: false
+    default: ''
+  version:
+    description: 'Which codelore release to download. `latest` follows the most recent v* tag; `vX.Y.Z` pins a specific release.'
+    required: false
+    default: 'latest'
+
+outputs:
+  result-path:
+    description: 'Absolute path to the generated output file (empty when --format streams to stdout).'
+    value: ${{ steps.run.outputs.result-path }}
+  version-used:
+    description: 'The actual codelore version that was downloaded (resolved from `latest` or pinned).'
+    value: ${{ steps.install.outputs.version }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Resolve codelore version
+      id: resolve
+      shell: bash
+      run: |
+        set -euo pipefail
+        VERSION="${{ inputs.version }}"
+        if [ "$VERSION" = "latest" ]; then
+          # Resolve the latest v* tag via the GitHub API. Single curl,
+          # no auth required for public read of public repo's releases.
+          VERSION=$(curl -fsSL https://api.github.com/repos/emrecdr/codelore/releases/latest \
+            | grep -oE '"tag_name"\s*:\s*"v[^"]+"' \
+            | head -1 \
+            | sed -E 's/.*"v([^"]+)"/v\1/')
+          if [ -z "$VERSION" ]; then
+            echo "::error::failed to resolve latest codelore version from GitHub API"
+            exit 1
+          fi
+        fi
+        # Strip leading 'v' so it can be used in archive names that drop it.
+        TAG="$VERSION"
+        VERSION_NO_V="${VERSION#v}"
+        echo "tag=$TAG"            >> "$GITHUB_OUTPUT"
+        echo "version=$VERSION_NO_V" >> "$GITHUB_OUTPUT"
+        echo "Resolved codelore version: $TAG"
+
+    - name: Detect target triple
+      id: target
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Map the runner OS+arch to the codelore release archive name.
+        # codelore ships 5 targets:
+        #   x86_64-apple-darwin       (macos x86_64)
+        #   aarch64-apple-darwin      (macos arm64)
+        #   x86_64-unknown-linux-gnu  (linux x86_64)
+        #   aarch64-unknown-linux-gnu (linux arm64)
+        #   x86_64-pc-windows-msvc    (windows x86_64)
+        case "${{ runner.os }}" in
+          Linux)
+            case "${{ runner.arch }}" in
+              X64)   TARGET="x86_64-unknown-linux-gnu" ;;
+              ARM64) TARGET="aarch64-unknown-linux-gnu" ;;
+              *) echo "::error::unsupported Linux arch ${{ runner.arch }}"; exit 1 ;;
+            esac
+            EXT="tar.gz"
+            ;;
+          macOS)
+            case "${{ runner.arch }}" in
+              X64)   TARGET="x86_64-apple-darwin" ;;
+              ARM64) TARGET="aarch64-apple-darwin" ;;
+              *) echo "::error::unsupported macOS arch ${{ runner.arch }}"; exit 1 ;;
+            esac
+            EXT="tar.gz"
+            ;;
+          Windows)
+            TARGET="x86_64-pc-windows-msvc"
+            EXT="zip"
+            ;;
+          *)
+            echo "::error::unsupported runner OS ${{ runner.os }}"
+            exit 1
+            ;;
+        esac
+        echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+        echo "ext=$EXT"       >> "$GITHUB_OUTPUT"
+
+    - name: Download + extract codelore
+      id: install
+      shell: bash
+      run: |
+        set -euo pipefail
+        TAG="${{ steps.resolve.outputs.tag }}"
+        VERSION="${{ steps.resolve.outputs.version }}"
+        TARGET="${{ steps.target.outputs.target }}"
+        EXT="${{ steps.target.outputs.ext }}"
+        ARCHIVE="codelore-${TAG}-${TARGET}.${EXT}"
+        URL="https://github.com/emrecdr/codelore/releases/download/${TAG}/${ARCHIVE}"
+        DEST="$RUNNER_TEMP/codelore"
+        mkdir -p "$DEST"
+        echo "Downloading $URL"
+        curl -fsSL --retry 3 --retry-delay 2 -o "$DEST/$ARCHIVE" "$URL"
+        case "$EXT" in
+          tar.gz) tar -xzf "$DEST/$ARCHIVE" -C "$DEST" ;;
+          zip)    unzip -q "$DEST/$ARCHIVE" -d "$DEST" ;;
+        esac
+        # The release archive layout is `codelore` (or `codelore.exe`) at
+        # the root of the extracted directory. Verify + add to PATH.
+        BIN="$DEST/codelore"
+        if [ "${{ runner.os }}" = "Windows" ]; then
+          BIN="$DEST/codelore.exe"
+        fi
+        if [ ! -x "$BIN" ] && [ "${{ runner.os }}" != "Windows" ]; then
+          chmod +x "$BIN" || true
+        fi
+        if [ ! -f "$BIN" ]; then
+          echo "::error::extracted archive does not contain expected binary at $BIN"
+          ls -la "$DEST"
+          exit 1
+        fi
+        echo "$DEST" >> "$GITHUB_PATH"
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+        "$BIN" --version
+
+    - name: Run codelore analyze
+      id: run
+      shell: bash
+      run: |
+        set -euo pipefail
+        ANALYSIS="${{ inputs.analysis }}"
+        FORMAT="${{ inputs.format }}"
+        OUTPUT="${{ inputs.output }}"
+        REPO="${{ inputs.repo }}"
+        EXTRA_ARGS="${{ inputs.args }}"
+
+        CMD=(codelore analyze --analysis "$ANALYSIS" --format "$FORMAT" --repo "$REPO" --no-banner)
+        if [ -n "$OUTPUT" ]; then
+          CMD+=(--output "$OUTPUT")
+        fi
+        # shellcheck disable=SC2206
+        EXTRA_ARRAY=($EXTRA_ARGS)
+        CMD+=("${EXTRA_ARRAY[@]}")
+
+        echo "Running: ${CMD[*]}"
+        "${CMD[@]}"
+
+        if [ -n "$OUTPUT" ]; then
+          ABS_OUTPUT="$(readlink -f "$OUTPUT" || python3 -c "import os,sys;print(os.path.abspath(sys.argv[1]))" "$OUTPUT")"
+          echo "result-path=$ABS_OUTPUT" >> "$GITHUB_OUTPUT"
+          echo "Output written to: $ABS_OUTPUT"
+        fi
