@@ -93,6 +93,13 @@ pub fn write_top_committers_json<W: Write>(
     write_json(rows, w)
 }
 
+pub fn write_knowledge_islands_json<W: Write>(
+    rows: &[crate::analyses::knowledge_islands::KnowledgeIslandRow],
+    w: &mut W,
+) -> Result<()> {
+    write_json(rows, w)
+}
+
 pub fn write_soc_json<W: Write>(rows: &[crate::analyses::soc::SocRow], w: &mut W) -> Result<()> {
     write_json(rows, w)
 }

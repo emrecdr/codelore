@@ -294,6 +294,23 @@ pub struct AnalyzeArgs {
     /// Default: no bucketing (raw commit grain).
     #[arg(long = "time-bucket", value_enum)]
     pub time_bucket: Option<TimeBucketArg>,
+
+    /// T8: An author is considered "departed" if their most recent
+    /// commit anywhere in the repo is older than this many days at the
+    /// anchor moment (used by `knowledge-islands` analysis).
+    ///
+    /// Default: 90 days (industry retention/sabbatical empirical
+    /// threshold; engineers who leave permanently usually stop
+    /// committing within 60 days, 90 avoids flagging extended-leave
+    /// contributors).
+    ///
+    /// Lower for fast-moving startups (30-45); raise for academia /
+    /// OSS maintainer codebases (180+).
+    #[arg(
+        long = "departed-threshold-days",
+        default_value_t = codelore_lib::constants::DEFAULT_DEPARTED_THRESHOLD_DAYS
+    )]
+    pub departed_threshold_days: u32,
 }
 
 /// `TimeBucket` mirror on the CLI surface (clap-friendly value enum).

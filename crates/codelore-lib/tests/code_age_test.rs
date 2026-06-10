@@ -192,11 +192,12 @@ fn code_age_never_returns_negative_age() {
 /// F16 regression: a file added and then DELETED before the analysis
 /// runs must NOT appear in `code-age` output. Previously deleted files
 /// were included (cluttered output with historical noise). The
-/// `live_paths_at_anchor` CTE in code_age.rs's SQL drops them.
+/// `live_paths_at_anchor` CTE in `code_age.rs`'s SQL drops them.
 ///
 /// The fixture: build a tiny git history where one file is added then
 /// deleted; assert it's missing from the run.
 #[test]
+#[allow(clippy::items_after_statements)]
 fn code_age_excludes_deleted_files() {
     use std::process::Command;
     let dir = tempfile::tempdir().expect("tempdir");

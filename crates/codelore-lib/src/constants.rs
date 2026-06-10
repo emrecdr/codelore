@@ -75,3 +75,32 @@ pub const DEFAULT_CLONE_SKIP_SAME_DIR: bool = true;
 /// occasionally hits stack-overflow or OOM on deeply-nested generated
 /// code; the cap turns those failures into graceful skips.
 pub const DEFAULT_MAX_AST_FILE_BYTES: usize = 2 * 1024 * 1024;
+
+/// T8: An author is considered "departed" if their most recent commit
+/// anywhere in the repo is older than this many days at the anchor
+/// moment. 90 days is the default — chosen as the empirical
+/// "person has stopped contributing in a meaningful way" threshold
+/// based on industry retention/sabbatical patterns (most engineers who
+/// leave permanently stop committing within 60 days; a 90-day window
+/// avoids flagging contributors on extended leave / between projects).
+/// Tunable via `--departed-threshold-days N` for organisations with
+/// longer (academia / OSS maintainers) or shorter (fast-moving startup)
+/// project cadences.
+///
+/// Critical for the `knowledge-islands` analysis (Bird et al. 2011
+/// "Don't Touch My Code!" — risk indicator combined with departure).
+/// `CodeScene` requires manual marking of "Ex-Developers"; `CodeLore`
+/// detects automatically via commit-date falloff.
+pub const DEFAULT_DEPARTED_THRESHOLD_DAYS: u32 = 90;
+
+/// T8: Threshold for "substantial author" — an author who isn't the
+/// main author but owns at least this fraction of file's `LoC`. Used to
+/// count `n_substantial_others` per file in `knowledge-islands`. A
+/// file with 0 substantial other owners + departed main author is the
+/// most actionable knowledge-loss signal; 1+ substantial others means
+/// there's still someone who genuinely knows the code.
+///
+/// 0.10 (10%) is the default — matches the academic literature's
+/// definition of "non-trivial contribution" (Bird et al., Mockus &
+/// Herbsleb).
+pub const DEFAULT_SUBSTANTIAL_OWNER_THRESHOLD: f64 = 0.10;

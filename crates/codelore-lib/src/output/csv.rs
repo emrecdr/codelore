@@ -406,6 +406,34 @@ pub fn write_top_committers_csv<W: Write>(
     Ok(())
 }
 
+/// T8: per-file knowledge-loss risk (`knowledge-islands` analysis).
+/// No code-maat equivalent — strict `CodeLore` extension; no compat-mode
+/// header variant needed.
+pub fn write_knowledge_islands_csv<W: Write>(
+    rows: &[crate::analyses::knowledge_islands::KnowledgeIslandRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(
+        w,
+        "entity,main_author,ownership_pct,days_since_main_active,last_main_author_commit,n_substantial_others"
+    )
+    .map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{:.2},{},{},{}",
+            quote_if_needed(&row.entity),
+            quote_if_needed(&row.main_author),
+            row.ownership_pct,
+            row.days_since_main_active,
+            row.last_main_author_commit,
+            row.n_substantial_others,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_soc_csv<W: Write>(rows: &[crate::analyses::soc::SocRow], w: &mut W) -> Result<()> {
     writeln!(w, "entity,soc").map_err(CodeLoreError::Io)?;
     for row in rows {

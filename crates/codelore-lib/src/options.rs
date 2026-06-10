@@ -96,6 +96,13 @@ pub struct Options {
     // Currently honored by `clones`; other analyses gain support in Plan 9.
     pub exclude_patterns: Vec<String>,
 
+    /// T8 (knowledge-islands): an author is considered "departed" if
+    /// their most recent commit anywhere in the repo is older than this
+    /// many days at the anchor moment. Default 90.
+    /// See `constants::DEFAULT_DEPARTED_THRESHOLD_DAYS` for the
+    /// rationale on this default.
+    pub departed_threshold_days: u32,
+
     // Plan 8 §6: clone-coupling false-positive mitigations (research brief
     // a0a6cf3534a65a643). Defaults locked from the brief.
     //
@@ -330,6 +337,7 @@ impl Default for Options {
             exclude_patterns: Vec::new(),
             min_clone_shared_revs: crate::constants::DEFAULT_MIN_CLONE_SHARED_REVS,
             clone_similarity_floor: crate::constants::DEFAULT_CLONE_SIMILARITY_FLOOR,
+            departed_threshold_days: crate::constants::DEFAULT_DEPARTED_THRESHOLD_DAYS,
             clone_skip_same_dir: crate::constants::DEFAULT_CLONE_SKIP_SAME_DIR,
             // code-maat parity additions
             min_soc: None,

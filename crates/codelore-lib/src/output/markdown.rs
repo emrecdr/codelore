@@ -265,6 +265,33 @@ pub fn write_top_committers_markdown<W: Write>(
     Ok(())
 }
 
+pub fn write_knowledge_islands_markdown<W: Write>(
+    rows: &[crate::analyses::knowledge_islands::KnowledgeIslandRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore knowledge-islands (bus-factor risk)")?;
+    writeln!(
+        w,
+        "| Entity | Main author | Ownership % | Days since main active | Last main commit | Substantial others |"
+    )
+    .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---|---:|---:|---|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| `{}` | {} | {:.2} | {} | {} | {} |",
+            row.entity,
+            row.main_author,
+            row.ownership_pct,
+            row.days_since_main_active,
+            row.last_main_author_commit,
+            row.n_substantial_others,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_soc_markdown<W: Write>(
     rows: &[crate::analyses::soc::SocRow],
     w: &mut W,

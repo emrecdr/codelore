@@ -157,6 +157,8 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         strict_grouping: args.strict_grouping || args.code_maat_compat,
         // PAR-8: --time-bucket. Maps from the CLI's enum to the lib's enum.
         time_bucket: args.time_bucket.map(Into::into),
+        // T8: knowledge-islands analysis "departed author" threshold.
+        departed_threshold_days: args.departed_threshold_days,
         ..Options::default()
     };
 
@@ -599,6 +601,31 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             }
             (fmt, AnalysisName::TopCommitters) => {
                 anyhow::bail!("top-committers analysis supports csv|json|markdown; got {fmt:?}")
+            }
+            // --- knowledge-islands (T8: bus-factor / knowledge-loss risk) ---
+            ("csv", AnalysisName::KnowledgeIslands) => {
+                let rows =
+                    codelore_lib::analyses::knowledge_islands::run_knowledge_islands(&db, &opts)
+                        .context("run knowledge-islands")?;
+                codelore_lib::output::csv::write_knowledge_islands_csv(&rows, &mut out)
+                    .context("write csv")?;
+            }
+            ("json", AnalysisName::KnowledgeIslands) => {
+                let rows =
+                    codelore_lib::analyses::knowledge_islands::run_knowledge_islands(&db, &opts)
+                        .context("run knowledge-islands")?;
+                codelore_lib::output::json::write_knowledge_islands_json(&rows, &mut out)
+                    .context("write json")?;
+            }
+            ("markdown", AnalysisName::KnowledgeIslands) => {
+                let rows =
+                    codelore_lib::analyses::knowledge_islands::run_knowledge_islands(&db, &opts)
+                        .context("run knowledge-islands")?;
+                codelore_lib::output::markdown::write_knowledge_islands_markdown(&rows, &mut out)
+                    .context("write markdown")?;
+            }
+            (fmt, AnalysisName::KnowledgeIslands) => {
+                anyhow::bail!("knowledge-islands analysis supports csv|json|markdown; got {fmt:?}")
             }
             // --- soc (Sum of Coupling) ---
             ("csv", AnalysisName::Soc) => {

@@ -12,6 +12,7 @@ pub mod coupling;
 pub mod entity_effort;
 pub mod entity_ownership;
 pub mod hotspots;
+pub mod knowledge_islands;
 pub mod lineage;
 pub mod main_dev;
 pub mod messages;
