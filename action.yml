@@ -49,13 +49,23 @@ runs:
     - name: Resolve codelore version
       id: resolve
       shell: bash
+      env:
+        # F21.2 fix: authenticate the GitHub API request to avoid
+        # rate-limit failures on shared GHA runner IPs. `github.token`
+        # is provided by the workflow context and grants read-only API
+        # access by default.
+        GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
         VERSION="${{ inputs.version }}"
         if [ "$VERSION" = "latest" ]; then
-          # Resolve the latest v* tag via the GitHub API. Single curl,
-          # no auth required for public read of public repo's releases.
-          VERSION=$(curl -fsSL https://api.github.com/repos/emrecdr/codelore/releases/latest \
+          # Resolve the latest v* tag via the GitHub API. Authenticated
+          # via $GH_TOKEN to avoid IP-based rate limits.
+          VERSION=$(curl -fsSL \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              https://api.github.com/repos/emrecdr/codelore/releases/latest \
             | grep -oE '"tag_name"\s*:\s*"v[^"]+"' \
             | head -1 \
             | sed -E 's/.*"v([^"]+)"/v\1/')
@@ -64,7 +74,13 @@ runs:
             exit 1
           fi
         fi
-        # Strip leading 'v' so it can be used in archive names that drop it.
+        # F21.1 fix: accept both `vX.Y.Z` and `X.Y.Z` inputs by
+        # normalising to the `vX.Y.Z` form. GitHub release tags are
+        # always v-prefixed, so `0.3.0` without normalisation would
+        # 404 on the download URL.
+        if [[ "$VERSION" != v* ]]; then
+          VERSION="v$VERSION"
+        fi
         TAG="$VERSION"
         VERSION_NO_V="${VERSION#v}"
         echo "tag=$TAG"            >> "$GITHUB_OUTPUT"
@@ -172,7 +188,17 @@ runs:
         "${CMD[@]}"
 
         if [ -n "$OUTPUT" ]; then
-          ABS_OUTPUT="$(readlink -f "$OUTPUT" || python3 -c "import os,sys;print(os.path.abspath(sys.argv[1]))" "$OUTPUT")"
+          # F21.3 fix: pure-bash absolute-path resolution. macOS's BSD
+          # `readlink` lacks the `-f` flag (GNU extension), so the
+          # previous `readlink -f || python3 …` fallback was always
+          # taking the python3 path on macOS — fragile if the runner
+          # image ever drops Python from its preinstalled toolchain.
+          # Bash absolute-path resolution is portable and dependency-free.
+          if [[ "$OUTPUT" = /* ]]; then
+            ABS_OUTPUT="$OUTPUT"
+          else
+            ABS_OUTPUT="$PWD/$OUTPUT"
+          fi
           echo "result-path=$ABS_OUTPUT" >> "$GITHUB_OUTPUT"
           echo "Output written to: $ABS_OUTPUT"
         fi

@@ -284,8 +284,17 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
   const columns = Object.keys(data[0]);
   let sortKey = null;
   let sortDirection = 1; // 1 = asc, -1 = desc
+  // F20 fix: page-based rendering. Synchronously building 30k+ row
+  // tables freezes the browser ("Page Unresponsive"). We render
+  // PAGE_SIZE rows at a time and reveal more on "Show more" click.
+  // Filtering / sorting always reset to page 1.
+  const PAGE_SIZE = 500;
+  let renderedRows = 0;
+  let currentRows = data;
 
   function renderTable(rows) {
+    currentRows = rows;
+    renderedRows = 0;
     if (rows.length === 0) {
       container.innerHTML = '<div class="empty">No rows match the current filter.</div>';
       return;
@@ -297,17 +306,25 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
         : '';
       html += `<th class="${sortClass}" data-col="${escapeHTML(col)}">${escapeHTML(col)}</th>`;
     }
-    html += '</tr></thead><tbody>';
-    for (const row of rows) {
-      html += '<tr>';
-      for (const col of columns) {
-        const val = row[col];
-        html += `<td class="${cellClass(col, val)}">${formatCell(val)}</td>`;
-      }
-      html += '</tr>';
-    }
-    html += '</tbody></table>';
+    html += '</tr></thead><tbody id="tbody"></tbody></table>';
+    // "Show more" + "Show all" controls appear only when there are
+    // more rows than fit on one page.
+    html += '<div id="pageControls" style="margin:1rem 0;text-align:center;display:none;">' +
+      '<button id="showMoreBtn" style="padding:0.4rem 0.8rem;background:var(--cl-card);' +
+      'color:var(--cl-fg);border:1px solid var(--cl-border);border-radius:6px;cursor:pointer;' +
+      'font-family:inherit;font-size:0.85rem;margin-right:0.5rem;">Show next 500</button>' +
+      '<button id="showAllBtn" style="padding:0.4rem 0.8rem;background:var(--cl-card);' +
+      'color:var(--cl-fg);border:1px solid var(--cl-border);border-radius:6px;cursor:pointer;' +
+      'font-family:inherit;font-size:0.85rem;">Show all (slow)</button>' +
+      '<span id="pageStatus" style="margin-left:1rem;color:var(--cl-muted);font-size:0.85rem;"></span>' +
+      '</div>';
     container.innerHTML = html;
+    renderNextPage();
+    // Wire pagination controls.
+    const moreBtn = document.getElementById('showMoreBtn');
+    const allBtn = document.getElementById('showAllBtn');
+    if (moreBtn) moreBtn.addEventListener('click', renderNextPage);
+    if (allBtn) allBtn.addEventListener('click', () => renderNextPage(Infinity));
     // Wire sort-on-click for each header.
     for (const th of container.querySelectorAll('th')) {
       th.addEventListener('click', () => {
@@ -320,6 +337,43 @@ const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
         }
         applyFilterAndSort();
       });
+    }
+  }
+
+  // F20 fix: incrementally append `count` more rows (default
+  // PAGE_SIZE). Uses a single innerHTML write per batch — building
+  // 500 rows takes <50ms even on low-end devices, well below the
+  // 100ms UI-freeze perception threshold.
+  function renderNextPage(count) {
+    if (count === undefined) count = PAGE_SIZE;
+    const tbody = document.getElementById('tbody');
+    if (!tbody) return;
+    const start = renderedRows;
+    const end = Math.min(currentRows.length, start + count);
+    let html = '';
+    for (let i = start; i < end; i++) {
+      const row = currentRows[i];
+      html += '<tr>';
+      for (const col of columns) {
+        const val = row[col];
+        html += `<td class="${cellClass(col, val)}">${formatCell(val)}</td>`;
+      }
+      html += '</tr>';
+    }
+    tbody.insertAdjacentHTML('beforeend', html);
+    renderedRows = end;
+    const ctrl = document.getElementById('pageControls');
+    const status = document.getElementById('pageStatus');
+    if (ctrl) {
+      if (renderedRows < currentRows.length) {
+        ctrl.style.display = '';
+        if (status) {
+          status.textContent = `Showing ${renderedRows.toLocaleString()} of ` +
+            `${currentRows.length.toLocaleString()} rows`;
+        }
+      } else {
+        ctrl.style.display = 'none';
+      }
     }
   }
 

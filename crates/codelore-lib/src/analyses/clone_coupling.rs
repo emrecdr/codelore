@@ -252,8 +252,18 @@ pub fn run_clone_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CloneCoupl
     // at_risk = false if the sub-analysis errors (the clone-coupling
     // analysis itself is the primary product; knowledge-loss is an
     // enrichment signal).
+    // F19 fix: pass `opts.with_no_row_limit()` (NOT the raw opts) to the
+    // inner sub-analysis. With raw opts, a user-supplied `--rows 10` on
+    // the outer `clone-coupling` would also cap knowledge-islands to 10
+    // rows — silently misclassifying any clone-coupling pair whose
+    // partner sits in island rank 11+ as `at_risk = false`. The
+    // `--rows N` flag is meant for the FINAL output cap, not the
+    // intermediate join. Same pattern as F2's
+    // `for_clone_coupling_inner_coupling` fix for the inner coupling
+    // call.
+    let inner_opts = opts.with_no_row_limit();
     let islands_paths: std::collections::HashSet<String> =
-        match crate::analyses::knowledge_islands::run_knowledge_islands(db, opts) {
+        match crate::analyses::knowledge_islands::run_knowledge_islands(db, &inner_opts) {
             Ok(islands) => islands.into_iter().map(|r| r.entity).collect(),
             Err(e) => {
                 tracing::debug!(

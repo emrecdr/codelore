@@ -104,10 +104,26 @@ pub struct KnowledgeIslandRow {
 ///
 /// Bind values: `[substantial_threshold, anchor, anchor,
 /// departed_threshold_days, row_limit]`.
+// F18 fix: the anchor (`?` placeholder) is applied to EVERY CTE that
+// touches `commits.date` so back-test mode (`--age-time-now <past>`)
+// gets a temporally-isolated view. Previously the anchor was only
+// applied at the outer SELECT's `DATE_DIFF` and the `WHERE
+// days_since_main_active > ?` filter — which left `author_last_commit`,
+// `live_paths`, and `per_path_author` looking at the full repo history
+// (including post-anchor commits). Symptoms:
+//   - Authors who returned & committed after the anchor got future
+//     `last_at` dates → negative `days_since_main_active`.
+//   - Files deleted after the anchor were treated as "still deleted"
+//     instead of "live as-of-anchor".
+//   - LoC ownership counted post-anchor contributions.
+//
+// All three CTEs now share the same `commits.date <= anchor` filter,
+// closing the temporal-isolation contract.
 const SQL: &str = "
     WITH author_last_commit AS (
         SELECT canonical_author AS author, MAX(date) AS last_at
         FROM commits
+        WHERE date <= CAST(? AS TIMESTAMP)
         GROUP BY canonical_author
     ),
     live_paths AS (
@@ -119,6 +135,7 @@ const SQL: &str = "
                    ) AS rn
             FROM changes c
             INNER JOIN commits ON commits.rev = c.rev
+            WHERE commits.date <= CAST(? AS TIMESTAMP)
         ) WHERE rn = 1 AND change_type != 'deleted'
     ),
     per_path_author AS (
@@ -137,6 +154,7 @@ const SQL: &str = "
         INNER JOIN live_paths USING (path)
         LEFT JOIN author_aliases aa ON aa.canonical = commits.canonical_author
         WHERE COALESCE(aa.is_bot, FALSE) = FALSE
+          AND commits.date <= CAST(? AS TIMESTAMP)
         GROUP BY changes.path, commits.canonical_author
     ),
     totals AS (
@@ -221,11 +239,14 @@ pub fn run_knowledge_islands(db: &FactsDb, opts: &Options) -> Result<Vec<Knowled
         db,
         &sql,
         params![
-            substantial_threshold,
-            anchor_str,
-            anchor_str,
-            opts.departed_threshold_days,
-            row_limit,
+            anchor_str,                   // [1] F18: author_last_commit CTE WHERE
+            anchor_str,                   // [2] F18: live_paths inner SELECT WHERE
+            anchor_str,                   // [3] F18: per_path_author WHERE
+            substantial_threshold,        // [4] substantial_others CASE
+            anchor_str,                   // [5] main SELECT DATE_DIFF for days_since
+            anchor_str,                   // [6] WHERE DATE_DIFF (departure filter)
+            opts.departed_threshold_days, // [7]
+            row_limit,                    // [8]
         ],
         "knowledge-islands",
         opts,
@@ -234,11 +255,14 @@ pub fn run_knowledge_islands(db: &FactsDb, opts: &Options) -> Result<Vec<Knowled
         db,
         &sql,
         params![
-            substantial_threshold,
-            anchor_str,
-            anchor_str,
-            opts.departed_threshold_days,
-            row_limit,
+            anchor_str,                   // [1] F18: author_last_commit CTE WHERE
+            anchor_str,                   // [2] F18: live_paths inner SELECT WHERE
+            anchor_str,                   // [3] F18: per_path_author WHERE
+            substantial_threshold,        // [4] substantial_others CASE
+            anchor_str,                   // [5] main SELECT DATE_DIFF for days_since
+            anchor_str,                   // [6] WHERE DATE_DIFF (departure filter)
+            opts.departed_threshold_days, // [7]
+            row_limit,                    // [8]
         ],
         "knowledge-islands",
         |r| {
