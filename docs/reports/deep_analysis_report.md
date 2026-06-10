@@ -94,6 +94,9 @@ All previous findings and code-maat parity issues have been validated as **fully
 *   **F33 (Consistent Repo Path Canonicalization)**: Resolved. Both cache key calculation and cache path resolution canonicalize the repository path before hashing, avoiding cache misses when switching between relative (`.`) and absolute paths.
 *   **F34 (Binary/Large File Diff Check)**: Resolved. `count_loc` checks for files larger than 1MB or containing NUL bytes in the first 8KB, and skips diffing, preventing OOM/CPU spikes and returning `(0, 0)`.
 
+### Resolved Core Deep-Analysis Finding (F38) (Fixed unreleased / commit c74a643, slated for v0.3.4 or v0.4.0)
+*   **F38 (Quadratic Self-Join in Kamei Enrichment)**: Resolved. Replaced the three path-self-join queries (`ndev`/`nuc`/`age` in `enrich_history`; `sexp` in `enrich_experience`) with per-path / per-(dir,author) running aggregations using DuckDB `LIST(...) OVER (... RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE CURRENT ROW)`. The RANGE frame preserves Kamei's same-day inclusion semantic exactly. Per-commit DISTINCT counts come from `LIST_DISTINCT(FLATTEN(LIST(...)))` across the commit's paths. Complexity moves from `O(K²)` per hot path to `O(K log K)`. Regression test in `kamei_test.rs` validates the windowed semantic produces the expected `ndev`, `nuc`, `sexp` on a hot-path fixture.
+
 ### Resolved Core Deep-Analysis Findings (F35-F37, F39) (shipped in v0.3.3 / commit e22a475)
 *   **F35 (Incorrect Numstat Join Key in Renames under GitCliRepo)**: Resolved. Added `expand_rename_path_destination` to expand braces (e.g. `src/{old => new}.rs` to `src/new.rs`) and Arrow rename syntaxes into canonical join keys, avoiding zero-stat joins for complex renames.
 *   **F36 (Parameter Mismatch Crash in entity-effort --explain Mode)**: Resolved. Bind parameter list passed to `explain_if_requested` in `entity_effort.rs` corrected to match the single SQL placeholder (`params![row_limit]`).
@@ -156,10 +159,10 @@ Below is the register of active improvement opportunities and bugs:
 
 | ID | Category | Finding / Improvement Point | Priority / Risk | Impact | Status |
 |---|---|---|---|---|---|
-| **F38** | Performance | Quadratic self-join complexity in Kamei history and experience enrichment. | **Medium** / Medium | Large CPU/disk overhead on massive repositories with highly active files. | Active |
-| **F40** | Correctness | Silent drop of duplicate-named entities (nested/overloaded/anonymous fns) in ingestion. | **High** / Medium | Incomplete complexity metrics/hotspots data for files with multiple closures/overloads. | Active |
-| **F41** | Performance | Sequential matching of regex rules in architectural grouping. | **Medium** / Low | Single-threaded CPU bottleneck during ingest of massive repositories with large group files. | Active |
-| **F42** | Performance | Redundant `COUNT(DISTINCT rev)` operations on unique changes tables. | **Low** / Low | Minor CPU and memory overhead during SQL execution for behavioral analyses. | Active |
+| **F38** | Performance | Quadratic self-join complexity in Kamei history and experience enrichment. | **Medium** / Medium | Large CPU/disk overhead on massive repositories with highly active files. | **Fixed (Unreleased)** — `c74a643` — windowed RANGE … EXCLUDE CURRENT ROW frames + LIST/FLATTEN union per commit. |
+| **F40** | Correctness | Silent drop of duplicate-named entities (nested/overloaded/anonymous fns) in ingestion. | **High** / Medium | Incomplete complexity metrics/hotspots data for files with multiple closures/overloads. | **Fixed (Unreleased)** — `dedup_entities` keys by `(name, start_line, end_line)` tuple; anonymous closures retain their own rows. |
+| **F41** | Performance | Sequential matching of regex rules in architectural grouping. | **Medium** / Low | Single-threaded CPU bottleneck during ingest of massive repositories with large group files. | **Fixed (Unreleased)** — `apply_grouping` regex-matches paths via rayon `par_iter`; serial INSERT after parallel collect. |
+| **F42** | Performance | Redundant `COUNT(DISTINCT rev)` operations on unique changes tables. | **Low** / Low | Minor CPU and memory overhead during SQL execution for behavioral analyses. | **Fixed (Unreleased)** — 6 sites switched to `COUNT(rev)`; (rev, path) PK guarantees uniqueness per group. |
 
 ---
 

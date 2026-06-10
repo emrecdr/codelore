@@ -466,14 +466,25 @@ fn query_live_paths(db: &FactsDb) -> Result<Vec<String>> {
         .map_err(|e| CodeLoreError::Analysis(format!("collect paths: {e}")))
 }
 
-/// De-duplicate a list of entities by name, preserving first-occurrence order.
+/// De-duplicate a list of entities by `(name, start_line, end_line)`,
+/// preserving first-occurrence order.
+///
+/// Tree-sitter walkers report multiple anonymous functions per file with
+/// identical `name` (`"<anonymous>"` or empty string for closures, lambdas,
+/// generator expressions). Deduping by name alone silently dropped every
+/// anonymous entity after the first, producing zero rows in
+/// `complexity_metrics` for closures-heavy files (JS/TS, Python, Rust
+/// async blocks). The line-range tuple is the closest thing to a stable
+/// identity for these — two anonymous functions at different line ranges
+/// are different entities, deserving their own complexity row.
 fn dedup_entities(
     entities: Vec<crate::complexity::ComplexityEntity>,
 ) -> Vec<crate::complexity::ComplexityEntity> {
-    let mut seen = std::collections::HashSet::new();
+    let mut seen: std::collections::HashSet<(String, u32, u32)> = std::collections::HashSet::new();
     let mut out = Vec::with_capacity(entities.len());
     for ent in entities {
-        if seen.insert(ent.name.clone()) {
+        let key = (ent.name.clone(), ent.start_line, ent.end_line);
+        if seen.insert(key) {
             out.push(ent);
         }
     }
@@ -944,19 +955,36 @@ pub fn apply_grouping(db: &super::FactsDb, group_map: &super::GroupMap) -> Resul
     .map_err(|e| CodeLoreError::Analysis(format!("create _grouping_v1: {e}")))?;
 
     {
+        // Step 2a: regex-match every distinct path against the group map
+        // in parallel. The regex set is `Send + Sync` (immutable post-build),
+        // and `Vec<String>` shares immutable refs across rayon workers.
+        // Pre-`f41` this loop ran sequentially on the main thread; for
+        // monorepos with N×M = paths × rules in the high millions, the
+        // single-threaded matching dominated `apply_grouping` wall-clock.
+        use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+        let strict = group_map.strict;
+        let mapped: Vec<(String, Option<String>)> = distinct_paths
+            .par_iter()
+            .map(|path| {
+                let raw = path.clone();
+                let effective: Option<String> = if strict {
+                    group_map.map_entity(path).map(str::to_owned)
+                } else {
+                    Some(group_map.map_entity(path).map_or_else(
+                        || path.clone(),
+                        str::to_owned,
+                    ))
+                };
+                (raw, effective)
+            })
+            .collect();
+
+        // Step 2b: serial INSERT (DuckDB Connection is !Send + !Sync).
         let mut stmt = conn
             .prepare("INSERT INTO _grouping_v1 (raw_path, group_name) VALUES (?, ?)")
             .map_err(|e| CodeLoreError::Analysis(format!("prepare grouping insert: {e}")))?;
-        for path in &distinct_paths {
-            let mapped: Option<&str> = group_map.map_entity(path);
-            // Strict: NULL → row gets dropped in step 3.
-            // Non-strict: fall back to raw path → row keeps its original path.
-            let effective: Option<&str> = if group_map.strict {
-                mapped
-            } else {
-                Some(mapped.unwrap_or(path.as_str()))
-            };
-            stmt.execute(params![path, effective])
+        for (raw, effective) in &mapped {
+            stmt.execute(params![raw, effective.as_deref()])
                 .map_err(|e| CodeLoreError::Analysis(format!("grouping insert row: {e}")))?;
         }
     }

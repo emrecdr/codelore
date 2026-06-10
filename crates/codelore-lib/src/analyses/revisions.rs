@@ -13,7 +13,11 @@ use crate::{Options, Result};
 /// Per-file revision count, gated on `--min-revs` and capped by
 /// `--rows`. Bound values: `min_revs`, `row_limit` (`i64::MAX` = unlimited).
 pub const SQL_RAW: &str = "
-    SELECT path, COUNT(DISTINCT rev) AS n_revs
+    -- `changes` has PRIMARY KEY (rev, path), so COUNT(rev) == COUNT(*) ==
+    -- COUNT(DISTINCT rev) for any GROUP BY path. The plain COUNT skips
+    -- DuckDB's distinct-tracking overhead on a column that is already
+    -- unique within the group.
+    SELECT path, COUNT(rev) AS n_revs
     FROM changes
     GROUP BY path
     HAVING n_revs >= ?

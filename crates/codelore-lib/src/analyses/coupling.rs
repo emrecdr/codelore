@@ -194,7 +194,9 @@ fn build_coupling_sql(
     format!(
         "WITH {good_cte},
          file_revs AS (
-             SELECT path, COUNT(DISTINCT rev) AS revs
+             -- (rev, path) is the changes PK; COUNT(rev) == COUNT(DISTINCT rev)
+             -- per path. Plain COUNT skips DuckDB's distinct-tracking overhead.
+             SELECT path, COUNT(rev) AS revs
              FROM {src}
              INNER JOIN good_commits USING(rev)
              GROUP BY path

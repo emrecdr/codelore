@@ -4,6 +4,48 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Fixed — deep-analysis findings F38 + F40 + F41 + F42
+
+- **F38 (perf, correctness-preserving)** — Kamei enrichment
+  (`ndev`, `nuc`, `age`, `sexp`) replaces the path-self-join shape
+  (which was `O(K²)` per hot path) with per-path / per-(dir,author)
+  running aggregations via DuckDB `LIST(...) OVER (... RANGE BETWEEN
+  UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE CURRENT ROW)`. The
+  RANGE frame preserves Kamei's same-day inclusion semantic exactly.
+  Per-commit DISTINCT counts come from `LIST_DISTINCT(FLATTEN(LIST(
+  ...)))` across the commit's paths. Hot files (lockfiles, top-level
+  manifests, vendored config) no longer dominate ingest wall-clock.
+  Regression test in `kamei_test.rs` validates the windowed
+  semantic.
+
+- **F40 (correctness — silent data loss)** — `dedup_entities` keys
+  by `(name, start_line, end_line)` instead of `name` alone. Tree-
+  sitter walkers report multiple anonymous functions per file with
+  identical name (`<anonymous>` or empty for closures, lambdas,
+  generator expressions). The old name-only dedup silently dropped
+  every anonymous entity after the first, leaving zero
+  `complexity_metrics` rows for closures-heavy files (JS/TS,
+  Python, Rust async blocks). The line-range tuple is the closest
+  thing to a stable identity for unnamed entities.
+
+- **F41 (perf)** — `apply_grouping` now matches paths against the
+  group map's regex set in parallel via rayon. The regex set is
+  immutable (`Send + Sync`) and shares freely across workers; the
+  serial INSERT into the `_grouping_v1` temp table happens after
+  the parallel collect. Pre-fix the loop was single-threaded on
+  the main thread — for monorepos with `paths × rules` in the
+  millions, this dominated `apply_grouping` wall-clock.
+
+- **F42 (perf, cleanup)** — drops the redundant `DISTINCT` in six
+  `COUNT(DISTINCT rev)` sites (`revisions`, `hotspots`,
+  `code_health`, `coupling`, `main_dev`, `communication`). The
+  `changes` table has `PRIMARY KEY (rev, path)`, so per
+  `GROUP BY path` the `rev` column is already unique within each
+  group — `COUNT(rev)` equals `COUNT(DISTINCT rev)` equals
+  `COUNT(*)`. Plain `COUNT` skips DuckDB's distinct-tracking
+  overhead. Same logic applies to the `commits` table where `rev`
+  is its primary key.
+
 ## [0.3.3] - 2026-06-10
 
 ### Fixed — deep-analysis findings F35-F37 + F39

@@ -77,7 +77,10 @@ fn build_communication_sql(code_maat_compat: bool) -> String {
     totals AS (
         SELECT
             canonical_author AS author,
-            COUNT(DISTINCT rev) AS commits
+            -- `commits.rev` is the PRIMARY KEY of the commits table, so
+            -- COUNT(rev) == COUNT(DISTINCT rev) per author. Plain COUNT
+            -- skips DuckDB's distinct-tracking overhead.
+            COUNT(rev) AS commits
         FROM commits
         GROUP BY canonical_author
     )

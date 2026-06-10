@@ -79,7 +79,9 @@ pub fn build_inlined_sql(src: &str, min_revs: u32, row_limit: i64) -> String {
 
 pub const SQL: &str = "
     WITH file_revs AS (
-        SELECT path, COUNT(DISTINCT rev) AS revs
+        -- (rev, path) is the changes PK, so COUNT(rev) == COUNT(DISTINCT rev)
+        -- per path. Plain COUNT avoids DuckDB's distinct-tracking overhead.
+        SELECT path, COUNT(rev) AS revs
         FROM changes
         GROUP BY path
         HAVING revs >= ?

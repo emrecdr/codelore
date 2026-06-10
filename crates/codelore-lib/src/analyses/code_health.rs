@@ -49,7 +49,9 @@ const SQL: &str = "
         GROUP BY path
     ),
     file_revs AS (
-        SELECT path, COUNT(DISTINCT rev) AS revs
+        -- (rev, path) is the changes PK; COUNT(rev) == COUNT(DISTINCT rev)
+        -- per path. Plain COUNT skips DuckDB's distinct-tracking overhead.
+        SELECT path, COUNT(rev) AS revs
         FROM {src}
         GROUP BY path
         HAVING revs >= ?

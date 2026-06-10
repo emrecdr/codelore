@@ -101,7 +101,9 @@ fn run(db: &FactsDb, opts: &Options, metric: MainDevMetric) -> Result<Vec<MainDe
              FROM ea
          ),
          file_revs AS (
-             SELECT path, COUNT(DISTINCT rev) AS revs FROM changes
+             -- (rev, path) is the changes PK; COUNT(rev) == COUNT(DISTINCT rev)
+             -- per path. Plain COUNT skips DuckDB's distinct-tracking overhead.
+             SELECT path, COUNT(rev) AS revs FROM changes
              GROUP BY path HAVING revs >= ?
          )
          SELECT r.entity, r.author, r.metric, t.total,
