@@ -41,7 +41,7 @@ graph TD
 
 ## 2. Validation Status of Prior Recommendations
 
-All previous findings and code-maat parity issues have been validated as **fully resolved and correct** in the current codebase (released in version `v0.2.1`):
+All previous findings and code-maat parity issues have been validated as **fully resolved and correct** in the current codebase (released in version `v0.2.1` and `v0.2.2`):
 
 ### Resolved Core Deep-Analysis Findings (F1–F11)
 *   **F1 (Commit Chronology Precision)**: Resolved. Promoted `commits.date` from `DATE` to `TIMESTAMP` in schema v2.
@@ -57,6 +57,14 @@ All previous findings and code-maat parity issues have been validated as **fully
 *   **F11 (Dirty Status Untracked Parity)**: Resolved. Switched `GixRepo::is_worktree_dirty` from `into_index_worktree_iter` to `into_iter()` to traverse and capture untracked files.
 *   **Original Findings (Complexity LOC mapping, Quoted paths, Namespaced tmp cache, SQL case rewriter)**: Verified as fully integrated.
 
+### Resolved Core Deep-Analysis Findings (F12–F17) (shipped in v0.2.2)
+*   **F12 (Same-Second Tiebreaker)**: Resolved. Promoted `commits.rowid ASC` (DuckDB insertion order = gix walk order = child-before-parent) to replace SHA-1 lexicographical ordering, ensuring topologically correct sorting of same-second commits.
+*   **F13 (Walker Memory Efficiency)**: Resolved. Implemented a chunked Rayon walker (1000-OID batches) streaming through a bounded crossbeam channel to limit memory usage and avoid OOM crashes on large repos.
+*   **F14 (Time-Bucket Crash)**: Resolved. Added the `AnalysisName::supports_time_bucket()` validation check at the CLI boundary to reject `--time-bucket` for the 10 analyses that do not materialize or support `changes_bucketed`.
+*   **F15 (Silent Empty Joins)**: Resolved. Handled by the same CLI-boundary validation check to prevent joining date-string bucket keys against SHA-1 commit hashes.
+*   **F16 (Deleted Files in reports)**: Resolved. Restricted `code-age` (using an anchor-aware CTE) and `entity-churn` (using a live-at-HEAD CTE) to active files only.
+*   **F17 (Standalone clones thread speed)**: Resolved. Refactored `run_clones` into a two-phase walk (serial gather followed by parallel function extraction/grouping via Rayon `into_par_iter()`).
+
 ### Resolved Code-Maat Parity Findings (PAR-1–PAR-9)
 *   All parity findings (Bird et al. per-entity risk authors logic, back-testing dates anchor, interval-month ceiling calculations, CSV header mapping, average-revs pivot points, and research foundations documentation) have been fully closed.
 *   **DEEP-1 to DEEP-15 (Code-Maat Exact Parity)**: Verified. Additional sprints in `v0.2.1` closed precise output formatting mismatches (7-column verbose shape for coupling, ceiling-rounded averages, integer-truncated strengths, and hyphenated statistic names in `summary` output under `--code-maat-compat`).
@@ -65,106 +73,100 @@ All previous findings and code-maat parity issues have been validated as **fully
 
 ## 3. Newly Identified Gaps & Recommendations
 
-### F12: Correctness / Robustness — Lexicographical Tiebreaker (`c.rev DESC`) for Same-Second Commits Risk
+### F18: Correctness / Back-testing — `knowledge-islands` Analysis Ignores `--age-time-now` (Anchor Date) in Data Ingest and CTEs
 
 **The Problem**:
-In both `query_live_paths` (in `ingest.rs`) and the `path_lineage` CTE, commit chronology resolves using `commits.date DESC` first, and falls back to `c.rev DESC` (a lexicographical sort of SHA-1 commit hashes) as a tiebreaker for commits that occur on the same second. 
-```sql
-                ROW_NUMBER() OVER (
-                    PARTITION BY c.path
-                    ORDER BY commits.date DESC, c.rev DESC
-                ) AS rn
-```
-However, SHA-1 lexicographical ordering is arbitrary and has no relationship to the parent-child relationships (topological order) of the commits in the git DAG. Same-second commits are highly common in repositories (due to automated script check-ins, rapid branch merges, rebases, or squashes).
+When the `--age-time-now` flag is provided to the `knowledge-islands` analysis to perform historical back-testing (e.g., "what were the knowledge island risks in June 2024?"), the Rust wrapper parses and passes the anchor date correctly. However, the SQL query fails to apply the anchor filter (`commits.date <= CAST(? AS TIMESTAMP)`) across the intermediate CTEs:
+1. `author_last_commit` computes the `MAX(date)` of authors over the entire repository history (up to today/2026), rather than as of the anchor date.
+2. `live_paths` selects files that are live today at HEAD, rather than files that were live at the anchor date.
+3. `per_path_author` sums file contribution lines (`loc_added`) from commits made after the anchor date.
 
 **The Impact**:
-If file `foo.rs` is modified in commit A and deleted in commit B at the same second (with B being the child of A):
-* If commit A's SHA-1 hash is lexicographically larger than commit B's, `c.rev DESC` will sort commit A first.
-* CodeLore will mistakenly identify the modification commit (A) as the latest state (rn = 1), concluding the file is still "live" when it was actually deleted.
-* This triggers erroneous file missing warnings during rayon-backed complexity scans and silences history mappings.
+This completely invalidates historical reports:
+- Authors who returned and committed after the anchor will have a future `last_at` date, resulting in negative `days_since_main_active` calculations.
+- Clones and ownership ratios are calculated based on future commits, violating the closed-world temporal isolation required for back-testing.
+- Files deleted after the anchor but live at the anchor time will be incorrectly excluded, while files introduced after the anchor will be incorrectly included.
 
 **Recommended Fix**:
-Track topological commit index during repository walking. Introduce an autoincrementing index `commit_index` on `commits` table representing the traversal sequence (which guarantees that child commits always sort after parent commits). Order by `commits.commit_index DESC` inside SQL queries to resolve chronological tiebreakers deterministically.
+Add a `WHERE commits.date <= CAST(? AS TIMESTAMP)` filter inside the `author_last_commit`, `live_paths` (joining commits table inside the subquery), and `per_path_author` CTEs, and bind the anchor timestamp parameters accordingly.
 
 ---
 
-### F13: Performance / Robustness — Eager Collection of CommitEvents in Parallel Walker Destroys Memory Efficiency
+### F19: Correctness / Integration — `clone-coupling` Truncates Knowledge Islands to `rows_limit`
 
 **The Problem**:
-In the parallelized walk implementation of [gix_repo.rs:130](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/repo/gix_repo.rs#L130), `walk_commits` performs parallel mapping and collects the entire event stream eagerly:
+The `clone-coupling` analysis intersects Fisher-significant coupled clone pairs with the `knowledge-islands` results to flag clones at risk of knowledge loss (setting `row.at_risk = true`). To fetch these islands, `run_clone_coupling` calls:
 ```rust
-        let events: Result<Vec<CommitEvent>> = oids
-            .into_par_iter()
-            .map(|oid| { ... })
-            .collect();
-        let events = events?;
-        Ok(Box::new(events.into_iter().map(Ok)))
+    let islands_paths: std::collections::HashSet<String> =
+        match crate::analyses::knowledge_islands::run_knowledge_islands(db, opts) {
 ```
-This design fully reads, diffs, and allocates every `CommitEvent` in the repository history into a single massive heap-allocated `Vec` before the iterator is ever returned or consumed.
+It passes the original `opts` object. If the user runs the command with a cosmetic row limit (e.g. `codelore analyze -a clone-coupling --rows 10`), the option is propagated directly to the inner `run_knowledge_islands` call. This limits the fetched list of knowledge island files to at most the top 10.
 
 **The Impact**:
-For large repositories with long histories (e.g. 50,000+ commits and millions of file changes), this eager allocation consumes gigabytes of RAM. It completely bypasses the memory throttling of the bounded producer-consumer channel (`CHANNEL_CAPACITY = 64` in `FactsDb::ingest`), risking Out-Of-Memory (OOM) crashes in memory-constrained environments like CI runners or small containers.
+If there are 50 knowledge island files in the repository, any coupled clone that involves a file ranking outside the top 10 (from 11 to 50) will fail the `islands_paths.contains(...)` lookup. It will be incorrectly marked as `at_risk = false` in the final output.
 
 **Recommended Fix**:
-Maintain lazy evaluation while using parallelism. Implement chunking (e.g., pulling and diffing OIDs in parallel chunks of 1000) or use a Rayon parallel bridge thread-pipeline to concurrently push processed `CommitEvent`s into the crossbeam channel dynamically, rather than collecting them all upfront.
-
----
-
-### F14: Correctness / Reliability — Catalog Error Crash on `--time-bucket` for 10 out of 14 Analyses
-
-**The Problem**:
-When the `--time-bucket <day|week|month>` command line flag is specified, the query rewriter `lineage::rewrite` globally swaps the table name `changes` with `changes_bucketed` for all queries. However, only 4 of the analyses (`coupling`, `soc`, `hotspots`, `code-health`) invoke `lineage::materialize_source(...)`, which actually builds the `changes_bucketed` table. The remaining 10 analyses (e.g., `revisions`, `ownership`, `code-age`, `churn`, `authors`, `messages`, `communication`, etc.) only call `lineage::materialize_if_needed(...)`, which does not materialize `changes_bucketed`.
-
-**The Impact**:
-Running any of these 10 analyses with `--time-bucket` causes a catastrophic application crash with a DuckDB Catalog Error:
-```text
-Catalog Error: Table with name changes_bucketed does not exist!
-Did you mean "changes"?
+Pass a modified options object that clears `rows_limit` to the inner `run_knowledge_islands` call:
+```rust
+    let islands_paths: std::collections::HashSet<String> =
+        match crate::analyses::knowledge_islands::run_knowledge_islands(db, &opts.with_no_row_limit()) {
 ```
 
+---
+
+### F20: Robustness / Performance — HTML Exporter Lacks Pagination or Pagination Safety, Freezing the Browser on Large Repositories
+
+**The Problem**:
+The HTML report emitter (`html.rs`) is designed to generate single-file static HTML reports by embedding the raw data slice in JSON format inside a `<script type="application/json">` block. At page load, the inline vanilla JavaScript parses the block and builds the entire table dynamically:
+```javascript
+    for (const row of rows) {
+      html += '<tr>';
+      for (const col of columns) {
+        const val = row[col];
+        html += `<td class="${cellClass(col, val)}">${formatCell(val)}</td>`;
+      }
+      html += '</tr>';
+    }
+    html += '</tbody></table>';
+    container.innerHTML = html;
+```
+For large analyses (e.g., running `hotspots` or `revisions` on a repo with 30,000+ files or commits without specifying a `--rows` cap), this script generates and inserts a massive DOM tree containing hundreds of thousands of table cells in a single synchronous task.
+
+**The Impact**:
+Doing so blocks the browser's UI thread, freezing the tab or triggering the browser's "Page Unresponsive" warning. It makes large reports practically unviewable.
+
 **Recommended Fix**:
-1. At the CLI argument parsing level in `args.rs` / `Options::validate()`, reject `--time-bucket` if the selected analysis does not logically support bucketing (such as `revisions`, `code-age`, or `authors`).
-2. Alternatively, ensure `materialize_if_needed` is updated to delegate to `materialize_source` so that the bucketed table is always built when the flag is present.
+Implement lightweight pagination or incremental rendering (e.g., render the first 100 rows, then load more dynamically as the user scrolls, or add simple page navigation controls) in the embedded JavaScript template in `html.rs`.
 
 ---
 
-### F15: Correctness / Reliability — Silent Empty Results under `--time-bucket` for Analyses Joining `commits` and `changes` on `rev`
+### F21: Robustness / Portability — GitHub Action (`codelore-action@v1`) Shell Script Issues (Version Parsing, API Rate Limits, macOS `readlink`)
 
 **The Problem**:
-In [ingest.rs:740](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/facts/ingest.rs#L740), `changes_bucketed` is materialized by collapsing commits inside the same time bucket. Its `rev` column is set to the formatted truncated date string (e.g. `'2026-06-08 00:00:00'`). In contrast, the `commits` table is not bucketed, keeping original SHA-1 commit hashes (e.g. `'3bb7936...'`) in its `rev` column.
-Any analysis query that successfully compiles (such as `code-health` or `ownership`) but performs an inner/left join on `c.rev = commits.rev` (or `USING(rev)`) will try to match a SHA-1 hash with a date string.
+Several shell script details in `action.yml` limit the action's reliability:
+1. **Version Pinning**: If the user inputs a pinned version without a leading `v` (e.g., `0.2.2`), the tag resolution logic does not prepend it. The download URL becomes `.../download/0.2.2/codelore-...`, which fails with a HTTP 404 since GitHub release tags are named `v0.2.2`.
+2. **GitHub API Rate Limits**: Resolving the `latest` version sends an unauthenticated `curl` request to the GitHub API. This is prone to rate-limiting failures on GitHub Actions shared runner IPs.
+3. **macOS `readlink`**: The script uses `readlink -f` to compute the absolute path of the output file. macOS's standard `readlink` does not support `-f`, resulting in an error exit (meaning python3 fallback is always triggered on macOS runners).
 
 **The Impact**:
-The join condition matches exactly zero rows. Consequently, running these analyses with `--time-bucket` executes successfully without error but silently returns an empty report (zero rows), which is misleading and mathematically corrupt.
+1. Workflows pinning version numbers like `0.2.2` will crash with download failures.
+2. High-volume workflows or standard runs on busy days will fail randomly due to API rate limits.
+3. Reliance on Python fallback on macOS will fail if Python is not pre-installed or structured differently on the runner.
 
 **Recommended Fix**:
-Disable/reject the `--time-bucket` flag for analyses that require joining `changes` against `commits` on `rev` (such as `code-health`, `ownership`, `communication`, etc.), as bucketing is semantically invalid for them.
-
----
-
-### F16: Correctness / Parity — Code-Age and Churn Analyses Include Deleted/Dead Files
-
-**The Problem**:
-Both `code_age.rs` and `churn.rs` (specifically `entity-churn`) query files from the entire historical `changes` table without checking whether the files are currently active/live in the repository.
-
-**The Impact**:
-The resulting outputs are cluttered with years-old deleted files. For example, a file deleted two years ago will show up in the `code-age` report with an age of 24 months, which pollutes the triage dashboard with historical noise and has no practical value for refactoring or complexity planning.
-
-**Recommended Fix**:
-Restrict the queries in `code_age.rs` and `entity-churn` to only select paths that are currently "live" (using the same partition window logic implemented in `query_live_paths` to check if the latest change type is not `'deleted'`).
-
----
-
-### F17: Performance — Standalone Clones Analysis Walk is Single-Threaded
-
-**The Problem**:
-While the ingest-time clones extraction (`populate_clones_at_head`) has been parallelized via Rayon, the standalone clones analysis [clones.rs:42](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/clones.rs#L42) (`run_clones`) still uses a sequential, single-threaded walk over `WalkDir` and executes tree-sitter AST fingerprinting sequentially on the calling thread.
-
-**The Impact**:
-Running the standalone clones analysis (e.g. `codelore analyze -a clones`) on multi-core systems does not benefit from parallelism, making it significantly slower (up to 10x slower on modern processors) compared to the ingest phase.
-
-**Recommended Fix**:
-Refactor `run_clones` in `clones.rs` to follow the same parallel strategy as `populate_clones_at_head`: walk sequentially to gather file candidates, and then map them concurrently via Rayon `into_par_iter` to extract functions and group clones in parallel.
+1. Check if the version input starts with `v`, and if not, prepend it.
+2. Authenticate the curl request using `github.token`:
+   ```bash
+   curl -fsSL -H "Authorization: Bearer ${{ github.token }}" https://api.github.com/repos/emrecdr/codelore/releases/latest
+   ```
+3. Use a pure Bash absolute path fallback:
+   ```bash
+   if [[ "$OUTPUT" = /* ]]; then
+     ABS_OUTPUT="$OUTPUT"
+   else
+     ABS_OUTPUT="$PWD/$OUTPUT"
+   fi
+   ```
 
 ---
 
@@ -174,32 +176,23 @@ Below is the register of active improvement opportunities and bugs:
 
 | ID | Category | Finding / Improvement Point | Priority / Risk | Impact | Status |
 |---|---|---|---|---|---|
-| **F12** | Correctness | Lexicographical Tiebreaker (`c.rev DESC`) for Same-Second Commits Risk. | **High** / Medium | Potential chronological sorting errors on same-second modifications and deletions, leading to wrong HEAD state. | **Fixed (Unreleased)** — `commits.rowid ASC` (DuckDB insertion order = gix walk order = child-before-parent) replaces SHA-1 lex. F13's chunked walker preserves insertion order. |
-| **F13** | Perf / Robustness | Eager Collection of CommitEvents in Parallel Walker Destroys Memory Efficiency. | **High** / High | Gigabytes of memory allocated upfront on large repositories, risking OOM and bypassing bounded channel limits. | **Fixed (Unreleased)** — chunked rayon (1000-OID batches) streams through a 256-slot `crossbeam_channel::bounded`. Order-preserving within and across chunks so F12 tiebreak remains correct. |
-| **F14** | Robustness | Catalog Error Crash on `--time-bucket` for 10 out of 14 Analyses. | **High** / Low | Catastrophic application crash due to missing `changes_bucketed` table materialization. | **Fixed (Unreleased)** — `AnalysisName::supports_time_bucket()` + CLI-boundary rejection. |
-| **F15** | Correctness | Silent Empty Results under `--time-bucket` for Analyses Joining `commits` and `changes` on `rev`. | **High** / High | Zero matching rows in joins on `rev` (SHA-1 vs Date string) yields empty outputs silently (e.g., `code-health`). | **Fixed (Unreleased)** — closed by the same CLI-boundary rejection as F14. |
-| **F16** | Correctness | Code-Age and Churn Analyses Include Deleted/Dead Files. | **Medium** / Low | Reports are cluttered with historical noise from deleted files. | **Fixed (Unreleased)** — `code-age` anchor-aware live-paths CTE; `entity-churn` live-at-HEAD CTE. |
-| **F17** | Performance | Standalone Clones Analysis Walk is Single-Threaded. | **Medium** / Low | Execution speed bottleneck during standalone clones analysis runs. | **Fixed (Unreleased)** — two-phase split: serial `WalkDir`+globset, then `into_par_iter().map().collect()`. Mirrors `populate_clones_at_head` pattern. |
+| **F18** | Correctness | `knowledge-islands` back-testing misses date filters on CTEs under `--age-time-now`. | **High** / High | Broken historical reports (incorrect/negative days since active, wrong active files, future LOC sums included). | **Fixed (Unreleased)** — Anchor filter applied inside `author_last_commit`, `live_paths`, and `per_path_author` CTEs; bind site now has 8 placeholders. |
+| **F19** | Correctness | `clone-coupling` truncates knowledge islands list to cosmetic `rows_limit`. | **High** / Medium | At-risk clones are incorrectly marked safe if the file falls outside the top `--rows N` islands. | **Fixed (Unreleased)** — Inner `run_knowledge_islands` call now receives `opts.with_no_row_limit()` (matches F2 pattern). |
+| **F20** | Performance | HTML exporter lacks DOM pagination/virtualization, freezing browser tab on large outputs. | **Medium** / High | UI thread freezes or tab crashes on larger repositories without a `--rows` cap. | **Fixed (Unreleased)** — Page size 500, incremental `renderNextPage()` via `insertAdjacentHTML`, "Show next 500" + "Show all" controls. |
+| **F21** | Robustness | GitHub Action wrapper lacks version normalization, rate-limit authentication, and has macOS issues. | **Medium** / Medium | Action failure on version pinning without `v`, API rate limits on public runners, or missing python3 on macOS. | **Fixed (Unreleased)** — `v`-prefix normalisation, authenticated `Authorization: Bearer` header, pure-bash absolute-path resolution. |
 
 ---
 
 ## 5. Proposed Verification Plan for New Findings
 
-To implement and verify fixes for findings F12–F17, the following strategies should be employed:
+### F18 (knowledge-islands back-testing)
+*   **Verification**: Create a mock repository with commits spanning multiple years, where the primary author departs early but makes a commit years later. Query `knowledge-islands` with `--age-time-now` anchored to the early period. Verify that days active are calculated correctly (no negative numbers) and the file is classified as a knowledge island at that point in history.
 
-### F12 (Same-Second Tiebreaker)
-*   **Verification**: Create a mock repository with multiple commits made at the exact same timestamp (including a final delete commit). Verify that topological sort / index order resolves HEAD correctly and no warning is logged.
+### F19 (clone-coupling rows_limit truncation)
+*   **Verification**: Set up a repository with more than 10 knowledge island files. Query `clone-coupling` with `--rows 2` and check if at-risk clones coupling with the 11th knowledge island file are still correctly flagged as `at_risk = true`.
 
-### F13 (Parallel Walker Eager Collection)
-*   **Verification**: Monitor peak RSS memory usage on a large repository (e.g., 20k+ commits). Ensure that replacing the eager `collect()` with parallel chunking/bridging significantly bounds memory consumption.
+### F20 (HTML pagination safety)
+*   **Verification**: Execute an analysis producing >10,000 rows (e.g. revisions on a large repo) outputting to HTML. Verify the file size and verify that opening the file in a browser renders the page instantly without freezing the UI thread.
 
-### F14 & F15 (Time-Bucket Issues)
-*   **Verification**: 
-    1. Verify that passing `--time-bucket week -a revisions` is cleanly rejected by CLI validation with a descriptive error.
-    2. Verify that running `--time-bucket week -a code-health` is similarly rejected, or that if it is run, it does not join on the mismatched `rev` keys and yields non-empty output.
-
-### F16 (Deleted Files in Reports)
-*   **Verification**: Delete a file in a commit and verify that it no longer appears in the output of `code-age` or `entity-churn` reports.
-
-### F17 (Parallel Standalone Clones)
-*   **Verification**: Time the standalone `codelore analyze -a clones` execution on a large codebase (like CodeLore itself or a larger target) and verify that it scales with multi-core CPUs.
+### F21 (GitHub Action wrapper robustness)
+*   **Verification**: Run a local simulation or test runner on the action script with inputs `version: 0.2.2` (no `v`) and verify that it downloads the release successfully. Verify that path resolution works on macOS without throwing a `readlink` error.

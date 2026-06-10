@@ -4,6 +4,46 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Fixed — T8-T12 follow-up findings (F18-F21)
+
+- **F18 — `knowledge-islands` back-testing now applies the
+  `--age-time-now` anchor inside the data CTEs.** The anchor was
+  previously only filtered at the outer `DATE_DIFF` and `WHERE`, so
+  `author_last_commit`, `live_paths`, and `per_path_author` still saw
+  post-anchor history — yielding negative `days_since_main_active`
+  values, post-anchor LoC sums, and incorrect "live" file
+  classifications. Anchor now filters all three CTEs; bind site has 8
+  placeholders. Back-testing produces a temporally-isolated view as
+  intended.
+
+- **F19 — `clone-coupling` now passes `with_no_row_limit()` to the
+  inner `run_knowledge_islands` call.** A user-supplied `--rows 10`
+  on the outer clone-coupling previously also capped the inner
+  knowledge-islands lookup, mis-flagging any clone-coupling pair
+  whose partner sat in island rank 11+ as `at_risk = false`. Inner
+  call is now uncapped (matches the F2 pattern for the inner
+  coupling sub-analysis).
+
+- **F20 — HTML exporter paginates by 500 rows.** Previously the
+  emitter rendered every row synchronously, freezing the browser
+  ("Page Unresponsive") on 30k-row outputs. Added incremental
+  `renderNextPage()` via `insertAdjacentHTML` plus "Show next 500"
+  and "Show all (slow)" controls — each batch stays under the 100 ms
+  UI-freeze perception threshold. Default page size: 500 rows.
+
+- **F21 — `codelore-action` three robustness fixes.**
+  - `v`-prefix auto-normalisation — inputs like `0.3.0` (no `v`)
+    are now prepended to `v0.3.0` before constructing the release
+    URL. Previously a missing `v` would 404.
+  - Authenticated GitHub API call — release-lookup `curl` now sends
+    `Authorization: Bearer $GH_TOKEN` (token from `github.token`)
+    to avoid shared-runner rate-limit failures.
+  - Portable absolute-path resolution — pure-bash `if [[ "$OUTPUT"
+    = /* ]]; then ABS_OUTPUT="$OUTPUT"; else
+    ABS_OUTPUT="$PWD/$OUTPUT"; fi` replaces the GNU-only
+    `readlink -f` + python3 fallback chain (broke on plain
+    macOS-without-Homebrew runners).
+
 ## [0.3.0] - 2026-06-10
 
 ### Added — strategic differentiators
