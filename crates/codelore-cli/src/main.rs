@@ -89,9 +89,9 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
 
     let format = args.format.as_str();
     match format {
-        "csv" | "json" | "sarif" | "markdown" | "parquet" | "sqlite" => {}
+        "csv" | "json" | "sarif" | "markdown" | "parquet" | "sqlite" | "html" => {}
         other => anyhow::bail!(
-            "unknown --format {other:?}. Supported: csv, json, sarif, markdown, parquet, sqlite"
+            "unknown --format {other:?}. Supported: csv, json, sarif, markdown, parquet, sqlite, html"
         ),
     }
 
@@ -279,7 +279,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         return Ok(());
     }
 
-    // csv / json / sarif / markdown: stream through Write
+    // csv / json / sarif / markdown / html: stream through Write
     {
         let _span =
             tracing::info_span!(target: "codelore::bench", "bench.analyze_and_emit").entered();
@@ -287,6 +287,135 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             Some(path) => Box::new(std::fs::File::create(path)?),
             None => Box::new(std::io::stdout().lock()),
         };
+
+        // T11: HTML dispatch handled BEFORE the per-analysis match.
+        // Generic `write_html<T: Serialize>(rows, w, title, ...)` works
+        // for any analysis whose row type is `Serialize`. Single dispatch
+        // block keeps the main match tidy; this scales to all analyses
+        // without per-format code duplication.
+        if format == "html" {
+            let now = time::OffsetDateTime::now_utc();
+            let generated_at = format!(
+                "{:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC",
+                now.year(),
+                u8::from(now.month()),
+                now.day(),
+                now.hour(),
+                now.minute(),
+                now.second(),
+            );
+            let repo_path = args.repo.display().to_string();
+            let title = format!("CodeLore: {}", analysis.as_str());
+            match analysis {
+                AnalysisName::Hotspots => {
+                    let rows = codelore_lib::analyses::hotspots::run_hotspots(&db, &opts)
+                        .context("run hotspots")?;
+                    codelore_lib::output::html::write_html(
+                        &rows,
+                        &mut out,
+                        &title,
+                        &repo_path,
+                        &generated_at,
+                    )
+                    .context("write html")?;
+                }
+                AnalysisName::CodeHealth => {
+                    let rows = codelore_lib::analyses::code_health::run_code_health(&db, &opts)
+                        .context("run code-health")?;
+                    codelore_lib::output::html::write_html(
+                        &rows,
+                        &mut out,
+                        &title,
+                        &repo_path,
+                        &generated_at,
+                    )
+                    .context("write html")?;
+                }
+                AnalysisName::KnowledgeIslands => {
+                    let rows = codelore_lib::analyses::knowledge_islands::run_knowledge_islands(
+                        &db, &opts,
+                    )
+                    .context("run knowledge-islands")?;
+                    codelore_lib::output::html::write_html(
+                        &rows,
+                        &mut out,
+                        &title,
+                        &repo_path,
+                        &generated_at,
+                    )
+                    .context("write html")?;
+                }
+                AnalysisName::CloneCoupling => {
+                    let rows =
+                        codelore_lib::analyses::clone_coupling::run_clone_coupling(&db, &opts)
+                            .context("run clone-coupling")?;
+                    codelore_lib::output::html::write_html(
+                        &rows,
+                        &mut out,
+                        &title,
+                        &repo_path,
+                        &generated_at,
+                    )
+                    .context("write html")?;
+                }
+                AnalysisName::Summary => {
+                    let rows = codelore_lib::analyses::summary::run_summary(&db, &opts)
+                        .context("run summary")?;
+                    codelore_lib::output::html::write_html(
+                        &rows,
+                        &mut out,
+                        &title,
+                        &repo_path,
+                        &generated_at,
+                    )
+                    .context("write html")?;
+                }
+                AnalysisName::Revisions => {
+                    let rows = codelore_lib::analyses::revisions::run_revisions(&db, &opts)
+                        .context("run revisions")?;
+                    codelore_lib::output::html::write_html(
+                        &rows,
+                        &mut out,
+                        &title,
+                        &repo_path,
+                        &generated_at,
+                    )
+                    .context("write html")?;
+                }
+                AnalysisName::Authors => {
+                    let rows = codelore_lib::analyses::authors::run_authors(&db, &opts)
+                        .context("run authors")?;
+                    codelore_lib::output::html::write_html(
+                        &rows,
+                        &mut out,
+                        &title,
+                        &repo_path,
+                        &generated_at,
+                    )
+                    .context("write html")?;
+                }
+                AnalysisName::TopCommitters => {
+                    let rows =
+                        codelore_lib::analyses::top_committers::run_top_committers(&db, &opts)
+                            .context("run top-committers")?;
+                    codelore_lib::output::html::write_html(
+                        &rows,
+                        &mut out,
+                        &title,
+                        &repo_path,
+                        &generated_at,
+                    )
+                    .context("write html")?;
+                }
+                other => anyhow::bail!(
+                    "--format html for analysis `{}` not yet wired (covered: hotspots, \
+                     code-health, knowledge-islands, clone-coupling, summary, revisions, \
+                     authors, top-committers — file an issue if you need another)",
+                    other.as_str()
+                ),
+            }
+            return Ok(());
+        }
 
         match (format, &analysis) {
             // --- revisions ---
