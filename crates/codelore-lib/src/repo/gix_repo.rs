@@ -71,54 +71,31 @@ impl Repo for GixRepo {
                 order: gix::traverse::commit::simple::CommitTimeOrder::NewestFirst,
             });
         }
+        // F27 fix: collect OIDs WITHOUT parsing commit objects on the main
+        // thread. The previous filter pass called `repo.find_commit(oid)`
+        // for every reachable commit on the hot path, then `process_commit_oid`
+        // called `find_commit` AGAIN on the worker — two object-store lookups
+        // per surviving commit, with the first one serialised on a single
+        // thread. Filtering is now folded into `process_commit_oid`
+        // (returning `Result<Option<CommitEvent>>`), so the OID gather is
+        // pure index iteration and filtering parallelises across workers.
+        //
+        // F12 invariant (commits.rowid ASC = gix walk order) is preserved:
+        // the OID vec retains walk order, par_iter().collect() preserves
+        // per-chunk order, and the driver thread drains Nones without
+        // inserting them — so rowid still tracks walk order on the
+        // surviving subset.
         let oids: Vec<gix::ObjectId> = walk
             .all()
             .map_err(|e| CodeLoreError::Repo(format!("rev_walk: {e}")))?
-            .filter_map(|info| {
-                let info = match info {
-                    Ok(i) => i,
-                    Err(e) => return Some(Err(CodeLoreError::Repo(format!("revwalk: {e}")))),
-                };
-                let oid = info.id;
-                let commit = match repo.find_commit(oid) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        return Some(Err(CodeLoreError::Repo(format!(
-                            "find_commit during filter: {e}"
-                        ))));
-                    }
-                };
-                // R4: merge filter (mirrors GitCliRepo's `if !opts.include_merges`).
-                if !opts.include_merges && commit.parent_ids().count() > 1 {
-                    return None;
-                }
-                // R2: date-range filter on author date. `opts.after` /
-                // `opts.before` are `time::Date` (calendar-day precision —
-                // matches git's own `--after`/`--before` semantics). The
-                // author time is now a full `OffsetDateTime` post-schema-v2;
-                // extract its calendar date for the comparison so we stay
-                // day-precise here even though we keep the full timestamp
-                // downstream.
-                if opts.after.is_some() || opts.before.is_some() {
-                    let ts = match commit_author_date(&commit) {
-                        Ok(d) => d,
-                        Err(e) => return Some(Err(e)),
-                    };
-                    let calendar_date = ts.date();
-                    if let Some(after) = opts.after
-                        && calendar_date < after
-                    {
-                        return None;
-                    }
-                    if let Some(before) = opts.before
-                        && calendar_date > before
-                    {
-                        return None;
-                    }
-                }
-                Some(Ok(oid))
+            .map(|info| {
+                info.map(|i| i.id)
+                    .map_err(|e| CodeLoreError::Repo(format!("revwalk: {e}")))
             })
             .collect::<Result<Vec<_>>>()?;
+        let filter_include_merges = opts.include_merges;
+        let filter_after = opts.after;
+        let filter_before = opts.before;
 
         // F13 fix: stream events through a bounded crossbeam channel
         // rather than eagerly collecting the full event list into memory.
@@ -154,14 +131,26 @@ impl Repo for GixRepo {
             .name("codelore-gix-walker".into())
             .spawn(move || {
                 for chunk in oids.chunks(WALKER_CHUNK_SIZE) {
-                    // Order-preserving parallel map over this chunk.
-                    let events: Result<Vec<CommitEvent>> = chunk
+                    // Order-preserving parallel map over this chunk. Filter
+                    // logic moved INSIDE the worker (F27): each worker opens
+                    // the commit object ONCE for both filtering and event
+                    // construction; filtered-out commits return Ok(None).
+                    let events: Result<Vec<Option<CommitEvent>>> = chunk
                         .par_iter()
-                        .map(|oid| process_commit_oid(*oid, &inner_clone, &mailmap))
+                        .map(|oid| {
+                            process_commit_oid(
+                                *oid,
+                                &inner_clone,
+                                &mailmap,
+                                filter_include_merges,
+                                filter_after,
+                                filter_before,
+                            )
+                        })
                         .collect();
                     match events {
                         Ok(events) => {
-                            for event in events {
+                            for event in events.into_iter().flatten() {
                                 // tx.send returns Err if the receiver was
                                 // dropped (consumer abandoned the
                                 // iterator). Stop processing and let the
@@ -537,15 +526,47 @@ fn commit_author_date(commit: &gix::Commit<'_>) -> Result<time::OffsetDateTime> 
 /// Free function (not a closure) so the chunked rayon driver can call it
 /// directly without dragging closure-capture lifetimes through the
 /// channel-spawned thread.
+/// Returns `Ok(None)` for commits filtered out by the merge or date
+/// predicates (F27: filtering used to happen on the main thread with its
+/// own `find_commit` call; both lookups are now folded here so each
+/// surviving commit is parsed exactly once per worker).
 fn process_commit_oid(
     oid: gix::ObjectId,
     inner: &gix::ThreadSafeRepository,
     mailmap: &gix::mailmap::Snapshot,
-) -> Result<CommitEvent> {
+    include_merges: bool,
+    after: Option<time::Date>,
+    before: Option<time::Date>,
+) -> Result<Option<CommitEvent>> {
     let repo = inner.to_thread_local();
     let commit = repo
         .find_commit(oid)
         .map_err(|e| CodeLoreError::Repo(format!("find_commit: {e}")))?;
+
+    // R4: merge filter (mirrors GitCliRepo's `if !opts.include_merges`).
+    if !include_merges && commit.parent_ids().count() > 1 {
+        return Ok(None);
+    }
+    // R2: date-range filter on author date. `after`/`before` are
+    // `time::Date` (calendar-day precision — matches git's `--after`/
+    // `--before` semantics). Extract the calendar date from the full
+    // `OffsetDateTime` so we stay day-precise even though the timestamp
+    // is full-resolution downstream.
+    if after.is_some() || before.is_some() {
+        let ts = commit_author_date(&commit)?;
+        let calendar_date = ts.date();
+        if let Some(after) = after
+            && calendar_date < after
+        {
+            return Ok(None);
+        }
+        if let Some(before) = before
+            && calendar_date > before
+        {
+            return Ok(None);
+        }
+    }
+
     let id_string = oid.to_hex().to_string();
     let mut event = commit_event_from_gix(&commit)?;
     // Reuse the already-resolved `commit` to compute changed files —
@@ -576,7 +597,7 @@ fn process_commit_oid(
     let ai_attr =
         crate::identity::ai_attribution(&event.author_email, &event.author_name, &event.message);
     event.ai_attribution = Some(ai_attr.to_string());
-    Ok(event)
+    Ok(Some(event))
 }
 
 fn commit_event_from_gix(commit: &gix::Commit<'_>) -> Result<CommitEvent> {

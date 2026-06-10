@@ -93,21 +93,41 @@ pub struct RevAnalyses {
 /// Parse `<base>..<head>` or `<base>...<head>` into base + head SHA strings.
 /// For three-dot, the returned base is the merge-base of (`base_rev`, `head_rev`),
 /// computed via `git merge-base`.
+///
+/// Implied-HEAD shortcuts (matching `git log`/`git diff` semantics): an
+/// omitted side of a range expression defaults to `HEAD`. So `main..` is
+/// `main..HEAD`, `..main` is `HEAD..main`, and `..` is `HEAD..HEAD`
+/// (an empty range — `git rev-parse HEAD` still resolves, producing a
+/// no-op diff). Same applies to the three-dot form.
 pub fn parse_rev_range(repo: &Path, range: &str) -> Result<(String, String, bool)> {
     // Match three-dot first (longer match) before two-dot.
     if let Some((base_ref, head_ref)) = range.split_once("...") {
-        if head_ref.is_empty() || base_ref.is_empty() {
-            return Err(anyhow!("malformed three-dot rev range: {range:?}"));
-        }
+        let base_ref = if base_ref.is_empty() {
+            "HEAD"
+        } else {
+            base_ref
+        };
+        let head_ref = if head_ref.is_empty() {
+            "HEAD"
+        } else {
+            head_ref
+        };
         let base_sha = git_rev_parse(repo, base_ref)?;
         let head_sha = git_rev_parse(repo, head_ref)?;
         let mb = git_merge_base(repo, &base_sha, &head_sha)?;
         return Ok((mb, head_sha, true));
     }
     if let Some((base_ref, head_ref)) = range.split_once("..") {
-        if head_ref.is_empty() || base_ref.is_empty() {
-            return Err(anyhow!("malformed two-dot rev range: {range:?}"));
-        }
+        let base_ref = if base_ref.is_empty() {
+            "HEAD"
+        } else {
+            base_ref
+        };
+        let head_ref = if head_ref.is_empty() {
+            "HEAD"
+        } else {
+            head_ref
+        };
         let base_sha = git_rev_parse(repo, base_ref)?;
         let head_sha = git_rev_parse(repo, head_ref)?;
         return Ok((base_sha, head_sha, false));
@@ -407,32 +427,24 @@ const STALE_WORKTREE_AGE_HOURS: u64 = 24;
 
 /// Best-effort cleanup of orphan worktrees from prior aborted runs.
 ///
-/// Two passes:
-///   1. `git -C <repo> worktree prune` — clears the git-side registry of
-///      entries pointing to deleted directories (removes the
-///      "already exists" failure mode on the next `git worktree add`).
-///   2. Walks `$XDG_CACHE_HOME/codelore/diff-worktrees/` and removes any
+/// Two passes (order matters — F28 fix):
+///   1. Walk `$XDG_CACHE_HOME/codelore/diff-worktrees/` and remove any
 ///      subdirectory whose mtime is older than [`STALE_WORKTREE_AGE_HOURS`].
+///   2. `git -C <repo> worktree prune` — clears the git-side registry of
+///      entries pointing to the directories we just deleted (removes the
+///      "already exists" failure mode on the next `git worktree add`).
+///
+/// Earlier code ran `git worktree prune` BEFORE the directory sweep, which
+/// caused a one-run lag: directories deleted in this run's sweep didn't
+/// have their `.git/worktrees/<name>/` administrative metadata cleaned up
+/// until the next invocation of `codelore diff`. Single-shot users would
+/// leave orphan metadata indefinitely.
 ///
 /// All errors are logged at warn level — pruning must never fail the caller.
 /// SIGKILL / OOM / disk-full aborts bypass [`Worktree::drop`] so orphans
 /// accumulate over time; this is the recovery path.
 fn prune_stale_worktrees(repo_root: &Path) {
-    // 1. git worktree prune in the user's repo — idempotent, removes orphan
-    //    registry entries that point to deleted directories.
-    let prune_result = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .args(["worktree", "prune"])
-        .output();
-    if let Err(e) = prune_result {
-        tracing::warn!(
-            "git worktree prune failed during startup cleanup: {e}; \
-             continuing — `git worktree add` may report 'already exists'"
-        );
-    }
-
-    // 2. Sweep $XDG_CACHE_HOME/codelore/diff-worktrees/ for old directories.
+    // 1. Sweep $XDG_CACHE_HOME/codelore/diff-worktrees/ for old directories.
     //
     // F4 fix: route through `codelore_lib::cache::default_cache_root()`
     // so the user-namespaced `/tmp` fallback applies here too. Earlier
@@ -443,36 +455,47 @@ fn prune_stale_worktrees(repo_root: &Path) {
     let cache_root = codelore_lib::cache::default_cache_root()
         .join("codelore")
         .join("diff-worktrees");
-    if !cache_root.exists() {
-        return;
-    }
-    let Ok(cutoff) = std::time::SystemTime::now()
-        .checked_sub(std::time::Duration::from_secs(
-            STALE_WORKTREE_AGE_HOURS * 3600,
-        ))
-        .ok_or("subtraction underflow")
-    else {
-        return;
-    };
-    let Ok(entries) = std::fs::read_dir(&cache_root) else {
-        return;
-    };
-    for entry in entries.filter_map(std::result::Result::ok) {
-        let Ok(meta) = entry.metadata() else { continue };
-        if !meta.is_dir() {
-            continue;
-        }
-        let Ok(modified) = meta.modified() else {
-            continue;
-        };
-        if modified < cutoff {
-            let path = entry.path();
-            if let Err(e) = std::fs::remove_dir_all(&path) {
-                tracing::warn!("failed to remove stale worktree {}: {e}", path.display());
-            } else {
-                tracing::info!("pruned stale worktree directory: {}", path.display());
+    if cache_root.exists()
+        && let Ok(cutoff) = std::time::SystemTime::now()
+            .checked_sub(std::time::Duration::from_secs(
+                STALE_WORKTREE_AGE_HOURS * 3600,
+            ))
+            .ok_or("subtraction underflow")
+        && let Ok(entries) = std::fs::read_dir(&cache_root)
+    {
+        for entry in entries.filter_map(std::result::Result::ok) {
+            let Ok(meta) = entry.metadata() else { continue };
+            if !meta.is_dir() {
+                continue;
+            }
+            let Ok(modified) = meta.modified() else {
+                continue;
+            };
+            if modified < cutoff {
+                let path = entry.path();
+                if let Err(e) = std::fs::remove_dir_all(&path) {
+                    tracing::warn!("failed to remove stale worktree {}: {e}", path.display());
+                } else {
+                    tracing::info!("pruned stale worktree directory: {}", path.display());
+                }
             }
         }
+    }
+
+    // 2. git worktree prune in the user's repo — idempotent, removes orphan
+    //    registry entries that point to deleted directories. Running AFTER
+    //    the directory sweep means dirs we just deleted have their
+    //    administrative metadata cleaned up in this same invocation.
+    let prune_result = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .args(["worktree", "prune"])
+        .output();
+    if let Err(e) = prune_result {
+        tracing::warn!(
+            "git worktree prune failed during startup cleanup: {e}; \
+             continuing — `git worktree add` may report 'already exists'"
+        );
     }
 }
 
@@ -564,6 +587,66 @@ pub fn should_fail(args: &DiffArgs, output: &DiffOutput) -> bool {
 #[cfg(test)]
 mod prune_tests {
     use super::*;
+
+    /// Build a tiny git repo with 2 commits for `parse_rev_range` tests.
+    /// Returns the repo dir and the first/second commit SHAs.
+    fn tiny_two_commit_repo() -> (tempfile::TempDir, String, String) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path();
+        let git = |args: &[&str]| {
+            assert!(
+                Command::new("git")
+                    .arg("-C")
+                    .arg(path)
+                    .args(args)
+                    .status()
+                    .expect("spawn git")
+                    .success(),
+                "git {args:?} failed"
+            );
+        };
+        git(&["init", "-b", "main", "--quiet"]);
+        git(&["config", "user.email", "x@x"]);
+        git(&["config", "user.name", "X"]);
+        std::fs::write(path.join("a.txt"), "1\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "c1", "--quiet"]);
+        let sha1 = git_rev_parse(path, "HEAD").unwrap();
+        std::fs::write(path.join("a.txt"), "2\n").unwrap();
+        git(&["commit", "-am", "c2", "--quiet"]);
+        let sha2 = git_rev_parse(path, "HEAD").unwrap();
+        (dir, sha1, sha2)
+    }
+
+    /// F26: omitted base side of a two-dot range defaults to HEAD
+    /// (matching `git log ..main` / `git diff ..main` semantics).
+    #[test]
+    fn parse_rev_range_two_dot_omitted_base_defaults_to_head() {
+        let (dir, sha1, sha2) = tiny_two_commit_repo();
+        let (base, head, mb) = parse_rev_range(dir.path(), "..HEAD~1").unwrap();
+        assert_eq!(base, sha2, "empty base should default to HEAD");
+        assert_eq!(head, sha1, "head should be HEAD~1");
+        assert!(!mb, "two-dot form should not flag merge-base");
+    }
+
+    /// F26: omitted head side of a two-dot range defaults to HEAD.
+    #[test]
+    fn parse_rev_range_two_dot_omitted_head_defaults_to_head() {
+        let (dir, sha1, sha2) = tiny_two_commit_repo();
+        let (base, head, mb) = parse_rev_range(dir.path(), "HEAD~1..").unwrap();
+        assert_eq!(base, sha1);
+        assert_eq!(head, sha2, "empty head should default to HEAD");
+        assert!(!mb);
+    }
+
+    /// F26: omitted head side of a three-dot range defaults to HEAD.
+    #[test]
+    fn parse_rev_range_three_dot_omitted_head_defaults_to_head() {
+        let (dir, _sha1, sha2) = tiny_two_commit_repo();
+        let (_base, head, mb) = parse_rev_range(dir.path(), "HEAD~1...").unwrap();
+        assert_eq!(head, sha2, "empty head should default to HEAD");
+        assert!(mb, "three-dot form should flag merge-base");
+    }
 
     /// `prune_stale_worktrees` is best-effort: must not panic when the
     /// repo isn't a real git repo (the `git worktree prune` call will

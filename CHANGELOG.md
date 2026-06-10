@@ -4,6 +4,41 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Fixed — deep-analysis findings F26-F28
+
+- **F26 (usability)** — `parse_rev_range` now accepts implied-HEAD
+  shortcuts matching `git log`/`git diff` semantics: `main..` resolves
+  to `main..HEAD`, `..main` to `HEAD..main`, and `..` to `HEAD..HEAD`.
+  Same treatment for the three-dot form. Previously every implied-HEAD
+  input failed with `malformed two-dot rev range`, forcing users to
+  type `HEAD` explicitly — a needless break from standard Git CLI
+  ergonomics. Three regression tests in `diff::prune_tests` cover the
+  two-dot omitted-base, two-dot omitted-head, and three-dot
+  omitted-head paths.
+
+- **F27 (performance)** — `walk_commits` no longer parses every
+  reachable commit on the main thread. The merge filter + date-range
+  filter ran inside a `filter_map` that called `repo.find_commit(oid)`
+  once per OID before chunked-rayon then called `find_commit` AGAIN
+  on the worker for each surviving commit — two object-store lookups
+  per surviving commit with the first one fully serialised. Filtering
+  is now folded into `process_commit_oid` (returning
+  `Result<Option<CommitEvent>>`), so the OID gather is pure index
+  iteration and filtering parallelises across workers. F12's
+  `commits.rowid ASC` invariant is preserved: the OID vec retains
+  walk order, `par_iter().collect()` preserves per-chunk order, and
+  the driver thread drains `None`s without inserting — so rowid still
+  tracks walk order on the surviving subset. Validated by the
+  differential repo test suite (GixRepo ↔ GitCliRepo event-stream
+  equality across the 50-commit fixture).
+
+- **F28 (robustness)** — `prune_stale_worktrees` order swapped:
+  directory sweep runs FIRST, `git worktree prune` runs SECOND.
+  Previously the prune ran before the sweep, so directories deleted
+  in this run's sweep didn't have their `.git/worktrees/<name>/`
+  administrative metadata cleaned up until the next invocation —
+  single-shot users left orphan metadata indefinitely.
+
 ## [0.3.1] - 2026-06-10
 
 ### Fixed — deep-analysis re-audit findings (F22-F25)

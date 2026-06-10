@@ -75,63 +75,56 @@ All previous findings and code-maat parity issues have been validated as **fully
 *   **F20 (HTML Render Freeze)**: Resolved. Implemented incremental page-based rendering (page size 500) and page controls (Show next 500 / Show all) in `html.rs` to prevent blocking the browser's UI thread on large outputs.
 *   **F21 (GitHub Action Wrapper)**: Resolved. Added automatic `v`-prefix normalisation, authenticated curl headers (via runner token), and pure-bash absolute path resolution to `action.yml`.
 
+### Resolved Core Deep-Analysis Findings (F22–F25) (shipped in v0.3.1)
+*   **F22 (Same-Second Rename Chaining)**: Resolved. Recursive CTE now carries `commits.rowid` and breaks date-ties via `co.rowid < l.current_rowid`. Regression test in `same_second_rename_test.rs`.
+*   **F23 (Concurrent Cache Writes)**: Resolved. Tmp database cache filename now suffixed with `std::process::id()`; stale `.tmp.<pid>` artifacts swept by the pruner.
+*   **F24 (Cache Directory Collection Walk Error Handling)**: Resolved. `collect_duckdb_files_inner` now log-and-skips per directory/entry instead of propagating errors.
+*   **F25 (WAL File Cleanup)**: Resolved. `delete_duckdb_with_companion` also removes `.wal`; `cleanup_stale_tmp_files` age-gates `.tmp.<pid>` artifacts (1h).
+
 ---
 
 ## 3. Newly Identified Gaps & Recommendations
 
-### F22: Correctness / Chronology — Same-Second Rename Chaining Failure in `path_lineage` CTE
+### F26: Usability / Correctness — `parse_rev_range` Rejects Standard Implied-HEAD Git Range Syntax
 
 **The Problem**:
-In [ingest.rs:814](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/facts/ingest.rs#L814), `materialize_path_lineage` walks rename paths recursively using a CTE that links rename steps chronologically. To prevent cycles or incorrect future links, it requires `co.date > l.current_date` in the recursive step. However, if two sequential renames (e.g., file `A` renamed to `B`, and then `B` renamed to `C`) occur in different commits that share the exact same second timestamp, the strictly-greater-than condition `co.date > l.current_date` evaluates to false.
+In [diff.rs:96](file:///Users/emrec/Projects/playground/codelore/crates/codelore-cli/src/diff.rs#L96), `parse_rev_range` splits the range string on `..` or `...` and rejects the input if either the base or the head portion is empty (e.g., `main..` or `..main`). However, in standard Git usage, an omitted revision in a range expression implicitly defaults to `HEAD` (for example, `main..` represents `main..HEAD`).
 
 **The Impact**:
-The recursive walk will terminate prematurely, failing to map the full rename history. This leads to broken lineage resolution where older changes are not correctly merged onto the final canonical name.
+Standard Git-style range shortcuts fail with a validation error (`malformed two-dot rev range: "main.."`). Users are forced to explicitly type `HEAD`, which violates standard Git CLI design expectations.
 
 **Recommended Fix**:
-Select and carry `commits.rowid` through the recursive CTE. When dates are equal, resolve the parent-to-child sequence by comparing `co.rowid < l.current_rowid` (since `gix` walks reverse-chronologically, child commits get smaller rowids than their parents during ingestion).
-
----
-
-### F23: Robustness — Concurrent Database Cache Write Collision
-
-**The Problem**:
-In [mod.rs:181](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/facts/mod.rs#L181), when `open_or_ingest_with_cache_root` creates a new persistent database cache, it uses a hardcoded temporary file path:
+Update `parse_rev_range` to default empty splits to `"HEAD"` instead of returning an error:
 ```rust
-        let tmp = cache_p.with_extension("duckdb.tmp");
+let base_ref = if base_ref.is_empty() { "HEAD" } else { base_ref };
+let head_ref = if head_ref.is_empty() { "HEAD" } else { head_ref };
 ```
-If multiple instances of `codelore` run concurrently on the same cache key (for example, concurrent workflow jobs in a CI environment or multiple developer terminals), they will collide on this fixed path. One process may remove or write to the `.tmp` file while another is active, or DuckDB will fail to set a write lock on the file.
-
-**The Impact**:
-Parallel runs will fail with database lock errors, crash the ingestion process, or lead to partially-written corrupt cache databases.
-
-**Recommended Fix**:
-Use a process-unique temporary database file path (e.g. by appending the process ID `std::process::id()` or a unique identifier to the filename) during ingestion, and atomically rename it to the final destination on completion.
 
 ---
 
-### F24: Robustness — Cache Directory Eviction Abort on Access Error
+### F27: Performance — Serial `find_commit` Filtering on Main Thread and Redundant Lookups
 
 **The Problem**:
-In [cache.rs:207](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/cache.rs#L207), `collect_duckdb_files_inner` recursively walks directory paths to gather cache files for size-based LRU pruning. It uses the `?` operator on `fs::read_dir`, `entry.metadata()`, and `duration_since` operations.
+In [gix_repo.rs:74](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/repo/gix_repo.rs#L74), `walk_commits` performs a serial `find_commit` lookup on the main thread for *every* commit OID to apply merge and date-range filters. Later, the matching commit IDs are batched and processed in parallel by Rayon workers in `process_commit_oid`, which calls `find_commit` a *second* time for the exact same commits.
 
 **The Impact**:
-If any single subdirectory under the global cache root has permission issues, contains a broken symbolic link, or experiences a temporary file system read failure, the entire collection walk aborts. The global cache size pruner (`prune_global_cache`) will exit early and fail to run, leading to unchecked cache disk space growth.
+For repositories with tens or hundreds of thousands of commits, the serial commit object parsing loop on the main thread creates a significant performance bottleneck. In addition, doing a redundant double lookup on matching commits wastes I/O and deserialization cycles.
 
 **Recommended Fix**:
-Refactor the recursive walking function to log a warning and proceed with the remaining directories and files upon encountering access or metadata retrieval errors, rather than returning an error.
+Defer commit parsing and filtering logic to the parallel Rayon workers. The main thread should collect all OIDs directly using `rev_walk.all()`, which is extremely fast and doesn't parse commit objects. The chunks can then be processed in parallel, where each worker opens the commit *once*, checks filters (yielding `None` if the commit is filtered out), and processes `CommitEvent` metadata.
 
 ---
 
-### F25: Robustness — Leftover Write-Ahead Log (.wal) Cache Storage Leak
+### F28: Robustness / Leaks — Git Worktree Administrative Metadata "One-Run Lag" Cleanup
 
 **The Problem**:
-DuckDB creates a write-ahead log (`.wal`) file alongside the `.duckdb` database during writes. If a `codelore` process is aborted, terminated, or crashes mid-ingestion, the `.wal` file remains on disk. In [cache.rs:121](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/cache.rs#L121), the cache pruner only scans for and deletes files with a `.duckdb` extension.
+In [diff.rs:420](file:///Users/emrec/Projects/playground/codelore/crates/codelore-cli/src/diff.rs#L420), `prune_stale_worktrees` runs `git worktree prune` *before* sweeping and deleting stale directory folders.
 
 **The Impact**:
-Evicted database files leave behind their corresponding `.wal` files. These orphaned files accumulate indefinitely in the cache directory, causing a silent storage leak.
+Any worktree directory deleted during the current sweep will not have its corresponding administrative metadata cleaned up from Git until the *next* time `codelore diff` is invoked. This leaves orphaned metadata folders inside `.git/worktrees/` indefinitely if no subsequent runs are executed, causing a resource leak.
 
 **Recommended Fix**:
-Update `prune_repo_cache` and `prune_global_cache` to check for and delete the companion `.wal` file (e.g. `path.with_extension("duckdb.wal")`) when deleting a `.duckdb` file, and clean up orphaned `.wal` files during the sweep.
+Swap the order: execute the stale directory removal sweep *first*, and run `git worktree prune` *afterward*. This ensures Git immediately detects the deleted directories and prunes their administrative metadata in the same invocation.
 
 ---
 
@@ -141,23 +134,19 @@ Below is the register of active improvement opportunities and bugs:
 
 | ID | Category | Finding / Improvement Point | Priority / Risk | Impact | Status |
 |---|---|---|---|---|---|
-| **F22** | Correctness | Same-second sequential renames fail to chain in `path_lineage` CTE. | **High** / Medium | Incomplete file lineage history mapping for same-second parent/child commit splits. | **Fixed (Unreleased)** — Recursive CTE now carries `commits.rowid` and breaks date-ties via `co.rowid < l.current_rowid`. Regression test in `same_second_rename_test.rs`. |
-| **F23** | Robustness | Concurrent database cache writes collide on the same `.tmp` path. | **High** / Low | Database file lock errors and potential cache corruption in parallel/CI environments. | **Fixed (Unreleased)** — Tmp filename now suffixed with `std::process::id()`; stale `.tmp.<pid>` artifacts swept by the pruner. |
-| **F24** | Robustness | Cache directory collection walk aborts completely on a single access error. | **Medium** / Low | Directory permissions or broken symlinks stop LRU eviction, leading to unchecked cache growth. | **Fixed (Unreleased)** — `collect_duckdb_files_inner` now log-and-skips per directory/entry instead of propagating errors. |
-| **F25** | Robustness | Leftover DuckDB Write-Ahead Log (`.wal`) files are never pruned. | **Medium** / Low | Orphans from crashed runs bypass `.duckdb`-only cache sweep, leaking disk space. | **Fixed (Unreleased)** — `delete_duckdb_with_companion` also removes `.wal`; `cleanup_stale_tmp_files` age-gates `.tmp.<pid>` artifacts (1h). |
+| **F26** | Usability / Correctness | `parse_rev_range` rejects standard implied-HEAD ranges (e.g., `main..`). | **Medium** / Low | Breaks compatibility with Git CLI ergonomics; fails on valid ranges. | **Fixed (Unreleased)** — Empty base/head strings now default to `"HEAD"` for two-dot and three-dot forms. 3 regression tests added. |
+| **F27** | Performance | Serial `find_commit` filtering on main thread and redundant double lookups. | **Medium** / Medium | Unnecessary serialization overhead and single-threaded bottlenecks on large repos. | **Fixed (Unreleased)** — Filtering moved into `process_commit_oid` (returns `Result<Option<CommitEvent>>`); main thread only gathers OIDs; F12 rowid invariant preserved. |
+| **F28** | Robustness | `prune_stale_worktrees` has a "one-run lag" when pruning Git metadata. | **Low** / Low | Orphaned worktree metadata directory remains in `.git/worktrees/` until next run. | **Fixed (Unreleased)** — Directory sweep now runs BEFORE `git worktree prune`, so metadata is cleaned up in the same invocation. |
 
 ---
 
 ## 5. Proposed Verification Plan for New Findings
 
-### F22 (same-second rename chaining)
-*   **Verification**: Create a mock repository with two commits made at the exact same timestamp: the first renaming `A → B`, and the second renaming `B → C`. Run any lineage-aware analysis (e.g. revisions) and verify that changes for original file `A` are mapped to the final canonical name `C`.
+### F26 (implied-HEAD range parsing)
+*   **Verification**: Run `codelore diff main..` and verify that it parses successfully and executes the diff analysis against HEAD without throwing a validation error.
 
-### F23 (concurrent cache writes)
-*   **Verification**: Launch multiple parallel runs of `codelore` ingesting the same repository commit under the same options. Verify that they all run and exit successfully without encountering DuckDB lock errors.
+### F27 (parallel commit filtering)
+*   **Verification**: Run the test suite and benchmark on a large repository (e.g., codelore itself or a larger open-source project) and verify that walk time is reduced and all commits are correctly filtered.
 
-### F24 (cache walk directory error handling)
-*   **Verification**: Create a directory with read-only/no-access permissions or a broken symlink inside the cache root. Run cache pruning and verify that other cache files under the root are still scanned and pruned.
-
-### F25 (WAL file cleanup)
-*   **Verification**: Place a dummy `.duckdb.wal` file inside the cache directory. Trigger a cache pruning run and verify that the `.wal` file is successfully cleaned up.
+### F28 (worktree prune metadata cleanup)
+*   **Verification**: Force-abort a run to leak a worktree directory. Trigger another run after the stale age threshold (or mock the threshold) and verify that both the temporary directory and Git's internal metadata for the worktree are immediately cleaned up.
