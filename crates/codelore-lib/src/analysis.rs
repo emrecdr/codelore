@@ -104,6 +104,36 @@ impl AnalysisName {
             Self::TopCommitters,
         ]
     }
+
+    /// F14 + F15 fix: classify which analyses can run under
+    /// `--time-bucket`. The bucketed source table (`changes_bucketed`)
+    /// is materialised by `lineage::materialize_source` and synthesises
+    /// `rev` as a date-truncated string. Any analysis that JOINs
+    /// `c.rev = commits.rev` against the non-bucketed `commits` table
+    /// silently returns zero rows (F15). Any analysis that uses
+    /// `materialize_if_needed` (no-op on the bucketed branch) crashes
+    /// with `Catalog Error: Table changes_bucketed does not exist`
+    /// (F14). Both failure modes are unacceptable user experiences.
+    ///
+    /// Currently only `coupling`, `soc`, `hotspots`, and `code-health`
+    /// invoke `materialize_source` AND have SQL that doesn't depend on
+    /// the `commits` JOIN for `rev` equality. These four are the only
+    /// analyses that semantically MAKE SENSE under bucketing (they're
+    /// all about co-change, which `--time-bucket` is designed to
+    /// smooth). The other 18 are either per-file or per-author
+    /// aggregations where bucketing is semantically a no-op or
+    /// outright invalid.
+    ///
+    /// Adding a new analysis: opt INTO bucketing by adding the variant
+    /// to this match arm AND wiring `materialize_source` (not
+    /// `materialize_if_needed`) in the analysis's `run_*` function.
+    #[must_use]
+    pub fn supports_time_bucket(&self) -> bool {
+        matches!(
+            self,
+            Self::Coupling | Self::Soc | Self::Hotspots | Self::CodeHealth
+        )
+    }
 }
 
 impl fmt::Display for AnalysisName {

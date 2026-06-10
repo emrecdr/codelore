@@ -389,7 +389,16 @@ fn build_clones_exclude_set(opts: &Options) -> Result<globset::GlobSet> {
 /// Resolve HEAD's rev from the commits table (most recent commit by date).
 /// Used to stamp the `rev` column on inserted clone rows.
 fn current_head_rev(db: &FactsDb) -> Result<String> {
-    let sql = "SELECT rev FROM commits ORDER BY date DESC, rev DESC LIMIT 1";
+    // F12 fix: SHA-1 lex order (`rev DESC`) is arbitrary and has no
+    // relationship to git topology. When two commits share the exact
+    // same second timestamp (common with bot commits, rebases,
+    // scripted backfills), the lex tiebreak can pick the PARENT as
+    // HEAD instead of the child. We use DuckDB's `rowid` pseudo-column
+    // (insertion order) — gix walks reverse-chronologically (newest
+    // first), so children arrive BEFORE their parents and get smaller
+    // rowids. `rowid ASC` for same-second pairs correctly selects the
+    // child as HEAD. Deterministic across runs of the same input.
+    let sql = "SELECT rev FROM commits ORDER BY date DESC, rowid ASC LIMIT 1";
     let mut stmt = db
         .conn()
         .prepare(sql)
@@ -419,8 +428,11 @@ fn current_head_rev(db: &FactsDb) -> Result<String> {
 ///
 /// Ordering uses `commits.date` (chronology) — NOT `changes.rev`, which is a
 /// SHA-1 hex string whose lex order has no relationship to commit order.
-/// `commits.date DESC` first, then `changes.rev DESC` as a deterministic
-/// tiebreaker when two events share a timestamp.
+/// `commits.date DESC` first, then `commits.rowid ASC` (insertion order — gix
+/// walks reverse-chronologically so children get smaller rowids than parents)
+/// as a deterministic, topologically-correct tiebreak. F12 fix: previously
+/// used `c.rev DESC` (SHA-1 lex) which is arbitrary and could pick the parent
+/// commit as HEAD instead of the child on same-second pairs.
 fn query_live_paths(db: &FactsDb) -> Result<Vec<String>> {
     let sql = "
         WITH latest_per_path AS (
@@ -429,7 +441,7 @@ fn query_live_paths(db: &FactsDb) -> Result<Vec<String>> {
                 c.change_type,
                 ROW_NUMBER() OVER (
                     PARTITION BY c.path
-                    ORDER BY commits.date DESC, c.rev DESC
+                    ORDER BY commits.date DESC, commits.rowid ASC
                 ) AS rn
             FROM changes c
             INNER JOIN commits ON commits.rev = c.rev

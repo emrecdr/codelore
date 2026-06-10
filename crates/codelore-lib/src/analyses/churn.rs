@@ -62,14 +62,40 @@ fn build_author_churn_sql(src: &str) -> String {
     )
 }
 
+// F16 fix: entity-churn now filters to files currently live at HEAD.
+// Without this, a file deleted years ago still shows up with full
+// historical churn numbers — useful for retroactive forensics but
+// confusing for triage dashboards which are the dominant use case.
+//
+// The `live_paths` CTE uses the same `ROW_NUMBER() OVER (PARTITION BY
+// path ORDER BY date DESC, rowid ASC)` pattern as `query_live_paths`
+// — selects paths whose most-recent change is not `'deleted'`.
+//
+// Unlike code_age, entity-churn has no anchor parameter — it's a
+// "current state" report — so the CTE filter is "live at HEAD now."
+// Users who want historical (deleted-included) views can pair
+// `entity-churn` with `--no-canonical-lineage` semantically; the
+// modern default surfaces only live files.
 fn build_entity_churn_sql(src: &str) -> String {
     format!(
-        "SELECT
+        "WITH live_paths AS (
+            SELECT path FROM (
+                SELECT c.path, c.change_type,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY c.path
+                           ORDER BY commits.date DESC, commits.rowid ASC
+                       ) AS rn
+                FROM {src} c
+                INNER JOIN commits ON commits.rev = c.rev
+            ) WHERE rn = 1 AND change_type != 'deleted'
+        )
+        SELECT
             c.path,
             COALESCE(SUM(c.loc_added), 0) AS added,
             COALESCE(SUM(c.loc_deleted), 0) AS deleted,
             COUNT(DISTINCT c.rev) AS commits
         FROM {src} c
+        INNER JOIN live_paths USING (path)
         GROUP BY c.path
         HAVING commits >= ?
         ORDER BY added DESC, commits DESC, path ASC

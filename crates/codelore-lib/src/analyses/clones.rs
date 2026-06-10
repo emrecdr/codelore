@@ -12,7 +12,7 @@
 //! index-then-probe pattern `CodeLore` follows).
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use walkdir::WalkDir;
@@ -40,56 +40,72 @@ pub struct ClonesRow {
 /// reads each Tier-1 file, fingerprints every function, groups, and returns
 /// one `ClonesRow` per clone-family member.
 pub fn run_clones(opts: &Options) -> Result<Vec<ClonesRow>> {
+    use rayon::iter::{IntoParallelIterator, ParallelIterator};
     // Plan 8 §2 Task 8: combine --exclude patterns with any .codeloreignore
     // file at the repo root into one GlobSet, then short-circuit per-file walks
     // that match. The .git/target/node_modules hard-skips are kept as defaults.
     let exclude_set = build_exclude_set(opts)?;
 
-    let mut all_fns = Vec::new();
-    for entry in WalkDir::new(&opts.repo_path)
+    // F17 fix: split into two phases — (1) a serial WalkDir+filter pass to
+    // gather the candidate file list, (2) a parallel rayon pass to read +
+    // tree-sitter-fingerprint each candidate. Mirrors the proven pattern
+    // already used in `ingest::populate_clones_at_head` (parallelised in
+    // Tier 2 quality work). The serial walk is cheap (filesystem traversal
+    // + globset matching); the parallel phase is what scales with cores
+    // for the tree-sitter parsing dominator.
+    let candidates: Vec<(PathBuf, String, CloneLanguage)> = WalkDir::new(&opts.repo_path)
         .into_iter()
         .filter_map(std::result::Result::ok)
-    {
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        let path = entry.path();
-        // Default hard-skip: vendored / build-output directories that virtually
-        // never contain user-meaningful clones.
-        if path.components().any(|c| {
-            matches!(
-                c.as_os_str().to_str(),
-                Some(".git" | "target" | "node_modules")
+        .filter(|entry| entry.file_type().is_file())
+        .filter_map(|entry| {
+            let path = entry.path();
+            // Default hard-skip: vendored / build-output directories that
+            // virtually never contain user-meaningful clones.
+            if path.components().any(|c| {
+                matches!(
+                    c.as_os_str().to_str(),
+                    Some(".git" | "target" | "node_modules")
+                )
+            }) {
+                return None;
+            }
+            let lang = CloneLanguage::from_path(path)?;
+            let rel = relative(&opts.repo_path, path);
+            // User-configured exclusions (--exclude + .codeloreignore).
+            if exclude_set.is_match(&rel) {
+                return None;
+            }
+            Some((path.to_path_buf(), rel, lang))
+        })
+        .collect();
+
+    // Parallel phase: read + tree-sitter for each candidate.
+    // `collect::<Result<Vec<_>>>()` preserves fail-fast semantics on
+    // any extract_functions error.
+    let all_fns: Vec<_> = candidates
+        .into_par_iter()
+        .filter_map(|(path, rel, lang)| -> Option<Result<Vec<_>>> {
+            let code = fs::read(&path).ok()?;
+            // F10: skip oversized files (generated / minified) before
+            // tree-sitter to avoid OOM / stack-overflow on deeply nested
+            // generated code.
+            if code.len() > crate::constants::DEFAULT_MAX_AST_FILE_BYTES {
+                tracing::debug!(
+                    "clones: skipping {rel} ({size} bytes > {cap}-byte AST cap)",
+                    size = code.len(),
+                    cap = crate::constants::DEFAULT_MAX_AST_FILE_BYTES,
+                );
+                return None;
+            }
+            Some(
+                extract_functions(&rel, &code, lang)
+                    .map_err(|e| CodeLoreError::Analysis(format!("clones: extract {rel}: {e}"))),
             )
-        }) {
-            continue;
-        }
-        let Some(lang) = CloneLanguage::from_path(path) else {
-            continue;
-        };
-        let rel = relative(&opts.repo_path, path);
-        // User-configured exclusions (--exclude + .codeloreignore).
-        if exclude_set.is_match(&rel) {
-            continue;
-        }
-        let Ok(code) = fs::read(path) else {
-            continue; // unreadable file — silently skip
-        };
-        // F10: skip oversized files (generated / minified) before
-        // tree-sitter to avoid OOM / stack-overflow on deeply nested
-        // generated code. Same cap used in the ingest-time clones pass.
-        if code.len() > crate::constants::DEFAULT_MAX_AST_FILE_BYTES {
-            tracing::debug!(
-                "clones: skipping {rel} ({size} bytes > {cap}-byte AST cap)",
-                size = code.len(),
-                cap = crate::constants::DEFAULT_MAX_AST_FILE_BYTES,
-            );
-            continue;
-        }
-        let fns = extract_functions(&rel, &code, lang)
-            .map_err(|e| CodeLoreError::Analysis(format!("clones: extract {rel}: {e}")))?;
-        all_fns.extend(fns);
-    }
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect();
     let groups = group_clones(all_fns, opts.min_clone_node_count);
 
     let mut rows = Vec::new();

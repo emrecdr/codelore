@@ -77,14 +77,34 @@ pub struct CodeAgeRow {
 // `EXTRACT(year/month/day FROM ...)` calls work on both `DATE` and
 // `TIMESTAMP` types, so we don't need to cast the anchor or the
 // `MAX(...)` aggregate to a specific shape.
+// F16 fix: code-age now filters to files that are LIVE AS OF THE ANCHOR
+// MOMENT (not just live at HEAD — back-test pattern needs the historical
+// view). The `live_paths_at_anchor` CTE takes the same anchor parameter
+// as the existing PAR-2 filter and selects paths whose latest change
+// at-or-before anchor is not a deletion. This drops 2-year-old deleted
+// files from current-anchor reports AND correctly resurrects files in
+// back-test mode that were deleted later.
 const SQL: &str = "
-    WITH per_path AS (
+    WITH live_paths_at_anchor AS (
+        SELECT path FROM (
+            SELECT c.path, c.change_type,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY c.path
+                       ORDER BY commits.date DESC, commits.rowid ASC
+                   ) AS rn
+            FROM changes c
+            INNER JOIN commits ON commits.rev = c.rev
+            WHERE commits.date <= CAST(? AS TIMESTAMP)
+        ) WHERE rn = 1 AND change_type != 'deleted'
+    ),
+    per_path AS (
         SELECT
             changes.path,
             MAX(commits.date) AS last_at,
             COUNT(DISTINCT changes.rev) AS n_revs
         FROM changes
         INNER JOIN commits ON changes.rev = commits.rev
+        INNER JOIN live_paths_at_anchor USING (path)
         WHERE commits.date <= CAST(? AS TIMESTAMP)
         GROUP BY changes.path
     )
@@ -157,6 +177,7 @@ pub fn run_code_age(db: &FactsDb, opts: &Options) -> Result<Vec<CodeAgeRow>> {
             now_str,
             now_str,
             now_str,
+            now_str,
             opts.min_revs,
             row_limit
         ],
@@ -170,6 +191,7 @@ pub fn run_code_age(db: &FactsDb, opts: &Options) -> Result<Vec<CodeAgeRow>> {
     let rows = stmt
         .query_map(
             params![
+                now_str,
                 now_str,
                 now_str,
                 now_str,

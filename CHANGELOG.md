@@ -4,6 +4,53 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Fixed — correctness
+
+- **F12 — `current_head_rev` and `query_live_paths` now use `commits.rowid ASC`
+  as the same-second tiebreak** instead of the previous `c.rev DESC` (SHA-1
+  lex). SHA-1 lex is arbitrary and could pick the parent commit as HEAD on
+  same-second pairs (common with automated/scripted commits). Since gix
+  walks reverse-chronologically (children before parents), `rowid ASC`
+  for same-second pairs correctly selects the child. Deterministic across
+  runs. F13's chunked walker preserves insertion order so this tiebreak
+  remains valid under parallel processing.
+- **F14 + F15 — `--time-bucket` now rejected at CLI boundary for analyses
+  that don't support bucketing.** Previously 10 of 14 analyses either
+  crashed with `Catalog Error: Table changes_bucketed does not exist`
+  (F14 — used `materialize_if_needed` which is a no-op on the bucketed
+  branch) OR silently returned 0 rows because the JOIN `c.rev =
+  commits.rev` matched date-string-keyed bucketed revs against SHA-1
+  hashes (F15 — `code-health` was the worst offender). New
+  `AnalysisName::supports_time_bucket()` classifies — only `coupling`,
+  `soc`, `hotspots`, `code-health` are bucket-compatible; others reject
+  at `main.rs` with a descriptive error.
+- **F16 — `code-age` and `entity-churn` now filter to live files only.**
+  Previously deleted files cluttered output (a file deleted two years ago
+  showed up with `age_months=24`). `code-age` uses an anchor-aware
+  live-paths CTE (correct for back-test mode — `live as of anchor`);
+  `entity-churn` uses a live-at-HEAD CTE.
+
+### Fixed — performance
+
+- **F13 — `GixRepo::walk_commits` now streams events through a bounded
+  channel instead of eagerly collecting into a Vec.** F9 (v0.2.1)
+  parallelised commit processing but called `par_iter().collect::<Vec<_>>`
+  — gigabytes peak on 100k+ commit repos with rich changes per commit.
+  New chunked rayon pattern: 1000-OID batches, each parallelised with
+  `par_iter().map().collect()` (order-preserving within batch), then
+  drained serially through a 256-slot `crossbeam_channel::bounded`.
+  Peak memory now bounded by (chunk size + channel) regardless of repo
+  size. Critically, order preservation across chunks is what allows
+  F12's `commits.rowid ASC` tiebreak to remain correct under parallel
+  processing.
+- **F17 — standalone `run_clones` analysis now parallelises across
+  cores.** F17 was the dual of F9: `populate_clones_at_head` (ingest
+  path) was Rayon-parallelised but the standalone `--analysis clones`
+  path still walked + tree-sitter-fingerprinted on the calling thread.
+  Refactored to the same two-phase pattern: serial `WalkDir` + globset
+  filter gathers candidates, then `into_par_iter().map().collect()`
+  reads + fingerprints each.
+
 ## [0.2.1] - 2026-06-09
 
 ### Fixed — correctness

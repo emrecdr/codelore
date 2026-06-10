@@ -41,143 +41,165 @@ graph TD
 
 ## 2. Validation Status of Prior Recommendations
 
-All previous findings and code-maat parity issues have been validated as **fully resolved and correct** in the current codebase (specifically released in version `v0.2.0`). Below is a summary of the verified resolutions:
+All previous findings and code-maat parity issues have been validated as **fully resolved and correct** in the current codebase (released in version `v0.2.1`):
 
-### Resolved Core Deep-Analysis Findings (F1–F6)
-*   **F1 (Commit Chronology Precision)**: Resolved. Commit date tracking was promoted from `DATE` to `TIMESTAMP` in schema v2. `CommitEvent.date` now uses `time::OffsetDateTime` to guarantee microsecond precision. This resolves sub-day order ambiguity and live-path resolution errors.
-*   **F2 (Clone-Coupling Floor Override)**: Resolved. Options passed to the inner `run_coupling` call are now generated using `Options::for_clone_coupling_inner_coupling()`, which correctly sets `min_shared_revs` to the minimum of `min_shared_revs` and `min_clone_shared_revs`.
-*   **F3 (Cache Poisoning on Dirty Tree)**: Resolved. In `FactsDb::open_or_ingest_with_cache_root`, the cache write path is now bypassed entirely when the working tree is dirty (`repo.is_worktree_dirty()`), instead falling back to an in-memory `FactsDb` to prevent cache poisoning.
-*   **F4 (Stale Worktree Cache Root Path)**: Resolved. `prune_stale_worktrees` now resolves the cache directory using the proper user-namespaced `default_cache_root()` instead of the fallback path `/tmp`.
-*   **F5 (Sum of Coupling max_changeset_size pre-filter)**: Resolved. `good_commits` CTE was added to `build_soc_sql` to restrict commits to changeset sizes less than or equal to `opts.max_changeset_size`.
-*   **F6 (Tempdir Leak on Git Failure)**: Resolved. `add_worktree` was updated to call `tmp.keep()` only after `git worktree add` succeeds, ensuring automatic cleanup of the directory if the git command fails.
-*   **Original Findings (Complexity LOC mapping, Quoted paths, Namespaced tmp cache, SQL case rewriter)**: Verified. All are fully integrated and tested in the codebase.
+### Resolved Core Deep-Analysis Findings (F1–F11)
+*   **F1 (Commit Chronology Precision)**: Resolved. Promoted `commits.date` from `DATE` to `TIMESTAMP` in schema v2.
+*   **F2 (Clone-Coupling Floor Override)**: Resolved. Lowered `min_shared_revs` to the minimum of `min_shared_revs` and `min_clone_shared_revs` in inner `run_coupling` calls.
+*   **F3 (Cache Poisoning on Dirty Tree)**: Resolved. Bypasses persistent cache writes when the working tree is dirty, using an in-memory db fallback instead.
+*   **F4 (Stale Worktree Cache Root Path)**: Resolved. Updates `prune_stale_worktrees` to resolve namespaced paths using `default_cache_root()`.
+*   **F5 (Sum of Coupling max_changeset_size pre-filter)**: Resolved. Added the `good_commits` CTE to pre-filter large commits in `soc`.
+*   **F6 (Tempdir Leak on Git Failure)**: Resolved. Delayed `tmp.keep()` until after successful `git worktree add`.
+*   **F7 (Cache Bypass for Parquet/SQLite)**: Resolved. Narrowed `needs_writable_db` to SQLite format only; Parquet output now successfully hits and reads from the persistent cache database.
+*   **F8 (Positional Alignment in GitCliRepo Zipping)**: Resolved. Replaced index-based zipping in `git_cli_repo.rs:parse_changes_block` with an explicit `HashMap` join on destination path keys, preventing column shifting on submodule/binary mismatches.
+*   **F9 (Single-Threaded Commit Traversal)**: Resolved. Configured `GixRepo::walk_commits` to parse commits and calculate diffs concurrently on a Rayon thread pool (`into_par_iter()`).
+*   **F10 (Tree-Sitter File Size Cap)**: Resolved. Applied a 2 MB size cap (`DEFAULT_MAX_AST_FILE_BYTES`) across complexity and clone scanner sites to skip oversized files.
+*   **F11 (Dirty Status Untracked Parity)**: Resolved. Switched `GixRepo::is_worktree_dirty` from `into_index_worktree_iter` to `into_iter()` to traverse and capture untracked files.
+*   **Original Findings (Complexity LOC mapping, Quoted paths, Namespaced tmp cache, SQL case rewriter)**: Verified as fully integrated.
 
 ### Resolved Code-Maat Parity Findings (PAR-1–PAR-9)
-*   **PAR-1 (Authors Shape & Top-Committers)**: Resolved. The `authors` analysis was modernized to be per-entity by default, displaying advanced metrics (GINI index, AI/human attribution counts). Legacy three-column format is preserved under `--code-maat-compat`. The previous per-author leaderboard was extracted into a first-class `top-committers` analysis.
-*   **PAR-2 (Code-Age anchor filtering)**: Resolved. `code-age` now correctly filters commits to `commits.date <= anchor` before computing age, preventing negative values during back-testing.
-*   **PAR-4 (Code-Age interval-month semantics)**: Resolved. Month calculation was changed from boundary-crossing to whole calendar months elapsed using a closed-form SQL formula matching `joda-time`.
-*   **PAR-5 (CSV header compatibility)**: Resolved. Parity CSV writers (`summary`, `code-age`, `communication`, `ownership`) translate headers to code-maat's legacy names when `--code-maat-compat` is enabled.
-*   **PAR-6 (Coupling min_revs pair-average pivot)**: Resolved. Under `--code-maat-compat`, the coupling analysis shifts from per-file revision filtering to per-pair-average filtering, matching code-maat.
-*   **PAR-9 (Research citations in docs & rustdoc)**: Resolved. A central `docs/research-foundations.md` file was created and cross-linked from rustdoc headers across all 15 analysis modules.
-*   **PAR-3 & PAR-8 (Sliding windows & Cryptic short flags)**: Addressed. These legacy warts were intentionally deferred and documented in `README.md` as opt-in/migration differences.
+*   All parity findings (Bird et al. per-entity risk authors logic, back-testing dates anchor, interval-month ceiling calculations, CSV header mapping, average-revs pivot points, and research foundations documentation) have been fully closed.
+*   **DEEP-1 to DEEP-15 (Code-Maat Exact Parity)**: Verified. Additional sprints in `v0.2.1` closed precise output formatting mismatches (7-column verbose shape for coupling, ceiling-rounded averages, integer-truncated strengths, and hyphenated statistic names in `summary` output under `--code-maat-compat`).
 
 ---
 
 ## 3. Newly Identified Gaps & Recommendations
 
-### F7: Persistent Cache Bypassed Unnecessarily for Parquet/SQLite Exports
+### F12: Correctness / Robustness — Lexicographical Tiebreaker (`c.rev DESC`) for Same-Second Commits Risk
 
 **The Problem**:
-In the CLI driver [main.rs](file:///Users/emrec/Projects/playground/codelore/crates/codelore-cli/src/main.rs#L224), `needs_writable_db` is set to `true` whenever the output format is `parquet` or `sqlite`. When `needs_writable_db` is `true`, CodeLore bypasses the persistent cache database entirely and spins up a fresh, in-memory DuckDB connection, performing a complete repository walk and commit ingestion on every run:
-```rust
-        if args.no_cache || needs_writable_db {
-            let db = FactsDb::new_in_memory().context("open fact store (in-memory)")?;
-            db.ingest(&repo, &opts).context("ingest commits")?;
-            db
+In both `query_live_paths` (in `ingest.rs`) and the `path_lineage` CTE, commit chronology resolves using `commits.date DESC` first, and falls back to `c.rev DESC` (a lexicographical sort of SHA-1 commit hashes) as a tiebreaker for commits that occur on the same second. 
+```sql
+                ROW_NUMBER() OVER (
+                    PARTITION BY c.path
+                    ORDER BY commits.date DESC, c.rev DESC
+                ) AS rn
 ```
-However, DuckDB's `COPY ... TO` (used for Parquet output) and `ATTACH ... (TYPE SQLITE)` (used for SQLite output) only require writing to external target files, not to the source DuckDB database itself. They run perfectly fine on a read-only DuckDB connection (which is how the persistent cache database is opened on hits).
+However, SHA-1 lexicographical ordering is arbitrary and has no relationship to the parent-child relationships (topological order) of the commits in the git DAG. Same-second commits are highly common in repositories (due to automated script check-ins, rapid branch merges, rebases, or squashes).
 
 **The Impact**:
-For large repositories with long histories, exporting to Parquet or SQLite incurs an enormous, unnecessary performance penalty. Users cannot benefit from caching and must wait for a full git log walk and parsing cycle on every single run.
+If file `foo.rs` is modified in commit A and deleted in commit B at the same second (with B being the child of A):
+* If commit A's SHA-1 hash is lexicographically larger than commit B's, `c.rev DESC` will sort commit A first.
+* CodeLore will mistakenly identify the modification commit (A) as the latest state (rn = 1), concluding the file is still "live" when it was actually deleted.
+* This triggers erroneous file missing warnings during rayon-backed complexity scans and silences history mappings.
 
 **Recommended Fix**:
-Remove `needs_writable_db` matching on `parquet` and `sqlite` formats. Allow them to use the cached `.duckdb` connection. If a cache miss occurs, the cache writer path will naturally open a writable connection to ingest commits, synchronize, rename, and then reopen it in read-only mode for the export.
+Track topological commit index during repository walking. Introduce an autoincrementing index `commit_index` on `commits` table representing the traversal sequence (which guarantees that child commits always sort after parent commits). Order by `commits.commit_index DESC` inside SQL queries to resolve chronological tiebreakers deterministically.
 
 ---
 
-### F8: Positional Alignment Risk in `GitCliRepo` Raw/Numstat Zipping
+### F13: Performance / Robustness — Eager Collection of CommitEvents in Parallel Walker Destroys Memory Efficiency
 
 **The Problem**:
-In [git_cli_repo.rs:475](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/repo/git_cli_repo.rs#L475), `parse_changes_block` parses the output of `git log --raw --numstat` by pushing `:`-prefixed lines to `raw_entries` and other lines to `numstat_entries`. It then zips these two lists by index:
+In the parallelized walk implementation of [gix_repo.rs:130](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/repo/gix_repo.rs#L130), `walk_commits` performs parallel mapping and collects the entire event stream eagerly:
 ```rust
-    raw_entries
-        .into_iter()
-        .zip(numstat_entries)
-        .filter_map(|(raw, numstat)| parse_raw_numstat_pair(raw, numstat))
+        let events: Result<Vec<CommitEvent>> = oids
+            .into_par_iter()
+            .map(|oid| { ... })
+            .collect();
+        let events = events?;
+        Ok(Box::new(events.into_iter().map(Ok)))
 ```
-This logic assumes that both lists are of equal length and represent the exact same files in the same order. However, submodules (which appear in `--raw` but not in `--numstat`) or binary exclusions will cause the lengths of these lists to differ.
+This design fully reads, diffs, and allocates every `CommitEvent` in the repository history into a single massive heap-allocated `Vec` before the iterator is ever returned or consumed.
 
 **The Impact**:
-When a mismatch occurs, the lists go out of alignment. The zipping shifts all subsequent entries in that commit block by one position. This results in the line counts (additions and deletions) of one file being incorrectly paired with the path and status of a completely different file, leading to corrupt statistics. Additionally, the final entries in the longer list are completely dropped due to `zip` termination.
+For large repositories with long histories (e.g. 50,000+ commits and millions of file changes), this eager allocation consumes gigabytes of RAM. It completely bypasses the memory throttling of the bounded producer-consumer channel (`CHANNEL_CAPACITY = 64` in `FactsDb::ingest`), risking Out-Of-Memory (OOM) crashes in memory-constrained environments like CI runners or small containers.
 
 **Recommended Fix**:
-Avoid positional zipping. Collect `raw` and `numstat` entries separately, extract the paths (resolving rename expressions in numstat lines like `src/old.rs => src/new.rs` to match the raw paths), and join the entries explicitly by path rather than index.
+Maintain lazy evaluation while using parallelism. Implement chunking (e.g., pulling and diffing OIDs in parallel chunks of 1000) or use a Rayon parallel bridge thread-pipeline to concurrently push processed `CommitEvent`s into the crossbeam channel dynamically, rather than collecting them all upfront.
 
 ---
 
-### F9: Single-Threaded Commit Traversal and Diff Processing
+### F14: Correctness / Reliability — Catalog Error Crash on `--time-bucket` for 10 out of 14 Analyses
 
 **The Problem**:
-In `GixRepo::walk_commits` [gix_repo.rs:130](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/repo/gix_repo.rs#L130), commit traversal and parsing of changed files (which involves running `diff_tree_to_tree` and counting modified line counts via `count_loc`'s histogram diffing) are executed sequentially on a single thread as the OID iterator is consumed.
+When the `--time-bucket <day|week|month>` command line flag is specified, the query rewriter `lineage::rewrite` globally swaps the table name `changes` with `changes_bucketed` for all queries. However, only 4 of the analyses (`coupling`, `soc`, `hotspots`, `code-health`) invoke `lineage::materialize_source(...)`, which actually builds the `changes_bucketed` table. The remaining 10 analyses (e.g., `revisions`, `ownership`, `code-age`, `churn`, `authors`, `messages`, `communication`, etc.) only call `lineage::materialize_if_needed(...)`, which does not materialize `changes_bucketed`.
 
 **The Impact**:
-For massive histories, reading git objects, comparing tree entries, and calculating line-by-line diffs is CPU-intensive and acts as the primary bottleneck during repository ingestion. Running this sequentially leaves multi-core CPUs mostly idle.
-
-**Recommended Fix**:
-Leverage Rayon or parallel worker channels to map OIDs to processed `CommitEvent`s concurrently. Because `GixRepo` holds `inner: gix::ThreadSafeRepository` (which is `Send + Sync`), worker threads can create independent thread-local `Repository` handles using `.to_thread_local()` and perform diff calculations in parallel.
-
----
-
-### F10: Lack of File Size Safety Caps for Tree-Sitter AST Parsing
-
-**The Problem**:
-When complexity and clones are analyzed at HEAD in [ingest.rs](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/facts/ingest.rs), the source code of all live files is read via `std::fs::read` and passed to Tree-Sitter parsers. There is no validation on the size of the files being read.
-
-**The Impact**:
-If a repository contains extremely large source files (e.g., auto-generated protobuf mappings, minified JavaScript libraries, or raw data arrays checked in with source extensions), Tree-Sitter will attempt to parse them. Parsing deeply nested or highly repetitive structures in massive files can cause massive heap allocation (OOM) or deep call stacks leading to stack overflows, crashing the entire process.
-
-**Recommended Fix**:
-Introduce a file size safety cap (e.g., 1MB or 2MB) in `ingest_complexity_at_head` and `populate_clones_at_head`. If a file exceeds this cap, log a warning/debug message and skip AST-based complexity/clones analysis for that file, fallback to recording basic line counts or returning empty results.
-
----
-
-### F11: `GixRepo` and `GitCliRepo` Disagree on Dirty Status for Untracked Files
-
-**The Problem**:
-`GitCliRepo::is_worktree_dirty` checks the output of `git status --porcelain` which captures untracked files, returning `true` if any untracked files exist. In contrast, `GixRepo::is_worktree_dirty` invokes `into_index_worktree_iter` using default options, which ignores untracked files:
-```rust
-        let Ok(iter) = platform
-            .index_worktree_options_mut(|_| {})
-            .into_index_worktree_iter(Vec::new())
+Running any of these 10 analyses with `--time-bucket` causes a catastrophic application crash with a DuckDB Catalog Error:
+```text
+Catalog Error: Table with name changes_bucketed does not exist!
+Did you mean "changes"?
 ```
 
+**Recommended Fix**:
+1. At the CLI argument parsing level in `args.rs` / `Options::validate()`, reject `--time-bucket` if the selected analysis does not logically support bucketing (such as `revisions`, `code-age`, or `authors`).
+2. Alternatively, ensure `materialize_if_needed` is updated to delegate to `materialize_source` so that the bucketed table is always built when the flag is present.
+
+---
+
+### F15: Correctness / Reliability — Silent Empty Results under `--time-bucket` for Analyses Joining `commits` and `changes` on `rev`
+
+**The Problem**:
+In [ingest.rs:740](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/facts/ingest.rs#L740), `changes_bucketed` is materialized by collapsing commits inside the same time bucket. Its `rev` column is set to the formatted truncated date string (e.g. `'2026-06-08 00:00:00'`). In contrast, the `commits` table is not bucketed, keeping original SHA-1 commit hashes (e.g. `'3bb7936...'`) in its `rev` column.
+Any analysis query that successfully compiles (such as `code-health` or `ownership`) but performs an inner/left join on `c.rev = commits.rev` (or `USING(rev)`) will try to match a SHA-1 hash with a date string.
+
 **The Impact**:
-This creates a behavior divergence between the two walkers on dirty trees. A repository containing untracked files will be marked as dirty by `GitCliRepo` (preventing persistent cache writes and prompting cache warnings) but as clean by `GixRepo`.
+The join condition matches exactly zero rows. Consequently, running these analyses with `--time-bucket` executes successfully without error but silently returns an empty report (zero rows), which is misleading and mathematically corrupt.
 
 **Recommended Fix**:
-Configure the index-worktree iteration options in `GixRepo::is_worktree_dirty` to match `GitCliRepo`'s behavior (either by enabling untracked file traversal or by excluding untracked files from both checks).
+Disable/reject the `--time-bucket` flag for analyses that require joining `changes` against `commits` on `rev` (such as `code-health`, `ownership`, `communication`, etc.), as bucketing is semantically invalid for them.
+
+---
+
+### F16: Correctness / Parity — Code-Age and Churn Analyses Include Deleted/Dead Files
+
+**The Problem**:
+Both `code_age.rs` and `churn.rs` (specifically `entity-churn`) query files from the entire historical `changes` table without checking whether the files are currently active/live in the repository.
+
+**The Impact**:
+The resulting outputs are cluttered with years-old deleted files. For example, a file deleted two years ago will show up in the `code-age` report with an age of 24 months, which pollutes the triage dashboard with historical noise and has no practical value for refactoring or complexity planning.
+
+**Recommended Fix**:
+Restrict the queries in `code_age.rs` and `entity-churn` to only select paths that are currently "live" (using the same partition window logic implemented in `query_live_paths` to check if the latest change type is not `'deleted'`).
+
+---
+
+### F17: Performance — Standalone Clones Analysis Walk is Single-Threaded
+
+**The Problem**:
+While the ingest-time clones extraction (`populate_clones_at_head`) has been parallelized via Rayon, the standalone clones analysis [clones.rs:42](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/clones.rs#L42) (`run_clones`) still uses a sequential, single-threaded walk over `WalkDir` and executes tree-sitter AST fingerprinting sequentially on the calling thread.
+
+**The Impact**:
+Running the standalone clones analysis (e.g. `codelore analyze -a clones`) on multi-core systems does not benefit from parallelism, making it significantly slower (up to 10x slower on modern processors) compared to the ingest phase.
+
+**Recommended Fix**:
+Refactor `run_clones` in `clones.rs` to follow the same parallel strategy as `populate_clones_at_head`: walk sequentially to gather file candidates, and then map them concurrently via Rayon `into_par_iter` to extract functions and group clones in parallel.
 
 ---
 
 ## 4. Summary of Active Findings
 
-Below is the updated register of active improvement opportunities and bugs:
+Below is the register of active improvement opportunities and bugs:
 
 | ID | Category | Finding / Improvement Point | Priority / Risk | Impact | Status |
 |---|---|---|---|---|---|
-| **F7** | Performance | Persistent Cache Bypassed Unnecessarily for Parquet/SQLite Exports. | **High** / Low | Slow in-memory ingest on every run for SQLite and Parquet formats. | **Fixed (Unreleased)** — narrowed to sqlite-only bypass; parquet now cached. |
-| **F8** | Correctness | Positional Alignment Risk in `GitCliRepo` Raw/Numstat Zipping. | **High** / High | Corrupt change event line counts or dropped entries when submodules/filters mismatch. | **Fixed (Unreleased)** — `HashMap`-by-destination-path join replaces positional zip; 6 new unit tests lock the regression. |
-| **F9** | Performance | Single-Threaded Commit Traversal and Diff Processing. | **Medium** / Low | CPU bottleneck on multi-core systems during historical walker runs. | **Fixed (Unreleased)** — Rayon `par_iter` parallelises across cores; order-preserving via `collect::<Vec<_>>`. |
-| **F10** | Robustness | Lack of File Size Safety Caps for Tree-Sitter AST Parsing. | **Medium** / Medium | Risk of stack overflow or OOM crash on extremely large or minified files at HEAD. | **Fixed (Unreleased)** — 2 MB cap at 3 read sites (complexity, ingest-time clones, ad-hoc clones). |
-| **F11** | Parity Gap | `GixRepo` and `GitCliRepo` Disagree on Dirty Status for Untracked Files. | **Low** / Low | Cache write bypass and warning discrepancies due to ignored untracked files in `GixRepo`. | **Fixed (Unreleased)** — switched from `into_index_worktree_iter` to `into_iter` (full status — includes dirwalk for untracked). |
+| **F12** | Correctness | Lexicographical Tiebreaker (`c.rev DESC`) for Same-Second Commits Risk. | **High** / Medium | Potential chronological sorting errors on same-second modifications and deletions, leading to wrong HEAD state. | **Fixed (Unreleased)** — `commits.rowid ASC` (DuckDB insertion order = gix walk order = child-before-parent) replaces SHA-1 lex. F13's chunked walker preserves insertion order. |
+| **F13** | Perf / Robustness | Eager Collection of CommitEvents in Parallel Walker Destroys Memory Efficiency. | **High** / High | Gigabytes of memory allocated upfront on large repositories, risking OOM and bypassing bounded channel limits. | **Fixed (Unreleased)** — chunked rayon (1000-OID batches) streams through a 256-slot `crossbeam_channel::bounded`. Order-preserving within and across chunks so F12 tiebreak remains correct. |
+| **F14** | Robustness | Catalog Error Crash on `--time-bucket` for 10 out of 14 Analyses. | **High** / Low | Catastrophic application crash due to missing `changes_bucketed` table materialization. | **Fixed (Unreleased)** — `AnalysisName::supports_time_bucket()` + CLI-boundary rejection. |
+| **F15** | Correctness | Silent Empty Results under `--time-bucket` for Analyses Joining `commits` and `changes` on `rev`. | **High** / High | Zero matching rows in joins on `rev` (SHA-1 vs Date string) yields empty outputs silently (e.g., `code-health`). | **Fixed (Unreleased)** — closed by the same CLI-boundary rejection as F14. |
+| **F16** | Correctness | Code-Age and Churn Analyses Include Deleted/Dead Files. | **Medium** / Low | Reports are cluttered with historical noise from deleted files. | **Fixed (Unreleased)** — `code-age` anchor-aware live-paths CTE; `entity-churn` live-at-HEAD CTE. |
+| **F17** | Performance | Standalone Clones Analysis Walk is Single-Threaded. | **Medium** / Low | Execution speed bottleneck during standalone clones analysis runs. | **Fixed (Unreleased)** — two-phase split: serial `WalkDir`+globset, then `into_par_iter().map().collect()`. Mirrors `populate_clones_at_head` pattern. |
 
 ---
 
 ## 5. Proposed Verification Plan for New Findings
 
-To implement and verify fixes for findings F7–F11, the following strategies should be employed:
+To implement and verify fixes for findings F12–F17, the following strategies should be employed:
 
-### F7 (Cache Bypass for Parquet/SQLite)
-*   **Verification**: Run exports using `--format parquet` and `--format sqlite` multiple times on a large repository. Verify that subsequent runs execute in sub-second times (confirming cache hits) and that the exported SQLite and Parquet databases match the in-memory baselines exactly.
+### F12 (Same-Second Tiebreaker)
+*   **Verification**: Create a mock repository with multiple commits made at the exact same timestamp (including a final delete commit). Verify that topological sort / index order resolves HEAD correctly and no warning is logged.
 
-### F8 (Raw/Numstat Positional Alignment)
-*   **Verification**: Add a test fixture repository containing submodule additions/removals and verify that `GitCliRepo` runs successfully and yields identical paths and line counts as `GixRepo` in the differential test suite (`tests/differential_repo_test.rs`).
+### F13 (Parallel Walker Eager Collection)
+*   **Verification**: Monitor peak RSS memory usage on a large repository (e.g., 20k+ commits). Ensure that replacing the eager `collect()` with parallel chunking/bridging significantly bounds memory consumption.
 
-### F9 (Parallel Walker)
-*   **Verification**: Execute `codelore analyze` on a repository with 50,000+ commits. Compare CPU utilization and duration of the ingestion phase between single-threaded and multi-threaded walker implementations.
+### F14 & F15 (Time-Bucket Issues)
+*   **Verification**: 
+    1. Verify that passing `--time-bucket week -a revisions` is cleanly rejected by CLI validation with a descriptive error.
+    2. Verify that running `--time-bucket week -a code-health` is similarly rejected, or that if it is run, it does not join on the mismatched `rev` keys and yields non-empty output.
 
-### F10 (File Size Cap)
-*   **Verification**: Create a mock repository containing a 5MB TypeScript file. Verify that the file is safely skipped with a warning, and that the command exits successfully without a stack overflow or OOM crash.
+### F16 (Deleted Files in Reports)
+*   **Verification**: Delete a file in a commit and verify that it no longer appears in the output of `code-age` or `entity-churn` reports.
 
-### F11 (Dirty Status Parity)
-*   **Verification**: Add a regression test that checks `is_worktree_dirty` when only untracked files are present. Ensure both backends return the same boolean value.
+### F17 (Parallel Standalone Clones)
+*   **Verification**: Time the standalone `codelore analyze -a clones` execution on a large codebase (like CodeLore itself or a larger target) and verify that it scales with multi-core CPUs.

@@ -165,6 +165,23 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
     // empty output downstream.
     opts.validate().context("validate options")?;
 
+    // F14 + F15 fix: `--time-bucket` is only semantically valid for
+    // four analyses (coupling, soc, hotspots, code-health). The other
+    // 18 either crash with a Catalog Error (no `changes_bucketed`
+    // table — F14) or silently return empty rows (rev-on-rev JOIN
+    // against the date-string-keyed bucketed table fails — F15). Reject
+    // at the CLI boundary with a descriptive error rather than letting
+    // either failure mode surprise the user downstream.
+    if opts.time_bucket.is_some() && !analysis.supports_time_bucket() {
+        anyhow::bail!(
+            "--time-bucket is not supported for analysis {:?}. \
+             Bucketing only applies to co-change analyses; supported: \
+             coupling, soc, hotspots, code-health. Remove --time-bucket \
+             or switch to one of those analyses.",
+            analysis.as_str()
+        );
+    }
+
     let analysis_name = args.analysis.as_str();
 
     // Plan 7 clones is a HEAD-only filesystem + tree-sitter walk — no git

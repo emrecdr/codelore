@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use gix::diff::tree_with_rewrites::Change as GixChange;
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use crate::repo::{CommitMetadata, Repo};
 use crate::{ChangeType, CodeLoreError, CommitEvent, FileChange, Hunk, Options, Result};
@@ -120,81 +120,73 @@ impl Repo for GixRepo {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        // F9 fix: parallelise commit processing across cores. The OID
-        // sequence is order-preserving (rayon `par_iter().map().collect()`
-        // re-assembles into commit-walk order), so the consumer still
-        // sees events in the same order as before — only the wall-clock
-        // throughput changes.
+        // F13 fix: stream events through a bounded crossbeam channel
+        // rather than eagerly collecting the full event list into memory.
+        // The previous F9 implementation called `par_iter().collect()`
+        // which materialised gigabytes on large repos (100k+ commits with
+        // rich changes/hunks per commit), bypassed the producer-consumer
+        // channel architecture, and could OOM CI runners.
         //
-        // Trade-off: this collects all events into memory before returning
-        // an iterator. For typical repos (10k–100k commits × ~200 bytes
-        // per `CommitEvent`) that's 2–20 MB peak — acceptable; the
-        // downstream `FactsDb` ingest pulls every event anyway, so the
-        // streaming-vs-buffered distinction doesn't change peak memory
-        // for the full pipeline.
+        // The architectural challenge: F12's `commits.rowid ASC` tiebreak
+        // REQUIRES insertion order to match commit-walk order. Pure
+        // streaming (`par_iter().for_each(send)`) scrambles order across
+        // worker threads and silently breaks F12.
+        //
+        // Resolution: chunked rayon. Process oids in batches of
+        // `WALKER_CHUNK_SIZE`, each batch parallelised with
+        // order-preserving `collect::<Vec<_>>`, then drained serially
+        // through the channel. Order is preserved both within and across
+        // chunks (chunks processed sequentially in the driver thread).
+        // Peak memory: one chunk's events (~1 MB at 1000 × typical event
+        // size) + channel buffer. Bounded regardless of repo size.
+        #[allow(clippy::items_after_statements)]
+        const WALKER_CHUNK_SIZE: usize = 1000;
+        #[allow(clippy::items_after_statements)]
+        const WALKER_CHANNEL_CAPACITY: usize = 256;
+
         let inner_clone = self.inner.clone();
-        // Parse `.mailmap` ONCE up front; the snapshot is owned bytes (Send + Sync)
-        // and we resolve every author against it inside each worker.
-        // Previously this was re-parsed from disk on every commit — quadratic-ish
-        // cost on repos with large histories.
+        // Parse `.mailmap` ONCE up front; the snapshot is owned bytes
+        // (Send + Sync) and is shared across all workers.
         let mailmap = inner_clone.to_thread_local().open_mailmap();
-        let events: Result<Vec<CommitEvent>> = oids
-            .into_par_iter()
-            .map(|oid| {
-                // Each Rayon worker gets its own thread-local gix repo
-                // handle — `gix::Repository` is !Send, but constructing
-                // one from the Send-able `ThreadSafeRepository` is cheap
-                // (Arc clone + reset of thread-local caches).
-                let repo = inner_clone.to_thread_local();
-                let commit = repo
-                    .find_commit(oid)
-                    .map_err(|e| CodeLoreError::Repo(format!("find_commit: {e}")))?;
-                let id_string = oid.to_hex().to_string();
-                let mut event = commit_event_from_gix(&commit)?;
-                // Reuse the already-resolved `commit` instead of re-fetching
-                // via `compute_changed_files(inner, rev)` — cuts one of the
-                // three per-commit `find_commit` lookups flagged by the
-                // deep-analysis perf review.
-                event.changes = changed_files_for_commit(&repo, &commit, &id_string)?;
+        let (tx, rx) = crossbeam_channel::bounded::<Result<CommitEvent>>(WALKER_CHANNEL_CAPACITY);
 
-                // Resolve mailmap alias and classify AI attribution in the
-                // worker (where the Repo is in scope), storing results on
-                // the event for the consumer.
-                //
-                // Plan 8 §2 T6 finding fix: pass the actual author_name
-                // (not b"") so .mailmap entries of the form
-                // `Canonical <c@x> Original <o@x>` — which match by
-                // Name+Email — also resolve. Email-only entries
-                // (`Canonical <c@x> <o@x>`) work either way.
-                let canonical = {
-                    use gix::bstr::ByteSlice as _;
-                    let sig_ref = gix::actor::SignatureRef {
-                        name: event.author_name.as_bytes().as_bstr(),
-                        email: event.author_email.as_bytes().as_bstr(),
-                        time: "0 +0000",
-                    };
-                    match mailmap.try_resolve(sig_ref) {
-                        Some(resolved) => resolved
-                            .email
-                            .to_str()
-                            .unwrap_or(&event.author_email)
-                            .to_string(),
-                        None => event.author_email.clone(),
+        std::thread::Builder::new()
+            .name("codelore-gix-walker".into())
+            .spawn(move || {
+                for chunk in oids.chunks(WALKER_CHUNK_SIZE) {
+                    // Order-preserving parallel map over this chunk.
+                    let events: Result<Vec<CommitEvent>> = chunk
+                        .par_iter()
+                        .map(|oid| process_commit_oid(*oid, &inner_clone, &mailmap))
+                        .collect();
+                    match events {
+                        Ok(events) => {
+                            for event in events {
+                                // tx.send returns Err if the receiver was
+                                // dropped (consumer abandoned the
+                                // iterator). Stop processing and let the
+                                // driver thread exit gracefully.
+                                if tx.send(Ok(event)).is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            // Send the error and stop. Subsequent rx.next()
+                            // will yield Err; downstream caller decides.
+                            let _ = tx.send(Err(e));
+                            return;
+                        }
                     }
-                };
-                let ai_attr = crate::identity::ai_attribution(
-                    &event.author_email,
-                    &event.author_name,
-                    &event.message,
-                );
-                event.canonical_author = Some(canonical);
-                event.ai_attribution = Some(ai_attr.to_string());
-
-                Ok(event)
+                }
+                // tx drops when the closure exits — signals end-of-stream
+                // to the receiver iterator.
             })
-            .collect();
-        let events = events?;
-        Ok(Box::new(events.into_iter().map(Ok)))
+            .map_err(|e| CodeLoreError::Repo(format!("spawn walker thread: {e}")))?;
+
+        // rx.into_iter() is `Iterator<Item = Result<CommitEvent>> + Send + 'static`,
+        // which satisfies the trait's `+ 'a` bound for any `'a`.
+        Ok(Box::new(rx.into_iter()))
     }
 
     fn changed_files(&self, rev: &str) -> Result<Vec<FileChange>> {
@@ -534,6 +526,57 @@ fn commit_author_date(commit: &gix::Commit<'_>) -> Result<time::OffsetDateTime> 
         .seconds;
     OffsetDateTime::from_unix_timestamp(ts_seconds)
         .map_err(|e| CodeLoreError::Repo(format!("commit timestamp {ts_seconds}: {e}")))
+}
+
+/// F13 helper: extract a fully-resolved `CommitEvent` from a single oid.
+/// Called by every rayon worker in the chunked walker — each worker
+/// constructs its own thread-local `gix::Repository` from the shared
+/// `ThreadSafeRepository` clone, finds the commit, computes changes,
+/// resolves mailmap canonical author, and classifies AI attribution.
+///
+/// Free function (not a closure) so the chunked rayon driver can call it
+/// directly without dragging closure-capture lifetimes through the
+/// channel-spawned thread.
+fn process_commit_oid(
+    oid: gix::ObjectId,
+    inner: &gix::ThreadSafeRepository,
+    mailmap: &gix::mailmap::Snapshot,
+) -> Result<CommitEvent> {
+    let repo = inner.to_thread_local();
+    let commit = repo
+        .find_commit(oid)
+        .map_err(|e| CodeLoreError::Repo(format!("find_commit: {e}")))?;
+    let id_string = oid.to_hex().to_string();
+    let mut event = commit_event_from_gix(&commit)?;
+    // Reuse the already-resolved `commit` to compute changed files —
+    // avoids a redundant `find_commit` lookup flagged by the deep-analysis
+    // perf review.
+    event.changes = changed_files_for_commit(&repo, &commit, &id_string)?;
+
+    // Plan 8 §2 T6 finding: pass the actual author_name (not b"") so
+    // `.mailmap` entries of the form `Canonical <c@x> Original <o@x>`
+    // — which match by Name+Email — also resolve.
+    let canonical = {
+        use gix::bstr::ByteSlice as _;
+        let sig_ref = gix::actor::SignatureRef {
+            name: event.author_name.as_bytes().as_bstr(),
+            email: event.author_email.as_bytes().as_bstr(),
+            time: "0 +0000",
+        };
+        match mailmap.try_resolve(sig_ref) {
+            Some(resolved) => resolved
+                .email
+                .to_str()
+                .unwrap_or(&event.author_email)
+                .to_string(),
+            None => event.author_email.clone(),
+        }
+    };
+    event.canonical_author = Some(canonical);
+    let ai_attr =
+        crate::identity::ai_attribution(&event.author_email, &event.author_name, &event.message);
+    event.ai_attribution = Some(ai_attr.to_string());
+    Ok(event)
 }
 
 fn commit_event_from_gix(commit: &gix::Commit<'_>) -> Result<CommitEvent> {
