@@ -188,3 +188,86 @@ fn code_age_never_returns_negative_age() {
         );
     }
 }
+
+/// F16 regression: a file added and then DELETED before the analysis
+/// runs must NOT appear in `code-age` output. Previously deleted files
+/// were included (cluttered output with historical noise). The
+/// `live_paths_at_anchor` CTE in code_age.rs's SQL drops them.
+///
+/// The fixture: build a tiny git history where one file is added then
+/// deleted; assert it's missing from the run.
+#[test]
+fn code_age_excludes_deleted_files() {
+    use std::process::Command;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path();
+    fn run_git_at(path: &std::path::Path, date: &str, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .env("GIT_AUTHOR_DATE", date)
+            .env("GIT_COMMITTER_DATE", date)
+            .status()
+            .expect("git");
+        assert!(status.success());
+    }
+    run_git_at(
+        path,
+        "2026-01-01T00:00:00Z",
+        &["init", "-b", "main", "--quiet"],
+    );
+    run_git_at(
+        path,
+        "2026-01-01T00:00:00Z",
+        &["config", "user.email", "t@t"],
+    );
+    run_git_at(
+        path,
+        "2026-01-01T00:00:00Z",
+        &["config", "user.name", "Tiny"],
+    );
+
+    // alive.rs and gone.rs both added on day 1
+    std::fs::write(path.join("alive.rs"), "x").unwrap();
+    std::fs::write(path.join("gone.rs"), "y").unwrap();
+    run_git_at(
+        path,
+        "2026-01-01T12:00:00Z",
+        &["add", "alive.rs", "gone.rs"],
+    );
+    run_git_at(
+        path,
+        "2026-01-01T12:00:00Z",
+        &["commit", "-m", "add both", "--quiet"],
+    );
+
+    // gone.rs deleted on day 2
+    std::fs::remove_file(path.join("gone.rs")).unwrap();
+    run_git_at(path, "2026-01-02T12:00:00Z", &["add", "-A"]);
+    run_git_at(
+        path,
+        "2026-01-02T12:00:00Z",
+        &["commit", "-m", "del", "--quiet"],
+    );
+
+    let repo = GixRepo::open(path).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: path.to_path_buf(),
+        min_revs: 1,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let rows = run_code_age(&db, &opts).expect("run");
+    let paths: Vec<&str> = rows.iter().map(|r| r.path.as_str()).collect();
+    assert!(
+        paths.contains(&"alive.rs"),
+        "alive.rs must surface; got paths={paths:?}",
+    );
+    assert!(
+        !paths.contains(&"gone.rs"),
+        "gone.rs was deleted — must NOT surface; got paths={paths:?}",
+    );
+}

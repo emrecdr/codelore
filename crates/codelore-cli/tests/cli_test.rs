@@ -677,3 +677,63 @@ fn cache_dir_flag_writes_cache_to_custom_location() {
         "expected at least 1 .duckdb file under cache_dir, got {count}"
     );
 }
+
+/// F14 + F15 regression: `--time-bucket` on an incompatible analysis
+/// must be rejected at the CLI boundary with a descriptive error,
+/// pointing the user at the supported analyses (coupling, soc,
+/// hotspots, code-health). Previously this either crashed with
+/// `Catalog Error: changes_bucketed does not exist` (F14) or silently
+/// returned empty rows (F15).
+#[test]
+fn time_bucket_rejected_for_incompatible_analysis() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "revisions",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "csv",
+            "--no-banner",
+            "--no-cache",
+            "--time-bucket",
+            "week",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--time-bucket is not supported"))
+        .stderr(predicate::str::contains(
+            "coupling, soc, hotspots, code-health",
+        ));
+}
+
+/// F14 + F15 control: `--time-bucket` on a compatible analysis
+/// (coupling) must succeed.
+#[test]
+fn time_bucket_accepted_for_coupling() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "coupling",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "csv",
+            "--no-banner",
+            "--no-cache",
+            "--time-bucket",
+            "day",
+            "--min-revs",
+            "1",
+            "--min-shared-revs",
+            "1",
+        ])
+        .assert()
+        .success();
+}
