@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-06-10
+
 ### Fixed — correctness
 
 - **F12 — `current_head_rev` and `query_live_paths` now use `commits.rowid ASC`
