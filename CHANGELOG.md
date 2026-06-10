@@ -4,6 +4,72 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Added — strategic differentiators
+
+- **T8 — `knowledge-islands` analysis (automatic bus-factor / knowledge-loss
+  detection).** New behavioural signal — per-file risk indicator surfacing
+  files where the primary author (by LoC) has effectively departed
+  (`--departed-threshold-days`, default 90) AND no other contributor owns
+  a substantial share (≥ 10% LoC). The first tool in the
+  behavioural-code-analysis category to detect departures *automatically*
+  from commit-date falloff — `CodeScene` requires manual marking of
+  "Ex-Developers"; codelore composes mailmap canonicalisation + `author_
+  aliases.is_bot` + second-precision `TIMESTAMP` to skip the ops labour.
+  Output columns: `entity, main_author, ownership_pct,
+  days_since_main_active, last_main_author_commit, n_substantial_others`.
+  Sort: `ownership_pct DESC, days_since_main_active DESC, entity ASC` —
+  highest-concentration-then-longest-departed first. Filters out
+  bot-dominated files and binary/lockfile cases pre-emptively. 3
+  regression tests + `docs/research-foundations.md` entry citing Bird et
+  al. (FSE 2011), Avelino et al. (SANER 2016), Cosentino et al. (CHASE
+  2015). New CLI flag `--departed-threshold-days N`.
+
+- **T9 — `clone-coupling` × knowledge-loss intersection (`at_risk` field).**
+  Every `clone-coupling` row now carries an `at_risk: bool` set true when
+  either file in the pair is a knowledge-island. Sort flips at-risk rows
+  to the top of the output. The literal-strictly-novel codelore signal:
+  no other tool composes clone × co-change × knowledge-loss
+  automatically. Graceful degradation — knowledge-islands sub-analysis
+  failures fall back to `at_risk = false` for all rows with a tracing
+  debug log. CSV gains a 19th column `at-risk`; Markdown shows `⚠`
+  markers; JSON serialises automatically via serde.
+
+- **T11 — `--format html` static-report emitter.** New single-file HTML
+  output: embedded CSS + vanilla JS + JSON data, no external CDN, no
+  framework. 9–10 KB typical output — well under the 200 KB soft cap
+  for clean GitHub Actions artifact attachment. Light/dark mode via
+  `prefers-color-scheme`. Sortable columns (click headers), free-text
+  filter, print-friendly via `@media print`. Security: HTML metadata
+  escaped (`& < > " '`); JSON data has `</` → `<\/` to prevent
+  script-block breakout. 3 unit tests lock both behaviours. 8 analyses
+  wired (`hotspots`, `code-health`, `knowledge-islands`,
+  `clone-coupling`, `summary`, `revisions`, `authors`, `top-committers`);
+  generic over `Serialize` so adding more is one match arm.
+
+- **T12 — `codelore-action@v1` reusable GitHub Action.** New `action.yml`
+  at repo root. Composite action — no Docker pull (~90s saved per run),
+  no Node bootstrap, ~3s startup. Detects runner OS+arch, downloads the
+  matching binary archive from Releases, runs `codelore analyze` with
+  user-supplied flags, exposes `result-path` + `version-used` outputs.
+  Supports all 5 GitHub-hosted runner families (Ubuntu x64/arm, macOS
+  Intel/Apple Silicon, Windows). New `docs/github-action.md` documents
+  6 common patterns: PR-mode SARIF, weekly knowledge-loss report,
+  live-clones SARIF with at-risk priority, multi-analysis matrix
+  strategy, code-maat-compat for dashboard migration, version pinning.
+
+### Performance
+
+- **T10 — CI speedup (`CARGO_INCREMENTAL=0`).** The CI workflow already
+  had `Swatinem/rust-cache@v2`, `mozilla-actions/sccache-action@v0.0.10`,
+  `cargo-nextest`, `paths-ignore` for docs, and `cancel-in-progress` for
+  superseded runs. Adding `CARGO_INCREMENTAL: "0"` to the workflow env
+  block closes the last missing best-practice — incremental compile
+  artifacts in cached CI environments get written + cached but
+  invalidated next run, wasting cache hit rate. Setting to 0 (per the
+  Rust CI consensus — cargo docs, Swatinem/rust-cache README,
+  ripgrep/cargo/clippy workflows) saves ~30–60s per cold job AND
+  improves cache hit rate.
+
 ## [0.2.2] - 2026-06-10
 
 ### Fixed — correctness
