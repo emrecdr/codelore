@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-06-10
+
 ### Fixed — deep-analysis findings F35-F37 + F39
 
 - **F35 (correctness)** — `GitCliRepo`'s `parse_numstat_with_key` now
