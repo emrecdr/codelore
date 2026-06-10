@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-10
+
 ### Added — strategic differentiators
 
 - **T8 — `knowledge-islands` analysis (automatic bus-factor / knowledge-loss
