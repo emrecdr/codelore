@@ -114,11 +114,14 @@ fn opts_hash(opts: &Options) -> String {
 // ---------------------------------------------------------------------------
 
 /// Remove `.duckdb` files from `repo_dir` beyond `max_entries`, deleting the
-/// oldest (by mtime) first.
+/// oldest (by mtime) first. Also sweeps stale `.tmp.<pid>` and
+/// `.tmp.<pid>.wal` artifacts left behind by crashed runs.
 ///
 /// Errors from individual file deletes are logged but not fatal — a partial
 /// prune is better than aborting the analysis.
 pub fn prune_repo_cache(repo_dir: &Path, max_entries: usize) {
+    cleanup_stale_tmp_files(repo_dir);
+
     let Ok(rd) = fs::read_dir(repo_dir) else {
         return;
     };
@@ -152,23 +155,20 @@ pub fn prune_repo_cache(repo_dir: &Path, max_entries: usize) {
     entries.sort_by_key(|(_, mtime)| *mtime);
     let to_delete = entries.len() - max_entries;
     for (path, _) in entries.into_iter().take(to_delete) {
-        if let Err(e) = fs::remove_file(&path) {
-            tracing::warn!("prune_repo_cache: failed to remove {}: {e}", path.display());
-        } else {
-            tracing::info!("prune_repo_cache: removed {}", path.display());
-        }
+        delete_duckdb_with_companion(&path, "prune_repo_cache");
     }
 }
 
 /// Walk `root/codelore/` and delete `.duckdb` files (oldest first) until the
-/// total directory size falls below `max_bytes`.
+/// total directory size falls below `max_bytes`. Also sweeps stale
+/// `.tmp.<pid>` artifacts across the global cache tree.
 ///
 /// Errors from individual file operations are logged but not fatal.
 pub fn prune_global_cache(root: &Path, max_bytes: u64) {
     let codelore_dir = root.join("codelore");
-    let Ok(walk) = collect_duckdb_files(&codelore_dir) else {
-        return;
-    };
+    cleanup_stale_tmp_files_recursive(&codelore_dir);
+
+    let walk = collect_duckdb_files(&codelore_dir);
 
     let total: u64 = walk.iter().map(|(_, _, size)| *size).sum();
     if total <= max_bytes {
@@ -184,13 +184,9 @@ pub fn prune_global_cache(root: &Path, max_bytes: u64) {
         if remaining <= max_bytes {
             break;
         }
-        if let Err(e) = fs::remove_file(&path) {
-            tracing::warn!(
-                "prune_global_cache: failed to remove {}: {e}",
-                path.display()
-            );
-        } else {
-            tracing::info!("prune_global_cache: removed {}", path.display());
+        let existed = path.exists();
+        delete_duckdb_with_companion(&path, "prune_global_cache");
+        if existed && !path.exists() {
             remaining = remaining.saturating_sub(size);
         }
     }
@@ -198,22 +194,36 @@ pub fn prune_global_cache(root: &Path, max_bytes: u64) {
 
 /// Recursively collect all `.duckdb` files under `dir`.
 /// Returns `(path, mtime_secs, size_bytes)` per file.
-fn collect_duckdb_files(dir: &Path) -> std::io::Result<Vec<(PathBuf, u64, u64)>> {
+///
+/// Individual subdirectory or entry errors (broken symlinks, permission
+/// denied) are logged and skipped — a single bad entry must not abort the
+/// entire walk, otherwise one inaccessible subdir would disable global LRU
+/// eviction and let the cache grow unbounded.
+fn collect_duckdb_files(dir: &Path) -> Vec<(PathBuf, u64, u64)> {
     let mut out = Vec::new();
-    collect_duckdb_files_inner(dir, &mut out)?;
-    Ok(out)
+    collect_duckdb_files_inner(dir, &mut out);
+    out
 }
 
-fn collect_duckdb_files_inner(
-    dir: &Path,
-    out: &mut Vec<(PathBuf, u64, u64)>,
-) -> std::io::Result<()> {
-    let rd = fs::read_dir(dir)?;
+fn collect_duckdb_files_inner(dir: &Path, out: &mut Vec<(PathBuf, u64, u64)>) {
+    let rd = match fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(e) => {
+            tracing::warn!("collect_duckdb_files: skipping {} ({e})", dir.display());
+            return;
+        }
+    };
     for entry in rd.flatten() {
         let path = entry.path();
-        let meta = entry.metadata()?;
+        let meta = match entry.metadata() {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!("collect_duckdb_files: skipping {} ({e})", path.display());
+                continue;
+            }
+        };
         if meta.is_dir() {
-            collect_duckdb_files_inner(&path, out)?;
+            collect_duckdb_files_inner(&path, out);
         } else if path
             .extension()
             .and_then(|x| x.to_str())
@@ -227,7 +237,94 @@ fn collect_duckdb_files_inner(
             out.push((path, mtime, meta.len()));
         }
     }
-    Ok(())
+}
+
+/// Delete a `.duckdb` cache file plus its companion `.duckdb.wal` if
+/// present. `DuckDB` writes a WAL alongside the database file during writes;
+/// in normal operation the WAL is flushed via `CHECKPOINT` before the
+/// connection drops, but in rare cases (forced kill, FS sync failure) an
+/// orphan WAL can survive next to the renamed database — and the
+/// pruner's `.duckdb`-only extension filter would leave it behind.
+///
+/// Failures are logged but not propagated — partial cleanup beats abort.
+fn delete_duckdb_with_companion(path: &Path, ctx: &str) {
+    match fs::remove_file(path) {
+        Ok(()) => tracing::info!("{ctx}: removed {}", path.display()),
+        Err(e) => {
+            tracing::warn!("{ctx}: failed to remove {}: {e}", path.display());
+            return;
+        }
+    }
+    let wal = path.with_extension("duckdb.wal");
+    if wal.exists() {
+        if let Err(e) = fs::remove_file(&wal) {
+            tracing::warn!("{ctx}: failed to remove WAL {}: {e}", wal.display());
+        } else {
+            tracing::info!("{ctx}: removed WAL {}", wal.display());
+        }
+    }
+}
+
+/// Stale `.tmp` sweep — minimum age before a `.tmp.<pid>` artifact is
+/// considered orphaned. One hour is well above any realistic ingest run on
+/// repositories of the size codelore targets, while still being short
+/// enough to bound disk leak from frequently-crashing runs.
+const STALE_TMP_AGE_SECS: u64 = 3600;
+
+/// Remove `.tmp.<pid>` and `.tmp.<pid>.wal` artifacts in `dir` that are
+/// older than [`STALE_TMP_AGE_SECS`]. These are left behind by crashed
+/// ingest runs (the normal-path rename + drop sequence cleans them up).
+///
+/// Age-gated rather than PID-alive-gated: checking liveness of a foreign
+/// PID requires platform-specific syscalls and races against PID
+/// recycling. An hour-old artifact whose PID has been recycled to another
+/// codelore process is functionally equivalent to a dead-PID orphan —
+/// either way nothing legitimate is still writing to it.
+pub fn cleanup_stale_tmp_files(dir: &Path) {
+    let Ok(rd) = fs::read_dir(dir) else { return };
+    for entry in rd.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        // Match either `<stem>.duckdb.tmp.<pid>` or
+        // `<stem>.duckdb.tmp.<pid>.wal`. `.duckdb.tmp` (no PID suffix,
+        // legacy v0.3.0-era artifact) is also swept for forward
+        // compatibility — the fixed-path scheme couldn't survive any
+        // concurrent run.
+        if !name.contains(".duckdb.tmp") {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
+        let Ok(age) = modified.elapsed() else {
+            continue;
+        };
+        if age.as_secs() < STALE_TMP_AGE_SECS {
+            continue;
+        }
+        if let Err(e) = fs::remove_file(&path) {
+            tracing::warn!(
+                "cleanup_stale_tmp_files: failed to remove {}: {e}",
+                path.display()
+            );
+        } else {
+            tracing::info!("cleanup_stale_tmp_files: removed stale {}", path.display());
+        }
+    }
+}
+
+fn cleanup_stale_tmp_files_recursive(dir: &Path) {
+    cleanup_stale_tmp_files(dir);
+    let Ok(rd) = fs::read_dir(dir) else { return };
+    for entry in rd.flatten() {
+        let path = entry.path();
+        if entry.file_type().is_ok_and(|t| t.is_dir()) {
+            cleanup_stale_tmp_files_recursive(&path);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

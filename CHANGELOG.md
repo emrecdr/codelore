@@ -4,6 +4,47 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Fixed — deep-analysis re-audit findings (F22-F25)
+
+- **F22 — `path_lineage` CTE now traverses same-second rename chains.**
+  The recursive step used strict `co.date > l.current_date` to extend
+  the chain, terminating prematurely when two sequential renames
+  (`A → B` then `B → C`) landed in commits sharing the exact same
+  second. Carry `commits.rowid` through the CTE and break date-ties
+  via `co.rowid < l.current_rowid` — gix walks reverse-chronologically
+  so newer commits receive smaller rowids, and the next step in a
+  forward rename chain must come from a newer commit (hence smaller
+  rowid). Regression test asserts `a.txt → b.txt → c.txt` merges
+  under `c.txt` with 3 revs accumulated when both rename commits
+  share the same second.
+
+- **F23 — cache writes now use PID-suffixed `.tmp.<pid>` paths.**
+  The fixed-path `cache_p.with_extension("duckdb.tmp")` allowed two
+  concurrent runs on the same cache key (parallel CI jobs, multiple
+  terminals) to clobber each other's in-flight writes. Each ingest
+  now writes to a process-unique path; the proactive `remove_file`
+  at write-start only removes the current PID's leftovers (PIDs are
+  not recycled while their owner is alive).
+
+- **F24 — global cache walk no longer aborts on a single bad entry.**
+  `collect_duckdb_files_inner` propagated `entry.metadata()?` errors
+  to the caller, so one broken symlink or permission-denied subdir
+  anywhere under the global cache root would abort the entire walk →
+  `prune_global_cache` would return without pruning → cache grew
+  unbounded. Errors on individual entries now log-and-skip instead,
+  per-subdirectory and per-entry.
+
+- **F25 — pruners now sweep `.duckdb.wal` companions and stale
+  `.tmp.<pid>` artifacts.** Both pruners filtered on
+  `extension == "duckdb"` only, leaving orphan `.wal` files (from
+  forced kills mid-write) and `.tmp.<pid>` artifacts (from crashed
+  ingests) growing the cache disk usage indefinitely. New helpers:
+  `delete_duckdb_with_companion` removes the `.wal` alongside the
+  database; `cleanup_stale_tmp_files` age-gates `.tmp.<pid>`
+  artifacts at 1 hour (longer than any realistic ingest, short
+  enough to bound disk leak from frequently-crashing runs).
+  Regression tests cover both behaviours.
+
 ### Fixed — T8-T12 follow-up findings (F18-F21)
 
 - **F18 — `knowledge-islands` back-testing now applies the

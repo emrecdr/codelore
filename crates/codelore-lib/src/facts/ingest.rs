@@ -795,23 +795,29 @@ pub fn materialize_path_lineage(db: &super::FactsDb) -> Result<()> {
     // The fix joins each step with `commits.date` and only extends the
     // chain when the NEXT rename happened AFTER the current step's date.
     // Date is fetched via `INNER JOIN commits ON commits.rev = c.rev` in
-    // both the seed and the recursive step; the recursive step adds
-    // `WHERE co.date > l.current_date`. `>` (not `>=`) excludes self-edges
-    // within the same commit (which can't happen for a rename anyway, but
-    // guards against equal-second tiebreakers).
+    // both the seed and the recursive step.
+    //
+    // Same-second tiebreak: strict `>` on date would terminate a chain
+    // where two sequential renames (A → B then B → C) land in commits
+    // sharing the exact same second. Carry `commits.rowid` through the CTE
+    // and break date-ties via `co.rowid < l.current_rowid`: gix walks
+    // reverse-chronologically (HEAD first), so newer commits receive
+    // smaller rowids during ingest; the next step in a forward rename
+    // chain must come from a newer commit, hence the smaller rowid.
     let sql = "CREATE OR REPLACE TEMPORARY TABLE path_lineage AS
-        WITH RECURSIVE lineage(orig, current, current_date, depth) AS (
-            SELECT DISTINCT c.rename_from, c.path, co.date, 1
+        WITH RECURSIVE lineage(orig, current, current_date, current_rowid, depth) AS (
+            SELECT DISTINCT c.rename_from, c.path, co.date, co.rowid, 1
             FROM changes c
             INNER JOIN commits co ON co.rev = c.rev
             WHERE c.rename_from IS NOT NULL
             UNION ALL
-            SELECT l.orig, c.path, co.date, l.depth + 1
+            SELECT l.orig, c.path, co.date, co.rowid, l.depth + 1
             FROM lineage l
             INNER JOIN changes c ON c.rename_from = l.current
             INNER JOIN commits co ON co.rev = c.rev
             WHERE l.depth < 50
-              AND co.date > l.current_date
+              AND (co.date > l.current_date
+                   OR (co.date = l.current_date AND co.rowid < l.current_rowid))
         )
         SELECT orig AS old_path, current AS canonical_path
         FROM (

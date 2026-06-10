@@ -177,9 +177,15 @@ impl FactsDb {
                 .map_err(|e| CodeLoreError::Analysis(format!("create cache dir: {e}")))?;
         }
 
-        // Write to a .tmp file first; atomic-rename on success.
-        let tmp = cache_p.with_extension("duckdb.tmp");
-        // Remove any leftover .tmp from a prior aborted run.
+        // Write to a process-unique .tmp file first; atomic-rename on
+        // success. The PID suffix prevents two concurrent runs on the same
+        // cache key (e.g. parallel CI jobs, multiple terminals) from
+        // clobbering each other's in-flight writes — DuckDB would either
+        // refuse the file lock or produce a partially-written cache file.
+        // Stale `.tmp.<dead_pid>` artifacts from crashed runs are swept by
+        // `cache::cleanup_stale_tmp_files` during prune.
+        let tmp = cache_p.with_extension(format!("duckdb.tmp.{}", std::process::id()));
+        // Remove any leftover .tmp from a prior aborted run by THIS PID.
         let _ = std::fs::remove_file(&tmp);
 
         let db = Self::open_file(&tmp)?;

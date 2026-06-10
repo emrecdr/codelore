@@ -2,7 +2,9 @@
 
 use std::time::{Duration, Instant};
 
-use codelore_lib::cache::{cache_key, cache_path_with_root, prune_repo_cache};
+use codelore_lib::cache::{
+    cache_key, cache_path_with_root, cleanup_stale_tmp_files, prune_repo_cache,
+};
 use codelore_lib::facts::FactsDb;
 use codelore_lib::repo::GixRepo;
 use codelore_lib::test_support::tiny_repo;
@@ -147,6 +149,81 @@ fn prune_global_cache_removes_oldest_beyond_byte_cap() {
         remaining <= 2,
         "expected at most 2 files after global prune with 15-byte cap, got {remaining}"
     );
+}
+
+/// F25 — pruner removes the `.duckdb.wal` companion alongside the database.
+/// Without this, DuckDB-WAL files orphaned by a crashed write would survive
+/// every prune cycle, silently growing cache disk usage.
+#[test]
+fn prune_repo_cache_removes_wal_companion() {
+    use std::fs::OpenOptions;
+    use std::time::SystemTime;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+
+    // Create 6 duckdb files + a WAL alongside the oldest one. Explicit
+    // mtimes (rather than sleep-between-writes) avoid coarse-FS-resolution
+    // ambiguity, ensuring file 0 is unambiguously the oldest.
+    let now = SystemTime::now();
+    for i in 0..6u64 {
+        let path = root.join(format!("{i:016x}.duckdb"));
+        std::fs::write(&path, b"placeholder").unwrap();
+        let f = OpenOptions::new().write(true).open(&path).unwrap();
+        let mtime = now - Duration::from_secs(100 - i);
+        f.set_modified(mtime).unwrap();
+        if i == 0 {
+            let wal = root.join(format!("{i:016x}.duckdb.wal"));
+            std::fs::write(&wal, b"wal-bytes").unwrap();
+        }
+    }
+
+    prune_repo_cache(root, 5);
+
+    let oldest_db = root.join(format!("{:016x}.duckdb", 0u64));
+    let oldest_wal = root.join(format!("{:016x}.duckdb.wal", 0u64));
+    assert!(
+        !oldest_db.exists(),
+        "oldest .duckdb should have been evicted"
+    );
+    assert!(
+        !oldest_wal.exists(),
+        "companion .duckdb.wal should be deleted alongside its .duckdb"
+    );
+}
+
+/// F25 — stale `.tmp.<pid>` artifacts older than the threshold are swept;
+/// fresh `.tmp` files are preserved.
+#[test]
+fn cleanup_stale_tmp_files_removes_old_artifacts_only() {
+    use std::fs::OpenOptions;
+    use std::time::SystemTime;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+
+    let old = root.join("foo.duckdb.tmp.12345");
+    let old_wal = root.join("foo.duckdb.tmp.12345.wal");
+    let fresh = root.join("bar.duckdb.tmp.67890");
+    let unrelated = root.join("baz.duckdb");
+
+    for p in [&old, &old_wal, &fresh, &unrelated] {
+        std::fs::write(p, b"x").unwrap();
+    }
+
+    // Backdate the "old" pair to 2 hours ago (well past the 1-hour threshold).
+    let two_hours_ago = SystemTime::now() - Duration::from_hours(2);
+    for p in [&old, &old_wal] {
+        let f = OpenOptions::new().write(true).open(p).unwrap();
+        f.set_modified(two_hours_ago).unwrap();
+    }
+
+    cleanup_stale_tmp_files(root);
+
+    assert!(!old.exists(), "old .tmp.<pid> should be swept");
+    assert!(!old_wal.exists(), "old .tmp.<pid>.wal should be swept");
+    assert!(fresh.exists(), "fresh .tmp.<pid> must NOT be swept");
+    assert!(unrelated.exists(), ".duckdb files must NOT be touched");
 }
 
 /// Verify that different opts produce different cache paths (different keys).
