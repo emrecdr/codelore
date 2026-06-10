@@ -176,7 +176,9 @@ Pin to a specific release for reproducibility:
 ```yaml
 - uses: emrecdr/codelore@v1
   with:
-    version: v0.3.0
+    # Pin to a specific release tag (see
+    # https://github.com/emrecdr/codelore/releases for the current list).
+    version: vX.Y.Z
 ```
 
 ## Limitations

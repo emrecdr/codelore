@@ -21,7 +21,7 @@ CodeLore is a 3-crate Cargo workspace:
 | Crate | Responsibility |
 |---|---|
 | `codelore-rca` | Vendored + modified fork of Mozilla's `rust-code-analysis` (MPL-2.0). Provides cyclomatic / cognitive / Halstead / MI complexity metrics. Isolated as its own crate so the vendored license stays cleanly separated. |
-| `codelore-lib` | Core library: the `Repo` trait (`GixRepo` default, `GitCliRepo` oracle for differential tests), the DuckDB-backed `FactsDb` fact store, the 22 analyses, the persistent cache, the multi-format output emitters, identity resolution (mailmap + bot + AI-attribution), and the Kamei change-feature enrichment. |
+| `codelore-lib` | Core library: the `Repo` trait (`GixRepo` default, `GitCliRepo` oracle for differential tests), the DuckDB-backed `FactsDb` fact store, the 23 analyses, the persistent cache, the multi-format output emitters, identity resolution (mailmap + bot + AI-attribution), and the Kamei change-feature enrichment. |
 | `codelore-cli` | Clap CLI binary: `analyze` and `diff` subcommands, ignore-file parsing, `Options` construction, output routing. |
 
 ## 3. Pipeline data flow
@@ -33,7 +33,7 @@ graph TD
     C -->|DuckDB Appender bulk-insert| D[(DuckDB fact store)]
     E[Working-tree walk @ HEAD] -->|tree-sitter parsing via rayon| F[Complexity + clones extraction]
     F -->|HEAD-time metrics| D
-    D -->|SQL views / parameterized queries| G[22 behavioral analyses]
+    D -->|SQL views / parameterized queries| G[23 behavioral analyses]
     G -->|emitters| H[CSV · JSON · SARIF 2.1.0 · Markdown · Parquet · SQLite]
     G -->|provenance| I[manifest sidecars]
 ```
@@ -87,7 +87,7 @@ Two implementations:
 
 The differential test suite (`tests/differential_repo_test.rs`) is the load-bearing correctness check: any divergence between backends fails CI.
 
-## 5. The 22 analyses
+## 5. The 23 analyses
 
 | Tier | Surface | What they share |
 |---|---|---|
@@ -112,7 +112,7 @@ Spec §3.1 + Kamei et al. 2013 (TSE). Implemented as five SQL UPDATE passes afte
 1. **Diffusion**: `nf`, `ns`, `nd`, `entropy`
 2. **Size**: `la`, `ld`, `lt` (LT stubbed to 0 — historical blob LOC is a follow-up)
 3. **Fix**: regex match on bug/fix keywords in commit message
-4. **History**: `ndev`, `nuc`, `age` — hash-joined UPDATE…FROM passes (O(N²) correlated-subquery rewrite shipped pre-`v0.1.0`)
+4. **History**: `ndev`, `nuc`, `age` — hash-joined UPDATE…FROM passes (O(N²) correlated-subquery has been rewritten)
 5. **Experience**: `exp`, `rexp`, `sexp` — same pattern
 
 ## 8. Quality posture

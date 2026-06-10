@@ -41,7 +41,7 @@ graph TD
 
 ## 2. Validation Status of Prior Recommendations
 
-All previous findings and code-maat parity issues have been validated as **fully resolved and correct** in the current codebase (released in version `v0.2.1` and `v0.2.2`):
+All previous findings and code-maat parity issues have been validated as **fully resolved and correct** in the current codebase (released in version `v0.2.1` up to `v0.3.2`):
 
 ### Resolved Core Deep-Analysis Findings (F1–F11)
 *   **F1 (Commit Chronology Precision)**: Resolved. Promoted `commits.date` from `DATE` to `TIMESTAMP` in schema v2.
@@ -86,7 +86,7 @@ All previous findings and code-maat parity issues have been validated as **fully
 *   **F27 (Parallel Commit Filtering)**: Resolved. Defer `find_commit` and filtering to parallel Rayon workers inside `process_commit_oid` (returning `Result<Option<CommitEvent>>`), completely eliminating the serial filtering loop on the main thread and preserving the `rowid` walk-order invariant.
 *   **F28 (Worktree Prune Metadata Cleanup)**: Resolved. Swapped the order in `prune_stale_worktrees` to run the directory cleanup sweep *before* executing `git worktree prune`, ensuring Git immediately detects deleted directories and cleans up its administrative metadata in the same run.
 
-### Resolved Core Deep-Analysis Findings (F29–F34)
+### Resolved Core Deep-Analysis Findings (F29–F34) (shipped in v0.3.2 / commit f4da267)
 *   **F29 (Time-Bucket Changeset Size Pre-Filter)**: Resolved. The `good_commits_cte` now counts files per physical commit before collapsing to a time bucket.
 *   **F30 (Relative-Path Skip Checks for Clones)**: Resolved. The hardcoded directories `.git`, `target`, and `node_modules` are now checked against the repo-relative path rather than the full absolute path of the files.
 *   **F31 (Aliases Duplicate Join Prevention)**: Resolved. Joins on `author_aliases` now use a canonical-deduplicated subquery, preventing inflated churn/revisions counts for multi-email authors.
@@ -94,64 +94,59 @@ All previous findings and code-maat parity issues have been validated as **fully
 *   **F33 (Consistent Repo Path Canonicalization)**: Resolved. Both cache key calculation and cache path resolution canonicalize the repository path before hashing, avoiding cache misses when switching between relative (`.`) and absolute paths.
 *   **F34 (Binary/Large File Diff Check)**: Resolved. `count_loc` checks for files larger than 1MB or containing NUL bytes in the first 8KB, and skips diffing, preventing OOM/CPU spikes and returning `(0, 0)`.
 
+### Resolved Core Deep-Analysis Findings (F35-F37, F39) (shipped in v0.3.2 / commit e22a475)
+*   **F35 (Incorrect Numstat Join Key in Renames under GitCliRepo)**: Resolved. Added `expand_rename_path_destination` to expand braces (e.g. `src/{old => new}.rs` to `src/new.rs`) and Arrow rename syntaxes into canonical join keys, avoiding zero-stat joins for complex renames.
+*   **F36 (Parameter Mismatch Crash in entity-effort --explain Mode)**: Resolved. Bind parameter list passed to `explain_if_requested` in `entity_effort.rs` corrected to match the single SQL placeholder (`params![row_limit]`).
+*   **F37 (Parameter Mismatch Crash in clone-coupling --explain Mode)**: Resolved. Passed exact query parameter bindings (`params![opts.min_clone_node_count, opts.clone_similarity_floor]`) to `explain_if_requested` to prevent DuckDB crashes.
+*   **F39 (Merge Commit Diffs Behavioral Divergence)**: Resolved. Adjusted `changed_files_for_commit` in `gix_repo.rs` to yield empty vectors for merge commits, resolving divergences against `GitCliRepo`'s default behavior.
+
 ---
 
 ## 3. Newly Identified Gaps & Recommendations
 
-### F35: Correctness — Incorrect Numstat Join Key in Renames under `GitCliRepo`
-
-**The Problem**:
-In [git_cli_repo.rs:527](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/repo/git_cli_repo.rs#L527), `parse_numstat_with_key` splits the path on `" => "` to find the destination file key. However, Git formats directory or shared-prefix renames with curly braces or parentheses (e.g., `src/{old => new}.rs` or `src/{ => new}/foo.rs`). When this occurs, the split returns a key containing parts of the braces (like `new.rs}`), which does not match the actual path in the raw line stream (e.g., `src/new.rs`).
-
-**The Impact**:
-The join between the numstat and raw streams fails for complex renames, silently returning `(0, 0)` line counts for those files.
-
-**Recommended Fix**:
-Implement a robust rename path parser in `parse_numstat_with_key` that expands curly braces / parenthesized rename paths (e.g. `path/{old => new}/file.ext` to `path/new/file.ext`) to align the join key with the destination path.
-
-### F36: Correctness / Robustness — Parameter Mismatch Crash in `entity-effort` `--explain` Mode
-
-**The Problem**:
-In [entity_effort.rs:48](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/entity_effort.rs#L48), `explain_if_requested` is invoked with `params![opts.min_revs, row_limit]`. However, the SQL query used in `entity-effort` only contains a single `?` placeholder (for `LIMIT`).
-
-**The Impact**:
-Running `codelore analyze --analysis entity-effort --explain` crashes with a fatal query error (`Got 2, needed 1`).
-
-**Recommended Fix**:
-Update the parameter list passed to `explain_if_requested` in `entity_effort.rs` to only bind `params![row_limit]`.
-
-### F37: Correctness / Robustness — Parameter Mismatch Crash in `clone-coupling` `--explain` Mode
-
-**The Problem**:
-In [clone_coupling.rs:172](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/clone_coupling.rs#L172), `explain_if_requested` is invoked with `[]` (no parameters). However, the query `CLONE_PAIRS_SQL` contains two `?` placeholders (for `node_count >= ?` and `similarity >= ?`).
-
-**The Impact**:
-Running `codelore analyze --analysis clone-coupling --explain` crashes with a fatal query error (`Got 0, needed 2`).
-
-**Recommended Fix**:
-Pass `params![opts.min_clone_node_count, opts.clone_similarity_floor]` to `explain_if_requested` in `clone_coupling.rs`.
-
 ### F38: Performance — Quadratic Complexity in Kamei History and Experience Enrichment
 
 **The Problem**:
-In [kamei/mod.rs:130](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/kamei/mod.rs#L130) and [kamei/mod.rs:214](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/kamei/mod.rs#L214), Kamei features (`ndev`, `nuc`, `sexp`) are enriched using cross-commit joins on path matching (`pchg.path = cchg.path`) and directory matching. For very active files (e.g. `package.json`, `Cargo.toml`) changed thousands of times, the join produces a quadratic number of rows (`O(changes_per_path^2)`).
+In [kamei/mod.rs:130](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/kamei/mod.rs#L130), [kamei/mod.rs:163](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/kamei/mod.rs#L163), and [kamei/mod.rs:222](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/kamei/mod.rs#L222), Kamei features (`ndev`, `nuc`, `age`, `sexp`) are enriched using cross-commit joins on path matching (`pchg.path = cchg.path`) and directory matching. For very active files changed thousands of times (e.g. `package.json`, `Cargo.toml`), or active top-level directories under single-directory projects, the self-joins scale quadratically (`O(changes_per_path^2)`).
 
 **The Impact**:
-Analyzing large repositories with highly active files can lead to severe slowdowns, high memory overhead, and potential DuckDB temporary file/disk space exhaustion.
+Analyzing large repositories with highly active files or concentrated top-level paths can lead to severe slowdowns, high CPU/memory overhead, and potential DuckDB temporary file/disk space exhaustion.
 
 **Recommended Fix**:
 Optimize the history and experience enrichment logic by utilizing pre-aggregates or staging temporary tables rather than full self-joins on historical changes.
 
-### F39: Correctness — Merge Commit Diffs Behavioral Divergence in `GixRepo` vs `GitCliRepo`
+### F40: Correctness — Duplicate Entity Names (Nested/Anonymous/Overloaded Functions) Are Silently Discarded
 
 **The Problem**:
-When `--include-merges` is enabled, `GixRepo` calculates file changes for merge commits by diffing the merge commit's tree against its first parent's tree. However, `GitCliRepo` relies on `git log --raw --numstat` which by default omits diffs for merge commits entirely.
+The `entities` database schema uses `PRIMARY KEY (path, name, rev_introduced)` and the `complexity_metrics` table uses `PRIMARY KEY (path, name, rev)`. To prevent DB constraint violation failures on duplicate keys, `ingest_complexity_at_head` in [ingest.rs](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/facts/ingest.rs) calls `dedup_entities`, which filters out duplicate entities based solely on `seen.insert(ent.name.clone())`.
 
 **The Impact**:
-Significant discrepancies in results (such as hotspots scores, churn, and coupling metrics) between the `GixRepo` and `GitCliRepo` backends when merge commits are included.
+Any entity sharing a name within the same file (e.g., nested functions, overloaded methods in Java, or multiple anonymous closures which all fall back to `"<anonymous>"`) is silently discarded during complexity metric ingestion. Consequently, only the first anonymous function or overloaded method gets parsed/stored, significantly skewing complexity rankings, hotspots, and code health calculations.
 
 **Recommended Fix**:
-Ensure behavior convergence by either passing the `-m` flag to `git log` inside `GitCliRepo` (to force merge diffs against the first parent), or skipping diff generation for merge commits in `GixRepo` when matching standard Git log behavior.
+Incorporate scope-qualification (e.g. `ClassName.methodName` or parent helper hierarchy) or append line numbers/offsets to the entity name (e.g., `name@start_line`) during ingestion to enforce uniqueness without discarding valid distinct entities. Alternatively, extend the Primary Keys in the schema to include line offsets.
+
+### F41: Performance — Sequential Architectural Grouping Over All Paths in History
+
+**The Problem**:
+In [ingest.rs:914](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/facts/ingest.rs#L914), `apply_grouping` fetches all unique paths from the database and maps them against the regex-based `GroupMap` rules sequentially on the main thread.
+
+**The Impact**:
+For massive repositories with tens of thousands of paths in history and complex architectural group maps (with multiple regexes containing backtracking lookarounds), sequentially matching every path is a major CPU bottleneck that delays ingestion completion.
+
+**Recommended Fix**:
+Parallelize the path-to-group resolution logic using Rayon (`into_par_iter()`) on the `distinct_paths` vector, collecting the computed mapping pairs before doing the database writes.
+
+### F42: Performance — Redundant `COUNT(DISTINCT rev)` on Unique `changes(rev, path)` Tables
+
+**The Problem**:
+Multiple SQL views in `ownership.rs`, `code_health.rs`, and `hotspots.rs` use `COUNT(DISTINCT rev)` or `COUNT(DISTINCT c.rev)` over the changes table (or `changes_bucketed` view). Because `(rev, path)` is already the Primary Key (and unique constraint) of the changes table, a path has at most one row per `rev`.
+
+**The Impact**:
+Unnecessary performance overhead. The database builds distinct/hash aggregations for `rev` on every file revisions calculation, whereas a direct `COUNT(*)` yields the same semantic results much faster.
+
+**Recommended Fix**:
+Replace `COUNT(DISTINCT rev)` with `COUNT(*)` in paths where uniqueness is already structurally guaranteed by the table layout or grouping query constraints.
 
 ---
 
@@ -161,27 +156,23 @@ Below is the register of active improvement opportunities and bugs:
 
 | ID | Category | Finding / Improvement Point | Priority / Risk | Impact | Status |
 |---|---|---|---|---|---|
-| **F35** | Correctness | Incorrect rename path key parsing for braces/parentheses under `GitCliRepo`. | **High** / Medium | Silence-yield of `(0, 0)` line counts for complex/directory renames. | Active |
-| **F36** | Correctness | Parameter mismatch crash in `entity-effort` `--explain` mode. | **Medium** / Low | Fatal database query crash when executing entity-effort analysis with `--explain`. | Active |
-| **F37** | Correctness | Parameter mismatch crash in `clone-coupling` `--explain` mode. | **Medium** / Low | Fatal database query crash when executing clone-coupling analysis with `--explain`. | Active |
 | **F38** | Performance | Quadratic self-join complexity in Kamei history and experience enrichment. | **Medium** / Medium | Large CPU/disk overhead on massive repositories with highly active files. | Active |
-| **F39** | Correctness | Merge commit changes divergence between `GixRepo` and `GitCliRepo`. | **High** / Medium | Mismatched analysis metrics when merges are included in the walk. | Active |
+| **F40** | Correctness | Silent drop of duplicate-named entities (nested/overloaded/anonymous fns) in ingestion. | **High** / Medium | Incomplete complexity metrics/hotspots data for files with multiple closures/overloads. | Active |
+| **F41** | Performance | Sequential matching of regex rules in architectural grouping. | **Medium** / Low | Single-threaded CPU bottleneck during ingest of massive repositories with large group files. | Active |
+| **F42** | Performance | Redundant `COUNT(DISTINCT rev)` operations on unique changes tables. | **Low** / Low | Minor CPU and memory overhead during SQL execution for behavioral analyses. | Active |
 
 ---
 
 ## 5. Proposed Verification Plan for New Findings
 
-### F35 (GitCliRepo rename path key parsing)
-*   **Verification**: Run a diff/log analysis under `GitCliRepo` on a repository with a directory rename (e.g. `src/{old_dir => new_dir}/file.rs`). Verify that the parsed line additions and deletions are correctly associated with the file instead of falling back to `(0, 0)`.
-
-### F36 (entity-effort explain mode)
-*   **Verification**: Run `codelore analyze --analysis entity-effort --explain`. Verify that the execution prints the DuckDB EXPLAIN plan instead of crashing with a parameter count mismatch.
-
-### F37 (clone-coupling explain mode)
-*   **Verification**: Run `codelore analyze --analysis clone-coupling --explain`. Verify that the execution prints the DuckDB EXPLAIN plan instead of crashing with a parameter count mismatch.
-
 ### F38 (Kamei enrichment performance)
 *   **Verification**: Run `codelore` JIT Kamei feature enrichment on a repository with a large commit history containing a file modified >5,000 times. Monitor processing time and verify it finishes within acceptable limits without massive memory leaks or disk blowup.
 
-### F39 (Merge commit changes divergence)
-*   **Verification**: Run both `GixRepo` and `GitCliRepo` analyses on a repository with `--include-merges` enabled and compare the change counts for a merge commit. Ensure that both backends report identical lists of changed files and line counts.
+### F40 (Duplicate entity name drop)
+*   **Verification**: Run `codelore analyze --analysis hotspots` on a codebase containing multiple nested or anonymous functions in a single file (e.g. a JS file with 10 arrow function closures). Verify that the database stores complexity metrics for all 10 distinct entities instead of only 1.
+
+### F41 (Parallel grouping performance)
+*   **Verification**: Profile ingestion time on a repository with 50,000 commits using a complex `--group-file`. Ensure the grouping phase runs concurrently across available CPU cores and shows a reduction in CPU time.
+
+### F42 (Redundant count distinct optimization)
+*   **Verification**: Run EXPLAIN on the modified SQL queries and compare execution plans. Verify that DuckDB does not construct a hash-distinct pipeline for `rev` counting. Verify that results of hotspots/ownership remain bit-identical.
