@@ -123,55 +123,67 @@ fn enrich_history(db: &FactsDb, src: &str) -> Result<()> {
         .execute_batch("UPDATE commits SET ndev = 0, nuc = 0, age = 0.0;")
         .map_err(|e| CodeLoreError::Analysis(format!("kamei history reset: {e}")))?;
 
-    // Pass 2: ndev + nuc via single hash-joined aggregation.
-    // Uses `prev.date <= c.date AND prev.rev != c.rev` to match the original's
-    // same-day-commit semantics (strictly-before would drop same-day history).
-    let sql_nd = format!(
-        "UPDATE commits SET ndev = h.ndev, nuc = h.nuc
+    // Pass 2: ndev + nuc + age via WINDOWED per-path running aggregation
+    // followed by per-commit cross-path union.
+    //
+    // The previous shape was a path-self-join:
+    //   {src} cchg ON cchg.rev = c.rev
+    //   {src} pchg ON pchg.path = cchg.path
+    // which for a path touched K times produced K×K rows per commit
+    // touching that path. On monorepos with hot files (lockfiles,
+    // top-level manifests, vendored config), the row blow-up dominated
+    // ingest wall-clock and could OOM larger fact stores.
+    //
+    // The windowed shape walks each path's touch sequence once,
+    // accumulating prior authors / revs / dates as DuckDB LIST values
+    // via a `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE
+    // CURRENT ROW` frame. RANGE (not ROWS) preserves the Kamei
+    // same-second semantic: peers (rows sharing the current row's
+    // ORDER BY date) are included in the prior set; only the current
+    // row itself is excluded. This matches the legacy `prev.date <=
+    // c.date AND prev.rev != c.rev` predicate exactly.
+    //
+    // Per-commit aggregation across paths uses FLATTEN(LIST(...)) +
+    // LIST_DISTINCT to union the per-path priors and dedupe. age is
+    // AVG of (curr_date − prior_last_date_at_path) across paths that
+    // have a prior touch.
+    let sql_history = format!(
+        "UPDATE commits SET
+             ndev = COALESCE(h.ndev, 0),
+             nuc = COALESCE(h.nuc, 0),
+             age = COALESCE(h.age, 0.0)
         FROM (
+            WITH path_prior_state AS (
+                SELECT
+                    ch.path,
+                    cm.rev,
+                    cm.date AS curr_date,
+                    LIST(cm.canonical_author) OVER w AS prior_authors_at_path,
+                    LIST(cm.rev) OVER w AS prior_revs_at_path,
+                    MAX(cm.date) OVER w AS prior_last_date_at_path
+                FROM commits cm
+                INNER JOIN {src} ch ON ch.rev = cm.rev
+                WINDOW w AS (
+                    PARTITION BY ch.path
+                    ORDER BY cm.date
+                    RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                    EXCLUDE CURRENT ROW
+                )
+            )
             SELECT
-                c.rev AS curr_rev,
-                COUNT(DISTINCT prev.canonical_author) AS ndev,
-                COUNT(DISTINCT prev.rev) AS nuc
-            FROM commits c
-            INNER JOIN {src} cchg ON cchg.rev = c.rev
-            INNER JOIN {src} pchg ON pchg.path = cchg.path
-            INNER JOIN commits prev ON prev.rev = pchg.rev
-            WHERE prev.rev != c.rev AND prev.date <= c.date
-            GROUP BY c.rev
+                rev AS curr_rev,
+                LENGTH(LIST_DISTINCT(FLATTEN(LIST(prior_authors_at_path)))) AS ndev,
+                LENGTH(LIST_DISTINCT(FLATTEN(LIST(prior_revs_at_path)))) AS nuc,
+                AVG(DATE_DIFF('day', prior_last_date_at_path, curr_date))
+                    FILTER (WHERE prior_last_date_at_path IS NOT NULL) AS age
+            FROM path_prior_state
+            GROUP BY rev
         ) AS h
         WHERE commits.rev = h.curr_rev;"
     );
     db.conn()
-        .execute_batch(&sql_nd)
-        .map_err(|e| CodeLoreError::Analysis(format!("kamei history ndev/nuc: {e}")))?;
-
-    // Pass 3: age — per-file MAX(prev.date), then AVG across files of the
-    // commit. Two-level subquery so the GROUP BY granularity is right.
-    let sql_age = format!(
-        "UPDATE commits SET age = a.age
-        FROM (
-            SELECT curr_rev, AVG(DATE_DIFF('day', last_prev_date, curr_date)) AS age
-            FROM (
-                SELECT
-                    c.rev AS curr_rev,
-                    c.date AS curr_date,
-                    cchg.path,
-                    MAX(prev.date) AS last_prev_date
-                FROM commits c
-                INNER JOIN {src} cchg ON cchg.rev = c.rev
-                INNER JOIN {src} pchg ON pchg.path = cchg.path
-                INNER JOIN commits prev ON prev.rev = pchg.rev
-                WHERE prev.rev != c.rev AND prev.date <= c.date
-                GROUP BY c.rev, c.date, cchg.path
-            ) per_file_max
-            GROUP BY curr_rev
-        ) AS a
-        WHERE commits.rev = a.curr_rev;"
-    );
-    db.conn()
-        .execute_batch(&sql_age)
-        .map_err(|e| CodeLoreError::Analysis(format!("kamei history age: {e}")))?;
+        .execute_batch(&sql_history)
+        .map_err(|e| CodeLoreError::Analysis(format!("kamei history ndev/nuc/age: {e}")))?;
 
     Ok(())
 }
@@ -211,20 +223,40 @@ fn enrich_experience(db: &FactsDb, src: &str) -> Result<()> {
 
     // Pass 2: SEXP (subsystem experience) — distinct prior commits by the
     // same author that touched the same top-level dir as the current commit.
+    //
+    // Windowed replacement of the legacy dir × author self-join: for a
+    // top-level dir touched K times by the same author, the join used to
+    // produce K×K rows per current commit. The windowed form walks each
+    // (dir, author) sequence once, accumulating prior revs as a DuckDB
+    // LIST via a RANGE … EXCLUDE CURRENT ROW frame — preserving the
+    // Kamei same-second semantic (peers included, current row excluded).
+    //
+    // Distinct revs per current commit come from FLATTEN(LIST(...)) +
+    // LIST_DISTINCT across the commit's touched dirs.
     let sql_sexp = format!(
-        "UPDATE commits SET sexp = asx.sexp
+        "UPDATE commits SET sexp = COALESCE(asx.sexp, 0)
         FROM (
+            WITH dir_author_prior AS (
+                SELECT
+                    SPLIT_PART(ch.path, '/', 1) AS dir,
+                    cm.canonical_author,
+                    cm.rev,
+                    cm.date,
+                    LIST(cm.rev) OVER w AS prior_revs
+                FROM commits cm
+                INNER JOIN {src} ch ON ch.rev = cm.rev
+                WINDOW w AS (
+                    PARTITION BY SPLIT_PART(ch.path, '/', 1), cm.canonical_author
+                    ORDER BY cm.date
+                    RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                    EXCLUDE CURRENT ROW
+                )
+            )
             SELECT
-                c.rev AS curr_rev,
-                COUNT(DISTINCT prev.rev) AS sexp
-            FROM commits c
-            INNER JOIN {src} cchg ON cchg.rev = c.rev
-            INNER JOIN {src} pchg ON SPLIT_PART(pchg.path, '/', 1) = SPLIT_PART(cchg.path, '/', 1)
-            INNER JOIN commits prev ON prev.rev = pchg.rev
-                AND prev.canonical_author = c.canonical_author
-                AND prev.rev != c.rev
-                AND prev.date <= c.date
-            GROUP BY c.rev
+                rev AS curr_rev,
+                LENGTH(LIST_DISTINCT(FLATTEN(LIST(prior_revs)))) AS sexp
+            FROM dir_author_prior
+            GROUP BY rev
         ) AS asx
         WHERE commits.rev = asx.curr_rev;"
     );

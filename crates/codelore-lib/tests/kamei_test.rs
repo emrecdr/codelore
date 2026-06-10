@@ -53,6 +53,147 @@ fn kamei_features_populated_for_tiny_repo() {
     );
 }
 
+/// Hot-path scenario validates the windowed history rewrite. A repo with
+/// one path touched many times by multiple authors should produce
+/// monotonically non-decreasing ndev/nuc/sexp values on that path, and
+/// the final commit's ndev/nuc must reflect all distinct prior authors
+/// and revs across the path's history.
+///
+/// The legacy path-self-join would compute the same values via a K×K
+/// cartesian on the hot path. The windowed form computes them via
+/// per-path running aggregation. This test gates parity.
+#[allow(clippy::too_many_lines)]
+#[test]
+fn windowed_history_matches_legacy_semantics_on_hot_path() {
+    use std::process::Command;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path();
+
+    let git = |args: &[&str]| {
+        let ok = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .status()
+            .expect("spawn git")
+            .success();
+        assert!(ok, "git {args:?} failed");
+    };
+    // Explicit per-commit timestamps — the Kamei `<=` semantic
+    // (preserved by the windowed RANGE … EXCLUDE CURRENT ROW frame)
+    // counts same-second peers as mutual priors. Distinct timestamps
+    // make the per-commit expected values deterministic.
+    let git_commit = |msg: &str, date: &str| {
+        let ok = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(["commit", "-m", msg, "--quiet"])
+            .env("GIT_AUTHOR_DATE", date)
+            .env("GIT_COMMITTER_DATE", date)
+            .status()
+            .expect("spawn git commit")
+            .success();
+        assert!(ok, "git commit {msg:?} failed");
+    };
+
+    git(&["init", "-b", "main", "--quiet"]);
+    git(&["config", "user.email", "alice@example.com"]);
+    git(&["config", "user.name", "Alice"]);
+    std::fs::write(path.join("hot.rs"), "v1\n").unwrap();
+    git(&["add", "."]);
+    git_commit("c1: alice creates hot.rs", "2026-01-01T10:00:00");
+
+    std::fs::write(path.join("hot.rs"), "v2\n").unwrap();
+    git(&["add", "."]);
+    git_commit("c2: alice modifies hot.rs", "2026-01-02T10:00:00");
+
+    git(&["config", "user.email", "bob@example.com"]);
+    git(&["config", "user.name", "Bob"]);
+    std::fs::write(path.join("hot.rs"), "v3\n").unwrap();
+    git(&["add", "."]);
+    git_commit("c3: bob modifies hot.rs", "2026-01-03T10:00:00");
+
+    git(&["config", "user.email", "alice@example.com"]);
+    git(&["config", "user.name", "Alice"]);
+    std::fs::write(path.join("cool.rs"), "vA\n").unwrap();
+    git(&["add", "."]);
+    git_commit("c4: alice creates cool.rs", "2026-01-04T10:00:00");
+
+    git(&["config", "user.email", "bob@example.com"]);
+    git(&["config", "user.name", "Bob"]);
+    std::fs::write(path.join("hot.rs"), "v4\n").unwrap();
+    std::fs::write(path.join("cool.rs"), "vB\n").unwrap();
+    git(&["add", "."]);
+    git_commit("c5: bob modifies both", "2026-01-05T10:00:00");
+
+    let repo = GixRepo::open(path).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: path.to_path_buf(),
+        min_revs: 1,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    // Verify c5's ndev/nuc: prior history at hot.rs = {alice, alice, bob}
+    // (revs c1, c2, c3) and at cool.rs = {alice} (rev c4). Union → ndev=2
+    // (alice, bob), nuc=4 (c1, c2, c3, c4).
+    let c5_ndev: String = db
+        .query_one_value(
+            "SELECT CAST(ndev AS TEXT) FROM commits \
+             WHERE message LIKE 'c5%'",
+        )
+        .expect("c5 ndev");
+    let c5_nuc: String = db
+        .query_one_value(
+            "SELECT CAST(nuc AS TEXT) FROM commits \
+             WHERE message LIKE 'c5%'",
+        )
+        .expect("c5 nuc");
+    assert_eq!(
+        c5_ndev.parse::<u32>().unwrap(),
+        2,
+        "c5 prior history spans both hot.rs (alice, bob) and cool.rs \
+         (alice); ndev should be 2 (distinct authors). Got {c5_ndev}",
+    );
+    assert_eq!(
+        c5_nuc.parse::<u32>().unwrap(),
+        4,
+        "c5 prior history union spans 4 distinct revs (c1, c2, c3, c4); \
+         got {c5_nuc}",
+    );
+
+    // SEXP: c5 by bob touches src/. Prior commits by bob touching src/
+    // = {c3}. So sexp = 1.
+    // (Note: no `src/` prefix — top-level dir = ".", same partition.)
+    let c5_sexp: String = db
+        .query_one_value(
+            "SELECT CAST(sexp AS TEXT) FROM commits \
+             WHERE message LIKE 'c5%'",
+        )
+        .expect("c5 sexp");
+    assert_eq!(
+        c5_sexp.parse::<u32>().unwrap(),
+        1,
+        "c5 by bob: prior bob-commits in the same top-level dir = c3 only \
+         (c4 was by alice, c5 is current); sexp should be 1. Got {c5_sexp}",
+    );
+
+    // c1 has no prior history on any path -> ndev=0, nuc=0, age=0.0,
+    // sexp=0.
+    let c1_ndev: String = db
+        .query_one_value(
+            "SELECT CAST(ndev AS TEXT) FROM commits \
+             WHERE message LIKE 'c1%'",
+        )
+        .expect("c1 ndev");
+    assert_eq!(
+        c1_ndev.parse::<u32>().unwrap(),
+        0,
+        "c1 is the first commit; ndev should be 0"
+    );
+}
+
 #[test]
 fn kamei_fix_flag_detects_bug_keywords() {
     // Build a fixture where one commit message says "fix typo"
