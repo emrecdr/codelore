@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-06-10
+
 ### Fixed — deep-analysis findings F38 + F40 + F41 + F42
 
 - **F38 (perf, correctness-preserving)** — Kamei enrichment
