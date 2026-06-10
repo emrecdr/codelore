@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-06-10
+
 ### Fixed — deep-analysis findings F29-F34
 
 - **F29 (correctness)** — under `--time-bucket`, `max_changeset_size`
