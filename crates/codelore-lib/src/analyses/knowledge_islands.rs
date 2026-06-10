@@ -122,6 +122,12 @@ const SQL: &str = "
         ) WHERE rn = 1 AND change_type != 'deleted'
     ),
     per_path_author AS (
+        -- Improvement: filter bots BEFORE aggregating ownership. Bots
+        -- (dependabot, renovate, etc.) don't have knowledge to lose —
+        -- flagging dependabot-dominated lockfiles as 'knowledge islands'
+        -- is exactly the kind of false positive that destroys signal
+        -- credibility. The LEFT JOIN tolerates authors without an
+        -- author_aliases row (legacy / pattern-only classifications).
         SELECT
             changes.path,
             commits.canonical_author AS author,
@@ -129,12 +135,18 @@ const SQL: &str = "
         FROM changes
         INNER JOIN commits ON changes.rev = commits.rev
         INNER JOIN live_paths USING (path)
+        LEFT JOIN author_aliases aa ON aa.canonical = commits.canonical_author
+        WHERE COALESCE(aa.is_bot, FALSE) = FALSE
         GROUP BY changes.path, commits.canonical_author
     ),
     totals AS (
+        -- Improvement: filter total_loc > 0 here so binary-only files
+        -- (no LoC tracking) AND fully-bot-owned files (everyone filtered
+        -- out above) don't propagate downstream as NULL-ownership rows.
         SELECT path, SUM(loc) AS total_loc
         FROM per_path_author
         GROUP BY path
+        HAVING SUM(loc) > 0
     ),
     main_per_path AS (
         SELECT path, author, loc

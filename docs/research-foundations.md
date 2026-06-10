@@ -491,6 +491,72 @@ actually expensive to maintain.
 
 ---
 
+### `knowledge-islands` ★ — Automatic bus-factor / knowledge-loss detection
+
+**Citation**:
+Composite signal grounded in three foundational works:
+- Bird, C., Nagappan, N., Murphy, B., Devanbu, P., & Zeller, A.
+  (2011). "Don't Touch My Code! Examining the Effects of Ownership
+  on Software Quality." *FSE '11*, pages 4–14.
+  [doi:10.1145/2025113.2025119](https://doi.org/10.1145/2025113.2025119)
+  — original n-authors risk indicator + ownership-concentration finding.
+- Avelino, G., Passos, L., Hora, A., & Valente, M. T. (2016).
+  "A Novel Approach for Estimating Truck Factors." *SANER '16*
+  (International Conference on Software Analysis, Evolution, and
+  Reengineering), pages 1–10.
+  [doi:10.1109/SANER.2016.106](https://doi.org/10.1109/SANER.2016.106)
+  — DOA-based Truck Factor estimation, the literature standard for
+  bus-factor measurement.
+- Cosentino, V., Cánovas Izquierdo, J. L., & Cabot, J. (2015).
+  "Assessing the bus factor of Git repositories." *CHASE '15*
+  (Cooperative and Human Aspects of Software Engineering).
+
+**What this signal tells you**:
+Per-file: the files at highest risk of being unmaintainable BECAUSE
+the primary author (by `LoC`) has effectively departed (no commits in
+`--departed-threshold-days`, default 90) AND no other contributor
+owns a substantial share (≥ 10% `LoC`). These are the actionable
+"if Alice leaves tomorrow, we're stuck" files.
+
+**What "good values" look like**:
+- **Zero rows in the output** is the ideal — every file has at least
+  one currently-active substantial contributor.
+- **5-10 rows in a 1000-file codebase** is normal for a team with
+  natural turnover.
+- **>50 rows or >10% of files** in a single team's codebase is a red
+  flag: onboarding velocity isn't keeping up with departure rate.
+
+**Implementation**: `crates/codelore-lib/src/analyses/knowledge_islands.rs`
+([source](../crates/codelore-lib/src/analyses/knowledge_islands.rs))
+
+**Why it matters — and why this is `CodeLore`'s strategic differentiator**:
+Industry behavioural-code-analysis tools have two of the three
+ingredients for this signal:
+- `CodeScene`'s **Knowledge Distribution** + **Bus Factor**: identifies
+  primary owners but requires you to **manually mark** each
+  "Ex-Developer" in a list. Maintaining that list is organisational
+  labour — dashboards stay wrong until someone updates them after
+  every offboard. Reactive, not proactive.
+- `code-maat`: has none of the three.
+- `GitHub Insights`: shows contributor counts but no risk modeling.
+
+`CodeLore` composes all three signals automatically via SQL over its
+existing fact store:
+1. Primary-author detection (reuses `ownership` analysis logic).
+2. Departed-author detection (new — `commits.canonical_author` grouped
+   by `MAX(commits.date)` falloff against `--departed-threshold-days`).
+3. Substantial-other-owner check (new — count of authors with
+   ≥ 10% `LoC` share, excluding the main author).
+
+Bot authors are filtered out before the ownership calculation —
+dependabot-dominated lockfiles never surface as knowledge-loss risks.
+That's the modernise-don't-migrate philosophy at work: don't replicate
+`CodeScene`'s manual-Ex-Developer workflow, exploit our richer data
+(mailmap, `author_aliases.is_bot`, second-precision `TIMESTAMP`) to
+automate it.
+
+---
+
 ## How CodeLore extends each signal
 
 Where the original research used 1990s/2000s data shapes, CodeLore
