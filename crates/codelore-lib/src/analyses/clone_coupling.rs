@@ -68,6 +68,19 @@ pub struct CloneCouplingRow {
     /// `similarity × degree_pct × (1 − p_value)` ∈ [0, 1]. Ranks the row;
     /// SARIF `security-severity` is derived from this × 10.
     pub combined_score: f64,
+    /// T9: `true` when either `file_a` or `file_b` is currently a
+    /// knowledge-island file (departed primary author + no substantial
+    /// other owners). Live clones AT-RISK files are the most actionable
+    /// debt findings: the clone is already a refactoring liability and
+    /// the people who could refactor it have already left.
+    ///
+    /// Computed by intersecting `clone-coupling` output with the
+    /// `knowledge-islands` analysis result set. Honors the same
+    /// `--departed-threshold-days` and `--age-time-now` flags as the
+    /// standalone analysis. No `knowledge-islands` data → all rows have
+    /// `at_risk = false` (graceful degradation when the repo has no
+    /// departed contributors).
+    pub at_risk: bool,
 }
 
 /// Run the clone-coupling analysis. Returns rows sorted by
@@ -229,15 +242,44 @@ pub fn run_clone_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CloneCoupl
             degree_pct,
             p_value: fisher_p,
             combined_score,
+            at_risk: false, // populated below from knowledge-islands intersection
         });
     }
 
-    // Stable sort: combined_score desc, then by clone_group_id + file pair so
-    // CSV output is deterministic across runs.
+    // T9: intersect with knowledge-islands. Any clone-coupling row whose
+    // file_a or file_b is in the knowledge-islands result set gets
+    // at_risk = true. Failures are non-fatal — we degrade gracefully to
+    // at_risk = false if the sub-analysis errors (the clone-coupling
+    // analysis itself is the primary product; knowledge-loss is an
+    // enrichment signal).
+    let islands_paths: std::collections::HashSet<String> =
+        match crate::analyses::knowledge_islands::run_knowledge_islands(db, opts) {
+            Ok(islands) => islands.into_iter().map(|r| r.entity).collect(),
+            Err(e) => {
+                tracing::debug!(
+                    "clone-coupling: knowledge-islands sub-analysis errored ({e}); \
+                     proceeding with at_risk = false for all rows",
+                );
+                std::collections::HashSet::new()
+            }
+        };
+    for row in &mut rows {
+        if islands_paths.contains(&row.file_a) || islands_paths.contains(&row.file_b) {
+            row.at_risk = true;
+        }
+    }
+
+    // Stable sort: at_risk DESC (knowledge-loss clones surface first),
+    // then combined_score DESC, then clone_group_id + file pair for
+    // deterministic CSV output across runs.
     rows.sort_by(|a, b| {
-        b.combined_score
-            .partial_cmp(&a.combined_score)
-            .unwrap_or(std::cmp::Ordering::Equal)
+        b.at_risk
+            .cmp(&a.at_risk)
+            .then_with(|| {
+                b.combined_score
+                    .partial_cmp(&a.combined_score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
             .then_with(|| a.clone_group_id.cmp(&b.clone_group_id))
             .then_with(|| a.file_a.cmp(&b.file_a))
             .then_with(|| a.file_b.cmp(&b.file_b))

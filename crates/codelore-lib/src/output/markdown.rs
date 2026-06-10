@@ -425,14 +425,15 @@ pub fn write_clone_coupling_markdown<W: Write>(rows: &[CloneCouplingRow], w: &mu
     )?;
     writeln!(
         w,
-        "| Group | File A | File B | Shared | Degree | Combined |"
+        "| At-risk | Group | File A | File B | Shared | Degree | Combined |"
     )
     .map_err(CodeLoreError::Io)?;
-    writeln!(w, "|---|---|---|---:|---:|---:|").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|:---:|---|---|---|---:|---:|---:|").map_err(CodeLoreError::Io)?;
     for row in rows {
         writeln!(
             w,
-            "| {} | `{}` | `{}` | {} | {:.2}% | {:.4} |",
+            "| {} | {} | `{}` | `{}` | {} | {:.2}% | {:.4} |",
+            if row.at_risk { "**⚠**" } else { "" },
             row.clone_group_id,
             row.file_a,
             row.file_b,

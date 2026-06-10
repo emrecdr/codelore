@@ -547,19 +547,19 @@ pub fn write_entity_ownership_csv<W: Write>(
 }
 
 pub fn write_clone_coupling_csv<W: Write>(rows: &[CloneCouplingRow], w: &mut W) -> Result<()> {
-    // 18 columns mirroring the CloneCouplingRow struct.
+    // 19 columns: 18 from CloneCouplingRow + T9 `at_risk`.
     writeln!(
         w,
         "clone-group,fingerprint,file-a,file-b,entity-a,entity-b,\
          start-line-a,end-line-a,start-line-b,end-line-b,\
          node-count,similarity,shared-revs,support-a,support-b,\
-         degree-pct,p-value,combined-score"
+         degree-pct,p-value,combined-score,at-risk"
     )
     .map_err(CodeLoreError::Io)?;
     for row in rows {
         writeln!(
             w,
-            "{},{},{},{},{},{},{},{},{},{},{},{:.4},{},{},{},{:.4},{:.4},{:.4}",
+            "{},{},{},{},{},{},{},{},{},{},{},{:.4},{},{},{},{:.4},{:.4},{:.4},{}",
             row.clone_group_id,
             row.fingerprint,
             quote_if_needed(&row.file_a),
@@ -578,6 +578,7 @@ pub fn write_clone_coupling_csv<W: Write>(rows: &[CloneCouplingRow], w: &mut W) 
             row.degree_pct,
             row.p_value,
             row.combined_score,
+            row.at_risk,
         )
         .map_err(CodeLoreError::Io)?;
     }

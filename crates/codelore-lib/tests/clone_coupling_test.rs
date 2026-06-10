@@ -110,6 +110,20 @@ fn live_clone_pair_surfaces_in_clone_coupling() {
         r.similarity
     );
 
+    // T9 regression: `at_risk` defaults to false when no files surface as
+    // knowledge-islands. The Tiny fixture author is "active" at test
+    // runtime (commits land at `now`) so they're never departed; the
+    // knowledge-islands sub-analysis returns empty; every row's at_risk
+    // stays false. Locks the default-state behaviour of the intersection
+    // column. The at_risk=true integration test would require injecting
+    // a departed author via GIT_AUTHOR_DATE — see the standalone
+    // knowledge_islands_test.rs for that pattern; cross-checking the
+    // intersection itself is a future test.
+    assert!(
+        !r.at_risk,
+        "at_risk must default false for fixture with active author; got at_risk=true",
+    );
+
     // Regression guard: p_value must carry the real Fisher exact test
     // result from the upstream CouplingRow, NOT a hard-coded 0.0.
     // (Earlier shipping code zeroed this out and shipped the fake value
