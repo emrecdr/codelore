@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-06-10
+
 ### Fixed — deep-analysis re-audit findings (F22-F25)
 
 - **F22 — `path_lineage` CTE now traverses same-second rename chains.**
