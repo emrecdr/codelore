@@ -125,3 +125,130 @@ fn time_bucket_sql_unit_strings() {
     assert_eq!(TimeBucket::Week.as_sql_unit(), "week");
     assert_eq!(TimeBucket::Month.as_sql_unit(), "month");
 }
+
+/// F29 regression — pre-fix, `--time-bucket day` + `--max-changeset-size 5`
+/// would silently drop an active day whose total distinct files exceeds
+/// 5, even if every individual commit only touched 1-2 files. Post-fix,
+/// the filter applies to PHYSICAL commits via `MAX(files) <= ?` so the
+/// day survives as long as it contains no giant commit.
+#[test]
+fn time_bucket_with_max_changeset_keeps_active_day_with_many_small_commits() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path();
+    run_git(path, &["init", "-b", "main", "--quiet"]);
+    run_git(path, &["config", "user.email", "t@e.com"]);
+    run_git(path, &["config", "user.name", "T"]);
+
+    let fixed_date = "2024-01-15T10:00:00";
+    let commit_at_date = |msg: &str| {
+        let out = std::process::Command::new("git")
+            .args(["commit", "-m", msg, "--quiet"])
+            .env("GIT_AUTHOR_DATE", fixed_date)
+            .env("GIT_COMMITTER_DATE", fixed_date)
+            .current_dir(path)
+            .output()
+            .expect("commit");
+        assert!(
+            out.status.success(),
+            "git commit failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+
+    // 8 commits on the same day, each touching exactly 1 small file.
+    // Per-commit size = 1; per-bucket distinct files = 8.
+    // Pre-F29 with `max_changeset_size = 5`: bucket dropped (8 > 5).
+    // Post-F29: bucket kept (MAX per-commit = 1 ≤ 5).
+    for i in 0..8 {
+        write(path.join(format!("f{i}.rs")), &format!("v1 for f{i}\n"));
+        run_git(path, &["add", "."]);
+        commit_at_date(&format!("add f{i}"));
+    }
+
+    let repo = GixRepo::open(path).expect("gix open");
+    let db = FactsDb::new_in_memory().expect("db");
+
+    let opts = Options {
+        repo_path: path.to_path_buf(),
+        min_revs: 0,
+        min_soc: Some(1),
+        max_changeset_size: 5,
+        time_bucket: Some(TimeBucket::Day),
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+    let rows = run_soc(&db, &opts).expect("soc");
+
+    // Bucket survives → each of the 8 files should appear with SoC ≥ 1
+    // (they all "co-occur" in the collapsed day bucket).
+    assert!(
+        !rows.is_empty(),
+        "F29 regression: --time-bucket day + --max-changeset-size 5 dropped \
+         the entire day-bucket even though every physical commit was tiny. \
+         Pre-fix: empty result. Post-fix: 8 entities with SoC>=1. Got: {rows:?}"
+    );
+    let entities: Vec<&str> = rows.iter().map(|r| r.entity.as_str()).collect();
+    for i in 0..8 {
+        let name = format!("f{i}.rs");
+        assert!(
+            entities.iter().any(|e| *e == name),
+            "F29: f{i}.rs missing from bucket-collapsed SoC. Got entities: {entities:?}"
+        );
+    }
+}
+
+/// F29 control case — a single giant commit in the bucket SHOULD still
+/// drop the whole bucket under the conservative MAX(files) semantic.
+/// This confirms the F5 anti-monorepo-sweep intent survives the F29 fix.
+#[test]
+fn time_bucket_with_max_changeset_drops_bucket_containing_giant_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path();
+    run_git(path, &["init", "-b", "main", "--quiet"]);
+    run_git(path, &["config", "user.email", "t@e.com"]);
+    run_git(path, &["config", "user.name", "T"]);
+
+    let fixed_date = "2024-02-20T10:00:00";
+    let commit_at_date = |msg: &str| {
+        let out = std::process::Command::new("git")
+            .args(["commit", "-m", msg, "--quiet"])
+            .env("GIT_AUTHOR_DATE", fixed_date)
+            .env("GIT_COMMITTER_DATE", fixed_date)
+            .current_dir(path)
+            .output()
+            .expect("commit");
+        assert!(out.status.success());
+    };
+
+    // One giant commit (10 files in one shot) + one tiny commit.
+    // With max_changeset_size = 5, the giant commit's bucket should be
+    // dropped under the conservative MAX(files) semantic.
+    for i in 0..10 {
+        write(path.join(format!("g{i}.rs")), "v\n");
+    }
+    run_git(path, &["add", "."]);
+    commit_at_date("giant sweep");
+
+    write(path.join("small.rs"), "v\n");
+    run_git(path, &["add", "."]);
+    commit_at_date("small");
+
+    let repo = GixRepo::open(path).expect("gix open");
+    let db = FactsDb::new_in_memory().expect("db");
+
+    let opts = Options {
+        repo_path: path.to_path_buf(),
+        min_revs: 0,
+        min_soc: Some(1),
+        max_changeset_size: 5,
+        time_bucket: Some(TimeBucket::Day),
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+    let rows = run_soc(&db, &opts).expect("soc");
+    assert!(
+        rows.is_empty(),
+        "F29 control: bucket containing a 10-file giant commit must be \
+         dropped under max_changeset_size=5. Got: {rows:?}"
+    );
+}

@@ -18,7 +18,57 @@
 use duckdb::params;
 
 use crate::facts::FactsDb;
+use crate::options::TimeBucket;
 use crate::{CodeLoreError, Options, Result};
+
+/// F29: build the `good_commits` CTE so the per-commit
+/// `max_changeset_size` filter is applied to PHYSICAL commits even when
+/// the analysis runs against a time-bucketed source.
+///
+/// - Non-bucketing: `good_commits.rev` = commit SHA.
+///   `INNER JOIN {src} USING(rev)` matches naturally.
+/// - Bucketing: `good_commits.rev` = bucket date key. A bucket survives
+///   iff EVERY contained physical commit has ≤`max_changeset_size`
+///   files (`HAVING MAX(files) <= ?`). Conservative semantic — a bucket
+///   with even one giant commit is excluded — but no longer drops
+///   active periods just because their TOTAL file count exceeds the
+///   per-commit threshold (the pre-F29 bug).
+///
+/// The first placeholder in the returned CTE is always
+/// `max_changeset_size`, matching the legacy CTE shape so callers'
+/// param-binding order is unchanged.
+pub(crate) fn good_commits_cte(bucket: Option<TimeBucket>, use_lineage: bool) -> String {
+    let physical_src = if use_lineage {
+        "changes_lineage"
+    } else {
+        "changes"
+    };
+    if let Some(b) = bucket {
+        let unit = b.as_sql_unit();
+        format!(
+            "good_commits AS (
+                 SELECT bucket_rev AS rev FROM (
+                     SELECT CAST(date_trunc('{unit}', m.date) AS TEXT) AS bucket_rev,
+                            c.rev AS commit_rev,
+                            COUNT(*) AS files
+                     FROM {physical_src} c
+                     INNER JOIN commits m ON m.rev = c.rev
+                     GROUP BY c.rev, date_trunc('{unit}', m.date)
+                 ) per_commit_in_bucket
+                 GROUP BY bucket_rev
+                 HAVING MAX(files) <= ?
+             )"
+        )
+    } else {
+        format!(
+            "good_commits AS (
+                 SELECT rev
+                 FROM (SELECT rev, COUNT(*) AS files FROM {physical_src} GROUP BY rev) t
+                 WHERE files <= ?
+             )"
+        )
+    }
+}
 
 /// A single coupling pair produced by [`run_coupling`].
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -110,7 +160,12 @@ fn source_table(opts: &Options) -> &'static str {
 /// `min_revs` is bound twice; only one branch's gate is "live", the
 /// other is a tautology. Trade-off: a 1-bind redundancy for a single
 /// caller-side `params!` invocation that doesn't branch on the flag.
-fn build_coupling_sql(src: &str, code_maat_compat: bool) -> String {
+fn build_coupling_sql(
+    src: &str,
+    code_maat_compat: bool,
+    bucket: Option<TimeBucket>,
+    use_lineage: bool,
+) -> String {
     // DEEP-3: under compat, average_revs uses CEIL((a+b)/2.0) to match
     // code-maat's `(math/ceil average-revs)`. CodeLore's modern default
     // uses integer-floor `(a+b)/2` (DuckDB integer division). The
@@ -135,12 +190,9 @@ fn build_coupling_sql(src: &str, code_maat_compat: bool) -> String {
         // the final SELECT.
         ("HAVING revs >= ?", "AND ? IS NOT NULL")
     };
+    let good_cte = good_commits_cte(bucket, use_lineage);
     format!(
-        "WITH good_commits AS (
-             SELECT rev
-             FROM (SELECT rev, COUNT(*) AS files FROM {src} GROUP BY rev) t
-             WHERE files <= ?
-         ),
+        "WITH {good_cte},
          file_revs AS (
              SELECT path, COUNT(DISTINCT rev) AS revs
              FROM {src}
@@ -177,11 +229,17 @@ fn build_coupling_sql(src: &str, code_maat_compat: bool) -> String {
     )
 }
 
-fn build_total_commits_sql(src: &str) -> String {
+fn build_total_commits_sql(bucket: Option<TimeBucket>, use_lineage: bool) -> String {
+    // F29: the "total commits" denominator for Fisher's contingency
+    // table must count the same units (physical commits, or buckets)
+    // that `good_commits` filters. Reuse the bucketing-aware CTE so
+    // the numerator and denominator stay in lockstep — otherwise the
+    // p-value math is over a wrong sample-space size under
+    // `--time-bucket`.
+    let good_cte = good_commits_cte(bucket, use_lineage);
     format!(
-        "SELECT COUNT(*) FROM (
-             SELECT rev, COUNT(*) AS files FROM {src} GROUP BY rev
-         ) t WHERE files <= ?"
+        "WITH {good_cte}
+         SELECT COUNT(*) FROM good_commits"
     )
 }
 
@@ -223,7 +281,7 @@ pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
 
     // Total commits after the max_changeset_size pre-filter — denominator for
     // the Fisher 2×2 contingency table.
-    let total_sql = build_total_commits_sql(src);
+    let total_sql = build_total_commits_sql(opts.time_bucket, opts.use_canonical_lineage);
     let total_commits: i64 = db
         .conn()
         .query_row(&total_sql, params![opts.max_changeset_size], |r| r.get(0))
@@ -233,7 +291,12 @@ pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
     // PAR-6: `build_coupling_sql` now takes `code_maat_compat` and the
     // bind list has 6 entries (min_revs bound twice — only one branch's
     // gate is live, the other is a tautology). See builder's doc.
-    let coupling_sql = build_coupling_sql(src, opts.code_maat_compat);
+    let coupling_sql = build_coupling_sql(
+        src,
+        opts.code_maat_compat,
+        opts.time_bucket,
+        opts.use_canonical_lineage,
+    );
     crate::analyses::query::explain_if_requested(
         db,
         &coupling_sql,

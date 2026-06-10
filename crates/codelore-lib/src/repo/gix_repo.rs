@@ -461,6 +461,31 @@ fn gix_change_to_file_change(
 /// re-exports `imara-diff`. Slider heuristics are applied (`postprocess_lines`)
 /// so hunk boundaries match `git diff` output line-for-line — the values
 /// here are bit-equivalent to `git log --numstat`.
+/// Maximum blob size that `count_loc` will diff. Blobs larger than this on
+/// either side return `(0, 0)` to mirror `git log --numstat`'s `- -`
+/// behaviour for binary/oversized files. 1 MiB matches Git's
+/// `core.bigFileThreshold` default and keeps the histogram diff bounded
+/// on commits that touch `SQLite` databases, vendored bundles, or large
+/// snapshot fixtures.
+const MAX_DIFF_BLOB_BYTES: usize = 1024 * 1024;
+
+/// Window size for git-style binary detection. Git inspects the first
+/// 8 KiB of a blob and treats it as binary if any NUL byte is found.
+/// Same heuristic — matching `GitCliRepo`'s implicit behaviour (it
+/// receives `- -` from `git diff --numstat` for binary files).
+const BINARY_SNIFF_BYTES: usize = 8000;
+
+/// F34 fix: blobs larger than [`MAX_DIFF_BLOB_BYTES`] on either side, or
+/// containing a NUL byte in the first [`BINARY_SNIFF_BYTES`], return
+/// `(0, 0)` without ever loading the full bytes into `InternedInput` or
+/// running the histogram diff. Pre-F34, `count_loc` blindly read raw
+/// bytes for any oid: a single commit touching a 50 MiB `SQLite` database
+/// allocated 100 MiB of `Vec<u8>` per worker thread and spent seconds in
+/// imara-diff on noise (random newline bytes), polluting hotspots /
+/// churn / code-health analyses with garbage `loc_added` /
+/// `loc_deleted` numbers. `GitCliRepo` doesn't have this problem
+/// because git's own `--numstat` filters binary files with `- -`; this
+/// fix brings the gix backend into convergence.
 fn count_loc(
     repo: &gix::Repository,
     old_oid: Option<gix::ObjectId>,
@@ -480,6 +505,14 @@ fn count_loc(
         Ok(obj.data.clone())
     };
 
+    let is_binary_or_oversized = |bytes: &[u8]| -> bool {
+        if bytes.len() > MAX_DIFF_BLOB_BYTES {
+            return true;
+        }
+        let sniff_end = bytes.len().min(BINARY_SNIFF_BYTES);
+        bytes[..sniff_end].contains(&0u8)
+    };
+
     let old_bytes = match old_oid {
         Some(oid) => read_blob(oid)?,
         None => empty.clone(),
@@ -488,6 +521,10 @@ fn count_loc(
         Some(oid) => read_blob(oid)?,
         None => empty.clone(),
     };
+
+    if is_binary_or_oversized(&old_bytes) || is_binary_or_oversized(&new_bytes) {
+        return Ok((0, 0));
+    }
 
     let input = InternedInput::new(old_bytes.as_slice(), new_bytes.as_slice());
     let diff = diff_with_slider_heuristics(Algorithm::Histogram, &input);

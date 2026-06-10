@@ -4,6 +4,67 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Fixed — deep-analysis findings F29-F34
+
+- **F29 (correctness)** — under `--time-bucket`, `max_changeset_size`
+  filter now counts files per PHYSICAL commit (not per collapsed
+  bucket). Pre-fix, `coupling`/`soc`/`clone-coupling` SQL applied the
+  filter to `changes_bucketed`, treating the day/week/month aggregate
+  size as if it were a single-commit size — silently dropping every
+  active period whose total distinct-files exceeded the threshold.
+  New helper `analyses::coupling::good_commits_cte(bucket, use_lineage)`
+  emits the bucketing-aware CTE: under bucketing a bucket survives iff
+  `MAX(files per commit) <= max_changeset_size`. Two regression tests
+  in `time_bucket_test.rs` lock the semantic.
+
+- **F30 (robustness)** — clones walk + ingest now evaluate the
+  vendored-dir skip list (`.git`, `target`, `node_modules`) against
+  the **repo-relative** path components, NOT the absolute path. A repo
+  located at `/Users/joe/target/my-repo` used to have `target` in
+  every absolute path's components and silently skipped 100% of
+  candidate files. Same `path.components().any(...)` predicate, but
+  reads the post-`strip_prefix` relative path so legitimate user
+  directories that happen to share a name with a skip token aren't
+  collateral damage.
+
+- **F31 (correctness)** — three `LEFT JOIN author_aliases aa ON
+  aa.canonical = ...` sites (`knowledge_islands.rs:155`,
+  `authors.rs:116`, `top_committers.rs:80`) replaced with a
+  deduplicating subquery: `LEFT JOIN (SELECT canonical, BOOL_OR(is_bot)
+  AS is_bot FROM author_aliases GROUP BY canonical) aa`. The
+  `author_aliases` schema has `raw_email TEXT PRIMARY KEY`, so
+  `canonical` is N:1 for multi-email authors — the original join
+  multiplied every joined row by N, inflating `SUM(loc)`,
+  `COUNT(DISTINCT commits)`, and burning the `LIMIT N` row budget on
+  duplicates.
+
+- **F32 (correctness)** — `codelore diff --base-cache <path>` now
+  validates `cached.sha == base_sha` before reusing the cache. On
+  mismatch (e.g. `main` advanced between PR runs, or a shared CI
+  cache path reused across branches): warn, recompute via
+  `analyze_at_rev`, overwrite. Pre-fix the cached `RevAnalyses` was
+  consumed directly — silently poisoning every hotspot delta,
+  coupling absence, and clones delta with an out-of-date base.
+
+- **F33 (robustness)** — `cache::cache_path_with_root` now
+  canonicalises `repo_path` before hashing the per-repo subdirectory
+  name, matching the canonicalisation that `cache_key` already
+  applies. Pre-fix, `codelore analyze .` and `codelore analyze $PWD`
+  computed the same key but landed in different subdirectories,
+  forcing a redundant ingest on every alternation.
+
+- **F34 (perf + correctness)** — `gix_repo::count_loc` now returns
+  `(0, 0)` for blobs that are either oversized (>1 MiB, matching
+  Git's `core.bigFileThreshold` default) or binary (NUL byte in the
+  first 8000 bytes, matching Git's own heuristic). Pre-fix the
+  function loaded raw blob bytes for any OID and ran imara-diff
+  unconditionally: a commit touching a 50 MiB SQLite database
+  allocated 100 MiB of `Vec<u8>` per worker thread and produced
+  nonsense `loc_added`/`loc_deleted` from random newline bytes,
+  polluting hotspots / churn / code-health. `GitCliRepo` doesn't
+  have this problem because `git log --numstat` reports `- -` for
+  binary files — the gix backend now converges with that behaviour.
+
 ### Fixed — deep-analysis findings F26-F28
 
 - **F26 (usability)** — `parse_rev_range` now accepts implied-HEAD

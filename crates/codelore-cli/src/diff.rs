@@ -507,15 +507,46 @@ pub fn run_diff(args: &DiffArgs) -> Result<DiffOutput> {
     let (base_sha, head_sha, merge_base_used) = parse_rev_range(&args.repo, &args.range)?;
 
     // Base analysis: load from --base-cache if present, otherwise compute + maybe cache.
+    //
+    // F32 fix: validate `cached.sha == base_sha` before reusing the cache.
+    // When `main` (or any base ref) advances, or when multiple PR branches
+    // in a shared CI environment reuse the same cache path, a stale cache
+    // would silently poison the delta computation — yielding incorrect
+    // hotspot entrants, false coupling absences, and wrong clones delta —
+    // without any warning. On mismatch: warn, recompute, overwrite.
     let base_analyses = if let Some(cache_path) = args.base_cache.as_ref() {
-        if cache_path.exists() {
-            tracing::info!("loading base analysis from {}", cache_path.display());
-            load_base_cache(cache_path)?
-        } else {
-            let a = analyze_at_rev(&args.repo, &base_sha, args)?;
-            write_base_cache(cache_path, &a)?;
-            tracing::info!("wrote base analysis to {}", cache_path.display());
-            a
+        match cache_path.exists().then(|| load_base_cache(cache_path)) {
+            Some(Ok(cached)) if cached.sha == base_sha => {
+                tracing::info!("loading base analysis from {}", cache_path.display());
+                cached
+            }
+            Some(Ok(cached)) => {
+                tracing::warn!(
+                    "base-cache SHA mismatch at {} (cached={}, expected={}); \
+                     discarding cache and recomputing base analysis",
+                    cache_path.display(),
+                    cached.sha,
+                    base_sha
+                );
+                let a = analyze_at_rev(&args.repo, &base_sha, args)?;
+                write_base_cache(cache_path, &a)?;
+                a
+            }
+            Some(Err(e)) => {
+                tracing::warn!(
+                    "failed to read base-cache {}: {e:#}; recomputing base analysis",
+                    cache_path.display()
+                );
+                let a = analyze_at_rev(&args.repo, &base_sha, args)?;
+                write_base_cache(cache_path, &a)?;
+                a
+            }
+            None => {
+                let a = analyze_at_rev(&args.repo, &base_sha, args)?;
+                write_base_cache(cache_path, &a)?;
+                tracing::info!("wrote base analysis to {}", cache_path.display());
+                a
+            }
         }
     } else {
         analyze_at_rev(&args.repo, &base_sha, args)?

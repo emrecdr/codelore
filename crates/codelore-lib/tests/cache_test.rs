@@ -226,6 +226,37 @@ fn cleanup_stale_tmp_files_removes_old_artifacts_only() {
     assert!(unrelated.exists(), ".duckdb files must NOT be touched");
 }
 
+/// F33 — `cache_key` and `cache_path_with_root` both canonicalize the
+/// repo path now, so invoking codelore as `codelore analyze .` and
+/// `codelore analyze $PWD` from the same directory must resolve to the
+/// exact same on-disk cache file. Pre-fix, the key was identical but
+/// the per-repo subdirectory hash differed → every alternation caused
+/// a fresh ingest.
+#[test]
+fn cache_path_with_root_canonicalises_repo_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let canonical_root = std::fs::canonicalize(root).expect("canonicalize tempdir for assertion");
+
+    let opts = Options::default();
+    let head = "deadbeef".to_string();
+    let key1 = cache_key(&canonical_root, &head, &opts);
+    let key2 = cache_key(root, &head, &opts);
+    assert_eq!(
+        key1, key2,
+        "cache_key must be invariant under canonicalisation"
+    );
+
+    let cache_dir = tempfile::tempdir().expect("cache root");
+    let p1 = cache_path_with_root(&key1, &canonical_root, cache_dir.path());
+    let p2 = cache_path_with_root(&key2, root, cache_dir.path());
+    assert_eq!(
+        p1, p2,
+        "F33: cache_path_with_root must canonicalise the repo_path so \
+         relative-vs-absolute invocations land in the same cache file"
+    );
+}
+
 /// Verify that different opts produce different cache paths (different keys).
 #[test]
 fn different_opts_produce_different_cache_paths() {

@@ -81,50 +81,90 @@ All previous findings and code-maat parity issues have been validated as **fully
 *   **F24 (Cache Directory Collection Walk Error Handling)**: Resolved. `collect_duckdb_files_inner` now log-and-skips per directory/entry instead of propagating errors.
 *   **F25 (WAL File Cleanup)**: Resolved. `delete_duckdb_with_companion` also removes `.wal`; `cleanup_stale_tmp_files` age-gates `.tmp.<pid>` artifacts (1h).
 
+### Resolved Core Deep-Analysis Findings (F26–F28) (shipped in v0.3.1 / commit 61b3c47)
+*   **F26 (Implied-HEAD Range Parsing)**: Resolved. Updated `parse_rev_range` to default empty splits to `"HEAD"`. Added 3 regression tests in `prune_tests`.
+*   **F27 (Parallel Commit Filtering)**: Resolved. Defer `find_commit` and filtering to parallel Rayon workers inside `process_commit_oid` (returning `Result<Option<CommitEvent>>`), completely eliminating the serial filtering loop on the main thread and preserving the `rowid` walk-order invariant.
+*   **F28 (Worktree Prune Metadata Cleanup)**: Resolved. Swapped the order in `prune_stale_worktrees` to run the directory cleanup sweep *before* executing `git worktree prune`, ensuring Git immediately detects deleted directories and cleans up its administrative metadata in the same run.
+
 ---
 
 ## 3. Newly Identified Gaps & Recommendations
 
-### F26: Usability / Correctness — `parse_rev_range` Rejects Standard Implied-HEAD Git Range Syntax
+### F29: Correctness / Logic — Time-Bucket Aggregation Silently Discards Active Weeks/Months via Incorrect `max_changeset_size` Filter Order
 
 **The Problem**:
-In [diff.rs:96](file:///Users/emrec/Projects/playground/codelore/crates/codelore-cli/src/diff.rs#L96), `parse_rev_range` splits the range string on `..` or `...` and rejects the input if either the base or the head portion is empty (e.g., `main..` or `..main`). However, in standard Git usage, an omitted revision in a range expression implicitly defaults to `HEAD` (for example, `main..` represents `main..HEAD`).
+In both [coupling.rs:139](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/coupling.rs#L139) and [soc.rs:54](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/soc.rs#L54), the `good_commits` CTE is built by grouping the source table by `rev` and dropping keys where the count of files exceeds the `max_changeset_size` threshold (default 30). When `--time-bucket` is enabled, the source table is `changes_bucketed` where `rev` is collapsed into time-bucket date strings (e.g. `"2026-06-01 00:00:00"`). As a result, the query evaluates the file count *per time bucket* rather than *per physical commit*.
 
 **The Impact**:
-Standard Git-style range shortcuts fail with a validation error (`malformed two-dot rev range: "main.."`). Users are forced to explicitly type `HEAD`, which violates standard Git CLI design expectations.
+Any week or month where the total number of distinct changed files across all commits exceeds 30 is discarded entirely. In active repositories, virtually every week/month will exceed this threshold, leading to time-bucketed coupling and SoC analyses silently returning empty or severely truncated results.
 
 **Recommended Fix**:
-Update `parse_rev_range` to default empty splits to `"HEAD"` instead of returning an error:
-```rust
-let base_ref = if base_ref.is_empty() { "HEAD" } else { base_ref };
-let head_ref = if head_ref.is_empty() { "HEAD" } else { head_ref };
-```
+Apply the `max_changeset_size` filter on the original `changes` (or `changes_lineage`) commit sizes *before* temporal bucket collapsing, rather than filtering on the collapsed bucket size.
 
 ---
 
-### F27: Performance — Serial `find_commit` Filtering on Main Thread and Redundant Lookups
+### F30: Robustness — Clones Analysis and Ingestion Silently Yield Empty Results if the Repository Absolute Path Contains `.git`, `target`, or `node_modules`
 
 **The Problem**:
-In [gix_repo.rs:74](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/repo/gix_repo.rs#L74), `walk_commits` performs a serial `find_commit` lookup on the main thread for *every* commit OID to apply merge and date-range filters. Later, the matching commit IDs are batched and processed in parallel by Rayon workers in `process_commit_oid`, which calls `find_commit` a *second* time for the exact same commits.
+In both [clones.rs:64](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/clones.rs#L64) and [ingest.rs:247](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/facts/ingest.rs#L247), the candidate file walker skips any path where `path.components().any(...)` matches `.git`, `target`, or `node_modules`. Because this is evaluated on the full absolute path of each file, if the parent directory structure of the repository root contains any of these directory names (e.g., `/Users/user/target/my-repo`), every file in the repository will be skipped.
 
 **The Impact**:
-For repositories with tens or hundreds of thousands of commits, the serial commit object parsing loop on the main thread creates a significant performance bottleneck. In addition, doing a redundant double lookup on matching commits wastes I/O and deserialization cycles.
+Clones detection and ingestion silently return zero results, and `clone-coupling` analysis has no data, without any warning or error.
 
 **Recommended Fix**:
-Defer commit parsing and filtering logic to the parallel Rayon workers. The main thread should collect all OIDs directly using `rev_walk.all()`, which is extremely fast and doesn't parse commit objects. The chunks can then be processed in parallel, where each worker opens the commit *once*, checks filters (yielding `None` if the commit is filtered out), and processes `CommitEvent` metadata.
+Only inspect path components *relative* to the repository root `opts.repo_path` (e.g., by calling `path.strip_prefix(&opts.repo_path)` first) before applying the skip list.
 
 ---
 
-### F28: Robustness / Leaks — Git Worktree Administrative Metadata "One-Run Lag" Cleanup
+### F31: Correctness — Join Duplication and Inflated Stats via Non-Unique `canonical` Joins on `author_aliases`
 
 **The Problem**:
-In [diff.rs:420](file:///Users/emrec/Projects/playground/codelore/crates/codelore-cli/src/diff.rs#L420), `prune_stale_worktrees` runs `git worktree prune` *before* sweeping and deleting stale directory folders.
+In [knowledge_islands.rs:155](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/knowledge_islands.rs#L155), [authors.rs:116](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/authors.rs#L116), and [top_committers.rs:80](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/top_committers.rs#L80), the SQL queries join the `author_aliases` table using `ON aa.canonical = commits.canonical_author` (or `pfa.author` / `pa.author`). However, the primary key of `author_aliases` is `email` (the raw email), and `canonical` is non-unique because a developer can commit under multiple email addresses, or multiple developers can map to the same team.
 
 **The Impact**:
-Any worktree directory deleted during the current sweep will not have its corresponding administrative metadata cleaned up from Git until the *next* time `codelore diff` is invoked. This leaves orphaned metadata folders inside `.git/worktrees/` indefinitely if no subsequent runs are executed, causing a resource leak.
+If a developer has committed with `N` raw emails in the repository history, their change/commit rows are duplicated `N` times in the join result. This inflates calculated developer commit counts, line churn statistics, and file ownership percentages, leading to distorted bus-factor calculations and leaderboard counts.
 
 **Recommended Fix**:
-Swap the order: execute the stale directory removal sweep *first*, and run `git worktree prune` *afterward*. This ensures Git immediately detects the deleted directories and prunes their administrative metadata in the same invocation.
+Join the tables using `aa.email` against the raw email column (`commits.author_email`), or select from a deduplicated subquery `(SELECT DISTINCT canonical, is_bot FROM author_aliases)` when joining on `canonical`.
+
+---
+
+### F32: Correctness / Robustness — Base Cache Cache-Poisoning via Missing SHA Validation in `codelore diff`
+
+**The Problem**:
+In [diff.rs:263](file:///Users/emrec/Projects/playground/codelore/crates/codelore-cli/src/diff.rs#L263), the function `run_diff` checks if the `--base-cache` file path exists and eagerly loads it without validating that the SHA in the cache file matches `base_sha`.
+
+**The Impact**:
+If the base branch (e.g. `main`) moves, or if different PR branches in a shared CI environment use the same cache file path, a PR run will hit the cache and silently use a stale/unrelated commit's analysis as its base analysis. This poisons the delta computation (yielding wrong hotspot entrants, false coupling absences, and wrong clones delta) without any warning.
+
+**Recommended Fix**:
+Verify that the cached `RevAnalyses.sha` matches the resolved `base_sha` before using the cached file. If there is a mismatch, log a warning, discard the cache, and re-compute the analysis.
+
+---
+
+### F33: Robustness — Cache Misses via Inconsistent Repo Path Canonicalization in Cache Path Resolution
+
+**The Problem**:
+In [cache.rs:30](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/cache.rs#L30), `cache_key` canonicalizes `repo_path` using `fs::canonicalize(repo_path)` before hashing it. However, in [cache.rs:58](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/cache.rs#L58), `cache_path_with_root` hashes `repo_path` directly without canonicalizing it first.
+
+**The Impact**:
+If a user runs `codelore` using relative paths (e.g. `codelore analyze .`) vs absolute paths (e.g. `codelore analyze /absolute/path`), `cache_path_with_root` will resolve to different repository subdirectories (e.g., `root/codelore/a1b2c3d4/` vs `root/codelore/e5f6g7h8/`). This leads to cache misses, forcing full database ingestions when switching invocation styles even though the underlying repository is identical.
+
+**Recommended Fix**:
+Canonicalize `repo_path` in `cache_path_with_root` before hashing it to derive the subdirectory name.
+
+---
+
+### F34: Performance / Correctness — Missing Binary / Large File Diff Protection in `GixRepo` Line-Counting
+
+**The Problem**:
+In [gix_repo.rs:464](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/repo/gix_repo.rs#L464), `count_loc` loads and diffs the contents of modifying blobs using the histogram algorithm without detecting if the file is binary or exceedingly large. Unlike `GitCliRepo` which leverages Git's built-in binary file heuristic (returning `- -` and skipping diffs), `GixRepo` blindly reads the raw blob bytes and performs line-splitting and diffing.
+
+**The Impact**:
+Commits touching large files (e.g., SQLite databases, large images, ZIP archives) will cause the Rayon walker threads to load massive byte arrays into memory and run expensive diff algorithms, causing CPU spikes and potential OOM crashes. Additionally, binary files will be falsely attributed arbitrary `loc_added` and `loc_deleted` based on random newline bytes, polluting hotspots, churn, and code-health analyses.
+
+**Recommended Fix**:
+Implement a binary-detection check in `count_loc` (e.g., check for NUL bytes `\0` in the first 8000 bytes) and a size cap (e.g., skip files larger than 1MB). If binary or too large, return `(0, 0)` immediately.
 
 ---
 
@@ -134,19 +174,31 @@ Below is the register of active improvement opportunities and bugs:
 
 | ID | Category | Finding / Improvement Point | Priority / Risk | Impact | Status |
 |---|---|---|---|---|---|
-| **F26** | Usability / Correctness | `parse_rev_range` rejects standard implied-HEAD ranges (e.g., `main..`). | **Medium** / Low | Breaks compatibility with Git CLI ergonomics; fails on valid ranges. | **Fixed (Unreleased)** — Empty base/head strings now default to `"HEAD"` for two-dot and three-dot forms. 3 regression tests added. |
-| **F27** | Performance | Serial `find_commit` filtering on main thread and redundant double lookups. | **Medium** / Medium | Unnecessary serialization overhead and single-threaded bottlenecks on large repos. | **Fixed (Unreleased)** — Filtering moved into `process_commit_oid` (returns `Result<Option<CommitEvent>>`); main thread only gathers OIDs; F12 rowid invariant preserved. |
-| **F28** | Robustness | `prune_stale_worktrees` has a "one-run lag" when pruning Git metadata. | **Low** / Low | Orphaned worktree metadata directory remains in `.git/worktrees/` until next run. | **Fixed (Unreleased)** — Directory sweep now runs BEFORE `git worktree prune`, so metadata is cleaned up in the same invocation. |
+| **F29** | Correctness | Time-Bucket aggregation incorrect `max_changeset_size` filter order. | **High** / Medium | Silently discards active weeks/months where cumulative file changes exceed 30. | **Fixed (Unreleased)** — New `good_commits_cte(bucket, use_lineage)` helper; bucketing-aware `MAX(files) <= ?` semantic. 2 regression tests. |
+| **F30** | Robustness | Clones analysis skips all candidate files if root path contains `.git`, `target`, etc. | **High** / Low | Silent empty clones and clone-coupling results under certain user file paths. | **Fixed (Unreleased)** — `path.components().any(...)` now runs on the repo-relative path in both `clones.rs` and `ingest::populate_clones_at_head`. |
+| **F31** | Correctness | Duplicate rows and inflated stats in joins on non-unique `canonical` in `author_aliases`. | **High** / Medium | Inflated commit and churn stats, distorted ownership percentages for multi-email authors. | **Fixed (Unreleased)** — All 3 sites (`knowledge_islands.rs`, `authors.rs`, `top_committers.rs`) use a dedup subquery: `LEFT JOIN (SELECT canonical, BOOL_OR(is_bot) AS is_bot FROM author_aliases GROUP BY canonical) aa`. |
+| **F32** | Correctness | Base cache cache-poisoning via missing SHA validation in `codelore diff`. | **High** / Medium | Silently uses stale/unrelated base commits, poisoning delta calculations in CI. | **Fixed (Unreleased)** — `run_diff` now validates `cached.sha == base_sha`; on mismatch warns + recomputes + overwrites cache. |
+| **F33** | Robustness | Cache path uses non-canonicalized repo path while cache key canonicalizes it. | **Medium** / Low | Causes cache misses when switching between relative (`.`) and absolute path invocations. | **Fixed (Unreleased)** — `cache_path_with_root` now `fs::canonicalize`s `repo_path` before hashing. Regression test. |
+| **F34** | Perf/Correct | Missing binary/large file diff protection in `GixRepo::count_loc` walk. | **High** / Medium | Slowdowns/OOMs on large commits, and incorrect line churn statistics for binary files. | **Fixed (Unreleased)** — `count_loc` returns `(0, 0)` for blobs >1 MiB or containing NUL in first 8 KB (matches `git log --numstat`). Regression test with synthetic binary blob. |
 
 ---
 
 ## 5. Proposed Verification Plan for New Findings
 
-### F26 (implied-HEAD range parsing)
-*   **Verification**: Run `codelore diff main..` and verify that it parses successfully and executes the diff analysis against HEAD without throwing a validation error.
+### F29 (time-bucket changeset size pre-filter)
+*   **Verification**: Run a time-bucketed coupling analysis on a repository where the cumulative files changed in a week exceeds `--max-changeset-size` but individual commits do not. Verify that the bucket is not dropped.
 
-### F27 (parallel commit filtering)
-*   **Verification**: Run the test suite and benchmark on a large repository (e.g., codelore itself or a larger open-source project) and verify that walk time is reduced and all commits are correctly filtered.
+### F30 (relative-path skip checks for clones)
+*   **Verification**: Move a repository to a path containing `target` (e.g. `/tmp/target/repo`), run the clones analysis, and verify that candidates are successfully parsed instead of being skipped.
 
-### F28 (worktree prune metadata cleanup)
-*   **Verification**: Force-abort a run to leak a worktree directory. Trigger another run after the stale age threshold (or mock the threshold) and verify that both the temporary directory and Git's internal metadata for the worktree are immediately cleaned up.
+### F31 (aliases duplicate join prevention)
+*   **Verification**: Create a mock repository with a developer who has committed using two different email addresses. Run `top-committers` and `authors` analyses and verify that their commit/change counts are not duplicated or inflated.
+
+### F32 (base cache SHA validation)
+*   **Verification**: Run `codelore diff` once with `--base-cache cache.json`. Modify the base branch, run again, and verify that codelore detects the SHA mismatch, ignores the cache, and computes a fresh analysis instead of loading stale cache.
+
+### F33 (consistent repo path canonicalization)
+*   **Verification**: Run `codelore analyze .` followed by `codelore analyze $(pwd)`. Verify that both invocations hit the exact same cache directory and file instead of generating two separate cache subdirectories.
+
+### F34 (binary/large file diff check)
+*   **Verification**: Commit a 5MB binary/PDF file to a mock repository. Run ingestion with `GixRepo` and verify that traversal does not hang/OOM, and the file gets `loc_added = 0` and `loc_deleted = 0` in the `changes` table.

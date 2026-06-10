@@ -44,18 +44,26 @@ pub struct SocRow {
 /// files' scores, producing false-positive "central nodes" that are
 /// really just bystanders of a one-off sweep. Mirrors the `good_commits`
 /// CTE pattern in `coupling.rs`.
-fn build_soc_sql(src: &str, code_maat_compat: bool) -> String {
+///
+/// F29 fix: under `--time-bucket` the `good_commits` filter now counts
+/// files per PHYSICAL commit (via `good_commits_cte`), then derives
+/// surviving bucket keys via `HAVING MAX(files) <= ?`. Pre-F29 the
+/// filter counted paths per bucket — drowning any active week/month
+/// in active repos and silently returning empty results.
+fn build_soc_sql(
+    src: &str,
+    code_maat_compat: bool,
+    bucket: Option<crate::options::TimeBucket>,
+    use_lineage: bool,
+) -> String {
     // DEEP-4: code-maat's `as-soc` filter is `(> n min-revs)` — strict
     // greater-than. Under `--code-maat-compat` we honour that semantic
     // so threshold-boundary results match exactly. CodeLore's modern
     // default uses `>=`, which is more intuitive ("SoC of at least N").
     let threshold_op = if code_maat_compat { ">" } else { ">=" };
+    let good_cte = crate::analyses::coupling::good_commits_cte(bucket, use_lineage);
     format!(
-        "WITH good_commits AS (
-             SELECT rev FROM (
-                 SELECT rev, COUNT(*) AS files FROM {src} GROUP BY rev
-             ) t WHERE files <= ?
-         ),
+        "WITH {good_cte},
          rev_sizes AS (
              SELECT rev, COUNT(DISTINCT path) AS n
              FROM {src}
@@ -87,7 +95,12 @@ pub fn run_soc(db: &FactsDb, opts: &Options) -> Result<Vec<SocRow>> {
     });
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
 
-    let sql = build_soc_sql(src, opts.code_maat_compat);
+    let sql = build_soc_sql(
+        src,
+        opts.code_maat_compat,
+        opts.time_bucket,
+        opts.use_canonical_lineage,
+    );
     crate::analyses::query::explain_if_requested(
         db,
         &sql,

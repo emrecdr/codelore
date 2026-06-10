@@ -77,7 +77,15 @@ const SQL: &str = "
         CAST(CAST(pa.last_at AS DATE) AS TEXT) AS last_commit,
         COALESCE(aa.is_bot, FALSE) AS is_bot
     FROM per_author pa
-    LEFT JOIN author_aliases aa ON aa.canonical = pa.author
+    LEFT JOIN (
+        -- F31: dedupe by canonical (raw_email is the PK; canonical is
+        -- N:1 for multi-email authors). Without this the join produced
+        -- duplicate rows per author, draining the `LIMIT N` row budget
+        -- on duplicates instead of distinct top committers.
+        SELECT canonical, BOOL_OR(is_bot) AS is_bot
+        FROM author_aliases
+        GROUP BY canonical
+    ) aa ON aa.canonical = pa.author
     ORDER BY commits DESC, author ASC
     LIMIT ?
 ";

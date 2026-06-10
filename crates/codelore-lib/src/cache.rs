@@ -54,10 +54,19 @@ pub fn cache_path(key: &[u8; 32], repo_path: &Path) -> PathBuf {
 }
 
 /// Same as [`cache_path`] but with an explicit root (for `--cache-dir` override).
+///
+/// F33 fix: `repo_path` is canonicalised before hashing the
+/// per-repo subdirectory name so this function and [`cache_key`] (which
+/// already canonicalises) stay in lockstep. Without this, calling
+/// `codelore analyze .` and `codelore analyze $(pwd)` produced identical
+/// cache keys but different cache subdirectories — neither call could
+/// see the other's cache file, forcing a redundant ingest every time the
+/// user alternated invocation styles.
 #[must_use]
 pub fn cache_path_with_root(key: &[u8; 32], repo_path: &Path, root: &Path) -> PathBuf {
+    let canonical = fs::canonicalize(repo_path).unwrap_or_else(|_| repo_path.to_path_buf());
     let mut repo_hash = Sha256::new();
-    repo_hash.update(repo_path.to_string_lossy().as_bytes());
+    repo_hash.update(canonical.to_string_lossy().as_bytes());
     let repo_short = hex::encode(&repo_hash.finalize()[..4]); // 8 hex chars
     let key_short = hex::encode(&key[..8]); // 16 hex chars
     root.join("codelore")

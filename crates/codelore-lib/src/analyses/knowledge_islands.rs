@@ -152,7 +152,15 @@ const SQL: &str = "
         FROM changes
         INNER JOIN commits ON changes.rev = commits.rev
         INNER JOIN live_paths USING (path)
-        LEFT JOIN author_aliases aa ON aa.canonical = commits.canonical_author
+        LEFT JOIN (
+            -- F31: dedupe by canonical. author_aliases primary key is
+            -- raw_email; canonical is N:1 (multi-email authors). A naive
+            -- `ON aa.canonical = ...` join multiplied every row by N,
+            -- inflating SUM(loc) by the same factor.
+            SELECT canonical, BOOL_OR(is_bot) AS is_bot
+            FROM author_aliases
+            GROUP BY canonical
+        ) aa ON aa.canonical = commits.canonical_author
         WHERE COALESCE(aa.is_bot, FALSE) = FALSE
           AND commits.date <= CAST(? AS TIMESTAMP)
         GROUP BY changes.path, commits.canonical_author

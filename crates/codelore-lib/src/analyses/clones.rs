@@ -59,9 +59,14 @@ pub fn run_clones(opts: &Options) -> Result<Vec<ClonesRow>> {
         .filter(|entry| entry.file_type().is_file())
         .filter_map(|entry| {
             let path = entry.path();
-            // Default hard-skip: vendored / build-output directories that
-            // virtually never contain user-meaningful clones.
-            if path.components().any(|c| {
+            let lang = CloneLanguage::from_path(path)?;
+            let rel = relative(&opts.repo_path, path);
+            // F30 fix: evaluate the skip list against the repo-relative
+            // path components, NOT the absolute path. Otherwise a repo
+            // located under e.g. `/Users/joe/target/my-repo` would have
+            // `target` in every file's components and silently skip
+            // 100% of candidates, producing zero clones with no warning.
+            if std::path::Path::new(&rel).components().any(|c| {
                 matches!(
                     c.as_os_str().to_str(),
                     Some(".git" | "target" | "node_modules")
@@ -69,8 +74,6 @@ pub fn run_clones(opts: &Options) -> Result<Vec<ClonesRow>> {
             }) {
                 return None;
             }
-            let lang = CloneLanguage::from_path(path)?;
-            let rel = relative(&opts.repo_path, path);
             // User-configured exclusions (--exclude + .codeloreignore).
             if exclude_set.is_match(&rel) {
                 return None;

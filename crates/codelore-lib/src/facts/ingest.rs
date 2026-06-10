@@ -244,7 +244,18 @@ impl FactsDb {
                         return None;
                     }
                     let path = entry.path();
-                    if path.components().any(|c| {
+                    let lang = CloneLanguage::from_path(path)?;
+                    // Normalise to POSIX `/` so `clones.path` matches `changes.path`
+                    // (git always emits `/`). See `crate::paths::to_posix`.
+                    let rel = path
+                        .strip_prefix(&opts.repo_path)
+                        .map_or_else(|_| crate::paths::to_posix(path), crate::paths::to_posix);
+                    // F30 fix: evaluate the skip list against repo-relative
+                    // path components, NOT the absolute path. A repo at
+                    // e.g. `/Users/joe/target/my-repo` would otherwise have
+                    // `target` in every absolute path and skip 100% of
+                    // candidate files silently.
+                    if std::path::Path::new(&rel).components().any(|c| {
                         matches!(
                             c.as_os_str().to_str(),
                             Some(".git" | "target" | "node_modules")
@@ -252,12 +263,6 @@ impl FactsDb {
                     }) {
                         return None;
                     }
-                    let lang = CloneLanguage::from_path(path)?;
-                    // Normalise to POSIX `/` so `clones.path` matches `changes.path`
-                    // (git always emits `/`). See `crate::paths::to_posix`.
-                    let rel = path
-                        .strip_prefix(&opts.repo_path)
-                        .map_or_else(|_| crate::paths::to_posix(path), crate::paths::to_posix);
                     if exclude_set.is_match(&rel) {
                         return None;
                     }

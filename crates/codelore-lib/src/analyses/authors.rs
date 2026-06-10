@@ -113,7 +113,15 @@ const SQL: &str = "
                 OR pfa.n_ai = pfa.n_commits
             ) AS is_bot_for_entity
         FROM per_file_author pfa
-        LEFT JOIN author_aliases aa ON aa.canonical = pfa.author
+        LEFT JOIN (
+            -- F31: dedupe by canonical (raw_email is the PK; canonical
+            -- is N:1 for multi-email authors). Without this the join
+            -- multiplied per_file_author rows by N, inflating COUNT and
+            -- SUM aggregates downstream.
+            SELECT canonical, BOOL_OR(is_bot) AS is_bot
+            FROM author_aliases
+            GROUP BY canonical
+        ) aa ON aa.canonical = pfa.author
     )
     SELECT
         cls.path AS entity,
