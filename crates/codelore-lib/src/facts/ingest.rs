@@ -970,10 +970,11 @@ pub fn apply_grouping(db: &super::FactsDb, group_map: &super::GroupMap) -> Resul
                 let effective: Option<String> = if strict {
                     group_map.map_entity(path).map(str::to_owned)
                 } else {
-                    Some(group_map.map_entity(path).map_or_else(
-                        || path.clone(),
-                        str::to_owned,
-                    ))
+                    Some(
+                        group_map
+                            .map_entity(path)
+                            .map_or_else(|| path.clone(), str::to_owned),
+                    )
                 };
                 (raw, effective)
             })
