@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-06-11
+
 ### Fixed — backend OOM protection + UX defaults + perf polish
 
 A bundled v0.4.3 batch covering one production-blocking OOM, two
