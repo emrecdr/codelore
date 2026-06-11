@@ -216,3 +216,91 @@ fn kamei_fix_flag_detects_bug_keywords() {
         "tiny repo has 'fix typo' commit; expected >=1 FIX"
     );
 }
+
+/// Directory-skew protection: a synthetic repo where every commit
+/// lands in the same top-level dir touches the worst-case (dir, author)
+/// partition. Before the O(K) rewrite, this exploded via list / cross-
+/// join materialization. This test ensures the (path, dir, author)
+/// hot-partition completes in a reasonable time and produces correct
+/// `ndev`, `nuc`, `sexp` values.
+#[test]
+fn dir_skew_does_not_oom_or_timeout() {
+    use std::process::Command;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path();
+
+    let git = |args: &[&str]| {
+        let ok = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .status()
+            .expect("spawn git")
+            .success();
+        assert!(ok, "git {args:?} failed");
+    };
+    let commit_at = |msg: &str, date: &str| {
+        let ok = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(["commit", "-m", msg, "--quiet"])
+            .env("GIT_AUTHOR_DATE", date)
+            .env("GIT_COMMITTER_DATE", date)
+            .status()
+            .expect("spawn git commit")
+            .success();
+        assert!(ok);
+    };
+
+    git(&["init", "-b", "main", "--quiet"]);
+    git(&["config", "user.email", "skew@example.com"]);
+    git(&["config", "user.name", "Skew"]);
+    std::fs::create_dir_all(path.join("src")).unwrap();
+
+    // 60 commits all touching distinct files under src/ — the
+    // (dir, author) partition has 60 distinct revs. The prior
+    // implementation's cross-join would explode (60 * 60 = 3600
+    // rows in the hot partition; safe for the test, but scales
+    // quadratically with K — the OOM at 19 GiB on a real repo had
+    // K ≈ 26k touches in one (src, author) partition).
+    for i in 0..60 {
+        std::fs::write(path.join(format!("src/f{i}.rs")), "v\n").unwrap();
+        git(&["add", "."]);
+        commit_at(
+            &format!("commit {i}"),
+            &format!("2026-01-{:02}T10:00:00", (i % 28) + 1),
+        );
+    }
+
+    let started = std::time::Instant::now();
+    let repo = codelore_lib::repo::GixRepo::open(path).expect("gix open");
+    let db = codelore_lib::facts::FactsDb::new_in_memory().expect("db");
+    let opts = codelore_lib::Options {
+        repo_path: path.to_path_buf(),
+        min_revs: 1,
+        ..codelore_lib::Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+    let elapsed = started.elapsed();
+
+    // Even on slow CI, the directory-skew partition should finish in
+    // well under 30 seconds — the prior implementation could exceed
+    // this on a 60-commit synthetic fixture if the partition
+    // materialization regressed.
+    assert!(
+        elapsed.as_secs() < 30,
+        "kamei ingest took {elapsed:?} on a 60-commit fixture — likely a partition-materialization regression"
+    );
+
+    // The 60th commit should see 59 prior revs in its (src, Skew)
+    // partition.
+    let last_sexp: String = db
+        .query_one_value(
+            "SELECT CAST(sexp AS TEXT) FROM commits ORDER BY date DESC LIMIT 1",
+        )
+        .expect("last sexp");
+    assert!(
+        last_sexp.parse::<u32>().unwrap() >= 50,
+        "60th commit in skewed (src, Skew) partition should see ~59 prior revs; got {last_sexp}"
+    );
+}

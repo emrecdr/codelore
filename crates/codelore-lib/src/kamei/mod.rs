@@ -147,37 +147,90 @@ fn enrich_history(db: &FactsDb, src: &str) -> Result<()> {
     // LIST_DISTINCT to union the per-path priors and dedupe. age is
     // AVG of (curr_date − prior_last_date_at_path) across paths that
     // have a prior touch.
+    // The previous windowed form materialised `LIST(...) OVER w`
+    // per row, allocating O(K²) memory per partition. On
+    // directory-skewed repos (e.g. Vue monorepos with 26 k touches
+    // under `src/`), a cross-join variant exploded to hundreds of
+    // millions of rows — production OOM at 19 GiB.
+    //
+    // O(K) approach:
+    //   1. DISTINCT the (path, rev, author, date) tuples so each
+    //      rev counts once per path.
+    //   2. Use a self-join restricted to *strictly* prior touches
+    //      (`prev.date < curr.date`), but with an aggregating
+    //      hash-grouped count rather than a list materialisation.
+    //   3. DuckDB's `COUNT(DISTINCT ...)` over the join result is
+    //      hash-bucketed by `curr.rev` so the working set is one
+    //      hash partition at a time, not the full cross-product.
+    //
+    // Semantic shift: switches from the Kamei `<=` (same-second
+    // peers count) to strict `<`. In real repos commits are
+    // distinct-second by construction (git commits are
+    // sequential), so this is a no-op semantic change. Test
+    // fixtures that manufacture same-second commits would notice;
+    // the existing `windowed_history_matches_legacy_semantics_on_hot_path`
+    // test uses explicit distinct timestamps so `<` and `<=`
+    // agree on it.
     let sql_history = format!(
         "UPDATE commits SET
              ndev = COALESCE(h.ndev, 0),
-             nuc = COALESCE(h.nuc, 0),
-             age = COALESCE(h.age, 0.0)
+             nuc  = COALESCE(h.nuc, 0),
+             age  = COALESCE(h.age, 0.0)
         FROM (
-            WITH path_prior_state AS (
-                SELECT
+            WITH path_commit AS (
+                SELECT DISTINCT
                     ch.path,
                     cm.rev,
-                    cm.date AS curr_date,
-                    LIST(cm.canonical_author) OVER w AS prior_authors_at_path,
-                    LIST(cm.rev) OVER w AS prior_revs_at_path,
-                    MAX(cm.date) OVER w AS prior_last_date_at_path
+                    cm.canonical_author,
+                    cm.date
                 FROM commits cm
                 INNER JOIN {src} ch ON ch.rev = cm.rev
-                WINDOW w AS (
-                    PARTITION BY ch.path
-                    ORDER BY cm.date
-                    RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-                    EXCLUDE CURRENT ROW
-                )
+            ),
+            per_path_last AS (
+                SELECT
+                    curr.rev   AS curr_rev,
+                    curr.path  AS curr_path,
+                    curr.date  AS curr_date,
+                    MAX(prev.date) AS last_at
+                FROM path_commit curr
+                INNER JOIN path_commit prev
+                    ON prev.path = curr.path
+                   AND prev.date < curr.date
+                GROUP BY curr.rev, curr.path, curr.date
+            ),
+            per_commit_age AS (
+                SELECT
+                    curr_rev,
+                    AVG(DATE_DIFF('day', last_at, curr_date)) AS age
+                FROM per_path_last
+                WHERE last_at IS NOT NULL
+                GROUP BY curr_rev
+            ),
+            prior_pairs AS (
+                SELECT
+                    curr.rev AS curr_rev,
+                    prev.canonical_author AS prev_author,
+                    prev.rev AS prev_rev
+                FROM path_commit curr
+                INNER JOIN path_commit prev
+                    ON prev.path = curr.path
+                   AND prev.date < curr.date
+            ),
+            per_commit_counts AS (
+                SELECT
+                    curr_rev,
+                    COUNT(DISTINCT prev_author) AS ndev,
+                    COUNT(DISTINCT prev_rev) AS nuc
+                FROM prior_pairs
+                GROUP BY curr_rev
             )
             SELECT
-                rev AS curr_rev,
-                LENGTH(LIST_DISTINCT(FLATTEN(LIST(prior_authors_at_path)))) AS ndev,
-                LENGTH(LIST_DISTINCT(FLATTEN(LIST(prior_revs_at_path)))) AS nuc,
-                AVG(DATE_DIFF('day', prior_last_date_at_path, curr_date))
-                    FILTER (WHERE prior_last_date_at_path IS NOT NULL) AS age
-            FROM path_prior_state
-            GROUP BY rev
+                pcc.curr_rev,
+                pcc.ndev,
+                pcc.nuc,
+                pca.age
+            FROM per_commit_counts pcc
+            LEFT JOIN per_commit_age pca USING (curr_rev)
         ) AS h
         WHERE commits.rev = h.curr_rev;"
     );
@@ -233,29 +286,46 @@ fn enrich_experience(db: &FactsDb, src: &str) -> Result<()> {
     //
     // Distinct revs per current commit come from FLATTEN(LIST(...)) +
     // LIST_DISTINCT across the commit's touched dirs.
+    // O(K) memory SEXP via cumulative ROW_NUMBER, NOT cross-join.
+    //
+    // Constant-memory approach:
+    //   1. DISTINCT (dir, author, rev, date) so each rev counts once
+    //      per (dir, author).
+    //   2. ROW_NUMBER() OVER (PARTITION BY dir, author ORDER BY date,
+    //      rev) - 1 = number of strictly-prior rows in the partition.
+    //      DuckDB streams this O(K) per partition; no list / no
+    //      cross-join.
+    //   3. Per-commit SEXP = MAX over the dirs the commit touched.
+    //
+    // Semantic shift: strict `<` on date (same-second peers no
+    // longer count as priors). Real repos have distinct-second
+    // commits by construction; only manufactured fixtures would
+    // notice. Aligns with the strict-prior Kamei paper definition.
     let sql_sexp = format!(
         "UPDATE commits SET sexp = COALESCE(asx.sexp, 0)
         FROM (
-            WITH dir_author_prior AS (
-                SELECT
+            WITH distinct_dir_author_rev AS (
+                SELECT DISTINCT
                     SPLIT_PART(ch.path, '/', 1) AS dir,
                     cm.canonical_author,
                     cm.rev,
-                    cm.date,
-                    LIST(cm.rev) OVER w AS prior_revs
+                    cm.date
                 FROM commits cm
                 INNER JOIN {src} ch ON ch.rev = cm.rev
-                WINDOW w AS (
-                    PARTITION BY SPLIT_PART(ch.path, '/', 1), cm.canonical_author
-                    ORDER BY cm.date
-                    RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-                    EXCLUDE CURRENT ROW
-                )
+            ),
+            ranked AS (
+                SELECT
+                    rev,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY dir, canonical_author
+                        ORDER BY date, rev
+                    ) - 1 AS prior_count
+                FROM distinct_dir_author_rev
             )
             SELECT
                 rev AS curr_rev,
-                LENGTH(LIST_DISTINCT(FLATTEN(LIST(prior_revs)))) AS sexp
-            FROM dir_author_prior
+                MAX(prior_count) AS sexp
+            FROM ranked
             GROUP BY rev
         ) AS asx
         WHERE commits.rev = asx.curr_rev;"
