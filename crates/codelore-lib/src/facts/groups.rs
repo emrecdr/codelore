@@ -30,16 +30,56 @@
 
 use std::path::Path;
 
-use fancy_regex::Regex;
+use fancy_regex::Regex as FancyRegex;
+
+/// Compiled grouping pattern. Code-maat allows full regex with lookaround
+/// in `^...$` form, but the typical user-typed group file is hundreds of
+/// plain-text path prefixes — `src/foo => engine`. The fast variant uses
+/// the standard `regex` crate (linear time, no backtracking); the fancy
+/// variant is only paid when the LHS actually starts with `^` (advanced
+/// users opting into regex semantics).
+#[derive(Debug)]
+pub enum GroupPattern {
+    /// Literal path-prefix match: `path.starts_with(prefix)` AND the next
+    /// char is `/` (or end-of-string). Substantially faster than ANY regex
+    /// engine on the millions-of-paths hot path of `apply_grouping`.
+    Literal(String),
+    /// Compiled standard regex. Used when the user wrote `^...$` but the
+    /// pattern only uses POSIX features.
+    Std(regex::Regex),
+    /// Compiled backtracking regex. Used when the standard `regex` crate
+    /// rejects the pattern (lookaround, backreferences, etc.).
+    Fancy(FancyRegex),
+}
+
+impl GroupPattern {
+    #[must_use]
+    pub fn is_match(&self, path: &str) -> bool {
+        match self {
+            // Code-maat semantic match: prefix + path-segment boundary.
+            // `src/foo` matches `src/foo/bar.rs` but not `src/foobar.rs`.
+            Self::Literal(prefix) => {
+                if !path.starts_with(prefix) {
+                    return false;
+                }
+                // Exact match OR next char is `/` (segment boundary).
+                let rest = &path[prefix.len()..];
+                rest.is_empty() || rest.starts_with('/')
+            }
+            Self::Std(r) => r.is_match(path),
+            // fancy-regex's `is_match` returns Result because lookaround can
+            // backtrack-explode; treat any error as no-match.
+            Self::Fancy(r) => r.is_match(path).unwrap_or(false),
+        }
+    }
+}
 
 /// One mapping rule from the group file.
 #[derive(Debug)]
 pub struct GroupRule {
-    pub pattern: Regex,
+    pub pattern: GroupPattern,
     pub name: String,
-    /// Original LHS string for error messages. The compiled regex may have
-    /// been rewritten (prefix-anchored + trailing-slashed) if the LHS was
-    /// plain text.
+    /// Original LHS string for error messages.
     pub raw: String,
 }
 
@@ -121,20 +161,30 @@ impl GroupMap {
             // Code-maat semantics: `^...$` literal regex; otherwise prefix-
             // anchor and slash-bound.
             //
-            // CodeLore divergence: code-maat does NOT escape the plain-text
-            // path before prefixing. We do (`regex::escape`) — it prevents
-            // accidental wildcard interpretation of `.` in literal paths.
-            // Documented in advanced-usage as a deliberate safety improvement.
-            let pattern_str = if path.starts_with('^') {
-                path.to_string()
+            // Three-tier compilation: plain-text path → `Literal` fast path
+            // (string `starts_with` + segment boundary, no regex engine at
+            // all). `^...$` form → try `regex` crate (linear time, no
+            // backtracking); fall back to `fancy-regex` only when
+            // `regex` rejects the pattern (lookaround / backreferences).
+            let pattern = if path.starts_with('^') {
+                // User-typed regex. Try the fast engine first; fall back
+                // to fancy-regex only when the standard `regex` crate
+                // rejects the pattern (lookaround / backreferences).
+                if let Ok(r) = regex::Regex::new(path) {
+                    GroupPattern::Std(r)
+                } else {
+                    let fancy =
+                        FancyRegex::new(path).map_err(|e| GroupParseError::InvalidRegex {
+                            line: line_no,
+                            pattern: path.to_string(),
+                            source: Box::new(e),
+                        })?;
+                    GroupPattern::Fancy(fancy)
+                }
             } else {
-                format!("^{}/", regex::escape(path))
+                // Literal path prefix. Skip the regex engine entirely.
+                GroupPattern::Literal(path.to_string())
             };
-            let pattern = Regex::new(&pattern_str).map_err(|e| GroupParseError::InvalidRegex {
-                line: line_no,
-                pattern: path.to_string(),
-                source: Box::new(e),
-            })?;
             rules.push(GroupRule {
                 pattern,
                 name: name.to_string(),
@@ -152,7 +202,7 @@ impl GroupMap {
             // fancy-regex's `is_match` returns Result because lookaround can
             // backtrack-out (rare); we treat backtrack-failure as a non-match
             // and continue.
-            if rule.pattern.is_match(path).unwrap_or(false) {
+            if rule.pattern.is_match(path) {
                 return Some(&rule.name);
             }
         }

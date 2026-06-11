@@ -29,6 +29,12 @@
   // Detail drawer state — set up once, reused by every widget that
   // wants to surface per-file details.
   initDetailDrawer();
+  // Registry of re-render callbacks. Each ECharts widget pushes its
+  // re-render fn so the theme toggle can repaint all of them when
+  // CSS variables change. (Theme uses CSS variables for axis / grid
+  // colors; ECharts caches the *resolved* values at setOption time
+  // so a CSS variable update alone doesn't refresh the chart.)
+  window._codeloreRerenderers = [];
   // Theme toggle (light / dark) — preference persisted in localStorage.
   initThemeToggle();
   // Color-mode toggles for the hotspot circle-pack (cognitive / author / ai).
@@ -47,7 +53,11 @@
   // -----------------------------------------------------------------
   // Widget 1: hotspot circle-pack (the signature CodeScene view)
   // -----------------------------------------------------------------
-  renderHotspotCirclePack(data.hotspots || []);
+  let currentHotspotColorMode = 'cognitive';
+  renderHotspotCirclePack(data.hotspots || [], currentHotspotColorMode);
+  window._codeloreRerenderers.push(function () {
+    renderHotspotCirclePack(data.hotspots || [], currentHotspotColorMode);
+  });
 
   // -----------------------------------------------------------------
   // Widget 2: hotspot table — sortable drill-down view of widget 1
@@ -58,13 +68,19 @@
   // Widget C: change-coupling sankey (top-N coupled file pairs)
   // -----------------------------------------------------------------
   renderCouplingSankey(data.coupling || []);
+  window._codeloreRerenderers.push(function () {
+    renderCouplingSankey(data.coupling || []);
+  });
 
   // -----------------------------------------------------------------
-  // v0.4.2 widgets
+  // v0.4.2 widgets (registered for theme re-render)
   // -----------------------------------------------------------------
   renderTrends(data.trends || []);
+  window._codeloreRerenderers.push(function () { renderTrends(data.trends || []); });
   renderCalendarHeatmap(data.daily_commits || []);
+  window._codeloreRerenderers.push(function () { renderCalendarHeatmap(data.daily_commits || []); });
   renderXRaySunburst(data.xray || []);
+  window._codeloreRerenderers.push(function () { renderXRaySunburst(data.xray || []); });
 
   function renderHotspotCirclePack(rows, colorMode) {
     const container = document.getElementById('widget-hotspot-circle-pack-body');
@@ -107,6 +123,8 @@
     // The custom series renders one shape per node; we draw circles
     // sized + positioned exactly per d3's layout. Color encodes
     // cognitive complexity (leaves only) on a yellow→red ramp.
+    const prior = echarts.getInstanceByDom(container);
+    if (prior) prior.dispose();
     const chart = echarts.init(container, null, { renderer: 'canvas' });
     const nodes = root.descendants();
     const maxCognitive = nodes.reduce(function (acc, n) {
@@ -517,6 +535,8 @@
       return { name: name };
     });
 
+    const prior = echarts.getInstanceByDom(container);
+    if (prior) prior.dispose();
     const chart = echarts.init(container, null, { renderer: 'canvas' });
     chart.setOption({
       tooltip: {
@@ -732,6 +752,8 @@
       };
     });
 
+    const prior = echarts.getInstanceByDom(container);
+    if (prior) prior.dispose();
     const chart = echarts.init(container, null, { renderer: 'canvas' });
     chart.setOption({
       tooltip: { trigger: 'axis' },
@@ -804,6 +826,8 @@
       };
     });
 
+    const prior = echarts.getInstanceByDom(container);
+    if (prior) prior.dispose();
     const chart = echarts.init(container, null, { renderer: 'canvas' });
     chart.setOption({
       tooltip: {
@@ -870,6 +894,8 @@
       });
     }
 
+    const prior = echarts.getInstanceByDom(container);
+    if (prior) prior.dispose();
     const chart = echarts.init(container, null, { renderer: 'canvas' });
     chart.setOption({
       tooltip: {
@@ -923,7 +949,9 @@
         for (var j = 0; j < buttons.length; j++) {
           buttons[j].classList.toggle('active', buttons[j] === evt.currentTarget);
         }
-        // Re-render with new color mode
+        // Re-render with new color mode. Update the shared cursor so
+        // the theme-toggle re-render uses the active mode too.
+        currentHotspotColorMode = mode;
         renderHotspotCirclePack(data.hotspots || [], mode);
       });
     }
@@ -949,6 +977,13 @@
       const next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
       apply(next);
       try { localStorage.setItem(STORAGE_KEY, next); } catch (e) {}
+      // Re-render every ECharts widget so axis labels / grids /
+      // gradient colors pick up the new CSS variable values
+      // (ECharts caches resolved colors at setOption time).
+      const rerenderers = window._codeloreRerenderers || [];
+      for (var i = 0; i < rerenderers.length; i++) {
+        try { rerenderers[i](); } catch (e) { console.warn('rerender failed:', e); }
+      }
     });
   }
 
