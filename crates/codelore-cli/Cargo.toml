@@ -14,6 +14,16 @@ path = "src/main.rs"
 [lints]
 workspace = true
 
+[features]
+default = []
+
+# `spa` — propagate the lib's `spa` feature so the binary can dispatch
+# `--format spa`. Released binaries ship with this enabled at the
+# release-workflow level; `cargo install codelore` defaults to OFF so
+# users without internet (or without the dashboard need) can install
+# cleanly.
+spa = ["codelore-lib/spa"]
+
 [dependencies]
 codelore-lib = { path = "../codelore-lib", version = "0.3.0" }
 clap = { version = "4", features = ["derive"] }

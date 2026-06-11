@@ -89,14 +89,14 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
 
     let format = args.format.as_str();
     match format {
-        "csv" | "json" | "sarif" | "markdown" | "parquet" | "sqlite" | "html" => {}
+        "csv" | "json" | "sarif" | "markdown" | "parquet" | "sqlite" | "html" | "spa" => {}
         other => anyhow::bail!(
-            "unknown --format {other:?}. Supported: csv, json, sarif, markdown, parquet, sqlite, html"
+            "unknown --format {other:?}. Supported: csv, json, sarif, markdown, parquet, sqlite, html, spa"
         ),
     }
 
     // Format constraints
-    if matches!(format, "parquet" | "sqlite") && args.output.is_none() {
+    if matches!(format, "parquet" | "sqlite" | "spa") && args.output.is_none() {
         anyhow::bail!(
             "--format {format} requires --output PATH (binary format, cannot stream to stdout)"
         );
@@ -277,6 +277,31 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             .context("write sqlite")?;
         // No sidecar — provenance table lives inside the SQLite DB.
         return Ok(());
+    }
+    if format == "spa" {
+        // Mirrors `--format sqlite` shape: bypasses the per-analysis
+        // match because the SPA is a multi-analysis composite, not a
+        // single row-type emission. v0.4.0 wires the first widget
+        // (hotspot circle-pack); subsequent widget commits add more
+        // fields to `SpaDashboard` and more analysis calls here.
+        let path = args.output.as_ref().expect("validated above");
+        #[cfg(feature = "spa")]
+        {
+            run_spa_dispatch(&db, &opts, &args.repo, path)?;
+            return Ok(());
+        }
+        #[cfg(not(feature = "spa"))]
+        {
+            // Argument is consumed at compile time when the feature is
+            // off, but keep it referenced so the var isn't flagged unused.
+            let _ = path;
+            anyhow::bail!(
+                "--format spa requires CodeLore to be built with the `spa` Cargo feature. \
+                 Reinstall with `cargo install codelore --features spa`, build from source \
+                 with `cargo build --features spa`, or use a prebuilt binary from \
+                 https://github.com/emrecdr/codelore/releases (which ship with `spa` enabled)."
+            );
+        }
     }
 
     // csv / json / sarif / markdown / html: stream through Write
@@ -1163,4 +1188,41 @@ fn write_parquet(
              (Plan 5 scope); got {other:?}"
         ),
     }
+}
+
+#[cfg(feature = "spa")]
+fn run_spa_dispatch(
+    db: &codelore_lib::facts::FactsDb,
+    opts: &codelore_lib::Options,
+    repo_path: &std::path::Path,
+    output: &std::path::Path,
+) -> anyhow::Result<()> {
+    use codelore_lib::output::spa::{SpaDashboard, write_spa};
+
+    // v0.4.0 first slice: one widget — circle-pack hotspot map.
+    // Subsequent commits in the v0.4.x series add coupling / knowledge
+    // islands / code health / etc. by extending SpaDashboard +
+    // adding more `run_*` calls here.
+    let hotspots = codelore_lib::analyses::hotspots::run_hotspots(db, opts)
+        .context("run hotspots for spa dashboard")?;
+    let dash = SpaDashboard { hotspots };
+
+    let now = time::OffsetDateTime::now_utc();
+    let generated_at = format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC",
+        now.year(),
+        u8::from(now.month()),
+        now.day(),
+        now.hour(),
+        now.minute(),
+        now.second(),
+    );
+    let title = "CodeLore Dashboard";
+    let repo_display = repo_path.display().to_string();
+
+    let mut out = std::fs::File::create(output)
+        .with_context(|| format!("create spa output {}", output.display()))?;
+    write_spa(&dash, title, &repo_display, &generated_at, &mut out)
+        .context("write spa dashboard")?;
+    Ok(())
 }
