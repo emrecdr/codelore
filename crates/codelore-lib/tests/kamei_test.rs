@@ -295,9 +295,7 @@ fn dir_skew_does_not_oom_or_timeout() {
     // The 60th commit should see 59 prior revs in its (src, Skew)
     // partition.
     let last_sexp: String = db
-        .query_one_value(
-            "SELECT CAST(sexp AS TEXT) FROM commits ORDER BY date DESC LIMIT 1",
-        )
+        .query_one_value("SELECT CAST(sexp AS TEXT) FROM commits ORDER BY date DESC LIMIT 1")
         .expect("last sexp");
     assert!(
         last_sexp.parse::<u32>().unwrap() >= 50,
