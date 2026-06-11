@@ -9,4 +9,6 @@ pub mod json;
 pub mod markdown;
 pub mod parquet;
 pub mod sarif;
+#[cfg(feature = "spa")]
+pub mod spa;
 pub mod sqlite;
