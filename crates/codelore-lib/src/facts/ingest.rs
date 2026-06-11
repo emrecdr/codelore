@@ -467,26 +467,42 @@ fn query_live_paths(db: &FactsDb) -> Result<Vec<String>> {
 }
 
 /// De-duplicate a list of entities by `(name, start_line, end_line)`,
-/// preserving first-occurrence order.
+/// preserving first-occurrence order, and disambiguate the surviving
+/// entries by suffixing the line range to the name so the downstream
+/// DB PK `(path, name, rev)` cannot conflict on duplicate-named rows.
 ///
-/// Tree-sitter walkers report multiple anonymous functions per file with
-/// identical `name` (`"<anonymous>"` or empty string for closures, lambdas,
-/// generator expressions). Deduping by name alone silently dropped every
-/// anonymous entity after the first, producing zero rows in
-/// `complexity_metrics` for closures-heavy files (JS/TS, Python, Rust
-/// async blocks). The line-range tuple is the closest thing to a stable
-/// identity for these — two anonymous functions at different line ranges
-/// are different entities, deserving their own complexity row.
+/// Tree-sitter walkers report multiple anonymous functions per file
+/// with identical `name` (`"<anonymous>"` or empty string for closures,
+/// lambdas, generator expressions) and language overloads can produce
+/// identical names too (C++ `foo(int)` vs `foo(double)`, Java
+/// constructors, Python decorated wrappers). Without disambiguation
+/// every duplicate-named entry after the first failed the
+/// `entities`/`complexity_metrics` PK on insert — the v0.3.4 F40 fix
+/// surfaced the data correctly into Rust memory but the DB rejected
+/// the second row with a UNIQUE-constraint violation, aborting ingest
+/// on any closures-heavy or overload-heavy codebase.
+///
+/// The fix rewrites the entity name to
+/// `"{original_name}@{start_line}-{end_line}"` (or
+/// `"<anonymous>@{start_line}-{end_line}"` for unnamed entities). The
+/// line range is the stable identity for unnamed entities and the
+/// unique key the PK needs without a schema migration.
 fn dedup_entities(
     entities: Vec<crate::complexity::ComplexityEntity>,
 ) -> Vec<crate::complexity::ComplexityEntity> {
     let mut seen: std::collections::HashSet<(String, u32, u32)> = std::collections::HashSet::new();
     let mut out = Vec::with_capacity(entities.len());
-    for ent in entities {
+    for mut ent in entities {
         let key = (ent.name.clone(), ent.start_line, ent.end_line);
-        if seen.insert(key) {
-            out.push(ent);
+        if !seen.insert(key) {
+            continue;
         }
+        ent.name = if ent.name.is_empty() {
+            format!("<anonymous>@{}-{}", ent.start_line, ent.end_line)
+        } else {
+            format!("{}@{}-{}", ent.name, ent.start_line, ent.end_line)
+        };
+        out.push(ent);
     }
     out
 }
