@@ -37,7 +37,7 @@ CodeScene does not have:
 | Charts (~95% of widgets) | **Apache ECharts 6.1.0** | Top-starred Apache Foundation project (66k+ stars); monthly minor releases; XSS-fix responsiveness validated in 6.1.0 + 5.5.1. Apache-2.0 license (deny.toml-allowed). Treemap, sunburst, sankey, chord, force-graph, heatmap, calendar heatmap, parallel coords, line/bar/area — all native. |
 | Circle-pack layout (1 widget) | **d3-hierarchy 3.1.2** | ECharts has no native circle-pack series. `d3-hierarchy.pack()` computes the layout (~10 KB tree-shaken); ECharts `custom` series renders the result. ISC license (deny.toml-allowed). |
 | Framework | **None** (vanilla JS) | Existing `output/html.rs` uses vanilla JS and serves 525 LOC of paginated/sortable table — proves the pattern. Adding a framework (Svelte/Vue/React) would add ~30–40 KB and a build pipeline without commensurate benefit. |
-| Build | **`build.rs` + SHA-256-pinned CDN fetch** | Avoids committing minified JS into the repo. Pins ECharts and d3-hierarchy to exact versions + SHA-256 in `crates/codelore-lib/build.rs`. Cached in `OUT_DIR` after first fetch — offline-clean for subsequent builds. Audit-trail: the build script's pin table IS the supply-chain manifest. |
+| Build | **`build.rs` + SHA-256-pinned CDN fetch behind `spa` Cargo feature** | Avoids committing minified JS into the repo. The `spa` feature is **opt-in**: default builds skip the fetch entirely (no internet needed). When enabled, `crates/codelore-lib/build.rs` fetches ECharts and d3-hierarchy from jsDelivr at pinned URLs, verifies SHA-256 against the table in `ASSETS`, and caches them in `OUT_DIR`. Subsequent builds with `spa` enabled hit the cache (no network) until either the pin changes or the cached bytes drift. Audit-trail: the build script's pin table IS the supply-chain manifest. |
 | Template | `include_str!` from `src/output/spa/template.html` | Same idiom as the existing HTML emitter; no runtime templating engine. |
 
 ### Why not Svelte / Solid / React?
@@ -129,13 +129,36 @@ emitter.
 
 ---
 
-## 5. Build-time CDN fetch with SHA-pinning
+## 5. Build-time CDN fetch with SHA-pinning, gated behind the `spa` feature
 
 `crates/codelore-lib/build.rs` fetches each minified JS dep from
 jsDelivr at the pinned URL, verifies SHA-256 against a hardcoded
 table, and writes to `OUT_DIR`. The emitter `include_str!`s from
 `OUT_DIR`. Subsequent builds skip the fetch when the file already
 exists and its hash still matches.
+
+**The fetch only fires when the `spa` Cargo feature is enabled.**
+Default builds (`cargo build`, `cargo install codelore`) do NOT
+include `spa`, do NOT fetch anything from the network, and do NOT
+need internet — offline-clean and audit-trail-clean. Released
+binaries shipped via Homebrew / ghcr / GitHub Releases enable
+`spa` at the release-workflow level.
+
+To build CodeLore with the dashboard emitter:
+
+```bash
+cargo install codelore --features spa
+# or:
+cargo build --features spa
+```
+
+The first build with `spa` enabled fetches `echarts.min.js` (~1.1 MB)
+and `d3-hierarchy.min.js` (~14 KB) from jsDelivr and SHA-pins
+them. Subsequent builds hit the `OUT_DIR` cache without any
+network call. If the cached bytes ever drift from the pin
+(corruption, tampering, manual replacement), the build fails loud
+with a SHA-mismatch error and refuses to embed the unverified
+bytes.
 
 ```rust
 // crates/codelore-lib/build.rs

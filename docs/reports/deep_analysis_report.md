@@ -94,8 +94,11 @@ All previous findings and code-maat parity issues have been validated as **fully
 *   **F33 (Consistent Repo Path Canonicalization)**: Resolved. Both cache key calculation and cache path resolution canonicalize the repository path before hashing, avoiding cache misses when switching between relative (`.`) and absolute paths.
 *   **F34 (Binary/Large File Diff Check)**: Resolved. `count_loc` checks for files larger than 1MB or containing NUL bytes in the first 8KB, and skips diffing, preventing OOM/CPU spikes and returning `(0, 0)`.
 
-### Resolved Core Deep-Analysis Finding (F38) (Fixed unreleased / commit c74a643, slated for v0.3.4 or v0.4.0)
+### Resolved Core Deep-Analysis Findings (F38, F40–F42) (Fixed unreleased / commits c74a643 & 8f42dba, slated for v0.4.0)
 *   **F38 (Quadratic Self-Join in Kamei Enrichment)**: Resolved. Replaced the three path-self-join queries (`ndev`/`nuc`/`age` in `enrich_history`; `sexp` in `enrich_experience`) with per-path / per-(dir,author) running aggregations using DuckDB `LIST(...) OVER (... RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE CURRENT ROW)`. The RANGE frame preserves Kamei's same-day inclusion semantic exactly. Per-commit DISTINCT counts come from `LIST_DISTINCT(FLATTEN(LIST(...)))` across the commit's paths. Complexity moves from `O(K²)` per hot path to `O(K log K)`. Regression test in `kamei_test.rs` validates the windowed semantic produces the expected `ndev`, `nuc`, `sexp` on a hot-path fixture.
+*   **F40 (Duplicate Entity Name Drop)**: Resolved. `dedup_entities` now keys on `(name, start_line, end_line)` instead of `name` alone. Tree-sitter walkers report multiple anonymous functions per file with identical names (`<anonymous>` or empty for closures/lambdas), which were previously silently dropped, leaving zero `complexity_metrics` rows for closures-heavy files. The line-range tuple is the closest thing to stable identity for unnamed entities, allowing closures to retain their own metrics rows.
+*   **F41 (Sequential Architectural Grouping)**: Resolved. `apply_grouping` matches paths against the group map's regex set in parallel via Rayon `par_iter()`. Pre-fix, this ran sequentially on the main thread, dominating wall-clock time for monorepos with paths × rules in the millions. The serial INSERT into the temp database table happens after the parallel collect.
+*   **F42 (Redundant DISTINCT in changes queries)**: Resolved. Removed redundant `DISTINCT` in six analysis sites (revisions, hotspots, code_health, coupling, main_dev, communication). Since `(rev, path)` is the primary key of the `changes` table, the `rev` column is already unique within each group, and `COUNT(rev)` equals `COUNT(DISTINCT rev)` but avoids DuckDB's distinct-tracking overhead.
 
 ### Resolved Core Deep-Analysis Findings (F35-F37, F39) (shipped in v0.3.3 / commit e22a475)
 *   **F35 (Incorrect Numstat Join Key in Renames under GitCliRepo)**: Resolved. Added `expand_rename_path_destination` to expand braces (e.g. `src/{old => new}.rs` to `src/new.rs`) and Arrow rename syntaxes into canonical join keys, avoiding zero-stat joins for complex renames.
@@ -107,49 +110,159 @@ All previous findings and code-maat parity issues have been validated as **fully
 
 ## 3. Newly Identified Gaps & Recommendations
 
-### F38: Performance — Quadratic Complexity in Kamei History and Experience Enrichment
+### F43: Performance — Redundant `clone()` of Blob Data in `count_loc`
 
 **The Problem**:
-In [kamei/mod.rs:130](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/kamei/mod.rs#L130), [kamei/mod.rs:163](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/kamei/mod.rs#L163), and [kamei/mod.rs:222](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/kamei/mod.rs#L222), Kamei features (`ndev`, `nuc`, `age`, `sexp`) are enriched using cross-commit joins on path matching (`pchg.path = cchg.path`) and directory matching. For very active files changed thousands of times (e.g. `package.json`, `Cargo.toml`), or active top-level directories under single-directory projects, the self-joins scale quadratically (`O(changes_per_path^2)`).
+In [gix_repo.rs:515](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/repo/gix_repo.rs#L515), `read_blob` returns `obj.data.clone()`. Since `obj` is an owned `gix::Object` loaded inside the closure, returning `obj.data` directly (which is an owned `Vec<u8>`) moves the buffer and avoids copying up to 1MiB of bytes for every changed file in every commit.
 
 **The Impact**:
-Analyzing large repositories with highly active files or concentrated top-level paths can lead to severe slowdowns, high CPU/memory overhead, and potential DuckDB temporary file/disk space exhaustion.
+Ingestion wall-clock time is inflated by constant heap allocation and byte-copying of large file buffers on active repos.
 
 **Recommended Fix**:
-Optimize the history and experience enrichment logic by utilizing pre-aggregates or staging temporary tables rather than full self-joins on historical changes.
+Change `Ok(obj.data.clone())` to `Ok(obj.data)` to move the vector.
 
-### F40: Correctness — Duplicate Entity Names (Nested/Anonymous/Overloaded Functions) Are Silently Discarded
+---
+
+### F44: Performance — Redundant Diff Computation for Additions and Deletions
 
 **The Problem**:
-The `entities` database schema uses `PRIMARY KEY (path, name, rev_introduced)` and the `complexity_metrics` table uses `PRIMARY KEY (path, name, rev)`. To prevent DB constraint violation failures on duplicate keys, `ingest_complexity_at_head` in [ingest.rs](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/facts/ingest.rs) calls `dedup_entities`, which filters out duplicate entities based solely on `seen.insert(ent.name.clone())`.
+In [gix_repo.rs:535](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/repo/gix_repo.rs#L535), `count_loc` runs a full `diff_with_slider_heuristics` histogram diff on additions and deletions (where `old_oid` or `new_oid` is `None`). This can be optimized.
 
 **The Impact**:
-Any entity sharing a name within the same file (e.g., nested functions, overloaded methods in Java, or multiple anonymous closures which all fall back to `"<anonymous>"`) is silently discarded during complexity metric ingestion. Consequently, only the first anonymous function or overloaded method gets parsed/stored, significantly skewing complexity rankings, hotspots, and code health calculations.
+Unnecessary compute overhead. Diffing against an empty buffer is mathematically equivalent to scanning the non-empty buffer and counting newlines.
 
 **Recommended Fix**:
-Incorporate scope-qualification (e.g. `ClassName.methodName` or parent helper hierarchy) or append line numbers/offsets to the entity name (e.g., `name@start_line`) during ingestion to enforce uniqueness without discarding valid distinct entities. Alternatively, extend the Primary Keys in the schema to include line offsets.
+When `old_oid` is `None`, skip `diff_with_slider_heuristics` entirely, count the lines in the new buffer, and return `(line_count, 0)`. Apply the converse when `new_oid` is `None`.
 
-### F41: Performance — Sequential Architectural Grouping Over All Paths in History
+---
+
+### F45: Performance — Recursive `TreeCursor` Creation in AST Walks
 
 **The Problem**:
-In [ingest.rs:914](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/facts/ingest.rs#L914), `apply_grouping` fetches all unique paths from the database and maps them against the regex-based `GroupMap` rules sequentially on the main thread.
+In [fingerprint.rs:104](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/clones/fingerprint.rs#L104) (`walk_preorder_internal`) and [extractor.rs:85](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/clones/extractor.rs#L85) (`visit`), a new `TreeCursor` is allocated via `node.walk()` at every node of the AST preorder walk.
 
 **The Impact**:
-For massive repositories with tens of thousands of paths in history and complex architectural group maps (with multiple regexes containing backtracking lookarounds), sequentially matching every path is a major CPU bottleneck that delays ingestion completion.
+Thousands of transient heap allocations and deallocations per file tree traversal, causing high CPU cache pressure and slower clone-detection walks.
 
 **Recommended Fix**:
-Parallelize the path-to-group resolution logic using Rayon (`into_par_iter()`) on the `distinct_paths` vector, collecting the computed mapping pairs before doing the database writes.
+Walk the AST iteratively using a single mutable `TreeCursor` and native traversal methods (`goto_first_child`, `goto_next_sibling`, `goto_parent`).
 
-### F42: Performance — Redundant `COUNT(DISTINCT rev)` on Unique `changes(rev, path)` Tables
+---
+
+### F46: Performance — Multiple String Replacement Passes on HTML Report Emitter
 
 **The Problem**:
-Multiple SQL views in `ownership.rs`, `code_health.rs`, and `hotspots.rs` use `COUNT(DISTINCT rev)` or `COUNT(DISTINCT c.rev)` over the changes table (or `changes_bucketed` view). Because `(rev, path)` is already the Primary Key (and unique constraint) of the changes table, a path has at most one row per `rev`.
+In [html.rs:60](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/output/html.rs#L60), the payload HTML is assembled by chaining `.replace` on `HTML_TEMPLATE` in memory, injecting a large JSON payload (which can be multi-megabytes) before subsequent replace passes.
 
 **The Impact**:
-Unnecessary performance overhead. The database builds distinct/hash aggregations for `rev` on every file revisions calculation, whereas a direct `COUNT(*)` yields the same semantic results much faster.
+Multiple copies and heap allocations of large HTML/JSON strings.
 
 **Recommended Fix**:
-Replace `COUNT(DISTINCT rev)` with `COUNT(*)` in paths where uniqueness is already structurally guaranteed by the table layout or grouping query constraints.
+Write the template segments and replaced tokens sequentially to the writer `w` directly, avoiding in-memory template duplication.
+
+---
+
+### F47: Performance — Redundant `COUNT(DISTINCT a.rev)` in Coupling Pairs CTE
+
+**The Problem**:
+In [coupling.rs:209](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/coupling.rs#L209), the query calculates `COUNT(DISTINCT a.rev) AS shared`. Because `(rev, path)` is the changes table primary key, a path pair can appear at most once per `rev`.
+
+**The Impact**:
+Unnecessary hash-distinct aggregation overhead on the largest Cartesian join in CodeLore.
+
+**Recommended Fix**:
+Replace `COUNT(DISTINCT a.rev)` with `COUNT(*)` or `COUNT(a.rev)`.
+
+---
+
+### F48: Performance — Redundant `COUNT(DISTINCT c.rev)` in Entity-Churn
+
+**The Problem**:
+In [churn.rs:96](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/churn.rs#L96), `COUNT(DISTINCT c.rev)` is computed under a `GROUP BY c.path`.
+
+**The Impact**:
+Redundant distinct tracking since `(rev, path)` is already unique in changes.
+
+**Recommended Fix**:
+Replace with `COUNT(c.rev)` or `COUNT(*)`.
+
+---
+
+### F49: Performance — Redundant `COUNT(DISTINCT c.rev)` in Code-Health Author-Revisions
+
+**The Problem**:
+In [code_health.rs:63](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/code_health.rs#L63), the CTE groups by `(c.path, author)` and distinct-counts `rev`.
+
+**The Impact**:
+Redundant hashing since a single author touches a file at most once per commit.
+
+**Recommended Fix**:
+Replace with `COUNT(c.rev)`.
+
+---
+
+### F50: Performance — Redundant `COUNT(DISTINCT changes.rev)` in Ownership
+
+**The Problem**:
+In [ownership.rs:35](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/ownership.rs#L35), author-revisions are computed with a distinct count on `changes.rev`.
+
+**The Impact**:
+Unnecessary aggregation overhead.
+
+**Recommended Fix**:
+Replace with `COUNT(changes.rev)`.
+
+---
+
+### F51: Performance — Redundant `COUNT(DISTINCT changes.rev)` in Code-Age
+
+**The Problem**:
+In [code_age.rs:104](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/code_age.rs#L104), path revision counts are computed via `COUNT(DISTINCT changes.rev)`.
+
+**The Impact**:
+Unnecessary distinct checking on the unique changes primary key.
+
+**Recommended Fix**:
+Replace with `COUNT(changes.rev)`.
+
+---
+
+### F52: Performance — Redundant `COUNT(DISTINCT a.path)` in Communication Pairs
+
+**The Problem**:
+In [communication.rs:71](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/communication.rs#L71), the `pairs` CTE groups by `(a.author, b.author)` and distinct-counts `a.path`.
+
+**The Impact**:
+Unnecessary distinct-aggregation. Since `author_files` is already deduplicated (`SELECT DISTINCT`), paths are unique per author.
+
+**Recommended Fix**:
+Replace with `COUNT(a.path)`.
+
+---
+
+### F53: Performance — Redundant `COUNT(DISTINCT cls.author)` in Authors Analysis
+
+**The Problem**:
+In [authors.rs:128-132](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/authors.rs#L128-L132), the final select uses `COUNT(DISTINCT)` on `cls.author`. Since `classified` groups by `(path, author)`, each author is unique per path.
+
+**The Impact**:
+Unnecessary distinct count tracking.
+
+**Recommended Fix**:
+Replace with `COUNT(cls.author)` and `SUM` or `COUNT` filters.
+
+---
+
+### F54: Performance — Redundant `COUNT(DISTINCT path)` in Sum of Coupling
+
+**The Problem**:
+In [soc.rs:68](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/soc.rs#L68), `rev_sizes` CTE groups by `rev` and counts `DISTINCT path`.
+
+**The Impact**:
+Redundant aggregation. Since `path` is unique per `rev` in the `changes` table, it is already distinct.
+
+**Recommended Fix**:
+Replace with `COUNT(path)`.
 
 ---
 
@@ -159,23 +272,31 @@ Below is the register of active improvement opportunities and bugs:
 
 | ID | Category | Finding / Improvement Point | Priority / Risk | Impact | Status |
 |---|---|---|---|---|---|
-| **F38** | Performance | Quadratic self-join complexity in Kamei history and experience enrichment. | **Medium** / Medium | Large CPU/disk overhead on massive repositories with highly active files. | **Fixed (Unreleased)** — `c74a643` — windowed RANGE … EXCLUDE CURRENT ROW frames + LIST/FLATTEN union per commit. |
-| **F40** | Correctness | Silent drop of duplicate-named entities (nested/overloaded/anonymous fns) in ingestion. | **High** / Medium | Incomplete complexity metrics/hotspots data for files with multiple closures/overloads. | **Fixed (Unreleased)** — `dedup_entities` keys by `(name, start_line, end_line)` tuple; anonymous closures retain their own rows. |
-| **F41** | Performance | Sequential matching of regex rules in architectural grouping. | **Medium** / Low | Single-threaded CPU bottleneck during ingest of massive repositories with large group files. | **Fixed (Unreleased)** — `apply_grouping` regex-matches paths via rayon `par_iter`; serial INSERT after parallel collect. |
-| **F42** | Performance | Redundant `COUNT(DISTINCT rev)` operations on unique changes tables. | **Low** / Low | Minor CPU and memory overhead during SQL execution for behavioral analyses. | **Fixed (Unreleased)** — 6 sites switched to `COUNT(rev)`; (rev, path) PK guarantees uniqueness per group. |
+| **F43** | Performance | Redundant `clone()` of blob data in `count_loc` | **Medium** / Low | High heap allocation overhead on active repositories. | Active |
+| **F44** | Performance | Redundant diff computation for additions and deletions | **Medium** / Low | Extra CPU cycles running histogram diff against empty inputs. | Active |
+| **F45** | Performance | Recursive `TreeCursor` creation in AST preorder walks | **High** / Low | Thousands of transient/dynamic allocations during tree traversal. | Active |
+| **F46** | Performance | Multiple string replacements on large JSON HTML outputs | **Low** / Low | High memory footprint and GC pressure during HTML report emission. | Active |
+| **F47** | Performance | Redundant `COUNT(DISTINCT a.rev)` in coupling pairs CTE | **High** / Low | High DuckDB distinct-aggregation overhead on the hot-path self-join. | Active |
+| **F48** | Performance | Redundant `COUNT(DISTINCT c.rev)` in entity-churn | **Medium** / Low | Unnecessary aggregation overhead. | Active |
+| **F49** | Performance | Redundant `COUNT(DISTINCT c.rev)` in code-health | **Medium** / Low | Unnecessary aggregation overhead. | Active |
+| **F50** | Performance | Redundant `COUNT(DISTINCT changes.rev)` in ownership | **Medium** / Low | Unnecessary aggregation overhead. | Active |
+| **F51** | Performance | Redundant `COUNT(DISTINCT changes.rev)` in code-age | **Medium** / Low | Unnecessary aggregation overhead. | Active |
+| **F52** | Performance | Redundant `COUNT(DISTINCT a.path)` in communication | **Medium** / Low | Unnecessary aggregation overhead. | Active |
+| **F53** | Performance | Redundant `COUNT(DISTINCT cls.author)` in authors | **Medium** / Low | Unnecessary aggregation overhead. | Active |
+| **F54** | Performance | Redundant `COUNT(DISTINCT path)` in sum-of-coupling | **Medium** / Low | Unnecessary aggregation overhead. | Active |
 
 ---
 
 ## 5. Proposed Verification Plan for New Findings
 
-### F38 (Kamei enrichment performance)
-*   **Verification**: Run `codelore` JIT Kamei feature enrichment on a repository with a large commit history containing a file modified >5,000 times. Monitor processing time and verify it finishes within acceptable limits without massive memory leaks or disk blowup.
+### F43 (Redundant blob data clone) & F44 (Redundant diff on empty input)
+*   **Verification**: Measure execution time of commit walks on a repository with large histories of additions/deletions. Confirm that processing speed improves and memory footprint decreases.
 
-### F40 (Duplicate entity name drop)
-*   **Verification**: Run `codelore analyze --analysis hotspots` on a codebase containing multiple nested or anonymous functions in a single file (e.g. a JS file with 10 arrow function closures). Verify that the database stores complexity metrics for all 10 distinct entities instead of only 1.
+### F45 (Recursive TreeCursor allocation)
+*   **Verification**: Run a heap profiler (e.g. `dhat` or `valgrind`) on clones/fingerprint walks and verify that the number of allocated `TreeCursor` structures drops to 1 per file/function subtree.
 
-### F41 (Parallel grouping performance)
-*   **Verification**: Profile ingestion time on a repository with 50,000 commits using a complex `--group-file`. Ensure the grouping phase runs concurrently across available CPU cores and shows a reduction in CPU time.
+### F46 (String replacements in HTML emitter)
+*   **Verification**: Run `codelore analyze --format html` on a massive codebase. Compare peak memory usage during HTML write against the previous implementation.
 
-### F42 (Redundant count distinct optimization)
-*   **Verification**: Run EXPLAIN on the modified SQL queries and compare execution plans. Verify that DuckDB does not construct a hash-distinct pipeline for `rev` counting. Verify that results of hotspots/ownership remain bit-identical.
+### F47 to F54 (Redundant SQL COUNT DISTINCT queries)
+*   **Verification**: Run `EXPLAIN` on all the rewritten SQL queries in DuckDB. Confirm that DuckDB does not construct distinct hash-aggregation pipelines, resulting in a cleaner and faster execution plan. Compare the outputs of the analyses on a test database to ensure they produce bit-identical results.

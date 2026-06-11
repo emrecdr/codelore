@@ -10,6 +10,15 @@ description = "CodeLore — Behavioral Code Analyzer library"
 [lints]
 workspace = true
 
+[build-dependencies]
+# Build-script HTTP fetch for the optional `spa` dashboard emitter's
+# vendored JS deps. ureq is sync, ~30KB, no async runtime — exactly
+# the right size for a build script. sha2/hex pin the downloaded
+# bytes against tampering (audit-trail-clean supply chain).
+ureq = { version = "2", features = ["tls"] }
+sha2 = "0.11"
+hex = "0.4"
+
 [dependencies]
 time = { version = "0.3", features = ["serde", "macros"] }
 serde = { version = "1", features = ["derive"] }
@@ -55,6 +64,15 @@ fancy-regex = "0.18"
 [features]
 default = []
 test-support = ["dep:tempfile"]
+
+# `spa` — opt-in CodeScene-equivalent dashboard emitter (--format spa).
+# Activating this feature makes `build.rs` fetch and SHA-pin the
+# vendored JS deps (Apache ECharts + d3-hierarchy) from jsDelivr at
+# build time and embed them into the binary. Without this feature
+# CodeLore builds cleanly offline and the `spa` format is unavailable
+# from the CLI. Released binaries (Homebrew, ghcr, GitHub Releases)
+# ship with `--features spa` enabled.
+spa = []
 
 [dev-dependencies]
 criterion = "0.8"

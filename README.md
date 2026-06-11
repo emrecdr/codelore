@@ -108,6 +108,11 @@ cargo binstall codelore
 
 # From source (Rust 1.96+ toolchain required):
 cargo install --git https://github.com/emrecdr/codelore codelore-cli
+
+# From source WITH the optional interactive dashboard emitter
+# (`--format spa` — Apache ECharts + d3-hierarchy fetched once at
+# build time, SHA-pinned). Requires internet on first build:
+cargo install --git https://github.com/emrecdr/codelore codelore-cli --features spa
 ```
 
 Or grab a prebuilt archive straight from a [GitHub Release](https://github.com/emrecdr/codelore/releases/latest) — five targets ship per tag (macOS arm64/x86_64, Linux arm64/x86_64-gnu, Windows x86_64-msvc), each with SLSA L3 build provenance attached.
