@@ -4,6 +4,47 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Added — `--format spa` widget completeness (v0.4.2)
+
+Five new widgets, the hotspot color-mode toggle, and a light/dark
+theme switcher. Builds on v0.4.0's SPA dashboard scaffold without
+adding any new build-time dependencies (still ECharts + d3-hierarchy
+only).
+
+- **W7 Knowledge map** — toggle on the hotspot circle-pack that
+  re-paints leaves by primary author per file (derived from
+  `entity_ownership` — max added LoC wins per path) using a stable
+  15-color palette.
+- **W8 X-Ray sunburst** — function-level cognitive complexity in a
+  three-level radial hierarchy (top-level path segment → file →
+  function). Top-500 functions by cognitive complexity. New
+  `output::spa::run_xray(db, limit)` helper that joins
+  `complexity_metrics` with `entities` on `(path, name, rev)` to
+  surface the line range alongside each score. CodeScene paywalls
+  this surface; CodeLore ships it free.
+- **W9 Trends multi-line** — monthly revision counts for the top-10
+  hotspot paths. New `output::spa::run_trends(db, &paths)` helper.
+- **W10 Calendar heatmap** — per-day commit volume rendered as
+  one calendar block per year using ECharts' native calendar coord
+  system. New `output::spa::run_daily_commits(db)` helper.
+- **W11 AI-attribution toggle** — third color-mode on the hotspot
+  circle-pack (placeholder; per-path AI rollup lands in v0.4.3).
+- **Light / dark theme toggle** — header button with `localStorage`
+  persistence. Light theme defined via `data-theme="light"` on
+  `<html>` overriding the `:root` CSS variables; widget bodies
+  (including ECharts axis / grid colors) pull from those variables
+  via the new `getCssVar(name)` JS helper.
+
+Shape changes:
+- `SpaDashboard` gains four fields: `entity_ownership`, `xray`,
+  `daily_commits`, `trends`. Each is `skip_serializing_if = "Vec::is_empty"`.
+- New row types: `XRayEntry`, `DailyCommit`, `TrendPoint`.
+
+End-to-end smoke (live CodeLore repo): 1.2 MB self-contained HTML
+embedding 301 hotspots + 494 xray functions + 7 daily-commit rows
++ 10 trend points + 47 coupling pairs. All 9 widget markers and
+color-mode toggles verified present.
+
 ## [0.4.1] - 2026-06-11
 
 ### Fixed — deep-analysis findings F43-F54 (v0.4.1 perf batch)
