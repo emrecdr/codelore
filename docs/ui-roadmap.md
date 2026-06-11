@@ -62,7 +62,7 @@ CodeScene does not have:
 
 | Version | Scope | Status |
 |---|---|---|
-| **v0.4.0** | F38 perf fix + 6-widget SPA-MVP (hotspot circle-pack, hotspot table, code-health KPI tiles, file detail drawer, change-coupling viz, knowledge-islands viz) | In progress |
+| **v0.4.0** | F38 perf fix + 6-widget SPA-MVP (KPI tiles, hotspot circle-pack, hotspot table, change-coupling sankey, knowledge-islands ranked view, file detail drawer) | **Shipped 2026-06-11** ✓ |
 | **v0.4.1** | 3 more widgets: knowledge map (author-colored treemap), function-level X-Ray sunburst, trends multi-line | Planned |
 | **v0.4.2** | Calendar heatmap, alternate coupling viz (network/chord), theming + dark mode | Planned |
 | **v0.4.3+** | Embed mode for CI artefacts, perf tuning on > 100k-commit repos, AI-attribution overlay | Planned |

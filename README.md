@@ -203,6 +203,38 @@ Once you've run those four, you have enough signal to triage. From here, [the ad
 
 ---
 
+## Interactive dashboard (`--format spa`)
+
+For an at-a-glance CodeScene-equivalent surface, emit a single
+self-contained HTML file that opens in any browser, runs offline,
+and fits in a CI artefact:
+
+```bash
+codelore analyze --format spa --output codelore.html --repo .
+```
+
+Six widgets — hotspot circle-pack map, sortable hotspot table,
+change-coupling sankey, knowledge-islands ranked view, code-health
+KPI tiles, and a click-target file detail drawer — all rendered
+from a single embedded JSON blob using Apache ECharts +
+`d3.pack()` for layout. The output is ~1.2 MB (most of it is the
+ECharts payload; the data payload is ~50 KB-2 MB depending on
+repo size). No server, no framework runtime, no phone-home.
+
+The `spa` Cargo feature gates the JS deps so default `cargo
+install codelore` builds clean offline. Released binaries
+(Homebrew / ghcr / GitHub Releases) enable the feature, so
+`codelore --format spa` works out of the box.
+
+CodeLore's UI exposes three signals CodeScene doesn't:
+**auto-detected knowledge islands** (departed-author × clones
+× co-change intersection — no manual ex-developer marking),
+**AI-attribution filtering** (planned for v0.4.1), and
+**auditable per-metric formulas** (provenance sidecar links every
+dashboard number to the SQL query that produced it).
+
+---
+
 ## In CI: PR-mode delta analysis
 
 ```bash
@@ -285,10 +317,13 @@ Default: **non-strict** (unmapped paths keep their raw names; safer than silent 
             │ SQL queries (bind-parameterized) + Rust orchestrators
             ▼
    ┌─────────────────────┐
-   │  21 Analyses         │  → 6 output formats (CSV/JSON/SARIF/
-   │                     │     Markdown/Parquet/SQLite)
+   │  23 Analyses         │  → 7 output formats (CSV/JSON/SARIF/
+   │                     │     Markdown/Parquet/SQLite/SPA*)
    │                     │  → persistent cache (10-100× speedup)
    │                     │  → provenance.json sidecar
+   │                     │
+   │                     │  * SPA = single-HTML interactive
+   │                     │    dashboard (opt-in `spa` feature)
    └─────────────────────┘
 ```
 
@@ -315,7 +350,7 @@ What we deliberately don't ship: no async runtime, no libgit2 binding, no LLM-ba
 
 ## Status
 
-Release-ready alpha. **23 analyses × 6 output formats × `codelore diff` PR-mode × 4 SARIF rules.** Full test suite (`codelore-lib` unit + integration, `codelore-cli` integration, differential `GixRepo` vs `GitCliRepo` cross-walker parity) passes on Rust 1.96.0 across Linux, macOS, and Windows; `clippy -D warnings`, `rustfmt --check`, and `cargo deny check` all gate every push. Each tagged release ships prebuilt binaries for five targets (macOS arm64/x86_64, Linux arm64/x86_64-gnu, Windows x86_64-msvc), each with SLSA L3 build provenance attached, a distroless OCI container at `ghcr.io/emrecdr/codelore`, an auto-regenerated formula in the `emrecdr/codelore` Homebrew tap, and a `cargo binstall`-compatible asset layout — all produced by `.github/workflows/release.yml` on every `v*` tag push, gated by the `protect-release-tags` ruleset that requires green CI on the target commit before the tag is accepted.
+Release-ready alpha. **23 analyses × 7 output formats × `codelore diff` PR-mode × 4 SARIF rules.** Full test suite (`codelore-lib` unit + integration, `codelore-cli` integration, differential `GixRepo` vs `GitCliRepo` cross-walker parity) passes on Rust 1.96.0 across Linux, macOS, and Windows; `clippy -D warnings`, `rustfmt --check`, and `cargo deny check` all gate every push. Each tagged release ships prebuilt binaries for five targets (macOS arm64/x86_64, Linux arm64/x86_64-gnu, Windows x86_64-msvc), each with SLSA L3 build provenance attached, a distroless OCI container at `ghcr.io/emrecdr/codelore`, an auto-regenerated formula in the `emrecdr/codelore` Homebrew tap, and a `cargo binstall`-compatible asset layout — all produced by `.github/workflows/release.yml` on every `v*` tag push, gated by the `protect-release-tags` ruleset that requires green CI on the target commit before the tag is accepted.
 
 **This session's deliverables** (3 sprints + GitHub tags + versioning):
 

@@ -72,8 +72,22 @@ codelore analyze --analysis <NAME> --format <FORMAT>
 | `sarif` | GitHub Code Scanning / GitLab security / Defectdojo | SARIF 2.1.0; supported for `hotspots`, `clones`, `clone-coupling`, and `codelore diff` (CODELORE-MISSING-COCHANGE) today |
 | `parquet` | DuckDB / Polars / pandas / Spark | `--output PATH` required; binary format |
 | `sqlite` | Ad-hoc SQL exploration of the full fact store | `--output PATH` required; dumps all 8 tables. Strict superset of code-maat's `--analysis identity` raw-dataset dump (CodeLore exposes complexity, clones, mailmap, and provenance tables alongside `commits`/`changes`). |
+| `spa` | Single-HTML interactive dashboard (CodeScene-equivalent surface). Opens in any browser, runs offline, fits in a CI artefact. | `--output PATH` required; ~1.2 MB self-contained HTML. Embeds Apache ECharts + d3-hierarchy SHA-pinned at build time. Composite (multi-analysis) emitter — bypasses `--analysis`. **Opt-in `spa` Cargo feature**: default `cargo install codelore` builds offline-clean without this. Released binaries / Homebrew / ghcr ship with `spa` enabled. |
 
-Every file output (except SQLite, where it lives inside the DB) emits a `{output}.provenance.json` sidecar with the bca/gix/duckdb versions, every threshold knob, mailmap state, and UTC timestamp. This is your reproducibility receipt.
+Every file output (except SQLite, where the provenance table lives inside the DB, and SPA, where it's embedded as a JSON block in the page) emits a `{output}.provenance.json` sidecar with the bca/gix/duckdb versions, every threshold knob, mailmap state, and UTC timestamp. This is your reproducibility receipt.
+
+### `--format spa` widget surface (v0.4.0)
+
+The dashboard composes six widgets in one HTML file:
+
+1. **KPI tiles** — at-a-glance: files analyzed, commits, distinct authors, median code health, cognitive p95, knowledge-island count, coupling pair count.
+2. **Hotspot circle-pack map** — the signature CodeScene view. Files sized by churn, colored by complexity, nested by filesystem hierarchy. `d3.pack()` layout fed into an ECharts `custom` series.
+3. **Hotspot table** — sortable, filterable drill-down. Same 500-row pagination as `--format html`. Click row → file detail drawer.
+4. **Change-coupling sankey** — top-30 file-pair coupling flows by `combined_score`. Node click → drawer.
+5. **Knowledge islands** (CodeLore differentiator) — ranked table of departed-primary-author files with no substantial other owner. Auto-detected from commit history + co-change intensity. CodeScene paywalls this and requires manual ex-developer marking.
+6. **File detail drawer** — side panel that aggregates hotspot / knowledge-island / code-health / coupling-partner data for one path. ESC or × closes.
+
+The emitter runs the analyses each widget needs (`hotspots`, `summary`, `code_health`, `coupling`, `knowledge_islands`) so a single `codelore analyze --format spa` invocation produces a fully populated dashboard. Coupling and knowledge-islands degrade gracefully on tiny fixtures where Fisher significance can't be reached.
 
 ### SARIF rules CodeLore ships
 
@@ -97,7 +111,7 @@ codelore analyze [OPTIONS]
                                 name prints the full valid list)
   -r, --repo PATH               Git repo path [default: .]
   -f, --format FORMAT           Output format [default: csv]
-                                csv | json | sarif | markdown | parquet | sqlite
+                                csv | json | sarif | markdown | parquet | sqlite | spa
   -o, --output PATH             Write to file instead of stdout
       --min-revs N              Min revisions per entity [default: 5]
       --rows N                  Cap output to N rows

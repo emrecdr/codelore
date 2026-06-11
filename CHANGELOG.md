@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-11
+
 ### Added — `--format spa` interactive dashboard emitter (v0.4.0 first slice)
 
 A single self-contained HTML dashboard that mirrors the

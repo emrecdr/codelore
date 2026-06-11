@@ -34,7 +34,7 @@ graph TD
     E[Working-tree walk @ HEAD] -->|tree-sitter parsing via rayon| F[Complexity + clones extraction]
     F -->|HEAD-time metrics| D
     D -->|SQL views / parameterized queries| G[23 behavioral analyses]
-    G -->|emitters| H[CSV · JSON · SARIF 2.1.0 · Markdown · Parquet · SQLite]
+    G -->|emitters| H[CSV · JSON · SARIF 2.1.0 · Markdown · Parquet · SQLite · SPA]
     G -->|provenance| I[manifest sidecars]
 ```
 
@@ -52,7 +52,7 @@ After successful ingest, the `FactsDb` is persisted to `$XDG_CACHE_HOME/codelore
 
 ### Output formats
 
-Six emitters share a single source of truth (the analysis's `Row` struct):
+Seven emitters share a single source of truth (the analysis's `Row` struct), plus one composite emitter for the SPA:
 
 - `csv` — code-maat-compatible headers; hand-rolled writer with `quote_if_needed` escaping
 - `json` — serde-derived pretty-printed JSON
@@ -60,6 +60,7 @@ Six emitters share a single source of truth (the analysis's `Row` struct):
 - `markdown` — GFM tables, targeted at `$GITHUB_STEP_SUMMARY`
 - `parquet` — DuckDB `COPY … TO … (FORMAT PARQUET)`; binary, columnar
 - `sqlite` — `INSTALL sqlite; ATTACH 'x.db' AS sink (TYPE SQLITE); CREATE TABLE sink.* AS SELECT * FROM …` — dumps the whole fact store
+- `spa` — single-HTML interactive dashboard (six widgets: KPI tiles, hotspot circle-pack, hotspot table, change-coupling sankey, knowledge islands, file detail drawer). Multi-analysis composite emitter that runs `hotspots`, `summary`, `code_health`, `coupling`, and `knowledge_islands` internally; bypasses `--analysis`. Vendored Apache ECharts + d3-hierarchy fetched and SHA-pinned by `build.rs` at compile time when the `spa` Cargo feature is enabled (default OFF for offline-clean source builds; ON in released binaries)
 
 Every file output (except SQLite, where reproducibility metadata lives inside the database) writes a `{output}.provenance.json` sidecar capturing the full `Options` snapshot, repo SHA, tool versions, mailmap state, and UTC timestamp.
 
