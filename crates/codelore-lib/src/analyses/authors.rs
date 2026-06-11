@@ -92,16 +92,6 @@ const SQL: &str = "
         INNER JOIN commits ON commits.rev = changes.rev
         GROUP BY changes.path, commits.canonical_author
     ),
-    last_author_per_path AS (
-        SELECT
-            path,
-            author,
-            ROW_NUMBER() OVER (
-                PARTITION BY path
-                ORDER BY last_at DESC, author ASC
-            ) AS rn
-        FROM per_file_author
-    ),
     classified AS (
         SELECT
             pfa.path,
@@ -139,11 +129,13 @@ const SQL: &str = "
         CAST(COUNT(CASE WHEN cls.is_bot_for_entity
                         THEN cls.author END) AS UINTEGER) AS n_bots,
         CAST(SUM(cls.n_commits) AS UINTEGER) AS n_revs,
-        ANY_VALUE(la.author) AS last_author,
+        -- `first(... ORDER BY ...)` collapses what used to be a separate
+        -- `last_author_per_path` CTE plus self-join. Picks the author
+        -- with the most recent `last_at` (ASC author tiebreak for
+        -- determinism on same-second commits).
+        first(cls.author ORDER BY cls.last_at DESC, cls.author ASC) AS last_author,
         CAST(CAST(MAX(cls.last_at) AS DATE) AS TEXT) AS last_modified
     FROM classified cls
-    INNER JOIN last_author_per_path la
-        ON la.path = cls.path AND la.rn = 1
     GROUP BY cls.path
     -- `classified` has one row per (path, author) so author is unique
     -- within the (path) group and non-NULL. COUNT(cls.author) skips

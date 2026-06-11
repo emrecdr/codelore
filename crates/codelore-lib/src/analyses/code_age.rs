@@ -87,15 +87,16 @@ pub struct CodeAgeRow {
 const SQL: &str = "
     WITH live_paths_at_anchor AS (
         SELECT path FROM (
-            SELECT c.path, c.change_type,
-                   ROW_NUMBER() OVER (
-                       PARTITION BY c.path
-                       ORDER BY commits.date DESC, commits.rowid ASC
-                   ) AS rn
+            SELECT c.path,
+                   arg_max(
+                       c.change_type,
+                       ROW(commits.date, -commits.rowid)
+                   ) AS change_type
             FROM changes c
             INNER JOIN commits ON commits.rev = c.rev
             WHERE commits.date <= CAST(? AS TIMESTAMP)
-        ) WHERE rn = 1 AND change_type != 'deleted'
+            GROUP BY c.path
+        ) WHERE change_type != 'deleted'
     ),
     per_path AS (
         SELECT

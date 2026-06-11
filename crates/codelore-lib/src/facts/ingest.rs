@@ -442,21 +442,25 @@ fn current_head_rev(db: &FactsDb) -> Result<String> {
 /// used `c.rev DESC` (SHA-1 lex) which is arbitrary and could pick the parent
 /// commit as HEAD instead of the child on same-second pairs.
 fn query_live_paths(db: &FactsDb) -> Result<Vec<String>> {
+    // Hash-grouped `arg_max` picks the most-recent change_type per path in a
+    // single streaming pass (O(K) memory, K = distinct paths). The ordering
+    // key is `ROW(date, -rowid)` so that struct lex-compare reproduces
+    // `ORDER BY date DESC, rowid ASC`: larger date wins, then smaller rowid.
     let sql = "
         WITH latest_per_path AS (
             SELECT
                 c.path,
-                c.change_type,
-                ROW_NUMBER() OVER (
-                    PARTITION BY c.path
-                    ORDER BY commits.date DESC, commits.rowid ASC
-                ) AS rn
+                arg_max(
+                    c.change_type,
+                    ROW(commits.date, -commits.rowid)
+                ) AS change_type
             FROM changes c
             INNER JOIN commits ON commits.rev = c.rev
+            GROUP BY c.path
         )
         SELECT path
         FROM latest_per_path
-        WHERE rn = 1 AND change_type != 'deleted'
+        WHERE change_type != 'deleted'
         ORDER BY path
     ";
     let mut stmt = db

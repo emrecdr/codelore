@@ -67,9 +67,11 @@ fn build_author_churn_sql(src: &str) -> String {
 // historical churn numbers — useful for retroactive forensics but
 // confusing for triage dashboards which are the dominant use case.
 //
-// The `live_paths` CTE uses the same `ROW_NUMBER() OVER (PARTITION BY
-// path ORDER BY date DESC, rowid ASC)` pattern as `query_live_paths`
-// — selects paths whose most-recent change is not `'deleted'`.
+// The `live_paths` CTE uses the same `arg_max(change_type, ROW(date, -rowid))`
+// hash-aggregation as `query_live_paths` — selects paths whose most-recent
+// change is not `'deleted'` in a single streaming pass (O(K) memory, K =
+// distinct paths). The ROW(date, -rowid) ordering reproduces the original
+// `ORDER BY date DESC, rowid ASC` tiebreak via DuckDB struct lex-compare.
 //
 // Unlike code_age, entity-churn has no anchor parameter — it's a
 // "current state" report — so the CTE filter is "live at HEAD now."
@@ -80,14 +82,15 @@ fn build_entity_churn_sql(src: &str) -> String {
     format!(
         "WITH live_paths AS (
             SELECT path FROM (
-                SELECT c.path, c.change_type,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY c.path
-                           ORDER BY commits.date DESC, commits.rowid ASC
-                       ) AS rn
+                SELECT c.path,
+                       arg_max(
+                           c.change_type,
+                           ROW(commits.date, -commits.rowid)
+                       ) AS change_type
                 FROM {src} c
                 INNER JOIN commits ON commits.rev = c.rev
-            ) WHERE rn = 1 AND change_type != 'deleted'
+                GROUP BY c.path
+            ) WHERE change_type != 'deleted'
         )
         SELECT
             c.path,

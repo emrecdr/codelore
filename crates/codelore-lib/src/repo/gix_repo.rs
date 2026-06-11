@@ -611,14 +611,11 @@ fn count_loc(
 /// (no final `\n`) is also counted, mirroring how the histogram diff
 /// would interpret it.
 fn count_lines(bytes: &[u8]) -> u32 {
+    use gix::bstr::ByteSlice as _;
     if bytes.is_empty() {
         return 0;
     }
-    // `filter().count()` over a byte iterator. `memchr` would be
-    // marginally faster via SIMD, but it isn't a direct dep and the
-    // savings on typical sub-1MiB blob sizes don't justify adding one.
-    #[allow(clippy::naive_bytecount)]
-    let nl = bytes.iter().filter(|&&b| b == b'\n').count();
+    let nl = bytes.find_iter(b"\n").count();
     let total = if bytes.last() == Some(&b'\n') {
         nl
     } else {

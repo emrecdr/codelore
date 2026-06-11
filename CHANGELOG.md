@@ -4,6 +4,46 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Changed — SQL planner simplification + SIMD line counting
+
+- **Hash-aggregation rewrite for "live-at-HEAD" CTE (F63)** — replaces
+  the `ROW_NUMBER() OVER (PARTITION BY path ORDER BY date DESC, rowid
+  ASC)` + `WHERE rn = 1` pattern with `arg_max(change_type, ROW(date,
+  -rowid))` GROUP BY path. DuckDB struct lex-compare reproduces the
+  original tiebreak in a single streaming pass — O(K) memory where K
+  = distinct paths, vs the prior partition-sorted O(N) materialisation.
+  Applied to `query_live_paths`, `entity_churn::live_paths`,
+  `knowledge_islands::live_paths`, and `code_age::live_paths_at_anchor`.
+
+- **`arg_max`/`first(... ORDER BY)` for "top author per entity" (F61)**
+  — replaces `ROW_NUMBER + JOIN`-style winner selection with single
+  grouped aggregates in `authors.rs`, `ownership.rs`, `main_dev.rs`,
+  and `knowledge_islands.rs::main_per_path`. Strings can't be inverted
+  for `arg_max` struct ordering, so the ASC-author tiebreak uses
+  `first(author ORDER BY metric DESC, author ASC)` which collapses
+  what was a separate `ranked` / `with_rank` / `last_author_per_path`
+  CTE plus self-join into one aggregation step. Deterministic output
+  unchanged on every test fixture.
+
+- **SIMD line counting via `bstr::find_iter` (F66)** — `count_lines`
+  in `gix_repo.rs` previously did `bytes.iter().filter(|&&b| b ==
+  b'\n').count()`. Rewritten as `bytes.find_iter(b"\n").count()` via
+  the already-imported `gix::bstr::ByteSlice` trait — internally uses
+  `memchr` SIMD scanning. No new dependency; gix re-exports bstr.
+
+### Notes
+
+- F65 ("double `is_worktree_dirty` on cache miss") audited and marked
+  **Not a bug** in the deep-analysis report: the two call sites in
+  `FactsDb::open_or_ingest_with_cache_root` are in the cache-HIT and
+  cache-MISS branches respectively (mutually exclusive). At most one
+  fires per invocation. No code change.
+
+- F60 ("stream `GitCliRepo::walk_commits` output") still **Active** —
+  `parse_git_log_stream` requires a two-record lookahead to pair
+  pretty blocks with name-status pairs, which a streaming reader
+  can't do without a parser rewrite. Deferred to a follow-up batch.
+
 ## [0.4.3] - 2026-06-11
 
 ### Fixed — backend OOM protection + UX defaults + perf polish

@@ -90,15 +90,16 @@ fn run(db: &FactsDb, opts: &Options, metric: MainDevMetric) -> Result<Vec<MainDe
              FROM changes c JOIN commits m USING (rev)
              GROUP BY c.path, m.canonical_author
          ),
-         totals AS (
-             SELECT entity, SUM(metric) AS total FROM ea GROUP BY entity
-         ),
-         ranked AS (
-             SELECT entity, author, metric,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY entity ORDER BY metric DESC, author ASC
-                    ) AS rn
+         winners AS (
+             -- `first(... ORDER BY ...)` + per-group MAX/SUM collapses the
+             -- old `ranked`+`totals` pair plus their self-join into a single
+             -- grouped aggregate (deterministic ASC author tiebreak).
+             SELECT entity,
+                    first(author ORDER BY metric DESC, author ASC) AS author,
+                    MAX(metric) AS metric,
+                    SUM(metric) AS total
              FROM ea
+             GROUP BY entity
          ),
          file_revs AS (
              -- (rev, path) is the changes PK; COUNT(rev) == COUNT(DISTINCT rev)
@@ -106,13 +107,11 @@ fn run(db: &FactsDb, opts: &Options, metric: MainDevMetric) -> Result<Vec<MainDe
              SELECT path, COUNT(rev) AS revs FROM changes
              GROUP BY path HAVING revs >= ?
          )
-         SELECT r.entity, r.author, r.metric, t.total,
-                ROUND(r.metric::DOUBLE / GREATEST(t.total, 1), 2) AS ownership
-         FROM ranked r
-         INNER JOIN totals t USING (entity)
-         INNER JOIN file_revs fr ON fr.path = r.entity
-         WHERE r.rn = 1
-         ORDER BY r.entity ASC
+         SELECT w.entity, w.author, w.metric, w.total,
+                ROUND(w.metric::DOUBLE / GREATEST(w.total, 1), 2) AS ownership
+         FROM winners w
+         INNER JOIN file_revs fr ON fr.path = w.entity
+         ORDER BY w.entity ASC
          LIMIT ?"
     );
 

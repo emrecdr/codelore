@@ -96,7 +96,7 @@ pub struct KnowledgeIslandRow {
 /// 3. `per_path_author` — per `(path, author)`: SUM(loc_added).
 /// 4. `totals` — per path: SUM of all authors' LoC.
 /// 5. `main_per_path` — per path: pick the author with max LoC
-///    (deterministic alphabetical tiebreak via `ROW_NUMBER`).
+///    (deterministic alphabetical tiebreak via `first(... ORDER BY ...)`).
 /// 6. `substantial_others` — per path: count of non-main authors with
 ///    LoC share ≥ the substantial threshold.
 /// 7. Final SELECT: join + project + filter by
@@ -128,15 +128,16 @@ const SQL: &str = "
     ),
     live_paths AS (
         SELECT path FROM (
-            SELECT c.path, c.change_type,
-                   ROW_NUMBER() OVER (
-                       PARTITION BY c.path
-                       ORDER BY commits.date DESC, commits.rowid ASC
-                   ) AS rn
+            SELECT c.path,
+                   arg_max(
+                       c.change_type,
+                       ROW(commits.date, -commits.rowid)
+                   ) AS change_type
             FROM changes c
             INNER JOIN commits ON commits.rev = c.rev
             WHERE commits.date <= CAST(? AS TIMESTAMP)
-        ) WHERE rn = 1 AND change_type != 'deleted'
+            GROUP BY c.path
+        ) WHERE change_type != 'deleted'
     ),
     per_path_author AS (
         -- Improvement: filter bots BEFORE aggregating ownership. Bots
@@ -175,16 +176,12 @@ const SQL: &str = "
         HAVING SUM(loc) > 0
     ),
     main_per_path AS (
-        SELECT path, author, loc
-        FROM (
-            SELECT
-                path, author, loc,
-                ROW_NUMBER() OVER (
-                    PARTITION BY path
-                    ORDER BY loc DESC, author ASC
-                ) AS rn
-            FROM per_path_author
-        ) WHERE rn = 1
+        SELECT
+            path,
+            first(author ORDER BY loc DESC, author ASC) AS author,
+            MAX(loc) AS loc
+        FROM per_path_author
+        GROUP BY path
     ),
     substantial_others AS (
         SELECT

@@ -25,8 +25,8 @@ pub struct OwnershipRow {
 
 // FV = 1 − Σᵢ (aᵢ / nc)²  (HHI complement)
 // where aᵢ = author i's distinct revision count, nc = total distinct revisions.
-// Window-function FIRST_VALUE + ROW_NUMBER picks the main author (deterministic
-// secondary sort on author ASC).
+// `first(author ORDER BY revs DESC, author ASC)` picks the main author per
+// path in one aggregate — replaces the older ROW_NUMBER+self-join pattern.
 const SQL: &str = "
     WITH author_revs AS (
         SELECT
@@ -45,28 +45,11 @@ const SQL: &str = "
         FROM author_revs
         GROUP BY path
     ),
-    with_rank AS (
-        SELECT
-            ar.path,
-            ar.author,
-            ar.revs,
-            t.total,
-            ROW_NUMBER() OVER (
-                PARTITION BY ar.path
-                ORDER BY ar.revs DESC, ar.author ASC
-            ) AS rn
-        FROM author_revs ar
-        INNER JOIN totals t ON ar.path = t.path
-    ),
-    main AS (
-        SELECT path, author AS main_author
-        FROM with_rank
-        WHERE rn = 1
-    ),
     hhi AS (
         SELECT
             ar.path,
             t.total,
+            first(ar.author ORDER BY ar.revs DESC, ar.author ASC) AS main_author,
             1.0 - SUM(
                 POWER(CAST(ar.revs AS DOUBLE) / NULLIF(CAST(t.total AS DOUBLE), 0), 2)
             ) AS fractal_value
@@ -76,13 +59,12 @@ const SQL: &str = "
         HAVING t.total >= ?
     )
     SELECT
-        hhi.path,
-        main.main_author,
-        hhi.total,
-        hhi.fractal_value
+        path,
+        main_author,
+        total,
+        fractal_value
     FROM hhi
-    INNER JOIN main ON main.path = hhi.path
-    ORDER BY fractal_value DESC, hhi.path ASC
+    ORDER BY fractal_value DESC, path ASC
     LIMIT ?
 ";
 
