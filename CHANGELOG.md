@@ -4,6 +4,77 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Added — `--format spa` interactive dashboard emitter (v0.4.0 first slice)
+
+A single self-contained HTML dashboard that mirrors the
+CodeScene-equivalent surface end-to-end, opt-in via the `spa`
+Cargo feature so default builds (`cargo install codelore`) remain
+offline-clean with zero JS dependencies.
+
+- **`build.rs`** fetches Apache ECharts 6.1.0 + d3-hierarchy 3.1.2
+  from jsDelivr at SHA-pinned URLs the first time the `spa` feature
+  is enabled, caches them in `OUT_DIR`, and embeds them via
+  `include_str!`. If jsDelivr ever serves bytes that don't match the
+  pin, the build fails loud — no silent supply-chain swaps. Adds
+  `ureq` (HTTP) as a build-dep; runtime deps unchanged.
+- **`--format spa -o codelore.html`** wires through the existing
+  CLI dispatch, mirrors the `--format sqlite` precedent (bypasses
+  `--analysis` and runs the analyses the dashboard needs:
+  `hotspots`, `summary`, `code_health`, `coupling`,
+  `knowledge_islands`). Coupling + knowledge-islands degrade
+  gracefully to empty on tiny fixtures.
+- **6 widgets** ship in v0.4.0:
+  - **KPI tiles** — at-a-glance metrics: files analyzed, commits,
+    distinct authors, median code health, cognitive p95, knowledge
+    island count, coupling pair count.
+  - **Hotspot circle-pack map** (the signature CodeScene view) —
+    files sized by churn, colored by complexity, nested by
+    filesystem hierarchy. Implemented as an ECharts `custom`
+    series fed by `d3-hierarchy.pack()`.
+  - **Hotspot table** — sortable, filterable drill-down with the
+    existing `output/html.rs`-style 500-row pagination + 80 ms
+    debounced filter.
+  - **Change-coupling sankey** — top-30 coupling pairs by
+    combined score via the native ECharts `sankey` series.
+  - **Knowledge islands** (CodeLore differentiator) — ranked table
+    of files where the primary author has departed and no
+    substantial other owner exists. Auto-detected, no manual
+    ex-developer marking. Surfaced with a "CodeLore differentiator"
+    badge.
+  - **File detail drawer** — side panel that opens on click of any
+    circle / table row / sankey node and aggregates hotspot,
+    knowledge-island, code-health, and coupling-partner data for
+    one path. ESC or × closes.
+- **Vendored JS attribution**: ECharts (Apache-2.0) and d3-hierarchy
+  (ISC) — both already in `deny.toml`'s license allow-list. Pin
+  table in `crates/codelore-lib/build.rs::ASSETS` IS the supply-chain
+  manifest; reviewers can re-fetch and hand-verify.
+- **Output size**: ~1.2 MB self-contained HTML for a 300-hotspot
+  repo (most of which is the ECharts payload). Gzipped over the
+  wire: ~400 KB.
+
+Validation:
+- 3 unit tests + 1 end-to-end integration test cover widget
+  markers, embedded JSON shape, ECharts/d3-hierarchy payload
+  presence, and the XSS-escape on `</script>` terminators.
+- Smoke-tested on the live CodeLore repo: emits a real dashboard
+  with all 6 widgets populated. Opens in any browser, runs
+  offline, requires no server.
+
+### Fixed — F40 follow-up: entity-name disambiguation for PK constraint
+
+Hotfix to the v0.3.4 F40 fix surfaced by the SPA smoke run on
+real repos. `dedup_entities` now suffixes every entity name with
+its line range (`"foo@start-end"` or `"<anonymous>@start-end"`).
+Before this, the F40 fix correctly surfaced anonymous /
+overloaded entities into Rust memory but the
+`(path, name, rev)` PK on `entities` / `complexity_metrics`
+rejected the second row with a UNIQUE-constraint violation,
+aborting ingest on any closures-heavy or overload-heavy codebase
+(JS/TS, Python, Rust async blocks, C++ overloads). The
+line-range suffix is the stable identity for unnamed entities
+and the unique key the PK needs without a schema migration.
+
 ## [0.3.4] - 2026-06-10
 
 ### Fixed — deep-analysis findings F38 + F40 + F41 + F42
