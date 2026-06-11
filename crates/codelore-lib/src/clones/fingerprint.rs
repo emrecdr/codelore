@@ -96,17 +96,36 @@ pub(crate) fn walk_preorder_internal(
     skip: &HashSet<&'static str>,
     out: &mut Vec<(u16, u16)>,
 ) {
-    let kind = node.kind();
-    let arity = u16::try_from(node.child_count()).unwrap_or(u16::MAX);
-    if !skip.contains(kind) {
-        out.push((node.kind_id(), arity));
-    }
-    let mut cursor: TreeCursor<'_> = node.walk();
-    if cursor.goto_first_child() {
+    // Iterative pre-order traversal with a SINGLE TreeCursor
+    // allocation, regardless of subtree size. The previous recursive
+    // form called `node.walk()` at every node, allocating one cursor
+    // per AST node (deep ASTs → tens of thousands of cursor allocs +
+    // drops on a hot path). The iterative form descends via
+    // `goto_first_child`, traverses siblings via `goto_next_sibling`,
+    // and backtracks via `goto_parent` — emitting each node exactly
+    // once in pre-order.
+    let root = node;
+    let mut cursor: TreeCursor<'_> = root.walk();
+    loop {
+        let current = cursor.node();
+        let kind = current.kind();
+        let arity = u16::try_from(current.child_count()).unwrap_or(u16::MAX);
+        if !skip.contains(kind) {
+            out.push((current.kind_id(), arity));
+        }
+        // Descend if possible.
+        if cursor.goto_first_child() {
+            continue;
+        }
+        // Otherwise advance to the next sibling, climbing as needed.
         loop {
-            walk_preorder_internal(cursor.node(), skip, out);
-            if !cursor.goto_next_sibling() {
+            if cursor.goto_next_sibling() {
                 break;
+            }
+            // No sibling; bubble up. Stop once we'd ascend past the
+            // subtree root the caller asked us to walk.
+            if !cursor.goto_parent() || cursor.node().id() == root.id() {
+                return;
             }
         }
     }

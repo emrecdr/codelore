@@ -101,7 +101,10 @@ const SQL: &str = "
         SELECT
             changes.path,
             MAX(commits.date) AS last_at,
-            COUNT(DISTINCT changes.rev) AS n_revs
+            -- (rev, path) is the changes PK so rev is unique within each
+            -- `GROUP BY changes.path` group. Plain COUNT skips DuckDB's
+            -- distinct-tracking overhead.
+            COUNT(changes.rev) AS n_revs
         FROM changes
         INNER JOIN commits ON changes.rev = commits.rev
         INNER JOIN live_paths_at_anchor USING (path)

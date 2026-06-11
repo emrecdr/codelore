@@ -68,7 +68,14 @@ fn build_communication_sql(code_maat_compat: bool) -> String {
         SELECT
             a.author AS author_a,
             b.author AS author_b,
-            COUNT(DISTINCT a.path) AS shared
+            -- `author_files` is upstream `SELECT DISTINCT path, author`,
+            -- so each (author, path) row is unique. The self-join on
+            -- `a.path = b.path AND a.author < b.author` then produces
+            -- at most one row per (path, author_a, author_b) triple,
+            -- making `a.path` unique within each (author_a, author_b)
+            -- group. Plain COUNT skips DuckDB's distinct-tracking
+            -- overhead.
+            COUNT(a.path) AS shared
         FROM author_files a
         INNER JOIN author_files b ON a.path = b.path AND a.author < b.author
         GROUP BY a.author, b.author

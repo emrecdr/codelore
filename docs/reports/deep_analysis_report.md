@@ -272,18 +272,18 @@ Below is the register of active improvement opportunities and bugs:
 
 | ID | Category | Finding / Improvement Point | Priority / Risk | Impact | Status |
 |---|---|---|---|---|---|
-| **F43** | Performance | Redundant `clone()` of blob data in `count_loc` | **Medium** / Low | High heap allocation overhead on active repositories. | Active |
-| **F44** | Performance | Redundant diff computation for additions and deletions | **Medium** / Low | Extra CPU cycles running histogram diff against empty inputs. | Active |
-| **F45** | Performance | Recursive `TreeCursor` creation in AST preorder walks | **High** / Low | Thousands of transient/dynamic allocations during tree traversal. | Active |
-| **F46** | Performance | Multiple string replacements on large JSON HTML outputs | **Low** / Low | High memory footprint and GC pressure during HTML report emission. | Active |
-| **F47** | Performance | Redundant `COUNT(DISTINCT a.rev)` in coupling pairs CTE | **High** / Low | High DuckDB distinct-aggregation overhead on the hot-path self-join. | Active |
-| **F48** | Performance | Redundant `COUNT(DISTINCT c.rev)` in entity-churn | **Medium** / Low | Unnecessary aggregation overhead. | Active |
-| **F49** | Performance | Redundant `COUNT(DISTINCT c.rev)` in code-health | **Medium** / Low | Unnecessary aggregation overhead. | Active |
-| **F50** | Performance | Redundant `COUNT(DISTINCT changes.rev)` in ownership | **Medium** / Low | Unnecessary aggregation overhead. | Active |
-| **F51** | Performance | Redundant `COUNT(DISTINCT changes.rev)` in code-age | **Medium** / Low | Unnecessary aggregation overhead. | Active |
-| **F52** | Performance | Redundant `COUNT(DISTINCT a.path)` in communication | **Medium** / Low | Unnecessary aggregation overhead. | Active |
-| **F53** | Performance | Redundant `COUNT(DISTINCT cls.author)` in authors | **Medium** / Low | Unnecessary aggregation overhead. | Active |
-| **F54** | Performance | Redundant `COUNT(DISTINCT path)` in sum-of-coupling | **Medium** / Low | Unnecessary aggregation overhead. | Active |
+| **F43** | Performance | Redundant `clone()` of blob data in `count_loc` | **Medium** / Low | High heap allocation overhead on active repositories. | **Fixed (Unreleased)** — v0.4.1 batch (see CHANGELOG) |
+| **F44** | Performance | Redundant diff computation for additions and deletions | **Medium** / Low | Extra CPU cycles running histogram diff against empty inputs. | **Fixed (Unreleased)** — v0.4.1 batch (see CHANGELOG) |
+| **F45** | Performance | Recursive `TreeCursor` creation in AST preorder walks | **High** / Low | Thousands of transient/dynamic allocations during tree traversal. | **Fixed (Unreleased)** — v0.4.1 batch (see CHANGELOG) |
+| **F46** | Performance | Multiple string replacements on large JSON HTML outputs | **Low** / Low | High memory footprint and GC pressure during HTML report emission. | **Fixed (Unreleased)** — v0.4.1 batch (see CHANGELOG) |
+| **F47** | Performance | Redundant `COUNT(DISTINCT a.rev)` in coupling pairs CTE | **High** / Low | High DuckDB distinct-aggregation overhead on the hot-path self-join. | **Fixed (Unreleased)** — v0.4.1 batch (see CHANGELOG) |
+| **F48** | Performance | Redundant `COUNT(DISTINCT c.rev)` in entity-churn | **Medium** / Low | Unnecessary aggregation overhead. | **Fixed (Unreleased)** — v0.4.1 batch (see CHANGELOG) |
+| **F49** | Performance | Redundant `COUNT(DISTINCT c.rev)` in code-health | **Medium** / Low | Unnecessary aggregation overhead. | **Fixed (Unreleased)** — v0.4.1 batch (see CHANGELOG) |
+| **F50** | Performance | Redundant `COUNT(DISTINCT changes.rev)` in ownership | **Medium** / Low | Unnecessary aggregation overhead. | **Fixed (Unreleased)** — v0.4.1 batch (see CHANGELOG) |
+| **F51** | Performance | Redundant `COUNT(DISTINCT changes.rev)` in code-age | **Medium** / Low | Unnecessary aggregation overhead. | **Fixed (Unreleased)** — v0.4.1 batch (see CHANGELOG) |
+| **F52** | Performance | Redundant `COUNT(DISTINCT a.path)` in communication | **Medium** / Low | Unnecessary aggregation overhead. | **Fixed (Unreleased)** — v0.4.1 batch (see CHANGELOG) |
+| **F53** | Performance | Redundant `COUNT(DISTINCT cls.author)` in authors | **Medium** / Low | Unnecessary aggregation overhead. | **Fixed (Unreleased)** — v0.4.1 batch (see CHANGELOG) |
+| **F54** | Performance | Redundant `COUNT(DISTINCT path)` in sum-of-coupling | **Medium** / Low | Unnecessary aggregation overhead. | **Fixed (Unreleased)** — v0.4.1 batch (see CHANGELOG) |
 
 ---
 

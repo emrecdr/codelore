@@ -84,14 +84,27 @@ pub fn write_spa<W: Write>(
         .map_err(|e| CodeLoreError::Output(format!("spa json serialize: {e}")))?;
     let data_json_safe = data_json.replace("</", "<\\/");
 
-    let html = TEMPLATE
-        .replace("{{TITLE}}", &escape_html(title))
-        .replace("{{REPO_PATH}}", &escape_html(repo_path))
-        .replace("{{GENERATED_AT}}", &escape_html(generated_at))
-        .replace("{{DATA_JSON}}", &data_json_safe)
-        .replace("{{ECHARTS_JS}}", ECHARTS_JS)
-        .replace("{{D3_HIERARCHY_JS}}", D3_HIERARCHY_JS)
-        .replace("{{WIDGETS_JS}}", WIDGETS_JS);
+    // Single-pass templating via `output::template::substitute`. This
+    // matters more here than in `output::html` because the SPA payload
+    // includes the ~1.1 MB `echarts.min.js` blob plus widget glue plus
+    // the per-analysis JSON data block. The chained-`.replace()` form
+    // copied that multi-megabyte intermediate 7 times per emit; one
+    // pass + a capacity hint cuts the allocation traffic ~7×.
+    let title_escaped = escape_html(title);
+    let repo_path_escaped = escape_html(repo_path);
+    let generated_at_escaped = escape_html(generated_at);
+    let html = crate::output::template::substitute(
+        TEMPLATE,
+        &[
+            ("{{TITLE}}", &title_escaped),
+            ("{{REPO_PATH}}", &repo_path_escaped),
+            ("{{GENERATED_AT}}", &generated_at_escaped),
+            ("{{DATA_JSON}}", &data_json_safe),
+            ("{{ECHARTS_JS}}", ECHARTS_JS),
+            ("{{D3_HIERARCHY_JS}}", D3_HIERARCHY_JS),
+            ("{{WIDGETS_JS}}", WIDGETS_JS),
+        ],
+    );
 
     w.write_all(html.as_bytes())
         .map_err(|e| CodeLoreError::Output(format!("spa write: {e}")))?;

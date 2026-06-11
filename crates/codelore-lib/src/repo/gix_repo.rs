@@ -505,14 +505,20 @@ fn count_loc(
 
     let empty: Vec<u8> = Vec::new();
     let read_blob = |oid: gix::ObjectId| -> Result<Vec<u8>> {
-        let obj = repo.find_object(oid).map_err(|_e| {
+        let mut obj = repo.find_object(oid).map_err(|_e| {
             // Distinguish "object missing" from other repo errors so a
             // shallow / corrupted repo can be detected upstream.
             CodeLoreError::BlobNotFound {
                 oid: oid.to_string(),
             }
         })?;
-        Ok(obj.data.clone())
+        // `gix::Object` implements Drop, so we can't partial-move out
+        // of `obj.data` directly. `mem::take` swaps in
+        // `Vec::default()` (which doesn't allocate) and returns the
+        // original buffer — avoids re-allocating + memcpy'ing up to
+        // `MAX_DIFF_BLOB_BYTES` of bytes per changed-file per commit
+        // on the diff hot path.
+        Ok(std::mem::take(&mut obj.data))
     };
 
     let is_binary_or_oversized = |bytes: &[u8]| -> bool {
@@ -536,6 +542,20 @@ fn count_loc(
         return Ok((0, 0));
     }
 
+    // Short-circuit pure additions and pure deletions. The histogram
+    // diff against an empty input degenerates to "every line of the
+    // non-empty side is added / removed", which we can compute by
+    // counting line terminators directly. This skips InternedInput's
+    // tokenization + Algorithm::Histogram's slider pass on a hot path
+    // (every Added / Deleted change in the walk would otherwise pay
+    // the full diff cost).
+    if old_oid.is_none() {
+        return Ok((count_lines(&new_bytes), 0));
+    }
+    if new_oid.is_none() {
+        return Ok((0, count_lines(&old_bytes)));
+    }
+
     let input = InternedInput::new(old_bytes.as_slice(), new_bytes.as_slice());
     let diff = diff_with_slider_heuristics(Algorithm::Histogram, &input);
     #[allow(clippy::cast_possible_truncation)]
@@ -543,6 +563,28 @@ fn count_loc(
     #[allow(clippy::cast_possible_truncation)]
     let removed = diff.count_removals() as u32;
     Ok((added, removed))
+}
+
+/// Count line terminators (LF) in a byte slice, capping at `u32::MAX`.
+/// Matches imara-diff's tokenization on pure-add / pure-delete sides:
+/// each `\n`-terminated segment is one line. A trailing partial line
+/// (no final `\n`) is also counted, mirroring how the histogram diff
+/// would interpret it.
+fn count_lines(bytes: &[u8]) -> u32 {
+    if bytes.is_empty() {
+        return 0;
+    }
+    // `filter().count()` over a byte iterator. `memchr` would be
+    // marginally faster via SIMD, but it isn't a direct dep and the
+    // savings on typical sub-1MiB blob sizes don't justify adding one.
+    #[allow(clippy::naive_bytecount)]
+    let nl = bytes.iter().filter(|&&b| b == b'\n').count();
+    let total = if bytes.last() == Some(&b'\n') {
+        nl
+    } else {
+        nl + 1
+    };
+    u32::try_from(total).unwrap_or(u32::MAX)
 }
 
 /// Extract the author-time as a full `OffsetDateTime` from a gix commit.

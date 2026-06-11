@@ -60,7 +60,10 @@ const SQL: &str = "
         SELECT
             c.path,
             commits.canonical_author AS author,
-            COUNT(DISTINCT c.rev) AS revs
+            -- (rev, path) is the changes PK so rev is unique within each
+            -- (path, author) group. Plain COUNT skips DuckDB's
+            -- distinct-tracking overhead.
+            COUNT(c.rev) AS revs
         FROM {src} c
         INNER JOIN commits ON c.rev = commits.rev
         GROUP BY c.path, commits.canonical_author

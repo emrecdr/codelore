@@ -203,10 +203,15 @@ fn build_coupling_sql(
              {file_revs_gate}
          ),
          pairs AS (
+             -- The triple (a.rev, a.path, b.path) is unique per (path_a,
+             -- path_b) group because (rev, path) is the changes PK and
+             -- `a.rev = b.rev` collapses the cardinality to one rev per
+             -- joined row. COUNT(a.rev) == COUNT(*) == COUNT(DISTINCT a.rev)
+             -- here; plain COUNT skips DuckDB's distinct-tracking overhead.
              SELECT
                  a.path AS path_a,
                  b.path AS path_b,
-                 COUNT(DISTINCT a.rev) AS shared
+                 COUNT(a.rev) AS shared
              FROM {src} a
              INNER JOIN {src} b ON a.rev = b.rev AND a.path < b.path
              INNER JOIN good_commits ON good_commits.rev = a.rev

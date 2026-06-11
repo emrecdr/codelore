@@ -56,38 +56,46 @@ fn visit(
     func_kinds: &HashSet<&'static str>,
     out: &mut Vec<FunctionFingerprint>,
 ) {
-    if func_kinds.contains(node.kind()) {
-        let mut sequence: Vec<(u16, u16)> = Vec::new();
-        walk_preorder_internal(node, skip, &mut sequence);
-        let fingerprint = Fingerprint::from_sequence(sequence);
-        let function_name = extract_function_name(node, code).unwrap_or_default();
-        let start_line = u32::try_from(node.start_position().row + 1).unwrap_or(u32::MAX);
-        let end_line = u32::try_from(node.end_position().row + 1).unwrap_or(u32::MAX);
-        out.push(FunctionFingerprint {
-            path: path.to_string(),
-            function_name,
-            start_line,
-            end_line,
-            fingerprint,
-        });
-        // Fall through (no `return`) so the recursion below ALSO descends
-        // into this function's body. Earlier this site returned early with
-        // a comment claiming an outer-loop walk would pick up nested
-        // function definitions — there is no such outer walk; nested
-        // helpers (Python `def` inside `def`, JS closures, Rust
-        // `fn outer() { fn helper() { ... } }`) were silently invisible
-        // to clone detection. The outer function's own fingerprint
-        // (computed above via `walk_preorder_internal`) already includes
-        // the nested function's structure as part of its sequence — so
-        // emitting nested entries is purely additive, never regresses
-        // outer-level clone detection.
-    }
-    let mut cursor = node.walk();
-    if cursor.goto_first_child() {
+    // Iterative pre-order traversal with a SINGLE outer TreeCursor
+    // allocation regardless of subtree size. The previous recursive
+    // form allocated one cursor per AST node via `node.walk()`. The
+    // inner per-function fingerprint walk (`walk_preorder_internal`)
+    // also uses a single cursor each — so total cursors for a file
+    // drop from O(AST nodes) to O(functions + 1).
+    //
+    // Behaviour preserved: every function node is fingerprinted and
+    // recursion descends INTO function bodies too, so nested helpers
+    // (Python `def` inside `def`, JS closures, Rust `fn outer() {
+    // fn helper() {} }`) are emitted alongside their enclosing
+    // function's fingerprint.
+    let root = node;
+    let mut cursor = root.walk();
+    loop {
+        let current = cursor.node();
+        if func_kinds.contains(current.kind()) {
+            let mut sequence: Vec<(u16, u16)> = Vec::new();
+            walk_preorder_internal(current, skip, &mut sequence);
+            let fingerprint = Fingerprint::from_sequence(sequence);
+            let function_name = extract_function_name(current, code).unwrap_or_default();
+            let start_line = u32::try_from(current.start_position().row + 1).unwrap_or(u32::MAX);
+            let end_line = u32::try_from(current.end_position().row + 1).unwrap_or(u32::MAX);
+            out.push(FunctionFingerprint {
+                path: path.to_string(),
+                function_name,
+                start_line,
+                end_line,
+                fingerprint,
+            });
+        }
+        if cursor.goto_first_child() {
+            continue;
+        }
         loop {
-            visit(cursor.node(), code, path, skip, func_kinds, out);
-            if !cursor.goto_next_sibling() {
+            if cursor.goto_next_sibling() {
                 break;
+            }
+            if !cursor.goto_parent() || cursor.node().id() == root.id() {
+                return;
             }
         }
     }

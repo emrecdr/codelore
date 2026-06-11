@@ -125,11 +125,19 @@ const SQL: &str = "
     )
     SELECT
         cls.path AS entity,
-        CAST(COUNT(DISTINCT cls.author) AS UINTEGER) AS n_authors,
-        CAST(COUNT(DISTINCT CASE WHEN NOT cls.is_bot_for_entity
-                                 THEN cls.author END) AS UINTEGER) AS n_humans,
-        CAST(COUNT(DISTINCT CASE WHEN cls.is_bot_for_entity
-                                 THEN cls.author END) AS UINTEGER) AS n_bots,
+        -- `classified` is built atop `per_file_author` which groups by
+        -- (path, author), so each (path, author) row is unique. Within
+        -- each `GROUP BY cls.path` group, all author values are distinct
+        -- by construction. COUNT(author) counts non-NULL rows, and since
+        -- author is unique, COUNT == COUNT(DISTINCT). Same applies to
+        -- the CASE WHEN forms — they emit author OR NULL, and COUNT
+        -- skips NULLs. Plain COUNT skips DuckDB's distinct-tracking
+        -- overhead.
+        CAST(COUNT(cls.author) AS UINTEGER) AS n_authors,
+        CAST(COUNT(CASE WHEN NOT cls.is_bot_for_entity
+                        THEN cls.author END) AS UINTEGER) AS n_humans,
+        CAST(COUNT(CASE WHEN cls.is_bot_for_entity
+                        THEN cls.author END) AS UINTEGER) AS n_bots,
         CAST(SUM(cls.n_commits) AS UINTEGER) AS n_revs,
         ANY_VALUE(la.author) AS last_author,
         CAST(CAST(MAX(cls.last_at) AS DATE) AS TEXT) AS last_modified
@@ -137,7 +145,10 @@ const SQL: &str = "
     INNER JOIN last_author_per_path la
         ON la.path = cls.path AND la.rn = 1
     GROUP BY cls.path
-    HAVING COUNT(DISTINCT cls.author) > 0
+    -- `classified` has one row per (path, author) so author is unique
+    -- within the (path) group and non-NULL. COUNT(cls.author) skips
+    -- DuckDB's distinct-tracking overhead and is equivalent.
+    HAVING COUNT(cls.author) > 0
        AND SUM(cls.n_commits) >= ?
     ORDER BY n_authors DESC, n_revs DESC, entity ASC
     LIMIT ?

@@ -57,13 +57,24 @@ pub fn write_html<W: Write, T: serde::Serialize>(
     // `<\/script>` form.
     let json_safe = json.replace("</", "<\\/");
 
-    let html = HTML_TEMPLATE
-        .replace("{{TITLE}}", &html_escape(title))
-        .replace("{{REPO_PATH}}", &html_escape(repo_path))
-        .replace("{{GENERATED_AT}}", &html_escape(generated_at))
-        .replace("{{ROW_COUNT}}", &rows.len().to_string())
-        .replace("{{DATA_JSON}}", &json_safe)
-        .replace("{{CODELORE_VERSION}}", env!("CARGO_PKG_VERSION"));
+    // Single-pass templating to avoid the chained-`.replace()` pattern's
+    // O(N×template) intermediate-string allocations on multi-megabyte
+    // JSON payloads. See `output::template::substitute` for the impl.
+    let title_escaped = html_escape(title);
+    let repo_path_escaped = html_escape(repo_path);
+    let generated_at_escaped = html_escape(generated_at);
+    let row_count = rows.len().to_string();
+    let html = crate::output::template::substitute(
+        HTML_TEMPLATE,
+        &[
+            ("{{TITLE}}", &title_escaped),
+            ("{{REPO_PATH}}", &repo_path_escaped),
+            ("{{GENERATED_AT}}", &generated_at_escaped),
+            ("{{ROW_COUNT}}", &row_count),
+            ("{{DATA_JSON}}", &json_safe),
+            ("{{CODELORE_VERSION}}", env!("CARGO_PKG_VERSION")),
+        ],
+    );
 
     w.write_all(html.as_bytes())
         .map_err(|e| CodeLoreError::Output(format!("html write: {e}")))?;

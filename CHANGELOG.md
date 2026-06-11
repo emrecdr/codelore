@@ -4,6 +4,69 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Fixed — deep-analysis findings F43-F54 (v0.4.1 perf batch)
+
+Twelve perf findings surfaced by the post-v0.4.0 audit, all validated
+against current source and shipped together. None change semantics —
+each fix produces output identical to the prior implementation on the
+existing test fixtures, with the cost of intermediate string
+allocation, distinct-tracking aggregation, or per-node cursor
+allocation removed.
+
+**SQL distinct-tracking cleanup (F47-F54, plus a follow-up site)**
+— extends the v0.3.4 F42 pattern to 9 more sites where the `DISTINCT`
+in `COUNT(DISTINCT col)` was provably redundant given either the
+`changes` PK `(rev, path)` or an upstream CTE that already produced
+unique rows. Plain `COUNT(col)` is semantically identical and skips
+DuckDB's distinct-tracking overhead on hot aggregation paths.
+
+- **F47** `coupling.rs::pairs` — `COUNT(DISTINCT a.rev)` → `COUNT(a.rev)`
+- **F48** `churn.rs::entity_churn` — `COUNT(DISTINCT c.rev)` → `COUNT(c.rev)`
+- **F49** `code_health.rs::author_revs` — same fix on `(path, author)` group
+- **F50** `ownership.rs::author_revs` — same fix
+- **F51** `code_age.rs::per_path` — same fix
+- **F52** `communication.rs::pairs` — `COUNT(DISTINCT a.path)` → `COUNT(a.path)`
+  (upstream `author_files` is `SELECT DISTINCT`)
+- **F53** `authors.rs` final select — `COUNT(DISTINCT cls.author)` → `COUNT(cls.author)`,
+  same for both CASE WHEN forms (n_humans, n_bots), plus the HAVING clause
+- **F54** `soc.rs::rev_sizes` — `COUNT(DISTINCT path)` → `COUNT(path)`
+
+**Non-SQL perf (F43, F44, F45, F46)**:
+
+- **F43** `gix_repo.rs::count_loc::read_blob` — drops the redundant
+  `obj.data.clone()` and uses `std::mem::take(&mut obj.data)` to move
+  the blob bytes out of `gix::Object` instead of re-allocating +
+  memcpy'ing up to `MAX_DIFF_BLOB_BYTES` (1 MiB) per changed-file per
+  commit. `gix::Object` implements `Drop`, so a direct partial move
+  isn't permitted — `mem::take` swaps in `Vec::default()` (no
+  allocation) and returns the original.
+- **F44** `gix_repo.rs::count_loc` — short-circuits the histogram
+  diff for pure additions (`old_oid.is_none()`) and pure deletions
+  (`new_oid.is_none()`). Counts newline-terminated lines in the
+  non-empty side directly via a single byte scan, skipping the
+  `InternedInput` tokenisation + `Algorithm::Histogram` slider pass.
+  New private helper `count_lines`.
+- **F45** `clones/fingerprint.rs::walk_preorder_internal` and
+  `clones/extractor.rs::visit` — both rewritten as iterative
+  pre-order traversals that allocate a SINGLE `TreeCursor` per
+  invocation regardless of subtree size. Previous recursive forms
+  called `node.walk()` at every AST node, allocating one cursor per
+  node on a hot path (deep ASTs → tens of thousands of cursor allocs
+  + drops). Pre-order semantics preserved exactly; nested-function
+  emission behaviour preserved.
+- **F46** `output/html.rs` + `output/spa.rs` — both replace the
+  chained `String::replace(...).replace(...).replace(...)` pattern
+  with a single-pass templating helper at
+  `output::template::substitute`. The chained form allocated a fresh
+  `String` per call, copying the growing intermediate buffer each
+  time — for the SPA emitter (which embeds the ~1.1 MB
+  `echarts.min.js` blob plus widget glue plus the per-analysis JSON
+  data block), the chained form copied that multi-megabyte
+  intermediate 7 times per emit. The single-pass form allocates one
+  output `String` pre-sized from template length + replacement value
+  lengths and writes substitutions in one scan. New unit-test
+  coverage in `output::template::tests`.
+
 ## [0.4.0] - 2026-06-11
 
 ### Added — `--format spa` interactive dashboard emitter (v0.4.0 first slice)

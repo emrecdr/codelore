@@ -93,7 +93,10 @@ fn build_entity_churn_sql(src: &str) -> String {
             c.path,
             COALESCE(SUM(c.loc_added), 0) AS added,
             COALESCE(SUM(c.loc_deleted), 0) AS deleted,
-            COUNT(DISTINCT c.rev) AS commits
+            -- (rev, path) is the changes PK so rev is unique within each
+            -- `GROUP BY c.path` group. Plain COUNT skips DuckDB's
+            -- distinct-tracking overhead.
+            COUNT(c.rev) AS commits
         FROM {src} c
         INNER JOIN live_paths USING (path)
         GROUP BY c.path

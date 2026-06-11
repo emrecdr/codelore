@@ -65,7 +65,10 @@ fn build_soc_sql(
     format!(
         "WITH {good_cte},
          rev_sizes AS (
-             SELECT rev, COUNT(DISTINCT path) AS n
+             -- (rev, path) is the changes PK so per `GROUP BY rev` each
+             -- path appears at most once. Plain COUNT skips DuckDB's
+             -- distinct-tracking overhead.
+             SELECT rev, COUNT(path) AS n
              FROM {src}
              INNER JOIN good_commits USING(rev)
              GROUP BY rev
