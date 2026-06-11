@@ -31,9 +31,13 @@ RUN cargo chef prepare --recipe-path recipe.json
 #─── builder stage ──────────────────────────────────────────────────────────
 FROM chef AS builder
 COPY --from=planner /src/recipe.json recipe.json
-RUN cargo chef cook --release --recipe-path recipe.json
+# `--features spa` activates the opt-in dashboard emitter
+# (`--format spa`). Container images ship with this enabled so
+# users running `docker run codelore … --format spa` get the
+# dashboard out of the box.
+RUN cargo chef cook --release --features spa --recipe-path recipe.json
 COPY . .
-RUN cargo build --release -p codelore-cli && \
+RUN cargo build --release --features spa -p codelore-cli && \
     strip target/release/codelore
 
 #─── runtime stage ──────────────────────────────────────────────────────────
