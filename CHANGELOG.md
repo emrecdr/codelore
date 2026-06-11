@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-06-11
+
 ### Changed — SQL planner simplification + SIMD line counting
 
 - **Hash-aggregation rewrite for "live-at-HEAD" CTE (F63)** — replaces
