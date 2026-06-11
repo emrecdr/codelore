@@ -203,8 +203,8 @@ Below is the register of active improvement opportunities and bugs:
 
 | ID | Category | Finding / Improvement Point | Priority / Risk | Impact | Status |
 |---|---|---|---|---|---|
-| **F55** | Correctness/Robustness | Runtime DuckDB crash in `run_xray` under `--format spa` | **High** / Low | Interactive SPA dashboard with X-Ray data fails. | **Fixed (Local)** — Applied in working copy |
-| **F56** | Robustness | Compilation failure of `spa_integration_test` with `spa` feature | **Medium** / Low | Developer test compilation failure. | **Fixed (Local)** — Applied in working copy |
+| **F55** | Correctness/Robustness | Runtime DuckDB crash in `run_xray` under `--format spa` | **High** / Low | Interactive SPA dashboard with X-Ray data fails. | **Fixed (v0.4.2 / commit `fe3d94f`)** — `run_xray` now JOINs `complexity_metrics ⋈ entities` on `(path, name)` with `e.rev_introduced <= cm.rev` and `(e.rev_last_seen IS NULL OR e.rev_last_seen >= cm.rev)`. Validated end-to-end (494 X-Ray rows embedded on the CodeLore repo smoke). |
+| **F56** | Robustness | Compilation failure of `spa_integration_test` with `spa` feature | **Medium** / Low | Developer test compilation failure. | **Fixed (v0.4.2 / commit `fe3d94f`)** — Integration test uses `..SpaDashboard::default()` to fill the new `entity_ownership`, `xray`, `daily_commits`, `trends` fields. `cargo test --features spa` green. |
 | **F57** | UI/UX | ECharts chart colors do not update when switching light/dark theme | **Medium** / Low | Axis labels and grids become illegible after toggle. | **Active** |
 | **F58** | Performance | Using `fancy-regex` for literal path-prefix grouping rules | **Medium** / Low | High CPU backtracking engine overhead on hot path. | **Active** |
 | **F59** | Architecture/Robustness | Ingest complexity and clones at HEAD read from working tree | **High** / Medium | Fails on bare repos; parses uncommitted dirty changes. | **Active** |
