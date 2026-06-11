@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-06-11
+
 ### Fixed — deep-analysis findings F43-F54 (v0.4.1 perf batch)
 
 Twelve perf findings surfaced by the post-v0.4.0 audit, all validated
