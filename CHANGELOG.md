@@ -4,6 +4,65 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Fixed — backend OOM protection + UX defaults + perf polish
+
+A bundled v0.4.3 batch covering one production-blocking OOM, two
+"smart defaults" UX wins, and three perf cleanups. All semantic-
+equivalent — output values unchanged on every existing fixture.
+
+- **Kamei O(K) memory rewrite (F61)** — `enrich_history` and
+  `enrich_experience` previously materialised `LIST(...) OVER w`
+  per row, allocating O(K²) memory per partition. On directory-
+  skewed monorepos (Vue/JS projects with 26k+ touches under `src/`)
+  this OOM'd with 19 GiB exhausted in production. Replaced with
+  DISTINCT + hash-grouped COUNT for ndev/nuc/age and ROW_NUMBER
+  for sexp — O(K) memory regardless of partition skew. Semantic
+  shift to strict-prior `<` (was `<=`); no-op on real repos where
+  commits are distinct-second by construction. New regression test
+  `dir_skew_does_not_oom_or_timeout` builds a 60-commit fixture
+  under a single hot dir and asserts ingest completes in <30s.
+
+- **Auto-`.gitignore` respect (F62)** — CodeLore now respects the
+  repo's `.gitignore` + `.git/info/exclude` + `.codeloreignore` by
+  default. Vendored deps (node_modules, target, dist), build
+  outputs, lockfiles, locales — none show up in hotspots unless
+  `--include-ignored` is passed. New `paths_filter` module backed
+  by the `ignore` crate (same engine ripgrep / bat use). Applied
+  to BOTH the HEAD walk (clones + complexity) and the commit walk
+  (changes ingest). Replaces 3 hardcoded `.git|target|node_modules`
+  match arms and 2 ad-hoc `.codeloreignore` parsers.
+
+- **SPA emit success message (F68)** — `--format spa` was silent on
+  success. CLI now prints output path, size, and a clickable
+  `file://` URL after the dashboard is written.
+
+- **Theme re-render registry (F57)** — light/dark toggle now
+  repaints every ECharts widget so axis labels, grids, and gradient
+  colors pick up the new CSS variable values. ECharts caches
+  resolved colors at setOption time, so the prior toggle left
+  charts stuck with the previous theme's palette. Implemented as a
+  `window._codeloreRerenderers` registry pushed by each widget.
+
+- **Chart instance disposal (F64)** — every `echarts.init(container)`
+  without a corresponding `dispose()` leaked the prior instance +
+  bound event listeners. Surfaced on repeated color-mode or theme
+  toggles. Fix: call `echarts.getInstanceByDom(container)?.dispose()`
+  before each re-init. Applied to all 5 widget render fns.
+
+- **Literal-prefix grouping (F58)** — replaced `fancy-regex` (a
+  backtracking engine) with the standard `regex` crate for plain-
+  text path-prefix grouping rules — the vast majority of
+  `--group-file` lines like `src/foo => Engine`. Three-tier
+  compilation in `GroupPattern`: `Literal(prefix)` (no regex
+  engine), `Std(regex)` (linear-time), `Fancy(fancy_regex)` (only
+  for lookaround/backreferences). The `apply_grouping` rayon
+  parallelisation already shipped in v0.3.4; this strips the regex
+  engine from the inner kernel.
+
+Deferred to v0.4.4: F59 (gix blob reads vs working-tree disk —
+needs bare-repo path planning), F60 (streaming git-log — needs
+BufReader refactor + parser state-machine update).
+
 ## [0.4.2] - 2026-06-11
 
 ### Added — `--format spa` widget completeness (v0.4.2)

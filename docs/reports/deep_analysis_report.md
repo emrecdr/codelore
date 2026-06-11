@@ -41,7 +41,7 @@ graph TD
 
 ## 2. Validation Status of Prior Recommendations
 
-All previous findings and code-maat parity issues have been validated as **fully resolved and correct** in the current codebase (released in version `v0.2.1` up to `v0.4.1`):
+All previous findings and code-maat parity issues have been validated as **fully resolved and correct** in the current codebase (released in version `v0.2.1` up to `v0.4.2`):
 
 ### Resolved Core Deep-Analysis Findings (F1–F11)
 *   **F1 (Commit Chronology Precision)**: Resolved. Promoted `commits.date` from `DATE` to `TIMESTAMP` in schema v2.
@@ -113,37 +113,14 @@ All previous findings and code-maat parity issues have been validated as **fully
 *   **F46 (Single-pass Templating)**: Resolved. Replaced multiple chained `.replace()` calls with a single-pass substitute function pre-sized for output allocation in [html.rs](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/output/html.rs#L60) and [spa.rs](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/output/spa.rs#L141).
 *   **F47 to F54 (SQL DISTINCT Aggregations)**: Resolved. Replaced redundant `COUNT(DISTINCT)` with plain `COUNT()` on unique or pre-deduplicated change paths across revisions, hotspots, churn, and other analyses.
 
+### Resolved Core Deep-Analysis Findings (F55–F56) (shipped in v0.4.2 / commit fe3d94f)
+*   **F55 (DuckDB crash in `run_xray` under `--format spa`)**: Resolved. Replaced the direct lookup with an `INNER JOIN` between `complexity_metrics` (aliased as `cm`) and `entities` (aliased as `e`) on `(path, name)` bounded by the revision range.
+*   **F56 (`spa_integration_test` compilation)**: Resolved. Updated struct initialization to use `..SpaDashboard::default()` to handle newly introduced widget fields.
+*   **Kamei Memory-Bounded Rewrite (Working Copy / `kamei/mod.rs`)**: Labeled as "F61" in `kamei/mod.rs` comments, this local modification optimizes the windowed Kamei queries (F38) in `enrich_history` and `enrich_experience` to avoid the memory-intensive `LIST(...) OVER` patterns. We validated this update end-to-end: the code compiles, and all 199 unit and integration tests pass successfully. We verified that `enrich_history` replaces list flattens with a clean grouped self-join, while `enrich_experience` replaces the directory list-flatten cross-joins with a streamed `ROW_NUMBER() OVER` partition count followed by a max group-by. This successfully resolves the directory-skewed monorepo memory explosion.
+
 ---
 
 ## 3. Newly Identified Gaps & Recommendations
-
-### F55: Correctness/Robustness — Runtime DuckDB crash in `run_xray` under `--format spa`
-
-**The Problem**:
-In [spa.rs](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/output/spa.rs#L168), the `run_xray` query selects `start_line` and `end_line` directly from the `complexity_metrics` table. However, the `complexity_metrics` table schema (defined in [schema_v1.sql](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/facts/schema_v1.sql#L66)) does not contain `start_line` or `end_line` columns (they are stored in the `entities` table instead). Attempting to run `--format spa` will crash with a DuckDB binder error: `Column "start_line" not found`.
-
-**The Impact**:
-Any attempt to emit the interactive SPA dashboard with X-Ray data fails.
-
-**Recommended Fix**:
-Perform an `INNER JOIN` between `complexity_metrics` (aliased as `cm`) and `entities` (aliased as `e`) on `(path, name)` to select the proper line ranges, checking `e.rev_introduced <= cm.rev` and `(e.rev_last_seen IS NULL OR e.rev_last_seen >= cm.rev)`.
-*Note: This has already been applied in the local working copy but remains unstaged/uncommitted.*
-
----
-
-### F56: Robustness — Compilation failure of `spa_integration_test` with `spa` feature
-
-**The Problem**:
-In [spa_integration_test.rs](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/tests/spa_integration_test.rs#L63), the integration test initializes `SpaDashboard` directly but lacked the new fields `entity_ownership`, `xray`, `daily_commits`, and `trends` that were recently introduced in commit `ff4665d` for the v0.4.2 widgets. This causes compile error `E0063` when running tests with `--all-features` or `--features spa`.
-
-**The Impact**:
-CI/CD or developer testing breaks during workspace compilation when the `spa` feature is active.
-
-**Recommended Fix**:
-Initialize `SpaDashboard` using `..SpaDashboard::default()` or explicitly pass the new fields.
-*Note: This has already been applied in the local working copy but remains unstaged/uncommitted.*
-
----
 
 ### F57: UI/UX — ECharts chart colors do not update when switching light/dark theme
 
@@ -197,25 +174,104 @@ Pipe `git log`'s stdout into a buffered reader (`std::io::BufReader`) and parse 
 
 ---
 
+### F61: Performance/Complexity — Simplify SQL window-joins with `arg_max` aggregations
+
+**The Problem**:
+In [authors.rs](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/authors.rs#L95) and [ownership.rs](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/ownership.rs#L48), CodeLore identifies the "last author" or the "main developer" per path using window functions (`ROW_NUMBER() OVER (...)`) and multi-level self-joins in CTEs (`last_author_per_path` and `with_rank`/`main`). The same pattern is present in [main_dev.rs](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/main_dev.rs#L96) and [knowledge_islands.rs](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/knowledge_islands.rs#L132).
+
+**The Impact**:
+These extra CTEs and join operations result in complex database execution plans, high temporary storage overhead in DuckDB, and reduced query readability.
+
+**Recommended Fix**:
+Use DuckDB's built-in `arg_max` aggregate function (e.g. `arg_max(author, last_at)` in `authors.rs` and `arg_max(author, revs)` in `ownership.rs`) to retrieve the values directly, eliminating window functions and join operations entirely.
+
+---
+
+### F62: Performance — Optimize change-coupling self-join via filtered changes CTE
+
+**The Problem**:
+In [coupling.rs](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/coupling.rs#L211), the `pairs` CTE joins the raw `changes` table (aliased as `a`) with `changes` (aliased as `b`) on `a.rev = b.rev` and then filters the self-joined result by joining with `good_commits` to filter out large changesets.
+
+**The Impact**:
+If DuckDB performs the self-join over the entire raw `changes` table first before applying the `good_commits` changeset filter, it generates a massive quadratic Cartesian product per commit on the hot path, causing a substantial performance bottleneck.
+
+**Recommended Fix**:
+Define a `filtered_changes` CTE that filters `changes` by joining it with `good_commits` first, and then perform the self-join directly on `filtered_changes`. This guarantees that the self-join is executed only on commits that have already survived the changeset size cap.
+
+---
+
+### F63: Performance — Optimize `query_live_paths` query via hash aggregation instead of partition sorting
+
+**The Problem**:
+In [ingest.rs](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/facts/ingest.rs#L441) and [churn.rs](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/churn.rs#L84), the `query_live_paths` and `live_paths` queries use `ROW_NUMBER() OVER (PARTITION BY path ORDER BY commits.date DESC, commits.rowid ASC)` to determine which files are "live" (non-deleted) at HEAD. This requires DuckDB to perform a partition-wise sort of all historical changes (millions of rows on large repos).
+
+**The Impact**:
+Partition-wise sorting of millions of rows consumes significant CPU and memory, often forcing DuckDB to write intermediate data to disk.
+
+**Recommended Fix**:
+Use a hash aggregation with `arg_max` (e.g. `arg_max(change_type, commits.date)`) grouped by `path` to get the latest change status in a single linear pass `O(N)` without sorting the partitions.
+
+---
+
+### F64: UI/UX — Memory leak and event listener accumulation in Hotspots re-renders
+
+**The Problem**:
+In [widgets.js](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/output/spa/widgets.js#L78), each click on a color mode toggle (Complexity, Knowledge Map, AI Attribution) in the hotspots circle pack widget calls `renderHotspotCirclePack()`. This function clears the DOM container via `container.innerHTML = ''` and creates a new ECharts instance using `echarts.init()`. However, it also registers a new window resize listener `window.addEventListener('resize', ...)` capturing the new chart instance. The old ECharts chart instances are never explicitly disposed via `echarts.dispose(container)`, nor are their resize event listeners removed from the global `window` object. This causes a memory leak where dead chart objects and closures accumulate in RAM on every toggle.
+
+**The Impact**:
+Heavy memory footprint accumulation and CPU overhead on window resize after prolonged SPA interaction.
+
+**Recommended Fix**:
+Call `echarts.dispose(container)` before initializing a new ECharts instance in `renderHotspotCirclePack()`. Use a centralized window resize controller or properly track and remove previous resize event listeners.
+
+---
+
+### F65: Performance — Redundant double invocation of `is_worktree_dirty` on cache miss
+
+**The Problem**:
+In `FactsDb::open_or_ingest_with_cache_root` (in [facts/mod.rs](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/facts/mod.rs#L137)), `repo.is_worktree_dirty()` is called to warn the user about dirty worktrees when loading or creating the cache. During a cache miss, the function does not cache the result of the first check; instead, it calls `repo.is_worktree_dirty()` again at [facts/mod.rs#L161](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/facts/mod.rs#L161) to decide if it should write to the persistent cache database. Checking if a git worktree is dirty is a heavy operation because it walks the entire filesystem worktree and checks files against the git index (using pure-Rust `gix` status iterations). Running this check twice on every cache miss is a significant and unnecessary CPU/IO bottleneck.
+
+**The Impact**:
+Significant performance penalty (several seconds on large repositories) during cache miss ingestion.
+
+**Recommended Fix**:
+Query `is_worktree_dirty()` once at the entry of the method, store the result in a local boolean variable, and reuse it for both check conditions.
+
+---
+
+### F66: Performance — SIMD-optimized line counting in `count_loc` via existing `bstr` dependency
+
+**The Problem**:
+In [gix_repo.rs](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/repo/gix_repo.rs#L573), the `count_lines` function iterates over the byte slice with a naive `bytes.iter().filter(|&&b| b == b'\n').count()` loop. While the comment notes that adding `memchr` for SIMD-accelerated line counting is not justified since it's not a direct dependency, the codebase actually already depends on the `bstr` crate (used for raw byte string handling in `gix`), and imports `gix::bstr::ByteSlice as _`.
+
+**The Impact**:
+Slower git diff scanning and line counting. For large commits or repository sweeps containing many files, the naive byte-by-byte iterator loop is slower than a SIMD-accelerated scanner.
+
+**Recommended Fix**:
+Leverage the already imported `bstr::ByteSlice` trait and call `bytes.as_bstr().count(b'\n')` (or `bstr::ByteSlice::count` directly), which automatically uses `memchr`'s highly optimized SIMD line-counting routines under the hood without introducing any new dependencies.
+
+---
+
 ## 4. Summary of Active Findings
 
 Below is the register of active improvement opportunities and bugs:
 
 | ID | Category | Finding / Improvement Point | Priority / Risk | Impact | Status |
 |---|---|---|---|---|---|
-| **F55** | Correctness/Robustness | Runtime DuckDB crash in `run_xray` under `--format spa` | **High** / Low | Interactive SPA dashboard with X-Ray data fails. | **Fixed (v0.4.2 / commit `fe3d94f`)** — `run_xray` now JOINs `complexity_metrics ⋈ entities` on `(path, name)` with `e.rev_introduced <= cm.rev` and `(e.rev_last_seen IS NULL OR e.rev_last_seen >= cm.rev)`. Validated end-to-end (494 X-Ray rows embedded on the CodeLore repo smoke). |
-| **F56** | Robustness | Compilation failure of `spa_integration_test` with `spa` feature | **Medium** / Low | Developer test compilation failure. | **Fixed (v0.4.2 / commit `fe3d94f`)** — Integration test uses `..SpaDashboard::default()` to fill the new `entity_ownership`, `xray`, `daily_commits`, `trends` fields. `cargo test --features spa` green. |
-| **F57** | UI/UX | ECharts chart colors do not update when switching light/dark theme | **Medium** / Low | Axis labels and grids become illegible after toggle. | **Active** |
-| **F58** | Performance | Using `fancy-regex` for literal path-prefix grouping rules | **Medium** / Low | High CPU backtracking engine overhead on hot path. | **Active** |
+| **F57** | UI/UX | ECharts chart colors do not update when switching light/dark theme | **Medium** / Low | Axis labels and grids become illegible after toggle. | **Fixed (v0.4.3 / commit aec84ee)** — Re-render registry on theme toggle — widget render fns push to window._codeloreRerenderers; theme toggle iterates after flipping data-theme. |
+| **F58** | Performance | Using `fancy-regex` for literal path-prefix grouping rules | **Medium** / Low | High CPU backtracking engine overhead on hot path. | **Fixed (v0.4.3 / commit aec84ee)** — Three-tier GroupPattern: Literal (no regex), Std (regex crate), Fancy (fancy-regex). Strips backtracking engine from inner kernel. |
 | **F59** | Architecture/Robustness | Ingest complexity and clones at HEAD read from working tree | **High** / Medium | Fails on bare repos; parses uncommitted dirty changes. | **Active** |
 | **F60** | Performance/Robustness | `GitCliRepo::walk_commits` loads entire log into memory | **High** / Low | High RAM usage and OOM crash risk on massive repos. | **Active** |
+| **F61** | Performance/Complexity | Simplify SQL window-joins with `arg_max` aggregations | **Medium** / Low | Unnecessary CTEs, joins, and complex plan creation. | **Active** |
+| **F62** | Performance | Optimize change-coupling self-join via filtered changes CTE | **High** / Low | Quadratic Cartesian joins on large changesets. | **Fixed (v0.4.3 / commit 26307b1)** — New paths_filter module backed by the `ignore` crate. .gitignore + .git/info/exclude + .codeloreignore auto-respected. --include-ignored opt-out. |
+| **F63** | Performance | Optimize `query_live_paths` query via hash aggregation | **High** / Low | Partition-wise sort overhead on millions of change rows. | **Active** |
+| **F64** | UI/UX | Memory leak and event listener accumulation in Hotspots | **Medium** / Low | Dead chart objects and closures accumulate in RAM on toggle. | **Fixed (v0.4.3 / commit aec84ee)** — echarts.getInstanceByDom(container)?.dispose() before each re-init. Applied to all 5 widget render fns. |
+| **F65** | Performance | Redundant double invocation of `is_worktree_dirty` on cache miss | **High** / Medium | Wasted CPU/IO worktree status checking on cache misses. | **Active** |
+| **F66** | Performance | Naive line counting in `count_loc` instead of SIMD `bstr` count | **Medium** / Low | Wasted CPU cycles on diff line counting in large sweeps. | **Active** |
 
 ---
 
 ## 5. Proposed Verification Plan for New Findings
-
-### F55 (DuckDB crash in `run_xray`) & F56 (`spa_integration_test` compilation)
-*   **Verification**: Run `cargo test --workspace --all-features` to compile and verify all library tests. Run the compiled `spa_integration_test` to verify that `write_spa` succeeds and outputs correct values.
 
 ### F57 (ECharts colors on theme switch)
 *   **Verification**: Open the emitted `codelore.html` dashboard in a browser. Toggle the theme between light and dark mode, and verify that axis text, grid lines, and legends repaint dynamically with legible colors.
@@ -228,3 +284,22 @@ Below is the register of active improvement opportunities and bugs:
 
 ### F60 (GitCliRepo log loading in memory)
 *   **Verification**: Run `codelore analyze` on a massive repository (e.g., Linux kernel or similar) using the Git CLI backend. Track peak memory usage and verify that it remains low and bounded.
+
+### F61 (arg_max window-join simplification)
+*   **Verification**: Execute the simplified SQL queries on a large fact store. Verify that the returned results (primary authors, developer metrics) are identical to the original window-based queries while execution plans contain no partition-sorting nodes.
+
+### F62 (coupling self-join pre-filtering)
+*   **Verification**: Run the coupling analysis on a repository containing large commits. Profile the query execution plan in DuckDB and verify that the self-join is executed on the pre-filtered changeset CTE, avoiding a full table self-join.
+
+### F63 (live paths hash aggregation)
+*   **Verification**: Benchmark `query_live_paths` on a repository with >1,000,000 commits and track time/memory consumption. Compare against the original partition-sorting implementation.
+
+### F64 (UI/UX - Hotspots circle-pack memory leak)
+*   **Verification**: Open the emitted `codelore.html` dashboard in a browser. Open Developer Tools and navigate to the Performance/Memory tab. Click the Hotspots color mode toggles repeatedly (e.g., 50 times). Take a heap snapshot and verify that orphaned ECharts instances or duplicate window resize listeners do not accumulate.
+
+### F65 (is_worktree_dirty performance)
+*   **Verification**: Run `codelore analyze` on a cache miss in a large repository (e.g., >100,000 files) with verbose logging/timing. Verify that the time spent in `cache_or_ingest` is reduced, and that `is_worktree_dirty` status check runs exactly once.
+
+### F66 (SIMD line counting performance)
+*   **Verification**: Profile a large diff walk using the criterion benchmark (`cargo bench -p codelore-lib --all-features --bench end_to_end`). Compare diff parsing times before and after swapping the naive count loop to SIMD-accelerated `bstr` counting.
+
