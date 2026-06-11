@@ -58,32 +58,125 @@ CodeScene does not have:
 
 ---
 
-## 3. v0.4.x release sequence
+## 3. Release sequence — calibrated against what actually shipped
 
 | Version | Scope | Status |
 |---|---|---|
-| **v0.4.0** | F38 perf fix + 6-widget SPA-MVP (KPI tiles, hotspot circle-pack, hotspot table, change-coupling sankey, knowledge-islands ranked view, file detail drawer) | **Shipped 2026-06-11** ✓ |
-| **v0.4.1** | 3 more widgets: knowledge map (author-colored treemap), function-level X-Ray sunburst, trends multi-line | Planned |
-| **v0.4.2** | Calendar heatmap, alternate coupling viz (network/chord), theming + dark mode | Planned |
-| **v0.4.3+** | Embed mode for CI artefacts, perf tuning on > 100k-commit repos, AI-attribution overlay | Planned |
+| **v0.4.0** | 6-widget SPA-MVP: KPI tiles, hotspot circle-pack, hotspot table, change-coupling sankey, knowledge-islands ranked view, file detail drawer; F38 windowed Kamei rewrite as precondition; `--features spa` Cargo gate; SHA-pinned ECharts + d3-hierarchy build.rs fetch | **Shipped 2026-06-11** ✓ |
+| **v0.4.1** | **Perf batch** — F43-F54 (DISTINCT cleanup, blob mem-move, empty-diff short-circuit, single-cursor AST walks, single-pass templating). No new widgets — the audit findings made this a backend-only release. | **Shipped 2026-06-11** ✓ |
+| **v0.4.2** | Widget completeness — 5 new widgets (knowledge map, X-Ray sunburst, trends, calendar heatmap, AI-attribution overlay) + theming + light/dark mode toggle | Planned (next) |
+| **v0.4.3** | CI embed mode, per-metric provenance tooltips, perf tuning on > 100k-commit repos | Planned |
+| **v0.5.x** | `codelore serve` — local Axum web server, live SQL exploration, cross-widget filter state. Alpine.js added at this point. | Planned (research done) |
+| **v0.6.x** | Tauri 2 desktop wrapper. Native filesystem, drag-drop folder, signed cross-platform installers. | Planned |
 
-### v0.4.0 widget detail
+### v0.4.0 widgets — what's actually in production
 
 | # | Widget | Data source(s) | ECharts series | Notes |
 |---|---|---|---|---|
-| 1 | **Hotspot circle-pack** | `run_hotspots` + filesystem hierarchy | `custom` + `d3.pack()` layout | The signature CodeScene look. Color = combined churn × complexity. |
-| 2 | **Hotspot table** | same `HotspotRow[]` | existing paginated table | Drill-down from #1 click. |
-| 3 | **Code-health KPI tiles** | `run_summary` + `run_code_health` | HTML cards | Total files, p95 cognitive, churn rate, AI-attribution %. |
-| 4 | **File detail drawer** | per-path slice of all run_* | HTML drawer | Click any file/cell → drawer with that path's metrics across analyses. |
-| 5 | **Change coupling sankey** | `run_coupling` top-N | native `sankey` | Quick to land; alternate `graph` (force network) view comes in v0.4.2. |
-| 6 | **Knowledge islands** | `run_knowledge_islands` | native `treemap` + ranked list | CodeLore's differentiator. Surface prominently. |
+| 1 | **Hotspot circle-pack** | `run_hotspots` + filesystem hierarchy | `custom` + `d3.pack()` layout | The signature CodeScene look. Color = cognitive on yellow→red ramp. |
+| 2 | **Hotspot table** | same `HotspotRow[]` | sortable paginated table (500/page) + 80 ms debounced filter | Drill-down from #1 click; row click → detail drawer. |
+| 3 | **KPI tiles** | `run_summary` + `run_code_health` + `run_hotspots` + `run_knowledge_islands` + `run_coupling` | HTML cards | Files analyzed, commits, distinct authors, median code health, cognitive p95, knowledge-island count, coupling pair count. |
+| 4 | **File detail drawer** | per-path slice of all run_* | HTML side panel | Click any circle / table row / sankey node → drawer with that path's hotspot, knowledge-island, code-health, and coupling-partner data. ESC or × closes. |
+| 5 | **Change coupling sankey** | `run_coupling` top-30 by combined score | native `sankey` | Node click → drawer. |
+| 6 | **Knowledge islands** (CodeLore differentiator) | `run_knowledge_islands` | ranked HTML table | Auto-detected departed-author files. Surfaced with a "CodeLore differentiator" badge. |
 
-**Bundle estimate**:
-- ECharts 6.1.0 minified: ~250 KB
-- d3-hierarchy 3.1.2 minified: ~10 KB
-- CodeLore SPA glue (template + widgets.js): ~20 KB
-- Per-analysis JSON data (typical mid-size repo): 50 KB – 2 MB
-- **Total single-file HTML**: ~330 KB + data; ~110 KB gzipped + data-gzipped
+**Actual bundle**:
+- ECharts 6.1.0 minified: 1.1 MB (full feature set; tree-shaken would be ~250 KB but we'd lose runtime widget swapping)
+- d3-hierarchy 3.1.2 minified: 14 KB
+- CodeLore SPA glue (template.html + widgets.js + CSS): ~30 KB
+- Per-analysis JSON data on a 300-file repo: ~50 KB
+- **Verified emitted size on the CodeLore repo itself**: 1.2 MB (~400 KB gzipped over the wire)
+
+---
+
+## 3a. v0.4.2 widget plan (next release)
+
+Five new widgets + theming. None require build-system changes; all are
+JS + template extensions + (for two) new `SpaDashboard` fields and one
+or two new `run_*` calls in `run_spa_dispatch`.
+
+| # | Widget | Data source(s) | ECharts series | New scaffold | Est. LOC |
+|---|---|---|---|---|---|
+| W7 | **Knowledge map** (author-colored treemap) | reuse `run_hotspots` data; client-side palette swap by `primary_author` from `run_entity_ownership` | native `treemap` (palette toggle on the existing circle-pack data) | new `entity_ownership` field on `SpaDashboard`; toggle UI in template | ~50 LOC |
+| W8 | **X-Ray sunburst** (function-level) | `entities` + `complexity_metrics` (already in DuckDB; needs a new raw SQL aggregation) | native `sunburst` | new `entities` field; new `run_xray` helper that emits `{path, function, cognitive}` rows | ~100 LOC |
+| W9 | **Trends multi-line** | hotspots over time — `run_hotspots` with `--time-bucket month`, top-N files | native `line` | new `trends` field; second `run_hotspots` call inside `run_spa_dispatch` with bucketing opts | ~80 LOC |
+| W10 | **Calendar heatmap** | raw `SELECT date_trunc('day', date) AS d, COUNT(*) FROM commits GROUP BY d` | native `heatmap` on `calendar` coord | new `daily_commits` field; new tiny SQL helper | ~60 LOC |
+| W11 | **AI-attribution overlay** | toggle that filters the circle-pack + table by `commits.ai_attribution` band (human / assisted / dominant) | client-side filter on existing data | toggle UI + JS that re-renders the circle-pack with filtered data | ~50 LOC |
+
+Plus:
+- **CSS theming via `:root` variables** — already partially in place; complete the audit so every color references a variable.
+- **Light/dark toggle** — single button in the header; preference stored in `localStorage`.
+
+**Cumulative SPA HTML size estimate**: 1.2 MB → ~1.3 MB (the extra is data, not glue).
+
+**v0.4.2 effort estimate**: ~1 week of focused work.
+
+---
+
+## 3b. v0.4.3 — polish + CI embed
+
+- **Embed mode** — `codelore analyze --format spa --embed` strips the
+  full-page shell and produces an HTML fragment suitable for
+  embedding in `$GITHUB_STEP_SUMMARY` and SARIF code-scanning result
+  pages. Keeps the widgets, drops the header/footer/styling that
+  conflicts with embedding contexts.
+- **Per-metric provenance tooltips** — `?` icons on every KPI tile
+  and table column. Tooltip shows the SQL query that produced the
+  value, plus a link to the research foundation in
+  `docs/research-foundations.md`. This is the "deterministic
+  published formulas" brand differentiator surfaced visually.
+- **Perf tuning** — `entities` table query for X-Ray currently does a
+  full scan; if v0.4.2 telemetry shows it as the long pole on
+  100k+ commit repos, add an `--analysis xray` boundary that
+  pre-filters to live-at-HEAD entities.
+
+**v0.4.3 effort estimate**: ~3 days.
+
+---
+
+## 3c. v0.5.x — `codelore serve` (interactive mode)
+
+This is where vanilla JS starts to hurt — cross-widget filter state
+(filter on the hotspot table → highlight matching circles → restrict
+the knowledge-islands view → restrict the sankey) needs reactivity.
+
+**Framework decision — revisited at the v0.5 boundary** (see §2.1):
+**Alpine.js** is the chosen upgrade. Validated as the best in-structure
+choice: ~15 KB, single `<script>` embed via the same `build.rs`
+SHA-pin pattern as ECharts, HTML-attribute syntax that matches our
+Rust-generated template philosophy. We stay vanilla until v0.5
+because v0.4.x widgets are independent — adding Alpine earlier would
+pay for capability we don't use yet.
+
+| Feature | Stack |
+|---|---|
+| Local web server | **Axum** (Rust) + `tower-http` for static |
+| Live SQL exploration | **REST** API over DuckDB cache; user can run custom queries (audit-trail brand) |
+| Cross-widget filter state | **Alpine.js** (new; SHA-pinned via build.rs) |
+| Threshold sliders | Re-run analyses on slider change (debounced) |
+| `codelore diff` PR-mode UI | Same Axum + the SPA frontend |
+| Optional auth | None for v0.5.x (local-first); team server is v0.6+ |
+
+**v0.5.x effort estimate**: 3-5 weeks. Mostly Axum routing + glue;
+the frontend is the v0.4.x SPA with Alpine sprinkled on.
+
+---
+
+## 3d. v0.6.x — Tauri 2 desktop app
+
+Reuses the v0.5.x frontend. Tauri 2 wraps the Axum server + the SPA
+frontend into a native desktop app. Validated as the right desktop
+story earlier in the session research:
+
+- Tauri 2 installer size: <5 MB (vs Electron's 300+ MB)
+- `codelore-lib` links directly into `src-tauri/` — no shell-out
+- Native filesystem: drag-drop a folder onto the window
+- Signed cross-platform installers (`.dmg` / `.msi` / `.AppImage`)
+  via Tauri's bundler
+- The `duckdb` Rust crate works inside Tauri's Rust backend
+  (Duckling reference confirms this pattern)
+
+**v0.6.x effort estimate**: 4-6 weeks on top of v0.5.x.
 
 ---
 
@@ -258,14 +351,22 @@ implementation.
 
 ---
 
-## 8. Out of scope for v0.4.x
+## 8. Out of scope (across all v0.4.x-v0.6.x phases)
 
-- **Hosted SaaS** — out of scope for the local-first CLI brand.
-- **Cloud sync / team server** — possibly v0.5.x if user feedback
-  asks for it.
+- **Hosted SaaS** — out of scope; conflicts with the local-first
+  audit-trail brand. Not planned.
+- **Cloud sync / team server** — possibly v0.7.x+ if user feedback
+  asks for it; not on the active roadmap.
 - **VSCode extension** — different surface, different repo. The
   SPA emitter does not preclude this work; SARIF already covers
-  editor integration via the Code Scanning channel.
-- **Tauri desktop app** — once the SPA matures (v0.5.x).
-- **`codelore serve`** — local Axum server with live SQL. Once
-  the SPA is stable (v0.5.x).
+  editor integration via the GitHub Code Scanning channel.
+- **Alternative dashboard frameworks** (Observable Framework /
+  Evidence.dev / Rill) — explicitly dropped. The v0.4.0 SPA emitter
+  delivers the curated CodeLore experience; users who want raw SQL
+  exploration use the already-shipped `--format sqlite` output with
+  Datasette / Rill / Metabase. No parallel emitter to maintain.
+
+**Now PLANNED (was out-of-scope in the original roadmap):**
+- `codelore serve` — moved into **v0.5.x** above
+- Tauri desktop app — moved into **v0.6.x** above
+- Alpine.js framework upgrade — locked in for **v0.5.x** boundary
