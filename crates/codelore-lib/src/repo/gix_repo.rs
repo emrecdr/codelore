@@ -255,6 +255,46 @@ impl Repo for GixRepo {
         // the tree is dirty.
         iter.flatten().next().is_some()
     }
+
+    fn read_blob_at_head(&self, path: &str) -> Result<Option<Vec<u8>>> {
+        let repo = self.inner.to_thread_local();
+        let head_id = match repo.head_id() {
+            Ok(id) => id,
+            Err(e) => {
+                return Err(CodeLoreError::Repo(format!(
+                    "read_blob_at_head head_id: {e}"
+                )));
+            }
+        };
+        let commit = repo
+            .find_commit(head_id)
+            .map_err(|e| CodeLoreError::Repo(format!("read_blob_at_head find_commit: {e}")))?;
+        let tree = commit
+            .tree()
+            .map_err(|e| CodeLoreError::Repo(format!("read_blob_at_head tree: {e}")))?;
+        // `lookup_entry_by_path` accepts a POSIX-separated repo-relative
+        // string and walks the tree segment by segment. Returns
+        // `Ok(None)` if any segment is missing — that's the "not tracked
+        // at HEAD" case the trait wants surfaced as `Ok(None)`.
+        let entry = tree
+            .lookup_entry_by_path(path)
+            .map_err(|e| CodeLoreError::Repo(format!("read_blob_at_head lookup {path}: {e}")))?;
+        let Some(entry) = entry else {
+            return Ok(None);
+        };
+        // Reject non-blob entries (directories, submodule gitlinks, etc.).
+        // The HEAD-time scan only cares about file contents.
+        if !entry.mode().is_blob() {
+            return Ok(None);
+        }
+        let mut obj = repo.find_object(entry.id()).map_err(|e| {
+            CodeLoreError::Repo(format!("read_blob_at_head find_object {path}: {e}"))
+        })?;
+        // Move the buffer out of the gix::Object via mem::take (gix::Object
+        // implements Drop so partial-move isn't permitted). Avoids
+        // re-allocating + memcpy'ing up to MAX_DIFF_BLOB_BYTES per file.
+        Ok(Some(std::mem::take(&mut obj.data)))
+    }
 }
 
 impl GixRepo {

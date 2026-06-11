@@ -79,9 +79,12 @@ impl FactsDb {
             Ok(stats)
         })?;
 
-        // Plan 3: populate entities + complexity_metrics from the working tree at HEAD.
-        // Plan 4 will replace this with proper gix blob reading.
-        self.ingest_complexity_at_head(opts)?;
+        // Populate entities + complexity_metrics from blobs at HEAD via
+        // `Repo::read_blob_at_head`. Avoids dirty-tree contamination and
+        // works on bare repos (no working tree). Falls back to
+        // `std::fs::read` for backends without a blob implementation
+        // (default trait impl returns `Ok(None)`).
+        self.ingest_complexity_at_head(repo, opts)?;
 
         // Plan 4: populate the Kamei 14-feature change vector via SQL UPDATE pass.
         // Kamei history (ndev, nuc, age) joins changes-to-changes on path;
@@ -94,7 +97,7 @@ impl FactsDb {
         // `clone-coupling` analysis (§6) can JOIN against it. Honors
         // `opts.min_clone_node_count` and `opts.exclude_patterns` (set via
         // `--exclude` + `.codeloreignore`).
-        let clones_n = self.populate_clones_at_head(opts)?;
+        let clones_n = self.populate_clones_at_head(repo, opts)?;
 
         // PAR-7: architectural grouping. After ingest, rewrite the
         // `changes.path` column to logical group names per --group-file.
@@ -110,7 +113,15 @@ impl FactsDb {
         Ok(stats)
     }
 
-    fn ingest_complexity_at_head(&self, opts: &Options) -> Result<()> {
+    fn ingest_complexity_at_head<R: crate::repo::Repo>(
+        &self,
+        repo: &R,
+        // After F59 (blob reads instead of disk), the complexity pass
+        // no longer needs `opts.repo_path` — every file is sourced via
+        // `repo.read_blob_at_head`. Kept on the signature for forward
+        // compatibility (future per-language flags may need it).
+        _opts: &Options,
+    ) -> Result<()> {
         use crate::complexity::{Tier1Language, compute_for_file};
         use rayon::prelude::*;
 
@@ -137,28 +148,32 @@ impl FactsDb {
                 || (),
                 |_state, path| {
                     let lang = Tier1Language::from_path(&path)?;
-                    let full_path = opts.repo_path.join(&path);
-                    let source = match std::fs::read(&full_path) {
-                        Ok(b) => b,
+                    // Prefer the blob at HEAD (works on bare repos, ignores
+                    // dirty-tree edits). Fall back to disk if the Repo
+                    // backend doesn't implement blob reads OR if the path
+                    // exists on disk but isn't tracked at HEAD (a freshly
+                    // ingested commit may have added paths not yet in any
+                    // tree the backend has cached).
+                    let source = match repo.read_blob_at_head(&path) {
+                        Ok(Some(b)) => b,
+                        Ok(None) => {
+                            // Path not tracked at HEAD; skip (matches the
+                            // HEAD-time scan semantic of "current files only").
+                            tracing::debug!("complexity: {path} not tracked at HEAD; skipping");
+                            return None;
+                        }
                         Err(e) => {
-                            // ENOENT here means the path was tracked at HEAD per
-                            // git history but the file is missing on disk — most
-                            // commonly because the user has uncommitted deletions
-                            // in the working tree. That's user-action territory,
-                            // not a codelore bug, so log at debug not warn to
-                            // avoid drowning the console on dirty trees.
-                            if e.kind() == std::io::ErrorKind::NotFound {
-                                tracing::debug!(
-                                    "complexity: file missing from working tree {path} \
-                                     (likely an uncommitted deletion; skipping)",
-                                );
-                            } else {
-                                tracing::warn!("complexity: cannot read {path}: {e}");
-                            }
+                            // Object-database error (corrupted pack, missing
+                            // shallow object). Surface as a warning and skip
+                            // — the rest of the scan can still complete.
+                            tracing::warn!("complexity: blob read failed for {path}: {e}");
                             return None;
                         }
                     };
-                    // F10: skip oversized files before handing to tree-sitter.
+                    // Skip oversized files before handing to tree-sitter.
+                    // Without this guard, deeply-nested generated/minified
+                    // files (sqlite3.c, .pb.cc, minified .js) can OOM or
+                    // stack-overflow the AST walker.
                     // Without this guard, deeply-nested generated/minified
                     // files (sqlite3.c, .pb.cc, minified .js) can OOM or
                     // stack-overflow the AST walker. Log at debug — minified
@@ -173,7 +188,11 @@ impl FactsDb {
                         );
                         return None;
                     }
-                    let entities = match compute_for_file(&full_path, &source, lang) {
+                    // Path only used for error reporting in compute_for_file;
+                    // the repo-relative form is more useful than the absolute
+                    // working-tree path anyway.
+                    let synth_path = std::path::Path::new(&path);
+                    let entities = match compute_for_file(synth_path, &source, lang) {
                         Ok(v) => v,
                         Err(e) => {
                             tracing::warn!("complexity: parse error {path}: {e}");
@@ -226,7 +245,11 @@ impl FactsDb {
     /// Honors `opts.min_clone_node_count` (default 30) and `opts.exclude_patterns`
     /// (built from `--exclude` flags + `.codeloreignore`).
     #[allow(clippy::too_many_lines)]
-    fn populate_clones_at_head(&self, opts: &Options) -> Result<usize> {
+    fn populate_clones_at_head<R: crate::repo::Repo>(
+        &self,
+        repo: &R,
+        opts: &Options,
+    ) -> Result<usize> {
         use crate::clones::{CloneLanguage, extract_functions, group_clones};
         use rayon::prelude::*;
         use walkdir::WalkDir;
@@ -275,8 +298,15 @@ impl FactsDb {
         // via `collect::<Result<_>>`.
         let per_file: Vec<Vec<_>> = candidates
             .into_par_iter()
-            .map(|(full_path, rel, lang)| -> Result<Vec<_>> {
-                let Ok(code) = std::fs::read(&full_path) else {
+            .map(|(_full_path, rel, lang)| -> Result<Vec<_>> {
+                // Read the blob at HEAD via the Repo trait. Bare-repo safe
+                // and ignores dirty-tree edits. Backends without blob
+                // support return Ok(None) — same skip behaviour as the
+                // disk-not-found case the previous let-Ok-else handled.
+                // Untracked-at-HEAD (Ok(None)) and object-DB errors
+                // (Err) both skip the file — non-fatal, the rest of
+                // the scan continues.
+                let Ok(Some(code)) = repo.read_blob_at_head(&rel) else {
                     return Ok(Vec::new());
                 };
                 // F10: skip oversized files (generated / minified) before

@@ -67,6 +67,38 @@ pub trait Repo: Send + Sync {
     fn is_worktree_dirty(&self) -> bool {
         false
     }
+
+    /// Read the blob bytes at HEAD for `path` (POSIX-separated, repo-
+    /// relative). Returns `Ok(None)` if the path isn't tracked at
+    /// HEAD (deleted upstream, or a directory). Returns `Err` only
+    /// on real I/O failure.
+    ///
+    /// HEAD-time scans (complexity, clones) use this instead of
+    /// reading the working-tree file via `std::fs::read`. Reading
+    /// blobs avoids three failure modes:
+    ///   1. Bare repos have no working tree — `fs::read` always
+    ///      fails. Blob reads work.
+    ///   2. Dirty working trees: `fs::read` returns the user's
+    ///      uncommitted edits, contaminating HEAD-time metrics with
+    ///      changes that aren't yet in the fact store's commit
+    ///      history.
+    ///   3. Untracked files (created locally, never committed)
+    ///      would be picked up by a working-tree walk but have no
+    ///      blob — the HEAD-time semantic is to skip them, which
+    ///      blob reads enforce by construction.
+    ///
+    /// Default impl returns `Ok(None)` so backends without an
+    /// efficient blob lookup can opt out and fall back to the
+    /// working-tree disk path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on object-database I/O failures (corrupted
+    /// pack, missing shallow object, etc.) but NOT on "path doesn't
+    /// exist at HEAD" — that case returns `Ok(None)`.
+    fn read_blob_at_head(&self, _path: &str) -> Result<Option<Vec<u8>>> {
+        Ok(None)
+    }
 }
 
 pub mod gix_repo;
