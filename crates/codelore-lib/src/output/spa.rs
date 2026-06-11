@@ -33,8 +33,11 @@ use std::io::Write;
 
 use serde::Serialize;
 
+use serde::Deserialize;
+
 use crate::analyses::code_health::CodeHealthRow;
 use crate::analyses::coupling::CouplingRow;
+use crate::analyses::entity_ownership::EntityOwnershipRow;
 use crate::analyses::hotspots::HotspotRow;
 use crate::analyses::knowledge_islands::KnowledgeIslandRow;
 use crate::analyses::summary::SummaryRow;
@@ -68,6 +71,48 @@ pub struct SpaDashboard {
     /// signal. Empty when no contributors have departed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub knowledge_islands: Vec<KnowledgeIslandRow>,
+    /// Entity-ownership rows feeding the knowledge-map widget (W7).
+    /// Each row is one (path, author) tuple; the JS picks the primary
+    /// author per path (max added `LoC`) and palette-colors the circles.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub entity_ownership: Vec<EntityOwnershipRow>,
+    /// Function-level entries feeding the X-Ray sunburst widget (W8).
+    /// Each row is one function with its cognitive complexity.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub xray: Vec<XRayEntry>,
+    /// Per-day commit counts feeding the calendar-heatmap widget (W10).
+    /// Each row is `(date YYYY-MM-DD, count)`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub daily_commits: Vec<DailyCommit>,
+    /// Per-month hotspot snapshots feeding the trends widget (W9).
+    /// Each row is `(month YYYY-MM-01, path, hotspot_score)`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trends: Vec<TrendPoint>,
+}
+
+/// One function in the X-Ray sunburst.
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+pub struct XRayEntry {
+    pub path: String,
+    pub function: String,
+    pub cognitive: f64,
+    pub start_line: u32,
+    pub end_line: u32,
+}
+
+/// One day's commit count for the calendar heatmap.
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+pub struct DailyCommit {
+    pub date: String,
+    pub count: u32,
+}
+
+/// One (month, path, score) point in the trends multi-line.
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+pub struct TrendPoint {
+    pub month: String,
+    pub path: String,
+    pub hotspot_score: f64,
 }
 
 /// Render the SPA HTML and write it to `w`. The HTML is fully
@@ -109,6 +154,125 @@ pub fn write_spa<W: Write>(
     w.write_all(html.as_bytes())
         .map_err(|e| CodeLoreError::Output(format!("spa write: {e}")))?;
     Ok(())
+}
+
+/// Aggregate function-level cognitive complexity per (path, function)
+/// from the `complexity_metrics` table for the X-Ray sunburst (W8).
+/// Returns at most `limit` rows ordered by `cognitive DESC`, since
+/// the sunburst becomes unreadable past a few hundred functions and
+/// the JSON payload would blow up on monorepos otherwise.
+pub fn run_xray(db: &crate::facts::FactsDb, limit: i64) -> Result<Vec<XRayEntry>> {
+    // Join `complexity_metrics` (cognitive score) with `entities`
+    // (line range) on (path, name, rev). The entities table has the
+    // start/end lines; complexity_metrics has the metrics. Both share
+    // the same (path, name, rev) primary-key columns. The JOIN is
+    // exact — every row in complexity_metrics has a matching row in
+    // entities by construction (they're populated in the same
+    // ingest pass).
+    let mut stmt = db
+        .conn()
+        .prepare(
+            "SELECT cm.path,
+                    cm.name,
+                    cm.cognitive,
+                    CAST(e.start_line AS UINTEGER) AS s_line,
+                    CAST(e.end_line AS UINTEGER) AS e_line
+             FROM complexity_metrics cm
+             INNER JOIN entities e
+                ON e.path = cm.path
+                AND e.name = cm.name
+                AND e.rev_introduced <= cm.rev
+                AND (e.rev_last_seen IS NULL OR e.rev_last_seen >= cm.rev)
+             WHERE cm.cognitive > 0
+             ORDER BY cm.cognitive DESC, cm.path ASC, cm.name ASC
+             LIMIT ?",
+        )
+        .map_err(|e| CodeLoreError::Output(format!("xray prepare: {e}")))?;
+    let rows = stmt
+        .query_map([limit], |r| {
+            Ok(XRayEntry {
+                path: r.get(0)?,
+                function: r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                cognitive: r.get(2)?,
+                start_line: r.get(3)?,
+                end_line: r.get(4)?,
+            })
+        })
+        .map_err(|e| CodeLoreError::Output(format!("xray query: {e}")))?;
+    let out: std::result::Result<Vec<_>, _> = rows.collect();
+    out.map_err(|e| CodeLoreError::Output(format!("xray collect: {e}")))
+}
+
+/// Build a per-(month, path) trend series restricted to `paths` for
+/// the trends multi-line widget (W9). The score per (month, path) is
+/// the count of revisions that touched the path during the month.
+/// Empty `paths` returns an empty Vec — the widget renders nothing.
+pub fn run_trends(db: &crate::facts::FactsDb, paths: &[String]) -> Result<Vec<TrendPoint>> {
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Bind `paths` via UNNEST so we don't string-interpolate user data
+    // into the SQL. DuckDB's list_value() / array binding accepts an
+    // owned Vec<String>; we materialise the path list as a temp table
+    // via VALUES instead since the duckdb crate's parameter binding
+    // doesn't accept Vec<String> directly.
+    //
+    // Strategy: build a `VALUES (?), (?), ...` clause sized to paths.len().
+    let placeholders = std::iter::repeat_n("(?)", paths.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "WITH paths(path) AS (VALUES {placeholders})
+         SELECT strftime(date_trunc('month', c.date), '%Y-%m-%d') AS month,
+                ch.path,
+                CAST(COUNT(*) AS DOUBLE) AS score
+         FROM commits c
+         INNER JOIN changes ch ON ch.rev = c.rev
+         INNER JOIN paths USING (path)
+         GROUP BY month, ch.path
+         ORDER BY month ASC, ch.path ASC"
+    );
+    let mut stmt = db
+        .conn()
+        .prepare(&sql)
+        .map_err(|e| CodeLoreError::Output(format!("trends prepare: {e}")))?;
+    let params: Vec<&dyn duckdb::ToSql> = paths.iter().map(|p| p as &dyn duckdb::ToSql).collect();
+    let rows = stmt
+        .query_map(params.as_slice(), |r| {
+            Ok(TrendPoint {
+                month: r.get(0)?,
+                path: r.get(1)?,
+                hotspot_score: r.get(2)?,
+            })
+        })
+        .map_err(|e| CodeLoreError::Output(format!("trends query: {e}")))?;
+    let out: std::result::Result<Vec<_>, _> = rows.collect();
+    out.map_err(|e| CodeLoreError::Output(format!("trends collect: {e}")))
+}
+
+/// Per-day commit counts for the calendar heatmap (W10). Returns one
+/// row per day with at least one commit, sorted by date ascending.
+pub fn run_daily_commits(db: &crate::facts::FactsDb) -> Result<Vec<DailyCommit>> {
+    let mut stmt = db
+        .conn()
+        .prepare(
+            "SELECT CAST(CAST(date AS DATE) AS TEXT) AS d,
+                    CAST(COUNT(*) AS UINTEGER) AS n
+             FROM commits
+             GROUP BY CAST(date AS DATE)
+             ORDER BY d ASC",
+        )
+        .map_err(|e| CodeLoreError::Output(format!("daily_commits prepare: {e}")))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(DailyCommit {
+                date: r.get(0)?,
+                count: r.get(1)?,
+            })
+        })
+        .map_err(|e| CodeLoreError::Output(format!("daily_commits query: {e}")))?;
+    let out: std::result::Result<Vec<_>, _> = rows.collect();
+    out.map_err(|e| CodeLoreError::Output(format!("daily_commits collect: {e}")))
 }
 
 fn escape_html(s: &str) -> String {

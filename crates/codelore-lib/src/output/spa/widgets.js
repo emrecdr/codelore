@@ -29,6 +29,10 @@
   // Detail drawer state — set up once, reused by every widget that
   // wants to surface per-file details.
   initDetailDrawer();
+  // Theme toggle (light / dark) — preference persisted in localStorage.
+  initThemeToggle();
+  // Color-mode toggles for the hotspot circle-pack (cognitive / author / ai).
+  initHotspotColorToggles();
 
   // -----------------------------------------------------------------
   // Widget 0: KPI tiles (at-a-glance KPIs)
@@ -55,7 +59,14 @@
   // -----------------------------------------------------------------
   renderCouplingSankey(data.coupling || []);
 
-  function renderHotspotCirclePack(rows) {
+  // -----------------------------------------------------------------
+  // v0.4.2 widgets
+  // -----------------------------------------------------------------
+  renderTrends(data.trends || []);
+  renderCalendarHeatmap(data.daily_commits || []);
+  renderXRaySunburst(data.xray || []);
+
+  function renderHotspotCirclePack(rows, colorMode) {
     const container = document.getElementById('widget-hotspot-circle-pack-body');
     if (!container) return;
     if (!rows.length) {
@@ -63,6 +74,16 @@
         'The repository may be too small, or thresholds filtered everything out.</div>';
       return;
     }
+    colorMode = colorMode || 'cognitive';
+    // Clear any prior ECharts instance so toggles re-render cleanly.
+    container.innerHTML = '';
+
+    // Build a primary-author map (path → author with max added LoC)
+    // for the W7 knowledge-map mode. Computed once per render call.
+    const primaryAuthorByPath = computePrimaryAuthorByPath(data.entity_ownership || []);
+    const authorPalette = makeAuthorPalette(
+      Array.from(new Set(Object.values(primaryAuthorByPath)))
+    );
 
     // Step 1: build a filesystem-style hierarchy from flat HotspotRow[].
     // Each row is { path, revisions, cognitive, code_health, hotspot_score }.
@@ -143,8 +164,21 @@
             const m = n.data.metrics;
             const cog = m ? m.cognitive : 0;
             const ratio = cog / maxCognitive;
+            let leafColor;
+            if (colorMode === 'author') {
+              const author = primaryAuthorByPath[n.data.fullPath];
+              leafColor = author ? authorPalette[author] : 'rgba(140, 140, 140, 0.55)';
+            } else if (colorMode === 'ai') {
+              // No per-file AI signal on HotspotRow today — fall back
+              // to cognitive heatmap with a footer hint. Once the
+              // ai_attribution rollup ships, swap this branch to use
+              // the per-path AI band.
+              leafColor = heatmapColor(ratio);
+            } else {
+              leafColor = heatmapColor(ratio);
+            }
             const color = isLeaf
-              ? heatmapColor(ratio)
+              ? leafColor
               : 'rgba(255, 255, 255, 0.02)';
             const stroke = isLeaf
               ? 'rgba(0, 0, 0, 0.3)'
@@ -663,6 +697,262 @@
   window._codeloreShowDetail = function (path) { showFileDetailDrawer(path, data); };
 
   // -----------------------------------------------------------------
+  // W9: trends multi-line
+  // -----------------------------------------------------------------
+  function renderTrends(rows) {
+    const container = document.getElementById('widget-trends-body');
+    if (!container) return;
+    if (!rows.length) {
+      container.innerHTML = '<div class="empty">No trend data — repo too small or analyses not wired.</div>';
+      return;
+    }
+
+    // Build {month -> {path -> score}} and a sorted month list.
+    const months = Array.from(new Set(rows.map(function (r) { return r.month; }))).sort();
+    const pathSet = new Set(rows.map(function (r) { return r.path; }));
+    const paths = Array.from(pathSet);
+    const byMonth = {};
+    for (var i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      if (!byMonth[r.month]) byMonth[r.month] = {};
+      byMonth[r.month][r.path] = r.hotspot_score;
+    }
+    // One series per path
+    const series = paths.map(function (p) {
+      return {
+        name: p,
+        type: 'line',
+        smooth: true,
+        symbol: 'circle',
+        symbolSize: 5,
+        emphasis: { focus: 'series' },
+        data: months.map(function (m) {
+          return (byMonth[m] && byMonth[m][p]) || 0;
+        }),
+      };
+    });
+
+    const chart = echarts.init(container, null, { renderer: 'canvas' });
+    chart.setOption({
+      tooltip: { trigger: 'axis' },
+      legend: {
+        top: 0,
+        type: 'scroll',
+        textStyle: { color: getCssVar('--fg-dim'), fontSize: 11 },
+      },
+      grid: { top: 40, left: 50, right: 20, bottom: 40 },
+      xAxis: {
+        type: 'category',
+        data: months,
+        axisLabel: { color: getCssVar('--fg-dim'), fontSize: 11 },
+        axisLine: { lineStyle: { color: getCssVar('--border') } },
+      },
+      yAxis: {
+        type: 'value',
+        name: 'revisions / month',
+        nameTextStyle: { color: getCssVar('--fg-dim'), fontSize: 11 },
+        axisLabel: { color: getCssVar('--fg-dim'), fontSize: 11 },
+        splitLine: { lineStyle: { color: getCssVar('--bg-elev-2') } },
+      },
+      series: series,
+    });
+    window.addEventListener('resize', function () { chart.resize(); });
+  }
+
+  // -----------------------------------------------------------------
+  // W10: calendar heatmap of commits per day
+  // -----------------------------------------------------------------
+  function renderCalendarHeatmap(rows) {
+    const container = document.getElementById('widget-calendar-heatmap-body');
+    if (!container) return;
+    if (!rows.length) {
+      container.innerHTML = '<div class="empty">No commit-activity data.</div>';
+      return;
+    }
+
+    const data = rows.map(function (r) { return [r.date, r.count]; });
+    const counts = rows.map(function (r) { return r.count; });
+    const minVal = Math.min.apply(null, counts);
+    const maxVal = Math.max.apply(null, counts);
+
+    // Determine which years to render — one calendar block per year
+    // present in the data. Many heatmaps cap at one year; we want
+    // multi-year history visible.
+    const years = Array.from(new Set(rows.map(function (r) { return r.date.slice(0, 4); }))).sort();
+    const calendars = years.map(function (y, idx) {
+      return {
+        range: y,
+        top: 30 + idx * 110,
+        cellSize: ['auto', 13],
+        left: 70,
+        right: 20,
+        splitLine: { lineStyle: { color: getCssVar('--border') } },
+        itemStyle: { color: 'transparent', borderColor: getCssVar('--border') },
+        yearLabel: { color: getCssVar('--fg-dim'), fontSize: 11 },
+        monthLabel: { color: getCssVar('--fg-dim'), fontSize: 11 },
+        dayLabel: { color: getCssVar('--fg-dim'), fontSize: 10 },
+      };
+    });
+    container.style.height = (30 + years.length * 110 + 20) + 'px';
+
+    const series = years.map(function (y, idx) {
+      return {
+        type: 'heatmap',
+        coordinateSystem: 'calendar',
+        calendarIndex: idx,
+        data: data.filter(function (d) { return d[0].startsWith(y); }),
+      };
+    });
+
+    const chart = echarts.init(container, null, { renderer: 'canvas' });
+    chart.setOption({
+      tooltip: {
+        formatter: function (params) {
+          const date = params.value[0];
+          const n = params.value[1];
+          return '<b>' + escapeHtml(date) + '</b><br/>' +
+            n + ' commit' + (n === 1 ? '' : 's');
+        },
+      },
+      visualMap: {
+        min: minVal,
+        max: maxVal,
+        type: 'piecewise',
+        orient: 'horizontal',
+        left: 'center',
+        top: 0,
+        textStyle: { color: getCssVar('--fg-dim'), fontSize: 10 },
+        inRange: { color: ['#1a4a2c', '#2ea44f', '#7dd87a', '#f59e0b', '#e0584e'] },
+      },
+      calendar: calendars,
+      series: series,
+    });
+    window.addEventListener('resize', function () { chart.resize(); });
+  }
+
+  // -----------------------------------------------------------------
+  // W8: X-Ray sunburst — function-level complexity drill-down
+  // -----------------------------------------------------------------
+  function renderXRaySunburst(rows) {
+    const container = document.getElementById('widget-xray-sunburst-body');
+    if (!container) return;
+    if (!rows.length) {
+      container.innerHTML = '<div class="empty">No function-level data. ' +
+        'Add Tier-1 source files to the repo or enable the `spa` feature ' +
+        'on a build that has tree-sitter language support.</div>';
+      return;
+    }
+
+    // Build a hierarchy: top-level path segment → file → function.
+    const root = { name: 'all', children: [] };
+    for (var i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const segs = (r.path || '').split('/').filter(Boolean);
+      const top = segs[0] || '<root>';
+      const file = segs.slice(1).join('/') || r.path;
+      let topNode = root.children.find(function (c) { return c.name === top; });
+      if (!topNode) {
+        topNode = { name: top, children: [] };
+        root.children.push(topNode);
+      }
+      let fileNode = topNode.children.find(function (c) { return c.name === file; });
+      if (!fileNode) {
+        fileNode = { name: file, children: [], fullPath: r.path };
+        topNode.children.push(fileNode);
+      }
+      fileNode.children.push({
+        name: r.function || '<anonymous>',
+        value: r.cognitive,
+        cognitive: r.cognitive,
+        startLine: r.start_line,
+        endLine: r.end_line,
+        fullPath: r.path,
+      });
+    }
+
+    const chart = echarts.init(container, null, { renderer: 'canvas' });
+    chart.setOption({
+      tooltip: {
+        formatter: function (params) {
+          const d = params.data || {};
+          if (d.cognitive != null) {
+            return '<b>' + escapeHtml(d.fullPath) + '</b><br/>' +
+              'function <code>' + escapeHtml(d.name) + '</code><br/>' +
+              'cognitive: ' + d.cognitive.toFixed(0) + '<br/>' +
+              'lines ' + d.startLine + '–' + d.endLine;
+          }
+          return '<b>' + escapeHtml(d.name) + '</b>';
+        },
+      },
+      series: [{
+        type: 'sunburst',
+        data: root.children,
+        radius: ['0%', '90%'],
+        nodeClick: 'rootToNode',
+        emphasis: { focus: 'ancestor' },
+        levels: [
+          {},
+          { itemStyle: { color: '#2b5d39' }, label: { color: '#fff', fontSize: 11 } },
+          { itemStyle: { color: '#3d7d4f' }, label: { color: '#fff', fontSize: 10 } },
+          { itemStyle: { color: '#5fa472' }, label: { color: '#fff', fontSize: 9 } },
+        ],
+      }],
+    });
+
+    chart.on('click', function (params) {
+      const d = params && params.data;
+      if (d && d.fullPath && d.cognitive != null) {
+        showFileDetailDrawer(d.fullPath, data);
+      }
+    });
+
+    window.addEventListener('resize', function () { chart.resize(); });
+  }
+
+  // -----------------------------------------------------------------
+  // W7 + W11: color-mode toggles on the hotspot circle-pack
+  // -----------------------------------------------------------------
+  function initHotspotColorToggles() {
+    const bar = document.getElementById('hotspot-color-toggles');
+    if (!bar) return;
+    const buttons = bar.querySelectorAll('button.toggle');
+    for (var i = 0; i < buttons.length; i++) {
+      buttons[i].addEventListener('click', function (evt) {
+        const mode = evt.currentTarget.getAttribute('data-mode');
+        // Update active state on buttons
+        for (var j = 0; j < buttons.length; j++) {
+          buttons[j].classList.toggle('active', buttons[j] === evt.currentTarget);
+        }
+        // Re-render with new color mode
+        renderHotspotCirclePack(data.hotspots || [], mode);
+      });
+    }
+  }
+
+  // -----------------------------------------------------------------
+  // Theme toggle (light / dark)
+  // -----------------------------------------------------------------
+  function initThemeToggle() {
+    const btn = document.getElementById('theme-toggle');
+    const label = document.getElementById('theme-toggle-label');
+    if (!btn || !label) return;
+    const STORAGE_KEY = 'codelore-theme';
+    function apply(theme) {
+      document.documentElement.setAttribute('data-theme', theme);
+      label.textContent = theme === 'light' ? 'Dark mode' : 'Light mode';
+    }
+    // Restore stored preference (default: dark, matching the original look)
+    let stored = 'dark';
+    try { stored = localStorage.getItem(STORAGE_KEY) || 'dark'; } catch (e) {}
+    apply(stored);
+    btn.addEventListener('click', function () {
+      const next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+      apply(next);
+      try { localStorage.setItem(STORAGE_KEY, next); } catch (e) {}
+    });
+  }
+
+  // -----------------------------------------------------------------
   // Helpers
   // -----------------------------------------------------------------
 
@@ -708,6 +998,46 @@
     const g = Math.round(255 * (1 - ratio * 0.85));
     const b = Math.round(50 * (1 - ratio));
     return 'rgb(' + r + ',' + g + ',' + b + ')';
+  }
+
+  // Pick the primary author per file: the one with the most added
+  // LoC. Stable across re-renders (Object.values walks in insertion
+  // order; ties broken by first-occurrence).
+  function computePrimaryAuthorByPath(rows) {
+    const byPath = {};
+    for (var i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const cur = byPath[r.entity];
+      if (!cur || r.added > cur.added) {
+        byPath[r.entity] = { author: r.author, added: r.added };
+      }
+    }
+    const out = {};
+    Object.keys(byPath).forEach(function (p) { out[p] = byPath[p].author; });
+    return out;
+  }
+
+  // Stable palette assignment for author colors. A discrete categorical
+  // palette tuned for dark-background readability; cycles if there are
+  // more authors than colors.
+  function makeAuthorPalette(authors) {
+    const palette = [
+      '#5fa472', '#2ea44f', '#7dd87a', '#f59e0b', '#e0584e',
+      '#c47ddb', '#8ab4ff', '#5bcdd5', '#d4953b', '#a8a8a8',
+      '#b53935', '#3d7d4f', '#c97600', '#6a6aef', '#ce62a6',
+    ];
+    const sorted = authors.slice().sort();
+    const out = {};
+    for (var i = 0; i < sorted.length; i++) {
+      out[sorted[i]] = palette[i % palette.length];
+    }
+    return out;
+  }
+
+  // Read a CSS variable from the current theme; used by ECharts widgets
+  // that pull axis / grid colors from the same palette as the CSS shell.
+  function getCssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   }
 
   function fmtInt(v) {

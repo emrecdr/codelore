@@ -270,6 +270,52 @@
       padding: 2px 4px;
       border-radius: 3px;
     }
+    .widget-toolbar {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 12px;
+      flex-wrap: wrap;
+    }
+    .widget-toolbar .toggle {
+      background: var(--bg-elev-2);
+      color: var(--fg-dim);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 4px 12px;
+      cursor: pointer;
+      font-size: 12px;
+      font-family: inherit;
+    }
+    .widget-toolbar .toggle:hover { border-color: var(--accent); color: var(--fg); }
+    .widget-toolbar .toggle.active {
+      background: rgba(46, 164, 79, 0.12);
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+    header .theme-toggle {
+      margin-left: auto;
+      background: var(--bg-elev-2);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 4px 10px;
+      cursor: pointer;
+      font-size: 12px;
+      font-family: inherit;
+    }
+    header .theme-toggle:hover { border-color: var(--accent); }
+    /* Light mode — applied when `data-theme="light"` is set on <html>. */
+    html[data-theme="light"] {
+      --bg: #fafafa;
+      --bg-elev: #ffffff;
+      --bg-elev-2: #f1f1f1;
+      --fg: #1a1a1a;
+      --fg-dim: #6a6a6a;
+      --accent: #2ea44f;
+      --accent-warn: #c97600;
+      --accent-danger: #b53935;
+      --border: #e0e0e0;
+    }
     footer {
       padding: 20px 28px;
       color: var(--fg-dim);
@@ -291,6 +337,9 @@
       ·
       <span>generated {{GENERATED_AT}}</span>
     </div>
+    <button type="button" class="theme-toggle" id="theme-toggle" title="Toggle light / dark theme">
+      <span id="theme-toggle-label">Light mode</span>
+    </button>
   </header>
 
   <main>
@@ -319,10 +368,44 @@
     <section class="widget" id="widget-hotspot-circle-pack">
       <h2>Hotspots</h2>
       <div class="subtitle">
-        Files sized by churn (revisions), colored by complexity (cognitive).
-        Click a circle for details. Click an empty area to zoom out.
+        Files sized by churn (revisions). Toggle the color mapping
+        between <b>complexity</b> (cognitive yellow→red), <b>knowledge
+        map</b> (primary author per file), and <b>AI attribution</b>
+        (filter by who wrote the code).
+      </div>
+      <div class="widget-toolbar" id="hotspot-color-toggles">
+        <button type="button" data-mode="cognitive" class="toggle active">Complexity</button>
+        <button type="button" data-mode="author" class="toggle">Knowledge map</button>
+        <button type="button" data-mode="ai" class="toggle">AI attribution</button>
       </div>
       <div id="widget-hotspot-circle-pack-body" class="widget-body"></div>
+    </section>
+
+    <section class="widget" id="widget-trends">
+      <h2>Trends</h2>
+      <div class="subtitle">
+        Monthly revision counts for the top-10 hotspot files.
+        Pattern shows where churn is intensifying or cooling off.
+      </div>
+      <div id="widget-trends-body" class="widget-body"></div>
+    </section>
+
+    <section class="widget" id="widget-calendar-heatmap">
+      <h2>Commit activity</h2>
+      <div class="subtitle">
+        Per-day commit volume across the analysed history.
+      </div>
+      <div id="widget-calendar-heatmap-body" class="widget-body" style="height: 260px;"></div>
+    </section>
+
+    <section class="widget" id="widget-xray-sunburst">
+      <h2>Function X-Ray <span class="badge">CodeLore-only — CodeScene paywalls this</span></h2>
+      <div class="subtitle">
+        Function-level cognitive complexity. Inner ring = top-level
+        path segment; outer = function. Click any wedge to drill down.
+        Top 500 functions by cognitive complexity.
+      </div>
+      <div id="widget-xray-sunburst-body" class="widget-body"></div>
     </section>
 
     <section class="widget" id="widget-hotspot-table">

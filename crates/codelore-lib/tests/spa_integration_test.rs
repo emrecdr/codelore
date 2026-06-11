@@ -66,6 +66,7 @@ fn spa_emits_full_dashboard_from_differential_fixture() {
         code_health,
         coupling,
         knowledge_islands,
+        ..SpaDashboard::default()
     };
 
     let mut buf = Vec::new();

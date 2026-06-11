@@ -1197,21 +1197,21 @@ fn run_spa_dispatch(
     repo_path: &std::path::Path,
     output: &std::path::Path,
 ) -> anyhow::Result<()> {
-    use codelore_lib::output::spa::{SpaDashboard, write_spa};
+    use codelore_lib::output::spa::{
+        SpaDashboard, run_daily_commits, run_trends, run_xray, write_spa,
+    };
 
     // Run every analysis the SPA's widgets consume. Each run_* call is
     // an SQL query over the already-ingested fact store, so the
     // composite cost is bounded by the query mix (typically <1s on
-    // mid-size repos). Failures on optional widgets (coupling,
-    // knowledge_islands) are logged and the SPA still renders.
+    // mid-size repos). Optional widgets degrade gracefully (warn +
+    // empty vec) on tiny fixtures or when the analysis can't run.
     let hotspots = codelore_lib::analyses::hotspots::run_hotspots(db, opts)
         .context("run hotspots for spa dashboard")?;
     let summary = codelore_lib::analyses::summary::run_summary(db, opts)
         .context("run summary for spa dashboard")?;
     let code_health = codelore_lib::analyses::code_health::run_code_health(db, opts)
         .context("run code-health for spa dashboard")?;
-    // Coupling can hit Fisher significance edges on tiny repos; degrade
-    // gracefully so a 5-commit fixture still emits a usable dashboard.
     let coupling = codelore_lib::analyses::coupling::run_coupling(db, opts).unwrap_or_else(|e| {
         tracing::warn!("spa: coupling analysis failed; skipping: {e}");
         Vec::new()
@@ -1223,12 +1223,38 @@ fn run_spa_dispatch(
         tracing::warn!("spa: knowledge-islands analysis failed; skipping: {e}");
         Vec::new()
     });
+    // v0.4.2 widget data
+    let entity_ownership = codelore_lib::analyses::entity_ownership::run_entity_ownership(db, opts)
+        .unwrap_or_else(|e| {
+            tracing::warn!("spa: entity-ownership analysis failed; skipping: {e}");
+            Vec::new()
+        });
+    let xray = run_xray(db, 500).unwrap_or_else(|e| {
+        tracing::warn!("spa: xray query failed; skipping: {e}");
+        Vec::new()
+    });
+    let daily_commits = run_daily_commits(db).unwrap_or_else(|e| {
+        tracing::warn!("spa: daily_commits query failed; skipping: {e}");
+        Vec::new()
+    });
+    // W9: trends multi-line — restrict to the top-10 hotspot paths to
+    // keep the line chart legible. `run_trends` returns one row per
+    // (month, path) with the revision count as the score.
+    let top_paths: Vec<String> = hotspots.iter().take(10).map(|r| r.path.clone()).collect();
+    let trends = run_trends(db, &top_paths).unwrap_or_else(|e| {
+        tracing::warn!("spa: trends query failed; skipping: {e}");
+        Vec::new()
+    });
     let dash = SpaDashboard {
         hotspots,
         summary,
         code_health,
         coupling,
         knowledge_islands,
+        entity_ownership,
+        xray,
+        daily_commits,
+        trends,
     };
 
     let now = time::OffsetDateTime::now_utc();
