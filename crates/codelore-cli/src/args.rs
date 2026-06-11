@@ -160,11 +160,21 @@ pub struct AnalyzeArgs {
     #[arg(long = "team-map-file", short = 'p')]
     pub team_map_file: Option<PathBuf>,
 
-    /// Path patterns to exclude from analyses (repeatable). Plan 8 §2 Task 8.
-    /// Honored by `clones` today; other analyses gain support in Plan 9.
-    /// A `.codeleignore` file in the repo root is also honored when present.
+    /// Path patterns to exclude from analyses (repeatable).
+    /// `.gitignore`, `.git/info/exclude`, and `.codeloreignore` in the
+    /// repo root are auto-respected by default — vendored deps
+    /// (`node_modules`, `target`, `dist`), lockfiles, locales, etc.
+    /// don't show up in hotspots unless `--include-ignored` is passed.
     #[arg(long = "exclude")]
     pub exclude: Vec<String>,
+
+    /// Analyse files normally excluded by `.gitignore` /
+    /// `.codeloreignore`. Default behaviour is to respect them so
+    /// vendored deps, build outputs, and lockfiles don't dominate
+    /// hotspots. Use this flag when analysing a vendored fork or
+    /// when the lockfile IS the engineering signal you care about.
+    #[arg(long = "include-ignored", default_value_t = false)]
+    pub include_ignored: bool,
 
     /// Skip the persistent fact-store cache and always run a fresh in-memory
     /// ingest. Useful when you suspect a stale cache or want reproducible timing.

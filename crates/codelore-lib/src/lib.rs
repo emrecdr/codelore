@@ -18,6 +18,7 @@ pub mod kamei;
 pub mod options;
 pub mod output;
 pub mod paths;
+pub mod paths_filter;
 pub mod provenance;
 pub mod repo;
 #[cfg(feature = "test-support")]

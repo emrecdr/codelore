@@ -44,7 +44,10 @@ pub fn run_clones(opts: &Options) -> Result<Vec<ClonesRow>> {
     // Plan 8 §2 Task 8: combine --exclude patterns with any .codeloreignore
     // file at the repo root into one GlobSet, then short-circuit per-file walks
     // that match. The .git/target/node_modules hard-skips are kept as defaults.
-    let exclude_set = build_exclude_set(opts)?;
+    // Combined filter: --exclude globs + .gitignore + .git/info/exclude
+    // + .codeloreignore. See `paths_filter::PathsFilter` for the
+    // precedence rules.
+    let filter = crate::paths_filter::PathsFilter::from_opts(opts)?;
 
     // F17 fix: split into two phases — (1) a serial WalkDir+filter pass to
     // gather the candidate file list, (2) a parallel rayon pass to read +
@@ -61,21 +64,17 @@ pub fn run_clones(opts: &Options) -> Result<Vec<ClonesRow>> {
             let path = entry.path();
             let lang = CloneLanguage::from_path(path)?;
             let rel = relative(&opts.repo_path, path);
-            // F30 fix: evaluate the skip list against the repo-relative
-            // path components, NOT the absolute path. Otherwise a repo
-            // located under e.g. `/Users/joe/target/my-repo` would have
-            // `target` in every file's components and silently skip
-            // 100% of candidates, producing zero clones with no warning.
-            if std::path::Path::new(&rel).components().any(|c| {
-                matches!(
-                    c.as_os_str().to_str(),
-                    Some(".git" | "target" | "node_modules")
-                )
-            }) {
+            let rel_path = std::path::Path::new(&rel);
+            // Always-on: never analyse .git/ contents (CodeLore's own
+            // metadata isn't a valid source).
+            if crate::paths_filter::is_git_metadata(rel_path) {
                 return None;
             }
-            // User-configured exclusions (--exclude + .codeloreignore).
-            if exclude_set.is_match(&rel) {
+            // Combined filter: respects user --exclude, .codeloreignore,
+            // and (by default) the project's .gitignore. F30 fix
+            // preserved: matched on the REPO-RELATIVE path, not the
+            // absolute path.
+            if filter.is_excluded(rel_path, false) {
                 return None;
             }
             Some((path.to_path_buf(), rel, lang))
@@ -136,33 +135,6 @@ fn relative(root: &Path, abs: &Path) -> String {
     // emits `/`). See `crate::paths::to_posix` for the rationale.
     abs.strip_prefix(root)
         .map_or_else(|_| crate::paths::to_posix(abs), crate::paths::to_posix)
-}
-
-/// Build the combined exclude `GlobSet` from `opts.exclude_patterns` plus
-/// any `.codeloreignore` file at the repo root. Lines starting with `#` and
-/// blank lines are ignored, matching .gitignore convention.
-fn build_exclude_set(opts: &Options) -> Result<globset::GlobSet> {
-    let mut b = globset::GlobSetBuilder::new();
-    for pat in &opts.exclude_patterns {
-        let g = globset::Glob::new(pat)
-            .map_err(|e| CodeLoreError::Analysis(format!("clones: --exclude {pat:?}: {e}")))?;
-        b.add(g);
-    }
-    let ignore_path = opts.repo_path.join(".codeloreignore");
-    if let Ok(contents) = std::fs::read_to_string(&ignore_path) {
-        for line in contents.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            let g = globset::Glob::new(line).map_err(|e| {
-                CodeLoreError::Analysis(format!(".codeloreignore line {line:?}: {e}"))
-            })?;
-            b.add(g);
-        }
-    }
-    b.build()
-        .map_err(|e| CodeLoreError::Analysis(format!("clones: build globset: {e}")))
 }
 
 #[cfg(all(test, feature = "test-support"))]

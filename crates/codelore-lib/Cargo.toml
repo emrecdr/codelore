@@ -43,6 +43,11 @@ tree-sitter-javascript = "=0.23.1"
 tree-sitter-typescript = "=0.23.1"
 walkdir = "2"
 globset = "0.4"
+# `ignore` powers the `.gitignore` + `.codeloreignore` + `.git/info/exclude`
+# auto-respect at HEAD-time scan. Same crate used by ripgrep / bat. Avoids
+# us hand-rolling gitignore semantics (negation patterns, parent-dir
+# inheritance, conditional-include rules, etc.).
+ignore = "0.4"
 dirs = "6"
 # `anstyle` is what cargo + clap use for ANSI styling. Already in our tree
 # transitively via clap; declaring it as a direct dep lets the banner module

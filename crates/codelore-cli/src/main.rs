@@ -136,6 +136,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         // `--no-renames` in its git log so it never canonicalizes).
         use_canonical_lineage: !args.no_canonical_lineage && !args.code_maat_compat,
         exclude_patterns: args.exclude.clone(),
+        include_ignored: args.include_ignored,
         // PAR-6: code-maat parity flag wiring
         min_shared_revs: args.min_shared_revs,
         min_coupling_pct: args.min_coupling_pct,
@@ -1274,5 +1275,33 @@ fn run_spa_dispatch(
         .with_context(|| format!("create spa output {}", output.display()))?;
     write_spa(&dash, title, &repo_display, &generated_at, &mut out)
         .context("write spa dashboard")?;
+    // Drop the writer so file size is finalised on disk before the
+    // stat() below.
+    drop(out);
+
+    // User feedback: --format spa is silent on success by default,
+    // which makes the dashboard look like nothing happened. Print
+    // the output path, size, and a clickable file:// URL for
+    // terminals that linkify (iTerm2, modern macOS Terminal, most
+    // Linux terminals). Single eprintln to stderr so it doesn't
+    // pollute stdout when callers pipe.
+    let size_bytes = std::fs::metadata(output).map_or(0, |m| m.len());
+    #[allow(clippy::cast_precision_loss)]
+    let size_human = if size_bytes >= 1_000_000 {
+        format!("{:.1} MB", size_bytes as f64 / 1_000_000.0)
+    } else if size_bytes >= 1_000 {
+        format!("{:.1} kB", size_bytes as f64 / 1_000.0)
+    } else {
+        format!("{size_bytes} bytes")
+    };
+    let abs = output
+        .canonicalize()
+        .unwrap_or_else(|_| output.to_path_buf());
+    eprintln!(
+        "✓ spa dashboard written to {} ({})",
+        output.display(),
+        size_human
+    );
+    eprintln!("  open in browser: file://{}", abs.display());
     Ok(())
 }

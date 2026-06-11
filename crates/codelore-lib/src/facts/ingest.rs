@@ -69,7 +69,11 @@ impl FactsDb {
             });
 
             // Consumer: runs on the calling thread — FactsDb / Connection stays single-threaded.
-            let stats = ingest_loop(self, rx, &team_map, &bot_patterns)?;
+            // Combined path filter — respects --exclude + .gitignore +
+            // .codeloreignore for the commit-walk ingest path. F30 fix
+            // (rel-path matching) preserved by PathsFilter internals.
+            let paths_filter = crate::paths_filter::PathsFilter::from_opts(opts)?;
+            let stats = ingest_loop(self, rx, &team_map, &bot_patterns, &paths_filter)?;
 
             producer.join().expect("producer panicked")?;
             Ok(stats)
@@ -227,9 +231,9 @@ impl FactsDb {
         use rayon::prelude::*;
         use walkdir::WalkDir;
 
-        // Compile the exclude globset once (.git / target / node_modules are
-        // hard-skipped always; the user globs and .codeloreignore are added).
-        let exclude_set = build_clones_exclude_set(opts)?;
+        // Combined filter: respects --exclude globs + .gitignore +
+        // .git/info/exclude + .codeloreignore. See `paths_filter`.
+        let filter = crate::paths_filter::PathsFilter::from_opts(opts)?;
 
         let head_rev = current_head_rev(self)?;
 
@@ -245,25 +249,20 @@ impl FactsDb {
                     }
                     let path = entry.path();
                     let lang = CloneLanguage::from_path(path)?;
-                    // Normalise to POSIX `/` so `clones.path` matches `changes.path`
-                    // (git always emits `/`). See `crate::paths::to_posix`.
                     let rel = path
                         .strip_prefix(&opts.repo_path)
                         .map_or_else(|_| crate::paths::to_posix(path), crate::paths::to_posix);
-                    // F30 fix: evaluate the skip list against repo-relative
-                    // path components, NOT the absolute path. A repo at
-                    // e.g. `/Users/joe/target/my-repo` would otherwise have
-                    // `target` in every absolute path and skip 100% of
-                    // candidate files silently.
-                    if std::path::Path::new(&rel).components().any(|c| {
-                        matches!(
-                            c.as_os_str().to_str(),
-                            Some(".git" | "target" | "node_modules")
-                        )
-                    }) {
+                    let rel_path = std::path::Path::new(&rel);
+                    // Always-on: never analyse .git/ contents.
+                    if crate::paths_filter::is_git_metadata(rel_path) {
                         return None;
                     }
-                    if exclude_set.is_match(&rel) {
+                    // Combined filter: --exclude + .gitignore +
+                    // .codeloreignore. F30 fix preserved: matched on
+                    // the REPO-RELATIVE path so a repo located under
+                    // e.g. `/Users/joe/target/my-repo` doesn't trip
+                    // the `target` rule via the parent path component.
+                    if filter.is_excluded(rel_path, false) {
                         return None;
                     }
                     Some((path.to_path_buf(), rel, lang))
@@ -363,32 +362,6 @@ impl FactsDb {
             .map_err(|e| CodeLoreError::Analysis(format!("flush clones appender: {e}")))?;
         Ok(n)
     }
-}
-
-/// Build the exclude `GlobSet` mirroring `analyses::clones::run_clones`'s
-/// behavior so the two paths produce the same filter set.
-fn build_clones_exclude_set(opts: &Options) -> Result<globset::GlobSet> {
-    let mut b = globset::GlobSetBuilder::new();
-    for pat in &opts.exclude_patterns {
-        let g = globset::Glob::new(pat)
-            .map_err(|e| CodeLoreError::Analysis(format!("clones: --exclude {pat:?}: {e}")))?;
-        b.add(g);
-    }
-    let ignore_path = opts.repo_path.join(".codeloreignore");
-    if let Ok(contents) = std::fs::read_to_string(&ignore_path) {
-        for line in contents.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            let g = globset::Glob::new(line).map_err(|e| {
-                CodeLoreError::Analysis(format!(".codeloreignore line {line:?}: {e}"))
-            })?;
-            b.add(g);
-        }
-    }
-    b.build()
-        .map_err(|e| CodeLoreError::Analysis(format!("clones: build globset: {e}")))
 }
 
 /// Resolve HEAD's rev from the commits table (most recent commit by date).
@@ -571,6 +544,7 @@ fn ingest_loop(
     rx: crossbeam_channel::Receiver<CommitEvent>,
     team_map: &identity::TeamMap,
     bot_patterns: &identity::BotPatterns,
+    paths_filter: &crate::paths_filter::PathsFilter,
 ) -> Result<IngestStats> {
     use std::collections::HashMap;
 
@@ -623,6 +597,18 @@ fn ingest_loop(
 
         append_commit(&mut commits_app, &event)?;
         for ch in &event.changes {
+            // Skip paths excluded by --exclude, .gitignore (unless the
+            // user passed --include-ignored), .git/info/exclude, or
+            // .codeloreignore. Operates on the gix-emitted POSIX path
+            // (already repo-relative). Same filter governs the
+            // HEAD-time complexity + clones walks so the fact store
+            // stays internally consistent.
+            let rel_path = std::path::Path::new(&ch.path);
+            if crate::paths_filter::is_git_metadata(rel_path)
+                || paths_filter.is_excluded(rel_path, false)
+            {
+                continue;
+            }
             append_change(&mut changes_app, &event.rev, ch)?;
             stats.changes_ingested += 1;
         }

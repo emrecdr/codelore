@@ -96,6 +96,15 @@ pub struct Options {
     // Currently honored by `clones`; other analyses gain support in Plan 9.
     pub exclude_patterns: Vec<String>,
 
+    /// When false (default), `paths_filter::PathsFilter` auto-respects
+    /// `.gitignore`, `.git/info/exclude`, and `.codeloreignore` at the
+    /// repo root so vendored deps (`node_modules`), build outputs
+    /// (`target`, `dist`), lockfiles, locales, etc. don't show up in
+    /// hotspots or skew Kamei features. Set to `true` (via
+    /// `--include-ignored`) to analyse everything regardless of those
+    /// files.
+    pub include_ignored: bool,
+
     /// T8 (knowledge-islands): an author is considered "departed" if
     /// their most recent commit anywhere in the repo is older than this
     /// many days at the anchor moment. Default 90.
@@ -335,6 +344,7 @@ impl Default for Options {
             complexity_sample: ComplexitySample::Head,
             min_clone_node_count: crate::constants::DEFAULT_MIN_CLONE_NODE_COUNT,
             exclude_patterns: Vec::new(),
+            include_ignored: false,
             min_clone_shared_revs: crate::constants::DEFAULT_MIN_CLONE_SHARED_REVS,
             clone_similarity_floor: crate::constants::DEFAULT_CLONE_SIMILARITY_FLOOR,
             departed_threshold_days: crate::constants::DEFAULT_DEPARTED_THRESHOLD_DAYS,
