@@ -74,6 +74,202 @@
       padding: 40px;
       text-align: center;
     }
+    .table-controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+      font-size: 12px;
+      flex-wrap: wrap;
+    }
+    .table-controls input[type="text"] {
+      flex: 0 0 280px;
+      background: var(--bg-elev-2);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 6px 8px;
+      font-size: 12px;
+      font-family: inherit;
+    }
+    .table-controls input[type="text"]:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    .table-summary { color: var(--fg-dim); }
+    .table-actions { margin-left: auto; display: flex; gap: 8px; }
+    .table-actions button {
+      background: var(--bg-elev-2);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 4px 10px;
+      cursor: pointer;
+      font-size: 12px;
+      font-family: inherit;
+    }
+    .table-actions button:hover { border-color: var(--accent); }
+    .table-actions button:disabled { opacity: 0.4; cursor: default; }
+    .table-container {
+      overflow-x: auto;
+      max-height: 60vh;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+    }
+    .table-container table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+    .table-container thead {
+      position: sticky;
+      top: 0;
+      background: var(--bg-elev-2);
+      z-index: 1;
+    }
+    .table-container th {
+      padding: 8px 12px;
+      text-align: left;
+      font-weight: 600;
+      color: var(--fg);
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+    }
+    .table-container th:hover { color: var(--accent); }
+    .table-container th .sort-indicator {
+      display: inline-block;
+      width: 10px;
+      color: var(--fg-dim);
+    }
+    .table-container th.active .sort-indicator { color: var(--accent); }
+    .table-container td {
+      padding: 6px 12px;
+      border-bottom: 1px solid var(--bg-elev-2);
+      color: var(--fg);
+    }
+    .table-container tr:hover td { background: var(--bg-elev-2); }
+    .table-container .num { text-align: right; font-variant-numeric: tabular-nums; }
+    .table-container .path { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+    }
+    .kpi-tile {
+      background: var(--bg-elev-2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 14px 16px;
+    }
+    .kpi-tile .kpi-label {
+      color: var(--fg-dim);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 4px;
+    }
+    .kpi-tile .kpi-value {
+      font-size: 22px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      color: var(--fg);
+    }
+    .kpi-tile .kpi-sub {
+      color: var(--fg-dim);
+      font-size: 11px;
+      margin-top: 2px;
+    }
+    .widget.differentiator {
+      border-color: rgba(46, 164, 79, 0.35);
+      box-shadow: 0 0 0 1px rgba(46, 164, 79, 0.15) inset;
+    }
+    .badge {
+      display: inline-block;
+      margin-left: 6px;
+      padding: 2px 6px;
+      font-size: 10px;
+      font-weight: 500;
+      letter-spacing: 0.02em;
+      color: var(--accent);
+      background: rgba(46, 164, 79, 0.12);
+      border: 1px solid rgba(46, 164, 79, 0.3);
+      border-radius: 3px;
+      vertical-align: 1px;
+    }
+    .detail-drawer {
+      position: fixed;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      width: min(440px, 90vw);
+      background: var(--bg-elev);
+      border-left: 1px solid var(--border);
+      box-shadow: -8px 0 24px rgba(0, 0, 0, 0.4);
+      z-index: 100;
+      display: flex;
+      flex-direction: column;
+    }
+    .detail-drawer[hidden] { display: none; }
+    .drawer-header {
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .drawer-header h3 {
+      margin: 0;
+      font-size: 13px;
+      font-weight: 600;
+      flex: 1;
+      word-break: break-all;
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    }
+    .drawer-close {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--fg);
+      width: 28px;
+      height: 28px;
+      border-radius: 4px;
+      font-size: 18px;
+      cursor: pointer;
+      line-height: 1;
+    }
+    .drawer-close:hover { border-color: var(--accent); }
+    .drawer-body {
+      padding: 20px;
+      overflow-y: auto;
+      flex: 1;
+      font-size: 13px;
+    }
+    .drawer-body h4 {
+      margin: 20px 0 8px 0;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--fg-dim);
+    }
+    .drawer-body h4:first-child { margin-top: 0; }
+    .drawer-body dl {
+      display: grid;
+      grid-template-columns: max-content 1fr;
+      gap: 4px 12px;
+      margin: 0;
+    }
+    .drawer-body dt { color: var(--fg-dim); }
+    .drawer-body dd { margin: 0; font-variant-numeric: tabular-nums; }
+    .drawer-body ul { margin: 0; padding-left: 18px; }
+    .drawer-body code {
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 11px;
+      background: var(--bg-elev-2);
+      padding: 2px 4px;
+      border-radius: 3px;
+    }
     footer {
       padding: 20px 28px;
       color: var(--fg-dim);
@@ -98,6 +294,28 @@
   </header>
 
   <main>
+    <section class="widget kpi-row" id="widget-kpi-tiles">
+      <h2>Codebase at a glance</h2>
+      <div class="subtitle">
+        Summary metrics across the repo. KPI cards are computed at
+        ingest time using deterministic published formulas — click
+        any value to inspect its derivation in the report sidecar.
+      </div>
+      <div id="widget-kpi-tiles-body" class="kpi-grid"></div>
+    </section>
+
+    <section class="widget differentiator" id="widget-knowledge-islands">
+      <h2>Knowledge islands <span class="badge">CodeLore differentiator</span></h2>
+      <div class="subtitle">
+        Files whose primary author has departed and where no
+        substantial other owner exists — auto-detected, no manual
+        ex-developer marking. CodeScene requires you to mark
+        ex-developers manually; CodeLore detects them from commit
+        history + co-change intensity.
+      </div>
+      <div id="widget-knowledge-islands-body" class="table-container"></div>
+    </section>
+
     <section class="widget" id="widget-hotspot-circle-pack">
       <h2>Hotspots</h2>
       <div class="subtitle">
@@ -106,7 +324,44 @@
       </div>
       <div id="widget-hotspot-circle-pack-body" class="widget-body"></div>
     </section>
+
+    <section class="widget" id="widget-hotspot-table">
+      <h2>Hotspot table</h2>
+      <div class="subtitle">
+        Sortable drill-down view of every hotspot row. Click a column
+        header to sort. Type to filter by path.
+      </div>
+      <div class="table-controls">
+        <input
+          type="text"
+          id="hotspot-table-filter"
+          placeholder="filter paths…"
+          autocomplete="off"
+          spellcheck="false">
+        <span class="table-summary" id="hotspot-table-summary"></span>
+        <span class="table-actions" id="hotspot-table-actions"></span>
+      </div>
+      <div id="widget-hotspot-table-body" class="table-container"></div>
+    </section>
+
+    <section class="widget" id="widget-coupling-sankey">
+      <h2>Change coupling</h2>
+      <div class="subtitle">
+        Files that change together at Fisher-significant rates. Wider
+        bands = stronger historical coupling. Top 30 pairs by combined
+        score.
+      </div>
+      <div id="widget-coupling-sankey-body" class="widget-body"></div>
+    </section>
   </main>
+
+  <aside class="detail-drawer" id="file-detail-drawer" hidden>
+    <div class="drawer-header">
+      <h3 id="drawer-title">File details</h3>
+      <button type="button" class="drawer-close" id="drawer-close" aria-label="Close">×</button>
+    </div>
+    <div class="drawer-body" id="drawer-body"></div>
+  </aside>
 
   <footer>
     Generated by

@@ -1199,13 +1199,37 @@ fn run_spa_dispatch(
 ) -> anyhow::Result<()> {
     use codelore_lib::output::spa::{SpaDashboard, write_spa};
 
-    // v0.4.0 first slice: one widget — circle-pack hotspot map.
-    // Subsequent commits in the v0.4.x series add coupling / knowledge
-    // islands / code health / etc. by extending SpaDashboard +
-    // adding more `run_*` calls here.
+    // Run every analysis the SPA's widgets consume. Each run_* call is
+    // an SQL query over the already-ingested fact store, so the
+    // composite cost is bounded by the query mix (typically <1s on
+    // mid-size repos). Failures on optional widgets (coupling,
+    // knowledge_islands) are logged and the SPA still renders.
     let hotspots = codelore_lib::analyses::hotspots::run_hotspots(db, opts)
         .context("run hotspots for spa dashboard")?;
-    let dash = SpaDashboard { hotspots };
+    let summary = codelore_lib::analyses::summary::run_summary(db, opts)
+        .context("run summary for spa dashboard")?;
+    let code_health = codelore_lib::analyses::code_health::run_code_health(db, opts)
+        .context("run code-health for spa dashboard")?;
+    // Coupling can hit Fisher significance edges on tiny repos; degrade
+    // gracefully so a 5-commit fixture still emits a usable dashboard.
+    let coupling = codelore_lib::analyses::coupling::run_coupling(db, opts).unwrap_or_else(|e| {
+        tracing::warn!("spa: coupling analysis failed; skipping: {e}");
+        Vec::new()
+    });
+    let knowledge_islands = codelore_lib::analyses::knowledge_islands::run_knowledge_islands(
+        db, opts,
+    )
+    .unwrap_or_else(|e| {
+        tracing::warn!("spa: knowledge-islands analysis failed; skipping: {e}");
+        Vec::new()
+    });
+    let dash = SpaDashboard {
+        hotspots,
+        summary,
+        code_health,
+        coupling,
+        knowledge_islands,
+    };
 
     let now = time::OffsetDateTime::now_utc();
     let generated_at = format!(

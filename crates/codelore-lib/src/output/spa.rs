@@ -33,7 +33,11 @@ use std::io::Write;
 
 use serde::Serialize;
 
+use crate::analyses::code_health::CodeHealthRow;
+use crate::analyses::coupling::CouplingRow;
 use crate::analyses::hotspots::HotspotRow;
+use crate::analyses::knowledge_islands::KnowledgeIslandRow;
+use crate::analyses::summary::SummaryRow;
 use crate::{CodeLoreError, Result};
 
 const TEMPLATE: &str = include_str!("spa/template.html");
@@ -50,6 +54,20 @@ const D3_HIERARCHY_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/d3-hierarc
 #[derive(Debug, Default, Serialize)]
 pub struct SpaDashboard {
     pub hotspots: Vec<HotspotRow>,
+    /// Per-file code-health rows (drill-down details + median KPI).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub code_health: Vec<CodeHealthRow>,
+    /// Aggregate metric rows (KPI tile values: commits, authors, etc.).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub summary: Vec<SummaryRow>,
+    /// Coupling pairs (sankey widget + per-file partner list in the
+    /// detail drawer).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub coupling: Vec<CouplingRow>,
+    /// Knowledge-island rows — `CodeLore`'s auto-detected ex-developer
+    /// signal. Empty when no contributors have departed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub knowledge_islands: Vec<KnowledgeIslandRow>,
 }
 
 /// Render the SPA HTML and write it to `w`. The HTML is fully
@@ -115,6 +133,7 @@ mod tests {
     fn write_spa_embeds_all_expected_markers() {
         let dash = SpaDashboard {
             hotspots: sample_hotspots(),
+            ..SpaDashboard::default()
         };
         let mut buf = Vec::new();
         write_spa(
@@ -137,7 +156,27 @@ mod tests {
         );
         assert!(
             html.contains("widget-hotspot-circle-pack"),
-            "hotspot widget mount point missing",
+            "hotspot circle-pack widget mount point missing",
+        );
+        assert!(
+            html.contains("widget-hotspot-table"),
+            "hotspot table widget mount point missing",
+        );
+        assert!(
+            html.contains("widget-kpi-tiles"),
+            "KPI tiles widget mount point missing",
+        );
+        assert!(
+            html.contains("widget-knowledge-islands"),
+            "knowledge islands widget mount point missing",
+        );
+        assert!(
+            html.contains("widget-coupling-sankey"),
+            "change-coupling sankey widget mount point missing",
+        );
+        assert!(
+            html.contains("file-detail-drawer"),
+            "file detail drawer mount point missing",
         );
         assert!(
             html.contains("src/main.rs"),
@@ -189,7 +228,10 @@ mod tests {
         let mut rows = sample_hotspots();
         // Cram a script-terminator into a row's path.
         rows[0].path = "src/</script><script>alert('xss')</script>.rs".into();
-        let dash = SpaDashboard { hotspots: rows };
+        let dash = SpaDashboard {
+            hotspots: rows,
+            ..SpaDashboard::default()
+        };
 
         let mut buf = Vec::new();
         write_spa(&dash, "x", "y", "z", &mut buf).expect("write_spa");
