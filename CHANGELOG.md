@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-06-11
+
 ### Added — `--format spa` widget completeness (v0.4.2)
 
 Five new widgets, the hotspot color-mode toggle, and a light/dark
