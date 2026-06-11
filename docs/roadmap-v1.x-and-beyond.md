@@ -1,6 +1,6 @@
 # CodeLore — Roadmap (post-`0.1.0` and beyond)
 
-**Status:** living document. Last updated 2026-06-08.
+**Status:** living document. Last updated 2026-06-11.
 
 This doc is the prioritized backlog of *everything* proposed after the `0.1.0` tag. Each row links to a plan document when one exists.
 
@@ -11,9 +11,111 @@ This doc is the prioritized backlog of *everything* proposed after the `0.1.0` t
 Items are ranked by **leverage × risk**:
 - **Leverage**: does this change make users more successful or open new use cases?
 - **Risk**: implementation difficulty × blast radius of getting it wrong
-- **Strategic**: does this differentiate CodeLore against code-maat / CodeScene / jscpd?
+- **Strategic**: does this differentiate CodeLore against code-maat / CodeScene / jscpd / CHM.
 
-## Priority queue
+### Borrow-or-build principle (applies to every feature evaluation)
+
+When evaluating a feature surfaced by another tool (code-maat, CodeScene,
+SonarQube, CHM / code-health-meter, jscpd, etc.):
+
+- **Never copy-paste.** No direct port of foreign idioms / data shapes.
+- **Identify the signal**, not the implementation. The signal is the
+  end-user value; the implementation must be re-derived against
+  CodeLore's stack (Rust + DuckDB + tree-sitter + behavioral git
+  history).
+- **If we already have the data**, the work is SQL aggregation +
+  emitter exposure, *not* new ingest. Latent-value surfacing beats
+  bolt-on plumbing.
+- **If we have a richer signal** (behavioral > static, polyglot > JS-only,
+  AST > text, persistent > snapshot), adapt the algorithm to the
+  richer signal. "Same algorithm, better feature."
+- **Cite the research foundation** in `docs/research-foundations.md`.
+  Brand promise: every metric is peer-reviewed-grounded.
+
+This rule applies retroactively too — past code-maat borrowing was done
+on this basis ([feedback memory: modernize-dont-migrate](../../.claude/memory/feedback_modernize_dont_migrate.md))
+and the CHM borrow analysis (v0.4.5 / v0.5.x) is the most recent
+application.
+
+## Active plan (v0.4.5 → v0.6.x)
+
+The shipped baseline is **v0.4.4** (released 2026-06-11). Current state:
+
+- 23 analyses + `codelore diff` PR-mode
+- SPA emitter behind `spa` Cargo feature (6-widget MVP shipped v0.4.0; W7-W11 widgets shipped v0.4.2; success message + dispose-on-rerender shipped v0.4.3; arg_max/first SQL planner sweep shipped v0.4.4)
+- DuckDB persistent cache, mailmap, AI attribution, `.gitignore`-aware exclude defaults
+- 5-binary release pipeline (macOS-arm64 / macOS-x86_64 / linux-x86_64-gnu / linux-arm64-gnu / windows-x86_64) + Homebrew + ghcr container
+- ~520 tests across lib + CLI + differential + integration
+
+### v0.4.5 — SQL planner finishing + cross-stack UI + first CHM-borrows
+
+**Scope ceiling**: backend perf cleanup + cross-stack AI/MI surfacing + UI roadmap holdovers + the *latent-value* CHM borrows (data already in the fact store, never queried). One week of focused work.
+
+Source-of-truth tracker: `docs/reports/deep_analysis_report.md` (F-findings) and `docs/ui-roadmap.md` §3b (UI items).
+
+| ID | Scope | Adaptation principle | Effort |
+|---|---|---|---|
+| **F67** | `coupling.rs`: `filtered_changes` CTE forces deterministic pre-filter (good_commits ⨝ {src}) before the self-join. | Aligns with v0.4.4's hash-aggregation rewrite pattern. | ~half day |
+| **F68** | Cross-stack AI attribution: `HotspotRow.ai_pct` column + hotspots SQL `COUNT(CASE WHEN ai_attribution IN ('ai-assisted','ai-authored') THEN 1 END) / COUNT(*)` + SpaDashboard JSON + widgets.js color band. Activates the AI Attribution toggle that's currently a placeholder. | Already-collected `commits.ai_attribution` becomes a queryable per-file signal. Latent-value surfacing. | ~1 day |
+| **F71** | `widgets.js`: replace `window.addEventListener('resize', …)` with per-container `ResizeObserver`. F64 fixed chart disposal but left the resize listener leaking; ResizeObserver auto-cleans when target node detaches. | Modern browser API (ResizeObserver is everywhere we support). Avoids manual `removeEventListener` bookkeeping. | ~half day |
+| **UI-1** | `--embed` flag strips full-page shell for `$GITHUB_STEP_SUMMARY` and SARIF code-scanning embed contexts. | Builds on the existing `include_str!` template; conditional shell. | ~half day |
+| **UI-2** | `?` tooltips on every KPI tile + table column. Tooltip text = SQL query + link to `docs/research-foundations.md`. **Augmented with CHM A4 borrow**: per-metric educational description text (title, range, interpretation) joins the existing provenance manifest payload, surfaced inline. | Brand-defining: "auditable formulas" promise made visual. | ~1 day |
+| **UI-3** | X-Ray sunburst entities pre-filtered to live-at-HEAD via the same `arg_max(change_type, ROW(date, -rowid))` pattern from F63. | Reuses v0.4.4 hash-aggregation primitive. | ~half day |
+| **CHM-A1** | Surface CodeLore's *already-computed polyglot MI* (`complexity_metrics.mi` via `mi_sei()`) on hotspots, KPI tiles, code-health. | We've computed it via Mozilla rust-code-analysis since v0.1.0; never queried. Pure SQL + emitter exposure. We're 8+ languages vs CHM's JS/TS-only — strictly richer. | ~half day |
+| **CHM-A2** | MI band buckets: `MiBand { Low (<65), Moderate (65-85), High (≥85) }` Rust enum + SQL `CASE WHEN` + KPI tile rollup ("234 files high, 41 moderate, 9 low"). | Industry-consensus thresholds (Coleman 1994 / SEI / SonarQube / CHM converge). Our typed enum + SQL idiom; not CHM's `Matcher()` chain. | ~50 LOC |
+| **CHM-A3** | Behavioral coupling graph **density** scalar on KPI tiles. `edges / (n·(n-1)/2)` over the Fisher-significant pairs. | CHM does density on static dep graph (JS-only); we do it on the behavioral graph — different signal. | ~30 LOC |
+| **CHM-A5** | Cite Coleman 1994 (MI), Ben Khalfallah 2025 TOSEM (CHM), Newman 2008 (modularity, for forward reference) in `docs/research-foundations.md`. | Brand promise: every metric peer-reviewed-grounded. | docs only |
+| **F60** | _Deferred to v0.4.6 hotfix._ `parse_git_log_stream` needs incremental parser rewrite (two-record lookahead pairs pretty blocks with name-status chunks). Carries forward. | Out of v0.4.5 scope. | — |
+| **F69 / F70** | _Conditional._ Run `EXPLAIN ANALYZE` benchmark on a 100k-commit fixture; if measurable win, fold into v0.4.5. If not, defer or close. | Gated on data, not speculation. | TBD |
+
+**Cumulative net change**: ~3 days work + ~1 day testing. No new dependencies. No new ingest. The biggest change is F68 (cross-stack AI rollup) which touches Rust → SQL → JSON → JS.
+
+**Goal-backward gate**: A v0.4.5 dashboard on the CodeLore repo itself should surface (1) MI band breakdown on the KPI tiles, (2) AI Attribution toggle that *works*, (3) `?` tooltips on every metric showing the SQL formula + Coleman/Ben Khalfallah/Blondel citations, (4) coupling density score. If any of those are missing or placeholder-state, the release isn't ready.
+
+### v0.5.x — `codelore serve` (interactive mode) + the big CHM borrow
+
+**Scope ceiling**: this is where vanilla JS starts to hurt. Cross-widget
+filter state, threshold sliders, live SQL exploration — they all want
+reactivity that pure JS makes painful. Framework decision (Alpine.js,
+~15 KB, SHA-pinned via the same `build.rs` pattern as ECharts) was
+validated in earlier UI roadmap research; locked in for this boundary.
+
+The Tauri 2 desktop wrap is the *next* step after this lands.
+
+| Phase | Item | Adaptation principle | Effort |
+|---|---|---|---|
+| **5.1** | Axum-based `codelore serve --port 4242` — wraps the existing fact-store query layer as REST endpoints. Reuses the SPA frontend; same emitter, served live. | Pure plumbing; no algorithm change. | ~1 week |
+| **5.2** | Cross-widget filter state via **Alpine.js** (SHA-pinned via `build.rs`). Filter on hotspots table → highlight matching circles → restrict knowledge-islands → restrict sankey. | Locked at the v0.5 boundary per `docs/ui-roadmap.md` §3c. | ~1 week |
+| **5.3** | Threshold sliders re-run analyses on the server with debouncing. Surfaces the deterministic-formula brand promise interactively. | Leverages the persistent DuckDB cache; no new analysis code. | ~3 days |
+| **5.4** | Live SQL exploration (`--query` escape hatch with a UI). Power-user feature; audit-trail brand. | Already partly in Tier 1 (`--query SQL`). Wires into the serve UI. | ~3 days |
+| **5.5** | `codelore diff` PR-mode UI — same Axum + SPA frontend, diff-anchored. | Reuses the existing `codelore diff` subcommand. | ~3 days |
+| **CHM-B1** | **Louvain modularity on the behavioral coupling graph** — NOT on a static dep graph. New analysis `run_behavioral_modules` over the Fisher-significant coupling output (run_coupling). Pure Rust implementation (Newman 2008 + Blondel et al. 2008), ~200 LOC; no `graphology`-equivalent dep pulled in. Output: per-file community ID + global Q score. Surface: new analysis row type + KPI tile + sankey node coloring by community + drawer "behavioral module" section. | **Genuinely different signal** vs CHM (they Louvain on static imports; we Louvain on git-co-change). Same algorithm, philosophically different feature. | ~3 days |
+| **CHM-B2** | Promote `coupling_centrality_v1` from internal TEMP TABLE to first-class analysis output. Adds degree/in-degree/out-degree as queryable columns on a `centrality` analysis. | CHM has degree centrality on static graph; we expose it on behavioral graph — richer signal. Already 90% there; just promotes the existing computation. | ~half day |
+| **Tier-1 holdovers picked up here** | `--query SQL` escape hatch (was Tier 1), `codelore-action@v1` reusable GHA (was Tier 3), GitHub App auto-PR comments (was Tier 3). Bundle naturally with `codelore serve`. | Architectural fit: all are HTTP-shaped clients of the same Axum routes. | varies |
+
+**Goal-backward gate**: a v0.5 user clicks a file in the SPA → drawer shows "Behavioral module: M3 (Q=0.42)" → clicks the module ID → sankey re-highlights with that community's edges → threshold slider changes the Fisher cutoff → all four widgets re-render in <500ms. If interactivity is laggy or the modularity score is not citable to Newman+Blondel, the release isn't ready.
+
+### v0.6.x — Tauri 2 desktop wrap
+
+**Scope ceiling**: reuse the v0.5.x frontend; Tauri 2 wraps the Axum
+server + SPA frontend into a native desktop app. Validated as the
+right desktop story in earlier session research:
+
+- Tauri 2 installer size: <5 MB (vs Electron's 300+ MB)
+- `codelore-lib` links directly into `src-tauri/` — no shell-out
+- Native filesystem: drag-drop a folder onto the window
+- Signed cross-platform installers (`.dmg` / `.msi` / `.AppImage`) via Tauri's bundler
+- `duckdb` Rust crate works inside Tauri's Rust backend (Duckling reference confirms)
+
+**Adaptation principle**: this is the same SPA, just locally-installed.
+No new metrics, no new analyses; the value-add is the discovery surface
+("install CodeLore.app, drag your repo onto it"). Skipping it would
+cap reach at CLI users.
+
+**v0.6.x effort estimate**: 4-6 weeks on top of v0.5.x. See
+`docs/ui-roadmap.md` §3d.
+
+---
 
 ### ✅ Shipped under `0.1.0`
 
@@ -26,21 +128,24 @@ The original "Tier 1" (release readiness) and "Tier 2" (v1.x differentiators) li
 - All 21 code-maat-parity analyses + 4 SARIF rules
 - 6 verified correctness fixes (R1, R2, R3, R4, R6, R12 — negative hotspot scores, GixRepo date/merge filters, `--after`/`--before`/`--include-merges` CLI surface, Kamei O(N²) → hash-joined UPDATE, Parquet schema completion)
 
-### Tier 1 — v0.2 differentiators (Plan 9, next-up)
-Strategic features for the next minor. Promote when there's measured user pull.
+### Tier 1 — strategic differentiators (forward-looking)
+Strategic features for upcoming minors. Promote when there's measured user pull.
 
 | Item | Why | Plan | Status |
 |---|---|---|---|
 | PGO campaign + release pipeline rebuild | Spec §6.5; 5–15% perf headroom on real workloads | future | pending |
 | Type 3 near-miss clones (MinHash + LSH @ Jaccard ≥ 0.8) | Plan 7 §2 Task 4; ~100 LOC; catches "renamed + restructured" code | future | pending |
-| **Bus-factor / knowledge-island detector** (hotspots × single-owner × departed-author) | Plan 7 research surfaced this; we already have all the data | future | pending |
-| **Live-clone × knowledge-loss intersection** (clones inside departed-contributor code) | Engineering-director-level signal nobody else produces | future | pending |
-| Rename tracking via `gix_diff::tree::breaks::detect_renames` | Validation Finding S6. `ChangeType::Renamed { from, similarity }` is captured at ingest by both `GixRepo` (gix_repo.rs:260) and `GitCliRepo` (git_cli_repo.rs:400). What's missing: no analysis queries the `from` field — `revisions` / `coupling` / `churn` SQL views all `GROUP BY` raw post-rename path, so a renamed file's history splits. Needs a canonical-lineage DuckDB view; rename chains can have cycles so the resolver must detect and break them deterministically. | future | partial (data captured, queries don't follow yet) |
+| **Bus-factor / knowledge-island detector** (hotspots × single-owner × departed-author) | Plan 7 research surfaced this; we already have all the data | shipped (v0.3.x) — `run_knowledge_islands` is a first-class analysis with KPI tile + SPA widget | **shipped** |
+| **Live-clone × knowledge-loss intersection** (clones inside departed-contributor code) | Engineering-director-level signal nobody else produces | shipped (v0.3.x) — `knowledge_islands.rs` joins departed-author × clones × co-change in one CTE chain | **shipped** |
+| Rename tracking via `gix_diff::tree::breaks::detect_renames` | Validation Finding S6. `ChangeType::Renamed { from, similarity }` is captured at ingest by both `GixRepo` and `GitCliRepo`. **Now shipped end-to-end**: the canonical lineage CTE (`facts/ingest.rs::materialize_path_lineage`) joins commit dates to deterministically break recycled-filename cycles; 12 path-aggregating analyses opt into rename-aware aggregation via the `analyses/lineage.rs::rewrite` SQL helper. | shipped (v0.2.x) | **shipped** |
 | Bootstrap confidence intervals on hotspot scores | Methodological honesty wedge; CodeScene reports point estimates | future | pending |
-| `--query SQL` escape hatch | Spec §5 reserved; power-user feature | future | pending |
+| `--query SQL` escape hatch | Spec §5 reserved; power-user feature. **Now folded into v0.5.x serve** (live SQL exploration in the dashboard). | v0.5.x | pending |
 | LCOV input → hotspot-weighted coverage | CodeScene shipped this in 2025 | future | pending |
-| AI-authorship correlation reports | We tag commits; novel publishable signal | future | pending |
+| AI-authorship correlation reports | We tag commits; novel publishable signal. **Partial shipped**: `commits.ai_attribution` captured at ingest, surfaced in `commits` + per-author rollup. **F68 in v0.4.5** wires per-file AI percentage into the SPA's AI Attribution toggle. | v0.4.5 (F68) | **partial → shipped v0.4.5** |
 | Survival analysis on hotspots (how long do they stay hot?) | Temporal-extension research | future | pending |
+| **MI (Maintainability Index) surfacing** (polyglot via `codelore-rca`) — Coleman 1994 + SEI variant | We already compute `mi_sei()` per function and ingest into `complexity_metrics.mi`; never queried. CHM-A1/A2/A3 in v0.4.5 fix that. | v0.4.5 (CHM-A1/A2/A3) | pending |
+| **Behavioral Louvain modularity** (Newman 2008 + Blondel 2008 on our coupling graph) | Novel signal vs CHM (they Louvain on static dep graph; we Louvain on git-co-change). | v0.5.x (CHM-B1) | pending |
+| **First-class centrality analysis** (degree / in / out on behavioral coupling graph) | `coupling_centrality_v1` exists internally; promote to a queryable output. | v0.5.x (CHM-B2) | pending |
 
 ### Tier 2 — quality and DX (continuous)
 Always-on hygiene work; no plan required, weave into other plans.
