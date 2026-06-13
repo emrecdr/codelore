@@ -533,9 +533,29 @@
     var debounceTimer = null;
     filterEl.addEventListener('input', function (evt) {
       filterText = evt.target.value;
+      // Mirror the local filterText into the Alpine `filter` store so
+      // any other widget that subscribes via `Alpine.effect(...)` sees
+      // the live value. Wrapped in `window.Alpine` guard so the page
+      // still works if Alpine fails to load (e.g. user disabled JS
+      // through a content-security-policy header).
+      if (window.Alpine) {
+        window.Alpine.store('filter').set(filterText);
+      }
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(rerender, 80);
     });
+
+    // Seed the input from the persisted Alpine store on first render
+    // so a page reload (e.g. `--embed` step-summary roundtrip) brings
+    // the user's last filter back. The store value comes from
+    // localStorage via the Alpine persist plugin.
+    if (window.Alpine) {
+      const persisted = window.Alpine.store('filter').text;
+      if (persisted && !filterEl.value) {
+        filterEl.value = persisted;
+        filterText = persisted;
+      }
+    }
 
     // Initial render.
     rerender();

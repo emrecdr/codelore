@@ -614,16 +614,33 @@
 
   <!-- Alpine.store registrations. Runs once, on `alpine:init`, before
        `Alpine.start()` walks the DOM and binds `x-data` / `x-show` etc.
-       The `detail` store is the file-detail drawer's open/close state;
-       widgets.js::showFileDetailDrawer calls `Alpine.store('detail')
-       .show()` to open, and the aside's
-       `@keydown.escape.window="$store.detail.hide()"` closes it. -->
+       Two stores wired here:
+
+       - `detail` — file-detail drawer open/close state. Consumed by
+         the aside markup (`x-show="$store.detail.open"`); written by
+         `widgets.js::showFileDetailDrawer` via `Alpine.store('detail')
+         .show()`. Closed via the aside's
+         `@keydown.escape.window="$store.detail.hide()"` and the
+         close button's `@click="$store.detail.hide()"`.
+
+       - `filter` — cross-widget filter text. PR-6 wires only the
+         hotspot table as a writer; future widgets subscribe via
+         `Alpine.effect(() => Alpine.store('filter').text)` to
+         re-render reactively. Persisted via the Alpine persist
+         plugin (`$persist` magic) so the filter survives a page
+         reload — useful for the `--embed` step-summary path and
+         for the inner-loop "tweak, reload, recheck" workflow. -->
   <script>
     document.addEventListener('alpine:init', () => {
       Alpine.store('detail', {
         open: false,
         show() { this.open = true; },
         hide() { this.open = false; },
+      });
+      Alpine.store('filter', {
+        text: Alpine.$persist('').as('codelore_filter_text'),
+        set(value) { this.text = value; },
+        clear() { this.text = ''; },
       });
     });
   </script>
