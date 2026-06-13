@@ -332,6 +332,24 @@ pub fn write_soc_markdown<W: Write>(
     Ok(())
 }
 
+pub fn write_centrality_markdown<W: Write>(
+    rows: &[crate::analyses::centrality::CentralityRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore coupling-graph centrality")?;
+    writeln!(w, "| Entity | Degree | Weighted degree | Revs |").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---:|---:|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| `{}` | {} | {:.3} | {} |",
+            row.entity, row.degree, row.weighted_degree, row.revs,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_messages_markdown<W: Write>(
     rows: &[crate::analyses::messages::MessagesRow],
     w: &mut W,

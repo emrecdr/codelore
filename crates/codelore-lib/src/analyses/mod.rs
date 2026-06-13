@@ -2,6 +2,7 @@
 //! plus a thin Rust orchestrator.
 
 pub mod authors;
+pub mod centrality;
 pub mod churn;
 pub mod clone_coupling;
 pub mod clones;

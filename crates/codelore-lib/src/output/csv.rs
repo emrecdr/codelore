@@ -477,6 +477,25 @@ pub fn write_soc_csv<W: Write>(rows: &[crate::analyses::soc::SocRow], w: &mut W)
     Ok(())
 }
 
+pub fn write_centrality_csv<W: Write>(
+    rows: &[crate::analyses::centrality::CentralityRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(w, "entity,degree,weighted_degree,revs").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{:.6},{}",
+            quote_if_needed(&row.entity),
+            row.degree,
+            row.weighted_degree,
+            row.revs,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_messages_csv<W: Write>(
     rows: &[crate::analyses::messages::MessagesRow],
     w: &mut W,

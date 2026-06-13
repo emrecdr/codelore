@@ -192,6 +192,58 @@ architecture is usually the inter-service contract.
 
 ---
 
+### `centrality` — degree + weighted-degree on the behavioral coupling graph
+
+**Citations**:
+- Newman, M. E. J. (2010). *Networks: An Introduction.* Oxford
+  University Press. §7.1 (degree centrality on undirected graphs).
+- Barrat, A., Barthélemy, M., Pastor-Satorras, R., & Vespignani, A.
+  (2004). The architecture of complex weighted networks. *Proceedings
+  of the National Academy of Sciences*, 101(11), 3747–3752. §III.A
+  (vertex strength in weighted networks).
+
+**What the signal means**: For each file, two complementary measures
+on the Fisher-significant coupling graph:
+
+- `degree` — number of distinct Fisher-significant partners. Counts
+  how broadly a file participates in real (not noise-floor) co-change.
+- `weighted_degree` — sum of `-log10(fisher_p)` across all partners.
+  Discounts weak couplings (low evidence p ≈ threshold) and rewards
+  strong ones; a file with three rock-solid partners ranks above a
+  file with three borderline ones.
+
+**Why two metrics, not one**: `soc` already summarises co-change
+breadth via a `Σ(commit_size − 1)` accumulator over the raw
+change-stream — it gates only on `--min-revs`, not statistical
+significance, so noise-floor pairs contribute. `centrality` walks the
+Fisher-gated graph instead, so the numbers tell you how many *real*
+partners a file has and how confident the evidence is. Both metrics
+on the same file is a feature: large `soc` + small `degree` is a
+"single-thread hub" (many co-changes but few partners); large `degree`
++ small `soc` is a "fan-out hub" (many partners with low per-pair
+volume).
+
+**What "good values" look like**:
+- Metrics are repo-relative; use the top-10 list as the investigation
+  set rather than thresholds.
+- High `degree` + low `revs` flags an architectural hotspot in
+  miniature: a small file with disproportionate cross-module reach.
+- High `degree` + high `revs` is the canonical inter-service contract
+  / shared model file.
+
+**Implementation**:
+`crates/codelore-lib/src/analyses/centrality.rs`
+([source](../crates/codelore-lib/src/analyses/centrality.rs))
+
+**Why not in-degree / out-degree**: The Fisher exact test on a 2×2
+contingency table is symmetric, so the coupling graph is undirected.
+A directional change-influence graph (e.g. "A's edits precede B's
+within commit windows") would be a separate analysis with its own
+research basis (Granger causality / lagged co-occurrence) and is out
+of scope here.
+
+---
+
 ### `code-age` — Months since last modification
 
 **Citation**: Inspired by Dan North's talk *"Short Software Half-Life"*

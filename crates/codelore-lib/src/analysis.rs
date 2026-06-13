@@ -53,6 +53,12 @@ pub enum AnalysisName {
     // (automatic departure detection from commit-date falloff vs
     // their required manual Ex-Developer marking).
     KnowledgeIslands,
+    // Behavioral-graph centrality: degree + weighted-degree per file
+    // over the Fisher-significant coupling graph. The underlying
+    // computation has lived as a temp table (`coupling_centrality_v1`)
+    // backing the code-health composite score; this exposes it as a
+    // first-class queryable analysis.
+    Centrality,
 }
 
 impl AnalysisName {
@@ -82,6 +88,7 @@ impl AnalysisName {
             Self::EntityOwnership => "entity-ownership",
             Self::TopCommitters => "top-committers",
             Self::KnowledgeIslands => "knowledge-islands",
+            Self::Centrality => "centrality",
         }
     }
 
@@ -111,6 +118,7 @@ impl AnalysisName {
             Self::EntityOwnership,
             Self::TopCommitters,
             Self::KnowledgeIslands,
+            Self::Centrality,
         ]
     }
 

@@ -22,11 +22,9 @@
 //! & Ball 2005), ownership fragmentation (Mockus & Herbsleb 2002), and
 //! coupling centrality (Tornhill 2018)).
 
-use std::collections::HashMap;
-
 use duckdb::params;
 
-use crate::analyses::coupling::run_coupling;
+use crate::analyses::centrality::run_centrality;
 use crate::facts::FactsDb;
 use crate::{CodeLoreError, Options, Result};
 
@@ -133,39 +131,33 @@ const CENTRALITY_DDL: &str = "
     )
 ";
 
-/// Build the centrality temp table from Fisher-significant coupling pairs.
-/// Each path appears once with `centrality = count of pairs that include it`.
+/// Build the centrality temp table from the first-class `centrality`
+/// analysis output. The temp table only consumes `degree` (the count of
+/// Fisher-significant partners); `weighted_degree` and `revs` from the
+/// rich `CentralityRow` are unused here but available to any analysis
+/// that needs them via `centrality::run_centrality` directly.
 fn materialize_centrality(db: &FactsDb, opts: &Options) -> Result<()> {
-    // `--rows N` MUST NOT propagate into the inner coupling query — the
-    // centrality term needs the FULL coupled-pair graph, not the user's
-    // output truncation. See `Options::with_no_row_limit` for the full
-    // bug narrative.
-    let pairs = run_coupling(db, &opts.with_no_row_limit())?;
-
-    // Count Fisher-significant partners per path. Each pair contributes to
-    // both endpoints' centrality.
-    let mut counts: HashMap<String, u32> = HashMap::new();
-    for p in &pairs {
-        *counts.entry(p.entity_a.clone()).or_insert(0) += 1;
-        *counts.entry(p.entity_b.clone()).or_insert(0) += 1;
-    }
+    // `--rows N` MUST NOT propagate into the inner computation — the
+    // `n_cp` term needs the FULL coupled-pair graph, not the user's
+    // output truncation. `run_centrality` already respects this via
+    // `with_no_row_limit` internally; we re-apply here to make the
+    // intent explicit at the call site.
+    let rows = run_centrality(db, &opts.with_no_row_limit())?;
 
     db.conn()
         .execute(CENTRALITY_DDL, [])
         .map_err(|e| CodeLoreError::Analysis(format!("create centrality temp table: {e}")))?;
 
-    if counts.is_empty() {
+    if rows.is_empty() {
         return Ok(()); // Nothing to insert; LEFT JOIN handles absence.
     }
 
-    // Bulk INSERT via prepared statement — small N (typically <= 100s of
-    // distinct paths), so per-row insert is fine without the Appender.
     let mut stmt = db
         .conn()
         .prepare("INSERT INTO coupling_centrality_v1 (path, centrality) VALUES (?, ?)")
         .map_err(|e| CodeLoreError::Analysis(format!("prepare centrality insert: {e}")))?;
-    for (path, count) in &counts {
-        stmt.execute(params![path, *count])
+    for row in &rows {
+        stmt.execute(params![row.entity, row.degree])
             .map_err(|e| CodeLoreError::Analysis(format!("centrality row insert: {e}")))?;
     }
     Ok(())

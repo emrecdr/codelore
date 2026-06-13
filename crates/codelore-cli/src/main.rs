@@ -825,6 +825,28 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             (fmt, AnalysisName::Soc) => {
                 anyhow::bail!("soc analysis supports csv|json|markdown; got {fmt:?}")
             }
+            // --- centrality (behavioral coupling graph: degree + weighted_degree per file) ---
+            ("csv", AnalysisName::Centrality) => {
+                let rows = codelore_lib::analyses::centrality::run_centrality(&db, &opts)
+                    .context("run centrality")?;
+                codelore_lib::output::csv::write_centrality_csv(&rows, &mut out)
+                    .context("write csv")?;
+            }
+            ("json", AnalysisName::Centrality) => {
+                let rows = codelore_lib::analyses::centrality::run_centrality(&db, &opts)
+                    .context("run centrality")?;
+                codelore_lib::output::json::write_centrality_json(&rows, &mut out)
+                    .context("write json")?;
+            }
+            ("markdown", AnalysisName::Centrality) => {
+                let rows = codelore_lib::analyses::centrality::run_centrality(&db, &opts)
+                    .context("run centrality")?;
+                codelore_lib::output::markdown::write_centrality_markdown(&rows, &mut out)
+                    .context("write markdown")?;
+            }
+            (fmt, AnalysisName::Centrality) => {
+                anyhow::bail!("centrality analysis supports csv|json|markdown; got {fmt:?}")
+            }
             // --- messages (commit-message regex matcher) ---
             ("csv", AnalysisName::Messages) => {
                 let rows = codelore_lib::analyses::messages::run_messages(&db, &opts)

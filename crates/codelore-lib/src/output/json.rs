@@ -104,6 +104,13 @@ pub fn write_soc_json<W: Write>(rows: &[crate::analyses::soc::SocRow], w: &mut W
     write_json(rows, w)
 }
 
+pub fn write_centrality_json<W: Write>(
+    rows: &[crate::analyses::centrality::CentralityRow],
+    w: &mut W,
+) -> Result<()> {
+    write_json(rows, w)
+}
+
 pub fn write_messages_json<W: Write>(
     rows: &[crate::analyses::messages::MessagesRow],
     w: &mut W,
