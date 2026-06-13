@@ -63,7 +63,9 @@ fn hotspots_surface_maintainability_index_for_rust_files() {
     db.ingest(&repo, &opts).expect("ingest");
 
     let rows = run_hotspots(&db, &opts).expect("run");
-    let any_finite_mi = rows.iter().any(|r| matches!(r.mi, Some(v) if v.is_finite()));
+    let any_finite_mi = rows
+        .iter()
+        .any(|r| matches!(r.mi, Some(v) if v.is_finite()));
     assert!(
         any_finite_mi,
         "expected ≥1 Rust hotspot row with a finite MI; got rows: {:?}",

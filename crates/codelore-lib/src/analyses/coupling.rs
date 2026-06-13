@@ -444,11 +444,9 @@ pub fn count_coupling_nodes(db: &FactsDb, opts: &Options) -> Result<u64> {
     );
     let count: i64 = db
         .conn()
-        .query_row(
-            &sql,
-            params![opts.max_changeset_size, opts.min_revs],
-            |r| r.get::<_, i64>(0),
-        )
+        .query_row(&sql, params![opts.max_changeset_size, opts.min_revs], |r| {
+            r.get::<_, i64>(0)
+        })
         .map_err(|e| CodeLoreError::Analysis(format!("count coupling nodes: {e}")))?;
     Ok(u64::try_from(count).unwrap_or(0))
 }

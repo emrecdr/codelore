@@ -61,7 +61,9 @@ pub fn write_hotspots_csv<W: Write>(rows: &[HotspotRow], w: &mut W) -> Result<()
         let (rank_cell, band_cell) = match row.mi_rank {
             Some(rank) if rank.is_finite() => (
                 format!("{rank:.4}"),
-                crate::analyses::mi::MiBand::from_rank(rank).as_str().to_owned(),
+                crate::analyses::mi::MiBand::from_rank(rank)
+                    .as_str()
+                    .to_owned(),
             ),
             _ => (String::new(), String::new()),
         };

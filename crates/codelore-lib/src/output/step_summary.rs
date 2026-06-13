@@ -50,11 +50,7 @@ pub fn write_step_summary<W: Write>(
     let io = CodeLoreError::Io;
     writeln!(w, "# 🔍 {title}").map_err(io)?;
     writeln!(w).map_err(io)?;
-    writeln!(
-        w,
-        "_Repo: `{repo_path}` · Generated: {generated_at}_"
-    )
-    .map_err(io)?;
+    writeln!(w, "_Repo: `{repo_path}` · Generated: {generated_at}_").map_err(io)?;
     writeln!(w).map_err(io)?;
 
     write_at_a_glance(dash, w)?;
@@ -387,15 +383,25 @@ mod tests {
 
     fn render(dash: &SpaDashboard) -> String {
         let mut buf = Vec::new();
-        write_step_summary(dash, "CodeLore Analysis", "/tmp/repo", "2026-06-13", &mut buf)
-            .expect("render");
+        write_step_summary(
+            dash,
+            "CodeLore Analysis",
+            "/tmp/repo",
+            "2026-06-13",
+            &mut buf,
+        )
+        .expect("render");
         String::from_utf8(buf).expect("utf8")
     }
 
     #[test]
     fn emits_well_under_github_step_summary_cap() {
         let md = render(&sample_dash());
-        assert!(md.len() < 50_000, "step summary should be < 50 KB; got {}", md.len());
+        assert!(
+            md.len() < 50_000,
+            "step summary should be < 50 KB; got {}",
+            md.len()
+        );
     }
 
     #[test]
@@ -412,7 +418,10 @@ mod tests {
         assert!(md.contains("Top hotspots"));
         assert!(md.contains("`src/main.rs`"));
         // mi_rank 0.03 → bottom quartile → Low band → 🔴
-        assert!(md.contains("🔴"), "main.rs (rank 0.03) should display Low-band 🔴");
+        assert!(
+            md.contains("🔴"),
+            "main.rs (rank 0.03) should display Low-band 🔴"
+        );
         // mi_rank 0.7 → Moderate → 🟡
         assert!(md.contains("🟡"));
     }
