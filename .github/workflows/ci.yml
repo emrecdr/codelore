@@ -133,4 +133,11 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
+      # cargo-deny-action runs `cargo metadata` inside a Docker container that
+      # mounts the host workspace. The workspace Cargo.toml's `[patch.crates-io]`
+      # block resolves to vendor/, which must exist on the host before the
+      # action fires, or `cargo metadata` errors with "failed to read
+      # vendor/duckdb-rs/.../Cargo.toml". Idempotent vendoring per duckdb-rs#786.
+      - name: Vendor patched libduckdb-sys (duckdb-rs#786)
+        run: bash scripts/vendor-duckdb-rs.sh
       - uses: EmbarkStudios/cargo-deny-action@v2

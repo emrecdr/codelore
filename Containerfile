@@ -24,6 +24,16 @@ RUN cargo install cargo-chef --locked
 WORKDIR /src
 
 #─── planner stage: capture deps ────────────────────────────────────────────
+# Workspace Cargo.toml carries a `[patch.crates-io]` entry pointing at
+# `vendor/duckdb-rs/crates/libduckdb-sys/` (workaround for upstream
+# `duckdb-rs#786` — MSVC 19.40 build break). Cargo errors when the patch
+# path is missing, so vendor/ must be present BEFORE `cargo chef prepare`
+# evaluates the manifest. Source-of-truth for that directory is the
+# `scripts/vendor-duckdb-rs.sh` script — `container.yml` runs it on the
+# host before `docker/build-push-action`, and the resulting tree lands in
+# the build context via `COPY . .` below. Carried into the builder stage
+# explicitly so `cargo chef cook` can resolve the same patch entry without
+# the full source tree.
 FROM chef AS planner
 COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
@@ -31,6 +41,7 @@ RUN cargo chef prepare --recipe-path recipe.json
 #─── builder stage ──────────────────────────────────────────────────────────
 FROM chef AS builder
 COPY --from=planner /src/recipe.json recipe.json
+COPY --from=planner /src/vendor vendor
 # `--features spa` activates the opt-in dashboard emitter
 # (`--format spa`). Container images ship with this enabled so
 # users running `docker run codelore … --format spa` get the
