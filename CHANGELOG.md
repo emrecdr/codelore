@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-06-13
+
 ### Added — CHM borrows, AI surfacing, step-summary, auditable tooltips
 
 A v0.4.5 batch built end-to-end with empirical validation before
