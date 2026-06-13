@@ -33,14 +33,29 @@ fn build_abs_churn_sql(src: &str) -> String {
     // `DATE` for the per-day aggregation, otherwise two commits one second
     // apart would each get their own bucket and the output stops being a
     // daily trend.
+    //
+    // `commit_churn` pre-aggregates `{src}` per rev so the downstream
+    // JOIN with `commits` produces exactly one row per commit (both
+    // tables key on `rev`, which is `commits` PK and `commit_churn`
+    // GROUP BY). That lets `COUNT(commits.rev)` replace
+    // `COUNT(DISTINCT commits.rev)` without semantic change —
+    // eliminating DuckDB's distinct-tracking hash overhead. Same
+    // philosophy as v0.4.1's F47-F54 sweep.
     format!(
-        "SELECT
+        "WITH commit_churn AS (
+            SELECT rev,
+                   COALESCE(SUM(loc_added), 0) AS added,
+                   COALESCE(SUM(loc_deleted), 0) AS deleted
+            FROM {src}
+            GROUP BY rev
+        )
+        SELECT
             CAST(CAST(commits.date AS DATE) AS TEXT) AS date,
-            COALESCE(SUM(c.loc_added), 0) AS added,
-            COALESCE(SUM(c.loc_deleted), 0) AS deleted,
-            COUNT(DISTINCT commits.rev) AS commits
+            SUM(cc.added) AS added,
+            SUM(cc.deleted) AS deleted,
+            COUNT(commits.rev) AS commits
         FROM commits
-        INNER JOIN {src} c ON c.rev = commits.rev
+        INNER JOIN commit_churn cc ON cc.rev = commits.rev
         GROUP BY CAST(commits.date AS DATE)
         ORDER BY CAST(commits.date AS DATE) ASC, added DESC, deleted DESC
         LIMIT ?"
@@ -48,14 +63,24 @@ fn build_abs_churn_sql(src: &str) -> String {
 }
 
 fn build_author_churn_sql(src: &str) -> String {
+    // Same `commit_churn` pre-aggregation as `build_abs_churn_sql` —
+    // see that function's comment for the COUNT(DISTINCT) elimination
+    // rationale.
     format!(
-        "SELECT
+        "WITH commit_churn AS (
+            SELECT rev,
+                   COALESCE(SUM(loc_added), 0) AS added,
+                   COALESCE(SUM(loc_deleted), 0) AS deleted
+            FROM {src}
+            GROUP BY rev
+        )
+        SELECT
             commits.canonical_author AS author,
-            COALESCE(SUM(c.loc_added), 0) AS added,
-            COALESCE(SUM(c.loc_deleted), 0) AS deleted,
-            COUNT(DISTINCT commits.rev) AS commits
+            SUM(cc.added) AS added,
+            SUM(cc.deleted) AS deleted,
+            COUNT(commits.rev) AS commits
         FROM commits
-        INNER JOIN {src} c ON c.rev = commits.rev
+        INNER JOIN commit_churn cc ON cc.rev = commits.rev
         GROUP BY commits.canonical_author
         ORDER BY added DESC, commits DESC, author ASC
         LIMIT ?"
