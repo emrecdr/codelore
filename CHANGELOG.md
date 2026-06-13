@@ -4,8 +4,6 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
-## [0.4.6] - 2026-06-13
-
 ### Fixed — Windows build unblocked (MSVC 19.40 / duckdb-rs#786)
 
 GitHub Actions Windows runners rolled out MSVC 19.40 (toolchain
