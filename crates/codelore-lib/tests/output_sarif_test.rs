@@ -11,6 +11,7 @@ fn sarif_hotspots_valid_2_1_0() {
         code_health: 50.0,
         hotspot_score: 0.75,
         mi: Some(60.0),
+        mi_rank: None,
     }];
 
     let mut buf = Vec::new();
@@ -65,6 +66,7 @@ fn sarif_level_warning_above_threshold() {
         code_health: 55.0, // → severity 4.5 → warning band
         hotspot_score: 0.6,
         mi: Some(68.0),
+        mi_rank: None,
     }];
 
     let mut buf = Vec::new();
@@ -90,6 +92,7 @@ fn sarif_level_error_for_severe_findings() {
         code_health: 20.0, // → severity 8.0 → error band
         hotspot_score: 0.9,
         mi: Some(40.0),
+        mi_rank: None,
     }];
 
     let mut buf = Vec::new();
@@ -114,6 +117,7 @@ fn sarif_level_note_below_threshold() {
         code_health: 90.0,
         hotspot_score: 0.3,
         mi: Some(88.0),
+        mi_rank: None,
     }];
 
     let mut buf = Vec::new();
@@ -138,6 +142,7 @@ fn sarif_security_severity_proxy() {
         code_health: 20.0,
         hotspot_score: 0.9,
         mi: Some(35.0),
+        mi_rank: None,
     }];
 
     let mut buf = Vec::new();
@@ -164,6 +169,7 @@ fn sarif_fingerprint_is_stable() {
         code_health: 50.0,
         hotspot_score: 0.75,
         mi: None,
+        mi_rank: None,
     };
 
     let mut buf1 = Vec::new();

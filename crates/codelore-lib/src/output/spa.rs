@@ -88,6 +88,12 @@ pub struct SpaDashboard {
     /// Each row is `(month YYYY-MM-01, path, hotspot_score)`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub trends: Vec<TrendPoint>,
+    /// Repo-relative MI band counts (`high` / `moderate` / `low` / `unknown`)
+    /// for the KPI tile. Derived from `hotspots[*].mi_rank` at dispatch
+    /// time via [`crate::analyses::mi::MiRollup::from_hotspots`]. `None`
+    /// when no hotspots are present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mi_rollup: Option<crate::analyses::mi::MiRollup>,
 }
 
 /// One function in the X-Ray sunburst.
@@ -296,6 +302,8 @@ mod tests {
                 code_health: 78.0,
                 hotspot_score: 5.5,
                 mi: Some(54.0),
+                // Bottom quartile → Low band when MiRollup runs over this set.
+                mi_rank: Some(0.0),
             },
             HotspotRow {
                 path: "src/lib/util.rs".into(),
@@ -304,6 +312,8 @@ mod tests {
                 code_health: 88.0,
                 hotspot_score: 2.1,
                 mi: Some(82.5),
+                // Top quartile → High band.
+                mi_rank: Some(1.0),
             },
         ]
     }

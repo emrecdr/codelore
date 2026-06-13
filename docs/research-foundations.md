@@ -428,11 +428,29 @@ threshold-banded scale practitioners already know.
   refactoring backlog.
 - Hotspots with **high revisions but low complexity** are well-managed
   hot paths; investigate the inverse first.
-- The **Maintainability Index** (SEI variant) is on an industry-standard
-  0–100 scale (capped at 100 in CodeLore via Microsoft's normalization):
-  - **≥ 85**: high maintainability
-  - **65 – 85**: moderate maintainability
-  - **< 65**: low maintainability — investigate
+- The **Maintainability Index** band is **repo-relative**, not absolute.
+  Each file is classified by its percentile rank against other files in
+  the same repo's MI distribution:
+  - **High** — top 25% (rank ≥ 0.75)
+  - **Moderate** — middle 50% (0.25 ≤ rank < 0.75)
+  - **Low** — bottom 25% (rank < 0.25)
+
+> **Why repo-relative bands, not the absolute Coleman/SEI thresholds?**
+> The literature thresholds (≥85 high / 65–85 moderate / <65 low) were
+> calibrated in the 1990s on small embedded-software modules typically
+> <200 SLOC each. Modern source files at 500–5000 SLOC produce much
+> lower MI values because the `−16.2·log₂(SLOC)` term grows fast. We
+> empirically validated on CodeLore's own Rust codebase (n = 42 files
+> with file-level MI): values range `[−137, +104]` with median ≈2.7.
+> Applying the literature thresholds verbatim would classify 100% of
+> well-maintained files as "low" — useless for triage. Repo-relative
+> percentile bands match the existing convention used by `hotspot_score`
+> (which is `PERCENT_RANK(revs) × PERCENT_RANK(cognitive) × …`) and
+> produce actionable triage signal regardless of language, repo size,
+> or file scale. CHM ships absolute thresholds because its JS/TS sample
+> files are small; ours aren't. Trade-off: bands aren't comparable
+> across repos. Mitigation: emitters surface the raw `mi` value and
+> the percentile rank alongside the band so users have absolute context.
 
 **Implementation**: `crates/codelore-lib/src/analyses/hotspots.rs`
 ([source](../crates/codelore-lib/src/analyses/hotspots.rs)). The

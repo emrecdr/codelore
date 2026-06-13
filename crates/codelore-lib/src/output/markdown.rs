@@ -35,6 +35,10 @@ pub fn write_revisions_markdown<W: Write>(rows: &[(String, u32)], w: &mut W) -> 
 
 pub fn write_hotspots_markdown<W: Write>(rows: &[HotspotRow], w: &mut W) -> Result<()> {
     header(w, "CodeLore hotspots")?;
+    // The MI cell renders `value (band, rank%)` when the file has a known
+    // file-level MI; `—` otherwise. Bands are repo-relative — see
+    // `crates/codelore-lib/src/analyses/mi.rs` for why we don't use the
+    // literature's absolute Coleman/SEI thresholds.
     writeln!(
         w,
         "| Entity | Revisions | Cognitive | Code Health | Score | MI |"
@@ -42,9 +46,15 @@ pub fn write_hotspots_markdown<W: Write>(rows: &[HotspotRow], w: &mut W) -> Resu
     .map_err(CodeLoreError::Io)?;
     writeln!(w, "|---|---|---|---|---|---|").map_err(CodeLoreError::Io)?;
     for row in rows {
-        let mi_cell = match row.mi {
-            Some(v) => format!("{v:.2}"),
-            None => "—".to_owned(),
+        let mi_cell = match (row.mi, row.mi_rank) {
+            (Some(v), Some(rank)) if rank.is_finite() => {
+                let band = crate::analyses::mi::MiBand::from_rank(rank);
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let rank_pct = (rank * 100.0).round() as u32;
+                format!("{v:.2} ({}, {rank_pct}%)", band.as_str())
+            }
+            (Some(v), _) => format!("{v:.2}"),
+            (None, _) => "—".to_owned(),
         };
         writeln!(
             w,

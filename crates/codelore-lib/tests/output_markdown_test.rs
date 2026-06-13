@@ -11,6 +11,7 @@ fn markdown_hotspots_table() {
         code_health: 75.5,
         hotspot_score: 0.42,
         mi: Some(72.0),
+        mi_rank: None,
     }];
     let mut buf = Vec::new();
     markdown::write_hotspots_markdown(&rows, &mut Cursor::new(&mut buf)).expect("write");

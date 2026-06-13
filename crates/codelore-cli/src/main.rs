@@ -1246,6 +1246,11 @@ fn run_spa_dispatch(
         tracing::warn!("spa: trends query failed; skipping: {e}");
         Vec::new()
     });
+    // Derive the MI band rollup directly from hotspots — cheap pure-Rust
+    // pass over what we already loaded; no extra SQL query needed.
+    let mi_rollup = Some(codelore_lib::analyses::mi::MiRollup::from_hotspots(
+        &hotspots,
+    ));
     let dash = SpaDashboard {
         hotspots,
         summary,
@@ -1256,6 +1261,7 @@ fn run_spa_dispatch(
         xray,
         daily_commits,
         trends,
+        mi_rollup,
     };
 
     let now = time::OffsetDateTime::now_utc();

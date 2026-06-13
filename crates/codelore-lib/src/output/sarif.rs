@@ -105,23 +105,27 @@ fn build_result(row: &HotspotRow, repo_root: &str) -> serde_json::Value {
         row.path.trim_start_matches('/')
     );
 
-    // Build the message text and properties bag with MI included only when
-    // known. SARIF consumers (GitHub Code Scanning) prefer omitting absent
-    // properties over surfacing `null` cells in their UI.
-    let (message_text, mi_suffix) = match row.mi {
-        Some(v) => (
-            format!(
-                "Hotspot '{}': score={:.3}, code_health={:.1}, revisions={}, cognitive={:.1}, mi={:.1}",
-                row.path, row.hotspot_score, row.code_health, row.revisions, row.cognitive, v
-            ),
-            Some(v),
+    // Build the message text and properties bag with MI / band included only
+    // when known. SARIF consumers (GitHub Code Scanning) prefer omitting
+    // absent properties over surfacing `null` cells in their UI.
+    let band_str = match row.mi_rank {
+        Some(rank) if rank.is_finite() => {
+            Some(crate::analyses::mi::MiBand::from_rank(rank).as_str())
+        }
+        _ => None,
+    };
+    let message_text = match (row.mi, band_str) {
+        (Some(v), Some(band)) => format!(
+            "Hotspot '{}': score={:.3}, code_health={:.1}, revisions={}, cognitive={:.1}, mi={:.1} ({})",
+            row.path, row.hotspot_score, row.code_health, row.revisions, row.cognitive, v, band
         ),
-        None => (
-            format!(
-                "Hotspot '{}': score={:.3}, code_health={:.1}, revisions={}, cognitive={:.1}",
-                row.path, row.hotspot_score, row.code_health, row.revisions, row.cognitive
-            ),
-            None,
+        (Some(v), None) => format!(
+            "Hotspot '{}': score={:.3}, code_health={:.1}, revisions={}, cognitive={:.1}, mi={:.1}",
+            row.path, row.hotspot_score, row.code_health, row.revisions, row.cognitive, v
+        ),
+        _ => format!(
+            "Hotspot '{}': score={:.3}, code_health={:.1}, revisions={}, cognitive={:.1}",
+            row.path, row.hotspot_score, row.code_health, row.revisions, row.cognitive
         ),
     };
 
@@ -133,8 +137,16 @@ fn build_result(row: &HotspotRow, repo_root: &str) -> serde_json::Value {
         "codelore/score": row.hotspot_score,
         "tags": ["behavioral", "hotspot"]
     });
-    if let Some(mi) = mi_suffix {
+    if let Some(mi) = row.mi {
         properties["codelore/mi"] = json!(mi);
+    }
+    if let Some(rank) = row.mi_rank
+        && rank.is_finite()
+    {
+        properties["codelore/mi-rank"] = json!(rank);
+    }
+    if let Some(band) = band_str {
+        properties["codelore/mi-band"] = json!(band);
     }
 
     json!({

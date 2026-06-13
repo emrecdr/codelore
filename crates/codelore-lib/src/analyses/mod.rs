@@ -15,6 +15,7 @@ pub mod hotspots;
 pub mod knowledge_islands;
 pub mod lineage;
 pub mod main_dev;
+pub mod mi;
 pub mod messages;
 pub mod ownership;
 pub mod query;

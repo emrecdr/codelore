@@ -60,6 +60,12 @@ pub struct HotspotRow {
     /// the language isn't supported by `codelore-rca` or the file was
     /// skipped for size / clone reasons at ingest.
     pub mi: Option<f64>,
+    /// Percentile rank of this file's MI within the analyzed repo, in
+    /// `[0, 1]`. `None` when `mi` is unknown. Used by the [`crate::analyses::mi::MiBand`]
+    /// classifier to derive a repo-relative Low / Moderate / High label —
+    /// see that module's docs for why the bands are percentile-based
+    /// rather than absolute Coleman/SEI thresholds.
+    pub mi_rank: Option<f64>,
 }
 
 // PERCENT_RANK() is standard SQL:2003 and is supported by DuckDB ≥0.2.
@@ -123,15 +129,30 @@ pub const SQL: &str = "
         WHERE e.kind = 'unit' AND cm.mi IS NOT NULL
         GROUP BY cm.path
     ),
+    -- Repo-relative MI percentile rank, computed ONLY over files that
+    -- actually have a `mi` value — files without a `kind='unit'` entry
+    -- (unsupported language / skipped file) MUST NOT skew the
+    -- distribution. PERCENT_RANK over file_mi emits values in [0, 1].
+    -- See analyses/mi.rs for why bands are repo-relative rather than
+    -- absolute Coleman/SEI thresholds (literature thresholds would
+    -- classify ~100% of any large codebase as 'low maintainability').
+    file_mi_ranked AS (
+        SELECT
+            path,
+            mi,
+            PERCENT_RANK() OVER (ORDER BY mi) AS mi_rank
+        FROM file_mi
+    ),
     joined AS (
         SELECT
             fr.path,
             fr.revs,
             COALESCE(fc.cognitive, 0) AS cognitive,
-            fm.mi AS mi
+            fmr.mi AS mi,
+            fmr.mi_rank AS mi_rank
         FROM file_revs fr
         LEFT JOIN file_complexity fc ON fc.path = fr.path
-        LEFT JOIN file_mi fm ON fm.path = fr.path
+        LEFT JOIN file_mi_ranked fmr ON fmr.path = fr.path
     ),
     ranked AS (
         SELECT
@@ -139,6 +160,7 @@ pub const SQL: &str = "
             revs,
             cognitive,
             mi,
+            mi_rank,
             PERCENT_RANK() OVER (ORDER BY revs) AS pr_rev,
             PERCENT_RANK() OVER (ORDER BY cognitive) AS pr_cx,
             CASE
@@ -154,7 +176,8 @@ pub const SQL: &str = "
         cognitive,
         GREATEST(0.0, LEAST(100.0, 100.0 * (1.0 - 0.40 * norm_cx))) AS code_health,
         pr_rev * pr_cx * (100.0 - GREATEST(0.0, LEAST(100.0, 100.0 * (1.0 - 0.40 * norm_cx)))) / 4.0 AS score,
-        mi
+        mi,
+        mi_rank
     FROM ranked
     ORDER BY score DESC, path ASC
     LIMIT ?
@@ -188,6 +211,7 @@ pub fn run_hotspots(db: &FactsDb, opts: &Options) -> Result<Vec<HotspotRow>> {
                 code_health: r.get::<_, f64>(3)?,
                 hotspot_score: r.get::<_, f64>(4)?,
                 mi: r.get::<_, Option<f64>>(5)?,
+                mi_rank: r.get::<_, Option<f64>>(6)?,
             })
         })
         .map_err(|e| CodeLoreError::Analysis(format!("query hotspots: {e}")))?;
