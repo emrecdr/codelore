@@ -312,6 +312,11 @@
       flex-direction: column;
     }
     .detail-drawer[hidden] { display: none; }
+    /* Suppress flash-of-visible-drawer before Alpine.js's
+       `x-show="$store.detail.open"` runs. Alpine sets `x-cloak`
+       attributes pre-init; this rule hides them until Alpine
+       removes the attribute on first render. */
+    [x-cloak] { display: none !important; }
     .drawer-header {
       padding: 14px 20px;
       border-bottom: 1px solid var(--border);
@@ -546,10 +551,27 @@
     </section>
   </main>
 
-  <aside class="detail-drawer" id="file-detail-drawer" hidden>
+  <!-- Detail drawer: open/close state driven by Alpine `$store.detail`
+       (declared in the inline script below the persist plugin load).
+       `x-show` toggles display; `x-transition.opacity` adds a 200 ms
+       fade. `x-cloak` keeps the drawer hidden before Alpine
+       initialises so there's no flash-of-visible-content.
+       `@keydown.escape.window` listens at the document level — Escape
+       closes the drawer regardless of focus. -->
+  <aside class="detail-drawer"
+         id="file-detail-drawer"
+         x-data
+         x-show="$store.detail.open"
+         x-transition.opacity.duration.200ms
+         x-cloak
+         @keydown.escape.window="$store.detail.hide()">
     <div class="drawer-header">
       <h3 id="drawer-title">File details</h3>
-      <button type="button" class="drawer-close" id="drawer-close" aria-label="Close">×</button>
+      <button type="button"
+              class="drawer-close btn btn-ghost btn-sm"
+              id="drawer-close"
+              @click="$store.detail.hide()"
+              aria-label="Close">×</button>
     </div>
     <div class="drawer-body" id="drawer-body"></div>
   </aside>
@@ -589,6 +611,22 @@
        the time each one runs. -->
   <script>{{ALPINE_JS}}</script>
   <script>{{ALPINE_PERSIST_JS}}</script>
+
+  <!-- Alpine.store registrations. Runs once, on `alpine:init`, before
+       `Alpine.start()` walks the DOM and binds `x-data` / `x-show` etc.
+       The `detail` store is the file-detail drawer's open/close state;
+       widgets.js::showFileDetailDrawer calls `Alpine.store('detail')
+       .show()` to open, and the aside's
+       `@keydown.escape.window="$store.detail.hide()"` closes it. -->
+  <script>
+    document.addEventListener('alpine:init', () => {
+      Alpine.store('detail', {
+        open: false,
+        show() { this.open = true; },
+        hide() { this.open = false; },
+      });
+    });
+  </script>
 
   <!-- Widget render logic. -->
   <script>{{WIDGETS_JS}}</script>

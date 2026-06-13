@@ -796,6 +796,15 @@
   // Detail drawer (cross-widget click target)
   // -----------------------------------------------------------------
   function initDetailDrawer() {
+    // No-op when Alpine is present: the drawer's `@click` on the
+    // close button and `@keydown.escape.window` on the aside drive
+    // open/close via `$store.detail` — no imperative listeners
+    // needed here. Kept as a stub so the v0.4.x call at line 31
+    // doesn't need to be removed in this PR (smaller diff).
+    //
+    // Fallback path (Alpine missing for any reason): re-attach the
+    // legacy imperative listeners so the drawer still works.
+    if (window.Alpine) return;
     const closeBtn = document.getElementById('drawer-close');
     if (closeBtn) {
       closeBtn.addEventListener('click', function () {
@@ -878,7 +887,15 @@
     }
 
     body.innerHTML = html;
-    drawer.hidden = false;
+    // Open via Alpine store when Alpine is loaded; fall back to the
+    // legacy `hidden` attribute toggle otherwise. The aside markup in
+    // template.html keys its `x-show` off `$store.detail.open`, so
+    // setting the store's open state shows the drawer reactively.
+    if (window.Alpine) {
+      window.Alpine.store('detail').show();
+    } else {
+      drawer.hidden = false;
+    }
   }
 
   // Expose so the hotspot table can call it on row click.
