@@ -651,10 +651,14 @@
     for (var j = 0; j < tiles.length; j++) {
       const t = tiles[j];
       const tip = t.defKey ? buildTooltipHtml(t.defKey) : '';
-      html += '<div class="kpi-tile">' +
-        '<div class="kpi-label">' + escapeHtml(t.label) + tip + '</div>' +
-        '<div class="kpi-value">' + escapeHtml(t.value) + '</div>' +
-        '<div class="kpi-sub">' + escapeHtml(t.sub) + '</div>' +
+      // DaisyUI `stat` classes layered onto the v0.4.x `.kpi-*`
+      // semantic classes. The kpi-grid wrapper still drives layout;
+      // DaisyUI's stat-title/value/desc give typography + spacing
+      // tokens consistent with the rest of the v0.5.x chrome.
+      html += '<div class="kpi-tile stat">' +
+        '<div class="kpi-label stat-title">' + escapeHtml(t.label) + tip + '</div>' +
+        '<div class="kpi-value stat-value">' + escapeHtml(t.value) + '</div>' +
+        '<div class="kpi-sub stat-desc">' + escapeHtml(t.sub) + '</div>' +
         '</div>';
     }
     container.innerHTML = html;
