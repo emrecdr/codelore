@@ -10,7 +10,13 @@
 use std::path::Path;
 
 /// Tier-1 languages `CodeLore` clone-detects. Mirrors
-/// `crate::complexity::language::Tier1Language` 1:1.
+/// `crate::complexity::language::Tier1Language` for extension recognition,
+/// but splits TSX out as its own variant: tree-sitter-typescript ships a
+/// dedicated `LANGUAGE_TSX` grammar for `.tsx` files (the plain
+/// `LANGUAGE_TYPESCRIPT` grammar errors on JSX tags). Complexity rolls TSX
+/// into TypeScript because `codelore-rca`'s Coleman MI scoring is the same
+/// for both — clone fingerprinting can't make that simplification because
+/// it parses the raw AST and JSX tags become real node kinds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CloneLanguage {
     Rust,
@@ -18,6 +24,7 @@ pub enum CloneLanguage {
     Java,
     JavaScript,
     TypeScript,
+    Tsx,
 }
 
 impl CloneLanguage {
@@ -30,8 +37,12 @@ impl CloneLanguage {
             "rs" => Some(Self::Rust),
             "py" => Some(Self::Python),
             "java" => Some(Self::Java),
-            "js" | "mjs" | "cjs" => Some(Self::JavaScript),
-            "ts" | "tsx" => Some(Self::TypeScript),
+            // tree-sitter-javascript's grammar accepts JSX natively, so
+            // `.jsx` shares the JavaScript variant. This matches what the
+            // complexity pass does at `complexity/language.rs`.
+            "js" | "jsx" | "mjs" | "cjs" => Some(Self::JavaScript),
+            "ts" => Some(Self::TypeScript),
+            "tsx" => Some(Self::Tsx),
             _ => None,
         }
     }
@@ -47,6 +58,7 @@ impl CloneLanguage {
             Self::Java => tree_sitter_java::LANGUAGE.into(),
             Self::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
             Self::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            Self::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
         }
     }
 
@@ -94,7 +106,7 @@ impl CloneLanguage {
                 "false",
                 "null_literal",
             ],
-            Self::JavaScript | Self::TypeScript => &[
+            Self::JavaScript | Self::TypeScript | Self::Tsx => &[
                 "identifier",
                 "type_identifier",
                 "property_identifier",
@@ -123,7 +135,7 @@ impl CloneLanguage {
             ],
             Self::Python => &["function_definition"],
             Self::Java => &["method_declaration", "constructor_declaration"],
-            Self::JavaScript | Self::TypeScript => &[
+            Self::JavaScript | Self::TypeScript | Self::Tsx => &[
                 "function_declaration",
                 "method_definition",
                 "arrow_function",
@@ -132,5 +144,91 @@ impl CloneLanguage {
                 "generator_function_declaration",
             ],
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn extension_dispatch() {
+        // Plain TypeScript and TSX must dispatch to different grammars —
+        // tree-sitter-typescript's plain TypeScript parser errors on JSX
+        // tags. The JSX extension shares JavaScript's grammar, which
+        // accepts JSX natively.
+        assert_eq!(
+            CloneLanguage::from_path(Path::new("a.rs")),
+            Some(CloneLanguage::Rust)
+        );
+        assert_eq!(
+            CloneLanguage::from_path(Path::new("a.py")),
+            Some(CloneLanguage::Python)
+        );
+        assert_eq!(
+            CloneLanguage::from_path(Path::new("a.java")),
+            Some(CloneLanguage::Java)
+        );
+        assert_eq!(
+            CloneLanguage::from_path(Path::new("a.js")),
+            Some(CloneLanguage::JavaScript)
+        );
+        assert_eq!(
+            CloneLanguage::from_path(Path::new("a.mjs")),
+            Some(CloneLanguage::JavaScript)
+        );
+        assert_eq!(
+            CloneLanguage::from_path(Path::new("a.cjs")),
+            Some(CloneLanguage::JavaScript)
+        );
+        assert_eq!(
+            CloneLanguage::from_path(Path::new("a.jsx")),
+            Some(CloneLanguage::JavaScript)
+        );
+        assert_eq!(
+            CloneLanguage::from_path(Path::new("a.ts")),
+            Some(CloneLanguage::TypeScript)
+        );
+        assert_eq!(
+            CloneLanguage::from_path(Path::new("a.tsx")),
+            Some(CloneLanguage::Tsx)
+        );
+        assert_eq!(CloneLanguage::from_path(Path::new("a.txt")), None);
+    }
+
+    #[test]
+    fn tsx_grammar_parses_jsx() {
+        // Regression: previously `.tsx` mapped to LANGUAGE_TYPESCRIPT which
+        // can't parse JSX tags. Real-world TSX components like
+        // `const X = () => <div>{n}</div>` would yield an ERROR node and
+        // skip clone detection silently.
+        let lang = CloneLanguage::Tsx.language();
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&lang).expect("set TSX language");
+        let src = "export const View = (n: number) => <div className=\"x\">{n}</div>;";
+        let tree = parser.parse(src, None).expect("parse TSX");
+        assert!(
+            !tree.root_node().has_error(),
+            "TSX grammar must accept JSX tags; got: {}",
+            tree.root_node().to_sexp()
+        );
+    }
+
+    #[test]
+    fn jsx_grammar_parses_jsx() {
+        // `.jsx` files route through the JavaScript variant. The plain
+        // tree-sitter-javascript grammar already accepts JSX without any
+        // additional grammar selection.
+        let lang = CloneLanguage::JavaScript.language();
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&lang).expect("set JS language");
+        let src = "export const View = ({n}) => <div className=\"x\">{n}</div>;";
+        let tree = parser.parse(src, None).expect("parse JSX");
+        assert!(
+            !tree.root_node().has_error(),
+            "JavaScript grammar must accept JSX; got: {}",
+            tree.root_node().to_sexp()
+        );
     }
 }
