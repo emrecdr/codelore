@@ -12,4 +12,6 @@ pub mod sarif;
 #[cfg(feature = "spa")]
 pub mod spa;
 pub mod sqlite;
+#[cfg(feature = "spa")]
+pub mod step_summary;
 pub(crate) mod template;

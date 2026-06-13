@@ -73,6 +73,7 @@ codelore analyze --analysis <NAME> --format <FORMAT>
 | `parquet` | DuckDB / Polars / pandas / Spark | `--output PATH` required; binary format |
 | `sqlite` | Ad-hoc SQL exploration of the full fact store | `--output PATH` required; dumps all 8 tables. Strict superset of code-maat's `--analysis identity` raw-dataset dump (CodeLore exposes complexity, clones, mailmap, and provenance tables alongside `commits`/`changes`). |
 | `spa` | Single-HTML interactive dashboard (CodeScene-equivalent surface). Opens in any browser, runs offline, fits in a CI artefact. | `--output PATH` required; ~1.2 MB self-contained HTML. Embeds Apache ECharts + d3-hierarchy SHA-pinned at build time. Composite (multi-analysis) emitter — bypasses `--analysis`. **Opt-in `spa` Cargo feature**: default `cargo install codelore` builds offline-clean without this. Released binaries / Homebrew / ghcr ship with `spa` enabled. |
+| `step-summary` | GitHub Actions `$GITHUB_STEP_SUMMARY`. Single GFM Markdown summary with KPI table, top-10 hotspots (MI band emoji), MI band breakdown (unicode bars), behavioral coupling density, knowledge islands `<details>` collapsible. | Streams to stdout by default; redirect with `>> $GITHUB_STEP_SUMMARY` in CI. Typical 2–10 KB; well under GitHub's 1 MB step-summary cap. Same composite-dashboard inputs as `--format spa` so a single ingest run can emit BOTH (run `--format step-summary` first to stdout, then `--format spa` to file). Requires the same `spa` Cargo feature as `--format spa`. |
 
 Every file output (except SQLite, where the provenance table lives inside the DB, and SPA, where it's embedded as a JSON block in the page) emits a `{output}.provenance.json` sidecar with the bca/gix/duckdb versions, every threshold knob, mailmap state, and UTC timestamp. This is your reproducibility receipt.
 
@@ -88,6 +89,53 @@ The dashboard composes six widgets in one HTML file:
 6. **File detail drawer** — side panel that aggregates hotspot / knowledge-island / code-health / coupling-partner data for one path. ESC or × closes.
 
 The emitter runs the analyses each widget needs (`hotspots`, `summary`, `code_health`, `coupling`, `knowledge_islands`) so a single `codelore analyze --format spa` invocation produces a fully populated dashboard. Coupling and knowledge-islands degrade gracefully on tiny fixtures where Fisher significance can't be reached.
+
+### `--format step-summary` GitHub Actions integration
+
+The step-summary emitter writes a GFM Markdown report sized for GitHub's `$GITHUB_STEP_SUMMARY` cap (1 MB; oversize summaries are silently dropped). Typical output is 2–10 KB. It renders into the Actions UI as a native Markdown block with KPI tables, emoji band labels, and `<details>` collapsibles — no JavaScript required (GitHub sanitizes `<script>` tags from step summaries).
+
+Copy-pasteable workflow snippet:
+
+```yaml
+name: codelore-pr-summary
+on: [pull_request]
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history for behavioural analyses
+
+      - name: Install codelore
+        run: |
+          curl -fsSL https://github.com/emrecdr/codelore/releases/latest/download/codelore-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C /usr/local/bin codelore
+
+      - name: Run analysis and write step summary
+        run: |
+          codelore analyze \
+            --analysis hotspots \
+            --repo . \
+            --format step-summary \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      # Optional: also upload the full HTML dashboard as an artefact
+      - name: Build full dashboard (optional)
+        run: |
+          codelore analyze \
+            --analysis hotspots \
+            --repo . \
+            --format spa \
+            --output codelore-dashboard.html
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codelore-dashboard
+          path: codelore-dashboard.html
+```
+
+The step summary appears at the bottom of the workflow run page in the GitHub Actions UI. The HTML artefact is a separate downloadable file with the full interactive dashboard.
 
 ### SARIF rules CodeLore ships
 

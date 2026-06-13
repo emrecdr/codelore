@@ -89,9 +89,10 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
 
     let format = args.format.as_str();
     match format {
-        "csv" | "json" | "sarif" | "markdown" | "parquet" | "sqlite" | "html" | "spa" => {}
+        "csv" | "json" | "sarif" | "markdown" | "parquet" | "sqlite" | "html" | "spa"
+        | "step-summary" => {}
         other => anyhow::bail!(
-            "unknown --format {other:?}. Supported: csv, json, sarif, markdown, parquet, sqlite, html, spa"
+            "unknown --format {other:?}. Supported: csv, json, sarif, markdown, parquet, sqlite, html, spa, step-summary"
         ),
     }
 
@@ -101,6 +102,8 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             "--format {format} requires --output PATH (binary format, cannot stream to stdout)"
         );
     }
+    // step-summary can stream to stdout (it's small GFM text), but typically
+    // gets redirected to $GITHUB_STEP_SUMMARY by the caller's CI workflow.
     // SARIF: hotspots (Plan 5), clones (Plan 8 §2 T10), clone-coupling (Plan 8 §6 T21).
     if format == "sarif"
         && !matches!(
@@ -298,6 +301,28 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             let _ = path;
             anyhow::bail!(
                 "--format spa requires CodeLore to be built with the `spa` Cargo feature. \
+                 Reinstall with `cargo install codelore --features spa`, build from source \
+                 with `cargo build --features spa`, or use a prebuilt binary from \
+                 https://github.com/emrecdr/codelore/releases (which ship with `spa` enabled)."
+            );
+        }
+    }
+    if format == "step-summary" {
+        // Reuses the same multi-analysis dispatch as `--format spa` —
+        // a step-summary IS a different rendering of the same
+        // SpaDashboard, sized for GitHub's $GITHUB_STEP_SUMMARY 1 MB
+        // cap. Streams to stdout by default so callers can
+        // `>> $GITHUB_STEP_SUMMARY` directly.
+        #[cfg(feature = "spa")]
+        {
+            run_step_summary_dispatch(&db, &opts, &args.repo, args.output.as_deref())?;
+            return Ok(());
+        }
+        #[cfg(not(feature = "spa"))]
+        {
+            anyhow::bail!(
+                "--format step-summary requires CodeLore to be built with the `spa` Cargo feature \
+                 (the step-summary writer consumes the same SpaDashboard as the SPA HTML emitter). \
                  Reinstall with `cargo install codelore --features spa`, build from source \
                  with `cargo build --features spa`, or use a prebuilt binary from \
                  https://github.com/emrecdr/codelore/releases (which ship with `spa` enabled)."
@@ -1191,66 +1216,65 @@ fn write_parquet(
     }
 }
 
+/// Run every analysis the dashboard consumes and assemble a
+/// `SpaDashboard`. Shared by both `--format spa` (HTML emitter) and
+/// `--format step-summary` (GFM markdown emitter) — they render the
+/// same data into different output shapes.
 #[cfg(feature = "spa")]
-fn run_spa_dispatch(
+fn build_spa_dashboard(
     db: &codelore_lib::facts::FactsDb,
     opts: &codelore_lib::Options,
-    repo_path: &std::path::Path,
-    output: &std::path::Path,
-) -> anyhow::Result<()> {
-    use codelore_lib::output::spa::{
-        SpaDashboard, run_daily_commits, run_trends, run_xray, write_spa,
-    };
+) -> anyhow::Result<codelore_lib::output::spa::SpaDashboard> {
+    use codelore_lib::output::spa::{SpaDashboard, run_daily_commits, run_trends, run_xray};
 
-    // Run every analysis the SPA's widgets consume. Each run_* call is
-    // an SQL query over the already-ingested fact store, so the
-    // composite cost is bounded by the query mix (typically <1s on
-    // mid-size repos). Optional widgets degrade gracefully (warn +
-    // empty vec) on tiny fixtures or when the analysis can't run.
+    // Each run_* call is an SQL query over the already-ingested fact
+    // store, so the composite cost is bounded by the query mix
+    // (typically <1s on mid-size repos). Optional widgets degrade
+    // gracefully (warn + empty vec) on tiny fixtures or when the
+    // analysis can't run.
     let hotspots = codelore_lib::analyses::hotspots::run_hotspots(db, opts)
-        .context("run hotspots for spa dashboard")?;
+        .context("run hotspots for dashboard")?;
     let summary = codelore_lib::analyses::summary::run_summary(db, opts)
-        .context("run summary for spa dashboard")?;
+        .context("run summary for dashboard")?;
     let code_health = codelore_lib::analyses::code_health::run_code_health(db, opts)
-        .context("run code-health for spa dashboard")?;
+        .context("run code-health for dashboard")?;
     let coupling = codelore_lib::analyses::coupling::run_coupling(db, opts).unwrap_or_else(|e| {
-        tracing::warn!("spa: coupling analysis failed; skipping: {e}");
+        tracing::warn!("dashboard: coupling analysis failed; skipping: {e}");
         Vec::new()
     });
     let knowledge_islands = codelore_lib::analyses::knowledge_islands::run_knowledge_islands(
         db, opts,
     )
     .unwrap_or_else(|e| {
-        tracing::warn!("spa: knowledge-islands analysis failed; skipping: {e}");
+        tracing::warn!("dashboard: knowledge-islands analysis failed; skipping: {e}");
         Vec::new()
     });
-    // v0.4.2 widget data
     let entity_ownership = codelore_lib::analyses::entity_ownership::run_entity_ownership(db, opts)
         .unwrap_or_else(|e| {
-            tracing::warn!("spa: entity-ownership analysis failed; skipping: {e}");
+            tracing::warn!("dashboard: entity-ownership analysis failed; skipping: {e}");
             Vec::new()
         });
     let xray = run_xray(db, 500).unwrap_or_else(|e| {
-        tracing::warn!("spa: xray query failed; skipping: {e}");
+        tracing::warn!("dashboard: xray query failed; skipping: {e}");
         Vec::new()
     });
     let daily_commits = run_daily_commits(db).unwrap_or_else(|e| {
-        tracing::warn!("spa: daily_commits query failed; skipping: {e}");
+        tracing::warn!("dashboard: daily_commits query failed; skipping: {e}");
         Vec::new()
     });
-    // W9: trends multi-line — restrict to the top-10 hotspot paths to
-    // keep the line chart legible. `run_trends` returns one row per
-    // (month, path) with the revision count as the score.
+    // Trends — restrict to the top-10 hotspot paths to keep the line
+    // chart legible. `run_trends` returns one row per (month, path)
+    // with the revision count as the score.
     let top_paths: Vec<String> = hotspots.iter().take(10).map(|r| r.path.clone()).collect();
     let trends = run_trends(db, &top_paths).unwrap_or_else(|e| {
-        tracing::warn!("spa: trends query failed; skipping: {e}");
+        tracing::warn!("dashboard: trends query failed; skipping: {e}");
         Vec::new()
     });
     let mi_rollup = Some(codelore_lib::analyses::mi::MiRollup::from_hotspots(
         &hotspots,
     ));
     let coupling_density = compute_spa_coupling_density(db, opts, &coupling);
-    let dash = SpaDashboard {
+    Ok(SpaDashboard {
         hotspots,
         summary,
         code_health,
@@ -1262,7 +1286,19 @@ fn run_spa_dispatch(
         trends,
         mi_rollup,
         coupling_density,
-    };
+    })
+}
+
+#[cfg(feature = "spa")]
+fn run_spa_dispatch(
+    db: &codelore_lib::facts::FactsDb,
+    opts: &codelore_lib::Options,
+    repo_path: &std::path::Path,
+    output: &std::path::Path,
+) -> anyhow::Result<()> {
+    use codelore_lib::output::spa::write_spa;
+
+    let dash = build_spa_dashboard(db, opts)?;
 
     let now = time::OffsetDateTime::now_utc();
     let generated_at = format!(
@@ -1309,6 +1345,46 @@ fn run_spa_dispatch(
         size_human
     );
     eprintln!("  open in browser: file://{}", abs.display());
+    Ok(())
+}
+
+#[cfg(feature = "spa")]
+fn run_step_summary_dispatch(
+    db: &codelore_lib::facts::FactsDb,
+    opts: &codelore_lib::Options,
+    repo_path: &std::path::Path,
+    output: Option<&std::path::Path>,
+) -> anyhow::Result<()> {
+    use codelore_lib::output::step_summary::write_step_summary;
+
+    let dash = build_spa_dashboard(db, opts)?;
+    let now = time::OffsetDateTime::now_utc();
+    let generated_at = format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC",
+        now.year(),
+        u8::from(now.month()),
+        now.day(),
+        now.hour(),
+        now.minute(),
+        now.second(),
+    );
+    let title = "CodeLore Analysis";
+    let repo_display = repo_path.display().to_string();
+
+    // step-summary streams to stdout by default so CI workflows can
+    // `codelore ... --format step-summary >> $GITHUB_STEP_SUMMARY`
+    // directly. `--output PATH` opt-in for local use / testing.
+    if let Some(path) = output {
+        let mut out = std::fs::File::create(path)
+            .with_context(|| format!("create step-summary output {}", path.display()))?;
+        write_step_summary(&dash, title, &repo_display, &generated_at, &mut out)
+            .context("write step-summary")?;
+        eprintln!("✓ step-summary written to {}", path.display());
+    } else {
+        let mut out = std::io::stdout().lock();
+        write_step_summary(&dash, title, &repo_display, &generated_at, &mut out)
+            .context("write step-summary")?;
+    }
     Ok(())
 }
 
