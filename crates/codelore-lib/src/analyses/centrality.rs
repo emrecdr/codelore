@@ -74,10 +74,14 @@ pub fn run_centrality(db: &FactsDb, opts: &Options) -> Result<Vec<CentralityRow>
     }
     let mut acc: HashMap<String, Acc> = HashMap::new();
     for p in &pairs {
-        // `fisher_two_tail` is guaranteed to produce a strictly-positive
-        // p-value (clamped above `f64::MIN_POSITIVE` at the source), so
-        // `log10` is finite. The defensive branch absorbs any future
-        // arithmetic drift without panicking.
+        // Defensive: the `fishers_exact` crate can in theory return a
+        // p-value of exactly 0.0 on a degenerate 2×2 contingency table.
+        // `log10(0)` is `-inf` and would propagate through `weighted_degree`
+        // as a `-inf` accumulator (and a downstream NaN once any partner
+        // contributes a finite weight). Clamp to `-log10(f64::MIN_POSITIVE)
+        // ≈ 307.6` instead so the metric stays finite + ranks the
+        // pathological pair as the maximum-strength contributor it
+        // morally is.
         let weight = if p.fisher_p > 0.0 {
             -p.fisher_p.log10()
         } else {
