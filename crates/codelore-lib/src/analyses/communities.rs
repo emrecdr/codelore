@@ -109,9 +109,13 @@ fn assign_node_ids(pairs: &[crate::analyses::coupling::CouplingRow]) -> Vec<Stri
     id_to_path
 }
 
-/// `fisher_two_tail` is guaranteed to produce a strictly-positive p-value
-/// (clamped above `f64::MIN_POSITIVE` at the source). The defensive
-/// branch absorbs any future arithmetic drift without panicking.
+/// Defensive: the `fishers_exact` crate (called via
+/// `analyses::coupling::fisher_two_tail`) can in theory return a p-value
+/// of exactly 0.0 on a degenerate 2×2 contingency table — there's no
+/// upstream clamp. `log10(0)` is `-inf` and would poison every downstream
+/// modularity calculation. Clamp to `-log10(f64::MIN_POSITIVE) ≈ 307.6`
+/// instead: the metric stays finite and the pathological pair ranks as
+/// the maximum-strength contributor it morally is.
 fn edge_weight(fisher_p: f64) -> f64 {
     if fisher_p > 0.0 {
         -fisher_p.log10()
