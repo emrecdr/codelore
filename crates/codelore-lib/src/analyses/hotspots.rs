@@ -31,7 +31,17 @@
 //! Research basis: see `docs/research-foundations.md` entry "hotspots"
 //! (Tornhill, *Software Design X-Rays*, 2018; `McCabe`, *IEEE TSE* 1976
 //! — cyclomatic complexity; Campbell / `SonarSource` 2018 — cognitive
-//! complexity formalisation).
+//! complexity formalisation; Coleman et al., *IEEE Computer* 1994 +
+//! `SEI` 1997 variant — Maintainability Index).
+//!
+//! `mi` (Maintainability Index, SEI variant) is computed by the vendored
+//! `codelore-rca` fork of Mozilla `rust-code-analysis` at ingest. We pull
+//! the **file-level** value by joining `entities` and filtering to
+//! `kind = 'unit'` — that's the rust-code-analysis convention for the
+//! root space (file/module level), whose cumulative Halstead /
+//! Cyclomatic / SLOC inputs produce the file's MI per Coleman 1994.
+//! Per-function MIs are also in `complexity_metrics` but averaging them
+//! is mathematically unsound (MI is non-linear in its inputs).
 
 use duckdb::params;
 
@@ -45,6 +55,11 @@ pub struct HotspotRow {
     pub cognitive: f64,
     pub code_health: f64,
     pub hotspot_score: f64,
+    /// File-level Maintainability Index (SEI variant). `None` when the
+    /// file has no `kind='unit'` complexity entry — typically because
+    /// the language isn't supported by `codelore-rca` or the file was
+    /// skipped for size / clone reasons at ingest.
+    pub mi: Option<f64>,
 }
 
 // PERCENT_RANK() is standard SQL:2003 and is supported by DuckDB ≥0.2.
@@ -91,19 +106,39 @@ pub const SQL: &str = "
         FROM complexity_metrics
         GROUP BY path
     ),
+    -- File-level MI: rust-code-analysis emits one `kind='unit'` entity per
+    -- file (the root space). Its `mi` is computed from the file's cumulative
+    -- Halstead / Cyclomatic / SLOC inputs per Coleman 1994 + SEI 1997. We
+    -- join `entities` to filter by kind because `complexity_metrics` doesn't
+    -- store kind. arg_max picks the most recent unit entry (rev_last_seen
+    -- DESC) to handle the rare case where a file's unit entity was renamed
+    -- across revs without a corresponding lineage rewrite.
+    file_mi AS (
+        SELECT
+            cm.path,
+            arg_max(cm.mi, e.rev_last_seen) AS mi
+        FROM complexity_metrics cm
+        INNER JOIN entities e
+            ON e.path = cm.path AND e.name = cm.name
+        WHERE e.kind = 'unit' AND cm.mi IS NOT NULL
+        GROUP BY cm.path
+    ),
     joined AS (
         SELECT
             fr.path,
             fr.revs,
-            COALESCE(fc.cognitive, 0) AS cognitive
+            COALESCE(fc.cognitive, 0) AS cognitive,
+            fm.mi AS mi
         FROM file_revs fr
         LEFT JOIN file_complexity fc ON fc.path = fr.path
+        LEFT JOIN file_mi fm ON fm.path = fr.path
     ),
     ranked AS (
         SELECT
             path,
             revs,
             cognitive,
+            mi,
             PERCENT_RANK() OVER (ORDER BY revs) AS pr_rev,
             PERCENT_RANK() OVER (ORDER BY cognitive) AS pr_cx,
             CASE
@@ -118,7 +153,8 @@ pub const SQL: &str = "
         revs,
         cognitive,
         GREATEST(0.0, LEAST(100.0, 100.0 * (1.0 - 0.40 * norm_cx))) AS code_health,
-        pr_rev * pr_cx * (100.0 - GREATEST(0.0, LEAST(100.0, 100.0 * (1.0 - 0.40 * norm_cx)))) / 4.0 AS score
+        pr_rev * pr_cx * (100.0 - GREATEST(0.0, LEAST(100.0, 100.0 * (1.0 - 0.40 * norm_cx)))) / 4.0 AS score,
+        mi
     FROM ranked
     ORDER BY score DESC, path ASC
     LIMIT ?
@@ -151,6 +187,7 @@ pub fn run_hotspots(db: &FactsDb, opts: &Options) -> Result<Vec<HotspotRow>> {
                 cognitive: r.get::<_, f64>(2)?,
                 code_health: r.get::<_, f64>(3)?,
                 hotspot_score: r.get::<_, f64>(4)?,
+                mi: r.get::<_, Option<f64>>(5)?,
             })
         })
         .map_err(|e| CodeLoreError::Analysis(format!("query hotspots: {e}")))?;

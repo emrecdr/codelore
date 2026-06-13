@@ -37,15 +37,19 @@ pub fn write_hotspots_markdown<W: Write>(rows: &[HotspotRow], w: &mut W) -> Resu
     header(w, "CodeLore hotspots")?;
     writeln!(
         w,
-        "| Entity | Revisions | Cognitive | Code Health | Score |"
+        "| Entity | Revisions | Cognitive | Code Health | Score | MI |"
     )
     .map_err(CodeLoreError::Io)?;
-    writeln!(w, "|---|---|---|---|---|").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---|---|---|---|---|").map_err(CodeLoreError::Io)?;
     for row in rows {
+        let mi_cell = match row.mi {
+            Some(v) => format!("{v:.2}"),
+            None => "—".to_owned(),
+        };
         writeln!(
             w,
-            "| `{}` | {} | {:.2} | {:.2} | {:.4} |",
-            row.path, row.revisions, row.cognitive, row.code_health, row.hotspot_score
+            "| `{}` | {} | {:.2} | {:.2} | {:.4} | {} |",
+            row.path, row.revisions, row.cognitive, row.code_health, row.hotspot_score, mi_cell
         )
         .map_err(CodeLoreError::Io)?;
     }

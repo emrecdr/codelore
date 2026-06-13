@@ -295,6 +295,7 @@ mod tests {
                 cognitive: 42.0,
                 code_health: 78.0,
                 hotspot_score: 5.5,
+                mi: Some(54.0),
             },
             HotspotRow {
                 path: "src/lib/util.rs".into(),
@@ -302,6 +303,7 @@ mod tests {
                 cognitive: 28.0,
                 code_health: 88.0,
                 hotspot_score: 2.1,
+                mi: Some(82.5),
             },
         ]
     }

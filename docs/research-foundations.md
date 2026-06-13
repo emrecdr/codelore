@@ -393,7 +393,7 @@ including in CI dashboards as an "is the data healthy?" panel.
 
 ## Modern additions ★ (no code-maat equivalent)
 
-### `hotspots` ★ — Revisions × complexity
+### `hotspots` ★ — Revisions × complexity (+ Maintainability Index)
 
 **Citation**: Tornhill, A. (2018). *Software Design X-Rays.* Chapter
 on "Hotspots." Builds on:
@@ -403,24 +403,75 @@ on "Hotspots." Builds on:
 - Cognitive complexity formalised by SonarSource (G. Ann Campbell,
   2018, *Cognitive Complexity: A New Way of Measuring Understandability*
   whitepaper).
+- Coleman, D., Ash, D., Lowther, B., & Oman, P. (1994). "Using Metrics
+  to Evaluate Software System Maintainability." *IEEE Computer*,
+  **27**(8), pages 44–49
+  ([doi:10.1109/2.303623](https://doi.org/10.1109/2.303623)) — the
+  original Maintainability Index formula `171 − 5.2·ln(V) − 0.23·CC −
+  16.2·ln(SLOC)` where `V` is Halstead volume, `CC` is cyclomatic
+  complexity, `SLOC` is source lines of code.
+- Software Engineering Institute (1997). The SEI variant adds a
+  `+50·sin(√(2.4·comment%))` modifier to credit well-commented
+  files. CodeLore emits the SEI variant via `codelore-rca`'s
+  `mi.rs::Stats::mi_sei`.
 
-**What the signal means**: The product of how *often* a file changes
-(revisions) and how *complex* it is (combined cyclomatic + cognitive)
-produces the strongest single prioritisation signal in CodeLore. High
-hotspots are where defect risk and refactoring ROI both concentrate.
+**What the signal means**: The hotspot ranking combines *how often* a
+file changes (revisions) with *how complex* it is (combined cyclomatic +
+cognitive). The Maintainability Index column is a complementary, more
+literature-canonical signal: a single composite score over Halstead
+volume + cyclomatic + SLOC that's been standardized since 1994 and
+calibrated by Microsoft Visual Studio + SonarQube + the SEI as the
+threshold-banded scale practitioners already know.
 
 **What "good values" look like**:
-- The metric is repo-relative — the **top 10 entries** are your
+- The hotspot metric is repo-relative — the **top 10 entries** are your
   refactoring backlog.
 - Hotspots with **high revisions but low complexity** are well-managed
   hot paths; investigate the inverse first.
+- The **Maintainability Index** (SEI variant) is on an industry-standard
+  0–100 scale (capped at 100 in CodeLore via Microsoft's normalization):
+  - **≥ 85**: high maintainability
+  - **65 – 85**: moderate maintainability
+  - **< 65**: low maintainability — investigate
 
 **Implementation**: `crates/codelore-lib/src/analyses/hotspots.rs`
-([source](../crates/codelore-lib/src/analyses/hotspots.rs))
+([source](../crates/codelore-lib/src/analyses/hotspots.rs)). The
+file-level MI is sourced from `complexity_metrics.mi` via a JOIN with
+`entities` filtered to `kind='unit'` — that's `rust-code-analysis`'s
+convention for the root space (file/module level) whose cumulative
+Halstead / Cyclomatic / SLOC inputs produce the file-level MI per
+Coleman 1994. Per-function MIs are also ingested but are not aggregated
+to the file (MI is non-linear in its inputs, so AVG over functions is
+mathematically unsound).
 
 **Why it matters**: The signature CodeLore output. CodeLore's
 SARIF-format hotspots integrate directly with GitHub code scanning,
-turning the analysis into an in-PR comment without any glue code.
+turning the analysis into an in-PR comment without any glue code. The
+MI column is CodeLore's bridge to the static-analysis tradition: every
+practitioner reading a SonarQube / SEI / Visual Studio report already
+knows what `mi: 54.0` means.
+
+**Related research** (for the v0.5.x roadmap items that extend this):
+- Ben Khalfallah, H. (2025). "Code Health Meter: A Quantitative and
+  Graph-Theoretic Foundation for Automated Code Quality and Architecture
+  Assessment." *ACM Transactions on Software Engineering and Methodology
+  (TOSEM)*
+  ([doi:10.1145/3737670](https://doi.org/10.1145/3737670),
+  [Zenodo](https://zenodo.org/badge/DOI/10.5281/zenodo.15501897.svg))
+  — surveys MI alongside Louvain modularity and centrality on the
+  *static* dependency graph for JS/TS. CodeLore's v0.5.x roadmap adapts
+  Louvain to the *behavioral* change-coupling graph (different signal,
+  same algorithm).
+- Newman, M. E. J. (2006). "Modularity and community structure in
+  networks." *PNAS*, **103**(23), pages 8577–8582
+  ([doi:10.1073/pnas.0601602103](https://doi.org/10.1073/pnas.0601602103))
+  — modularity score (Q) foundation, planned for v0.5.x.
+- Blondel, V. D., Guillaume, J.-L., Lambiotte, R., & Lefebvre, E.
+  (2008). "Fast unfolding of communities in large networks."
+  *Journal of Statistical Mechanics: Theory and Experiment*,
+  P10008
+  ([doi:10.1088/1742-5468/2008/10/P10008](https://doi.org/10.1088/1742-5468/2008/10/P10008))
+  — the Louvain algorithm itself, planned for v0.5.x.
 
 ---
 

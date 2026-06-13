@@ -105,33 +105,51 @@ fn build_result(row: &HotspotRow, repo_root: &str) -> serde_json::Value {
         row.path.trim_start_matches('/')
     );
 
+    // Build the message text and properties bag with MI included only when
+    // known. SARIF consumers (GitHub Code Scanning) prefer omitting absent
+    // properties over surfacing `null` cells in their UI.
+    let (message_text, mi_suffix) = match row.mi {
+        Some(v) => (
+            format!(
+                "Hotspot '{}': score={:.3}, code_health={:.1}, revisions={}, cognitive={:.1}, mi={:.1}",
+                row.path, row.hotspot_score, row.code_health, row.revisions, row.cognitive, v
+            ),
+            Some(v),
+        ),
+        None => (
+            format!(
+                "Hotspot '{}': score={:.3}, code_health={:.1}, revisions={}, cognitive={:.1}",
+                row.path, row.hotspot_score, row.code_health, row.revisions, row.cognitive
+            ),
+            None,
+        ),
+    };
+
+    let mut properties = json!({
+        "security-severity": security_severity,
+        "codelore/revs": row.revisions,
+        "codelore/cognitive": row.cognitive,
+        "codelore/codehealth": row.code_health,
+        "codelore/score": row.hotspot_score,
+        "tags": ["behavioral", "hotspot"]
+    });
+    if let Some(mi) = mi_suffix {
+        properties["codelore/mi"] = json!(mi);
+    }
+
     json!({
         "ruleId": RULE_ID,
         "level": level,
-        "message": {
-            "text": format!(
-                "Hotspot '{}': score={:.3}, code_health={:.1}, revisions={}, cognitive={:.1}",
-                row.path, row.hotspot_score, row.code_health, row.revisions, row.cognitive
-            )
-        },
+        "message": { "text": message_text },
         "locations": [{
             "physicalLocation": {
-                "artifactLocation": {
-                    "uri": artifact_uri
-                }
+                "artifactLocation": { "uri": artifact_uri }
             }
         }],
         "partialFingerprints": {
             "primaryLocationLineHash": fp
         },
-        "properties": {
-            "security-severity": security_severity,
-            "codelore/revs": row.revisions,
-            "codelore/cognitive": row.cognitive,
-            "codelore/codehealth": row.code_health,
-            "codelore/score": row.hotspot_score,
-            "tags": ["behavioral", "hotspot"]
-        }
+        "properties": properties
     })
 }
 

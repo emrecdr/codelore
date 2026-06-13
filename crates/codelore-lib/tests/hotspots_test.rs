@@ -45,6 +45,34 @@ fn hotspots_for_tiny_repo() {
     }
 }
 
+/// The hotspots query joins `complexity_metrics` × `entities` on `kind='unit'`
+/// to surface the file-level Maintainability Index (Coleman 1994 / SEI 1997
+/// variant computed in `codelore-rca`). For the tiny Rust fixture, at least
+/// one row should carry a non-null finite MI — the JOIN being broken would
+/// silently return all-None.
+#[test]
+fn hotspots_surface_maintainability_index_for_rust_files() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let repo = GixRepo::open(tiny.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: tiny.dir.path().to_path_buf(),
+        min_revs: 1,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let rows = run_hotspots(&db, &opts).expect("run");
+    let any_finite_mi = rows.iter().any(|r| matches!(r.mi, Some(v) if v.is_finite()));
+    assert!(
+        any_finite_mi,
+        "expected ≥1 Rust hotspot row with a finite MI; got rows: {:?}",
+        rows.iter()
+            .map(|r| (r.path.as_str(), r.mi))
+            .collect::<Vec<_>>()
+    );
+}
+
 /// `FactsDb::explain_sql` returns a non-empty `DuckDB` optimizer plan for
 /// the hotspots SQL. The CLI's `--explain` flag routes through this
 /// helper; missing or empty plan output would mean `--explain` silently

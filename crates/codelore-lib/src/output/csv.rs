@@ -37,17 +37,25 @@ pub fn write_revisions_csv<W: Write>(rows: &[(String, u32)], w: &mut W) -> Resul
 }
 
 pub fn write_hotspots_csv<W: Write>(rows: &[HotspotRow], w: &mut W) -> Result<()> {
-    writeln!(w, "entity,revisions,cognitive,code-health,hotspot-score")
+    // `mi` is the SEI-variant Maintainability Index per Coleman 1994 / SEI 1997.
+    // Empty cell when the file has no `kind='unit'` complexity entry (language
+    // not yet supported by `codelore-rca`, or file skipped at ingest).
+    writeln!(w, "entity,revisions,cognitive,code-health,hotspot-score,mi")
         .map_err(CodeLoreError::Io)?;
     for row in rows {
+        let mi_cell = match row.mi {
+            Some(v) => format!("{v:.2}"),
+            None => String::new(),
+        };
         writeln!(
             w,
-            "{},{},{:.2},{:.2},{:.4}",
+            "{},{},{:.2},{:.2},{:.4},{}",
             quote_if_needed(&row.path),
             row.revisions,
             row.cognitive,
             row.code_health,
-            row.hotspot_score
+            row.hotspot_score,
+            mi_cell
         )
         .map_err(CodeLoreError::Io)?;
     }
