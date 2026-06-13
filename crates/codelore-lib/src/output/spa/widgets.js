@@ -395,7 +395,12 @@
     }
 
     function renderHeader() {
-      let html = '<table><thead><tr>';
+      // DaisyUI `table table-zebra` provides striped rows + consistent
+      // typography on top of the inline `.table-container table { ... }`
+      // rules. The two co-exist: inline rules win on background-color
+      // (var(--bg-elev-2)) so v0.4.x continuity holds; DaisyUI's font
+      // tokens layer on top.
+      let html = '<table class="table table-zebra"><thead><tr>';
       for (var i = 0; i < COLUMNS.length; i++) {
         const c = COLUMNS[i];
         const active = (c.key === sortKey);
@@ -436,21 +441,38 @@
       var html = '';
       for (var i = renderedRows; i < next; i++) {
         const r = filteredView[i];
-        // MI cell: number + band emoji when mi_rank is finite. Empty
-        // when language unsupported by codelore-rca.
+        // MI cell: number + DaisyUI band badge (success / warning /
+        // error) when mi_rank is finite. Empty when language is
+        // unsupported by codelore-rca. The badge replaces the v0.4.x
+        // emoji band cue with a colour-coded pill — same triad
+        // (top/mid/bottom quartile) but accessible to screen readers
+        // and themable through DaisyUI's `--color-success` /
+        // `--color-warning` / `--color-error` tokens.
         let miCell = '';
         if (typeof r.mi === 'number' && isFinite(r.mi)) {
-          let bandEmoji = '';
+          let bandBadge = '';
           if (typeof r.mi_rank === 'number' && isFinite(r.mi_rank)) {
-            bandEmoji = r.mi_rank >= 0.75 ? ' 🟢'
-              : r.mi_rank >= 0.25 ? ' 🟡' : ' 🔴';
+            // Complete class-name literals (not string-concatenation)
+            // so the Tailwind v4 pruner can see each variant during
+            // `@source` scan of widgets.js — `'badge-' + kind` would
+            // hide the suffix from the static scan and the variants
+            // would drop out of the compiled CSS bundle.
+            if (r.mi_rank >= 0.75) {
+              bandBadge = ' <span class="badge badge-success badge-sm" title="MI band: High">High</span>';
+            } else if (r.mi_rank >= 0.25) {
+              bandBadge = ' <span class="badge badge-warning badge-sm" title="MI band: Mid">Mid</span>';
+            } else {
+              bandBadge = ' <span class="badge badge-error badge-sm" title="MI band: Low">Low</span>';
+            }
           }
-          miCell = r.mi.toFixed(1) + bandEmoji;
+          miCell = r.mi.toFixed(1) + bandBadge;
         }
         // AI cell: percentage rendered as X% (rounded — table is dense,
-        // decimal point would crowd).
+        // decimal point would crowd). Wrapped in a DaisyUI outline
+        // badge so the AI-attribution signal reads consistently with
+        // the MI band badge above.
         const aiCell = (typeof r.ai_pct === 'number' && isFinite(r.ai_pct))
-          ? Math.round(r.ai_pct) + '%'
+          ? '<span class="badge badge-outline badge-sm">' + Math.round(r.ai_pct) + '%</span>'
           : '';
         html += '<tr data-path="' + escapeHtml(r.path) + '" class="hotspot-row" style="cursor:pointer">' +
           '<td class="path">' + escapeHtml(r.path) + '</td>' +
