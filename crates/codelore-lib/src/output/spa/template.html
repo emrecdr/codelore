@@ -60,9 +60,11 @@
       margin: 0 auto;
     }
     .widget {
-      background: var(--bg-elev);
-      border: 1px solid var(--border);
-      border-radius: 8px;
+      /* PR-7: `background` / `border` / `border-radius` removed —
+         DaisyUI's `card bg-base-200 shadow-lg` classes on the section
+         now provide elevation, fill, and rounded corners. `padding`
+         stays since DaisyUI's bare `.card` expects a `.card-body`
+         child for padding, which we don't restructure to. */
       padding: 20px;
     }
     .widget h2 {
@@ -169,10 +171,11 @@
       gap: 12px;
     }
     .kpi-tile {
-      background: var(--bg-elev-2);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 14px 16px;
+      /* PR-7: `background` / `border` / `border-radius` / `padding`
+         removed — DaisyUI's `stat` class (added by
+         widgets.js::renderKpiTiles) now provides them. The empty
+         rule + selector is kept rather than deleted so any future
+         polish has a targeted home. */
     }
     .kpi-tile .kpi-label {
       color: var(--fg-dim);
@@ -333,17 +336,16 @@
       font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     }
     .drawer-close {
-      background: transparent;
-      border: 1px solid var(--border);
-      color: var(--fg);
+      /* PR-7: `background` / `border` / `color` / `border-radius`
+         removed — DaisyUI's `btn btn-ghost btn-sm` classes (added in
+         PR-4's drawer markup) now provide them, including the hover
+         state. The sizing tokens stay for click-target consistency
+         with the v0.4.x drawer-close affordance. */
       width: 28px;
       height: 28px;
-      border-radius: 4px;
       font-size: 18px;
-      cursor: pointer;
       line-height: 1;
     }
-    .drawer-close:hover { border-color: var(--accent); }
     .drawer-body {
       padding: 20px;
       overflow-y: auto;
@@ -456,7 +458,7 @@
        auto; }` rule sets — DaisyUI doesn't override either property,
        so the two co-exist as a redundant guard. -->
   <main class="max-w-screen-2xl mx-auto">
-    <section class="widget kpi-row" id="widget-kpi-tiles">
+    <section class="widget card bg-base-200 shadow-lg kpi-row" id="widget-kpi-tiles">
       <h2>Codebase at a glance</h2>
       <div class="subtitle">
         Summary metrics across the repo. KPI cards are computed at
@@ -466,7 +468,7 @@
       <div id="widget-kpi-tiles-body" class="kpi-grid"></div>
     </section>
 
-    <section class="widget differentiator" id="widget-knowledge-islands">
+    <section class="widget card bg-base-200 shadow-lg differentiator" id="widget-knowledge-islands">
       <h2>Knowledge islands <span class="badge">CodeLore differentiator</span></h2>
       <div class="subtitle">
         Files whose primary author has departed and where no
@@ -478,7 +480,7 @@
       <div id="widget-knowledge-islands-body" class="table-container"></div>
     </section>
 
-    <section class="widget" id="widget-hotspot-circle-pack">
+    <section class="widget card bg-base-200 shadow-lg" id="widget-hotspot-circle-pack">
       <h2>Hotspots</h2>
       <div class="subtitle">
         Files sized by churn (revisions). Toggle the color mapping
@@ -494,7 +496,7 @@
       <div id="widget-hotspot-circle-pack-body" class="widget-body"></div>
     </section>
 
-    <section class="widget" id="widget-trends">
+    <section class="widget card bg-base-200 shadow-lg" id="widget-trends">
       <h2>Trends</h2>
       <div class="subtitle">
         Monthly revision counts for the top-10 hotspot files.
@@ -503,7 +505,7 @@
       <div id="widget-trends-body" class="widget-body"></div>
     </section>
 
-    <section class="widget" id="widget-calendar-heatmap">
+    <section class="widget card bg-base-200 shadow-lg" id="widget-calendar-heatmap">
       <h2>Commit activity</h2>
       <div class="subtitle">
         Per-day commit volume across the analysed history.
@@ -511,7 +513,7 @@
       <div id="widget-calendar-heatmap-body" class="widget-body" style="height: 260px;"></div>
     </section>
 
-    <section class="widget" id="widget-xray-sunburst">
+    <section class="widget card bg-base-200 shadow-lg" id="widget-xray-sunburst">
       <h2>Function X-Ray <span class="badge">CodeLore-only — CodeScene paywalls this</span></h2>
       <div class="subtitle">
         Function-level cognitive complexity. Inner ring = top-level
@@ -521,7 +523,7 @@
       <div id="widget-xray-sunburst-body" class="widget-body"></div>
     </section>
 
-    <section class="widget" id="widget-hotspot-table">
+    <section class="widget card bg-base-200 shadow-lg" id="widget-hotspot-table">
       <h2>Hotspot table</h2>
       <div class="subtitle">
         Sortable drill-down view of every hotspot row. Click a column
@@ -540,7 +542,7 @@
       <div id="widget-hotspot-table-body" class="table-container"></div>
     </section>
 
-    <section class="widget" id="widget-coupling-sankey">
+    <section class="widget card bg-base-200 shadow-lg" id="widget-coupling-sankey">
       <h2>Change coupling</h2>
       <div class="subtitle">
         Files that change together at Fisher-significant rates. Wider
