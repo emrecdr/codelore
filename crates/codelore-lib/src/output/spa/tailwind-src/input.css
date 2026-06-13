@@ -1,23 +1,34 @@
 /* Source CSS for the v0.5.x SPA dashboard.
  *
  * This file is the INPUT to the Tailwind v4 standalone CLI; the
- * compiled artifact `../tailwind.daisyui.min.css` is what `build.rs`
- * inlines into the rendered HTML. Re-generate via:
+ * compiled artifact `../tailwind.daisyui.min.css` is what
+ * `output/spa.rs` inlines into the rendered HTML. Re-generate via:
  *
  *     just spa-css-rebuild
  *
- * (See `crates/codelore-lib/src/output/spa/tailwind-src/README.md` for
- * the one-time CLI install + rebuild workflow.)
+ * (See `README.md` in this directory for the one-time CLI install +
+ * the DaisyUI `.mjs` re-download workflow.)
  *
- * Plugin order matters: the `@plugin "daisyui"` directive registers
- * DaisyUI 5's component layer (cards, drawer, badges, tables, stats)
- * on top of the `@import "tailwindcss"` core. Anything below that
- * lives in `@layer components`/`@layer utilities` per Tailwind v4
- * conventions.
+ * Plugin path semantics: the standalone CLI does NOT resolve
+ * `@plugin "daisyui"` to an npm package — it expects a relative path
+ * to a plugin source file. The two DaisyUI bundles (`daisyui.mjs` +
+ * `daisyui-theme.mjs`) sit next to this file; DaisyUI 5 ships its
+ * plugin code as `.mjs`. Per the official standalone-CLI install
+ * doc: <https://daisyui.com/docs/install/standalone/>.
  */
 
 @import "tailwindcss";
-@plugin "daisyui";
+
+/* Don't treat the plugin source files as content to scan for class
+ * names — they contain code, not markup. Without these `@source not`
+ * exclusions the CLI extracts class-shaped substrings from DaisyUI's
+ * compiled JavaScript, bloating the output with utility classes
+ * nothing references. */
+@source not "./daisyui.mjs";
+@source not "./daisyui-theme.mjs";
+
+@plugin "./daisyui.mjs";
+@plugin "./daisyui-theme.mjs";
 
 /* The standalone CLI scans `@source` paths for class usage. Only
  * `template.html` carries the class soup that needs pruning; the
@@ -27,8 +38,7 @@
 
 /* CodeLore-specific accent overrides — keep the brand colour from the
  * v0.4.x palette so the dashboard stays visually continuous with
- * `--format html`. DaisyUI's `corporate` theme is the closest match
- * out-of-the-box; brand specifics layer on top. */
+ * `--format html`. */
 @theme {
     --color-codelore-accent: #2ea44f;
     --color-codelore-accent-warn: #f59e0b;
