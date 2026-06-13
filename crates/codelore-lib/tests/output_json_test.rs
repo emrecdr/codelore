@@ -12,6 +12,7 @@ fn json_hotspots_emits_array() {
         hotspot_score: 0.42,
         mi: Some(72.0),
         mi_rank: None,
+        ai_pct: None,
     }];
     let mut buf = Vec::new();
     json::write_hotspots_json(&rows, &mut Cursor::new(&mut buf)).expect("write");

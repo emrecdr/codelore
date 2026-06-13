@@ -148,6 +148,11 @@ fn build_result(row: &HotspotRow, repo_root: &str) -> serde_json::Value {
     if let Some(band) = band_str {
         properties["codelore/mi-band"] = json!(band);
     }
+    if let Some(pct) = row.ai_pct
+        && pct.is_finite()
+    {
+        properties["codelore/ai-pct"] = json!(pct);
+    }
 
     json!({
         "ruleId": RULE_ID,

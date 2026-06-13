@@ -94,6 +94,19 @@ fn write_at_a_glance<W: Write>(dash: &SpaDashboard, w: &mut W) -> Result<()> {
         )
         .map_err(io)?;
     }
+    // Repo-wide AI authorship percentage: AVG of per-file AI percentages
+    // across hotspot rows that have a known value. Skip when no AI signal
+    // is present (e.g. tiny fixture with no commits classified).
+    let ai_values: Vec<f64> = dash
+        .hotspots
+        .iter()
+        .filter_map(|r| r.ai_pct.filter(|p| p.is_finite()))
+        .collect();
+    if !ai_values.is_empty() {
+        #[allow(clippy::cast_precision_loss)]
+        let avg = ai_values.iter().sum::<f64>() / (ai_values.len() as f64);
+        writeln!(w, "| AI authorship (avg across files) | {avg:.1}% |").map_err(io)?;
+    }
     let island_count = dash.knowledge_islands.len();
     if island_count > 0 {
         writeln!(w, "| Knowledge islands | {island_count} |").map_err(io)?;
@@ -320,6 +333,7 @@ mod tests {
                     hotspot_score: 9.7,
                     mi: Some(-137.0),
                     mi_rank: Some(0.03),
+                    ai_pct: None,
                 },
                 HotspotRow {
                     path: "src/lib.rs".into(),
@@ -329,6 +343,7 @@ mod tests {
                     hotspot_score: 3.9,
                     mi: Some(50.0),
                     mi_rank: Some(0.7),
+                    ai_pct: None,
                 },
             ],
             summary: vec![

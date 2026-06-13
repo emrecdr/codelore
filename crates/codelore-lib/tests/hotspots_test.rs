@@ -73,6 +73,43 @@ fn hotspots_surface_maintainability_index_for_rust_files() {
     );
 }
 
+/// The hotspots SQL also surfaces an `ai_pct` column: share of commits
+/// touching a file that carry the `ai-assisted` or `ai-authored`
+/// attribution from `identity::bots`. Every hotspot row should have a
+/// non-null `ai_pct` (in `[0, 100]`) — the LEFT JOIN with `file_ai` is
+/// over the same node set as `file_revs`, so the only way to get None
+/// here would be if the JOIN got silently broken (column collision,
+/// rename drift, etc).
+#[test]
+fn hotspots_surface_ai_attribution_percentage() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let repo = GixRepo::open(tiny.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: tiny.dir.path().to_path_buf(),
+        min_revs: 1,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let rows = run_hotspots(&db, &opts).expect("run");
+    assert!(!rows.is_empty(), "fixture should produce ≥1 hotspot row");
+    for row in &rows {
+        match row.ai_pct {
+            Some(p) => assert!(
+                (0.0..=100.0).contains(&p) && p.is_finite(),
+                "ai_pct out of range for {}: {p}",
+                row.path
+            ),
+            None => panic!(
+                "ai_pct should be Some on every hotspot row (LEFT JOIN over the \
+                 same node set as file_revs); got None on {}",
+                row.path
+            ),
+        }
+    }
+}
+
 /// `FactsDb::explain_sql` returns a non-empty `DuckDB` optimizer plan for
 /// the hotspots SQL. The CLI's `--explain` flag routes through this
 /// helper; missing or empty plan output would mean `--explain` silently

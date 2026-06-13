@@ -66,6 +66,13 @@ pub struct HotspotRow {
     /// see that module's docs for why the bands are percentile-based
     /// rather than absolute Coleman/SEI thresholds.
     pub mi_rank: Option<f64>,
+    /// Percentage of commits touching this file that carry an AI-attribution
+    /// signal (`ai-assisted` or `ai-authored` per `identity::bots`). Range
+    /// `[0, 100]`. `None` when no commits touched the file (shouldn't
+    /// happen in practice since hotspots filters to `revs >= min_revs`, but
+    /// defensive against schema drift). Unlike MI, this is a true
+    /// percentage so absolute interpretation is meaningful across repos.
+    pub ai_pct: Option<f64>,
 }
 
 // PERCENT_RANK() is standard SQL:2003 and is supported by DuckDB ≥0.2.
@@ -129,6 +136,21 @@ pub const SQL: &str = "
         WHERE e.kind = 'unit' AND cm.mi IS NOT NULL
         GROUP BY cm.path
     ),
+    -- Per-file AI-attribution percentage: share of commits touching this
+    -- file that carry an AI-attribution signal (ai-assisted or
+    -- ai-authored). NULLIF guards against div-by-zero on the empty join
+    -- (defensive; file_revs already filters revs >= min_revs).
+    -- Categories come from identity::bots — schema is stable.
+    file_ai AS (
+        SELECT
+            ch.path,
+            COUNT(CASE WHEN co.ai_attribution IN ('ai-assisted', 'ai-authored')
+                       THEN 1 END) * 100.0
+                / NULLIF(COUNT(ch.rev), 0) AS ai_pct
+        FROM changes ch
+        INNER JOIN commits co ON co.rev = ch.rev
+        GROUP BY ch.path
+    ),
     -- Repo-relative MI percentile rank, computed ONLY over files that
     -- actually have a `mi` value — files without a `kind='unit'` entry
     -- (unsupported language / skipped file) MUST NOT skew the
@@ -149,10 +171,12 @@ pub const SQL: &str = "
             fr.revs,
             COALESCE(fc.cognitive, 0) AS cognitive,
             fmr.mi AS mi,
-            fmr.mi_rank AS mi_rank
+            fmr.mi_rank AS mi_rank,
+            fa.ai_pct AS ai_pct
         FROM file_revs fr
         LEFT JOIN file_complexity fc ON fc.path = fr.path
         LEFT JOIN file_mi_ranked fmr ON fmr.path = fr.path
+        LEFT JOIN file_ai fa ON fa.path = fr.path
     ),
     ranked AS (
         SELECT
@@ -161,6 +185,7 @@ pub const SQL: &str = "
             cognitive,
             mi,
             mi_rank,
+            ai_pct,
             PERCENT_RANK() OVER (ORDER BY revs) AS pr_rev,
             PERCENT_RANK() OVER (ORDER BY cognitive) AS pr_cx,
             CASE
@@ -177,7 +202,8 @@ pub const SQL: &str = "
         GREATEST(0.0, LEAST(100.0, 100.0 * (1.0 - 0.40 * norm_cx))) AS code_health,
         pr_rev * pr_cx * (100.0 - GREATEST(0.0, LEAST(100.0, 100.0 * (1.0 - 0.40 * norm_cx)))) / 4.0 AS score,
         mi,
-        mi_rank
+        mi_rank,
+        ai_pct
     FROM ranked
     ORDER BY score DESC, path ASC
     LIMIT ?
@@ -212,6 +238,7 @@ pub fn run_hotspots(db: &FactsDb, opts: &Options) -> Result<Vec<HotspotRow>> {
                 hotspot_score: r.get::<_, f64>(4)?,
                 mi: r.get::<_, Option<f64>>(5)?,
                 mi_rank: r.get::<_, Option<f64>>(6)?,
+                ai_pct: r.get::<_, Option<f64>>(7)?,
             })
         })
         .map_err(|e| CodeLoreError::Analysis(format!("query hotspots: {e}")))?;

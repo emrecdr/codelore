@@ -311,6 +311,7 @@ mod tests {
                 mi: Some(54.0),
                 // Bottom quartile → Low band when MiRollup runs over this set.
                 mi_rank: Some(0.0),
+                ai_pct: None,
             },
             HotspotRow {
                 path: "src/lib/util.rs".into(),
@@ -321,6 +322,7 @@ mod tests {
                 mi: Some(82.5),
                 // Top quartile → High band.
                 mi_rank: Some(1.0),
+                ai_pct: None,
             },
         ]
     }

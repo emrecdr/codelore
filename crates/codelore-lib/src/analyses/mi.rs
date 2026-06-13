@@ -160,6 +160,7 @@ mod tests {
             hotspot_score: 0.0,
             mi,
             mi_rank: rank,
+            ai_pct: None,
         };
         let rows = vec![
             make("a.rs", Some(80.0), Some(0.90)), // High
@@ -187,6 +188,7 @@ mod tests {
             hotspot_score: 0.0,
             mi: Some(50.0),
             mi_rank: Some(f64::NAN),
+            ai_pct: None,
         };
         let r = MiRollup::from_hotspots(std::slice::from_ref(&row));
         assert_eq!(r.unknown, 1);

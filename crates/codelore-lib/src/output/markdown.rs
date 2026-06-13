@@ -39,12 +39,15 @@ pub fn write_hotspots_markdown<W: Write>(rows: &[HotspotRow], w: &mut W) -> Resu
     // file-level MI; `—` otherwise. Bands are repo-relative — see
     // `crates/codelore-lib/src/analyses/mi.rs` for why we don't use the
     // literature's absolute Coleman/SEI thresholds.
+    //
+    // The AI cell is the share of commits with AI-attribution signal
+    // (ai-assisted | ai-authored), rendered as `X.X%` or `—`.
     writeln!(
         w,
-        "| Entity | Revisions | Cognitive | Code Health | Score | MI |"
+        "| Entity | Revisions | Cognitive | Code Health | Score | MI | AI % |"
     )
     .map_err(CodeLoreError::Io)?;
-    writeln!(w, "|---|---|---|---|---|---|").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---|---|---|---|---|---|").map_err(CodeLoreError::Io)?;
     for row in rows {
         let mi_cell = match (row.mi, row.mi_rank) {
             (Some(v), Some(rank)) if rank.is_finite() => {
@@ -56,10 +59,20 @@ pub fn write_hotspots_markdown<W: Write>(rows: &[HotspotRow], w: &mut W) -> Resu
             (Some(v), _) => format!("{v:.2}"),
             (None, _) => "—".to_owned(),
         };
+        let ai_cell = match row.ai_pct {
+            Some(v) if v.is_finite() => format!("{v:.1}%"),
+            _ => "—".to_owned(),
+        };
         writeln!(
             w,
-            "| `{}` | {} | {:.2} | {:.2} | {:.4} | {} |",
-            row.path, row.revisions, row.cognitive, row.code_health, row.hotspot_score, mi_cell
+            "| `{}` | {} | {:.2} | {:.2} | {:.4} | {} | {} |",
+            row.path,
+            row.revisions,
+            row.cognitive,
+            row.code_health,
+            row.hotspot_score,
+            mi_cell,
+            ai_cell
         )
         .map_err(CodeLoreError::Io)?;
     }

@@ -44,9 +44,13 @@ pub fn write_hotspots_csv<W: Write>(rows: &[HotspotRow], w: &mut W) -> Result<()
     // see `crates/codelore-lib/src/analyses/mi.rs` for the empirical
     // calibration that motivates relative bands over absolute Coleman/SEI
     // thresholds. Cells are empty when `mi` is unknown.
+    //
+    // `ai-pct` is the share of commits touching this file that carry an
+    // AI-attribution signal (ai-assisted | ai-authored per identity::bots).
+    // Range [0, 100]; absolute interpretation is meaningful across repos.
     writeln!(
         w,
-        "entity,revisions,cognitive,code-health,hotspot-score,mi,mi-rank,mi-band"
+        "entity,revisions,cognitive,code-health,hotspot-score,mi,mi-rank,mi-band,ai-pct"
     )
     .map_err(CodeLoreError::Io)?;
     for row in rows {
@@ -61,9 +65,13 @@ pub fn write_hotspots_csv<W: Write>(rows: &[HotspotRow], w: &mut W) -> Result<()
             ),
             _ => (String::new(), String::new()),
         };
+        let ai_cell = match row.ai_pct {
+            Some(v) if v.is_finite() => format!("{v:.2}"),
+            _ => String::new(),
+        };
         writeln!(
             w,
-            "{},{},{:.2},{:.2},{:.4},{},{},{}",
+            "{},{},{:.2},{:.2},{:.4},{},{},{},{}",
             quote_if_needed(&row.path),
             row.revisions,
             row.cognitive,
@@ -71,7 +79,8 @@ pub fn write_hotspots_csv<W: Write>(rows: &[HotspotRow], w: &mut W) -> Result<()
             row.hotspot_score,
             mi_cell,
             rank_cell,
-            band_cell
+            band_cell,
+            ai_cell
         )
         .map_err(CodeLoreError::Io)?;
     }

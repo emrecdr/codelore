@@ -204,11 +204,18 @@
               const author = primaryAuthorByPath[n.data.fullPath];
               leafColor = author ? authorPalette[author] : 'rgba(140, 140, 140, 0.55)';
             } else if (colorMode === 'ai') {
-              // No per-file AI signal on HotspotRow today — fall back
-              // to cognitive heatmap with a footer hint. Once the
-              // ai_attribution rollup ships, swap this branch to use
-              // the per-path AI band.
-              leafColor = heatmapColor(ratio);
+              // Per-file AI-attribution ratio: share of commits
+              // touching this file that carry an ai-assisted /
+              // ai-authored signal. Continuous heatmap from pale
+              // (no AI) to red (all AI). Files with no MI/AI data
+              // (binary, unsupported language) render as neutral
+              // grey instead of misleading "0% AI".
+              const aiPct = m && typeof m.ai_pct === 'number' ? m.ai_pct : null;
+              if (aiPct === null) {
+                leafColor = 'rgba(140, 140, 140, 0.55)';
+              } else {
+                leafColor = heatmapColor(Math.max(0, Math.min(1, aiPct / 100)));
+              }
             } else {
               leafColor = heatmapColor(ratio);
             }
