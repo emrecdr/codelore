@@ -19,10 +19,8 @@ fn sqlite_full_dump_roundtrip() {
     let path = dir.path().join("dump.db");
     sqlite::write_full_fact_store_sqlite(&db, &opts, &path).expect("write");
 
-    // Verify the file exists and contains the 7 tables.
     assert!(path.exists(), "sqlite file should be created");
 
-    // Verify via DuckDB (cleaner than pulling rusqlite in just for this test)
     let reader = Connection::open_in_memory().expect("open");
     let path_str = path.display().to_string();
     reader
@@ -34,4 +32,22 @@ fn sqlite_full_dump_roundtrip() {
         .query_row("SELECT COUNT(*) FROM db.commits", [], |r| r.get(0))
         .expect("count");
     assert_eq!(commit_count, 5, "tiny_repo has 5 commits");
+
+    // Every base table in schema_v1.sql must round-trip. The clones table
+    // was silently omitted before this regression test was added.
+    for table in [
+        "commits",
+        "changes",
+        "hunks",
+        "entities",
+        "complexity_metrics",
+        "author_aliases",
+        "provenance",
+        "clones",
+    ] {
+        let sql = format!("SELECT COUNT(*) FROM db.{table}");
+        reader
+            .query_row::<i64, _, _>(&sql, [], |r| r.get(0))
+            .unwrap_or_else(|e| panic!("table {table} missing from sqlite dump: {e}"));
+    }
 }
