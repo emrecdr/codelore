@@ -1,7 +1,11 @@
 //! `SQLite` output via `DuckDB` ATTACH ... (TYPE SQLITE).
 //!
-//! Dumps the entire fact store (7 tables) to a `SQLite` file. Plan 5 ships
-//! the full dump; future plans may add per-analysis filtered dumps.
+//! Dumps every base table in `schema_v1.sql` (currently: `commits`,
+//! `changes`, `hunks`, `entities`, `complexity_metrics`, `author_aliases`,
+//! `provenance`, `clones`) to a `SQLite` file. When a new base table is
+//! added to `schema_v1.sql`, it MUST be appended here too — otherwise
+//! consumers of the `SQLite` export silently lose that data with no error
+//! at write time.
 
 use crate::facts::FactsDb;
 use crate::{CodeLoreError, Options, Result};
@@ -22,6 +26,7 @@ pub fn write_full_fact_store_sqlite(db: &FactsDb, _opts: &Options, path: &Path) 
          CREATE TABLE sink.complexity_metrics  AS SELECT * FROM complexity_metrics;
          CREATE TABLE sink.author_aliases      AS SELECT * FROM author_aliases;
          CREATE TABLE sink.provenance          AS SELECT * FROM provenance;
+         CREATE TABLE sink.clones              AS SELECT * FROM clones;
          DETACH sink;"
     );
     db.conn()
