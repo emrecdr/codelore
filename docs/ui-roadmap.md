@@ -202,6 +202,104 @@ pay for capability we don't use yet.
 **v0.5.x effort estimate**: 3-5 weeks. Mostly Axum routing + glue;
 the frontend is the v0.4.x SPA with Alpine sprinkled on.
 
+### 3c.1 v0.5.x CSS / component stack — locked
+
+Decided 2026-06-13 after a research spike (see PR-1 commit on the
+branch `feat/v0.5x-ui-redesign-pr1`): **Tailwind v4 + DaisyUI 5**,
+precompiled to a single CSS bundle and committed to the repo.
+
+| Layer | Pin | Distribution |
+|---|---|---|
+| Interactivity (locked earlier — §3c) | Alpine.js 3.15.8 | jsDelivr `npm/alpinejs@3.15.8/dist/cdn.min.js` (~46 KB) — `build.rs` SHA-pin |
+| State persistence | Alpine persist 3.15.8 | jsDelivr `npm/@alpinejs/persist@3.15.8/dist/cdn.min.js` (~1 KB) — `build.rs` SHA-pin |
+| CSS framework | Tailwind v4 (CLI v4.3.1) | Standalone CLI compiles `tailwind-src/input.css` → `tailwind.daisyui.min.css` (committed) |
+| Component library | DaisyUI 5 | Bundled with Tailwind v4 standalone CLI; activated via `@plugin "daisyui"` in `input.css` |
+| Charts | ECharts 6.1.0 (unchanged) | already locked at §2 |
+| Layout helper | d3-hierarchy 3.1.2 (unchanged) | already locked at §2 |
+| Plotly basic (azure-dashboard reference candidate) | DEFERRED to per-widget PRs | per-widget call: pick when a specific chart actually needs a Plotly capability ECharts doesn't have. Not added speculatively. |
+
+#### Why Tailwind v4 + DaisyUI 5 over the alternatives
+
+Tailwind v4 dropped the production-grade runtime CDN script that v3
+shipped (the [Play CDN](https://tailwindcss.com/docs/installation/play-cdn)
+is explicitly dev-only); the recommended distribution is the
+standalone CLI binary that compiles a pruned CSS file at build time.
+For `CodeLore`'s offline-first build flow this means the CSS is a
+*compiled artefact*, not a runtime asset.
+
+Three handling options were evaluated:
+
+| Option | Trade-off | Verdict |
+|---|---|---|
+| A. Precompile + commit | One-time CLI install per contributor; rebuild is a chore when DaisyUI bumps. CSS becomes a `git diff`-reviewable source artefact. | **Chosen.** |
+| B. `build.rs` fetches + runs the standalone CLI | Zero check-in surface, BUT adds ~30 MB binary to every contributor's build cache + makes `cargo build` depend on running a foreign executable across all five release-target platforms. Trust surface larger than every other dep combined. | Rejected. |
+| C. Vanilla CSS (extend the existing `:root` custom-property tokens) | No build step, no checked-in CSS. Loses DaisyUI's admin-portal component vocabulary; turns the v0.5.x redesign into a sustained hand-rolling effort. | Rejected (loses the redesign polish the user asked for). |
+| D. Runtime-CDN framework alternative (Pico / Beer / Open Props) | Stays within the existing `build.rs` SHA-pin pattern with no compilation step. Different design vocabulary than DaisyUI; smaller component coverage. | Rejected (substitutes away from a stack the user already validated on `gf-azure-ops/azure-dashboard`). |
+
+DaisyUI 5's component set maps directly to v0.4.x's existing shapes
+and v0.5.x's planned ones:
+
+| v0.4.x element | DaisyUI 5 component |
+|---|---|
+| `.kpi-grid` + tile divs | `stat` / `stats` |
+| `.drawer-body` | `drawer` |
+| Hotspot sortable table | `table table-zebra` + `badge` |
+| Header + footer chrome | `navbar` + `footer` |
+
+The framework wasn't picked for v0.4.x because the widget set was
+too small to amortise the cost; v0.5.x adds Alpine reactivity +
+per-widget controls, which IS where DaisyUI starts paying off.
+
+#### PR-1 — infrastructure (shipped)
+
+Branch: `feat/v0.5x-ui-redesign-pr1` · commit `387dc9a` on origin.
+
+Wires the build/CSS plumbing **without any visual change**:
+
+- `build.rs` gains two `AssetPin` entries for Alpine.js + Alpine
+  persist.
+- `output/spa.rs` adds three `include_str!` constants (Alpine,
+  persist, CSS) into the template-substitution table.
+- `template.html` gains three new slot markers; the existing
+  inline `<style>` block stays in place so v0.4.x rendering is
+  byte-identical.
+- `spa/tailwind-src/input.css` + `README.md` document the
+  rebuild workflow.
+- `spa/tailwind.daisyui.min.css` ships as a STUB — a fresh
+  checkout `cargo build`s without anyone needing the CLI; the stub
+  carries v0.4.x defaults so the dashboard renders unstyled-but-
+  readable. The stub gets replaced via `just spa-css-rebuild`.
+- `justfile` gains `spa-css-rebuild` recipe.
+- `tests/spa_integration_test.rs` adds six assertions covering the
+  new payloads + placeholder substitution.
+
+One human-driven step gates the PR from being fully complete:
+install the Tailwind v4 standalone CLI, run `just spa-css-rebuild`,
+commit the resulting real CSS file. The Claude Code classifier
+blocked autonomous fetching/execution of the ~76 MB CLI binary —
+this step is appropriately gated behind a human authorisation.
+
+#### PR-2+ — per-widget DaisyUI conversion
+
+Each follow-up PR migrates one widget at a time. Rough sequence:
+
+1. **PR-2: chrome** — header (`navbar`), footer (`footer`), main
+   `<main>` grid → DaisyUI containers. No widget internals touched.
+2. **PR-3: KPI tiles** — `.kpi-grid` + `.kpi-tile` → `stats` +
+   `stat` components. Inherits the new accent colour from the
+   `@theme` block.
+3. **PR-4: drawer** — file-detail drawer → DaisyUI `drawer` with
+   right-side overlay. Adds Alpine `x-data` for the open/close
+   state instead of the imperative JS in `widgets.js`.
+4. **PR-5: hotspot table** — `.table-container` → `table
+   table-zebra` + `badge` for MI-band / AI-attribution cells.
+5. **PR-6: cross-widget filter store** — Alpine `$store` for filter
+   state, persisted via the persist plugin. First widget to consume:
+   hotspot table filter.
+
+Each PR is self-contained, reviewable in one sitting, and revertable
+without untangling the others.
+
 ---
 
 ## 3d. v0.6.x — Tauri 2 desktop app
