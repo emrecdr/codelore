@@ -40,3 +40,9 @@ graphify-out/cache/
 
 # Graphify per-machine manifest
 graphify-out/manifest.json
+
+# Vendored libduckdb-sys workaround for upstream duckdb-rs#786.
+# Populated by scripts/vendor-duckdb-rs.sh + patches/duckdb-rs-msvc-1940.patch
+# Tracked OUT of source control because the script reproduces it deterministically.
+# Remove this entry when the upstream patch ships in a released duckdb crate.
+vendor/

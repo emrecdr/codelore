@@ -4,6 +4,28 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Fixed — Windows build unblocked (MSVC 19.40 / duckdb-rs#786)
+
+GitHub Actions Windows runners rolled out MSVC 19.40 (toolchain
+14.51) around 2026-06-12, which removed the deprecated
+`stdext::checked_array_iterator`. Bundled DuckDB compiles transitively
+include the fmt header that consumes it, so every `cargo build` on
+`x86_64-pc-windows-msvc` fails inside `libduckdb-sys`. The
+[v0.4.5 release](https://github.com/emrecdr/codelore/releases/tag/v0.4.5)
+shipped without the Windows artifact for this reason.
+
+Upstream `duckdb/duckdb-rs#786` carries the canonical patch but has
+not landed in a published crate. As an interim, CodeLore vendors
+`libduckdb-sys` at the released `v1.10503.1` rev plus the patch via
+a `[patch.crates-io]` entry. The vendored source is regenerated
+deterministically by `scripts/vendor-duckdb-rs.sh` at CI time (and
+on demand locally) so source control stays slim. When the upstream
+crate ships the fix in a released version, the patch block, script,
+and `vendor/` ignore entry will be removed in one commit.
+
+User impact: pre-built Windows binaries are restored. No behaviour
+change vs `v0.4.5` on other platforms.
+
 ## [0.4.5] - 2026-06-13
 
 ### Added — CHM borrows, AI surfacing, step-summary, auditable tooltips

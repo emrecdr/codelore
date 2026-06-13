@@ -100,6 +100,17 @@ jobs:
             target
           key: release-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
 
+      - name: Vendor patched libduckdb-sys (workaround for duckdb-rs#786)
+        # MSVC 19.40 (rolled out by GitHub Actions runners around
+        # 2026-06-12) removed `stdext::checked_array_iterator`, breaking
+        # bundled DuckDB builds on Windows. Upstream patch hasn't shipped
+        # in a released duckdb-rs crate yet. Until then, this step
+        # vendors duckdb-rs locally + applies our patch. Idempotent.
+        # Required on every target since Cargo.toml's [patch.crates-io]
+        # entry points at the vendored path unconditionally.
+        shell: bash
+        run: bash scripts/vendor-duckdb-rs.sh
+
       - name: Build release binary
         # `--features spa` activates the opt-in dashboard emitter
         # (`--format spa`). Released binaries ship with this enabled

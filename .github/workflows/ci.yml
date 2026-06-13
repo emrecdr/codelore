@@ -48,6 +48,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.96.0
         with:
           components: rustfmt
+      # Vendor + patch libduckdb-sys per duckdb-rs#786 (MSVC 19.40 fix).
+      # Required even for fmt because Cargo.toml's [patch.crates-io]
+      # entry points at vendor/duckdb-rs/ unconditionally; cargo's
+      # manifest validation reads the patch path. Idempotent; the
+      # script no-ops if vendor/ is already at the right rev.
+      - name: Vendor patched libduckdb-sys (duckdb-rs#786)
+        run: bash scripts/vendor-duckdb-rs.sh
       - run: cargo fmt --all --check
 
   clippy:
@@ -63,6 +70,8 @@ jobs:
           components: clippy
       - uses: mozilla-actions/sccache-action@v0.0.10
       - uses: Swatinem/rust-cache@v2
+      - name: Vendor patched libduckdb-sys (duckdb-rs#786)
+        run: bash scripts/vendor-duckdb-rs.sh
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: sccache stats
         if: always()
@@ -93,6 +102,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.96.0
       - uses: mozilla-actions/sccache-action@v0.0.10
       - uses: Swatinem/rust-cache@v2
+      - name: Vendor patched libduckdb-sys (duckdb-rs#786)
+        shell: bash
+        run: bash scripts/vendor-duckdb-rs.sh
       # cargo-nextest: ~20-30% faster than `cargo test` on this workspace
       # (smarter parallelism, faster process spawning, better failure
       # aggregation). Doesn't run doc tests — those still need `cargo test

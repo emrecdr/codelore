@@ -1,0 +1,46 @@
+diff --git a/crates/libduckdb-sys/build_bundled_cc.rs b/crates/libduckdb-sys/build_bundled_cc.rs
+index cf7504d..372fca6 100644
+--- a/crates/libduckdb-sys/build_bundled_cc.rs
++++ b/crates/libduckdb-sys/build_bundled_cc.rs
+@@ -53,8 +53,28 @@ fn untar_archive(out_dir: &str) {
+     archive.unpack(out_dir).expect("archive");
+ }
+ 
++/// Workaround for upstream duckdb/duckdb-rs#786 (MSVC 19.40 removed
++/// `stdext::checked_array_iterator`). Bundled fmt header guards its
++/// use behind `#ifdef _SECURE_SCL` only; narrow the guard so newer
++/// MSVC compiles use the standard path. Applied verbatim from
++/// @huhlig's comment in #786.
++fn patch_msvc_removed_checked_iterator(out_dir: &str) {
++    let format_header = format!("{out_dir}/duckdb/third_party/fmt/include/fmt/format.h");
++    let Ok(source) = std::fs::read_to_string(&format_header) else {
++        return;
++    };
++    let patched = source.replace(
++        "#ifdef _SECURE_SCL\n// Make a checked iterator to avoid MSVC warnings.",
++        "#if defined(_SECURE_SCL) && _SECURE_SCL && (!defined(_MSC_VER) || _MSC_VER < 1940)\n// Make a checked iterator to avoid MSVC warnings.",
++    );
++    if patched != source {
++        std::fs::write(format_header, patched).expect("patching bundled fmt header");
++    }
++}
++
+ pub fn main(out_dir: &str, out_path: &Path) {
+     untar_archive(out_dir);
++    patch_msvc_removed_checked_iterator(out_dir);
+ 
+     let include_path = Path::new(out_dir).join("duckdb/src/include");
+     write_bindings(&include_path, out_path);
+@@ -125,5 +145,12 @@ pub fn main(out_dir: &str, out_path: &Path) {
+     }
+     cfg.compile("duckdb");
+ 
++    if win_target() {
++        // DuckDB's Windows file-lock diagnostics call Restart Manager APIs
++        // (RmStartSession, RmEndSession). Without rstrtmgr.lib the final
++        // binary fails to link. Per duckdb/duckdb-rs#786.
++        println!("cargo:rustc-link-lib=Rstrtmgr");
++    }
++
+     println!("cargo:lib_dir={out_dir}");
+ }
