@@ -64,17 +64,28 @@ fn build_soc_sql(
     let good_cte = crate::analyses::coupling::good_commits_cte(bucket, use_lineage);
     format!(
         "WITH {good_cte},
+         filtered_changes AS (
+             -- Pre-filter `changes` against `good_commits` ONCE so both
+             -- downstream CTEs share the result. DuckDB materializes a CTE
+             -- referenced 2+ times (rev_sizes + the outer SELECT), so the
+             -- self-implicit double scan of the raw `{src}` table is
+             -- collapsed into one filter pass + two cached reads. Same
+             -- pattern as `coupling.rs` (see the comment there for the
+             -- O(N²)-to-O(K²) complexity rationale on large repos).
+             SELECT rev, path
+             FROM {src}
+             INNER JOIN good_commits USING(rev)
+         ),
          rev_sizes AS (
              -- (rev, path) is the changes PK so per `GROUP BY rev` each
              -- path appears at most once. Plain COUNT skips DuckDB's
              -- distinct-tracking overhead.
              SELECT rev, COUNT(path) AS n
-             FROM {src}
-             INNER JOIN good_commits USING(rev)
+             FROM filtered_changes
              GROUP BY rev
          )
          SELECT c.path AS entity, SUM(rs.n - 1)::INTEGER AS soc
-         FROM {src} c
+         FROM filtered_changes c
          INNER JOIN rev_sizes rs USING (rev)
          GROUP BY c.path
          HAVING SUM(rs.n - 1) {threshold_op} ?
