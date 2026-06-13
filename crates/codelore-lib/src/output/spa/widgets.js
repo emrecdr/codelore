@@ -509,12 +509,19 @@
       const next = Math.min(PAGE_SIZE, more);
       const showNext = document.createElement('button');
       showNext.type = 'button';
+      // DaisyUI `btn btn-outline btn-sm` matches the v0.5.x admin-portal
+      // vocabulary established by PR-2 (theme toggle) and PR-4 (drawer
+      // close). Inline `.table-actions button { ... }` rules in the
+      // `<style>` block are no-op'd by this — the DaisyUI utility
+      // classes win specificity now that we declare them explicitly.
+      showNext.className = 'btn btn-outline btn-sm';
       showNext.textContent = 'Show next ' + next;
       showNext.addEventListener('click', function () { renderNextPage(PAGE_SIZE); });
       actionsEl.appendChild(showNext);
       if (more > PAGE_SIZE) {
         const showAll = document.createElement('button');
         showAll.type = 'button';
+        showAll.className = 'btn btn-outline btn-sm';
         showAll.textContent = 'Show all (' + more + ' more)';
         showAll.addEventListener('click', function () { renderNextPage(Infinity); });
         actionsEl.appendChild(showAll);
