@@ -250,55 +250,55 @@ The framework wasn't picked for v0.4.x because the widget set was
 too small to amortise the cost; v0.5.x adds Alpine reactivity +
 per-widget controls, which IS where DaisyUI starts paying off.
 
-#### PR-1 — infrastructure (shipped)
+#### PR sequence — all six PRs landed on origin
 
-Branch: `feat/v0.5x-ui-redesign-pr1` · commit `387dc9a` on origin.
+Stacked branch chain: each base = the prior PR's head. GitHub
+auto-rebases each base when the prior merges.
 
-Wires the build/CSS plumbing **without any visual change**:
+| PR | Branch | Final tip | Scope | Status |
+|---|---|---|---|---|
+| **#7** | `feat/v0.5x-ui-redesign-pr1` | `fa5cb2c` | Infrastructure — Alpine.js + Alpine persist via `build.rs` SHA-pin; Tailwind v4 + DaisyUI 5 source CSS + real 74 KB compiled bundle; `spa.rs` substitution wiring; `template.html` slot markers; `tests/spa_integration_test.rs` placeholder-substitution + payload-presence assertions. | Ready for review, all 6 CI jobs green |
+| **#10** | `feat/v0.5x-ui-redesign-pr2-chrome` | `05ad29e` | Chrome — `<header>` → DaisyUI `navbar`, `<footer>` → `footer footer-center`, `<main>` → `max-w-screen-2xl mx-auto`, theme toggle → `btn btn-ghost btn-sm`, footer link → `link`. Inline `<style>` rules untouched. | Draft, all 6 CI jobs green |
+| **#11** | `feat/v0.5x-ui-redesign-pr3-kpi-tiles` | `9500047` | KPI tiles — `widgets.js::renderKpiTiles` dynamic markup gains `stat` / `stat-title` / `stat-value` / `stat-desc` alongside `kpi-tile` / `kpi-label` / `kpi-value` / `kpi-sub`. Critical fix: `@source "../widgets.js"` added to `input.css` so the pruner sees class names from JS-rendered markup. | Draft, all 6 CI jobs green |
+| **#12** | `feat/v0.5x-ui-redesign-pr4-drawer` | `ab79ef2` | Detail drawer — open/close state migrated from imperative `drawer.hidden = true/false` to `Alpine.store('detail')` reactive. Aside markup gains `x-show` / `x-transition.opacity` / `x-cloak` / `@keydown.escape.window`. First real consumer of the Alpine interactivity layer. Fallback path retained for the no-Alpine case. | Draft, CI in progress |
+| **#13** | `feat/v0.5x-ui-redesign-pr5-hotspot-table` | `7e5db5d` | Hotspot table — `<table class="table table-zebra">`; MI-band emoji (`🟢/🟡/🔴`) → DaisyUI `badge badge-{success,warning,error}` carrying `High`/`Mid`/`Low` text; bare AI percentage → `badge badge-outline`. Pruner-trap caught in development: runtime-concatenated `'badge-' + bandKind` hid variants from the scan; refactored to complete class-name literals in a three-branch `if`. | Draft, CI in progress |
+| **#14** | `feat/v0.5x-ui-redesign-pr6-filter-store` | `d825f8d` | Cross-widget filter store — `Alpine.store('filter', { text, set, clear })` with `Alpine.$persist` for `localStorage` round-trip. First writer: hotspot table filter input. Future widgets become subscribers via `Alpine.effect(() => Alpine.store('filter').text)` callbacks; no infrastructure changes required. | Draft, CI in progress |
 
-- `build.rs` gains two `AssetPin` entries for Alpine.js + Alpine
-  persist.
-- `output/spa.rs` adds three `include_str!` constants (Alpine,
-  persist, CSS) into the template-substitution table.
-- `template.html` gains three new slot markers; the existing
-  inline `<style>` block stays in place so v0.4.x rendering is
-  byte-identical.
-- `spa/tailwind-src/input.css` + `README.md` document the
-  rebuild workflow.
-- `spa/tailwind.daisyui.min.css` ships as a STUB — a fresh
-  checkout `cargo build`s without anyone needing the CLI; the stub
-  carries v0.4.x defaults so the dashboard renders unstyled-but-
-  readable. The stub gets replaced via `just spa-css-rebuild`.
-- `justfile` gains `spa-css-rebuild` recipe.
-- `tests/spa_integration_test.rs` adds six assertions covering the
-  new payloads + placeholder substitution.
+All six PRs ship **without removing any v0.4.x semantic CSS rules** —
+the inline `<style>` block still governs background / border /
+padding for visual continuity, and DaisyUI typography + spacing
+tokens layer on top via the utility classes. A future PR (call it
+PR-7) removes the now-redundant inline rules once every widget has
+migrated.
 
-One human-driven step gates the PR from being fully complete:
-install the Tailwind v4 standalone CLI, run `just spa-css-rebuild`,
-commit the resulting real CSS file. The Claude Code classifier
-blocked autonomous fetching/execution of the ~76 MB CLI binary —
-this step is appropriately gated behind a human authorisation.
+##### Lessons surfaced during the run
 
-#### PR-2+ — per-widget DaisyUI conversion
+1. **DaisyUI 5 with the standalone CLI needs the `.mjs` plugin
+   sources checked in next to `input.css`** — the original PR-1
+   README claimed "the CLI ships DaisyUI built in" which was
+   wrong. PR #7's `fa5cb2c` commit corrected this with the
+   download workflow + SHA-pinned versions.
+2. **The Tailwind v4 pruner only sees complete class-name string
+   literals** — runtime concatenation hides variants. PR-5 hit
+   this with `'badge-' + bandKind`; documented in `widgets.js`
+   inline so PR-6's future filter-driven dynamic classes don't
+   reintroduce the trap.
+3. **`@source "../widgets.js"` matters** — without it, classes
+   injected via JS innerHTML would drop from the bundle even
+   though they're used at runtime. PR-3 added the directive.
+4. **`.gitignore` was too narrow** — `.claude/agent-memory/`
+   covered the subdir but not `.claude/settings.json` at the
+   root, and similar for `.devt/`, `graphify-out/`, `.serena/`.
+   PR-3 and PR-4 each accidentally committed ~480k lines of
+   session-tooling artefacts before main commit `62e90ec`
+   broadened the catch-all.
 
-Each follow-up PR migrates one widget at a time. Rough sequence:
+#### Once PR #7 merges
 
-1. **PR-2: chrome** — header (`navbar`), footer (`footer`), main
-   `<main>` grid → DaisyUI containers. No widget internals touched.
-2. **PR-3: KPI tiles** — `.kpi-grid` + `.kpi-tile` → `stats` +
-   `stat` components. Inherits the new accent colour from the
-   `@theme` block.
-3. **PR-4: drawer** — file-detail drawer → DaisyUI `drawer` with
-   right-side overlay. Adds Alpine `x-data` for the open/close
-   state instead of the imperative JS in `widgets.js`.
-4. **PR-5: hotspot table** — `.table-container` → `table
-   table-zebra` + `badge` for MI-band / AI-attribution cells.
-5. **PR-6: cross-widget filter store** — Alpine `$store` for filter
-   state, persisted via the persist plugin. First widget to consume:
-   hotspot table filter.
-
-Each PR is self-contained, reviewable in one sitting, and revertable
-without untangling the others.
+The remaining five PRs (#10–#14) auto-rebase onto main as you
+merge them in order. The `fa5cb2c` commit's CSS bundle becomes
+the live styling foundation; PR-2+ class additions take visual
+effect.
 
 ---
 
