@@ -114,10 +114,18 @@ CREATE INDEX IF NOT EXISTS idx_clones_fp ON clones(fingerprint);
 --   (revisions, hotspots, ownership, code-health, entity-churn, etc.).
 -- changes(rev):  primary JOIN column with commits; PK is (rev, path),
 --   so a rev-prefix scan benefits from a dedicated index too.
+-- changes(rename_from): walked by the recursive lineage CTE in
+--   `facts/ingest.rs::materialize_path_lineage`. The CTE joins
+--   `lineage` with `changes` on `c.rename_from = l.current` to
+--   chase rename chains forward through history. NULL rename_from
+--   rows (which dominate the table — typically >95%) are
+--   automatically excluded from a B-tree index in DuckDB, so this
+--   index is small on disk relative to the table.
 -- commits(canonical_author): scanned by author-based analyses (authors,
 --   author-churn, ownership, communication, code-health).
 -- commits(date): scanned by abs-churn and code-age.
-CREATE INDEX IF NOT EXISTS idx_changes_path     ON changes(path);
-CREATE INDEX IF NOT EXISTS idx_changes_rev      ON changes(rev);
-CREATE INDEX IF NOT EXISTS idx_commits_author   ON commits(canonical_author);
-CREATE INDEX IF NOT EXISTS idx_commits_date     ON commits(date);
+CREATE INDEX IF NOT EXISTS idx_changes_path        ON changes(path);
+CREATE INDEX IF NOT EXISTS idx_changes_rev         ON changes(rev);
+CREATE INDEX IF NOT EXISTS idx_changes_rename_from ON changes(rename_from);
+CREATE INDEX IF NOT EXISTS idx_commits_author      ON commits(canonical_author);
+CREATE INDEX IF NOT EXISTS idx_commits_date        ON commits(date);
