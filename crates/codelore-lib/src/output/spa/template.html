@@ -182,6 +182,95 @@
       font-size: 11px;
       margin-top: 2px;
     }
+    /* "?" provenance tooltips. CSS-only show/hide via :hover and
+       :focus-within so keyboard users get tooltips for free and we
+       don't add JS listeners that could leak (F71 lesson).
+       The popup is positioned absolutely relative to the trigger's
+       parent element — callers should give the parent
+       `position: relative` (kpi-label and th.col-with-tooltip
+       already do). */
+    .tooltip-trigger {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      margin-left: 4px;
+      padding: 0;
+      border: 1px solid var(--border);
+      border-radius: 50%;
+      background: transparent;
+      color: var(--fg-dim);
+      font-size: 9px;
+      font-weight: bold;
+      line-height: 12px;
+      vertical-align: 1px;
+      cursor: help;
+      font-family: inherit;
+      text-transform: none;
+      letter-spacing: 0;
+    }
+    .tooltip-trigger:hover,
+    .tooltip-trigger:focus-visible {
+      border-color: var(--accent);
+      color: var(--accent);
+      outline: none;
+    }
+    .tooltip-host {
+      position: relative;
+      display: inline;
+    }
+    .tooltip-popup {
+      display: none;
+      position: absolute;
+      left: 0;
+      top: 100%;
+      z-index: 50;
+      margin-top: 6px;
+      width: max-content;
+      max-width: 340px;
+      padding: 10px 12px;
+      background: var(--bg-elev-2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+      color: var(--fg);
+      font-size: 12px;
+      font-weight: normal;
+      text-transform: none;
+      letter-spacing: 0;
+      line-height: 1.5;
+      white-space: normal;
+      text-align: left;
+    }
+    .tooltip-host:hover .tooltip-popup,
+    .tooltip-host:focus-within .tooltip-popup {
+      display: block;
+    }
+    .tooltip-popup strong { color: var(--fg); }
+    .tooltip-popup code {
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 11px;
+      padding: 1px 4px;
+      border-radius: 3px;
+      background: rgba(127, 127, 127, 0.15);
+    }
+    .tooltip-popup .tooltip-formula {
+      margin-top: 4px;
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 11px;
+      color: var(--fg);
+    }
+    .tooltip-popup .tooltip-citation {
+      margin-top: 8px;
+      padding-top: 6px;
+      border-top: 1px solid var(--border);
+      font-size: 11px;
+      color: var(--fg-dim);
+    }
+    .tooltip-popup .tooltip-citation a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    .tooltip-popup .tooltip-citation a:hover { text-decoration: underline; }
     .widget.differentiator {
       border-color: rgba(46, 164, 79, 0.35);
       box-shadow: 0 0 0 1px rgba(46, 164, 79, 0.15) inset;

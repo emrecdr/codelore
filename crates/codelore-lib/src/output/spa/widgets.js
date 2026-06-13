@@ -82,6 +82,95 @@
   renderXRaySunburst(data.xray || []);
   window._codeloreRerenderers.push(function () { renderXRaySunburst(data.xray || []); });
 
+  // Per-metric provenance definitions: formula in plain English + a
+  // link to the research-foundations.md section that grounds the
+  // metric. Surfaced as `?` tooltips on KPI tiles and table column
+  // headers. Static data — no per-repo variation — so it lives in
+  // the JS const map rather than the SpaDashboard JSON payload.
+  const RESEARCH_FOUNDATIONS_URL =
+    'https://github.com/emrecdr/codelore/blob/main/docs/research-foundations.md';
+  const METRIC_DEFS = {
+    files_analyzed: {
+      formula: 'Count of files surviving the live-at-HEAD filter (not deleted in the most recent change touching the path).',
+      citation: { label: 'Live-at-HEAD selection', anchor: '#hotspots-' },
+    },
+    commits: {
+      formula: 'Count of commits in the analysed history, after --after / --before / --include-merges filters.',
+      citation: { label: 'Behavioural code analysis foundations', anchor: '#authors-' },
+    },
+    authors: {
+      formula: 'Distinct canonical author identities after mailmap consolidation and bot filtering.',
+      citation: { label: 'Bird et al. 2011 — Don\'t Touch My Code', anchor: '#authors-' },
+    },
+    median_code_health: {
+      formula: 'code_health = 100 × (1 − 0.40 × normalize(cognitive)). Median is the per-file midpoint across the analysed set.',
+      citation: { label: 'code-health composite', anchor: '#code-health-' },
+    },
+    cognitive_p95: {
+      formula: '95th percentile of per-file cognitive complexity (SonarSource formalisation, max across entities in each file).',
+      citation: { label: 'Campbell 2018 — Cognitive Complexity', anchor: '#hotspots-' },
+    },
+    knowledge_islands: {
+      formula: 'Files where departed primary author + no substantial other owner intersect with hotspot risk. CodeLore-only signal.',
+      citation: { label: 'Knowledge-island detector', anchor: '#knowledge-islands-' },
+    },
+    coupling_pairs: {
+      formula: 'Pairs (a, b) where the two files change in the same commit, gated by min_shared_revs and Fisher exact p < fisher_significance.',
+      citation: { label: 'Gall et al. 1998 + Tornhill 2015', anchor: '#coupling-' },
+    },
+    coupling_density: {
+      formula: 'edges / (V·(V−1)/2) where V is the candidate node set (files with revs ≥ min_revs) and edges are Fisher-significant coupling pairs.',
+      citation: { label: 'Newman 2010 §6.10 — graph density', anchor: '#hotspots-' },
+    },
+    mi_band: {
+      formula: 'Repo-relative percentile band of file-level Maintainability Index (SEI variant). Low = bottom 25% / Moderate = middle 50% / High = top 25%.',
+      citation: { label: 'Coleman 1994 + SEI 1997 — why repo-relative', anchor: '#hotspots-' },
+    },
+    hotspot_score: {
+      formula: 'percentile_rank(revisions) × percentile_rank(cognitive) × (100 − code_health) / 4. Range [0, 10] (CodeScene convention).',
+      citation: { label: 'Tornhill 2018 — Software Design X-Rays', anchor: '#hotspots-' },
+    },
+    revisions: {
+      formula: 'Count of distinct commits touching the file in the analysed history, after time-bucket and lineage rewrites.',
+      citation: { label: 'Revisions analysis', anchor: '#revisions-' },
+    },
+    code_health: {
+      formula: '100 × (1 − 0.40 × normalize(cognitive)). Empirical range [60, 100]; lower = more cognitively complex.',
+      citation: { label: 'code-health composite', anchor: '#code-health-' },
+    },
+    cognitive: {
+      formula: 'Max cognitive complexity across entities within the file (SonarSource formalisation, Campbell 2018).',
+      citation: { label: 'Campbell 2018 — Cognitive Complexity', anchor: '#hotspots-' },
+    },
+    mi: {
+      formula: '171 − 5.2·log₂(V) − 0.23·CC − 16.2·log₂(SLOC) + 50·sin(√(2.4·comments%)). Values surfaced are the rust-code-analysis `kind=\'unit\'` (file-level) entry.',
+      citation: { label: 'Coleman 1994 + SEI 1997', anchor: '#hotspots-' },
+    },
+    ai_pct: {
+      formula: 'COUNT(CASE WHEN ai_attribution IN (\'ai-assisted\', \'ai-authored\') THEN 1 END) × 100 / COUNT(commits touching this file).',
+      citation: { label: 'AI authorship classifier (identity::bots)', anchor: '#authors-' },
+    },
+  };
+
+  // Build the HTML for a `?` tooltip. Returns the trigger button plus
+  // an absolutely-positioned popup with the formula + citation link.
+  // Caller is responsible for putting `.tooltip-host` on the wrapping
+  // element so the popup positions correctly.
+  function buildTooltipHtml(defKey) {
+    const def = METRIC_DEFS[defKey];
+    if (!def) return '';
+    const citationHref = RESEARCH_FOUNDATIONS_URL + (def.citation.anchor || '');
+    return '<span class="tooltip-host">' +
+      '<button type="button" class="tooltip-trigger" aria-label="What does this metric mean?" tabindex="0">?</button>' +
+      '<span class="tooltip-popup" role="tooltip">' +
+        '<strong>Formula</strong>' +
+        '<div class="tooltip-formula">' + escapeHtml(def.formula) + '</div>' +
+        '<div class="tooltip-citation">📖 <a href="' + escapeHtml(citationHref) + '" target="_blank" rel="noopener">' +
+          escapeHtml(def.citation.label) + ' ↗</a></div>' +
+      '</span>' +
+    '</span>';
+  }
+
   // Bind a ResizeObserver to keep `chart` sized to `container`. Stores
   // the observer on `container._codeloreResizeObserver` and disconnects
   // any prior observer first so re-renders (color-mode toggles, theme
@@ -262,10 +351,12 @@
 
     const COLUMNS = [
       { key: 'path',          label: 'Path',         cls: 'path', kind: 'string', defaultDir: 1 },
-      { key: 'revisions',     label: 'Revisions',    cls: 'num',  kind: 'number', defaultDir: -1 },
-      { key: 'cognitive',     label: 'Cognitive',    cls: 'num',  kind: 'number', defaultDir: -1 },
-      { key: 'code_health',   label: 'Code Health',  cls: 'num',  kind: 'number', defaultDir: 1 },
-      { key: 'hotspot_score', label: 'Hotspot Score', cls: 'num', kind: 'number', defaultDir: -1 },
+      { key: 'revisions',     label: 'Revisions',    cls: 'num',  kind: 'number', defaultDir: -1, defKey: 'revisions' },
+      { key: 'cognitive',     label: 'Cognitive',    cls: 'num',  kind: 'number', defaultDir: -1, defKey: 'cognitive' },
+      { key: 'code_health',   label: 'Code Health',  cls: 'num',  kind: 'number', defaultDir: 1,  defKey: 'code_health' },
+      { key: 'hotspot_score', label: 'Hotspot Score', cls: 'num', kind: 'number', defaultDir: -1, defKey: 'hotspot_score' },
+      { key: 'mi',            label: 'MI',           cls: 'num',  kind: 'number', defaultDir: -1, defKey: 'mi' },
+      { key: 'ai_pct',        label: 'AI %',         cls: 'num',  kind: 'number', defaultDir: -1, defKey: 'ai_pct' },
     ];
     const PAGE_SIZE = 500;
 
@@ -311,9 +402,10 @@
         const indicator = active
           ? (sortDir > 0 ? '▲' : '▼')
           : '';
+        const tip = c.defKey ? buildTooltipHtml(c.defKey) : '';
         html += '<th class="' + (active ? 'active' : '') + '"' +
           ' data-key="' + escapeHtml(c.key) + '">' +
-          escapeHtml(c.label) +
+          escapeHtml(c.label) + tip +
           ' <span class="sort-indicator">' + indicator + '</span>' +
           '</th>';
       }
@@ -344,12 +436,30 @@
       var html = '';
       for (var i = renderedRows; i < next; i++) {
         const r = filteredView[i];
+        // MI cell: number + band emoji when mi_rank is finite. Empty
+        // when language unsupported by codelore-rca.
+        let miCell = '';
+        if (typeof r.mi === 'number' && isFinite(r.mi)) {
+          let bandEmoji = '';
+          if (typeof r.mi_rank === 'number' && isFinite(r.mi_rank)) {
+            bandEmoji = r.mi_rank >= 0.75 ? ' 🟢'
+              : r.mi_rank >= 0.25 ? ' 🟡' : ' 🔴';
+          }
+          miCell = r.mi.toFixed(1) + bandEmoji;
+        }
+        // AI cell: percentage rendered as X% (rounded — table is dense,
+        // decimal point would crowd).
+        const aiCell = (typeof r.ai_pct === 'number' && isFinite(r.ai_pct))
+          ? Math.round(r.ai_pct) + '%'
+          : '';
         html += '<tr data-path="' + escapeHtml(r.path) + '" class="hotspot-row" style="cursor:pointer">' +
           '<td class="path">' + escapeHtml(r.path) + '</td>' +
           '<td class="num">' + (r.revisions != null ? r.revisions : '') + '</td>' +
           '<td class="num">' + fmtNumber(r.cognitive, { decimals: 0 }) + '</td>' +
           '<td class="num">' + fmtNumber(r.code_health, { decimals: 1 }) + '</td>' +
           '<td class="num">' + fmtNumber(r.hotspot_score, { decimals: 2 }) + '</td>' +
+          '<td class="num">' + miCell + '</td>' +
+          '<td class="num">' + aiCell + '</td>' +
           '</tr>';
       }
       tbody.insertAdjacentHTML('beforeend', html);
@@ -434,6 +544,7 @@
     const fileCount = hotspots.length || codeHealth.length || 0;
     tiles.push({
       label: 'Files analyzed',
+      defKey: 'files_analyzed',
       value: fmtInt(fileCount),
       sub: fileCount === 1 ? 'one file' : 'live at HEAD',
     });
@@ -442,6 +553,7 @@
     const commits = summaryByName.commits || summaryByName['number-of-commits'] || 0;
     tiles.push({
       label: 'Commits',
+      defKey: 'commits',
       value: fmtInt(commits),
       sub: 'in the analysed history',
     });
@@ -450,6 +562,7 @@
     const authors = summaryByName['authors'] || summaryByName['number-of-authors'] || 0;
     tiles.push({
       label: 'Distinct authors',
+      defKey: 'authors',
       value: fmtInt(authors),
       sub: 'after mailmap resolution',
     });
@@ -468,6 +581,7 @@
           median >= 70 ? 'concern' : 'critical';
         tiles.push({
           label: 'Median code health',
+          defKey: 'median_code_health',
           value: median.toFixed(1),
           sub: 'band: ' + healthBand,
         });
@@ -483,6 +597,7 @@
         const idx = Math.min(cogs.length - 1, Math.floor(cogs.length * 0.95));
         tiles.push({
           label: 'Cognitive p95',
+          defKey: 'cognitive_p95',
           value: fmtInt(cogs[idx]),
           sub: 'top-5% file complexity',
         });
@@ -494,25 +609,50 @@
     if (knowledgeIslands.length) {
       tiles.push({
         label: 'Knowledge islands',
+        defKey: 'knowledge_islands',
         value: fmtInt(knowledgeIslands.length),
         sub: 'departed-author files',
       });
     }
 
-    // Tile 7: coupling pair count
+    // Tile 7: coupling pair count + density
     if (coupling.length) {
       tiles.push({
         label: 'Coupled file pairs',
+        defKey: 'coupling_pairs',
         value: fmtInt(coupling.length),
         sub: 'Fisher-significant',
       });
+    }
+    if (typeof d.coupling_density === 'number' && isFinite(d.coupling_density)) {
+      tiles.push({
+        label: 'Coupling density',
+        defKey: 'coupling_density',
+        value: d.coupling_density.toFixed(4),
+        sub: 'graph |E|/(|V|·(|V|−1)/2)',
+      });
+    }
+
+    // Tile 8: MI band breakdown
+    if (d.mi_rollup && typeof d.mi_rollup === 'object') {
+      const r = d.mi_rollup;
+      const known = (r.low || 0) + (r.moderate || 0) + (r.high || 0);
+      if (known > 0) {
+        tiles.push({
+          label: 'MI band breakdown',
+          defKey: 'mi_band',
+          value: '🟢 ' + fmtInt(r.high || 0) + ' / 🟡 ' + fmtInt(r.moderate || 0) + ' / 🔴 ' + fmtInt(r.low || 0),
+          sub: 'top / mid / bottom quartile',
+        });
+      }
     }
 
     var html = '';
     for (var j = 0; j < tiles.length; j++) {
       const t = tiles[j];
+      const tip = t.defKey ? buildTooltipHtml(t.defKey) : '';
       html += '<div class="kpi-tile">' +
-        '<div class="kpi-label">' + escapeHtml(t.label) + '</div>' +
+        '<div class="kpi-label">' + escapeHtml(t.label) + tip + '</div>' +
         '<div class="kpi-value">' + escapeHtml(t.value) + '</div>' +
         '<div class="kpi-sub">' + escapeHtml(t.sub) + '</div>' +
         '</div>';
