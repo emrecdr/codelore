@@ -30,11 +30,13 @@
 @plugin "./daisyui.mjs";
 @plugin "./daisyui-theme.mjs";
 
-/* The standalone CLI scans `@source` paths for class usage. Only
- * `template.html` carries the class soup that needs pruning; the
- * embedded data JSON and ECharts/d3 internals never produce class
- * names. */
+/* The standalone CLI scans `@source` paths for class usage. Both
+ * `template.html` (static markup) and `widgets.js` (dynamically
+ * rendered chart containers + KPI tiles + drawer body) carry class
+ * names the pruner needs to see. Embedded data JSON and ECharts/d3
+ * internals never produce class names of their own. */
 @source "../template.html";
+@source "../widgets.js";
 
 /* CodeLore-specific accent overrides — keep the brand colour from the
  * v0.4.x palette so the dashboard stays visually continuous with

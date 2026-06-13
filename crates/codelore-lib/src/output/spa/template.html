@@ -60,9 +60,11 @@
       margin: 0 auto;
     }
     .widget {
-      background: var(--bg-elev);
-      border: 1px solid var(--border);
-      border-radius: 8px;
+      /* PR-7: `background` / `border` / `border-radius` removed —
+         DaisyUI's `card bg-base-200 shadow-lg` classes on the section
+         now provide elevation, fill, and rounded corners. `padding`
+         stays since DaisyUI's bare `.card` expects a `.card-body`
+         child for padding, which we don't restructure to. */
       padding: 20px;
     }
     .widget h2 {
@@ -169,10 +171,11 @@
       gap: 12px;
     }
     .kpi-tile {
-      background: var(--bg-elev-2);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 14px 16px;
+      /* PR-7: `background` / `border` / `border-radius` / `padding`
+         removed — DaisyUI's `stat` class (added by
+         widgets.js::renderKpiTiles) now provides them. The empty
+         rule + selector is kept rather than deleted so any future
+         polish has a targeted home. */
     }
     .kpi-tile .kpi-label {
       color: var(--fg-dim);
@@ -312,6 +315,11 @@
       flex-direction: column;
     }
     .detail-drawer[hidden] { display: none; }
+    /* Suppress flash-of-visible-drawer before Alpine.js's
+       `x-show="$store.detail.open"` runs. Alpine sets `x-cloak`
+       attributes pre-init; this rule hides them until Alpine
+       removes the attribute on first render. */
+    [x-cloak] { display: none !important; }
     .drawer-header {
       padding: 14px 20px;
       border-bottom: 1px solid var(--border);
@@ -328,17 +336,16 @@
       font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     }
     .drawer-close {
-      background: transparent;
-      border: 1px solid var(--border);
-      color: var(--fg);
+      /* PR-7: `background` / `border` / `color` / `border-radius`
+         removed — DaisyUI's `btn btn-ghost btn-sm` classes (added in
+         PR-4's drawer markup) now provide them, including the hover
+         state. The sizing tokens stay for click-target consistency
+         with the v0.4.x drawer-close affordance. */
       width: 28px;
       height: 28px;
-      border-radius: 4px;
       font-size: 18px;
-      cursor: pointer;
       line-height: 1;
     }
-    .drawer-close:hover { border-color: var(--accent); }
     .drawer-body {
       padding: 20px;
       overflow-y: auto;
@@ -429,20 +436,29 @@
   </style>
 </head>
 <body>
-  <header>
+  <!-- DaisyUI `navbar` provides the horizontal flex layout + spacing
+       tokens; the existing semantic `header { ... }` block in the
+       inline <style> still wins on background-color / border-color for
+       v0.4.x continuity, and gets cleanly removed in a later PR once
+       every consumer has migrated. -->
+  <header class="navbar">
     <h1>{{TITLE}}</h1>
     <div class="meta">
       <span>{{REPO_PATH}}</span>
       ·
       <span>generated {{GENERATED_AT}}</span>
     </div>
-    <button type="button" class="theme-toggle" id="theme-toggle" title="Toggle light / dark theme">
+    <button type="button" class="theme-toggle btn btn-ghost btn-sm" id="theme-toggle" title="Toggle light / dark theme">
       <span id="theme-toggle-label">Light mode</span>
     </button>
   </header>
 
-  <main>
-    <section class="widget kpi-row" id="widget-kpi-tiles">
+  <!-- `max-w-screen-2xl mx-auto` caps the widget grid at the same
+       1600 px width the inline `main { max-width: 1600px; margin: 0
+       auto; }` rule sets — DaisyUI doesn't override either property,
+       so the two co-exist as a redundant guard. -->
+  <main class="max-w-screen-2xl mx-auto">
+    <section class="widget card bg-base-200 shadow-lg kpi-row" id="widget-kpi-tiles">
       <h2>Codebase at a glance</h2>
       <div class="subtitle">
         Summary metrics across the repo. KPI cards are computed at
@@ -452,7 +468,7 @@
       <div id="widget-kpi-tiles-body" class="kpi-grid"></div>
     </section>
 
-    <section class="widget differentiator" id="widget-knowledge-islands">
+    <section class="widget card bg-base-200 shadow-lg differentiator" id="widget-knowledge-islands">
       <h2>Knowledge islands <span class="badge">CodeLore differentiator</span></h2>
       <div class="subtitle">
         Files whose primary author has departed and where no
@@ -464,7 +480,7 @@
       <div id="widget-knowledge-islands-body" class="table-container"></div>
     </section>
 
-    <section class="widget" id="widget-hotspot-circle-pack">
+    <section class="widget card bg-base-200 shadow-lg" id="widget-hotspot-circle-pack">
       <h2>Hotspots</h2>
       <div class="subtitle">
         Files sized by churn (revisions). Toggle the color mapping
@@ -480,7 +496,7 @@
       <div id="widget-hotspot-circle-pack-body" class="widget-body"></div>
     </section>
 
-    <section class="widget" id="widget-trends">
+    <section class="widget card bg-base-200 shadow-lg" id="widget-trends">
       <h2>Trends</h2>
       <div class="subtitle">
         Monthly revision counts for the top-10 hotspot files.
@@ -489,7 +505,7 @@
       <div id="widget-trends-body" class="widget-body"></div>
     </section>
 
-    <section class="widget" id="widget-calendar-heatmap">
+    <section class="widget card bg-base-200 shadow-lg" id="widget-calendar-heatmap">
       <h2>Commit activity</h2>
       <div class="subtitle">
         Per-day commit volume across the analysed history.
@@ -497,7 +513,7 @@
       <div id="widget-calendar-heatmap-body" class="widget-body" style="height: 260px;"></div>
     </section>
 
-    <section class="widget" id="widget-xray-sunburst">
+    <section class="widget card bg-base-200 shadow-lg" id="widget-xray-sunburst">
       <h2>Function X-Ray <span class="badge">CodeLore-only — CodeScene paywalls this</span></h2>
       <div class="subtitle">
         Function-level cognitive complexity. Inner ring = top-level
@@ -507,7 +523,7 @@
       <div id="widget-xray-sunburst-body" class="widget-body"></div>
     </section>
 
-    <section class="widget" id="widget-hotspot-table">
+    <section class="widget card bg-base-200 shadow-lg" id="widget-hotspot-table">
       <h2>Hotspot table</h2>
       <div class="subtitle">
         Sortable drill-down view of every hotspot row. Click a column
@@ -517,16 +533,18 @@
         <input
           type="text"
           id="hotspot-table-filter"
+          class="input input-bordered input-sm"
           placeholder="filter paths…"
           autocomplete="off"
-          spellcheck="false">
+          spellcheck="false"
+          aria-label="Filter hotspots by path">
         <span class="table-summary" id="hotspot-table-summary"></span>
         <span class="table-actions" id="hotspot-table-actions"></span>
       </div>
       <div id="widget-hotspot-table-body" class="table-container"></div>
     </section>
 
-    <section class="widget" id="widget-coupling-sankey">
+    <section class="widget card bg-base-200 shadow-lg" id="widget-coupling-sankey">
       <h2>Change coupling</h2>
       <div class="subtitle">
         Files that change together at Fisher-significant rates. Wider
@@ -537,17 +555,38 @@
     </section>
   </main>
 
-  <aside class="detail-drawer" id="file-detail-drawer" hidden>
+  <!-- Detail drawer: open/close state driven by Alpine `$store.detail`
+       (declared in the inline script below the persist plugin load).
+       `x-show` toggles display; `x-transition.opacity` adds a 200 ms
+       fade. `x-cloak` keeps the drawer hidden before Alpine
+       initialises so there's no flash-of-visible-content.
+       `@keydown.escape.window` listens at the document level — Escape
+       closes the drawer regardless of focus. -->
+  <aside class="detail-drawer"
+         id="file-detail-drawer"
+         x-data
+         x-show="$store.detail.open"
+         x-transition.opacity.duration.200ms
+         x-cloak
+         @keydown.escape.window="$store.detail.hide()">
     <div class="drawer-header">
       <h3 id="drawer-title">File details</h3>
-      <button type="button" class="drawer-close" id="drawer-close" aria-label="Close">×</button>
+      <button type="button"
+              class="drawer-close btn btn-ghost btn-sm"
+              id="drawer-close"
+              @click="$store.detail.hide()"
+              aria-label="Close">×</button>
     </div>
     <div class="drawer-body" id="drawer-body"></div>
   </aside>
 
-  <footer>
+  <!-- DaisyUI `footer footer-center` provides centred horizontal
+       layout; the existing semantic `footer { ... }` rule in the
+       inline <style> keeps the v0.4.x background + padding for visual
+       continuity. -->
+  <footer class="footer footer-center">
     Generated by
-    <a href="https://github.com/emrecdr/codelore" rel="noopener">CodeLore</a>
+    <a href="https://github.com/emrecdr/codelore" rel="noopener" class="link">CodeLore</a>
     — the behavioral-code-analysis CLI with published deterministic formulas.
   </footer>
 
@@ -576,6 +615,39 @@
        the time each one runs. -->
   <script>{{ALPINE_JS}}</script>
   <script>{{ALPINE_PERSIST_JS}}</script>
+
+  <!-- Alpine.store registrations. Runs once, on `alpine:init`, before
+       `Alpine.start()` walks the DOM and binds `x-data` / `x-show` etc.
+       Two stores wired here:
+
+       - `detail` — file-detail drawer open/close state. Consumed by
+         the aside markup (`x-show="$store.detail.open"`); written by
+         `widgets.js::showFileDetailDrawer` via `Alpine.store('detail')
+         .show()`. Closed via the aside's
+         `@keydown.escape.window="$store.detail.hide()"` and the
+         close button's `@click="$store.detail.hide()"`.
+
+       - `filter` — cross-widget filter text. PR-6 wires only the
+         hotspot table as a writer; future widgets subscribe via
+         `Alpine.effect(() => Alpine.store('filter').text)` to
+         re-render reactively. Persisted via the Alpine persist
+         plugin (`$persist` magic) so the filter survives a page
+         reload — useful for the `--embed` step-summary path and
+         for the inner-loop "tweak, reload, recheck" workflow. -->
+  <script>
+    document.addEventListener('alpine:init', () => {
+      Alpine.store('detail', {
+        open: false,
+        show() { this.open = true; },
+        hide() { this.open = false; },
+      });
+      Alpine.store('filter', {
+        text: Alpine.$persist('').as('codelore_filter_text'),
+        set(value) { this.text = value; },
+        clear() { this.text = ''; },
+      });
+    });
+  </script>
 
   <!-- Widget render logic. -->
   <script>{{WIDGETS_JS}}</script>

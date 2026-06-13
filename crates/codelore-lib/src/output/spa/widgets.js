@@ -395,7 +395,12 @@
     }
 
     function renderHeader() {
-      let html = '<table><thead><tr>';
+      // DaisyUI `table table-zebra` provides striped rows + consistent
+      // typography on top of the inline `.table-container table { ... }`
+      // rules. The two co-exist: inline rules win on background-color
+      // (var(--bg-elev-2)) so v0.4.x continuity holds; DaisyUI's font
+      // tokens layer on top.
+      let html = '<table class="table table-zebra"><thead><tr>';
       for (var i = 0; i < COLUMNS.length; i++) {
         const c = COLUMNS[i];
         const active = (c.key === sortKey);
@@ -436,21 +441,38 @@
       var html = '';
       for (var i = renderedRows; i < next; i++) {
         const r = filteredView[i];
-        // MI cell: number + band emoji when mi_rank is finite. Empty
-        // when language unsupported by codelore-rca.
+        // MI cell: number + DaisyUI band badge (success / warning /
+        // error) when mi_rank is finite. Empty when language is
+        // unsupported by codelore-rca. The badge replaces the v0.4.x
+        // emoji band cue with a colour-coded pill — same triad
+        // (top/mid/bottom quartile) but accessible to screen readers
+        // and themable through DaisyUI's `--color-success` /
+        // `--color-warning` / `--color-error` tokens.
         let miCell = '';
         if (typeof r.mi === 'number' && isFinite(r.mi)) {
-          let bandEmoji = '';
+          let bandBadge = '';
           if (typeof r.mi_rank === 'number' && isFinite(r.mi_rank)) {
-            bandEmoji = r.mi_rank >= 0.75 ? ' 🟢'
-              : r.mi_rank >= 0.25 ? ' 🟡' : ' 🔴';
+            // Complete class-name literals (not string-concatenation)
+            // so the Tailwind v4 pruner can see each variant during
+            // `@source` scan of widgets.js — `'badge-' + kind` would
+            // hide the suffix from the static scan and the variants
+            // would drop out of the compiled CSS bundle.
+            if (r.mi_rank >= 0.75) {
+              bandBadge = ' <span class="badge badge-success badge-sm" title="MI band: High">High</span>';
+            } else if (r.mi_rank >= 0.25) {
+              bandBadge = ' <span class="badge badge-warning badge-sm" title="MI band: Mid">Mid</span>';
+            } else {
+              bandBadge = ' <span class="badge badge-error badge-sm" title="MI band: Low">Low</span>';
+            }
           }
-          miCell = r.mi.toFixed(1) + bandEmoji;
+          miCell = r.mi.toFixed(1) + bandBadge;
         }
         // AI cell: percentage rendered as X% (rounded — table is dense,
-        // decimal point would crowd).
+        // decimal point would crowd). Wrapped in a DaisyUI outline
+        // badge so the AI-attribution signal reads consistently with
+        // the MI band badge above.
         const aiCell = (typeof r.ai_pct === 'number' && isFinite(r.ai_pct))
-          ? Math.round(r.ai_pct) + '%'
+          ? '<span class="badge badge-outline badge-sm">' + Math.round(r.ai_pct) + '%</span>'
           : '';
         html += '<tr data-path="' + escapeHtml(r.path) + '" class="hotspot-row" style="cursor:pointer">' +
           '<td class="path">' + escapeHtml(r.path) + '</td>' +
@@ -487,12 +509,19 @@
       const next = Math.min(PAGE_SIZE, more);
       const showNext = document.createElement('button');
       showNext.type = 'button';
+      // DaisyUI `btn btn-outline btn-sm` matches the v0.5.x admin-portal
+      // vocabulary established by PR-2 (theme toggle) and PR-4 (drawer
+      // close). Inline `.table-actions button { ... }` rules in the
+      // `<style>` block are no-op'd by this — the DaisyUI utility
+      // classes win specificity now that we declare them explicitly.
+      showNext.className = 'btn btn-outline btn-sm';
       showNext.textContent = 'Show next ' + next;
       showNext.addEventListener('click', function () { renderNextPage(PAGE_SIZE); });
       actionsEl.appendChild(showNext);
       if (more > PAGE_SIZE) {
         const showAll = document.createElement('button');
         showAll.type = 'button';
+        showAll.className = 'btn btn-outline btn-sm';
         showAll.textContent = 'Show all (' + more + ' more)';
         showAll.addEventListener('click', function () { renderNextPage(Infinity); });
         actionsEl.appendChild(showAll);
@@ -511,9 +540,29 @@
     var debounceTimer = null;
     filterEl.addEventListener('input', function (evt) {
       filterText = evt.target.value;
+      // Mirror the local filterText into the Alpine `filter` store so
+      // any other widget that subscribes via `Alpine.effect(...)` sees
+      // the live value. Wrapped in `window.Alpine` guard so the page
+      // still works if Alpine fails to load (e.g. user disabled JS
+      // through a content-security-policy header).
+      if (window.Alpine) {
+        window.Alpine.store('filter').set(filterText);
+      }
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(rerender, 80);
     });
+
+    // Seed the input from the persisted Alpine store on first render
+    // so a page reload (e.g. `--embed` step-summary roundtrip) brings
+    // the user's last filter back. The store value comes from
+    // localStorage via the Alpine persist plugin.
+    if (window.Alpine) {
+      const persisted = window.Alpine.store('filter').text;
+      if (persisted && !filterEl.value) {
+        filterEl.value = persisted;
+        filterText = persisted;
+      }
+    }
 
     // Initial render.
     rerender();
@@ -651,10 +700,14 @@
     for (var j = 0; j < tiles.length; j++) {
       const t = tiles[j];
       const tip = t.defKey ? buildTooltipHtml(t.defKey) : '';
-      html += '<div class="kpi-tile">' +
-        '<div class="kpi-label">' + escapeHtml(t.label) + tip + '</div>' +
-        '<div class="kpi-value">' + escapeHtml(t.value) + '</div>' +
-        '<div class="kpi-sub">' + escapeHtml(t.sub) + '</div>' +
+      // DaisyUI `stat` classes layered onto the v0.4.x `.kpi-*`
+      // semantic classes. The kpi-grid wrapper still drives layout;
+      // DaisyUI's stat-title/value/desc give typography + spacing
+      // tokens consistent with the rest of the v0.5.x chrome.
+      html += '<div class="kpi-tile stat">' +
+        '<div class="kpi-label stat-title">' + escapeHtml(t.label) + tip + '</div>' +
+        '<div class="kpi-value stat-value">' + escapeHtml(t.value) + '</div>' +
+        '<div class="kpi-sub stat-desc">' + escapeHtml(t.sub) + '</div>' +
         '</div>';
     }
     container.innerHTML = html;
@@ -792,6 +845,15 @@
   // Detail drawer (cross-widget click target)
   // -----------------------------------------------------------------
   function initDetailDrawer() {
+    // No-op when Alpine is present: the drawer's `@click` on the
+    // close button and `@keydown.escape.window` on the aside drive
+    // open/close via `$store.detail` — no imperative listeners
+    // needed here. Kept as a stub so the v0.4.x call at line 31
+    // doesn't need to be removed in this PR (smaller diff).
+    //
+    // Fallback path (Alpine missing for any reason): re-attach the
+    // legacy imperative listeners so the drawer still works.
+    if (window.Alpine) return;
     const closeBtn = document.getElementById('drawer-close');
     if (closeBtn) {
       closeBtn.addEventListener('click', function () {
@@ -874,7 +936,15 @@
     }
 
     body.innerHTML = html;
-    drawer.hidden = false;
+    // Open via Alpine store when Alpine is loaded; fall back to the
+    // legacy `hidden` attribute toggle otherwise. The aside markup in
+    // template.html keys its `x-show` off `$store.detail.open`, so
+    // setting the store's open state shows the drawer reactively.
+    if (window.Alpine) {
+      window.Alpine.store('detail').show();
+    } else {
+      drawer.hidden = false;
+    }
   }
 
   // Expose so the hotspot table can call it on row click.
