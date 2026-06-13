@@ -26,6 +26,33 @@ and `vendor/` ignore entry will be removed in one commit.
 User impact: pre-built Windows binaries are restored. No behaviour
 change vs `v0.4.5` on other platforms.
 
+### Improved — SQL hotspot/SoC/churn perf + lockstep complexity joins
+
+A small SQL-shaped perf batch that closes four `deep_analysis_report`
+findings without changing any output semantics. Byte-identical baseline
+validation across the cache-fixture suite confirms no result drift.
+
+- **F72 / F73 — lockstep `rev` equality on `complexity_metrics × entities`
+  joins.** The previous `JOIN entities e ON e.path = cm.path AND
+  e.name = cm.name` matched a complexity row to the LATEST entity for
+  that (path, name) regardless of when the metric was sampled, so
+  long-lived files whose entity tables drifted across many revs paid
+  for a redundant cross-product. Adding `AND e.rev_last_seen = cm.rev`
+  pins each metric to its sampled rev and cuts the cartesian explosion.
+  Applied to both `hotspots.rs::file_mi` and `output/spa.rs::run_xray`.
+- **F74 — secondary index on `changes(rename_from)`** materialises the
+  lookup the lineage CTE replays at every aggregation. Pure schema-time
+  change; the materialised index pays for itself within the first
+  rename-aware analysis call.
+- **F75 — `soc.rs` filtered-changes CTE.** Mirrors the F67 pattern from
+  `change_coupling.rs`: pre-filter `changes` against the pair set before
+  the self-implicit double scan, eliminating the
+  `Σ(blob_changes_per_file)²` blow-up on monorepos.
+- **F76 — pre-aggregate per `rev` to eliminate `COUNT(DISTINCT)` in
+  churn.** DuckDB's `COUNT(DISTINCT)` builds a hash set per group; the
+  pre-aggregated `commit_churn` CTE produces the same result via two
+  cheap scans and a join.
+
 ## [0.4.5] - 2026-06-13
 
 ### Added — CHM borrows, AI surfacing, step-summary, auditable tooltips
