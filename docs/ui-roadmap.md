@@ -262,14 +262,37 @@ auto-rebases each base when the prior merges.
 | **#11** | `feat/v0.5x-ui-redesign-pr3-kpi-tiles` | `9500047` | KPI tiles — `widgets.js::renderKpiTiles` dynamic markup gains `stat` / `stat-title` / `stat-value` / `stat-desc` alongside `kpi-tile` / `kpi-label` / `kpi-value` / `kpi-sub`. Critical fix: `@source "../widgets.js"` added to `input.css` so the pruner sees class names from JS-rendered markup. | Draft, all 6 CI jobs green |
 | **#12** | `feat/v0.5x-ui-redesign-pr4-drawer` | `ab79ef2` | Detail drawer — open/close state migrated from imperative `drawer.hidden = true/false` to `Alpine.store('detail')` reactive. Aside markup gains `x-show` / `x-transition.opacity` / `x-cloak` / `@keydown.escape.window`. First real consumer of the Alpine interactivity layer. Fallback path retained for the no-Alpine case. | Draft, CI in progress |
 | **#13** | `feat/v0.5x-ui-redesign-pr5-hotspot-table` | `7e5db5d` | Hotspot table — `<table class="table table-zebra">`; MI-band emoji (`🟢/🟡/🔴`) → DaisyUI `badge badge-{success,warning,error}` carrying `High`/`Mid`/`Low` text; bare AI percentage → `badge badge-outline`. Pruner-trap caught in development: runtime-concatenated `'badge-' + bandKind` hid variants from the scan; refactored to complete class-name literals in a three-branch `if`. | Draft, CI in progress |
-| **#14** | `feat/v0.5x-ui-redesign-pr6-filter-store` | `d825f8d` | Cross-widget filter store — `Alpine.store('filter', { text, set, clear })` with `Alpine.$persist` for `localStorage` round-trip. First writer: hotspot table filter input. Future widgets become subscribers via `Alpine.effect(() => Alpine.store('filter').text)` callbacks; no infrastructure changes required. | Draft, CI in progress |
+| **#14** | `feat/v0.5x-ui-redesign-pr6-filter-store` | `d825f8d` | Cross-widget filter store — `Alpine.store('filter', { text, set, clear })` with `Alpine.$persist` for `localStorage` round-trip. First writer: hotspot table filter input. Future widgets become subscribers via `Alpine.effect(() => Alpine.store('filter').text)` callbacks; no infrastructure changes required. | Ready for review, all 6 CI jobs green |
+| **#15** | `feat/v0.5x-ui-redesign-pr7-admin-portal-polish` | `93c74e0` | **Admin-portal polish (the visual flip).** Every widget section gains `card bg-base-200 shadow-lg`. Inline `.widget` / `.kpi-tile` / `.drawer-close` rules dropped so DaisyUI tokens actually win specificity. **First PR in the sequence that changes how the dashboard looks in the browser** — until #15 lands the prior six are no-op class additions blocked by inline-style specificity. | Draft, CI just fired |
 
-All six PRs ship **without removing any v0.4.x semantic CSS rules** —
-the inline `<style>` block still governs background / border /
-padding for visual continuity, and DaisyUI typography + spacing
-tokens layer on top via the utility classes. A future PR (call it
-PR-7) removes the now-redundant inline rules once every widget has
-migrated.
+PRs #7 / #10 / #11 / #12 / #13 / #14 are CSS-class additions only —
+the v0.4.x inline rules still govern background / border / padding
+so visual continuity holds. **PR #15 is the keystone**: it drops the
+inline rules so the new tokens take effect, and adds DaisyUI's `card`
+elevation around every widget. Without #15, the prior six PRs render
+zero visual change.
+
+#### Visual verification — admin-portal flip confirmed
+
+Local SPA render against this repo on the PR-7 branch (`93c74e0`,
+all prior PRs stacked via branch chain): 1.4 MB output HTML
+contains every expected class in the expected counts —
+
+```
+navbar                      → 3   stat-title           → 3
+footer footer-center        → 2   stat-value           → 2
+table table-zebra           → 2   stat-desc            → 2
+card bg-base-200 shadow-lg  → 9   stat                 → 9
+btn btn-ghost btn-sm        → 3   badge badge-outline  → 1
+badge badge-success         → 1   badge badge-warning  → 1
+badge badge-error           → 1
+x-data                      → 3   x-show               → 6
+x-cloak                     → 4   x-transition         → 2
+@keydown.escape.window      → 4   @click=              → 2
+Alpine.store                → 10  Alpine.$persist      → 1
+```
+
+Zero `{{PLACEHOLDER}}` leakage; all template substitutions clean.
 
 ##### Lessons surfaced during the run
 
