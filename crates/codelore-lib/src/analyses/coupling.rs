@@ -193,12 +193,27 @@ fn build_coupling_sql(
     let good_cte = good_commits_cte(bucket, use_lineage);
     format!(
         "WITH {good_cte},
+         filtered_changes AS (
+             -- Pre-filter `changes` by `good_commits` ONCE so both downstream
+             -- CTEs share the result. DuckDB materializes a CTE referenced
+             -- 2+ times, so this guarantees:
+             --   1. `file_revs` reads the pre-filtered set (was already
+             --      joining good_commits inline).
+             --   2. The `pairs` self-join is over the small filtered set
+             --      instead of the full `{src}` (which would be O(N²) on the
+             --      raw row count) — without this, DuckDB's planner *may*
+             --      push the filter down but isn't required to. On large
+             --      repos (changes >> good_commits) this difference is
+             --      decisive (e.g. 1M rows → trillion vs 100k² → 10B comps).
+             SELECT rev, path
+             FROM {src}
+             INNER JOIN good_commits USING(rev)
+         ),
          file_revs AS (
              -- (rev, path) is the changes PK; COUNT(rev) == COUNT(DISTINCT rev)
              -- per path. Plain COUNT skips DuckDB's distinct-tracking overhead.
              SELECT path, COUNT(rev) AS revs
-             FROM {src}
-             INNER JOIN good_commits USING(rev)
+             FROM filtered_changes
              GROUP BY path
              {file_revs_gate}
          ),
@@ -208,13 +223,15 @@ fn build_coupling_sql(
              -- `a.rev = b.rev` collapses the cardinality to one rev per
              -- joined row. COUNT(a.rev) == COUNT(*) == COUNT(DISTINCT a.rev)
              -- here; plain COUNT skips DuckDB's distinct-tracking overhead.
+             -- Self-join is over the pre-filtered set, not the raw `{src}` —
+             -- see the `filtered_changes` CTE comment above for the
+             -- complexity rationale.
              SELECT
                  a.path AS path_a,
                  b.path AS path_b,
                  COUNT(a.rev) AS shared
-             FROM {src} a
-             INNER JOIN {src} b ON a.rev = b.rev AND a.path < b.path
-             INNER JOIN good_commits ON good_commits.rev = a.rev
+             FROM filtered_changes a
+             INNER JOIN filtered_changes b ON a.rev = b.rev AND a.path < b.path
              GROUP BY a.path, b.path
              HAVING shared >= ?
          )
