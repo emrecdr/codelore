@@ -185,6 +185,15 @@ pub fn run_xray(db: &crate::facts::FactsDb, limit: i64) -> Result<Vec<XRayEntry>
     let mut stmt = db
         .conn()
         .prepare(
+            // The `e.rev_last_seen = cm.rev` filter is the lockstep
+            // invariant from `facts/ingest.rs`: append_entity_row and
+            // append_metric_row both receive the same head_rev. Earlier
+            // versions used `e.rev_introduced <= cm.rev AND e.rev_last_seen
+            // >= cm.rev` (a lex SHA range) which only happened to work
+            // when complexity_metrics has a single rev — random
+            // failures the moment an incremental ingest ships. Equality
+            // on the lockstep field is the correct semantic and matches
+            // the file_mi CTE in `analyses/hotspots.rs`.
             "SELECT cm.path,
                     cm.name,
                     cm.cognitive,
@@ -194,8 +203,7 @@ pub fn run_xray(db: &crate::facts::FactsDb, limit: i64) -> Result<Vec<XRayEntry>
              INNER JOIN entities e
                 ON e.path = cm.path
                 AND e.name = cm.name
-                AND e.rev_introduced <= cm.rev
-                AND (e.rev_last_seen IS NULL OR e.rev_last_seen >= cm.rev)
+                AND e.rev_last_seen = cm.rev
              WHERE cm.cognitive > 0
              ORDER BY cm.cognitive DESC, cm.path ASC, cm.name ASC
              LIMIT ?",

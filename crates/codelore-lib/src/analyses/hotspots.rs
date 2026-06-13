@@ -123,16 +123,25 @@ pub const SQL: &str = "
     -- file (the root space). Its `mi` is computed from the file's cumulative
     -- Halstead / Cyclomatic / SLOC inputs per Coleman 1994 + SEI 1997. We
     -- join `entities` to filter by kind because `complexity_metrics` doesn't
-    -- store kind. arg_max picks the most recent unit entry (rev_last_seen
-    -- DESC) to handle the rare case where a file's unit entity was renamed
-    -- across revs without a corresponding lineage rewrite.
+    -- store kind.
+    --
+    -- The `e.rev_last_seen = cm.rev` filter is the lockstep invariant:
+    -- `append_entity_row` and `append_metric_row` in `facts/ingest.rs`
+    -- both receive the same `head_rev`, so for any (path, name) in this
+    -- run, the entity row alive at the metric's rev is the only one
+    -- that should match. Without this filter we'd lex-compare SHA
+    -- strings as if chronological, which is unreliable (lex order on
+    -- SHA hex is essentially random vs commit order). MAX(cm.mi)
+    -- collapses to the single matched row by construction.
     file_mi AS (
         SELECT
             cm.path,
-            arg_max(cm.mi, e.rev_last_seen) AS mi
+            MAX(cm.mi) AS mi
         FROM complexity_metrics cm
         INNER JOIN entities e
-            ON e.path = cm.path AND e.name = cm.name
+            ON e.path = cm.path
+            AND e.name = cm.name
+            AND e.rev_last_seen = cm.rev
         WHERE e.kind = 'unit' AND cm.mi IS NOT NULL
         GROUP BY cm.path
     ),
