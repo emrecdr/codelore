@@ -82,6 +82,23 @@
   renderXRaySunburst(data.xray || []);
   window._codeloreRerenderers.push(function () { renderXRaySunburst(data.xray || []); });
 
+  // Bind a ResizeObserver to keep `chart` sized to `container`. Stores
+  // the observer on `container._codeloreResizeObserver` and disconnects
+  // any prior observer first so re-renders (color-mode toggles, theme
+  // switches) don't accumulate listeners across the SPA's lifetime.
+  // ResizeObserver also fires when the container's own dimensions
+  // change (e.g. sidebar collapses) — strictly better than
+  // `window.addEventListener('resize')`, which only fires on viewport
+  // changes and leaks one closure per re-render.
+  function bindChartResize(chart, container) {
+    if (container._codeloreResizeObserver) {
+      container._codeloreResizeObserver.disconnect();
+    }
+    const ro = new ResizeObserver(function () { chart.resize(); });
+    ro.observe(container);
+    container._codeloreResizeObserver = ro;
+  }
+
   function renderHotspotCirclePack(rows, colorMode) {
     const container = document.getElementById('widget-hotspot-circle-pack-body');
     if (!container) return;
@@ -221,7 +238,7 @@
       }
     });
 
-    window.addEventListener('resize', function () { chart.resize(); });
+    bindChartResize(chart, container);
   }
 
   function renderHotspotTable(rows) {
@@ -568,7 +585,7 @@
       }
     });
 
-    window.addEventListener('resize', function () { chart.resize(); });
+    bindChartResize(chart, container);
   }
 
   // -----------------------------------------------------------------
@@ -778,7 +795,7 @@
       },
       series: series,
     });
-    window.addEventListener('resize', function () { chart.resize(); });
+    bindChartResize(chart, container);
   }
 
   // -----------------------------------------------------------------
@@ -851,7 +868,7 @@
       calendar: calendars,
       series: series,
     });
-    window.addEventListener('resize', function () { chart.resize(); });
+    bindChartResize(chart, container);
   }
 
   // -----------------------------------------------------------------
@@ -932,7 +949,7 @@
       }
     });
 
-    window.addEventListener('resize', function () { chart.resize(); });
+    bindChartResize(chart, container);
   }
 
   // -----------------------------------------------------------------
