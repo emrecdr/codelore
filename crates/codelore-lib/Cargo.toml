@@ -195,3 +195,7 @@ required-features = ["test-support"]
 [[test]]
 name = "cache_test"
 required-features = ["test-support"]
+
+[[test]]
+name = "f69_window_spike_test"
+required-features = ["test-support"]
