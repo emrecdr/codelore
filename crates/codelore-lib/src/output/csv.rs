@@ -477,6 +477,41 @@ pub fn write_soc_csv<W: Write>(rows: &[crate::analyses::soc::SocRow], w: &mut W)
     Ok(())
 }
 
+pub fn write_communities_csv<W: Write>(
+    rows: &[crate::analyses::communities::CommunityRow],
+    stats: &crate::analyses::communities::CommunityStats,
+    w: &mut W,
+) -> Result<()> {
+    // Stats line first (as a `#` comment) so spreadsheet tools that
+    // honour the row 0 = header convention treat it as metadata rather
+    // than skewing column counts. modularity / num_communities /
+    // num_nodes / num_edges captures the whole partition shape.
+    writeln!(
+        w,
+        "# modularity={:.6} num_communities={} num_nodes={} num_edges={}",
+        stats.modularity, stats.num_communities, stats.num_nodes, stats.num_edges,
+    )
+    .map_err(CodeLoreError::Io)?;
+    writeln!(
+        w,
+        "entity,community_id,community_size,intra_strength,inter_strength"
+    )
+    .map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{},{:.6},{:.6}",
+            quote_if_needed(&row.entity),
+            row.community_id,
+            row.community_size,
+            row.intra_strength,
+            row.inter_strength,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_messages_csv<W: Write>(
     rows: &[crate::analyses::messages::MessagesRow],
     w: &mut W,

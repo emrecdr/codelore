@@ -730,6 +730,7 @@ dependencies = [
  "globset",
  "hex",
  "ignore",
+ "leiden-rs",
  "rayon",
  "regex",
  "serde",
@@ -2802,6 +2803,17 @@ name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
+
+[[package]]
+name = "leiden-rs"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7bbf4703fdbd25078c1842083c8f4e5551ed118a9d00342e309fee0bea46d42"
+dependencies = [
+ "rand 0.9.4",
+ "rustc-hash",
+ "thiserror",
+]
 
 [[package]]
 name = "lexical-core"

@@ -53,6 +53,11 @@ pub enum AnalysisName {
     // (automatic departure detection from commit-date falloff vs
     // their required manual Ex-Developer marking).
     KnowledgeIslands,
+    // Leiden community detection on the Fisher-significant behavioral
+    // coupling graph. Surfaces per-file community_id + community size +
+    // intra/inter-community edge strength so users can see which files
+    // cluster and which files leak across module boundaries.
+    Communities,
 }
 
 impl AnalysisName {
@@ -82,6 +87,7 @@ impl AnalysisName {
             Self::EntityOwnership => "entity-ownership",
             Self::TopCommitters => "top-committers",
             Self::KnowledgeIslands => "knowledge-islands",
+            Self::Communities => "communities",
         }
     }
 
@@ -111,6 +117,7 @@ impl AnalysisName {
             Self::EntityOwnership,
             Self::TopCommitters,
             Self::KnowledgeIslands,
+            Self::Communities,
         ]
     }
 

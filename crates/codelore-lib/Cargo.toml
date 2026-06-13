@@ -65,6 +65,13 @@ regex = "1"
 # Rust `regex` crate doesn't support lookaround. fancy-regex wraps
 # `regex` with a backtracking engine for non-regular features.
 fancy-regex = "0.18"
+# Community detection on the behavioral coupling graph. We use Leiden
+# (Traag, Waltman & van Eck 2019) — the strict successor to Louvain
+# (Blondel et al. 2008) that fixes Louvain's "broken-community" failure
+# mode by adding a refinement phase guaranteeing well-connected
+# communities. The `analyses/communities.rs` orchestrator drives it
+# from Fisher-significant coupling pairs. MIT/Apache-2.0 license.
+leiden-rs = { version = "0.8", default-features = false }
 
 [features]
 default = []

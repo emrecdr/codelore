@@ -332,6 +332,40 @@ pub fn write_soc_markdown<W: Write>(
     Ok(())
 }
 
+pub fn write_communities_markdown<W: Write>(
+    rows: &[crate::analyses::communities::CommunityRow],
+    stats: &crate::analyses::communities::CommunityStats,
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore behavioral communities (Leiden)")?;
+    writeln!(
+        w,
+        "**Modularity Q:** {:.3} &nbsp; **Communities:** {} &nbsp; **Nodes:** {} &nbsp; **Edges:** {}",
+        stats.modularity, stats.num_communities, stats.num_nodes, stats.num_edges,
+    )
+    .map_err(CodeLoreError::Io)?;
+    writeln!(w).map_err(CodeLoreError::Io)?;
+    writeln!(
+        w,
+        "| Community | Size | Entity | Intra strength | Inter strength |"
+    )
+    .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---:|---:|---|---:|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| {} | {} | `{}` | {:.3} | {:.3} |",
+            row.community_id,
+            row.community_size,
+            row.entity,
+            row.intra_strength,
+            row.inter_strength,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_messages_markdown<W: Write>(
     rows: &[crate::analyses::messages::MessagesRow],
     w: &mut W,

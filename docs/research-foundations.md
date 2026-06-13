@@ -192,6 +192,70 @@ architecture is usually the inter-service contract.
 
 ---
 
+### `communities` — Leiden community detection on the behavioral graph
+
+**Citations**:
+- Traag, V. A., Waltman, L., & van Eck, N. J. (2019). "From Louvain to
+  Leiden: guaranteeing well-connected communities." *Scientific
+  Reports* 9: 5233.
+  [doi:10.1038/s41598-019-41695-z](https://doi.org/10.1038/s41598-019-41695-z)
+- Newman, M. E. J. (2006). "Modularity and community structure in
+  networks." *Proceedings of the National Academy of Sciences*
+  103(23): 8577–8582 (Q metric definition).
+- Blondel, V. D., Guillaume, J.-L., Lambiotte, R., & Lefebvre, E.
+  (2008). "Fast unfolding of communities in large networks."
+  *J. Stat. Mech.* P10008 (Louvain — the predecessor algorithm).
+
+**What the signal means**: Treat every file with at least one
+Fisher-significant coupling partner as a node, every coupling pair
+as an undirected edge weighted by `-log10(fisher_p)`. Leiden then
+partitions the nodes into communities by greedily moving each node
+to whichever community most improves the modularity score Q, with a
+refinement phase that guarantees each community is internally
+connected. The output answers two questions at once: which files
+cluster as a behavioral module, and how much of each file's
+coupling weight stays inside its module vs. leaks across boundaries.
+
+**Why Leiden, not Louvain**: Louvain's local-move heuristic can leave
+a community internally disconnected — two unrelated subsystems joined
+only through a bridge file would mistakenly appear as one community.
+Leiden's refinement phase fixes this. Same Q objective, costs a few
+percent runtime. Per CodeLore's "modernize, don't migrate" principle,
+we ship the strict improvement even where the roadmap said Louvain.
+
+**What "good values" look like**:
+- **Modularity Q ≥ 0.3** — Newman 2006 reports this as the threshold
+  above which a partition is "clearly modular" on real-world graphs.
+- **Q ≥ 0.5** — strong community structure; the codebase has obvious
+  behavioral modules.
+- **High `inter_strength / (intra + inter)` per file** — flags a
+  "bridge" file whose changes leak across module boundaries. Often a
+  shared utility, a config holder, or — less innocently — a
+  god-object spread across what should be separate concerns.
+
+**Determinism**: Leiden's node-traversal order is randomised; CodeLore
+seeds the RNG with a fixed constant so two runs on the same fact
+store produce byte-identical partitions and modularity scores. The
+cache-key invariant requires this.
+
+**Implementation**:
+`crates/codelore-lib/src/analyses/communities.rs`
+([source](../crates/codelore-lib/src/analyses/communities.rs))
+— driven by the [`leiden-rs`](https://crates.io/crates/leiden-rs)
+crate (MIT/Apache 2.0; ~3 transitive deps under `default-features =
+false`).
+
+**Why it matters**: This is CodeLore's novel signal vs CHM. CHM
+([Ben Khalfallah 2025 TOSEM](https://doi.org/10.1145/3737670))
+computes Louvain on the *static* dependency graph (`madge` AST
+imports, JS/TS only). CodeLore computes Leiden on the *behavioral*
+coupling graph (Fisher-significant change-co-change pairs, polyglot).
+Same algorithm family, genuinely different signal — see the
+"borrow-or-build principle" in
+[`docs/roadmap-v1.x-and-beyond.md`](roadmap-v1.x-and-beyond.md).
+
+---
+
 ### `code-age` — Months since last modification
 
 **Citation**: Inspired by Dan North's talk *"Short Software Half-Life"*

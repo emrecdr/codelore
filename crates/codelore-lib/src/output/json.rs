@@ -104,6 +104,24 @@ pub fn write_soc_json<W: Write>(rows: &[crate::analyses::soc::SocRow], w: &mut W
     write_json(rows, w)
 }
 
+/// JSON has structure CSV doesn't — emit both the rows AND the stats in
+/// a single object so consumers don't need a sidecar manifest to know
+/// what modularity / `num_communities` / etc. went with the rows.
+pub fn write_communities_json<W: Write>(
+    rows: &[crate::analyses::communities::CommunityRow],
+    stats: &crate::analyses::communities::CommunityStats,
+    w: &mut W,
+) -> Result<()> {
+    #[derive(serde::Serialize)]
+    struct Wrapper<'a> {
+        stats: &'a crate::analyses::communities::CommunityStats,
+        rows: &'a [crate::analyses::communities::CommunityRow],
+    }
+    let payload = Wrapper { stats, rows };
+    serde_json::to_writer_pretty(w, &payload)
+        .map_err(|e| crate::CodeLoreError::Output(format!("write_communities_json: {e}")))
+}
+
 pub fn write_messages_json<W: Write>(
     rows: &[crate::analyses::messages::MessagesRow],
     w: &mut W,

@@ -825,6 +825,31 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             (fmt, AnalysisName::Soc) => {
                 anyhow::bail!("soc analysis supports csv|json|markdown; got {fmt:?}")
             }
+            // --- communities (Leiden community detection on behavioral coupling graph) ---
+            ("csv", AnalysisName::Communities) => {
+                let (rows, stats) =
+                    codelore_lib::analyses::communities::run_communities(&db, &opts)
+                        .context("run communities")?;
+                codelore_lib::output::csv::write_communities_csv(&rows, &stats, &mut out)
+                    .context("write csv")?;
+            }
+            ("json", AnalysisName::Communities) => {
+                let (rows, stats) =
+                    codelore_lib::analyses::communities::run_communities(&db, &opts)
+                        .context("run communities")?;
+                codelore_lib::output::json::write_communities_json(&rows, &stats, &mut out)
+                    .context("write json")?;
+            }
+            ("markdown", AnalysisName::Communities) => {
+                let (rows, stats) =
+                    codelore_lib::analyses::communities::run_communities(&db, &opts)
+                        .context("run communities")?;
+                codelore_lib::output::markdown::write_communities_markdown(&rows, &stats, &mut out)
+                    .context("write markdown")?;
+            }
+            (fmt, AnalysisName::Communities) => {
+                anyhow::bail!("communities analysis supports csv|json|markdown; got {fmt:?}")
+            }
             // --- messages (commit-message regex matcher) ---
             ("csv", AnalysisName::Messages) => {
                 let rows = codelore_lib::analyses::messages::run_messages(&db, &opts)
