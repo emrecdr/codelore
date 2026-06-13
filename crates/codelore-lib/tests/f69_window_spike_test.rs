@@ -83,7 +83,10 @@ fn build_spike_fixture() -> tempfile::TempDir {
 
     for i in 0..30 {
         let f = files[i % files.len()];
-        write(path.join(f), &format!("// v{i}\npub fn f_{i}() -> u32 {{ {i} }}\n"));
+        write(
+            path.join(f),
+            &format!("// v{i}\npub fn f_{i}() -> u32 {{ {i} }}\n"),
+        );
         let (name, email) = authors[i % authors.len()];
         let author = format!("{name} <{email}>");
         git(path, &["add", f]);
