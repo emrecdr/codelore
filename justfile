@@ -44,3 +44,14 @@ ci: fmt-check lint deny test
 # Run the binary
 codelore *ARGS:
     cargo run --release -p codelore-cli -- "$@"
+
+# Recompile the SPA's Tailwind v4 + DaisyUI 5 CSS asset.
+# Requires the Tailwind v4 standalone CLI on $PATH (see
+# crates/codelore-lib/src/output/spa/tailwind-src/README.md for the
+# install workflow). The compiled output is checked in so build.rs can
+# inline it the same way it inlines ECharts/d3.
+spa-css-rebuild:
+    tailwindcss \
+        -i crates/codelore-lib/src/output/spa/tailwind-src/input.css \
+        -o crates/codelore-lib/src/output/spa/tailwind.daisyui.min.css \
+        --minify

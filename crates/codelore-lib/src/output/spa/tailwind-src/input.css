@@ -1,0 +1,36 @@
+/* Source CSS for the v0.5.x SPA dashboard.
+ *
+ * This file is the INPUT to the Tailwind v4 standalone CLI; the
+ * compiled artifact `../tailwind.daisyui.min.css` is what `build.rs`
+ * inlines into the rendered HTML. Re-generate via:
+ *
+ *     just spa-css-rebuild
+ *
+ * (See `crates/codelore-lib/src/output/spa/tailwind-src/README.md` for
+ * the one-time CLI install + rebuild workflow.)
+ *
+ * Plugin order matters: the `@plugin "daisyui"` directive registers
+ * DaisyUI 5's component layer (cards, drawer, badges, tables, stats)
+ * on top of the `@import "tailwindcss"` core. Anything below that
+ * lives in `@layer components`/`@layer utilities` per Tailwind v4
+ * conventions.
+ */
+
+@import "tailwindcss";
+@plugin "daisyui";
+
+/* The standalone CLI scans `@source` paths for class usage. Only
+ * `template.html` carries the class soup that needs pruning; the
+ * embedded data JSON and ECharts/d3 internals never produce class
+ * names. */
+@source "../template.html";
+
+/* CodeLore-specific accent overrides — keep the brand colour from the
+ * v0.4.x palette so the dashboard stays visually continuous with
+ * `--format html`. DaisyUI's `corporate` theme is the closest match
+ * out-of-the-box; brand specifics layer on top. */
+@theme {
+    --color-codelore-accent: #2ea44f;
+    --color-codelore-accent-warn: #f59e0b;
+    --color-codelore-accent-danger: #e0584e;
+}

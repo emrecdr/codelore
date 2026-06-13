@@ -1,0 +1,36 @@
+/* STUB — replace by running `just spa-css-rebuild`.
+ *
+ * This file is the precompiled Tailwind v4 + DaisyUI 5 CSS bundle that
+ * `output/spa.rs` substitutes into `template.html` at the
+ * tailwind-daisy-css template slot. It is checked in so the build
+ * stays offline-first (no foreign-binary execution at cargo build
+ * time); regeneration is a once-per-DaisyUI-bump chore documented in
+ * `tailwind-src/README.md`.
+ *
+ * Keeping this stub committed (rather than a `.gitignore`d file) means:
+ *   - `cargo build` works on a fresh checkout without anyone needing
+ *     to install the Tailwind standalone CLI first; you just get the
+ *     unstyled fallback below.
+ *   - The presence/absence of real CSS is `git diff`-visible — a
+ *     PR that forgets to regenerate stands out immediately.
+ *
+ * Run `just spa-css-rebuild` to replace this stub with the real
+ * compiled bundle (Tailwind core + DaisyUI components + any custom
+ * @theme overrides from `tailwind-src/input.css`).
+ */
+
+/* Fallback unstyled-but-readable defaults so the dashboard remains
+ * usable while the stub is in place. These match the existing v0.4.x
+ * inline CSS variables for visual continuity. */
+:root {
+    --color-bg: #0f0f0f;
+    --color-bg-elev: #1a1a1a;
+    --color-fg: #e6e6e6;
+    --color-accent: #2ea44f;
+}
+body {
+    margin: 0;
+    background: var(--color-bg);
+    color: var(--color-fg);
+    font: 14px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
