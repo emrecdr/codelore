@@ -33,7 +33,7 @@ fn write(p: std::path::PathBuf, content: &str) {
 /// `{a,b}`, `{a,c}`, `{b,c}` pair a 12-of-27 shared count over a 27-rev
 /// universe, which Fisher's exact test clears at the default p=0.05.
 /// Expected: every trio path has degree=2 (paired with each of the other
-/// two), weighted_degree > 0.
+/// two), `weighted_degree` > 0.
 #[test]
 fn degree_equals_count_of_fisher_significant_partners() {
     let dir = tempfile::tempdir().unwrap();

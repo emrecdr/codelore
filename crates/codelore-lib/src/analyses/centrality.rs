@@ -55,6 +55,20 @@ pub struct CentralityRow {
 }
 
 pub fn run_centrality(db: &FactsDb, opts: &Options) -> Result<Vec<CentralityRow>> {
+    // Per-path accumulator. `coupling.rs` computes `revs_a` / `revs_b`
+    // via `COUNT(*) GROUP BY path`, so per path the value is identical
+    // across every pair the path appears in. Overwriting `revs` on
+    // every encounter is therefore idempotent rather than a race.
+    //
+    // Declared at the top of the function body so the items-after-
+    // statements clippy pedantic lint doesn't fire (items must come
+    // before any `let` statements in the same scope).
+    struct Acc {
+        degree: u32,
+        weighted: f64,
+        revs: u32,
+    }
+
     // `--rows N` MUST NOT propagate into the inner coupling query — we
     // need every Fisher-significant pair to compute degree honestly.
     // Truncation is applied after aggregation. Same rationale as
@@ -63,15 +77,6 @@ pub fn run_centrality(db: &FactsDb, opts: &Options) -> Result<Vec<CentralityRow>
     // bug narrative.
     let pairs = run_coupling(db, &opts.with_no_row_limit())?;
 
-    // Single pass over the pair list. `coupling.rs` computes `revs_a` /
-    // `revs_b` via `COUNT(*) GROUP BY path`, so per path the value is
-    // identical across every pair the path appears in. Overwriting on
-    // every encounter is therefore idempotent rather than a race.
-    struct Acc {
-        degree: u32,
-        weighted: f64,
-        revs: u32,
-    }
     let mut acc: HashMap<String, Acc> = HashMap::new();
     for p in &pairs {
         // Defensive: the `fishers_exact` crate can in theory return a
