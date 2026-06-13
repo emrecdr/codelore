@@ -94,6 +94,13 @@ pub struct SpaDashboard {
     /// when no hotspots are present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mi_rollup: Option<crate::analyses::mi::MiRollup>,
+    /// Density of the behavioral coupling graph in `[0, 1]` — the ratio
+    /// of Fisher-significant pairs to the maximum possible pairs in the
+    /// `revs >= min_revs` candidate node set. Computed via
+    /// [`crate::analyses::coupling::density`] over the same node universe
+    /// `run_coupling` uses. `None` when coupling analysis was skipped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coupling_density: Option<f64>,
 }
 
 /// One function in the X-Ray sunburst.

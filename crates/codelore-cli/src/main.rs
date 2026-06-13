@@ -1246,11 +1246,10 @@ fn run_spa_dispatch(
         tracing::warn!("spa: trends query failed; skipping: {e}");
         Vec::new()
     });
-    // Derive the MI band rollup directly from hotspots — cheap pure-Rust
-    // pass over what we already loaded; no extra SQL query needed.
     let mi_rollup = Some(codelore_lib::analyses::mi::MiRollup::from_hotspots(
         &hotspots,
     ));
+    let coupling_density = compute_spa_coupling_density(db, opts, &coupling);
     let dash = SpaDashboard {
         hotspots,
         summary,
@@ -1262,6 +1261,7 @@ fn run_spa_dispatch(
         daily_commits,
         trends,
         mi_rollup,
+        coupling_density,
     };
 
     let now = time::OffsetDateTime::now_utc();
@@ -1310,4 +1310,28 @@ fn run_spa_dispatch(
     );
     eprintln!("  open in browser: file://{}", abs.display());
     Ok(())
+}
+
+/// Compute the behavioral coupling graph density for the SPA dashboard.
+/// `coupling` is the Fisher-significant edge set already returned by
+/// `run_coupling`. Skips the node-count query when the edge set is empty
+/// (density would be `0` regardless) and converts node-count failures
+/// into a warning + `None` so dashboard generation never blocks on a
+/// secondary metric.
+#[cfg(feature = "spa")]
+fn compute_spa_coupling_density(
+    db: &codelore_lib::facts::FactsDb,
+    opts: &codelore_lib::Options,
+    coupling: &[codelore_lib::analyses::coupling::CouplingRow],
+) -> Option<f64> {
+    if coupling.is_empty() {
+        return None;
+    }
+    match codelore_lib::analyses::coupling::count_coupling_nodes(db, opts) {
+        Ok(n) => Some(codelore_lib::analyses::coupling::density(n, coupling.len())),
+        Err(e) => {
+            tracing::warn!("spa: coupling-density node count failed; skipping: {e}");
+            None
+        }
+    }
 }

@@ -121,6 +121,49 @@ static analysis misses. A pair of `.h` and `.cpp` files coupled at 100%
 is expected; a pair of `auth.rs` and `billing.rs` coupled at 80% is a
 red flag pointing at an abstraction debt.
 
+#### Behavioral coupling density (`coupling_density` KPI)
+
+**Citation**: Newman, M. E. J. (2010). *Networks: An Introduction.*
+Oxford University Press. Chapter 6.10 on graph density:
+`D = 2E / (V·(V−1))` for undirected graphs. See also CHM
+([Ben Khalfallah 2025 TOSEM](https://doi.org/10.1145/3737670)) for the
+*static*-graph density precedent we adapted from.
+
+**What the signal means**: The behavioral coupling graph treats every
+file as a node and every Fisher-significant coupling pair as an edge.
+Density is the ratio of actual edges to the maximum possible — a single
+scalar in `[0, 1]` summarising "how interconnected is this codebase
+in commit-co-change space?". The denominator uses the **full
+candidate node set** (files with `revs ≥ min_revs` after the
+`good_commits` pre-filter), including files with no significant
+coupling partners — this matches graphology / Newman convention and
+keeps the metric comparable as the edge set fluctuates run-to-run.
+
+**Adaptation principle**: CHM computes density on the *static*
+dependency graph (`madge` AST imports, JS/TS only). CodeLore computes
+it on the *behavioral* coupling graph (Fisher-significant change-co-change
+pairs, polyglot). Same algorithm, genuinely different signal — see the
+"borrow-or-build principle" in
+[`docs/roadmap-v1.x-and-beyond.md`](roadmap-v1.x-and-beyond.md).
+
+**What "good values" look like**:
+- `< 0.01` — sparsely coupled, files change largely independently
+  (well-modularised or small codebase where few files have enough
+  revisions to participate).
+- `0.01 – 0.10` — typical for modular production codebases.
+- `> 0.10` — tightly coupled. Either a cohesive small codebase (the
+  natural case at low |V|) or a candidate for architectural refactoring
+  (at high |V|, this means a *significant* fraction of all file pairs
+  move together in git).
+
+**Empirical calibration**: measured on CodeLore's own repository at
+v0.4.4 — 59 candidate nodes, 47 Fisher-significant edges, density
+`≈ 0.0275`.
+
+**Implementation**: `crates/codelore-lib/src/analyses/coupling.rs`
+functions `count_coupling_nodes` and `density`. Surfaced on the SPA
+dashboard's KPI tiles via `SpaDashboard::coupling_density`.
+
 ---
 
 ### `soc` — Sum of Coupling (per-file coupling centrality)

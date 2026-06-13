@@ -387,3 +387,125 @@ pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
 
     Ok(out)
 }
+
+/// Count the number of nodes in the behavioral coupling graph universe.
+/// Returns the count of distinct files in the same `file_revs` candidate
+/// set used by [`run_coupling`] — i.e. files with `revs >= opts.min_revs`
+/// after the configured `--time-bucket` / `--use-canonical-lineage`
+/// rewrite. Honours `opts.max_changeset_size` via the same `good_commits`
+/// pre-filter so isolated nodes inside large commits don't inflate the
+/// denominator of [`density`].
+///
+/// # Errors
+///
+/// Propagates `DuckDB` errors from the underlying query.
+pub fn count_coupling_nodes(db: &FactsDb, opts: &Options) -> Result<u64> {
+    let src = source_table(opts);
+    let use_lineage =
+        opts.use_canonical_lineage && opts.time_bucket.is_none() && src == "changes_lineage";
+    if use_lineage {
+        crate::analyses::lineage::materialize_if_needed(db, opts)?;
+    }
+    // Mirrors the `good_commits` + `file_revs` CTE pair in
+    // build_coupling_sql, narrowed to a single scalar.
+    let sql = format!(
+        "WITH good_commits AS (
+             SELECT rev FROM (
+                 SELECT rev, COUNT(path) AS n
+                 FROM {src}
+                 GROUP BY rev
+             ) WHERE n <= ?
+         ),
+         file_revs AS (
+             SELECT path, COUNT(rev) AS revs
+             FROM {src}
+             INNER JOIN good_commits USING(rev)
+             GROUP BY path
+             HAVING revs >= ?
+         )
+         SELECT COUNT(*) FROM file_revs"
+    );
+    let count: i64 = db
+        .conn()
+        .query_row(
+            &sql,
+            params![opts.max_changeset_size, opts.min_revs],
+            |r| r.get::<_, i64>(0),
+        )
+        .map_err(|e| CodeLoreError::Analysis(format!("count coupling nodes: {e}")))?;
+    Ok(u64::try_from(count).unwrap_or(0))
+}
+
+/// Density of the behavioral coupling graph: `2·E / (V·(V−1))`, in `[0, 1]`.
+///
+/// `V` is the node count from [`count_coupling_nodes`]; `E` is the count
+/// of Fisher-significant coupling pairs (typically the length of the
+/// [`run_coupling`] result vector). The graph is undirected and each pair
+/// is counted once.
+///
+/// Returns `0.0` when `V < 2` (a graph with fewer than two nodes has no
+/// possible edges). Returns `1.0` when `E ≥ V·(V−1)/2` (every possible
+/// pair is coupled — fully connected).
+///
+/// Range guidance (empirical, repo-dependent):
+/// - `< 0.01` — sparsely coupled, files change largely independently
+/// - `0.01 – 0.10` — typical for modular codebases
+/// - `> 0.10` — tightly coupled; candidate for refactoring or a sign
+///   of a small/cohesive codebase
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn density(node_count: u64, edge_count: usize) -> f64 {
+    if node_count < 2 {
+        return 0.0;
+    }
+    let max_edges = node_count.saturating_mul(node_count - 1) / 2;
+    if max_edges == 0 {
+        return 0.0;
+    }
+    let e = edge_count as f64;
+    let max = max_edges as f64;
+    (e / max).clamp(0.0, 1.0)
+}
+
+#[cfg(test)]
+mod density_tests {
+    use super::density;
+
+    #[test]
+    fn density_zero_when_fewer_than_two_nodes() {
+        assert!(density(0, 0).abs() < f64::EPSILON);
+        assert!(density(1, 0).abs() < f64::EPSILON);
+        // Pathological case: an edge count > 0 with < 2 nodes — return 0.0
+        // (graph is structurally impossible; defensive guard).
+        assert!(density(1, 5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn density_zero_on_empty_edge_set() {
+        assert!(density(100, 0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn density_one_when_complete_graph() {
+        // K_4 has 6 edges (4·3/2).
+        assert!((density(4, 6) - 1.0).abs() < f64::EPSILON);
+        // Over-count is clamped to 1.0.
+        assert!((density(4, 99) - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn density_matches_empirical_codelore_repo() {
+        // Empirically measured on the CodeLore repo at v0.4.4: 59
+        // candidate nodes (files with revs >= min_revs after the
+        // good_commits pre-filter) and 47 Fisher-significant edges. The
+        // `~0.0275` figure documents the calibration in
+        // research-foundations.md. NOTE: the denominator uses the
+        // FULL candidate set including isolated nodes (no coupling
+        // partners), matching graphology / Newman convention.
+        let d = density(59, 47);
+        assert!(
+            (d - 0.0275).abs() < 0.001,
+            "expected ~0.0275, got {d} — re-measure if the fixture has drifted"
+        );
+    }
+}
