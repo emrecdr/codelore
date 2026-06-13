@@ -46,6 +46,62 @@ use codelore_lib::Options;
 use codelore_lib::facts::FactsDb;
 use codelore_lib::repo::GixRepo;
 
+/// Inline fixture: 30 commits, 5 files, 3 authors. Small enough to be
+/// rock-solid on every CI OS (the 500-commit `test_support::medium_repo`
+/// fixture has a Linux-only fragility the broader test suite hasn't
+/// exercised), but produces enough (path, author) groups and revs that
+/// the CTE-vs-window plan difference is visible in `EXPLAIN ANALYZE`.
+fn build_spike_fixture() -> tempfile::TempDir {
+    fn git(path: &std::path::Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(path)
+            .output()
+            .expect("git");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    fn write(p: std::path::PathBuf, content: &str) {
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, content).unwrap();
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path();
+    git(path, &["init", "-b", "main", "--quiet"]);
+    git(path, &["config", "user.email", "test@example.com"]);
+    git(path, &["config", "user.name", "T"]);
+
+    let authors = [
+        ("Alice", "alice@example.com"),
+        ("Bob", "bob@example.com"),
+        ("Carol", "carol@example.com"),
+    ];
+    let files = ["src/a.rs", "src/b.rs", "src/c.rs", "src/d.rs", "src/e.rs"];
+
+    for i in 0..30 {
+        let f = files[i % files.len()];
+        write(path.join(f), &format!("// v{i}\npub fn f_{i}() -> u32 {{ {i} }}\n"));
+        let (name, email) = authors[i % authors.len()];
+        let author = format!("{name} <{email}>");
+        git(path, &["add", f]);
+        git(
+            path,
+            &[
+                "commit",
+                "-m",
+                &format!("c{i}"),
+                "--author",
+                &author,
+                "--quiet",
+            ],
+        );
+    }
+    dir
+}
+
 const SQL_CTE: &str = "
     WITH author_revs AS (
         SELECT
@@ -126,12 +182,12 @@ fn collect_hhi(db: &FactsDb, sql: &str) -> Vec<HhiRow> {
 
 #[test]
 fn cte_and_window_return_byte_identical_rows() {
-    let medium = codelore_lib::test_support::medium_repo::build();
+    let fixture = build_spike_fixture();
     let opts = Options {
-        repo_path: medium.dir.path().to_path_buf(),
+        repo_path: fixture.path().to_path_buf(),
         ..Options::default()
     };
-    let repo = GixRepo::open(medium.dir.path()).expect("open");
+    let repo = GixRepo::open(fixture.path()).expect("open");
     let db = FactsDb::new_in_memory().expect("db");
     db.ingest(&repo, &opts).expect("ingest");
 
@@ -164,12 +220,12 @@ fn cte_and_window_return_byte_identical_rows() {
         );
     }
 
-    // Surface the wall-clock times. Medium fixture is small enough that
-    // either variant should complete in microseconds, so these numbers
-    // are largely indicative; the real bench-gate runs on the kernel
-    // snapshot in CI. Tests pipe stdout to nextest's per-test buffer,
-    // visible with `cargo test -- --nocapture`.
-    eprintln!("[F69 spike] medium fixture timings:");
+    // Surface the wall-clock times. The 30-commit fixture is small
+    // enough that either variant completes in single-digit milliseconds,
+    // so these numbers are largely indicative; the real bench-gate runs
+    // on the kernel snapshot in CI. Tests pipe stdout to nextest's
+    // per-test buffer, visible with `cargo test -- --nocapture`.
+    eprintln!("[F69 spike] inline-fixture timings:");
     eprintln!("  CTE-totals:       {dur_cte:?}");
     eprintln!("  window function:  {dur_win:?}");
     eprintln!(
@@ -187,12 +243,12 @@ fn cte_and_window_return_byte_identical_rows() {
 /// observational; runs with `cargo test -- --nocapture` to see output.
 #[test]
 fn capture_explain_analyze_plans() {
-    let medium = codelore_lib::test_support::medium_repo::build();
+    let fixture = build_spike_fixture();
     let opts = Options {
-        repo_path: medium.dir.path().to_path_buf(),
+        repo_path: fixture.path().to_path_buf(),
         ..Options::default()
     };
-    let repo = GixRepo::open(medium.dir.path()).expect("open");
+    let repo = GixRepo::open(fixture.path()).expect("open");
     let db = FactsDb::new_in_memory().expect("db");
     db.ingest(&repo, &opts).expect("ingest");
 
