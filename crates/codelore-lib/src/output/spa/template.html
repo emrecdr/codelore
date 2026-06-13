@@ -560,12 +560,22 @@
   <script>{{D3_HIERARCHY_JS}}</script>
 
   <!-- Alpine.js + Alpine persist plugin: HTML-attribute reactivity for
-       v0.5.x cross-widget filter state. Loading order matters — the
-       persist plugin's `Alpine.plugin(...)` call needs Alpine's global
-       to already exist. The defer attribute keeps both scripts from
-       blocking the rest of the page's parse. -->
-  <script defer>{{ALPINE_JS}}</script>
-  <script defer>{{ALPINE_PERSIST_JS}}</script>
+       v0.5.x cross-widget filter state.
+
+       Loading order: core first, then plugin — the upstream README
+       convention. Technically the persist plugin registers via
+       `document.addEventListener('alpine:init', ...)` which captures
+       Alpine's lifecycle event regardless of which inline script
+       parses first, so the order is documentation-of-intent rather
+       than a correctness constraint.
+
+       No `defer` attribute: per the HTML5 spec, `defer` is ignored on
+       inline scripts (it only changes behaviour for `<script src>`).
+       Position-based ordering is what carries here — every script sits
+       AFTER the markup it operates on, so the DOM is fully parsed by
+       the time each one runs. -->
+  <script>{{ALPINE_JS}}</script>
+  <script>{{ALPINE_PERSIST_JS}}</script>
 
   <!-- Widget render logic. -->
   <script>{{WIDGETS_JS}}</script>
