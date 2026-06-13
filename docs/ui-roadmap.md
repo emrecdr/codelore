@@ -36,7 +36,8 @@ CodeScene does not have:
 |---|---|---|
 | Charts (~95% of widgets) | **Apache ECharts 6.1.0** | Top-starred Apache Foundation project (66k+ stars); monthly minor releases; XSS-fix responsiveness validated in 6.1.0 + 5.5.1. Apache-2.0 license (deny.toml-allowed). Treemap, sunburst, sankey, chord, force-graph, heatmap, calendar heatmap, parallel coords, line/bar/area — all native. |
 | Circle-pack layout (1 widget) | **d3-hierarchy 3.1.2** | ECharts has no native circle-pack series. `d3-hierarchy.pack()` computes the layout (~10 KB tree-shaken); ECharts `custom` series renders the result. ISC license (deny.toml-allowed). |
-| Framework | **None** (vanilla JS) | Existing `output/html.rs` uses vanilla JS and serves 525 LOC of paginated/sortable table — proves the pattern. Adding a framework (Svelte/Vue/React) would add ~30–40 KB and a build pipeline without commensurate benefit. |
+| Framework (v0.4.x) | **None** (vanilla JS) | Existing `output/html.rs` uses vanilla JS and serves 525 LOC of paginated/sortable table — proves the pattern. Adding a framework (Svelte/Vue/React) would add ~30–40 KB and a build pipeline without commensurate benefit. |
+| Interactivity layer (v0.5.x) | **Alpine.js 3.x** (scheduled, not yet wired) | ~15 KB, single `<script>` embed via the same SHA-256-pinned `build.rs` fetch pattern as ECharts. HTML-attribute reactivity (`x-data`, `x-show`, `x-on`) matches our Rust-generated template philosophy — directives sit on existing DOM, no virtual DOM, no JSX/SFC compiler. Re-validated 2026-06-11: still the right call for `codelore serve` cross-widget filter state. See "Why Alpine.js (re-validated)" subsection below. |
 | Build | **`build.rs` + SHA-256-pinned CDN fetch behind `spa` Cargo feature** | Avoids committing minified JS into the repo. The `spa` feature is **opt-in**: default builds skip the fetch entirely (no internet needed). When enabled, `crates/codelore-lib/build.rs` fetches ECharts and d3-hierarchy from jsDelivr at pinned URLs, verifies SHA-256 against the table in `ASSETS`, and caches them in `OUT_DIR`. Subsequent builds with `spa` enabled hit the cache (no network) until either the pin changes or the cached bytes drift. Audit-trail: the build script's pin table IS the supply-chain manifest. |
 | Template | `include_str!` from `src/output/spa/template.html` | Same idiom as the existing HTML emitter; no runtime templating engine. |
 
@@ -48,6 +49,43 @@ CodeScene does not have:
 - We are not building a long-lived SPA with routing, forms, or
   reactive state graphs — we are rendering a fixed set of charts
   from one JSON blob
+
+### Why Alpine.js at v0.5 (re-validated 2026-06-11)
+
+Re-checked the landscape before locking the v0.5.x boundary — Alpine
+is still the right answer:
+
+- **Size budget**: 15 KB minified+gzipped (current 3.x). HTMX (14 KB)
+  is the next-smallest with a similar philosophy but is request-oriented
+  (every interaction is a server roundtrip), which conflicts with the
+  "single static HTML file works offline" north star (§1). Petite-Vue
+  (6 KB) is technically smaller but has been in maintenance-only mode
+  since 2022 — Alpine is actively shipped against.
+- **Programming model fit**: HTML-attribute directives (`x-data`,
+  `x-show`, `x-bind`, `x-on`) sit on existing DOM nodes. Our
+  templates are `include_str!`-shipped from Rust; no JSX, no SFC
+  compiler, no Vite step required. The same template renders
+  identically in `--format spa` (static) and `codelore serve` (live)
+  by toggling whether Alpine is loaded.
+- **Cross-widget filter state**: Alpine's reactive `$store` is the
+  exact primitive v0.5.x needs — filter on hotspot table updates a
+  store, every widget watching that store re-renders. Doing this in
+  vanilla JS scales to 2–3 widgets; we have 11.
+- **SHA-pin compatibility**: ships as a single minified `<script>`,
+  drops into the same `build.rs` SHA-256 pin table that hosts ECharts
+  and d3-hierarchy. No build pipeline added.
+- **Trajectory check**: Alpine 3.x has been stable since 2020 with
+  regular minor releases; not a flavor-of-the-quarter risk. Used by
+  Laravel (Livewire), 37signals (Basecamp), and the Caleb Porzio
+  ecosystem — long-tail mindshare.
+
+Rejected alternatives at this size class:
+- **HTMX** — request-oriented (kills offline mode).
+- **Petite-Vue** — maintenance-only since 2022.
+- **Lit** — Web Components add 8 KB and a class-based component model
+  that fights our Rust-templated HTML.
+- **Vue / React / Svelte** — already rejected at §2 for v0.4.x; the
+  same arguments hold at v0.5 (build pipeline, framework chrome).
 
 ### Why not Observable Framework / Evidence.dev / Rill?
 
@@ -64,8 +102,10 @@ CodeScene does not have:
 |---|---|---|
 | **v0.4.0** | 6-widget SPA-MVP: KPI tiles, hotspot circle-pack, hotspot table, change-coupling sankey, knowledge-islands ranked view, file detail drawer; F38 windowed Kamei rewrite as precondition; `--features spa` Cargo gate; SHA-pinned ECharts + d3-hierarchy build.rs fetch | **Shipped 2026-06-11** ✓ |
 | **v0.4.1** | **Perf batch** — F43-F54 (DISTINCT cleanup, blob mem-move, empty-diff short-circuit, single-cursor AST walks, single-pass templating). No new widgets — the audit findings made this a backend-only release. | **Shipped 2026-06-11** ✓ |
-| **v0.4.2** | Widget completeness — 5 new widgets (knowledge map, X-Ray sunburst, trends, calendar heatmap, AI-attribution overlay) + theming + light/dark mode toggle | Planned (next) |
-| **v0.4.3** | CI embed mode, per-metric provenance tooltips, perf tuning on > 100k-commit repos | Planned |
+| **v0.4.2** | Widget completeness — 5 new widgets (W7 knowledge map, W8 X-Ray sunburst, W9 trends multi-line, W10 calendar heatmap, W11 AI-attribution overlay) + CSS theming + light/dark mode toggle. | **Shipped 2026-06-11** ✓ |
+| **v0.4.3** | Dashboard polish — success message on render, dispose-on-rerender (F64) to fix the chart-instance leak that bit `--repeat`-style rerenders. CI embed mode, per-metric provenance tooltips, and X-Ray live-at-HEAD pre-filter slipped to v0.4.5 (now tracked as UI-1/UI-2/UI-3 in the main roadmap). | **Shipped 2026-06-11** ✓ (partial — UI-1/2/3 deferred) |
+| **v0.4.4** | SQL planner sweep — F61/F63 `arg_max` rewrite, F66 `bstr` SIMD line count. No widget changes; perf headroom for v0.4.5's X-Ray pre-filter (UI-3) reuses the `arg_max(change_type, ROW(date, -rowid))` pattern. | **Shipped 2026-06-11** ✓ |
+| **v0.4.5** | **Active** — UI holdovers from v0.4.3 + CHM borrows. UI-1 `--embed` flag, UI-2 `?` tooltips with CHM-A4 per-metric description text on every KPI tile + table column, UI-3 X-Ray sunburst pre-filtered to live-at-HEAD via the F63 hash-aggregation pattern, F68 cross-stack AI-attribution toggle wired end-to-end (column → SQL → JSON → widgets.js), F71 per-container `ResizeObserver` replacing the leaking global `resize` listener. See main roadmap for the full F-finding + CHM-A1/A2/A3/A5 backend pairs. | **Active** (in development) |
 | **v0.5.x** | `codelore serve` — local Axum web server, live SQL exploration, cross-widget filter state. Alpine.js added at this point. | Planned (research done) |
 | **v0.6.x** | Tauri 2 desktop wrapper. Native filesystem, drag-drop folder, signed cross-platform installers. | Planned |
 
@@ -89,7 +129,7 @@ CodeScene does not have:
 
 ---
 
-## 3a. v0.4.2 widget plan (next release)
+## 3a. v0.4.2 widget plan — **shipped 2026-06-11**
 
 Five new widgets + theming. None require build-system changes; all are
 JS + template extensions + (for two) new `SpaDashboard` fields and one
@@ -113,7 +153,9 @@ Plus:
 
 ---
 
-## 3b. v0.4.3 — polish + CI embed
+## 3b. v0.4.3 — polish + CI embed — **shipped 2026-06-11 (partial)**
+
+> Dashboard polish (success message + dispose-on-rerender / F64) landed in v0.4.3. The CI embed mode, per-metric provenance tooltips, and X-Ray live-at-HEAD pre-filter were re-scoped to **v0.4.5** under IDs **UI-1 / UI-2 / UI-3** (see main roadmap). The original §3b plan below documents what those holdovers were intended to do.
 
 - **Embed mode** — `codelore analyze --format spa --embed` strips the
   full-page shell and produces an HTML fragment suitable for
