@@ -52,3 +52,20 @@ graphify-out/manifest.json
 # Tracked OUT of source control because the script reproduces it deterministically.
 # Remove this entry when the upstream patch ships in a released duckdb crate.
 vendor/
+
+# Session-tooling artefacts — runtime state generated per developer
+# by Claude Code / devt / graphify / serena / per-project MCP servers.
+# Catches everything the narrow rules above didn't, after a v0.5.x
+# session accidentally committed ~480k lines of these files into
+# branches twice in one sitting. The narrow rules above stay for
+# back-compat but are now no-ops under these broader catch-alls.
+.claude/
+.devt/
+.serena/
+.mcp.json
+CLAUDE.md
+
+# Graphify pipeline outputs — graphs, manifests, cost reports,
+# semantic labels. All regenerable from source via `graphify build`;
+# no value in tracking them and each graph.json is 100k+ lines.
+graphify-out/
