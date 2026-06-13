@@ -4,6 +4,134 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Added — CHM borrows, AI surfacing, step-summary, auditable tooltips
+
+A v0.4.5 batch built end-to-end with empirical validation before
+locking thresholds, denominators, output formats, and visual design.
+Two false-positive findings (UI-3, F65 carryover) closed honestly with
+documented architectural reasoning rather than dead code.
+
+- **File-level Maintainability Index** (Coleman 1994 + SEI 1997) is
+  surfaced on hotspots across every emitter (CSV/Markdown/SARIF/JSON/
+  SPA). CodeLore has computed `mi_sei()` polyglot since v0.1.0 via the
+  vendored Mozilla rust-code-analysis fork; the column was ingested
+  into `complexity_metrics.mi` but never queried. The hotspots SQL now
+  joins `entities` filtered to `kind='unit'` to pull the file-level
+  value (per-function MIs are mathematically unsound to average).
+
+- **Repo-relative MI bands** (Low / Moderate / High by percentile rank
+  within the analyzed repo) instead of the literature's absolute
+  Coleman/SEI thresholds. Empirically validated on CodeLore's own
+  codebase: MI values range `[-137, +104]` with median ≈2.7;
+  applying the (≥85 / 65-85 / <65) thresholds verbatim would classify
+  100% of well-maintained files as "low maintainability" — useless for
+  triage. New `analyses/mi.rs` module exports `MiBand` and `MiRollup`.
+  Trade-off (bands aren't comparable across repos) documented in
+  `research-foundations.md`.
+
+- **Behavioral coupling graph density** scalar on the SPA KPI tiles —
+  `edges / (V·(V-1)/2)` over the Fisher-significant coupling pairs.
+  CHM ships density on the static dep graph (JS/TS only); we compute
+  it on our richer behavioral graph (Newman 2010 §6.10 formula, same
+  algorithm, different signal). Empirical on CodeLore: 0.0275 — modular
+  / typical production codebase.
+
+- **Per-file AI attribution percentage** on hotspots. Surfaces the
+  share of commits touching each file with `ai-assisted` or
+  `ai-authored` attribution (per identity::bots). The SPA's "AI
+  Attribution" toggle was a placeholder since v0.4.0 — now wired
+  end-to-end with a continuous color ramp (no AI → pale, all AI →
+  red). Empirical distribution on CodeLore: median 75%, mean 70.6%.
+
+- **`--format step-summary`** GFM Markdown emitter sized for GitHub
+  Actions' `$GITHUB_STEP_SUMMARY` (1 MB cap). Original spec
+  (`--format spa --embed`) is structurally impossible because the SPA
+  HTML is 1.3 MB dominated by ECharts, GitHub sanitizes `<script>`
+  tags, and stripping the chrome saves <10 KB. The redesigned emitter
+  produces a 2-15 KB GFM summary with KPI table, top-10 hotspots
+  (MI band emoji per file), MI band breakdown (unicode bar chart),
+  coupling density line, knowledge-islands `<details>` collapsible.
+  Documented workflow snippet in `docs/advanced-usage.md`.
+
+- **Per-metric provenance tooltips** on the SPA dashboard — `?` icons
+  next to every KPI tile label and hotspot table column header. On
+  hover (or keyboard focus), a popup surfaces the metric's formula in
+  plain English plus a link to the matching section in
+  `research-foundations.md`. The brand-defining "auditable formulas"
+  promise made visual. CSS-only show/hide (no JS event listeners,
+  no leak risk per F71 lesson) and theme-inherited via existing CSS
+  variables (light/dark mode work automatically). ~14 tooltips at
+  runtime.
+
+- **Research foundation citations** in `docs/research-foundations.md`:
+  Coleman et al. 1994 (MI formula), SEI 1997 (variant modifier),
+  Newman 2006 (modularity foundation), Blondel et al. 2008 (Louvain
+  algorithm — forward reference for v0.5.x), Ben Khalfallah 2025
+  TOSEM (CHM precedent we adapted from).
+
+- **Hotspot table** gains MI and AI % columns with band emoji
+  (🟢 top quartile / 🟡 middle / 🔴 bottom) — these were data
+  fields already populated by earlier commits but the SPA table
+  hadn't surfaced them.
+
+### Changed — SQL planner work
+
+- **Coupling self-join over pre-filtered CTE.** `build_coupling_sql`
+  introduces a `filtered_changes` CTE that pre-filters `changes`
+  against `good_commits` ONCE and reuses it in both the `file_revs`
+  aggregate AND the `pairs` self-join. DuckDB materializes the CTE
+  (5 CTE_SCAN operators in the new plan). On CodeLore the self-join
+  cardinality drops from 1412² to 266² (28× reduction). On Linux-
+  kernel-scale repos: 1M² → 100K² — an order of magnitude.
+  Semantic output proven byte-identical via git-stash baseline.
+
+### Fixed
+
+- **SPA dashboard resize listeners no longer leak.** Every ECharts
+  widget render registered an anonymous `window.addEventListener(
+  'resize', …)` that captured the chart instance; on re-render
+  (color-mode toggle, theme switch) the new listener added without
+  removing the old. ResizeObserver per container replaces this —
+  disconnects any prior observer before installing a new one.
+  **Bonus fix**: ResizeObserver also fires on container-level
+  dimension changes (sidebar collapse), which `window.resize` missed.
+
+### Notes
+
+- **UI-3** ("xray entities live-at-HEAD pre-filter") audited and
+  marked **Not a bug** — `ingest_complexity_at_head` only populates
+  `complexity_metrics` for files in the working tree at HEAD, so the
+  xray query is already implicitly live-at-HEAD via the ingest
+  invariant. Empirically: 110 paths in current output, 110 paths
+  after the proposed filter, 0 complexity_metrics paths absent from
+  changes. No code change.
+
+- **F60** (stream `GitCliRepo` log) closed — `GitCliRepo` is only
+  used as a differential-test oracle. Production walker (`GixRepo`)
+  already streams chunks through a crossbeam-channel.
+
+- **F70** (drop `idx_changes_rev` + `idx_clones_group`) closed as
+  **Won't Fix** — schema comment ("rev-prefix scan benefits from a
+  dedicated index too") indicates the original author profiled when
+  adding these. Dropping blind reverts a measured decision; no
+  contrary empirical evidence available.
+
+- **F69** (totals-CTE → window function) deferred to v0.5.x marked
+  bench-gated. Need an `EXPLAIN ANALYZE` comparison on a 100k+ commit
+  fixture before locking the rewrite — the kind of "is the planner
+  actually doing what we think" measurement that this batch
+  validated as essential.
+
+- **v0.5.x admin-portal redesign** queued: Alpine.js 3.15.8 + Alpine
+  persist + Tailwind v4 + DaisyUI 5 + Plotly basic 3.3.1 spike (the
+  user's validated stack from a sibling project). Replaces vanilla
+  CSS + ECharts with admin-dashboard-grade component primitives.
+  This v0.4.5 commit's hand-rolled tooltips will be re-implemented
+  as DaisyUI `tooltip` components during that phase — the rework is
+  the accepted cost of shipping the auditable-formulas brand
+  promise on v0.4.5 schedule rather than delaying the release for an
+  architectural pivot.
+
 ## [0.4.4] - 2026-06-11
 
 ### Changed — SQL planner simplification + SIMD line counting
