@@ -121,6 +121,36 @@ fn spa_emits_full_dashboard_from_differential_fixture() {
         "d3-hierarchy payload missing from emitted HTML",
     );
 
+    // Alpine.js + persist plugin — v0.5.x interactivity layer wiring.
+    // Tested via known minified-output substrings (Alpine ships under
+    // an IIFE that exposes `Alpine.start`; persist plugin registers
+    // via `Alpine.plugin`).
+    assert!(
+        html.contains("Alpine.start") || html.contains("alpinejs"),
+        "Alpine.js payload missing from emitted HTML",
+    );
+    assert!(
+        html.contains("Alpine.plugin") || html.contains("persist"),
+        "Alpine persist plugin missing from emitted HTML",
+    );
+
+    // Tailwind v4 + DaisyUI 5 CSS asset — until the per-widget
+    // conversion lands the asset is a stub, but `{{TAILWIND_DAISY_CSS}}`
+    // must still substitute (i.e. the literal placeholder must NOT
+    // appear in the final HTML).
+    assert!(
+        !html.contains("{{TAILWIND_DAISY_CSS}}"),
+        "TAILWIND_DAISY_CSS placeholder leaked into emitted HTML — substitution wiring is broken",
+    );
+    assert!(
+        !html.contains("{{ALPINE_JS}}"),
+        "ALPINE_JS placeholder leaked into emitted HTML",
+    );
+    assert!(
+        !html.contains("{{ALPINE_PERSIST_JS}}"),
+        "ALPINE_PERSIST_JS placeholder leaked into emitted HTML",
+    );
+
     // Parse the embedded JSON data block and verify the shape.
     let data = extract_data_json(&html).expect("parse data block");
     let hotspots_arr = data

@@ -47,6 +47,12 @@ const TEMPLATE: &str = include_str!("spa/template.html");
 const WIDGETS_JS: &str = include_str!("spa/widgets.js");
 const ECHARTS_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/echarts.min.js"));
 const D3_HIERARCHY_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/d3-hierarchy.min.js"));
+const ALPINE_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/alpine.min.js"));
+const ALPINE_PERSIST_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/alpine-persist.min.js"));
+// CSS lives as a regular source file (not a `build.rs`-fetched asset) —
+// it's the precompiled output of `just spa-css-rebuild`, checked into
+// the repo. See `spa/tailwind-src/README.md` for the rebuild workflow.
+const TAILWIND_DAISY_CSS: &str = include_str!("spa/tailwind.daisyui.min.css");
 
 /// Composite of all per-widget data the SPA dashboard renders. For
 /// v0.4.0 only `hotspots` is wired; subsequent commits in the v0.4.x
@@ -160,6 +166,9 @@ pub fn write_spa<W: Write>(
             ("{{DATA_JSON}}", &data_json_safe),
             ("{{ECHARTS_JS}}", ECHARTS_JS),
             ("{{D3_HIERARCHY_JS}}", D3_HIERARCHY_JS),
+            ("{{ALPINE_JS}}", ALPINE_JS),
+            ("{{ALPINE_PERSIST_JS}}", ALPINE_PERSIST_JS),
+            ("{{TAILWIND_DAISY_CSS}}", TAILWIND_DAISY_CSS),
             ("{{WIDGETS_JS}}", WIDGETS_JS),
         ],
     );

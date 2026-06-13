@@ -4,6 +4,16 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{{TITLE}}</title>
+
+  <!-- Precompiled Tailwind v4 + DaisyUI 5 bundle. Rebuilt via
+       `just spa-css-rebuild` (see crates/codelore-lib/src/output/spa/
+       tailwind-src/README.md for the workflow). Until the per-widget
+       DaisyUI conversion lands in follow-up PRs, the <style> block
+       below carries the v0.4.x hand-rolled CSS — the two co-exist
+       deliberately: DaisyUI tokens are available to new widgets while
+       legacy widgets keep their semantic classes. -->
+  <style>{{TAILWIND_DAISY_CSS}}</style>
+
   <style>
     :root {
       --bg: #0f0f0f;
@@ -548,6 +558,14 @@
   <!-- Vendored libraries, SHA-pinned at build time. See crates/codelore-lib/build.rs. -->
   <script>{{ECHARTS_JS}}</script>
   <script>{{D3_HIERARCHY_JS}}</script>
+
+  <!-- Alpine.js + Alpine persist plugin: HTML-attribute reactivity for
+       v0.5.x cross-widget filter state. Loading order matters — the
+       persist plugin's `Alpine.plugin(...)` call needs Alpine's global
+       to already exist. The defer attribute keeps both scripts from
+       blocking the rest of the page's parse. -->
+  <script defer>{{ALPINE_JS}}</script>
+  <script defer>{{ALPINE_PERSIST_JS}}</script>
 
   <!-- Widget render logic. -->
   <script>{{WIDGETS_JS}}</script>
