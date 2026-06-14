@@ -107,6 +107,12 @@ pub struct SpaDashboard {
     /// `run_coupling` uses. `None` when coupling analysis was skipped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub coupling_density: Option<f64>,
+    /// Per-file clone-group counts feeding the hotspot circle-pack's
+    /// "Clones" colour mode. One row per path that appears in at least
+    /// one clone family. Files with zero clone groups are omitted from
+    /// the payload (the widget falls back to neutral grey for them).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clones: Vec<CloneSummary>,
 }
 
 /// One function in the X-Ray sunburst.
@@ -132,6 +138,18 @@ pub struct TrendPoint {
     pub month: String,
     pub path: String,
     pub hotspot_score: f64,
+}
+
+/// Per-file clone overlay row: how many distinct clone groups touch the
+/// path. Surfaced as a colour-mode toggle on the hotspot circle-pack so
+/// users can see structural-duplication hotspots overlaid on the same
+/// file layout they already know from the cognitive / author / AI modes.
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+pub struct CloneSummary {
+    pub path: String,
+    /// Number of distinct `clone_group_id`s the path appears in. A file
+    /// that's part of N independent clone families has `groups = N`.
+    pub groups: u32,
 }
 
 /// Render the SPA HTML and write it to `w`. The HTML is fully
@@ -231,6 +249,36 @@ pub fn run_xray(db: &crate::facts::FactsDb, limit: i64) -> Result<Vec<XRayEntry>
         .map_err(|e| CodeLoreError::Output(format!("xray query: {e}")))?;
     let out: std::result::Result<Vec<_>, _> = rows.collect();
     out.map_err(|e| CodeLoreError::Output(format!("xray collect: {e}")))
+}
+
+/// Per-file clone-group counts from the `clones` table. Empty result
+/// when no clone groups exist (small repo, no Tier-1 sources, or
+/// `min_clone_node_count` filtered everything out at ingest time).
+/// One row per path that appears in ≥ 1 clone family — files with
+/// zero clone groups are dropped so the payload stays compact.
+///
+/// # Errors
+/// Returns [`CodeLoreError::Output`] on any `DuckDB` failure.
+pub fn run_clone_summary(db: &crate::facts::FactsDb) -> Result<Vec<CloneSummary>> {
+    let mut stmt = db
+        .conn()
+        .prepare(
+            "SELECT path, COUNT(DISTINCT clone_group_id)::UINTEGER AS groups
+             FROM clones
+             GROUP BY path
+             ORDER BY groups DESC, path ASC",
+        )
+        .map_err(|e| CodeLoreError::Output(format!("clone_summary prepare: {e}")))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(CloneSummary {
+                path: r.get(0)?,
+                groups: r.get(1)?,
+            })
+        })
+        .map_err(|e| CodeLoreError::Output(format!("clone_summary query: {e}")))?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| CodeLoreError::Output(format!("clone_summary collect: {e}")))
 }
 
 /// Build a per-(month, path) trend series restricted to `paths` for

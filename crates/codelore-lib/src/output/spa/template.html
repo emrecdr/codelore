@@ -492,6 +492,11 @@
         <button type="button" data-mode="cognitive" class="toggle active">Complexity</button>
         <button type="button" data-mode="author" class="toggle">Knowledge map</button>
         <button type="button" data-mode="ai" class="toggle">AI attribution</button>
+        <!-- F83 — clones overlay: yellow→red ramp on files that
+             appear in ≥ 1 clone family. Files with zero clone groups
+             render neutral grey, so structural-duplication hotspots
+             pop visually against the rest of the codebase. -->
+        <button type="button" data-mode="clones" class="toggle">Clones</button>
       </div>
       <div id="widget-hotspot-circle-pack-body" class="widget-body"></div>
     </section>

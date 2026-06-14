@@ -207,6 +207,22 @@
       Array.from(new Set(Object.values(primaryAuthorByPath)))
     );
 
+    // F83: build a path → clone-group-count map for the 'clones'
+    // colour mode. `data.clones` is the per-file overlay computed
+    // by `output/spa.rs::run_clone_summary`; one entry per path
+    // with ≥ 1 clone family. Falls back to an empty object when
+    // the payload omits the field (older fixtures, no clones
+    // detected). `maxCloneGroups` anchors the heatmap.
+    const cloneCountByPath = {};
+    let maxCloneGroups = 0;
+    const cloneRows = data.clones || [];
+    for (var ci = 0; ci < cloneRows.length; ci++) {
+      const cr = cloneRows[ci];
+      cloneCountByPath[cr.path] = cr.groups;
+      if (cr.groups > maxCloneGroups) maxCloneGroups = cr.groups;
+    }
+    const cloneScale = maxCloneGroups || 1;
+
     // Step 1: build a filesystem-style hierarchy from flat HotspotRow[].
     // Each row is { path, revisions, cognitive, code_health, hotspot_score }.
     // Path "a/b/c.rs" yields tree:
@@ -304,6 +320,20 @@
                 leafColor = 'rgba(140, 140, 140, 0.55)';
               } else {
                 leafColor = heatmapColor(Math.max(0, Math.min(1, aiPct / 100)));
+              }
+            } else if (colorMode === 'clones') {
+              // F83: structural-duplication overlay. `cloneCountByPath`
+              // came from `data.clones` (see `output/spa.rs::run_clone_summary`).
+              // Files outside any clone family render neutral grey so
+              // they sit visually behind the heat colours on actual
+              // clone hotspots. The heatmap colour scales by the
+              // max group count across the whole dashboard so the
+              // distribution is per-repo relative, not absolute.
+              const groups = cloneCountByPath[n.data.fullPath] || 0;
+              if (groups === 0) {
+                leafColor = 'rgba(140, 140, 140, 0.55)';
+              } else {
+                leafColor = heatmapColor(Math.min(1, groups / cloneScale));
               }
             } else {
               leafColor = heatmapColor(ratio);

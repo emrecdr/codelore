@@ -1225,7 +1225,9 @@ fn build_spa_dashboard(
     db: &codelore_lib::facts::FactsDb,
     opts: &codelore_lib::Options,
 ) -> anyhow::Result<codelore_lib::output::spa::SpaDashboard> {
-    use codelore_lib::output::spa::{SpaDashboard, run_daily_commits, run_trends, run_xray};
+    use codelore_lib::output::spa::{
+        SpaDashboard, run_clone_summary, run_daily_commits, run_trends, run_xray,
+    };
 
     // Each run_* call is an SQL query over the already-ingested fact
     // store, so the composite cost is bounded by the query mix
@@ -1274,6 +1276,10 @@ fn build_spa_dashboard(
         &hotspots,
     ));
     let coupling_density = compute_spa_coupling_density(db, opts, &coupling);
+    let clones = run_clone_summary(db).unwrap_or_else(|e| {
+        tracing::warn!("dashboard: clone summary query failed; skipping: {e}");
+        Vec::new()
+    });
     Ok(SpaDashboard {
         hotspots,
         summary,
@@ -1286,6 +1292,7 @@ fn build_spa_dashboard(
         trends,
         mi_rollup,
         coupling_density,
+        clones,
     })
 }
 
