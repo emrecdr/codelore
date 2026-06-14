@@ -37,7 +37,8 @@ CodeScene does not have:
 | Charts (~95% of widgets) | **Apache ECharts 6.1.0** | Top-starred Apache Foundation project (66k+ stars); monthly minor releases; XSS-fix responsiveness validated in 6.1.0 + 5.5.1. Apache-2.0 license (deny.toml-allowed). Treemap, sunburst, sankey, chord, force-graph, heatmap, calendar heatmap, parallel coords, line/bar/area — all native. |
 | Circle-pack layout (1 widget) | **d3-hierarchy 3.1.2** | ECharts has no native circle-pack series. `d3-hierarchy.pack()` computes the layout (~10 KB tree-shaken); ECharts `custom` series renders the result. ISC license (deny.toml-allowed). |
 | Framework (v0.4.x) | **None** (vanilla JS) | Existing `output/html.rs` uses vanilla JS and serves 525 LOC of paginated/sortable table — proves the pattern. Adding a framework (Svelte/Vue/React) would add ~30–40 KB and a build pipeline without commensurate benefit. |
-| Interactivity layer (v0.5.x) | **Alpine.js 3.x** (scheduled, not yet wired) | ~15 KB, single `<script>` embed via the same SHA-256-pinned `build.rs` fetch pattern as ECharts. HTML-attribute reactivity (`x-data`, `x-show`, `x-on`) matches our Rust-generated template philosophy — directives sit on existing DOM, no virtual DOM, no JSX/SFC compiler. Re-validated 2026-06-11: still the right call for `codelore serve` cross-widget filter state. See "Why Alpine.js (re-validated)" subsection below. |
+| Interactivity layer | **Alpine.js 3.15 + persist plugin** (shipped) | ~46 KB minified core + sub-1 KB persist plugin; both single `<script>` embeds via the same SHA-256-pinned `build.rs` fetch pattern as ECharts. HTML-attribute reactivity (`x-data`, `x-show`, `x-on`, `x-model`, `x-cloak`, `x-transition`) matches the Rust-generated template philosophy — directives sit on existing DOM, no virtual DOM, no JSX/SFC compiler. Three stores in production: `$store('detail')` (drawer open/close), `$store('filter')` (cross-widget filter text, `$persist`-backed), `$store('theme')` (light/dark toggle, `$persist`-backed). |
+| CSS framework | **Tailwind v4 + DaisyUI 5** (shipped) | Tailwind v4 utility-first layout (`grid-cols-1 xl:grid-cols-2 gap-7 p-7` etc.) + DaisyUI 5 themed components (`navbar`, `card`, `stat`, `table-zebra`, `badge`, `swap`). DaisyUI plugin config `themes: light --default, dark --prefersdark` makes first-paint match the OS `prefers-color-scheme` via CSS media query — no JS frame for the wrong theme. Pre-compiled CSS bundle (~78 KB minified) inlined into the SPA at build time via the same template-substitution layer as ECharts/Alpine. |
 | Build | **`build.rs` + SHA-256-pinned CDN fetch behind `spa` Cargo feature** | Avoids committing minified JS into the repo. The `spa` feature is **opt-in**: default builds skip the fetch entirely (no internet needed). When enabled, `crates/codelore-lib/build.rs` fetches ECharts and d3-hierarchy from jsDelivr at pinned URLs, verifies SHA-256 against the table in `ASSETS`, and caches them in `OUT_DIR`. Subsequent builds with `spa` enabled hit the cache (no network) until either the pin changes or the cached bytes drift. Audit-trail: the build script's pin table IS the supply-chain manifest. |
 | Template | `include_str!` from `src/output/spa/template.html` | Same idiom as the existing HTML emitter; no runtime templating engine. |
 
@@ -176,19 +177,22 @@ Plus:
 
 ---
 
-## 3c. v0.5.x — `codelore serve` (interactive mode)
+## 3c. v0.5.x — UI redesign + `codelore serve` (interactive mode)
 
-This is where vanilla JS starts to hurt — cross-widget filter state
-(filter on the hotspot table → highlight matching circles → restrict
-the knowledge-islands view → restrict the sankey) needs reactivity.
+**v0.5.0 shipped 2026-06-14** — Tailwind v4 + DaisyUI 5 + Alpine.js
+infrastructure landed across PRs #7, #10–#16 (squashed as bundle
+commit `2220440`) plus the audit-driven follow-ups (#21, #23, #25–#29).
+The UI redesign is the shipped portion of the v0.5.x milestone.
+`codelore serve` (interactive Axum HTTP mode) is the remaining
+v0.5.x scope.
 
 **Framework decision — revisited at the v0.5 boundary** (see §2.1):
-**Alpine.js** is the chosen upgrade. Validated as the best in-structure
-choice: ~15 KB, single `<script>` embed via the same `build.rs`
-SHA-pin pattern as ECharts, HTML-attribute syntax that matches our
-Rust-generated template philosophy. We stay vanilla until v0.5
-because v0.4.x widgets are independent — adding Alpine earlier would
-pay for capability we don't use yet.
+**Alpine.js** chosen for the interactivity layer. Validated as the
+best in-structure choice: ~46 KB minified core, single `<script>`
+embed via the same `build.rs` SHA-pin pattern as ECharts,
+HTML-attribute syntax that matches the Rust-generated template
+philosophy. Three production stores: `$store('detail')`,
+`$store('filter')`, `$store('theme')`.
 
 | Feature | Stack |
 |---|---|
@@ -210,8 +214,8 @@ precompiled to a single CSS bundle and committed to the repo.
 
 | Layer | Pin | Distribution |
 |---|---|---|
-| Interactivity (locked earlier — §3c) | Alpine.js 3.15.8 | jsDelivr `npm/alpinejs@3.15.8/dist/cdn.min.js` (~46 KB) — `build.rs` SHA-pin |
-| State persistence | Alpine persist 3.15.8 | jsDelivr `npm/@alpinejs/persist@3.15.8/dist/cdn.min.js` (~1 KB) — `build.rs` SHA-pin |
+| Interactivity (locked earlier — §3c) | Alpine.js 3.15.12 | jsDelivr `npm/alpinejs@3.15.12/dist/cdn.min.js` (~46 KB) — `build.rs` SHA-pin |
+| State persistence | Alpine persist 3.15.12 | jsDelivr `npm/@alpinejs/persist@3.15.12/dist/cdn.min.js` (~1 KB) — `build.rs` SHA-pin |
 | CSS framework | Tailwind v4 (CLI v4.3.1) | Standalone CLI compiles `tailwind-src/input.css` → `tailwind.daisyui.min.css` (committed) |
 | Component library | DaisyUI 5 | Bundled with Tailwind v4 standalone CLI; activated via `@plugin "daisyui"` in `input.css` |
 | Charts | ECharts 6.1.0 (unchanged) | already locked at §2 |
@@ -255,15 +259,30 @@ per-widget controls, which IS where DaisyUI starts paying off.
 Stacked branch chain: each base = the prior PR's head. GitHub
 auto-rebases each base when the prior merges.
 
-| PR | Branch | Final tip | Scope | Status |
-|---|---|---|---|---|
-| **#7** | `feat/v0.5x-ui-redesign-pr1` | `fa5cb2c` | Infrastructure — Alpine.js + Alpine persist via `build.rs` SHA-pin; Tailwind v4 + DaisyUI 5 source CSS + real 74 KB compiled bundle; `spa.rs` substitution wiring; `template.html` slot markers; `tests/spa_integration_test.rs` placeholder-substitution + payload-presence assertions. | Ready for review, all 6 CI jobs green |
-| **#10** | `feat/v0.5x-ui-redesign-pr2-chrome` | `05ad29e` | Chrome — `<header>` → DaisyUI `navbar`, `<footer>` → `footer footer-center`, `<main>` → `max-w-screen-2xl mx-auto`, theme toggle → `btn btn-ghost btn-sm`, footer link → `link`. Inline `<style>` rules untouched. | Draft, all 6 CI jobs green |
-| **#11** | `feat/v0.5x-ui-redesign-pr3-kpi-tiles` | `9500047` | KPI tiles — `widgets.js::renderKpiTiles` dynamic markup gains `stat` / `stat-title` / `stat-value` / `stat-desc` alongside `kpi-tile` / `kpi-label` / `kpi-value` / `kpi-sub`. Critical fix: `@source "../widgets.js"` added to `input.css` so the pruner sees class names from JS-rendered markup. | Draft, all 6 CI jobs green |
-| **#12** | `feat/v0.5x-ui-redesign-pr4-drawer` | `ab79ef2` | Detail drawer — open/close state migrated from imperative `drawer.hidden = true/false` to `Alpine.store('detail')` reactive. Aside markup gains `x-show` / `x-transition.opacity` / `x-cloak` / `@keydown.escape.window`. First real consumer of the Alpine interactivity layer. Fallback path retained for the no-Alpine case. | Draft, CI in progress |
-| **#13** | `feat/v0.5x-ui-redesign-pr5-hotspot-table` | `7e5db5d` | Hotspot table — `<table class="table table-zebra">`; MI-band emoji (`🟢/🟡/🔴`) → DaisyUI `badge badge-{success,warning,error}` carrying `High`/`Mid`/`Low` text; bare AI percentage → `badge badge-outline`. Pruner-trap caught in development: runtime-concatenated `'badge-' + bandKind` hid variants from the scan; refactored to complete class-name literals in a three-branch `if`. | Draft, CI in progress |
-| **#14** | `feat/v0.5x-ui-redesign-pr6-filter-store` | `d825f8d` | Cross-widget filter store — `Alpine.store('filter', { text, set, clear })` with `Alpine.$persist` for `localStorage` round-trip. First writer: hotspot table filter input. Future widgets become subscribers via `Alpine.effect(() => Alpine.store('filter').text)` callbacks; no infrastructure changes required. | Ready for review, all 6 CI jobs green |
-| **#15** | `feat/v0.5x-ui-redesign-pr7-admin-portal-polish` | `93c74e0` | **Admin-portal polish (the visual flip).** Every widget section gains `card bg-base-200 shadow-lg`. Inline `.widget` / `.kpi-tile` / `.drawer-close` rules dropped so DaisyUI tokens actually win specificity. **First PR in the sequence that changes how the dashboard looks in the browser** — until #15 lands the prior six are no-op class additions blocked by inline-style specificity. | Draft, CI just fired |
+| PR | Branch | Scope | Status |
+|---|---|---|---|
+| **#7** | `feat/v0.5x-ui-redesign-pr1` | Infrastructure — Alpine.js + Alpine persist via `build.rs` SHA-pin; Tailwind v4 + DaisyUI 5 source CSS + compiled bundle; `spa.rs` substitution wiring; `template.html` slot markers; `tests/spa_integration_test.rs` placeholder-substitution + payload-presence assertions. | ✅ Merged → `f73b6e2` |
+| **#10** | `feat/v0.5x-ui-redesign-pr2-chrome` | Chrome — `<header>` → DaisyUI `navbar`, `<footer>` → `footer footer-center`, `<main>` → responsive grid wrapper, theme toggle → `btn btn-ghost btn-sm`. | ✅ Shipped in bundle squash `2220440` |
+| **#11** | `feat/v0.5x-ui-redesign-pr3-kpi-tiles` | KPI tiles — `widgets.js::renderKpiTiles` dynamic markup gains `stat` / `stat-title` / `stat-value` / `stat-desc`. Critical fix: `@source "../widgets.js"` added to `input.css` so the pruner sees class names from JS-rendered markup. | ✅ Shipped in bundle squash `2220440` |
+| **#12** | `feat/v0.5x-ui-redesign-pr4-drawer` | Detail drawer — open/close state migrated from imperative `drawer.hidden = true/false` to `Alpine.store('detail')` reactive. Aside markup gains `x-show` / `x-transition.opacity` / `x-cloak` / `@keydown.escape.window`. First real consumer of the Alpine interactivity layer. | ✅ Shipped in bundle squash `2220440` |
+| **#13** | `feat/v0.5x-ui-redesign-pr5-hotspot-table` | Hotspot table — `<table class="table table-zebra">`; MI-band emoji → DaisyUI `badge badge-{success,warning,error}`; AI percentage → `badge badge-outline`. Pruner-trap caught: runtime-concatenated `'badge-' + bandKind` hid variants from the scan; refactored to complete class-name literals. | ✅ Shipped in bundle squash `2220440` |
+| **#14** | `feat/v0.5x-ui-redesign-pr6-filter-store` | Cross-widget filter store — `Alpine.store('filter', { text, set, clear })` with `Alpine.$persist` for `localStorage` round-trip. First writer: hotspot table filter input. | ✅ Shipped in bundle squash `2220440` |
+| **#15** | `feat/v0.5x-ui-redesign-pr7-admin-portal-polish` | **Admin-portal polish (the visual flip).** Every widget section gains `card bg-base-200 shadow-lg`. Inline `.widget` / `.kpi-tile` / `.drawer-close` rules dropped so DaisyUI tokens win specificity. | ✅ Shipped in bundle squash `2220440` |
+| **#16** | `feat/v0.5x-ui-redesign-pr8-table-controls-a11y` | Table-controls polish — filter input `input input-bordered input-sm` + `aria-label="Filter hotspots by path"`; dynamic `Show next` / `Show all` buttons `btn btn-outline btn-sm`. | ✅ Shipped in bundle squash `2220440` |
+
+### Audit-driven follow-ups (post-bundle)
+
+The validation pass against `main` HEAD (PR #20) surfaced seven Active findings on top of the shipped v0.5.x bundle. All landed before v0.5.0 cut:
+
+- **#21** F78 — drop redundant `source.to_vec()` in `compute_for_file` → `b3fae46`
+- **#23** V2 DaisyUI theme-controller migration (closes F79 + V1 dead `.kpi-row`) → `0bab513`
+- **#25** F81 X-Ray sunburst encodes cognitive complexity as colour → `73ed679`
+- **#26** F77 `populate_clones_at_head` uses `query_live_paths` (bare-repo) → `6218bd2`
+- **#27** F83 clone-detection overlay on hotspot circle-pack → `1468c93`
+- **#28** F85 `NOT IN` → `NOT EXISTS` in `apply_grouping` → `d9f34c1`
+- **#29** F80 multi-column responsive widget grid → `f49adc2`
+
+Plus paperwork: **#30** CHANGELOG + report + README closeout, **#31** docs validation + dead `@theme` tokens, **#32** Alpine bump 3.15.8 → 3.15.12.
 
 PRs #7 / #10 / #11 / #12 / #13 / #14 are CSS-class additions only —
 the v0.4.x inline rules still govern background / border / padding
