@@ -67,7 +67,7 @@ Source-of-truth tracker: `docs/reports/deep_analysis_report.md` (F-findings) and
 | **CHM-A3** | Behavioral coupling graph **density** scalar on KPI tiles. `edges / (n·(n-1)/2)` over the Fisher-significant pairs. | CHM does density on static dep graph (JS-only); we do it on the behavioral graph — different signal. | ~30 LOC |
 | **CHM-A5** | Cite Coleman 1994 (MI), Ben Khalfallah 2025 TOSEM (CHM), Newman 2008 (modularity, for forward reference) in `docs/research-foundations.md`. | Brand promise: every metric peer-reviewed-grounded. | docs only |
 | **F60** | _Deferred to v0.4.6 hotfix._ `parse_git_log_stream` needs incremental parser rewrite (two-record lookahead pairs pretty blocks with name-status chunks). Carries forward. | Out of v0.4.5 scope. | — |
-| **F69 / F70** | _Conditional._ Run `EXPLAIN ANALYZE` benchmark on a 100k-commit fixture; if measurable win, fold into v0.4.5. If not, defer or close. | Gated on data, not speculation. | TBD |
+| **F69 / F70** | _Closed (bench-gated, no measurable win)._ F69: `tests/f69_window_spike_test.rs` proved CTE-totals is ~16% faster than the window-function rewrite on the codelore-self fixture — closed as Won't Fix. F70: schema-comment evidence that the indexes were profiled when added — kept as a measured decision. | Gated on data; data said no. | — |
 
 **Cumulative net change**: ~3 days work + ~1 day testing. No new dependencies. No new ingest. The biggest change is F68 (cross-stack AI rollup) which touches Rust → SQL → JSON → JS.
 
