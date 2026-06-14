@@ -1033,11 +1033,26 @@ pub fn apply_grouping(db: &super::FactsDb, group_map: &super::GroupMap) -> Resul
     // referent. Hunks aren't path-rewritten (line-range semantics don't
     // translate to group level), so they get dropped for any path that
     // collapsed or got removed.
+    //
+    // F85: the previous `NOT IN (SELECT … )` form on a composite key
+    // forces some `DuckDB` planner paths into a per-row subquery scan
+    // rather than the index-friendly hash anti-join. `NOT EXISTS` with
+    // a correlated `h.rev = c.rev AND h.path = c.path` predicate is the
+    // textbook planner-friendly form: same semantics (both projected
+    // columns are `NOT NULL` per `schema_v1.sql`, so `NOT IN`'s NULL
+    // pitfall doesn't apply, but `NOT EXISTS` is uniformly preferred
+    // across `DuckDB` versions). The existing
+    // `apply_grouping_*` integration tests cover the semantic
+    // equivalence — both forms must drop the same hunks for the same
+    // group-map input.
     conn.execute(
-        "DELETE FROM hunks WHERE (rev, path) NOT IN (\
-             SELECT c.rev, g.group_name FROM changes c \
+        "DELETE FROM hunks h \
+         WHERE NOT EXISTS ( \
+             SELECT 1 FROM changes c \
              INNER JOIN _grouping_v1 g ON g.raw_path = c.path \
-             WHERE g.group_name = c.path\
+             WHERE g.group_name = c.path \
+               AND c.rev = h.rev \
+               AND c.path = h.path \
          )",
         [],
     )
