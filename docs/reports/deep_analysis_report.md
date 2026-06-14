@@ -50,8 +50,11 @@ All prior findings (F1–F87) have shipped and were validated against `main` HEA
 | **F68–F76** (v0.4.6) | AI attribution rollup, lockstep rev equality, lineage rename-index, NULL-safe distinct elimination | Shipped (F69/F70 bench-gated closed) |
 | **F77–F87** (v0.5.0) | Bare-repo clone discovery, theme-controller migration, multi-column SPA grid, cognitive-color sunburst, JSX/TSX grammar coverage | Shipped |
 | **F84, F88** | Refuted at source-quote level (recycled-path lineage, silent ODB-skip rationale) | Refuted |
+| **F107, F108** (v0.5.1 hotfix) | SPA runtime errors caught in production after v0.5.0 ship: METRIC_DEFS Temporal Dead Zone in widgets.js IIFE (F107) + Alpine inline-script order causing `$store.*` undefined at first paint (F108). Both shipped through every SPA-touching PR since v0.4.x. Caught by user browser console, not by CI. PR #37. | Shipped |
 
 Refuted-finding rationale stays in `git log` against the validation PR (commit 2f8a7bc, PR #20) so the next audit cycle doesn't rediscover them.
+
+**Methodology note (F107 / F108 post-mortem)**: both the F89–F98 audit cycle (§3) and the F99–F106 second pass (§4) ran read-only sub-agents over the source tree using static-grep + inspection. Neither surfaced F107 + F108 because both are *runtime* initialization-order defects — the bugs only manifest when the JS actually executes in a browser. The existing `spa_integration_test` shares the same blind spot: it greps the rendered HTML for string presence and never runs the JS. **Captured as the open structural follow-up: a headless-browser smoke test (chromedp / playwright via cargo) for the SPA emitter that would catch both classes of defect at CI time** — pairing this with the next audit cycle would close the runtime-defect coverage gap permanently.
 
 ---
 
@@ -201,6 +204,115 @@ For audit-trail completeness, raw findings that survived first-pass triage but f
 
 ---
 
-## 4. Next Audit Cycle
+## 4. Second Audit Pass (2026-06-14, post-§3 sweep)
 
-When this report's `Active` count reaches zero again, the next read-only sweep can re-open with F-IDs starting at F104 (preserving 89–98 plus V4–V6 in audit-trail). The validation methodology (parallel sub-agents → adversarial verification → strict source-quote requirement before promoting to `Active`) is the load-bearing discipline — without it, the 6 refuted findings would have shipped as work and burnt cycles.
+User requested an additional deep-dive loop "until you find real improvement points or real practical or potential issues" — second pass covered surface areas the first pass under-served: **CI/CD + release pipeline**, **identity layer + diff PR-mode + provenance manifest**, and **analytical-formula correctness (Kamei, Fisher exact, clone fingerprinting)**.
+
+Methodology unchanged: three parallel read-only sub-agents → adversarial source-quote verification → only verified-real findings become Active.
+
+**Score**: 21 raw HIGH/MED candidates → **8 Active** findings (F99–F106) + **7 Refuted** (over-fired or misread source) + **5 already-captured-in-§3** (dropped to avoid double-counting).
+
+### Active Findings
+
+#### F99 — Container OCI label `image.source` hardcoded to `<owner>` placeholder
+
+*   **Location**: `Containerfile:60` — `LABEL org.opencontainers.image.source="https://github.com/<owner>/codelore"`
+*   **Severity**: MED
+*   **Category**: Container image / supply-chain hygiene
+*   **Status**: Active
+*   **Description**: The Containerfile's `image.source` OCI label is the literal string `https://github.com/<owner>/codelore` — the `<owner>` placeholder was never templated. Anyone who runs `docker inspect ghcr.io/emrecdr/codelore:latest` sees `<owner>` in the source URL. This breaks the OCI spec's intent (clients should be able to dereference `image.source` to the canonical repo), breaks `cosign verify --certificate-identity-regexp ...` style attestation chains that rely on the label, and produces nonsense in security-scanner output (Snyk/Grype/Trivy all surface `image.source`).
+*   **Reproduce**: `docker pull ghcr.io/emrecdr/codelore:latest && docker inspect ghcr.io/emrecdr/codelore:latest | jq '.[0].Config.Labels["org.opencontainers.image.source"]'` → `"https://github.com/<owner>/codelore"`.
+*   **Suggested fix**: add `ARG REPO=emrecdr/codelore` near the top of the Containerfile, replace the label with `LABEL org.opencontainers.image.source="https://github.com/${REPO}"`. Pass `--build-arg REPO=${{ github.repository }}` from `.github/workflows/container.yml` so the value tracks fork ownership automatically. Confirm via `docker inspect` after the next container build.
+
+#### F100 — `cut-release.sh` ruleset-restore trap can hang indefinitely on stuck `gh api`
+
+*   **Location**: `scripts/cut-release.sh:109-155` (the `restore_ruleset` function registered via `trap … EXIT` at `:156`)
+*   **Severity**: MED
+*   **Category**: Release-pipeline robustness
+*   **Status**: Active
+*   **Description**: The trap fires `gh api -X PUT repos/${REPO}/rulesets/${RULESET_ID}` with no timeout. If GitHub's API returns slow / hangs / rate-limits the request, the trap blocks. Worse, the trap already runs *during* shell exit, so a Ctrl-C while it's hung doesn't run a second cleanup — the user kills `gh`, the script exits, and the protect-release-tags ruleset stays in `enforcement: disabled` state on the live repo until someone notices. Per CLAUDE.md, this dance is "the ONLY safe way to publish a `v*` tag" — leaving the repo unprotected breaks that contract. The non-hung failure case is handled (the `else` branch at line 148 prints a manual-recovery command), but the hung case isn't.
+*   **Reproduce**: hard to reproduce in dev (would need to script a `gh` hang); review-by-inspection only.
+*   **Suggested fix**: wrap the `gh api` call with `timeout 30s gh api …` (GNU coreutils `timeout`, available on Linux + macOS via `brew install coreutils` or as `gtimeout`). On timeout, fall through to the existing manual-recovery `else` branch so the operator gets a paste-able recovery command. Update `docs/RELEASING.md`'s "Tag push ruleset dance" with the timeout caveat.
+
+#### F101 — GitHub Actions cache keys omit `rust-toolchain.toml` fingerprint
+
+*   **Location**: `.github/workflows/release.yml:101` (`key: release-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}`) and `.github/workflows/bench.yml:28` (`key: bench-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}`)
+*   **Severity**: LOW
+*   **Category**: CI cache correctness
+*   **Status**: Active
+*   **Description**: Cache keys hash `Cargo.lock` but not `rust-toolchain.toml`. The toolchain pin (`1.96.0` today) is the authoritative source per CLAUDE.md — bumping it should invalidate all cache artifacts, since rustc-version is part of every `.rmeta` / `.rlib` hash. Today the workspace pins `1.96.0`, so this is a theoretical concern. The moment the next Rust-bump batch ships (rust-toolchain.toml + workspace rust-version + 5 action invocations + CHANGELOG), CI could hit stale-cache linker errors that are diagnosed as "flaky CI" but are deterministically the missing toolchain fingerprint.
+*   **Suggested fix**: change the keys to `${{ matrix.target }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}` (hashFiles takes a glob list and concatenates). One-line change in two workflow files. Confirms with a forced Rust-version bump in a draft PR — first run must miss the cache.
+
+#### F102 — `bench.yml` kernel-snapshot fetch has no error handling
+
+*   **Location**: `.github/workflows/bench.yml:40-45` — `git clone --depth=10000 --filter=blob:none https://github.com/torvalds/linux.git /tmp/linux-kernel-snapshot`
+*   **Severity**: LOW
+*   **Category**: CI workflow robustness
+*   **Status**: Active
+*   **Description**: The `run:` block doesn't `set -euo pipefail`, so if the clone fails (network flap, GitHub rate-limit, transient DNS) the step still exits 0. The subsequent bench step then crashes with `CODELORE_BENCH_LINUX_KERNEL_PATH not found` — a cryptic-symptom-of-a-clear-cause failure pattern. The 2026-06 cache key (`linux-kernel-snapshot-2026-06`) helps on warm runs but the cold-cache cycle is exposed.
+*   **Suggested fix**: prepend `set -euo pipefail` to the run block, or explicitly assert post-clone: `[ -d /tmp/linux-kernel-snapshot/kernel ] || { echo "clone failed or repo empty"; exit 1; }`. Two-line change.
+
+#### F103 — Third-party action `softprops/action-gh-release@v3` is tag-pinned (mutable upstream)
+
+*   **Location**: `.github/workflows/release.yml:169` (and adjacent `actions/upload-artifact@v7`, `actions/checkout@v6`, etc.)
+*   **Severity**: LOW
+*   **Category**: Supply-chain hygiene
+*   **Status**: Active
+*   **Description**: Industry consensus is *first-party* GitHub actions (`actions/*`) at major-tag pin is acceptable (tight upstream control), but *third-party* actions at tag pin are a known supply-chain risk — the tag can be force-moved upstream to point at a malicious commit. `softprops/action-gh-release@v3` is the only third-party action in the release path and runs with `GITHUB_TOKEN` permissions to create releases (i.e., everything the release pipeline needs to be subverted). The action has a clean reputation today, but tag-pinning a *third-party* action that handles credentials is a measurable risk worth not taking.
+*   **Suggested fix**: replace `softprops/action-gh-release@v3` with a full commit SHA: `softprops/action-gh-release@<40-char-sha>`. Pin once, let Dependabot offer SHA bumps. The other third-party actions in the workflow (none found in release.yml besides this one) should follow the same rule. First-party `actions/*` pins stay at major-tag form.
+
+#### F104 — Fisher-exact contingency table can produce degenerate cells on inconsistent inputs
+
+*   **Location**: `crates/codelore-lib/src/analyses/coupling.rs:282-289` (`fisher_two_tail`)
+*   **Severity**: LOW
+*   **Category**: Statistical robustness
+*   **Status**: Active
+*   **Description**: The 2×2 contingency-table cells are computed via chained `saturating_sub`: `b = revs_a - shared`, `c = revs_b - shared`, `d = total - a - b - c`. If the inputs are inconsistent (`shared > revs_a` or `shared > revs_b` or `a+b+c > total`) — which "shouldn't happen" under correct SQL — the saturated subtractions silently clamp to 0 and `fishers_exact` is called on a degenerate table. The `.ok()` swallows fishers_exact's error, but a wrong-shaped table that happens to satisfy the crate's input validation still yields a meaningless p-value treated as significant. Inputs come from SQL aggregates over `good_commits`, so they're internally consistent in correct usage — but a future bug in the upstream SQL (esp. under time-bucket aliasing or post-cache hot-fix UPDATE statements) would surface as "more significant pairs than usual" rather than as a typed error.
+*   **Suggested fix**: add an invariant check at the top of `fisher_two_tail`: `if shared > revs_a || shared > revs_b || a + b + c > total { return None }`. Three-line defensive add; the `None` propagates the same way today's error case does (caller filters out None).
+
+#### F105 — `ureq = "2"` in build-deps is on maintenance-only branch
+
+*   **Location**: `crates/codelore-lib/Cargo.toml:18` — `ureq = { version = "2", features = ["tls"] }`
+*   **Severity**: LOW
+*   **Category**: Dependency currency
+*   **Status**: Active
+*   **Description**: ureq 3.x has shipped as the active release line; ureq 2.x receives only security backports. The build script's network surface is small (one GET per asset, with explicit timeout) so the practical risk today is near-zero — but `ureq 2.x` will eventually stop receiving security updates entirely. Upgrade is a build-script-only change with no runtime impact.
+*   **Suggested fix**: bump to `ureq = { version = "3", features = ["tls"] }`, port the `Duration::from_mins(2)` timeout and `.into_reader()` / `.read_to_end()` calls to ureq 3's API (`Agent::run` + `Body::into_reader`). Sanity-test by deleting the cached `OUT_DIR/echarts.min.js` and rebuilding with `--features spa` — the SHA-256 must still match.
+
+#### F106 — Provenance manifest has no explicit schema-version field
+
+*   **Location**: `crates/codelore-lib/src/provenance/mod.rs:16-41` — `struct Manifest`
+*   **Severity**: LOW
+*   **Category**: Forward-compatibility
+*   **Status**: Active
+*   **Description**: The `.provenance.json` sidecar carries `codelore_version` (a useful proxy for "what schema is this?"), but no explicit `manifest_version`. Consumers (the planned audit-trail tooling, downstream SLSA tooling, the hypothetical `codelore serve` API) must heuristically reason about schema from `codelore_version` — which couples *consumers* to *codelore's release cadence* even when the manifest schema is stable. A `manifest_version: 1` field would let consumers gate on the schema separately from the producer version.
+*   **Suggested fix**: add `pub manifest_version: u8` to `Manifest` (default `1`). Document in the manifest's module docstring that "bump this whenever a field changes type, is removed, or has its semantics changed; *adding* fields is forward-compatible and doesn't bump it." Add a `tests/provenance_test.rs` assertion that the field is present and `>= 1`.
+
+### Refuted in This Pass
+
+| Claim | Refutation |
+|---|---|
+| Kamei SEXP uses strict `<` instead of paper's `<=` → silently diverges on same-second commits | Refuted. The semantic shift is *explicitly documented* at `kamei/mod.rs:166-173`: "In real repos commits are distinct-second by construction (git commits are sequential), so this is a no-op semantic change. Test fixtures that manufacture same-second commits would notice; the existing `windowed_history_matches_legacy_semantics_on_hot_path` test uses explicit distinct timestamps so `<` and `<=` agree on it." This is a *design decision*, not a bug — the alternative (`<=`) would require an additional tie-break against `rowid` to stay deterministic. |
+| Tree-sitter `kind_id()` is not ABI-stable → cache-fingerprint silently invalidated by grammar bumps | Refuted. Tree-sitter grammars are pinned `=0.23.x` in `crates/codelore-lib/Cargo.toml:38-43` exactly because of this concern (documented in CLAUDE.md's "Dependabot has intentional ignore rules" section). A grammar bump can only land coordinated with the codelore version bump; the cache key includes `CARGO_PKG_VERSION` (cache.rs:37), so the cache invalidates by construction whenever grammars change. The "salt" fix the agent proposed duplicates the protection that's already shipped. |
+| AI-assist pattern `"co-authored-by: cody"` produces false positives on commits containing "cody" | Refuted. The pattern is the *full* literal `"co-authored-by: cody"`, not bare `"cody"`. `str::contains("co-authored-by: cody")` against a commit message `"wrote cody helpers for testing"` returns false — the `"co-authored-by: "` prefix is the anchor. The agent misread the substring as `"cody"` standalone. |
+| AI-attribution `file_ai` CTE conflates NULL `ai_attribution` with human | Refuted. The schema column `commits.ai_attribution` is populated at ingest time by `identity::ai_attribution(...)` for every row (never NULL on a freshly-ingested DB). Older cached DBs are protected by the cache key's `CARGO_PKG_VERSION` slot — a codelore upgrade that changes `ai_attribution` semantics also invalidates the cache. The NULL-on-cache scenario requires both: (a) an old cache survives the version bump, AND (b) the schema migration doesn't touch the column. Neither is currently possible. |
+| DuckDB version is pinned 12+ months old, may produce different `--time-bucket` boundaries vs current upstream | Refuted as speculative. No specific upstream DuckDB changelog entry was cited for week-boundary regression; the version pin `=1.10503.1` is intentional (vendored to work around `libduckdb-sys` MSVC 19.40 — see CLAUDE.md and `Cargo.toml`'s `[patch.crates-io]` block). The pin moves when the upstream `duckdb-rs#786` ships; planning the bump on speculation about a different changelog risks regressing the fixed Windows build. |
+| Code-health weights (0.40 / 0.25 / 0.15 / 0.20) lack a citation for the *weight* values | Refuted as a finding, accepted as a documentation enhancement. The component citations are in `docs/research-foundations.md` (Campbell 2018 cognitive, Nagappan & Ball 2005 churn, Mockus & Herbsleb 2002 ownership, Tornhill 2018 coupling). The *weighting* is CodeLore's calibration choice — already documented in module-level comments. Capturing it as a F-finding double-counts what's already accepted methodology. |
+| SoC `HAVING MAX(files) <= ?` admits boundary cases vs code-maat's strict `<` | Refuted as a finding, accepted as a documented departure. CLAUDE.md and `feedback_modernize_dont_migrate` make explicit: code-maat parity is *opt-in* via `--code-maat-compat`, not the default. The boundary semantics are a *deliberate departure* — modern best practice (inclusive thresholds) over legacy code-maat exact behaviour. |
+
+### Reaffirmed from §3 (deduplicated)
+
+The Round-2 sub-agents independently re-surfaced these Round-1 findings; counted once each, not double-numbered:
+- Markdown emitter pipe-escape (F91) — Round-2 confirmed the same gap exists in `diff_output.rs` (lines 165, 184, 212, 234). F91's fix should sweep both `output/markdown.rs` and `codelore-cli/src/diff_output.rs` simultaneously.
+- Provenance sidecar atomicity (F92) — independently surfaced, same diagnosis.
+- Communication `--since` / `--until` boundary (F95) — independently surfaced.
+- Cache canonicalize fallback (F93) — independently surfaced.
+- ECharts mount-pattern duplication (F96) — independently surfaced; reinforces that V4 (`widgets.js` modularization) is the natural home for F96's extract.
+
+---
+
+## 5. Next Audit Cycle
+
+Combined Active count after both passes: **F89–F106 = 18 Active findings + V4–V6 improvements**. The next sweep should re-open with F-IDs starting at F107.
+
+The validation methodology held across both passes: 16 + 21 raw HIGH/MED candidates → only 10 + 8 = **18 Active** after source-quote verification. The 13 refuted candidates would have shipped as work if the audit pipeline lacked the verify-against-source gate.
