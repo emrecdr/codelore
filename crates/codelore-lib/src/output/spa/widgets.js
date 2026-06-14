@@ -1203,9 +1203,14 @@
       document.documentElement.setAttribute('data-theme', theme);
       label.textContent = theme === 'light' ? 'Dark mode' : 'Light mode';
     }
-    // Restore stored preference (default: dark, matching the original look)
-    let stored = 'dark';
-    try { stored = localStorage.getItem(STORAGE_KEY) || 'dark'; } catch (e) {}
+    // Restore stored preference. If the user has no explicit choice
+    // saved, fall back to the OS-level `prefers-color-scheme` hint
+    // instead of hardcoding dark — so light-mode systems first-paint
+    // light. Once the user clicks the toggle the localStorage entry
+    // wins over the system hint forever (that's `getItem(...) || stored`).
+    let stored = (window.matchMedia
+      && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
+    try { stored = localStorage.getItem(STORAGE_KEY) || stored; } catch (e) {}
     apply(stored);
     btn.addEventListener('click', function () {
       const next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
