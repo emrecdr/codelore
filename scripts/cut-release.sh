@@ -315,7 +315,7 @@ if [[ "${DRY_RUN}" != "true" ]]; then
   ok "binary reports codelore ${VERSION}"
 fi
 
-run git add Cargo.toml Cargo.lock CHANGELOG.md
+run git add Cargo.toml Cargo.lock CHANGELOG.md crates/*/Cargo.toml
 run git commit -m "chore(release): ${TAG}"
 ok "release commit created"
 
