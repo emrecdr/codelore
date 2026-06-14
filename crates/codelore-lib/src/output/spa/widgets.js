@@ -1104,7 +1104,13 @@
     }
 
     // Build a hierarchy: top-level path segment → file → function.
+    // First pass collects leaves; second pass assigns per-leaf
+    // `itemStyle.color` driven by cognitive complexity (yellow→red
+    // ramp via the shared `heatmapColor` helper). Container nodes
+    // (top dir, file) keep depth-based shading so the wedge boundary
+    // stays visible against the heatmap.
     const root = { name: 'all', children: [] };
+    let maxCognitive = 0;
     for (var i = 0; i < rows.length; i++) {
       const r = rows[i];
       const segs = (r.path || '').split('/').filter(Boolean);
@@ -1120,14 +1126,30 @@
         fileNode = { name: file, children: [], fullPath: r.path };
         topNode.children.push(fileNode);
       }
+      const cog = typeof r.cognitive === 'number' ? r.cognitive : 0;
+      if (cog > maxCognitive) maxCognitive = cog;
       fileNode.children.push({
         name: r.function || '<anonymous>',
-        value: r.cognitive,
-        cognitive: r.cognitive,
+        value: cog,
+        cognitive: cog,
         startLine: r.start_line,
         endLine: r.end_line,
         fullPath: r.path,
       });
+    }
+    // Assign per-leaf colour by `cognitive / maxCognitive`. Anchored
+    // to 1 to avoid div-by-zero on degenerate fixtures where every
+    // function has cognitive complexity 0.
+    const cogScale = maxCognitive || 1;
+    for (var ti = 0; ti < root.children.length; ti++) {
+      const topNode = root.children[ti];
+      for (var fi = 0; fi < topNode.children.length; fi++) {
+        const fileNode = topNode.children[fi];
+        for (var fni = 0; fni < fileNode.children.length; fni++) {
+          const fn = fileNode.children[fni];
+          fn.itemStyle = { color: heatmapColor(fn.cognitive / cogScale) };
+        }
+      }
     }
 
     const prior = echarts.getInstanceByDom(container);
@@ -1152,11 +1174,15 @@
         radius: ['0%', '90%'],
         nodeClick: 'rootToNode',
         emphasis: { focus: 'ancestor' },
+        // Container shading carries the visual hierarchy: ring 1 (top
+        // path segment) is dark, ring 2 (file) is mid. Ring 3 (function
+        // leaves) is overridden per-node by the heatmap colour assigned
+        // above — the empty entry below disables the default ramp.
         levels: [
           {},
-          { itemStyle: { color: '#2b5d39' }, label: { color: '#fff', fontSize: 11 } },
-          { itemStyle: { color: '#3d7d4f' }, label: { color: '#fff', fontSize: 10 } },
-          { itemStyle: { color: '#5fa472' }, label: { color: '#fff', fontSize: 9 } },
+          { itemStyle: { color: '#1f3f29' }, label: { color: '#fff', fontSize: 11 } },
+          { itemStyle: { color: '#2c5d3a' }, label: { color: '#fff', fontSize: 10 } },
+          { label: { color: '#1a1a1a', fontSize: 9 } },
         ],
       }],
     });
