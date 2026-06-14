@@ -244,7 +244,6 @@ impl FactsDb {
     ///
     /// Honors `opts.min_clone_node_count` (default 30) and `opts.exclude_patterns`
     /// (built from `--exclude` flags + `.codeloreignore`).
-    #[allow(clippy::too_many_lines)]
     fn populate_clones_at_head<R: crate::repo::Repo>(
         &self,
         repo: &R,
@@ -252,45 +251,26 @@ impl FactsDb {
     ) -> Result<usize> {
         use crate::clones::{CloneLanguage, extract_functions, group_clones};
         use rayon::prelude::*;
-        use walkdir::WalkDir;
-
-        // Combined filter: respects --exclude globs + .gitignore +
-        // .git/info/exclude + .codeloreignore. See `paths_filter`.
-        let filter = crate::paths_filter::PathsFilter::from_opts(opts)?;
 
         let head_rev = current_head_rev(self)?;
 
-        // Phase 1 (serial, fast): walk the working tree, filter to Tier-1 files
-        // that survive the exclude globset, capture (absolute path, POSIX rel, lang).
-        let candidates: Vec<(std::path::PathBuf, String, CloneLanguage)> =
-            WalkDir::new(&opts.repo_path)
-                .into_iter()
-                .filter_map(std::result::Result::ok)
-                .filter_map(|entry| {
-                    if !entry.file_type().is_file() {
-                        return None;
-                    }
-                    let path = entry.path();
-                    let lang = CloneLanguage::from_path(path)?;
-                    let rel = path
-                        .strip_prefix(&opts.repo_path)
-                        .map_or_else(|_| crate::paths::to_posix(path), crate::paths::to_posix);
-                    let rel_path = std::path::Path::new(&rel);
-                    // Always-on: never analyse .git/ contents.
-                    if crate::paths_filter::is_git_metadata(rel_path) {
-                        return None;
-                    }
-                    // Combined filter: --exclude + .gitignore +
-                    // .codeloreignore. F30 fix preserved: matched on
-                    // the REPO-RELATIVE path so a repo located under
-                    // e.g. `/Users/joe/target/my-repo` doesn't trip
-                    // the `target` rule via the parent path component.
-                    if filter.is_excluded(rel_path, false) {
-                        return None;
-                    }
-                    Some((path.to_path_buf(), rel, lang))
-                })
-                .collect();
+        // Phase 1 (serial, fast): query the live-at-HEAD path set from
+        // DuckDB and filter to Tier-1 source extensions. `query_live_paths`
+        // returns rows the ingest already accepted (`PathsFilter` ran at
+        // ingest time before any row landed in `changes`), so we don't
+        // re-apply `--exclude` / `.gitignore` / `.codeloreignore` here.
+        // F77 fix: switched from `WalkDir::new(&opts.repo_path)` to
+        // `query_live_paths` so the clones pass works on bare
+        // repositories (no working tree to walk) the same way the
+        // complexity pass already does — see `ingest_complexity_at_head`.
+        let live_paths = query_live_paths(self)?;
+        let candidates: Vec<(String, CloneLanguage)> = live_paths
+            .into_iter()
+            .filter_map(|rel| {
+                let lang = CloneLanguage::from_path(std::path::Path::new(&rel))?;
+                Some((rel, lang))
+            })
+            .collect();
 
         // Phase 2 (parallel): read each file + run tree-sitter fingerprinting on
         // the rayon pool. Mirrors the complexity pass above. Unreadable files
@@ -298,7 +278,7 @@ impl FactsDb {
         // via `collect::<Result<_>>`.
         let per_file: Vec<Vec<_>> = candidates
             .into_par_iter()
-            .map(|(_full_path, rel, lang)| -> Result<Vec<_>> {
+            .map(|(rel, lang)| -> Result<Vec<_>> {
                 // Read the blob at HEAD via the Repo trait. Bare-repo safe
                 // and ignores dirty-tree edits. Backends without blob
                 // support return Ok(None) — same skip behaviour as the
