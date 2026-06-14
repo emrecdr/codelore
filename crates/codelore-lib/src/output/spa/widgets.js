@@ -43,47 +43,13 @@
   initHotspotColorToggles();
 
   // -----------------------------------------------------------------
-  // Widget 0: KPI tiles (at-a-glance KPIs)
+  // Per-metric provenance definitions
   // -----------------------------------------------------------------
-  renderKpiTiles(data);
-
-  // -----------------------------------------------------------------
-  // Widget K: knowledge islands (CodeLore differentiator vs CodeScene)
-  // -----------------------------------------------------------------
-  renderKnowledgeIslands(data.knowledge_islands || []);
-
-  // -----------------------------------------------------------------
-  // Widget 1: hotspot circle-pack (the signature CodeScene view)
-  // -----------------------------------------------------------------
-  let currentHotspotColorMode = 'cognitive';
-  renderHotspotCirclePack(data.hotspots || [], currentHotspotColorMode);
-  window._codeloreRerenderers.push(function () {
-    renderHotspotCirclePack(data.hotspots || [], currentHotspotColorMode);
-  });
-
-  // -----------------------------------------------------------------
-  // Widget 2: hotspot table — sortable drill-down view of widget 1
-  // -----------------------------------------------------------------
-  renderHotspotTable(data.hotspots || []);
-
-  // -----------------------------------------------------------------
-  // Widget C: change-coupling sankey (top-N coupled file pairs)
-  // -----------------------------------------------------------------
-  renderCouplingSankey(data.coupling || []);
-  window._codeloreRerenderers.push(function () {
-    renderCouplingSankey(data.coupling || []);
-  });
-
-  // -----------------------------------------------------------------
-  // v0.4.2 widgets (registered for theme re-render)
-  // -----------------------------------------------------------------
-  renderTrends(data.trends || []);
-  window._codeloreRerenderers.push(function () { renderTrends(data.trends || []); });
-  renderCalendarHeatmap(data.daily_commits || []);
-  window._codeloreRerenderers.push(function () { renderCalendarHeatmap(data.daily_commits || []); });
-  renderXRaySunburst(data.xray || []);
-  window._codeloreRerenderers.push(function () { renderXRaySunburst(data.xray || []); });
-
+  // Hoisted ABOVE the renderXxx(data) calls below: renderKpiTiles +
+  // the hotspot table header both reach METRIC_DEFS via
+  // buildTooltipHtml. A const at the bottom of the IIFE hits TDZ
+  // when those callers fire — 'Cannot access METRIC_DEFS before
+  // initialization' showed up on every browser load in v0.5.0.
   // Per-metric provenance definitions: formula in plain English + a
   // link to the research-foundations.md section that grounds the
   // metric. Surfaced as `?` tooltips on KPI tiles and table column
@@ -153,6 +119,50 @@
       citation: { label: 'AI authorship classifier (identity::bots)', anchor: '#authors-' },
     },
   };
+
+
+  // -----------------------------------------------------------------
+  // Widget 0: KPI tiles (at-a-glance KPIs)
+  // -----------------------------------------------------------------
+  renderKpiTiles(data);
+
+  // -----------------------------------------------------------------
+  // Widget K: knowledge islands (CodeLore differentiator vs CodeScene)
+  // -----------------------------------------------------------------
+  renderKnowledgeIslands(data.knowledge_islands || []);
+
+  // -----------------------------------------------------------------
+  // Widget 1: hotspot circle-pack (the signature CodeScene view)
+  // -----------------------------------------------------------------
+  let currentHotspotColorMode = 'cognitive';
+  renderHotspotCirclePack(data.hotspots || [], currentHotspotColorMode);
+  window._codeloreRerenderers.push(function () {
+    renderHotspotCirclePack(data.hotspots || [], currentHotspotColorMode);
+  });
+
+  // -----------------------------------------------------------------
+  // Widget 2: hotspot table — sortable drill-down view of widget 1
+  // -----------------------------------------------------------------
+  renderHotspotTable(data.hotspots || []);
+
+  // -----------------------------------------------------------------
+  // Widget C: change-coupling sankey (top-N coupled file pairs)
+  // -----------------------------------------------------------------
+  renderCouplingSankey(data.coupling || []);
+  window._codeloreRerenderers.push(function () {
+    renderCouplingSankey(data.coupling || []);
+  });
+
+  // -----------------------------------------------------------------
+  // v0.4.2 widgets (registered for theme re-render)
+  // -----------------------------------------------------------------
+  renderTrends(data.trends || []);
+  window._codeloreRerenderers.push(function () { renderTrends(data.trends || []); });
+  renderCalendarHeatmap(data.daily_commits || []);
+  window._codeloreRerenderers.push(function () { renderCalendarHeatmap(data.daily_commits || []); });
+  renderXRaySunburst(data.xray || []);
+  window._codeloreRerenderers.push(function () { renderXRaySunburst(data.xray || []); });
+
 
   // Build the HTML for a `?` tooltip. Returns the trigger button plus
   // an absolutely-positioned popup with the formula + citation link.
