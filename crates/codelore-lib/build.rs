@@ -83,22 +83,26 @@ const ASSETS: &[AssetPin] = &[
         url: "https://cdn.jsdelivr.net/npm/d3-hierarchy@3.1.2/dist/d3-hierarchy.min.js",
         sha256: "a8771380454be89ec5ffe9a6396ba7c247081e348ae740dc9cb9629abd4c0e43",
     },
-    // Alpine.js — HTML-attribute reactivity layer for v0.5.x. Locked at
-    // 3.15.8 (the same pin in the user's azure-dashboard reference).
+    // Alpine.js — HTML-attribute reactivity layer for the SPA dashboard.
     // ~46 KB minified; the `cdn.min.js` build is what jsDelivr ships
     // with the IIFE wrapper safe for inlining via <script>{{...}}</script>.
     AssetPin {
         name: "alpine.min.js",
-        url: "https://cdn.jsdelivr.net/npm/alpinejs@3.15.8/dist/cdn.min.js",
-        sha256: "899842782a7fd16fcc2d7a7c877ff9ec159394044c87b158b2ef132786606932",
+        url: "https://cdn.jsdelivr.net/npm/alpinejs@3.15.12/dist/cdn.min.js",
+        sha256: "57b37d7cae9a27d965fdae4adcc844245dfdc407e655aee85dcfff3a08036a3f",
     },
     // Alpine persist plugin — wires Alpine reactive state to
     // localStorage so cross-widget filter selections survive page
     // refresh. Sub-1 KB. Must be loaded AFTER alpine.min.js (Alpine's
     // global hooks need to exist for the plugin to register).
+    //
+    // Note: the persist plugin's `dist/cdn.min.js` is byte-identical
+    // between 3.15.8 and 3.15.12 (only the core received patches),
+    // so the SHA below is unchanged from the prior pin. The URL is
+    // bumped to keep the version label aligned with the core.
     AssetPin {
         name: "alpine-persist.min.js",
-        url: "https://cdn.jsdelivr.net/npm/@alpinejs/persist@3.15.8/dist/cdn.min.js",
+        url: "https://cdn.jsdelivr.net/npm/@alpinejs/persist@3.15.12/dist/cdn.min.js",
         sha256: "e77d932c52ce616c2a5c5dc45530a0221911a31aab48a179e8680932d4d3aa47",
     },
 ];
