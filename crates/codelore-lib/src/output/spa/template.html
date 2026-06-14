@@ -81,14 +81,10 @@
       color: var(--fg-dim);
       font-size: 12px;
     }
-    main {
-      padding: 28px;
-      display: grid;
-      grid-template-columns: 1fr;
-      gap: 28px;
-      max-width: 1600px;
-      margin: 0 auto;
-    }
+    /* `main`'s layout primitives now come from Tailwind utilities on
+       the markup (`grid grid-cols-1 xl:grid-cols-2 gap-7 p-7
+       max-w-[1600px] mx-auto`). Nothing else in this stylesheet
+       targets `main`. */
     .widget {
       /* PR-7: `background` / `border` / `border-radius` removed —
          DaisyUI's `card bg-base-200 shadow-lg` classes on the section
@@ -503,11 +499,17 @@
     </label>
   </header>
 
-  <!-- `max-w-screen-2xl mx-auto` caps the widget grid at the same
-       1600 px width the inline `main { max-width: 1600px; margin: 0
-       auto; }` rule sets — DaisyUI doesn't override either property,
-       so the two co-exist as a redundant guard. -->
-  <main class="max-w-screen-2xl mx-auto">
+  <!-- Responsive widget grid:
+       - mobile / md (< 1280 px): 1 column (`grid-cols-1`)
+       - xl (≥ 1280 px): 2 columns (`xl:grid-cols-2`)
+       Widgets that need horizontal real estate
+       (`xl:col-span-2`): hotspot circle-pack, trends, calendar
+       heatmap, X-Ray sunburst, hotspot table, change-coupling
+       sankey. Two compact widgets pair on row 1 (kpi-tiles +
+       knowledge-islands). 1600 px arbitrary cap matches the
+       v0.4.x dashboard width — `max-w-screen-2xl` (1536 px)
+       would shrink the dashboard on ultra-wide displays. -->
+  <main class="max-w-[1600px] mx-auto grid grid-cols-1 xl:grid-cols-2 gap-7 p-7">
     <section class="widget card bg-base-200 shadow-lg" id="widget-kpi-tiles">
       <h2>Codebase at a glance</h2>
       <div class="subtitle">
@@ -530,7 +532,7 @@
       <div id="widget-knowledge-islands-body" class="table-container"></div>
     </section>
 
-    <section class="widget card bg-base-200 shadow-lg" id="widget-hotspot-circle-pack">
+    <section class="widget card bg-base-200 shadow-lg xl:col-span-2" id="widget-hotspot-circle-pack">
       <h2>Hotspots</h2>
       <div class="subtitle">
         Files sized by churn (revisions). Toggle the color mapping
@@ -551,7 +553,7 @@
       <div id="widget-hotspot-circle-pack-body" class="widget-body"></div>
     </section>
 
-    <section class="widget card bg-base-200 shadow-lg" id="widget-trends">
+    <section class="widget card bg-base-200 shadow-lg xl:col-span-2" id="widget-trends">
       <h2>Trends</h2>
       <div class="subtitle">
         Monthly revision counts for the top-10 hotspot files.
@@ -560,7 +562,7 @@
       <div id="widget-trends-body" class="widget-body"></div>
     </section>
 
-    <section class="widget card bg-base-200 shadow-lg" id="widget-calendar-heatmap">
+    <section class="widget card bg-base-200 shadow-lg xl:col-span-2" id="widget-calendar-heatmap">
       <h2>Commit activity</h2>
       <div class="subtitle">
         Per-day commit volume across the analysed history.
@@ -568,7 +570,7 @@
       <div id="widget-calendar-heatmap-body" class="widget-body" style="height: 260px;"></div>
     </section>
 
-    <section class="widget card bg-base-200 shadow-lg" id="widget-xray-sunburst">
+    <section class="widget card bg-base-200 shadow-lg xl:col-span-2" id="widget-xray-sunburst">
       <h2>Function X-Ray <span class="badge">CodeLore-only — CodeScene paywalls this</span></h2>
       <div class="subtitle">
         Function-level cognitive complexity. Inner ring = top-level
@@ -578,7 +580,7 @@
       <div id="widget-xray-sunburst-body" class="widget-body"></div>
     </section>
 
-    <section class="widget card bg-base-200 shadow-lg" id="widget-hotspot-table">
+    <section class="widget card bg-base-200 shadow-lg xl:col-span-2" id="widget-hotspot-table">
       <h2>Hotspot table</h2>
       <div class="subtitle">
         Sortable drill-down view of every hotspot row. Click a column
@@ -599,7 +601,7 @@
       <div id="widget-hotspot-table-body" class="table-container"></div>
     </section>
 
-    <section class="widget card bg-base-200 shadow-lg" id="widget-coupling-sankey">
+    <section class="widget card bg-base-200 shadow-lg xl:col-span-2" id="widget-coupling-sankey">
       <h2>Change coupling</h2>
       <div class="subtitle">
         Files that change together at Fisher-significant rates. Wider
