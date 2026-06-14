@@ -192,7 +192,7 @@ impl FactsDb {
                     // the repo-relative form is more useful than the absolute
                     // working-tree path anyway.
                     let synth_path = std::path::Path::new(&path);
-                    let entities = match compute_for_file(synth_path, &source, lang) {
+                    let entities = match compute_for_file(synth_path, source, lang) {
                         Ok(v) => v,
                         Err(e) => {
                             tracing::warn!("complexity: parse error {path}: {e}");
