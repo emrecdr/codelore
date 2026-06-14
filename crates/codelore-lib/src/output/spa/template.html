@@ -5,13 +5,43 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{{TITLE}}</title>
 
-  <!-- Precompiled Tailwind v4 + DaisyUI 5 bundle. Rebuilt via
-       `just spa-css-rebuild` (see crates/codelore-lib/src/output/spa/
-       tailwind-src/README.md for the workflow). Until the per-widget
-       DaisyUI conversion lands in follow-up PRs, the <style> block
-       below carries the v0.4.x hand-rolled CSS — the two co-exist
-       deliberately: DaisyUI tokens are available to new widgets while
-       legacy widgets keep their semantic classes. -->
+  <!-- Anti-flash-of-wrong-theme guard. Runs BEFORE any CSS or markup
+       is parsed below, so the `data-theme` attribute is in place by
+       the time the rest of the document is styled.
+
+       - If the user has an explicit saved preference (Alpine $persist
+         writes to localStorage keys prefixed with `_x_`), restore it
+         here so first paint matches.
+       - If not, leave `data-theme` unset and rely on the DaisyUI
+         `--prefersdark` config in `tailwind-src/input.css` to apply
+         the OS-level `prefers-color-scheme` via CSS.
+       - Migration: a previous version persisted theme under the
+         `codelore-theme` key with string values 'light' / 'dark'.
+         If found, translate to the new boolean-stringified key and
+         delete the old entry so legacy preferences are honoured. -->
+  <script>
+    (function () {
+      try {
+        var legacy = localStorage.getItem('codelore-theme');
+        if (legacy && localStorage.getItem('_x_codelore_theme_is_dark') === null) {
+          localStorage.setItem('_x_codelore_theme_is_dark', JSON.stringify(legacy === 'dark'));
+          localStorage.removeItem('codelore-theme');
+        }
+        var stored = localStorage.getItem('_x_codelore_theme_is_dark');
+        if (stored === 'true') document.documentElement.setAttribute('data-theme', 'dark');
+        else if (stored === 'false') document.documentElement.setAttribute('data-theme', 'light');
+        /* else: no preference saved → DaisyUI --default + --prefersdark
+           handles first paint via CSS media query. */
+      } catch (e) { /* localStorage blocked: fall through to CSS default. */ }
+    })();
+  </script>
+
+  <!-- Precompiled Tailwind v4 + DaisyUI 5 bundle.
+       Rebuild via `tailwindcss -i tailwind-src/input.css -o tailwind.daisyui.min.css --minify`
+       (see `tailwind-src/README.md`). The hand-rolled `<style>` block
+       below carries inline CSS that pre-dates the DaisyUI conversion;
+       the two co-exist so legacy widget classes keep working while
+       DaisyUI tokens are available to new widgets. -->
   <style>{{TAILWIND_DAISY_CSS}}</style>
 
   <style>
@@ -398,18 +428,10 @@
       color: var(--accent);
       border-color: var(--accent);
     }
-    header .theme-toggle {
-      margin-left: auto;
-      background: var(--bg-elev-2);
-      color: var(--fg);
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      padding: 4px 10px;
-      cursor: pointer;
-      font-size: 12px;
-      font-family: inherit;
-    }
-    header .theme-toggle:hover { border-color: var(--accent); }
+    /* Theme toggle styling now comes from DaisyUI (`btn btn-ghost`
+       + `swap swap-rotate`); only the navbar push-right behaviour
+       is preserved here so the label still sits at the far end. */
+    header label.swap { margin-left: auto; }
     /* Light mode — applied when `data-theme="light"` is set on <html>. */
     html[data-theme="light"] {
       --bg: #fafafa;
@@ -448,9 +470,37 @@
       ·
       <span>generated {{GENERATED_AT}}</span>
     </div>
-    <button type="button" class="theme-toggle btn btn-ghost btn-sm" id="theme-toggle" title="Toggle light / dark theme">
-      <span id="theme-toggle-label">Light mode</span>
-    </button>
+    <!-- DaisyUI `swap-rotate` between a sun and a moon. The hidden
+         checkbox is the actual control — Alpine `x-model` binds its
+         `checked` state to the persisted `$store.theme.isDark`
+         boolean. An `Alpine.effect` in the store registration script
+         syncs the boolean to the document's `data-theme` attribute,
+         which DaisyUI's CSS reads to swap palette variables.
+         Aria label substitutes for the previous on-screen text. -->
+    <label class="swap swap-rotate btn btn-ghost btn-sm"
+           title="Toggle light / dark theme"
+           aria-label="Toggle dark theme">
+      <!-- `class="theme-controller" value="dark"` engages DaisyUI's
+           CSS-only theme swap via `:has(.theme-controller[value=dark]:checked)`
+           so the theme flips visually even if Alpine fails to load —
+           defense in depth around the `Alpine.effect` that also sets
+           `data-theme` reactively. -->
+      <input type="checkbox" class="theme-controller" value="dark"
+             x-data x-model="$store.theme.isDark">
+      <!-- swap-on: rendered when checked (dark mode active) → moon -->
+      <svg class="swap-on h-4 w-4" xmlns="http://www.w3.org/2000/svg"
+           viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+      </svg>
+      <!-- swap-off: rendered when unchecked (light mode active) → sun -->
+      <svg class="swap-off h-4 w-4" xmlns="http://www.w3.org/2000/svg"
+           viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="4"/>
+        <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+      </svg>
+    </label>
   </header>
 
   <!-- `max-w-screen-2xl mx-auto` caps the widget grid at the same
@@ -458,7 +508,7 @@
        auto; }` rule sets — DaisyUI doesn't override either property,
        so the two co-exist as a redundant guard. -->
   <main class="max-w-screen-2xl mx-auto">
-    <section class="widget card bg-base-200 shadow-lg kpi-row" id="widget-kpi-tiles">
+    <section class="widget card bg-base-200 shadow-lg" id="widget-kpi-tiles">
       <h2>Codebase at a glance</h2>
       <div class="subtitle">
         Summary metrics across the repo. KPI cards are computed at
@@ -618,7 +668,7 @@
 
   <!-- Alpine.store registrations. Runs once, on `alpine:init`, before
        `Alpine.start()` walks the DOM and binds `x-data` / `x-show` etc.
-       Two stores wired here:
+       Three stores wired here:
 
        - `detail` — file-detail drawer open/close state. Consumed by
          the aside markup (`x-show="$store.detail.open"`); written by
@@ -633,7 +683,18 @@
          re-render reactively. Persisted via the Alpine persist
          plugin (`$persist` magic) so the filter survives a page
          reload — useful for the `--embed` step-summary path and
-         for the inner-loop "tweak, reload, recheck" workflow. -->
+         for the inner-loop "tweak, reload, recheck" workflow.
+
+       - `theme` — light / dark toggle. Initial value seeded from the
+         OS `prefers-color-scheme` so a user with no saved preference
+         gets a sensible default. Persisted via `$persist` so the
+         pre-paint script in `<head>` can read the same key and apply
+         the `data-theme` attribute before first paint (no flash of
+         wrong theme). `Alpine.effect` keeps `data-theme` in sync
+         with the boolean reactively, and triggers ECharts re-renders
+         via the `_codeloreRerenderers` registry — ECharts caches
+         resolved colours at `setOption` time, so a CSS-variable
+         change alone doesn't refresh the chart. -->
   <script>
     document.addEventListener('alpine:init', () => {
       Alpine.store('detail', {
@@ -645,6 +706,23 @@
         text: Alpine.$persist('').as('codelore_filter_text'),
         set(value) { this.text = value; },
         clear() { this.text = ''; },
+      });
+      const initialDark = (window.matchMedia
+        && window.matchMedia('(prefers-color-scheme: dark)').matches) || false;
+      Alpine.store('theme', {
+        isDark: Alpine.$persist(initialDark).as('codelore_theme_is_dark'),
+      });
+      // Reactive bridge: store.isDark → <html data-theme="..."> + ECharts re-render.
+      Alpine.effect(() => {
+        const dark = Alpine.store('theme').isDark;
+        document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+        // Fire registered re-renderers so ECharts widgets pick up the
+        // new resolved palette. Wrapped in try/catch per-renderer so
+        // one broken widget doesn't break the rest.
+        const rerenderers = window._codeloreRerenderers || [];
+        for (let i = 0; i < rerenderers.length; i++) {
+          try { rerenderers[i](); } catch (e) { console.warn('rerender failed:', e); }
+        }
       });
     });
   </script>

@@ -27,7 +27,22 @@
 @source not "./daisyui.mjs";
 @source not "./daisyui-theme.mjs";
 
-@plugin "./daisyui.mjs";
+/* DaisyUI 5 theme config:
+ *   - `light --default`   → applied when no `data-theme` is set AND
+ *                            the OS is in light mode (or has no
+ *                            `prefers-color-scheme` opinion).
+ *   - `dark --prefersdark` → applied via a `@media (prefers-color-scheme: dark)`
+ *                            block when no `data-theme` override is present,
+ *                            so first-paint matches the OS without any JS.
+ *
+ * Explicit user toggle still wins: the SPA's theme controller writes
+ * `data-theme="light|dark"` on `<html>`, which beats the media query.
+ * Persisted preference (Alpine `$persist`) re-applies the attribute
+ * on subsequent loads.
+ */
+@plugin "./daisyui.mjs" {
+    themes: light --default, dark --prefersdark;
+}
 @plugin "./daisyui-theme.mjs";
 
 /* The standalone CLI scans `@source` paths for class usage. Both
