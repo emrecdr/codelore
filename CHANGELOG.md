@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-14
+
 ### Added — v0.5.x SPA UI redesign (Tailwind v4 + DaisyUI 5 + Alpine.js)
 
 The interactive dashboard (`--format spa`) moves off the hand-rolled v0.4.x CSS onto a real design-system stack: **Tailwind v4** for utility-first layout, **DaisyUI 5** for themed components, **Alpine.js 3.15** for HTML-attribute reactivity. All three SHA-pinned at build time via `build.rs`; bundle stays self-contained (~1.5 MB rendered SPA, no CDN at runtime).
