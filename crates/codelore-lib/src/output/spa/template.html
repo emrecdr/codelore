@@ -658,50 +658,73 @@
   <!-- Alpine.js + Alpine persist plugin: HTML-attribute reactivity for
        v0.5.x cross-widget filter state.
 
-       Loading order: core first, then plugin — the upstream README
-       convention. Technically the persist plugin registers via
-       `document.addEventListener('alpine:init', ...)` which captures
-       Alpine's lifecycle event regardless of which inline script
-       parses first, so the order is documentation-of-intent rather
-       than a correctness constraint.
+       === Script-load order is load-bearing for correctness ===
 
-       No `defer` attribute: per the HTML5 spec, `defer` is ignored on
-       inline scripts (it only changes behaviour for `<script src>`).
-       Position-based ordering is what carries here — every script sits
-       AFTER the markup it operates on, so the DOM is fully parsed by
-       the time each one runs. -->
-  <script>{{ALPINE_JS}}</script>
-  <script>{{ALPINE_PERSIST_JS}}</script>
+       Alpine's `cdn.min.js` build auto-starts (`Alpine.start()`)
+       immediately when `document.readyState !== 'loading'` — which
+       is ALWAYS the case for inline scripts placed at the end of
+       `<body>` (the body has children, parsing is past the `loading`
+       phase). `Alpine.start()` synchronously dispatches the
+       `alpine:init` event before walking the DOM to bind `x-data` /
+       `x-show` etc. Any `document.addEventListener('alpine:init',
+       ...)` listener registered AFTER the Alpine core script tag is
+       too late — the event has already fired and the listener never
+       runs.
 
-  <!-- Alpine.store registrations. Runs once, on `alpine:init`, before
-       `Alpine.start()` walks the DOM and binds `x-data` / `x-show` etc.
-       Three stores wired here:
+       Initial v0.5.x order was core → persist → store-init listener;
+       browser console reported `Cannot read properties of undefined
+       (reading 'isDark')` on `input.theme-controller` (the store was
+       never registered). Reorder fixes that:
+
+       1. Persist plugin script — registers ITS own `alpine:init`
+          listener (uses `Alpine.plugin(persist)` inside the
+          listener, so the call happens after Alpine is loaded).
+       2. Our inline store-init script — registers a second
+          `alpine:init` listener (uses `Alpine.$persist`, which
+          requires the persist plugin's listener to have run first;
+          DOM listeners fire in registration order, so persist must
+          register FIRST).
+       3. Alpine core script LAST — fires `alpine:init`; both
+          listeners run in registration order, stores end up wired
+          before Alpine walks the DOM and evaluates `x-show`.
+
+       No `defer` attribute: per the HTML5 spec, `defer` is ignored
+       on inline scripts (only changes behaviour for `<script src>`).
+       Position-based ordering is what carries here.
+
+       Three stores wired:
 
        - `detail` — file-detail drawer open/close state. Consumed by
-         the aside markup (`x-show="$store.detail.open"`); written by
-         `widgets.js::showFileDetailDrawer` via `Alpine.store('detail')
-         .show()`. Closed via the aside's
+         the aside markup (`x-show="$store.detail.open"`); written
+         by `widgets.js::showFileDetailDrawer` via
+         `Alpine.store('detail').show()`. Closed via the aside's
          `@keydown.escape.window="$store.detail.hide()"` and the
          close button's `@click="$store.detail.hide()"`.
 
        - `filter` — cross-widget filter text. PR-6 wires only the
          hotspot table as a writer; future widgets subscribe via
-         `Alpine.effect(() => Alpine.store('filter').text)` to
-         re-render reactively. Persisted via the Alpine persist
-         plugin (`$persist` magic) so the filter survives a page
-         reload — useful for the `--embed` step-summary path and
-         for the inner-loop "tweak, reload, recheck" workflow.
+         `Alpine.effect(() => Alpine.store('filter').text)`.
+         Persisted via the Alpine persist plugin (`$persist` magic)
+         so the filter survives a page reload.
 
-       - `theme` — light / dark toggle. Initial value seeded from the
-         OS `prefers-color-scheme` so a user with no saved preference
-         gets a sensible default. Persisted via `$persist` so the
-         pre-paint script in `<head>` can read the same key and apply
-         the `data-theme` attribute before first paint (no flash of
-         wrong theme). `Alpine.effect` keeps `data-theme` in sync
-         with the boolean reactively, and triggers ECharts re-renders
-         via the `_codeloreRerenderers` registry — ECharts caches
-         resolved colours at `setOption` time, so a CSS-variable
-         change alone doesn't refresh the chart. -->
+       - `theme` — light / dark toggle. Initial value seeded from
+         the OS `prefers-color-scheme` so a user with no saved
+         preference gets a sensible default. Persisted via
+         `$persist` so the pre-paint script in `<head>` can read
+         the same key and apply the `data-theme` attribute before
+         first paint (no flash of wrong theme). `Alpine.effect`
+         keeps `data-theme` in sync with the boolean reactively,
+         and triggers ECharts re-renders via the
+         `_codeloreRerenderers` registry — ECharts caches resolved
+         colours at `setOption` time, so a CSS-variable change
+         alone doesn't refresh the chart. -->
+
+  <!-- Step 1: persist plugin script — registers its own alpine:init listener. -->
+  <script>{{ALPINE_PERSIST_JS}}</script>
+
+  <!-- Step 2: our store-init listener — registers AFTER persist's, so it
+       runs second on alpine:init dispatch (DOM listeners fire in
+       registration order). -->
   <script>
     document.addEventListener('alpine:init', () => {
       Alpine.store('detail', {
@@ -734,7 +757,14 @@
     });
   </script>
 
-  <!-- Widget render logic. -->
+  <!-- Step 3: Alpine core LAST — auto-starts; fires alpine:init; both
+       listeners above run in registration order, stores are wired
+       before Alpine walks the DOM. -->
+  <script>{{ALPINE_JS}}</script>
+
+  <!-- Widget render logic. Runs after Alpine has bound, so any
+       `Alpine.store(...)` access from widgets sees the registered
+       stores. -->
   <script>{{WIDGETS_JS}}</script>
 </body>
 </html>
