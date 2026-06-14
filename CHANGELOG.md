@@ -4,6 +4,24 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Fixed — v0.5.0 SPA runtime errors (F107 + F108 hotfix)
+
+Two production browser-console errors on the v0.5.0 SPA made the dashboard unusable on first paint. Both bugs predated v0.5.0 — they shipped through SPA-touching PRs going back to v0.4.x — and only surfaced when the JS executed in a real browser. The existing `spa_integration_test` greps the rendered HTML for string presence but never runs the JS, so neither bug ever tripped CI. PR #37 ships the fix; PR #38 records the post-mortem in `docs/reports/deep_analysis_report.md` as F107 / F108 plus a methodology note for the audit cycles' shared blind spot.
+
+- **F107** — `METRIC_DEFS` Temporal Dead Zone in `widgets.js` IIFE. `renderKpiTiles(data)` was called at the top of the IIFE and reached `METRIC_DEFS` via `buildTooltipHtml`, but `const METRIC_DEFS = {...}` was declared further down — TDZ tripped on every render with `Uncaught ReferenceError: Cannot access 'METRIC_DEFS' before initialization`. Fix: hoist the `const RESEARCH_FOUNDATIONS_URL` + `const METRIC_DEFS` block to before the `renderXxx(data)` call block.
+- **F108** — Alpine inline-script order caused `$store.*` undefined at first paint. Alpine's `cdn.min.js` auto-starts (`Alpine.start()`) immediately when `document.readyState !== 'loading'`, synchronously dispatching `alpine:init` before walking the DOM. The store-init inline `<script>` was placed AFTER `{{ALPINE_JS}}` — by the time our `addEventListener('alpine:init', ...)` ran, the event had already fired and our callback never executed. Every `x-show="$store.theme.isDark"` / `x-show="$store.detail.open"` evaluation then hit `undefined`. Fix: reorder the three inline scripts in `template.html` to `persist plugin → store-init listener → Alpine core`. Persist plugin's `cdn.min.js` registers via `document.addEventListener("alpine:init", () => Alpine.plugin(d))` — safe to load before Alpine core; DOM listeners fire in registration order, so persist's runs before ours; both run before Alpine walks the DOM.
+
+The fix preserves the `Alpine.$persist`-backed store wiring (detail / filter / theme), the prefers-color-scheme first-paint guard, and the v0.4.x → v0.5.0 localStorage migration logic untouched. Template comment block above the scripts now documents the ordering invariant explicitly.
+
+### Docs — F89–F108 audit cycles + cycle-methodology limitation captured
+
+Two read-only audit cycles ran post-v0.5.0 against `main`:
+
+- **F89–F98** (`docs/reports/deep_analysis_report.md` §3) — 5 parallel sub-agents over ingest/threading, SQL analyses, SPA frontend, Rust deps & idioms, CLI & output emitters. 10 Active findings + 3 Improvement opportunities (V4–V6) + 6 Refuted with source-quote evidence. Shipped in PR #36.
+- **F99–F106** (§4 second pass) — 3 parallel sub-agents over CI/CD + release pipeline, identity layer + diff PR-mode + provenance manifest, analytical-formula correctness. 8 Active findings + 7 Refuted + 5 already-captured-in-§3 (dropped to avoid double-counting). Shipped in PR #38.
+
+PR #38 also captures the cycle methodology limitation: both passes used static-grep + read-only inspection; neither surfaces *runtime* defects like F107/F108. Open structural follow-up: headless-browser smoke test (chromedp / playwright via cargo) for the SPA emitter.
+
 ## [0.5.0] - 2026-06-14
 
 ### Added — v0.5.x SPA UI redesign (Tailwind v4 + DaisyUI 5 + Alpine.js)
