@@ -245,6 +245,32 @@ open(path, "w").write(out)
 PY
   ok "bumped Cargo.toml workspace version → ${VERSION}"
 
+  # Bump internal workspace path-deps in lock-step. Cargo requires the
+  # `version = "..."` constraint on a path dep to be satisfied by the
+  # target crate's published version — when the workspace bumps from
+  # 0.4.X to 0.5.0, internal deps still pinned at "0.4.0" no longer
+  # match and `cargo update` (next step) fails with:
+  #   error: failed to select a version for the requirement
+  #   `codelore-rca = "^0.4.0"` … candidate versions found which
+  #   didn't match: 0.5.0
+  # Match any line of the shape:
+  #   codelore-foo = { path = "...", version = "X.Y.Z", ... }
+  # inside any crates/*/Cargo.toml, and rewrite the version literal.
+  python3 - "${VERSION}" <<'PY'
+import re, sys, glob
+new_version = sys.argv[1]
+pat = re.compile(
+    r'(codelore-[a-z]+\s*=\s*\{\s*path\s*=\s*"[^"]+"\s*,\s*version\s*=\s*")[0-9]+\.[0-9]+\.[0-9]+(")'
+)
+for path in glob.glob("crates/*/Cargo.toml"):
+    src = open(path).read()
+    out = pat.sub(rf'\g<1>{new_version}\g<2>', src)
+    if out != src:
+        open(path, "w").write(out)
+        print(f"  updated internal path-deps in {path}")
+PY
+  ok "bumped internal codelore-* path-dep versions → ${VERSION}"
+
   # Flip CHANGELOG ## [Unreleased] → ## [X.Y.Z] - YYYY-MM-DD, then prepend
   # a fresh empty [Unreleased] section above it so future commits have a
   # bucket to land in.
