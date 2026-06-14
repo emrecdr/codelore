@@ -53,11 +53,15 @@
 @source "../template.html";
 @source "../widgets.js";
 
-/* CodeLore-specific accent overrides — keep the brand colour from the
- * v0.4.x palette so the dashboard stays visually continuous with
- * `--format html`. */
-@theme {
-    --color-codelore-accent: #2ea44f;
-    --color-codelore-accent-warn: #f59e0b;
-    --color-codelore-accent-danger: #e0584e;
-}
+/* CodeLore brand accent palette lives inline in `template.html` as
+ * `--accent` / `--accent-warn` / `--accent-danger` CSS variables on
+ * `:root`, where the legacy stylesheet + ECharts widgets (via
+ * `getCssVar`) both read them. A previous version also mirrored
+ * them through `@theme { --color-codelore-accent: ... }` to expose
+ * `text-codelore-accent` / `bg-codelore-accent` Tailwind utilities
+ * to the markup — but nothing in template/widgets ever consumed
+ * those classes (verified via grep), so the declarations were dead
+ * tokens. Removed. If a future widget wants Tailwind brand
+ * utilities, re-introduce this `@theme` block AND wire the
+ * corresponding utility class into the markup at the same time.
+ */

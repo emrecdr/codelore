@@ -77,18 +77,22 @@ codelore analyze --analysis <NAME> --format <FORMAT>
 
 Every file output (except SQLite, where the provenance table lives inside the DB, and SPA, where it's embedded as a JSON block in the page) emits a `{output}.provenance.json` sidecar with the bca/gix/duckdb versions, every threshold knob, mailmap state, and UTC timestamp. This is your reproducibility receipt.
 
-### `--format spa` widget surface (v0.4.0)
+### `--format spa` widget surface
 
-The dashboard composes six widgets in one HTML file:
+The dashboard composes eight widgets in one HTML file, plus a click-target file detail drawer:
 
-1. **KPI tiles** — at-a-glance: files analyzed, commits, distinct authors, median code health, cognitive p95, knowledge-island count, coupling pair count.
-2. **Hotspot circle-pack map** — the signature CodeScene view. Files sized by churn, colored by complexity, nested by filesystem hierarchy. `d3.pack()` layout fed into an ECharts `custom` series.
-3. **Hotspot table** — sortable, filterable drill-down. Same 500-row pagination as `--format html`. Click row → file detail drawer.
-4. **Change-coupling sankey** — top-30 file-pair coupling flows by `combined_score`. Node click → drawer.
-5. **Knowledge islands** (CodeLore differentiator) — ranked table of departed-primary-author files with no substantial other owner. Auto-detected from commit history + co-change intensity. CodeScene paywalls this and requires manual ex-developer marking.
-6. **File detail drawer** — side panel that aggregates hotspot / knowledge-island / code-health / coupling-partner data for one path. ESC or × closes.
+1. **KPI tiles** — at-a-glance summary: files analyzed, commits, distinct authors, median code health, cognitive p95, knowledge-island count, coupling pair count, coupling-graph density. Each tile has a `?` provenance tooltip linking to the formula in `docs/research-foundations.md`.
+2. **Knowledge islands** (CodeLore differentiator) — ranked table of departed-primary-author files with no substantial other owner. Auto-detected from commit history + co-change intensity. CodeScene paywalls this and requires manual ex-developer marking.
+3. **Hotspot circle-pack map** — the signature CodeScene view. Files sized by churn, nested by filesystem hierarchy, `d3.pack()` layout fed into an ECharts `custom` series. Four toggleable colour modes: **Complexity** (cognitive heatmap), **Knowledge map** (per-author palette), **AI attribution** (per-file AI-authorship %), **Clones** (per-file clone-group count overlay).
+4. **Hotspot table** — sortable, filterable drill-down. Cross-widget filter state (Alpine `$store('filter')` with `$persist`) survives reload. Click row → file detail drawer.
+5. **Change-coupling sankey** — top-N file-pair coupling flows by `combined_score`. Node click → drawer.
+6. **Monthly trends** — multi-line chart of top-10 hotspot paths' revision counts over time. Theme-aware (re-renders on theme toggle).
+7. **Calendar heatmap** — per-day commit volume, GitHub-style 52-week strip.
+8. **X-Ray function sunburst** — function-level cognitive complexity drill-down, leaf colour mapped to cognitive complexity (yellow → red ramp via the same `heatmapColor` helper the circle-pack uses).
 
-The emitter runs the analyses each widget needs (`hotspots`, `summary`, `code_health`, `coupling`, `knowledge_islands`) so a single `codelore analyze --format spa` invocation produces a fully populated dashboard. Coupling and knowledge-islands degrade gracefully on tiny fixtures where Fisher significance can't be reached.
+Stack: Tailwind v4 (utility-first layout) + DaisyUI 5 (themed components; OS `prefers-color-scheme` honoured on first paint via the plugin's `--prefersdark` config) + Alpine.js 3.15 (HTML-attribute reactivity for stores + drawer + filter) + Apache ECharts + d3-hierarchy. All four vendored at build time, SHA-pinned in `build.rs`; bundle stays fully self-contained (~1.5 MB rendered SPA, no CDN at runtime).
+
+The emitter runs every analysis each widget needs (`hotspots`, `summary`, `code_health`, `coupling`, `knowledge_islands`, `entity_ownership`, `xray`, `daily_commits`, `trends`, plus a clone-summary helper) so a single `codelore analyze --format spa` invocation produces a fully populated dashboard. Coupling and knowledge-islands degrade gracefully on tiny fixtures where Fisher significance can't be reached.
 
 ### `--format step-summary` GitHub Actions integration
 
