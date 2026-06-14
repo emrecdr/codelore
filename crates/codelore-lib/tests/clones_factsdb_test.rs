@@ -100,6 +100,69 @@ fn ingest_respects_exclude_patterns_for_clones() {
     );
 }
 
+#[test]
+fn ingest_populates_clones_on_bare_repository() {
+    // F77 regression: the previous `WalkDir::new(&opts.repo_path)`
+    // discovery phase yielded zero candidates on a bare repo (no
+    // working tree → only `.git`-style metadata exists). Clones
+    // would silently come back as 0 rows. The fix switches to
+    // `query_live_paths`, which reads from the `changes` table —
+    // populated by the gix walker via the ODB regardless of whether
+    // a working tree exists.
+
+    // Step 1: build a regular fixture with a clone pair.
+    let source = tempfile::tempdir().unwrap();
+    let source_path = source.path();
+    std::fs::create_dir_all(source_path.join("src")).unwrap();
+    std::fs::write(
+        source_path.join("src/a.rs"),
+        "fn add(a: i32, b: i32) -> i32 { let x = 1; let y = 2; a + b + x + y }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        source_path.join("src/b.rs"),
+        "fn mul(p: u64, q: u64) -> u64 { let s = 9; let t = 7; p + q + s + t }\n",
+    )
+    .unwrap();
+    run_git(source_path, &["init", "-b", "main", "--quiet"]);
+    run_git(source_path, &["config", "user.email", "t@e.com"]);
+    run_git(source_path, &["config", "user.name", "T"]);
+    run_git(source_path, &["add", "."]);
+    run_git(source_path, &["commit", "-m", "init", "--quiet"]);
+
+    // Step 2: clone --bare into a fresh tempdir. The resulting repo
+    // has no working tree — exactly the shape WalkDir failed on.
+    let bare = tempfile::tempdir().unwrap();
+    let bare_path = bare.path().join("clones.git");
+    let clone_exit = std::process::Command::new("git")
+        .args(["clone", "--bare", "--quiet"])
+        .arg(source_path)
+        .arg(&bare_path)
+        .status()
+        .expect("git clone --bare");
+    assert!(clone_exit.success(), "git clone --bare failed");
+    // Sanity: confirm there's truly no working-tree checkout.
+    assert!(
+        !bare_path.join("src").exists(),
+        "bare repo unexpectedly has src/ — test invalid"
+    );
+
+    let repo = GixRepo::open(&bare_path).expect("gix open bare");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: bare_path.clone(),
+        min_clone_node_count: 0,
+        ..Options::default()
+    };
+    let ingest_stats = db.ingest(&repo, &opts).expect("ingest bare");
+
+    assert_eq!(
+        ingest_stats.clones_ingested, 2,
+        "bare repo must still detect the clone pair; got {}",
+        ingest_stats.clones_ingested
+    );
+}
+
 fn run_git(path: &std::path::Path, args: &[&str]) {
     let status = std::process::Command::new("git")
         .arg("-C")
