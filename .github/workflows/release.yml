@@ -98,7 +98,12 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: release-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          # F101: include rust-toolchain.toml in the cache key so a
+          # Rust toolchain bump invalidates the cached artifacts.
+          # The rustc version is part of every .rmeta / .rlib hash;
+          # carrying stale artifacts across a toolchain bump produces
+          # cryptic linker errors that get misdiagnosed as flaky CI.
+          key: release-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
 
       - name: Vendor patched libduckdb-sys (workaround for duckdb-rs#786)
         # MSVC 19.40 (rolled out by GitHub Actions runners around
