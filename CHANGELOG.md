@@ -4,6 +4,67 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Added — v0.5.x SPA UI redesign (Tailwind v4 + DaisyUI 5 + Alpine.js)
+
+The interactive dashboard (`--format spa`) moves off the hand-rolled v0.4.x CSS onto a real design-system stack: **Tailwind v4** for utility-first layout, **DaisyUI 5** for themed components, **Alpine.js 3.15** for HTML-attribute reactivity. All three SHA-pinned at build time via `build.rs`; bundle stays self-contained (~1.5 MB rendered SPA, no CDN at runtime).
+
+- Compiled Tailwind v4 + DaisyUI 5 CSS bundle (~78 KB minified) inlined into the SPA at build time.
+- Alpine.js core + persist plugin SHA-pinned; localStorage-backed cross-widget filter state (`$store.filter.text`) and detail drawer state (`$store.detail.open`).
+- Every widget section converted to DaisyUI primitives (`card bg-base-200 shadow-lg`, `stat / stat-value / stat-desc`, `table table-zebra`, `navbar`, `footer footer-center`, `badge badge-success/warning/error`).
+- Detail drawer migrated to Alpine `x-show="$store.detail.open"` with `x-transition.opacity` fade + `@keydown.escape.window` close.
+- Hotspot table filter input upgraded to `input input-bordered input-sm` + explicit `aria-label="Filter hotspots by path"` for screen-reader access.
+
+### Added — V2 DaisyUI theme-controller migration (closes F79)
+
+- DaisyUI `themes: light --default, dark --prefersdark` plugin config makes first-paint follow OS `prefers-color-scheme` purely via CSS — no JS frame for the wrong theme to appear in.
+- Custom `<button id="theme-toggle">` replaced with DaisyUI `<label class="swap swap-rotate">` + sun/moon SVG pair + `class="theme-controller" value="dark"` checkbox (CSS-only theme swap, defense-in-depth if Alpine fails).
+- New `Alpine.store('theme', { isDark: $persist(initialDark).as('codelore_theme_is_dark') })` + `Alpine.effect` bridge reactively mirrors the boolean to `<html data-theme>` AND fires every ECharts re-renderer in `_codeloreRerenderers`.
+- Anti-flash-of-wrong-theme inline script in `<head>` reads persisted preference and sets `data-theme` synchronously before first paint. Includes legacy-key migration from old `codelore-theme` string key.
+- `widgets.js::initThemeToggle()` (~30 lines) deleted — work distributed across pre-paint script, DaisyUI `:has()` selector, and the Alpine effect.
+
+### Added — F83 clone-detection overlay on hotspot circle-pack
+
+New "Clones" colour-mode toggle on the hotspot circle-pack surfaces structural-duplication signal directly on the file layout users already know — no new widget, no flat table. Files in ≥ 1 clone family render heatmap colour scaled to per-repo max clone-group count; files outside any family render neutral grey.
+
+- New `SpaDashboard.clones` field (`Vec<CloneSummary { path, groups }>`) plumbed through `build_spa_dashboard`.
+- New `output::spa::run_clone_summary` SQL helper queries the existing `clones` table with `COUNT(DISTINCT clone_group_id) GROUP BY path`.
+
+### Fixed — F77 clone discovery on bare repositories
+
+`populate_clones_at_head` discovery phase switched from `WalkDir::new(&opts.repo_path)` to `query_live_paths(self)?`. Bare repositories (no working tree checkout) previously returned zero clone candidates because WalkDir found only `.git/` metadata; the fix routes discovery through the gix ODB the same way `ingest_complexity_at_head` already does. New `ingest_populates_clones_on_bare_repository` regression test in `tests/clones_factsdb_test.rs`.
+
+### Fixed — F82 SQLite emitter dumps `clones` table
+
+`output/sqlite.rs::write_full_fact_store_sqlite` was dumping 7 of the 8 base tables in `schema_v1.sql` — silently omitting `clones`. `--format sqlite` exports now include clone-detection data. New table-list regression in `output_sqlite_test.rs` fails if any future schema table is added without updating the emitter.
+
+### Fixed — F86 TSX files parsed with TSX grammar (not plain TypeScript)
+
+`clones/language.rs` gained a `Tsx` variant routed through `tree_sitter_typescript::LANGUAGE_TSX`. Pre-fix, `.tsx` files were parsed with `LANGUAGE_TYPESCRIPT` which errors on JSX tags — every real-world TSX component produced an ERROR node and clone fingerprinting silently bailed. New inline regression test parses `<div>{n}</div>` against the new grammar.
+
+### Fixed — F87 `.jsx` files participate in clone detection
+
+`clones/language.rs::from_path` now maps `"jsx"` to the JavaScript variant (matching what `complexity/language.rs` already did). Pre-fix, JSX files were silently skipped in the clones pass while still being analysed for complexity — an inconsistency in language coverage between two analyses on the same file set.
+
+### Performance — F78 drop redundant `source.to_vec()` in `compute_for_file`
+
+Signature changed from `source: &[u8]` to `source: Vec<u8>`; the rayon caller already owns a fresh `Vec` from `Repo::read_blob_at_head`, so the move is free. Drops one full-source clone per Tier-1 file at HEAD ingest — meaningful on large source trees during HEAD-time complexity scan.
+
+### Performance — F85 `apply_grouping` hunks cleanup uses `NOT EXISTS`
+
+The `--group-file` post-ingest cleanup pass rewrote `DELETE FROM hunks WHERE (rev, path) NOT IN (SELECT …)` to a correlated `DELETE FROM hunks h WHERE NOT EXISTS (… AND c.rev = h.rev AND c.path = h.path)`. DuckDB reliably picks a hash anti-join on the `NOT EXISTS` form, avoiding the per-row subquery scan some planner paths produce for composite-key `NOT IN`. NULL-semantics concern is moot here (both projected columns are `NOT NULL` per schema); swap is purely about plan shape.
+
+### UI — F80 responsive multi-column widget grid on wide screens
+
+Main widget grid was hardcoded single-column regardless of viewport — on 1440p+ displays every widget stretched to full width and stacked vertically, wasting horizontal real estate. `<main>` now carries `max-w-[1600px] mx-auto grid grid-cols-1 xl:grid-cols-2 gap-7 p-7`; six visualization-dense widgets get `xl:col-span-2` so they keep full-width treatment; KPI tiles and knowledge-islands pair on row 1 at xl. Inline `main { ... }` rule deleted — layout primitives now on the markup.
+
+### UI — F81 X-Ray sunburst encodes cognitive complexity as colour
+
+Sunburst leaves were uniformly green (depth-shaded only); a 1-cognitive function and a 100-cognitive function in the same module rendered as the same shade. Per-leaf `itemStyle.color` now drives off `cognitive / maxCognitive`, reusing the existing `heatmapColor(ratio)` helper from the hotspot circle-pack — one visual vocabulary across the dashboard for cognitive complexity.
+
+### Docs — F77–F88 audit pass validation + closeout
+
+`docs/reports/deep_analysis_report.md` validation pass (PR #20) source-verified each finding against `main` HEAD before any fix landed: 3 confirmed-real-already-shipped (F82/F86/F87), 2 refuted with source-quote evidence (F84/F88), 7 confirmed-Active. All 7 Active shipped in this release. Report now collapses to a single "Audit-Pass Closeout" section reflecting the all-resolved state.
+
 ## [0.4.6] - 2026-06-13
 
 ### Fixed — Windows build unblocked (MSVC 19.40 / duckdb-rs#786)

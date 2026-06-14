@@ -48,7 +48,7 @@ CodeLore focuses on the **socio-technical dimension** — the legends your codeb
 What separates CodeLore from code-maat, CodeScene, and jscpd:
 
 - **🎯 Live-clone × co-change intersection.** Every clone detector finds copy-pasted blocks. CodeLore intersects clones with Fisher-significant change-coupling — flagging only the clones whose copies actually evolve together. Dead clones (look-alike code nobody touches) are filtered out as noise; live clones (real debt) are surfaced with a `combined_score` ranking. We're not aware of another OSS tool that ships this intersection.
-- **📋 Behavioral SARIF.** Findings land natively in **SARIF 2.1.0** with four rules — `CODELORE-HOTSPOT`, `CODELORE-CLONE`, `CODELORE-LIVE-CLONE`, and `CODELORE-MISSING-COCHANGE`. Drop them straight into GitHub Code Scanning, GitLab security dashboards, or Defectdojo and alerts appear inline on pull requests.
+- **📋 Behavioral SARIF.** Findings land natively in **SARIF 2.1.0** with three rules — `CODELORE-HOTSPOT`, `CODELORE-CLONE`, and `CODELORE-LIVE-CLONE`. Drop them straight into GitHub Code Scanning, GitLab security dashboards, or Defectdojo and alerts appear inline on pull requests.
 - **🔍 Transparency over opaque ML.** CodeScene's hotspot ranking is a closed ML model. CodeLore ranks with a **published deterministic formula**: `percentile_rank(revisions) × percentile_rank(cognitive_complexity) × (100 − code_health) / 10`. Every input is emitted alongside the score; anyone can reproduce it.
 - **🧾 Provenance manifest.** Every run emits a `.provenance.json` sidecar recording every config knob (auto-derived via canonical Options serialization — adding a new field auto-propagates), version pin, and timestamp. Reproducibility receipt for the run; eliminates the "we got different numbers because we silently used different thresholds" failure mode.
 - **💾 SQL-queryable fact store.** No proprietary format lock-in. Export the full DuckDB store as Parquet or SQLite and query your git history as a database from the command line.
@@ -213,25 +213,37 @@ and fits in a CI artefact:
 codelore analyze --format spa --output codelore.html --repo .
 ```
 
-Six widgets — hotspot circle-pack map, sortable hotspot table,
-change-coupling sankey, knowledge-islands ranked view, code-health
-KPI tiles, and a click-target file detail drawer — all rendered
-from a single embedded JSON blob using Apache ECharts +
-`d3.pack()` for layout. The output is ~1.2 MB (most of it is the
-ECharts payload; the data payload is ~50 KB-2 MB depending on
-repo size). No server, no framework runtime, no phone-home.
+Eight widgets — KPI-tile overview, knowledge-islands ranked view,
+hotspot circle-pack map (with toggleable Complexity / Knowledge-map
+/ AI-attribution / Clones colour modes), sortable hotspot table,
+change-coupling sankey, monthly trends multi-line, calendar
+heatmap of daily commits, function-X-Ray sunburst (cognitive
+complexity heatmap) — plus a click-target file detail drawer.
+All rendered from a single embedded JSON blob.
+
+Stack: **Tailwind v4** for utility-first layout, **DaisyUI 5**
+for themed components, **Alpine.js 3.15** for HTML-attribute
+reactivity (cross-widget filter state, persisted theme toggle,
+detail-drawer state), **Apache ECharts** + **d3-hierarchy.pack()**
+for the visualisations. All four SHA-pinned at build time; bundle
+stays fully self-contained (~1.5 MB rendered SPA, no CDN at
+runtime). Theme follows the OS-level `prefers-color-scheme` on
+first paint and survives reload via `localStorage`.
 
 The `spa` Cargo feature gates the JS deps so default `cargo
 install codelore` builds clean offline. Released binaries
 (Homebrew / ghcr / GitHub Releases) enable the feature, so
 `codelore --format spa` works out of the box.
 
-CodeLore's UI exposes three signals CodeScene doesn't:
+CodeLore's UI exposes signals CodeScene doesn't:
 **auto-detected knowledge islands** (departed-author × clones
 × co-change intersection — no manual ex-developer marking),
-**AI-attribution filtering** (planned for v0.4.1), and
-**auditable per-metric formulas** (provenance sidecar links every
-dashboard number to the SQL query that produced it).
+**AI-attribution filtering** (per-file AI-authorship percentage
+as a circle-pack colour mode), **clone-detection overlay** (per-file
+clone-group counts as another colour mode on the same hotspot
+view — structural-duplication hotspots where you already navigate),
+and **auditable per-metric formulas** (provenance sidecar links
+every dashboard number to the SQL query that produced it).
 
 ---
 
