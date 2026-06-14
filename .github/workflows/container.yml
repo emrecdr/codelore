@@ -72,6 +72,15 @@ jobs:
           file: Containerfile
           platforms: ${{ matrix.platform }}
           push: true
+          # F99 fix: pass the canonical owner/repo slug through to the
+          # Containerfile's REPO build-arg so the
+          # `org.opencontainers.image.source` label resolves to the
+          # actual GitHub repo (was previously a literal `<owner>`
+          # placeholder, breaking `docker inspect` / cosign / Snyk).
+          # `github.repository` is the `owner/repo` slug the workflow
+          # ran from, so fork builds get fork-correct labels for free.
+          build-args: |
+            REPO=${{ github.repository }}
           outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
