@@ -141,8 +141,15 @@ All previous findings and code-maat parity issues have been validated as **fully
 *   **F75 (Optimize SoC query performance)**: Resolved. Implemented a pre-filtered `filtered_changes` CTE to avoid double scans of the changes table.
 *   **F76 (Eliminate COUNT(DISTINCT) in churn queries)**: Resolved. Pre-aggregated `commit_churn` CTE to replace distinct-tracking count aggregations.
 
-### Resolved Audit Findings (F82, F86, F87) (shipped Unreleased)
+### Resolved Audit Findings (F77–F87) (shipped Unreleased)
+*   **F77 (Clone discovery fails on bare repos)**: Resolved. `populate_clones_at_head` discovery switched from `WalkDir::new(&opts.repo_path)` to `query_live_paths(self)?` — the same authoritative path source `ingest_complexity_at_head` uses. Bare repos (`git clone --bare`) now detect clones via the ODB instead of returning zero candidates. New `ingest_populates_clones_on_bare_repository` regression test in `tests/clones_factsdb_test.rs` reproduces the original failure mode.
+*   **F78 (Redundant `source.to_vec()` in `compute_for_file`)**: Resolved. Signature changed from `source: &[u8]` to `source: Vec<u8>`; the rayon caller already owns a fresh `Vec` from `Repo::read_blob_at_head`, so the move is free. Drops one full-source clone per Tier-1 file at HEAD ingest. Docstring documents the ownership-transfer rationale.
+*   **F79 (SPA theme default ignores `prefers-color-scheme`)**: Resolved via the V2 DaisyUI theme-controller migration. `input.css` `@plugin "./daisyui.mjs" { themes: light --default, dark --prefersdark; }` makes DaisyUI emit the dark theme inside a `@media (prefers-color-scheme: dark)` block — first paint matches OS preference with no JS. The custom `initThemeToggle()` (~30 lines) is gone; replaced by an Alpine `$store('theme')` + `Alpine.effect` bridge + anti-flash-of-wrong-theme inline script. Bundles V1 cleanup (dead `.kpi-row` marker class).
+*   **F80 (Single-column widget grid on wide screens)**: Resolved. `<main>` now carries `max-w-[1600px] mx-auto grid grid-cols-1 xl:grid-cols-2 gap-7 p-7`; six visualization-dense widgets get `xl:col-span-2`; KPI tiles and knowledge-islands pair on row 1 of xl-breakpoint layouts. Inline `main { ... }` rule deleted — layout primitives are now on the markup.
+*   **F81 (X-Ray sunburst encodes depth, not complexity)**: Resolved. Per-leaf `itemStyle.color` driven by cognitive complexity, reusing the existing `heatmapColor(ratio)` helper that the hotspot circle-pack uses for the same metric — one visual vocabulary across the dashboard. Container rings keep depth-based shading (tuned darker) so the leaf heatmap stands out.
 *   **F82 (SQLite emitter omits `clones` table)**: Resolved. `output/sqlite.rs::write_full_fact_store_sqlite` now appends `CREATE TABLE sink.clones AS SELECT * FROM clones;` to the ATTACH chain; module docstring rewritten with the maintenance invariant (when a base table is added to `schema_v1.sql`, append here too); `tests/output_sqlite_test.rs` extended with a table-list regression that fails if any base table is missing from the dump.
+*   **F83 (SPA lacks clone-detection widgets)**: Resolved. Clones surface as a colour-mode toggle on the existing hotspot circle-pack (next to Complexity / Knowledge map / AI attribution) — not a new widget. New `CloneSummary { path, groups }` row, new `run_clone_summary` SQL helper, new `clones` field on `SpaDashboard`. `widgets.js` builds a per-render `cloneCountByPath` map and reuses `heatmapColor` so the colour vocabulary matches Complexity and AI modes.
+*   **F85 (`NOT IN` on composite key in `apply_grouping` hunks cleanup)**: Resolved. Rewrote `DELETE FROM hunks WHERE (rev, path) NOT IN (...)` to a correlated `DELETE FROM hunks h WHERE NOT EXISTS (... AND c.rev = h.rev AND c.path = h.path)`. DuckDB reliably picks a hash anti-join on the `NOT EXISTS` form across the versions we pin. Both projected columns are `NOT NULL` per schema, so the NULL-semantics concern of `NOT IN` doesn't apply — the swap is purely about plan shape. Existing `groups_test` integration suite covers semantic equivalence.
 *   **F86 (TSX files parsed with TypeScript grammar)**: Resolved. `clones/language.rs` gained a `Tsx` variant routed through `tree_sitter_typescript::LANGUAGE_TSX`; inline regression test parses a real-world TSX component (`<div>{n}</div>`) and asserts `has_error() == false` against the new grammar.
 *   **F87 (`.jsx` skipped in clone detection)**: Resolved. `clones/language.rs::from_path` now includes `"jsx"` in the JavaScript extension match (matching what `complexity/language.rs` already did); inline regression test parses JSX against the JavaScript grammar.
 
@@ -152,180 +159,24 @@ All previous findings and code-maat parity issues have been validated as **fully
 
 ---
 
-## 3. Newly Identified Gaps & Recommendations
-
-### F77: Correctness — `populate_clones_at_head` discovery phase fails on bare repositories
-
-**Status**: Active. Verified against `facts/ingest.rs` HEAD.
-
-**Source evidence** at [facts/ingest.rs::populate_clones_at_head](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/facts/ingest.rs#L266):
-```rust
-let candidates: Vec<(PathBuf, String, CloneLanguage)> =
-    WalkDir::new(&opts.repo_path)
-        .into_iter()
-        .filter_map(...)
-        ...
-```
-
-**Scope refinement (from validation pass)**: the function uses a two-phase architecture — discovery via `WalkDir` over the working tree, then blob reads via `repo.read_blob_at_head(&rel)`. So **blob reading is bare-repo safe**; **discovery is not**. The original finding bundled three claims (bare-repo failure, "slow disk walk", "inconsistency vs complexity") — only the bare-repo claim is real and worth fixing.
-
-The performance sub-claim is weak: a serial `WalkDir` of a Tier-1-filtered file set is dominated by the parallel tree-sitter pass that follows, and `query_live_paths` would itself materialise a result set from DuckDB — not free either. Treat F77 strictly as a **correctness** finding for bare repos, not a perf one.
-
-**Recommended fix**: switch the discovery phase to `query_live_paths(self)?` so the candidate list comes from the same authoritative source the complexity pass uses (it's already populated by the ingest walker, which works against gix's ODB and is bare-repo safe by construction). Keep the two-phase `Rayon`-then-serial-drain pattern.
-
 ---
 
-### F78: Performance — Redundant `source.to_vec()` in `compute_for_file`
+## 3. Audit-Pass Closeout
 
-**Status**: Active. Verified against `complexity/mod.rs:141` HEAD.
+The F77–F88 audit pass that landed in §2 (above) has been fully triaged and shipped. All 12 raw findings were resolved against current `main`:
 
-**Source evidence** at [complexity/mod.rs::compute_for_file](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/complexity/mod.rs#L136):
-```rust
-pub fn compute_for_file(
-    path: &Path,
-    source: &[u8],
-    lang: Tier1Language,
-) -> Result<Vec<ComplexityEntity>> {
-    let code = source.to_vec();
-```
+| Outcome | Findings | Count |
+|---|---|---|
+| **Shipped** (Unreleased) | F77, F78, F79, F80, F81, F82, F83, F85, F86, F87 | 10 |
+| **Refuted** (already addressed in current code) | F84, F88 | 2 |
+| **Active** | — | 0 |
 
-Every HEAD-time complexity scan allocates a full copy of every source file's bytes before handing them to the parser. On a 50-MB source tree that's 50 MB of avoidable transient allocations per ingest.
+Plus three improvement opportunities surfaced during the V2 validation pass:
 
-**Recommended fix**: change the parameter to `source: Vec<u8>` so the caller's already-heap-allocated buffer transfers ownership in. Callers (the rayon parallel pass at `facts/ingest.rs::ingest_complexity_at_head`) already own a fresh `Vec<u8>` from `read_blob_at_head` — the move is free for them. Pair the signature change with a sweep of every call site so the borrow doesn't silently break a test fixture; the `rust-code-analysis` parser constructors all take `Vec<u8>` by value already, so the inner call is unchanged.
+- **V1** — dead `.kpi-row` marker class. Bundled into V2 cleanup.
+- **V2** — DaisyUI theme-controller migration. Shipped — supersedes F79's `matchMedia` stop-gap by handling `prefers-color-scheme` purely via CSS plugin config.
+- **V3** — `.input-bordered` no-op marker. Verified intentional in DaisyUI 5 (collapsed into `.input`); kept on markup for forward-compat with theme controllers.
 
----
+Per-finding evidence and recommended-fix context for the resolved findings are preserved in §2's "Resolved Audit Findings (F77–F87)" and "Refuted Audit Findings (F84, F88)" subsections above. The corresponding commits are catalogued in `CHANGELOG.md`'s `[Unreleased]` section.
 
-### F79: UI/UX — SPA theme default ignores `prefers-color-scheme`
-
-**Status**: Active. Verified against `widgets.js:1131-1138` HEAD.
-
-**Source evidence** at [widgets.js — theme init](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/output/spa/widgets.js#L1131):
-```javascript
-const STORAGE_KEY = 'codelore-theme';
-...
-let stored = 'dark';
-try { stored = localStorage.getItem(STORAGE_KEY) || 'dark'; } catch (e) {}
-```
-
-No `window.matchMedia('(prefers-color-scheme: …)')` check anywhere in `widgets.js`. First-paint on a fresh visit hardcodes dark regardless of OS / browser theme preference.
-
-**Recommended fix**:
-```javascript
-let stored = (window.matchMedia
-  && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
-try { stored = localStorage.getItem(STORAGE_KEY) || stored; } catch (e) {}
-```
-DaisyUI's theme controller already exposes a `prefers-color-scheme`-aware swap; if PR-9 ever wires the theme controller in (orthogonal v0.5.x follow-up), this finding folds into that work for free.
-
----
-
-### F80: UI/UX — Main widget grid is single-column on wide screens
-
-**Status**: Active. Verified against `template.html:56-58` HEAD.
-
-**Source evidence** at [template.html — main grid](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/output/spa/template.html#L56):
-```css
-main {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 28px;
-  max-width: 1600px;
-  margin: 0 auto;
-}
-```
-
-KPI tiles are responsive (`grid-template-columns: repeat(auto-fit, minmax(180px, 1fr))` at line 168), but the outer main grid that holds widget sections never goes above one column. On a 1440p+ display widgets render at ~1600 px wide regardless of screen real estate, and dense metric widgets that could fit side-by-side stack vertically instead.
-
-**Recommended fix**: PR-7 already wired `max-w-screen-2xl mx-auto` on the `<main>` element via DaisyUI. The remaining change is the column rule:
-```html
-<main class="max-w-screen-2xl mx-auto grid grid-cols-1 xl:grid-cols-2 gap-7">
-```
-Pair-wise grouping (`xl:grid-cols-2`) on ≥1280 px keeps related KPIs + tables visible together without making any single widget too narrow. The hotspot circle-pack and X-Ray sunburst should likely opt out with `xl:col-span-2` since they need horizontal room.
-
----
-
-### F81: UI/UX — X-Ray sunburst colors encode depth, not cognitive complexity
-
-**Status**: Active. Verified against `widgets.js:1083-1088` HEAD.
-
-**Source evidence** at [widgets.js — sunburst levels](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/output/spa/widgets.js#L1083):
-```javascript
-levels: [
-  {},
-  { itemStyle: { color: '#2b5d39' }, label: { color: '#fff', fontSize: 11 } },
-  { itemStyle: { color: '#3d7d4f' }, label: { color: '#fff', fontSize: 10 } },
-  { itemStyle: { color: '#5fa472' }, label: { color: '#fff', fontSize: 9 } },
-],
-```
-
-The three greens are depth indicators (root → leaf gets progressively lighter), with no mapping from cognitive complexity to color. A 1-cognitive function and a 100-cognitive function in the same module render the same shade.
-
-**Recommended fix**: assign per-node `itemStyle.color` at data-shape time. The hotspot circle-pack already does exactly this in `renderHotspotCirclePack` — extract the existing color-stop function (Tailwind's `accent-warn` / `accent-danger` CSS variables are already wired into the SPA palette) and reuse it on sunburst leaves. Keep depth-based shading only on container nodes (modules/files) where cognitive complexity isn't an aggregate-meaningful number.
-
----
-
-### F83: UI/UX — SPA dashboard lacks clone-detection widgets
-
-**Status**: Active. Verified against `template.html:445-529` HEAD.
-
-**Source evidence**: the SPA widget IDs in [template.html](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/output/spa/template.html) are `widget-kpi-tiles`, `widget-knowledge-islands`, `widget-hotspot-circle-pack`, `widget-trends`, `widget-calendar-heatmap`, `widget-xray-sunburst`, `widget-hotspot-table`, `widget-coupling-sankey` — no clone or clone-coupling widgets. The `clones` DuckDB table is populated (verified end-to-end via the clone-detection regression tests), but the data never surfaces in the HTML dashboard.
-
-**Recommended fix (don't copy CodeScene's clone view)**: instead of yet another flat clone-group table, surface clones as an overlay layer on widgets we already have. A `widget-hotspot-circle-pack` mode toggle ("clones") that recolors files containing clone groups, plus a drawer enhancement that lists the cross-file clone-pair counts for the selected file, ships clone signal where users are already looking. The clone-coupling intersection (clones × co-change, already in `analyses/clones_xcoupling.rs`) becomes a sankey overlay on the existing `widget-coupling-sankey`. This honours the "borrow-or-build" + "modernize, don't migrate" memory rules — clone signal as enrichment, not as a new noisy table.
-
----
-
-### F85: Performance — `NOT IN (subquery)` in `apply_grouping` hunks cleanup
-
-**Status**: Active but planner-dependent. Verified against `facts/ingest.rs:97-103` HEAD.
-
-**Source evidence** at [facts/ingest.rs::apply_grouping](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/facts/ingest.rs#L97):
-```sql
-DELETE FROM hunks WHERE (rev, path) NOT IN (
-    SELECT c.rev, g.group_name
-    FROM changes c
-    INNER JOIN _grouping_v1 g ON g.raw_path = c.path
-    WHERE g.group_name = c.path
-)
-```
-
-**Open question**: DuckDB's optimiser may already rewrite composite-key `NOT IN` to a hash anti-join in its plan, neutralising the perf concern. The NULL-semantics concern is also moot here — both `changes(rev, path)` and the projected `(c.rev, g.group_name)` are `NOT NULL` columns (per `schema_v1.sql`).
-
-**Action before any fix lands**: run `EXPLAIN (ANALYZE) DELETE FROM hunks WHERE (rev, path) NOT IN …` against a non-trivial repo (e.g. cached codelore-self ingest). If the plan shows a per-row subquery scan, rewrite to `NOT EXISTS`. If it shows a hash anti-join, this is a non-finding — close as Won't Fix with the EXPLAIN attached. Bench-gated, same pattern as F69.
-
-## 4. Summary of Active Findings
-
-The audit pass that introduced F77–F88 was triaged against the current `main` HEAD on 2026-06-14. Of the 12 drafted findings, 3 were verified real and shipped (F82, F86, F87 → see Resolved section above), 2 were refuted (F84, F88 → see Refuted section above), and 7 remain Active. The remaining table reflects the validated state.
-
-| ID | Category | Finding | Priority / Risk | Status |
-|---|---|---|---|---|
-| **F77** | Correctness | `populate_clones_at_head` discovery uses `WalkDir` → bare-repo failure | **High** / Low | **Active** |
-| **F78** | Performance | `source.to_vec()` in `compute_for_file` clones every blob | **Medium** / Low | **Active** |
-| **F79** | UI/UX | SPA theme default ignores `prefers-color-scheme` | **Low** / Low | **Active** |
-| **F80** | UI/UX | Main widget grid is single-column on wide screens | **Medium** / Low | **Active** |
-| **F81** | UI/UX | X-Ray sunburst colors encode depth, not cognitive complexity | **Medium** / Low | **Active** |
-| **F83** | UI/UX | SPA lacks clone-detection widgets (surface as overlay, not new table) | **Medium** / Low | **Active** |
-| **F85** | Performance | `NOT IN` in `apply_grouping` hunks cleanup — planner-dependent | **Medium** / Low | **Active (bench-gated)** |
-
-## 5. Verification Plan for Active Findings
-
-### F77 — bare-repo discovery
-Run `git clone --bare <fixture>` and `codelore analyze --analysis clones --repo <bare>`; verify the `clones` table populates with non-zero rows.
-
-### F78 — redundant `source.to_vec()`
-Wrap `compute_for_file` in a `dhat` allocation profile against the codelore-self ingest; verify peak alloc-bytes drops by approximately the sum of all Tier-1 file sizes (one copy each, no double-buffer).
-
-### F79 — SPA theme default
-Open the dashboard with OS in light mode + cleared localStorage; verify first-paint renders light theme without a flash of dark.
-
-### F80 — multi-column wide-screen grid
-Open the dashboard at ≥ 1280 px; verify widget sections render in two columns with the two wide widgets (`widget-hotspot-circle-pack`, `widget-xray-sunburst`) spanning the row.
-
-### F81 — sunburst complexity heatmap
-Open the dashboard and verify wedge color tracks per-function cognitive complexity (high-complexity wedges visually distinct from low-complexity ones in the same module), not just nesting depth.
-
-### F83 — clone overlay on existing widgets
-Trigger the clone overlay on `widget-hotspot-circle-pack` against a fixture with seeded clone groups; verify files with clones receive distinct shading and the detail drawer surfaces per-file clone-pair counts.
-
-### F85 — `NOT IN` planner check
-Run `EXPLAIN (ANALYZE) DELETE FROM hunks WHERE (rev, path) NOT IN (…)` against the codelore-self ingest. If the plan is a hash anti-join: close F85 as Won't Fix with the EXPLAIN attached. If the plan is a per-row subquery scan: rewrite to `NOT EXISTS` and re-EXPLAIN.
-
+The audit loop — raw audit → source-validation pass (PR #20) → fix triage → ship — closed in one stretch. Next audit findings (F89+) will start a fresh cycle when the next deep-analysis run is requested.
