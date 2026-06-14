@@ -35,8 +35,10 @@
   // colors; ECharts caches the *resolved* values at setOption time
   // so a CSS variable update alone doesn't refresh the chart.)
   window._codeloreRerenderers = [];
-  // Theme toggle (light / dark) — preference persisted in localStorage.
-  initThemeToggle();
+  // Theme toggle is now an Alpine store registered in template.html
+  // (`$store.theme.isDark`). The store's `Alpine.effect` reactively
+  // sets `<html data-theme>` AND fires registered re-renderers, so
+  // this script doesn't manage the toggle directly anymore.
   // Color-mode toggles for the hotspot circle-pack (cognitive / author / ai).
   initHotspotColorToggles();
 
@@ -1192,34 +1194,11 @@
   }
 
   // -----------------------------------------------------------------
-  // Theme toggle (light / dark)
-  // -----------------------------------------------------------------
-  function initThemeToggle() {
-    const btn = document.getElementById('theme-toggle');
-    const label = document.getElementById('theme-toggle-label');
-    if (!btn || !label) return;
-    const STORAGE_KEY = 'codelore-theme';
-    function apply(theme) {
-      document.documentElement.setAttribute('data-theme', theme);
-      label.textContent = theme === 'light' ? 'Dark mode' : 'Light mode';
-    }
-    // Restore stored preference (default: dark, matching the original look)
-    let stored = 'dark';
-    try { stored = localStorage.getItem(STORAGE_KEY) || 'dark'; } catch (e) {}
-    apply(stored);
-    btn.addEventListener('click', function () {
-      const next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
-      apply(next);
-      try { localStorage.setItem(STORAGE_KEY, next); } catch (e) {}
-      // Re-render every ECharts widget so axis labels / grids /
-      // gradient colors pick up the new CSS variable values
-      // (ECharts caches resolved colors at setOption time).
-      const rerenderers = window._codeloreRerenderers || [];
-      for (var i = 0; i < rerenderers.length; i++) {
-        try { rerenderers[i](); } catch (e) { console.warn('rerender failed:', e); }
-      }
-    });
-  }
+  // Theme toggle is owned by Alpine (`$store.theme.isDark` registered
+  // in template.html). The `Alpine.effect` there both flips
+  // `<html data-theme>` AND fires every callback in
+  // `window._codeloreRerenderers`, so this file just appends to that
+  // registry — no toggle init function needed.
 
   // -----------------------------------------------------------------
   // Helpers
