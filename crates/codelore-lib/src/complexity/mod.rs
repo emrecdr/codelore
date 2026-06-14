@@ -133,33 +133,39 @@ fn collect_entities(space: &FuncSpace, path: &str, out: &mut Vec<ComplexityEntit
 }
 
 /// Compute complexity entities for a Tier-1 source file.
+///
+/// `source` is taken by value because every `codelore-rca` parser constructor
+/// consumes the byte buffer (`*Parser::new(Vec<u8>, &Path, Option<…>)`). The
+/// caller in `facts/ingest.rs::ingest_complexity_at_head` already owns a
+/// fresh `Vec<u8>` from `Repo::read_blob_at_head`, so the move is free; a
+/// `&[u8]` parameter would force a redundant `.to_vec()` per file (one
+/// full-source clone per Tier-1 file ingested at HEAD).
 pub fn compute_for_file(
     path: &Path,
-    source: &[u8],
+    source: Vec<u8>,
     lang: Tier1Language,
 ) -> Result<Vec<ComplexityEntity>> {
-    let code = source.to_vec();
     let path_str = path.to_str().unwrap_or("");
 
     let root: Option<FuncSpace> = match lang {
         Tier1Language::Rust => {
-            let parser = RustParser::new(code, path, None);
+            let parser = RustParser::new(source, path, None);
             metrics(&parser, path)
         }
         Tier1Language::Python => {
-            let parser = PythonParser::new(code, path, None);
+            let parser = PythonParser::new(source, path, None);
             metrics(&parser, path)
         }
         Tier1Language::Java => {
-            let parser = JavaParser::new(code, path, None);
+            let parser = JavaParser::new(source, path, None);
             metrics(&parser, path)
         }
         Tier1Language::JavaScript => {
-            let parser = JavascriptParser::new(code, path, None);
+            let parser = JavascriptParser::new(source, path, None);
             metrics(&parser, path)
         }
         Tier1Language::TypeScript => {
-            let parser = TypescriptParser::new(code, path, None);
+            let parser = TypescriptParser::new(source, path, None);
             metrics(&parser, path)
         }
     };

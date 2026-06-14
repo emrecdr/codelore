@@ -12,8 +12,8 @@ fn complexity_for_rust_function() {
     0
 }
 ";
-    let entities =
-        compute_for_file(Path::new("src/test.rs"), src, Tier1Language::Rust).expect("compute");
+    let entities = compute_for_file(Path::new("src/test.rs"), src.to_vec(), Tier1Language::Rust)
+        .expect("compute");
 
     assert!(
         !entities.is_empty(),
@@ -41,8 +41,8 @@ fn complexity_for_python_function() {
         return -1
     return 0
 ";
-    let entities =
-        compute_for_file(Path::new("test.py"), src, Tier1Language::Python).expect("compute");
+    let entities = compute_for_file(Path::new("test.py"), src.to_vec(), Tier1Language::Python)
+        .expect("compute");
     assert!(!entities.is_empty());
 
     // Python should have a function entity (not just file)
@@ -56,7 +56,7 @@ fn complexity_for_python_function() {
 fn complexity_returns_empty_for_invalid_source() {
     // Empty source should produce at most a unit/file entity
     let entities =
-        compute_for_file(Path::new("test.rs"), b"", Tier1Language::Rust).expect("compute");
+        compute_for_file(Path::new("test.rs"), Vec::new(), Tier1Language::Rust).expect("compute");
     // Either empty (parse failure → None FuncSpace → empty Vec) or one unit entity
     assert!(entities.len() <= 1);
 }
