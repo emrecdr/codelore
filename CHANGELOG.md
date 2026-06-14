@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-06-14
+
 ### Fixed — v0.5.0 SPA runtime errors (F107 + F108 hotfix)
 
 Two production browser-console errors on the v0.5.0 SPA made the dashboard unusable on first paint. Both bugs predated v0.5.0 — they shipped through SPA-touching PRs going back to v0.4.x — and only surfaced when the JS executed in a real browser. The existing `spa_integration_test` greps the rendered HTML for string presence but never runs the JS, so neither bug ever tripped CI. PR #37 ships the fix; PR #38 records the post-mortem in `docs/reports/deep_analysis_report.md` as F107 / F108 plus a methodology note for the audit cycles' shared blind spot.

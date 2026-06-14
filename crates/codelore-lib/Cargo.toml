@@ -29,7 +29,7 @@ gix = { version = "0.84", features = ["max-performance", "blob-diff"] }
 tempfile = { version = "3", optional = true }
 duckdb = { version = "=1.10503.1", features = ["bundled", "appender-arrow"] }
 crossbeam-channel = "0.5"
-codelore-rca = { path = "../codelore-rca", version = "0.5.0" }
+codelore-rca = { path = "../codelore-rca", version = "0.5.1" }
 fishers_exact = "1"
 sha2 = "0.11"
 hex = "0.4"
