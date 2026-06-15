@@ -113,7 +113,15 @@ jobs:
         with:
           tool: cargo-nextest
       - name: Run tests (nextest)
-        run: cargo nextest run --workspace --all-features --no-fail-fast
+        # `--all-features` would also activate `browser-tests`, which
+        # requires a Chrome binary on the runner. The matrix test job
+        # is the wrong place for that (windows runners pay a 5+ min
+        # toll fetching Chromium even with the graceful-skip path).
+        # The `spa-browser` job below opts in explicitly on
+        # ubuntu-latest where Chrome is pre-installed. Spelling out
+        # the non-browser feature set here keeps the matrix
+        # cost-predictable.
+        run: cargo nextest run --workspace --features test-support,spa --no-fail-fast
       - name: Run doc tests
         # `cargo test --doc --workspace` does NOT honour per-package
         # `doctest = false` (long-standing cargo behaviour: the flag opts in
@@ -123,6 +131,47 @@ jobs:
         # don't compile. Excluded here so our doctests still gate without
         # forcing edits into the upstream-tracked vendored sources.
         run: cargo test --workspace --exclude codelore-rca --all-features --doc
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
+
+  spa-browser:
+    # Headless-browser smoke test for the SPA emitter. Closes the
+    # runtime-defect blind spot that earlier string-grep tests
+    # couldn't cover (production browser-console errors that ship
+    # through every PR because no JS executes at CI time). The test
+    # itself is gated on the `browser-tests` Cargo feature, so it
+    # never fires in `cargo test --all-features` from the main test
+    # matrix — it gets its own job that explicitly opts in.
+    #
+    # ubuntu-latest only: the test transitively depends on a Chrome
+    # binary in the standard search path. ubuntu-latest pre-installs
+    # Chrome; macos-latest also does but adds 4-5 min to the cold
+    # build; windows-latest has it too but msvc + duckdb-bundled +
+    # the Chrome path discovery combine into a measurable cost. The
+    # primary goal here is catching JS regressions, not OS-portability
+    # of the test harness — Chrome behaves identically across runners.
+    name: spa-browser
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RUSTC_WRAPPER: sccache
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - uses: Swatinem/rust-cache@v2
+      - name: Vendor patched libduckdb-sys (duckdb-rs#786)
+        run: bash scripts/vendor-duckdb-rs.sh
+      - name: Run SPA browser smoke test
+        # `--features browser-tests,spa,test-support` opts into all three:
+        # the harness feature itself, the SPA emitter, and the in-process
+        # fixture helpers. `cargo test --features` doesn't include
+        # default features automatically; spelling each one keeps the
+        # invocation reproducible across `cargo` upgrades.
+        run: cargo test --features browser-tests,spa,test-support -p codelore-lib --test spa_browser_test
       - name: sccache stats
         if: always()
         run: sccache --show-stats
