@@ -29,7 +29,7 @@ const SCHEMA_VERSION: &str = "schema_v2";
 #[must_use]
 pub fn cache_key(repo_path: &Path, head_sha: &str, opts: &Options) -> [u8; 32] {
     let mut hasher = Sha256::new();
-    let canonical = fs::canonicalize(repo_path).unwrap_or_else(|_| repo_path.to_path_buf());
+    let canonical = canonicalize_with_fallback_log(repo_path, "cache_key");
     hasher.update(canonical.to_string_lossy().as_bytes());
     hasher.update(b"\x00");
     hasher.update(head_sha.as_bytes());
@@ -64,7 +64,7 @@ pub fn cache_path(key: &[u8; 32], repo_path: &Path) -> PathBuf {
 /// user alternated invocation styles.
 #[must_use]
 pub fn cache_path_with_root(key: &[u8; 32], repo_path: &Path, root: &Path) -> PathBuf {
-    let canonical = fs::canonicalize(repo_path).unwrap_or_else(|_| repo_path.to_path_buf());
+    let canonical = canonicalize_with_fallback_log(repo_path, "cache_path_with_root");
     let mut repo_hash = Sha256::new();
     repo_hash.update(canonical.to_string_lossy().as_bytes());
     let repo_short = hex::encode(&repo_hash.finalize()[..4]); // 8 hex chars
@@ -116,6 +116,36 @@ fn fallback_tmp_root() -> PathBuf {
 /// options changed. The new behavior auto-propagates as Options grows.
 fn opts_hash(opts: &Options) -> String {
     opts.canonical_json().to_string()
+}
+
+/// `fs::canonicalize` wrapper that logs a `tracing::debug!` when the
+/// system call fails and the raw path is used as a fallback.
+///
+/// `cache_key` and `cache_path_with_root` both canonicalise the repo
+/// path before hashing — they MUST agree on the result for the same
+/// input or the cache key drifts between key derivation and path
+/// lookup, producing a silent cache miss. The `unwrap_or_else` keeps
+/// them aligned (both fall back to the raw path on identical
+/// failure), but the fallback path was previously silent. If a
+/// canonicalize succeeds in one call site and fails in the other
+/// (e.g., a symlink target is created or a permission flips between
+/// invocations), the resulting key drift surfaces only as a degraded
+/// hit rate — invisible without instrumentation. The debug log gives
+/// operators on dirty containers / shared mounts a breadcrumb to
+/// trace why their cache hit rate dropped.
+fn canonicalize_with_fallback_log(repo_path: &Path, call_site: &str) -> PathBuf {
+    match fs::canonicalize(repo_path) {
+        Ok(canonical) => canonical,
+        Err(e) => {
+            tracing::debug!(
+                "{}: fs::canonicalize fallback for repo_path={} ({}); using raw path",
+                call_site,
+                repo_path.display(),
+                e,
+            );
+            repo_path.to_path_buf()
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

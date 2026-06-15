@@ -127,13 +127,10 @@ Validation methodology: five parallel read-only sub-agents covered (1) ingest & 
 
 #### F95 — `communication.rs::author_files` has no `--since` / `--until` filter
 
-*   **Location**: `crates/codelore-lib/src/analyses/communication.rs:60-66`
-*   **Severity**: LOW
-*   **Category**: Time-window semantics
-*   **Status**: Active
-*   **Description**: Most CodeLore analyses respect `--since` and `--until` boundary filters via WHERE clauses on `commits.date`. `communication`'s `author_files` CTE has no such filter — it's an unbounded `SELECT DISTINCT path, author FROM commits INNER JOIN changes`. If a user runs `codelore communication --since=2024-01-01`, the rest of the pipeline filters the time-window but the per-pair shared-file count silently includes pre-window history. (Knowledge-Islands does anchor; communication does not.)
-*   **Suggested fix**: if `opts.since` / `opts.until` are set, add the boundary `WHERE commits.date BETWEEN ? AND ?` inside `author_files` and `totals` CTEs, with the param binds threaded through to `prepare`. Adds two param slots. Regression test: a fixture spanning a year, communication with `--since` halfway through; the shared-file count must drop for pairs whose co-edits were pre-window.
-*   **Verify-then-fix**: confirm `communication` is expected to honor `--since` / `--until` (the codebase has `since/until` flags but several analyses are documented as full-history). If full-history is by design, downgrade to docs-only.
+*   **Status**: **Refuted** (post-verification follow-up to the §3 cycle).
+*   **Why refuted**: The claim assumed `--since` / `--until` are applied at SQL-query time via WHERE clauses on `commits.date`. Verification against current `main` shows the time-window filter actually lives at the *ingest* level — `repo/gix_repo.rs:59` wires `opts.after` into `gix::revision::walk::Sorting::ByCommitTimeCutoff`, and `repo/gix_repo.rs:97-98` re-checks each commit against `opts.after` / `opts.before` in the per-commit filter pass. Commits outside the window never make it into the consumer's `CommitEvent` stream, so they never land in the `commits` or `changes` tables. `communication`'s `author_files` CTE operates on `commits` ⊆ window by construction — it's already time-bounded transitively. Adding a redundant `WHERE commits.date BETWEEN ?` clause would be a no-op at best and a maintenance liability at worst (every analysis would acquire the same redundant guard). The original finding's own "Verify-then-fix" caveat correctly anticipated this outcome.
+*   **Original audit text preserved for trail**: "Most CodeLore analyses respect `--since` and `--until` boundary filters via WHERE clauses on `commits.date`. `communication`'s `author_files` CTE has no such filter — it's an unbounded `SELECT DISTINCT path, author FROM commits INNER JOIN changes`. If a user runs `codelore communication --since=2024-01-01`, the rest of the pipeline filters the time-window but the per-pair shared-file count silently includes pre-window history."
+*   **CLI-flag naming nit**: the audit text said `--since` / `--until`; the actual CLI flags are `--after` / `--before` (mirrored as `Options::after` / `Options::before` in `options.rs:51-52`). Not a defect; just naming drift between the audit phrasing and the implementation.
 
 #### F96 — ECharts mount + dispose pattern duplicated 5× across widgets
 

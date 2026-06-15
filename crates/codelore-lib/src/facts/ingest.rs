@@ -75,7 +75,17 @@ impl FactsDb {
             let paths_filter = crate::paths_filter::PathsFilter::from_opts(opts)?;
             let stats = ingest_loop(self, rx, &team_map, &bot_patterns, &paths_filter)?;
 
-            producer.join().expect("producer panicked")?;
+            // Map a panic in the commit-walker thread into a typed
+            // `CodeLoreError::Repo` so `main()`'s chain-walker can
+            // derive the correct spec §6.6 exit code (3 = repo).
+            // Using `.expect()` here would surface the panic as
+            // `thread 'main' panicked at 'producer panicked'` + exit
+            // 101 — bypassing the typed-error chain and giving the
+            // operator no breadcrumb back to the failing commit walk.
+            let join_result = producer
+                .join()
+                .map_err(|payload| CodeLoreError::Repo(format_panic_payload(&payload)))?;
+            join_result?;
             Ok(stats)
         })?;
 
@@ -1077,4 +1087,55 @@ pub fn apply_grouping(db: &super::FactsDb, group_map: &super::GroupMap) -> Resul
     );
 
     Ok(())
+}
+
+/// Format a `Box<dyn Any + Send>` panic payload (the value
+/// `std::thread::JoinHandle::join` returns on `Err`) into a stable
+/// human-readable string. The two canonical concrete types `panic!`
+/// produces are `&'static str` (from `panic!("literal")`) and `String`
+/// (from `panic!("{}", val)`) — handle both. Anything else (custom
+/// panic types, payload-less aborts) falls through to a generic
+/// `<non-string panic payload>` so the typed-error path still
+/// surfaces something operators can grep for.
+fn format_panic_payload(payload: &Box<dyn std::any::Any + Send>) -> String {
+    let detail = payload
+        .downcast_ref::<&'static str>()
+        .map(|s| (*s).to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "<non-string panic payload>".to_string());
+    format!("commit walker thread panicked: {detail}")
+}
+
+#[cfg(test)]
+mod panic_payload_tests {
+    use super::format_panic_payload;
+
+    /// `panic!("literal")` → `Box<dyn Any>` containing `&'static str`.
+    #[test]
+    fn extracts_static_str_payload() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new("walker exploded");
+        let msg = format_panic_payload(&payload);
+        assert_eq!(msg, "commit walker thread panicked: walker exploded");
+    }
+
+    /// `panic!("{} {}", "walker", "exploded")` → `Box<dyn Any>` containing `String`.
+    #[test]
+    fn extracts_string_payload() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new(String::from("formatted reason"));
+        let msg = format_panic_payload(&payload);
+        assert_eq!(msg, "commit walker thread panicked: formatted reason");
+    }
+
+    /// Anything that isn't `&'static str` or `String` falls through to
+    /// the placeholder. Exercises the `unwrap_or_else` branch so a
+    /// future change to the helper can't silently break it.
+    #[test]
+    fn unknown_payload_falls_through_to_placeholder() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new(42_u32);
+        let msg = format_panic_payload(&payload);
+        assert_eq!(
+            msg,
+            "commit walker thread panicked: <non-string panic payload>"
+        );
+    }
 }
