@@ -13,8 +13,26 @@ pub const GIX_VERSION: &str = "0.84.0";
 /// Pinned `DuckDB` version — same drift guard applies.
 pub const DUCKDB_VERSION: &str = "1.10503.1";
 
+/// Explicit schema version for the provenance manifest format. Bumped
+/// whenever a field is renamed, removed, or its semantic meaning
+/// changes. Additive field changes (new optional fields with
+/// non-default `Some()` values) do NOT require a bump — downstream
+/// consumers using serde's `#[serde(deny_unknown_fields)]` opt-in are
+/// the only ones affected by adds, and they'd need to bump regardless.
+///
+/// Serialized first (alphabetical order via `schema_version`'s
+/// position in the struct) so downstream parsers can refuse to
+/// proceed on a mismatch before reading any data fields. Without
+/// this, downstream tooling can't distinguish "the field I expected
+/// is gone because the schema rolled forward" from "the field was
+/// always optional and the producer omitted it."
+pub const MANIFEST_SCHEMA_VERSION: u32 = 1;
+
 #[derive(Debug, Serialize)]
 pub struct Manifest {
+    /// Provenance-manifest schema version. See [`MANIFEST_SCHEMA_VERSION`]
+    /// for the bump contract.
+    pub schema_version: u32,
     pub codelore_version: String,
     pub gix_version: String,
     pub arrow_version: String,
@@ -61,6 +79,7 @@ impl Manifest {
             crate::options::ComplexitySample::Full => "full",
         };
         Ok(Self {
+            schema_version: MANIFEST_SCHEMA_VERSION,
             codelore_version: env!("CARGO_PKG_VERSION").to_string(),
             gix_version: GIX_VERSION.to_string(),
             arrow_version: crate::arrow_facade::ARROW_RUNTIME_VERSION.to_string(),
