@@ -611,7 +611,10 @@ mod fisher_two_tail_invariant_tests {
     #[test]
     fn perfect_coupling_is_consistent() {
         let p = fisher_two_tail(5, 5, 5, 100).expect("perfect coupling must accept");
-        assert!(p < 0.01, "perfect coupling on 5/100 should be highly significant: p={p}");
+        assert!(
+            p < 0.01,
+            "perfect coupling on 5/100 should be highly significant: p={p}"
+        );
     }
 
     /// `shared = 0`: pair is in the table but never co-changed. The
