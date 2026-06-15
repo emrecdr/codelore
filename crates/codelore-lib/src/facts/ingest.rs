@@ -259,7 +259,7 @@ impl FactsDb {
         // returns rows the ingest already accepted (`PathsFilter` ran at
         // ingest time before any row landed in `changes`), so we don't
         // re-apply `--exclude` / `.gitignore` / `.codeloreignore` here.
-        // F77 fix: switched from `WalkDir::new(&opts.repo_path)` to
+        // Switched from `WalkDir::new(&opts.repo_path)` to
         // `query_live_paths` so the clones pass works on bare
         // repositories (no working tree to walk) the same way the
         // complexity pass already does — see `ingest_complexity_at_head`.
@@ -1034,7 +1034,7 @@ pub fn apply_grouping(db: &super::FactsDb, group_map: &super::GroupMap) -> Resul
     // translate to group level), so they get dropped for any path that
     // collapsed or got removed.
     //
-    // F85: the previous `NOT IN (SELECT … )` form on a composite key
+    // The previous `NOT IN (SELECT … )` form on a composite key
     // forces some `DuckDB` planner paths into a per-row subquery scan
     // rather than the index-friendly hash anti-join. `NOT EXISTS` with
     // a correlated `h.rev = c.rev AND h.path = c.path` predicate is the

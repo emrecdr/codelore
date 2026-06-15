@@ -17,14 +17,12 @@
 
 ARG RUST_VERSION=1.96
 ARG DEBIAN_RELEASE=bookworm
-# F99 fix: REPO is the GitHub `owner/repo` slug. Used only by the
+# REPO is the GitHub `owner/repo` slug. Used only by the
 # `org.opencontainers.image.source` OCI label so `docker inspect`
 # / `cosign verify` / Snyk / Grype / Trivy etc. dereference back
 # to the canonical repository. The default `emrecdr/codelore`
 # matches what container.yml ships from CI on tag push. Forks
-# should override with `--build-arg REPO=<owner>/<fork>`. Until
-# the workflow passes this explicitly via `build-args` (see
-# container.yml), the default is the publish target.
+# should override with `--build-arg REPO=<owner>/<fork>`.
 ARG REPO=emrecdr/codelore
 
 #─── chef stage ─────────────────────────────────────────────────────────────

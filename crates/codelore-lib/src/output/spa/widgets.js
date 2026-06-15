@@ -219,7 +219,7 @@
       Array.from(new Set(Object.values(primaryAuthorByPath)))
     );
 
-    // F83: build a path → clone-group-count map for the 'clones'
+    // Build a path → clone-group-count map for the 'clones'
     // colour mode. `data.clones` is the per-file overlay computed
     // by `output/spa.rs::run_clone_summary`; one entry per path
     // with ≥ 1 clone family. Falls back to an empty object when
@@ -334,7 +334,7 @@
                 leafColor = heatmapColor(Math.max(0, Math.min(1, aiPct / 100)));
               }
             } else if (colorMode === 'clones') {
-              // F83: structural-duplication overlay. `cloneCountByPath`
+              // Structural-duplication overlay. `cloneCountByPath`
               // came from `data.clones` (see `output/spa.rs::run_clone_summary`).
               // Files outside any clone family render neutral grey so
               // they sit visually behind the heat colours on actual
