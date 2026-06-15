@@ -10,7 +10,7 @@ The 27-feature plan in `docs/maximum-feature-plan.md` shipped end-to-end across 
 
 **Net deltas vs v0.5.1**:
 - **+6 new behavioural analyses** — `god-classes` (Brown et al. 1998 AntiPatterns), `architecture-violations` (layered-rule validation via `.codelore-arch-rules.toml`), `stale-code` (untouched + low-cognitive intersection), `pair-programming` (`Co-Authored-By:` trailer aggregation), `lead-time` (DORA in-flight time), `bus-factor` (per-module Filatov 2010)
-- **+7 new CLI subcommands** — `codelore explain` (formula + citation for 15 metrics), `codelore check` (quality-gate validation against `.codelore-thresholds.toml`), `codelore profile` (operational telemetry), `codelore docs` (markdown analysis catalogue), `codelore notes <range>` (release-notes markdown), `codelore completions <shell>` (bash | zsh | fish | powershell | elvish), `codelore schema <row-type>` (JSON Schema 2020-12)
+- **+6 new CLI subcommands** — `codelore explain` (formula + citation for 15 metrics), `codelore check` (quality-gate validation against `.codelore-thresholds.toml`), `codelore profile` (operational telemetry), `codelore docs` (markdown analysis catalogue), `codelore completions <shell>` (bash | zsh | fish | powershell | elvish), `codelore schema <row-type>` (JSON Schema 2020-12)
 - **+6 new SPA widgets** — Kamei Delivery-Risk Sparkline (beyond-CodeScene differentiator) · per-file radar in drawer · hotspot treemap · multi-metric parallel coordinates · cognitive boxplot · module chord · architecture force-graph
 - **+3 new SPA color modes** on the hotspot circle-pack — Code health (DaisyUI 3-band) · Tech-debt friction (OKLCH continuous heat ramp) · Knowledge loss (offboarding scenario driven)
 - **+1 new SPA overlay** — coupling arcs with Fisher p-value-encoded opacity + degree-encoded width (CodeScene-exceeding)
@@ -18,9 +18,35 @@ The 27-feature plan in `docs/maximum-feature-plan.md` shipped end-to-end across 
 - **5 modern web platform primitives** brought in — View Transitions API · native `<dialog>` · PWA manifest · OKLCH `color-mix()` · WCAG-conformant parallel DOM tree
 - **+1 schema migration** — `schema_v3` adds the `imports` table for the architecture import-graph (F-A1), populated via tree-sitter walks across the 6 Tier-1 languages, with per-language path resolver (Rust `crate::`, Python `.`, JS/TS `./`)
 - **+2 quality-gates files** — `.codelore-arch-rules.toml` (layered-architecture) + `.codelore-thresholds.toml` (gate thresholds with `$GITHUB_OUTPUT` integration)
-- **+359 tests** total (+37 net since v0.5.1), all green, clippy `-D warnings` clean
+- **+602 tests** total (+280 net since v0.5.1), all green, clippy `-D warnings` clean
 
 **Closed F-findings as side effects of feature work**: F71 · F90 · F92 · F97 · F98 (see `docs/reports/deep_analysis_report.md` for the audit trail).
+
+### Fixed — multi-angle validation pass
+
+A high-effort multi-angle code review of the feature cycle surfaced 15 correctness issues; each was confirmed against the running binary on the codelore repo before fixing.
+
+- **stale-code**: replaced `DATE_DIFF('month', TIMESTAMP, DATE)` (which DuckDB 1.10.5 cannot bind) with EXTRACT-based interval-month arithmetic mirroring the existing `code_age.rs` pattern; negative-month rows (future-dated commits) now filtered at SQL.
+- **bus-factor**: switched `COUNT(*) FROM changes` to `COUNT(DISTINCT rev)` so multi-file commits aren't multiplied; filter top-level files (`README.md`, `Cargo.toml`) out of the module set; `Option<f64>::unwrap_or` instead of swallowing NULL ratios to a false 0%.
+- **arch_rules**: TOML deserialisation now uses an order-preserving `toml::Table` walk; `classify()` honours its documented first-match-by-declaration-order contract deterministically. Test asserts exact result, not `matches!(api|app)`.
+- **pair-programming**: primary identity canonicalised to lowercased email (matches lowercased trailer emails); `BotPatterns::from_repo` filter applied to both primary and co-authors so the documented bot-filter promise actually fires.
+- **Rust import resolver**: `crate::` now resolves to the importer's containing crate `src/` boundary (workspace-aware), not literal top-level `src/`. Verified `god-classes fan_in` now > 0 on the codelore workspace itself. Bare module paths (`foo::bar`) skipped since Rust 2018+ treats those as extern crate references.
+- **Python import extractor**: `from X import Y` stores `X` (was: `X import Y`); `import x.y, z` keeps the first module; `as` aliases stripped on both branches.
+- **JS import extractor**: side-effect / dynamic imports (no ` from ` literal) return None so the walker skips them, instead of storing the raw statement as a phantom target that polluted `god-classes fan_out` counts.
+- **All path-joining resolvers**: `to_posix()` helper normalises `PathBuf` output to forward-slash so Windows hosts match the POSIX paths gix emits.
+- **lead-time**: `tracing::warn!` at run time explaining the schema gap so users see why every row reports 0 seconds.
+- **disallow_clone_type_1** gate: was parsed but never enforced; new `evaluate_clone_gate` counts `similarity=1.0` clone groups and surfaces one violation per repo (verified: detects 118 Type-1 groups on the codelore repo).
+
+### Removed
+
+- `codelore notes` subcommand — was a stub that printed markdown explaining itself as a stub then exited 0. Misleading for CI release-notes workflows; defer to a future iteration when the engine is actually wired.
+- `--diff <base..head>` flag on `codelore check` — was declared but never read by `run_check_cmd`.
+
+### Docs
+
+- README, CLAUDE.md, advanced-usage.md, codebase_analysis.md, ui-roadmap.md, roadmap-v1.x-and-beyond.md, deep_analysis_report.md refreshed to reflect the 31-analysis surface and current CLI shape.
+- Codebase + non-changelog docs scrubbed of every F-ID, Tier/Day marker, sprint label, version anchor (`v0.4.x`, `v0.5.x`, `v0.6.x`), PR-N reference, and "shipped in vX.Y" annotation per the project rule that comments describe current contract; CHANGELOG is the only history surface.
+- `docs/roadmap-v1.x-and-beyond.md` + `docs/ui-roadmap.md` restructured from sprint-sequenced release ladders into "Shipped (current state)" + "Planned (next direction)" sections.
 
 ## [0.5.1] - 2026-06-14
 
