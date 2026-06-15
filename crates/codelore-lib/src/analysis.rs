@@ -134,6 +134,55 @@ impl AnalysisName {
 
     #[must_use]
     pub fn all() -> &'static [Self] {
+        // The match below is the compile-time exhaustiveness guard for
+        // the `all()` registry. Adding a variant to the enum without
+        // also adding it to this match fails to compile with
+        // "non-exhaustive patterns" — preventing the silent
+        // registry-drift class of bug where a new analysis is
+        // dispatchable via `from_str` but invisible to `--help`'s
+        // supported-names list, the `Supported: ...` error message,
+        // and the round-trip test (which only iterates `all()`).
+        //
+        // The const block forces evaluation at compile time. The
+        // sentinel `let _: () = ...` body is type-only; we don't use
+        // the value, we use the fact that the match must cover every
+        // variant. The actual array below stays the source of truth
+        // for runtime order (which is the documented CLI ordering).
+        const fn _exhaustive_check(name: AnalysisName) {
+            match name {
+                AnalysisName::Hotspots
+                | AnalysisName::Coupling
+                | AnalysisName::Ownership
+                | AnalysisName::CodeAge
+                | AnalysisName::AbsChurn
+                | AnalysisName::AuthorChurn
+                | AnalysisName::EntityChurn
+                | AnalysisName::Communication
+                | AnalysisName::CodeHealth
+                | AnalysisName::Summary
+                | AnalysisName::Revisions
+                | AnalysisName::Authors
+                | AnalysisName::Clones
+                | AnalysisName::CloneCoupling
+                | AnalysisName::Soc
+                | AnalysisName::Messages
+                | AnalysisName::MainDev
+                | AnalysisName::MainDevByRevs
+                | AnalysisName::MainDevByDeletions
+                | AnalysisName::EntityEffort
+                | AnalysisName::EntityOwnership
+                | AnalysisName::TopCommitters
+                | AnalysisName::KnowledgeIslands
+                | AnalysisName::Centrality
+                | AnalysisName::Communities
+                | AnalysisName::GodClasses
+                | AnalysisName::ArchViolations
+                | AnalysisName::StaleCode
+                | AnalysisName::PairProgramming
+                | AnalysisName::LeadTime
+                | AnalysisName::BusFactor => {}
+            }
+        }
         &[
             Self::Hotspots,
             Self::Coupling,
