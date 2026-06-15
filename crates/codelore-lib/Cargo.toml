@@ -227,3 +227,27 @@ required-features = ["test-support"]
 [[test]]
 name = "f69_window_spike_test"
 required-features = ["test-support"]
+
+[[test]]
+name = "bus_factor_test"
+required-features = ["test-support"]
+
+[[test]]
+name = "lead_time_test"
+required-features = ["test-support"]
+
+[[test]]
+name = "stale_code_test"
+required-features = ["test-support"]
+
+[[test]]
+name = "pair_programming_test"
+required-features = ["test-support"]
+
+[[test]]
+name = "god_classes_test"
+required-features = ["test-support"]
+
+[[test]]
+name = "arch_violations_test"
+required-features = ["test-support"]
