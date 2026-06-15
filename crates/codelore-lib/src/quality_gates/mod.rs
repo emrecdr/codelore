@@ -149,9 +149,7 @@ pub fn evaluate_clone_gate(
             "SELECT COUNT(DISTINCT clone_group_id) FROM clones \
              WHERE similarity = 1.0",
         )
-        .map_err(|e| {
-            crate::CodeLoreError::Analysis(format!("prepare clone-gate: {e}"))
-        })?;
+        .map_err(|e| crate::CodeLoreError::Analysis(format!("prepare clone-gate: {e}")))?;
     let count: i64 = stmt
         .query_row([], |r| r.get(0))
         .map_err(|e| crate::CodeLoreError::Analysis(format!("query clone-gate: {e}")))?;
