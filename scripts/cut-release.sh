@@ -105,6 +105,16 @@ run()  {
 # ──────────────────────────────────────────────────────────────────────
 # Ruleset restore (registered via trap EXIT — runs on ANY exit path)
 # ──────────────────────────────────────────────────────────────────────
+# Restore-call timeout: prevents an indefinite hang if `gh api` stalls
+# on a slow / rate-limited GitHub response while the trap is running.
+# Without the cap, a Ctrl-C while gh is hung gives the operator no
+# second chance to clean up and the ruleset stays disabled silently.
+# 30s is generous for a single PUT (typical: <2s); on timeout we fall
+# through to the manual-recovery branch so the operator gets a
+# paste-able recovery command. Uses `gtimeout` on macOS (coreutils)
+# when present, falling back to GNU `timeout` on Linux.
+TIMEOUT_BIN="$(command -v gtimeout || command -v timeout || true)"
+
 RULESET_DISABLED=false
 restore_ruleset() {
   local exit_code=$?
@@ -112,7 +122,7 @@ restore_ruleset() {
     warn "restoring protect-release-tags ruleset to active enforcement..."
     # Use a fresh PUT so we don't depend on a captured backup body — the
     # ruleset shape is canonical and lives here in this script.
-    if gh api -X PUT "repos/${REPO}/rulesets/${RULESET_ID}" --input - >/dev/null <<RULESET
+    if ${TIMEOUT_BIN:+${TIMEOUT_BIN} 30s} gh api -X PUT "repos/${REPO}/rulesets/${RULESET_ID}" --input - >/dev/null <<RULESET
 {
   "name": "protect-release-tags",
   "target": "tag",
@@ -146,9 +156,11 @@ RULESET
     then
       ok "ruleset restored to active enforcement"
     else
-      warn "ruleset restore FAILED — run manually:"
+      warn "ruleset restore FAILED (or timed out after 30s) — run manually:"
       warn "  gh api repos/${REPO}/rulesets/${RULESET_ID}  # inspect current state"
       warn "  then PUT with the canonical config (see the heredoc above in this script)"
+      warn "If the ruleset shows enforcement=disabled, the repo is unprotected"
+      warn "for tag pushes until restored — restore as soon as possible."
     fi
   fi
   exit "${exit_code}"
