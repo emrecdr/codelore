@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-15
+
 ### Added — v0.6.x maximum-aligned feature sprint (full implementation)
 
 The 27-feature plan in `docs/maximum-feature-plan.md` shipped end-to-end across an 18-day implementation cycle (plus a completion sprint for the deferred quality-gates and multi-language resolver pack). The cycle landed Tier 1 (CodeScene parity + architecture foundation), Tier 2 (analytical surface + modern platform), and Tier 3 (brand-extending) with a single CI-clean clippy gate at every checkpoint.

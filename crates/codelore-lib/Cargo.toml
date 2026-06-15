@@ -38,7 +38,7 @@ gix = { version = "0.84", features = ["max-performance", "blob-diff"] }
 tempfile = { version = "3", optional = true }
 duckdb = { version = "=1.10503.1", features = ["bundled", "appender-arrow"] }
 crossbeam-channel = "0.5"
-codelore-rca = { path = "../codelore-rca", version = "0.5.1" }
+codelore-rca = { path = "../codelore-rca", version = "0.6.0" }
 fishers_exact = "1"
 # Leiden community detection on the behavioural coupling graph.
 # Default features disabled because the upstream default pulls in
