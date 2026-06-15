@@ -42,7 +42,8 @@ fn header<W: Write>(w: &mut W, title: &str) -> Result<()> {
 /// life this preserves matters here — every analysis emits hundreds
 /// to thousands of rows and the markdown emitter is a hot path for
 /// the `$GITHUB_STEP_SUMMARY` flow.
-fn escape_md_cell(s: &str) -> Cow<'_, str> {
+#[must_use]
+pub fn escape_md_cell(s: &str) -> Cow<'_, str> {
     if !s.contains('|') && !s.contains('\n') && !s.contains('\r') {
         return Cow::Borrowed(s);
     }

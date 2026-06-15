@@ -168,7 +168,10 @@ fn emit_markdown(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
             writeln!(
                 out,
                 "| `{}` | {:.4} | {} | {:.1} |",
-                h.path, h.hotspot_score, h.revisions, h.cognitive
+                codelore_lib::output::markdown::escape_md_cell(&h.path),
+                h.hotspot_score,
+                h.revisions,
+                h.cognitive
             )?;
         }
         writeln!(out)?;
@@ -187,7 +190,10 @@ fn emit_markdown(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
             writeln!(
                 out,
                 "| `{}` | {:.4} | {:.4} | +{:.4} |",
-                s.path, s.base_score, s.head_score, s.delta
+                codelore_lib::output::markdown::escape_md_cell(&s.path),
+                s.base_score,
+                s.head_score,
+                s.delta
             )?;
         }
         writeln!(out)?;
@@ -214,8 +220,8 @@ fn emit_markdown(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
             writeln!(
                 out,
                 "| `{}` | `{}` | {:.1}% | {} | {:.4} |",
-                a.touched_file,
-                a.expected_partner,
+                codelore_lib::output::markdown::escape_md_cell(&a.touched_file),
+                codelore_lib::output::markdown::escape_md_cell(&a.expected_partner),
                 a.historical_coupling,
                 a.historical_shared_revs,
                 a.fisher_p,
@@ -237,7 +243,12 @@ fn emit_markdown(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
             writeln!(
                 out,
                 "| {} | `{}` | `{}` | {}-{} | {} |",
-                c.clone_group_id, c.entity, c.function, c.start_line, c.end_line, c.node_count
+                c.clone_group_id,
+                codelore_lib::output::markdown::escape_md_cell(&c.entity),
+                codelore_lib::output::markdown::escape_md_cell(&c.function),
+                c.start_line,
+                c.end_line,
+                c.node_count
             )?;
         }
         writeln!(out)?;

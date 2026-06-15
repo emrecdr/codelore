@@ -51,6 +51,7 @@ All prior findings (F1–F87) have shipped and were validated against `main` HEA
 | **F77–F87** (v0.5.0) | Bare-repo clone discovery, theme-controller migration, multi-column SPA grid, cognitive-color sunburst, JSX/TSX grammar coverage | Shipped |
 | **F84, F88** | Refuted at source-quote level (recycled-path lineage, silent ODB-skip rationale) | Refuted |
 | **F107, F108** (v0.5.1 hotfix) | SPA runtime errors caught in production after v0.5.0 ship: METRIC_DEFS Temporal Dead Zone in widgets.js IIFE (F107) + Alpine inline-script order causing `$store.*` undefined at first paint (F108). Both shipped through every SPA-touching PR since v0.4.x. Caught by user browser console, not by CI. PR #37. | Shipped |
+| **F109** (post-F91 sweep gap) | `codelore-cli/src/diff_output.rs` had 4 cell-emit sites (`writeln!(out, "\| `{}` \| ...")` for hotspots/coupling/clones rows) that F91's `escape_md_cell` fix in PR #48 did not sweep — F91 only touched `output/markdown.rs`. §4's Reaffirmed section explicitly flagged this gap; missed during F91 implementation. Fixed by promoting `escape_md_cell` to `pub` in codelore-lib::output::markdown and wrapping all four diff-PR-mode cell-emit sites. | Shipped |
 
 Refuted-finding rationale stays in `git log` against the validation PR (commit 2f8a7bc, PR #20) so the next audit cycle doesn't rediscover them.
 
