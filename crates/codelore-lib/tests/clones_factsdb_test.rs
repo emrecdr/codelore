@@ -102,7 +102,7 @@ fn ingest_respects_exclude_patterns_for_clones() {
 
 #[test]
 fn ingest_populates_clones_on_bare_repository() {
-    // F77 regression: the previous `WalkDir::new(&opts.repo_path)`
+    // Regression: the previous `WalkDir::new(&opts.repo_path)`
     // discovery phase yielded zero candidates on a bare repo (no
     // working tree → only `.git`-style metadata exists). Clones
     // would silently come back as 0 rows. The fix switches to
