@@ -27,7 +27,6 @@
 //!     opt INTO coverage rather than being forced to cover the whole
 //!     repo upfront.
 
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -97,32 +96,43 @@ impl LayerRules {
     ///
     /// Returns a static `&str` description of the parse failure.
     pub fn from_text(raw: &str) -> std::result::Result<Self, String> {
-        let parsed: WireFormat = toml::from_str(raw).map_err(|e| e.to_string())?;
+        // Deserialise via `toml::Table` (order-preserving) and walk
+        // the `[layer.*]` keys in declaration order so `classify()`'s
+        // first-match contract is reproducible across runs. The
+        // default `HashMap<String, WireLayer>` shape lost order to
+        // hash randomisation and made arch-violations non-deterministic
+        // on inputs with nested-prefix layers.
+        let table: toml::Table = toml::from_str(raw).map_err(|e| e.to_string())?;
+        let mut layers: Vec<Layer> = Vec::new();
+        if let Some(layer_section) = table.get("layer") {
+            let layer_table = layer_section
+                .as_table()
+                .ok_or_else(|| "`layer` must be a TOML table".to_string())?;
+            for (name, body_val) in layer_table {
+                let body: WireLayer = body_val
+                    .clone()
+                    .try_into()
+                    .map_err(|e: toml::de::Error| format!("layer `{name}`: {e}"))?;
+                layers.push(Layer {
+                    name: name.clone(),
+                    paths: body.paths,
+                    may_depend_on: body.may_depend_on,
+                });
+            }
+        }
         // Validate that every `may_depend_on` reference resolves.
         let declared_names: std::collections::HashSet<&str> =
-            parsed.layer.keys().map(String::as_str).collect();
-        for (lname, layer) in &parsed.layer {
+            layers.iter().map(|l| l.name.as_str()).collect();
+        for layer in &layers {
             for dep in &layer.may_depend_on {
                 if !declared_names.contains(dep.as_str()) {
                     return Err(format!(
-                        "layer `{lname}` may_depend_on references undeclared layer `{dep}`"
+                        "layer `{}` may_depend_on references undeclared layer `{dep}`",
+                        layer.name
                     ));
                 }
             }
         }
-        // Preserve declaration order — TOML tables in `toml` 0.8
-        // preserve insertion order when using `IndexMap`-backed
-        // deserialisation; we explicitly transcribe to Vec to make
-        // the order contract visible at this layer.
-        let layers: Vec<Layer> = parsed
-            .layer
-            .into_iter()
-            .map(|(name, body)| Layer {
-                name,
-                paths: body.paths,
-                may_depend_on: body.may_depend_on,
-            })
-            .collect();
         Ok(Self { layers })
     }
 
@@ -179,12 +189,6 @@ pub struct Violation {
 
 // Internal TOML deserialisation shape — kept private so the public
 // `Layer` struct can carry a denormalised `name` field.
-#[derive(Deserialize)]
-struct WireFormat {
-    #[serde(default)]
-    layer: HashMap<String, WireLayer>,
-}
-
 #[derive(Deserialize)]
 struct WireLayer {
     #[serde(default)]
@@ -252,13 +256,10 @@ paths = ["src/"]
 may_depend_on = []
 "#;
         let rules = LayerRules::from_text(raw).unwrap();
-        // src/api/foo.rs matches both — first-declared (api) wins.
-        // NOTE: hashmap iteration order is unstable; whichever layer
-        // is checked first reflects declaration order via the IndexMap
-        // backing. For this test we assert that the result is *one of*
-        // the two — the order contract is documented separately.
-        let got = rules.classify("src/api/foo.rs");
-        assert!(matches!(got, Some("api" | "app")));
+        // src/api/foo.rs matches both — first-declared (api) wins
+        // deterministically via the order-preserving `toml::Table`
+        // walk in `from_text`.
+        assert_eq!(rules.classify("src/api/foo.rs"), Some("api"));
     }
 
     #[test]

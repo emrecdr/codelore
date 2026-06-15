@@ -43,20 +43,24 @@ pub fn resolve_rust_path<S: std::hash::BuildHasher>(
     if segments.is_empty() {
         return None;
     }
-    // Determine the file-system root: `crate::` from `src/`, `self::`
-    // from the importer's parent directory.
+    // Determine the file-system root. `crate::` resolves to the
+    // importer's containing crate `src/` directory — for Cargo
+    // workspaces (which codelore itself is) that means walking the
+    // importer path backward from its `src/` boundary, NOT a literal
+    // top-level `src/`. `self::` is relative to the importer's parent
+    // module; `super::` climbs one parent.
     let (rest, root): (&[&str], PathBuf) = match segments[0] {
-        "crate" => (&segments[1..], PathBuf::from("src")),
+        "crate" => (&segments[1..], crate_src_root(importer_path)),
         "self" => (&segments[1..], parent_dir(importer_path)),
         "super" => {
             let mut p = parent_dir(importer_path);
             p.pop();
             (&segments[1..], p)
         }
-        // Bare module paths (`foo::bar`) — try same crate root as
-        // crate:: since cargo accepts both forms inside the same
-        // crate, then bail.
-        _ => (segments.as_slice(), PathBuf::from("src")),
+        // Bare module paths (`foo::bar`) refer to extern crates in
+        // Rust 2018+ — not the same crate. Skip resolution; these
+        // come from `Cargo.toml` dependencies.
+        _ => return None,
     };
     if rest.is_empty() {
         return None;
@@ -78,8 +82,8 @@ pub fn resolve_rust_path<S: std::hash::BuildHasher>(
         joined.push(part);
     }
     let candidates = [
-        format!("{}.rs", joined.to_string_lossy()),
-        format!("{}/mod.rs", joined.to_string_lossy()),
+        format!("{}.rs", to_posix(&joined)),
+        format!("{}/mod.rs", to_posix(&joined)),
     ];
     for c in &candidates {
         if live_paths.contains(c) {
@@ -93,8 +97,8 @@ pub fn resolve_rust_path<S: std::hash::BuildHasher>(
         joined2.push(part);
     }
     let candidates2 = [
-        format!("{}.rs", joined2.to_string_lossy()),
-        format!("{}/mod.rs", joined2.to_string_lossy()),
+        format!("{}.rs", to_posix(&joined2)),
+        format!("{}/mod.rs", to_posix(&joined2)),
     ];
     for c in &candidates2 {
         if live_paths.contains(c) {
@@ -141,8 +145,8 @@ pub fn resolve_python_relative<S: std::hash::BuildHasher>(
         joined.push(part);
     }
     let candidates = [
-        format!("{}.py", joined.to_string_lossy()),
-        format!("{}/__init__.py", joined.to_string_lossy()),
+        format!("{}.py", to_posix(&joined)),
+        format!("{}/__init__.py", to_posix(&joined)),
     ];
     for c in &candidates {
         if live_paths.contains(c) {
@@ -160,8 +164,8 @@ pub fn resolve_python_relative<S: std::hash::BuildHasher>(
         joined2.push(part);
     }
     let candidates2 = [
-        format!("{}.py", joined2.to_string_lossy()),
-        format!("{}/__init__.py", joined2.to_string_lossy()),
+        format!("{}.py", to_posix(&joined2)),
+        format!("{}/__init__.py", to_posix(&joined2)),
     ];
     for c in &candidates2 {
         if live_paths.contains(c) {
@@ -175,6 +179,35 @@ fn parent_dir(path: &str) -> PathBuf {
     Path::new(path)
         .parent()
         .map_or_else(PathBuf::new, std::path::Path::to_path_buf)
+}
+
+/// `crate::` root resolution. For a single-crate repo this is
+/// literally `src`; for a Cargo workspace it's the importer's
+/// containing crate's `src/` directory. We detect the crate root by
+/// scanning the importer's path for the rightmost `src/` boundary and
+/// preserving every segment up to (and including) the `src` segment.
+fn crate_src_root(importer_path: &str) -> PathBuf {
+    let segments: Vec<&str> = importer_path.split('/').collect();
+    // Walk right-to-left to find the LAST `src` segment so nested
+    // module trees (`crates/foo/src/bar/src/baz.rs` is theoretical but
+    // safe) anchor at the crate's `src`.
+    if let Some(idx) = segments.iter().rposition(|s| *s == "src") {
+        let prefix = &segments[..=idx];
+        let mut p = PathBuf::new();
+        for seg in prefix {
+            p.push(seg);
+        }
+        return p;
+    }
+    PathBuf::from("src")
+}
+
+/// Convert a `PathBuf` to a forward-slash POSIX string regardless of
+/// host platform. `live_paths` is populated from gix which always
+/// emits `/`-separated paths; `PathBuf::to_string_lossy` would emit
+/// `\` on Windows, breaking `HashSet::contains`.
+fn to_posix(p: &Path) -> String {
+    p.to_string_lossy().replace('\\', "/")
 }
 
 /// Resolve a JS/TS relative import target against the live-at-HEAD
@@ -196,7 +229,7 @@ pub fn resolve_js_relative<S: std::hash::BuildHasher>(
     }
     let importer_dir = Path::new(importer_path).parent().unwrap_or(Path::new(""));
     let joined = normalise_path(&importer_dir.join(target));
-    let base = joined.to_string_lossy().into_owned();
+    let base = to_posix(&joined);
 
     // Determine extension priority based on importer's extension.
     let importer_ext = Path::new(importer_path)

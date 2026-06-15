@@ -83,6 +83,9 @@ pub fn run_lead_time(db: &FactsDb, opts: &Options) -> Result<Vec<LeadTimeRow>> {
         .conn()
         .prepare(sql)
         .map_err(|e| CodeLoreError::Analysis(format!("prepare lead-time: {e}")))?;
+    tracing::warn!(
+        "lead-time: schema carries only committer date; all rows report 0-second lead time until a future schema bump adds author_date. Use `codelore explain lead-time` for the planned semantic."
+    );
     let rows = stmt
         .query_map(params![row_limit], |r| {
             let lead_time_seconds: i64 = r.get(4)?;

@@ -64,6 +64,11 @@ pub fn run_pair_programming(db: &FactsDb, opts: &Options) -> Result<Vec<PairRow>
         .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
         .map_err(|e| crate::CodeLoreError::Analysis(format!("query pair-programming scan: {e}")))?;
 
+    // Bot patterns are merged with project-level `.codelorebots`
+    // (when present) so the same filter the identity layer applies at
+    // ingest also covers trailer-emitted co-authors.
+    let bot_patterns = crate::identity::BotPatterns::from_repo(&opts.repo_path);
+
     let mut pair_counts: HashMap<(String, String), u32> = HashMap::new();
     for row in rows {
         let (primary, message) = row.map_err(|e| {
@@ -73,10 +78,25 @@ pub fn run_pair_programming(db: &FactsDb, opts: &Options) -> Result<Vec<PairRow>
         if co_authors.is_empty() {
             continue;
         }
+        // Normalise the primary identity to lowercased email when
+        // possible so it dedups against the lowercased trailer emails.
+        // canonical_author is `Name <email>` (display form) — extract
+        // the email if present, else lowercase the whole token.
+        let primary_norm = normalise_identity(&primary);
+        if bot_patterns.is_bot(&primary_norm, &primary) {
+            continue;
+        }
         // Build the unique-pair set for this commit. Primary author
         // pairs with each co-author; co-authors pair with each other
-        // (true mob session).
-        let mut participants: Vec<String> = std::iter::once(primary).chain(co_authors).collect();
+        // (true mob session). Drop any bot identity surfacing through
+        // the Co-Authored-By trailers.
+        let mut participants: Vec<String> = std::iter::once(primary_norm)
+            .chain(
+                co_authors
+                    .into_iter()
+                    .filter(|a| !bot_patterns.is_bot(a, a)),
+            )
+            .collect();
         participants.sort();
         participants.dedup();
         for i in 0..participants.len() {
@@ -117,6 +137,23 @@ pub fn run_pair_programming(db: &FactsDb, opts: &Options) -> Result<Vec<PairRow>
     let _ = params![row_limit];
 
     Ok(out)
+}
+
+/// Normalise an identity string to a stable lowercased token used as
+/// the pair-counter map key. `canonical_author` is `Name <email>`
+/// (display form); the email is the stable identity surface, so we
+/// strip to it when present. Falls back to the lowercased input when
+/// the angle-bracket envelope is missing.
+fn normalise_identity(raw: &str) -> String {
+    if let (Some(lt), Some(gt)) = (raw.find('<'), raw.find('>'))
+        && lt < gt
+    {
+        let email = raw[(lt + 1)..gt].trim();
+        if !email.is_empty() {
+            return email.to_lowercase();
+        }
+    }
+    raw.trim().to_lowercase()
 }
 
 /// Extract Co-Authored-By trailer values from a commit message.

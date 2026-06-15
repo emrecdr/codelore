@@ -65,10 +65,11 @@ pub fn run_bus_factor(db: &FactsDb, opts: &Options) -> Result<Vec<BusFactorRow>>
             SELECT
                 regexp_extract(c.path, '^[^/]+', 0) AS module,
                 co.canonical_author AS author,
-                COUNT(*) AS commits
+                COUNT(DISTINCT c.rev) AS commits
             FROM changes c
             INNER JOIN commits co ON co.rev = c.rev
             WHERE co.is_merge = FALSE
+              AND c.path LIKE '%/%'
             GROUP BY module, co.canonical_author
         ),
         per_module AS (
@@ -131,7 +132,7 @@ pub fn run_bus_factor(db: &FactsDb, opts: &Options) -> Result<Vec<BusFactorRow>>
                 total_commits: r.get(1)?,
                 bus_factor: r.get(2)?,
                 top_contributor: r.get(3)?,
-                top_contributor_share: r.get::<_, f64>(4).unwrap_or(0.0),
+                top_contributor_share: r.get::<_, Option<f64>>(4)?.unwrap_or(0.0),
             })
         })
         .map_err(|e| CodeLoreError::Analysis(format!("query bus-factor: {e}")))?;

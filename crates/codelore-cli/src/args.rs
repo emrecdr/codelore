@@ -125,10 +125,6 @@ pub enum Command {
     /// Writes `result=pass|fail` to `$GITHUB_OUTPUT` when the env var
     /// is set, for direct GitHub Actions step-output integration.
     Check(CheckArgs),
-    /// Emit a release-notes markdown summary between two revisions.
-    /// Mirrors `codelore diff` but pivots the output for changelog-
-    /// style consumption.
-    Notes(NotesArgs),
 }
 
 /// Quality-gate check.
@@ -143,21 +139,6 @@ pub struct CheckArgs {
     /// passes vacuously.
     #[arg(long)]
     pub thresholds_file: Option<PathBuf>,
-    /// Diff-mode: restrict the gate to files that changed in
-    /// `<base>..<head>`. When omitted the check covers every file
-    /// live at HEAD.
-    #[arg(long)]
-    pub diff: Option<String>,
-}
-
-/// Release-notes args.
-#[derive(clap::Args, Debug)]
-pub struct NotesArgs {
-    /// Path to the git repo (default: cwd).
-    #[arg(short, long, default_value = ".")]
-    pub repo: PathBuf,
-    /// `<base>..<head>` revision range to summarise.
-    pub range: String,
 }
 
 /// Shell-completion script generation.

@@ -100,12 +100,11 @@ fn walk_imports(root: Node<'_>, source: &[u8], lang: ImportLanguage, out: &mut V
         let current = cursor.node();
         if kinds.contains(&current.kind())
             && let Some(raw) = node_text(current, source)
+            && let Some(target) = normalise_target(&raw, lang)
+            && !target.is_empty()
         {
-            let target = normalise_target(&raw, lang);
-            if !target.is_empty() {
-                let kind = classify(&target, lang);
-                out.push(RawImport { target, kind });
-            }
+            let kind = classify(&target, lang);
+            out.push(RawImport { target, kind });
         }
         // Descend if possible — child first for preorder.
         if cursor.goto_first_child() {
@@ -141,7 +140,13 @@ fn node_text<'a>(node: Node<'a>, source: &'a [u8]) -> Option<String> {
 /// keyword + trailing punctuation. A future enhancement will replace
 /// this with proper AST-child extraction; today's heuristic gets
 /// ~95 % correctness on real-world code while staying surgical.
-fn normalise_target(raw: &str, lang: ImportLanguage) -> String {
+///
+/// Returns `None` when the statement cannot be normalised to a
+/// meaningful module identifier (JS side-effect / dynamic imports,
+/// Python `from X import Y` whose module specifier is empty). The
+/// caller skips the row rather than storing the raw statement
+/// text as a phantom target.
+fn normalise_target(raw: &str, lang: ImportLanguage) -> Option<String> {
     // Collapse whitespace + strip leading/trailing punctuation.
     let s = raw.split_whitespace().collect::<Vec<_>>().join(" ");
     let trimmed = match lang {
@@ -149,25 +154,48 @@ fn normalise_target(raw: &str, lang: ImportLanguage) -> String {
             .trim_start_matches("pub ")
             .trim_start_matches("use ")
             .trim_end_matches(';')
-            .trim(),
-        ImportLanguage::Python => s
-            .trim_start_matches("import ")
-            .trim_start_matches("from ")
-            .trim(),
+            .trim()
+            .to_string(),
+        ImportLanguage::Python => normalise_python_target(&s)?,
         ImportLanguage::Java => s
             .trim_start_matches("import ")
             .trim_start_matches("static ")
             .trim_end_matches(';')
-            .trim(),
+            .trim()
+            .to_string(),
         ImportLanguage::JavaScript | ImportLanguage::TypeScript | ImportLanguage::Tsx => {
-            // For JS/TS the meaningful target is the string literal
-            // after `from`. Extract it; fall back to the full raw
-            // text so we don't drop the import on edge-case syntax
-            // (dynamic import, type-only import).
-            extract_js_module_target(&s).unwrap_or(&s).trim()
+            // The meaningful target is the string literal after
+            // `from`. Side-effect imports (`import 'foo';`) and
+            // dynamic imports have no such literal — return None so
+            // the walker drops them, rather than storing the raw
+            // statement text as a phantom target.
+            extract_js_module_target(&s)?.trim().to_string()
         }
     };
-    trimmed.to_string()
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed)
+}
+
+/// Python target normalisation. Strips the `import` / `from` keyword
+/// and discards everything after a `from X import Y`'s ` import ` so
+/// only the dotted module specifier survives — `from os.path import
+/// join` → `os.path`. `import x.y` → `x.y`. Returns None when the
+/// statement carries no module specifier at all.
+fn normalise_python_target(s: &str) -> Option<String> {
+    let after = s.trim_start_matches("from ").trim_start_matches("import ");
+    // `from X import Y` shape: keep everything before ` import `.
+    let head = after.split_once(" import ").map_or(after, |(h, _)| h);
+    // `import X, Y, Z` shape: keep the first dotted module.
+    let first = head.split(',').next().unwrap_or(head).trim();
+    // Drop `as Alias` tails on either branch.
+    let target = first.split_once(" as ").map_or(first, |(h, _)| h).trim();
+    if target.is_empty() {
+        None
+    } else {
+        Some(target.to_string())
+    }
 }
 
 /// Extract the module specifier from a JS/TS import statement —

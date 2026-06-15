@@ -128,6 +128,44 @@ pub struct GateViolation {
     pub threshold: String,
 }
 
+/// Evaluate the `disallow_clone_type_1` gate by counting Type-1
+/// clone families (`similarity = 1.0`) in the fact store. When the
+/// gate is off this is a noop; when on, every distinct clone group
+/// of similarity 1.0 surfaces as one violation row.
+///
+/// # Errors
+///
+/// Returns [`crate::CodeLoreError::Analysis`] on `DuckDB` errors.
+pub fn evaluate_clone_gate(
+    thresholds: &Thresholds,
+    db: &crate::facts::FactsDb,
+) -> crate::Result<Vec<GateViolation>> {
+    if !thresholds.gates.disallow_clone_type_1 {
+        return Ok(Vec::new());
+    }
+    let mut stmt = db
+        .conn()
+        .prepare(
+            "SELECT COUNT(DISTINCT clone_group_id) FROM clones \
+             WHERE similarity = 1.0",
+        )
+        .map_err(|e| {
+            crate::CodeLoreError::Analysis(format!("prepare clone-gate: {e}"))
+        })?;
+    let count: i64 = stmt
+        .query_row([], |r| r.get(0))
+        .map_err(|e| crate::CodeLoreError::Analysis(format!("query clone-gate: {e}")))?;
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    Ok(vec![GateViolation {
+        gate: "disallow_clone_type_1".into(),
+        path: "(repo-wide)".into(),
+        actual: count.to_string(),
+        threshold: "0".into(),
+    }])
+}
+
 /// Evaluate the `[gates]` section against a hotspots result set.
 /// Returns the list of violations.
 #[must_use]

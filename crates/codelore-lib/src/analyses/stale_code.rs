@@ -51,16 +51,30 @@ const SQL: &str = "
         WHERE cognitive IS NOT NULL
         GROUP BY path
     )
+    , months_calc AS (
+        SELECT
+            lp.path,
+            lp.last_touched,
+            (
+                12 * (EXTRACT(year FROM CAST(? AS TIMESTAMP))
+                      - EXTRACT(year FROM lp.last_touched))
+              + (EXTRACT(month FROM CAST(? AS TIMESTAMP))
+                 - EXTRACT(month FROM lp.last_touched))
+              - CASE WHEN EXTRACT(day FROM CAST(? AS TIMESTAMP))
+                        < EXTRACT(day FROM lp.last_touched) THEN 1 ELSE 0 END
+            )::INTEGER AS months_since
+        FROM live_paths lp
+    )
     SELECT
-        lp.path,
-        CAST(CAST(lp.last_touched AS DATE) AS TEXT) AS last_touched,
-        CAST(DATE_DIFF('month', lp.last_touched, CURRENT_DATE) AS UINTEGER) AS months_since,
+        mc.path,
+        CAST(CAST(mc.last_touched AS DATE) AS TEXT) AS last_touched,
+        mc.months_since,
         COALESCE(fc.max_cognitive, 0)::DOUBLE AS max_cognitive
-    FROM live_paths lp
-    LEFT JOIN file_complexity fc ON fc.path = lp.path
-    WHERE DATE_DIFF('month', lp.last_touched, CURRENT_DATE) >= ?
+    FROM months_calc mc
+    LEFT JOIN file_complexity fc ON fc.path = mc.path
+    WHERE mc.months_since >= ?
       AND COALESCE(fc.max_cognitive, 0) <= ?
-    ORDER BY months_since DESC, lp.path ASC
+    ORDER BY mc.months_since DESC, mc.path ASC
     LIMIT ?
 ";
 
@@ -72,23 +86,47 @@ const SQL: &str = "
 /// Returns [`crate::CodeLoreError::Analysis`] on `DuckDB` errors.
 pub fn run_stale_code(db: &FactsDb, opts: &Options) -> Result<Vec<StaleCodeRow>> {
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
+    let n = time::OffsetDateTime::now_utc();
+    let anchor = format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        n.year(),
+        u8::from(n.month()),
+        n.day(),
+        n.hour(),
+        n.minute(),
+        n.second(),
+    );
     super::query::explain_if_requested(
         db,
         SQL,
-        params![DEFAULT_MIN_MONTHS, DEFAULT_MAX_COGNITIVE, row_limit],
+        params![
+            anchor,
+            anchor,
+            anchor,
+            DEFAULT_MIN_MONTHS,
+            DEFAULT_MAX_COGNITIVE,
+            row_limit
+        ],
         "stale-code",
         opts,
     )?;
     super::query::query_map_collect(
         db,
         SQL,
-        params![DEFAULT_MIN_MONTHS, DEFAULT_MAX_COGNITIVE, row_limit],
+        params![
+            anchor,
+            anchor,
+            anchor,
+            DEFAULT_MIN_MONTHS,
+            DEFAULT_MAX_COGNITIVE,
+            row_limit
+        ],
         "stale-code",
         |r| {
             Ok(StaleCodeRow {
                 path: r.get::<_, String>(0)?,
                 last_touched: r.get::<_, String>(1)?,
-                months_since_touched: r.get::<_, u32>(2)?,
+                months_since_touched: r.get::<_, i32>(2).map(|v| u32::try_from(v).unwrap_or(0))?,
                 max_cognitive: r.get::<_, f64>(3)?,
             })
         },
