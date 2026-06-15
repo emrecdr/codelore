@@ -616,12 +616,8 @@ fn diff_hunks_gix_is_empty_stub_cli_returns_real_hunks() {
     // Pick the most recent commit and ask for hunks against
     // README.md — the fixture's first-touched file.
     let head = gix.head_sha().expect("head_sha");
-    let gix_hunks = gix
-        .diff_hunks(&head, "README.md")
-        .expect("gix diff_hunks");
-    let cli_hunks = cli
-        .diff_hunks(&head, "README.md")
-        .expect("cli diff_hunks");
+    let gix_hunks = gix.diff_hunks(&head, "README.md").expect("gix diff_hunks");
+    let cli_hunks = cli.diff_hunks(&head, "README.md").expect("cli diff_hunks");
     assert!(
         gix_hunks.is_empty(),
         "GixRepo::diff_hunks is documented as an empty-vec stub; \
