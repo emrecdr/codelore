@@ -15,6 +15,7 @@ use crate::analyses::{
     summary::SummaryRow,
 };
 use crate::{CodeLoreError, Result};
+use std::borrow::Cow;
 use std::io::Write;
 
 fn header<W: Write>(w: &mut W, title: &str) -> Result<()> {
@@ -23,12 +24,45 @@ fn header<W: Write>(w: &mut W, title: &str) -> Result<()> {
     Ok(())
 }
 
+/// Escape a string for safe inclusion inside a GFM table cell.
+///
+/// Per the GFM spec, an unescaped `|` inside a cell ends the cell —
+/// every subsequent character on the line lands in the next column,
+/// so a single stray pipe in a path / author name / commit message
+/// silently corrupts the entire row's column alignment. The escape is
+/// a leading backslash on the pipe character.
+///
+/// Newlines and carriage returns inside a cell are GFM-unsupported
+/// entirely (the table row terminates at the line break), so they get
+/// replaced with the visual `↵` glyph to preserve the cell boundary
+/// rather than break the row.
+///
+/// Returns `Cow::Borrowed` for the common case (no escape needed) so
+/// the happy path is allocation-free. The borrow checker thread-of-
+/// life this preserves matters here — every analysis emits hundreds
+/// to thousands of rows and the markdown emitter is a hot path for
+/// the `$GITHUB_STEP_SUMMARY` flow.
+fn escape_md_cell(s: &str) -> Cow<'_, str> {
+    if !s.contains('|') && !s.contains('\n') && !s.contains('\r') {
+        return Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len() + 4);
+    for c in s.chars() {
+        match c {
+            '|' => out.push_str("\\|"),
+            '\n' | '\r' => out.push('↵'),
+            other => out.push(other),
+        }
+    }
+    Cow::Owned(out)
+}
+
 pub fn write_revisions_markdown<W: Write>(rows: &[(String, u32)], w: &mut W) -> Result<()> {
     header(w, "CodeLore revisions")?;
     writeln!(w, "| Entity | Revisions |").map_err(CodeLoreError::Io)?;
     writeln!(w, "|---|---|").map_err(CodeLoreError::Io)?;
     for (path, n) in rows {
-        writeln!(w, "| `{path}` | {n} |").map_err(CodeLoreError::Io)?;
+        writeln!(w, "| `{}` | {n} |", escape_md_cell(path)).map_err(CodeLoreError::Io)?;
     }
     Ok(())
 }
@@ -66,7 +100,7 @@ pub fn write_hotspots_markdown<W: Write>(rows: &[HotspotRow], w: &mut W) -> Resu
         writeln!(
             w,
             "| `{}` | {} | {:.2} | {:.2} | {:.4} | {} | {} |",
-            row.path,
+            escape_md_cell(&row.path),
             row.revisions,
             row.cognitive,
             row.code_health,
@@ -87,7 +121,9 @@ pub fn write_code_health_markdown<W: Write>(rows: &[CodeHealthRow], w: &mut W) -
         writeln!(
             w,
             "| `{}` | {:.2} | {:.2} |",
-            row.path, row.cognitive, row.score
+            escape_md_cell(&row.path),
+            row.cognitive,
+            row.score
         )
         .map_err(CodeLoreError::Io)?;
     }
@@ -103,7 +139,10 @@ pub fn write_code_age_markdown<W: Write>(rows: &[CodeAgeRow], w: &mut W) -> Resu
         writeln!(
             w,
             "| `{}` | {} | {} | {} |",
-            row.path, row.age_months, row.age_days, row.last_modified
+            escape_md_cell(&row.path),
+            row.age_months,
+            row.age_days,
+            row.last_modified
         )
         .map_err(CodeLoreError::Io)?;
     }
@@ -133,7 +172,10 @@ pub fn write_author_churn_markdown<W: Write>(rows: &[AuthorChurnRow], w: &mut W)
         writeln!(
             w,
             "| {} | {} | {} | {} |",
-            row.author, row.added, row.deleted, row.commits
+            escape_md_cell(&row.author),
+            row.added,
+            row.deleted,
+            row.commits
         )
         .map_err(CodeLoreError::Io)?;
     }
@@ -148,7 +190,10 @@ pub fn write_entity_churn_markdown<W: Write>(rows: &[EntityChurnRow], w: &mut W)
         writeln!(
             w,
             "| `{}` | {} | {} | {} |",
-            row.path, row.added, row.deleted, row.commits
+            escape_md_cell(&row.path),
+            row.added,
+            row.deleted,
+            row.commits
         )
         .map_err(CodeLoreError::Io)?;
     }
@@ -164,7 +209,11 @@ pub fn write_communication_markdown<W: Write>(rows: &[CommunicationRow], w: &mut
         writeln!(
             w,
             "| {} | {} | {} | {} | {:.2} |",
-            row.author_a, row.author_b, row.shared, row.average, row.strength
+            escape_md_cell(&row.author_a),
+            escape_md_cell(&row.author_b),
+            row.shared,
+            row.average,
+            row.strength
         )
         .map_err(CodeLoreError::Io)?;
     }
@@ -180,7 +229,10 @@ pub fn write_ownership_markdown<W: Write>(rows: &[OwnershipRow], w: &mut W) -> R
         writeln!(
             w,
             "| `{}` | {} | {} | {:.4} |",
-            row.path, row.main_author, row.total_revs, row.fractal_value
+            escape_md_cell(&row.path),
+            escape_md_cell(&row.main_author),
+            row.total_revs,
+            row.fractal_value
         )
         .map_err(CodeLoreError::Io)?;
     }
@@ -196,7 +248,11 @@ pub fn write_coupling_markdown<W: Write>(rows: &[CouplingRow], w: &mut W) -> Res
         writeln!(
             w,
             "| `{}` | `{}` | {} | {:.2}% | {:.4} |",
-            row.entity_a, row.entity_b, row.shared, row.degree, row.fisher_p
+            escape_md_cell(&row.entity_a),
+            escape_md_cell(&row.entity_b),
+            row.shared,
+            row.degree,
+            row.fisher_p
         )
         .map_err(CodeLoreError::Io)?;
     }
@@ -208,7 +264,8 @@ pub fn write_summary_markdown<W: Write>(rows: &[SummaryRow], w: &mut W) -> Resul
     writeln!(w, "| Metric | Value |").map_err(CodeLoreError::Io)?;
     writeln!(w, "|---|---|").map_err(CodeLoreError::Io)?;
     for row in rows {
-        writeln!(w, "| {} | {} |", row.metric, row.value).map_err(CodeLoreError::Io)?;
+        writeln!(w, "| {} | {} |", escape_md_cell(&row.metric), row.value,)
+            .map_err(CodeLoreError::Io)?;
     }
     Ok(())
 }
@@ -226,8 +283,8 @@ pub fn write_clones_markdown<W: Write>(rows: &[ClonesRow], w: &mut W) -> Result<
             w,
             "| {} | `{}` | `{}` | {}-{} | {} | {:.4} | {} |",
             row.clone_group_id,
-            row.entity,
-            row.function,
+            escape_md_cell(&row.entity),
+            escape_md_cell(&row.function),
             row.start_line,
             row.end_line,
             row.node_count,
@@ -251,12 +308,12 @@ pub fn write_authors_markdown<W: Write>(rows: &[AuthorsRow], w: &mut W) -> Resul
         writeln!(
             w,
             "| `{}` | {} | {} | {} | {} | {} | {} |",
-            row.entity,
+            escape_md_cell(&row.entity),
             row.n_authors,
             row.n_humans,
             row.n_bots,
             row.n_revs,
-            row.last_author,
+            escape_md_cell(&row.last_author),
             row.last_modified,
         )
         .map_err(CodeLoreError::Io)?;
@@ -279,7 +336,7 @@ pub fn write_top_committers_markdown<W: Write>(
         writeln!(
             w,
             "| {} | {} | {} | {} | {} | {} | {} |",
-            row.author,
+            escape_md_cell(&row.author),
             row.commits,
             row.loc_added,
             row.loc_deleted,
@@ -307,8 +364,8 @@ pub fn write_knowledge_islands_markdown<W: Write>(
         writeln!(
             w,
             "| `{}` | {} | {:.2} | {} | {} | {} |",
-            row.entity,
-            row.main_author,
+            escape_md_cell(&row.entity),
+            escape_md_cell(&row.main_author),
             row.ownership_pct,
             row.days_since_main_active,
             row.last_main_author_commit,
@@ -327,7 +384,8 @@ pub fn write_soc_markdown<W: Write>(
     writeln!(w, "| Entity | SoC |").map_err(CodeLoreError::Io)?;
     writeln!(w, "|---|---:|").map_err(CodeLoreError::Io)?;
     for row in rows {
-        writeln!(w, "| `{}` | {} |", row.entity, row.soc).map_err(CodeLoreError::Io)?;
+        writeln!(w, "| `{}` | {} |", escape_md_cell(&row.entity), row.soc)
+            .map_err(CodeLoreError::Io)?;
     }
     Ok(())
 }
@@ -340,7 +398,8 @@ pub fn write_messages_markdown<W: Write>(
     writeln!(w, "| Entity | Matches |").map_err(CodeLoreError::Io)?;
     writeln!(w, "|---|---:|").map_err(CodeLoreError::Io)?;
     for row in rows {
-        writeln!(w, "| `{}` | {} |", row.entity, row.matches).map_err(CodeLoreError::Io)?;
+        writeln!(w, "| `{}` | {} |", escape_md_cell(&row.entity), row.matches,)
+            .map_err(CodeLoreError::Io)?;
     }
     Ok(())
 }
@@ -363,7 +422,11 @@ fn write_main_dev_markdown_with_headers<W: Write>(
         writeln!(
             w,
             "| `{}` | {} | {} | {} | {:.2} |",
-            row.entity, row.main_dev, row.metric, row.total, row.ownership,
+            escape_md_cell(&row.entity),
+            escape_md_cell(&row.main_dev),
+            row.metric,
+            row.total,
+            row.ownership,
         )
         .map_err(CodeLoreError::Io)?;
     }
@@ -420,7 +483,10 @@ pub fn write_entity_effort_markdown<W: Write>(
         writeln!(
             w,
             "| `{}` | {} | {} | {} |",
-            row.entity, row.author, row.author_revs, row.total_revs,
+            escape_md_cell(&row.entity),
+            escape_md_cell(&row.author),
+            row.author_revs,
+            row.total_revs,
         )
         .map_err(CodeLoreError::Io)?;
     }
@@ -438,7 +504,10 @@ pub fn write_entity_ownership_markdown<W: Write>(
         writeln!(
             w,
             "| `{}` | {} | {} | {} |",
-            row.entity, row.author, row.added, row.deleted,
+            escape_md_cell(&row.entity),
+            escape_md_cell(&row.author),
+            row.added,
+            row.deleted,
         )
         .map_err(CodeLoreError::Io)?;
     }
@@ -462,8 +531,8 @@ pub fn write_clone_coupling_markdown<W: Write>(rows: &[CloneCouplingRow], w: &mu
             "| {} | {} | `{}` | `{}` | {} | {:.2}% | {:.4} |",
             if row.at_risk { "**⚠**" } else { "" },
             row.clone_group_id,
-            row.file_a,
-            row.file_b,
+            escape_md_cell(&row.file_a),
+            escape_md_cell(&row.file_b),
             row.shared_revs,
             row.degree_pct * 100.0,
             row.combined_score,
@@ -485,7 +554,11 @@ pub fn write_centrality_markdown<W: Write>(
         writeln!(
             w,
             "| `{}` | {} | {:.2} | {:.4} | {:.4} |",
-            row.path, row.degree, row.weighted_degree, row.pagerank, row.eigenvector,
+            escape_md_cell(&row.path),
+            row.degree,
+            row.weighted_degree,
+            row.pagerank,
+            row.eigenvector,
         )
         .map_err(CodeLoreError::Io)?;
     }
@@ -509,9 +582,59 @@ pub fn write_communities_markdown<W: Write>(
         writeln!(
             w,
             "| {} | {} | `{}` |",
-            row.community_id, row.community_size, row.path,
+            row.community_id,
+            row.community_size,
+            escape_md_cell(&row.path),
         )
         .map_err(CodeLoreError::Io)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod escape_tests {
+    use super::escape_md_cell;
+    use std::borrow::Cow;
+
+    /// Common case: no special characters → borrow the input.
+    #[test]
+    fn plain_string_is_borrowed() {
+        let s = "src/main.rs";
+        match escape_md_cell(s) {
+            Cow::Borrowed(out) => assert_eq!(out, s),
+            Cow::Owned(_) => panic!("expected borrow, got owned allocation"),
+        }
+    }
+
+    /// A literal `|` in a path / author name / commit message gets
+    /// backslash-escaped so GFM renders the row with the correct column
+    /// count instead of treating the pipe as a cell terminator.
+    #[test]
+    fn pipe_is_backslash_escaped() {
+        let out = escape_md_cell("path/with|pipe.rs");
+        assert_eq!(out, "path/with\\|pipe.rs");
+    }
+
+    /// Multiple pipes within a single cell — each escaped.
+    #[test]
+    fn multiple_pipes_each_escaped() {
+        let out = escape_md_cell("a|b|c");
+        assert_eq!(out, "a\\|b\\|c");
+    }
+
+    /// Newlines inside a cell terminate the GFM row entirely. Substitute
+    /// the visual `↵` glyph so the row stays intact.
+    #[test]
+    fn newline_becomes_arrow_glyph() {
+        let out = escape_md_cell("line1\nline2");
+        assert_eq!(out, "line1↵line2");
+    }
+
+    /// Mixed payload — verifies the loop handles each special character
+    /// independently and preserves all other characters verbatim.
+    #[test]
+    fn mixed_special_chars_pipe_and_newline() {
+        let out = escape_md_cell("a|b\nc");
+        assert_eq!(out, "a\\|b↵c");
+    }
 }

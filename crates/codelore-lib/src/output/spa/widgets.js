@@ -200,6 +200,27 @@
     container._codeloreResizeObserver = ro;
   }
 
+  // Single-call helper for the ECharts widget lifecycle:
+  //   1. Dispose any prior instance bound to the same DOM node — without
+  //      this, re-render leaks the old instance (caches stale state +
+  //      keeps its event listeners alive).
+  //   2. Create a fresh instance with the canvas renderer.
+  //   3. Wire the resize observer so the chart tracks container size.
+  // Five widgets used to repeat this triplet verbatim; the next bug fix
+  // for any one of them would have had to touch every site (the dispose-
+  // drift class of regression that earlier work explicitly fixed).
+  //
+  // Callers still set the option via `chart.setOption(...)` themselves —
+  // each widget's option shape is bespoke, so wrapping that step in here
+  // would just hide the widget's most-edited surface behind an argument.
+  function mountEcharts(container) {
+    const prior = echarts.getInstanceByDom(container);
+    if (prior) prior.dispose();
+    const chart = echarts.init(container, null, { renderer: 'canvas' });
+    bindChartResize(chart, container);
+    return chart;
+  }
+
   function renderHotspotCirclePack(rows, colorMode) {
     const container = document.getElementById('widget-hotspot-circle-pack-body');
     if (!container) return;
@@ -257,9 +278,7 @@
     // The custom series renders one shape per node; we draw circles
     // sized + positioned exactly per d3's layout. Color encodes
     // cognitive complexity (leaves only) on a yellow→red ramp.
-    const prior = echarts.getInstanceByDom(container);
-    if (prior) prior.dispose();
-    const chart = echarts.init(container, null, { renderer: 'canvas' });
+    const chart = mountEcharts(container);
     const nodes = root.descendants();
     const maxCognitive = nodes.reduce(function (acc, n) {
       const cog = n.data.metrics ? n.data.metrics.cognitive : 0;
@@ -376,7 +395,6 @@
       }
     });
 
-    bindChartResize(chart, container);
   }
 
   function renderHotspotTable(rows) {
@@ -794,9 +812,7 @@
       return { name: name };
     });
 
-    const prior = echarts.getInstanceByDom(container);
-    if (prior) prior.dispose();
-    const chart = echarts.init(container, null, { renderer: 'canvas' });
+    const chart = mountEcharts(container);
     chart.setOption({
       tooltip: {
         trigger: 'item',
@@ -827,7 +843,6 @@
       }
     });
 
-    bindChartResize(chart, container);
   }
 
   // -----------------------------------------------------------------
@@ -1028,9 +1043,7 @@
       };
     });
 
-    const prior = echarts.getInstanceByDom(container);
-    if (prior) prior.dispose();
-    const chart = echarts.init(container, null, { renderer: 'canvas' });
+    const chart = mountEcharts(container);
     chart.setOption({
       tooltip: { trigger: 'axis' },
       legend: {
@@ -1054,7 +1067,6 @@
       },
       series: series,
     });
-    bindChartResize(chart, container);
   }
 
   // -----------------------------------------------------------------
@@ -1102,9 +1114,7 @@
       };
     });
 
-    const prior = echarts.getInstanceByDom(container);
-    if (prior) prior.dispose();
-    const chart = echarts.init(container, null, { renderer: 'canvas' });
+    const chart = mountEcharts(container);
     chart.setOption({
       tooltip: {
         formatter: function (params) {
@@ -1127,7 +1137,6 @@
       calendar: calendars,
       series: series,
     });
-    bindChartResize(chart, container);
   }
 
   // -----------------------------------------------------------------
@@ -1192,9 +1201,7 @@
       }
     }
 
-    const prior = echarts.getInstanceByDom(container);
-    if (prior) prior.dispose();
-    const chart = echarts.init(container, null, { renderer: 'canvas' });
+    const chart = mountEcharts(container);
     chart.setOption({
       tooltip: {
         formatter: function (params) {
@@ -1218,11 +1225,24 @@
         // path segment) is dark, ring 2 (file) is mid. Ring 3 (function
         // leaves) is overridden per-node by the heatmap colour assigned
         // above — the empty entry below disables the default ramp.
+        // Container-ring fills + label colors pulled from CSS vars so
+        // they swap on theme toggle (the `_codeloreRerenderers` registry
+        // re-runs this widget when `$store.theme.isDark` flips, which
+        // re-evaluates the getCssVar calls against the new theme). The
+        // leaf-ring label color stays dark across themes because it sits
+        // on the saturated heatmap (yellow→red) where light text would
+        // drop below WCAG AA contrast on the yellow end.
         levels: [
           {},
-          { itemStyle: { color: '#1f3f29' }, label: { color: '#fff', fontSize: 11 } },
-          { itemStyle: { color: '#2c5d3a' }, label: { color: '#fff', fontSize: 10 } },
-          { label: { color: '#1a1a1a', fontSize: 9 } },
+          {
+            itemStyle: { color: getCssVar('--xray-ring-1') },
+            label: { color: getCssVar('--xray-ring-label'), fontSize: 11 },
+          },
+          {
+            itemStyle: { color: getCssVar('--xray-ring-2') },
+            label: { color: getCssVar('--xray-ring-label'), fontSize: 10 },
+          },
+          { label: { color: getCssVar('--xray-leaf-label'), fontSize: 9 } },
         ],
       }],
     });
@@ -1234,7 +1254,6 @@
       }
     });
 
-    bindChartResize(chart, container);
   }
 
   // -----------------------------------------------------------------

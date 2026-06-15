@@ -55,6 +55,22 @@
       --accent-warn: #f59e0b;
       --accent-danger: #e0584e;
       --border: #2a2a2a;
+      /* X-Ray sunburst container-ring fills. The two outer rings sit
+         on the elevated card background; the third (leaf) ring is the
+         heatmap (yellow→red) that widgets.js paints inline based on
+         cognitive complexity. Ring colors here only style the
+         containers, not the leaves. Dark-theme defaults — light-theme
+         overrides below.
+
+         The leaf label sits on top of saturated heatmap colors, so it
+         needs to remain dark-on-light regardless of theme to clear
+         WCAG AA contrast (~4.5:1 against the yellow end of the
+         ramp). Hence the leaf label color is the same across themes;
+         only the container-ring fills swap. */
+      --xray-ring-1: #1f3f29;
+      --xray-ring-2: #2c5d3a;
+      --xray-ring-label: #ffffff;
+      --xray-leaf-label: #1a1a1a;
     }
     * { box-sizing: border-box; }
     body {
@@ -439,6 +455,13 @@
       --accent-warn: #c97600;
       --accent-danger: #b53935;
       --border: #e0e0e0;
+      /* Light-theme sunburst rings: lift the saturated dark-greens
+         off the elevated card so they're still distinguishable on a
+         light background. Leaf-label color held constant — the leaf
+         fill is the heatmap (yellow→red), not the theme. */
+      --xray-ring-1: #5c8a6a;
+      --xray-ring-2: #8fb59c;
+      --xray-ring-label: #1a1a1a;
     }
     footer {
       padding: 20px 28px;
