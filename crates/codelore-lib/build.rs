@@ -56,7 +56,6 @@
 
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// One vendored JS dependency. The pinned SHA-256 is the
@@ -218,16 +217,32 @@ fn fetch_and_pin(asset: &AssetPin, dest: &Path) {
 }
 
 fn download(url: &str) -> Result<Vec<u8>, String> {
-    let resp = ureq::get(url)
-        .timeout(std::time::Duration::from_mins(2))
+    // ureq 3 surface notes:
+    // - Per-request timeout lives under `.config().timeout_global(...)`
+    //   (ureq 2 had a top-level `.timeout(...)` method; gone in v3).
+    // - Non-2xx responses are returned as `Err(Error::StatusCode(code))`
+    //   by default, so the explicit `resp.status() != 200` check the
+    //   v2 code did is now redundant — `.call()?` covers it.
+    // - Body consumption: ureq 2's `into_reader().read_to_end(&mut buf)`
+    //   chain replaced by `body_mut().with_config().limit(N).read_to_vec()`.
+    //   The default 10 MB limit would actually cover every CDN asset we
+    //   fetch today (ECharts ≈ 1.1 MB, others all sub-100 KB), but we
+    //   pin an explicit 8 MB limit anyway so an upstream CDN-side
+    //   compromise that swaps one of our pinned assets for a giant
+    //   payload fails fast instead of consuming heap unbounded — the
+    //   SHA-256 check downstream would still catch the substitution,
+    //   but the limit makes the failure cheaper.
+    let mut resp = ureq::get(url)
+        .config()
+        .timeout_global(Some(std::time::Duration::from_mins(2)))
+        .build()
         .call()
         .map_err(|e| format!("ureq call: {e}"))?;
-    if resp.status() != 200 {
-        return Err(format!("HTTP {} from CDN", resp.status()));
-    }
-    let mut buf = Vec::with_capacity(1_200_000);
-    resp.into_reader()
-        .read_to_end(&mut buf)
+    let buf = resp
+        .body_mut()
+        .with_config()
+        .limit(8 * 1024 * 1024)
+        .read_to_vec()
         .map_err(|e| format!("read body: {e}"))?;
     Ok(buf)
 }
