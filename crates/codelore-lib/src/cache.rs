@@ -1,5 +1,4 @@
 //! Persistent fact-store cache: key derivation + XDG path resolution.
-//! Plan 8 §3 — Tasks 11-14.
 //!
 //! Cache path layout:
 //!   `$XDG_CACHE_HOME/codelore/<repo_hash_8>/<cache_key_16>.duckdb`
@@ -18,7 +17,7 @@ use crate::Options;
 
 /// Schema version sentinel. Bump whenever the `DuckDB` schema changes so that
 /// old cache files are not opened with a new schema.
-const SCHEMA_VERSION: &str = "schema_v2";
+const SCHEMA_VERSION: &str = "schema_v3";
 
 /// Compute a 32-byte SHA-256 cache key from:
 ///   `canonical_repo_path || NUL || head_sha || NUL || CARGO_PKG_VERSION || NUL`
@@ -327,10 +326,9 @@ pub fn cleanup_stale_tmp_files(dir: &Path) {
             continue;
         };
         // Match either `<stem>.duckdb.tmp.<pid>` or
-        // `<stem>.duckdb.tmp.<pid>.wal`. `.duckdb.tmp` (no PID suffix,
-        // legacy v0.3.0-era artifact) is also swept for forward
-        // compatibility — the fixed-path scheme couldn't survive any
-        // concurrent run.
+        // `<stem>.duckdb.tmp.<pid>.wal`. The bare `.duckdb.tmp` (no
+        // PID suffix) is also swept for forward compatibility —
+        // a fixed-path scheme couldn't survive any concurrent run.
         if !name.contains(".duckdb.tmp") {
             continue;
         }

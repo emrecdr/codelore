@@ -4,7 +4,7 @@ This guide is the developer-facing reference for CodeLore. The [README](../READM
 
 ## Table of contents
 
-1. [The 23 analyses (what they tell you)](#1-the-23-analyses-what-they-tell-you)
+1. [The 31 analyses (what they tell you)](#1-the-31-analyses-what-they-tell-you)
 2. [Output formats deep-dive](#2-output-formats-deep-dive)
 3. [Every CLI flag explained](#3-every-cli-flag-explained)
 4. [PR-mode: `codelore diff`](#4-pr-mode-codelore-diff)
@@ -20,9 +20,9 @@ This guide is the developer-facing reference for CodeLore. The [README](../READM
 
 ---
 
-## 1. The 23 analyses (what they tell you)
+## 1. The 31 analyses (what they tell you)
 
-The table below is split into the **17 code-maat-parity analyses** (drop-in successors to legacy code-maat), **1 modern signal** (`top-committers` — a first-class per-author leaderboard that code-maat approximated via `-a author-churn` + sort), and **4 modern additions** marked ★ that CodeLore introduces (the SARIF-backed differentiators).
+The table below is split into the **17 code-maat-parity analyses** (drop-in successors to legacy code-maat), **1 modern signal** (`top-committers` — a first-class per-author leaderboard that code-maat approximated via `-a author-churn` + sort), **4 modern foundations** marked ★ (the SARIF-backed differentiators), **3 graph-analytics analyses** marked ★ (knowledge-islands + centrality + communities), and **6 architecture-analytics analyses** marked ★★ (god-classes + architecture-violations + stale-code + pair-programming + lead-time + bus-factor — see `docs/maximum-feature-plan.md`).
 
 ### Code-maat parity (17) + modern signal
 
@@ -56,7 +56,41 @@ The table below is split into the **17 code-maat-parity analyses** (drop-in succ
 | `clones` ★ | "Where is code copy-pasted?" | Type 1 + Type 2 via AST structural hashing on tree-sitter | Refactoring candidates |
 | `clone-coupling` ★ | "Which copy-pasted blocks ALSO change together?" (the strategic differentiator) | Clones JOIN coupling, Fisher-significant only | Live debt that hurts you on every change |
 
+### Graph-analytics tier (3 ★)
+
+| Analysis | What you ask it | Formula / source | When to reach for it |
+|---|---|---|---|
+| `knowledge-islands` ★ | "Which files are at risk because their primary author is gone?" | Bird et al. 2011 + departed-author detection | Bus-factor risk surfaced automatically (no manual ex-developer marking) |
+| `centrality` ★ | "Which files are most central in the coupling graph?" | Degree / weighted-degree / PageRank on the Fisher-significant coupling graph | Network-centrality lens (Newman 2010 §7) |
+| `communities` ★ | "What are the actual Conway's-law clusters?" | Leiden algorithm (Traag, Waltman, van Eck 2019) on the coupling graph | Auto-detect socio-technical modules |
+
+### Architecture-analytics tier (6 ★★)
+
+| Analysis | What you ask it | Formula / source | When to reach for it |
+|---|---|---|---|
+| `god-classes` ★★ | "Which files are gnarly AND coupled AND depended-upon?" | `(cognitive / 100) × (fan_in + fan_out)` (Brown et al. 1998 AntiPatterns §3.1) | Pick refactor targets that hit every dimension |
+| `architecture-violations` ★★ | "Are layer boundaries respected?" | Imports crossing forbidden boundaries per `.codelore-arch-rules.toml` | CI gate for layered architecture |
+| `stale-code` ★★ | "Which trivial files are likely abandoned?" | Alive at HEAD AND untouched ≥12 months AND `max(cognitive) ≤ 5` | Delete-candidate surfacing (intersection minimises false positives) |
+| `pair-programming` ★★ | "Who pair-programs with whom?" | `Co-Authored-By:` trailer aggregation per author pair | Team-topology / mentoring signal |
+| `lead-time` ★★ | "How long does code sit before shipping?" | Per-commit author-date → committer-date delta (DORA Accelerate) | Cycle-time monitoring |
+| `bus-factor` ★★ | "What's our per-module bus factor?" | Filatov 2010 — minimum N authors covering ≥80% of a module's commits | Module-level Key Personnel (CodeScene shows file-level; this is the actionable view) |
+
 All analyses are pure SQL views over the DuckDB fact store + thin Rust orchestrators. You can run any analysis at any output format.
+
+### CLI subcommands beyond `analyze` + `diff`
+
+```bash
+codelore explain <metric>           # formula + citation + SQL source for any metric
+codelore check                      # quality-gate validation against .codelore-thresholds.toml
+codelore check --diff base..head    # PR-mode quality gate
+codelore profile                    # operational telemetry
+codelore docs                       # markdown analysis catalogue
+codelore notes <base>..<head>       # release-notes markdown summary
+codelore completions <shell>        # bash | zsh | fish | powershell | elvish
+codelore schema <row-type>          # JSON Schema 2020-12 emit
+```
+
+`codelore check` writes `result=pass|fail` + `violations=N` to `$GITHUB_OUTPUT` when the env var is set — direct GitHub Actions step-output integration.
 
 ## 2. Output formats deep-dive
 
@@ -569,7 +603,7 @@ codescene/
 │   ├── codelore-lib/                     # the library
 │   │   ├── src/
 │   │   │   ├── facts/                    # DuckDB fact store + ingest pipeline
-│   │   │   ├── analyses/                 # the 23 analyses (one file each)
+│   │   │   ├── analyses/                 # the 31 analyses (one file each)
 │   │   │   ├── output/                   # 6 format emitters
 │   │   │   ├── repo/                     # GixRepo + GitCliRepo + Repo trait
 │   │   │   ├── complexity/               # tree-sitter dispatch + ComplexityEntity

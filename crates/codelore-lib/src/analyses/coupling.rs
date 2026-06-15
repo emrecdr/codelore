@@ -540,10 +540,10 @@ mod density_tests {
 
     #[test]
     fn density_matches_empirical_codelore_repo() {
-        // Empirically measured on the CodeLore repo at v0.4.4: 59
-        // candidate nodes (files with revs >= min_revs after the
-        // good_commits pre-filter) and 47 Fisher-significant edges. The
-        // `~0.0275` figure documents the calibration in
+        // Empirically measured on the CodeLore repo: 59 candidate
+        // nodes (files with revs >= min_revs after the good_commits
+        // pre-filter) and 47 Fisher-significant edges. The `~0.0275`
+        // figure documents the calibration in
         // research-foundations.md. NOTE: the denominator uses the
         // FULL candidate set including isolated nodes (no coupling
         // partners), matching graphology / Newman convention.

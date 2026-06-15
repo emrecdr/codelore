@@ -13,9 +13,9 @@ use crate::{Options, Result};
 
 /// Returns the table name to use as the change source for `opts`.
 ///
-/// Precedence: `--time-bucket` wins (the 4-way `changes_bucketed_lineage`
-/// matrix is a v0.1.2 follow-up); canonical lineage second; raw `changes`
-/// otherwise.
+/// Precedence: `--time-bucket` wins (a 4-way `changes_bucketed_lineage`
+/// matrix is a planned enhancement); canonical lineage second; raw
+/// `changes` otherwise.
 #[must_use]
 pub fn source_table(opts: &Options) -> &'static str {
     if opts.time_bucket.is_some() {
@@ -203,13 +203,13 @@ mod tests {
         assert!(out.contains("changes.rev = commits.rev"));
     }
 
-    /// NEW-C regression: prior to v0.1.4 the rewriter used a case-based
-    /// alias-vs-keyword discriminator (next char uppercase → keyword,
-    /// lowercase → alias). Lowercase SQL therefore parsed `group` as if it
-    /// were a user-supplied alias and produced
-    /// `FROM changes_lineage group BY path` — a parse error. The
-    /// case-insensitive keyword-whitelist replacement handles both
-    /// canonical-case and lowercase variants the same way.
+    /// Regression guard: a naive case-based alias-vs-keyword
+    /// discriminator (next char uppercase → keyword, lowercase →
+    /// alias) parses `group` in lowercase SQL as if it were a user-
+    /// supplied alias and produces `FROM changes_lineage group BY
+    /// path` — a parse error. The case-insensitive keyword-whitelist
+    /// replacement handles both canonical-case and lowercase
+    /// variants the same way.
     #[test]
     fn rewrite_handles_lowercase_sql_keywords() {
         let sql = "select path from changes\ngroup by path";

@@ -64,6 +64,34 @@ pub enum AnalysisName {
     // number. CodeLore's strategic differentiator vs CodeScene
     // (paywalled there).
     Communities,
+    // God-class detector — files where high cognitive complexity
+    // intersects with high coupling (fan_in + fan_out via the
+    // imports table). Brown et al. 1998 AntiPatterns. Consumes the
+    // architecture import graph; fan_in accuracy follows the
+    // resolver's language coverage (Rust + Python + JS/TS today,
+    // Java FQN→file mapping skipped).
+    GodClasses,
+    // Layered-architecture rule validation. Consumes
+    // `.codelore-arch-rules.toml` at the repo root + the imports
+    // table; flags every import edge that crosses a forbidden layer
+    // boundary. No rules file → empty output (opt-in).
+    ArchViolations,
+    // Stale-code surfacer — files alive at HEAD untouched ≥N months
+    // AND low cognitive (trivial). Intersection minimises false
+    // positives.
+    StaleCode,
+    // Pair-programming detector — counts commits sharing one or
+    // more `Co-Authored-By:` trailers, by unique author pair.
+    // Surfaces who pair-programs with whom.
+    PairProgramming,
+    // Lead-time per commit (DORA metric). Today's schema carries
+    // only committer date so rows ship zero lead-time; a future
+    // schema bump adds author_date and surfaces real review-time
+    // values.
+    LeadTime,
+    // Per-module bus factor (Filatov 2010). Module = top-level
+    // directory or --group-file group.
+    BusFactor,
 }
 
 impl AnalysisName {
@@ -95,6 +123,12 @@ impl AnalysisName {
             Self::KnowledgeIslands => "knowledge-islands",
             Self::Centrality => "centrality",
             Self::Communities => "communities",
+            Self::GodClasses => "god-classes",
+            Self::ArchViolations => "architecture-violations",
+            Self::StaleCode => "stale-code",
+            Self::PairProgramming => "pair-programming",
+            Self::LeadTime => "lead-time",
+            Self::BusFactor => "bus-factor",
         }
     }
 
@@ -126,6 +160,12 @@ impl AnalysisName {
             Self::KnowledgeIslands,
             Self::Centrality,
             Self::Communities,
+            Self::GodClasses,
+            Self::ArchViolations,
+            Self::StaleCode,
+            Self::PairProgramming,
+            Self::LeadTime,
+            Self::BusFactor,
         ]
     }
 

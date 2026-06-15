@@ -1,0 +1,96 @@
+//! `stale-code` analysis.
+//!
+//! Surfaces files that are alive at HEAD but haven't been touched in
+//! N+ months AND carry low cognitive complexity — the signature of
+//! code that's likely unused / abandoned but hasn't been deleted.
+//! Defaults: 12 months untouched + cognitive ≤ 5 (functions /
+//! constants / boilerplate). The intersection minimises false
+//! positives: critical low-complexity code (config / constants) that
+//! was recently TOUCHED stays in the codebase; the surfacing list is
+//! files that are BOTH small AND forgotten.
+//!
+//! Output is sorted by months-since-touch DESC so the worst
+//! offenders sit at the top.
+
+use duckdb::params;
+
+use crate::facts::FactsDb;
+use crate::{Options, Result};
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct StaleCodeRow {
+    pub path: String,
+    /// Calendar-date string of the most recent change to this file.
+    pub last_touched: String,
+    pub months_since_touched: u32,
+    /// Max cognitive across this file's entities. Files where every
+    /// entity is below the cognitive threshold are candidates; the
+    /// per-file max reported here is the highest of those.
+    pub max_cognitive: f64,
+}
+
+/// Default minimum age in months. Matches the "abandoned" heuristic
+/// used by code-maat's `code-age` follow-ups.
+const DEFAULT_MIN_MONTHS: u32 = 12;
+
+/// Default upper bound on cognitive complexity. Sonar's "trivial"
+/// threshold sits at 5 (file-level max).
+const DEFAULT_MAX_COGNITIVE: f64 = 5.0;
+
+const SQL: &str = "
+    WITH live_paths AS (
+        SELECT path, MAX(date) AS last_touched
+        FROM changes
+        INNER JOIN commits USING (rev)
+        GROUP BY path
+        HAVING MAX(CASE WHEN change_type = 'deleted' THEN 1 ELSE 0 END) = 0
+    ),
+    file_complexity AS (
+        SELECT path, MAX(cognitive) AS max_cognitive
+        FROM complexity_metrics
+        WHERE cognitive IS NOT NULL
+        GROUP BY path
+    )
+    SELECT
+        lp.path,
+        CAST(CAST(lp.last_touched AS DATE) AS TEXT) AS last_touched,
+        CAST(DATE_DIFF('month', lp.last_touched, CURRENT_DATE) AS UINTEGER) AS months_since,
+        COALESCE(fc.max_cognitive, 0)::DOUBLE AS max_cognitive
+    FROM live_paths lp
+    LEFT JOIN file_complexity fc ON fc.path = lp.path
+    WHERE DATE_DIFF('month', lp.last_touched, CURRENT_DATE) >= ?
+      AND COALESCE(fc.max_cognitive, 0) <= ?
+    ORDER BY months_since DESC, lp.path ASC
+    LIMIT ?
+";
+
+/// Run the `stale-code` analysis. Returns rows ranked by months-
+/// since-touch (highest first).
+///
+/// # Errors
+///
+/// Returns [`crate::CodeLoreError::Analysis`] on `DuckDB` errors.
+pub fn run_stale_code(db: &FactsDb, opts: &Options) -> Result<Vec<StaleCodeRow>> {
+    let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
+    super::query::explain_if_requested(
+        db,
+        SQL,
+        params![DEFAULT_MIN_MONTHS, DEFAULT_MAX_COGNITIVE, row_limit],
+        "stale-code",
+        opts,
+    )?;
+    super::query::query_map_collect(
+        db,
+        SQL,
+        params![DEFAULT_MIN_MONTHS, DEFAULT_MAX_COGNITIVE, row_limit],
+        "stale-code",
+        |r| {
+            Ok(StaleCodeRow {
+                path: r.get::<_, String>(0)?,
+                last_touched: r.get::<_, String>(1)?,
+                months_since_touched: r.get::<_, u32>(2)?,
+                max_cognitive: r.get::<_, f64>(3)?,
+            })
+        },
+    )
+}

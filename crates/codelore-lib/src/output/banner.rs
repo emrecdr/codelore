@@ -27,9 +27,9 @@ use anstyle::{AnsiColor, Style};
 
 /// Fixed 72-character box width — fits 80-col terminals with comfortable
 /// padding and renders cleanly in split-screen panes. Adaptive width via
-/// `terminal_size` was considered and rejected for v0.1.x: predictable output
-/// is more debuggable, and the box content is short enough that 72 cols never
-/// truncates a real value in practice.
+/// `terminal_size` was considered and rejected: predictable output is
+/// more debuggable, and the box content is short enough that 72 cols
+/// never truncates a real value in practice.
 const BOX_WIDTH: usize = 72;
 
 /// Outcome of the pre-flight gate. `Ready` is the only variant that allows

@@ -121,10 +121,10 @@ fn spa_emits_full_dashboard_from_differential_fixture() {
         "d3-hierarchy payload missing from emitted HTML",
     );
 
-    // Alpine.js + persist plugin — v0.5.x interactivity layer wiring.
-    // Tested via known minified-output substrings (Alpine ships under
-    // an IIFE that exposes `Alpine.start`; persist plugin registers
-    // via `Alpine.plugin`).
+    // Alpine.js + persist plugin — interactivity layer wiring. Tested
+    // via known minified-output substrings (Alpine ships under an
+    // IIFE that exposes `Alpine.start`; persist plugin registers via
+    // `Alpine.plugin`).
     assert!(
         html.contains("Alpine.start") || html.contains("alpinejs"),
         "Alpine.js payload missing from emitted HTML",

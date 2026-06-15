@@ -4,6 +4,15 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{{TITLE}}</title>
+  <!-- Inline PWA manifest via data URI keeps the single-file SPA
+       self-contained. iOS/Android browsers prompt "Add to Home
+       Screen" on this signal; the inline Service Worker registration
+       in the boot script delivers offline support so the dashboard
+       works on a plane / air-gap. -->
+  <link rel="manifest" href='data:application/json,{"name":"CodeLore","short_name":"CodeLore","description":"Behavioral code analysis dashboard","display":"standalone","start_url":"./","theme_color":"#1a1a1a","background_color":"#1a1a1a","icons":[]}'/>
+  <meta name="theme-color" content="#1a1a1a"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black"/>
 
   <!-- Anti-flash-of-wrong-theme guard. Runs BEFORE any CSS or markup
        is parsed below, so the `data-theme` attribute is in place by
@@ -102,11 +111,11 @@
        max-w-[1600px] mx-auto`). Nothing else in this stylesheet
        targets `main`. */
     .widget {
-      /* PR-7: `background` / `border` / `border-radius` removed —
-         DaisyUI's `card bg-base-200 shadow-lg` classes on the section
-         now provide elevation, fill, and rounded corners. `padding`
-         stays since DaisyUI's bare `.card` expects a `.card-body`
-         child for padding, which we don't restructure to. */
+      /* DaisyUI's `card bg-base-200 shadow-lg` classes on the
+         section provide elevation, fill, and rounded corners.
+         `padding` stays since DaisyUI's bare `.card` expects a
+         `.card-body` child for padding, which we don't restructure
+         to. */
       padding: 20px;
     }
     .widget h2 {
@@ -213,11 +222,11 @@
       gap: 12px;
     }
     .kpi-tile {
-      /* PR-7: `background` / `border` / `border-radius` / `padding`
-         removed — DaisyUI's `stat` class (added by
-         widgets.js::renderKpiTiles) now provides them. The empty
-         rule + selector is kept rather than deleted so any future
-         polish has a targeted home. */
+      /* DaisyUI's `stat` class (added by
+         widgets.js::renderKpiTiles) provides background, border,
+         border-radius, and padding. The empty rule + selector is
+         kept rather than deleted so any future polish has a
+         targeted home. */
     }
     .kpi-tile .kpi-label {
       color: var(--fg-dim);
@@ -378,11 +387,10 @@
       font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     }
     .drawer-close {
-      /* PR-7: `background` / `border` / `color` / `border-radius`
-         removed — DaisyUI's `btn btn-ghost btn-sm` classes (added in
-         PR-4's drawer markup) now provide them, including the hover
-         state. The sizing tokens stay for click-target consistency
-         with the v0.4.x drawer-close affordance. */
+      /* DaisyUI's `btn btn-ghost btn-sm` classes on the drawer
+         markup provide background / border / color / border-radius
+         and the hover state. The sizing tokens stay for click-target
+         consistency with the drawer-close affordance. */
       width: 28px;
       height: 28px;
       font-size: 18px;
@@ -479,9 +487,8 @@
 <body>
   <!-- DaisyUI `navbar` provides the horizontal flex layout + spacing
        tokens; the existing semantic `header { ... }` block in the
-       inline <style> still wins on background-color / border-color for
-       v0.4.x continuity, and gets cleanly removed in a later PR once
-       every consumer has migrated. -->
+       inline <style> still wins on background-color / border-color
+       for stylistic continuity. -->
   <header class="navbar">
     <h1>{{TITLE}}</h1>
     <div class="meta">
@@ -529,8 +536,8 @@
        (`xl:col-span-2`): hotspot circle-pack, trends, calendar
        heatmap, X-Ray sunburst, hotspot table, change-coupling
        sankey. Two compact widgets pair on row 1 (kpi-tiles +
-       knowledge-islands). 1600 px arbitrary cap matches the
-       v0.4.x dashboard width — `max-w-screen-2xl` (1536 px)
+       knowledge-islands). The 1600 px max-width matches the
+       dashboard's preferred layout — `max-w-screen-2xl` (1536 px)
        would shrink the dashboard on ultra-wide displays. -->
   <main class="max-w-[1600px] mx-auto grid grid-cols-1 xl:grid-cols-2 gap-7 p-7">
     <section class="widget card bg-base-200 shadow-lg" id="widget-kpi-tiles">
@@ -558,22 +565,121 @@
     <section class="widget card bg-base-200 shadow-lg xl:col-span-2" id="widget-hotspot-circle-pack">
       <h2>Hotspots</h2>
       <div class="subtitle">
-        Files sized by churn (revisions). Toggle the color mapping
-        between <b>complexity</b> (cognitive yellow→red), <b>knowledge
-        map</b> (primary author per file), and <b>AI attribution</b>
-        (filter by who wrote the code).
+        Files sized by churn (revisions). Toggle the colour mapping
+        across the behavioural lenses: <b>complexity</b> (cognitive
+        yellow→red), <b>code health</b> (DaisyUI 3-band), <b>tech-debt
+        friction</b> (Tornhill 2018 score), <b>knowledge map</b>
+        (primary author), <b>AI attribution</b>, and <b>clones</b>
+        (Type-1/Type-2 structural duplication). Files in the top
+        quartile of hotspot score wear a yellow ring overlay.
       </div>
-      <div class="widget-toolbar" id="hotspot-color-toggles">
-        <button type="button" data-mode="cognitive" class="toggle active">Complexity</button>
-        <button type="button" data-mode="author" class="toggle">Knowledge map</button>
-        <button type="button" data-mode="ai" class="toggle">AI attribution</button>
-        <!-- Clones overlay: yellow→red ramp on files that
-             appear in ≥ 1 clone family. Files with zero clone groups
-             render neutral grey, so structural-duplication hotspots
-             pop visually against the rest of the codebase. -->
-        <button type="button" data-mode="clones" class="toggle">Clones</button>
+      <!-- Offboarding scenario picker. DaisyUI `dropdown`
+           + native `<details>` for keyboard-accessible
+           open/close (no JS needed). Multi-select via
+           per-author checkboxes bound to `$store.scenario`.
+           Empty `available` list (no entity_ownership data,
+           older fixtures) collapses to a helpful message instead
+           of an empty menu. -->
+      <div class="flex flex-wrap gap-2 items-center mb-2">
+        <details class="dropdown">
+          <summary class="btn btn-sm btn-outline" aria-haspopup="listbox">
+            Simulate off-boarding
+            <span class="badge badge-sm badge-warning ml-1"
+                  x-show="$store.scenario.departed.length > 0"
+                  x-text="$store.scenario.departed.length"></span>
+          </summary>
+          <div class="dropdown-content menu menu-sm bg-base-100 rounded-box shadow-md p-2 z-10 max-h-80 overflow-y-auto w-72"
+               role="listbox" aria-multiselectable="true">
+            <template x-if="$store.scenario.available.length === 0">
+              <li><span class="opacity-60 px-2 py-1 text-xs">No author data available.</span></li>
+            </template>
+            <template x-for="author in $store.scenario.available" :key="author">
+              <li>
+                <label class="flex items-center gap-2 px-2 py-1 cursor-pointer">
+                  <input type="checkbox" class="checkbox checkbox-sm"
+                         :checked="$store.scenario.isDeparted(author)"
+                         @change="$store.scenario.toggle(author)" />
+                  <span class="truncate" x-text="author"></span>
+                </label>
+              </li>
+            </template>
+            <li x-show="$store.scenario.departed.length > 0" class="mt-1 border-t border-base-300 pt-1">
+              <button type="button" class="btn btn-xs btn-ghost w-full"
+                      @click="$store.scenario.clear()">
+                Clear scenario
+              </button>
+            </li>
+          </div>
+        </details>
+      </div>
+      <!-- DaisyUI `tabs tabs-boxed` accommodates the `health` /
+           `friction` / `knowledge-loss` modes cleanly and theme-
+           adapts automatically via DaisyUI's `--color-base-*`
+           tokens. Tailwind v4 sees every variant literal here so the
+           `@source` scanner keeps `tab` / `tab-active` in the
+           bundle. -->
+      <div role="tablist" class="tabs tabs-boxed" id="hotspot-color-toggles">
+        <button type="button" role="tab" data-mode="cognitive"      class="tab tab-active">Complexity</button>
+        <button type="button" role="tab" data-mode="health"         class="tab">Code health</button>
+        <button type="button" role="tab" data-mode="friction"       class="tab">Tech-debt friction</button>
+        <button type="button" role="tab" data-mode="author"         class="tab">Knowledge map</button>
+        <button type="button" role="tab" data-mode="ai"             class="tab">AI attribution</button>
+        <!-- Knowledge-loss mode: blue = current team, red =
+             code by departed authors per the offboarding scenario
+             dropdown above. Auto-pinged from the dropdown when the
+             user toggles their first author. -->
+        <button type="button" role="tab" data-mode="knowledge-loss" class="tab">Knowledge loss</button>
+        <!-- Clones overlay: yellow→red ramp on files that appear in
+             ≥ 1 clone family. Files with zero clone groups render
+             neutral grey, so structural-duplication hotspots pop
+             visually against the rest of the codebase. -->
+        <button type="button" role="tab" data-mode="clones"         class="tab">Clones</button>
       </div>
       <div id="widget-hotspot-circle-pack-body" class="widget-body"></div>
+      <!-- Parallel DOM tree — keyboard-accessible alternative for the
+           canvas circle-pack above. Per WAI-ARIA treeview, canvas
+           charts have no conformant aria-overlay path; the conformant
+           pattern is a real DOM tree whose treeitems share the same
+           activation handler as the canvas click. Collapsed by
+           default to keep the visual layout clean for mouse users —
+           opens via `<summary>` (native toggle, no JS), keyboard
+           activation respects Enter/Space per platform convention. -->
+      <details class="collapse collapse-arrow bg-base-300 mt-3">
+        <summary class="collapse-title text-sm font-medium">
+          Keyboard-accessible file list
+          (<span x-text="$store.dashboard.hotspots.length"></span>)
+        </summary>
+        <div class="collapse-content">
+          <menu role="tree" aria-label="Hotspot files"
+                class="menu menu-sm menu-vertical w-full">
+            <template x-if="$store.dashboard.hotspots.length === 0">
+              <li><span class="opacity-60 px-2 py-1">No hotspot data loaded.</span></li>
+            </template>
+            <template x-for="file in $store.dashboard.hotspots" :key="file.path">
+              <li role="none">
+                <a role="treeitem" tabindex="0"
+                   class="flex items-center justify-between gap-2"
+                   @click="window._codeloreShowDetail && window._codeloreShowDetail(file.path)"
+                   @keydown.enter.prevent="window._codeloreShowDetail && window._codeloreShowDetail(file.path)"
+                   @keydown.space.prevent="window._codeloreShowDetail && window._codeloreShowDetail(file.path)">
+                  <span class="truncate" x-text="file.path"></span>
+                  <!-- Code-health badge — DaisyUI semantic classes
+                       are complete literals so Tailwind v4 @source
+                       sees them. The 3-band cut matches
+                       widgets.js::codeHealthColor (≤40 / 41-70 / ≥71). -->
+                  <span class="badge badge-sm flex-shrink-0"
+                        :class="file.code_health == null ? 'badge-ghost'
+                              : file.code_health <= 40 ? 'badge-error'
+                              : file.code_health <= 70 ? 'badge-warning'
+                              : 'badge-success'"
+                        x-text="file.code_health != null ? file.code_health.toFixed(0) : '?'">
+                  </span>
+                </a>
+              </li>
+            </template>
+          </menu>
+        </div>
+      </details>
     </section>
 
     <section class="widget card bg-base-200 shadow-lg xl:col-span-2" id="widget-trends">
@@ -583,6 +689,93 @@
         Pattern shows where churn is intensifying or cooling off.
       </div>
       <div id="widget-trends-body" class="widget-body"></div>
+    </section>
+
+    <!-- Boxplot of cognitive complexity distribution across all
+         files. Quartiles + outliers in one glance — answers "how
+         lopsided is the cognitive tail?". -->
+    <section class="widget card bg-base-200 shadow-lg" id="widget-cognitive-boxplot">
+      <h2>Cognitive distribution</h2>
+      <div class="subtitle">
+        Box-and-whisker: median, quartiles, and outliers across every
+        file with measured complexity.
+      </div>
+      <div id="widget-cognitive-boxplot-body" class="widget-body" style="height: 220px;"></div>
+    </section>
+
+    <!-- Module-to-module chord diagram from the coupling pairs
+         aggregated by top-level directory. Surfaces cross-module
+         Conway's-law structure. -->
+    <section class="widget card bg-base-200 shadow-lg" id="widget-module-chord">
+      <h2>Module coupling</h2>
+      <div class="subtitle">
+        Inter-module change-coupling rolled up from the file-pair
+        graph by top-level directory.
+      </div>
+      <div id="widget-module-chord-body" class="widget-body" style="height: 320px;"></div>
+    </section>
+
+    <!-- Architecture force-graph from the resolved import edges.
+         Shows the actual structural dependency graph alongside the
+         behavioural coupling sankey above — disagreement between
+         the two signals is itself signal. -->
+    <section class="widget card bg-base-200 shadow-lg xl:col-span-2" id="widget-arch-graph">
+      <h2>Architecture graph</h2>
+      <div class="subtitle">
+        Force-directed import graph from the resolved imports
+        (Rust + Python + JS/TS). Compare to the behavioural coupling
+        sankey — agreement = healthy modularity; disagreement =
+        signal worth investigating.
+      </div>
+      <div id="widget-arch-graph-body" class="widget-body" style="height: 380px;"></div>
+    </section>
+
+    <!-- Treemap alternative view to the circle-pack. Same
+         `hotspots` data, rendered as nested rectangles. Strict
+         area encoding (cognitive complexity × revisions); useful
+         when size differences need to read exactly rather than
+         perceptually-via-circle-area. -->
+    <section class="widget card bg-base-200 shadow-lg xl:col-span-2" id="widget-hotspot-treemap">
+      <h2>Hotspots — treemap view</h2>
+      <div class="subtitle">
+        Same data as the circle-pack above, rendered as nested
+        rectangles for strict area-comparison readability.
+      </div>
+      <div id="widget-hotspot-treemap-body" class="widget-body" style="height: 320px;"></div>
+    </section>
+
+    <!-- Parallel coordinates over the top-20 hotspots. Each file
+         is one polyline crossing 5 axes: revisions / cognitive /
+         code-health / hotspot-score / MI. Hover a polyline to see
+         the file path; drag-select on any axis to filter the
+         visible set (ECharts native). Power-user analytical tool —
+         surfaces files that are outliers on multiple axes
+         simultaneously. -->
+    <section class="widget card bg-base-200 shadow-lg xl:col-span-2" id="widget-parallel-coords">
+      <h2>Multi-metric comparison</h2>
+      <div class="subtitle">
+        Top-20 hotspots across five behavioural axes. Drag on any
+        axis to filter — useful for "files high on cognitive AND
+        low on MI" cross-cuts.
+      </div>
+      <div id="widget-parallel-coords-body" class="widget-body" style="height: 320px;"></div>
+    </section>
+
+    <!-- Delivery Risk Sparkline. Per-commit risk bars over the last
+         30 non-merge commits, decomposed into peer-reviewed Kamei
+         JIT-SDP dimensions (size / spread / concurrency /
+         inexperience / entropy) in the tooltip. Beyond CodeScene:
+         their delivery-risk score is opaque; ours is citable
+         (Kamei et al. 2013, Hassan 2009). -->
+    <section class="widget card bg-base-200 shadow-lg xl:col-span-2" id="widget-kamei-risk">
+      <h2>Delivery risk · last 30 commits</h2>
+      <div class="subtitle">
+        Per-commit risk score composited from Kamei's JIT-SDP feature
+        vector (la, ld, nf, ndev, exp, entropy). Hover any bar to see
+        which dimension dominates that commit's risk.
+        Citations: Kamei et al. 2013 · Hassan 2009.
+      </div>
+      <div id="widget-kamei-risk-body" class="widget-body" style="height: 220px;"></div>
     </section>
 
     <section class="widget card bg-base-200 shadow-lg xl:col-span-2" id="widget-calendar-heatmap">
@@ -642,27 +835,33 @@
        initialises so there's no flash-of-visible-content.
        `@keydown.escape.window` listens at the document level — Escape
        closes the drawer regardless of focus. -->
-  <aside class="detail-drawer"
-         id="file-detail-drawer"
-         x-data
-         x-show="$store.detail.open"
-         x-transition.opacity.duration.200ms
-         x-cloak
-         @keydown.escape.window="$store.detail.hide()">
-    <div class="drawer-header">
-      <h3 id="drawer-title">File details</h3>
-      <button type="button"
-              class="drawer-close btn btn-ghost btn-sm"
-              id="drawer-close"
-              @click="$store.detail.hide()"
-              aria-label="Close">×</button>
+  <!-- Native `<dialog>` element backs the file-detail drawer. Gives
+       free focus-trap, free Escape-closes, free `::backdrop`.
+       Alpine.store('detail') calls `.showModal()` / `.close()`
+       directly; no `x-show`/`x-cloak`/`x-transition` markup. Native
+       modal management is strictly better for a11y (focus
+       restoration, screen-reader announcement). -->
+  <dialog class="detail-drawer modal" id="file-detail-drawer">
+    <div class="modal-box max-w-2xl">
+      <div class="drawer-header flex items-center justify-between mb-2">
+        <h3 id="drawer-title" class="text-lg font-semibold">File details</h3>
+        <form method="dialog" class="m-0">
+          <button type="submit"
+                  class="drawer-close btn btn-ghost btn-sm"
+                  id="drawer-close"
+                  aria-label="Close">×</button>
+        </form>
+      </div>
+      <div class="drawer-body" id="drawer-body"></div>
     </div>
-    <div class="drawer-body" id="drawer-body"></div>
-  </aside>
+    <form method="dialog" class="modal-backdrop">
+      <button>close</button>
+    </form>
+  </dialog>
 
   <!-- DaisyUI `footer footer-center` provides centred horizontal
        layout; the existing semantic `footer { ... }` rule in the
-       inline <style> keeps the v0.4.x background + padding for visual
+       inline <style> keeps the background + padding for visual
        continuity. -->
   <footer class="footer footer-center">
     Generated by
@@ -678,8 +877,8 @@
   <script>{{ECHARTS_JS}}</script>
   <script>{{D3_HIERARCHY_JS}}</script>
 
-  <!-- Alpine.js + Alpine persist plugin: HTML-attribute reactivity for
-       v0.5.x cross-widget filter state.
+  <!-- Alpine.js + Alpine persist plugin: HTML-attribute reactivity
+       for cross-widget filter state.
 
        === Script-load order is load-bearing for correctness ===
 
@@ -694,10 +893,10 @@
        too late — the event has already fired and the listener never
        runs.
 
-       Initial v0.5.x order was core → persist → store-init listener;
-       browser console reported `Cannot read properties of undefined
-       (reading 'isDark')` on `input.theme-controller` (the store was
-       never registered). Reorder fixes that:
+       Naive core → persist → store-init order surfaces `Cannot read
+       properties of undefined (reading 'isDark')` on
+       `input.theme-controller` because the store was never
+       registered. The correct order:
 
        1. Persist plugin script — registers ITS own `alpine:init`
           listener (uses `Alpine.plugin(persist)` inside the
@@ -724,8 +923,8 @@
          `@keydown.escape.window="$store.detail.hide()"` and the
          close button's `@click="$store.detail.hide()"`.
 
-       - `filter` — cross-widget filter text. PR-6 wires only the
-         hotspot table as a writer; future widgets subscribe via
+       - `filter` — cross-widget filter text. Only the hotspot table
+         is wired as a writer today; future widgets subscribe via
          `Alpine.effect(() => Alpine.store('filter').text)`.
          Persisted via the Alpine persist plugin (`$persist` magic)
          so the filter survives a page reload.
@@ -751,27 +950,88 @@
   <script>
     document.addEventListener('alpine:init', () => {
       Alpine.store('detail', {
+        // Drawer is backed by a native <dialog>. show()/hide() route
+        // through the dialog's modal API so we get free focus-trap
+        // + Escape-closes + ::backdrop.
+        // Keeping `open` for backwards-compat with any widget that
+        // still queries it (e.g. an Alpine.effect bridge), but the
+        // canonical source of truth is the dialog's .open property.
         open: false,
-        show() { this.open = true; },
-        hide() { this.open = false; },
+        show() {
+          this.open = true;
+          const d = document.getElementById('file-detail-drawer');
+          if (d && typeof d.showModal === 'function' && !d.open) {
+            d.showModal();
+          }
+        },
+        hide() {
+          this.open = false;
+          const d = document.getElementById('file-detail-drawer');
+          if (d && typeof d.close === 'function' && d.open) {
+            d.close();
+          }
+        },
       });
       Alpine.store('filter', {
         text: Alpine.$persist('').as('codelore_filter_text'),
         set(value) { this.text = value; },
         clear() { this.text = ''; },
       });
+      // Offboarding scenario state. head_sha is not yet exposed in
+      // the SpaDashboard payload, so cross-repo persistence is not
+      // attempted — the user clears the list manually when switching
+      // repos.
+      // Dashboard data exposed to Alpine for the parallel DOM tree
+      // (keyboard-accessible alternative to the canvas circle-pack).
+      // Populated by widgets.js after data load. The WAI-ARIA
+      // treeview pattern has no conformant canvas fallback, so the
+      // keyboard-accessible surface IS this DOM tree, parented to
+      // the same data the chart shows.
+      Alpine.store('dashboard', {
+        hotspots: [],   // [{path, code_health, hotspot_score}], top-N sorted
+      });
+      Alpine.store('scenario', {
+        departed: Alpine.$persist([]).as('codelore_offboard_v1'),
+        // Populated by widgets.js at boot from data.entity_ownership;
+        // not persisted (recomputed per-load against the live dataset).
+        available: [],
+        toggle(author) {
+          const i = this.departed.indexOf(author);
+          if (i >= 0) this.departed.splice(i, 1);
+          else this.departed.push(author);
+          // UX: when the user adds their first departed author and
+          // the circle-pack isn't already in knowledge-loss mode,
+          // auto-switch so the colour change becomes immediately
+          // visible. Subsequent toggles inside the mode don't
+          // re-trigger the click (we check tab-active state first).
+          if (this.departed.length > 0) {
+            const tab = document.querySelector('button[data-mode="knowledge-loss"]');
+            if (tab && !tab.classList.contains('tab-active')) tab.click();
+          }
+        },
+        clear() { this.departed.splice(0, this.departed.length); },
+        isDeparted(author) { return this.departed.indexOf(author) >= 0; },
+      });
       const initialDark = (window.matchMedia
         && window.matchMedia('(prefers-color-scheme: dark)').matches) || false;
       Alpine.store('theme', {
         isDark: Alpine.$persist(initialDark).as('codelore_theme_is_dark'),
       });
-      // Reactive bridge: store.isDark → <html data-theme="..."> + ECharts re-render.
+      // Reactive bridge: store.isDark + store.scenario.departed →
+      // <html data-theme="..."> + ECharts re-render. Reading the
+      // scenario length here registers the effect's dependency on
+      // it, so adding/removing a departed author also fires the
+      // rerenderer loop — the circle-pack picks up new knowledge-loss
+      // colours without a separate subscription.
       Alpine.effect(() => {
         const dark = Alpine.store('theme').isDark;
+        // Reading both establishes the reactive dep on both stores.
+        // The length-read is enough; the effect only needs a trigger.
+        void Alpine.store('scenario').departed.length;
         document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
         // Fire registered re-renderers so ECharts widgets pick up the
-        // new resolved palette. Wrapped in try/catch per-renderer so
-        // one broken widget doesn't break the rest.
+        // new resolved palette / scenario state. Wrapped in try/catch
+        // per-renderer so one broken widget doesn't break the rest.
         const rerenderers = window._codeloreRerenderers || [];
         for (let i = 0; i < rerenderers.length; i++) {
           try { rerenderers[i](); } catch (e) { console.warn('rerender failed:', e); }

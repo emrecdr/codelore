@@ -27,6 +27,10 @@ spa = ["codelore-lib/spa"]
 [dependencies]
 codelore-lib = { path = "../codelore-lib", version = "0.5.1" }
 clap = { version = "4", features = ["derive"] }
+# F-X3 (Tier 2 Day 12): shell completion generation for bash / zsh /
+# fish / PowerShell / elvish. Derives the spec from the existing
+# clap derive macros — no hand-maintained completion files.
+clap_complete = "4"
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

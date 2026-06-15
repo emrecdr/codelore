@@ -503,7 +503,7 @@ rill start codelore.sqlite       # local-first BI
 ```
 
 `docs/bi-integration.md` (planned) will document this with example
-queries that reproduce each of the 23 analyses. This path is
+queries that reproduce each of the 31 analyses. This path is
 complementary to the SPA emitter — users who want raw exploration
 can stay here; users who want the curated CodeLore narrative get
 the SPA.

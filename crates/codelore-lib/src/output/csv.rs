@@ -441,6 +441,143 @@ pub fn write_top_committers_csv<W: Write>(
     Ok(())
 }
 
+/// `god-classes` CSV emitter — `fan_in` / `fan_out` / cognitive
+/// intersection ranking per file.
+pub fn write_god_classes_csv<W: Write>(
+    rows: &[crate::analyses::god_classes::GodClassRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(w, "path,cognitive,fan_in,fan_out,god_score").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{:.2},{},{},{:.4}",
+            quote_if_needed(&row.path),
+            row.cognitive,
+            row.fan_in,
+            row.fan_out,
+            row.god_score,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+/// `architecture-violations` CSV emitter — one row per import edge
+/// that crosses a forbidden layer boundary per
+/// `.codelore-arch-rules.toml`.
+pub fn write_arch_violations_csv<W: Write>(
+    rows: &[crate::analyses::arch_violations::ArchViolationRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(w, "src_path,target_path,src_layer,target_layer,raw_target")
+        .map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{},{},{}",
+            quote_if_needed(&row.src_path),
+            quote_if_needed(&row.target_path),
+            quote_if_needed(&row.src_layer),
+            quote_if_needed(&row.target_layer),
+            quote_if_needed(&row.raw_target),
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+/// `stale-code` CSV emitter.
+pub fn write_stale_code_csv<W: Write>(
+    rows: &[crate::analyses::stale_code::StaleCodeRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(w, "path,last_touched,months_since_touched,max_cognitive")
+        .map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{},{:.2}",
+            quote_if_needed(&row.path),
+            row.last_touched,
+            row.months_since_touched,
+            row.max_cognitive,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+/// `pair-programming` CSV emitter.
+pub fn write_pair_programming_csv<W: Write>(
+    rows: &[crate::analyses::pair_programming::PairRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(w, "author_a,author_b,pair_commits").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{}",
+            quote_if_needed(&row.author_a),
+            quote_if_needed(&row.author_b),
+            row.pair_commits,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+/// `lead-time` CSV emitter.
+pub fn write_lead_time_csv<W: Write>(
+    rows: &[crate::analyses::lead_time::LeadTimeRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(
+        w,
+        "rev,canonical_author,author_date,committer_date,lead_time_seconds,lead_time_days"
+    )
+    .map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{},{},{},{:.3}",
+            quote_if_needed(&row.rev),
+            quote_if_needed(&row.canonical_author),
+            quote_if_needed(&row.author_date),
+            quote_if_needed(&row.committer_date),
+            row.lead_time_seconds,
+            row.lead_time_days,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+/// `bus-factor` CSV emitter.
+pub fn write_bus_factor_csv<W: Write>(
+    rows: &[crate::analyses::bus_factor::BusFactorRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(
+        w,
+        "module,total_commits,bus_factor,top_contributor,top_contributor_share"
+    )
+    .map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{},{},{:.4}",
+            quote_if_needed(&row.module),
+            row.total_commits,
+            row.bus_factor,
+            quote_if_needed(&row.top_contributor),
+            row.top_contributor_share,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 /// T8: per-file knowledge-loss risk (`knowledge-islands` analysis).
 /// No code-maat equivalent — strict `CodeLore` extension; no compat-mode
 /// header variant needed.

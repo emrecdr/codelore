@@ -93,6 +93,48 @@ pub fn write_top_committers_json<W: Write>(
     write_json(rows, w)
 }
 
+pub fn write_god_classes_json<W: Write>(
+    rows: &[crate::analyses::god_classes::GodClassRow],
+    w: &mut W,
+) -> Result<()> {
+    write_json(rows, w)
+}
+
+pub fn write_arch_violations_json<W: Write>(
+    rows: &[crate::analyses::arch_violations::ArchViolationRow],
+    w: &mut W,
+) -> Result<()> {
+    write_json(rows, w)
+}
+
+pub fn write_stale_code_json<W: Write>(
+    rows: &[crate::analyses::stale_code::StaleCodeRow],
+    w: &mut W,
+) -> Result<()> {
+    write_json(rows, w)
+}
+
+pub fn write_pair_programming_json<W: Write>(
+    rows: &[crate::analyses::pair_programming::PairRow],
+    w: &mut W,
+) -> Result<()> {
+    write_json(rows, w)
+}
+
+pub fn write_lead_time_json<W: Write>(
+    rows: &[crate::analyses::lead_time::LeadTimeRow],
+    w: &mut W,
+) -> Result<()> {
+    write_json(rows, w)
+}
+
+pub fn write_bus_factor_json<W: Write>(
+    rows: &[crate::analyses::bus_factor::BusFactorRow],
+    w: &mut W,
+) -> Result<()> {
+    write_json(rows, w)
+}
+
 pub fn write_knowledge_islands_json<W: Write>(
     rows: &[crate::analyses::knowledge_islands::KnowledgeIslandRow],
     w: &mut W,

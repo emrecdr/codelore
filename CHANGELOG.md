@@ -4,6 +4,24 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Added — v0.6.x maximum-aligned feature sprint (full implementation)
+
+The 27-feature plan in `docs/maximum-feature-plan.md` shipped end-to-end across an 18-day implementation cycle (plus a completion sprint for the deferred quality-gates and multi-language resolver pack). The cycle landed Tier 1 (CodeScene parity + architecture foundation), Tier 2 (analytical surface + modern platform), and Tier 3 (brand-extending) with a single CI-clean clippy gate at every checkpoint.
+
+**Net deltas vs v0.5.1**:
+- **+6 new behavioural analyses** — `god-classes` (Brown et al. 1998 AntiPatterns), `architecture-violations` (layered-rule validation via `.codelore-arch-rules.toml`), `stale-code` (untouched + low-cognitive intersection), `pair-programming` (`Co-Authored-By:` trailer aggregation), `lead-time` (DORA in-flight time), `bus-factor` (per-module Filatov 2010)
+- **+7 new CLI subcommands** — `codelore explain` (formula + citation for 15 metrics), `codelore check` (quality-gate validation against `.codelore-thresholds.toml`), `codelore profile` (operational telemetry), `codelore docs` (markdown analysis catalogue), `codelore notes <range>` (release-notes markdown), `codelore completions <shell>` (bash | zsh | fish | powershell | elvish), `codelore schema <row-type>` (JSON Schema 2020-12)
+- **+6 new SPA widgets** — Kamei Delivery-Risk Sparkline (beyond-CodeScene differentiator) · per-file radar in drawer · hotspot treemap · multi-metric parallel coordinates · cognitive boxplot · module chord · architecture force-graph
+- **+3 new SPA color modes** on the hotspot circle-pack — Code health (DaisyUI 3-band) · Tech-debt friction (OKLCH continuous heat ramp) · Knowledge loss (offboarding scenario driven)
+- **+1 new SPA overlay** — coupling arcs with Fisher p-value-encoded opacity + degree-encoded width (CodeScene-exceeding)
+- **+1 new SPA interaction** — Off-boarding scenario picker (DaisyUI multi-select dropdown + `$persist`, runs entirely client-side)
+- **5 modern web platform primitives** brought in — View Transitions API · native `<dialog>` · PWA manifest · OKLCH `color-mix()` · WCAG-conformant parallel DOM tree
+- **+1 schema migration** — `schema_v3` adds the `imports` table for the architecture import-graph (F-A1), populated via tree-sitter walks across the 6 Tier-1 languages, with per-language path resolver (Rust `crate::`, Python `.`, JS/TS `./`)
+- **+2 quality-gates files** — `.codelore-arch-rules.toml` (layered-architecture) + `.codelore-thresholds.toml` (gate thresholds with `$GITHUB_OUTPUT` integration)
+- **+359 tests** total (+37 net since v0.5.1), all green, clippy `-D warnings` clean
+
+**Closed F-findings as side effects of feature work**: F71 · F90 · F92 · F97 · F98 (see `docs/reports/deep_analysis_report.md` for the audit trail).
+
 ## [0.5.1] - 2026-06-14
 
 ### Fixed — v0.5.0 SPA runtime errors (F107 + F108 hotfix)

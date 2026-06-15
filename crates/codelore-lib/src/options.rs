@@ -282,8 +282,8 @@ impl Options {
     /// Check cross-field invariants. Caller (typically the CLI boundary)
     /// runs this once after constructing `Options` so pathological flag
     /// combinations fail loudly instead of silently producing empty
-    /// output. Each invariant catches a real footgun documented in the
-    /// v0.1.1 roadmap.
+    /// output. Each invariant catches a real footgun from the CLI
+    /// surface.
     ///
     /// # Errors
     ///

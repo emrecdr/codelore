@@ -3,6 +3,8 @@
 Read-only audit log. Findings are immutable F-IDs; status field tracks state.
 Shipped findings are pruned from this report once their release ships (full history in `CHANGELOG.md`); refuted findings stay documented to prevent rediscovery.
 
+> **2026-06-15 sprint update**: the v0.6.x implementation cycle closed the following Active findings as side effects of feature work — **F71** (resize listener leak: F96 mountEcharts helper subsumed it), **F90** (sunburst hardcoded colors: replaced with cached `token()` reads via `--xray-*` CSS vars + DaisyUI semantic tokens), **F92** (provenance sidecar atomicity: hardened during the `codelore check` work), **F97** (`JSON.parse` blocking first paint: F-P5 PWA bootstrap deprioritises non-critical widgets), **F98** (chart-click a11y: closed by F-P4 parallel DOM tree). Tracking moved to `CHANGELOG.md`; this report keeps the historical entries for audit-trail integrity.
+
 ---
 
 ## 1. Architectural Overview & Pipeline Data Flow

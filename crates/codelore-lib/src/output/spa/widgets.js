@@ -10,9 +10,47 @@
 (function () {
   'use strict';
 
-  // -----------------------------------------------------------------
-  // Data load
-  // -----------------------------------------------------------------
+  // ═════════════════════════════════════════════════════════════════
+  //  TABLE OF CONTENTS
+  // ═════════════════════════════════════════════════════════════════
+  //   §1  Data load & IIFE setup
+  //   §2  Per-metric provenance definitions (METRIC_DEFS)
+  //   §3  Boot — dispatch render() per widget + register re-renderers
+  //
+  //   §4  Helpers
+  //         mountEcharts · bindChartResize ·
+  //         buildTooltipHtml · getCssVar · fmtInt · fmtNumberFlex ·
+  //         escapeHtml
+  //         · token (cached) · invalidateTokenCache ·
+  //           registerThemeRerender · resolveCssColor ·
+  //           codeHealthColor · heatRamp
+  //   §5  Detail drawer
+  //         initDetailDrawer · showFileDetailDrawer
+  //   §6  Widget: KPI tiles                        — renderKpiTiles
+  //   §7  Widget: knowledge islands                — renderKnowledgeIslands
+  //   §8  Widget: hotspot circle-pack              — renderHotspotCirclePack
+  //   §9  Widget: hotspot table                    — renderHotspotTable
+  //   §10 Widget: change-coupling sankey           — renderCouplingSankey
+  //   §11 Widget: trends multi-line                — renderTrends
+  //   §11b Widget: Kamei delivery-risk sparkline    — renderKameiRiskSparkline
+  //   §12 Widget: calendar heatmap                 — renderCalendarHeatmap
+  //   §13 Widget: X-Ray sunburst                   — renderXRaySunburst
+  //   §14 Controls: hotspot color-mode toggles     — initHotspotColorToggles
+  //   §15 Utility helpers
+  //         buildFsHierarchy · heatmapColor ·
+  //         computePrimaryAuthorByPath · makeAuthorPalette
+  //
+  //  All function declarations in §4-§15 are hoisted to script scope,
+  //  so the boot section at §3 can call them despite being source-
+  //  earlier. Only function declarations move freely; let / const /
+  //  expression statements must stay in source order.
+  // ═════════════════════════════════════════════════════════════════
+
+
+  // ═════════════════════════════════════════════════════════════════
+  //  §1  Data load & IIFE setup
+  // ═════════════════════════════════════════════════════════════════
+
   const dataBlock = document.getElementById('codelore-data');
   if (!dataBlock) {
     console.error('CodeLore: data block not found');
@@ -25,6 +63,25 @@
     console.error('CodeLore: failed to parse data block:', e);
     return;
   }
+
+  // Cross-widget state — declared early so handlers attached inside
+  // function declarations can read/write via closure. None of these
+  // are read at script-execution time; they're consulted only inside
+  // click / Alpine.effect callbacks that fire after this point.
+  //
+  //   selectedCouplingFile:
+  //     The leaf the user last clicked to surface its top-N
+  //     Fisher-significant coupling partners as arcs on the
+  //     circle-pack. `null` = no overlay.
+  //
+  //   lastHotspotChart / lastHotspotNodePositions:
+  //     The most-recent circle-pack chart instance and its laid-out
+  //     {path → (x,y,r)} map. Cached so `updateCouplingArcs()` can
+  //     do a partial `setOption` (touching only the arc series) on
+  //     click instead of re-running d3.pack().
+  let selectedCouplingFile = null;
+  let lastHotspotChart = null;
+  let lastHotspotNodePositions = null;
 
   // Detail drawer state — set up once, reused by every widget that
   // wants to surface per-file details.
@@ -42,19 +99,23 @@
   // Color-mode toggles for the hotspot circle-pack (cognitive / author / ai).
   initHotspotColorToggles();
 
-  // -----------------------------------------------------------------
-  // Per-metric provenance definitions
-  // -----------------------------------------------------------------
-  // Hoisted ABOVE the renderXxx(data) calls below: renderKpiTiles +
-  // the hotspot table header both reach METRIC_DEFS via
+
+  // ═════════════════════════════════════════════════════════════════
+  //  §2  Per-metric provenance definitions
+  // ═════════════════════════════════════════════════════════════════
+  //
+  // Hoisted ABOVE the renderXxx(data) calls in §3: renderKpiTiles and
+  // the hotspot-table header both reach METRIC_DEFS via
   // buildTooltipHtml. A const at the bottom of the IIFE hits TDZ
   // when those callers fire — 'Cannot access METRIC_DEFS before
-  // initialization' showed up on every browser load in v0.5.0.
-  // Per-metric provenance definitions: formula in plain English + a
-  // link to the research-foundations.md section that grounds the
-  // metric. Surfaced as `?` tooltips on KPI tiles and table column
-  // headers. Static data — no per-repo variation — so it lives in
-  // the JS const map rather than the SpaDashboard JSON payload.
+  // initialization' surfaces on every browser load otherwise.
+  //
+  // Per-metric provenance: formula in plain English + a link to the
+  // research-foundations.md section that grounds the metric. Surfaced
+  // as `?` tooltips on KPI tiles and table column headers. Static
+  // data — no per-repo variation — so it lives in this JS const map
+  // rather than the SpaDashboard JSON payload.
+
   const RESEARCH_FOUNDATIONS_URL =
     'https://github.com/emrecdr/codelore/blob/main/docs/research-foundations.md';
   const METRIC_DEFS = {
@@ -121,67 +182,118 @@
   };
 
 
-  // -----------------------------------------------------------------
-  // Widget 0: KPI tiles (at-a-glance KPIs)
-  // -----------------------------------------------------------------
-  renderKpiTiles(data);
+  // ═════════════════════════════════════════════════════════════════
+  //  §3  Boot
+  // ═════════════════════════════════════════════════════════════════
+  //
+  // Each widget render runs once at script execution and is registered
+  // for the theme-toggle re-render path (`window._codeloreRerenderers`)
+  // when its visuals depend on resolved CSS variables.
 
-  // -----------------------------------------------------------------
-  // Widget K: knowledge islands (CodeLore differentiator vs CodeScene)
-  // -----------------------------------------------------------------
-  renderKnowledgeIslands(data.knowledge_islands || []);
+  renderKpiTiles(data);                                            // → §6
 
-  // -----------------------------------------------------------------
-  // Widget 1: hotspot circle-pack (the signature CodeScene view)
-  // -----------------------------------------------------------------
+  renderKnowledgeIslands(data.knowledge_islands || []);            // → §7
+
   let currentHotspotColorMode = 'cognitive';
-  renderHotspotCirclePack(data.hotspots || [], currentHotspotColorMode);
-  window._codeloreRerenderers.push(function () {
+  renderHotspotCirclePack(data.hotspots || [], currentHotspotColorMode);  // → §8
+  // Use registerThemeRerender (not the raw push) because §8 reads
+  // theme tokens via the cached `token()` helper (friction heat ramp,
+  // health 3-band, top-quartile ring overlay). Flushing the cache
+  // before the chart redraws keeps colours in lockstep with the live
+  // theme.
+  registerThemeRerender(function () {
     renderHotspotCirclePack(data.hotspots || [], currentHotspotColorMode);
   });
 
-  // -----------------------------------------------------------------
-  // Widget 2: hotspot table — sortable drill-down view of widget 1
-  // -----------------------------------------------------------------
-  renderHotspotTable(data.hotspots || []);
+  renderHotspotTable(data.hotspots || []);                         // → §9
 
-  // -----------------------------------------------------------------
-  // Widget C: change-coupling sankey (top-N coupled file pairs)
-  // -----------------------------------------------------------------
-  renderCouplingSankey(data.coupling || []);
+  renderCouplingSankey(data.coupling || []);                       // → §10
   window._codeloreRerenderers.push(function () {
     renderCouplingSankey(data.coupling || []);
   });
 
-  // -----------------------------------------------------------------
-  // v0.4.2 widgets (registered for theme re-render)
-  // -----------------------------------------------------------------
-  renderTrends(data.trends || []);
+  renderTrends(data.trends || []);                                 // → §11
   window._codeloreRerenderers.push(function () { renderTrends(data.trends || []); });
-  renderCalendarHeatmap(data.daily_commits || []);
+
+  renderKameiRiskSparkline(data.kamei_risk || []);                 // → §11b
+  window._codeloreRerenderers.push(function () { renderKameiRiskSparkline(data.kamei_risk || []); });
+
+  // Treemap and parallel-coordinates views. Both consume the
+  // existing hotspots payload (no new SQL); they're alternative
+  // views surfaced as their own sections.
+  renderHotspotTreemap(data.hotspots || []);                       // → §11c
+  window._codeloreRerenderers.push(function () { renderHotspotTreemap(data.hotspots || []); });
+  renderParallelCoords(data.hotspots || []);                       // → §11d
+  window._codeloreRerenderers.push(function () { renderParallelCoords(data.hotspots || []); });
+
+  // Cognitive-complexity boxplot, module-to-module chord, and
+  // architecture force-graph.
+  renderCognitiveBoxplot(data.hotspots || []);                     // → §11e
+  window._codeloreRerenderers.push(function () { renderCognitiveBoxplot(data.hotspots || []); });
+  renderModuleChord(data.coupling || []);                          // → §11f
+  window._codeloreRerenderers.push(function () { renderModuleChord(data.coupling || []); });
+  renderArchGraph(data.imports || []);                             // → §11g
+  window._codeloreRerenderers.push(function () { renderArchGraph(data.imports || []); });
+
+  renderCalendarHeatmap(data.daily_commits || []);                 // → §12
   window._codeloreRerenderers.push(function () { renderCalendarHeatmap(data.daily_commits || []); });
-  renderXRaySunburst(data.xray || []);
+
+  renderXRaySunburst(data.xray || []);                             // → §13
   window._codeloreRerenderers.push(function () { renderXRaySunburst(data.xray || []); });
 
+  // Expose the drawer-show callback so the hotspot-table row-click
+  // handler can fire it. Must execute after `data` is loaded (above);
+  // order vs the renderXxx() calls is immaterial because this is
+  // invoked at user-click time.
+  window._codeloreShowDetail = function (path) { showFileDetailDrawer(path, data); };
 
-  // Build the HTML for a `?` tooltip. Returns the trigger button plus
-  // an absolutely-positioned popup with the formula + citation link.
-  // Caller is responsible for putting `.tooltip-host` on the wrapping
-  // element so the popup positions correctly.
-  function buildTooltipHtml(defKey) {
-    const def = METRIC_DEFS[defKey];
-    if (!def) return '';
-    const citationHref = RESEARCH_FOUNDATIONS_URL + (def.citation.anchor || '');
-    return '<span class="tooltip-host">' +
-      '<button type="button" class="tooltip-trigger" aria-label="What does this metric mean?" tabindex="0">?</button>' +
-      '<span class="tooltip-popup" role="tooltip">' +
-        '<strong>Formula</strong>' +
-        '<div class="tooltip-formula">' + escapeHtml(def.formula) + '</div>' +
-        '<div class="tooltip-citation">📖 <a href="' + escapeHtml(citationHref) + '" target="_blank" rel="noopener">' +
-          escapeHtml(def.citation.label) + ' ↗</a></div>' +
-      '</span>' +
-    '</span>';
+  // Populate the offboarding picker's author list from the
+  // current dataset's entity_ownership. Alpine has auto-initialized
+  // by the time this script runs (template.html script order:
+  // ALPINE_JS loads → fires alpine:init synchronously → our store
+  // listener runs → store is registered), so the store assignment is
+  // reactive and the dropdown's x-for template renders against fresh
+  // data. Guarded for the no-Alpine fallback path (drawer-only).
+  if (window.Alpine && window.Alpine.store) {
+    const scenarioStore = window.Alpine.store('scenario');
+    if (scenarioStore) {
+      scenarioStore.available = computeUniqueAuthors(data.entity_ownership || []);
+    }
+    // Populate the parallel DOM tree's data. Top-50
+    // by hotspot_score keeps the menu navigable for screen readers
+    // while still surfacing every high-priority file. Includes only
+    // the fields the menu binds against — keeps the reactive proxy
+    // light and avoids leaking metric internals into Alpine's
+    // reactivity graph.
+    const dashboardStore = window.Alpine.store('dashboard');
+    if (dashboardStore) {
+      const HOTSPOT_TREE_LIMIT = 50;
+      const sorted = (data.hotspots || [])
+        .slice()
+        .sort(function (a, b) {
+          const sa = (typeof a.hotspot_score === 'number') ? a.hotspot_score : -Infinity;
+          const sb = (typeof b.hotspot_score === 'number') ? b.hotspot_score : -Infinity;
+          return sb - sa;
+        })
+        .slice(0, HOTSPOT_TREE_LIMIT)
+        .map(function (r) {
+          return {
+            path: r.path,
+            code_health: r.code_health,
+            hotspot_score: r.hotspot_score,
+          };
+        });
+      dashboardStore.hotspots = sorted;
+    }
   }
+
+
+  // ═════════════════════════════════════════════════════════════════
+  //  §4-§15 — FUNCTION DECLARATIONS (hoisted to IIFE scope)
+  // ═════════════════════════════════════════════════════════════════
+
+
+  // ─── §4  Helpers ─────────────────────────────────────────────────
 
   // Bind a ResizeObserver to keep `chart` sized to `container`. Stores
   // the observer on `container._codeloreResizeObserver` and disconnects
@@ -221,416 +333,332 @@
     return chart;
   }
 
-  function renderHotspotCirclePack(rows, colorMode) {
-    const container = document.getElementById('widget-hotspot-circle-pack-body');
-    if (!container) return;
-    if (!rows.length) {
-      container.innerHTML = '<div class="empty">No hotspots to display. ' +
-        'The repository may be too small, or thresholds filtered everything out.</div>';
+  // Build the HTML for a `?` tooltip. Returns the trigger button plus
+  // an absolutely-positioned popup with the formula + citation link.
+  // Caller is responsible for putting `.tooltip-host` on the wrapping
+  // element so the popup positions correctly.
+  function buildTooltipHtml(defKey) {
+    const def = METRIC_DEFS[defKey];
+    if (!def) return '';
+    const citationHref = RESEARCH_FOUNDATIONS_URL + (def.citation.anchor || '');
+    return '<span class="tooltip-host">' +
+      '<button type="button" class="tooltip-trigger" aria-label="What does this metric mean?" tabindex="0">?</button>' +
+      '<span class="tooltip-popup" role="tooltip">' +
+        '<strong>Formula</strong>' +
+        '<div class="tooltip-formula">' + escapeHtml(def.formula) + '</div>' +
+        '<div class="tooltip-citation">📖 <a href="' + escapeHtml(citationHref) + '" target="_blank" rel="noopener">' +
+          escapeHtml(def.citation.label) + ' ↗</a></div>' +
+      '</span>' +
+    '</span>';
+  }
+
+  // Read a CSS variable from the current theme; used by ECharts widgets
+  // that pull axis / grid colors from the same palette as the CSS shell.
+  function getCssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  function fmtInt(v) {
+    if (typeof v !== 'number' || !isFinite(v)) return '';
+    return Math.round(v).toLocaleString('en-US');
+  }
+
+  function fmtNumberFlex(v, decimals) {
+    if (typeof v !== 'number' || !isFinite(v)) return '';
+    return v.toFixed(decimals);
+  }
+
+  function escapeHtml(s) {
+    return String(s || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  // Theme-token helpers for the per-mode color readers.
+  //
+  // Two read paths exist by design:
+  //
+  //   getCssVar(name)  ← UNCACHED. For non-hot-path reads that happen
+  //                       at most once per chart setOption (axis colors,
+  //                       grid colors, ring fills). Existing widgets.
+  //
+  //   token(name)      ← CACHED. For hot-path reads inside per-node
+  //                       color callbacks (called once per leaf circle).
+  //                       Cache invalidated on theme toggle via
+  //                       registerThemeRerender so DaisyUI's
+  //                       semantic tokens stay theme-accurate.
+  //
+  // Distinct surfaces because mixing them would either over-cache
+  // (sunburst rings going stale on toggle) or under-cache (per-circle
+  // re-read of getComputedStyle on 5000-file repos).
+  const _tokenCache = {};
+  function token(name) {
+    if (!(name in _tokenCache)) {
+      _tokenCache[name] = getComputedStyle(document.documentElement)
+        .getPropertyValue(name).trim();
+    }
+    return _tokenCache[name];
+  }
+  function invalidateTokenCache() {
+    for (const k in _tokenCache) delete _tokenCache[k];
+  }
+
+  // Register a theme-aware rerenderer that uses cached token() reads.
+  // Wraps fn so the token cache is flushed before fn() runs, so the
+  // first read after a theme toggle sees the new --color-* values.
+  // Widgets that read theme colors only via getCssVar() should keep
+  // calling window._codeloreRerenderers.push(fn) directly — they don't
+  // need the cache flush.
+  function registerThemeRerender(fn) {
+    window._codeloreRerenderers.push(function () {
+      invalidateTokenCache();
+      fn();
+    });
+  }
+
+  // Hidden element used to ask the browser to resolve CSS color
+  // functions (color-mix(), oklch(), color()) into a concrete rgb()
+  // string. ECharts renders to canvas; canvas accepts only concrete
+  // colors, NOT CSS color functions, so heat ramps need this
+  // round-trip. Created lazily on first use.
+  let _colorResolver;
+  function resolveCssColor(cssExpr) {
+    if (!_colorResolver) {
+      _colorResolver = document.createElement('div');
+      _colorResolver.style.cssText =
+        'position:absolute;visibility:hidden;pointer-events:none;';
+      document.body.appendChild(_colorResolver);
+    }
+    _colorResolver.style.color = cssExpr;
+    return getComputedStyle(_colorResolver).color;
+  }
+
+  // CodeScene-equivalent three-band code-health color. CodeLore's
+  // scale is 0-100 (SonarSource formalisation) where CodeScene's is
+  // 1-10; the cutoffs scale accordingly. Returns DaisyUI semantic
+  // tokens so the bands theme-adapt (green/yellow/red in both light
+  // and dark modes). Falls back to --color-base-content (dim
+  // foreground) when score is null (unsupported language).
+  function codeHealthColor(score) {
+    if (score == null) return token('--color-base-content');
+    if (score <= 40)   return token('--color-error');
+    if (score <= 70)   return token('--color-warning');
+    return token('--color-success');
+  }
+
+  // Continuous heat ramp from --color-warning to --color-error in OKLCH
+  // space. Perceptually uniform — midpoint stays in the orange family,
+  // unlike sRGB / HSL interpolation which mudbrowns through grey at
+  // 50%. Browser-native via CSS color-mix(), no JS color math.
+  // ratio ∈ [0, 1]; returns a concrete rgb() string ready for canvas.
+  function heatRamp(ratio) {
+    const pct = Math.max(0, Math.min(1, ratio)) * 100;
+    const expr = 'color-mix(in oklch, ' + token('--color-warning') +
+                 ', ' + token('--color-error') + ' ' + pct + '%)';
+    return resolveCssColor(expr);
+  }
+
+  // View Transitions API wrapper. Runs updateFn inside the browser's
+  // snapshot-then-animate boundary so colour-mode swaps crossfade
+  // smoothly. Graceful no-op fallback on browsers without the API
+  // (Safari < 18, Firefox < 124 — both currently shipping).
+  // The transition itself is purely visual; correctness is in
+  // updateFn, which runs synchronously either way.
+  function startViewTransition(updateFn) {
+    if (typeof document.startViewTransition !== 'function') {
+      updateFn();
       return;
     }
-    colorMode = colorMode || 'cognitive';
-    // Clear any prior ECharts instance so toggles re-render cleanly.
-    container.innerHTML = '';
+    document.startViewTransition(updateFn);
+  }
 
-    // Build a primary-author map (path → author with max added LoC)
-    // for the W7 knowledge-map mode. Computed once per render call.
-    const primaryAuthorByPath = computePrimaryAuthorByPath(data.entity_ownership || []);
-    const authorPalette = makeAuthorPalette(
-      Array.from(new Set(Object.values(primaryAuthorByPath)))
-    );
 
-    // Build a path → clone-group-count map for the 'clones'
-    // colour mode. `data.clones` is the per-file overlay computed
-    // by `output/spa.rs::run_clone_summary`; one entry per path
-    // with ≥ 1 clone family. Falls back to an empty object when
-    // the payload omits the field (older fixtures, no clones
-    // detected). `maxCloneGroups` anchors the heatmap.
-    const cloneCountByPath = {};
-    let maxCloneGroups = 0;
-    const cloneRows = data.clones || [];
-    for (var ci = 0; ci < cloneRows.length; ci++) {
-      const cr = cloneRows[ci];
-      cloneCountByPath[cr.path] = cr.groups;
-      if (cr.groups > maxCloneGroups) maxCloneGroups = cr.groups;
+  // ─── §5  Detail drawer (cross-widget click target) ────────────────
+
+  function initDetailDrawer() {
+    // No-op when Alpine is present: the drawer's `@click` on the
+    // close button and `@keydown.escape.window` on the aside drive
+    // open/close via `$store.detail` — no imperative listeners
+    // needed here. Kept as a stub so the boot call at §1 keeps a
+    // single, uniform shape across the Alpine / no-Alpine branches.
+    //
+    // Fallback path (Alpine missing for any reason): re-attach the
+    // legacy imperative listeners so the drawer still works.
+    if (window.Alpine) return;
+    const closeBtn = document.getElementById('drawer-close');
+    if (closeBtn) {
+      closeBtn.addEventListener('click', function () {
+        const drawer = document.getElementById('file-detail-drawer');
+        if (drawer) drawer.hidden = true;
+      });
     }
-    const cloneScale = maxCloneGroups || 1;
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') {
+        const drawer = document.getElementById('file-detail-drawer');
+        if (drawer) drawer.hidden = true;
+      }
+    });
+  }
 
-    // Step 1: build a filesystem-style hierarchy from flat HotspotRow[].
-    // Each row is { path, revisions, cognitive, code_health, hotspot_score }.
-    // Path "a/b/c.rs" yields tree:
-    //   root -> "a" -> "b" -> "c.rs" (leaf with the metrics)
-    const tree = buildFsHierarchy(rows);
+  function showFileDetailDrawer(path, d) {
+    const drawer = document.getElementById('file-detail-drawer');
+    const title = document.getElementById('drawer-title');
+    const body = document.getElementById('drawer-body');
+    if (!drawer || !title || !body) return;
+    title.textContent = path;
 
-    // Step 2: d3.hierarchy + d3.pack() compute circle (x, y, r) coords.
-    // The pack layout sizes leaves by `revisions` (churn). Internal nodes
-    // are sized by the sum of their leaves.
-    const root = d3.hierarchy(tree)
-      .sum(function (d) { return (d.metrics ? d.metrics.revisions : 0); })
-      .sort(function (a, b) { return b.value - a.value; });
+    var html = '';
 
-    const containerWidth = container.clientWidth || 800;
-    const containerHeight = container.clientHeight || 600;
-    const side = Math.min(containerWidth, containerHeight);
-    d3.pack().size([side, side]).padding(2)(root);
+    // Section: hotspot row
+    const hot = (d.hotspots || []).find(function (r) { return r.path === path; });
+    if (hot) {
+      html += '<h4>Hotspot</h4><dl>' +
+        '<dt>Revisions</dt><dd>' + fmtInt(hot.revisions) + '</dd>' +
+        '<dt>Cognitive</dt><dd>' + fmtNumberFlex(hot.cognitive, 0) + '</dd>' +
+        '<dt>Code health</dt><dd>' + fmtNumberFlex(hot.code_health, 1) + '</dd>' +
+        '<dt>Hotspot score</dt><dd>' + fmtNumberFlex(hot.hotspot_score, 2) + '</dd>' +
+        '</dl>';
+    }
 
-    // Step 3: feed the laid-out nodes into ECharts as a custom series.
-    // The custom series renders one shape per node; we draw circles
-    // sized + positioned exactly per d3's layout. Color encodes
-    // cognitive complexity (leaves only) on a yellow→red ramp.
+    // Section: knowledge island
+    const ki = (d.knowledge_islands || []).find(function (r) { return r.path === path; });
+    if (ki) {
+      html += '<h4>Knowledge island</h4><dl>' +
+        '<dt>Primary author</dt><dd>' + escapeHtml(ki.main_author || '') + '</dd>' +
+        '<dt>Ownership</dt><dd>' + fmtNumberFlex(ki.ownership_pct, 1) + ' %</dd>' +
+        '<dt>Days since active</dt><dd>' + fmtInt(ki.days_since_main_active) + '</dd>' +
+        '<dt>Total LoC</dt><dd>' + fmtInt(ki.total_loc) + '</dd>' +
+        '</dl>';
+    }
+
+    // Section: coupling partners
+    const partners = (d.coupling || []).filter(function (r) {
+      return r.entity_a === path || r.entity_b === path;
+    });
+    if (partners.length) {
+      html += '<h4>Coupling partners</h4><ul>';
+      for (var i = 0; i < Math.min(partners.length, 20); i++) {
+        const p = partners[i];
+        const other = (p.entity_a === path) ? p.entity_b : p.entity_a;
+        html += '<li><code>' + escapeHtml(other) + '</code>' +
+          ' — ' + fmtInt(p.shared_revs) + ' shared revs' +
+          (p.combined_score != null ? (' (score ' + fmtNumberFlex(p.combined_score, 2) + ')') : '') +
+          '</li>';
+      }
+      if (partners.length > 20) {
+        html += '<li>… ' + (partners.length - 20) + ' more</li>';
+      }
+      html += '</ul>';
+    }
+
+    // Section: code health
+    const ch = (d.code_health || []).find(function (r) { return r.path === path; });
+    if (ch) {
+      html += '<h4>Code health</h4><dl>' +
+        '<dt>Score</dt><dd>' + fmtNumberFlex(ch.score, 1) + '</dd>' +
+        '<dt>Cognitive</dt><dd>' + fmtNumberFlex(ch.cognitive, 0) + '</dd>' +
+        '</dl>';
+    }
+
+    if (!html) {
+      html = '<div class="empty">No additional details for this path. ' +
+        'The path may have been filtered out by minimum-revision thresholds, ' +
+        'or its row type is not yet wired into the dashboard.</div>';
+    }
+
+    // Radar chart at the top of the drawer. Six axes profile the
+    // file across CodeLore's primary metrics: cognitive / churn /
+    // age / coupling / MI / AI%. Each axis is normalised to [0, 1]
+    // against the run's max so a small repo doesn't show every file
+    // at 0 — the radar is comparative within the current dataset.
+    html = '<div id="drawer-radar" style="height: 220px; margin-bottom: 14px;"></div>' + html;
+
+    body.innerHTML = html;
+
+    // Render the radar after body.innerHTML so the container exists.
+    renderDrawerRadar(path, d);
+
+    // Native <dialog>. Alpine.store('detail') routes show()/hide()
+    // through showModal()/close(). Fallback path for environments
+    // without Alpine: call showModal() directly. Both paths
+    // converge on the same native modal flow.
+    if (window.Alpine) {
+      window.Alpine.store('detail').show();
+    } else if (typeof drawer.showModal === 'function' && !drawer.open) {
+      drawer.showModal();
+    }
+  }
+
+  // Drawer radar — six-axis behavioural profile for the file shown
+  // in the drawer. Sources every axis from the live dataset and
+  // normalises against the run's max for each metric so the shape
+  // reads "how this file compares to the rest of THIS analysis."
+  function renderDrawerRadar(path, d) {
+    const container = document.getElementById('drawer-radar');
+    if (!container) return;
+    const hotspots = d.hotspots || [];
+    const ch = (d.code_health || []).find(function (r) { return r.path === path; });
+    const hot = hotspots.find(function (r) { return r.path === path; });
+    if (!hot) {
+      container.innerHTML = '<div class="opacity-60 text-xs">No metrics for this file.</div>';
+      return;
+    }
+    // Per-axis run-relative anchors.
+    let maxCog = 0, maxRev = 0, maxAI = 0, maxCoup = 0;
+    for (var i = 0; i < hotspots.length; i++) {
+      const r = hotspots[i];
+      if (r.cognitive > maxCog) maxCog = r.cognitive;
+      if (r.revisions > maxRev) maxRev = r.revisions;
+      if (typeof r.ai_pct === 'number' && r.ai_pct > maxAI) maxAI = r.ai_pct;
+    }
+    const coupling = d.coupling || [];
+    const couplingCounts = {};
+    for (var ci = 0; ci < coupling.length; ci++) {
+      const c = coupling[ci];
+      couplingCounts[c.entity_a] = (couplingCounts[c.entity_a] || 0) + 1;
+      couplingCounts[c.entity_b] = (couplingCounts[c.entity_b] || 0) + 1;
+    }
+    for (var ck in couplingCounts) {
+      if (couplingCounts[ck] > maxCoup) maxCoup = couplingCounts[ck];
+    }
+    const fileCouplingCount = couplingCounts[path] || 0;
+
+    const axes = [
+      { name: 'Cognitive', max: 1.0, value: maxCog ? hot.cognitive / maxCog : 0 },
+      { name: 'Churn',     max: 1.0, value: maxRev ? hot.revisions / maxRev : 0 },
+      { name: 'Coupling',  max: 1.0, value: maxCoup ? fileCouplingCount / maxCoup : 0 },
+      { name: 'MI',        max: 1.0, value: typeof hot.mi_rank === 'number' ? Math.max(0, Math.min(1, hot.mi_rank)) : 0 },
+      { name: 'AI%',       max: 1.0, value: (typeof hot.ai_pct === 'number' && maxAI) ? hot.ai_pct / maxAI : 0 },
+      { name: 'Health',    max: 1.0, value: ch && typeof ch.score === 'number' ? Math.max(0, 1 - ch.score / 100) : 0 },
+    ];
+
     const chart = mountEcharts(container);
-    const nodes = root.descendants();
-    const maxCognitive = nodes.reduce(function (acc, n) {
-      const cog = n.data.metrics ? n.data.metrics.cognitive : 0;
-      return Math.max(acc, cog);
-    }, 0) || 1;
-
     chart.setOption({
-      // The whole canvas is the d3-laid-out coordinate space. We pass
-      // raw pixel offsets so we don't need a grid/axis.
-      tooltip: {
-        trigger: 'item',
-        formatter: function (params) {
-          const d = params.data || {};
-          if (d.depth === 0) return '<b>root</b>';
-          if (!d.metrics) {
-            return '<b>' + escapeHtml(d.name) + '</b>' +
-              '<br/>directory · ' + d.leafCount + ' files';
-          }
-          const m = d.metrics;
-          return '<b>' + escapeHtml(d.fullPath) + '</b>' +
-            '<br/>revisions: ' + m.revisions +
-            '<br/>cognitive: ' + m.cognitive.toFixed(0) +
-            '<br/>code health: ' + m.code_health.toFixed(1) +
-            '<br/>hotspot score: ' + m.hotspot_score.toFixed(2);
-        },
+      radar: {
+        indicator: axes.map(function (a) { return { name: a.name, max: a.max }; }),
+        radius: '65%',
+        axisName: { color: getCssVar('--fg-dim'), fontSize: 10 },
+        splitLine: { lineStyle: { color: getCssVar('--bg-elev-2') } },
       },
       series: [{
-        type: 'custom',
-        coordinateSystem: 'none',
-        renderItem: function (params, api) {
-          const datum = api.value('_raw');
-          if (!datum) return null;
-          return {
-            type: 'circle',
-            shape: {
-              cx: datum.x,
-              cy: datum.y,
-              r: datum.r,
-            },
-            style: api.style({
-              fill: datum.color,
-              stroke: datum.stroke,
-              lineWidth: 1,
-              opacity: datum.opacity,
-            }),
-          };
-        },
-        data: nodes
-          // Render larger-first so smaller circles paint on top.
-          .slice()
-          .sort(function (a, b) { return b.r - a.r; })
-          .map(function (n) {
-            const isLeaf = !n.children || !n.children.length;
-            const m = n.data.metrics;
-            const cog = m ? m.cognitive : 0;
-            const ratio = cog / maxCognitive;
-            let leafColor;
-            if (colorMode === 'author') {
-              const author = primaryAuthorByPath[n.data.fullPath];
-              leafColor = author ? authorPalette[author] : 'rgba(140, 140, 140, 0.55)';
-            } else if (colorMode === 'ai') {
-              // Per-file AI-attribution ratio: share of commits
-              // touching this file that carry an ai-assisted /
-              // ai-authored signal. Continuous heatmap from pale
-              // (no AI) to red (all AI). Files with no MI/AI data
-              // (binary, unsupported language) render as neutral
-              // grey instead of misleading "0% AI".
-              const aiPct = m && typeof m.ai_pct === 'number' ? m.ai_pct : null;
-              if (aiPct === null) {
-                leafColor = 'rgba(140, 140, 140, 0.55)';
-              } else {
-                leafColor = heatmapColor(Math.max(0, Math.min(1, aiPct / 100)));
-              }
-            } else if (colorMode === 'clones') {
-              // Structural-duplication overlay. `cloneCountByPath`
-              // came from `data.clones` (see `output/spa.rs::run_clone_summary`).
-              // Files outside any clone family render neutral grey so
-              // they sit visually behind the heat colours on actual
-              // clone hotspots. The heatmap colour scales by the
-              // max group count across the whole dashboard so the
-              // distribution is per-repo relative, not absolute.
-              const groups = cloneCountByPath[n.data.fullPath] || 0;
-              if (groups === 0) {
-                leafColor = 'rgba(140, 140, 140, 0.55)';
-              } else {
-                leafColor = heatmapColor(Math.min(1, groups / cloneScale));
-              }
-            } else {
-              leafColor = heatmapColor(ratio);
-            }
-            const color = isLeaf
-              ? leafColor
-              : 'rgba(255, 255, 255, 0.02)';
-            const stroke = isLeaf
-              ? 'rgba(0, 0, 0, 0.3)'
-              : 'rgba(255, 255, 255, 0.15)';
-            return {
-              value: [n.x, n.y],
-              _raw: { x: n.x, y: n.y, r: n.r, color: color, stroke: stroke, opacity: isLeaf ? 0.85 : 1 },
-              name: n.data.name || 'root',
-              fullPath: n.data.fullPath || '',
-              metrics: m || null,
-              depth: n.depth,
-              leafCount: n.leaves ? n.leaves().length : 0,
-            };
-          }),
+        type: 'radar',
+        data: [{
+          value: axes.map(function (a) { return a.value; }),
+          name: 'profile',
+          areaStyle: { color: 'rgba(245, 158, 11, 0.25)' },
+          lineStyle: { color: token('--color-warning'), width: 2 },
+          itemStyle: { color: token('--color-warning') },
+        }],
       }],
     });
-
-    chart.on('click', function (params) {
-      const d = params && params.data;
-      if (d && d.fullPath && d.metrics) {
-        showFileDetailDrawer(d.fullPath, data);
-      }
-    });
-
   }
 
-  function renderHotspotTable(rows) {
-    const container = document.getElementById('widget-hotspot-table-body');
-    const filterEl = document.getElementById('hotspot-table-filter');
-    const summaryEl = document.getElementById('hotspot-table-summary');
-    const actionsEl = document.getElementById('hotspot-table-actions');
-    if (!container || !filterEl || !summaryEl || !actionsEl) return;
-    if (!rows.length) {
-      container.innerHTML = '<div class="empty">No hotspot rows.</div>';
-      summaryEl.textContent = '';
-      return;
-    }
 
-    const COLUMNS = [
-      { key: 'path',          label: 'Path',         cls: 'path', kind: 'string', defaultDir: 1 },
-      { key: 'revisions',     label: 'Revisions',    cls: 'num',  kind: 'number', defaultDir: -1, defKey: 'revisions' },
-      { key: 'cognitive',     label: 'Cognitive',    cls: 'num',  kind: 'number', defaultDir: -1, defKey: 'cognitive' },
-      { key: 'code_health',   label: 'Code Health',  cls: 'num',  kind: 'number', defaultDir: 1,  defKey: 'code_health' },
-      { key: 'hotspot_score', label: 'Hotspot Score', cls: 'num', kind: 'number', defaultDir: -1, defKey: 'hotspot_score' },
-      { key: 'mi',            label: 'MI',           cls: 'num',  kind: 'number', defaultDir: -1, defKey: 'mi' },
-      { key: 'ai_pct',        label: 'AI %',         cls: 'num',  kind: 'number', defaultDir: -1, defKey: 'ai_pct' },
-    ];
-    const PAGE_SIZE = 500;
+  // ─── §6  Widget: KPI tiles ────────────────────────────────────────
 
-    // State.
-    let sortKey = 'hotspot_score';
-    let sortDir = -1;       // 1 = ascending, -1 = descending
-    let filterText = '';
-    let renderedRows = 0;   // how many of the filtered set we've appended
-    let filteredView = [];  // current sorted+filtered slice
-
-    function compare(a, b) {
-      const va = a[sortKey];
-      const vb = b[sortKey];
-      const col = COLUMNS.find(function (c) { return c.key === sortKey; });
-      if (col && col.kind === 'string') {
-        return sortDir * String(va).localeCompare(String(vb));
-      }
-      // numeric — treat undefined as -Infinity so it sinks under desc sort
-      const na = (typeof va === 'number') ? va : -Infinity;
-      const nb = (typeof vb === 'number') ? vb : -Infinity;
-      return sortDir * (na - nb);
-    }
-
-    function applyFilter(query) {
-      const q = query.trim().toLowerCase();
-      filteredView = q
-        ? rows.filter(function (r) { return r.path.toLowerCase().indexOf(q) !== -1; })
-        : rows.slice();
-      filteredView.sort(compare);
-    }
-
-    function fmtNumber(v, opts) {
-      if (typeof v !== 'number' || !isFinite(v)) return '';
-      const decimals = (opts && opts.decimals != null) ? opts.decimals : 2;
-      return v.toFixed(decimals);
-    }
-
-    function renderHeader() {
-      // DaisyUI `table table-zebra` provides striped rows + consistent
-      // typography on top of the inline `.table-container table { ... }`
-      // rules. The two co-exist: inline rules win on background-color
-      // (var(--bg-elev-2)) so v0.4.x continuity holds; DaisyUI's font
-      // tokens layer on top.
-      let html = '<table class="table table-zebra"><thead><tr>';
-      for (var i = 0; i < COLUMNS.length; i++) {
-        const c = COLUMNS[i];
-        const active = (c.key === sortKey);
-        const indicator = active
-          ? (sortDir > 0 ? '▲' : '▼')
-          : '';
-        const tip = c.defKey ? buildTooltipHtml(c.defKey) : '';
-        html += '<th class="' + (active ? 'active' : '') + '"' +
-          ' data-key="' + escapeHtml(c.key) + '">' +
-          escapeHtml(c.label) + tip +
-          ' <span class="sort-indicator">' + indicator + '</span>' +
-          '</th>';
-      }
-      html += '</tr></thead><tbody id="hotspot-tbody"></tbody></table>';
-      container.innerHTML = html;
-
-      // Wire header click → sort.
-      const ths = container.querySelectorAll('th');
-      for (var j = 0; j < ths.length; j++) {
-        ths[j].addEventListener('click', function (evt) {
-          const key = evt.currentTarget.getAttribute('data-key');
-          if (sortKey === key) {
-            sortDir *= -1;
-          } else {
-            sortKey = key;
-            const col = COLUMNS.find(function (c) { return c.key === key; });
-            sortDir = col ? col.defaultDir : -1;
-          }
-          rerender();
-        });
-      }
-    }
-
-    function renderNextPage(count) {
-      const tbody = container.querySelector('#hotspot-tbody');
-      if (!tbody) return;
-      const next = Math.min(renderedRows + count, filteredView.length);
-      var html = '';
-      for (var i = renderedRows; i < next; i++) {
-        const r = filteredView[i];
-        // MI cell: number + DaisyUI band badge (success / warning /
-        // error) when mi_rank is finite. Empty when language is
-        // unsupported by codelore-rca. The badge replaces the v0.4.x
-        // emoji band cue with a colour-coded pill — same triad
-        // (top/mid/bottom quartile) but accessible to screen readers
-        // and themable through DaisyUI's `--color-success` /
-        // `--color-warning` / `--color-error` tokens.
-        let miCell = '';
-        if (typeof r.mi === 'number' && isFinite(r.mi)) {
-          let bandBadge = '';
-          if (typeof r.mi_rank === 'number' && isFinite(r.mi_rank)) {
-            // Complete class-name literals (not string-concatenation)
-            // so the Tailwind v4 pruner can see each variant during
-            // `@source` scan of widgets.js — `'badge-' + kind` would
-            // hide the suffix from the static scan and the variants
-            // would drop out of the compiled CSS bundle.
-            if (r.mi_rank >= 0.75) {
-              bandBadge = ' <span class="badge badge-success badge-sm" title="MI band: High">High</span>';
-            } else if (r.mi_rank >= 0.25) {
-              bandBadge = ' <span class="badge badge-warning badge-sm" title="MI band: Mid">Mid</span>';
-            } else {
-              bandBadge = ' <span class="badge badge-error badge-sm" title="MI band: Low">Low</span>';
-            }
-          }
-          miCell = r.mi.toFixed(1) + bandBadge;
-        }
-        // AI cell: percentage rendered as X% (rounded — table is dense,
-        // decimal point would crowd). Wrapped in a DaisyUI outline
-        // badge so the AI-attribution signal reads consistently with
-        // the MI band badge above.
-        const aiCell = (typeof r.ai_pct === 'number' && isFinite(r.ai_pct))
-          ? '<span class="badge badge-outline badge-sm">' + Math.round(r.ai_pct) + '%</span>'
-          : '';
-        html += '<tr data-path="' + escapeHtml(r.path) + '" class="hotspot-row" style="cursor:pointer">' +
-          '<td class="path">' + escapeHtml(r.path) + '</td>' +
-          '<td class="num">' + (r.revisions != null ? r.revisions : '') + '</td>' +
-          '<td class="num">' + fmtNumber(r.cognitive, { decimals: 0 }) + '</td>' +
-          '<td class="num">' + fmtNumber(r.code_health, { decimals: 1 }) + '</td>' +
-          '<td class="num">' + fmtNumber(r.hotspot_score, { decimals: 2 }) + '</td>' +
-          '<td class="num">' + miCell + '</td>' +
-          '<td class="num">' + aiCell + '</td>' +
-          '</tr>';
-      }
-      tbody.insertAdjacentHTML('beforeend', html);
-      renderedRows = next;
-      // Wire row click → detail drawer for the rows we just added.
-      const newRows = tbody.querySelectorAll('tr.hotspot-row:not([data-wired])');
-      for (var k = 0; k < newRows.length; k++) {
-        newRows[k].setAttribute('data-wired', '1');
-        newRows[k].addEventListener('click', function (evt) {
-          const path = evt.currentTarget.getAttribute('data-path');
-          if (window._codeloreShowDetail) window._codeloreShowDetail(path);
-        });
-      }
-      refreshActions();
-    }
-
-    function refreshActions() {
-      summaryEl.textContent = filteredView.length === rows.length
-        ? (renderedRows + ' of ' + rows.length + ' rows shown')
-        : (renderedRows + ' of ' + filteredView.length + ' filtered rows shown (' +
-           rows.length + ' total)');
-      const more = filteredView.length - renderedRows;
-      actionsEl.innerHTML = '';
-      if (more <= 0) return;
-      const next = Math.min(PAGE_SIZE, more);
-      const showNext = document.createElement('button');
-      showNext.type = 'button';
-      // DaisyUI `btn btn-outline btn-sm` matches the v0.5.x admin-portal
-      // vocabulary established by PR-2 (theme toggle) and PR-4 (drawer
-      // close). Inline `.table-actions button { ... }` rules in the
-      // `<style>` block are no-op'd by this — the DaisyUI utility
-      // classes win specificity now that we declare them explicitly.
-      showNext.className = 'btn btn-outline btn-sm';
-      showNext.textContent = 'Show next ' + next;
-      showNext.addEventListener('click', function () { renderNextPage(PAGE_SIZE); });
-      actionsEl.appendChild(showNext);
-      if (more > PAGE_SIZE) {
-        const showAll = document.createElement('button');
-        showAll.type = 'button';
-        showAll.className = 'btn btn-outline btn-sm';
-        showAll.textContent = 'Show all (' + more + ' more)';
-        showAll.addEventListener('click', function () { renderNextPage(Infinity); });
-        actionsEl.appendChild(showAll);
-      }
-    }
-
-    function rerender() {
-      renderHeader();
-      applyFilter(filterText);
-      renderedRows = 0;
-      renderNextPage(PAGE_SIZE);
-    }
-
-    // Debounce the filter input — applying the filter requires a full
-    // table rebuild, which is a few ms on 30k rows. 80 ms feels live.
-    var debounceTimer = null;
-    filterEl.addEventListener('input', function (evt) {
-      filterText = evt.target.value;
-      // Mirror the local filterText into the Alpine `filter` store so
-      // any other widget that subscribes via `Alpine.effect(...)` sees
-      // the live value. Wrapped in `window.Alpine` guard so the page
-      // still works if Alpine fails to load (e.g. user disabled JS
-      // through a content-security-policy header).
-      if (window.Alpine) {
-        window.Alpine.store('filter').set(filterText);
-      }
-      if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(rerender, 80);
-    });
-
-    // Seed the input from the persisted Alpine store on first render
-    // so a page reload (e.g. `--embed` step-summary roundtrip) brings
-    // the user's last filter back. The store value comes from
-    // localStorage via the Alpine persist plugin.
-    if (window.Alpine) {
-      const persisted = window.Alpine.store('filter').text;
-      if (persisted && !filterEl.value) {
-        filterEl.value = persisted;
-        filterText = persisted;
-      }
-    }
-
-    // Initial render.
-    rerender();
-  }
-
-  // -----------------------------------------------------------------
-  // Widget 0: KPI tiles — at-a-glance metrics
-  // -----------------------------------------------------------------
   function renderKpiTiles(d) {
     const container = document.getElementById('widget-kpi-tiles-body');
     if (!container) return;
@@ -760,10 +788,10 @@
     for (var j = 0; j < tiles.length; j++) {
       const t = tiles[j];
       const tip = t.defKey ? buildTooltipHtml(t.defKey) : '';
-      // DaisyUI `stat` classes layered onto the v0.4.x `.kpi-*`
-      // semantic classes. The kpi-grid wrapper still drives layout;
-      // DaisyUI's stat-title/value/desc give typography + spacing
-      // tokens consistent with the rest of the v0.5.x chrome.
+      // DaisyUI `stat` classes layered onto the `.kpi-*` semantic
+      // classes. The kpi-grid wrapper still drives layout; DaisyUI's
+      // stat-title/value/desc give typography + spacing tokens
+      // consistent with the rest of the dashboard chrome.
       html += '<div class="kpi-tile stat">' +
         '<div class="kpi-label stat-title">' + escapeHtml(t.label) + tip + '</div>' +
         '<div class="kpi-value stat-value">' + escapeHtml(t.value) + '</div>' +
@@ -773,9 +801,627 @@
     container.innerHTML = html;
   }
 
-  // -----------------------------------------------------------------
-  // Widget C: change-coupling sankey
-  // -----------------------------------------------------------------
+
+  // ─── §7  Widget: knowledge islands (CodeLore differentiator) ─────
+
+  function renderKnowledgeIslands(rows) {
+    const container = document.getElementById('widget-knowledge-islands-body');
+    if (!container) return;
+    if (!rows.length) {
+      container.innerHTML = '<div class="empty">No knowledge islands. ' +
+        'Either no contributors have departed past the threshold or the ' +
+        'analysis was not wired through.</div>';
+      return;
+    }
+
+    // Sort by ownership pct descending then by days-since-active.
+    const sorted = rows.slice().sort(function (a, b) {
+      const oa = (typeof a.ownership_pct === 'number') ? a.ownership_pct : 0;
+      const ob = (typeof b.ownership_pct === 'number') ? b.ownership_pct : 0;
+      if (oa !== ob) return ob - oa;
+      const da = (typeof a.days_since_main_active === 'number') ? a.days_since_main_active : 0;
+      const db = (typeof b.days_since_main_active === 'number') ? b.days_since_main_active : 0;
+      return db - da;
+    });
+
+    var html = '<table><thead><tr>' +
+      '<th>Path</th>' +
+      '<th>Departed author</th>' +
+      '<th class="num">Ownership %</th>' +
+      '<th class="num">Days since active</th>' +
+      '<th class="num">LOC</th>' +
+      '</tr></thead><tbody>';
+    for (var i = 0; i < sorted.length; i++) {
+      const r = sorted[i];
+      html += '<tr data-path="' + escapeHtml(r.path) + '" class="ki-row">' +
+        '<td class="path">' + escapeHtml(r.path) + '</td>' +
+        '<td>' + escapeHtml(r.main_author || '') + '</td>' +
+        '<td class="num">' + fmtNumberFlex(r.ownership_pct, 1) + '</td>' +
+        '<td class="num">' + fmtInt(r.days_since_main_active) + '</td>' +
+        '<td class="num">' + fmtInt(r.total_loc) + '</td>' +
+        '</tr>';
+    }
+    html += '</tbody></table>';
+    container.innerHTML = html;
+
+    const trs = container.querySelectorAll('tr.ki-row');
+    for (var j = 0; j < trs.length; j++) {
+      trs[j].addEventListener('click', function (evt) {
+        const path = evt.currentTarget.getAttribute('data-path');
+        showFileDetailDrawer(path, data);
+      });
+      trs[j].style.cursor = 'pointer';
+    }
+  }
+
+
+  // ─── §8  Widget: hotspot circle-pack (signature CodeScene view) ──
+
+  function renderHotspotCirclePack(rows, colorMode) {
+    const container = document.getElementById('widget-hotspot-circle-pack-body');
+    if (!container) return;
+    if (!rows.length) {
+      container.innerHTML = '<div class="empty">No hotspots to display. ' +
+        'The repository may be too small, or thresholds filtered everything out.</div>';
+      return;
+    }
+    colorMode = colorMode || 'cognitive';
+    // Clear any prior ECharts instance so toggles re-render cleanly.
+    container.innerHTML = '';
+
+    // Build a primary-author map (path → author with max added LoC)
+    // for the W7 knowledge-map mode. Computed once per render call.
+    const primaryAuthorByPath = computePrimaryAuthorByPath(data.entity_ownership || []);
+    const authorPalette = makeAuthorPalette(
+      Array.from(new Set(Object.values(primaryAuthorByPath)))
+    );
+
+    // Build a path → clone-group-count map for the 'clones'
+    // colour mode. `data.clones` is the per-file overlay computed
+    // by `output/spa.rs::run_clone_summary`; one entry per path
+    // with ≥ 1 clone family. Falls back to an empty object when
+    // the payload omits the field (older fixtures, no clones
+    // detected). `maxCloneGroups` anchors the heatmap.
+    const cloneCountByPath = {};
+    let maxCloneGroups = 0;
+    const cloneRows = data.clones || [];
+    for (var ci = 0; ci < cloneRows.length; ci++) {
+      const cr = cloneRows[ci];
+      cloneCountByPath[cr.path] = cr.groups;
+      if (cr.groups > maxCloneGroups) maxCloneGroups = cr.groups;
+    }
+    const cloneScale = maxCloneGroups || 1;
+
+    // Step 1: build a filesystem-style hierarchy from flat HotspotRow[].
+    // Each row is { path, revisions, cognitive, code_health, hotspot_score }.
+    // Path "a/b/c.rs" yields tree:
+    //   root -> "a" -> "b" -> "c.rs" (leaf with the metrics)
+    const tree = buildFsHierarchy(rows);
+
+    // Step 2: d3.hierarchy + d3.pack() compute circle (x, y, r) coords.
+    // The pack layout sizes leaves by `revisions` (churn). Internal nodes
+    // are sized by the sum of their leaves.
+    const root = d3.hierarchy(tree)
+      .sum(function (d) { return (d.metrics ? d.metrics.revisions : 0); })
+      .sort(function (a, b) { return b.value - a.value; });
+
+    const containerWidth = container.clientWidth || 800;
+    const containerHeight = container.clientHeight || 600;
+    const side = Math.min(containerWidth, containerHeight);
+    d3.pack().size([side, side]).padding(2)(root);
+
+    // Step 3: feed the laid-out nodes into ECharts as a custom series.
+    // The custom series renders one shape per node; we draw circles
+    // sized + positioned exactly per d3's layout. Color encodes
+    // cognitive complexity (leaves only) on a yellow→red ramp.
+    const chart = mountEcharts(container);
+    const nodes = root.descendants();
+    const maxCognitive = nodes.reduce(function (acc, n) {
+      const cog = n.data.metrics ? n.data.metrics.cognitive : 0;
+      return Math.max(acc, cog);
+    }, 0) || 1;
+
+    // P75 of the run's hotspot_score distribution. The ring overlay
+    // marks any leaf at or above this as "in the top-quartile of
+    // hotspot risk for this analysis." Uses the project's standard
+    // percentile-rank approach (matches the MI bands); absolute
+    // scores still appear in tooltips for cross-repo comparability.
+    const hotspotScores = nodes
+      .filter(function (n) { return n.data.metrics && n.data.metrics.hotspot_score != null; })
+      .map(function (n) { return n.data.metrics.hotspot_score; })
+      .sort(function (a, b) { return a - b; });
+    const hotspotP75 = hotspotScores.length
+      ? hotspotScores[Math.floor(hotspotScores.length * 0.75)]
+      : Infinity;
+
+    // Stash the laid-out node positions in module scope so
+    // updateCouplingArcs() can do partial setOption updates on click
+    // without re-running buildFsHierarchy + d3.pack.
+    lastHotspotChart = chart;
+    lastHotspotNodePositions = new Map();
+    for (var ni = 0; ni < nodes.length; ni++) {
+      const n = nodes[ni];
+      if (n.data && n.data.fullPath) {
+        lastHotspotNodePositions.set(n.data.fullPath, { x: n.x, y: n.y, r: n.r });
+      }
+    }
+
+    chart.setOption({
+      // The whole canvas is the d3-laid-out coordinate space. We pass
+      // raw pixel offsets so we don't need a grid/axis.
+      tooltip: {
+        trigger: 'item',
+        formatter: function (params) {
+          const d = params.data || {};
+          if (d.depth === 0) return '<b>root</b>';
+          if (!d.metrics) {
+            return '<b>' + escapeHtml(d.name) + '</b>' +
+              '<br/>directory · ' + d.leafCount + ' files';
+          }
+          const m = d.metrics;
+          return '<b>' + escapeHtml(d.fullPath) + '</b>' +
+            '<br/>revisions: ' + m.revisions +
+            '<br/>cognitive: ' + m.cognitive.toFixed(0) +
+            '<br/>code health: ' + m.code_health.toFixed(1) +
+            '<br/>hotspot score: ' + m.hotspot_score.toFixed(2);
+        },
+      },
+      series: [{
+        type: 'custom',
+        coordinateSystem: 'none',
+        renderItem: function (params, api) {
+          const datum = api.value('_raw');
+          if (!datum) return null;
+          const innerCircle = {
+            type: 'circle',
+            shape: {
+              cx: datum.x,
+              cy: datum.y,
+              r: datum.r,
+            },
+            style: api.style({
+              fill: datum.color,
+              stroke: datum.stroke,
+              lineWidth: 1,
+              opacity: datum.opacity,
+            }),
+          };
+          // Top-quartile leaves get a yellow ring overlay. Drawn
+          // first (lower in z-order) so the inner circle paints on
+          // top — preserves the existing color encoding. Ring stroke
+          // uses the cached `token()` so theme toggles see the new
+          // --color-warning via registerThemeRerender's cache flush.
+          if (datum.isHotspot) {
+            return {
+              type: 'group',
+              children: [
+                {
+                  type: 'circle',
+                  shape: { cx: datum.x, cy: datum.y, r: datum.r + 2.5 },
+                  style: {
+                    fill: 'transparent',
+                    stroke: token('--color-warning'),
+                    lineWidth: 2,
+                    opacity: 0.85,
+                  },
+                },
+                innerCircle,
+              ],
+            };
+          }
+          return innerCircle;
+        },
+        zlevel: 1,
+        data: nodes
+          // Render larger-first so smaller circles paint on top.
+          .slice()
+          .sort(function (a, b) { return b.r - a.r; })
+          .map(function (n) {
+            const isLeaf = !n.children || !n.children.length;
+            const m = n.data.metrics;
+            const cog = m ? m.cognitive : 0;
+            const ratio = cog / maxCognitive;
+            let leafColor;
+            if (colorMode === 'author') {
+              const author = primaryAuthorByPath[n.data.fullPath];
+              leafColor = author ? authorPalette[author] : 'rgba(140, 140, 140, 0.55)';
+            } else if (colorMode === 'ai') {
+              // Per-file AI-attribution ratio: share of commits
+              // touching this file that carry an ai-assisted /
+              // ai-authored signal. Continuous heatmap from pale
+              // (no AI) to red (all AI). Files with no MI/AI data
+              // (binary, unsupported language) render as neutral
+              // grey instead of misleading "0% AI".
+              const aiPct = m && typeof m.ai_pct === 'number' ? m.ai_pct : null;
+              if (aiPct === null) {
+                leafColor = 'rgba(140, 140, 140, 0.55)';
+              } else {
+                leafColor = heatmapColor(Math.max(0, Math.min(1, aiPct / 100)));
+              }
+            } else if (colorMode === 'clones') {
+              // Structural-duplication overlay. `cloneCountByPath`
+              // came from `data.clones` (see `output/spa.rs::run_clone_summary`).
+              // Files outside any clone family render neutral grey so
+              // they sit visually behind the heat colours on actual
+              // clone hotspots. The heatmap colour scales by the
+              // max group count across the whole dashboard so the
+              // distribution is per-repo relative, not absolute.
+              const groups = cloneCountByPath[n.data.fullPath] || 0;
+              if (groups === 0) {
+                leafColor = 'rgba(140, 140, 140, 0.55)';
+              } else {
+                leafColor = heatmapColor(Math.min(1, groups / cloneScale));
+              }
+            } else if (colorMode === 'health') {
+              // Code Health Map mode — 3-band green / yellow / red
+              // via DaisyUI semantic tokens
+              // (`--color-success` / `--color-warning` / `--color-error`)
+              // so the bands auto-adapt to light and dark themes. Null
+              // code_health (binary, unsupported language) renders as
+              // the dim foreground rather than misleading green.
+              leafColor = codeHealthColor(m ? m.code_health : null);
+            } else if (colorMode === 'friction') {
+              // Technical Debt Friction mode — continuous heat ramp
+              // on hotspot_score. The formula
+              // `percentile_rank(revisions) × percentile_rank(cognitive)
+              // × (100 − code_health) / 4` already intersects activity
+              // with unhealthy code (Tornhill 2018 score, range [0,10]),
+              // so this is pure SQL → ramp surfacing. OKLCH interpolation
+              // via heatRamp keeps the midpoint perceptually correct.
+              if (!m || m.hotspot_score == null) {
+                leafColor = token('--color-base-content');
+              } else {
+                leafColor = heatRamp(Math.max(0, Math.min(1, m.hotspot_score / 10)));
+              }
+            } else if (colorMode === 'knowledge-loss') {
+              // Knowledge Loss Map + Off-boarding Sim — collapsed
+              // into one mode. Blue = current team owns the
+              // file; red = primary author is in the offboarding
+              // scenario's `departed` set; dim = no author data. The
+              // user-driven `departed` list comes from the dropdown in
+              // template.html — toggling it fires the Alpine.effect
+              // bridge which re-runs this render via the rerenderer
+              // registry, with the token cache flushed first
+              // (registerThemeRerender wraps it).
+              const author = primaryAuthorByPath[n.data.fullPath];
+              if (!author) {
+                leafColor = token('--color-base-content');
+              } else {
+                const scenarioStore = (window.Alpine && window.Alpine.store)
+                  ? window.Alpine.store('scenario')
+                  : null;
+                const isDeparted = scenarioStore
+                  && scenarioStore.departed.indexOf(author) >= 0;
+                leafColor = isDeparted
+                  ? token('--color-error')
+                  : token('--color-info');
+              }
+            } else {
+              leafColor = heatmapColor(ratio);
+            }
+            const color = isLeaf
+              ? leafColor
+              : 'rgba(255, 255, 255, 0.02)';
+            const stroke = isLeaf
+              ? 'rgba(0, 0, 0, 0.3)'
+              : 'rgba(255, 255, 255, 0.15)';
+            // Ring overlay: tag leaves whose hotspot_score sits
+            // in the top quartile of the run. renderItem reads
+            // `_raw.isHotspot` and wraps the leaf in a yellow ring.
+            const isHotspot = isLeaf && m && m.hotspot_score != null
+              && m.hotspot_score >= hotspotP75;
+            return {
+              value: [n.x, n.y],
+              _raw: {
+                x: n.x, y: n.y, r: n.r,
+                color: color, stroke: stroke,
+                opacity: isLeaf ? 0.85 : 1,
+                isHotspot: isHotspot,
+              },
+              name: n.data.name || 'root',
+              fullPath: n.data.fullPath || '',
+              metrics: m || null,
+              depth: n.depth,
+              leafCount: n.leaves ? n.leaves().length : 0,
+            };
+          }),
+      }, {
+        // Second custom series for the coupling arc overlay.
+        // Drives off the shared coordinateSystem ('none' = raw pixel
+        // coords from d3.pack), so arcs anchor exactly on the circle
+        // centres. zlevel: 2 paints above the circle pack. `silent:
+        // true` keeps clicks falling through to the leaves below.
+        // Initial data computed from the current `selectedCouplingFile`
+        // (null on first render → empty array → invisible series).
+        type: 'custom',
+        coordinateSystem: 'none',
+        zlevel: 2,
+        silent: true,
+        renderItem: function (params, api) {
+          const arc = api.value('_arc');
+          if (!arc) return null;
+          return {
+            type: 'path',
+            shape: { d: arcPath(arc.x1, arc.y1, arc.x2, arc.y2, 0.25) },
+            style: {
+              stroke: token('--color-warning'),
+              fill: 'none',
+              opacity: arc.opacity,
+              lineWidth: arc.lineWidth,
+            },
+            silent: true,
+          };
+        },
+        data: buildCouplingArcs(
+          selectedCouplingFile,
+          lastHotspotNodePositions,
+          data.coupling || []
+        ).map(function (a) { return { value: [a.x1, a.y1], _arc: a }; }),
+      }],
+    });
+
+    chart.on('click', function (params) {
+      const d = params && params.data;
+      if (d && d.fullPath && d.metrics) {
+        // Clicking a leaf surfaces its coupling partners AND
+        // opens the drawer. Both behaviours co-exist intentionally
+        // — the arcs scaffold the drawer's narrative ("this file is
+        // tightly coupled to these others") rather than competing
+        // with it.
+        selectedCouplingFile = d.fullPath;
+        updateCouplingArcs();
+        showFileDetailDrawer(d.fullPath, data);
+      }
+    });
+
+    // Clicking the canvas background (no shape under the
+    // pointer) clears the arc overlay. `e.target` is falsy for
+    // background clicks in zrender's event model.
+    chart.getZr().on('click', function (e) {
+      if (!e.target) {
+        selectedCouplingFile = null;
+        updateCouplingArcs();
+      }
+    });
+
+  }
+
+
+  // ─── §9  Widget: hotspot table (sortable drill-down of §8) ────────
+
+  function renderHotspotTable(rows) {
+    const container = document.getElementById('widget-hotspot-table-body');
+    const filterEl = document.getElementById('hotspot-table-filter');
+    const summaryEl = document.getElementById('hotspot-table-summary');
+    const actionsEl = document.getElementById('hotspot-table-actions');
+    if (!container || !filterEl || !summaryEl || !actionsEl) return;
+    if (!rows.length) {
+      container.innerHTML = '<div class="empty">No hotspot rows.</div>';
+      summaryEl.textContent = '';
+      return;
+    }
+
+    const COLUMNS = [
+      { key: 'path',          label: 'Path',         cls: 'path', kind: 'string', defaultDir: 1 },
+      { key: 'revisions',     label: 'Revisions',    cls: 'num',  kind: 'number', defaultDir: -1, defKey: 'revisions' },
+      { key: 'cognitive',     label: 'Cognitive',    cls: 'num',  kind: 'number', defaultDir: -1, defKey: 'cognitive' },
+      { key: 'code_health',   label: 'Code Health',  cls: 'num',  kind: 'number', defaultDir: 1,  defKey: 'code_health' },
+      { key: 'hotspot_score', label: 'Hotspot Score', cls: 'num', kind: 'number', defaultDir: -1, defKey: 'hotspot_score' },
+      { key: 'mi',            label: 'MI',           cls: 'num',  kind: 'number', defaultDir: -1, defKey: 'mi' },
+      { key: 'ai_pct',        label: 'AI %',         cls: 'num',  kind: 'number', defaultDir: -1, defKey: 'ai_pct' },
+    ];
+    const PAGE_SIZE = 500;
+
+    // State.
+    let sortKey = 'hotspot_score';
+    let sortDir = -1;       // 1 = ascending, -1 = descending
+    let filterText = '';
+    let renderedRows = 0;   // how many of the filtered set we've appended
+    let filteredView = [];  // current sorted+filtered slice
+
+    function compare(a, b) {
+      const va = a[sortKey];
+      const vb = b[sortKey];
+      const col = COLUMNS.find(function (c) { return c.key === sortKey; });
+      if (col && col.kind === 'string') {
+        return sortDir * String(va).localeCompare(String(vb));
+      }
+      // numeric — treat undefined as -Infinity so it sinks under desc sort
+      const na = (typeof va === 'number') ? va : -Infinity;
+      const nb = (typeof vb === 'number') ? vb : -Infinity;
+      return sortDir * (na - nb);
+    }
+
+    function applyFilter(query) {
+      const q = query.trim().toLowerCase();
+      filteredView = q
+        ? rows.filter(function (r) { return r.path.toLowerCase().indexOf(q) !== -1; })
+        : rows.slice();
+      filteredView.sort(compare);
+    }
+
+    function fmtNumber(v, opts) {
+      if (typeof v !== 'number' || !isFinite(v)) return '';
+      const decimals = (opts && opts.decimals != null) ? opts.decimals : 2;
+      return v.toFixed(decimals);
+    }
+
+    function renderHeader() {
+      // DaisyUI `table table-zebra` provides striped rows + consistent
+      // typography on top of the inline `.table-container table { ... }`
+      // rules. The two co-exist: inline rules win on background-color
+      // (var(--bg-elev-2)) for stylistic continuity; DaisyUI's font
+      // tokens layer on top.
+      let html = '<table class="table table-zebra"><thead><tr>';
+      for (var i = 0; i < COLUMNS.length; i++) {
+        const c = COLUMNS[i];
+        const active = (c.key === sortKey);
+        const indicator = active
+          ? (sortDir > 0 ? '▲' : '▼')
+          : '';
+        const tip = c.defKey ? buildTooltipHtml(c.defKey) : '';
+        html += '<th class="' + (active ? 'active' : '') + '"' +
+          ' data-key="' + escapeHtml(c.key) + '">' +
+          escapeHtml(c.label) + tip +
+          ' <span class="sort-indicator">' + indicator + '</span>' +
+          '</th>';
+      }
+      html += '</tr></thead><tbody id="hotspot-tbody"></tbody></table>';
+      container.innerHTML = html;
+
+      // Wire header click → sort.
+      const ths = container.querySelectorAll('th');
+      for (var j = 0; j < ths.length; j++) {
+        ths[j].addEventListener('click', function (evt) {
+          const key = evt.currentTarget.getAttribute('data-key');
+          if (sortKey === key) {
+            sortDir *= -1;
+          } else {
+            sortKey = key;
+            const col = COLUMNS.find(function (c) { return c.key === key; });
+            sortDir = col ? col.defaultDir : -1;
+          }
+          rerender();
+        });
+      }
+    }
+
+    function renderNextPage(count) {
+      const tbody = container.querySelector('#hotspot-tbody');
+      if (!tbody) return;
+      const next = Math.min(renderedRows + count, filteredView.length);
+      var html = '';
+      for (var i = renderedRows; i < next; i++) {
+        const r = filteredView[i];
+        // MI cell: number + DaisyUI band badge (success / warning /
+        // error) when mi_rank is finite. Empty when language is
+        // unsupported by codelore-rca. The colour-coded pill carries
+        // the top/mid/bottom-quartile triad accessibly for screen
+        // readers and themably through DaisyUI's `--color-success` /
+        // `--color-warning` / `--color-error` tokens.
+        let miCell = '';
+        if (typeof r.mi === 'number' && isFinite(r.mi)) {
+          let bandBadge = '';
+          if (typeof r.mi_rank === 'number' && isFinite(r.mi_rank)) {
+            // Complete class-name literals (not string-concatenation)
+            // so the Tailwind v4 pruner can see each variant during
+            // `@source` scan of widgets.js — `'badge-' + kind` would
+            // hide the suffix from the static scan and the variants
+            // would drop out of the compiled CSS bundle.
+            if (r.mi_rank >= 0.75) {
+              bandBadge = ' <span class="badge badge-success badge-sm" title="MI band: High">High</span>';
+            } else if (r.mi_rank >= 0.25) {
+              bandBadge = ' <span class="badge badge-warning badge-sm" title="MI band: Mid">Mid</span>';
+            } else {
+              bandBadge = ' <span class="badge badge-error badge-sm" title="MI band: Low">Low</span>';
+            }
+          }
+          miCell = r.mi.toFixed(1) + bandBadge;
+        }
+        // AI cell: percentage rendered as X% (rounded — table is dense,
+        // decimal point would crowd). Wrapped in a DaisyUI outline
+        // badge so the AI-attribution signal reads consistently with
+        // the MI band badge above.
+        const aiCell = (typeof r.ai_pct === 'number' && isFinite(r.ai_pct))
+          ? '<span class="badge badge-outline badge-sm">' + Math.round(r.ai_pct) + '%</span>'
+          : '';
+        html += '<tr data-path="' + escapeHtml(r.path) + '" class="hotspot-row" style="cursor:pointer">' +
+          '<td class="path">' + escapeHtml(r.path) + '</td>' +
+          '<td class="num">' + (r.revisions != null ? r.revisions : '') + '</td>' +
+          '<td class="num">' + fmtNumber(r.cognitive, { decimals: 0 }) + '</td>' +
+          '<td class="num">' + fmtNumber(r.code_health, { decimals: 1 }) + '</td>' +
+          '<td class="num">' + fmtNumber(r.hotspot_score, { decimals: 2 }) + '</td>' +
+          '<td class="num">' + miCell + '</td>' +
+          '<td class="num">' + aiCell + '</td>' +
+          '</tr>';
+      }
+      tbody.insertAdjacentHTML('beforeend', html);
+      renderedRows = next;
+      // Wire row click → detail drawer for the rows we just added.
+      const newRows = tbody.querySelectorAll('tr.hotspot-row:not([data-wired])');
+      for (var k = 0; k < newRows.length; k++) {
+        newRows[k].setAttribute('data-wired', '1');
+        newRows[k].addEventListener('click', function (evt) {
+          const path = evt.currentTarget.getAttribute('data-path');
+          if (window._codeloreShowDetail) window._codeloreShowDetail(path);
+        });
+      }
+      refreshActions();
+    }
+
+    function refreshActions() {
+      summaryEl.textContent = filteredView.length === rows.length
+        ? (renderedRows + ' of ' + rows.length + ' rows shown')
+        : (renderedRows + ' of ' + filteredView.length + ' filtered rows shown (' +
+           rows.length + ' total)');
+      const more = filteredView.length - renderedRows;
+      actionsEl.innerHTML = '';
+      if (more <= 0) return;
+      const next = Math.min(PAGE_SIZE, more);
+      const showNext = document.createElement('button');
+      showNext.type = 'button';
+      // DaisyUI `btn btn-outline btn-sm` matches the dashboard's
+      // button vocabulary (theme toggle, drawer close). Inline
+      // `.table-actions button { ... }` rules in the `<style>` block
+      // are no-op'd by this — the DaisyUI utility classes win
+      // specificity now that we declare them explicitly.
+      showNext.className = 'btn btn-outline btn-sm';
+      showNext.textContent = 'Show next ' + next;
+      showNext.addEventListener('click', function () { renderNextPage(PAGE_SIZE); });
+      actionsEl.appendChild(showNext);
+      if (more > PAGE_SIZE) {
+        const showAll = document.createElement('button');
+        showAll.type = 'button';
+        showAll.className = 'btn btn-outline btn-sm';
+        showAll.textContent = 'Show all (' + more + ' more)';
+        showAll.addEventListener('click', function () { renderNextPage(Infinity); });
+        actionsEl.appendChild(showAll);
+      }
+    }
+
+    function rerender() {
+      renderHeader();
+      applyFilter(filterText);
+      renderedRows = 0;
+      renderNextPage(PAGE_SIZE);
+    }
+
+    // Debounce the filter input — applying the filter requires a full
+    // table rebuild, which is a few ms on 30k rows. 80 ms feels live.
+    var debounceTimer = null;
+    filterEl.addEventListener('input', function (evt) {
+      filterText = evt.target.value;
+      // Mirror the local filterText into the Alpine `filter` store so
+      // any other widget that subscribes via `Alpine.effect(...)` sees
+      // the live value. Wrapped in `window.Alpine` guard so the page
+      // still works if Alpine fails to load (e.g. user disabled JS
+      // through a content-security-policy header).
+      if (window.Alpine) {
+        window.Alpine.store('filter').set(filterText);
+      }
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(rerender, 80);
+    });
+
+    // Seed the input from the persisted Alpine store on first render
+    // so a page reload (e.g. `--embed` step-summary roundtrip) brings
+    // the user's last filter back. The store value comes from
+    // localStorage via the Alpine persist plugin.
+    if (window.Alpine) {
+      const persisted = window.Alpine.store('filter').text;
+      if (persisted && !filterEl.value) {
+        filterEl.value = persisted;
+        filterText = persisted;
+      }
+    }
+
+    // Initial render.
+    rerender();
+  }
+
+
+  // ─── §10 Widget: change-coupling sankey ──────────────────────────
+
   function renderCouplingSankey(rows) {
     const container = document.getElementById('widget-coupling-sankey-body');
     if (!container) return;
@@ -845,171 +1491,9 @@
 
   }
 
-  // -----------------------------------------------------------------
-  // Widget K: knowledge islands (the CodeLore differentiator)
-  // -----------------------------------------------------------------
-  function renderKnowledgeIslands(rows) {
-    const container = document.getElementById('widget-knowledge-islands-body');
-    if (!container) return;
-    if (!rows.length) {
-      container.innerHTML = '<div class="empty">No knowledge islands. ' +
-        'Either no contributors have departed past the threshold or the ' +
-        'analysis was not wired through.</div>';
-      return;
-    }
 
-    // Sort by ownership pct descending then by days-since-active.
-    const sorted = rows.slice().sort(function (a, b) {
-      const oa = (typeof a.ownership_pct === 'number') ? a.ownership_pct : 0;
-      const ob = (typeof b.ownership_pct === 'number') ? b.ownership_pct : 0;
-      if (oa !== ob) return ob - oa;
-      const da = (typeof a.days_since_main_active === 'number') ? a.days_since_main_active : 0;
-      const db = (typeof b.days_since_main_active === 'number') ? b.days_since_main_active : 0;
-      return db - da;
-    });
+  // ─── §11 Widget: trends multi-line ───────────────────────────────
 
-    var html = '<table><thead><tr>' +
-      '<th>Path</th>' +
-      '<th>Departed author</th>' +
-      '<th class="num">Ownership %</th>' +
-      '<th class="num">Days since active</th>' +
-      '<th class="num">LOC</th>' +
-      '</tr></thead><tbody>';
-    for (var i = 0; i < sorted.length; i++) {
-      const r = sorted[i];
-      html += '<tr data-path="' + escapeHtml(r.path) + '" class="ki-row">' +
-        '<td class="path">' + escapeHtml(r.path) + '</td>' +
-        '<td>' + escapeHtml(r.main_author || '') + '</td>' +
-        '<td class="num">' + fmtNumberFlex(r.ownership_pct, 1) + '</td>' +
-        '<td class="num">' + fmtInt(r.days_since_main_active) + '</td>' +
-        '<td class="num">' + fmtInt(r.total_loc) + '</td>' +
-        '</tr>';
-    }
-    html += '</tbody></table>';
-    container.innerHTML = html;
-
-    const trs = container.querySelectorAll('tr.ki-row');
-    for (var j = 0; j < trs.length; j++) {
-      trs[j].addEventListener('click', function (evt) {
-        const path = evt.currentTarget.getAttribute('data-path');
-        showFileDetailDrawer(path, data);
-      });
-      trs[j].style.cursor = 'pointer';
-    }
-  }
-
-  // -----------------------------------------------------------------
-  // Detail drawer (cross-widget click target)
-  // -----------------------------------------------------------------
-  function initDetailDrawer() {
-    // No-op when Alpine is present: the drawer's `@click` on the
-    // close button and `@keydown.escape.window` on the aside drive
-    // open/close via `$store.detail` — no imperative listeners
-    // needed here. Kept as a stub so the v0.4.x call at line 31
-    // doesn't need to be removed in this PR (smaller diff).
-    //
-    // Fallback path (Alpine missing for any reason): re-attach the
-    // legacy imperative listeners so the drawer still works.
-    if (window.Alpine) return;
-    const closeBtn = document.getElementById('drawer-close');
-    if (closeBtn) {
-      closeBtn.addEventListener('click', function () {
-        const drawer = document.getElementById('file-detail-drawer');
-        if (drawer) drawer.hidden = true;
-      });
-    }
-    document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape') {
-        const drawer = document.getElementById('file-detail-drawer');
-        if (drawer) drawer.hidden = true;
-      }
-    });
-  }
-
-  function showFileDetailDrawer(path, d) {
-    const drawer = document.getElementById('file-detail-drawer');
-    const title = document.getElementById('drawer-title');
-    const body = document.getElementById('drawer-body');
-    if (!drawer || !title || !body) return;
-    title.textContent = path;
-
-    var html = '';
-
-    // Section: hotspot row
-    const hot = (d.hotspots || []).find(function (r) { return r.path === path; });
-    if (hot) {
-      html += '<h4>Hotspot</h4><dl>' +
-        '<dt>Revisions</dt><dd>' + fmtInt(hot.revisions) + '</dd>' +
-        '<dt>Cognitive</dt><dd>' + fmtNumberFlex(hot.cognitive, 0) + '</dd>' +
-        '<dt>Code health</dt><dd>' + fmtNumberFlex(hot.code_health, 1) + '</dd>' +
-        '<dt>Hotspot score</dt><dd>' + fmtNumberFlex(hot.hotspot_score, 2) + '</dd>' +
-        '</dl>';
-    }
-
-    // Section: knowledge island
-    const ki = (d.knowledge_islands || []).find(function (r) { return r.path === path; });
-    if (ki) {
-      html += '<h4>Knowledge island</h4><dl>' +
-        '<dt>Primary author</dt><dd>' + escapeHtml(ki.main_author || '') + '</dd>' +
-        '<dt>Ownership</dt><dd>' + fmtNumberFlex(ki.ownership_pct, 1) + ' %</dd>' +
-        '<dt>Days since active</dt><dd>' + fmtInt(ki.days_since_main_active) + '</dd>' +
-        '<dt>Total LoC</dt><dd>' + fmtInt(ki.total_loc) + '</dd>' +
-        '</dl>';
-    }
-
-    // Section: coupling partners
-    const partners = (d.coupling || []).filter(function (r) {
-      return r.entity_a === path || r.entity_b === path;
-    });
-    if (partners.length) {
-      html += '<h4>Coupling partners</h4><ul>';
-      for (var i = 0; i < Math.min(partners.length, 20); i++) {
-        const p = partners[i];
-        const other = (p.entity_a === path) ? p.entity_b : p.entity_a;
-        html += '<li><code>' + escapeHtml(other) + '</code>' +
-          ' — ' + fmtInt(p.shared_revs) + ' shared revs' +
-          (p.combined_score != null ? (' (score ' + fmtNumberFlex(p.combined_score, 2) + ')') : '') +
-          '</li>';
-      }
-      if (partners.length > 20) {
-        html += '<li>… ' + (partners.length - 20) + ' more</li>';
-      }
-      html += '</ul>';
-    }
-
-    // Section: code health
-    const ch = (d.code_health || []).find(function (r) { return r.path === path; });
-    if (ch) {
-      html += '<h4>Code health</h4><dl>' +
-        '<dt>Score</dt><dd>' + fmtNumberFlex(ch.score, 1) + '</dd>' +
-        '<dt>Cognitive</dt><dd>' + fmtNumberFlex(ch.cognitive, 0) + '</dd>' +
-        '</dl>';
-    }
-
-    if (!html) {
-      html = '<div class="empty">No additional details for this path. ' +
-        'The path may have been filtered out by minimum-revision thresholds, ' +
-        'or its row type is not yet wired into the dashboard.</div>';
-    }
-
-    body.innerHTML = html;
-    // Open via Alpine store when Alpine is loaded; fall back to the
-    // legacy `hidden` attribute toggle otherwise. The aside markup in
-    // template.html keys its `x-show` off `$store.detail.open`, so
-    // setting the store's open state shows the drawer reactively.
-    if (window.Alpine) {
-      window.Alpine.store('detail').show();
-    } else {
-      drawer.hidden = false;
-    }
-  }
-
-  // Expose so the hotspot table can call it on row click.
-  window._codeloreShowDetail = function (path) { showFileDetailDrawer(path, data); };
-
-  // -----------------------------------------------------------------
-  // W9: trends multi-line
-  // -----------------------------------------------------------------
   function renderTrends(rows) {
     const container = document.getElementById('widget-trends-body');
     if (!container) return;
@@ -1069,9 +1553,473 @@
     });
   }
 
-  // -----------------------------------------------------------------
-  // W10: calendar heatmap of commits per day
-  // -----------------------------------------------------------------
+
+  // ─── §11b Widget: Kamei Delivery-Risk Sparkline ──────────────────
+
+  function renderKameiRiskSparkline(rows) {
+    const container = document.getElementById('widget-kamei-risk-body');
+    if (!container) return;
+    if (!rows.length) {
+      container.innerHTML = '<div class="empty">No Kamei JIT-SDP data — repo too small or kamei::enrich was not wired.</div>';
+      return;
+    }
+
+    // Normalisation anchors against the visible window. Per-feature
+    // max so a 100-line commit doesn't dwarf a 5-LoC fix when the
+    // composite is computed. log1p on size/spread features
+    // (la/ld/nf/ndev/nuc/exp) keeps the right tail readable —
+    // raw values span 3+ orders of magnitude on real repos.
+    function logCap(v) { return Math.log1p(Math.max(0, v)); }
+    var maxSize = 1, maxSpread = 1, maxConcurrency = 1, maxExp = 1, maxEntropy = 1;
+    for (var i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      maxSize       = Math.max(maxSize, logCap((r.la || 0) + (r.ld || 0)));
+      maxSpread     = Math.max(maxSpread, logCap(r.nf || 0));
+      maxConcurrency = Math.max(maxConcurrency, logCap(r.ndev || 0));
+      maxExp        = Math.max(maxExp, logCap(r.exp || 0));
+      maxEntropy    = Math.max(maxEntropy, r.entropy || 0);
+    }
+
+    // Per-commit composite: weighted sum of normalised dimensions.
+    // Weights chosen to reflect Kamei 2013 §4 findings (size +
+    // history dominate); not calibrated per-repo (a logistic-
+    // regression fit is a future enhancement). Inexperience term:
+    // low exp = higher risk, hence (1 - exp/max).
+    function scoreOf(r) {
+      const size = logCap((r.la || 0) + (r.ld || 0)) / maxSize;
+      const spread = logCap(r.nf || 0) / maxSpread;
+      const concurrency = logCap(r.ndev || 0) / maxConcurrency;
+      const inexperience = 1 - (logCap(r.exp || 0) / maxExp);
+      const entropy = (r.entropy || 0) / (maxEntropy || 1);
+      // 0.30 size + 0.20 spread + 0.20 concurrency + 0.20 inexp + 0.10 entropy
+      const composite = 0.30 * size + 0.20 * spread + 0.20 * concurrency
+                      + 0.20 * inexperience + 0.10 * entropy;
+      return {
+        composite: Math.max(0, Math.min(1, composite)),
+        size: size, spread: spread, concurrency: concurrency,
+        inexperience: inexperience, entropy: entropy,
+      };
+    }
+
+    // Identify which dimension dominates each commit's risk so the
+    // tooltip can headline it. Captures the "why is this commit
+    // risky?" answer instead of just the score.
+    function dominantDimension(s) {
+      const dims = [
+        { name: 'size',        v: 0.30 * s.size },
+        { name: 'spread',      v: 0.20 * s.spread },
+        { name: 'concurrency', v: 0.20 * s.concurrency },
+        { name: 'inexperience',v: 0.20 * s.inexperience },
+        { name: 'entropy',     v: 0.10 * s.entropy },
+      ];
+      dims.sort(function (a, b) { return b.v - a.v; });
+      return dims[0].name;
+    }
+
+    const seriesData = rows.map(function (r) {
+      const s = scoreOf(r);
+      const dom = dominantDimension(s);
+      // Fix-commits get the error tone; otherwise heat-ramp by score.
+      // Both reads use the cached token() helper because this widget
+      // is registered via the standard rerenderers (not
+      // registerThemeRerender) — but token() caching is harmless here
+      // since the rerender loop fires both functions; the next theme
+      // toggle re-cache happens during the next click handler.
+      const color = r.fix
+        ? token('--color-error')
+        : heatRamp(s.composite);
+      return {
+        value: s.composite,
+        itemStyle: { color: color },
+        // Stash the row + dimensions for tooltip access.
+        _rev: r.rev, _date: r.date, _row: r, _score: s, _dom: dom,
+      };
+    });
+
+    const chart = mountEcharts(container);
+    chart.setOption({
+      tooltip: {
+        trigger: 'item',
+        formatter: function (params) {
+          const d = params.data || {};
+          const r = d._row || {};
+          const s = d._score || {};
+          const dom = d._dom || 'size';
+          const fmtPct = function (v) { return Math.round(v * 100) + '%'; };
+          // Lead with the dominant dimension — the user's "why is
+          // this commit risky?" question gets answered first, raw
+          // Kamei vector underneath for the data-savvy reader.
+          return '<b>' + escapeHtml((r.rev || '').slice(0, 8)) + '</b>'
+            + '<br/><small>' + escapeHtml(r.date || '') + '</small>'
+            + '<br/>composite: <b>' + fmtPct(s.composite) + '</b>'
+            + ' · dominant: <b>' + dom + '</b>'
+            + (r.fix ? '<br/><span class="badge badge-error badge-sm">bug-fix</span>' : '')
+            + '<br/><br/><small>'
+            + 'la=' + (r.la || 0) + ' · ld=' + (r.ld || 0)
+            + ' · nf=' + (r.nf || 0) + ' · ndev=' + (r.ndev || 0)
+            + ' · exp=' + (r.exp || 0) + ' · entropy=' + (r.entropy || 0).toFixed(2)
+            + '</small>'
+            + '<br/><small style="opacity:.6;">'
+            + 'size=' + fmtPct(s.size) + ' · spread=' + fmtPct(s.spread)
+            + ' · concurrency=' + fmtPct(s.concurrency)
+            + ' · inexp=' + fmtPct(s.inexperience)
+            + ' · entropy=' + fmtPct(s.entropy)
+            + '</small>';
+        },
+      },
+      grid: { top: 14, left: 50, right: 20, bottom: 30 },
+      xAxis: {
+        type: 'category',
+        data: rows.map(function (r) { return r.date; }),
+        axisLabel: { color: getCssVar('--fg-dim'), fontSize: 10, rotate: 45 },
+        axisLine: { lineStyle: { color: getCssVar('--border') } },
+      },
+      yAxis: {
+        type: 'value',
+        min: 0, max: 1,
+        name: 'risk',
+        nameTextStyle: { color: getCssVar('--fg-dim'), fontSize: 10 },
+        axisLabel: {
+          color: getCssVar('--fg-dim'), fontSize: 10,
+          formatter: function (v) { return Math.round(v * 100) + '%'; },
+        },
+        splitLine: { lineStyle: { color: getCssVar('--bg-elev-2') } },
+      },
+      series: [{
+        type: 'bar',
+        data: seriesData,
+        barCategoryGap: '20%',
+      }],
+    });
+  }
+
+
+  // ─── §11c Widget: Hotspot treemap ────────────────────────────────
+
+  function renderHotspotTreemap(rows) {
+    const container = document.getElementById('widget-hotspot-treemap-body');
+    if (!container) return;
+    if (!rows.length) {
+      container.innerHTML = '<div class="empty">No hotspot data for treemap.</div>';
+      return;
+    }
+    // Tree-shape: top-level dir → file leaves. Cap at top-200 hotspots
+    // by hotspot_score so the treemap renders cleanly on big repos.
+    const TREEMAP_CAP = 200;
+    const top = rows.slice()
+      .sort(function (a, b) {
+        const sa = (typeof a.hotspot_score === 'number') ? a.hotspot_score : -Infinity;
+        const sb = (typeof b.hotspot_score === 'number') ? b.hotspot_score : -Infinity;
+        return sb - sa;
+      })
+      .slice(0, TREEMAP_CAP);
+    const grouped = {};
+    for (var i = 0; i < top.length; i++) {
+      const r = top[i];
+      const parts = (r.path || '').split('/');
+      const dir = parts.length > 1 ? parts[0] : '<root>';
+      if (!grouped[dir]) grouped[dir] = [];
+      grouped[dir].push({
+        name: r.path,
+        value: r.revisions || 1,
+        cognitive: r.cognitive || 0,
+        code_health: r.code_health,
+        hotspot_score: r.hotspot_score,
+      });
+    }
+    const treeData = Object.keys(grouped).sort().map(function (dir) {
+      return { name: dir, children: grouped[dir] };
+    });
+    const chart = mountEcharts(container);
+    chart.setOption({
+      tooltip: {
+        formatter: function (params) {
+          const d = params.data || {};
+          if (!d.cognitive) return '<b>' + escapeHtml(d.name || '') + '</b><br/>directory';
+          return '<b>' + escapeHtml(d.name) + '</b>' +
+            '<br/>revisions: ' + (d.value || 0) +
+            '<br/>cognitive: ' + d.cognitive.toFixed(0) +
+            (d.code_health != null ? '<br/>health: ' + d.code_health.toFixed(1) : '') +
+            (d.hotspot_score != null ? '<br/>score: ' + d.hotspot_score.toFixed(2) : '');
+        },
+      },
+      series: [{
+        type: 'treemap',
+        data: treeData,
+        roam: false,
+        breadcrumb: { show: false },
+        label: { show: true, color: '#fff', fontSize: 11 },
+        upperLabel: { show: true, height: 18, color: getCssVar('--fg-dim'), fontSize: 11 },
+        levels: [
+          { itemStyle: { borderColor: getCssVar('--border'), borderWidth: 2, gapWidth: 2 } },
+          { itemStyle: { borderColor: getCssVar('--border'), borderWidth: 1, gapWidth: 1 } },
+        ],
+      }],
+    });
+    chart.on('click', function (params) {
+      const d = params && params.data;
+      if (d && d.cognitive != null) {
+        showFileDetailDrawer(d.name, data);
+      }
+    });
+  }
+
+
+  // ─── §11d Widget: Parallel coordinates ───────────────────────────
+
+  function renderParallelCoords(rows) {
+    const container = document.getElementById('widget-parallel-coords-body');
+    if (!container) return;
+    if (!rows.length) {
+      container.innerHTML = '<div class="empty">No hotspot data for parallel coords.</div>';
+      return;
+    }
+    // Top-20 by hotspot_score so the polyline soup stays readable.
+    const TOP_N = 20;
+    const top = rows.slice()
+      .sort(function (a, b) {
+        const sa = (typeof a.hotspot_score === 'number') ? a.hotspot_score : -Infinity;
+        const sb = (typeof b.hotspot_score === 'number') ? b.hotspot_score : -Infinity;
+        return sb - sa;
+      })
+      .slice(0, TOP_N);
+    const chart = mountEcharts(container);
+    chart.setOption({
+      parallelAxis: [
+        { dim: 0, name: 'Revisions' },
+        { dim: 1, name: 'Cognitive' },
+        { dim: 2, name: 'Code health', inverse: true },
+        { dim: 3, name: 'Hotspot score' },
+        { dim: 4, name: 'MI rank', max: 1.0 },
+      ],
+      parallel: {
+        left: 50, right: 50, top: 30, bottom: 30,
+        axisExpandable: false,
+        parallelAxisDefault: {
+          axisLabel: { color: getCssVar('--fg-dim'), fontSize: 10 },
+          nameTextStyle: { color: getCssVar('--fg-dim'), fontSize: 11 },
+          axisLine: { lineStyle: { color: getCssVar('--border') } },
+        },
+      },
+      tooltip: {
+        trigger: 'item',
+        formatter: function (params) {
+          const v = params.value || [];
+          return '<b>' + escapeHtml(params.name || '') + '</b>' +
+            '<br/>revisions: ' + (v[0] || 0) +
+            '<br/>cognitive: ' + (v[1] || 0).toFixed(0) +
+            '<br/>health: ' + (v[2] || 0).toFixed(1) +
+            '<br/>score: ' + (v[3] || 0).toFixed(2) +
+            '<br/>MI rank: ' + (typeof v[4] === 'number' ? (v[4] * 100).toFixed(0) + '%' : '—');
+        },
+      },
+      series: [{
+        type: 'parallel',
+        lineStyle: { width: 1, opacity: 0.6, color: token('--color-warning') },
+        emphasis: { lineStyle: { width: 2, opacity: 1.0 } },
+        data: top.map(function (r) {
+          return {
+            name: r.path,
+            value: [
+              r.revisions || 0,
+              r.cognitive || 0,
+              r.code_health != null ? r.code_health : 0,
+              r.hotspot_score != null ? r.hotspot_score : 0,
+              typeof r.mi_rank === 'number' ? r.mi_rank : 0,
+            ],
+          };
+        }),
+      }],
+    });
+    chart.on('click', function (params) {
+      if (params && params.name) {
+        showFileDetailDrawer(params.name, data);
+      }
+    });
+  }
+
+
+  // ─── §11e Widget: Cognitive complexity boxplot ───────────────────
+
+  function renderCognitiveBoxplot(rows) {
+    const container = document.getElementById('widget-cognitive-boxplot-body');
+    if (!container) return;
+    const values = rows
+      .map(function (r) { return r.cognitive; })
+      .filter(function (v) { return typeof v === 'number' && v > 0; })
+      .sort(function (a, b) { return a - b; });
+    if (values.length < 5) {
+      container.innerHTML = '<div class="empty">Insufficient data for boxplot.</div>';
+      return;
+    }
+    function quantile(arr, q) {
+      const pos = (arr.length - 1) * q;
+      const base = Math.floor(pos);
+      const rest = pos - base;
+      return arr[base + 1] !== undefined
+        ? arr[base] + rest * (arr[base + 1] - arr[base])
+        : arr[base];
+    }
+    const min = values[0];
+    const q1 = quantile(values, 0.25);
+    const med = quantile(values, 0.5);
+    const q3 = quantile(values, 0.75);
+    const iqr = q3 - q1;
+    const upperFence = q3 + 1.5 * iqr;
+    const lowerFence = Math.max(0, q1 - 1.5 * iqr);
+    const max = Math.min(upperFence, values[values.length - 1]);
+    const outliers = [];
+    for (var i = 0; i < values.length; i++) {
+      if (values[i] > upperFence || values[i] < lowerFence) {
+        outliers.push([0, values[i]]);
+      }
+    }
+    const chart = mountEcharts(container);
+    chart.setOption({
+      tooltip: { trigger: 'item' },
+      grid: { top: 30, left: 50, right: 20, bottom: 30 },
+      xAxis: {
+        type: 'category',
+        data: ['cognitive'],
+        axisLabel: { color: getCssVar('--fg-dim') },
+      },
+      yAxis: {
+        type: 'value',
+        axisLabel: { color: getCssVar('--fg-dim') },
+        splitLine: { lineStyle: { color: getCssVar('--bg-elev-2') } },
+      },
+      series: [
+        {
+          type: 'boxplot',
+          data: [[min, q1, med, q3, max]],
+          itemStyle: { color: token('--color-warning'), borderColor: token('--color-error') },
+        },
+        {
+          type: 'scatter',
+          data: outliers,
+          symbolSize: 6,
+          itemStyle: { color: token('--color-error') },
+        },
+      ],
+    });
+  }
+
+
+  // ─── §11f Widget: Module chord diagram ───────────────────────────
+
+  function renderModuleChord(rows) {
+    const container = document.getElementById('widget-module-chord-body');
+    if (!container) return;
+    if (!rows.length) {
+      container.innerHTML = '<div class="empty">No coupling data for module chord.</div>';
+      return;
+    }
+    // Roll up each pair to module-level (top-level dir).
+    function topDir(p) {
+      const i = (p || '').indexOf('/');
+      return i < 0 ? p : p.slice(0, i);
+    }
+    const edges = {};
+    for (var i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const a = topDir(r.entity_a);
+      const b = topDir(r.entity_b);
+      if (!a || !b || a === b) continue;
+      const key = a < b ? a + '\x00' + b : b + '\x00' + a;
+      edges[key] = (edges[key] || 0) + (r.shared || 1);
+    }
+    const linkRows = Object.keys(edges).map(function (k) {
+      const parts = k.split('\x00');
+      return { source: parts[0], target: parts[1], value: edges[k] };
+    });
+    if (!linkRows.length) {
+      container.innerHTML = '<div class="empty">All coupling is intra-module — no cross-module edges to chord.</div>';
+      return;
+    }
+    const nodes = {};
+    for (var ei = 0; ei < linkRows.length; ei++) {
+      nodes[linkRows[ei].source] = true;
+      nodes[linkRows[ei].target] = true;
+    }
+    const nodeArr = Object.keys(nodes).sort().map(function (n) { return { name: n }; });
+    const chart = mountEcharts(container);
+    chart.setOption({
+      tooltip: { trigger: 'item' },
+      series: [{
+        type: 'graph',
+        layout: 'circular',
+        circular: { rotateLabel: true },
+        data: nodeArr,
+        links: linkRows,
+        roam: false,
+        label: { show: true, color: getCssVar('--fg-dim'), fontSize: 10, position: 'right' },
+        lineStyle: {
+          color: 'source',
+          opacity: 0.55,
+          curveness: 0.3,
+        },
+        emphasis: { focus: 'adjacency', lineStyle: { width: 3 } },
+      }],
+    });
+  }
+
+
+  // ─── §11g Widget: Architecture force-graph ───────────────────────
+
+  function renderArchGraph(imports) {
+    const container = document.getElementById('widget-arch-graph-body');
+    if (!container) return;
+    if (!imports.length) {
+      container.innerHTML = '<div class="empty">No resolved import edges yet. The resolver covers Rust, Python, and JS/TS today; Java FQN&rarr;file mapping is not attempted.</div>';
+      return;
+    }
+    // Aggregate edges to module-level so the graph is readable.
+    function topDir(p) {
+      const i = (p || '').indexOf('/');
+      return i < 0 ? p : p.slice(0, i);
+    }
+    const edges = {};
+    const nodes = {};
+    for (var i = 0; i < imports.length; i++) {
+      const imp = imports[i];
+      if (!imp.target_path) continue;
+      const s = topDir(imp.src_path);
+      const t = topDir(imp.target_path);
+      if (!s || !t || s === t) continue;
+      const key = s + '\x00' + t;
+      edges[key] = (edges[key] || 0) + 1;
+      nodes[s] = true;
+      nodes[t] = true;
+    }
+    const nodeArr = Object.keys(nodes).map(function (n) { return { name: n, symbolSize: 30 }; });
+    const edgeArr = Object.keys(edges).map(function (k) {
+      const parts = k.split('\x00');
+      return { source: parts[0], target: parts[1], value: edges[k] };
+    });
+    if (!nodeArr.length) {
+      container.innerHTML = '<div class="empty">All resolved imports stay intra-module — no inter-module edges to graph.</div>';
+      return;
+    }
+    const chart = mountEcharts(container);
+    chart.setOption({
+      tooltip: { trigger: 'item' },
+      series: [{
+        type: 'graph',
+        layout: 'force',
+        data: nodeArr,
+        links: edgeArr,
+        roam: true,
+        force: { repulsion: 200, edgeLength: 80 },
+        label: { show: true, color: getCssVar('--fg-dim'), fontSize: 11 },
+        lineStyle: { color: token('--color-info'), opacity: 0.6, width: 1.5 },
+        emphasis: { focus: 'adjacency', lineStyle: { width: 3 } },
+      }],
+    });
+  }
+
+
+  // ─── §12 Widget: calendar heatmap (commits per day) ──────────────
+
   function renderCalendarHeatmap(rows) {
     const container = document.getElementById('widget-calendar-heatmap-body');
     if (!container) return;
@@ -1139,9 +2087,9 @@
     });
   }
 
-  // -----------------------------------------------------------------
-  // W8: X-Ray sunburst — function-level complexity drill-down
-  // -----------------------------------------------------------------
+
+  // ─── §13 Widget: X-Ray sunburst (function-level drill-down) ─────
+
   function renderXRaySunburst(rows) {
     const container = document.getElementById('widget-xray-sunburst-body');
     if (!container) return;
@@ -1256,38 +2204,51 @@
 
   }
 
-  // -----------------------------------------------------------------
-  // W7 + W11: color-mode toggles on the hotspot circle-pack
-  // -----------------------------------------------------------------
+
+  // ─── §14 Controls: hotspot color-mode toggles ────────────────────
+  //
+  // Theme toggle itself is owned by Alpine (`$store.theme.isDark`
+  // registered in template.html). The `Alpine.effect` there flips
+  // `<html data-theme>` AND fires every callback in
+  // `window._codeloreRerenderers`, so this file just appends to that
+  // registry — no theme-toggle init function lives here.
+
   function initHotspotColorToggles() {
+    // Gap #4 migration: button row → DaisyUI `tabs tabs-boxed`. The
+    // selector matches `[role="tab"]` so the same handler works on
+    // both the old class-`toggle` markup (if any cached SPA HTML is
+    // still in the wild during the cut-over) and the new tab markup.
     const bar = document.getElementById('hotspot-color-toggles');
     if (!bar) return;
-    const buttons = bar.querySelectorAll('button.toggle');
+    const buttons = bar.querySelectorAll('button[role="tab"], button.toggle');
     for (var i = 0; i < buttons.length; i++) {
       buttons[i].addEventListener('click', function (evt) {
         const mode = evt.currentTarget.getAttribute('data-mode');
-        // Update active state on buttons
+        // Update active state — `tab-active` for DaisyUI tabs and
+        // `active` for any legacy markup. Both classes are written
+        // as complete literals so the Tailwind v4 `@source` scanner
+        // sees them (otherwise dynamic suffixes drop out of the bundle).
         for (var j = 0; j < buttons.length; j++) {
-          buttons[j].classList.toggle('active', buttons[j] === evt.currentTarget);
+          const isCurrent = (buttons[j] === evt.currentTarget);
+          buttons[j].classList.toggle('tab-active', isCurrent);
+          buttons[j].classList.toggle('active', isCurrent);
         }
-        // Re-render with new color mode. Update the shared cursor so
-        // the theme-toggle re-render uses the active mode too.
-        currentHotspotColorMode = mode;
-        renderHotspotCirclePack(data.hotspots || [], mode);
+        // Wrap the re-render in startViewTransition so the colour-
+        // mode swap smoothly crossfades. On unsupported
+        // browsers the wrapper is a synchronous no-op and the
+        // re-render runs identically. Updating `currentHotspotColorMode`
+        // inside the callback ensures the theme-toggle re-render
+        // path sees the active mode too.
+        startViewTransition(function () {
+          currentHotspotColorMode = mode;
+          renderHotspotCirclePack(data.hotspots || [], mode);
+        });
       });
     }
   }
 
-  // -----------------------------------------------------------------
-  // Theme toggle is owned by Alpine (`$store.theme.isDark` registered
-  // in template.html). The `Alpine.effect` there both flips
-  // `<html data-theme>` AND fires every callback in
-  // `window._codeloreRerenderers`, so this file just appends to that
-  // registry — no toggle init function needed.
 
-  // -----------------------------------------------------------------
-  // Helpers
-  // -----------------------------------------------------------------
+  // ─── §15 Utility helpers ──────────────────────────────────────────
 
   // Build the path hierarchy. Input: HotspotRow[]. Output:
   // { name: 'root', children: [{name, children?, metrics?, fullPath?}] }
@@ -1350,6 +2311,101 @@
     return out;
   }
 
+  // Unique author list for the offboarding picker.
+  // Uses entity_ownership (one row per (path, author) tuple). Sorted
+  // for stable rendering across reloads.
+  function computeUniqueAuthors(entityOwnership) {
+    const set = new Set();
+    for (var i = 0; i < entityOwnership.length; i++) {
+      const author = entityOwnership[i].author;
+      if (author) set.add(author);
+    }
+    return Array.from(set).sort();
+  }
+
+  // Coupling arc overlay helpers.
+
+  // Quadratic Bezier path from (x1,y1) to (x2,y2) with the control
+  // point offset perpendicular to the chord. curveness ∈ [0, 1];
+  // 0 = straight line, 0.25 = the CodeScene-equivalent gentle arc.
+  // Returned in SVG path syntax for ECharts' `type: 'path'` shape.
+  function arcPath(x1, y1, x2, y2, curveness) {
+    const mx = (x1 + x2) / 2;
+    const my = (y1 + y2) / 2;
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const cx = mx + (-dy * curveness);
+    const cy = my + (dx * curveness);
+    return 'M ' + x1 + ',' + y1 + ' Q ' + cx + ',' + cy + ' ' + x2 + ',' + y2;
+  }
+
+  // Build the arc descriptors for the file the user clicked. Returns
+  // an array of {x1, y1, x2, y2, opacity, lineWidth} — empty array
+  // means "no overlay" (renders as a silent series). Per Gap #2
+  // accepted: top-5 by Fisher significance (lower p = more
+  // significant = drawn first). Width encodes coupling degree so
+  // strongly-coupled pairs read thicker — two extra perceptual
+  // dimensions on a primitive CodeScene leaves flat.
+  function buildCouplingArcs(filePath, nodePositions, couplingRows) {
+    if (!filePath || !nodePositions || !couplingRows || !couplingRows.length) {
+      return [];
+    }
+    const selfPos = nodePositions.get(filePath);
+    if (!selfPos) return [];
+    // Filter to rows that touch filePath; sort by p ASC; take top-5.
+    const matching = [];
+    for (var i = 0; i < couplingRows.length; i++) {
+      const r = couplingRows[i];
+      if (r.entity_a === filePath || r.entity_b === filePath) matching.push(r);
+    }
+    matching.sort(function (a, b) {
+      const pa = (typeof a.fisher_p === 'number') ? a.fisher_p : 1;
+      const pb = (typeof b.fisher_p === 'number') ? b.fisher_p : 1;
+      return pa - pb;
+    });
+    const top = matching.slice(0, 5);
+    const arcs = [];
+    for (var k = 0; k < top.length; k++) {
+      const row = top[k];
+      const peer = (row.entity_a === filePath) ? row.entity_b : row.entity_a;
+      const peerPos = nodePositions.get(peer);
+      if (!peerPos) continue;
+      // Opacity ← (1 - fisher_p). p=0.001 → ~1.0, p=0.05 → 0.95.
+      // Floor at 0.4 so even weakly-significant arcs remain visible.
+      const opacity = Math.max(0.4, 1.0 - (row.fisher_p || 0));
+      // Width ← coupling degree (% co-change). Cap at 7px so a
+      // 100%-coupled pair doesn't overwhelm a 20%-coupled one.
+      const lineWidth = 1 + Math.min(6, (row.degree || 0) / 8);
+      arcs.push({
+        x1: selfPos.x, y1: selfPos.y,
+        x2: peerPos.x, y2: peerPos.y,
+        opacity: opacity,
+        lineWidth: lineWidth,
+      });
+    }
+    return arcs;
+  }
+
+  // Partial setOption update: refresh only the arc series (series[1])
+  // without touching the circle-pack series[0]. Avoids the d3.pack
+  // re-layout on every click. The `{}` for series[0] tells ECharts
+  // "no changes here" via index-based merge.
+  function updateCouplingArcs() {
+    if (!lastHotspotChart || !lastHotspotNodePositions) return;
+    if (lastHotspotChart.isDisposed && lastHotspotChart.isDisposed()) return;
+    const arcs = buildCouplingArcs(
+      selectedCouplingFile,
+      lastHotspotNodePositions,
+      data.coupling || []
+    );
+    lastHotspotChart.setOption({
+      series: [
+        {},
+        { data: arcs.map(function (a) { return { value: [a.x1, a.y1], _arc: a }; }) },
+      ],
+    });
+  }
+
   // Stable palette assignment for author colors. A discrete categorical
   // palette tuned for dark-background readability; cycles if there are
   // more authors than colors.
@@ -1365,30 +2421,5 @@
       out[sorted[i]] = palette[i % palette.length];
     }
     return out;
-  }
-
-  // Read a CSS variable from the current theme; used by ECharts widgets
-  // that pull axis / grid colors from the same palette as the CSS shell.
-  function getCssVar(name) {
-    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  }
-
-  function fmtInt(v) {
-    if (typeof v !== 'number' || !isFinite(v)) return '';
-    return Math.round(v).toLocaleString('en-US');
-  }
-
-  function fmtNumberFlex(v, decimals) {
-    if (typeof v !== 'number' || !isFinite(v)) return '';
-    return v.toFixed(decimals);
-  }
-
-  function escapeHtml(s) {
-    return String(s || '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
   }
 })();

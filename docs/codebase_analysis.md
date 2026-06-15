@@ -21,7 +21,7 @@ CodeLore is a 3-crate Cargo workspace:
 | Crate | Responsibility |
 |---|---|
 | `codelore-rca` | Vendored + modified fork of Mozilla's `rust-code-analysis` (MPL-2.0). Provides cyclomatic / cognitive / Halstead / MI complexity metrics. Isolated as its own crate so the vendored license stays cleanly separated. |
-| `codelore-lib` | Core library: the `Repo` trait (`GixRepo` default, `GitCliRepo` oracle for differential tests), the DuckDB-backed `FactsDb` fact store, the 23 analyses, the persistent cache, the multi-format output emitters, identity resolution (mailmap + bot + AI-attribution), and the Kamei change-feature enrichment. |
+| `codelore-lib` | Core library: the `Repo` trait (`GixRepo` default, `GitCliRepo` oracle for differential tests), the DuckDB-backed `FactsDb` fact store, the 31 analyses, the persistent cache, the multi-format output emitters, identity resolution (mailmap + bot + AI-attribution), and the Kamei change-feature enrichment. |
 | `codelore-cli` | Clap CLI binary: `analyze` and `diff` subcommands, ignore-file parsing, `Options` construction, output routing. |
 
 ## 3. Pipeline data flow
@@ -88,15 +88,17 @@ Two implementations:
 
 The differential test suite (`tests/differential_repo_test.rs`) is the load-bearing correctness check: any divergence between backends fails CI.
 
-## 5. The 23 analyses
+## 5. The 31 analyses
 
 | Tier | Surface | What they share |
 |---|---|---|
 | Code-maat parity (17) | revisions, summary, authors, code-age, abs-churn, author-churn, entity-churn, entity-effort, entity-ownership, communication, code-ownership, main-dev, main-dev-by-revs, main-dev-by-deletions (alias `refactoring-main-dev`), change-coupling, soc, messages | Output schemas match code-maat's CSV headers under `--code-maat-compat`; the modern default emits richer columns (identity layers, day-precision age, last-modified context) — see `docs/research-foundations.md` |
 | Modern signals (1) | top-committers | Per-author leaderboard with LoC + first/last commit + bot flag — code-maat approximated this with `-a author-churn` + sort; CodeLore exposes it first-class |
-| Modern additions ★ (4) | hotspots, code-health, clones, clone-coupling | The behavioral-SARIF differentiators — not in code-maat, not opaque-ML like CodeScene; published deterministic formulas |
+| Modern foundations ★ (4) | hotspots, code-health, clones, clone-coupling | The behavioral-SARIF differentiators — not in code-maat, not opaque-ML like CodeScene; published deterministic formulas |
+| Graph-analytics ★ (3) | knowledge-islands, centrality, communities | Leiden-algorithm community detection + PageRank centrality + auto-detected bus-factor risk on the Fisher-significant coupling graph |
+| Architecture-analytics ★★ (6) | god-classes, architecture-violations, stale-code, pair-programming, lead-time, bus-factor | Consume the `imports` table for structural fan-in/fan-out; `architecture-violations` reads `.codelore-arch-rules.toml`; `lead-time` is a DORA Accelerate metric |
 
-All 22 are pure SQL views over the DuckDB fact store with a thin Rust orchestrator each. Adding a new analysis = adding one SQL string + one row-struct + entries in the dispatch ladder. Each carries a `Research basis: see docs/research-foundations.md entry "<name>"` rustdoc cross-link.
+All 31 are pure SQL views over the DuckDB fact store with a thin Rust orchestrator each (except `pair-programming`, which extracts Co-Authored-By trailers in Rust for case-insensitive matching). Adding a new analysis = adding one SQL string + one row-struct + entries in the dispatch ladder. Each carries a `Research basis: see docs/research-foundations.md entry "<name>"` rustdoc cross-link.
 
 ## 6. Identity resolution
 

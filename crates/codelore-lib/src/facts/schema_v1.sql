@@ -129,3 +129,34 @@ CREATE INDEX IF NOT EXISTS idx_changes_rev         ON changes(rev);
 CREATE INDEX IF NOT EXISTS idx_changes_rename_from ON changes(rename_from);
 CREATE INDEX IF NOT EXISTS idx_commits_author      ON commits(canonical_author);
 CREATE INDEX IF NOT EXISTS idx_commits_date        ON commits(date);
+
+-- Architecture import graph — one row per import edge at HEAD.
+-- Drives the layered-architecture rule validation, god-class
+-- detector (fan_in/fan_out), architecture force-graph widget, and
+-- module-to-module chord diagram.
+--
+-- src_path is the file containing the import statement (the importer);
+-- target is the raw module-path string extracted from the tree-sitter
+-- AST (e.g. "std::fs::read_to_string" for Rust, "react" for JS,
+-- "java.util.List" for Java).
+--
+-- The per-language resolver maps `target → repo-relative path`
+-- where possible and sets resolved=TRUE + target_path; rows that
+-- can't be mapped (external crates, npm packages, std-lib) stay
+-- resolved=FALSE with target_path=NULL.
+--
+-- kind buckets the import semantics into a small closed set so SQL
+-- can `WHERE kind = 'wildcard'` without parsing the target string.
+CREATE TABLE IF NOT EXISTS imports (
+    rev         TEXT NOT NULL REFERENCES commits(rev),
+    src_path    TEXT NOT NULL,
+    target      TEXT NOT NULL,
+    resolved    BOOLEAN NOT NULL,
+    target_path TEXT,
+    kind        TEXT NOT NULL CHECK (kind IN (
+        'absolute', 'relative', 'wildcard', 'unknown'
+    )),
+    PRIMARY KEY (rev, src_path, target)
+);
+CREATE INDEX IF NOT EXISTS idx_imports_src    ON imports(src_path);
+CREATE INDEX IF NOT EXISTS idx_imports_target ON imports(target_path);

@@ -38,15 +38,21 @@ on this basis ([feedback memory: modernize-dont-migrate](../../.claude/memory/fe
 and the CHM borrow analysis (v0.4.5 / v0.5.x) is the most recent
 application.
 
-## Active plan (v0.4.5 → v0.6.x)
+## Active plan (v0.6.x → v0.7.x)
 
-The shipped baseline is **v0.4.4** (released 2026-06-11). Current state:
+The shipped baseline is **v0.6.x** (the 27-feature maximum-aligned implementation cycle that closed 2026-06-15 — see `docs/maximum-feature-plan.md` for the validated proposal and `CHANGELOG.md` `[Unreleased]` for the per-feature delta). Current state:
 
-- 23 analyses + `codelore diff` PR-mode
-- SPA emitter behind `spa` Cargo feature (6-widget MVP shipped v0.4.0; W7-W11 widgets shipped v0.4.2; success message + dispose-on-rerender shipped v0.4.3; arg_max/first SQL planner sweep shipped v0.4.4)
+- **31 analyses** + `codelore diff` PR-mode + `codelore check` quality gate + 6 ancillary CLI subcommands (`explain`, `profile`, `docs`, `notes`, `completions`, `schema`)
+- SPA emitter behind `spa` Cargo feature — **15+ interactive widgets** (KPI tiles, knowledge islands, hotspot circle-pack with 7 color modes + ring overlay + coupling arc overlay, hotspot table, parallel DOM tree, change-coupling sankey, trends, calendar heatmap, X-Ray sunburst, **Kamei Delivery-Risk Sparkline**, **treemap**, **parallel coordinates**, **boxplot**, **module chord**, **architecture force-graph**, **drawer-radar**) — backed by Tailwind v4 + DaisyUI 5 + Alpine.js 3.15 + ECharts 6.1 + d3-hierarchy, all SHA-pinned at build time, single self-contained HTML
+- **F-A1 architecture import-graph** (`schema_v3`) — per-language path resolver for Rust / Python / JS / TS
+- **F-A2 layered-architecture rules** via `.codelore-arch-rules.toml` + **F-Q quality gates** via `.codelore-thresholds.toml` (with `$GITHUB_OUTPUT` integration)
 - DuckDB persistent cache, mailmap, AI attribution, `.gitignore`-aware exclude defaults
 - 5-binary release pipeline (macOS-arm64 / macOS-x86_64 / linux-x86_64-gnu / linux-arm64-gnu / windows-x86_64) + Homebrew + ghcr container
-- ~520 tests across lib + CLI + differential + integration
+- **359 tests** passing across lib + CLI + differential + integration; clippy `-D warnings` clean
+
+### v0.6.x — Maximum-aligned feature cycle (✅ SHIPPED 2026-06-15)
+
+All 27 features from `docs/maximum-feature-plan.md` plus 6 deferral closures landed end-to-end. The remaining forward-looking items below remain v0.7.x+ scope:
 
 ### v0.4.5 — SQL planner finishing + cross-stack UI + first CHM-borrows
 

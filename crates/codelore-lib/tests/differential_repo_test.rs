@@ -133,8 +133,8 @@ fn walk_commits_per_commit_fields_match() {
 /// `resolve_alias` must return identical canonical emails for all tested
 /// (name, email) pairs. Both an empty-name probe (exercises email-only
 /// `.mailmap` rules) and a paired-name probe (exercises name+email rules)
-/// are tested — the v0.1.3 trait-signature change added the `name`
-/// parameter to close the previously-asymmetric GixRepo/GitCliRepo gap.
+/// are tested — the `name` parameter on the trait closes a previously-
+/// asymmetric `GixRepo` / `GitCliRepo` gap.
 #[test]
 fn resolve_alias_matches() {
     let (gix, cli) = open_both();

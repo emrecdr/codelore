@@ -109,6 +109,23 @@ impl FactsDb {
         // `--exclude` + `.codeloreignore`).
         let clones_n = self.populate_clones_at_head(repo, opts)?;
 
+        // Populate the `imports` table at HEAD so the layered-
+        // architecture rules, god-class detector, and architecture
+        // force-graph analyses can JOIN against it. Uses the same
+        // rayon-then-serial-drain shape as the complexity + clones
+        // passes — no new threading primitives.
+        let imports_n = self.populate_imports_at_head(repo, opts)?;
+        tracing::info!("imports: {imports_n} edges ingested at HEAD across Tier-1 source files");
+
+        // Per-language resolver UPDATE pass. Maps the raw `target`
+        // strings to repo-relative tracked paths where resolution
+        // succeeds. Covers Rust / Python / JS / TS today; Java FQN
+        // → file mapping is project-layout-specific and skipped.
+        let resolved_n = self.resolve_imports_at_head()?;
+        tracing::info!(
+            "imports: {resolved_n} of {imports_n} import edges resolved to tracked paths"
+        );
+
         // PAR-7: architectural grouping. After ingest, rewrite the
         // `changes.path` column to logical group names per --group-file.
         // Runs last so the rewrite sees all change rows from every commit.
@@ -382,6 +399,192 @@ impl FactsDb {
             .map_err(|e| CodeLoreError::Analysis(format!("flush clones appender: {e}")))?;
         Ok(n)
     }
+
+    /// Walk Tier-1 source files at HEAD, tree-sitter-parse each for
+    /// import statements, and bulk-insert one row per import edge
+    /// into the `imports` table. Returns the total row count for
+    /// diagnostics.
+    ///
+    /// Mirrors `populate_clones_at_head`'s rayon-then-serial-drain
+    /// shape: parallel blob-read + extraction, then a single Appender
+    /// drain on the connection-owning thread (`DuckDB` Connection is
+    /// `!Send + !Sync`). Per-file duplicates (same raw target listed
+    /// twice in one file) are deduped before drain to honor the
+    /// `(rev, src_path, target)` PRIMARY KEY.
+    ///
+    /// Every row lands with `resolved=false` / `target_path=NULL`;
+    /// the companion `resolve_imports_at_head` UPDATE pass fills in
+    /// resolvable targets immediately after.
+    fn populate_imports_at_head<R: crate::repo::Repo>(
+        &self,
+        repo: &R,
+        _opts: &Options,
+    ) -> Result<usize> {
+        use crate::imports::{ImportLanguage, RawImport, extract_imports};
+        use rayon::prelude::*;
+        use std::collections::HashSet;
+
+        let head_rev = current_head_rev(self)?;
+
+        // Phase 1 (serial): query the live-at-HEAD path set + filter
+        // to Tier-1 extensions. Same source-of-truth pattern as the
+        // complexity + clones passes (works on bare repos via the
+        // gix ODB; PathsFilter already ran at ingest time).
+        let live_paths = query_live_paths(self)?;
+        let candidates: Vec<(String, ImportLanguage)> = live_paths
+            .into_iter()
+            .filter_map(|rel| {
+                let lang = ImportLanguage::from_path(std::path::Path::new(&rel))?;
+                Some((rel, lang))
+            })
+            .collect();
+
+        // Phase 2 (parallel): read blob + extract imports per file.
+        // Errors are logged at warn / debug and the file skipped —
+        // a single malformed file shouldn't fail the whole ingest.
+        let per_file: Vec<(String, Vec<RawImport>)> = candidates
+            .into_par_iter()
+            .filter_map(|(rel, lang)| {
+                let Ok(Some(code)) = repo.read_blob_at_head(&rel) else {
+                    tracing::debug!("imports: {rel} not tracked at HEAD; skipping");
+                    return None;
+                };
+                if code.len() > crate::constants::DEFAULT_MAX_AST_FILE_BYTES {
+                    tracing::debug!(
+                        "imports: skipping {rel} ({size} bytes > {cap}-byte AST cap)",
+                        size = code.len(),
+                        cap = crate::constants::DEFAULT_MAX_AST_FILE_BYTES,
+                    );
+                    return None;
+                }
+                let imports = match extract_imports(&code, lang) {
+                    Ok(v) if !v.is_empty() => v,
+                    Ok(_) => return None,
+                    Err(e) => {
+                        tracing::warn!("imports: extract failed for {rel}: {e}");
+                        return None;
+                    }
+                };
+                Some((rel, imports))
+            })
+            .collect();
+
+        // Phase 3 (serial drain): bulk-insert via the DuckDB Appender
+        // on the connection-owning thread. Dedup within each file's
+        // target set so the (rev, src_path, target) PK isn't violated
+        // by a file that lists the same raw target twice (rare but
+        // legal in JS dynamic-import patterns).
+        let mut app = self
+            .conn()
+            .appender("imports")
+            .map_err(|e| CodeLoreError::Analysis(format!("appender imports: {e}")))?;
+        let mut rows_inserted = 0usize;
+        for (path, imports) in per_file {
+            let mut seen = HashSet::new();
+            for imp in &imports {
+                if !seen.insert(imp.target.clone()) {
+                    continue;
+                }
+                app.append_row(duckdb::params![
+                    &head_rev,
+                    &path,
+                    &imp.target,
+                    false,
+                    Option::<&str>::None,
+                    imp.kind.as_str(),
+                ])
+                .map_err(|e| CodeLoreError::Analysis(format!("append imports row: {e}")))?;
+                rows_inserted += 1;
+            }
+        }
+        app.flush()
+            .map_err(|e| CodeLoreError::Analysis(format!("flush imports appender: {e}")))?;
+        Ok(rows_inserted)
+    }
+
+    /// Resolver pass: for every import row whose `target_path` is
+    /// still NULL, attempt a per-language resolution against the
+    /// live-at-HEAD tracked path set. On a hit, UPDATE the row to
+    /// set `resolved=TRUE` and the canonical `target_path`. Returns
+    /// the total number of rows successfully resolved.
+    ///
+    /// Covers Rust `crate::` / `self::` / `super::` paths, Python
+    /// relative imports, and JS/TS `./` / `../` paths today. Java
+    /// FQN → filesystem-path mapping is project-layout-specific
+    /// and is not attempted here.
+    fn resolve_imports_at_head(&self) -> Result<usize> {
+        use crate::imports::{resolve_js_relative, resolve_python_relative, resolve_rust_path};
+
+        // 1. Build the live-at-HEAD path set as a `HashSet` for O(1)
+        //    candidate lookups inside the resolver.
+        let live_paths: std::collections::HashSet<String> =
+            query_live_paths(self)?.into_iter().collect();
+
+        // 2. Pull every unresolved import row scoped to a language
+        //    the multi-language resolver supports (JS/TS, Python,
+        //    Rust). Java FQNs are project-layout-specific and stay
+        //    deferred until a Java-specific resolver lands.
+        let mut stmt = self
+            .conn()
+            .prepare(
+                "SELECT src_path, target FROM imports \
+                 WHERE target_path IS NULL \
+                   AND (
+                       src_path LIKE '%.js' OR src_path LIKE '%.jsx' OR
+                       src_path LIKE '%.mjs' OR src_path LIKE '%.cjs' OR
+                       src_path LIKE '%.ts' OR src_path LIKE '%.tsx' OR
+                       src_path LIKE '%.py' OR src_path LIKE '%.pyi' OR
+                       src_path LIKE '%.rs'
+                   )",
+            )
+            .map_err(|e| CodeLoreError::Analysis(format!("prepare imports scan: {e}")))?;
+        let candidates: Vec<(String, String)> = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .map_err(|e| CodeLoreError::Analysis(format!("query imports scan: {e}")))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| CodeLoreError::Analysis(format!("collect imports scan: {e}")))?;
+
+        // 3. Dispatch to the per-language resolver by file extension.
+        //    First-match wins; falls through to `None` for external
+        //    targets the resolver can't map to a tracked path.
+        let mut hits: Vec<(String, String, String)> = Vec::new();
+        for (src_path, target) in candidates {
+            let ext = std::path::Path::new(&src_path)
+                .extension()
+                .and_then(std::ffi::OsStr::to_str);
+            let resolved = match ext {
+                Some("rs") => resolve_rust_path(&src_path, &target, &live_paths),
+                Some("py" | "pyi") => resolve_python_relative(&src_path, &target, &live_paths),
+                Some("js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx") => {
+                    resolve_js_relative(&src_path, &target, &live_paths)
+                }
+                _ => None,
+            };
+            if let Some(resolved_target_path) = resolved {
+                hits.push((resolved_target_path, src_path, target));
+            }
+        }
+
+        // 4. Apply UPDATEs. We need the rev too — there's only one
+        //    rev in the imports table per ingest pass (HEAD), so we
+        //    grab it once and stamp every UPDATE with it.
+        let head_rev = current_head_rev(self)?;
+        let mut update_stmt = self
+            .conn()
+            .prepare(
+                "UPDATE imports SET resolved = TRUE, target_path = ? \
+                 WHERE rev = ? AND src_path = ? AND target = ?",
+            )
+            .map_err(|e| CodeLoreError::Analysis(format!("prepare imports update: {e}")))?;
+        let mut updated = 0usize;
+        for (target_path, src_path, target) in hits {
+            update_stmt
+                .execute(duckdb::params![target_path, head_rev, src_path, target])
+                .map_err(|e| CodeLoreError::Analysis(format!("update imports row: {e}")))?;
+            updated += 1;
+        }
+        Ok(updated)
+    }
 }
 
 /// Resolve HEAD's rev from the commits table (most recent commit by date).
@@ -473,11 +676,11 @@ fn query_live_paths(db: &FactsDb) -> Result<Vec<String>> {
 /// lambdas, generator expressions) and language overloads can produce
 /// identical names too (C++ `foo(int)` vs `foo(double)`, Java
 /// constructors, Python decorated wrappers). Without disambiguation
-/// every duplicate-named entry after the first failed the
-/// `entities`/`complexity_metrics` PK on insert — the v0.3.4 F40 fix
-/// surfaced the data correctly into Rust memory but the DB rejected
-/// the second row with a UNIQUE-constraint violation, aborting ingest
-/// on any closures-heavy or overload-heavy codebase.
+/// every duplicate-named entry after the first violates the
+/// `entities`/`complexity_metrics` PK on insert — the data lands in
+/// Rust memory but the DB rejects the second row with a UNIQUE-
+/// constraint violation, aborting ingest on any closures-heavy or
+/// overload-heavy codebase.
 ///
 /// The fix rewrites the entity name to
 /// `"{original_name}@{start_line}-{end_line}"` (or

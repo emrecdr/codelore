@@ -85,6 +85,10 @@ regex = "1"
 # Rust `regex` crate doesn't support lookaround. fancy-regex wraps
 # `regex` with a backtracking engine for non-regular features.
 fancy-regex = "0.18"
+# F-A2 (Tier 2 Day 6): TOML parser for the `.codelore-arch-rules.toml`
+# layered-architecture rule file. `serde` derive feature gives a
+# zero-boilerplate struct-binding parse path.
+toml = { version = "0.8", default-features = false, features = ["parse"] }
 
 [features]
 default = []
@@ -180,6 +184,10 @@ required-features = ["test-support"]
 
 [[test]]
 name = "clone_coupling_test"
+required-features = ["test-support"]
+
+[[test]]
+name = "imports_factsdb_test"
 required-features = ["test-support"]
 
 [[test]]

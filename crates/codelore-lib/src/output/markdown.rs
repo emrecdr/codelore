@@ -350,6 +350,170 @@ pub fn write_top_committers_markdown<W: Write>(
     Ok(())
 }
 
+/// god-classes markdown emitter — cognitive × `fan_in` × `fan_out`
+/// intersection. Top-of-list files have all three pulling up.
+pub fn write_god_classes_markdown<W: Write>(
+    rows: &[crate::analyses::god_classes::GodClassRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore god-classes")?;
+    writeln!(w, "| Path | Cognitive | Fan-in | Fan-out | God score |")
+        .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---:|---:|---:|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| `{}` | {:.0} | {} | {} | {:.3} |",
+            escape_md_cell(&row.path),
+            row.cognitive,
+            row.fan_in,
+            row.fan_out,
+            row.god_score,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+/// architecture-violations markdown emitter — one row per import
+/// edge that crosses a forbidden layer boundary.
+pub fn write_arch_violations_markdown<W: Write>(
+    rows: &[crate::analyses::arch_violations::ArchViolationRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore architecture-violations")?;
+    if rows.is_empty() {
+        writeln!(
+            w,
+            "_No violations detected — either the rule set is empty (no `.codelore-arch-rules.toml` at the repo root) or every import edge respects the declared layer boundaries._"
+        )
+        .map_err(CodeLoreError::Io)?;
+        return Ok(());
+    }
+    writeln!(
+        w,
+        "| Source file | Source layer | Target file | Target layer | Raw target |"
+    )
+    .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---|---|---|---|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| `{}` | {} | `{}` | {} | `{}` |",
+            escape_md_cell(&row.src_path),
+            escape_md_cell(&row.src_layer),
+            escape_md_cell(&row.target_path),
+            escape_md_cell(&row.target_layer),
+            escape_md_cell(&row.raw_target),
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+/// stale-code markdown emitter.
+pub fn write_stale_code_markdown<W: Write>(
+    rows: &[crate::analyses::stale_code::StaleCodeRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore stale-code")?;
+    writeln!(w, "| Path | Last touched | Months since | Max cognitive |")
+        .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---|---:|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| `{}` | {} | {} | {:.0} |",
+            escape_md_cell(&row.path),
+            row.last_touched,
+            row.months_since_touched,
+            row.max_cognitive,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+/// pair-programming markdown emitter.
+pub fn write_pair_programming_markdown<W: Write>(
+    rows: &[crate::analyses::pair_programming::PairRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore pair-programming")?;
+    writeln!(w, "| Author A | Author B | Pair commits |").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| {} | {} | {} |",
+            escape_md_cell(&row.author_a),
+            escape_md_cell(&row.author_b),
+            row.pair_commits,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+/// lead-time markdown emitter.
+pub fn write_lead_time_markdown<W: Write>(
+    rows: &[crate::analyses::lead_time::LeadTimeRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore lead-time")?;
+    writeln!(
+        w,
+        "| Rev | Author | Authored | Committed | Lead time (days) |"
+    )
+    .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---|---|---|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        let short_rev = if row.rev.len() >= 8 {
+            &row.rev[..8]
+        } else {
+            &row.rev
+        };
+        writeln!(
+            w,
+            "| `{}` | {} | {} | {} | {:.2} |",
+            short_rev,
+            escape_md_cell(&row.canonical_author),
+            row.author_date,
+            row.committer_date,
+            row.lead_time_days,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+/// bus-factor markdown emitter.
+pub fn write_bus_factor_markdown<W: Write>(
+    rows: &[crate::analyses::bus_factor::BusFactorRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore bus-factor")?;
+    writeln!(
+        w,
+        "| Module | Total commits | Bus factor | Top contributor | Top share |"
+    )
+    .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---:|---:|---|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| {} | {} | {} | {} | {:.1}% |",
+            escape_md_cell(&row.module),
+            row.total_commits,
+            row.bus_factor,
+            escape_md_cell(&row.top_contributor),
+            row.top_contributor_share * 100.0,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_knowledge_islands_markdown<W: Write>(
     rows: &[crate::analyses::knowledge_islands::KnowledgeIslandRow],
     w: &mut W,

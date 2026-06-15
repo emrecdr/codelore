@@ -1,8 +1,7 @@
 //! Single source of truth for `Options` default values + `clap`
 //! `default_value_t` annotations. Without this module the same number
 //! had to be edited in two places, and drift went unnoticed at compile
-//! time (the v0.1.0 audit caught the matching state — but only after a
-//! manual cross-reference of every default).
+//! time — a hand-cross-reference of every default was the only catch.
 //!
 //! Add new defaults here; reference from `Options::default()` AND from
 //! the corresponding `#[arg(default_value_t = …)]` annotation in

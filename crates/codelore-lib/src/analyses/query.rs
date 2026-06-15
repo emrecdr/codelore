@@ -1,8 +1,8 @@
 //! Shared `prepare → query_map → collect → format!()-wrapped errors`
-//! boilerplate. Before this, 13 analyses copy-pasted the same 7-line
-//! pattern with only the SQL constant, params, and mapper closure
-//! varying. Drift risk on the error-message format was a real concern
-//! flagged by the v0.1.1 cleanup review.
+//! boilerplate. Without this helper every analysis would copy-paste
+//! the same 7-line pattern with only the SQL constant, params, and
+//! mapper closure varying, and the error-message format would drift
+//! across analyses.
 //!
 //! Usage:
 //!

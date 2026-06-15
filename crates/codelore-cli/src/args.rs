@@ -98,8 +98,90 @@ pub struct Cli {
 pub enum Command {
     /// Run an analysis and emit results.
     Analyze(AnalyzeArgs),
-    /// Run analyses at two revisions and emit the delta. Plan 8 §7.
+    /// Run analyses at two revisions and emit the delta.
     Diff(DiffArgs),
+    /// Emit shell-completion script to stdout. Supported shells:
+    /// bash | zsh | fish | powershell | elvish. Pipe to your shell's
+    /// completion directory.
+    Completions(CompletionsArgs),
+    /// Print the formula + citation + SQL for any metric or analysis
+    /// `CodeLore` exposes. Makes the auditable-formulas brand
+    /// promise tactile on the CLI side.
+    Explain(ExplainArgs),
+    /// Emit JSON Schema 2020-12 for any `CodeLore` output row type.
+    /// Integrates with downstream tools (Stoplight, Spectral,
+    /// Postman, `OpenAPI` registries).
+    Schema(SchemaArgs),
+    /// Print operational telemetry — cache size, schema version, and
+    /// per-analysis SQL preview. The "what's `CodeLore` doing under
+    /// the hood?" subcommand.
+    Profile,
+    /// Emit a markdown documentation dump covering every supported
+    /// analysis, formula, and citation. The seed of the planned full
+    /// static-HTML doc site.
+    Docs,
+    /// Run quality-gate validation against `.codelore-thresholds.toml`
+    /// at the repo root. Exit 0 on pass, non-zero on any violation.
+    /// Writes `result=pass|fail` to `$GITHUB_OUTPUT` when the env var
+    /// is set, for direct GitHub Actions step-output integration.
+    Check(CheckArgs),
+    /// Emit a release-notes markdown summary between two revisions.
+    /// Mirrors `codelore diff` but pivots the output for changelog-
+    /// style consumption.
+    Notes(NotesArgs),
+}
+
+/// Quality-gate check.
+#[derive(clap::Args, Debug)]
+pub struct CheckArgs {
+    /// Path to the git repo (default: cwd).
+    #[arg(short, long, default_value = ".")]
+    pub repo: PathBuf,
+    /// Optional explicit thresholds file. When omitted,
+    /// `.codelore-thresholds.toml` at the repo root is auto-
+    /// discovered. Empty/missing file → empty rule set → check
+    /// passes vacuously.
+    #[arg(long)]
+    pub thresholds_file: Option<PathBuf>,
+    /// Diff-mode: restrict the gate to files that changed in
+    /// `<base>..<head>`. When omitted the check covers every file
+    /// live at HEAD.
+    #[arg(long)]
+    pub diff: Option<String>,
+}
+
+/// Release-notes args.
+#[derive(clap::Args, Debug)]
+pub struct NotesArgs {
+    /// Path to the git repo (default: cwd).
+    #[arg(short, long, default_value = ".")]
+    pub repo: PathBuf,
+    /// `<base>..<head>` revision range to summarise.
+    pub range: String,
+}
+
+/// Shell-completion script generation.
+#[derive(clap::Args, Debug)]
+pub struct CompletionsArgs {
+    /// Target shell.
+    #[arg(value_enum)]
+    pub shell: clap_complete::Shell,
+}
+
+/// Metric / analysis explanation.
+#[derive(clap::Args, Debug)]
+pub struct ExplainArgs {
+    /// Name of the metric or analysis to explain. Pass without an
+    /// argument to list every supported topic.
+    pub topic: Option<String>,
+}
+
+/// JSON Schema export.
+#[derive(clap::Args, Debug)]
+pub struct SchemaArgs {
+    /// Name of the row type (e.g. `hotspots`, `god-classes`,
+    /// `bus-factor`). Pass without an argument to list every type.
+    pub row_type: Option<String>,
 }
 
 // AnalyzeArgs accumulates 4+ independent boolean flags (--no-cache, --verbose,

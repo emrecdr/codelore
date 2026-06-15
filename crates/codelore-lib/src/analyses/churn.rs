@@ -40,7 +40,7 @@ fn build_abs_churn_sql(src: &str) -> String {
     // GROUP BY). That lets `COUNT(commits.rev)` replace
     // `COUNT(DISTINCT commits.rev)` without semantic change —
     // eliminating DuckDB's distinct-tracking hash overhead. Same
-    // philosophy as v0.4.1's F47-F54 sweep.
+    // philosophy as the broader DISTINCT-elimination sweep.
     format!(
         "WITH commit_churn AS (
             SELECT rev,

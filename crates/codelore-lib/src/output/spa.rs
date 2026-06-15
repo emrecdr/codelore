@@ -8,7 +8,7 @@
 //! that opens in any browser, runs without a server, fits in a CI
 //! artefact, and does not phone home.
 //!
-//! See `docs/ui-roadmap.md` for the v0.4.x widget plan and the
+//! See `docs/ui-roadmap.md` for the widget plan and the
 //! technical-stack justification.
 //!
 //! # Shape
@@ -54,12 +54,11 @@ const ALPINE_PERSIST_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/alpine-p
 // the repo. See `spa/tailwind-src/README.md` for the rebuild workflow.
 const TAILWIND_DAISY_CSS: &str = include_str!("spa/tailwind.daisyui.min.css");
 
-/// Composite of all per-widget data the SPA dashboard renders. For
-/// v0.4.0 only `hotspots` is wired; subsequent commits in the v0.4.x
-/// series add `coupling`, `code_health`, `knowledge_islands`, and the
-/// trends timeseries as separate fields. Adding a field here +
-/// updating the JSON consumer in `widgets.js` is the v0.4.x growth
-/// vector.
+/// Composite of all per-widget data the SPA dashboard renders.
+/// Each field carries the rows for one widget; widgets that opt out
+/// via `skip_serializing_if` are simply absent from the payload.
+/// Adding a field here + updating the JSON consumer in `widgets.js`
+/// is the canonical extension point for a new widget.
 #[derive(Debug, Default, Serialize)]
 pub struct SpaDashboard {
     pub hotspots: Vec<HotspotRow>,
@@ -113,6 +112,24 @@ pub struct SpaDashboard {
     /// the payload (the widget falls back to neutral grey for them).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clones: Vec<CloneSummary>,
+    /// Resolved import edges feeding the architecture force-graph
+    /// widget. One row per resolved import from the imports table.
+    /// Empty until the resolver covers the repo's language mix
+    /// (Rust + Python + JS/TS today).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub imports: Vec<ImportEdgeRow>,
+    /// Per-commit Kamei JIT-SDP feature vector for the Delivery Risk
+    /// Sparkline widget. One row per commit in the last-N (capped at
+    /// 30) chronological window. Surfaces the raw Kamei 14-feature
+    /// signal — la/ld (size), nf (spread), ndev (concurrency), exp
+    /// (author experience), entropy (file distribution), fix (bug-
+    /// fix-ness) — so the SPA can compute a composite risk score per
+    /// dimension and explain *which* dimension dominates each
+    /// commit's risk. Beyond-CodeScene differentiator (`CodeScene`
+    /// reports an opaque score; `CodeLore` reports the peer-reviewed
+    /// dimensions).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kamei_risk: Vec<KameiRiskRow>,
 }
 
 /// One function in the X-Ray sunburst.
@@ -150,6 +167,74 @@ pub struct CloneSummary {
     /// Number of distinct `clone_group_id`s the path appears in. A file
     /// that's part of N independent clone families has `groups = N`.
     pub groups: u32,
+}
+
+/// One resolved import edge for the architecture force-graph widget.
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+pub struct ImportEdgeRow {
+    pub src_path: String,
+    pub target_path: String,
+}
+
+/// Pull every resolved import edge from the `imports` table. Only
+/// resolved edges (where `target_path` is non-NULL) participate so
+/// the SPA graph reflects the dependency surface `CodeLore` can
+/// actually visualise.
+///
+/// # Errors
+///
+/// Propagates `DuckDB` prepare / query errors as
+/// [`CodeLoreError::Output`].
+pub fn run_imports_for_arch_graph(db: &crate::facts::FactsDb) -> Result<Vec<ImportEdgeRow>> {
+    let mut stmt = db
+        .conn()
+        .prepare(
+            "SELECT src_path, target_path FROM imports \
+             WHERE target_path IS NOT NULL \
+             ORDER BY src_path ASC, target_path ASC",
+        )
+        .map_err(|e| CodeLoreError::Output(format!("arch-imports prepare: {e}")))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(ImportEdgeRow {
+                src_path: r.get(0)?,
+                target_path: r.get(1)?,
+            })
+        })
+        .map_err(|e| CodeLoreError::Output(format!("arch-imports query: {e}")))?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| CodeLoreError::Output(format!("arch-imports collect: {e}")))
+}
+
+/// Per-commit Kamei JIT-SDP feature row for the Delivery Risk
+/// Sparkline widget. Drops the merge-commit subset (their Kamei
+/// vectors are 0 by design — see
+/// `gix_repo.rs::changed_files_for_commit`) and the date-null
+/// fringe.
+///
+/// Feature definitions per Kamei et al. 2013 §3:
+///   - `la` / `ld` — lines added / deleted (Size dimension)
+///   - `nf` — files changed (Diffusion)
+///   - `nd` — directories changed (Diffusion)
+///   - `ndev` — distinct devs who touched the same files before this commit (History)
+///   - `nuc` — unique changes per file before this commit (History)
+///   - `exp` — author's general experience (History)
+///   - `entropy` — distribution of changes across files (Diffusion)
+///   - `fix` — is this a bug-fix commit (Purpose)
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+pub struct KameiRiskRow {
+    pub rev: String,
+    /// ISO date `YYYY-MM-DD` of the commit (committer date).
+    pub date: String,
+    pub la: u32,
+    pub ld: u32,
+    pub nf: u32,
+    pub nd: u32,
+    pub ndev: u32,
+    pub nuc: u32,
+    pub exp: u32,
+    pub entropy: f64,
+    pub fix: bool,
 }
 
 /// Render the SPA HTML and write it to `w`. The HTML is fully
@@ -351,6 +436,68 @@ pub fn run_daily_commits(db: &crate::facts::FactsDb) -> Result<Vec<DailyCommit>>
         .map_err(|e| CodeLoreError::Output(format!("daily_commits query: {e}")))?;
     let out: std::result::Result<Vec<_>, _> = rows.collect();
     out.map_err(|e| CodeLoreError::Output(format!("daily_commits collect: {e}")))
+}
+
+/// Pull the last-N non-merge commits with their Kamei JIT-SDP
+/// feature vector for the Delivery Risk Sparkline widget. Returns
+/// rows in chronological order (oldest → newest) so the widget can
+/// render left-to-right as a calendar-time bar series.
+///
+/// COALESCE(...0) on every Kamei feature guards against the
+/// nullable schema columns — fresh fixtures or analyses where a
+/// commit's Kamei vector wasn't populated render as zero-risk bars
+/// rather than crashing the serialisation.
+///
+/// # Errors
+///
+/// Propagates `DuckDB` prepare / query errors as
+/// [`CodeLoreError::Output`].
+pub fn run_kamei_risk(db: &crate::facts::FactsDb, limit: i64) -> Result<Vec<KameiRiskRow>> {
+    let sql = "
+        WITH recent AS (
+            SELECT rev, date, la, ld, nf, nd, ndev, nuc, exp, entropy, fix
+            FROM commits
+            WHERE is_merge = FALSE AND date IS NOT NULL
+            ORDER BY date DESC, rowid DESC
+            LIMIT ?
+        )
+        SELECT rev,
+               strftime(date, '%Y-%m-%d') AS date,
+               COALESCE(la, 0)::UINTEGER AS la,
+               COALESCE(ld, 0)::UINTEGER AS ld,
+               COALESCE(nf, 0)::UINTEGER AS nf,
+               COALESCE(nd, 0)::UINTEGER AS nd,
+               COALESCE(ndev, 0)::UINTEGER AS ndev,
+               COALESCE(nuc, 0)::UINTEGER AS nuc,
+               COALESCE(exp, 0)::UINTEGER AS exp,
+               COALESCE(entropy, 0.0) AS entropy,
+               COALESCE(fix, FALSE) AS fix
+        FROM recent
+        ORDER BY date ASC, rev ASC
+    ";
+    let mut stmt = db
+        .conn()
+        .prepare(sql)
+        .map_err(|e| CodeLoreError::Output(format!("kamei_risk prepare: {e}")))?;
+    let rows = stmt
+        .query_map([limit], |r| {
+            Ok(KameiRiskRow {
+                rev: r.get(0)?,
+                date: r.get(1)?,
+                la: r.get(2)?,
+                ld: r.get(3)?,
+                nf: r.get(4)?,
+                nd: r.get(5)?,
+                ndev: r.get(6)?,
+                nuc: r.get(7)?,
+                exp: r.get(8)?,
+                entropy: r.get(9)?,
+                fix: r.get(10)?,
+            })
+        })
+        .map_err(|e| CodeLoreError::Output(format!("kamei_risk query: {e}")))?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| CodeLoreError::Output(format!("kamei_risk collect: {e}")))
 }
 
 fn escape_html(s: &str) -> String {

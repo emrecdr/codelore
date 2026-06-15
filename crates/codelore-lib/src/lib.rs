@@ -6,6 +6,7 @@
 
 pub mod analyses;
 pub mod analysis;
+pub mod arch_rules;
 pub mod arrow_facade;
 pub mod cache;
 pub mod clones;
@@ -14,12 +15,14 @@ pub mod constants;
 pub mod error;
 pub mod facts;
 pub mod identity;
+pub mod imports;
 pub mod kamei;
 pub mod options;
 pub mod output;
 pub mod paths;
 pub mod paths_filter;
 pub mod provenance;
+pub mod quality_gates;
 pub mod repo;
 #[cfg(feature = "test-support")]
 pub mod test_support;
