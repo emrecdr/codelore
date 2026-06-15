@@ -1229,8 +1229,60 @@ fn write_provenance_sidecar(
         .to_json()
         .context("serialize provenance manifest")?;
     let sidecar = std::path::PathBuf::from(format!("{}.provenance.json", output_path.display()));
-    std::fs::write(&sidecar, json)
-        .with_context(|| format!("write provenance sidecar to {}", sidecar.display()))?;
+
+    // Atomic-rename pattern: write the sidecar payload to a temp file
+    // first, fsync it, then atomically rename into place. Closes the
+    // crash window where a half-written .provenance.json on disk would
+    // be indistinguishable from a complete one. Downstream consumers
+    // (SLSA verifiers, CI gates) can rely on "if the file exists,
+    // its contents are complete and durable".
+    //
+    // The pid suffix lets concurrent codelore runs against the same
+    // output path stay isolated (the last writer wins, and intermediate
+    // writers don't trample each other's tmp files mid-write).
+    //
+    // Caveat: this only makes the SIDECAR atomic — the main output
+    // (parquet, CSV, etc.) was already dropped by the caller before
+    // we got here. Power-loss between the BufWriter drop and the
+    // rename below can still leave a main output without a sidecar.
+    // That's the residual gap; closing it would require restructuring
+    // the output emitters to expose a sync_all hook on the main
+    // handle, which is out of scope for the sidecar atomicity fix.
+    let mut tmp_name = sidecar.as_os_str().to_owned();
+    tmp_name.push(format!(".tmp.{}", std::process::id()));
+    let tmp_path = std::path::PathBuf::from(tmp_name);
+
+    {
+        use std::io::Write as _;
+        let mut f = std::fs::File::create(&tmp_path).with_context(|| {
+            format!(
+                "create provenance sidecar tmp file at {}",
+                tmp_path.display()
+            )
+        })?;
+        f.write_all(json.as_bytes()).with_context(|| {
+            format!("write provenance sidecar payload to {}", tmp_path.display())
+        })?;
+        f.sync_all().with_context(|| {
+            format!(
+                "fsync provenance sidecar tmp file at {}",
+                tmp_path.display()
+            )
+        })?;
+    } // File dropped → OS handle closed before rename.
+
+    std::fs::rename(&tmp_path, &sidecar).with_context(|| {
+        // On rename failure, clean up the orphan tmp file best-effort.
+        // We can't surface a secondary error here because we're already
+        // returning the rename's error; the orphan would be left for
+        // the next process-id collision to clobber.
+        let _ = std::fs::remove_file(&tmp_path);
+        format!(
+            "atomically rename {} -> {}",
+            tmp_path.display(),
+            sidecar.display()
+        )
+    })?;
     Ok(())
 }
 
