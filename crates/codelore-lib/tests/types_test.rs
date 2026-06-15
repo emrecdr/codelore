@@ -67,6 +67,34 @@ fn analysis_name_rejects_unknown() {
     assert!(r.is_err());
 }
 
+/// Every variant of `AnalysisName` must (a) appear in `all()` so the
+/// CLI's `--help` / supported-names list is complete, AND (b)
+/// round-trip through `as_str` / `from_str` cleanly.
+///
+/// The compile-time guard inside `all()` (a `match name { ... }` over
+/// every variant) catches "added a variant but forgot to register it"
+/// at build time. This runtime test is the **belt** to that
+/// compile-time **brace**: a future contributor who edits the guard
+/// match (e.g. accidentally widening an arm via `Self::A | Self::B`
+/// when they meant to add a new line) might still compile but ship
+/// a regression in `all()`. The duplicate-detection and non-empty
+/// assertions below catch that second-order failure.
+#[test]
+fn analysis_name_all_is_unique_and_non_empty() {
+    let all = AnalysisName::all();
+    let mut unique = all.to_vec();
+    unique.sort_by_key(|n| n.as_str());
+    unique.dedup();
+    assert_eq!(
+        unique.len(),
+        all.len(),
+        "AnalysisName::all() contains duplicates: {:?} -> deduped {:?}",
+        all.iter().map(|n| n.as_str()).collect::<Vec<_>>(),
+        unique.iter().map(|n| n.as_str()).collect::<Vec<_>>(),
+    );
+    assert!(!all.is_empty(), "AnalysisName::all() must not be empty");
+}
+
 #[test]
 fn analysis_name_display_matches_as_str() {
     for &name in AnalysisName::all() {

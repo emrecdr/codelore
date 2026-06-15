@@ -33,6 +33,44 @@ pub struct DiffOutput {
     pub hotspots: HotspotsDelta,
     pub coupling_absences: Vec<CouplingAbsence>,
     pub clones: ClonesDelta,
+    /// Median `code_health` over the base-rev hotspots set. Computed
+    /// only when `--thresholds-file` is set (otherwise 0.0). Surfaced
+    /// in the JSON output so downstream tools can re-evaluate the
+    /// `[diff].delta_code_health_min` gate against their own
+    /// thresholds without re-running the analysis.
+    pub base_median_code_health: f64,
+    /// Median `code_health` over the head-rev hotspots set. Same
+    /// triggering / default as `base_median_code_health`.
+    pub head_median_code_health: f64,
+    /// `[diff]` quality-gate violations. Empty when the gate is
+    /// vacuous (no `--thresholds-file` or no `[diff]` section) OR
+    /// when both gates pass.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gate_violations: Vec<GateViolationOut>,
+}
+
+/// JSON-serialisable mirror of `quality_gates::GateViolation`.
+/// We re-export the lib type with `Serialize` rather than depending on
+/// the library's struct directly: keeps the library's gate type free
+/// of `Serialize` derives that would propagate `serde` through every
+/// gate-evaluating consumer.
+#[derive(Debug, Clone, Serialize)]
+pub struct GateViolationOut {
+    pub gate: String,
+    pub path: String,
+    pub actual: String,
+    pub threshold: String,
+}
+
+impl From<codelore_lib::quality_gates::GateViolation> for GateViolationOut {
+    fn from(v: codelore_lib::quality_gates::GateViolation) -> Self {
+        Self {
+            gate: v.gate,
+            path: v.path,
+            actual: v.actual,
+            threshold: v.threshold,
+        }
+    }
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -499,6 +537,7 @@ fn prune_stale_worktrees(repo_root: &Path) {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn run_diff(args: &DiffArgs) -> Result<DiffOutput> {
     // Best-effort cleanup of orphans from prior aborted runs before we add
     // a new worktree. Idempotent; errors logged only.
@@ -587,6 +626,45 @@ pub fn run_diff(args: &DiffArgs) -> Result<DiffOutput> {
         ClonesDelta::default()
     };
 
+    // [diff] gate evaluation. Vacuous (zeroes + empty violations
+    // list) when --thresholds-file is unset OR no [diff] section is
+    // present in the file. The thresholds file is auto-discovered
+    // when the flag is omitted — same auto-discovery the `check`
+    // subcommand uses — so `codelore diff` in a repo with a
+    // committed `.codelore-thresholds.toml` automatically gates on
+    // its `[diff]` section without needing the flag every time.
+    let thresholds_opt = if let Some(path) = args.thresholds_file.as_ref() {
+        Some(
+            codelore_lib::quality_gates::Thresholds::from_path(path)
+                .map_err(|e| anyhow::anyhow!("load thresholds file: {e}"))?,
+        )
+    } else {
+        let discovered = codelore_lib::quality_gates::Thresholds::discover(&args.repo)
+            .map_err(|e| anyhow::anyhow!("discover thresholds file: {e}"))?;
+        if discovered.is_empty() {
+            None
+        } else {
+            Some(discovered)
+        }
+    };
+    let (base_median_code_health, head_median_code_health, gate_violations) = if let Some(t) =
+        thresholds_opt.as_ref()
+        && (t.diff.delta_code_health_min.is_some() || t.diff.new_hotspot_max.is_some())
+    {
+        let base_med = median_code_health(&base_analyses.hotspots);
+        let head_med = median_code_health(&head_analyses.hotspots);
+        let delta = head_med - base_med;
+        let new_hotspot_count = u32::try_from(hotspots.rank_entrants.len()).unwrap_or(u32::MAX);
+        let violations: Vec<GateViolationOut> =
+            codelore_lib::quality_gates::evaluate_diff_gate(t, new_hotspot_count, delta)
+                .into_iter()
+                .map(Into::into)
+                .collect();
+        (base_med, head_med, violations)
+    } else {
+        (0.0, 0.0, Vec::new())
+    };
+
     Ok(DiffOutput {
         base_sha,
         head_sha,
@@ -594,14 +672,44 @@ pub fn run_diff(args: &DiffArgs) -> Result<DiffOutput> {
         hotspots,
         coupling_absences,
         clones,
+        base_median_code_health,
+        head_median_code_health,
+        gate_violations,
     })
 }
 
-/// Decide the process exit code based on `--fail-on`. Returns `true` if the
-/// process should exit non-zero. Exhaustive match on the typed enum — no
-/// silent fall-through on unknown values (clap validates at parse time).
+/// Median of `code_health` across a hotspots row vector. Returns 0.0
+/// for empty inputs — consistent with the "vacuous" branch in the
+/// caller, where no data means no signal means no violation.
+fn median_code_health(rows: &[HotspotRow]) -> f64 {
+    if rows.is_empty() {
+        return 0.0;
+    }
+    let mut healths: Vec<f64> = rows.iter().map(|r| r.code_health).collect();
+    healths.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mid = healths.len() / 2;
+    if healths.len() % 2 == 1 {
+        healths[mid]
+    } else {
+        f64::midpoint(healths[mid - 1], healths[mid])
+    }
+}
+
+/// Decide the process exit code based on `--fail-on` AND the
+/// `[diff]` quality gate. Returns `true` if the process should exit
+/// non-zero.
+///
+/// `[diff]` violations are an unconditional fail signal — they
+/// override `--fail-on=none`. Rationale: a thresholds file is opt-in
+/// (user explicitly configured a gate), so a violation is exactly
+/// the case where "do nothing" is the wrong default. The `--fail-on`
+/// knob continues to gate the OTHER signals (rank entrants, score
+/// increase, etc.) as a separate axis.
 pub fn should_fail(args: &DiffArgs, output: &DiffOutput) -> bool {
     use crate::args::DiffFailOn;
+    if !output.gate_violations.is_empty() {
+        return true;
+    }
     match args.fail_on {
         DiffFailOn::None => false,
         DiffFailOn::RankEntrant => !output.hotspots.rank_entrants.is_empty(),

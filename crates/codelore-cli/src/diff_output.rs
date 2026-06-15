@@ -26,6 +26,7 @@ pub fn emit(out: &mut dyn Write, output: &DiffOutput, format: &str) -> Result<()
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn emit_text(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
     writeln!(
         out,
@@ -42,6 +43,22 @@ fn emit_text(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
             + output.clones.pr_touched_existing.len(),
     )?;
     writeln!(out)?;
+
+    if !output.gate_violations.is_empty() {
+        writeln!(
+            out,
+            "✗ {} quality-gate VIOLATION(s) (from [diff] section)",
+            output.gate_violations.len()
+        )?;
+        for v in &output.gate_violations {
+            writeln!(
+                out,
+                "    {} actual={} threshold={}",
+                v.gate, v.actual, v.threshold
+            )?;
+        }
+        writeln!(out)?;
+    }
 
     if !output.hotspots.rank_entrants.is_empty() {
         writeln!(
@@ -148,6 +165,27 @@ fn emit_markdown(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
         }
     )?;
     writeln!(out)?;
+
+    if !output.gate_violations.is_empty() {
+        writeln!(
+            out,
+            "## ❌ Quality-gate violations ({})",
+            output.gate_violations.len()
+        )?;
+        writeln!(out)?;
+        writeln!(out, "| Gate | Actual | Threshold |")?;
+        writeln!(out, "|---|---:|---:|")?;
+        for v in &output.gate_violations {
+            writeln!(
+                out,
+                "| `{}` | `{}` | `{}` |",
+                codelore_lib::output::markdown::escape_md_cell(&v.gate),
+                codelore_lib::output::markdown::escape_md_cell(&v.actual),
+                codelore_lib::output::markdown::escape_md_cell(&v.threshold),
+            )?;
+        }
+        writeln!(out)?;
+    }
 
     if !output.hotspots.rank_entrants.is_empty() {
         writeln!(

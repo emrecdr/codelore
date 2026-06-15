@@ -490,4 +490,20 @@ pub struct DiffArgs {
     /// threshold); 0.01 for stricter signal.
     #[arg(long, default_value_t = DEFAULT_FISHER_SIGNIFICANCE)]
     pub absence_fisher_p: f64,
+
+    /// Optional path to a thresholds file (default name
+    /// `.codelore-thresholds.toml`). When set, the file's `[diff]`
+    /// section is evaluated against this run's deltas:
+    ///
+    /// - `delta_code_health_min` — minimum allowed
+    ///   `head_median − base_median` code-health delta. Negative
+    ///   values mean "drop tolerated up to this magnitude".
+    /// - `new_hotspot_max` — maximum allowed count of rank-entrant
+    ///   hotspots (files that enter top-N at head but were not
+    ///   in top-N at base).
+    ///
+    /// Violations are surfaced on the output and force a non-zero
+    /// exit (overriding `--fail-on=none`).
+    #[arg(long)]
+    pub thresholds_file: Option<PathBuf>,
 }

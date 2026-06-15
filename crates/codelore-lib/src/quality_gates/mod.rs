@@ -164,6 +164,51 @@ pub fn evaluate_clone_gate(
     }])
 }
 
+/// Evaluate the `[diff]` section against a base→head delta.
+///
+/// `new_hotspot_count` is the number of files that newly enter the
+/// top-N hotspot ranking at head (i.e. weren't in the base ranking).
+/// `delta_code_health` is `head_median_health − base_median_health` —
+/// a positive value means health improved, a negative value means it
+/// dropped. Convention follows the `[diff] delta_code_health_min`
+/// gate: the configured threshold is the floor for the delta, so the
+/// gate fails when `delta_code_health < delta_code_health_min`.
+///
+/// Returns an empty vec when no `[diff]` gates are configured (the
+/// caller's empty-thresholds short-circuit covers this, but the
+/// internal early-return keeps the function safe to call from
+/// downstream tooling that wires `[diff]` standalone).
+#[must_use]
+pub fn evaluate_diff_gate(
+    thresholds: &Thresholds,
+    new_hotspot_count: u32,
+    delta_code_health: f64,
+) -> Vec<GateViolation> {
+    let mut out = Vec::new();
+    let d = &thresholds.diff;
+    if let Some(max) = d.new_hotspot_max
+        && new_hotspot_count > max
+    {
+        out.push(GateViolation {
+            gate: "new_hotspot_max".into(),
+            path: "(diff-summary)".into(),
+            actual: new_hotspot_count.to_string(),
+            threshold: max.to_string(),
+        });
+    }
+    if let Some(min) = d.delta_code_health_min
+        && delta_code_health < min
+    {
+        out.push(GateViolation {
+            gate: "delta_code_health_min".into(),
+            path: "(diff-summary)".into(),
+            actual: format!("{delta_code_health:+.2}"),
+            threshold: format!("{min:+.2}"),
+        });
+    }
+    out
+}
+
 /// Evaluate the `[gates]` section against a hotspots result set.
 /// Returns the list of violations.
 #[must_use]
@@ -289,5 +334,72 @@ new_hotspot_max = 0
         let rows = vec![make_row("a.rs", 9999.0, 0.0, 99.0)];
         let v = evaluate_full_tree(&t, &rows);
         assert!(v.is_empty());
+    }
+
+    // ───────────────── [diff] gate ─────────────────
+
+    #[test]
+    fn diff_gate_vacuous_when_unconfigured() {
+        let t = Thresholds::default();
+        let v = evaluate_diff_gate(&t, 999, -100.0);
+        assert!(
+            v.is_empty(),
+            "no [diff] gates ⇒ no violations regardless of inputs"
+        );
+    }
+
+    #[test]
+    fn diff_gate_new_hotspot_max_flags_excess() {
+        let mut t = Thresholds::default();
+        t.diff.new_hotspot_max = Some(2);
+        let v = evaluate_diff_gate(&t, 5, 0.0);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].gate, "new_hotspot_max");
+        assert_eq!(v[0].actual, "5");
+        assert_eq!(v[0].threshold, "2");
+    }
+
+    #[test]
+    fn diff_gate_new_hotspot_max_boundary_passes() {
+        // Equal-to-threshold is allowed (`> max`, not `>= max`).
+        let mut t = Thresholds::default();
+        t.diff.new_hotspot_max = Some(3);
+        let v = evaluate_diff_gate(&t, 3, 0.0);
+        assert!(v.is_empty());
+    }
+
+    #[test]
+    fn diff_gate_delta_health_min_flags_drop() {
+        // delta_code_health_min = -5 means "drop no more than 5 pts".
+        // A delta of -10 violates; the gate's actual/threshold formatting
+        // includes the sign so the human-readable output is unambiguous.
+        let mut t = Thresholds::default();
+        t.diff.delta_code_health_min = Some(-5.0);
+        let v = evaluate_diff_gate(&t, 0, -10.0);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].gate, "delta_code_health_min");
+        assert_eq!(v[0].actual, "-10.00");
+        assert_eq!(v[0].threshold, "-5.00");
+    }
+
+    #[test]
+    fn diff_gate_delta_health_min_improvement_passes() {
+        // Positive delta (health improved) trivially clears any floor.
+        let mut t = Thresholds::default();
+        t.diff.delta_code_health_min = Some(-5.0);
+        let v = evaluate_diff_gate(&t, 0, 3.0);
+        assert!(v.is_empty());
+    }
+
+    #[test]
+    fn diff_gate_both_violations_surface_independently() {
+        let mut t = Thresholds::default();
+        t.diff.delta_code_health_min = Some(0.0);
+        t.diff.new_hotspot_max = Some(0);
+        let v = evaluate_diff_gate(&t, 2, -1.0);
+        assert_eq!(v.len(), 2);
+        let gates: Vec<&str> = v.iter().map(|g| g.gate.as_str()).collect();
+        assert!(gates.contains(&"new_hotspot_max"));
+        assert!(gates.contains(&"delta_code_health_min"));
     }
 }
