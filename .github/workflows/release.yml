@@ -171,7 +171,16 @@ jobs:
           merge-multiple: true
 
       - name: Create / update GitHub Release
-        uses: softprops/action-gh-release@v3
+        # SHA-pin to the exact `v3.0.0` commit. The `@v3` tag is
+        # mutable upstream — the action repo could re-point it to a
+        # malicious commit and CI would silently pick it up on the
+        # next tag push. SHA pin defeats that supply-chain class.
+        # Bump procedure when softprops ships a real v3.x.y update:
+        # 1. `gh api repos/softprops/action-gh-release/git/refs/tags/v3 --jq '.object.sha'`
+        # 2. confirm the new SHA against the upstream release notes
+        #    (https://github.com/softprops/action-gh-release/releases)
+        # 3. replace the SHA below + update the trailing `# v3.x.y` tag.
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           tag_name: ${{ needs.plan.outputs.tag }}
           generate_release_notes: true
