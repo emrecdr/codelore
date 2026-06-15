@@ -264,7 +264,7 @@ pub fn write_summary_markdown<W: Write>(rows: &[SummaryRow], w: &mut W) -> Resul
     writeln!(w, "| Metric | Value |").map_err(CodeLoreError::Io)?;
     writeln!(w, "|---|---|").map_err(CodeLoreError::Io)?;
     for row in rows {
-        writeln!(w, "| {} | {} |", escape_md_cell(&row.metric), row.value,)
+        writeln!(w, "| {} | {} |", escape_md_cell(&row.metric), row.value)
             .map_err(CodeLoreError::Io)?;
     }
     Ok(())
@@ -398,7 +398,7 @@ pub fn write_messages_markdown<W: Write>(
     writeln!(w, "| Entity | Matches |").map_err(CodeLoreError::Io)?;
     writeln!(w, "|---|---:|").map_err(CodeLoreError::Io)?;
     for row in rows {
-        writeln!(w, "| `{}` | {} |", escape_md_cell(&row.entity), row.matches,)
+        writeln!(w, "| `{}` | {} |", escape_md_cell(&row.entity), row.matches)
             .map_err(CodeLoreError::Io)?;
     }
     Ok(())
