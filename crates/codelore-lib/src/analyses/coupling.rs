@@ -280,10 +280,40 @@ fn build_total_commits_sql(bucket: Option<TimeBucket>, use_lineage: bool) -> Str
 ///                    |  shared   |
 /// ```
 fn fisher_two_tail(shared: u32, revs_a: u32, revs_b: u32, total: u32) -> Option<f64> {
+    // Invariants the SQL aggregation is supposed to enforce on the
+    // inputs:
+    //   shared ≤ revs_a              (a pair's co-change count can't
+    //                                 exceed either file's own
+    //                                 revisions)
+    //   shared ≤ revs_b              (same — symmetric)
+    //   revs_a + revs_b − shared ≤ total
+    //                                (inclusion-exclusion: every
+    //                                 commit touching A or B is in
+    //                                 `total`)
+    //
+    // If the SQL ever drifts (a future bug in coupling.rs's
+    // `good_commits` filter, a post-cache hot-fix UPDATE, a
+    // `--group-file` collapse that merges A and B into the same
+    // logical entity), the saturating_subs that used to live here
+    // would silently clamp the cells to 0, `fishers_exact`'s input
+    // validation may still accept the degenerate table, and we'd
+    // get a "meaningful" p-value on garbage. Return None on any
+    // violation so the caller's existing None-filtered path drops
+    // the pair silently rather than including a wrong-p-value row.
+    if shared > revs_a || shared > revs_b {
+        return None;
+    }
+    // saturating_add here doubles as an overflow guard against the
+    // theoretical u32-overflow case for pathologically-sized inputs.
+    let union_ab = revs_a.saturating_add(revs_b).saturating_sub(shared);
+    if union_ab > total {
+        return None;
+    }
+
     let a = shared;
-    let b = revs_a.saturating_sub(shared);
-    let c = revs_b.saturating_sub(shared);
-    let d = total.saturating_sub(a).saturating_sub(b).saturating_sub(c);
+    let b = revs_a - shared; // checked above
+    let c = revs_b - shared; // checked above
+    let d = total - union_ab; // checked above
     fishers_exact::fishers_exact(&[a, b, c, d])
         .ok()
         .map(|pv| pv.two_tail_pvalue)
@@ -521,6 +551,93 @@ mod density_tests {
         assert!(
             (d - 0.0275).abs() < 0.001,
             "expected ~0.0275, got {d} — re-measure if the fixture has drifted"
+        );
+    }
+}
+
+#[cfg(test)]
+mod fisher_two_tail_invariant_tests {
+    use super::fisher_two_tail;
+
+    /// Sanity check that the happy path still computes a valid p-value.
+    /// The exact value isn't asserted (`fishers_exact` is the source of
+    /// truth); we just check it's in `[0, 1]`.
+    #[test]
+    fn happy_path_returns_some_in_unit_interval() {
+        let p = fisher_two_tail(5, 10, 12, 100).expect("happy-path inputs must produce Some");
+        assert!((0.0..=1.0).contains(&p), "p={p} should be in [0,1]");
+    }
+
+    /// `shared > revs_a`: a pair's co-change count claims to exceed
+    /// A's total revisions. Inconsistent — return `None` so the caller
+    /// drops the pair rather than reporting a fabricated p-value.
+    #[test]
+    fn shared_exceeds_revs_a_returns_none() {
+        assert_eq!(fisher_two_tail(11, 10, 12, 100), None);
+    }
+
+    /// Symmetric case: `shared > revs_b`.
+    #[test]
+    fn shared_exceeds_revs_b_returns_none() {
+        assert_eq!(fisher_two_tail(13, 20, 12, 100), None);
+    }
+
+    /// `revs_a + revs_b − shared > total`: inclusion-exclusion says
+    /// the union of commits touching A or B can't exceed `total`, so
+    /// a violation means the inputs disagree about what `total` counts.
+    #[test]
+    fn union_exceeds_total_returns_none() {
+        // |A| = 60, |B| = 50, |A∩B| = 5  →  |A∪B| = 105 > total = 100
+        assert_eq!(fisher_two_tail(5, 60, 50, 100), None);
+    }
+
+    /// Edge of the inclusion-exclusion invariant: `|A∪B| == total`.
+    /// Two files between them touch every commit, with no untouched
+    /// commits left. Still consistent; should compute.
+    #[test]
+    fn union_equals_total_is_consistent() {
+        // |A| = 60, |B| = 45, |A∩B| = 5  →  |A∪B| = 100 == total
+        let p = fisher_two_tail(5, 60, 45, 100);
+        assert!(
+            p.is_some(),
+            "|A∪B| == total is the boundary of consistency, must accept"
+        );
+    }
+
+    /// `shared == revs_a == revs_b`: identical-pair edge. Two files
+    /// that always change together, with no independent revisions
+    /// either side. Statistically the strongest possible coupling.
+    /// Cells: `(a=5, b=0, c=0, d=total-5)`. Valid.
+    #[test]
+    fn perfect_coupling_is_consistent() {
+        let p = fisher_two_tail(5, 5, 5, 100).expect("perfect coupling must accept");
+        assert!(
+            p < 0.01,
+            "perfect coupling on 5/100 should be highly significant: p={p}"
+        );
+    }
+
+    /// `shared = 0`: pair is in the table but never co-changed. The
+    /// caller already gates on `min_shared_revs ≥ 1`, but the helper
+    /// must still be well-defined here.
+    #[test]
+    fn shared_zero_is_consistent() {
+        let p = fisher_two_tail(0, 10, 12, 100);
+        assert!(p.is_some());
+    }
+
+    /// `u32::MAX` overflow guard on `revs_a + revs_b`. Without the
+    /// `saturating_add`, this would wrap into a small number and pass
+    /// the `> total` check incorrectly. Belt-and-braces; in practice
+    /// no repo hits anywhere near `u32::MAX`, but the guard is cheap.
+    #[test]
+    fn overflow_on_revs_sum_returns_none() {
+        // total can't accommodate the union; saturating arithmetic
+        // ensures union_ab stays at u32::MAX > any sane total.
+        assert_eq!(
+            fisher_two_tail(0, u32::MAX, u32::MAX, u32::MAX),
+            None,
+            "pathological u32::MAX inputs must not panic + must reject"
         );
     }
 }
