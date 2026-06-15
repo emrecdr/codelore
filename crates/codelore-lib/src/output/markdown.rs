@@ -472,3 +472,46 @@ pub fn write_clone_coupling_markdown<W: Write>(rows: &[CloneCouplingRow], w: &mu
     }
     Ok(())
 }
+
+pub fn write_centrality_markdown<W: Write>(
+    rows: &[crate::analyses::centrality::CentralityRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore behavioural-coupling centrality")?;
+    writeln!(w, "| Entity | Degree | Weighted | PageRank | Eigenvector |")
+        .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---:|---:|---:|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| `{}` | {} | {:.2} | {:.4} | {:.4} |",
+            row.path, row.degree, row.weighted_degree, row.pagerank, row.eigenvector,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+pub fn write_communities_markdown<W: Write>(
+    result: &crate::analyses::communities::CommunitiesResult,
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore behavioural communities (Leiden partition)")?;
+    writeln!(
+        w,
+        "**Modularity Q = {:.4}** across **{} communities**.\n",
+        result.modularity, result.community_count,
+    )
+    .map_err(CodeLoreError::Io)?;
+    writeln!(w, "| Community | Size | Entity |").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---:|---:|---|").map_err(CodeLoreError::Io)?;
+    for row in &result.rows {
+        writeln!(
+            w,
+            "| {} | {} | `{}` |",
+            row.community_id, row.community_size, row.path,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}

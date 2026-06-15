@@ -1001,6 +1001,50 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
                     "clone-coupling analysis supports csv|json|markdown|sarif; got {fmt:?}"
                 )
             }
+            // --- centrality (per-file centrality on the coupling graph) ---
+            ("csv", AnalysisName::Centrality) => {
+                let rows = codelore_lib::analyses::centrality::run_centrality(&db, &opts)
+                    .context("run centrality")?;
+                codelore_lib::output::csv::write_centrality_csv(&rows, &mut out)
+                    .context("write csv")?;
+            }
+            ("json", AnalysisName::Centrality) => {
+                let rows = codelore_lib::analyses::centrality::run_centrality(&db, &opts)
+                    .context("run centrality")?;
+                codelore_lib::output::json::write_centrality_json(&rows, &mut out)
+                    .context("write json")?;
+            }
+            ("markdown", AnalysisName::Centrality) => {
+                let rows = codelore_lib::analyses::centrality::run_centrality(&db, &opts)
+                    .context("run centrality")?;
+                codelore_lib::output::markdown::write_centrality_markdown(&rows, &mut out)
+                    .context("write markdown")?;
+            }
+            (fmt, AnalysisName::Centrality) => {
+                anyhow::bail!("centrality analysis supports csv|json|markdown; got {fmt:?}")
+            }
+            // --- communities (Leiden partition of the coupling graph) ---
+            ("csv", AnalysisName::Communities) => {
+                let result = codelore_lib::analyses::communities::run_communities(&db, &opts)
+                    .context("run communities")?;
+                codelore_lib::output::csv::write_communities_csv(&result, &mut out)
+                    .context("write csv")?;
+            }
+            ("json", AnalysisName::Communities) => {
+                let result = codelore_lib::analyses::communities::run_communities(&db, &opts)
+                    .context("run communities")?;
+                codelore_lib::output::json::write_communities_json(&result, &mut out)
+                    .context("write json")?;
+            }
+            ("markdown", AnalysisName::Communities) => {
+                let result = codelore_lib::analyses::communities::run_communities(&db, &opts)
+                    .context("run communities")?;
+                codelore_lib::output::markdown::write_communities_markdown(&result, &mut out)
+                    .context("write markdown")?;
+            }
+            (fmt, AnalysisName::Communities) => {
+                anyhow::bail!("communities analysis supports csv|json|markdown; got {fmt:?}")
+            }
             _ => unreachable!("format/analysis combination should have been validated above"),
         }
     } // out is dropped here, flushing any buffered writes

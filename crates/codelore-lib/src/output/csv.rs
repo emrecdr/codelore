@@ -620,6 +620,54 @@ pub fn write_clone_coupling_csv<W: Write>(rows: &[CloneCouplingRow], w: &mut W) 
     Ok(())
 }
 
+pub fn write_centrality_csv<W: Write>(
+    rows: &[crate::analyses::centrality::CentralityRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(w, "entity,degree,weighted_degree,pagerank,eigenvector").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{:.6},{:.8},{:.8}",
+            quote_if_needed(&row.path),
+            row.degree,
+            row.weighted_degree,
+            row.pagerank,
+            row.eigenvector,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+pub fn write_communities_csv<W: Write>(
+    result: &crate::analyses::communities::CommunitiesResult,
+    w: &mut W,
+) -> Result<()> {
+    writeln!(w, "entity,community_id,community_size").map_err(CodeLoreError::Io)?;
+    for row in &result.rows {
+        writeln!(
+            w,
+            "{},{},{}",
+            quote_if_needed(&row.path),
+            row.community_id,
+            row.community_size,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    // Trailing comment line carries the partition-level summary
+    // (modularity, community count). CSV consumers can ignore comments;
+    // the field is needed for the markdown / json variants and humans
+    // running the csv variant will appreciate seeing the score.
+    writeln!(
+        w,
+        "# partition_modularity={:.6} community_count={}",
+        result.modularity, result.community_count,
+    )
+    .map_err(CodeLoreError::Io)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::quote_if_needed;
