@@ -31,6 +31,17 @@ duckdb = { version = "=1.10503.1", features = ["bundled", "appender-arrow"] }
 crossbeam-channel = "0.5"
 codelore-rca = { path = "../codelore-rca", version = "0.5.1" }
 fishers_exact = "1"
+# Leiden community detection on the behavioural coupling graph.
+# Default features disabled because the upstream default pulls in
+# `cli` (clap binary we don't need), `gryf` (alternative graph crate;
+# we feed edges directly as Vec<(u32, u32, f64)>), and `rayon`. We
+# opt back into `rayon` only — the parallel Leiden iterations are
+# meaningfully faster on linux-kernel-scale coupling graphs
+# (~70k nodes). The `petgraph` feature is intentionally left off so
+# leiden-rs's optional petgraph 0.8 dep doesn't conflict with
+# codelore-rca's pinned 0.6 (CLAUDE.md documents why the 0.6 → 0.8
+# bump is held).
+leiden-rs = { version = "0.8", default-features = false, features = ["rayon"] }
 sha2 = "0.11"
 hex = "0.4"
 # Direct tree-sitter + grammar deps for clone-detection AST walking (Plan 7).

@@ -53,6 +53,17 @@ pub enum AnalysisName {
     // (automatic departure detection from commit-date falloff vs
     // their required manual Ex-Developer marking).
     KnowledgeIslands,
+    // Per-file centrality on the Fisher-significant coupling graph.
+    // Promotes the SoC-style `coupling_centrality_v1` primitive
+    // (currently a bare COUNT(*) materialised inside `code_health`)
+    // to a first-class analysis with degree, weighted-degree,
+    // PageRank, and eigenvector variants.
+    Centrality,
+    // Leiden community detection on the coupling graph. Auto-detects
+    // Conway's-law clusters; partition modularity is the headline
+    // number. CodeLore's strategic differentiator vs CodeScene
+    // (paywalled there).
+    Communities,
 }
 
 impl AnalysisName {
@@ -82,6 +93,8 @@ impl AnalysisName {
             Self::EntityOwnership => "entity-ownership",
             Self::TopCommitters => "top-committers",
             Self::KnowledgeIslands => "knowledge-islands",
+            Self::Centrality => "centrality",
+            Self::Communities => "communities",
         }
     }
 
@@ -111,6 +124,8 @@ impl AnalysisName {
             Self::EntityOwnership,
             Self::TopCommitters,
             Self::KnowledgeIslands,
+            Self::Centrality,
+            Self::Communities,
         ]
     }
 

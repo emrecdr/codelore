@@ -135,3 +135,22 @@ pub fn write_entity_ownership_json<W: Write>(
 pub fn write_clone_coupling_json<W: Write>(rows: &[CloneCouplingRow], w: &mut W) -> Result<()> {
     write_json(rows, w)
 }
+
+pub fn write_centrality_json<W: Write>(
+    rows: &[crate::analyses::centrality::CentralityRow],
+    w: &mut W,
+) -> Result<()> {
+    write_json(rows, w)
+}
+
+/// Communities emits the wrapper struct (`rows` + `modularity` +
+/// `community_count`), not just the row array — the partition-level
+/// summary is the headline metric and JSON consumers expect it
+/// alongside the per-file mapping.
+pub fn write_communities_json<W: Write>(
+    result: &crate::analyses::communities::CommunitiesResult,
+    w: &mut W,
+) -> Result<()> {
+    serde_json::to_writer_pretty(w, result)
+        .map_err(|e| crate::CodeLoreError::Output(format!("json: {e}")))
+}

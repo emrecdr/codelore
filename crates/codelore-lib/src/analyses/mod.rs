@@ -2,12 +2,14 @@
 //! plus a thin Rust orchestrator.
 
 pub mod authors;
+pub mod centrality;
 pub mod churn;
 pub mod clone_coupling;
 pub mod clones;
 pub mod code_age;
 pub mod code_health;
 pub mod communication;
+pub mod communities;
 pub mod coupling;
 pub mod entity_effort;
 pub mod entity_ownership;
