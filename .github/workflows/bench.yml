@@ -43,10 +43,47 @@ jobs:
           key: linux-kernel-snapshot-2026-06
 
       - name: Fetch Linux kernel snapshot
+        # Bounded fetch with explicit error surfacing. Three modes
+        # the previous bare `git clone` left ambiguous:
+        #   1. Transient git.kernel.org / GitHub raw-network failure
+        #      → noisy retry once before giving up.
+        #   2. Disk-full mid-clone (the partial clone is ~2-3 GB)
+        #      → set -e propagates the exit code; the job fails fast
+        #      instead of producing a phantom "successful" clone the
+        #      bench step then trips over.
+        #   3. Repository moved / renamed upstream → exit 128 from
+        #      git clone surfaces cleanly via set -e.
+        # The bench step downstream takes `CODELORE_BENCH_LINUX_KERNEL_PATH`
+        # and reads kernel files — a half-cloned repo is worse than no
+        # clone (silent partial results vs explicit skip).
         if: steps.kernel-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 10
         run: |
-          git clone --depth=10000 --filter=blob:none \
-            https://github.com/torvalds/linux.git /tmp/linux-kernel-snapshot
+          set -euo pipefail
+          target=/tmp/linux-kernel-snapshot
+          clone_url=https://github.com/torvalds/linux.git
+          for attempt in 1 2; do
+            echo "::group::clone attempt ${attempt}"
+            if git clone --depth=10000 --filter=blob:none "${clone_url}" "${target}"; then
+              echo "::endgroup::"
+              # Sanity check: the bench reads kernel source files; a
+              # zero-file clone (which can happen on partial network
+              # truncation that git reports as success) breaks the
+              # bench with an opaque "no files found" error. Verify a
+              # known-present top-level file exists.
+              if [[ -f "${target}/MAINTAINERS" ]]; then
+                echo "kernel snapshot OK ($(du -sh "${target}" | cut -f1))"
+                exit 0
+              fi
+              echo "clone reported success but MAINTAINERS missing — corrupted, retrying" >&2
+              rm -rf "${target}"
+            fi
+            echo "::endgroup::"
+            echo "clone attempt ${attempt} failed" >&2
+            rm -rf "${target}"
+          done
+          echo "::error::kernel snapshot fetch failed after 2 attempts; bench job will not run" >&2
+          exit 1
 
       - name: Run criterion benches
         env:
