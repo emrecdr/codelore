@@ -4,6 +4,232 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **F143 — Headless-browser smoke test for the SPA dashboard.** New
+  `crates/codelore-lib/tests/spa_browser_test.rs` integration test
+  (gated on a new `browser-tests` Cargo feature) renders the SPA
+  via the differential fixture, opens it in headless Chrome via the
+  `headless_chrome` crate, and asserts (a) no `RuntimeExceptionThrown`
+  events fire during render, (b) the KPI tiles container has rendered
+  content. Companion `spa-browser` job added to `.github/workflows/ci.yml`
+  on `ubuntu-latest` only (Chrome dependency). Catches the runtime
+  init-order class of defect that v0.5.1's F107/F108 hotfix had to
+  fix in production. Caught a real TDZ regression at PR time (the
+  `_tokenCache` helpers in `widgets.js`); fix shipped in the same PR.
+- **F110 — Differential-test coverage extended to the previously
+  un-cross-checked `Repo` trait methods.** Four new tests in
+  `crates/codelore-lib/tests/differential_repo_test.rs` —
+  `head_sha_matches`, `is_worktree_dirty_matches_on_fresh_clone`,
+  `read_blob_at_head_matches_on_tracked_and_untracked_paths`,
+  `diff_hunks_gix_is_empty_stub_cli_returns_real_hunks`. Writing
+  the third test surfaced a real bug: `GitCliRepo::read_blob_at_head`
+  was missing (defaulted to `Ok(None)`) — production code falling
+  back to the CLI backend would have silently read empty blobs.
+  Backend implementation added via `git show HEAD:<path>`.
+- **F112 — Provenance manifest carries reproducibility-critical
+  fields.** Five new fields in the `.provenance.json` sidecar:
+  `head_sha`, `cache_key_hash`, `rust_version`, `target_triple`,
+  `grammars` (BTreeMap of tree-sitter crate name → exact version
+  pin). The grammar pins make complexity / clones outputs
+  trivially auditable for ABI compatibility.
+- **F140 + F141 — Integration-test coverage for the v0.6.0 analyses
+  + multi-language import resolver.** Five new `tests/*_test.rs`
+  files (`bus_factor_test`, `lead_time_test`, `stale_code_test`,
+  `pair_programming_test`, `god_classes_test`, `arch_violations_test`)
+  plus a new `ingest_resolves_imports_to_target_paths` assertion in
+  `imports_factsdb_test` that exercises the JS/Python/Rust per-language
+  resolvers end-to-end.
+
+### Changed
+
+- **Provenance sidecar schema bumped: `MANIFEST_SCHEMA_VERSION = 1`
+  → `2`.** Downstream consumers reading `.provenance.json` directly
+  see five new top-level fields (`head_sha`, `cache_key_hash`,
+  `rust_version`, `target_triple`, `grammars`). Existing fields are
+  unchanged. Consumers with `#[serde(deny_unknown_fields)]` opt-in
+  need to bump their schema; everyone else passes through. See
+  **Upgrade notes** below.
+- **F155 — `DiffOutput.{base,head}_median_code_health` JSON shape
+  changed.** Both fields are now `Option<f64>` with
+  `#[serde(skip_serializing_if = "Option::is_none")]`, instead of
+  bare `f64` defaulted to `0.0`. When `--thresholds-file` is absent
+  or `[diff]` gates are not configured, the fields are now **omitted
+  entirely** from the diff JSON (previously emitted as `0.0`, which
+  read as catastrophic on the 0-100 scale and tripped downstream
+  dashboard rules). See **Upgrade notes**.
+- **F156 — `.codelore-thresholds.toml` now rejects unknown keys.**
+  `Thresholds` / `Gates` / `DiffGates` carry `#[serde(deny_unknown_fields)]`,
+  so a typo like `cognative_max = 30` (transposed) or
+  `disallow_clone_type1 = true` (missing underscore) — previously
+  silently parsed as the default — now fails the parse with the
+  standard serde "unknown field" error. The gate's value proposition
+  is that the repo carries the gate; silent misconfiguration was
+  the worst failure mode. See **Upgrade notes**.
+- **F157 — `AnalysisName::all()` registry single-source-of-truth.**
+  F147's exhaustiveness guard forced new variants to be added to a
+  match but did not force them into the actual `&[Self::X, ...]`
+  array `all()` returns — meaning a new variant could be added to
+  the match (forced) and forgotten from the array (silently). A new
+  `registry!` macro now expands ONCE into both the array and the
+  guard match from a single token list; the two surfaces cannot
+  drift by construction.
+- **F158 — SARIF `tool.driver.informationUri` now points at the
+  canonical codelore repo.** Five sites previously hardcoded
+  `https://github.com/emre/codescene` (wrong project name, wrong
+  org). Three `informationUri` constants + two rule `helpUri`
+  strings updated. Every SARIF report shipped to GitHub Code
+  Scanning previously linked the tool-details panel to a 404 / the
+  wrong repo. See **Upgrade notes**.
+- **F160 — Kamei strict-prior peer semantics unified.** EXP / REXP
+  previously used inclusive `prev.date <= c.date` (same-second peers
+  counted as priors); NDEV / NUC / AGE / SEXP used strict `<`. Three
+  different "prior commit" definitions inside one canonical 14-feature
+  vector made the output paper-unfaithful. EXP / REXP now use strict
+  `<` like the rest; the tiny_repo test fixture was updated to span
+  explicit per-commit timestamps via a new `run_git_at(path, iso_date,
+  args)` helper. See **Upgrade notes**.
+- **F154 — `codelore diff <base>..<head>` rejects `base == head`.**
+  Previously ran two identical analyses, computed a zero-everywhere
+  delta, and emitted an empty SARIF / JSON / markdown diff with no
+  signal that the input was vacuous. Now bails at the entry point
+  with an actionable error naming the SHA and the range. Hot failure
+  mode after a `gh pr checkout` refresh that leaves the local branch
+  at the base SHA.
+- **F94 / F97 / Branch-merge gate** — these audit findings remain
+  Active (file:line + suggested fix) in `docs/reports/deep_analysis_report.md`
+  for follow-up. The validation pass in §4½ of that report carries
+  source-grepped evidence for every Active finding as of this release.
+
+### Performance
+
+- **F125 — Redundant HEAD-time SQL queries hoisted to compute-once
+  per ingest.** `query_live_paths` (a recursive CTE + `arg_max` over
+  `commits ⋈ changes`) and `current_head_rev` previously ran four
+  times per ingest — once each from the complexity / clones / imports
+  / resolver passes. Both now compute once at the top of `ingest()`
+  and thread down via `&[String]` + `&str`. Saves 30-300 ms per
+  ingest on real-world repos.
+- **F126 — Resolver UPDATE rewritten from N round-trips to one
+  hash-joined `UPDATE … FROM`.** `resolve_imports_at_head` previously
+  issued one prepared `UPDATE imports SET …` per resolved hit —
+  O(N × |imports|) because DuckDB has no clustered index on the
+  predicate columns. Now bulk-inserts hits into a TEMP TABLE and
+  applies a single hash-joined UPDATE. ~100× speed-up on
+  import-heavy monorepos with thousands of resolved edges.
+- **F127 + F128 — Kamei `enrich_diffusion` + `enrich_size`
+  rewritten from correlated subqueries to grouped `UPDATE … FROM`.**
+  Three (diffusion: NF/NS/ND) + two (size: LA/LD) correlated subqueries
+  per commit re-scanned `changes` for each — O(N × |changes|). Both
+  now run a single `GROUP BY rev` and hash-join the aggregates back.
+  Same shape the `enrich_history` and `enrich_experience` passes
+  already use.
+
+### Fixed
+
+- **F89 → F109 closures from prior batches**, recorded as
+  `Fixed-on-branch` in `deep_analysis_report.md` §3 closure log;
+  this release marks their landing on main.
+- **F118 — `GixRepo::walk_commits` walker thread panic no longer
+  silently swallowed.** New `WalkerStream` wrapper owns the
+  `JoinHandle` alongside the receiver; on end-of-stream it joins
+  the handle and surfaces any panic as a final
+  `Err(CodeLoreError::Repo(...))`, mapped to exit code 3 per
+  spec §6.6. Two unit tests cover the panic-surfaces and clean-exit
+  cases.
+- **F127 / F128 / F143 / F150 / F151 / F152 / F154 / F156 / F157 /
+  F158 / F159 / F160 / F163** — see above sections.
+- **F138 — `startViewTransition` honors `prefers-reduced-motion`.**
+  The SPA's wrapper previously called `document.startViewTransition`
+  unconditionally; users with the OS-level reduced-motion preference
+  still got the crossfade. Now queries `window.matchMedia` and
+  applies the update synchronously when reduced motion is preferred.
+- **F139 — `[diff]` gates evaluated and wired into `codelore diff`.**
+  `Thresholds.diff` was parsed but never evaluated. New
+  `evaluate_diff_gate` in `quality_gates` plus CLI wiring in
+  `codelore diff` make the `[diff]` section enforce
+  `new_hotspot_max` and `delta_code_health_min`. Returns non-zero
+  exit on violation.
+- **F147 — `AnalysisName::all()` exhaustiveness guard added** (now
+  superseded by the F157 macro fix above, but the underlying gap
+  is closed end-to-end).
+- **F149 / F150 — Schema version validation on `FactsDb::open_read_only`.**
+  Operator who hands a stale `.duckdb` to `--cache-dir` directly
+  now gets a typed parse-time error instead of cryptic SQL failures
+  at analysis time. Literal `"1"` promoted to a `CURRENT_SCHEMA_VERSION`
+  constant in `facts/schema.rs` so producer and validator share
+  one source of truth.
+- **F151 — Leiden community detection seeded deterministically.**
+  `LeidenConfig::default()` left `seed = None`; `leiden-rs` fell
+  back to wall-clock entropy. Module docstring promised "deterministic
+  across runs"; that promise was broken on every cache miss. Fixed
+  via `LEIDEN_SEED = 0xC0DE_10E5_AED1_DEED`.
+- **F152 — `clone_group_id` deterministic across runs.** The clone
+  extractor's `HashMap<[u8;32], _>` bucket was iterated in
+  `RandomState` order, swapping group ID assignments across process
+  restarts. Switched to `BTreeMap` so iteration is digest-sorted.
+- **F159 — SARIF `artifactLocation.uri` percent-encoded per
+  RFC 3986.** Paths with spaces, `#`, or non-ASCII characters
+  previously shipped as raw bytes; GitHub Code Scanning rejected
+  the SARIF upload or silently truncated at `#` so inline annotations
+  landed on the wrong file. `percent-encoding` crate added as a
+  direct dependency.
+- **F163 — SARIF `automationDetails.id` is per-run unique.** SARIF
+  2.1.0 §3.17.3 wants `<runGroupName>/<runName>/<correlationGuid>`
+  per-run; the three constants in the codebase were static strings,
+  so GitHub Code Scanning collapsed runs into a single timeline,
+  defeating the partialFingerprints work. New `automation_id_for`
+  appends a 16-hex correlation suffix from `SystemTime` nanos +
+  `process::id()`.
+
+### Repository hygiene
+
+- **Audit log cleaned up.** `docs/reports/deep_analysis_report.md`
+  now carries a §3 closure log (every shipped F-finding with its
+  closing commit), a §4 active-findings list (with file:line +
+  severity + suggested-fix shape for every future task candidate),
+  and a §4½ validation pass with source-grepped evidence per Active
+  entry. 20 findings shipped this release; ~30 remain as documented
+  future tasks.
+- **Local + GitHub state cleaned.** 4 redundant local branches
+  deleted, 3 superseded stashes dropped, the v0.5.x UI redesign
+  branch stack consolidated to its canonical superset
+  (`feat/v0.5x-ui-redesign-pr8-table-controls-a11y`) pushed to
+  origin for safekeeping, the 3 intermediate checkpoints preserved
+  as `backup/ui-redesign/*` tags on origin.
+
+### Upgrade notes — breaking changes for consumers
+
+This release contains four schema / output-format changes that may
+affect downstream consumers. None require code changes if you
+consume the documented surface area, but each is called out so
+strict-schema parsers can opt in deliberately.
+
+1. **`.provenance.json` schema_version 1 → 2** (F112). Five new
+   top-level fields. Backwards-compatible for permissive parsers;
+   add the five fields if you use `deny_unknown_fields`.
+2. **`codelore diff` JSON shape** (F155). `base_median_code_health`
+   and `head_median_code_health` are now omitted when no `[diff]`
+   gate is configured; previously emitted as `0.0`. Consumers that
+   read these fields without a presence check now see "key absent"
+   instead of "0.0" in the no-gate case — semantically more correct,
+   but a JSON-shape change.
+3. **`.codelore-thresholds.toml` strictness** (F156). Unknown keys
+   now fail the parse instead of silently defaulting. If your
+   thresholds file has a typo today, the v0.7.0 binary will refuse
+   it; previously the typo'd gate was effectively disabled.
+4. **SARIF `tool.driver.informationUri`** (F158). Changed from the
+   incorrect `https://github.com/emre/codescene` to
+   `https://github.com/emrecdr/codelore`. Tooling that hardcodes
+   the old URL must update; tooling that follows the URL it sees
+   in the report needs no change.
+5. **Kamei EXP / REXP same-second peer semantics** (F160). Now
+   uses strict `prev.date < c.date` like the rest of the 14-feature
+   vector (was inclusive `<=`). Same-author same-second commits no
+   longer count as priors for each other. Production repos with
+   distinct-second commits see no change; bulk-import / amend-heavy
+   histories may see different EXP / REXP values.
+
 ## [0.6.0] - 2026-06-15
 
 ### Added — v0.6.x maximum-aligned feature sprint (full implementation)
