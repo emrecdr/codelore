@@ -23,6 +23,14 @@ allow = [
 ]
 confidence-threshold = 0.93
 
+# Build-only codegen dependency of headless_chrome (browser-tests feature).
+# Emits Rust source at build time from the Chrome DevTools Protocol JSON; not
+# linked into any shipped binary. Only pulled when the `browser-tests` feature
+# is enabled, which today is exclusively the spa-browser CI job.
+[[licenses.exceptions]]
+name = "auto_generate_cdp"
+allow = ["GPL-3.0-or-later"]
+
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"

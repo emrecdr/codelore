@@ -51,6 +51,15 @@ fishers_exact = "1"
 # codelore-rca's pinned 0.6 (CLAUDE.md documents why the 0.6 → 0.8
 # bump is held).
 leiden-rs = { version = "0.8", default-features = false, features = ["rayon"] }
+# Headless Chrome driver, opt-in via the `browser-tests` feature.
+# Used only by `tests/spa_browser_test.rs` to drive the rendered SPA
+# in a real browser — closes the runtime-defect blind spot that the
+# existing string-grep `spa_integration_test` can't cover. `optional`
+# so the default build (no `browser-tests` flag) doesn't fetch the
+# crate or its native-CDP transitive deps. Default features cover
+# what the smoke test needs (CDP + JSON RPC + the bundled Chrome
+# fetcher fallback path).
+headless_chrome = { version = "1", optional = true }
 sha2 = "0.11"
 hex = "0.4"
 # Direct tree-sitter + grammar deps for clone-detection AST walking (Plan 7).
@@ -102,6 +111,16 @@ test-support = ["dep:tempfile"]
 # from the CLI. Released binaries (Homebrew, ghcr, GitHub Releases)
 # ship with `--features spa` enabled.
 spa = []
+
+# `browser-tests` — opt-in headless-browser smoke test for the SPA
+# emitter. Closes the runtime-defect blind spot the earlier
+# string-grep `spa_integration_test` can't cover (production browser-
+# console errors that ship through every PR because no JS executes
+# at CI time). Defaults OFF so contributors who don't have Chrome
+# installed locally still get a clean `cargo test`; CI's ubuntu
+# matrix opts in via `--features browser-tests`. Requires `spa` to
+# be enabled too — there's nothing to drive in a browser otherwise.
+browser-tests = ["spa", "dep:headless_chrome"]
 
 [dev-dependencies]
 criterion = "0.8"
@@ -251,3 +270,7 @@ required-features = ["test-support"]
 [[test]]
 name = "arch_violations_test"
 required-features = ["test-support"]
+
+[[test]]
+name = "spa_browser_test"
+required-features = ["browser-tests", "test-support"]

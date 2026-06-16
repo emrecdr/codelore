@@ -183,6 +183,42 @@
 
 
   // ═════════════════════════════════════════════════════════════════
+
+  // ─── Theme-token helpers — hoisted before the boot section ───
+  // The cached `token(name)` helper is read INSIDE per-node color
+  // callbacks invoked by `renderXxx(data)` in §3 below. Declaring
+  // `const _tokenCache = {}` further down used to TDZ-fault every
+  // boot — same shape as the METRIC_DEFS regression earlier. Hoisted
+  // here so every render path sees an initialised cache.
+  // Theme-token helpers for the per-mode color readers.
+  //
+  // Two read paths exist by design:
+  //
+  //   getCssVar(name)  ← UNCACHED. For non-hot-path reads that happen
+  //                       at most once per chart setOption (axis colors,
+  //                       grid colors, ring fills). Existing widgets.
+  //
+  //   token(name)      ← CACHED. For hot-path reads inside per-node
+  //                       color callbacks (called once per leaf circle).
+  //                       Cache invalidated on theme toggle via
+  //                       registerThemeRerender so DaisyUI's
+  //                       semantic tokens stay theme-accurate.
+  //
+  // Distinct surfaces because mixing them would either over-cache
+  // (sunburst rings going stale on toggle) or under-cache (per-circle
+  // re-read of getComputedStyle on 5000-file repos).
+  const _tokenCache = {};
+  function token(name) {
+    if (!(name in _tokenCache)) {
+      _tokenCache[name] = getComputedStyle(document.documentElement)
+        .getPropertyValue(name).trim();
+    }
+    return _tokenCache[name];
+  }
+  function invalidateTokenCache() {
+    for (const k in _tokenCache) delete _tokenCache[k];
+  }
+
   //  §3  Boot
   // ═════════════════════════════════════════════════════════════════
   //
@@ -377,34 +413,6 @@
       .replace(/'/g, '&#39;');
   }
 
-  // Theme-token helpers for the per-mode color readers.
-  //
-  // Two read paths exist by design:
-  //
-  //   getCssVar(name)  ← UNCACHED. For non-hot-path reads that happen
-  //                       at most once per chart setOption (axis colors,
-  //                       grid colors, ring fills). Existing widgets.
-  //
-  //   token(name)      ← CACHED. For hot-path reads inside per-node
-  //                       color callbacks (called once per leaf circle).
-  //                       Cache invalidated on theme toggle via
-  //                       registerThemeRerender so DaisyUI's
-  //                       semantic tokens stay theme-accurate.
-  //
-  // Distinct surfaces because mixing them would either over-cache
-  // (sunburst rings going stale on toggle) or under-cache (per-circle
-  // re-read of getComputedStyle on 5000-file repos).
-  const _tokenCache = {};
-  function token(name) {
-    if (!(name in _tokenCache)) {
-      _tokenCache[name] = getComputedStyle(document.documentElement)
-        .getPropertyValue(name).trim();
-    }
-    return _tokenCache[name];
-  }
-  function invalidateTokenCache() {
-    for (const k in _tokenCache) delete _tokenCache[k];
-  }
 
   // Register a theme-aware rerenderer that uses cached token() reads.
   // Wraps fn so the token cache is flushed before fn() runs, so the
