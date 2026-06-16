@@ -741,6 +741,7 @@ dependencies = [
  "hex",
  "ignore",
  "leiden-rs",
+ "percent-encoding",
  "rayon",
  "regex",
  "serde",
