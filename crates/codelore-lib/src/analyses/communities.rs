@@ -55,6 +55,12 @@ use crate::analyses::coupling::run_coupling;
 use crate::facts::FactsDb;
 use crate::{CodeLoreError, Options, Result};
 
+/// Deterministic RNG seed for the Leiden community-detection pass. See
+/// the call site for the rationale: `LeidenConfig::default()` leaves
+/// `seed = None` and leiden-rs falls back to wall-clock entropy, which
+/// breaks the module's "deterministic across runs" promise.
+const LEIDEN_SEED: u64 = 0xC0DE_10E5_AED1_DEED;
+
 /// One row per file mapped to its Leiden community ID. Files with no
 /// Fisher-significant coupling partners are omitted (no node, no row).
 /// Rows are sorted by `(community_id ASC, path ASC)` so the output is
@@ -133,7 +139,16 @@ pub fn run_communities(db: &FactsDb, opts: &Options) -> Result<CommunitiesResult
         .build()
         .map_err(|e| CodeLoreError::Analysis(format!("leiden-rs build: {e}")))?;
 
-    let leiden = Leiden::new(LeidenConfig::default());
+    // Deterministic seed so two back-to-back runs against the same graph
+    // produce identical `community_id` columns. `LeidenConfig::default()`
+    // leaves `seed = None`, which the leiden-rs crate fills from
+    // `rand::rng()` → wall-clock entropy → non-determinism. The module
+    // docstring promises "deterministic across runs"; that promise was
+    // broken on every cache miss. Constant is arbitrary but recognisable.
+    let leiden = Leiden::new(LeidenConfig {
+        seed: Some(LEIDEN_SEED),
+        ..LeidenConfig::default()
+    });
     let result = leiden
         .run(&graph)
         .map_err(|e| CodeLoreError::Analysis(format!("leiden-rs run: {e}")))?;
@@ -248,5 +263,57 @@ mod tests {
         assert_eq!(cb, result.partition.community_of(path_to_id["b2"]));
         assert_eq!(cb, result.partition.community_of(path_to_id["b3"]));
         assert_ne!(ca, cb, "two cliques should produce two communities");
+    }
+
+    /// Two back-to-back Leiden runs over the same graph with the same
+    /// seed must produce identical community assignments. Without a
+    /// seed, `LeidenConfig::default()` drew from `rand::rng()` (wall-
+    /// clock entropy) and the module's "deterministic across runs"
+    /// promise was broken on every cache miss.
+    #[test]
+    fn leiden_partition_is_deterministic_across_runs() {
+        let pairs = vec![
+            pair("a1", "a2", 100.0),
+            pair("a1", "a3", 100.0),
+            pair("a2", "a3", 100.0),
+            pair("b1", "b2", 100.0),
+            pair("b1", "b3", 100.0),
+            pair("b2", "b3", 100.0),
+            pair("a1", "b1", 1.0),
+        ];
+        let mut path_to_id: HashMap<String, usize> = HashMap::new();
+        let mut id_to_path: Vec<String> = Vec::new();
+        for p in &pairs {
+            for x in [&p.entity_a, &p.entity_b] {
+                if !path_to_id.contains_key(x) {
+                    path_to_id.insert(x.clone(), id_to_path.len());
+                    id_to_path.push(x.clone());
+                }
+            }
+        }
+        let build = || {
+            let mut b = GraphDataBuilder::new(id_to_path.len());
+            for p in &pairs {
+                b.add_edge(path_to_id[&p.entity_a], path_to_id[&p.entity_b], p.degree)
+                    .unwrap();
+            }
+            b.build().unwrap()
+        };
+        let seeded = || LeidenConfig {
+            seed: Some(LEIDEN_SEED),
+            ..LeidenConfig::default()
+        };
+        let r1 = Leiden::new(seeded()).run(&build()).unwrap();
+        let r2 = Leiden::new(seeded()).run(&build()).unwrap();
+        let parts1: Vec<_> = (0..id_to_path.len())
+            .map(|i| r1.partition.community_of(i))
+            .collect();
+        let parts2: Vec<_> = (0..id_to_path.len())
+            .map(|i| r2.partition.community_of(i))
+            .collect();
+        assert_eq!(
+            parts1, parts2,
+            "seeded Leiden must produce identical partitions across runs"
+        );
     }
 }

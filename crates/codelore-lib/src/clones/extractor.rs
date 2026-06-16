@@ -141,8 +141,15 @@ pub fn group_clones(
     fingerprints: Vec<FunctionFingerprint>,
     min_node_count: u32,
 ) -> Vec<CloneGroup> {
-    use std::collections::HashMap;
-    let mut bucket: HashMap<[u8; 32], Vec<FunctionFingerprint>> = HashMap::new();
+    // `BTreeMap` (not `HashMap`) so iteration order is digest-sorted.
+    // `clone_group_id` is assigned in iteration order via `enumerate()`;
+    // `HashMap` iteration depends on std's `RandomState`, which
+    // randomises per process. Two back-to-back runs over the same
+    // fingerprint set could swap clone_group_id assignments, breaking
+    // diff-mode comparisons and any downstream tooling that joins on
+    // the ID. Digest-sorted iteration makes IDs deterministic across runs.
+    use std::collections::BTreeMap;
+    let mut bucket: BTreeMap<[u8; 32], Vec<FunctionFingerprint>> = BTreeMap::new();
     for f in fingerprints {
         if f.fingerprint.node_count < min_node_count {
             continue;
@@ -215,6 +222,40 @@ mod tests {
             0,
             "trivial functions should be filtered by min_node_count"
         );
+    }
+
+    #[test]
+    fn clone_group_id_is_deterministic_across_runs() {
+        // Two families with distinguishable shapes; if `group_clones`
+        // iterates a `HashMap` keyed on a 32-byte digest, the two
+        // family→ID assignments would swap roughly half the time
+        // across process restarts because std's `RandomState` is
+        // randomised per process. `BTreeMap` iteration is digest-sorted
+        // → the same input always produces the same id assignment.
+        // We invoke `group_clones` twice in the same process and rely
+        // on the fact that BTreeMap iteration order is stable.
+        let mk = |c: &str| -> Vec<FunctionFingerprint> {
+            extract_functions("x.rs", c.as_bytes(), CloneLanguage::Rust).unwrap()
+        };
+        let pair_a = mk("fn add(a: i32, b: i32) -> i32 { let x = 1; a + b + x } \
+             fn sum(p: i32, q: i32) -> i32 { let z = 2; p + q + z }");
+        let pair_b = mk(
+            "fn mul(a: i64, b: i64) -> i64 { let r = a * b; let q = r + 1; q } \
+             fn prod(p: u64, q: u64) -> u64 { let s = p * q; let t = s + 2; t }",
+        );
+        let all: Vec<_> = pair_a.into_iter().chain(pair_b).collect();
+        let g1 = group_clones(all.clone(), 0);
+        let g2 = group_clones(all, 0);
+        assert_eq!(g1.len(), 2, "expected 2 clone families");
+        assert_eq!(g2.len(), g1.len());
+        // ID-to-digest mapping must be identical between runs.
+        for (a, b) in g1.iter().zip(g2.iter()) {
+            assert_eq!(a.clone_group_id, b.clone_group_id);
+            assert_eq!(
+                a.members[0].fingerprint.digest,
+                b.members[0].fingerprint.digest
+            );
+        }
     }
 
     #[test]
