@@ -4,6 +4,79 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **F165 — Detail-drawer modal showed as a permanent sidebar.** The
+  `<dialog>` element had no `[hidden]` attribute, so its
+  `.detail-drawer { position: fixed }` CSS rule painted the closed
+  dialog as a visible right-side panel. `Alpine.store('detail').show()`
+  now removes `[hidden]` before `showModal()`, `hide()` re-adds it
+  after `close()`, and a `close` event listener mirrors that toggle
+  for the form-method=dialog × button + Escape-key + backdrop close
+  paths (which bypass Alpine).
+- **F166 — Temporal Dead Zone on `_colorResolver`.** The `let
+  _colorResolver` binding was declared below the boot block but
+  reached from `heatRamp()` → `resolveCssColor()` during the
+  synchronous Kamei-sparkline render — `let` bindings are not
+  hoisted, so the call landed in the TDZ. Declaration moved above
+  the §3 Boot section.
+- **F167 — Hotspot circle-pack `renderItem` returned NaN under
+  ECharts 6.** `api.value('_raw')` / `api.value(2)` regressed in
+  ECharts 6 — non-numeric keys produce NaN and object values
+  coerce to NaN. Switched to the documented closure-from-data-array
+  pattern: pre-build `circlePackData = [...]` at module scope; both
+  `series.data` and `renderItem(params)` reference the same array
+  via `circlePackData[params.dataIndex]._raw`. Same fix applied to
+  the coupling-arc series + `updateCouplingArcs` (in-place mutation
+  to preserve closure).
+- **F168 — Hotspot circle-pack tooltip always showed "root".** The
+  root node's full-canvas hit box intercepted every pointer event
+  before it could reach leaf circles. Added `silent: isDirectory`
+  to all directory shapes so hits pass through.
+- **F169 — PWA manifest data URL truncated at the first `#`.** The
+  inline `data:application/json,...` URL embedded
+  `theme_color":"#1a1a1a"` — the browser parsed `#1a1a1a"...` as
+  the URL fragment, leaving the JSON parser with a truncated
+  string that errored at column 150. Percent-encoded `#` to `%23`.
+- **F170 — Cognitive-distribution boxplot collapsed to a thin
+  band.** Outlier scatter points (cognitive up to 209) shared the
+  y-axis with the box (whisker-clamped to ~30); ECharts auto-fit
+  stretched the axis to the outliers and the IQR collapsed to ~5%
+  of the chart height. Removed the scatter series, clipped
+  `yAxis.max` to `upperFence * 1.15`, set `boxWidth: [60, 140]`,
+  and added a `graphic` annotation `+N outliers · max V` in the
+  top-right.
+- **F171 — Hovered line/bar appeared to disappear on the parallel-
+  coords and Kamei-sparkline widgets.** ECharts 6's default
+  emphasis behaviour leaves the hovered element visually identical
+  to its neighbours (or worse, the hovered series re-paints
+  underneath the dim batch). Added explicit `emphasis: { focus:
+  'self', ...lineStyle/itemStyle: { opacity: 1 } }` + `blur:
+  { ...style: { opacity: 0.15-0.25 } }` to both series so hover
+  vivid-ifies the target and fades the rest.
+- **F172 — Architecture force-graph empty for repos that nest
+  everything under a single root.** `topDir(p)` returned the first
+  path segment (`app/`), folding every edge into `app→app` and
+  dropping it as intra-module — the user got the misleading "stays
+  intra-module" message even with thousands of resolved imports.
+  Replaced with adaptive `modulePath(p, depth)` that retries
+  depth 2→6 until at least one inter-module edge survives. Same
+  fix applied to module-chord rollup.
+- **F173 — Trends legend overflowed with long file paths.** Top-N
+  hotspot paths like `app/services/clients/application/service.py`
+  consumed an entire scroll-pager page each. Added abbreviated
+  display (`app/…/application/service.py`) + tooltip formatter
+  that restores the full path for hover.
+- **F174 — Alpine bindings silently inert across the page.** Only
+  one `x-data` directive existed in the template (on the theme
+  checkbox), so the keyboard-accessible file list, off-boarding
+  dropdown, and theme indicators outside that scope were ignored
+  by Alpine's directive walk — `$store.dashboard.hotspots.length`
+  rendered as `()`, `<template x-for>` left raw template nodes in
+  place, `x-show` never hid the "Clear scenario" item. Added empty
+  `x-data` to `<body>` so the entire page is a single component
+  scope.
+
 ## [0.7.0] - 2026-06-16
 
 ### Added

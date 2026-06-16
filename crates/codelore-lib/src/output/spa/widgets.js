@@ -82,6 +82,14 @@
   let selectedCouplingFile = null;
   let lastHotspotChart = null;
   let lastHotspotNodePositions = null;
+  // Shared arc-overlay data array. Owned at module scope so both the
+  // arc-series renderItem inside renderHotspotCirclePack AND the
+  // partial-update call from updateCouplingArcs (which runs on every
+  // leaf click without re-running d3.pack) mutate the SAME reference.
+  // Critical: arcData.length = 0 + .push(...) — NOT reassignment — is
+  // how updateCouplingArcs has to refresh it so the closure inside
+  // renderItem keeps seeing live data.
+  let arcData = [];
 
   // Detail drawer state — set up once, reused by every widget that
   // wants to surface per-file details.
@@ -218,6 +226,16 @@
   function invalidateTokenCache() {
     for (const k in _tokenCache) delete _tokenCache[k];
   }
+
+  // Lazy-init cache for the hidden DOM element `resolveCssColor`
+  // uses to round-trip `color-mix()` / `oklch()` expressions through
+  // the browser's CSS parser into concrete `rgb(...)` strings ECharts
+  // can paint on canvas. Declared above §3 Boot because the boot
+  // block synchronously calls widgets (Kamei sparkline, friction
+  // mode, etc.) that reach `resolveCssColor()` — `let` bindings are
+  // NOT hoisted, so any reference from a function called during boot
+  // before this line lands in the Temporal Dead Zone.
+  let _colorResolver;
 
   //  §3  Boot
   // ═════════════════════════════════════════════════════════════════
@@ -427,12 +445,6 @@
     });
   }
 
-  // Hidden element used to ask the browser to resolve CSS color
-  // functions (color-mix(), oklch(), color()) into a concrete rgb()
-  // string. ECharts renders to canvas; canvas accepts only concrete
-  // colors, NOT CSS color functions, so heat ramps need this
-  // round-trip. Created lazily on first use.
-  let _colorResolver;
   function resolveCssColor(cssExpr) {
     if (!_colorResolver) {
       _colorResolver = document.createElement('div');
@@ -967,6 +979,28 @@
       }
     }
 
+    // Declare the data arrays as `let` here so the inline `.map(...)`
+    // expressions below (inside setOption) can assign back into them.
+    // The renderItem callbacks close over these names and read each
+    // item's render payload via `[params.dataIndex]._raw` / `._arc`.
+    //
+    // ECharts 6 dropped the older path for passing structured per-item
+    // data into custom-series renderItem: string-keyed `api.value()`
+    // returns NaN, and numeric `api.value(N)` coerces object values
+    // through Number(...) so they also come back as NaN. The
+    // closure-from-data-array pattern is the documented, stable
+    // ECharts 6 way to pass per-item structured data through to the
+    // renderItem callback. Sibling fields (name, fullPath, metrics,
+    // depth, leafCount) stay on the data item so the tooltip formatter
+    // — which DOES receive the full data item via `params.data` in
+    // ECharts 6 — keeps working untouched.
+    let circlePackData = [];
+    // `arcData` lives at module scope (declared near the top of the
+    // IIFE) so updateCouplingArcs() can mutate the same reference the
+    // arc renderItem closes over. Reset its length here so the per-
+    // render reset doesn't reassign and break the closure.
+    arcData.length = 0;
+
     chart.setOption({
       // The whole canvas is the d3-laid-out coordinate space. We pass
       // raw pixel offsets so we don't need a grid/axis.
@@ -990,9 +1024,30 @@
       series: [{
         type: 'custom',
         coordinateSystem: 'none',
+        // ECharts 6 dropped string-keyed `api.value()` lookups for
+        // custom-series renderItem callbacks; only numeric dimension
+        // indices into the data item's `value` array resolve. We carry
+        // the per-leaf render payload at `value[2]` and read it via
+        // `api.value(2)`. Sibling properties on the data item (name,
+        // fullPath, metrics, depth, leafCount) remain readable via
+        // `params.data` in the tooltip formatter, which is a separate
+        // ECharts callback context where `params.data` is preserved.
         renderItem: function (params, api) {
-          const datum = api.value('_raw');
+          // Read the render payload via closure over `circlePackData`.
+          // ECharts 6 coerces non-numeric values from api.value(N) to
+          // NaN, so we cannot pack the payload into `value[N]`. The
+          // closure-from-data-array pattern is the documented escape.
+          const item = circlePackData[params.dataIndex];
+          const datum = item ? item._raw : null;
           if (!datum) return null;
+          // Directories (non-leaf nodes) carry `metrics: null` on the
+          // data item. They render as the giant transparent containers
+          // around the actual files, so they must NOT capture pointer
+          // events — otherwise ECharts' first-match tooltip hit-test
+          // always picks the outermost root node and the tooltip shows
+          // "root" for every hover. `silent: true` lets pointer events
+          // pass through to the leaf circles painted on top.
+          const isDirectory = !item.metrics;
           const innerCircle = {
             type: 'circle',
             shape: {
@@ -1006,6 +1061,7 @@
               lineWidth: 1,
               opacity: datum.opacity,
             }),
+            silent: isDirectory,
           };
           // Top-quartile leaves get a yellow ring overlay. Drawn
           // first (lower in z-order) so the inner circle paints on
@@ -1015,6 +1071,7 @@
           if (datum.isHotspot) {
             return {
               type: 'group',
+              silent: isDirectory,
               children: [
                 {
                   type: 'circle',
@@ -1025,6 +1082,7 @@
                     lineWidth: 2,
                     opacity: 0.85,
                   },
+                  silent: isDirectory,
                 },
                 innerCircle,
               ],
@@ -1033,7 +1091,7 @@
           return innerCircle;
         },
         zlevel: 1,
-        data: nodes
+        data: (circlePackData = nodes
           // Render larger-first so smaller circles paint on top.
           .slice()
           .sort(function (a, b) { return b.r - a.r; })
@@ -1131,6 +1189,12 @@
             // `_raw.isHotspot` and wraps the leaf in a yellow ring.
             const isHotspot = isLeaf && m && m.hotspot_score != null
               && m.hotspot_score >= hotspotP75;
+            // `value[0]`, `value[1]` carry the d3-laid-out (x, y) for
+            // ECharts' coordinate system. `_raw` is the render payload
+            // renderItem reads via closure over `circlePackData`
+            // (see explanation above the `let circlePackData = []`).
+            // Sibling fields (name, fullPath, metrics, …) drive the
+            // tooltip formatter via `params.data`.
             return {
               value: [n.x, n.y],
               _raw: {
@@ -1145,7 +1209,7 @@
               depth: n.depth,
               leafCount: n.leaves ? n.leaves().length : 0,
             };
-          }),
+          })),
       }, {
         // Second custom series for the coupling arc overlay.
         // Drives off the shared coordinateSystem ('none' = raw pixel
@@ -1158,8 +1222,11 @@
         coordinateSystem: 'none',
         zlevel: 2,
         silent: true,
+        // Read the arc payload via closure over `arcData` — same
+        // ECharts 6 pattern as the inner circle-pack series above.
         renderItem: function (params, api) {
-          const arc = api.value('_arc');
+          const item = arcData[params.dataIndex];
+          const arc = item ? item._arc : null;
           if (!arc) return null;
           return {
             type: 'path',
@@ -1173,11 +1240,23 @@
             silent: true,
           };
         },
-        data: buildCouplingArcs(
-          selectedCouplingFile,
-          lastHotspotNodePositions,
-          data.coupling || []
-        ).map(function (a) { return { value: [a.x1, a.y1], _arc: a }; }),
+        // `value[0]`, `value[1]` anchor the arc on its first endpoint;
+        // `_arc` carries the full payload that renderItem reads via
+        // closure over `arcData` (module scope, never reassigned —
+        // mutated in place so the closure stays live across calls
+        // from updateCouplingArcs).
+        data: (function () {
+          const arcs = buildCouplingArcs(
+            selectedCouplingFile,
+            lastHotspotNodePositions,
+            data.coupling || []
+          );
+          for (var ai = 0; ai < arcs.length; ai++) {
+            const a = arcs[ai];
+            arcData.push({ value: [a.x1, a.y1], _arc: a });
+          }
+          return arcData;
+        })(),
       }],
     });
 
@@ -1548,13 +1627,40 @@
       };
     });
 
+    // Abbreviate long paths in the legend so the scroll pager has
+    // room for multiple labels per page. Keeps the top segment for
+    // architectural context and the last two for file identification:
+    // `app/services/clients/application/service.py` → `app/…/application/service.py`.
+    // Full path is preserved in the tooltip via the formatter.
+    function shortPath(p) {
+      const parts = (p || '').split('/');
+      if (parts.length <= 3) return p;
+      return parts[0] + '/…/' + parts.slice(-2).join('/');
+    }
+    const legendData = paths.map(function (p) { return shortPath(p); });
+    const longByShort = {};
+    paths.forEach(function (p) { longByShort[shortPath(p)] = p; });
+
     const chart = mountEcharts(container);
     chart.setOption({
-      tooltip: { trigger: 'axis' },
+      tooltip: {
+        trigger: 'axis',
+        formatter: function (params) {
+          if (!params || !params.length) return '';
+          var html = '<b>' + escapeHtml(params[0].axisValueLabel || params[0].name) + '</b>';
+          for (var i = 0; i < params.length; i++) {
+            const p = params[i];
+            const full = longByShort[p.seriesName] || p.seriesName;
+            html += '<br/>' + p.marker + escapeHtml(full) + ': <b>' + p.value + '</b>';
+          }
+          return html;
+        },
+      },
       legend: {
         top: 0,
         type: 'scroll',
         textStyle: { color: getCssVar('--fg-dim'), fontSize: 11 },
+        data: legendData,
       },
       grid: { top: 40, left: 50, right: 20, bottom: 40 },
       xAxis: {
@@ -1570,7 +1676,9 @@
         axisLabel: { color: getCssVar('--fg-dim'), fontSize: 11 },
         splitLine: { lineStyle: { color: getCssVar('--bg-elev-2') } },
       },
-      series: series,
+      series: series.map(function (s) {
+        return Object.assign({}, s, { name: shortPath(s.name) });
+      }),
     });
   }
 
@@ -1710,6 +1818,12 @@
         type: 'bar',
         data: seriesData,
         barCategoryGap: '20%',
+        // Same emphasis/blur protocol as the parallel-coords widget:
+        // hovered bar stays full-opacity, others dim. Without explicit
+        // config ECharts 6 applies its default fade that washes the
+        // hovered bar out alongside the rest.
+        emphasis: { focus: 'self', itemStyle: { opacity: 1 } },
+        blur: { itemStyle: { opacity: 0.25 } },
       }],
     });
   }
@@ -1837,7 +1951,14 @@
       series: [{
         type: 'parallel',
         lineStyle: { width: 1, opacity: 0.6, color: token('--color-warning') },
-        emphasis: { lineStyle: { width: 2, opacity: 1.0 } },
+        // `focus: 'self'` keeps the hovered line opaque while the
+        // explicit `blur` config dims the rest. Without these, ECharts
+        // 6's default emphasis behaviour leaves the hovered polyline
+        // visually identical to its neighbours (or worse, the hovered
+        // line gets re-painted underneath the dim batch and appears to
+        // vanish entirely).
+        emphasis: { focus: 'self', lineStyle: { width: 3, opacity: 1.0 } },
+        blur: { lineStyle: { opacity: 0.15 } },
         data: top.map(function (r) {
           return {
             name: r.path,
@@ -1896,32 +2017,52 @@
       }
     }
     const chart = mountEcharts(container);
+    // Outliers share the y-axis with the box; if any reach far above
+    // the upper fence (cognitive often has a long tail), the auto-fit
+    // scale collapses the IQR to a few pixels. Clip the y-axis to the
+    // whisker range with a small headroom and surface the outlier
+    // tally + extreme value as a corner annotation so the information
+    // is preserved without distorting the box.
+    const maxOutlier = outliers.length
+      ? outliers.reduce(function (m, o) { return o[1] > m ? o[1] : m; }, 0)
+      : 0;
+    const yAxisMax = Math.ceil(upperFence * 1.15);
     chart.setOption({
       tooltip: { trigger: 'item' },
-      grid: { top: 30, left: 50, right: 20, bottom: 30 },
+      grid: { top: 30, left: 60, right: 24, bottom: 36 },
       xAxis: {
         type: 'category',
         data: ['cognitive'],
+        boundaryGap: true,
         axisLabel: { color: getCssVar('--fg-dim') },
       },
       yAxis: {
         type: 'value',
+        min: 0,
+        max: yAxisMax,
         axisLabel: { color: getCssVar('--fg-dim') },
         splitLine: { lineStyle: { color: getCssVar('--bg-elev-2') } },
       },
       series: [
         {
           type: 'boxplot',
+          boxWidth: [60, 140],
           data: [[min, q1, med, q3, max]],
           itemStyle: { color: token('--color-warning'), borderColor: token('--color-error') },
         },
-        {
-          type: 'scatter',
-          data: outliers,
-          symbolSize: 6,
-          itemStyle: { color: token('--color-error') },
-        },
       ],
+      graphic: outliers.length
+        ? [{
+            type: 'text',
+            right: 16,
+            top: 8,
+            style: {
+              text: '+' + outliers.length + ' outliers · max ' + Math.round(maxOutlier),
+              fill: getCssVar('--fg-dim'),
+              fontSize: 11,
+            },
+          }]
+        : [],
     });
   }
 
@@ -1935,16 +2076,21 @@
       container.innerHTML = '<div class="empty">No coupling data for module chord.</div>';
       return;
     }
-    // Roll up each pair to module-level (top-level dir).
-    function topDir(p) {
-      const i = (p || '').indexOf('/');
-      return i < 0 ? p : p.slice(0, i);
+    // Roll up each pair to module-level using the first two path
+    // segments (e.g. `app/services/x.py` → `app/services`). One
+    // segment is too coarse for repos that put everything under a
+    // single root like `app/` or `src/` — every edge collapses to
+    // `app→app` and the chord empties out.
+    function modulePath(p) {
+      const parts = (p || '').split('/');
+      if (parts.length <= 1) return p || '';
+      return parts.slice(0, 2).join('/');
     }
     const edges = {};
     for (var i = 0; i < rows.length; i++) {
       const r = rows[i];
-      const a = topDir(r.entity_a);
-      const b = topDir(r.entity_b);
+      const a = modulePath(r.entity_a);
+      const b = modulePath(r.entity_b);
       if (!a || !b || a === b) continue;
       const key = a < b ? a + '\x00' + b : b + '\x00' + a;
       edges[key] = (edges[key] || 0) + (r.shared || 1);
@@ -1994,23 +2140,42 @@
       container.innerHTML = '<div class="empty">No resolved import edges yet. The resolver covers Rust, Python, and JS/TS today; Java FQN&rarr;file mapping is not attempted.</div>';
       return;
     }
-    // Aggregate edges to module-level so the graph is readable.
-    function topDir(p) {
-      const i = (p || '').indexOf('/');
-      return i < 0 ? p : p.slice(0, i);
+    // Adaptive module depth: aggregate edges using path prefixes,
+    // starting at 2 segments and deepening until at least one
+    // inter-module edge survives. Different repos have different
+    // "natural" module boundaries (Rust crates: 1-2 segments,
+    // Django apps: 2-3, monorepos: 3-5). A fixed depth empties the
+    // graph for repos whose imports all sit under a single root
+    // like `app/services/` — we'd then show the misleading "stays
+    // intra-module" message. Caps at 6 segments to keep labels
+    // readable.
+    function modulePath(p, depth) {
+      const parts = (p || '').split('/');
+      if (parts.length <= depth) {
+        // Use parent dir if file has fewer than `depth` segments;
+        // avoids collapsing leaf-level imports onto themselves.
+        const lastSlash = (p || '').lastIndexOf('/');
+        return lastSlash < 0 ? (p || '') : p.slice(0, lastSlash);
+      }
+      return parts.slice(0, depth).join('/');
     }
-    const edges = {};
-    const nodes = {};
-    for (var i = 0; i < imports.length; i++) {
-      const imp = imports[i];
-      if (!imp.target_path) continue;
-      const s = topDir(imp.src_path);
-      const t = topDir(imp.target_path);
-      if (!s || !t || s === t) continue;
-      const key = s + '\x00' + t;
-      edges[key] = (edges[key] || 0) + 1;
-      nodes[s] = true;
-      nodes[t] = true;
+    var edges = {};
+    var nodes = {};
+    for (var depth = 2; depth <= 6; depth++) {
+      edges = {};
+      nodes = {};
+      for (var i = 0; i < imports.length; i++) {
+        const imp = imports[i];
+        if (!imp.target_path) continue;
+        const s = modulePath(imp.src_path, depth);
+        const t = modulePath(imp.target_path, depth);
+        if (!s || !t || s === t) continue;
+        const key = s + '\x00' + t;
+        edges[key] = (edges[key] || 0) + 1;
+        nodes[s] = true;
+        nodes[t] = true;
+      }
+      if (Object.keys(edges).length > 0) break;
     }
     const nodeArr = Object.keys(nodes).map(function (n) { return { name: n, symbolSize: 30 }; });
     const edgeArr = Object.keys(edges).map(function (k) {
@@ -2419,10 +2584,19 @@
       lastHotspotNodePositions,
       data.coupling || []
     );
+    // Mutate the module-scoped `arcData` array in place so the arc
+    // renderItem's closure-captured reference keeps pointing at live
+    // data. Reassigning would orphan the closure and the click flow
+    // would silently render stale arcs.
+    arcData.length = 0;
+    for (var ai = 0; ai < arcs.length; ai++) {
+      const a = arcs[ai];
+      arcData.push({ value: [a.x1, a.y1], _arc: a });
+    }
     lastHotspotChart.setOption({
       series: [
         {},
-        { data: arcs.map(function (a) { return { value: [a.x1, a.y1], _arc: a }; }) },
+        { data: arcData },
       ],
     });
   }

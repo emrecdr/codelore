@@ -9,7 +9,7 @@
        Screen" on this signal; the inline Service Worker registration
        in the boot script delivers offline support so the dashboard
        works on a plane / air-gap. -->
-  <link rel="manifest" href='data:application/json,{"name":"CodeLore","short_name":"CodeLore","description":"Behavioral code analysis dashboard","display":"standalone","start_url":"./","theme_color":"#1a1a1a","background_color":"#1a1a1a","icons":[]}'/>
+  <link rel="manifest" href='data:application/json,{"name":"CodeLore","short_name":"CodeLore","description":"Behavioral code analysis dashboard","display":"standalone","start_url":"./","theme_color":"%231a1a1a","background_color":"%231a1a1a","icons":[]}'/>
   <meta name="theme-color" content="#1a1a1a"/>
   <meta name="apple-mobile-web-app-capable" content="yes"/>
   <meta name="apple-mobile-web-app-status-bar-style" content="black"/>
@@ -484,7 +484,14 @@
     }
   </style>
 </head>
-<body>
+<body x-data>
+  <!-- `x-data` (empty) on <body> scopes the entire page as one Alpine
+       component so every descendant directive (x-text / x-show /
+       x-for / x-if / x-model) sees the global stores. Alpine 3
+       processes directives only inside an x-data root; without this,
+       the keyboard-accessible file list, off-boarding dropdown, and
+       theme bindings are silently inert. Empty value = no local
+       reactive data, just a scope marker. -->
   <!-- DaisyUI `navbar` provides the horizontal flex layout + spacing
        tokens; the existing semantic `header { ... }` block in the
        inline <style> still wins on background-color / border-color
@@ -841,7 +848,7 @@
        directly; no `x-show`/`x-cloak`/`x-transition` markup. Native
        modal management is strictly better for a11y (focus
        restoration, screen-reader announcement). -->
-  <dialog class="detail-drawer modal" id="file-detail-drawer">
+  <dialog class="detail-drawer modal" id="file-detail-drawer" hidden>
     <div class="modal-box max-w-2xl">
       <div class="drawer-header flex items-center justify-between mb-2">
         <h3 id="drawer-title" class="text-lg font-semibold">File details</h3>
@@ -960,18 +967,45 @@
         show() {
           this.open = true;
           const d = document.getElementById('file-detail-drawer');
-          if (d && typeof d.showModal === 'function' && !d.open) {
+          if (!d) return;
+          // Remove the [hidden] attribute that keeps the drawer
+          // collapsed when no file is selected. `showModal()` puts the
+          // dialog into the top layer; the `.detail-drawer { ... }`
+          // CSS rule then takes over for layout.
+          d.removeAttribute('hidden');
+          if (typeof d.showModal === 'function' && !d.open) {
             d.showModal();
           }
         },
         hide() {
           this.open = false;
           const d = document.getElementById('file-detail-drawer');
-          if (d && typeof d.close === 'function' && d.open) {
+          if (!d) return;
+          if (typeof d.close === 'function' && d.open) {
             d.close();
           }
+          // Re-add [hidden] so the `.detail-drawer { position: fixed }`
+          // CSS rule doesn't keep showing the closed dialog as a
+          // visible sidebar.
+          d.setAttribute('hidden', '');
         },
       });
+      // The drawer's × button is a <form method="dialog"> submit
+      // (plus the backdrop close + Escape-key close), which calls
+      // dialog.close() natively but BYPASSES the Alpine store.hide()
+      // method. Listen for the dialog's `close` event and re-add
+      // [hidden] + sync the store's `open` flag so the
+      // `.detail-drawer { position: fixed }` CSS rule doesn't keep
+      // the closed dialog showing as a sidebar.
+      const detailDialog = document.getElementById('file-detail-drawer');
+      if (detailDialog) {
+        detailDialog.addEventListener('close', function () {
+          detailDialog.setAttribute('hidden', '');
+          if (Alpine.store('detail')) {
+            Alpine.store('detail').open = false;
+          }
+        });
+      }
       Alpine.store('filter', {
         text: Alpine.$persist('').as('codelore_filter_text'),
         set(value) { this.text = value; },
