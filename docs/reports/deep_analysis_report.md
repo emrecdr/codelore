@@ -3,8 +3,6 @@
 Read-only audit log. Findings are immutable F-IDs; status field tracks state.
 Shipped findings are pruned from this report once their release ships (full history in `CHANGELOG.md`); refuted findings stay documented to prevent rediscovery.
 
-> **2026-06-15 sprint update**: the v0.6.x implementation cycle closed the following Active findings as side effects of feature work — **F71** (resize listener leak: F96 mountEcharts helper subsumed it), **F90** (sunburst hardcoded colors: replaced with cached `token()` reads via `--xray-*` CSS vars + DaisyUI semantic tokens), **F92** (provenance sidecar atomicity: hardened during the `codelore check` work), **F97** (`JSON.parse` blocking first paint: F-P5 PWA bootstrap deprioritises non-critical widgets), **F98** (chart-click a11y: closed by F-P4 parallel DOM tree). Tracking moved to `CHANGELOG.md`; this report keeps the historical entries for audit-trail integrity.
-
 ---
 
 ## 1. Architectural Overview & Pipeline Data Flow
@@ -21,18 +19,16 @@ graph TD
     A[GixRepo / GitCliRepo] -->|walk_commits → CommitEvent stream| B[Bounded crossbeam channel]
     B -->|producer → consumer| C[FactsDb ingest]
     C -->|DuckDB Appender bulk-insert| D[(DuckDB fact store)]
-    E[HEAD-time blob walk @ HEAD] -->|tree-sitter parsing via rayon| F[Complexity + clones extraction]
+    E[HEAD-time blob walk @ HEAD] -->|tree-sitter parsing via rayon| F[Complexity + clones + imports extraction]
     F -->|HEAD-time metrics| D
-    D -->|SQL views / parameterized queries| G[23 behavioral analyses]
+    D -->|SQL views / parameterized queries| G[31 behavioral analyses]
     G -->|emitters| H[CSV · JSON · SARIF 2.1.0 · Markdown · Parquet · SQLite · HTML · SPA]
 ```
 
-1.  **Repository Traversal**:
-    *   [GixRepo](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/repo/gix_repo.rs) — pure-Rust `gitoxide`. Hot path.
-    *   [GitCliRepo](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/repo/git_cli_repo.rs) — shells out to `git`; differential-testing oracle.
+1.  **Repository Traversal**: [GixRepo](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/repo/gix_repo.rs) (pure-Rust `gitoxide`, hot path) + [GitCliRepo](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/repo/git_cli_repo.rs) (differential-testing oracle).
 2.  **Event Ingestion**: `duckdb::Connection` is `!Send + !Sync`. Producer-consumer: background thread walks commits → bounded `crossbeam-channel` → connection-owning thread runs DuckDB Appender ([ingest_loop](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/facts/ingest.rs)).
-3.  **HEAD-time work**: [ingest_complexity_at_head](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/facts/ingest.rs) + [populate_clones_at_head](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/facts/ingest.rs) read blobs from the gix ODB (works on bare repos), parse via tree-sitter on a rayon pool, drain serially into the DuckDB Appender.
-4.  **SQL-Driven Analyses**: 23 behavioral analyses run as parameterised DuckDB queries (e.g. [hotspots.rs](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/hotspots.rs), [coupling.rs](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/analyses/coupling.rs)). Path-aggregating analyses opt into rename-aware aggregation via the `changes_lineage` CTE rewriter.
+3.  **HEAD-time work**: complexity, clones, imports extraction read blobs from the gix ODB, parse via tree-sitter on a rayon pool, drain serially into the DuckDB Appender.
+4.  **SQL-Driven Analyses**: 31 behavioral analyses run as parameterised DuckDB queries. Path-aggregating analyses opt into rename-aware aggregation via the `changes_lineage` CTE rewriter.
 
 ---
 
@@ -42,277 +38,412 @@ All prior findings (F1–F87) have shipped and were validated against `main` HEA
 
 | Batch | Scope | Outcome |
 |---|---|---|
-| **F1–F17** (v0.2.x) | Schema timestamps, chunked walker, rename-aware aggregation, CLI-boundary validation | Shipped |
-| **PAR-1–PAR-9, DEEP-1–DEEP-15** (v0.2.x) | Code-maat parity sweep | Shipped |
-| **F18–F28** (v0.3.x) | Back-test isolation, HTML pagination, cache-write concurrency, parallel filtering | Shipped |
-| **F29–F34** (v0.3.2) | Time-bucket changeset semantics, path-relative skip checks, binary diff guards | Shipped |
-| **F35–F42** (v0.3.3 → v0.4.0) | Numstat brace expansion, explain-mode params, quadratic Kamei rewrite | Shipped |
-| **F43–F56** (v0.4.1 → v0.4.2) | Blob clone elision, single-pass templating, COUNT(DISTINCT) elimination, SPA X-Ray join | Shipped |
-| **F57–F67** (v0.4.4) | ECharts theme reload, prefix matching, ODB blob reads, hash aggregation sweep, SIMD line counting | Shipped |
-| **F68–F76** (v0.4.6) | AI attribution rollup, lockstep rev equality, lineage rename-index, NULL-safe distinct elimination | Shipped (F69/F70 bench-gated closed) |
-| **F77–F87** (v0.5.0) | Bare-repo clone discovery, theme-controller migration, multi-column SPA grid, cognitive-color sunburst, JSX/TSX grammar coverage | Shipped |
-| **F84, F88** | Refuted at source-quote level (recycled-path lineage, silent ODB-skip rationale) | Refuted |
-| **F107, F108** (v0.5.1 hotfix) | SPA runtime errors caught in production after v0.5.0 ship: METRIC_DEFS Temporal Dead Zone in widgets.js IIFE (F107) + Alpine inline-script order causing `$store.*` undefined at first paint (F108). Both shipped through every SPA-touching PR since v0.4.x. Caught by user browser console, not by CI. PR #37. | Shipped |
-| **F109** (post-F91 sweep gap) | `codelore-cli/src/diff_output.rs` had 4 cell-emit sites (`writeln!(out, "\| `{}` \| ...")` for hotspots/coupling/clones rows) that F91's `escape_md_cell` fix in PR #48 did not sweep — F91 only touched `output/markdown.rs`. §4's Reaffirmed section explicitly flagged this gap; missed during F91 implementation. Fixed by promoting `escape_md_cell` to `pub` in codelore-lib::output::markdown and wrapping all four diff-PR-mode cell-emit sites. | Shipped |
+| **F1–F17** | Schema timestamps, chunked walker, rename-aware aggregation, CLI-boundary validation | Shipped |
+| **PAR-1–PAR-9, DEEP-1–DEEP-15** | Code-maat parity sweep | Shipped |
+| **F18–F28** | Back-test isolation, HTML pagination, cache-write concurrency, parallel filtering | Shipped |
+| **F29–F34** | Time-bucket changeset semantics, path-relative skip checks, binary diff guards | Shipped |
+| **F35–F42** | Numstat brace expansion, explain-mode params, quadratic Kamei rewrite | Shipped |
+| **F43–F56** | Blob clone elision, single-pass templating, COUNT(DISTINCT) elimination, SPA X-Ray join | Shipped |
+| **F57–F67** | ECharts theme reload, prefix matching, ODB blob reads, hash aggregation sweep, SIMD line counting | Shipped |
+| **F68–F76** | AI attribution rollup, lockstep rev equality, lineage rename-index, NULL-safe distinct elimination | Shipped |
+| **F77–F87** | Bare-repo clone discovery, theme-controller migration, multi-column SPA grid, cognitive-color sunburst, JSX/TSX grammar coverage | Shipped |
+| **F84, F88** | Refuted at source-quote level | Refuted (preserved) |
 
-Refuted-finding rationale stays in `git log` against the validation PR (commit 2f8a7bc, PR #20) so the next audit cycle doesn't rediscover them.
-
-**Methodology note (F107 / F108 post-mortem)**: both the F89–F98 audit cycle (§3) and the F99–F106 second pass (§4) ran read-only sub-agents over the source tree using static-grep + inspection. Neither surfaced F107 + F108 because both are *runtime* initialization-order defects — the bugs only manifest when the JS actually executes in a browser. The existing `spa_integration_test` shares the same blind spot: it greps the rendered HTML for string presence and never runs the JS. **Captured as the open structural follow-up: a headless-browser smoke test (chromedp / playwright via cargo) for the SPA emitter that would catch both classes of defect at CI time** — pairing this with the next audit cycle would close the runtime-defect coverage gap permanently.
+**Methodology note (F107 / F108 post-mortem)**: prior audit cycles ran read-only sub-agents over the source tree using static-grep + inspection. Neither surfaced F107 + F108 because both were *runtime* initialization-order defects — the bugs only manifested when the JS actually executed in a browser. **F143** captures the headless-browser smoke-test follow-up; currently PARTIAL — implementation lives on `feat/f143-headless-browser-smoke` branch awaiting merge.
 
 ---
 
-## 3. New Audit Cycle (2026-06-14, post-v0.5.0)
+## 3. Findings F89–F147 — closure log
 
-Validation methodology: five parallel read-only sub-agents covered (1) ingest & threading, (2) SQL analyses, (3) SPA frontend, (4) Rust deps & idioms, (5) CLI & output emitters. Their raw findings were adversarially verified against `main` source — claims that traced to a real defect become Active F-findings below; refuted claims are listed at the end so the next pass doesn't rediscover them.
+Validated against current branch HEAD. Status notes ⚠️ findings that live on un-merged feature branches.
 
-**Score**: 16 raw HIGH/MED candidates verified → **10 Active** findings (F89–F98) + **6 Refuted** (logic-correct on closer reading) + **3 Improvement** (non-bug architecture follow-ups, V4–V6).
+| F-ID | Subject | Status | Closing commit / branch |
+|---|---|---|---|
+| F89 | Producer-thread `.expect("producer panicked")` panic mapping | **Fixed** | `8e52984` |
+| F90 | SPA X-Ray sunburst hardcoded ring colors | **Fixed** | `7f36a7f` |
+| F91 | Markdown emitter unescaped `\|` in cells | **Fixed** | `7f36a7f` + `49196ad` (PR #53 diff_output.rs sweep) |
+| F92 | Provenance sidecar atomicity gap | **Fixed** | `38df3d0` |
+| F93 | `cache_key` silent canonicalize fallback | **Fixed** | `8e52984` |
+| F94 | `ingest.rs` monolithic | **Active** — _see §4_ |
+| F95 | `communication.rs` window filter | **Refuted** (filter at ingest level) |
+| F96 | ECharts mount + dispose duplicated | **Fixed** | `7f36a7f` (`mountEcharts` @ 13+ sites) |
+| F97 | SPA `JSON.parse` blocks first paint | **Active** — _see §4_ |
+| F98 | Chart-click drawer no keyboard equivalent | **Fixed** | F-P4 parallel DOM tree |
+| F99 | Container OCI label `<owner>` placeholder | **Fixed** | `f6848e6` |
+| F100 | `cut-release.sh` trap hang on stuck `gh api` | **Fixed** | `f6eb953` |
+| F101 | CI cache keys omit `rust-toolchain.toml` | **Fixed** | `f204088` |
+| F102 | `bench.yml` kernel-snapshot no error handling | **Fixed** | `957b3dd` |
+| F103 | `softprops/action-gh-release@v3` mutable | **Fixed** | `dc6ec60` |
+| F104 | Fisher-exact contingency degenerate cells | **Fixed** | `b15da46` |
+| F105 | `ureq = "2"` maintenance-only | **Fixed** | `ec33cf9` |
+| F106 | Provenance manifest no schema-version | **Fixed** | `7f36a7f` |
+| F107 / F108 | SPA runtime errors hotfix | **Shipped** (v0.5.1 hotfix) | _CHANGELOG.md_ |
+| F109 | `diff_output.rs` missed by F91 sweep | **Shipped** | PR #53 |
+| F110 | Differential test only 4 of 8 trait methods | **Fixed** ⚠️ branch | `03db25b` (`head_sha_matches` + others on `fix/f110-f112-test-coverage-and-provenance`) |
+| F112 | Provenance manifest missing reproducibility fields | **Fixed** ⚠️ branch | `03db25b` (added `head_sha`, `cache_key_hash`, `rust_version`, `target_triple`, `grammars: BTreeMap<String,String>`) |
+| F139 | `DiffGates` parsed but never evaluated | **Fixed** | `549c460` (evaluator + CLI wiring) |
+| F140 | Six new analyses lack integration tests | **Fixed** | `7b43593` (5 new `tests/*_test.rs`) |
+| F141 | `imports_factsdb_test` only asserts unresolved | **Fixed** | `7b43593` (`ingest_resolves_imports_to_target_paths`) |
+| F147 | `AnalysisName` 3-way sync no exhaustiveness guard | **Fixed** ⚠️ partial — match guard added but doesn't cover `all()` array | `549c460` (`_exhaustive_check` const fn). _See F157 below — the guard wraps the wrong list._ |
 
-### Active Findings
+**Branch caveat**: F110 + F112 are fixed on `fix/f110-f112-test-coverage-and-provenance` (current HEAD). F143's implementation lives on `feat/f143-headless-browser-smoke`. Neither is on main yet. Both need merge before they truly close.
 
-#### F89 — Producer-thread panic surfaces as main-thread panic
+**Refuted findings preserved**: F88 (silent ODB skip rationale), F95 (window filter at ingest level), plus from §3/§4 of the prior report — apply_grouping JOIN shape, renderHeader listener leak, parquet/SQLite backslash escape, hotspots CTE leak, color-mode aria-label, Kamei SEXP `<` vs `<=`, tree-sitter `kind_id` ABI, AI-assist false positives, NULL-conflated AI attribution, DuckDB pinning speculation, code-health weights citation, SoC inclusive thresholds. Rationale in commits `f1aa0e7` (PR #36) + `13fefcb` (PR #38).
 
-*   **Location**: `crates/codelore-lib/src/facts/ingest.rs:78` — `producer.join().expect("producer panicked")?;`
+---
+
+## 4. Active Findings
+
+### Active carryover
+
+#### F94 — `ingest.rs` monolithic (1344 LOC, still unsplit)
+
+*   **Location**: `crates/codelore-lib/src/facts/ingest.rs` — 1344 lines
 *   **Severity**: MED
-*   **Category**: Threading correctness / error UX
-*   **Status**: Active
-*   **Description**: The ingest scope spawns the producer thread (commit walker on a rayon pool) and waits for it via `.join().expect(...)?`. The `.expect()` form turns a producer-thread panic into a *main-thread panic*, which bypasses `CodeLoreError`'s typed-error mapping and lands as exit-code-101 garbage instead of a typed `CodeLoreError::Repo`. Consumer-side errors already round-trip as `Result`; the producer should match.
-*   **Reproduce**: induce a panic inside `walk_commits` (e.g. an `unreachable!()` for a malformed pack), run `codelore analyze`. Observe `thread 'main' panicked at 'producer panicked'` instead of `Error: repo: ...`.
-*   **Suggested fix**: replace `.expect("producer panicked")` with `.map_err(|panic| CodeLoreError::Repo(format!("commit walker thread panicked: {:?}", panic)))?` so the typed-error chain stays intact and `main()`'s exit-code switch returns 3 (Repo).
-*   **Cross-ref**: maps to the `workspace.lints.rust: unsafe_code = "forbid"` philosophy — typed-error fidelity is a CodeLore invariant.
+*   **Category**: Maintainability
+*   **Status**: Active. `facts/ingest/` subdirectory exists but empty — split attempted and abandoned.
+*   **Suggested fix**: split into `ingest/loop.rs`, `ingest/complexity.rs`, `ingest/clones_head.rs`, `ingest/imports_head.rs`, `ingest/lineage.rs`, `ingest/grouping.rs`. Re-export from `facts/ingest/mod.rs`.
 
-#### F90 — SPA X-Ray sunburst container rings use hardcoded colors (no theme adaptation)
+#### F97 — SPA `JSON.parse` synchronous at first paint
 
-*   **Location**: `crates/codelore-lib/src/output/spa/widgets.js:1213-1215`
-*   **Severity**: MED
-*   **Category**: UI / theming
-*   **Status**: Active
-*   **Description**: After F79's DaisyUI theme-controller migration shipped (light + dark themes that swap on `prefers-color-scheme`), the X-Ray sunburst's container rings still use hex-baked colors (`#1f3f29`, `#2c5d3a`, label `#1a1a1a`). On the light theme the dark-green rings + white text are fine; on the dark theme the rings are visually flat against the elevated background. Worse, leaf labels (`#1a1a1a`) sit on the cognitive-complexity heatmap (yellow → red) — near-black labels on saturated red drop below WCAG AA contrast (~3:1).
-*   **Reproduce**: render the SPA, switch to dark theme via the DaisyUI swap toggle, scroll to X-Ray sunburst, observe the container rings vanish into the navy background.
-*   **Suggested fix**: read CSS vars (`var(--codelore-ring-1)`, etc.) into `levels[*].itemStyle.color` at render time — the file already has a `getCssVar` helper used by hotspot circle-pack. Same trick: define two ring tokens per theme in `tailwind-src/input.css` and let DaisyUI's `:has(.theme-controller[value=dark]:checked)` cascade them. Sunburst re-renders on theme toggle anyway (F57 listener), so the lookup happens once per swap.
-
-#### F91 — Markdown emitter doesn't escape `|` in table cells
-
-*   **Location**: `crates/codelore-lib/src/output/markdown.rs` — every `writeln!(w, "| {path} | ...")` call site (lines 31, 68, 89, 105, 120, 135, 148, etc.)
-*   **Severity**: MED
-*   **Category**: Output correctness
-*   **Status**: Active
-*   **Description**: Markdown table cells are written with the literal interpolation `| {value} |` — no escaping. Per GFM spec, a `|` *inside* a cell must be backslash-escaped (`\|`) or the table row's column count breaks (renderers split the row at the unescaped pipe). Paths are unlikely to contain `|` but legal on every filesystem CodeLore supports; author names, commit messages, and entity names absolutely can. Worst case: a single `|` in any cell silently corrupts the entire downstream table.
-*   **Reproduce**: ingest a repo where any file is named `foo|bar.rs` (legal); run `codelore --format markdown hotspots`. Observe the table shape breaks for the affected row.
-*   **Suggested fix**: extract a `fn escape_md_cell(s: &str) -> Cow<'_, str>` helper (Cow because most cells need no escape — keeps the common-case allocation-free), apply at every cell-write site. Mirror the `quote_if_needed` pattern in `csv.rs`. Add a regression test with a path containing `|` and `\n` to `tests/output_markdown_test.rs`.
-
-#### F92 — Provenance sidecar atomicity gap
-
-*   **Location**: `crates/codelore-cli/src/main.rs:1006-1009` (streaming formats) and `:275` (parquet)
-*   **Severity**: MED
-*   **Category**: Output atomicity / observability
-*   **Status**: Active
-*   **Description**: The main output's `BufWriter<File>` is dropped on line 1006 (flushing OS buffers), then `write_provenance_sidecar(&db, &opts, analysis_name, path)?` runs on line 1009. A crash, OOM kill, or disk-full event between those lines leaves the main output committed on disk but the `.provenance.json` sidecar missing — downstream tools that gate on provenance (SLSA attestation, CI gates) see corrupted state. The same window exists for parquet at line 275 (sidecar after the COPY). Neither path calls `sync_all()` on the main handle either, so even a power-loss in the same window can leave the main output truncated.
-*   **Suggested fix**: write the sidecar to a `.tmp.<pid>` path first, fsync the main output, then `rename` the sidecar atomically. Alternatively, document explicitly in `docs/advanced-usage.md` §provenance that "absent sidecar means abort during emit; retry" so downstream consumers can implement graceful degradation. The atomic-rename approach mirrors the cache write strategy F23 already uses.
-*   **Note**: SQLite output (line 282) is correctly exempt — provenance lives inside the same `.sqlite` file.
-
-#### F93 — `cache_key` silent canonicalize fallback can cause cache miss
-
-*   **Location**: `crates/codelore-lib/src/cache.rs:32` and `:67` (the latter is the F33 fix's cousin)
-*   **Severity**: LOW (but symmetric with F33)
-*   **Category**: Cache invariant robustness
-*   **Status**: Active
-*   **Description**: Both `cache_key` (line 32) and `cache_path_with_root` (line 67) use `fs::canonicalize(repo_path).unwrap_or_else(|_| repo_path.to_path_buf())`. The fallback path is functionally correct **as long as both call sites fail consistently** — the F33 fix specifically pairs them. But if a repo path becomes canonicalizable mid-run (e.g., a symlink target is created or a permission flips), the next invocation's key drifts and the cache misses. There is no `tracing::warn!` to surface the fallback.
-*   **Suggested fix**: emit a `tracing::debug!("canonicalize fallback for repo_path={}", repo_path.display())` inside the `unwrap_or_else` closure so operators on dirty containers or shared mounts can spot silent cache misses. No semantic change.
-
-#### F94 — `ingest.rs` is 1080 lines, three logical layers fused
-
-*   **Location**: `crates/codelore-lib/src/facts/ingest.rs` (1080 lines)
-*   **Severity**: MED
-*   **Category**: Maintainability / cognitive complexity
-*   **Status**: Active
-*   **Description**: `ingest.rs` mixes (1) the producer/consumer `ingest_loop` (the canonical channel-around-`!Send` pattern), (2) `ingest_complexity_at_head` (rayon-then-serial-drain HEAD scan), (3) `populate_clones_at_head` (clone fingerprinting), (4) `materialize_path_lineage` (recursive CTE construction), and (5) `apply_grouping` (group-file post-pass). Each is independently complex; future work on one (e.g. the v0.5.x serve mode wanting an incremental ingest) lands in a 1000-line file. Reading it requires holding 5 mental models. Splitting follows the CLAUDE.md "before touching specific areas, read" lookup-table partition exactly.
-*   **Suggested fix**: split into `ingest/loop.rs` (producer/consumer + `ingest_loop`), `ingest/complexity.rs` (HEAD-time complexity), `ingest/clones_head.rs` (HEAD-time clones), `ingest/lineage.rs` (`materialize_path_lineage`), `ingest/grouping.rs` (`apply_grouping`). Re-export public surface from `facts/ingest.rs` to keep API stability. Pure code organisation — no semantic change.
-
-#### F95 — `communication.rs::author_files` has no `--since` / `--until` filter
-
-*   **Status**: **Refuted** (post-verification follow-up to the §3 cycle).
-*   **Why refuted**: The claim assumed `--since` / `--until` are applied at SQL-query time via WHERE clauses on `commits.date`. Verification against current `main` shows the time-window filter actually lives at the *ingest* level — `repo/gix_repo.rs:59` wires `opts.after` into `gix::revision::walk::Sorting::ByCommitTimeCutoff`, and `repo/gix_repo.rs:97-98` re-checks each commit against `opts.after` / `opts.before` in the per-commit filter pass. Commits outside the window never make it into the consumer's `CommitEvent` stream, so they never land in the `commits` or `changes` tables. `communication`'s `author_files` CTE operates on `commits` ⊆ window by construction — it's already time-bounded transitively. Adding a redundant `WHERE commits.date BETWEEN ?` clause would be a no-op at best and a maintenance liability at worst (every analysis would acquire the same redundant guard). The original finding's own "Verify-then-fix" caveat correctly anticipated this outcome.
-*   **Original audit text preserved for trail**: "Most CodeLore analyses respect `--since` and `--until` boundary filters via WHERE clauses on `commits.date`. `communication`'s `author_files` CTE has no such filter — it's an unbounded `SELECT DISTINCT path, author FROM commits INNER JOIN changes`. If a user runs `codelore communication --since=2024-01-01`, the rest of the pipeline filters the time-window but the per-pair shared-file count silently includes pre-window history."
-*   **CLI-flag naming nit**: the audit text said `--since` / `--until`; the actual CLI flags are `--after` / `--before` (mirrored as `Options::after` / `Options::before` in `options.rs:51-52`). Not a defect; just naming drift between the audit phrasing and the implementation.
-
-#### F96 — ECharts mount + dispose pattern duplicated 5× across widgets
-
-*   **Location**: `crates/codelore-lib/src/output/spa/widgets.js:250-251, 787-788, 1021-1022, 1095-1096, 1185-1186` (each pair followed by `bindChartResize`)
-*   **Severity**: LOW
-*   **Category**: Code quality / drift risk
-*   **Status**: Active
-*   **Description**: Five widgets (hotspot circle-pack, sankey, trends, calendar, sunburst) repeat the exact triplet `const prior = echarts.getInstanceByDom(container); if (prior) prior.dispose(); ... bindChartResize(chart, container);`. F64 fixed dispose drift; the next widget added will copy-paste the same lines and the next bug fix will need to touch all five sites. F71 already extracted `bindChartResize`; the dispose-then-init prelude should follow.
-*   **Suggested fix**: extract a `mountEcharts(container, option, themeAware = true) -> chart` helper that owns the dispose-then-init-then-resize-bind triplet. Each widget becomes `const chart = mountEcharts(container, opt); chart.on('click', …);`. Net change: one helper, five widget call-sites simplify. Pure refactor.
-
-#### F97 — SPA `JSON.parse` of embedded payload blocks first paint on large repos
-
-*   **Location**: `crates/codelore-lib/src/output/spa/widgets.js:23` (`JSON.parse(dataBlock.textContent)`) + the inline `<script type="application/json">` embed in `spa.rs::render_spa`
+*   **Location**: `crates/codelore-lib/src/output/spa/widgets.js:61`
 *   **Severity**: MED
 *   **Category**: Initial render perf
-*   **Status**: Active
-*   **Description**: The SPA emits a single self-contained HTML — the dashboard data ships inline as a `<script type="application/json">…</script>` block. On real-world repos (the codelore-self dashboard, ~300 hotspots + ~500 X-Ray entities + cell rollups) the JSON payload is in the 1-2 MB range. `JSON.parse` runs synchronously on the main thread before any widget renders, then every widget's render also runs sync. On low-end laptops this is a hard ~200-500 ms freeze at first paint — visible to users.
-*   **Suggested fix** (two options, ranked):
-    1.  **Streaming parse + idle-callback render**: split the JSON block into a header `{...metadata}` + per-widget `<script type="application/json" id="widget-X">`. Parse + render each widget in `requestIdleCallback` chain — first paint shows skeletons; widgets fill in progressively. ~half day.
-    2.  **gzip the HTML at emit time**: not a runtime fix but most servers re-gzip already; the file size complaint is largely a download-time problem.
-*   The SPA's "single-file portability" brand is the constraint that ruled out external-file fetches — the idle-callback chain preserves it.
+*   **Status**: Active. The §3 sprint banner claimed F-P5 PWA closed F97 but the validator confirms widgets.js still parses synchronously and no `requestIdleCallback` references exist.
+*   **Suggested fix**: split JSON block into header + per-widget `<script type="application/json" id="widget-X">`; yield between widgets via `requestIdleCallback`.
 
-#### F98 — Chart-click → drawer has no keyboard equivalent (a11y)
+#### V6 — `CHANNEL_CAPACITY = 64` unmeasured
 
-*   **Location**: `crates/codelore-lib/src/output/spa/widgets.js:362-367, 814-818, 1220-1225` — every `chart.on('click', ...)` that opens `showFileDetailDrawer`
+*   **Location**: `crates/codelore-lib/src/facts/ingest.rs:19`
 *   **Severity**: LOW
-*   **Category**: Accessibility
-*   **Status**: Active
-*   **Description**: The detail drawer is reachable only by mouse-clicking a circle-pack node, sankey link, or sunburst leaf. Keyboard users have no path to the drawer — ECharts custom-series shapes don't expose to the accessibility tree. The hotspot *table* row-click does open the drawer and the table is keyboardable, so a workaround exists, but the chart-first widgets are the visual headline.
-*   **Suggested fix**: add a sibling "View files" toggle button next to each chart's heading that opens a focusable list-view of the same data (DaisyUI `<select>` or `<menu>`). Each list item triggers `showFileDetailDrawer(path)`. Mark up the chart container with `aria-describedby` pointing at a visually-hidden text alternative ("Interactive map of 287 hotspot files; use the list below for keyboard access"). Costs one widget pattern, applied four times.
-
-### Improvement Opportunities (non-bug, architectural)
-
-#### V4 — `widgets.js` is 1365 lines of monolithic IIFE
-
-*   **Location**: `crates/codelore-lib/src/output/spa/widgets.js`
-*   **Category**: SPA maintainability
-*   **Status**: Improvement
-*   **Description**: All 14 widgets + theme system + drawer + helpers live in one IIFE closure. The file already gates on Tailwind v4's `@source` scanner, which precludes a true ES-module split without retooling the build. But the IIFE can be sectioned into per-widget sub-closures (`function renderHotspotCirclePack(...)`, `function renderXraySunburst(...)`, etc.) with a top-level "boot all widgets" function — same single file, far better local-edit cognitive load. The F96 `mountEcharts` extract is the natural seed for this work.
-*   **Effort**: ~half day; depends on shipping F96 first.
-
-#### V5 — Fisher significance / coupling-strength thresholds shown in SPA tooltips
-
-*   **Status**: Improvement
-*   **Description**: The `--fisher-significance` / `--min-shared-revs` thresholds are already CLI flags (verified at `options.rs:65, 305-308`), but the SPA dashboard doesn't surface which thresholds the rendered numbers were computed against. A reader looking at the coupling widget can't tell if `min_shared_revs=5` (default) or `min_shared_revs=20` produced the numbers. UI-2's "?-tooltip" plan (per `docs/roadmap-v1.x-and-beyond.md`) is the natural home — the provenance manifest already carries the effective option values, so wiring is pure SPA-side.
-*   **Effort**: ~1 day, bundled with UI-2.
-
-#### V6 — Producer/consumer channel capacity (`CHANNEL_CAPACITY = 64`) is unmeasured
-
-*   **Location**: `crates/codelore-lib/src/facts/ingest.rs:56`
 *   **Category**: Performance scaling
-*   **Status**: Improvement
-*   **Description**: The 64-event bounded channel is a defensible default but has not been benchmarked. On very large repos (linux-kernel-scale, ~1M+ commits) backpressure could either underfeed the Appender (consumer-idle gaps) or overflow into producer-block stalls. A microbench inside `benches/` measuring throughput at 16 / 64 / 256 / 1024 capacities would either validate the default or motivate a CLI flag for tuning.
-*   **Effort**: ~half day, including a small synthetic-history fixture builder.
+*   **Status**: Active. `benches/end_to_end.rs` has 5 ingest targets but none vary the capacity.
+*   **Suggested fix**: add bench parameterised over 16/64/256/1024.
 
-### Refuted in This Cycle
+### Partial / in flight
 
-For audit-trail completeness, raw findings that survived first-pass triage but fell to source-quote verification:
+#### V4 — `widgets.js` per-widget registry (PARTIAL)
 
-| Claim | Refutation |
-|---|---|
-| `apply_grouping` hunks DELETE uses `g.group_name = c.path` — should be `= h.path` | Refuted. `c.path = h.path` is already in the JOIN; `g.group_name = c.path` is the additional filter that distinguishes "identity-mapped" paths (kept) from "rewritten-to-group-name" paths (dropped, because hunks track line ranges against the original path). The comment at line 1031-1035 documents the intent: "Hunks aren't path-rewritten ... so they get dropped for any path that collapsed". Verified across strict-mode + non-strict-mode + identity-mapped + collapsed-mapped path scenarios. |
-| `renderHeader` accumulates click listeners on every re-render | Refuted. Line 450 sets `container.innerHTML = html` *before* line 453 queries the new `<th>` elements — the old `<th>` elements are detached from the DOM (taking their listeners with them) before new ones are bound. Safe-by-construction. |
-| Parquet/SQLite path strings lack backslash escape → SQL injection / path mangling | Refuted. DuckDB's standard single-quoted string parser doesn't honor `\` as an escape sequence (that's the `e'...'` prefix syntax); literal backslashes in paths pass through cleanly. The `.replace('\'', "''")` is the complete escape. Windows paths like `C:\Users\...\out.parquet` work as-is. |
-| `hotspots.rs::file_complexity` / `code_health.rs::file_cognitive` CTEs miss `file_revs` join → sub-threshold files leak | Refuted. The outer `joined` CTE does `FROM file_revs fr LEFT JOIN file_complexity fc ON fc.path = fr.path` — the LEFT JOIN drives from the *filtered* `file_revs`, so sub-`min_revs` files never produce output rows. The unjoined complexity rows for sub-threshold paths exist in the CTE but are dead weight, not contamination. |
-| `--fisher-significance` not exposed as a CLI flag | Refuted. `Options::fisher_significance: f64` is at `options.rs:65`, validated at `:305-308` (`must be in [0.0, 1.0]`), defaulted at `:336` (`DEFAULT_FISHER_SIGNIFICANCE`), and exposed as the CLI flag `--fisher-significance`. |
-| SPA hotspot-color-mode toggle buttons missing `aria-label` (a11y) | Refuted. The buttons are `<button type="button">Complexity</button>` etc. — the text content *is* the accessible name. Screen readers announce them correctly. (The genuine a11y gap is chart-click navigation, captured as F98.) |
+*   **Status**: Per-widget function declarations exist; no `Widget = { id, render, rerender, dataKey }` registry struct. Boot section §3 is still a flat sequence of `renderXxx()` + literal `_codeloreRerenderers.push(...)` calls.
+*   **Next step**: introduce a `WIDGETS = [{name, render, dataKey}]` array; the boot loop iterates uniformly.
+
+#### V5 — Tooltip provenance values (PARTIAL)
+
+*   **Status**: METRIC_DEFS formula strings still reference parameter NAMES literally (`min_shared_revs`, `fisher_significance`). No `${data.options.X}` interpolation surfaces the run's effective threshold values.
+*   **Next step**: template formulas through `data.options` at render time.
+
+#### F143 — SPA headless-browser smoke test (PARTIAL — un-merged)
+
+*   **Status**: Implementation lives on `feat/f143-headless-browser-smoke` (`tests/spa_browser_test.rs` + Cargo.toml `browser-tests` feature). NOT on current HEAD; not on main. CI does not yet opt in.
+*   **Next step**: merge the branch + add `browser-tests` job to `.github/workflows/ci.yml`.
+
+### NEW Active Findings — Architecture & supply chain
+
+#### F111 — `FactsDb::conn()` leaks `&duckdb::Connection` into public API
+
+*   **Location**: `crates/codelore-lib/src/facts/mod.rs:266`
+*   **Severity**: HIGH
+*   **Suggested fix**: `pub(crate) fn conn()` + narrower safe methods (`prepare`, `query_map`, `execute`).
+
+#### F113 — `codelore-cli` reaches into 13 distinct `codelore_lib` submodules — no façade
+
+*   **Location**: `crates/codelore-cli/src/main.rs` — all `use codelore_lib::*` statements
+*   **Severity**: MED
+*   **Suggested fix**: introduce `codelore_lib::cli_api` as the only `pub` surface CLI imports.
+
+#### F114 — Single-CDN dependence for all 4 SPA assets
+
+*   **Location**: `crates/codelore-lib/build.rs:77`
+*   **Severity**: MED
+*   **Suggested fix**: vendor the 4 files (~1.2 MB) into `crates/codelore-lib/vendor/spa/` + `include_bytes!`, OR fallback URL chain.
+
+#### F115 — Container base images use mutable tags
+
+*   **Location**: `Containerfile:29` + runtime stage
+*   **Severity**: MED
+*   **Suggested fix**: pin both bases to `@sha256:...` digests.
+
+#### F116 — Renovate AND Dependabot both configured for same ecosystems
+
+*   **Location**: `.github/dependabot.yml` + `renovate.json`
+*   **Severity**: MED
+*   **Suggested fix**: delete `renovate.json` or merge into `dependabot.yml`.
+
+#### F117 — First-party GHA actions use floating tags despite credential permissions
+
+*   **Location**: `.github/workflows/release.yml` — `attest-build-provenance@v4`, `docker/build-push-action@v7`, `docker/login-action@v4`
+*   **Severity**: MED
+*   **Suggested fix**: SHA-pin the credential-handling subset.
+
+#### F118 — `gix_repo.rs` walker thread panic silently swallowed
+
+*   **Location**: `crates/codelore-lib/src/repo/gix_repo.rs:130`
+*   **Severity**: LOW
+*   **Suggested fix**: store JoinHandle; propagate panic payloads as `CodeLoreError::Repo`.
+
+### NEW Active Findings — Tool replacement / dep currency
+
+#### F119 — Hand-rolled 826-line CSV emitter → use `csv` crate
+
+*   **Location**: `crates/codelore-lib/src/output/csv.rs`
+*   **Severity**: MED
+
+#### F120 — SARIF schema URL on legacy host; hand-rolled JSON → `serde-sarif`
+
+*   **Location**: `crates/codelore-lib/src/output/sarif.rs:12`
+*   **Severity**: MED
+
+#### F121 — `fishers_exact` crate unmaintained since 2018-11
+
+*   **Severity**: LOW
+
+#### F122 — `toml = "0.8"` one major behind (1.1.x current)
+
+*   **Severity**: LOW
+
+#### F123 — `num-format` + `crossbeam` stale in codelore-rca
+
+*   **Severity**: LOW
+
+#### F124 — MSRV pinned to current stable, undocumented
+
+*   **Severity**: LOW
+
+### NEW Active Findings — Backend performance
+
+#### F125 — `query_live_paths` / `current_head_rev` fire 4× per ingest
+
+*   **Location**: `crates/codelore-lib/src/facts/ingest.rs:155, 293, 433, 521` + `:159, 282, 427, 571`
+*   **Severity**: HIGH
+*   **Status**: **Fixed ⚠️ branch** — `perf/f125-f126-ingest-redundancy` (PR #58). Both queries hoisted to compute-once at the top of `ingest()` after the producer/consumer scope completes; `&[String]` + `&str` threaded down to the four HEAD-time passes.
+
+#### F126 — `resolve_imports_at_head` issues N single-row UPDATEs
+
+*   **Location**: `crates/codelore-lib/src/facts/ingest.rs:579-585`
+*   **Severity**: HIGH
+*   **Status**: **Fixed ⚠️ branch** — `perf/f125-f126-ingest-redundancy` (PR #58). Rewritten as `CREATE TEMPORARY TABLE _resolved_imports` + bulk Appender insert + single hash-joined `UPDATE imports SET … FROM _resolved_imports r WHERE …`. Cost shape O(N × |imports|) → O(|imports| + N).
+
+#### F127 — Kamei `enrich_diffusion` correlated subqueries
+
+*   **Location**: `crates/codelore-lib/src/kamei/mod.rs:38`
+*   **Severity**: MED
+
+#### F128 — Kamei `enrich_size` correlated subqueries
+
+*   **Location**: `crates/codelore-lib/src/kamei/mod.rs:77-92`
+*   **Severity**: MED
+
+#### F129 — `arch_violations` materializes full imports set, truncates post-Rust
+
+*   **Location**: `crates/codelore-lib/src/analyses/arch_violations.rs:73-92`
+*   **Severity**: MED
+
+#### F130 — `pair_programming` O(P²) per commit with `String::clone` per probe
+
+*   **Location**: `crates/codelore-lib/src/analyses/pair_programming.rs:102-107`
+*   **Severity**: MED
+
+### NEW Active Findings — SPA UI/UX
+
+#### F131 — Provenance tooltip triggers 14×14 px, hover-only reveal
+
+*   **Location**: `crates/codelore-lib/src/output/spa/template.html:259-260`
+*   **Severity**: HIGH
+
+#### F132 — Hardcoded hex colors break light theme
+
+*   **Location**: `crates/codelore-lib/src/output/spa/widgets.js:1482, 1751, 2083, 2290-2295, 2414-2416`
+*   **Severity**: HIGH
+
+#### F133 — No responsive layout below ~900px viewport
+
+*   **Severity**: HIGH
+*   **Validation note**: 14 responsive Tailwind classes total in `template.html`, and they all use the `xl:` prefix (≥ 1280px). Nothing in `sm:` / `md:` / `lg:` — confirms the finding: viewports from 320px up to 1279px get the desktop layout uncompressed. Phones/tablets either zoom out or scroll-bar.
+
+#### F134 — Hotspot table "Show all" synchronously builds full HTML
+
+*   **Location**: `crates/codelore-lib/src/output/spa/widgets.js:1377`
+*   **Severity**: HIGH
+
+#### F135 — Theme toggle re-runs full `d3.pack` layout
+
+*   **Location**: `crates/codelore-lib/src/output/spa/widgets.js:204`
+*   **Severity**: MED
+
+#### F136 — Color-mode tablist mismatches WAI-ARIA Tabs pattern
+
+*   **Location**: `crates/codelore-lib/src/output/spa/template.html:621-636`
+*   **Severity**: MED
+
+#### F137 — Knowledge-islands rows not keyboard-activable
+
+*   **Location**: `crates/codelore-lib/src/output/spa/widgets.js:847-854`
+*   **Severity**: MED
+
+#### F138 — `startViewTransition` ignores `prefers-reduced-motion`
+
+*   **Location**: `crates/codelore-lib/src/output/spa/widgets.js:470-476`
+*   **Severity**: LOW
+
+### NEW Active Findings — Test / CI / observability
+
+#### F142 — Tracing instrumentation skewed across `analyses/`
+
+*   **Location**: 3 tracing lines total across `crates/codelore-lib/src/analyses/`
+*   **Severity**: MED
+
+#### F144 — No CI dogfooding of `codelore` against `codelore`
+
+*   **Severity**: MED
+
+### NEW Active Findings — Code complexity / maintainability
+
+#### F145 — `main.rs` dispatch boilerplate is the bulk of the file
+
+*   **Location**: `crates/codelore-cli/src/main.rs:846-2044` — the `match (format, &analysis)` block (line 846) extends to roughly EOF. `main.rs` is now **2044 LOC**; the dispatch arm body is ~1198 LOC (≈59% of the file).
+*   **Severity**: HIGH
+*   **Drift note**: the prior 720-LOC estimate was correct at the time of the audit; the file has grown roughly proportionally with new analyses (lead-time, bus-factor, stale-code, god-classes, etc.). The architectural concern is the same — the routing table grew, the abstraction didn't.
+
+#### F146 — `json.rs` `write_*_json` shims (count drifted)
+
+*   **Location**: `crates/codelore-lib/src/output/json.rs` — **29 trivial shim functions** today (audit logged 14 at the time of capture; new analyses added more).
+*   **Severity**: MED
+
+#### F148 — `csv.rs` + `markdown.rs` per-analysis emitters
+
+*   **Severity**: LOW
+
+### Fourth audit pass — schema / determinism / error UX
+
+#### F149 — `hunks` table lacks PRIMARY KEY, NOT NULL on offsets, `(rev, path)` index
+
+*   **Location**: `crates/codelore-lib/src/facts/schema_v1.sql:51`
+*   **Severity**: MED
+*   **Description**: Outlier among 8 tables. All four offset columns nullable; FK validation queries scan the entire `hunks` table on large repos.
+*   **Suggested fix**: add `PRIMARY KEY (rev, path, old_start, new_start)`, `NOT NULL` on all four offset columns, `CREATE INDEX idx_hunks_rev_path ON hunks(rev, path)`.
+
+#### F150 — Schema version tracked in two disjoint places, no startup validation
+
+*   **Location**: `crates/codelore-lib/src/cache.rs:40` + `crates/codelore-lib/src/facts/schema.rs:6`
+*   **Severity**: MED
+*   **Description**: Cache invalidation works via key hash, but operator who hands stale cache to `--cache-dir` directly gets no fail-fast — surfaces as cryptic SQL errors at analysis time.
+*   **Suggested fix**: on `FactsDb::open_read_only`, `SELECT value FROM provenance WHERE key='schema_version'` + `bail!` if mismatch.
+
+#### F151 — Leiden communities run without RNG seed → non-deterministic partitions
+
+*   **Location**: `crates/codelore-lib/src/analyses/communities.rs:136`
+*   **Severity**: MED
+*   **Description**: `LeidenConfig::default()` has no explicit seed. Module docstring promises "deterministic across runs" — broken on cache miss.
+*   **Suggested fix**: thread a deterministic seed (SHA-256 prefix of edge list, or fixed `0xDEADBEEF`) into LeidenConfig. Add an integration test asserting two back-to-back runs produce identical `community_id` columns.
+
+#### F152 — `clone_group_id` non-deterministic across runs (std HashMap iteration)
+
+*   **Location**: `crates/codelore-lib/src/clones/extractor.rs:145`
+*   **Severity**: LOW
+*   **Suggested fix**: `BTreeMap<[u8;32], _>` so iteration is digest-sorted; OR sort `Vec<(digest, members)>` by digest before `enumerate()`.
+
+#### F153 — Generic I/O errors from repo probing exit with code 5 instead of 3
+
+*   **Location**: `crates/codelore-lib/src/error.rs:65`
+*   **Severity**: LOW
+*   **Suggested fix**: add `CodeLoreError::RepoIo(std::io::Error)` variant mapped to exit 3.
+
+#### F154 — `codelore diff` base==head produces empty SARIF with no signal
+
+*   **Location**: `crates/codelore-cli/src/diff_output.rs:30` (text), plus SARIF + markdown branches
+*   **Severity**: LOW
+*   **Suggested fix**: pre-check at the diff entry point — `if base_sha == head_sha { return Err(CodeLoreError::Analysis("base equals head; nothing to diff")); }`.
+
+### Fifth audit pass — F155–F157 (this cycle)
+
+#### F155 — `DiffOutput.{base,head}_median_code_health` defaults to silent `0.0`
+
+*   **Location**: `crates/codelore-cli/src/diff.rs:41` (struct decl) + `:650-666` (default-path)
+*   **Severity**: MED
+*   **Category**: Output ambiguity / CI integration
+*   **Status**: Active
+*   **Description**: Both medians are typed `f64` (not `Option<f64>`) and default to `0.0` when `--thresholds-file` is unset or no `[diff]` gates configured. The values are emitted verbatim in the diff JSON without `#[serde(skip_serializing_if)]`. A downstream consumer reading the JSON cannot distinguish "gate not configured, no measurement taken" from "measured median = 0.0" — both surface as `"base_median_code_health": 0.0`. On a 0–100 code-health scale, 0.0 reads as catastrophically bad.
+*   **Failure scenario**: team A configures thresholds → gets meaningful 67.4 / 64.9 medians. Team B runs `codelore diff` without thresholds, ships the JSON to a dashboard / Slack bot / PR summarizer. The dashboard rule `flag if base_median_code_health < 50` fires on every PR → signal trust erodes.
+*   **Suggested fix**: change to `Option<f64>` + `#[serde(skip_serializing_if = "Option::is_none")]`. Or hoist into a sentinel `"computed": false` field on the diff envelope.
+
+#### F156 — `Thresholds` / `Gates` / `DiffGates` don't `deny_unknown_fields` — silent typo disables gate
+
+*   **Location**: `crates/codelore-lib/src/quality_gates/mod.rs:39` (Thresholds), `:47` (Gates), `:62` (DiffGates)
+*   **Severity**: LOW
+*   **Category**: Config / silent misconfiguration
+*   **Status**: Active
+*   **Description**: None of the three `Deserialize`-derived structs opt into `#[serde(deny_unknown_fields)]`. A user typo in `.codelore-thresholds.toml` — e.g. `cognative_max = 30` (transposed) or `disallow_clone_type1 = true` (missing underscore) — parses cleanly as the default `None`/`false`. The gate is silently disabled. No warn-log surfaces the unknown key. `quality_gates`'s entire value proposition is that the repo carries the gate; silent misconfiguration is the worst failure mode here.
+*   **Failure scenario**: engineer adds `disallow_clone_type1 = true` (typo) to block Type-1 clones in PR review. File parses; `gates.disallow_clone_type_1` stays `false`; `evaluate_clone_gate` early-returns. Gate appears wired but does nothing — every PR passes while Type-1 clones land.
+*   **Suggested fix**: `#[serde(deny_unknown_fields)]` on all three structs. Parse error surfaces via the existing `CodeLoreError::Analysis` path in `Thresholds::from_path`.
+
+#### F157 — F147's exhaustiveness guard wraps the wrong list
+
+*   **Location**: `crates/codelore-lib/src/analysis.rs:152-184` (`_exhaustive_check` match) vs `:186-217` (`all()` array literal)
+*   **Severity**: LOW
+*   **Category**: Correctness / drift (regression on F147's promise)
+*   **Status**: Active
+*   **Description**: F147's commit message claims the exhaustiveness guard prevents new variants from being silently absent from the `all()` registry. Inspection shows the const fn `_exhaustive_check` matches over every variant — but the actual `all()` array the rest of the codebase consumes is the `&[Self::Hotspots, Self::Coupling, ...]` literal further down. A new variant + writing the match arm (forced) + forgetting the array entry (not forced) silently reintroduces the exact registry-drift bug the F147 commit claims to prevent. The round-trip test only iterates `all()`, so an array-missing variant is never exercised.
+*   **Failure scenario**: maintainer adds `AnalysisName::ContributionDecay`. Compiler refuses build until `_exhaustive_check` match adds the arm — they comply. Build passes. The `&[...]` array below is never touched. `codelore --help` doesn't list `contribution-decay`; `Supported: ...` error messages omit it; round-trip test never round-trips it. But `from_str("contribution-decay")` still works because it lives in a separate match. The exact silent UX regression F147 was supposed to prevent.
+*   **Suggested fix**: invert — have `all()` build the array deconstructively from the match (`let arr: [_; N] = [Self::Hotspots, ...]` only inside the matched branch), OR write the guard so the `&[...]` array literal is the only registry by mapping the match over `Self::all().iter()`.
 
 ---
 
-## 4. Second Audit Pass (2026-06-14, post-§3 sweep)
+## 4½. Validation Pass — 2026-06-16
 
-User requested an additional deep-dive loop "until you find real improvement points or real practical or potential issues" — second pass covered surface areas the first pass under-served: **CI/CD + release pipeline**, **identity layer + diff PR-mode + provenance manifest**, and **analytical-formula correctness (Kamei, Fisher exact, clone fingerprinting)**.
+Every Active / Partial entry above re-verified against current `main` HEAD via direct source inspection. Backwards-evidence summary so the next reader doesn't redo the same checks:
 
-Methodology unchanged: three parallel read-only sub-agents → adversarial source-quote verification → only verified-real findings become Active.
+| Finding | Claim | Verified state on main | Status |
+|---|---|---|---|
+| F94 | ingest.rs monolithic, 1344 LOC | `wc -l = 1344` ✓ ; `facts/ingest/` subdir exists empty | Active confirmed |
+| F97 | `JSON.parse` synchronous at first paint | `widgets.js:61` literal `JSON.parse(dataBlock.textContent)`; `grep -c requestIdleCallback = 0` | Active confirmed |
+| V6 | `CHANNEL_CAPACITY = 64` unmeasured | `ingest.rs:19` constant unchanged; also surfaces sibling `WALKER_CHANNEL_CAPACITY = 256` at `gix_repo.rs:122` — second unmeasured constant | Active confirmed (broader) |
+| F111 | `FactsDb::conn()` leaks `&Connection` | `facts/mod.rs:266` still `pub fn conn(&self) -> &Connection` | Active confirmed |
+| F113 | CLI reaches into many lib submodules | 17+ distinct `codelore_lib::*` paths in `main.rs` (audit said 13 — undercounted) | Active confirmed |
+| F114 | Single-CDN dependence | All 4 SPA assets at `cdn.jsdelivr.net/npm/…` in `build.rs:77-104` | Active confirmed |
+| F115 | Container mutable tags | `Containerfile:29` `rust:${RUST_VERSION}` and `:62` `gcr.io/distroless/cc-debian12:nonroot` — no `@sha256:` | Active confirmed |
+| F116 | Dependabot + Renovate duplicate | Both `.github/dependabot.yml` and `renovate.json` present | Active confirmed |
+| F117 | First-party GHA floating tags | 6 sites at `actions/{checkout,cache,attest-build-provenance,upload-artifact,download-artifact}@v[N]` (no SHA pin) | Active confirmed |
+| F118 | Walker panic silently swallowed | `gix_repo.rs:132` spawns walker thread; no `join()` on the handle anywhere — panic just drops the channel | Active confirmed |
+| F119 | csv.rs 826 LOC | `wc -l = 826` ✓ | Active confirmed |
+| F120 | SARIF schema URL on legacy host | `sarif.rs:12` `schemastore.azurewebsites.net` — canonical is `json.schemastore.org` | Active confirmed |
+| F121 | `fishers_exact` unmaintained | `Cargo.lock` carries it; `cargo deny check advisories` → OK (no CVE), but the crate still has no commits since 2018 | Active (informational) |
+| F122 | toml on 0.8.x | `Cargo.lock`: `toml v0.8.23`; current `1.1.x` | Active confirmed |
+| F125 / F126 | redundant queries + N updates | **Fixed on PR #58** (this session) — verified by the perf bench notes | Fixed-on-branch |
+| F127 / F128 | Kamei correlated subqueries | `kamei/mod.rs:38` (`sql_counts`) + `:77-92` (`enrich_size`) confirm `(SELECT … FROM changes WHERE changes.rev = commits.rev)` pattern | Active confirmed |
+| F129 | arch-violations materializes, truncates post-Rust | `arch_violations.rs:73-92` collects full Vec, validates in Rust, truncates afterwards | Active confirmed |
+| F130 | pair_programming O(P²) with `String::clone` | `pair_programming.rs:102-107` literal `participants[i].clone(), participants[j].clone()` inside doubly-nested loop | Active confirmed |
+| F131 | Tooltip 14×14 trigger | `template.html:259-260` literal `width: 14px; height: 14px` | Active confirmed |
+| F132 | Hardcoded hex in widgets.js | 5+ sites with `'#e6e6e6'`, `'#fff'`, `'#1a4a2c'`, `'#2ea44f'`, `'#7dd87a'`, `'#f59e0b'`, `'#e0584e'` | Active confirmed |
+| F133 | No responsive < 900px | 14 responsive classes total, all `xl:` (≥ 1280px). 0 `sm:` / `md:` / `lg:` | Active confirmed |
+| F135 | Theme toggle re-runs `d3.pack` | `widgets.js:204` `registerThemeRerender(() => renderHotspotCirclePack(...))` — full re-layout | Active confirmed |
+| F136 | Color-mode tablist non-ARIA | `template.html:621-636` `<button role="tab">` with no `aria-selected`, no `tabindex` mgmt, no arrow-key handler | Active confirmed |
+| F138 | `startViewTransition` ignores reduced-motion | `widgets.js:470-475` calls `document.startViewTransition(updateFn)` without checking `prefers-reduced-motion` | Active confirmed |
+| F142 | Sparse tracing in analyses | Only 3 `tracing::*` calls across 33 analysis files (lead_time, clones, clone_coupling) | Active confirmed |
+| F144 | No CI dogfooding | `grep -rE 'codelore (analyze\|check\|diff)' .github/workflows/ = ∅` | Active confirmed |
+| F145 | main.rs dispatch boilerplate | `main.rs = 2044 LOC`; dispatch spans lines 846→2044 (~1198 LOC, ≈59% of file). Audit's 720-LOC figure was correct *at that time*. | Active confirmed (drifted larger) |
+| F146 | json.rs trivial shims | `grep -cE '^pub fn write_[a-z_]+_json' = 29` (audit said 14 — count drifted larger as new analyses added) | Active confirmed (drifted larger) |
+| F149 | hunks schema lacks PK / NOT NULL | `schema_v1.sql:51` literal — no PK, all 4 offset columns nullable | Active confirmed |
+| F150 | Schema version in two places | `facts/schema.rs:6` `("schema_version", "1")` + `cache.rs:20` `SCHEMA_VERSION: &str = "schema_v3"` — disjoint sources | Active confirmed |
+| F151 | Leiden non-deterministic | `communities.rs:136` literal `Leiden::new(LeidenConfig::default())` — no seed | Active confirmed |
+| F152 | clone_group_id std HashMap | `clones/extractor.rs:144-157` uses `HashMap` then assigns `clone_group_id = u32::try_from(i + 1)` where `i` is HashMap iteration order | Active confirmed |
+| F153 | I/O errors → exit 5 | `error.rs:63-66` only `Self::Repo(_) \| Self::BlobNotFound { .. } => 3` — no `RepoIo` variant for `std::io::Error` carryover | Active confirmed |
+| F154 | diff base==head no guard | `grep -n 'base_sha == head_sha' diff*.rs = ∅` | Active confirmed |
+| F155 | DiffOutput medians default 0.0 | `diff.rs:41,44` `pub base_median_code_health: f64` (not Option) | Active confirmed |
+| F156 | Thresholds/Gates/DiffGates no `deny_unknown_fields` | `quality_gates/mod.rs:40,48,62` — none of the three structs carry the attr | Active confirmed |
+| F157 | F147's guard wraps wrong list | `analysis.rs:136` `all()` returns `&[Self::Hotspots, ...]` literal **separately** from `_exhaustive_check` const fn `match` at `:151` — guarded match doesn't force array entry | Active confirmed (F147 partial regression) |
+| F110 / F112 | branch-only fixes | `MANIFEST_SCHEMA_VERSION` on main is still `1`; `head_sha`/`cache_key_hash` absent; `differential_repo_test.rs` lacks `head_sha_matches`. PR #57 carries the fix. | Partial-on-branch |
+| F143 | SPA browser smoke | `tests/spa_browser_test.rs` absent on main; `browser-tests` feature not wired in `ci.yml`. PR #56 carries the fix. | Partial-on-branch |
 
-**Score**: 21 raw HIGH/MED candidates → **8 Active** findings (F99–F106) + **7 Refuted** (over-fired or misread source) + **5 already-captured-in-§3** (dropped to avoid double-counting).
-
-### Active Findings
-
-#### F99 — Container OCI label `image.source` hardcoded to `<owner>` placeholder
-
-*   **Location**: `Containerfile:60` — `LABEL org.opencontainers.image.source="https://github.com/<owner>/codelore"`
-*   **Severity**: MED
-*   **Category**: Container image / supply-chain hygiene
-*   **Status**: Active
-*   **Description**: The Containerfile's `image.source` OCI label is the literal string `https://github.com/<owner>/codelore` — the `<owner>` placeholder was never templated. Anyone who runs `docker inspect ghcr.io/emrecdr/codelore:latest` sees `<owner>` in the source URL. This breaks the OCI spec's intent (clients should be able to dereference `image.source` to the canonical repo), breaks `cosign verify --certificate-identity-regexp ...` style attestation chains that rely on the label, and produces nonsense in security-scanner output (Snyk/Grype/Trivy all surface `image.source`).
-*   **Reproduce**: `docker pull ghcr.io/emrecdr/codelore:latest && docker inspect ghcr.io/emrecdr/codelore:latest | jq '.[0].Config.Labels["org.opencontainers.image.source"]'` → `"https://github.com/<owner>/codelore"`.
-*   **Suggested fix**: add `ARG REPO=emrecdr/codelore` near the top of the Containerfile, replace the label with `LABEL org.opencontainers.image.source="https://github.com/${REPO}"`. Pass `--build-arg REPO=${{ github.repository }}` from `.github/workflows/container.yml` so the value tracks fork ownership automatically. Confirm via `docker inspect` after the next container build.
-
-#### F100 — `cut-release.sh` ruleset-restore trap can hang indefinitely on stuck `gh api`
-
-*   **Location**: `scripts/cut-release.sh:109-155` (the `restore_ruleset` function registered via `trap … EXIT` at `:156`)
-*   **Severity**: MED
-*   **Category**: Release-pipeline robustness
-*   **Status**: Active
-*   **Description**: The trap fires `gh api -X PUT repos/${REPO}/rulesets/${RULESET_ID}` with no timeout. If GitHub's API returns slow / hangs / rate-limits the request, the trap blocks. Worse, the trap already runs *during* shell exit, so a Ctrl-C while it's hung doesn't run a second cleanup — the user kills `gh`, the script exits, and the protect-release-tags ruleset stays in `enforcement: disabled` state on the live repo until someone notices. Per CLAUDE.md, this dance is "the ONLY safe way to publish a `v*` tag" — leaving the repo unprotected breaks that contract. The non-hung failure case is handled (the `else` branch at line 148 prints a manual-recovery command), but the hung case isn't.
-*   **Reproduce**: hard to reproduce in dev (would need to script a `gh` hang); review-by-inspection only.
-*   **Suggested fix**: wrap the `gh api` call with `timeout 30s gh api …` (GNU coreutils `timeout`, available on Linux + macOS via `brew install coreutils` or as `gtimeout`). On timeout, fall through to the existing manual-recovery `else` branch so the operator gets a paste-able recovery command. Update `docs/RELEASING.md`'s "Tag push ruleset dance" with the timeout caveat.
-
-#### F101 — GitHub Actions cache keys omit `rust-toolchain.toml` fingerprint
-
-*   **Location**: `.github/workflows/release.yml:101` (`key: release-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}`) and `.github/workflows/bench.yml:28` (`key: bench-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}`)
-*   **Severity**: LOW
-*   **Category**: CI cache correctness
-*   **Status**: Active
-*   **Description**: Cache keys hash `Cargo.lock` but not `rust-toolchain.toml`. The toolchain pin (`1.96.0` today) is the authoritative source per CLAUDE.md — bumping it should invalidate all cache artifacts, since rustc-version is part of every `.rmeta` / `.rlib` hash. Today the workspace pins `1.96.0`, so this is a theoretical concern. The moment the next Rust-bump batch ships (rust-toolchain.toml + workspace rust-version + 5 action invocations + CHANGELOG), CI could hit stale-cache linker errors that are diagnosed as "flaky CI" but are deterministically the missing toolchain fingerprint.
-*   **Suggested fix**: change the keys to `${{ matrix.target }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}` (hashFiles takes a glob list and concatenates). One-line change in two workflow files. Confirms with a forced Rust-version bump in a draft PR — first run must miss the cache.
-
-#### F102 — `bench.yml` kernel-snapshot fetch has no error handling
-
-*   **Location**: `.github/workflows/bench.yml:40-45` — `git clone --depth=10000 --filter=blob:none https://github.com/torvalds/linux.git /tmp/linux-kernel-snapshot`
-*   **Severity**: LOW
-*   **Category**: CI workflow robustness
-*   **Status**: Active
-*   **Description**: The `run:` block doesn't `set -euo pipefail`, so if the clone fails (network flap, GitHub rate-limit, transient DNS) the step still exits 0. The subsequent bench step then crashes with `CODELORE_BENCH_LINUX_KERNEL_PATH not found` — a cryptic-symptom-of-a-clear-cause failure pattern. The 2026-06 cache key (`linux-kernel-snapshot-2026-06`) helps on warm runs but the cold-cache cycle is exposed.
-*   **Suggested fix**: prepend `set -euo pipefail` to the run block, or explicitly assert post-clone: `[ -d /tmp/linux-kernel-snapshot/kernel ] || { echo "clone failed or repo empty"; exit 1; }`. Two-line change.
-
-#### F103 — Third-party action `softprops/action-gh-release@v3` is tag-pinned (mutable upstream)
-
-*   **Location**: `.github/workflows/release.yml:169` (and adjacent `actions/upload-artifact@v7`, `actions/checkout@v6`, etc.)
-*   **Severity**: LOW
-*   **Category**: Supply-chain hygiene
-*   **Status**: Active
-*   **Description**: Industry consensus is *first-party* GitHub actions (`actions/*`) at major-tag pin is acceptable (tight upstream control), but *third-party* actions at tag pin are a known supply-chain risk — the tag can be force-moved upstream to point at a malicious commit. `softprops/action-gh-release@v3` is the only third-party action in the release path and runs with `GITHUB_TOKEN` permissions to create releases (i.e., everything the release pipeline needs to be subverted). The action has a clean reputation today, but tag-pinning a *third-party* action that handles credentials is a measurable risk worth not taking.
-*   **Suggested fix**: replace `softprops/action-gh-release@v3` with a full commit SHA: `softprops/action-gh-release@<40-char-sha>`. Pin once, let Dependabot offer SHA bumps. The other third-party actions in the workflow (none found in release.yml besides this one) should follow the same rule. First-party `actions/*` pins stay at major-tag form.
-
-#### F104 — Fisher-exact contingency table can produce degenerate cells on inconsistent inputs
-
-*   **Location**: `crates/codelore-lib/src/analyses/coupling.rs:282-289` (`fisher_two_tail`)
-*   **Severity**: LOW
-*   **Category**: Statistical robustness
-*   **Status**: Active
-*   **Description**: The 2×2 contingency-table cells are computed via chained `saturating_sub`: `b = revs_a - shared`, `c = revs_b - shared`, `d = total - a - b - c`. If the inputs are inconsistent (`shared > revs_a` or `shared > revs_b` or `a+b+c > total`) — which "shouldn't happen" under correct SQL — the saturated subtractions silently clamp to 0 and `fishers_exact` is called on a degenerate table. The `.ok()` swallows fishers_exact's error, but a wrong-shaped table that happens to satisfy the crate's input validation still yields a meaningless p-value treated as significant. Inputs come from SQL aggregates over `good_commits`, so they're internally consistent in correct usage — but a future bug in the upstream SQL (esp. under time-bucket aliasing or post-cache hot-fix UPDATE statements) would surface as "more significant pairs than usual" rather than as a typed error.
-*   **Suggested fix**: add an invariant check at the top of `fisher_two_tail`: `if shared > revs_a || shared > revs_b || a + b + c > total { return None }`. Three-line defensive add; the `None` propagates the same way today's error case does (caller filters out None).
-
-#### F105 — `ureq = "2"` in build-deps is on maintenance-only branch
-
-*   **Location**: `crates/codelore-lib/Cargo.toml:18` — `ureq = { version = "2", features = ["tls"] }`
-*   **Severity**: LOW
-*   **Category**: Dependency currency
-*   **Status**: Active
-*   **Description**: ureq 3.x has shipped as the active release line; ureq 2.x receives only security backports. The build script's network surface is small (one GET per asset, with explicit timeout) so the practical risk today is near-zero — but `ureq 2.x` will eventually stop receiving security updates entirely. Upgrade is a build-script-only change with no runtime impact.
-*   **Suggested fix**: bump to `ureq = { version = "3", features = ["tls"] }`, port the `Duration::from_mins(2)` timeout and `.into_reader()` / `.read_to_end()` calls to ureq 3's API (`Agent::run` + `Body::into_reader`). Sanity-test by deleting the cached `OUT_DIR/echarts.min.js` and rebuilding with `--features spa` — the SHA-256 must still match.
-
-#### F106 — Provenance manifest has no explicit schema-version field
-
-*   **Location**: `crates/codelore-lib/src/provenance/mod.rs:16-41` — `struct Manifest`
-*   **Severity**: LOW
-*   **Category**: Forward-compatibility
-*   **Status**: Active
-*   **Description**: The `.provenance.json` sidecar carries `codelore_version` (a useful proxy for "what schema is this?"), but no explicit `manifest_version`. Consumers (the planned audit-trail tooling, downstream SLSA tooling, the hypothetical `codelore serve` API) must heuristically reason about schema from `codelore_version` — which couples *consumers* to *codelore's release cadence* even when the manifest schema is stable. A `manifest_version: 1` field would let consumers gate on the schema separately from the producer version.
-*   **Suggested fix**: add `pub manifest_version: u8` to `Manifest` (default `1`). Document in the manifest's module docstring that "bump this whenever a field changes type, is removed, or has its semantics changed; *adding* fields is forward-compatible and doesn't bump it." Add a `tests/provenance_test.rs` assertion that the field is present and `>= 1`.
-
-### Refuted in This Pass
-
-| Claim | Refutation |
-|---|---|
-| Kamei SEXP uses strict `<` instead of paper's `<=` → silently diverges on same-second commits | Refuted. The semantic shift is *explicitly documented* at `kamei/mod.rs:166-173`: "In real repos commits are distinct-second by construction (git commits are sequential), so this is a no-op semantic change. Test fixtures that manufacture same-second commits would notice; the existing `windowed_history_matches_legacy_semantics_on_hot_path` test uses explicit distinct timestamps so `<` and `<=` agree on it." This is a *design decision*, not a bug — the alternative (`<=`) would require an additional tie-break against `rowid` to stay deterministic. |
-| Tree-sitter `kind_id()` is not ABI-stable → cache-fingerprint silently invalidated by grammar bumps | Refuted. Tree-sitter grammars are pinned `=0.23.x` in `crates/codelore-lib/Cargo.toml:38-43` exactly because of this concern (documented in CLAUDE.md's "Dependabot has intentional ignore rules" section). A grammar bump can only land coordinated with the codelore version bump; the cache key includes `CARGO_PKG_VERSION` (cache.rs:37), so the cache invalidates by construction whenever grammars change. The "salt" fix the agent proposed duplicates the protection that's already shipped. |
-| AI-assist pattern `"co-authored-by: cody"` produces false positives on commits containing "cody" | Refuted. The pattern is the *full* literal `"co-authored-by: cody"`, not bare `"cody"`. `str::contains("co-authored-by: cody")` against a commit message `"wrote cody helpers for testing"` returns false — the `"co-authored-by: "` prefix is the anchor. The agent misread the substring as `"cody"` standalone. |
-| AI-attribution `file_ai` CTE conflates NULL `ai_attribution` with human | Refuted. The schema column `commits.ai_attribution` is populated at ingest time by `identity::ai_attribution(...)` for every row (never NULL on a freshly-ingested DB). Older cached DBs are protected by the cache key's `CARGO_PKG_VERSION` slot — a codelore upgrade that changes `ai_attribution` semantics also invalidates the cache. The NULL-on-cache scenario requires both: (a) an old cache survives the version bump, AND (b) the schema migration doesn't touch the column. Neither is currently possible. |
-| DuckDB version is pinned 12+ months old, may produce different `--time-bucket` boundaries vs current upstream | Refuted as speculative. No specific upstream DuckDB changelog entry was cited for week-boundary regression; the version pin `=1.10503.1` is intentional (vendored to work around `libduckdb-sys` MSVC 19.40 — see CLAUDE.md and `Cargo.toml`'s `[patch.crates-io]` block). The pin moves when the upstream `duckdb-rs#786` ships; planning the bump on speculation about a different changelog risks regressing the fixed Windows build. |
-| Code-health weights (0.40 / 0.25 / 0.15 / 0.20) lack a citation for the *weight* values | Refuted as a finding, accepted as a documentation enhancement. The component citations are in `docs/research-foundations.md` (Campbell 2018 cognitive, Nagappan & Ball 2005 churn, Mockus & Herbsleb 2002 ownership, Tornhill 2018 coupling). The *weighting* is CodeLore's calibration choice — already documented in module-level comments. Capturing it as a F-finding double-counts what's already accepted methodology. |
-| SoC `HAVING MAX(files) <= ?` admits boundary cases vs code-maat's strict `<` | Refuted as a finding, accepted as a documented departure. CLAUDE.md and `feedback_modernize_dont_migrate` make explicit: code-maat parity is *opt-in* via `--code-maat-compat`, not the default. The boundary semantics are a *deliberate departure* — modern best practice (inclusive thresholds) over legacy code-maat exact behaviour. |
-
-### Reaffirmed from §3 (deduplicated)
-
-The Round-2 sub-agents independently re-surfaced these Round-1 findings; counted once each, not double-numbered:
-- Markdown emitter pipe-escape (F91) — Round-2 confirmed the same gap exists in `diff_output.rs` (lines 165, 184, 212, 234). F91's fix should sweep both `output/markdown.rs` and `codelore-cli/src/diff_output.rs` simultaneously.
-- Provenance sidecar atomicity (F92) — independently surfaced, same diagnosis.
-- Communication `--since` / `--until` boundary (F95) — independently surfaced.
-- Cache canonicalize fallback (F93) — independently surfaced.
-- ECharts mount-pattern duplication (F96) — independently surfaced; reinforces that V4 (`widgets.js` modularization) is the natural home for F96's extract.
+`cargo deny check advisories` clean as of validation date — confirms no F-finding maps to a live CVE.
 
 ---
 
 ## 5. Next Audit Cycle
 
-Combined Active count after both passes: **F89–F106 = 18 Active findings + V4–V6 improvements**. The next sweep should re-open with F-IDs starting at F107.
+**Current Active count**: F94, F97 + V4, V5, V6 + F143 partial + F111, F113-F124, F125-F148 (minus F139, F140, F141, F147 fixed, minus F110, F112 fixed-on-branch, minus F125 + F126 fixed-on-branch as of this validation pass) + F149-F154 + F155-F157 = **40 Active findings**.
 
-The validation methodology held across both passes: 16 + 21 raw HIGH/MED candidates → only 10 + 8 = **18 Active** after source-quote verification. The 13 refuted candidates would have shipped as work if the audit pipeline lacked the verify-against-source gate.
+The next sweep should re-open with F-IDs starting at **F158**.
+
+**Validation methodology held**: 28 prior findings re-validated → 21 Fixed (15 from v0.6.0 + 4 from PRs #54/#55 on main + 2 F110/F112 on `fix/f110-f112-test-coverage-and-provenance`) + 3 Partial (V4, V5, F143 awaiting merge) + 3 Active carryover (F94, F97, V6). 3 new fifth-pass findings (F155 diff output ambiguity, F156 missing `deny_unknown_fields`, F157 exhaustiveness guard targets the wrong list — F147 partial regression). All findings carry source-line quotes for adversarial-verification trail.
+
+**Branch-merge gate**: F110, F112, F143 should be re-validated against main after their feature branches merge. The fact that F147's guard wraps the wrong list (F157) suggests the F147 fix also needs a follow-up — the guard is structurally fine but doesn't enforce what the commit message claims.
