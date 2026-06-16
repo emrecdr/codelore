@@ -36,7 +36,14 @@ use crate::{CodeLoreError, Result};
 /// Conventional filename auto-discovered at the repo root.
 pub const THRESHOLDS_FILENAME: &str = ".codelore-thresholds.toml";
 
+// `deny_unknown_fields` on all three structs so a typo in the user's
+// `.codelore-thresholds.toml` surfaces as a parse error instead of
+// silently disabling the gate. Without this, `cognative_max` (typo of
+// `cognitive_max`) or `disallow_clone_type1` (missing underscore)
+// parses as the default `None`/`false` — the gate appears wired but
+// does nothing on every PR.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Thresholds {
     #[serde(default)]
     pub gates: Gates,
@@ -45,6 +52,7 @@ pub struct Thresholds {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Gates {
     /// Maximum cognitive complexity per file. Files exceeding fail
     /// the gate.
@@ -59,6 +67,7 @@ pub struct Gates {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DiffGates {
     /// Maximum allowed drop in median code-health between base and
     /// head. A drop of more than this magnitude fails the gate.
@@ -261,6 +270,40 @@ mod tests {
     fn empty_text_yields_default() {
         let t = Thresholds::from_text("").unwrap();
         assert!(t.is_empty());
+    }
+
+    #[test]
+    fn unknown_key_at_root_is_rejected() {
+        // A typo at the root table level (e.g. `gate` instead of
+        // `gates`) must fail the parse, not silently drop the value.
+        let raw = "[gate]\ncognitive_max = 30\n";
+        let err = Thresholds::from_text(raw).expect_err("typo'd table should reject");
+        assert!(
+            err.contains("unknown field") || err.contains("gate"),
+            "expected 'unknown field' in error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn unknown_key_in_gates_is_rejected() {
+        // `cognative_max` (transposed letters) used to parse as
+        // default-disabled — the exact failure mode F156 captures.
+        let raw = "[gates]\ncognative_max = 30\n";
+        let err = Thresholds::from_text(raw).expect_err("typo'd gate key should reject");
+        assert!(
+            err.contains("unknown field") || err.contains("cognative"),
+            "expected 'unknown field' in error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn unknown_key_in_diff_is_rejected() {
+        let raw = "[diff]\nnew_hotspot_maximum = 5\n";
+        let err = Thresholds::from_text(raw).expect_err("typo'd diff key should reject");
+        assert!(
+            err.contains("unknown field") || err.contains("new_hotspot_maximum"),
+            "expected 'unknown field' in error, got: {err}"
+        );
     }
 
     #[test]

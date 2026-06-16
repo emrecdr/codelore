@@ -34,14 +34,22 @@ pub struct DiffOutput {
     pub coupling_absences: Vec<CouplingAbsence>,
     pub clones: ClonesDelta,
     /// Median `code_health` over the base-rev hotspots set. Computed
-    /// only when `--thresholds-file` is set (otherwise 0.0). Surfaced
-    /// in the JSON output so downstream tools can re-evaluate the
+    /// only when `--thresholds-file` is set AND a `[diff]` gate is
+    /// configured; otherwise `None` (field omitted from JSON output).
+    /// Surfaced so downstream tools can re-evaluate the
     /// `[diff].delta_code_health_min` gate against their own
     /// thresholds without re-running the analysis.
-    pub base_median_code_health: f64,
+    ///
+    /// `Option<f64>` (not `f64`) so consumers can distinguish "gate
+    /// not configured, no measurement taken" from "measured median
+    /// = 0.0" — the latter would read as catastrophic health on the
+    /// 0-100 scale and trigger false alarms in downstream dashboards.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_median_code_health: Option<f64>,
     /// Median `code_health` over the head-rev hotspots set. Same
-    /// triggering / default as `base_median_code_health`.
-    pub head_median_code_health: f64,
+    /// triggering / absence semantics as `base_median_code_health`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_median_code_health: Option<f64>,
     /// `[diff]` quality-gate violations. Empty when the gate is
     /// vacuous (no `--thresholds-file` or no `[diff]` section) OR
     /// when both gates pass.
@@ -660,9 +668,9 @@ pub fn run_diff(args: &DiffArgs) -> Result<DiffOutput> {
                 .into_iter()
                 .map(Into::into)
                 .collect();
-        (base_med, head_med, violations)
+        (Some(base_med), Some(head_med), violations)
     } else {
-        (0.0, 0.0, Vec::new())
+        (None, None, Vec::new())
     };
 
     Ok(DiffOutput {
