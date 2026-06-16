@@ -206,6 +206,123 @@ fn sarif_fingerprint_is_stable() {
 }
 
 #[test]
+fn sarif_information_uri_points_at_codelore_repo() {
+    // F158: every SARIF report's tool.driver.informationUri previously
+    // hardcoded `github.com/emre/codescene` — wrong org, wrong project.
+    // Must be the canonical codelore repo URL so GH Code Scanning's
+    // tool-details link resolves.
+    let rows = vec![HotspotRow {
+        path: "src/main.rs".into(),
+        revisions: 1,
+        cognitive: 1.0,
+        code_health: 90.0,
+        hotspot_score: 0.1,
+        mi: None,
+        mi_rank: None,
+        ai_pct: None,
+    }];
+    let mut buf = Vec::new();
+    write_hotspots_sarif(
+        &rows,
+        "https://github.com/example/repo",
+        &mut Cursor::new(&mut buf),
+    )
+    .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&buf).unwrap();
+    let info_uri = v["runs"][0]["tool"]["driver"]["informationUri"]
+        .as_str()
+        .unwrap();
+    assert_eq!(info_uri, "https://github.com/emrecdr/codelore");
+    assert!(!info_uri.contains("emre/codescene"));
+}
+
+#[test]
+fn sarif_artifact_uri_percent_encodes_special_chars() {
+    // F159: paths with spaces / `#` / non-ASCII used to ship as raw
+    // bytes in artifactLocation.uri — invalid per RFC 3986 §4.1.
+    // Three probes cover the most common breakage classes.
+    let probes = [
+        ("src/foo bar.rs", "src/foo%20bar.rs"),
+        ("docs/foo#bar.md", "docs/foo%23bar.md"),
+        ("src/café.rs", "src/caf%C3%A9.rs"),
+    ];
+    for (raw, encoded) in probes {
+        let rows = vec![HotspotRow {
+            path: raw.into(),
+            revisions: 1,
+            cognitive: 1.0,
+            code_health: 90.0,
+            hotspot_score: 0.1,
+            mi: None,
+            mi_rank: None,
+            ai_pct: None,
+        }];
+        let mut buf = Vec::new();
+        write_hotspots_sarif(
+            &rows,
+            "https://github.com/example/repo",
+            &mut Cursor::new(&mut buf),
+        )
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&buf).unwrap();
+        let uri = v["runs"][0]["results"][0]["locations"][0]["physicalLocation"]
+            ["artifactLocation"]["uri"]
+            .as_str()
+            .unwrap();
+        assert!(
+            uri.ends_with(encoded),
+            "expected encoded {encoded:?}, got {uri:?}"
+        );
+        // The raw form must NOT appear in the URI.
+        assert!(!uri.contains(raw), "URI {uri:?} still contains raw {raw:?}");
+    }
+}
+
+#[test]
+fn sarif_automation_id_is_unique_per_run() {
+    // F163: SARIF 2.1.0 §3.17.3 wants per-run correlation IDs so GH
+    // Code Scanning doesn't collapse multiple runs into a single
+    // timeline. Two back-to-back emissions must differ in the
+    // automationDetails.id suffix.
+    let rows = vec![HotspotRow {
+        path: "src/main.rs".into(),
+        revisions: 1,
+        cognitive: 1.0,
+        code_health: 90.0,
+        hotspot_score: 0.1,
+        mi: None,
+        mi_rank: None,
+        ai_pct: None,
+    }];
+    let emit = || {
+        let mut buf = Vec::new();
+        write_hotspots_sarif(
+            &rows,
+            "https://github.com/example/repo",
+            &mut Cursor::new(&mut buf),
+        )
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&buf).unwrap();
+        v["runs"][0]["automationDetails"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let id1 = emit();
+    // Spin briefly so SystemTime nanos advance even on coarse clocks.
+    std::thread::sleep(std::time::Duration::from_micros(50));
+    let id2 = emit();
+    assert!(
+        id1.starts_with("codelore/hotspots/run/") && id2.starts_with("codelore/hotspots/run/"),
+        "expected prefix preserved, got {id1:?} / {id2:?}"
+    );
+    assert_ne!(
+        id1, id2,
+        "two emissions must produce distinct correlation suffixes"
+    );
+}
+
+#[test]
 fn sarif_empty_rows() {
     let mut buf = Vec::new();
     write_hotspots_sarif(

@@ -6,12 +6,81 @@
 
 use crate::analyses::hotspots::HotspotRow;
 use crate::{CodeLoreError, Result};
+use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use sha2::{Digest, Sha256};
 use std::io::Write;
 
 const SARIF_SCHEMA: &str = "https://schemastore.azurewebsites.net/schemas/json/sarif-2.1.0.json";
 const RULE_ID: &str = "CODELORE-HOTSPOT";
-const AUTOMATION_ID: &str = "codelore/hotspots/run";
+const AUTOMATION_ID_PREFIX: &str = "codelore/hotspots/run";
+
+/// Canonical project homepage. Surfaces in every SARIF report's
+/// `tool.driver.informationUri` — GitHub Code Scanning links the
+/// driver name in the tool-details panel here.
+const CODELORE_HOMEPAGE: &str = "https://github.com/emrecdr/codelore";
+
+/// `helpUri` for `CODELORE-CLONE` / `CODELORE-LIVE-CLONE` rules.
+/// `docs/research-foundations.md` carries the publishable rationale
+/// for every behavioural analysis (Tornhill 2018, Kamei 2013, etc.);
+/// the per-rule anchor mirrors the rule id in lowercase.
+const CODELORE_RESEARCH_FOUNDATIONS_URL: &str =
+    "https://github.com/emrecdr/codelore/blob/main/docs/research-foundations.md";
+
+/// Per-RFC-3986 §2.3 "unreserved characters" set — alphanumeric plus
+/// `-` / `.` / `_` / `~`. Everything else in a path segment is
+/// percent-encoded so SARIF artifact URIs satisfy §4.1 (Code Scanning
+/// rejects malformed URIs at upload time). We deliberately also
+/// encode `/`-adjacent characters that are legal in URI paths but
+/// confuse downstream tooling (e.g. `?`, `#`, `[`, `]`, `<`, `>`,
+/// quotes, whitespace).
+const URI_PATH_ENCODE: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'#')
+    .add(b'<')
+    .add(b'>')
+    .add(b'?')
+    .add(b'[')
+    .add(b'\\')
+    .add(b']')
+    .add(b'^')
+    .add(b'`')
+    .add(b'{')
+    .add(b'|')
+    .add(b'}');
+
+/// Encode a single path segment per [`URI_PATH_ENCODE`]. `/` is NOT
+/// in the encode set so path separators pass through unchanged.
+pub(super) fn percent_encode_path(p: &str) -> String {
+    utf8_percent_encode(p, URI_PATH_ENCODE).to_string()
+}
+
+/// Per-run correlation suffix for SARIF `automationDetails.id`. SARIF
+/// 2.1.0 §3.17.3 wants `<runGroupName>/<runName>/<correlationGuid>`;
+/// without a per-run suffix, GitHub Code Scanning collapses every run
+/// sharing the static id into a single timeline, defeating the
+/// `partialFingerprints` work that the row-level emitters do.
+///
+/// We derive the suffix from system time (nanos-since-epoch, hashed
+/// to 16 hex chars) instead of pulling in a `uuid` dep — uniqueness
+/// per run is all that's required; cryptographic randomness isn't.
+fn run_correlation_id() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let mut hasher = Sha256::new();
+    hasher.update(nanos.to_le_bytes());
+    // Mix in the process id so two SARIF emissions in different
+    // processes that happen at the same nanosecond (CI parallel
+    // jobs on the same host) don't collide.
+    hasher.update(std::process::id().to_le_bytes());
+    let digest = hasher.finalize();
+    hex::encode(&digest[..8])
+}
+
+fn automation_id_for(prefix: &str) -> String {
+    format!("{prefix}/{}", run_correlation_id())
+}
 
 /// Emit a SARIF 2.1.0 document for `rows` to `w`.
 ///
@@ -52,13 +121,13 @@ fn build_sarif(rows: &[HotspotRow], repo_root: &str) -> serde_json::Value {
         "version": "2.1.0",
         "runs": [{
             "automationDetails": {
-                "id": AUTOMATION_ID
+                "id": automation_id_for(AUTOMATION_ID_PREFIX)
             },
             "tool": {
                 "driver": {
                     "name": "codelore",
                     "version": env!("CARGO_PKG_VERSION"),
-                    "informationUri": "https://github.com/emre/codescene",
+                    "informationUri": CODELORE_HOMEPAGE,
                     "rules": [rule]
                 }
             },
@@ -98,11 +167,14 @@ fn build_result(row: &HotspotRow, repo_root: &str) -> serde_json::Value {
         format!("sha256:{}", hex::encode(hasher.finalize()))
     };
 
-    // Artifact URI: repo_root + "/" + path (strip leading slash from path if any)
+    // Artifact URI: repo_root + "/" + percent-encoded path. The path
+    // half is percent-encoded per RFC 3986 §4.1; GitHub Code Scanning
+    // rejects malformed URIs at upload time and silently truncates at
+    // `#` so inline annotations land on the wrong file.
     let artifact_uri = format!(
         "{}/{}",
         repo_root.trim_end_matches('/'),
-        row.path.trim_start_matches('/')
+        percent_encode_path(row.path.trim_start_matches('/'))
     );
 
     // Build the message text and properties bag with MI / band included only
@@ -184,7 +256,7 @@ fn build_result(row: &HotspotRow, repo_root: &str) -> serde_json::Value {
 use crate::analyses::clones::ClonesRow;
 
 const CLONE_RULE_ID: &str = "CODELORE-CLONE";
-const CLONE_AUTOMATION_ID: &str = "codelore/clones/run";
+const CLONE_AUTOMATION_ID_PREFIX: &str = "codelore/clones/run";
 
 /// Emit a SARIF 2.1.0 document for clone families to `w`.
 ///
@@ -221,7 +293,7 @@ fn build_clones_sarif(rows: &[ClonesRow], repo_root: &str) -> serde_json::Value 
                      renamed/parameterized. See CODELORE-LIVE-CLONE for the \
                      higher-severity intersection with change-coupling."
         },
-        "helpUri": "https://github.com/emre/codescene/blob/main/docs/superpowers/plans/2026-06-07-codelore-plan-7-clone-detection.md",
+        "helpUri": CODELORE_RESEARCH_FOUNDATIONS_URL,
         "properties": {
             "precision": "medium",
             "tags": ["behavioral", "clone", "type-1", "type-2"]
@@ -237,12 +309,12 @@ fn build_clones_sarif(rows: &[ClonesRow], repo_root: &str) -> serde_json::Value 
         "$schema": SARIF_SCHEMA,
         "version": "2.1.0",
         "runs": [{
-            "automationDetails": { "id": CLONE_AUTOMATION_ID },
+            "automationDetails": { "id": automation_id_for(CLONE_AUTOMATION_ID_PREFIX) },
             "tool": {
                 "driver": {
                     "name": "codelore",
                     "version": env!("CARGO_PKG_VERSION"),
-                    "informationUri": "https://github.com/emre/codescene",
+                    "informationUri": CODELORE_HOMEPAGE,
                     "rules": [rule]
                 }
             },
@@ -279,7 +351,7 @@ fn build_clones_result(
             let artifact_uri = format!(
                 "{}/{}",
                 repo_root.trim_end_matches('/'),
-                m.entity.trim_start_matches('/')
+                percent_encode_path(m.entity.trim_start_matches('/'))
             );
             json!({
                 "physicalLocation": {
@@ -341,7 +413,7 @@ fn build_clones_result(
 use crate::analyses::clone_coupling::CloneCouplingRow;
 
 const LIVE_CLONE_RULE_ID: &str = "CODELORE-LIVE-CLONE";
-const LIVE_CLONE_AUTOMATION_ID: &str = "codelore/clone-coupling/run";
+const LIVE_CLONE_AUTOMATION_ID_PREFIX: &str = "codelore/clone-coupling/run";
 
 /// Emit a SARIF 2.1.0 document for live clone-coupling findings.
 ///
@@ -383,7 +455,7 @@ fn build_clone_coupling_sarif(rows: &[CloneCouplingRow], repo_root: &str) -> ser
                      actionable the finding is. Live clones are real technical \
                      debt; dead clones (filtered out) are noise."
         },
-        "helpUri": "https://github.com/emre/codescene/blob/main/docs/superpowers/plans/2026-06-07-codelore-plan-8-v1.x-readiness.md",
+        "helpUri": CODELORE_RESEARCH_FOUNDATIONS_URL,
         "properties": {
             "precision": "high",
             "tags": ["behavioral", "clone", "live-clone", "co-change", "x-ray"]
@@ -399,12 +471,12 @@ fn build_clone_coupling_sarif(rows: &[CloneCouplingRow], repo_root: &str) -> ser
         "$schema": SARIF_SCHEMA,
         "version": "2.1.0",
         "runs": [{
-            "automationDetails": { "id": LIVE_CLONE_AUTOMATION_ID },
+            "automationDetails": { "id": automation_id_for(LIVE_CLONE_AUTOMATION_ID_PREFIX) },
             "tool": {
                 "driver": {
                     "name": "codelore",
                     "version": env!("CARGO_PKG_VERSION"),
-                    "informationUri": "https://github.com/emre/codescene",
+                    "informationUri": CODELORE_HOMEPAGE,
                     "rules": [rule]
                 }
             },
@@ -456,7 +528,7 @@ fn build_live_clone_result(row: &CloneCouplingRow, repo_root: &str) -> serde_jso
         format!(
             "{}/{}",
             repo_root.trim_end_matches('/'),
-            p.trim_start_matches('/')
+            percent_encode_path(p.trim_start_matches('/'))
         )
     };
 
