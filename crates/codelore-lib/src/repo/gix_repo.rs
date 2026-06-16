@@ -127,7 +127,7 @@ impl Repo for GixRepo {
         let mailmap = inner_clone.to_thread_local().open_mailmap();
         let (tx, rx) = crossbeam_channel::bounded::<Result<CommitEvent>>(WALKER_CHANNEL_CAPACITY);
 
-        std::thread::Builder::new()
+        let handle = std::thread::Builder::new()
             .name("codelore-gix-walker".into())
             .spawn(move || {
                 for chunk in oids.chunks(WALKER_CHUNK_SIZE) {
@@ -173,9 +173,18 @@ impl Repo for GixRepo {
             })
             .map_err(|e| CodeLoreError::Repo(format!("spawn walker thread: {e}")))?;
 
-        // rx.into_iter() is `Iterator<Item = Result<CommitEvent>> + Send + 'static`,
-        // which satisfies the trait's `+ 'a` bound for any `'a`.
-        Ok(Box::new(rx.into_iter()))
+        // Wrap the receiver in a stream that owns the JoinHandle so a
+        // walker-thread panic surfaces as a final `Err` instead of being
+        // silently swallowed as clean end-of-stream. Without this, the
+        // closure unwinds, `tx` drops, the rx iterator ends, and the
+        // caller sees a successful (but truncated) walk. The CLI's
+        // typed-error → exit-code chain stays intact via
+        // `CodeLoreError::Repo` mapped to exit 3.
+        Ok(Box::new(WalkerStream {
+            inner: rx.into_iter(),
+            handle: Some(handle),
+            surfaced_panic: false,
+        }))
     }
 
     fn changed_files(&self, rev: &str) -> Result<Vec<FileChange>> {
@@ -769,4 +778,100 @@ fn commit_event_from_gix(commit: &gix::Commit<'_>) -> Result<CommitEvent> {
         ai_attribution: None,   // Populated by walk_commits after identity classification.
         kamei: None,
     })
+}
+
+/// Iterator wrapper that joins the walker thread after the receiver
+/// drains and surfaces any panic as a final `Err`. The default
+/// `rx.into_iter()` shape silently swallows walker panics — `tx`
+/// drops during unwind, the iterator hits end-of-stream, and the
+/// caller sees a clean (but truncated) commit walk with no signal.
+struct WalkerStream<I: Iterator<Item = Result<CommitEvent>>> {
+    inner: I,
+    handle: Option<std::thread::JoinHandle<()>>,
+    /// `Some(panic_payload)` would re-yield the panic on every `next`
+    /// call. We surface it ONCE then settle into `None` to match the
+    /// fused-iterator contract callers expect.
+    surfaced_panic: bool,
+}
+
+impl<I: Iterator<Item = Result<CommitEvent>>> Iterator for WalkerStream<I> {
+    type Item = Result<CommitEvent>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(item) = self.inner.next() {
+            return Some(item);
+        }
+        // Receiver drained. Join the walker thread so a panic surfaces
+        // instead of being silently swallowed by the drop of `tx`.
+        if !self.surfaced_panic
+            && let Some(handle) = self.handle.take()
+            && let Err(payload) = handle.join()
+        {
+            self.surfaced_panic = true;
+            return Some(Err(CodeLoreError::Repo(
+                crate::facts::ingest::format_panic_payload(&payload),
+            )));
+        }
+        None
+    }
+}
+
+#[cfg(test)]
+mod walker_stream_tests {
+    use super::WalkerStream;
+    use crate::{CodeLoreError, CommitEvent, Result};
+
+    /// A panic in the walker thread must surface as a final `Err(Repo)`
+    /// from the iterator chain, not vanish as silent end-of-stream.
+    #[test]
+    fn surfaces_walker_thread_panic_as_final_err() {
+        let (tx, rx) = crossbeam_channel::bounded::<Result<CommitEvent>>(4);
+        let handle = std::thread::Builder::new()
+            .name("test-panicking-walker".into())
+            .spawn(move || {
+                drop(tx);
+                panic!("simulated walker explosion");
+            })
+            .expect("spawn");
+        let mut stream = WalkerStream {
+            inner: rx.into_iter(),
+            handle: Some(handle),
+            surfaced_panic: false,
+        };
+        // Receiver drains immediately (tx dropped before panic), so the
+        // first `next()` joins the handle and surfaces the panic.
+        let item = stream.next().expect("first item should be Some(Err)");
+        let err = item.expect_err("walker panic must surface as Err");
+        match err {
+            CodeLoreError::Repo(msg) => {
+                assert!(
+                    msg.contains("commit walker thread panicked")
+                        && msg.contains("simulated walker explosion"),
+                    "panic message lost: {msg}"
+                );
+            }
+            other => panic!("expected CodeLoreError::Repo, got {other:?}"),
+        }
+        // Fused: subsequent next() returns None.
+        assert!(stream.next().is_none(), "stream must fuse after panic");
+    }
+
+    /// Happy path: the walker exits cleanly, the stream drains, and
+    /// `join()` returns `Ok(())` so no spurious `Err` is yielded.
+    #[test]
+    fn clean_exit_does_not_yield_spurious_err() {
+        let (tx, rx) = crossbeam_channel::bounded::<Result<CommitEvent>>(4);
+        let handle = std::thread::Builder::new()
+            .name("test-clean-walker".into())
+            .spawn(move || {
+                drop(tx);
+            })
+            .expect("spawn");
+        let mut stream = WalkerStream {
+            inner: rx.into_iter(),
+            handle: Some(handle),
+            surfaced_panic: false,
+        };
+        assert!(stream.next().is_none(), "clean exit must yield None");
+    }
 }

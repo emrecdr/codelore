@@ -1351,7 +1351,7 @@ pub fn apply_grouping(db: &super::FactsDb, group_map: &super::GroupMap) -> Resul
 /// panic types, payload-less aborts) falls through to a generic
 /// `<non-string panic payload>` so the typed-error path still
 /// surfaces something operators can grep for.
-fn format_panic_payload(payload: &Box<dyn std::any::Any + Send>) -> String {
+pub(crate) fn format_panic_payload(payload: &Box<dyn std::any::Any + Send>) -> String {
     let detail = payload
         .downcast_ref::<&'static str>()
         .map(|s| (*s).to_string())

@@ -48,6 +48,31 @@ fn version_flag_works() {
 }
 
 #[test]
+fn diff_rejects_base_equals_head() {
+    // F154: a `--range` whose base resolves to the same SHA as head
+    // used to run two identical analyses and emit an empty diff with
+    // no signal. Now the entry point bails early with a typed error.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let output = Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "diff",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "HEAD..HEAD",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "HEAD..HEAD should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("base and head resolve to the same commit")
+            && stderr.contains("nothing to diff"),
+        "expected base==head error, got stderr: {stderr}"
+    );
+}
+
+#[test]
 fn invalid_repo_exits_with_code_3() {
     let output = Command::cargo_bin("codelore")
         .unwrap()
