@@ -241,8 +241,12 @@ RELEASE_TARGET_SHA=""
 CARGO_TOML_VERSION="$(awk '/^\[workspace\.package\]/{f=1;next} /^\[/{f=0} f && /^version = /' Cargo.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
 # `index($0, subj)` matches literally — `~` would treat `(` and `)` in
 # `chore(release): vX.Y.Z` as regex parens and silently fail to match.
+# `|| true` swallows SIGPIPE (141) from `git log` when awk's early `exit`
+# closes stdin — `set -e -o pipefail` would otherwise abort the script
+# on the (harmless) broken pipe.
 RELEASE_TARGET_SHA="$(git log -n 20 --format='%H %s' 2>/dev/null \
-                       | awk -v subj="chore(release): ${TAG}" 'index($0, subj) {print $1; exit}')"
+                       | awk -v subj="chore(release): ${TAG}" 'index($0, subj) {print $1; exit}' \
+                       || true)"
 if [[ -n "${RELEASE_TARGET_SHA}" ]] \
    && [[ "${CARGO_TOML_VERSION}" == "${VERSION}" ]] \
    && grep -qE "^## \[${VERSION//./\\.}\]" CHANGELOG.md; then
