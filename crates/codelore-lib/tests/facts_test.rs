@@ -28,6 +28,67 @@ fn provenance_records_schema_version() {
 }
 
 #[test]
+fn open_read_only_validates_schema_version_match() {
+    // Happy path: a fact store ingested by the current binary should
+    // re-open in read-only mode without error.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("ok.duckdb");
+    {
+        let _ = FactsDb::open(&path).expect("create");
+    }
+    let reopen = FactsDb::open_read_only(&path);
+    assert!(
+        reopen.is_ok(),
+        "open_read_only on current schema should succeed"
+    );
+}
+
+#[test]
+fn open_read_only_rejects_mismatched_schema_version() {
+    // Simulate an operator handing a stale .duckdb to `--cache-dir`:
+    // create the fact store, then bump the stored schema_version to a
+    // value the current binary doesn't expect. open_read_only must
+    // surface a typed parse-time error instead of bubbling cryptic
+    // Catalog Errors at analysis time.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("stale.duckdb");
+    {
+        let db = FactsDb::open(&path).expect("create");
+        db.conn()
+            .execute_batch("UPDATE provenance SET value = '999' WHERE key = 'schema_version'")
+            .expect("bump schema_version");
+    }
+    let msg = match FactsDb::open_read_only(&path) {
+        Ok(_) => panic!("stale schema should fail open_read_only"),
+        Err(e) => format!("{e}"),
+    };
+    assert!(
+        msg.contains("schema_version=999") && msg.contains("expects 1"),
+        "expected mismatch error, got: {msg}"
+    );
+}
+
+#[test]
+fn open_read_only_rejects_non_factstore_file() {
+    // A random DuckDB file with no provenance table should also fail.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("foreign.duckdb");
+    {
+        let conn = duckdb::Connection::open(&path).expect("open foreign");
+        conn.execute_batch("CREATE TABLE foo(x INTEGER)")
+            .expect("create foreign schema");
+    }
+    let msg = match FactsDb::open_read_only(&path) {
+        Ok(_) => panic!("foreign DB should fail open_read_only"),
+        Err(e) => format!("{e}"),
+    };
+    assert!(
+        msg.contains("missing the provenance schema_version row"),
+        "expected missing-row error, got: {msg}"
+    );
+}
+
+#[test]
 fn file_backed_db_persists_and_reopens() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("test.duckdb");

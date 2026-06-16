@@ -46,13 +46,54 @@ impl FactsDb {
     }
 
     /// Open an existing `DuckDB` file in read-only mode.
+    ///
+    /// Validates the stored `schema_version` against the binary's expected
+    /// version (`schema::CURRENT_SCHEMA_VERSION`) so an operator who hands
+    /// a stale `.duckdb` to `--cache-dir` directly gets a typed parse-time
+    /// error instead of cryptic `Catalog Error: Table … does not exist`
+    /// at analysis time. The cache-hit path (`open_or_ingest`) is already
+    /// guarded by the cache key — this check defends the direct-open path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CodeLoreError::Analysis`] if the file isn't a `DuckDB`
+    /// fact store, lacks a `provenance` table, or has a different
+    /// `schema_version` than this binary produces.
     pub fn open_read_only(path: &Path) -> Result<Self> {
         let config = Config::default()
             .access_mode(AccessMode::ReadOnly)
             .map_err(|e| CodeLoreError::Analysis(format!("duckdb config read-only: {e}")))?;
         let conn = Connection::open_with_flags(path, config)
             .map_err(|e| CodeLoreError::Analysis(format!("open_read_only duckdb: {e}")))?;
-        Ok(Self { conn })
+        let db = Self { conn };
+        db.validate_schema_version(path)?;
+        Ok(db)
+    }
+
+    /// Read the `schema_version` row from the `provenance` table and bail
+    /// if it differs from this binary's [`schema::CURRENT_SCHEMA_VERSION`].
+    /// A missing `provenance` table or missing row is treated as schema
+    /// mismatch — same operator-facing surface either way.
+    fn validate_schema_version(&self, path: &Path) -> Result<()> {
+        let stored: std::result::Result<String, duckdb::Error> = self.conn.query_row(
+            "SELECT value FROM provenance WHERE key = 'schema_version'",
+            [],
+            |r| r.get(0),
+        );
+        match stored {
+            Ok(v) if v == schema::CURRENT_SCHEMA_VERSION => Ok(()),
+            Ok(v) => Err(CodeLoreError::Analysis(format!(
+                "fact store {} has schema_version={v}, this binary expects {} — \
+                 re-ingest with `--no-cache` or upgrade/downgrade codelore",
+                path.display(),
+                schema::CURRENT_SCHEMA_VERSION,
+            ))),
+            Err(e) => Err(CodeLoreError::Analysis(format!(
+                "fact store {} is missing the provenance schema_version row \
+                 (not a codelore fact store, or corrupted): {e}",
+                path.display(),
+            ))),
+        }
     }
 
     /// Run `EXPLAIN <sql>` against the underlying `DuckDB` connection and
