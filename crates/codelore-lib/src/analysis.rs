@@ -134,88 +134,67 @@ impl AnalysisName {
 
     #[must_use]
     pub fn all() -> &'static [Self] {
-        // The match below is the compile-time exhaustiveness guard for
-        // the `all()` registry. Adding a variant to the enum without
-        // also adding it to this match fails to compile with
-        // "non-exhaustive patterns" — preventing the silent
-        // registry-drift class of bug where a new analysis is
-        // dispatchable via `from_str` but invisible to `--help`'s
-        // supported-names list, the `Supported: ...` error message,
-        // and the round-trip test (which only iterates `all()`).
+        // Single source of truth for the registry. The macro expands
+        // ONCE into both:
+        //   (a) the `&[Self::X, ...]` array `all()` returns (drives
+        //       `--help`'s supported-names list, the `Supported: ...`
+        //       error message, and the round-trip test).
+        //   (b) a `const fn _guard` match arm `Self::X => ()` for
+        //       every variant in the same token list.
         //
-        // The const block forces evaluation at compile time. The
-        // sentinel `let _: () = ...` body is type-only; we don't use
-        // the value, we use the fact that the match must cover every
-        // variant. The actual array below stays the source of truth
-        // for runtime order (which is the documented CLI ordering).
-        const fn _exhaustive_check(name: AnalysisName) {
-            match name {
-                AnalysisName::Hotspots
-                | AnalysisName::Coupling
-                | AnalysisName::Ownership
-                | AnalysisName::CodeAge
-                | AnalysisName::AbsChurn
-                | AnalysisName::AuthorChurn
-                | AnalysisName::EntityChurn
-                | AnalysisName::Communication
-                | AnalysisName::CodeHealth
-                | AnalysisName::Summary
-                | AnalysisName::Revisions
-                | AnalysisName::Authors
-                | AnalysisName::Clones
-                | AnalysisName::CloneCoupling
-                | AnalysisName::Soc
-                | AnalysisName::Messages
-                | AnalysisName::MainDev
-                | AnalysisName::MainDevByRevs
-                | AnalysisName::MainDevByDeletions
-                | AnalysisName::EntityEffort
-                | AnalysisName::EntityOwnership
-                | AnalysisName::TopCommitters
-                | AnalysisName::KnowledgeIslands
-                | AnalysisName::Centrality
-                | AnalysisName::Communities
-                | AnalysisName::GodClasses
-                | AnalysisName::ArchViolations
-                | AnalysisName::StaleCode
-                | AnalysisName::PairProgramming
-                | AnalysisName::LeadTime
-                | AnalysisName::BusFactor => {}
-            }
+        // Adding a new variant to the enum forces a non-exhaustive-
+        // match compile error inside `_guard`. The author MUST add
+        // the variant to the macro call to fix it — and that single
+        // addition also populates the array. The two surfaces cannot
+        // drift, which the prior "array literal next to a separate
+        // match" shape allowed (a new variant could be added to the
+        // separate match while the array silently lost coverage,
+        // making the new analysis invisible to `--help` and the
+        // round-trip test even though it was dispatchable).
+        macro_rules! registry {
+            ($($variant:ident),* $(,)?) => {{
+                const ALL: &[AnalysisName] = &[$(AnalysisName::$variant),*];
+                const fn _guard(name: AnalysisName) {
+                    match name {
+                        $(AnalysisName::$variant => {}),*
+                    }
+                }
+                ALL
+            }};
         }
-        &[
-            Self::Hotspots,
-            Self::Coupling,
-            Self::Ownership,
-            Self::CodeAge,
-            Self::AbsChurn,
-            Self::AuthorChurn,
-            Self::EntityChurn,
-            Self::Communication,
-            Self::CodeHealth,
-            Self::Summary,
-            Self::Revisions,
-            Self::Authors,
-            Self::Clones,
-            Self::CloneCoupling,
-            Self::Soc,
-            Self::Messages,
-            Self::MainDev,
-            Self::MainDevByRevs,
-            Self::MainDevByDeletions,
-            Self::EntityEffort,
-            Self::EntityOwnership,
-            Self::TopCommitters,
-            Self::KnowledgeIslands,
-            Self::Centrality,
-            Self::Communities,
-            Self::GodClasses,
-            Self::ArchViolations,
-            Self::StaleCode,
-            Self::PairProgramming,
-            Self::LeadTime,
-            Self::BusFactor,
-        ]
+        registry!(
+            Hotspots,
+            Coupling,
+            Ownership,
+            CodeAge,
+            AbsChurn,
+            AuthorChurn,
+            EntityChurn,
+            Communication,
+            CodeHealth,
+            Summary,
+            Revisions,
+            Authors,
+            Clones,
+            CloneCoupling,
+            Soc,
+            Messages,
+            MainDev,
+            MainDevByRevs,
+            MainDevByDeletions,
+            EntityEffort,
+            EntityOwnership,
+            TopCommitters,
+            KnowledgeIslands,
+            Centrality,
+            Communities,
+            GodClasses,
+            ArchViolations,
+            StaleCode,
+            PairProgramming,
+            LeadTime,
+            BusFactor,
+        )
     }
 
     /// F14 + F15 fix: classify which analyses can run under
