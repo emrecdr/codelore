@@ -35,17 +35,33 @@ fn enrich_diffusion(db: &FactsDb) -> Result<()> {
     // NS = distinct top-level dirs touched
     // ND = distinct directory paths touched
     // NF = distinct files touched
+    //
+    // Rewritten from three correlated subqueries to a single hash-joined
+    // `UPDATE … FROM (… GROUP BY rev) …`. The prior shape re-scanned
+    // `changes` three times per commit (O(N × |changes|) work); the
+    // grouped aggregation walks `changes` exactly once and joins back
+    // by rev. Same motivation + shape as `enrich_history` / `enrich_experience`.
     let sql_counts = "
         UPDATE commits SET
-          nf = (SELECT COUNT(DISTINCT path) FROM changes WHERE changes.rev = commits.rev),
-          ns = (SELECT COUNT(DISTINCT SPLIT_PART(path, '/', 1)) FROM changes WHERE changes.rev = commits.rev),
-          nd = (SELECT COUNT(DISTINCT
-                    CASE
-                        WHEN STRPOS(path, '/') > 0
-                        THEN SUBSTR(path, 1, LENGTH(path) - LENGTH(SPLIT_PART(path, '/', -1)) - 1)
-                        ELSE ''
-                    END
-                ) FROM changes WHERE changes.rev = commits.rev);
+          nf = COALESCE(d.nf, 0),
+          ns = COALESCE(d.ns, 0),
+          nd = COALESCE(d.nd, 0)
+        FROM (
+            SELECT
+              rev,
+              COUNT(DISTINCT path) AS nf,
+              COUNT(DISTINCT SPLIT_PART(path, '/', 1)) AS ns,
+              COUNT(DISTINCT
+                  CASE
+                      WHEN STRPOS(path, '/') > 0
+                      THEN SUBSTR(path, 1, LENGTH(path) - LENGTH(SPLIT_PART(path, '/', -1)) - 1)
+                      ELSE ''
+                  END
+              ) AS nd
+            FROM changes
+            GROUP BY rev
+        ) AS d
+        WHERE commits.rev = d.rev;
     ";
     db.conn()
         .execute_batch(sql_counts)
@@ -78,17 +94,30 @@ fn enrich_size(db: &FactsDb) -> Result<()> {
     // LA = total loc added in commit
     // LD = total loc deleted in commit
     // LT = mean total LOC of touched files (pre-change).
-    //      Plan 4 approximation: stub to 0 since pre-change LOC requires
-    //      reading historical blobs; Plan 5+ may improve.
-    let sql = "
+    //      Approximation: stub to 0 since pre-change LOC requires
+    //      reading historical blobs (a future schema enhancement).
+    //
+    // Two correlated subqueries collapse to a single grouped aggregation
+    // joined back by rev — same shape as the rewritten enrich_diffusion
+    // above. `lt = 0.0` stays as a plain UPDATE since it doesn't read
+    // `changes`.
+    let sql_la_ld = "
         UPDATE commits SET
-          la = COALESCE((SELECT SUM(loc_added) FROM changes WHERE changes.rev = commits.rev), 0),
-          ld = COALESCE((SELECT SUM(loc_deleted) FROM changes WHERE changes.rev = commits.rev), 0),
-          lt = 0.0;
+          la = COALESCE(s.la, 0),
+          ld = COALESCE(s.ld, 0)
+        FROM (
+            SELECT rev, SUM(loc_added) AS la, SUM(loc_deleted) AS ld
+            FROM changes
+            GROUP BY rev
+        ) AS s
+        WHERE commits.rev = s.rev;
     ";
     db.conn()
-        .execute_batch(sql)
-        .map_err(|e| CodeLoreError::Analysis(format!("kamei size: {e}")))?;
+        .execute_batch(sql_la_ld)
+        .map_err(|e| CodeLoreError::Analysis(format!("kamei size la/ld: {e}")))?;
+    db.conn()
+        .execute_batch("UPDATE commits SET lt = 0.0;")
+        .map_err(|e| CodeLoreError::Analysis(format!("kamei size lt: {e}")))?;
     Ok(())
 }
 
@@ -244,10 +273,18 @@ fn enrich_history(db: &FactsDb, src: &str) -> Result<()> {
 /// Experience: EXP, REXP, SEXP.
 ///
 /// Rewritten from N correlated subqueries to two hash-joined UPDATE…FROM
-/// passes (same motivation + shape as `enrich_history` above). `prev.date <=
-/// c.date AND prev.rev != c.rev` preserves the same-day-commit semantics —
-/// strictly-before would give EXP=0 for repos with many same-date commits
-/// (test fixtures, bulk imports, ingest-time clusters).
+/// passes (same motivation + shape as `enrich_history` above).
+///
+/// Same-second peer semantics: **strict** `prev.date < c.date`. Matches
+/// NDEV / NUC / AGE (`enrich_history`) and SEXP (this function's pass 2)
+/// — one canonical definition of "prior commit" across the whole Kamei
+/// 14-feature vector, consistent with Kamei 2013 §3 baseline. The
+/// earlier inclusive `<=` was a deliberate departure to handle bulk-
+/// import fixtures gracefully, but it produced contradictory semantics
+/// inside one feature vector (EXP would count peers SEXP didn't), and
+/// real production repos commit at distinct seconds by construction.
+/// Fixtures that manufacture same-second commits must use distinct
+/// timestamps explicitly — `tests/kamei_test.rs` already does so.
 fn enrich_experience(db: &FactsDb, src: &str) -> Result<()> {
     db.conn()
         .execute_batch("UPDATE commits SET exp = 0, rexp = 0.0, sexp = 0;")
@@ -264,8 +301,7 @@ fn enrich_experience(db: &FactsDb, src: &str) -> Result<()> {
             FROM commits c
             INNER JOIN commits prev
                 ON prev.canonical_author = c.canonical_author
-                AND prev.rev != c.rev
-                AND prev.date <= c.date
+                AND prev.date < c.date
             GROUP BY c.rev
         ) AS ae
         WHERE commits.rev = ae.curr_rev;

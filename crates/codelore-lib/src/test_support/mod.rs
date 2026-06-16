@@ -33,26 +33,44 @@ pub mod tiny_repo {
         run_git(&path, &["config", "user.email", "tiny@example.com"]);
         run_git(&path, &["config", "user.name", "Tiny"]);
 
+        // Distinct per-commit timestamps. Kamei `enrich_history` /
+        // `enrich_experience` / SEXP all use **strict** `prev.date <
+        // c.date` semantics; same-second peers don't count as priors.
+        // Without explicit dates, all 5 commits land at the wall-clock
+        // second of fixture construction and every Kamei history /
+        // experience metric reads 0 — masking real-world behaviour.
+        let dates = [
+            "2026-06-01T10:00:00Z",
+            "2026-06-02T10:00:00Z",
+            "2026-06-03T10:00:00Z",
+            "2026-06-04T10:00:00Z",
+            "2026-06-05T10:00:00Z",
+        ];
+
         write(&path, "src/main.rs", "fn main() {}\n");
         run_git(&path, &["add", "."]);
-        run_git(&path, &["commit", "-m", "init", "--quiet"]);
+        run_git_at(&path, dates[0], &["commit", "-m", "init", "--quiet"]);
 
         write(&path, "src/main.rs", "fn main() { println!(\"hi\"); }\n");
-        run_git(&path, &["commit", "-am", "say hi", "--quiet"]);
+        run_git_at(&path, dates[1], &["commit", "-am", "say hi", "--quiet"]);
 
         write(&path, "src/lib.rs", "pub fn greet() {}\n");
         run_git(&path, &["add", "."]);
-        run_git(&path, &["commit", "-m", "add lib", "--quiet"]);
+        run_git_at(&path, dates[2], &["commit", "-m", "add lib", "--quiet"]);
 
         write(&path, "src/main.rs", "fn main() { println!(\"hello\"); }\n");
-        run_git(&path, &["commit", "-am", "fix typo", "--quiet"]);
+        run_git_at(&path, dates[3], &["commit", "-am", "fix typo", "--quiet"]);
 
         write(
             &path,
             "src/main.rs",
             "fn main() { println!(\"hello, world\"); }\n",
         );
-        run_git(&path, &["commit", "-am", "expand greeting", "--quiet"]);
+        run_git_at(
+            &path,
+            dates[4],
+            &["commit", "-am", "expand greeting", "--quiet"],
+        );
 
         let head_sha = String::from_utf8(
             std::process::Command::new("git")
@@ -76,6 +94,23 @@ pub mod tiny_repo {
             .status()
             .expect("git");
         assert!(status.success(), "git {args:?} failed");
+    }
+
+    /// `run_git` variant that pins `GIT_AUTHOR_DATE` /
+    /// `GIT_COMMITTER_DATE` so the commit lands at a deterministic
+    /// timestamp. Required for Kamei history / experience metrics
+    /// (which use strict `prev.date < c.date` semantics) to be
+    /// non-zero on a manufactured fixture.
+    fn run_git_at(path: &std::path::Path, iso_date: &str, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .env("GIT_AUTHOR_DATE", iso_date)
+            .env("GIT_COMMITTER_DATE", iso_date)
+            .status()
+            .expect("git");
+        assert!(status.success(), "git {args:?} (at {iso_date}) failed");
     }
 
     fn write(root: &std::path::Path, rel: &str, content: &str) {
