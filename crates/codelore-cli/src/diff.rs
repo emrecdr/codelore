@@ -545,6 +545,21 @@ pub fn run_diff(args: &DiffArgs) -> Result<DiffOutput> {
 
     let (base_sha, head_sha, merge_base_used) = parse_rev_range(&args.repo, &args.range)?;
 
+    // Reject base == head early. Without this guard the downstream
+    // pipeline cheerfully runs two identical analyses, computes a
+    // zero-everywhere delta, and emits an empty SARIF / JSON / markdown
+    // diff with no signal that the input was vacuous. Hot failure mode
+    // when a `gh pr checkout` refresh leaves the local branch at the
+    // base SHA: the CI gate trivially passes on what should obviously
+    // be a configuration error.
+    if base_sha == head_sha {
+        anyhow::bail!(
+            "base and head resolve to the same commit {base_sha} \
+             (range {:?}); nothing to diff",
+            args.range
+        );
+    }
+
     // Base analysis: load from --base-cache if present, otherwise compute + maybe cache.
     //
     // F32 fix: validate `cached.sha == base_sha` before reusing the cache.

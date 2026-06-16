@@ -472,6 +472,19 @@
       updateFn();
       return;
     }
+    // Honor `prefers-reduced-motion: reduce` — users with vestibular
+    // disorders / motion sensitivity opt out of cross-page transitions
+    // at the OS level. `startViewTransition` does not gate on the
+    // media query itself, so without this check the crossfade still
+    // runs. Apply the update synchronously instead so the swap is
+    // instant.
+    const prefersReducedMotion =
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (prefersReducedMotion) {
+      updateFn();
+      return;
+    }
     document.startViewTransition(updateFn);
   }
 
