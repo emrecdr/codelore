@@ -354,7 +354,69 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 *   **Severity**: LOW
 *   **Suggested fix**: pre-check at the diff entry point — `if base_sha == head_sha { return Err(CodeLoreError::Analysis("base equals head; nothing to diff")); }`.
 
-### Fifth audit pass — F155–F157 (this cycle)
+### Sixth audit pass — F158–F163 (SARIF conformance + Kamei semantics + emit memory)
+
+#### F158 — SARIF `tool.driver.informationUri` hardcodes wrong project URL `github.com/emre/codescene`
+
+*   **Location**: `crates/codelore-lib/src/output/sarif.rs:61` (hotspots), `:245` (clones), `:407` (live-clones), plus rule-level `helpUri` at `:224, :386`
+*   **Severity**: MED
+*   **Category**: SARIF conformance / branding
+*   **Status**: Active
+*   **Description**: Three `tool.driver.informationUri` constants + two rule `helpUri` strings hardcode `https://github.com/emre/codescene` — wrong project name, wrong org. Actual repo per `Cargo.toml` is `https://github.com/emrecdr/codelore`. SARIF 2.1.0 §3.19.18 makes `informationUri` the canonical "where to learn more about this tool" link surfaced in GitHub Code Scanning's tool-details panel.
+*   **Failure scenario**: user clicks the tool name in GH Code Scanning, lands on a 404 (or unrelated repo). PR reviewers can't reach the rule documentation. Brand surface broken on every SARIF report.
+*   **Suggested fix**: replace all 5 occurrences with `https://github.com/emrecdr/codelore`. Add a regression test that the SARIF emission contains the canonical URL.
+
+#### F159 — SARIF `artifactLocation.uri` not percent-encoded — paths with space / `#` / non-ASCII break
+
+*   **Location**: `crates/codelore-lib/src/output/sarif.rs:102` (`mk_uri`), `:279`, `:455`
+*   **Severity**: MED
+*   **Category**: SARIF conformance / cross-platform
+*   **Status**: Active
+*   **Description**: URI built via plain `format!("{}/{}", repo_root, path)` with no percent-encoding. SARIF 2.1.0 §3.4.4 requires "a valid URI reference per RFC 3986 §4.1". Paths containing spaces, `#`, `?`, `[`, `]`, non-ASCII chars produce malformed URIs. CSV's `quote_if_needed` shows the project knows path bytes can be hostile; SARIF skips encoding entirely.
+*   **Failure scenario**: repo with `path/with space/file.rs` or `docs/foo#bar.md` — GH Code Scanning rejects the SARIF upload (URI parse error) OR silently truncates at `#` so inline annotations land on the wrong file. Non-ASCII paths (CJK, accented) similarly malformed.
+*   **Suggested fix**: apply `percent-encoding` crate (NON_ALPHANUMERIC set, RFC 3986) to each path segment before assembling the URI.
+
+#### F160 — Kamei NDEV/EXP same-second peer semantics inconsistent (`<` vs `<=`)
+
+*   **Location**: `crates/codelore-lib/src/kamei/mod.rs:198, 217` (enrich_history strict `<`) vs `:268` (enrich_experience inclusive `<=`) — plus SEXP ROW_NUMBER variant at `:320-321`
+*   **Severity**: MED
+*   **Category**: Statistical / paper-faithfulness
+*   **Status**: Active
+*   **Description**: Three variants of the same "prior commit" predicate across one canonical Kamei 14-feature vector. NDEV/NUC use strict `prev.date < curr.date`; EXP/REXP use inclusive `prev.date <= c.date`; SEXP uses ROW_NUMBER (a third semantic flavor). Comments justifying each branch contradict each other ("real repos have distinct-second commits" vs "preserve same-day clusters").
+*   **Failure scenario**: bulk-import + same-second admin edit (`git commit --amend --date=`, vendored sweeps): NDEV reports 0 prior devs but EXP includes the same-second peer. Downstream Kamei JIT-SDP risk scores mix the two flavors per commit; paper-faithful Kamei consumers cannot reproduce results.
+*   **Suggested fix**: pick ONE same-second semantic (strict `<` matches Kamei 2013 §3 baseline), apply to all four enrich passes, document in `docs/research-foundations.md`.
+
+#### F161 — Every emitter materializes the full `Vec<Row>` — no streaming path
+
+*   **Location**: `crates/codelore-cli/src/main.rs:735-799` (HTML) + every CSV/JSON/markdown/SARIF arm
+*   **Severity**: LOW
+*   **Category**: Memory architecture
+*   **Status**: Active
+*   **Description**: Every `run_*` collects from the DuckDB cursor into a `Vec<Row>`; emitter signature `fn write_X(rows: &[Row], w: &mut W)` iterates over the slice. Peak memory grows with row count. On a 100k-file monorepo, HotspotRow Vec (~40 MB data + double during query→Vec staging) plus CSV staging strings can hit hundreds of MB.
+*   **Failure scenario**: `codelore analyze --analysis hotspots --format csv` on a 200k-touched-path monorepo: ~5-8 GB resident peak; OOM on 4 GB CI runner.
+*   **Suggested fix**: `EmitterStream<W>` trait with `emit_header` / `emit_row` / `finish`. CSV is mechanical; JSON/markdown need array streaming; SARIF stays batch (needs run-level totals).
+
+#### F162 — Parquet column types drift from CSV row-type contract (`u32` → `INT64`)
+
+*   **Location**: `crates/codelore-lib/src/output/parquet.rs:10-17`
+*   **Severity**: LOW
+*   **Category**: Output type contract
+*   **Status**: Active
+*   **Description**: `copy_to_parquet` leaves type decisions to DuckDB's COPY...TO PARQUET inference. `revisions` ends up INT64 while `HotspotRow.revisions: u32`; `clone_group_id` is i32 in DuckDB but u32 in the CSV row type. Downstream Parquet consumers schema-checking against the CSV contract see Int64 not UInt32.
+*   **Failure scenario**: Spark/Polars consumer reads Parquet with UInt32 schema cast — fails type-cast on Int64 column. Same logical column, two contracts.
+*   **Suggested fix**: (a) `CAST(revisions AS UINTEGER)` in the COPY query so Parquet emits UInt32, OR (b) document a "Parquet uses widest-fit integer" convention in `docs/advanced-usage.md`.
+
+#### F163 — SARIF `automationDetails.id` is static — GH Code Scanning collapses runs
+
+*   **Location**: `crates/codelore-lib/src/output/sarif.rs:14, 187, 344`
+*   **Severity**: LOW
+*   **Category**: SARIF conformance
+*   **Status**: Active
+*   **Description**: SARIF 2.1.0 §3.17.3 specifies `automationDetails.id` SHOULD have form `<runGroupName>/<runName>/<correlationGuid>` so per-run correlation works. The three constants are static strings — every run emits the same id. GH Code Scanning collapses runs with identical id, defeating the partialFingerprints work done at lines 92-99.
+*   **Failure scenario**: two consecutive PRs emit SARIF; GH Code Scanning treats them as the same run; 'first seen' / 'last seen' timestamps merge across PRs.
+*   **Suggested fix**: append `/<SHA-256(repo_head_sha + invocation_unix_ts)[..16]>` to each ID at run time.
+
+### Fifth audit pass — F155–F157 (prior cycle)
 
 #### F155 — `DiffOutput.{base,head}_median_code_health` defaults to silent `0.0`
 
@@ -440,9 +502,9 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 
 ## 5. Next Audit Cycle
 
-**Current Active count**: F94, F97 + V4, V5, V6 + F143 partial + F111, F113-F124, F125-F148 (minus F139, F140, F141, F147 fixed, minus F110, F112 fixed-on-branch, minus F125 + F126 fixed-on-branch as of this validation pass) + F149-F154 + F155-F157 = **40 Active findings**.
+**Current Active count**: F94, F97, V4, V5, V6, F143 partial + F111, F113-F124 + F125-F148 (minus F139/F140/F141/F147 fixed on this branch; F110/F112 fixed-on-other-branch; F125/F126 fixed-on-other-branch) + F149-F154 + F155-F157 + **F158-F163 (this pass)** = **46 Active findings**.
 
-The next sweep should re-open with F-IDs starting at **F158**.
+The next sweep should re-open with F-IDs starting at **F164**.
 
 **Validation methodology held**: 28 prior findings re-validated → 21 Fixed (15 from v0.6.0 + 4 from PRs #54/#55 on main + 2 F110/F112 on `fix/f110-f112-test-coverage-and-provenance`) + 3 Partial (V4, V5, F143 awaiting merge) + 3 Active carryover (F94, F97, V6). 3 new fifth-pass findings (F155 diff output ambiguity, F156 missing `deny_unknown_fields`, F157 exhaustiveness guard targets the wrong list — F147 partial regression). All findings carry source-line quotes for adversarial-verification trail.
 
