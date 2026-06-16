@@ -89,12 +89,20 @@ impl FactsDb {
             Ok(stats)
         })?;
 
+        // Hoist HEAD-time context shared across all four HEAD-time passes.
+        // `query_live_paths` runs a CTE + arg_max across `commits ⋈ changes`
+        // and `current_head_rev` walks `commits` ordered by date — both are
+        // pure functions of the just-ingested fact store, so computing them
+        // once here avoids four redundant round-trips through the SQL planner.
+        let head_rev = current_head_rev(self)?;
+        let live_paths = query_live_paths(self)?;
+
         // Populate entities + complexity_metrics from blobs at HEAD via
         // `Repo::read_blob_at_head`. Avoids dirty-tree contamination and
         // works on bare repos (no working tree). Falls back to
         // `std::fs::read` for backends without a blob implementation
         // (default trait impl returns `Ok(None)`).
-        self.ingest_complexity_at_head(repo, opts)?;
+        self.ingest_complexity_at_head(repo, opts, &live_paths, &head_rev)?;
 
         // Plan 4: populate the Kamei 14-feature change vector via SQL UPDATE pass.
         // Kamei history (ndev, nuc, age) joins changes-to-changes on path;
@@ -107,21 +115,21 @@ impl FactsDb {
         // `clone-coupling` analysis (§6) can JOIN against it. Honors
         // `opts.min_clone_node_count` and `opts.exclude_patterns` (set via
         // `--exclude` + `.codeloreignore`).
-        let clones_n = self.populate_clones_at_head(repo, opts)?;
+        let clones_n = self.populate_clones_at_head(repo, opts, &live_paths, &head_rev)?;
 
         // Populate the `imports` table at HEAD so the layered-
         // architecture rules, god-class detector, and architecture
         // force-graph analyses can JOIN against it. Uses the same
         // rayon-then-serial-drain shape as the complexity + clones
         // passes — no new threading primitives.
-        let imports_n = self.populate_imports_at_head(repo, opts)?;
+        let imports_n = self.populate_imports_at_head(repo, opts, &live_paths, &head_rev)?;
         tracing::info!("imports: {imports_n} edges ingested at HEAD across Tier-1 source files");
 
         // Per-language resolver UPDATE pass. Maps the raw `target`
         // strings to repo-relative tracked paths where resolution
         // succeeds. Covers Rust / Python / JS / TS today; Java FQN
         // → file mapping is project-layout-specific and skipped.
-        let resolved_n = self.resolve_imports_at_head()?;
+        let resolved_n = self.resolve_imports_at_head(&live_paths, &head_rev)?;
         tracing::info!(
             "imports: {resolved_n} of {imports_n} import edges resolved to tracked paths"
         );
@@ -148,15 +156,17 @@ impl FactsDb {
         // `repo.read_blob_at_head`. Kept on the signature for forward
         // compatibility (future per-language flags may need it).
         _opts: &Options,
+        live_paths: &[String],
+        head_rev: &str,
     ) -> Result<()> {
         use crate::complexity::{Tier1Language, compute_for_file};
         use rayon::prelude::*;
 
-        let live_paths = query_live_paths(self)?;
-        // One HEAD rev shared by every row written in this pass — semantically
-        // correct (the complexity was measured against THIS commit, not against
-        // a per-path lex-max-of-SHA approximation).
-        let head_rev = current_head_rev(self)?;
+        // Caller hoisted `query_live_paths` + `current_head_rev` to compute-once;
+        // clone the slice into an owned `Vec` so the existing `into_par_iter`
+        // shape below is unchanged. The slice clone is sub-ms vs ~10-100ms per
+        // skipped SQL execution.
+        let live_paths: Vec<String> = live_paths.to_vec();
 
         // ── Parallel pass ────────────────────────────────────────────────────────
         // Each worker thread reads the file, dispatches the tree-sitter parser,
@@ -250,8 +260,8 @@ impl FactsDb {
                 continue;
             };
             for ent in &entities {
-                append_entity_row(&mut entities_app, &path, ent, &head_rev)?;
-                append_metric_row(&mut metrics_app, &path, ent, &head_rev)?;
+                append_entity_row(&mut entities_app, &path, ent, head_rev)?;
+                append_metric_row(&mut metrics_app, &path, ent, head_rev)?;
             }
         }
 
@@ -275,27 +285,23 @@ impl FactsDb {
         &self,
         repo: &R,
         opts: &Options,
+        live_paths: &[String],
+        head_rev: &str,
     ) -> Result<usize> {
         use crate::clones::{CloneLanguage, extract_functions, group_clones};
         use rayon::prelude::*;
 
-        let head_rev = current_head_rev(self)?;
-
-        // Phase 1 (serial, fast): query the live-at-HEAD path set from
-        // DuckDB and filter to Tier-1 source extensions. `query_live_paths`
-        // returns rows the ingest already accepted (`PathsFilter` ran at
-        // ingest time before any row landed in `changes`), so we don't
-        // re-apply `--exclude` / `.gitignore` / `.codeloreignore` here.
-        // Switched from `WalkDir::new(&opts.repo_path)` to
-        // `query_live_paths` so the clones pass works on bare
-        // repositories (no working tree to walk) the same way the
-        // complexity pass already does — see `ingest_complexity_at_head`.
-        let live_paths = query_live_paths(self)?;
+        // `live_paths` + `head_rev` are computed once by the caller and shared
+        // across all four HEAD-time passes. Source-of-truth pattern: paths the
+        // ingest already accepted (`PathsFilter` ran before any row landed in
+        // `changes`), so we don't re-apply `--exclude` / `.gitignore` /
+        // `.codeloreignore` here. Bare-repo safe because the query reads from
+        // the fact store, not a working tree.
         let candidates: Vec<(String, CloneLanguage)> = live_paths
-            .into_iter()
+            .iter()
             .filter_map(|rel| {
-                let lang = CloneLanguage::from_path(std::path::Path::new(&rel))?;
-                Some((rel, lang))
+                let lang = CloneLanguage::from_path(std::path::Path::new(rel))?;
+                Some((rel.clone(), lang))
             })
             .collect();
 
@@ -419,23 +425,22 @@ impl FactsDb {
         &self,
         repo: &R,
         _opts: &Options,
+        live_paths: &[String],
+        head_rev: &str,
     ) -> Result<usize> {
         use crate::imports::{ImportLanguage, RawImport, extract_imports};
         use rayon::prelude::*;
         use std::collections::HashSet;
 
-        let head_rev = current_head_rev(self)?;
-
-        // Phase 1 (serial): query the live-at-HEAD path set + filter
-        // to Tier-1 extensions. Same source-of-truth pattern as the
-        // complexity + clones passes (works on bare repos via the
-        // gix ODB; PathsFilter already ran at ingest time).
-        let live_paths = query_live_paths(self)?;
+        // Phase 1 (serial): caller-supplied path set, filtered to Tier-1
+        // extensions. Same source-of-truth pattern as the complexity +
+        // clones passes (works on bare repos via the gix ODB;
+        // `PathsFilter` already ran at ingest time).
         let candidates: Vec<(String, ImportLanguage)> = live_paths
-            .into_iter()
+            .iter()
             .filter_map(|rel| {
-                let lang = ImportLanguage::from_path(std::path::Path::new(&rel))?;
-                Some((rel, lang))
+                let lang = ImportLanguage::from_path(std::path::Path::new(rel))?;
+                Some((rel.clone(), lang))
             })
             .collect();
 
@@ -486,7 +491,7 @@ impl FactsDb {
                     continue;
                 }
                 app.append_row(duckdb::params![
-                    &head_rev,
+                    head_rev,
                     &path,
                     &imp.target,
                     false,
@@ -512,13 +517,15 @@ impl FactsDb {
     /// relative imports, and JS/TS `./` / `../` paths today. Java
     /// FQN → filesystem-path mapping is project-layout-specific
     /// and is not attempted here.
-    fn resolve_imports_at_head(&self) -> Result<usize> {
+    fn resolve_imports_at_head(&self, live_paths: &[String], head_rev: &str) -> Result<usize> {
         use crate::imports::{resolve_js_relative, resolve_python_relative, resolve_rust_path};
 
         // 1. Build the live-at-HEAD path set as a `HashSet` for O(1)
-        //    candidate lookups inside the resolver.
-        let live_paths: std::collections::HashSet<String> =
-            query_live_paths(self)?.into_iter().collect();
+        //    candidate lookups inside the resolver. Caller hoisted
+        //    `query_live_paths` to compute-once across all HEAD-time
+        //    passes; we just lift the slice into a hash set here.
+        let live_paths_set: std::collections::HashSet<&str> =
+            live_paths.iter().map(String::as_str).collect();
 
         // 2. Pull every unresolved import row scoped to a language
         //    the multi-language resolver supports (JS/TS, Python,
@@ -547,16 +554,25 @@ impl FactsDb {
         // 3. Dispatch to the per-language resolver by file extension.
         //    First-match wins; falls through to `None` for external
         //    targets the resolver can't map to a tracked path.
+        //
+        //    The resolvers want an owned-string hash set; we adapt the
+        //    `&str` set above into a single shared owned copy so each
+        //    resolver call gets the same `&HashSet<String>` without
+        //    rebuilding it per row.
+        let live_paths_owned: std::collections::HashSet<String> =
+            live_paths_set.iter().map(|s| (*s).to_string()).collect();
         let mut hits: Vec<(String, String, String)> = Vec::new();
         for (src_path, target) in candidates {
             let ext = std::path::Path::new(&src_path)
                 .extension()
                 .and_then(std::ffi::OsStr::to_str);
             let resolved = match ext {
-                Some("rs") => resolve_rust_path(&src_path, &target, &live_paths),
-                Some("py" | "pyi") => resolve_python_relative(&src_path, &target, &live_paths),
+                Some("rs") => resolve_rust_path(&src_path, &target, &live_paths_owned),
+                Some("py" | "pyi") => {
+                    resolve_python_relative(&src_path, &target, &live_paths_owned)
+                }
                 Some("js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx") => {
-                    resolve_js_relative(&src_path, &target, &live_paths)
+                    resolve_js_relative(&src_path, &target, &live_paths_owned)
                 }
                 _ => None,
             };
@@ -565,24 +581,59 @@ impl FactsDb {
             }
         }
 
-        // 4. Apply UPDATEs. We need the rev too — there's only one
-        //    rev in the imports table per ingest pass (HEAD), so we
-        //    grab it once and stamp every UPDATE with it.
-        let head_rev = current_head_rev(self)?;
-        let mut update_stmt = self
-            .conn()
-            .prepare(
-                "UPDATE imports SET resolved = TRUE, target_path = ? \
-                 WHERE rev = ? AND src_path = ? AND target = ?",
-            )
-            .map_err(|e| CodeLoreError::Analysis(format!("prepare imports update: {e}")))?;
-        let mut updated = 0usize;
-        for (target_path, src_path, target) in hits {
-            update_stmt
-                .execute(duckdb::params![target_path, head_rev, src_path, target])
-                .map_err(|e| CodeLoreError::Analysis(format!("update imports row: {e}")))?;
-            updated += 1;
+        if hits.is_empty() {
+            return Ok(0);
         }
+
+        // 4. Apply all resolved hits via a single hash-joined UPDATE…FROM
+        //    instead of N independent UPDATEs. Each per-row UPDATE in the
+        //    old shape forced DuckDB to scan `imports` end-to-end (the
+        //    `(rev, src_path, target)` PK is not a clustered index in
+        //    DuckDB), making the pass O(N × |imports|). The temp-table
+        //    join shape is one hash build + one streaming pass.
+        //
+        //    `CREATE OR REPLACE TEMPORARY TABLE` mirrors the lineage /
+        //    grouping passes elsewhere in this file.
+        self.conn()
+            .execute_batch(
+                "CREATE OR REPLACE TEMPORARY TABLE _resolved_imports (
+                     target_path TEXT,
+                     src_path    TEXT,
+                     target      TEXT
+                 )",
+            )
+            .map_err(|e| CodeLoreError::Analysis(format!("create resolved temp table: {e}")))?;
+        {
+            let mut app = self
+                .conn()
+                .appender("_resolved_imports")
+                .map_err(|e| CodeLoreError::Analysis(format!("appender resolved: {e}")))?;
+            for (target_path, src_path, target) in &hits {
+                app.append_row(duckdb::params![target_path, src_path, target])
+                    .map_err(|e| CodeLoreError::Analysis(format!("append resolved row: {e}")))?;
+            }
+            app.flush()
+                .map_err(|e| CodeLoreError::Analysis(format!("flush resolved appender: {e}")))?;
+        }
+
+        let updated = self
+            .conn()
+            .execute(
+                "UPDATE imports
+                    SET resolved = TRUE,
+                        target_path = r.target_path
+                   FROM _resolved_imports r
+                  WHERE imports.rev = ?
+                    AND imports.src_path = r.src_path
+                    AND imports.target = r.target",
+                duckdb::params![head_rev],
+            )
+            .map_err(|e| CodeLoreError::Analysis(format!("bulk imports update: {e}")))?;
+
+        self.conn()
+            .execute_batch("DROP TABLE _resolved_imports")
+            .map_err(|e| CodeLoreError::Analysis(format!("drop resolved temp table: {e}")))?;
+
         Ok(updated)
     }
 }
