@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-16
+
 ### Added
 
 - **F143 — Headless-browser smoke test for the SPA dashboard.** New
