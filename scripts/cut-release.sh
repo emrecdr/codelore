@@ -223,22 +223,34 @@ if ! command -v gh >/dev/null; then die "gh CLI not on PATH"; fi
 if ! gh auth status >/dev/null 2>&1; then die "gh CLI not authenticated. Run 'gh auth login'."; fi
 ok "gh CLI authenticated"
 
-# Idempotent resume: if HEAD is already a `chore(release): vX.Y.Z` commit
-# AND Cargo.toml workspace version matches X.Y.Z AND CHANGELOG has a
-# `## [X.Y.Z]` section, the prep work has already landed — likely a
-# previous run aborted between "push release commit" and "tag dance"
-# (e.g. transient GitHub API error during CI wait). Skip re-prep and
-# resume from CI wait so the operator doesn't have to manually unwind
-# the partial commit. Caught from the v0.7.0 cut where a 502 mid-poll
-# left the release commit pushed and the tag never created.
+# Idempotent resume: if any commit in recent history (up to 20 back) is a
+# `chore(release): vX.Y.Z` commit AND Cargo.toml workspace version matches
+# X.Y.Z AND CHANGELOG has a `## [X.Y.Z]` section, the prep work has already
+# landed — likely a previous run aborted between "push release commit" and
+# "tag dance" (e.g. transient GitHub API error during CI wait), possibly
+# followed by additional commits on top (e.g. a fix-forward of the script
+# itself). Skip re-prep, resume from CI wait, and **tag the release commit
+# specifically** (not HEAD) so v0.7.0 captures the actual release commit
+# even if HEAD has advanced.
+#
+# Caught from the v0.7.0 cut where a 502 mid-poll left the release commit
+# pushed and the tag never created; the operator then committed a script
+# fix on top before re-running.
 RESUME_MODE=false
-HEAD_SUBJECT="$(git log -1 --pretty=%s 2>/dev/null || true)"
+RELEASE_TARGET_SHA=""
 CARGO_TOML_VERSION="$(awk '/^\[workspace\.package\]/{f=1;next} /^\[/{f=0} f && /^version = /' Cargo.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
-if [[ "${HEAD_SUBJECT}" == "chore(release): ${TAG}" ]] \
+# `index($0, subj)` matches literally — `~` would treat `(` and `)` in
+# `chore(release): vX.Y.Z` as regex parens and silently fail to match.
+RELEASE_TARGET_SHA="$(git log -n 20 --format='%H %s' 2>/dev/null \
+                       | awk -v subj="chore(release): ${TAG}" 'index($0, subj) {print $1; exit}')"
+if [[ -n "${RELEASE_TARGET_SHA}" ]] \
    && [[ "${CARGO_TOML_VERSION}" == "${VERSION}" ]] \
    && grep -qE "^## \[${VERSION//./\\.}\]" CHANGELOG.md; then
   RESUME_MODE=true
-  ok "detected existing release commit at HEAD — resuming from CI wait"
+  ok "detected existing release commit at ${RELEASE_TARGET_SHA:0:7} — resuming from CI wait"
+  if [[ "$(git rev-parse HEAD)" != "${RELEASE_TARGET_SHA}" ]]; then
+    warn "  HEAD has advanced past the release commit; tag will target ${RELEASE_TARGET_SHA:0:7} specifically"
+  fi
   warn "  prep section (version bump, CHANGELOG flip, cargo update, commit, push) will be SKIPPED"
 fi
 
@@ -467,10 +479,19 @@ else
   log "[dry-run] would: PUT ruleset with enforcement=disabled"
 fi
 
-run git tag -a "${TAG}" -m "${TAG}
+# In resume mode, tag the actual release commit (not HEAD) — HEAD may
+# have advanced past the release commit (e.g. fix-forward of script
+# itself before the re-run). Without this, the tag would point at a
+# post-release commit and the published archives would include
+# post-release changes silently.
+TAG_TARGET="${RELEASE_TARGET_SHA:-HEAD}"
+if [[ "${RESUME_MODE}" == "true" ]] && [[ "${TAG_TARGET}" != "HEAD" ]]; then
+  log "tagging ${TAG_TARGET:0:7} (the release commit, not HEAD ${LOCAL:0:7})"
+fi
+run git tag -a "${TAG}" "${TAG_TARGET}" -m "${TAG}
 
 See CHANGELOG.md [${VERSION}] section for the full list of changes."
-ok "annotated tag ${TAG} created locally"
+ok "annotated tag ${TAG} created locally at ${TAG_TARGET:0:7}"
 
 run git push origin "${TAG}"
 ok "tag ${TAG} pushed to origin"
