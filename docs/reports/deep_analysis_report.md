@@ -179,6 +179,7 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 
 *   **Location**: `crates/codelore-lib/src/repo/gix_repo.rs:130`
 *   **Severity**: LOW
+*   **Status**: **Fixed ⚠️ branch** — `fix/error-ux-and-a11y-sweep` (PR #62). New `WalkerStream` wrapper owns the JoinHandle alongside the rx; on end-of-stream it joins the handle and surfaces any panic as a final `Err(CodeLoreError::Repo(...))`, mapped to exit code 3.
 *   **Suggested fix**: store JoinHandle; propagate panic payloads as `CodeLoreError::Repo`.
 
 ### NEW Active Findings — Tool replacement / dep currency
@@ -227,11 +228,13 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 
 *   **Location**: `crates/codelore-lib/src/kamei/mod.rs:38`
 *   **Severity**: MED
+*   **Status**: **Fixed ⚠️ branch** — `fix/kamei-correctness-and-perf` (PR #64). Three correlated subqueries collapsed into one `UPDATE … FROM (… GROUP BY rev)`. DuckDB streams `changes` once and hash-joins back.
 
 #### F128 — Kamei `enrich_size` correlated subqueries
 
 *   **Location**: `crates/codelore-lib/src/kamei/mod.rs:77-92`
 *   **Severity**: MED
+*   **Status**: **Fixed ⚠️ branch** — `fix/kamei-correctness-and-perf` (PR #64). Same shape — two correlated subqueries → grouped `UPDATE … FROM`. `lt = 0.0` kept as plain UPDATE.
 
 #### F129 — `arch_violations` materializes full imports set, truncates post-Rust
 
@@ -284,6 +287,7 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 
 *   **Location**: `crates/codelore-lib/src/output/spa/widgets.js:470-476`
 *   **Severity**: LOW
+*   **Status**: **Fixed ⚠️ branch** — `fix/error-ux-and-a11y-sweep` (PR #62). Wrapper now queries `window.matchMedia('(prefers-reduced-motion: reduce)')`; when reduced motion is preferred, `updateFn()` runs synchronously instead of animating.
 
 ### NEW Active Findings — Test / CI / observability
 
@@ -326,6 +330,7 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 
 *   **Location**: `crates/codelore-lib/src/cache.rs:40` + `crates/codelore-lib/src/facts/schema.rs:6`
 *   **Severity**: MED
+*   **Status**: **Fixed ⚠️ branch** — `fix/determinism-sweep` (PR #61). Literal `"1"` promoted to `CURRENT_SCHEMA_VERSION` const (single source of truth for producer + validator). `FactsDb::open_read_only` now `SELECT`s the stored version and bails on mismatch / missing-row.
 *   **Description**: Cache invalidation works via key hash, but operator who hands stale cache to `--cache-dir` directly gets no fail-fast — surfaces as cryptic SQL errors at analysis time.
 *   **Suggested fix**: on `FactsDb::open_read_only`, `SELECT value FROM provenance WHERE key='schema_version'` + `bail!` if mismatch.
 
@@ -333,6 +338,7 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 
 *   **Location**: `crates/codelore-lib/src/analyses/communities.rs:136`
 *   **Severity**: MED
+*   **Status**: **Fixed ⚠️ branch** — `fix/determinism-sweep` (PR #61). New `LEIDEN_SEED = 0xC0DE_10E5_AED1_DEED` passed via `LeidenConfig { seed: Some(...), .. }`. Regression test asserts identical partitions across runs.
 *   **Description**: `LeidenConfig::default()` has no explicit seed. Module docstring promises "deterministic across runs" — broken on cache miss.
 *   **Suggested fix**: thread a deterministic seed (SHA-256 prefix of edge list, or fixed `0xDEADBEEF`) into LeidenConfig. Add an integration test asserting two back-to-back runs produce identical `community_id` columns.
 
@@ -340,6 +346,7 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 
 *   **Location**: `crates/codelore-lib/src/clones/extractor.rs:145`
 *   **Severity**: LOW
+*   **Status**: **Fixed ⚠️ branch** — `fix/determinism-sweep` (PR #61). `HashMap<[u8;32], _>` → `BTreeMap<[u8;32], _>` so iteration is digest-sorted; `enumerate()`-assigned IDs now stable across runs.
 *   **Suggested fix**: `BTreeMap<[u8;32], _>` so iteration is digest-sorted; OR sort `Vec<(digest, members)>` by digest before `enumerate()`.
 
 #### F153 — Generic I/O errors from repo probing exit with code 5 instead of 3
@@ -352,6 +359,7 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 
 *   **Location**: `crates/codelore-cli/src/diff_output.rs:30` (text), plus SARIF + markdown branches
 *   **Severity**: LOW
+*   **Status**: **Fixed ⚠️ branch** — `fix/error-ux-and-a11y-sweep` (PR #62). `run_diff` now pre-checks `base_sha == head_sha` and bails with an actionable error naming the SHA and the range. CLI test `diff_rejects_base_equals_head` covers.
 *   **Suggested fix**: pre-check at the diff entry point — `if base_sha == head_sha { return Err(CodeLoreError::Analysis("base equals head; nothing to diff")); }`.
 
 ### Sixth audit pass — F158–F163 (SARIF conformance + Kamei semantics + emit memory)
@@ -361,7 +369,7 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 *   **Location**: `crates/codelore-lib/src/output/sarif.rs:61` (hotspots), `:245` (clones), `:407` (live-clones), plus rule-level `helpUri` at `:224, :386`
 *   **Severity**: MED
 *   **Category**: SARIF conformance / branding
-*   **Status**: Active
+*   **Status**: **Fixed ⚠️ branch** — `fix/sarif-correctness-sweep` (PR #63). Five sites replaced with `CODELORE_HOMEPAGE` / `CODELORE_RESEARCH_FOUNDATIONS_URL` constants. Regression test guards the canonical URL and explicitly rejects the prior `emre/codescene` substring.
 *   **Description**: Three `tool.driver.informationUri` constants + two rule `helpUri` strings hardcode `https://github.com/emre/codescene` — wrong project name, wrong org. Actual repo per `Cargo.toml` is `https://github.com/emrecdr/codelore`. SARIF 2.1.0 §3.19.18 makes `informationUri` the canonical "where to learn more about this tool" link surfaced in GitHub Code Scanning's tool-details panel.
 *   **Failure scenario**: user clicks the tool name in GH Code Scanning, lands on a 404 (or unrelated repo). PR reviewers can't reach the rule documentation. Brand surface broken on every SARIF report.
 *   **Suggested fix**: replace all 5 occurrences with `https://github.com/emrecdr/codelore`. Add a regression test that the SARIF emission contains the canonical URL.
@@ -371,7 +379,7 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 *   **Location**: `crates/codelore-lib/src/output/sarif.rs:102` (`mk_uri`), `:279`, `:455`
 *   **Severity**: MED
 *   **Category**: SARIF conformance / cross-platform
-*   **Status**: Active
+*   **Status**: **Fixed ⚠️ branch** — `fix/sarif-correctness-sweep` (PR #63). New `percent_encode_path()` helper using `percent-encoding` crate; applied to all 3 artifact-URI build sites. Regression test covers space + `#` + `café.rs` non-ASCII probes.
 *   **Description**: URI built via plain `format!("{}/{}", repo_root, path)` with no percent-encoding. SARIF 2.1.0 §3.4.4 requires "a valid URI reference per RFC 3986 §4.1". Paths containing spaces, `#`, `?`, `[`, `]`, non-ASCII chars produce malformed URIs. CSV's `quote_if_needed` shows the project knows path bytes can be hostile; SARIF skips encoding entirely.
 *   **Failure scenario**: repo with `path/with space/file.rs` or `docs/foo#bar.md` — GH Code Scanning rejects the SARIF upload (URI parse error) OR silently truncates at `#` so inline annotations land on the wrong file. Non-ASCII paths (CJK, accented) similarly malformed.
 *   **Suggested fix**: apply `percent-encoding` crate (NON_ALPHANUMERIC set, RFC 3986) to each path segment before assembling the URI.
@@ -381,7 +389,7 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 *   **Location**: `crates/codelore-lib/src/kamei/mod.rs:198, 217` (enrich_history strict `<`) vs `:268` (enrich_experience inclusive `<=`) — plus SEXP ROW_NUMBER variant at `:320-321`
 *   **Severity**: MED
 *   **Category**: Statistical / paper-faithfulness
-*   **Status**: Active
+*   **Status**: **Fixed ⚠️ branch** — `fix/kamei-correctness-and-perf` (PR #64). EXP/REXP join predicate switched to strict `prev.date < c.date`, matching NDEV/NUC/AGE/SEXP. One canonical "prior commit" semantic across the 14-feature vector; consistent with Kamei 2013 §3. `tiny_repo` fixture updated to use explicit per-commit timestamps.
 *   **Description**: Three variants of the same "prior commit" predicate across one canonical Kamei 14-feature vector. NDEV/NUC use strict `prev.date < curr.date`; EXP/REXP use inclusive `prev.date <= c.date`; SEXP uses ROW_NUMBER (a third semantic flavor). Comments justifying each branch contradict each other ("real repos have distinct-second commits" vs "preserve same-day clusters").
 *   **Failure scenario**: bulk-import + same-second admin edit (`git commit --amend --date=`, vendored sweeps): NDEV reports 0 prior devs but EXP includes the same-second peer. Downstream Kamei JIT-SDP risk scores mix the two flavors per commit; paper-faithful Kamei consumers cannot reproduce results.
 *   **Suggested fix**: pick ONE same-second semantic (strict `<` matches Kamei 2013 §3 baseline), apply to all four enrich passes, document in `docs/research-foundations.md`.
@@ -411,7 +419,7 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 *   **Location**: `crates/codelore-lib/src/output/sarif.rs:14, 187, 344`
 *   **Severity**: LOW
 *   **Category**: SARIF conformance
-*   **Status**: Active
+*   **Status**: **Fixed ⚠️ branch** — `fix/sarif-correctness-sweep` (PR #63). `automation_id_for(prefix)` appends a 16-hex SHA-256 suffix derived from `SystemTime` nanos + `process::id()` to all three sites. Regression test asserts two back-to-back emissions produce distinct correlation suffixes while preserving the prefix.
 *   **Description**: SARIF 2.1.0 §3.17.3 specifies `automationDetails.id` SHOULD have form `<runGroupName>/<runName>/<correlationGuid>` so per-run correlation works. The three constants are static strings — every run emits the same id. GH Code Scanning collapses runs with identical id, defeating the partialFingerprints work done at lines 92-99.
 *   **Failure scenario**: two consecutive PRs emit SARIF; GH Code Scanning treats them as the same run; 'first seen' / 'last seen' timestamps merge across PRs.
 *   **Suggested fix**: append `/<SHA-256(repo_head_sha + invocation_unix_ts)[..16]>` to each ID at run time.
@@ -423,7 +431,7 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 *   **Location**: `crates/codelore-cli/src/diff.rs:41` (struct decl) + `:650-666` (default-path)
 *   **Severity**: MED
 *   **Category**: Output ambiguity / CI integration
-*   **Status**: Active
+*   **Status**: **Fixed ⚠️ branch** — `fix/diff-gates-correctness-sweep` (PR #60). Both fields now `Option<f64>` with `#[serde(skip_serializing_if = "Option::is_none")]`; populating branch returns `Some(med)` only when the gate ran, otherwise `None` so the JSON key is omitted entirely.
 *   **Description**: Both medians are typed `f64` (not `Option<f64>`) and default to `0.0` when `--thresholds-file` is unset or no `[diff]` gates configured. The values are emitted verbatim in the diff JSON without `#[serde(skip_serializing_if)]`. A downstream consumer reading the JSON cannot distinguish "gate not configured, no measurement taken" from "measured median = 0.0" — both surface as `"base_median_code_health": 0.0`. On a 0–100 code-health scale, 0.0 reads as catastrophically bad.
 *   **Failure scenario**: team A configures thresholds → gets meaningful 67.4 / 64.9 medians. Team B runs `codelore diff` without thresholds, ships the JSON to a dashboard / Slack bot / PR summarizer. The dashboard rule `flag if base_median_code_health < 50` fires on every PR → signal trust erodes.
 *   **Suggested fix**: change to `Option<f64>` + `#[serde(skip_serializing_if = "Option::is_none")]`. Or hoist into a sentinel `"computed": false` field on the diff envelope.
@@ -433,7 +441,7 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 *   **Location**: `crates/codelore-lib/src/quality_gates/mod.rs:39` (Thresholds), `:47` (Gates), `:62` (DiffGates)
 *   **Severity**: LOW
 *   **Category**: Config / silent misconfiguration
-*   **Status**: Active
+*   **Status**: **Fixed ⚠️ branch** — `fix/diff-gates-correctness-sweep` (PR #60). `#[serde(deny_unknown_fields)]` added to all three structs. Typos now fail the parse via the existing `CodeLoreError::Analysis` chain. Three regression tests cover root / gates / diff levels.
 *   **Description**: None of the three `Deserialize`-derived structs opt into `#[serde(deny_unknown_fields)]`. A user typo in `.codelore-thresholds.toml` — e.g. `cognative_max = 30` (transposed) or `disallow_clone_type1 = true` (missing underscore) — parses cleanly as the default `None`/`false`. The gate is silently disabled. No warn-log surfaces the unknown key. `quality_gates`'s entire value proposition is that the repo carries the gate; silent misconfiguration is the worst failure mode here.
 *   **Failure scenario**: engineer adds `disallow_clone_type1 = true` (typo) to block Type-1 clones in PR review. File parses; `gates.disallow_clone_type_1` stays `false`; `evaluate_clone_gate` early-returns. Gate appears wired but does nothing — every PR passes while Type-1 clones land.
 *   **Suggested fix**: `#[serde(deny_unknown_fields)]` on all three structs. Parse error surfaces via the existing `CodeLoreError::Analysis` path in `Thresholds::from_path`.
@@ -443,7 +451,7 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 *   **Location**: `crates/codelore-lib/src/analysis.rs:152-184` (`_exhaustive_check` match) vs `:186-217` (`all()` array literal)
 *   **Severity**: LOW
 *   **Category**: Correctness / drift (regression on F147's promise)
-*   **Status**: Active
+*   **Status**: **Fixed ⚠️ branch** — `fix/diff-gates-correctness-sweep` (PR #60). New `registry!` macro expands ONCE into both the `&[Self::X, ...]` array and the const `_guard` match from a single token list. Two surfaces cannot drift by construction — adding a variant fails compile until the macro call is updated, which auto-populates the array.
 *   **Description**: F147's commit message claims the exhaustiveness guard prevents new variants from being silently absent from the `all()` registry. Inspection shows the const fn `_exhaustive_check` matches over every variant — but the actual `all()` array the rest of the codebase consumes is the `&[Self::Hotspots, Self::Coupling, ...]` literal further down. A new variant + writing the match arm (forced) + forgetting the array entry (not forced) silently reintroduces the exact registry-drift bug the F147 commit claims to prevent. The round-trip test only iterates `all()`, so an array-missing variant is never exercised.
 *   **Failure scenario**: maintainer adds `AnalysisName::ContributionDecay`. Compiler refuses build until `_exhaustive_check` match adds the arm — they comply. Build passes. The `&[...]` array below is never touched. `codelore --help` doesn't list `contribution-decay`; `Supported: ...` error messages omit it; round-trip test never round-trips it. But `from_str("contribution-decay")` still works because it lives in a separate match. The exact silent UX regression F147 was supposed to prevent.
 *   **Suggested fix**: invert — have `all()` build the array deconstructively from the match (`let arr: [_; N] = [Self::Hotspots, ...]` only inside the matched branch), OR write the guard so the `&[...]` array literal is the only registry by mapping the match over `Self::all().iter()`.
@@ -502,10 +510,13 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 
 ## 5. Next Audit Cycle
 
-**Current Active count**: F94, F97, V4, V5, V6, F143 partial + F111, F113-F124 + F125-F148 (minus F139/F140/F141/F147 fixed on this branch; F110/F112 fixed-on-other-branch; F125/F126 fixed-on-other-branch) + F149-F154 + F155-F157 + **F158-F163 (this pass)** = **46 Active findings**.
+**Current Active count after this validation pass + closure annotations**:
+
+- **Fixed-on-branch** (15, awaiting merge): F125 (PR #58), F126 (PR #58), F155 (PR #60), F156 (PR #60), F157 (PR #60), F150 (PR #61), F151 (PR #61), F152 (PR #61), F118 (PR #62), F138 (PR #62), F154 (PR #62), F158 (PR #63), F159 (PR #63), F163 (PR #63), F127 (PR #64), F128 (PR #64), F160 (PR #64). Plus F110 / F112 (PR #57) and F143 (PR #56) from prior session.
+- **Active (still open as future task candidates)**: F94, F97, V4, V5, V6 + F111, F113, F114, F115, F116, F117, F119, F120, F121, F122, F123, F124, F129, F130, F131, F132, F133, F134, F135, F136, F137, F142, F144, F145, F146, F148, F149, F153, F161, F162 = **~30 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
 
 The next sweep should re-open with F-IDs starting at **F164**.
 
-**Validation methodology held**: 28 prior findings re-validated → 21 Fixed (15 from v0.6.0 + 4 from PRs #54/#55 on main + 2 F110/F112 on `fix/f110-f112-test-coverage-and-provenance`) + 3 Partial (V4, V5, F143 awaiting merge) + 3 Active carryover (F94, F97, V6). 3 new fifth-pass findings (F155 diff output ambiguity, F156 missing `deny_unknown_fields`, F157 exhaustiveness guard targets the wrong list — F147 partial regression). All findings carry source-line quotes for adversarial-verification trail.
+**Validation methodology held**: every Active finding above re-verified against current `main` HEAD via direct source-line grep / wc / sed; results recorded in §4½. Branch-only fixes carry explicit PR numbers so the report doesn't claim closures that haven't reached main yet.
 
-**Branch-merge gate**: F110, F112, F143 should be re-validated against main after their feature branches merge. The fact that F147's guard wraps the wrong list (F157) suggests the F147 fix also needs a follow-up — the guard is structurally fine but doesn't enforce what the commit message claims.
+**Branch-merge gate**: once PRs #56-#64 merge to main, the 17 "Fixed-on-branch" entries above can be pruned to the §3 closure-log table and removed from §4 Active. Until then the report deliberately retains the Active descriptions so re-validation can confirm the fix landed where the audit said it would.
