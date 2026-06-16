@@ -294,7 +294,7 @@ fn sarif_automation_id_is_unique_per_run() {
         mi_rank: None,
         ai_pct: None,
     }];
-    let mut emit = || {
+    let emit = || {
         let mut buf = Vec::new();
         write_hotspots_sarif(
             &rows,
