@@ -254,8 +254,9 @@ impl FromStr for AnalysisName {
             // code-maat's `-a identity` is a debugging-only passthrough that
             // dumps the parsed dataset. CodeLore's modern equivalent is the
             // SQLite output emitter — it dumps the full DuckDB fact store
-            // (8 tables: commits, changes, complexity, clones, mailmap, …),
-            // strictly richer than code-maat's raw-log seq. Rather than
+            // (commits, changes, hunks, entities, complexity_metrics,
+            // clones, imports, author_aliases, provenance), strictly richer
+            // than code-maat's raw-log seq. Rather than
             // pollute the canonical AnalysisName enum with a debug-only
             // alias (and risk it appearing in --help as a "supported"
             // analysis), we intercept here with a dedicated error variant
@@ -309,10 +310,10 @@ impl From<UnknownAnalysisError> for crate::CodeLoreError {
             UnknownAnalysisError::IdentityRedirect => crate::CodeLoreError::Analysis(
                 "code-maat's `-a identity` (raw data dump) maps to CodeLore's \
                  SQLite output: `codelore analyze --format sqlite --output facts.db` \
-                 dumps the full DuckDB fact store (commits, changes, complexity, clones, \
-                 mailmap, provenance, hunks, author_aliases — 8 tables, strictly richer \
-                 than code-maat's parsed-log seq). The `identity` analysis name is not \
-                 registered in CodeLore."
+                 dumps the full DuckDB fact store (commits, changes, hunks, entities, \
+                 complexity_metrics, clones, imports, author_aliases, provenance — \
+                 strictly richer than code-maat's parsed-log seq). The `identity` \
+                 analysis name is not registered in CodeLore."
                     .into(),
             ),
         }
@@ -338,9 +339,9 @@ impl fmt::Display for UnknownAnalysisError {
                 "code-maat's `-a identity` (raw data dump) is provided in \
                  CodeLore via the SQLite output emitter — try: \
                  `codelore analyze --format sqlite --output facts.db`. This \
-                 dumps the full DuckDB fact store (8 tables: commits, changes, \
-                 complexity, clones, mailmap, provenance, hunks, author_aliases) \
-                 — strictly richer than code-maat's parsed-log seq.",
+                 dumps the full DuckDB fact store (commits, changes, hunks, \
+                 entities, complexity_metrics, clones, imports, author_aliases, \
+                 provenance) — strictly richer than code-maat's parsed-log seq.",
             ),
         }
     }
