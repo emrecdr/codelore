@@ -31,10 +31,10 @@ graph TD
     A[GixRepo / GitCliRepo] -->|walk_commits → CommitEvent stream| B[Bounded crossbeam channel]
     B -->|producer → consumer| C[FactsDb ingest]
     C -->|DuckDB Appender bulk-insert| D[(DuckDB fact store)]
-    E[Working-tree walk @ HEAD] -->|tree-sitter parsing via rayon| F[Complexity + clones extraction]
+    E[HEAD-time blob walk @ HEAD] -->|tree-sitter parsing via rayon| F[Complexity + clones + imports extraction]
     F -->|HEAD-time metrics| D
-    D -->|SQL views / parameterized queries| G[23 behavioral analyses]
-    G -->|emitters| H[CSV · JSON · SARIF 2.1.0 · Markdown · Parquet · SQLite · SPA]
+    D -->|SQL views / parameterized queries| G[31 behavioral analyses]
+    G -->|emitters| H[CSV · JSON · SARIF 2.1.0 · Markdown · Parquet · SQLite · HTML · SPA · Step-Summary]
     G -->|provenance| I[manifest sidecars]
 ```
 
