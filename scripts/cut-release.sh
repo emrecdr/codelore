@@ -223,17 +223,43 @@ if ! command -v gh >/dev/null; then die "gh CLI not on PATH"; fi
 if ! gh auth status >/dev/null 2>&1; then die "gh CLI not authenticated. Run 'gh auth login'."; fi
 ok "gh CLI authenticated"
 
+# Idempotent resume: if HEAD is already a `chore(release): vX.Y.Z` commit
+# AND Cargo.toml workspace version matches X.Y.Z AND CHANGELOG has a
+# `## [X.Y.Z]` section, the prep work has already landed — likely a
+# previous run aborted between "push release commit" and "tag dance"
+# (e.g. transient GitHub API error during CI wait). Skip re-prep and
+# resume from CI wait so the operator doesn't have to manually unwind
+# the partial commit. Caught from the v0.7.0 cut where a 502 mid-poll
+# left the release commit pushed and the tag never created.
+RESUME_MODE=false
+HEAD_SUBJECT="$(git log -1 --pretty=%s 2>/dev/null || true)"
+CARGO_TOML_VERSION="$(awk '/^\[workspace\.package\]/{f=1;next} /^\[/{f=0} f && /^version = /' Cargo.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+if [[ "${HEAD_SUBJECT}" == "chore(release): ${TAG}" ]] \
+   && [[ "${CARGO_TOML_VERSION}" == "${VERSION}" ]] \
+   && grep -qE "^## \[${VERSION//./\\.}\]" CHANGELOG.md; then
+  RESUME_MODE=true
+  ok "detected existing release commit at HEAD — resuming from CI wait"
+  warn "  prep section (version bump, CHANGELOG flip, cargo update, commit, push) will be SKIPPED"
+fi
+
 # CHANGELOG must have a non-empty [Unreleased] section to flip into versioned.
 # Empty Unreleased = nothing to release = probably a mistake.
-UNRELEASED_BODY="$(awk '/^## \[Unreleased\]/{f=1;next} /^## \[[0-9]/{f=0} f' CHANGELOG.md | sed '/^$/d')"
-if [[ -z "${UNRELEASED_BODY}" ]]; then
-  die "CHANGELOG.md [Unreleased] section is empty. Add release notes before cutting."
+# Skip this check in resume mode — the section was already flipped on
+# the previous run.
+if [[ "${RESUME_MODE}" != "true" ]]; then
+  UNRELEASED_BODY="$(awk '/^## \[Unreleased\]/{f=1;next} /^## \[[0-9]/{f=0} f' CHANGELOG.md | sed '/^$/d')"
+  if [[ -z "${UNRELEASED_BODY}" ]]; then
+    die "CHANGELOG.md [Unreleased] section is empty. Add release notes before cutting."
+  fi
+  ok "CHANGELOG.md [Unreleased] section has content"
 fi
-ok "CHANGELOG.md [Unreleased] section has content"
 
 # ──────────────────────────────────────────────────────────────────────
 # Pre-release prep on a new commit
 # ──────────────────────────────────────────────────────────────────────
+if [[ "${RESUME_MODE}" == "true" ]]; then
+  log "skipping prep (release commit already at HEAD)"
+else
 log "preparing release commit for ${TAG}..."
 
 if [[ "${DRY_RUN}" != "true" ]]; then
@@ -336,6 +362,7 @@ ok "release commit created"
 # ──────────────────────────────────────────────────────────────────────
 run git push origin main
 ok "release commit pushed to origin"
+fi  # end of: if RESUME_MODE then skip-prep else prep+commit+push
 
 if [[ "${SKIP_CI_WAIT}" == "true" ]]; then
   warn "--skip-ci-wait passed — NOT waiting for CI to confirm green"
@@ -366,12 +393,50 @@ else
     # "cancelled" runs (per gh CLI source — anything that isn't "failure"
     # exits 0). We've been bitten by that conflation during v0.1.2/v0.1.3
     # cuts where a concurrency-cancelled prior run was misread as green
-    # CI. Watch the run to block on completion, then verify the actual
-    # conclusion via the API. The script ONLY proceeds to the tag dance
-    # if conclusion == "success" — anything else (failure, cancelled,
-    # timed_out, action_required, neutral, skipped) aborts.
-    gh run watch "${RUN_ID}" >/dev/null || true
-    CONCLUSION="$(gh run view "${RUN_ID}" --json conclusion --jq .conclusion)"
+    # CI. So we poll status + conclusion via the API directly instead of
+    # trusting gh run watch's exit code, and the script ONLY proceeds to
+    # the tag dance if conclusion == "success" — anything else (failure,
+    # cancelled, timed_out, action_required, neutral, skipped) aborts.
+    #
+    # The v0.7.0 cut hit a different failure: `gh run watch` errored with
+    # an HTTP 502 from GitHub mid-poll, the subsequent `gh run view --json
+    # conclusion` returned empty (because the run was still in progress
+    # after watch died early), and the script died treating empty as a
+    # non-success conclusion. The polling loop below tolerates transient
+    # 5xx / timeout errors with retries, only declares completion when
+    # `status == "completed"`, and only then reads `conclusion`.
+    #
+    # Hard cap: 40 minutes. CI typically completes in 12-25 min;
+    # 40 min is the windows-latest p99 ceiling on this repo.
+    POLL_INTERVAL=30
+    MAX_WAIT_SECONDS=2400
+    MAX_TRANSIENT_FAILS=5
+    elapsed=0
+    transient_fails=0
+    STATUS=""
+    CONCLUSION=""
+    while (( elapsed < MAX_WAIT_SECONDS )); do
+      if probe="$(gh run view "${RUN_ID}" --json status,conclusion 2>/dev/null)"; then
+        STATUS="$(printf '%s' "${probe}" | jq -r '.status // ""')"
+        CONCLUSION="$(printf '%s' "${probe}" | jq -r '.conclusion // ""')"
+        transient_fails=0
+        if [[ "${STATUS}" == "completed" ]]; then
+          break
+        fi
+        log "  CI run ${RUN_ID}: status=${STATUS} (elapsed ${elapsed}s)"
+      else
+        transient_fails=$(( transient_fails + 1 ))
+        warn "  transient gh API error polling run ${RUN_ID} (${transient_fails}/${MAX_TRANSIENT_FAILS})"
+        if (( transient_fails >= MAX_TRANSIENT_FAILS )); then
+          die "gh API repeatedly errored polling CI run ${RUN_ID} (${MAX_TRANSIENT_FAILS}× transient failures). Check 'gh run view ${RUN_ID}' manually and re-run with --skip-ci-wait once green."
+        fi
+      fi
+      sleep "${POLL_INTERVAL}"
+      elapsed=$(( elapsed + POLL_INTERVAL ))
+    done
+    if [[ "${STATUS}" != "completed" ]]; then
+      die "CI run ${RUN_ID} did not complete within ${MAX_WAIT_SECONDS}s (last status: '${STATUS:-unknown}'). Investigate via 'gh run view ${RUN_ID}' and re-run with --skip-ci-wait once green."
+    fi
     if [[ "${CONCLUSION}" != "success" ]]; then
       die "CI conclusion was '${CONCLUSION}' (not 'success') on the release commit ${RELEASE_SHA:0:7}. Investigate via 'gh run view ${RUN_ID}' and re-run the script with --skip-ci-wait once green, or fix and re-cut."
     fi
