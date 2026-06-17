@@ -254,6 +254,17 @@ codelore analyze --format spa --output codelore.html --repo .
 
 **Native `<dialog>` + View Transitions + Popover-pattern tooltips + PWA manifest** — modern web platform primitives, no tooltip lib, no drawer logic, installable on iOS/Android via Add-to-Home-Screen.
 
+### What you can do with the dashboard
+
+- **Tune every chart in place** — depth selectors on the module-coupling chord, architecture force-graph, and change-coupling sankey; Top-N selectors on Trends, Multi-metric, and Delivery-risk Kamei. Defaults stay quiet; the panel re-renders the moment you tap a tab. Selections survive reload via `Alpine.$persist` (localStorage).
+- **Share the exact view** — depth, Top-N, off-boarding scenario, and other tunables sync to the URL hash. Copy the link into Slack and your teammate sees the same dashboard you do — even on an air-gapped CI artefact.
+- **Simulate off-boarding reactively** — pick departing authors from the dropdown and the *Hotspots* circle-pack switches to its knowledge-loss colour mode, the *Hotspot table* flags affected rows with a red accent + badge, the *Keyboard-accessible file list* lights up, and the detail drawer surfaces a knowledge-loss flag on every coupling partner and top contributor owned by a departed author.
+- **Click any file anywhere** — Hotspot table, parallel-coords polyline, keyboard list, KI row, treemap rectangle — and the right-side detail drawer slides in with the file's complete behavioural profile: 6-axis radar, hotspot metrics, knowledge-island data, top contributors with `+added/-deleted` LoC and knowledge-loss flags, coupling partners with their primary authors, top-N most complex functions (from X-Ray), and clone-group membership. The drawer is non-modal — click another row and the content swaps in place.
+- **Cross-widget highlight** — selecting a file in any path-aware widget lights it up across Trends and Multi-metric comparison so its profile reads at a glance across all panels.
+- **Explain every panel** — every widget carries an inline *Learn more* disclosure with academic citation, how to read the chart, what signal to watch for, and a recommended action. Hover the small `?` icons next to tab buttons for one-line explanations of each color mode, depth level, or top-N choice.
+- **Full-screen + pan/zoom** — every widget has a fullscreen toggle in its top-right corner. The Hotspots circle-pack and Architecture graph also have a reset-zoom button; the former supports wheel-zoom + drag-pan (with double-click to reset), the latter uses ECharts' native graph roam.
+- **Ultra-wide ready** — the dashboard fills viewports up to 2400 px wide with the grid auto-centred beyond that. Two-column layout for the small widgets, full-width for the large ones, vertical right-side legend on the trends chart with All / Swap selectors for one-click isolate.
+
 Stack: **Tailwind v4** for utility-first layout, **DaisyUI 5**
 for themed components, **Alpine.js 3.15** for HTML-attribute
 reactivity (cross-widget filter state, persisted theme toggle,

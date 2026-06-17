@@ -109,6 +109,168 @@
   // up across the trends, parallel-coords, and any other widget that
   // registered a listener.
   window._codeloreSelectionListeners = [];
+
+  // ─── §3a  Fullscreen toggle per widget ──────────────────────────
+  // Injects a button into every `<section class="widget">` at boot
+  // and wires it to the native HTML5 Fullscreen API. Listens for
+  // `fullscreenchange` globally to resize every ECharts instance
+  // inside the target panel so charts re-layout to the new viewport
+  // size (and back to the panel size when exiting). No Alpine
+  // binding — the DOM mutation is one-shot per widget.
+  // Reset-zoom handler registry. Each zoom-capable widget registers
+  // its panel-id → reset function pair here; the corresponding
+  // button (installed by `installWidgetResetZoomButtons` below)
+  // looks it up by walking from the click target up to the nearest
+  // `section.widget`.
+  window._codeloreResetZoomHandlers = window._codeloreResetZoomHandlers || {};
+  function installWidgetResetZoomButtons() {
+    const RESET_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><polyline points="3 4 3 9 8 9"/></svg>';
+    const ids = Object.keys(window._codeloreResetZoomHandlers);
+    for (let i = 0; i < ids.length; i++) {
+      const panel = document.getElementById(ids[i]);
+      if (!panel || panel.querySelector('.widget-reset-zoom-btn')) continue;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'widget-reset-zoom-btn';
+      btn.setAttribute('aria-label', 'Reset zoom');
+      btn.title = 'Reset zoom';
+      btn.innerHTML = RESET_ICON;
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        const fn = window._codeloreResetZoomHandlers[ids[i]];
+        if (typeof fn === 'function') fn();
+      });
+      panel.appendChild(btn);
+    }
+  }
+
+  function installWidgetFullscreenButtons() {
+    const FS_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>';
+    const sections = document.querySelectorAll('section.widget');
+    for (let i = 0; i < sections.length; i++) {
+      const panel = sections[i];
+      if (panel.querySelector('.widget-fullscreen-btn')) continue;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'widget-fullscreen-btn';
+      btn.setAttribute('aria-label', 'Toggle fullscreen');
+      btn.title = 'Toggle fullscreen';
+      btn.innerHTML = FS_ICON;
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        if (document.fullscreenElement === panel) {
+          document.exitFullscreen && document.exitFullscreen();
+        } else if (panel.requestFullscreen) {
+          panel.requestFullscreen();
+        }
+      });
+      panel.appendChild(btn);
+    }
+  }
+  function resizeAllEchartsIn(root) {
+    if (!root || !window.echarts) return;
+    const bodies = root.querySelectorAll('.widget-body, [id$="-body"]');
+    for (let i = 0; i < bodies.length; i++) {
+      const inst = window.echarts.getInstanceByDom(bodies[i]);
+      if (inst) inst.resize();
+    }
+  }
+  // Defer install + bind global fullscreenchange so charts re-layout.
+  // The reset-zoom installer fires AFTER the widget renderers have
+  // populated `_codeloreResetZoomHandlers` (boot block calls them
+  // synchronously above), so a microtask delay is enough.
+  function installPanelControls() {
+    installWidgetFullscreenButtons();
+    installWidgetResetZoomButtons();
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', installPanelControls);
+  } else {
+    installPanelControls();
+  }
+  document.addEventListener('fullscreenchange', function () {
+    const target = document.fullscreenElement;
+    // 60 ms gives the browser a frame to apply the :fullscreen
+    // pseudo-class + height: calc(100vh - 220px) before we ask
+    // ECharts to measure.
+    setTimeout(function () {
+      if (target) {
+        resizeAllEchartsIn(target);
+      } else {
+        resizeAllEchartsIn(document);
+      }
+    }, 60);
+  });
+
+  // ─── §3b  Canvas pan/zoom helper ────────────────────────────────
+  // Attach wheel-zoom + drag-pan to a chart container's canvas
+  // child via CSS transform. Used by the hotspot circle-pack (a
+  // `type: 'custom'` ECharts series that doesn't support native
+  // `roam`). The zoom is purely visual (transform-based) so it
+  // doesn't fight with ECharts' click handling — clicks still
+  // reach the underlying canvas. Double-click resets.
+  function attachCanvasZoom(containerEl) {
+    if (!containerEl || containerEl._codeloreZoomAttached) return;
+    containerEl._codeloreZoomAttached = true;
+    var scale = 1, panX = 0, panY = 0;
+    var isDragging = false, lastX = 0, lastY = 0, downX = 0, downY = 0;
+    function apply() {
+      const canvas = containerEl.querySelector('canvas');
+      if (!canvas) return;
+      canvas.style.transformOrigin = '0 0';
+      canvas.style.transform = 'translate(' + panX + 'px, ' + panY + 'px) scale(' + scale + ')';
+    }
+    function reset() { scale = 1; panX = 0; panY = 0; apply(); }
+    containerEl.addEventListener('wheel', function (e) {
+      e.preventDefault();
+      const rect = containerEl.getBoundingClientRect();
+      const cx = e.clientX - rect.left;
+      const cy = e.clientY - rect.top;
+      const delta = e.deltaY > 0 ? 1 / 1.12 : 1.12;
+      const newScale = Math.max(0.4, Math.min(8, scale * delta));
+      // Zoom around the cursor: keep the point under the cursor
+      // stationary by adjusting pan to compensate for the scale change.
+      panX = cx - (cx - panX) * (newScale / scale);
+      panY = cy - (cy - panY) * (newScale / scale);
+      scale = newScale;
+      apply();
+    }, { passive: false });
+    containerEl.addEventListener('mousedown', function (e) {
+      isDragging = true;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      downX = e.clientX;
+      downY = e.clientY;
+      containerEl.style.cursor = 'grabbing';
+    });
+    document.addEventListener('mousemove', function (e) {
+      if (!isDragging) return;
+      panX += e.clientX - lastX;
+      panY += e.clientY - lastY;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      apply();
+    });
+    document.addEventListener('mouseup', function (e) {
+      if (!isDragging) return;
+      isDragging = false;
+      containerEl.style.cursor = '';
+      // If the user barely moved (<4 px), treat as click — don't
+      // block the underlying canvas's click handler. (Browsers fire
+      // click after mouseup natively; we just need to not eat the
+      // event with drag state.)
+      const moved = Math.hypot(e.clientX - downX, e.clientY - downY);
+      if (moved < 4) { /* allow click to pass through */ }
+    });
+    containerEl.addEventListener('dblclick', function (e) {
+      e.preventDefault();
+      reset();
+    });
+    // Expose for the fullscreenchange handler to reset on
+    // enter/exit (otherwise the panned position carries across
+    // size changes and the chart drifts off-screen).
+    containerEl._codeloreZoomReset = reset;
+  }
   // Theme toggle is now an Alpine store registered in template.html
   // (`$store.theme.isDark`). The store's `Alpine.effect` reactively
   // sets `<html data-theme>` AND fires registered re-renderers, so
@@ -341,6 +503,17 @@
     const dashboardStore = window.Alpine.store('dashboard');
     if (dashboardStore) {
       const HOTSPOT_TREE_LIMIT = 50;
+      // `primary_author` per path is what the off-boarding scenario
+      // toggle reads — including it on each list entry lets the
+      // template flag affected files reactively as the user picks
+      // departures, mirroring the canvas circle-pack's
+      // knowledge-loss tint.
+      const listPrimaryAuthorByPath =
+        computePrimaryAuthorByPath(data.entity_ownership || []);
+      // Expose globally so the hotspot-table renderer (different
+      // call site, no shared closure) can stamp `data-primary-author`
+      // on each row for the off-boarding reactive class toggle.
+      window._codelorePrimaryAuthorByPath = listPrimaryAuthorByPath;
       const sorted = (data.hotspots || [])
         .slice()
         .sort(function (a, b) {
@@ -354,6 +527,7 @@
             path: r.path,
             code_health: r.code_health,
             hotspot_score: r.hotspot_score,
+            primary_author: listPrimaryAuthorByPath[r.path] || null,
           };
         });
       dashboardStore.hotspots = sorted;
@@ -575,8 +749,12 @@
         '</dl>';
     }
 
-    // Section: knowledge island
-    const ki = (d.knowledge_islands || []).find(function (r) { return r.path === path; });
+    // Section: knowledge island. Payload uses `entity` here (not
+    // `path` like the other tables) — check both so the lookup
+    // succeeds regardless of which field carries the path.
+    const ki = (d.knowledge_islands || []).find(function (r) {
+      return (r.path || r.entity) === path;
+    });
     if (ki) {
       html += '<h4>Knowledge island</h4><dl>' +
         '<dt>Primary author</dt><dd>' + escapeHtml(ki.main_author || '') + '</dd>' +
@@ -586,24 +764,125 @@
         '</dl>';
     }
 
-    // Section: coupling partners
+    // Section: coupling partners. Each partner is annotated with
+    // its primary author and (when scenario.departed contains that
+    // author) a knowledge-loss badge — same reactive signal the
+    // hotspot table + KI list use. Authors are looked up from the
+    // window-global map populated at boot.
+    const primaryAuthorByPath = window._codelorePrimaryAuthorByPath || {};
+    const departedSet = (window.Alpine && window.Alpine.store && window.Alpine.store('scenario'))
+      ? new Set(window.Alpine.store('scenario').departed)
+      : new Set();
     const partners = (d.coupling || []).filter(function (r) {
       return r.entity_a === path || r.entity_b === path;
     });
     if (partners.length) {
-      html += '<h4>Coupling partners</h4><ul>';
+      html += '<h4>Coupling partners</h4><ul class="drawer-partners">';
       for (var i = 0; i < Math.min(partners.length, 20); i++) {
         const p = partners[i];
         const other = (p.entity_a === path) ? p.entity_b : p.entity_a;
-        html += '<li><code>' + escapeHtml(other) + '</code>' +
+        const partnerAuthor = primaryAuthorByPath[other] || '';
+        const isDeparted = partnerAuthor && departedSet.has(partnerAuthor);
+        html += '<li' + (isDeparted ? ' class="drawer-partner-departed"' : '') + '>' +
+          '<code>' + escapeHtml(other) + '</code>' +
           ' — ' + fmtInt(p.shared_revs) + ' shared revs' +
           (p.combined_score != null ? (' (score ' + fmtNumberFlex(p.combined_score, 2) + ')') : '') +
+          (partnerAuthor ? ' <span class="drawer-author">' + escapeHtml(partnerAuthor) + '</span>' : '') +
+          (isDeparted ? ' <span class="ki-knowledge-loss-badge">knowledge-loss</span>' : '') +
           '</li>';
       }
       if (partners.length > 20) {
         html += '<li>… ' + (partners.length - 20) + ' more</li>';
       }
       html += '</ul>';
+    }
+
+    // Section: top contributors. Aggregates entity_ownership rows
+    // for the file by author and ranks by total LoC contribution.
+    // Useful for "who else has touched this besides the primary
+    // author?" — answers the bus-factor recovery question without
+    // leaving the drawer.
+    const contribRows = (d.entity_ownership || []).filter(function (r) {
+      return r.entity === path;
+    });
+    if (contribRows.length) {
+      const byAuthor = {};
+      for (var ci = 0; ci < contribRows.length; ci++) {
+        const r = contribRows[ci];
+        if (!byAuthor[r.author]) byAuthor[r.author] = { added: 0, deleted: 0 };
+        byAuthor[r.author].added += (r.added || 0);
+        byAuthor[r.author].deleted += (r.deleted || 0);
+      }
+      // Drop zero-contribution entries. Entity_ownership keeps a row
+      // for any commit that touched the path; renames / reverts can
+      // net to 0 added + 0 deleted and produce misleading "0%"
+      // contributors (especially when flagged as knowledge-loss —
+      // if they didn't contribute lines, their departure doesn't
+      // actually lose knowledge of this file). Only show authors
+      // with substantive contribution.
+      const contribList = Object.keys(byAuthor)
+        .filter(function (a) { return (byAuthor[a].added + byAuthor[a].deleted) > 0; })
+        .map(function (a) {
+          return { author: a, added: byAuthor[a].added, deleted: byAuthor[a].deleted };
+        })
+        .sort(function (a, b) {
+          return (b.added + b.deleted) - (a.added + a.deleted);
+        });
+      if (contribList.length) {
+        const total = contribList.reduce(function (acc, r) { return acc + r.added + r.deleted; }, 0) || 1;
+        html += '<h4>Top contributors</h4><ul class="drawer-partners">';
+        for (var pi = 0; pi < Math.min(contribList.length, 5); pi++) {
+          const c = contribList[pi];
+          const pct = Math.round(((c.added + c.deleted) / total) * 100);
+          const cDeparted = departedSet.has(c.author);
+          html += '<li' + (cDeparted ? ' class="drawer-partner-departed"' : '') + '>' +
+            escapeHtml(c.author) +
+            ' — ' + pct + '% (<span class="drawer-author">+' + fmtInt(c.added) + ' / -' + fmtInt(c.deleted) + '</span>)' +
+            (cDeparted ? ' <span class="ki-knowledge-loss-badge">knowledge-loss</span>' : '') +
+            '</li>';
+        }
+        if (contribList.length > 5) {
+          html += '<li>… ' + (contribList.length - 5) + ' more contributors</li>';
+        }
+        html += '</ul>';
+      }
+    }
+
+    // Section: functions (from X-ray complexity scan). Lists the
+    // file's top-complexity functions inline so the user doesn't
+    // have to drill into the sunburst widget separately.
+    const fileFunctions = (d.xray || [])
+      .filter(function (r) { return r.path === path; })
+      .sort(function (a, b) {
+        const ca = (typeof a.cognitive === 'number') ? a.cognitive : 0;
+        const cb = (typeof b.cognitive === 'number') ? b.cognitive : 0;
+        return cb - ca;
+      });
+    if (fileFunctions.length) {
+      html += '<h4>Functions</h4><ul class="drawer-partners">';
+      for (var fi = 0; fi < Math.min(fileFunctions.length, 8); fi++) {
+        const f = fileFunctions[fi];
+        html += '<li><code>' + escapeHtml(f.function || '(anonymous)') + '</code>' +
+          ' — cognitive <b>' + fmtNumberFlex(f.cognitive, 0) + '</b>' +
+          (typeof f.start_line === 'number' ? ' <span class="drawer-author">L' + f.start_line + '</span>' : '') +
+          '</li>';
+      }
+      if (fileFunctions.length > 8) {
+        html += '<li>… ' + (fileFunctions.length - 8) + ' more functions</li>';
+      }
+      html += '</ul>';
+    }
+
+    // Section: clone groups. If the file appears in any clone
+    // family, surface the count + group IDs so the user can
+    // cross-reference with the Clones color mode in the hotspot
+    // circle-pack.
+    const cloneRow = (d.clones || []).find(function (r) { return r.path === path; });
+    if (cloneRow && (cloneRow.groups || cloneRow.group_count || cloneRow.clone_groups)) {
+      const groupCount = cloneRow.groups || cloneRow.group_count || cloneRow.clone_groups;
+      html += '<h4>Clones</h4><dl>' +
+        '<dt>Clone groups</dt><dd>' + fmtInt(groupCount) + '</dd>' +
+        '</dl>';
     }
 
     // Section: code health
@@ -655,9 +934,22 @@
     const ch = (d.code_health || []).find(function (r) { return r.path === path; });
     const hot = hotspots.find(function (r) { return r.path === path; });
     if (!hot) {
-      container.innerHTML = '<div class="opacity-60 text-xs">No metrics for this file.</div>';
+      // Files with no hotspot row are typically empty / near-empty
+      // (`__init__.py`, generated stubs) that have no functions or
+      // classes for the complexity scan to measure. There's nothing
+      // useful to plot on the radar — but the Knowledge island /
+      // Coupling / Code-health sections below still surface what
+      // we DO know about this file (ownership, author, total LoC,
+      // change-coupling partners). Hide the radar container so the
+      // drawer goes straight to those sections instead of wasting
+      // 220px on an empty chart with a confusing "no metrics"
+      // message.
+      container.style.display = 'none';
       return;
     }
+    // Make sure a previous hidden render doesn't keep the container
+    // collapsed when we switch to a file that DOES have metrics.
+    container.style.display = '';
     // Per-axis run-relative anchors.
     let maxCog = 0, maxRev = 0, maxAI = 0, maxCoup = 0;
     for (var i = 0; i < hotspots.length; i++) {
@@ -885,8 +1177,13 @@
       '</tr></thead><tbody>';
     for (var i = 0; i < sorted.length; i++) {
       const r = sorted[i];
-      html += '<tr data-path="' + escapeHtml(r.path) + '" class="ki-row">' +
-        '<td class="path">' + escapeHtml(r.path) + '</td>' +
+      // The knowledge_islands payload uses `entity` for the file
+      // path (not `path` like the other tables). Read both so a
+      // future rename in either direction doesn't silently empty
+      // the Path column or break the click-to-drawer lookup.
+      const filePath = r.path || r.entity || '';
+      html += '<tr data-path="' + escapeHtml(filePath) + '" class="ki-row">' +
+        '<td class="path">' + escapeHtml(filePath) + '</td>' +
         '<td>' + escapeHtml(r.main_author || '') + '</td>' +
         '<td class="num">' + fmtNumberFlex(r.ownership_pct, 1) + '</td>' +
         '<td class="num">' + fmtInt(r.days_since_main_active) + '</td>' +
@@ -900,7 +1197,15 @@
     for (var j = 0; j < trs.length; j++) {
       trs[j].addEventListener('click', function (evt) {
         const path = evt.currentTarget.getAttribute('data-path');
-        showFileDetailDrawer(path, data);
+        // Route through `_codeloreShowDetail` so the click also
+        // publishes to the selection store — same pattern every
+        // other path-aware widget uses; bypassing it left the
+        // trends + parallel-coords highlight stale on KI clicks.
+        if (window._codeloreShowDetail) {
+          window._codeloreShowDetail(path);
+        } else {
+          showFileDetailDrawer(path, data);
+        }
       });
       trs[j].style.cursor = 'pointer';
     }
@@ -961,12 +1266,41 @@
     const containerHeight = container.clientHeight || 600;
     const side = Math.min(containerWidth, containerHeight);
     d3.pack().size([side, side]).padding(2)(root);
+    // d3.pack lays out into a square [0, side] × [0, side]; on a panel
+    // wider (or taller) than the chosen `side`, the pack would sit in
+    // the top-left of the canvas. Translate every node's (x, y) so
+    // the square is centred — this offset needs to land BEFORE any
+    // downstream consumer (renderItem closure, arc anchors,
+    // `lastHotspotNodePositions`) reads the coords, otherwise the
+    // arcs would draw at the un-offset positions while the circles
+    // moved.
+    const xOffset = Math.max(0, (containerWidth - side) / 2);
+    const yOffset = Math.max(0, (containerHeight - side) / 2);
+    if (xOffset > 0 || yOffset > 0) {
+      root.each(function (n) {
+        n.x += xOffset;
+        n.y += yOffset;
+      });
+    }
 
     // Step 3: feed the laid-out nodes into ECharts as a custom series.
     // The custom series renders one shape per node; we draw circles
     // sized + positioned exactly per d3's layout. Color encodes
     // cognitive complexity (leaves only) on a yellow→red ramp.
     const chart = mountEcharts(container);
+    // Wheel-zoom + drag-pan on the canvas. ECharts `type: 'custom'`
+    // doesn't support `roam` natively, so we layer CSS-transform
+    // pan/zoom on top — double-click resets. Same affordance the
+    // Architecture force-graph gets from `series.roam: true`.
+    attachCanvasZoom(container);
+    // Register the reset handler so the top-right reset button
+    // (installed at boot once all widgets have rendered) calls
+    // back into the canvas-zoom reset.
+    window._codeloreResetZoomHandlers['widget-hotspot-circle-pack'] = function () {
+      if (container && typeof container._codeloreZoomReset === 'function') {
+        container._codeloreZoomReset();
+      }
+    };
     const nodes = root.descendants();
     const maxCognitive = nodes.reduce(function (acc, n) {
       const cog = n.data.metrics ? n.data.metrics.cognitive : 0;
@@ -1444,7 +1778,14 @@
         const aiCell = (typeof r.ai_pct === 'number' && isFinite(r.ai_pct))
           ? '<span class="badge badge-outline badge-sm">' + Math.round(r.ai_pct) + '%</span>'
           : '';
-        html += '<tr data-path="' + escapeHtml(r.path) + '" class="hotspot-row" style="cursor:pointer">' +
+        // `data-primary-author` lets the off-boarding effect (set up
+        // below) toggle a `.hotspot-row-departed` class on rows whose
+        // primary author is in `$store.scenario.departed` — the same
+        // reactive signal the keyboard-accessible file list uses.
+        // Lookup pulls from `_codelorePrimaryAuthorByPath`, populated
+        // once at boot.
+        const rowAuthor = (window._codelorePrimaryAuthorByPath || {})[r.path] || '';
+        html += '<tr data-path="' + escapeHtml(r.path) + '" data-primary-author="' + escapeHtml(rowAuthor) + '" class="hotspot-row" style="cursor:pointer">' +
           '<td class="path">' + escapeHtml(r.path) + '</td>' +
           '<td class="num">' + (r.revisions != null ? r.revisions : '') + '</td>' +
           '<td class="num">' + fmtNumber(r.cognitive, { decimals: 0 }) + '</td>' +
@@ -1551,9 +1892,59 @@
       return;
     }
 
-    // Top-N to keep the sankey legible. Sort by combined_score desc.
+    // Depth source:
+    //   'files' (default) → no aggregation: top-30 file pairs
+    //   integer 2-6      → collapse entities to N path segments,
+    //                       re-aggregate pairs, then top-30
+    // The user setting lives in `Alpine.store('layout').sankeyDepth`
+    // and is persisted across reloads.
     const TOP_N = 30;
-    const topRows = rows.slice()
+    const sankeyLayout = (window.Alpine && window.Alpine.store)
+      ? window.Alpine.store('layout') : null;
+    const userSankeyDepth = sankeyLayout ? sankeyLayout.sankeyDepth : 'files';
+
+    function modulePathSeg(p, depth) {
+      const parts = (p || '').split('/');
+      if (parts.length <= depth) {
+        const lastSlash = (p || '').lastIndexOf('/');
+        return lastSlash < 0 ? (p || '') : p.slice(0, lastSlash);
+      }
+      return parts.slice(0, depth).join('/');
+    }
+
+    var workingRows;
+    if (typeof userSankeyDepth === 'number') {
+      // Aggregate file-pair coupling to module-pair coupling at the
+      // chosen depth. Self-pairs (s === t after collapse) and
+      // duplicate (s, t) edges are merged by summing `shared_revs`
+      // and taking the max `combined_score`.
+      const aggregated = {};
+      for (var i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        const a = modulePathSeg(r.entity_a, userSankeyDepth);
+        const b = modulePathSeg(r.entity_b, userSankeyDepth);
+        if (!a || !b || a === b) continue;
+        const key = a < b ? a + '\x00' + b : b + '\x00' + a;
+        if (!aggregated[key]) {
+          aggregated[key] = {
+            entity_a: a < b ? a : b,
+            entity_b: a < b ? b : a,
+            shared_revs: 0,
+            combined_score: 0,
+          };
+        }
+        aggregated[key].shared_revs += (r.shared_revs || 1);
+        const score = (typeof r.combined_score === 'number') ? r.combined_score : 0;
+        if (score > aggregated[key].combined_score) {
+          aggregated[key].combined_score = score;
+        }
+      }
+      workingRows = Object.keys(aggregated).map(function (k) { return aggregated[k]; });
+    } else {
+      workingRows = rows;
+    }
+
+    const topRows = workingRows.slice()
       .sort(function (a, b) {
         const ca = (typeof a.combined_score === 'number') ? a.combined_score : 0;
         const cb = (typeof b.combined_score === 'number') ? b.combined_score : 0;
@@ -1621,16 +2012,29 @@
       return;
     }
 
+    // User-tunable Top-N. Backend sends up to 50 paths; the frontend
+    // ranks by total revisions across all months and slices to
+    // `Alpine.store('layout').trendsTopN` (default 10, 'all' = no
+    // cap). The selector persists across reloads.
+    const trendsLayout = (window.Alpine && window.Alpine.store)
+      ? window.Alpine.store('layout') : null;
+    const trendsTopN = trendsLayout ? trendsLayout.trendsTopN : 10;
+
     // Build {month -> {path -> score}} and a sorted month list.
     const months = Array.from(new Set(rows.map(function (r) { return r.month; }))).sort();
-    const pathSet = new Set(rows.map(function (r) { return r.path; }));
-    const paths = Array.from(pathSet);
     const byMonth = {};
+    const pathTotals = {};
     for (var i = 0; i < rows.length; i++) {
       const r = rows[i];
       if (!byMonth[r.month]) byMonth[r.month] = {};
       byMonth[r.month][r.path] = r.hotspot_score;
+      pathTotals[r.path] = (pathTotals[r.path] || 0) + (r.hotspot_score || 0);
     }
+    const allPaths = Object.keys(pathTotals)
+      .sort(function (a, b) { return pathTotals[b] - pathTotals[a]; });
+    const paths = (trendsTopN === 'all')
+      ? allPaths
+      : allPaths.slice(0, Number(trendsTopN));
     // One series per path. `emphasis.focus: 'series'` + explicit
     // `blur` dim non-hovered lines so the user can isolate one
     // trajectory in a busy chart — without `blur`, ECharts 6 leaves
@@ -1680,13 +2084,52 @@
           return html;
         },
       },
+      // Vertical right-side legend. A horizontal top legend
+      // collides with the y-axis name and overlaps itself once
+      // there are more than ~6 entries with long paths — even
+      // with the path-abbreviation. Vertical scrolling on the
+      // right scales cleanly from 5 → 50 series without
+      // overlapping the chart area or the axis labels.
+      //
+      // `selector` adds ECharts' built-in "All" / "Inv" buttons
+      // at the bottom of the legend — one click clears the entire
+      // selection, another click inverts. Saves the user from
+      // having to click every file off individually just to
+      // isolate one trajectory.
       legend: {
-        top: 0,
         type: 'scroll',
+        orient: 'vertical',
+        right: 8,
+        top: 8,
+        bottom: 30,
         textStyle: { color: getCssVar('--fg-dim'), fontSize: 11 },
+        pageTextStyle: { color: getCssVar('--fg-dim'), fontSize: 11 },
         data: legendData,
+        itemGap: 6,
+        pageButtonGap: 4,
+        width: 220,
+        // `title` is the button label — ECharts ships `inverse` as
+        // "Inv" by default, which reads cryptic. "Swap" tells the
+        // user exactly what happens: the on/off state of every
+        // file flips. From the default all-on view, one click of
+        // Swap turns everything off, then they click the single
+        // file they want to keep.
+        selector: [
+          { type: 'all',     title: 'All' },
+          { type: 'inverse', title: 'Swap' },
+        ],
+        selectorPosition: 'end',
+        selectorButtonGap: 4,
+        selectorLabel: {
+          color: getCssVar('--fg-dim'),
+          fontSize: 10,
+          padding: [2, 6],
+          borderColor: getCssVar('--border'),
+          borderWidth: 1,
+          borderRadius: 4,
+        },
       },
-      grid: { top: 40, left: 50, right: 20, bottom: 40 },
+      grid: { top: 16, left: 70, right: 248, bottom: 40 },
       xAxis: {
         type: 'category',
         data: months,
@@ -1695,7 +2138,15 @@
       },
       yAxis: {
         type: 'value',
+        // `nameLocation: 'middle'` + `nameRotate: 90` puts the
+        // axis name along the axis instead of above it, which
+        // would collide with the vertical legend on the right —
+        // the original top-positioned "revisions / month" sat
+        // right where the legend's first row now wants to be.
         name: 'revisions / month',
+        nameLocation: 'middle',
+        nameRotate: 90,
+        nameGap: 40,
         nameTextStyle: { color: getCssVar('--fg-dim'), fontSize: 11 },
         axisLabel: { color: getCssVar('--fg-dim'), fontSize: 11 },
         splitLine: { lineStyle: { color: getCssVar('--bg-elev-2') } },
@@ -1725,13 +2176,25 @@
 
   // ─── §11b Widget: Kamei Delivery-Risk Sparkline ──────────────────
 
-  function renderKameiRiskSparkline(rows) {
+  function renderKameiRiskSparkline(allRows) {
     const container = document.getElementById('widget-kamei-risk-body');
     if (!container) return;
-    if (!rows.length) {
+    if (!allRows.length) {
       container.innerHTML = '<div class="empty">No Kamei JIT-SDP data — repo too small or kamei::enrich was not wired.</div>';
       return;
     }
+
+    // User-tunable window. Backend now sends up to 100 most recent
+    // non-merge commits; the SPA slices reactively per
+    // `Alpine.store('layout').kameiWindow` (default 30, 'all' = no
+    // cap). Rows are chronological; slicing from the tail keeps
+    // the "most recent N" semantic.
+    const kameiLayout = (window.Alpine && window.Alpine.store)
+      ? window.Alpine.store('layout') : null;
+    const kameiWindow = kameiLayout ? kameiLayout.kameiWindow : 30;
+    const rows = (kameiWindow === 'all')
+      ? allRows
+      : allRows.slice(-Number(kameiWindow));
 
     // Normalisation anchors against the visible window. Per-feature
     // max so a 100-line commit doesn't dwarf a 5-LoC fix when the
@@ -1809,6 +2272,20 @@
     chart.setOption({
       tooltip: {
         trigger: 'item',
+        // Attach the tooltip DOM to the OUTER widget section
+        // (#widget-kamei-risk) instead of the inner chart body
+        // (#widget-kamei-risk-body). Positioning is then relative
+        // to the whole panel — top-right lands in the panel's
+        // header area, well clear of every bar in the chart
+        // beneath. Without `appendTo`, ECharts attaches the
+        // tooltip to the chart body so `{ top: 4, right: 4 }`
+        // landed somewhere over the bars instead of above them.
+        appendTo: function (chartDom) {
+          return chartDom.closest('section.widget') || document.body;
+        },
+        position: function () {
+          return { top: 4, right: 4 };
+        },
         formatter: function (params) {
           const d = params.data || {};
           const r = d._row || {};
@@ -1858,12 +2335,15 @@
         type: 'bar',
         data: seriesData,
         barCategoryGap: '20%',
-        // Same emphasis/blur protocol as the parallel-coords widget:
-        // hovered bar stays full-opacity, others dim. Without explicit
-        // config ECharts 6 applies its default fade that washes the
-        // hovered bar out alongside the rest.
-        emphasis: { focus: 'self', itemStyle: { opacity: 1 } },
-        blur: { itemStyle: { opacity: 0.25 } },
+        // `emphasis: { disabled: true }` — ECharts 6 had a regression
+        // on this exact combination (`focus: 'self'` + per-data
+        // `itemStyle.color` on a `type: 'bar'` series): hovering the
+        // bar dropped its rendered color, painting it with the chart
+        // background → "the bar disappears." Disabling emphasis
+        // entirely is the safe contract: no hover transform on the
+        // bar, the tooltip carries the affordance. Same idiom on
+        // parallel-coords below.
+        emphasis: { disabled: true },
       }],
     });
   }
@@ -1949,15 +2429,20 @@
       container.innerHTML = '<div class="empty">No hotspot data for parallel coords.</div>';
       return;
     }
-    // Top-20 by hotspot_score so the polyline soup stays readable.
-    const TOP_N = 20;
-    const top = rows.slice()
+    // User-tunable Top-N. Sorted by hotspot_score descending so the
+    // polylines remain the highest-pressure files at any setting.
+    // Stored in `Alpine.store('layout').parallelTopN` (default 20,
+    // 'all' = no cap), persisted across reloads.
+    const parallelLayout = (window.Alpine && window.Alpine.store)
+      ? window.Alpine.store('layout') : null;
+    const parallelTopN = parallelLayout ? parallelLayout.parallelTopN : 20;
+    const sorted = rows.slice()
       .sort(function (a, b) {
         const sa = (typeof a.hotspot_score === 'number') ? a.hotspot_score : -Infinity;
         const sb = (typeof b.hotspot_score === 'number') ? b.hotspot_score : -Infinity;
         return sb - sa;
-      })
-      .slice(0, TOP_N);
+      });
+    const top = (parallelTopN === 'all') ? sorted : sorted.slice(0, Number(parallelTopN));
     const chart = mountEcharts(container);
     chart.setOption({
       parallelAxis: [
@@ -1978,6 +2463,16 @@
       },
       tooltip: {
         trigger: 'item',
+        // Position function pins the tooltip to the top-right of
+        // the chart instead of following the cursor — at-cursor
+        // placement on a parallel-coords polyline puts the popup
+        // directly over the line the user is reading, so it looks
+        // like the line vanished. Top-right keeps the data visible
+        // and the popup readable in one glance.
+        position: function (point, params, dom, rect, size) {
+          return [size.viewSize[0] - size.contentSize[0] - 12, 8];
+        },
+        confine: true,
         formatter: function (params) {
           const v = params.value || [];
           return '<b>' + escapeHtml(params.name || '') + '</b>' +
@@ -1991,14 +2486,13 @@
       series: [{
         type: 'parallel',
         lineStyle: { width: 1, opacity: 0.6, color: token('--color-warning') },
-        // `focus: 'self'` keeps the hovered line opaque while the
-        // explicit `blur` config dims the rest. Without these, ECharts
-        // 6's default emphasis behaviour leaves the hovered polyline
-        // visually identical to its neighbours (or worse, the hovered
-        // line gets re-painted underneath the dim batch and appears to
-        // vanish entirely).
-        emphasis: { focus: 'self', lineStyle: { width: 3, opacity: 1.0 } },
-        blur: { lineStyle: { opacity: 0.15 } },
+        // `emphasis: { disabled: true }` — ECharts 6 had the same
+        // hovered-item-disappears regression on this parallel
+        // series as on the Kamei bar series above. Disable the
+        // emphasis transform entirely; the tooltip carries all the
+        // hover affordance we need, the polyline remains its normal
+        // colour and width regardless of hover state.
+        emphasis: { disabled: true },
         data: top.map(function (r) {
           return {
             name: r.path,
@@ -2140,15 +2634,21 @@
       container.innerHTML = '<div class="empty">No coupling data for module chord.</div>';
       return;
     }
-    // Roll up each pair to module-level using the first two path
-    // segments (e.g. `app/services/x.py` → `app/services`). One
-    // segment is too coarse for repos that put everything under a
-    // single root like `app/` or `src/` — every edge collapses to
-    // `app→app` and the chord empties out.
-    function modulePath(p) {
+    // Roll up each pair to module-level using the first N path
+    // segments (e.g. depth=2 → `app/services/x.py` → `app/services`).
+    // Different repos have different natural granularities — a Rust
+    // workspace at the crate level may want depth 1-2; a Python web
+    // app with deep `app/services/<feature>/...` trees needs 3+.
+    // Fixed depth + infra filter often collapses to 2-3 nodes; we
+    // deepen adaptively until the chord has enough structure to
+    // read.
+    function modulePath(p, depth) {
       const parts = (p || '').split('/');
-      if (parts.length <= 1) return p || '';
-      return parts.slice(0, 2).join('/');
+      if (parts.length <= depth) {
+        const lastSlash = (p || '').lastIndexOf('/');
+        return lastSlash < 0 ? (p || '') : p.slice(0, lastSlash);
+      }
+      return parts.slice(0, depth).join('/');
     }
     // Drop infrastructure / configuration files from the chord.
     // Change-coupling captures co-modification, so lock files,
@@ -2176,15 +2676,42 @@
       if (/(^|\/)VERSION$/.test(p) || /(^|\/)CHANGELOG(\.[^/]+)?$/i.test(p)) return true;
       return false;
     }
-    const edges = {};
-    for (var i = 0; i < rows.length; i++) {
-      const r = rows[i];
-      if (isInfrastructureFile(r.entity_a) || isInfrastructureFile(r.entity_b)) continue;
-      const a = modulePath(r.entity_a);
-      const b = modulePath(r.entity_b);
-      if (!a || !b || a === b) continue;
-      const key = a < b ? a + '\x00' + b : b + '\x00' + a;
-      edges[key] = (edges[key] || 0) + (r.shared || 1);
+    // Depth source:
+    //   'auto' (default) → adaptive loop, deepens until ≥ MIN_NODES
+    //   integer 2-6     → user-fixed depth, no adaptation
+    // The user setting lives in `Alpine.store('layout').chordDepth`
+    // (persisted across reloads). When the store value changes, an
+    // Alpine effect in template.html fires the rerenderer list,
+    // which re-runs this function with the new setting.
+    const MIN_NODES_FOR_USEFUL_CHORD = 6;
+    const layout = (window.Alpine && window.Alpine.store)
+      ? window.Alpine.store('layout') : null;
+    const userChordDepth = layout ? layout.chordDepth : 'auto';
+    function aggregateAt(depth) {
+      const ee = {};
+      const nn = {};
+      for (var i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        if (isInfrastructureFile(r.entity_a) || isInfrastructureFile(r.entity_b)) continue;
+        const a = modulePath(r.entity_a, depth);
+        const b = modulePath(r.entity_b, depth);
+        if (!a || !b || a === b) continue;
+        const key = a < b ? a + '\x00' + b : b + '\x00' + a;
+        ee[key] = (ee[key] || 0) + (r.shared || 1);
+        nn[a] = true;
+        nn[b] = true;
+      }
+      return { edges: ee, nodeCount: Object.keys(nn).length };
+    }
+    var edges = {};
+    if (typeof userChordDepth === 'number') {
+      edges = aggregateAt(userChordDepth).edges;
+    } else {
+      for (var depth = 2; depth <= 6; depth++) {
+        const result = aggregateAt(depth);
+        edges = result.edges;
+        if (result.nodeCount >= MIN_NODES_FOR_USEFUL_CHORD) break;
+      }
     }
     const linkRows = Object.keys(edges).map(function (k) {
       const parts = k.split('\x00');
@@ -2250,11 +2777,20 @@
       }
       return parts.slice(0, depth).join('/');
     }
-    var edges = {};
-    var nodes = {};
-    for (var depth = 2; depth <= 6; depth++) {
-      edges = {};
-      nodes = {};
+    // Depth source:
+    //   'auto' (default) → adaptive loop, deepens until ≥ MIN_NODES
+    //   integer 2-6     → user-fixed depth, no adaptation
+    // The user setting lives in `Alpine.store('layout').archGraphDepth`
+    // (persisted across reloads). When the store value changes, an
+    // Alpine effect in template.html fires the rerenderer list,
+    // which re-runs this function with the new setting.
+    const MIN_NODES_FOR_USEFUL_GRAPH = 8;
+    const archLayout = (window.Alpine && window.Alpine.store)
+      ? window.Alpine.store('layout') : null;
+    const userArchDepth = archLayout ? archLayout.archGraphDepth : 'auto';
+    function aggregateArchAt(depth) {
+      const ee = {};
+      const nn = {};
       for (var i = 0; i < imports.length; i++) {
         const imp = imports[i];
         if (!imp.target_path) continue;
@@ -2262,11 +2798,25 @@
         const t = modulePath(imp.target_path, depth);
         if (!s || !t || s === t) continue;
         const key = s + '\x00' + t;
-        edges[key] = (edges[key] || 0) + 1;
-        nodes[s] = true;
-        nodes[t] = true;
+        ee[key] = (ee[key] || 0) + 1;
+        nn[s] = true;
+        nn[t] = true;
       }
-      if (Object.keys(edges).length > 0) break;
+      return { edges: ee, nodes: nn };
+    }
+    var edges = {};
+    var nodes = {};
+    if (typeof userArchDepth === 'number') {
+      const result = aggregateArchAt(userArchDepth);
+      edges = result.edges;
+      nodes = result.nodes;
+    } else {
+      for (var depth = 2; depth <= 6; depth++) {
+        const result = aggregateArchAt(depth);
+        edges = result.edges;
+        nodes = result.nodes;
+        if (Object.keys(nodes).length >= MIN_NODES_FOR_USEFUL_GRAPH) break;
+      }
     }
     const nodeArr = Object.keys(nodes).map(function (n) { return { name: n, symbolSize: 30 }; });
     const edgeArr = Object.keys(edges).map(function (k) {
@@ -2292,6 +2842,16 @@
         emphasis: { focus: 'adjacency', lineStyle: { width: 3 } },
       }],
     });
+    // Reset-zoom for the arch graph: re-run the renderer to wipe
+    // the chart's internal `roam` state (pan offset + zoom level)
+    // — ECharts reuses the chart instance via getInstanceByDom, so
+    // this is a cheap setOption, not a full re-mount. Same effect
+    // as the Hotspots widget's `_codeloreZoomReset` but driven by
+    // ECharts' built-in roam reset instead of the CSS-transform
+    // overlay.
+    window._codeloreResetZoomHandlers['widget-arch-graph'] = function () {
+      renderArchGraph(imports);
+    };
   }
 
 
@@ -2317,10 +2877,14 @@
     const calendars = years.map(function (y, idx) {
       return {
         range: y,
-        top: 30 + idx * 110,
+        // Top: 20 (was 30) drops the horizontal-top visualMap padding
+        // — we moved the legend to the right-vertical axis. `right:
+        // 130` reserves room for the vertical visualMap on the right
+        // (its labels span ~110 px).
+        top: 20 + idx * 110,
         cellSize: ['auto', 13],
         left: 70,
-        right: 20,
+        right: 130,
         splitLine: { lineStyle: { color: getCssVar('--border') } },
         itemStyle: { color: 'transparent', borderColor: getCssVar('--border') },
         yearLabel: { color: getCssVar('--fg-dim'), fontSize: 11 },
@@ -2349,14 +2913,23 @@
             n + ' commit' + (n === 1 ? '' : 's');
         },
       },
+      // Vertical right-side legend. The horizontal-top placement
+      // collided with each calendar's month labels (Jan / Feb / …)
+      // — they share the same y-band, so "May 1.0-5.4 5.4-9.8 Jun"
+      // crashed into "May" / "Jun". Vertical on the right is the
+      // GitHub contributions-graph idiom and stays clear of every
+      // month label.
       visualMap: {
         min: minVal,
         max: maxVal,
         type: 'piecewise',
-        orient: 'horizontal',
-        left: 'center',
-        top: 0,
+        orient: 'vertical',
+        right: 12,
+        top: 'middle',
         textStyle: { color: getCssVar('--fg-dim'), fontSize: 10 },
+        itemWidth: 12,
+        itemHeight: 12,
+        itemGap: 6,
         inRange: { color: ['#1a4a2c', '#2ea44f', '#7dd87a', '#f59e0b', '#e0584e'] },
       },
       calendar: calendars,

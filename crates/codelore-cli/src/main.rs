@@ -1872,10 +1872,12 @@ fn build_spa_dashboard(
         tracing::warn!("dashboard: daily_commits query failed; skipping: {e}");
         Vec::new()
     });
-    // Trends — restrict to the top-10 hotspot paths to keep the line
-    // chart legible. `run_trends` returns one row per (month, path)
-    // with the revision count as the score.
-    let top_paths: Vec<String> = hotspots.iter().take(10).map(|r| r.path.clone()).collect();
+    // Trends — restrict to the top-50 hotspot paths. The SPA's
+    // Top-N selector defaults to 10 (the historical view) but lets
+    // the user widen up to all 50 without a re-run. Frontend
+    // slices `data.trends` reactively when the user changes the
+    // selector — no backend round-trip needed.
+    let top_paths: Vec<String> = hotspots.iter().take(50).map(|r| r.path.clone()).collect();
     let trends = run_trends(db, &top_paths).unwrap_or_else(|e| {
         tracing::warn!("dashboard: trends query failed; skipping: {e}");
         Vec::new()
@@ -1888,10 +1890,11 @@ fn build_spa_dashboard(
         tracing::warn!("dashboard: clone summary query failed; skipping: {e}");
         Vec::new()
     });
-    // Kamei JIT-SDP feature vector for the last-30 non-merge commits
-    // feeds the Delivery Risk Sparkline widget. Failure is non-fatal
-    // (the rest of the dashboard renders normally without it).
-    let kamei_risk = codelore_lib::output::spa::run_kamei_risk(db, 30).unwrap_or_else(|e| {
+    // Kamei JIT-SDP feature vector — pulled for the last-100
+    // non-merge commits so the SPA's window selector can show 10,
+    // 30, 60, or all-100 without a re-run. Default render is the
+    // last 30 (historical view); the frontend slices reactively.
+    let kamei_risk = codelore_lib::output::spa::run_kamei_risk(db, 100).unwrap_or_else(|e| {
         tracing::warn!("dashboard: kamei risk query failed; skipping: {e}");
         Vec::new()
     });

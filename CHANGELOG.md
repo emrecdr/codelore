@@ -4,7 +4,109 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **F175 — Per-widget tunables on the SPA dashboard.** Module-coupling
+  chord, architecture force-graph, and change-coupling sankey each
+  gained a depth selector (Auto + 2-6 path segments) that re-paints
+  the chart on tab-click. Trends, Multi-metric comparison, and
+  Delivery-risk Kamei gained Top-N / window selectors (5/10/20/All,
+  10/20/50/All, 10/30/60/All). Backend caps bumped to 50 trends
+  paths and 100 Kamei commits so the wider options work without a
+  re-analysis. All selections persisted via `Alpine.$persist`.
+- **F176 — URL state persistence for shareable views.** Depth
+  selectors, Top-N choices, and off-boarding scenario sync to the
+  URL hash (`#departed=...&chordDepth=3&trendsTopN=20`). A pasted
+  link reproduces the exact dashboard view its creator was looking
+  at, overriding the local-storage cache. `history.replaceState`
+  drives the writes so back/forward navigation walks through view
+  changes without page reloads.
+- **F177 — Cross-widget selection bridge.** New
+  `Alpine.store('selection')` + listener registry. Clicking a file
+  in any path-aware widget (Hotspot table, parallel-coords, KI row,
+  keyboard list, treemap) lights the matching polyline on Trends
+  and Multi-metric comparison. Drawer-close clears the selection.
+- **F178 — Reactive off-boarding propagates through every panel.**
+  Picking departed authors now flags affected rows in the Hotspot
+  table (red accent + left-border), the keyboard-accessible file
+  list (red badge + accent), the coupling-partners list inside the
+  detail drawer, and the top-contributors list inside the drawer —
+  same Alpine `$store.scenario.departed` signal threaded through
+  every surface that shows file ownership.
+- **F179 — Detail drawer enrichment.** Drawer now surfaces top
+  contributors per file (top-5 authors by `+added/-deleted` LoC
+  with knowledge-loss flags), function-level cognitive complexity
+  inline from X-Ray (top-8 functions with line numbers), and
+  clone-group membership. Coupling-partner list shows each partner's
+  primary author and flags departed-author files. Zero-contribution
+  authors (rename / revert artefacts) filtered from the contributor
+  list.
+- **F180 — Per-widget Learn-more disclosures.** Every panel now
+  carries a collapsed `<details>` explaining what it measures, how
+  to read it, what to watch for, recommended action, and academic
+  citation. Hover the small `?` icons on color-mode tabs, depth
+  selectors, and Top-N tabs for one-line popups using the existing
+  `tooltip-host` convention.
+- **F181 — Fullscreen toggle + pan/zoom per widget.** Every widget
+  panel gains a fullscreen icon (top-right). Hotspots circle-pack
+  and Architecture graph also get a reset-zoom button. Circle-pack
+  uses CSS-transform wheel-zoom + drag-pan + double-click reset
+  (ECharts `type: 'custom'` doesn't support native roam); arch
+  graph uses ECharts' built-in `series.roam`.
+- **F182 — Wide-screen layout.** Dashboard cap lifted from 1600 px
+  to 2400 px, centred via `mx-auto`. `.widget` gets
+  `position: relative` so tooltips appended to the outer section
+  anchor against the panel.
+- **F183 — Trends vertical-right legend with All / Swap selectors.**
+  Horizontal-top legend collided with the y-axis name and
+  overflowed at large Top-N; switched to vertical scrollable
+  right-side legend with ECharts' built-in `selector` for one-click
+  Select-all / invert-selection ("Swap"). Y-axis label rotated
+  along the axis so it doesn't compete with the legend.
+
 ### Fixed
+
+- **F184 — Hovered bar / line disappeared on Kamei + parallel-coords.**
+  ECharts 6 regression on `emphasis: { focus: 'self' }` with
+  per-data `itemStyle.color` repainted the hovered element with
+  the chart background. Switched both series to
+  `emphasis: { disabled: true }`; the tooltip carries the hover
+  affordance.
+- **F185 — Kamei tooltip occluded the bar it described.** ECharts
+  `position: 'top'` falls back to cursor-at-bar placement on
+  certain renderer paths (issue #15307). Tooltip is now appended
+  to the outer `section.widget` via ECharts' `appendTo` and pinned
+  to the panel's top-right corner via object-syntax `position`.
+  `.widget { position: relative }` anchors it to the panel.
+- **F186 — Knowledge-islands Path column was empty + click-to-drawer
+  showed "No additional details".** The KI payload uses `entity`
+  (not `path` like the other tables); the renderer + drawer lookup
+  now read both. Knowledge-island files without hotspot metrics
+  hide the radar instead of rendering an empty-state message —
+  ownership / author / days-since-active surface in the Knowledge
+  island section directly.
+- **F187 — Drawer opened at top-left corner blocking other clicks.**
+  Dropped DaisyUI's `.modal` class (its `inset: 0` over-constrained
+  the right-side `.detail-drawer`). Switched from `showModal()` to
+  non-modal `.show()` so the drawer floats without a backdrop —
+  click another row anywhere on the page and the drawer content
+  swaps in place. Removed the redundant bottom-left close button
+  (was the modal-backdrop close); the × in the header is the sole
+  close affordance.
+- **F188 — Trends legend overlapped its own entries + y-axis name.**
+  Horizontal-top legend with `type: 'scroll'` overflowed once paths
+  got long; rotated to vertical right-side and rotated the y-axis
+  name along the axis.
+- **F189 — Hotspots circle-pack rendered left-aligned in wide
+  containers.** d3.pack produces a `[side, side]` square layout;
+  on a wider-than-tall canvas that square sat top-left. Centred via
+  an `xOffset` / `yOffset` translation applied to every node before
+  ECharts consumes the coords, so downstream arc anchors and
+  position cache stay in sync.
+- **F190 — Calendar heatmap colour legend overlapped month labels.**
+  Horizontal-top visualMap with the calendar's month band collided
+  visibly ("May 1.0-5.4 Jun 5.4-9.8"). Moved to vertical right-side
+  visualMap with calendar `right: 130` to reserve space.
 
 - **F165 — Detail-drawer modal showed as a permanent sidebar.** The
   `<dialog>` element had no `[hidden]` attribute, so its
