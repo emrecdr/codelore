@@ -100,6 +100,15 @@
   // colors; ECharts caches the *resolved* values at setOption time
   // so a CSS variable update alone doesn't refresh the chart.)
   window._codeloreRerenderers = [];
+  // Cross-widget selection listeners. Each path-aware widget pushes a
+  // `function (selectedPath | null) { ... }` callback that updates its
+  // emphasis (typically via `chart.dispatchAction({ type: 'highlight'
+  // | 'downplay', ... })`). Fired from an `Alpine.effect` in
+  // template.html whenever `$store.selection.path` changes — i.e.
+  // when the user opens the detail drawer, the file's profile lights
+  // up across the trends, parallel-coords, and any other widget that
+  // registered a listener.
+  window._codeloreSelectionListeners = [];
   // Theme toggle is now an Alpine store registered in template.html
   // (`$store.theme.isDark`). The store's `Alpine.effect` reactively
   // sets `<html data-theme>` AND fires registered re-renderers, so
@@ -299,7 +308,17 @@
   // handler can fire it. Must execute after `data` is loaded (above);
   // order vs the renderXxx() calls is immaterial because this is
   // invoked at user-click time.
-  window._codeloreShowDetail = function (path) { showFileDetailDrawer(path, data); };
+  window._codeloreShowDetail = function (path) {
+    // Publish selection so registered listeners (trends, parallel-
+    // coords, etc.) light up the same file across every widget.
+    // Drawer-close clears the selection via the dialog `close`
+    // event listener registered in template.html.
+    if (window.Alpine && window.Alpine.store) {
+      const sel = window.Alpine.store('selection');
+      if (sel) sel.set(path);
+    }
+    showFileDetailDrawer(path, data);
+  };
 
   // Populate the offboarding picker's author list from the
   // current dataset's entity_ownership. Alpine has auto-initialized
@@ -1612,7 +1631,11 @@
       if (!byMonth[r.month]) byMonth[r.month] = {};
       byMonth[r.month][r.path] = r.hotspot_score;
     }
-    // One series per path
+    // One series per path. `emphasis.focus: 'series'` + explicit
+    // `blur` dim non-hovered lines so the user can isolate one
+    // trajectory in a busy chart — without `blur`, ECharts 6 leaves
+    // the rest at full opacity and the hovered line gets visually
+    // lost.
     const series = paths.map(function (p) {
       return {
         name: p,
@@ -1620,7 +1643,8 @@
         smooth: true,
         symbol: 'circle',
         symbolSize: 5,
-        emphasis: { focus: 'series' },
+        emphasis: { focus: 'series', lineStyle: { width: 3 } },
+        blur: { lineStyle: { opacity: 0.15 } },
         data: months.map(function (m) {
           return (byMonth[m] && byMonth[m][p]) || 0;
         }),
@@ -1679,6 +1703,22 @@
       series: series.map(function (s) {
         return Object.assign({}, s, { name: shortPath(s.name) });
       }),
+    });
+    // Cross-widget selection sync: each series corresponds to one
+    // path (the path array's indexing matches the series array),
+    // so selecting a file dispatches `highlight` on that series
+    // index. Empty selection downplays everything back to neutral.
+    window._codeloreSelectionListeners.push(function (selectedPath) {
+      if (!selectedPath) {
+        chart.dispatchAction({ type: 'downplay' });
+        return;
+      }
+      const idx = paths.indexOf(selectedPath);
+      if (idx >= 0) {
+        chart.dispatchAction({ type: 'highlight', seriesIndex: idx });
+      } else {
+        chart.dispatchAction({ type: 'downplay' });
+      }
     });
   }
 
@@ -1975,7 +2015,31 @@
     });
     chart.on('click', function (params) {
       if (params && params.name) {
-        showFileDetailDrawer(params.name, data);
+        // Route through `_codeloreShowDetail` so the click both
+        // opens the drawer AND publishes the selection — direct
+        // `showFileDetailDrawer` would only do the former.
+        if (window._codeloreShowDetail) {
+          window._codeloreShowDetail(params.name);
+        } else {
+          showFileDetailDrawer(params.name, data);
+        }
+      }
+    });
+    // Cross-widget selection sync: parallel-coords is a single
+    // series whose data array is indexed by path; `dispatchAction
+    // highlight` with that data index lights the matching polyline
+    // (and the existing emphasis/blur protocol fades the others).
+    const parallelPaths = top.map(function (r) { return r.path; });
+    window._codeloreSelectionListeners.push(function (selectedPath) {
+      if (!selectedPath) {
+        chart.dispatchAction({ type: 'downplay', seriesIndex: 0 });
+        return;
+      }
+      const idx = parallelPaths.indexOf(selectedPath);
+      if (idx >= 0) {
+        chart.dispatchAction({ type: 'highlight', seriesIndex: 0, dataIndex: idx });
+      } else {
+        chart.dispatchAction({ type: 'downplay', seriesIndex: 0 });
       }
     });
   }
@@ -2086,9 +2150,36 @@
       if (parts.length <= 1) return p || '';
       return parts.slice(0, 2).join('/');
     }
+    // Drop infrastructure / configuration files from the chord.
+    // Change-coupling captures co-modification, so lock files,
+    // env files, and top-level docs cluster with every release
+    // commit they were bumped in — they pollute the module
+    // diagram with edges that don't represent code architecture.
+    // Keep this list conservative; users who explicitly want
+    // infra coupling can read the raw coupling table.
+    function isInfrastructureFile(p) {
+      if (!p) return false;
+      // Lock files (uv.lock, package-lock.json, Cargo.lock, poetry.lock, yarn.lock, ...)
+      if (/\.lock$/i.test(p) || /-lock\.json$/i.test(p)) return true;
+      // Env files (.env, .env.example, .env.test, .env.local, ...)
+      if (/(^|\/)\.env(\..+)?$/i.test(p)) return true;
+      // Docs (top-level .md / .rst / .txt + entire docs/** tree)
+      if (/^docs?\//i.test(p)) return true;
+      if (/\.(md|rst|txt|adoc)$/i.test(p)) return true;
+      // Build / dependency manifests at any depth
+      if (/(^|\/)(pyproject|Cargo|package|composer|Gemfile|setup)\.(toml|json|yaml|yml)$/i.test(p)) return true;
+      if (/(^|\/)(requirements[^/]*|setup)\.(txt|cfg|py)$/i.test(p)) return true;
+      // CI / repo metadata
+      if (/^\.github\//i.test(p) || /^\.gitlab/i.test(p)) return true;
+      if (/^\.(gitignore|gitattributes|dockerignore|editorconfig|prettierrc|eslintrc)/i.test(p)) return true;
+      // Version markers
+      if (/(^|\/)VERSION$/.test(p) || /(^|\/)CHANGELOG(\.[^/]+)?$/i.test(p)) return true;
+      return false;
+    }
     const edges = {};
     for (var i = 0; i < rows.length; i++) {
       const r = rows[i];
+      if (isInfrastructureFile(r.entity_a) || isInfrastructureFile(r.entity_b)) continue;
       const a = modulePath(r.entity_a);
       const b = modulePath(r.entity_b);
       if (!a || !b || a === b) continue;
@@ -2100,7 +2191,7 @@
       return { source: parts[0], target: parts[1], value: edges[k] };
     });
     if (!linkRows.length) {
-      container.innerHTML = '<div class="empty">All coupling is intra-module — no cross-module edges to chord.</div>';
+      container.innerHTML = '<div class="empty">All change-coupling stays inside a single 2-segment module after dropping infrastructure files (lock / env / docs / build manifests). See the raw <em>coupling</em> table for the full pair list.</div>';
       return;
     }
     const nodes = {};

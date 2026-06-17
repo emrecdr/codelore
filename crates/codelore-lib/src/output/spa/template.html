@@ -1004,6 +1004,12 @@
           if (Alpine.store('detail')) {
             Alpine.store('detail').open = false;
           }
+          // Clear the cross-widget selection so the trends /
+          // parallel-coords highlights fade back to neutral when
+          // the drawer is dismissed.
+          if (Alpine.store('selection')) {
+            Alpine.store('selection').clear();
+          }
         });
       }
       Alpine.store('filter', {
@@ -1023,6 +1029,19 @@
       // the same data the chart shows.
       Alpine.store('dashboard', {
         hotspots: [],   // [{path, code_health, hotspot_score}], top-N sorted
+      });
+      // Cross-widget selection: tracks the currently focused file
+      // path so the trends chart, parallel-coords, and any other
+      // path-aware widget can light it up in sync. Set by
+      // `_codeloreShowDetail` on drawer-open; cleared by the
+      // dialog `close` event listener (× button, Escape, backdrop).
+      // Listeners registered in widgets.js via
+      // `window._codeloreSelectionListeners.push(fn)` are fired by
+      // the reactive `Alpine.effect` below.
+      Alpine.store('selection', {
+        path: null,
+        set(p) { this.path = p || null; },
+        clear() { this.path = null; },
       });
       Alpine.store('scenario', {
         departed: Alpine.$persist([]).as('codelore_offboard_v1'),
@@ -1069,6 +1088,17 @@
         const rerenderers = window._codeloreRerenderers || [];
         for (let i = 0; i < rerenderers.length; i++) {
           try { rerenderers[i](); } catch (e) { console.warn('rerender failed:', e); }
+        }
+      });
+      // Cross-widget selection bridge: fire listeners registered by
+      // path-aware widgets whenever `$store.selection.path` changes.
+      // Each listener is responsible for its own
+      // dispatchAction({type:'highlight'/'downplay'}) on its chart.
+      Alpine.effect(() => {
+        const path = Alpine.store('selection').path;
+        const listeners = window._codeloreSelectionListeners || [];
+        for (let i = 0; i < listeners.length; i++) {
+          try { listeners[i](path); } catch (e) { console.warn('selection listener failed:', e); }
         }
       });
     });
