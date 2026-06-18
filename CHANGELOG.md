@@ -25,6 +25,8 @@ Conventional Commits format. All notable changes documented here.
 
 - **MSRV (Minimum Supported Rust Version) Policy** section added to `docs/RELEASING.md`. Documents the deliberate "MSRV tracks toolchain channel" stance — appropriate for the pre-1.0 CLI-binary distribution model where end users install via prebuilt binaries / `cargo binstall` / container rather than building from source. Codifies the post-1.0 reconsideration trigger ("external Rust consumers depend on `codelore-lib`'s API"). Closes F124.
 
+## [0.8.0] - 2026-06-18
+
 ### Added
 
 - **F175 — Per-widget tunables on the SPA dashboard.** Module-coupling
