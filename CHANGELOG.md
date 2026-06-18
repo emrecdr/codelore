@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-06-18
+
 ### Added
 
 - **F175 — Per-widget tunables on the SPA dashboard.** Module-coupling
