@@ -118,7 +118,7 @@ fn hotspots_surface_ai_attribution_percentage() {
 /// no-ops.
 #[test]
 fn explain_sql_returns_non_empty_plan() {
-    use codelore_lib::analyses::hotspots::SQL;
+    use codelore_lib::analyses::hotspots::build_sql;
     use duckdb::params;
     let tiny = codelore_lib::test_support::tiny_repo::build();
     let repo = GixRepo::open(tiny.dir.path()).expect("open");
@@ -130,8 +130,12 @@ fn explain_sql_returns_non_empty_plan() {
     };
     db.ingest(&repo, &opts).expect("ingest");
 
+    // Resolve the template placeholders via `build_sql` — the raw `SQL`
+    // const carries `{cm_src}` / `{file_mi_cte}` markers that `DuckDB`
+    // can't parse. This mirrors the ungrouped runtime path.
+    let sql = build_sql("changes", "complexity_metrics");
     let plan = db
-        .explain_sql(SQL, params![1u32, i64::MAX])
+        .explain_sql(&sql, params![1u32, i64::MAX])
         .expect("explain");
     assert!(
         !plan.is_empty(),

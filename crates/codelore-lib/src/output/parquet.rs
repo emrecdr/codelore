@@ -25,8 +25,9 @@ pub fn write_hotspots_parquet(db: &FactsDb, opts: &Options, path: &Path) -> Resu
     // of the SQL that had to be hand-synced after every formula change.
     crate::analyses::lineage::materialize_source(db, opts)?;
     let src = crate::analyses::lineage::source_table(opts);
+    let cm_src = crate::analyses::grouped_complexity::source_table(opts);
     let row_limit = opts.rows_limit.map_or(i64::MAX, i64::from);
-    let query = crate::analyses::hotspots::build_inlined_sql(src, opts.min_revs, row_limit);
+    let query = crate::analyses::hotspots::build_inlined_sql(src, cm_src, opts.min_revs, row_limit);
     copy_to_parquet(db, &query, path)
 }
 

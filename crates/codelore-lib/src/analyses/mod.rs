@@ -16,6 +16,7 @@ pub mod coupling;
 pub mod entity_effort;
 pub mod entity_ownership;
 pub mod god_classes;
+pub mod grouped_complexity;
 pub mod hotspots;
 pub mod knowledge_islands;
 pub mod lead_time;

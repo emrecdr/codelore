@@ -4,7 +4,26 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
-## [0.8.0] - 2026-06-18
+### Fixed
+
+- **SARIF `$schema` URL points at the canonical SchemaStore host.** The constant in `sarif.rs` swapped from `https://schemastore.azurewebsites.net/schemas/json/sarif-2.1.0.json` (Microsoft's legacy `azurewebsites.net` origin) to `https://json.schemastore.org/sarif-2.1.0.json` (the canonical SchemaStore CDN). All three SARIF emitters (hotspots, clones, live-clones) inherit the fix through the shared constant. Closes F120 (URL half).
+- **Group-level cognitive + MI aggregation under `--group-file`.** Pre-fix,
+  `hotspots`, `code-health`, `god-classes`, and `stale-code` silently
+  reported `0` cognitive (and NULL MI for `hotspots`) on every grouped
+  entity. Root cause: `apply_grouping` rewrote `changes.path` to the
+  group name but `complexity_metrics.path` stayed at raw file paths, so
+  the `LEFT JOIN file_complexity fc ON fc.path = c.path` never matched.
+  `apply_grouping` now also materialises `complexity_metrics_grouped`
+  with per-group `MAX(cognitive)` + `MAX(kind='unit' MI)` rolled up,
+  and the four analyses route through
+  `analyses::grouped_complexity::source_table` to pick the rolled-up
+  table when grouping is active. The table is permanent so it survives
+  cache replay (`FactsDb::open_read_only` opens a fresh connection that
+  can't see the connection-scoped `_grouping_v1` temp table).
+
+### Docs
+
+- **MSRV (Minimum Supported Rust Version) Policy** section added to `docs/RELEASING.md`. Documents the deliberate "MSRV tracks toolchain channel" stance — appropriate for the pre-1.0 CLI-binary distribution model where end users install via prebuilt binaries / `cargo binstall` / container rather than building from source. Codifies the post-1.0 reconsideration trigger ("external Rust consumers depend on `codelore-lib`'s API"). Closes F124.
 
 ### Added
 

@@ -40,7 +40,7 @@ pub struct CodeHealthRow {
 const SQL: &str = "
     WITH file_cognitive AS (
         SELECT path, MAX(cognitive) AS cognitive
-        FROM complexity_metrics
+        FROM {cm_src}
         GROUP BY path
     ),
     file_churn AS (
@@ -183,7 +183,8 @@ pub fn run_code_health(db: &FactsDb, opts: &Options) -> Result<Vec<CodeHealthRow
     // Unified dispatch honours both --time-bucket and --use-canonical-lineage.
     crate::analyses::lineage::materialize_source(db, opts)?;
     let src = crate::analyses::lineage::source_table(opts);
-    let sql = SQL.replace("{src}", src);
+    let cm_src = crate::analyses::grouped_complexity::source_table(opts);
+    let sql = SQL.replace("{src}", src).replace("{cm_src}", cm_src);
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
     crate::analyses::query::explain_if_requested(
         db,

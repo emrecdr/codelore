@@ -62,7 +62,7 @@ const DEFAULT_MIN_TOTAL_FAN: u32 = 10;
 const SQL: &str = "
     WITH file_complexity AS (
         SELECT path, MAX(cognitive)::DOUBLE AS cognitive
-        FROM complexity_metrics
+        FROM {cm_src}
         WHERE cognitive IS NOT NULL
         GROUP BY path
     ),
@@ -107,16 +107,18 @@ const SQL: &str = "
 /// query / collect errors.
 pub fn run_god_classes(db: &FactsDb, opts: &Options) -> Result<Vec<GodClassRow>> {
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
+    let cm_src = crate::analyses::grouped_complexity::source_table(opts);
+    let sql = SQL.replace("{cm_src}", cm_src);
     super::query::explain_if_requested(
         db,
-        SQL,
+        &sql,
         params![DEFAULT_MIN_COGNITIVE, DEFAULT_MIN_TOTAL_FAN, row_limit],
         "god-classes",
         opts,
     )?;
     super::query::query_map_collect(
         db,
-        SQL,
+        &sql,
         params![DEFAULT_MIN_COGNITIVE, DEFAULT_MIN_TOTAL_FAN, row_limit],
         "god-classes",
         |r| {

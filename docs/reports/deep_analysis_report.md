@@ -79,14 +79,36 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 | F106 | Provenance manifest no schema-version | **Fixed** | `7f36a7f` |
 | F107 / F108 | SPA runtime errors hotfix | **Shipped** (v0.5.1 hotfix) | _CHANGELOG.md_ |
 | F109 | `diff_output.rs` missed by F91 sweep | **Shipped** | PR #53 |
-| F110 | Differential test only 4 of 8 trait methods | **Fixed** ⚠️ branch | `03db25b` (`head_sha_matches` + others on `fix/f110-f112-test-coverage-and-provenance`) |
-| F112 | Provenance manifest missing reproducibility fields | **Fixed** ⚠️ branch | `03db25b` (added `head_sha`, `cache_key_hash`, `rust_version`, `target_triple`, `grammars: BTreeMap<String,String>`) |
+| F110 | Differential test only 4 of 8 trait methods | **Fixed** | PR #57 → main. `head_sha_matches` + 11 sibling tests now in `differential_repo_test.rs` |
+| F112 | Provenance manifest missing reproducibility fields | **Fixed** | PR #57 → main. `head_sha`, `cache_key_hash`, `rust_version`, `target_triple`, `grammars: BTreeMap<String,String>` populated in `provenance/mod.rs` |
+| F118 | gix walker thread panic silently swallowed | **Fixed** | PR #62 → main. `WalkerStream` joins handle on EOF; panic mapped to `CodeLoreError::Repo` → exit 3 |
+| F127 | Kamei `enrich_diffusion` NS/ND/NF correlated subqueries | **Fixed** (partial — entropy block remains) | PR #64 → main collapsed the NS/ND/NF triple. See F127 in §4 for the entropy-block remainder. |
+| F128 | Kamei `enrich_size` correlated subqueries | **Fixed** | PR #64 → main. Grouped `UPDATE … FROM (… GROUP BY rev)` |
+| F138 | `startViewTransition` ignores `prefers-reduced-motion` | **Fixed** | PR #62 → main. `matchMedia('(prefers-reduced-motion: reduce)')` short-circuits the transition |
 | F139 | `DiffGates` parsed but never evaluated | **Fixed** | `549c460` (evaluator + CLI wiring) |
 | F140 | Six new analyses lack integration tests | **Fixed** | `7b43593` (5 new `tests/*_test.rs`) |
 | F141 | `imports_factsdb_test` only asserts unresolved | **Fixed** | `7b43593` (`ingest_resolves_imports_to_target_paths`) |
-| F147 | `AnalysisName` 3-way sync no exhaustiveness guard | **Fixed** ⚠️ partial — match guard added but doesn't cover `all()` array | `549c460` (`_exhaustive_check` const fn). _See F157 below — the guard wraps the wrong list._ |
+| F143 | SPA headless-browser smoke test | **Fixed** | PR #56 → main. `tests/spa_browser_test.rs` + `browser-tests` feature + CI job |
+| F147 | `AnalysisName` 3-way sync no exhaustiveness guard | **Fixed** | `549c460` (initial `_exhaustive_check`) + PR #60 (`registry!` macro). F157 closed by the macro. |
+| F120 | SARIF schema URL on legacy `schemastore.azurewebsites.net` host | **Fixed (URL)** | This session. `sarif.rs:13` swapped to canonical `https://json.schemastore.org/sarif-2.1.0.json`. The hand-rolled-JSON / `serde-sarif` migration concern in the original finding was a separate refactor and is NOT closed — re-surfaces in next discovery pass if still material. |
+| F124 | MSRV pin has zero buffer behind toolchain | **Fixed (policy)** | This session. `docs/RELEASING.md` now carries an "MSRV (Minimum Supported Rust Version) Policy" section explaining the deliberate "MSRV tracks channel" stance for the pre-1.0 binary-distribution model + post-1.0 reconsideration trigger. The zero-buffer is now a deliberate documented decision, not an oversight. |
+| F150 | Schema version tracked in two disjoint places, no startup validation | **Fixed** | PR #61 → main. `CURRENT_SCHEMA_VERSION` const + `validate_schema_version()` on `open_read_only` |
+| F151 | Leiden communities non-deterministic | **Fixed** | PR #61 → main. `LEIDEN_SEED` constant threaded into `LeidenConfig` + regression test |
+| F152 | `clone_group_id` non-deterministic (std HashMap iteration) | **Fixed** | PR #61 → main. `BTreeMap<[u8;32], _>` |
+| F154 | `codelore diff` base==head produces empty SARIF | **Fixed** | PR #62 → main. `bail!` at diff entry with SHA + range context |
+| F155 | `DiffOutput.{base,head}_median_code_health` defaults to silent 0.0 | **Fixed** | PR #60 → main. `Option<f64>` + `skip_serializing_if` |
+| F156 | `Thresholds`/`Gates`/`DiffGates` don't `deny_unknown_fields` | **Fixed** | PR #60 → main. Attribute added to all three structs + 3 regression tests |
+| F157 | F147's exhaustiveness guard wraps the wrong list | **Fixed** | PR #60 → main. `registry!` macro forces single source-of-truth for both array and match |
+| F158 | SARIF `informationUri`/`helpUri` hardcodes wrong project URL | **Fixed** | PR #63 → main. `CODELORE_HOMEPAGE` constant + URL-guard regression test |
+| F159 | SARIF `artifactLocation.uri` not percent-encoded | **Fixed** | PR #63 → main. `percent_encode_path()` helper + non-ASCII/space/# regression test |
+| F160 | Kamei NDEV/EXP same-second peer semantics inconsistent | **Fixed** | PR #64 → main. Strict `prev.date < c.date` uniformly across NDEV/NUC/EXP/REXP/SEXP |
+| F163 | SARIF `automationDetails.id` is static | **Fixed** | PR #63 → main. `automation_id_for(prefix)` appends per-run 16-hex suffix |
 
-**Branch caveat**: F110 + F112 are fixed on `fix/f110-f112-test-coverage-and-provenance` (current HEAD). F143's implementation lives on `feat/f143-headless-browser-smoke`. Neither is on main yet. Both need merge before they truly close.
+**Newly REFUTED (2026-06-18)**:
+
+| F-ID | Original claim | Why refuted |
+|---|---|---|
+| F116 | Renovate AND Dependabot configured for same ecosystems | The two bots are partitioned by `package-ecosystem`, not duplicated. `.github/dependabot.yml` opens with `package-ecosystem: github-actions` (only updates `.github/workflows/*.yml` action pins). `renovate.json` carries `matchManagers: ["cargo"]` rules exclusively (Rust deps). The original audit treated the presence of both config files as evidence of duplication without reading either's scope. Keep both; they're the right split — Renovate's `matchPackageNames: ["duckdb"] rangeStrategy: pin` + `tree-sitter enabled: false` rules carry the same Cargo-bump policy CLAUDE.md documents in §"Dependabot has intentional ignore rules" but for the cargo ecosystem, which Dependabot is NOT configured to touch. |
 
 **Refuted findings preserved**: F88 (silent ODB skip rationale), F95 (window filter at ingest level), plus from §3/§4 of the prior report — apply_grouping JOIN shape, renderHeader listener leak, parquet/SQLite backslash escape, hotspots CTE leak, color-mode aria-label, Kamei SEXP `<` vs `<=`, tree-sitter `kind_id` ABI, AI-assist false positives, NULL-conflated AI attribution, DuckDB pinning speculation, code-health weights citation, SoC inclusive thresholds. Rationale in commits `f1aa0e7` (PR #36) + `13fefcb` (PR #38).
 
@@ -96,9 +118,9 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 
 ### Active carryover
 
-#### F94 — `ingest.rs` monolithic (1344 LOC, still unsplit)
+#### F94 — `ingest.rs` monolithic (1453 LOC, still unsplit)
 
-*   **Location**: `crates/codelore-lib/src/facts/ingest.rs` — 1344 lines
+*   **Location**: `crates/codelore-lib/src/facts/ingest.rs` — 1453 lines (grew +109 since prior audit)
 *   **Severity**: MED
 *   **Category**: Maintainability
 *   **Status**: Active. `facts/ingest/` subdirectory exists but empty — split attempted and abandoned.
@@ -132,23 +154,19 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 *   **Status**: METRIC_DEFS formula strings still reference parameter NAMES literally (`min_shared_revs`, `fisher_significance`). No `${data.options.X}` interpolation surfaces the run's effective threshold values.
 *   **Next step**: template formulas through `data.options` at render time.
 
-#### F143 — SPA headless-browser smoke test (PARTIAL — un-merged)
-
-*   **Status**: Implementation lives on `feat/f143-headless-browser-smoke` (`tests/spa_browser_test.rs` + Cargo.toml `browser-tests` feature). NOT on current HEAD; not on main. CI does not yet opt in.
-*   **Next step**: merge the branch + add `browser-tests` job to `.github/workflows/ci.yml`.
-
 ### NEW Active Findings — Architecture & supply chain
 
 #### F111 — `FactsDb::conn()` leaks `&duckdb::Connection` into public API
 
-*   **Location**: `crates/codelore-lib/src/facts/mod.rs:266`
+*   **Location**: `crates/codelore-lib/src/facts/mod.rs:307`
 *   **Severity**: HIGH
 *   **Suggested fix**: `pub(crate) fn conn()` + narrower safe methods (`prepare`, `query_map`, `execute`).
 
-#### F113 — `codelore-cli` reaches into 13 distinct `codelore_lib` submodules — no façade
+#### F113 — `codelore-cli` reaches into 8 distinct `codelore_lib` submodules — no façade
 
 *   **Location**: `crates/codelore-cli/src/main.rs` — all `use codelore_lib::*` statements
 *   **Severity**: MED
+*   **Status**: Active. The 2026-06-16 validator's "17+" claim and the original "13" claim both over-counted. Verified count is 8 distinct first-level submodule paths: `analyses`, `analysis`, `facts`, `options`, `output`, `provenance`, `quality_gates`, `repo` (plus root-level `CodeLoreError`, `AnalysisName`, `Options`). The architectural smell — no `cli_api` façade, CLI reaches across many internal modules — is unchanged; only the count was inflated.
 *   **Suggested fix**: introduce `codelore_lib::cli_api` as the only `pub` surface CLI imports.
 
 #### F114 — Single-CDN dependence for all 4 SPA assets
@@ -163,35 +181,17 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 *   **Severity**: MED
 *   **Suggested fix**: pin both bases to `@sha256:...` digests.
 
-#### F116 — Renovate AND Dependabot both configured for same ecosystems
-
-*   **Location**: `.github/dependabot.yml` + `renovate.json`
-*   **Severity**: MED
-*   **Suggested fix**: delete `renovate.json` or merge into `dependabot.yml`.
-
 #### F117 — First-party GHA actions use floating tags despite credential permissions
 
 *   **Location**: `.github/workflows/release.yml` — `attest-build-provenance@v4`, `docker/build-push-action@v7`, `docker/login-action@v4`
 *   **Severity**: MED
 *   **Suggested fix**: SHA-pin the credential-handling subset.
 
-#### F118 — `gix_repo.rs` walker thread panic silently swallowed
-
-*   **Location**: `crates/codelore-lib/src/repo/gix_repo.rs:130`
-*   **Severity**: LOW
-*   **Status**: **Fixed ⚠️ branch** — `fix/error-ux-and-a11y-sweep` (PR #62). New `WalkerStream` wrapper owns the JoinHandle alongside the rx; on end-of-stream it joins the handle and surfaces any panic as a final `Err(CodeLoreError::Repo(...))`, mapped to exit code 3.
-*   **Suggested fix**: store JoinHandle; propagate panic payloads as `CodeLoreError::Repo`.
-
 ### NEW Active Findings — Tool replacement / dep currency
 
 #### F119 — Hand-rolled 826-line CSV emitter → use `csv` crate
 
 *   **Location**: `crates/codelore-lib/src/output/csv.rs`
-*   **Severity**: MED
-
-#### F120 — SARIF schema URL on legacy host; hand-rolled JSON → `serde-sarif`
-
-*   **Location**: `crates/codelore-lib/src/output/sarif.rs:12`
 *   **Severity**: MED
 
 #### F121 — `fishers_exact` crate unmaintained since 2018-11
@@ -206,35 +206,15 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 
 *   **Severity**: LOW
 
-#### F124 — MSRV pinned to current stable, undocumented
-
-*   **Severity**: LOW
-
 ### NEW Active Findings — Backend performance
 
-#### F125 — `query_live_paths` / `current_head_rev` fire 4× per ingest
+#### F127 — Kamei `enrich_diffusion` entropy block still correlated (partial)
 
-*   **Location**: `crates/codelore-lib/src/facts/ingest.rs:155, 293, 433, 521` + `:159, 282, 427, 571`
-*   **Severity**: HIGH
-*   **Status**: **Fixed ⚠️ branch** — `perf/f125-f126-ingest-redundancy` (PR #58). Both queries hoisted to compute-once at the top of `ingest()` after the producer/consumer scope completes; `&[String]` + `&str` threaded down to the four HEAD-time passes.
-
-#### F126 — `resolve_imports_at_head` issues N single-row UPDATEs
-
-*   **Location**: `crates/codelore-lib/src/facts/ingest.rs:579-585`
-*   **Severity**: HIGH
-*   **Status**: **Fixed ⚠️ branch** — `perf/f125-f126-ingest-redundancy` (PR #58). Rewritten as `CREATE TEMPORARY TABLE _resolved_imports` + bulk Appender insert + single hash-joined `UPDATE imports SET … FROM _resolved_imports r WHERE …`. Cost shape O(N × |imports|) → O(|imports| + N).
-
-#### F127 — Kamei `enrich_diffusion` correlated subqueries
-
-*   **Location**: `crates/codelore-lib/src/kamei/mod.rs:38`
+*   **Location**: `crates/codelore-lib/src/kamei/mod.rs:72-83` (entropy block) — comment at `:39-43` documents the partial fix
 *   **Severity**: MED
-*   **Status**: **Fixed ⚠️ branch** — `fix/kamei-correctness-and-perf` (PR #64). Three correlated subqueries collapsed into one `UPDATE … FROM (… GROUP BY rev)`. DuckDB streams `changes` once and hash-joins back.
-
-#### F128 — Kamei `enrich_size` correlated subqueries
-
-*   **Location**: `crates/codelore-lib/src/kamei/mod.rs:77-92`
-*   **Severity**: MED
-*   **Status**: **Fixed ⚠️ branch** — `fix/kamei-correctness-and-perf` (PR #64). Same shape — two correlated subqueries → grouped `UPDATE … FROM`. `lt = 0.0` kept as plain UPDATE.
+*   **Status**: Partial. The NS/ND/NF triple at `:44-65` was collapsed into one `UPDATE commits SET nf=..., ns=..., nd=... FROM (... GROUP BY rev) AS d WHERE commits.rev = d.rev` on `main` (PR #64 landed). The entropy block at `:72-83` remained correlated (`WHERE changes.rev = commits.rev`) because the rewrite was found not to be semantically equivalent without a separate reset pass (validation observation 30251). The original "three correlated subqueries" claim is closed by the letter; the entropy follow-up is the remainder.
+*   **Failure scenario**: large monorepo Kamei enrichment still streams `changes` once for NS/ND/NF (fast path) but pays the per-row scan for entropy.
+*   **Suggested fix**: rewrite entropy as `UPDATE commits SET entropy = e.h FROM (SELECT rev, -SUM(p * LOG(p)) AS h FROM (SELECT rev, COUNT(*)::DOUBLE / SUM(COUNT(*)) OVER (PARTITION BY rev) AS p FROM changes GROUP BY rev, path) GROUP BY rev) AS e WHERE commits.rev = e.rev` — paired with a regression test asserting byte-identical entropy values vs. the correlated form on the fixture.
 
 #### F129 — `arch_violations` materializes full imports set, truncates post-Rust
 
@@ -261,7 +241,7 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 #### F133 — No responsive layout below ~900px viewport
 
 *   **Severity**: HIGH
-*   **Validation note**: 14 responsive Tailwind classes total in `template.html`, and they all use the `xl:` prefix (≥ 1280px). Nothing in `sm:` / `md:` / `lg:` — confirms the finding: viewports from 320px up to 1279px get the desktop layout uncompressed. Phones/tablets either zoom out or scroll-bar.
+*   **Validation note (2026-06-18)**: 15 responsive Tailwind classes total in `template.html` (drifted +1), all `xl:` (≥ 1280px). Zero `sm:` / `md:` / `lg:` — confirms the finding: viewports from 320px up to 1279px get the desktop layout uncompressed. Phones/tablets either zoom out or scroll-bar.
 
 #### F134 — Hotspot table "Show all" synchronously builds full HTML
 
@@ -283,12 +263,6 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 *   **Location**: `crates/codelore-lib/src/output/spa/widgets.js:847-854`
 *   **Severity**: MED
 
-#### F138 — `startViewTransition` ignores `prefers-reduced-motion`
-
-*   **Location**: `crates/codelore-lib/src/output/spa/widgets.js:470-476`
-*   **Severity**: LOW
-*   **Status**: **Fixed ⚠️ branch** — `fix/error-ux-and-a11y-sweep` (PR #62). Wrapper now queries `window.matchMedia('(prefers-reduced-motion: reduce)')`; when reduced motion is preferred, `updateFn()` runs synchronously instead of animating.
-
 ### NEW Active Findings — Test / CI / observability
 
 #### F142 — Tracing instrumentation skewed across `analyses/`
@@ -304,7 +278,7 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 
 #### F145 — `main.rs` dispatch boilerplate is the bulk of the file
 
-*   **Location**: `crates/codelore-cli/src/main.rs:846-2044` — the `match (format, &analysis)` block (line 846) extends to roughly EOF. `main.rs` is now **2044 LOC**; the dispatch arm body is ~1198 LOC (≈59% of the file).
+*   **Location**: `crates/codelore-cli/src/main.rs:846-2047` — the `match (format, &analysis)` block (line 846) extends to roughly EOF. `main.rs` is now **2047 LOC** (drifted +3 since prior audit); the dispatch arm body is ~1201 LOC (≈59% of the file).
 *   **Severity**: HIGH
 *   **Drift note**: the prior 720-LOC estimate was correct at the time of the audit; the file has grown roughly proportionally with new analyses (lead-time, bus-factor, stale-code, god-classes, etc.). The architectural concern is the same — the routing table grew, the abstraction didn't.
 
@@ -326,73 +300,13 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 *   **Description**: Outlier among 8 tables. All four offset columns nullable; FK validation queries scan the entire `hunks` table on large repos.
 *   **Suggested fix**: add `PRIMARY KEY (rev, path, old_start, new_start)`, `NOT NULL` on all four offset columns, `CREATE INDEX idx_hunks_rev_path ON hunks(rev, path)`.
 
-#### F150 — Schema version tracked in two disjoint places, no startup validation
-
-*   **Location**: `crates/codelore-lib/src/cache.rs:40` + `crates/codelore-lib/src/facts/schema.rs:6`
-*   **Severity**: MED
-*   **Status**: **Fixed ⚠️ branch** — `fix/determinism-sweep` (PR #61). Literal `"1"` promoted to `CURRENT_SCHEMA_VERSION` const (single source of truth for producer + validator). `FactsDb::open_read_only` now `SELECT`s the stored version and bails on mismatch / missing-row.
-*   **Description**: Cache invalidation works via key hash, but operator who hands stale cache to `--cache-dir` directly gets no fail-fast — surfaces as cryptic SQL errors at analysis time.
-*   **Suggested fix**: on `FactsDb::open_read_only`, `SELECT value FROM provenance WHERE key='schema_version'` + `bail!` if mismatch.
-
-#### F151 — Leiden communities run without RNG seed → non-deterministic partitions
-
-*   **Location**: `crates/codelore-lib/src/analyses/communities.rs:136`
-*   **Severity**: MED
-*   **Status**: **Fixed ⚠️ branch** — `fix/determinism-sweep` (PR #61). New `LEIDEN_SEED = 0xC0DE_10E5_AED1_DEED` passed via `LeidenConfig { seed: Some(...), .. }`. Regression test asserts identical partitions across runs.
-*   **Description**: `LeidenConfig::default()` has no explicit seed. Module docstring promises "deterministic across runs" — broken on cache miss.
-*   **Suggested fix**: thread a deterministic seed (SHA-256 prefix of edge list, or fixed `0xDEADBEEF`) into LeidenConfig. Add an integration test asserting two back-to-back runs produce identical `community_id` columns.
-
-#### F152 — `clone_group_id` non-deterministic across runs (std HashMap iteration)
-
-*   **Location**: `crates/codelore-lib/src/clones/extractor.rs:145`
-*   **Severity**: LOW
-*   **Status**: **Fixed ⚠️ branch** — `fix/determinism-sweep` (PR #61). `HashMap<[u8;32], _>` → `BTreeMap<[u8;32], _>` so iteration is digest-sorted; `enumerate()`-assigned IDs now stable across runs.
-*   **Suggested fix**: `BTreeMap<[u8;32], _>` so iteration is digest-sorted; OR sort `Vec<(digest, members)>` by digest before `enumerate()`.
-
 #### F153 — Generic I/O errors from repo probing exit with code 5 instead of 3
 
 *   **Location**: `crates/codelore-lib/src/error.rs:65`
 *   **Severity**: LOW
 *   **Suggested fix**: add `CodeLoreError::RepoIo(std::io::Error)` variant mapped to exit 3.
 
-#### F154 — `codelore diff` base==head produces empty SARIF with no signal
-
-*   **Location**: `crates/codelore-cli/src/diff_output.rs:30` (text), plus SARIF + markdown branches
-*   **Severity**: LOW
-*   **Status**: **Fixed ⚠️ branch** — `fix/error-ux-and-a11y-sweep` (PR #62). `run_diff` now pre-checks `base_sha == head_sha` and bails with an actionable error naming the SHA and the range. CLI test `diff_rejects_base_equals_head` covers.
-*   **Suggested fix**: pre-check at the diff entry point — `if base_sha == head_sha { return Err(CodeLoreError::Analysis("base equals head; nothing to diff")); }`.
-
-### Sixth audit pass — F158–F163 (SARIF conformance + Kamei semantics + emit memory)
-
-#### F158 — SARIF `tool.driver.informationUri` hardcodes wrong project URL `github.com/emre/codescene`
-
-*   **Location**: `crates/codelore-lib/src/output/sarif.rs:61` (hotspots), `:245` (clones), `:407` (live-clones), plus rule-level `helpUri` at `:224, :386`
-*   **Severity**: MED
-*   **Category**: SARIF conformance / branding
-*   **Status**: **Fixed ⚠️ branch** — `fix/sarif-correctness-sweep` (PR #63). Five sites replaced with `CODELORE_HOMEPAGE` / `CODELORE_RESEARCH_FOUNDATIONS_URL` constants. Regression test guards the canonical URL and explicitly rejects the prior `emre/codescene` substring.
-*   **Description**: Three `tool.driver.informationUri` constants + two rule `helpUri` strings hardcode `https://github.com/emre/codescene` — wrong project name, wrong org. Actual repo per `Cargo.toml` is `https://github.com/emrecdr/codelore`. SARIF 2.1.0 §3.19.18 makes `informationUri` the canonical "where to learn more about this tool" link surfaced in GitHub Code Scanning's tool-details panel.
-*   **Failure scenario**: user clicks the tool name in GH Code Scanning, lands on a 404 (or unrelated repo). PR reviewers can't reach the rule documentation. Brand surface broken on every SARIF report.
-*   **Suggested fix**: replace all 5 occurrences with `https://github.com/emrecdr/codelore`. Add a regression test that the SARIF emission contains the canonical URL.
-
-#### F159 — SARIF `artifactLocation.uri` not percent-encoded — paths with space / `#` / non-ASCII break
-
-*   **Location**: `crates/codelore-lib/src/output/sarif.rs:102` (`mk_uri`), `:279`, `:455`
-*   **Severity**: MED
-*   **Category**: SARIF conformance / cross-platform
-*   **Status**: **Fixed ⚠️ branch** — `fix/sarif-correctness-sweep` (PR #63). New `percent_encode_path()` helper using `percent-encoding` crate; applied to all 3 artifact-URI build sites. Regression test covers space + `#` + `café.rs` non-ASCII probes.
-*   **Description**: URI built via plain `format!("{}/{}", repo_root, path)` with no percent-encoding. SARIF 2.1.0 §3.4.4 requires "a valid URI reference per RFC 3986 §4.1". Paths containing spaces, `#`, `?`, `[`, `]`, non-ASCII chars produce malformed URIs. CSV's `quote_if_needed` shows the project knows path bytes can be hostile; SARIF skips encoding entirely.
-*   **Failure scenario**: repo with `path/with space/file.rs` or `docs/foo#bar.md` — GH Code Scanning rejects the SARIF upload (URI parse error) OR silently truncates at `#` so inline annotations land on the wrong file. Non-ASCII paths (CJK, accented) similarly malformed.
-*   **Suggested fix**: apply `percent-encoding` crate (NON_ALPHANUMERIC set, RFC 3986) to each path segment before assembling the URI.
-
-#### F160 — Kamei NDEV/EXP same-second peer semantics inconsistent (`<` vs `<=`)
-
-*   **Location**: `crates/codelore-lib/src/kamei/mod.rs:198, 217` (enrich_history strict `<`) vs `:268` (enrich_experience inclusive `<=`) — plus SEXP ROW_NUMBER variant at `:320-321`
-*   **Severity**: MED
-*   **Category**: Statistical / paper-faithfulness
-*   **Status**: **Fixed ⚠️ branch** — `fix/kamei-correctness-and-perf` (PR #64). EXP/REXP join predicate switched to strict `prev.date < c.date`, matching NDEV/NUC/AGE/SEXP. One canonical "prior commit" semantic across the 14-feature vector; consistent with Kamei 2013 §3. `tiny_repo` fixture updated to use explicit per-commit timestamps.
-*   **Description**: Three variants of the same "prior commit" predicate across one canonical Kamei 14-feature vector. NDEV/NUC use strict `prev.date < curr.date`; EXP/REXP use inclusive `prev.date <= c.date`; SEXP uses ROW_NUMBER (a third semantic flavor). Comments justifying each branch contradict each other ("real repos have distinct-second commits" vs "preserve same-day clusters").
-*   **Failure scenario**: bulk-import + same-second admin edit (`git commit --amend --date=`, vendored sweeps): NDEV reports 0 prior devs but EXP includes the same-second peer. Downstream Kamei JIT-SDP risk scores mix the two flavors per commit; paper-faithful Kamei consumers cannot reproduce results.
-*   **Suggested fix**: pick ONE same-second semantic (strict `<` matches Kamei 2013 §3 baseline), apply to all four enrich passes, document in `docs/research-foundations.md`.
+### Sixth audit pass — F161, F162 (emit memory / type contract)
 
 #### F161 — Every emitter materializes the full `Vec<Row>` — no streaming path
 
@@ -414,97 +328,72 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 *   **Failure scenario**: Spark/Polars consumer reads Parquet with UInt32 schema cast — fails type-cast on Int64 column. Same logical column, two contracts.
 *   **Suggested fix**: (a) `CAST(revisions AS UINTEGER)` in the COPY query so Parquet emits UInt32, OR (b) document a "Parquet uses widest-fit integer" convention in `docs/advanced-usage.md`.
 
-#### F163 — SARIF `automationDetails.id` is static — GH Code Scanning collapses runs
-
-*   **Location**: `crates/codelore-lib/src/output/sarif.rs:14, 187, 344`
-*   **Severity**: LOW
-*   **Category**: SARIF conformance
-*   **Status**: **Fixed ⚠️ branch** — `fix/sarif-correctness-sweep` (PR #63). `automation_id_for(prefix)` appends a 16-hex SHA-256 suffix derived from `SystemTime` nanos + `process::id()` to all three sites. Regression test asserts two back-to-back emissions produce distinct correlation suffixes while preserving the prefix.
-*   **Description**: SARIF 2.1.0 §3.17.3 specifies `automationDetails.id` SHOULD have form `<runGroupName>/<runName>/<correlationGuid>` so per-run correlation works. The three constants are static strings — every run emits the same id. GH Code Scanning collapses runs with identical id, defeating the partialFingerprints work done at lines 92-99.
-*   **Failure scenario**: two consecutive PRs emit SARIF; GH Code Scanning treats them as the same run; 'first seen' / 'last seen' timestamps merge across PRs.
-*   **Suggested fix**: append `/<SHA-256(repo_head_sha + invocation_unix_ts)[..16]>` to each ID at run time.
-
-### Fifth audit pass — F155–F157 (prior cycle)
-
-#### F155 — `DiffOutput.{base,head}_median_code_health` defaults to silent `0.0`
-
-*   **Location**: `crates/codelore-cli/src/diff.rs:41` (struct decl) + `:650-666` (default-path)
-*   **Severity**: MED
-*   **Category**: Output ambiguity / CI integration
-*   **Status**: **Fixed ⚠️ branch** — `fix/diff-gates-correctness-sweep` (PR #60). Both fields now `Option<f64>` with `#[serde(skip_serializing_if = "Option::is_none")]`; populating branch returns `Some(med)` only when the gate ran, otherwise `None` so the JSON key is omitted entirely.
-*   **Description**: Both medians are typed `f64` (not `Option<f64>`) and default to `0.0` when `--thresholds-file` is unset or no `[diff]` gates configured. The values are emitted verbatim in the diff JSON without `#[serde(skip_serializing_if)]`. A downstream consumer reading the JSON cannot distinguish "gate not configured, no measurement taken" from "measured median = 0.0" — both surface as `"base_median_code_health": 0.0`. On a 0–100 code-health scale, 0.0 reads as catastrophically bad.
-*   **Failure scenario**: team A configures thresholds → gets meaningful 67.4 / 64.9 medians. Team B runs `codelore diff` without thresholds, ships the JSON to a dashboard / Slack bot / PR summarizer. The dashboard rule `flag if base_median_code_health < 50` fires on every PR → signal trust erodes.
-*   **Suggested fix**: change to `Option<f64>` + `#[serde(skip_serializing_if = "Option::is_none")]`. Or hoist into a sentinel `"computed": false` field on the diff envelope.
-
-#### F156 — `Thresholds` / `Gates` / `DiffGates` don't `deny_unknown_fields` — silent typo disables gate
-
-*   **Location**: `crates/codelore-lib/src/quality_gates/mod.rs:39` (Thresholds), `:47` (Gates), `:62` (DiffGates)
-*   **Severity**: LOW
-*   **Category**: Config / silent misconfiguration
-*   **Status**: **Fixed ⚠️ branch** — `fix/diff-gates-correctness-sweep` (PR #60). `#[serde(deny_unknown_fields)]` added to all three structs. Typos now fail the parse via the existing `CodeLoreError::Analysis` chain. Three regression tests cover root / gates / diff levels.
-*   **Description**: None of the three `Deserialize`-derived structs opt into `#[serde(deny_unknown_fields)]`. A user typo in `.codelore-thresholds.toml` — e.g. `cognative_max = 30` (transposed) or `disallow_clone_type1 = true` (missing underscore) — parses cleanly as the default `None`/`false`. The gate is silently disabled. No warn-log surfaces the unknown key. `quality_gates`'s entire value proposition is that the repo carries the gate; silent misconfiguration is the worst failure mode here.
-*   **Failure scenario**: engineer adds `disallow_clone_type1 = true` (typo) to block Type-1 clones in PR review. File parses; `gates.disallow_clone_type_1` stays `false`; `evaluate_clone_gate` early-returns. Gate appears wired but does nothing — every PR passes while Type-1 clones land.
-*   **Suggested fix**: `#[serde(deny_unknown_fields)]` on all three structs. Parse error surfaces via the existing `CodeLoreError::Analysis` path in `Thresholds::from_path`.
-
-#### F157 — F147's exhaustiveness guard wraps the wrong list
-
-*   **Location**: `crates/codelore-lib/src/analysis.rs:152-184` (`_exhaustive_check` match) vs `:186-217` (`all()` array literal)
-*   **Severity**: LOW
-*   **Category**: Correctness / drift (regression on F147's promise)
-*   **Status**: **Fixed ⚠️ branch** — `fix/diff-gates-correctness-sweep` (PR #60). New `registry!` macro expands ONCE into both the `&[Self::X, ...]` array and the const `_guard` match from a single token list. Two surfaces cannot drift by construction — adding a variant fails compile until the macro call is updated, which auto-populates the array.
-*   **Description**: F147's commit message claims the exhaustiveness guard prevents new variants from being silently absent from the `all()` registry. Inspection shows the const fn `_exhaustive_check` matches over every variant — but the actual `all()` array the rest of the codebase consumes is the `&[Self::Hotspots, Self::Coupling, ...]` literal further down. A new variant + writing the match arm (forced) + forgetting the array entry (not forced) silently reintroduces the exact registry-drift bug the F147 commit claims to prevent. The round-trip test only iterates `all()`, so an array-missing variant is never exercised.
-*   **Failure scenario**: maintainer adds `AnalysisName::ContributionDecay`. Compiler refuses build until `_exhaustive_check` match adds the arm — they comply. Build passes. The `&[...]` array below is never touched. `codelore --help` doesn't list `contribution-decay`; `Supported: ...` error messages omit it; round-trip test never round-trips it. But `from_str("contribution-decay")` still works because it lives in a separate match. The exact silent UX regression F147 was supposed to prevent.
-*   **Suggested fix**: invert — have `all()` build the array deconstructively from the match (`let arr: [_; N] = [Self::Hotspots, ...]` only inside the matched branch), OR write the guard so the `&[...]` array literal is the only registry by mapping the match over `Self::all().iter()`.
-
 ---
 
-## 4½. Validation Pass — 2026-06-16
+## 4½. Validation Pass — 2026-06-18
 
-Every Active / Partial entry above re-verified against current `main` HEAD via direct source inspection. Backwards-evidence summary so the next reader doesn't redo the same checks:
+Every Active / Partial entry above re-verified against current `main` HEAD via direct source inspection by a fan-out of 8 parallel validation subagents. Backwards-evidence summary so the next reader doesn't redo the same checks:
 
 | Finding | Claim | Verified state on main | Status |
 |---|---|---|---|
-| F94 | ingest.rs monolithic, 1344 LOC | `wc -l = 1344` ✓ ; `facts/ingest/` subdir exists empty | Active confirmed |
+| F94 | ingest.rs monolithic | `wc -l = 1453` (drifted +109 LOC) ; `facts/ingest/` subdir exists empty | Active confirmed (drifted larger) |
 | F97 | `JSON.parse` synchronous at first paint | `widgets.js:61` literal `JSON.parse(dataBlock.textContent)`; `grep -c requestIdleCallback = 0` | Active confirmed |
-| V6 | `CHANNEL_CAPACITY = 64` unmeasured | `ingest.rs:19` constant unchanged; also surfaces sibling `WALKER_CHANNEL_CAPACITY = 256` at `gix_repo.rs:122` — second unmeasured constant | Active confirmed (broader) |
-| F111 | `FactsDb::conn()` leaks `&Connection` | `facts/mod.rs:266` still `pub fn conn(&self) -> &Connection` | Active confirmed |
-| F113 | CLI reaches into many lib submodules | 17+ distinct `codelore_lib::*` paths in `main.rs` (audit said 13 — undercounted) | Active confirmed |
-| F114 | Single-CDN dependence | All 4 SPA assets at `cdn.jsdelivr.net/npm/…` in `build.rs:77-104` | Active confirmed |
-| F115 | Container mutable tags | `Containerfile:29` `rust:${RUST_VERSION}` and `:62` `gcr.io/distroless/cc-debian12:nonroot` — no `@sha256:` | Active confirmed |
-| F116 | Dependabot + Renovate duplicate | Both `.github/dependabot.yml` and `renovate.json` present | Active confirmed |
-| F117 | First-party GHA floating tags | 6 sites at `actions/{checkout,cache,attest-build-provenance,upload-artifact,download-artifact}@v[N]` (no SHA pin) | Active confirmed |
-| F118 | Walker panic silently swallowed | `gix_repo.rs:132` spawns walker thread; no `join()` on the handle anywhere — panic just drops the channel | Active confirmed |
-| F119 | csv.rs 826 LOC | `wc -l = 826` ✓ | Active confirmed |
-| F120 | SARIF schema URL on legacy host | `sarif.rs:12` `schemastore.azurewebsites.net` — canonical is `json.schemastore.org` | Active confirmed |
-| F121 | `fishers_exact` unmaintained | `Cargo.lock` carries it; `cargo deny check advisories` → OK (no CVE), but the crate still has no commits since 2018 | Active (informational) |
-| F122 | toml on 0.8.x | `Cargo.lock`: `toml v0.8.23`; current `1.1.x` | Active confirmed |
-| F125 / F126 | redundant queries + N updates | **Fixed on PR #58** (this session) — verified by the perf bench notes | Fixed-on-branch |
-| F127 / F128 | Kamei correlated subqueries | `kamei/mod.rs:38` (`sql_counts`) + `:77-92` (`enrich_size`) confirm `(SELECT … FROM changes WHERE changes.rev = commits.rev)` pattern | Active confirmed |
-| F129 | arch-violations materializes, truncates post-Rust | `arch_violations.rs:73-92` collects full Vec, validates in Rust, truncates afterwards | Active confirmed |
-| F130 | pair_programming O(P²) with `String::clone` | `pair_programming.rs:102-107` literal `participants[i].clone(), participants[j].clone()` inside doubly-nested loop | Active confirmed |
-| F131 | Tooltip 14×14 trigger | `template.html:259-260` literal `width: 14px; height: 14px` | Active confirmed |
-| F132 | Hardcoded hex in widgets.js | 5+ sites with `'#e6e6e6'`, `'#fff'`, `'#1a4a2c'`, `'#2ea44f'`, `'#7dd87a'`, `'#f59e0b'`, `'#e0584e'` | Active confirmed |
-| F133 | No responsive < 900px | 14 responsive classes total, all `xl:` (≥ 1280px). 0 `sm:` / `md:` / `lg:` | Active confirmed |
-| F135 | Theme toggle re-runs `d3.pack` | `widgets.js:204` `registerThemeRerender(() => renderHotspotCirclePack(...))` — full re-layout | Active confirmed |
-| F136 | Color-mode tablist non-ARIA | `template.html:621-636` `<button role="tab">` with no `aria-selected`, no `tabindex` mgmt, no arrow-key handler | Active confirmed |
-| F138 | `startViewTransition` ignores reduced-motion | `widgets.js:470-475` calls `document.startViewTransition(updateFn)` without checking `prefers-reduced-motion` | Active confirmed |
-| F142 | Sparse tracing in analyses | Only 3 `tracing::*` calls across 33 analysis files (lead_time, clones, clone_coupling) | Active confirmed |
+| V4 | no `WIDGETS` registry | `_codeloreRerenderers.push(...)` literal sequence at widgets.js:436,441,444,450,452,457,459,461; no `WIDGETS = [` array | Active confirmed |
+| V5 | METRIC_DEFS not interpolated | `grep -n 'data.options' widgets.js` = 0; `buildTooltipHtml` at :587 escapeHtml's `def.formula` verbatim | Active confirmed |
+| V6 | `CHANNEL_CAPACITY = 64` unmeasured | `ingest.rs:19` constant unchanged; sibling `WALKER_CHANNEL_CAPACITY = 256` at `gix_repo.rs:122` also unmeasured | Active confirmed (broader) |
+| F111 | `FactsDb::conn()` leaks `&Connection` | `facts/mod.rs:307` (drifted from :266) still `pub fn conn(&self) -> &Connection` | Active confirmed |
+| F113 | CLI reaches into many lib submodules | 8 distinct first-level `codelore_lib::*` paths (analyses, analysis, facts, options, output, provenance, quality_gates, repo) — earlier 13/17+ counts both inflated | Active confirmed (count corrected) |
+| F114 | Single-CDN dependence | All 4 SPA assets at `cdn.jsdelivr.net/npm/…` in `build.rs:77,82,90,104`. SHA-256-pinned for integrity, but no fallback URL, no `include_bytes!` vendoring. `fn vendor_spa_assets` is a misnomer — it CDN-fetches. | Active confirmed |
+| F115 | Container mutable tags | `Containerfile:29` `rust:${RUST_VERSION}-${DEBIAN_RELEASE}` and `:62` `gcr.io/distroless/cc-debian12:nonroot` — zero `@sha256:` | Active confirmed |
+| F116 | Dependabot + Renovate duplicate | Both files present BUT partitioned by `package-ecosystem`: Dependabot owns `github-actions`, Renovate owns `cargo`. Not duplicated. | **REFUTED** (see refuted-findings block above) |
+| F117 | First-party GHA floating tags | `release.yml`: 6 `actions/...@vN` lines (52, 88, 95, 148, 153, 165, 168, 207, 266) all floating. `container.yml`: 6 `docker/...@vN` lines (59, 61, 69, 119, 121, 129). Audit cited release.yml for the docker actions — they actually live in container.yml. | Active confirmed (location refined) |
+| F119 | csv.rs 826 LOC | `wc -l = 826` ✓ (no drift); `grep 'use csv' = 0` — still hand-rolled | Active confirmed |
+| F120 | SARIF schema URL on legacy host | `sarif.rs:13` swapped to `https://json.schemastore.org/sarif-2.1.0.json` | **Fixed (URL half) — hand-rolled JSON / serde-sarif migration NOT closed** |
+| F121 | `fishers_exact` unmaintained | `Cargo.toml:42 = "1"` resolves to `Cargo.lock:1357 v1.0.1` (2018-11 release). Identical to prior audit. `cargo deny check advisories` clean — no live CVE | Active (informational) |
+| F122 | toml on 0.8.x | `Cargo.lock:4391` `toml v0.8.23` — unchanged; upstream on 1.x | Active confirmed |
+| F123 | codelore-rca stale crossbeam/num-format | `Cargo.toml:40 crossbeam = "0.8"`, `:47 num-format = "0.4"`; lock resolves crossbeam v0.8.4 + num-format v0.4.4 — identical to prior. Hands-off policy on the MPL fork. | Active confirmed |
+| F124 | MSRV pinned to current stable, undocumented | `docs/RELEASING.md` now carries an "MSRV (Minimum Supported Rust Version) Policy" section: documents the deliberate "MSRV tracks channel" stance for the pre-1.0 binary-distribution model + the post-1.0 reconsideration trigger | **Fixed (policy)** |
+| F125 | redundant queries fire 4× per ingest | `ingest.rs:92-98` hoist `current_head_rev` + `query_live_paths` once; threaded as `&[String]` + `&str` into 4 HEAD-time passes | **Fixed on main (PR #58)** |
+| F126 | N single-row UPDATEs in resolve_imports | `ingest.rs:599-635` bulk Appender into `_resolved_imports` + single hash-joined UPDATE | **Fixed on main (PR #58)** |
+| F127 | Kamei `enrich_diffusion` correlated | NS/ND/NF collapsed (`kamei/mod.rs:44-65`). Entropy block (`:72-83`) **still correlated** — known follow-up per validation observation 30251. | Partial (entropy block remains — see updated §4 description) |
+| F128 | Kamei `enrich_size` correlated | `kamei/mod.rs:104-114` — single grouped `UPDATE … FROM (SELECT rev, SUM ... GROUP BY rev)` | **Fixed on main (PR #64)** |
+| F129 | arch-violations materializes, truncates post-Rust | `arch_violations.rs:55-75` collects full Vec without LIMIT, validates in Rust at `:77-88`, `truncate(limit)` post-loop at `:90-93` | Active confirmed |
+| F130 | pair_programming O(P²) with `String::clone` | `pair_programming.rs:102-107` literal doubly-nested loop with `participants[i].clone(), participants[j].clone()` | Active confirmed |
+| F131 | Tooltip 14×14 trigger | `template.html:311` (drifted from :259) literal `width: 14px; height: 14px; cursor: help` | Active confirmed |
+| F132 | Hardcoded hex in widgets.js | 6 sites — examples: `:1992 '#e6e6e6'`, `:2406 '#fff'`, `:2933` visualMap ramp `['#1a4a2c','#2ea44f','#7dd87a','#f59e0b','#e0584e']`, `:3273-3275` author palette | Active confirmed |
+| F133 | No responsive < 900px | 15 responsive classes total (drifted +1), all `xl:`. Zero `sm:` / `md:` / `lg:` | Active confirmed |
+| F134 | Hotspot 'Show all' synchronous | `widgets.js:1836-1837` `showAll.addEventListener('click', function () { renderNextPage(Infinity); })` — no virtualization / requestIdleCallback / requestAnimationFrame | Active confirmed |
+| F135 | Theme toggle re-runs `d3.pack` | `widgets.js:429-431` `registerThemeRerender(...)` → `renderHotspotCirclePack` → `:1268` `d3.pack().size([side, side]).padding(2)(root)` — full re-layout | Active confirmed |
+| F136 | Color-mode tablist non-ARIA | `template.html` has ~40 `role="tab"` but no `aria-selected`/`aria-controls`; `initHotspotColorToggles` at widgets.js:3066-3098 only swaps `tab-active` class on click; no arrow-key handler | Active confirmed |
+| F137 | Knowledge-islands rows mouse-only | widgets.js:1196-1211 only `addEventListener('click', ...)`+`cursor: pointer`; no `tabindex`, no `role="button"`, no `keydown` | Active confirmed |
+| F138 | `startViewTransition` ignores reduced-motion | widgets.js:694-700 now matches `prefers-reduced-motion` and runs `updateFn()` synchronously | **Fixed on main (PR #62)** |
+| F142 | Sparse tracing in analyses | Exactly 3 `tracing::*` calls across 32 analysis files (lead_time.rs:86, clones.rs:95, clone_coupling.rs:278) | Active confirmed |
 | F144 | No CI dogfooding | `grep -rE 'codelore (analyze\|check\|diff)' .github/workflows/ = ∅` | Active confirmed |
-| F145 | main.rs dispatch boilerplate | `main.rs = 2044 LOC`; dispatch spans lines 846→2044 (~1198 LOC, ≈59% of file). Audit's 720-LOC figure was correct *at that time*. | Active confirmed (drifted larger) |
-| F146 | json.rs trivial shims | `grep -cE '^pub fn write_[a-z_]+_json' = 29` (audit said 14 — count drifted larger as new analyses added) | Active confirmed (drifted larger) |
-| F149 | hunks schema lacks PK / NOT NULL | `schema_v1.sql:51` literal — no PK, all 4 offset columns nullable | Active confirmed |
-| F150 | Schema version in two places | `facts/schema.rs:6` `("schema_version", "1")` + `cache.rs:20` `SCHEMA_VERSION: &str = "schema_v3"` — disjoint sources | Active confirmed |
-| F151 | Leiden non-deterministic | `communities.rs:136` literal `Leiden::new(LeidenConfig::default())` — no seed | Active confirmed |
-| F152 | clone_group_id std HashMap | `clones/extractor.rs:144-157` uses `HashMap` then assigns `clone_group_id = u32::try_from(i + 1)` where `i` is HashMap iteration order | Active confirmed |
-| F153 | I/O errors → exit 5 | `error.rs:63-66` only `Self::Repo(_) \| Self::BlobNotFound { .. } => 3` — no `RepoIo` variant for `std::io::Error` carryover | Active confirmed |
-| F154 | diff base==head no guard | `grep -n 'base_sha == head_sha' diff*.rs = ∅` | Active confirmed |
-| F155 | DiffOutput medians default 0.0 | `diff.rs:41,44` `pub base_median_code_health: f64` (not Option) | Active confirmed |
-| F156 | Thresholds/Gates/DiffGates no `deny_unknown_fields` | `quality_gates/mod.rs:40,48,62` — none of the three structs carry the attr | Active confirmed |
-| F157 | F147's guard wraps wrong list | `analysis.rs:136` `all()` returns `&[Self::Hotspots, ...]` literal **separately** from `_exhaustive_check` const fn `match` at `:151` — guarded match doesn't force array entry | Active confirmed (F147 partial regression) |
-| F110 / F112 | branch-only fixes | `MANIFEST_SCHEMA_VERSION` on main is still `1`; `head_sha`/`cache_key_hash` absent; `differential_repo_test.rs` lacks `head_sha_matches`. PR #57 carries the fix. | Partial-on-branch |
-| F143 | SPA browser smoke | `tests/spa_browser_test.rs` absent on main; `browser-tests` feature not wired in `ci.yml`. PR #56 carries the fix. | Partial-on-branch |
+| F145 | main.rs dispatch boilerplate | `main.rs = 2047 LOC` (drifted +3); dispatch arm ~1201 LOC (≈59%) | Active confirmed (essentially unchanged) |
+| F146 | json.rs trivial shims | `grep -cE '^pub fn write_[a-z_]+_json' = 29` — no change | Active confirmed |
+| F148 | csv.rs + markdown.rs per-analysis emitters | Both still ~25KB per-analysis files (csv.rs 25825 bytes, markdown.rs 25534 bytes) | Active confirmed |
+| F149 | hunks schema lacks PK / NOT NULL | `schema_v1.sql:51-57` — 4 offset columns plain INTEGER (nullable); no PK; no `(rev,path)` index | Active confirmed |
+| F150 | Schema version disjoint, no startup validation | `facts/schema.rs:10` `CURRENT_SCHEMA_VERSION` const + `facts/mod.rs:69` `validate_schema_version()` at `open_read_only` bails on mismatch | **Fixed on main (PR #61)** |
+| F151 | Leiden non-deterministic | `communities.rs:58 LEIDEN_SEED` + `:148-150 LeidenConfig { seed: Some(LEIDEN_SEED), .. }` + regression test :269-316 | **Fixed on main (PR #61)** |
+| F152 | clone_group_id std HashMap | `clones/extractor.rs:151-152` switched to `BTreeMap<[u8;32], _>` | **Fixed on main (PR #61)** |
+| F153 | I/O errors → exit 5 | `error.rs:22` single `Io(#[from] std::io::Error)` variant; `:68` still maps `Io(_) → 5` alongside `Output(_)`; no `RepoIo` variant | Active confirmed |
+| F154 | diff base==head no guard | `diff.rs:563-569` explicit `if base_sha == head_sha { anyhow::bail!(...) }` pre-check with SHA + range context | **Fixed on main (PR #62)** |
+| F155 | DiffOutput medians default 0.0 | `diff.rs:48,52` `Option<f64>` for both fields; `:673` populates `Some/None` per gate-ran branch | **Fixed on main (PR #60)** |
+| F156 | Thresholds/Gates/DiffGates no `deny_unknown_fields` | `quality_gates/mod.rs:46,55,70` all three structs carry `#[serde(deny_unknown_fields)]` | **Fixed on main (PR #60)** |
+| F157 | F147's guard wraps wrong list | `analysis.rs:154-164 registry!` macro expands ONCE into both the `&[AnalysisName::$variant,*]` array and the const `_guard` match — single source of truth | **Fixed on main (PR #60)** |
+| F158 | SARIF informationUri hardcodes wrong URL | `sarif.rs:20 CODELORE_HOMEPAGE` + `:26-27 CODELORE_RESEARCH_FOUNDATIONS_URL` used at all 5 sites (informationUri ×3 + helpUri ×2). `grep emre/codescene = ∅` | **Fixed on main (PR #63)** |
+| F159 | SARIF artifactLocation.uri not percent-encoded | `Cargo.toml:46 percent-encoding = "2"` + `sarif.rs:54 percent_encode_path(p)` applied at `:177, :354, :531` (all 3 emitters) | **Fixed on main (PR #63)** |
+| F160 | Kamei NDEV/EXP same-second `<` vs `<=` inconsistent | `kamei/mod.rs:227, :246, :304` all use strict `prev.date < c.date`; `:278` documents the unified semantic; no `<=` in code paths | **Fixed on main (PR #64)** |
+| F161 | Vec<Row> in every emitter | json.rs/markdown.rs/sarif.rs all still `rows: &[T]`; no `EmitterStream` trait | Active confirmed |
+| F162 | Parquet types drift from CSV row-type | `parquet.rs:13` still raw `COPY … TO PARQUET`; no `CAST … AS UINTEGER`; no documentation note | Active confirmed |
+| F163 | SARIF automationDetails.id static | `sarif.rs:81 automation_id_for(prefix)` appends per-run 16-hex SHA-256 suffix; applied at all 3 sites (:124, :312, :474) | **Fixed on main (PR #63)** |
+| F110 | Differential test coverage incomplete | `differential_repo_test.rs:522 head_sha_matches` + 11 sibling tests at lines 62, 97, 139, 169, 209, 241, 265, 316, 390, 450, 485, 537 | **Fixed on main (PR #57)** |
+| F112 | Provenance manifest missing reproducibility | `provenance/mod.rs:94,98,114,117,122` — all 5 reproducibility fields present; builder populates from real sources | **Fixed on main (PR #57)** |
+| F143 | SPA browser smoke test | `tests/spa_browser_test.rs` exists; `Cargo.toml:127 browser-tests` feature wired; `ci.yml:174` runs `cargo test --features browser-tests,spa,test-support -p codelore-lib --test spa_browser_test` | **Fixed on main (PR #56)** |
 
 `cargo deny check advisories` clean as of validation date — confirms no F-finding maps to a live CVE.
+
+**Pruning note**: 17 findings that the 2026-06-16 validator marked "Fixed-on-branch" all reached main (PRs #56-#64 merged via v0.7.0 / v0.8.0). Their full §4 bodies have been removed from this report and condensed into the §3 closure log per the report's stated policy (line 4). F113 count corrected (8, not 13/17). F127 reclassified as Partial — see updated §4 entry. F120 + F124 closed this session (URL fix + MSRV policy doc). F116 refuted this session after reading both bot configs — Renovate handles `cargo`, Dependabot handles `github-actions`; they're partitioned, not duplicated.
 
 ---
 
@@ -512,11 +401,14 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 
 **Current Active count after this validation pass + closure annotations**:
 
-- **Fixed-on-branch** (15, awaiting merge): F125 (PR #58), F126 (PR #58), F155 (PR #60), F156 (PR #60), F157 (PR #60), F150 (PR #61), F151 (PR #61), F152 (PR #61), F118 (PR #62), F138 (PR #62), F154 (PR #62), F158 (PR #63), F159 (PR #63), F163 (PR #63), F127 (PR #64), F128 (PR #64), F160 (PR #64). Plus F110 / F112 (PR #57) and F143 (PR #56) from prior session.
-- **Active (still open as future task candidates)**: F94, F97, V4, V5, V6 + F111, F113, F114, F115, F116, F117, F119, F120, F121, F122, F123, F124, F129, F130, F131, F132, F133, F134, F135, F136, F137, F142, F144, F145, F146, F148, F149, F153, F161, F162 = **~30 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
+- **Closed on main (added to §3 closure-log)**: F110, F112, F118, F120 (URL half), F124 (policy half), F125, F126, F128, F138, F143, F150, F151, F152, F154, F155, F156, F157, F158, F159, F160, F163. F127 partial-closed (NS/ND/NF triple done; entropy remains).
+- **REFUTED this session**: F116 — see §3 newly-refuted block. Renovate + Dependabot are partitioned by ecosystem (cargo vs github-actions), not duplicated.
+- **Active**: F94, F97, V4, V5, V6, F111, F113, F114, F115, F117, F119, F121, F122, F123, F127 (partial — entropy), F129, F130, F131, F132, F133, F134, F135, F136, F137, F142, F144, F145, F146, F148, F149, F153, F161, F162 = **32 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
 
 The next sweep should re-open with F-IDs starting at **F164**.
 
-**Validation methodology held**: every Active finding above re-verified against current `main` HEAD via direct source-line grep / wc / sed; results recorded in §4½. Branch-only fixes carry explicit PR numbers so the report doesn't claim closures that haven't reached main yet.
+### Deferred — discovery pass (Workflow `wf_902c8b32-45d`)
 
-**Branch-merge gate**: once PRs #56-#64 merge to main, the 17 "Fixed-on-branch" entries above can be pruned to the §3 closure-log table and removed from §4 Active. Until then the report deliberately retains the Active descriptions so re-validation can confirm the fix landed where the audit said it would.
+The 2026-06-18 audit attempted to fan out 8 fresh discovery dimensions (architecture, backend-perf, rust-best-practices, spa-frontend, dep-currency, test-quality, code-design, security-correctness) with 3-lens adversarial verification per candidate, looped to dry. The validation half (54 findings re-verified in parallel) completed; the discovery half — 16 subagents across 2 rounds — was lost to an Anthropic weekly-quota cap (resets 2026-06-21 21:00 Europe/Amsterdam). The workflow script + run journal persist at `/Users/emrec/.claude/projects/-Users-emrec-Projects-playground-codelore/8db19d2a-538c-4ef3-aaaa-e3093c56c8c8/workflows/scripts/codelore-deep-audit-wf_902c8b32-45d.js` — resumable with `Workflow({scriptPath, resumeFromRunId: "wf_902c8b32-45d"})` once quota resets, which will cache the entire validation phase and only re-run the discovery half.
+
+**Validation methodology held**: every Active finding above re-verified against current `main` HEAD via direct source-line grep / wc / sed; results recorded in §4½. Closures show explicit PR numbers so the report doesn't claim closures that haven't reached main.

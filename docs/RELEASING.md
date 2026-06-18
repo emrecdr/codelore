@@ -64,6 +64,26 @@ From `0.1.0` the path forward is:
 
 For future major-version cuts (`1.0`, `2.0`, …), revive the `alpha → beta → rc → stable` ladder — the rigor matters more once external users depend on the previous major.
 
+## MSRV (Minimum Supported Rust Version) Policy
+
+**Pre-1.0 stance: MSRV tracks the toolchain channel verbatim. No N-2 buffer.**
+
+The workspace's `Cargo.toml` `rust-version` field and `rust-toolchain.toml`'s `channel` are pinned to the same stable release (currently `1.96` / `1.96.0`). A Rust toolchain bump and an MSRV bump are the same operation — coordinated atomically by `scripts/cut-release.sh` across the four pin sites (`rust-toolchain.toml`, workspace `rust-version`, the `dtolnay/rust-toolchain` action invocations, `CHANGELOG.md`).
+
+### Why no buffer
+
+The conventional N-2-stable MSRV buffer (Rust convention for library crates published to `crates.io`) trades currency for compatibility. CodeLore is a CLI binary, not a library consumed by other crates' build graphs — there is no downstream `cargo build` chain we destabilize by requiring fresh stable. The binary ships as prebuilt artifacts (five targets per release) plus a `cargo binstall`-compatible asset layout plus a distroless container. End users do not compile from source as a primary install path.
+
+The cost we accept: a contributor building from a Rust ≤ 1.95 toolchain gets a build error pointing at the `rust-version` mismatch. The benefit: we get to use every stable Rust feature the moment it ships (the SQL-driven analyses surface benefits from `let-else` / `let chains` / `if let` chaining as they land), and the MSRV ratchet has no surprises — every MSRV bump is a deliberate `scripts/cut-release.sh` invocation, never a silently-broken downstream.
+
+### Post-1.0 reconsideration
+
+Once we hit `1.0`, the binary will likely grow a stable library surface (`codelore-lib` consumed by IDE extensions, lints crates, custom dashboards). At that point this section gets revisited and the conventional N-2 buffer applies. The trigger is "external Rust consumers depend on `codelore-lib`'s API", not the version number itself.
+
+### How to bump MSRV
+
+Run `scripts/cut-release.sh` for the coordinated update. Never hand-edit a single pin site — the four-way coordination is what `cut-release.sh` exists to guarantee.
+
 ## Release Procedure
 
 ### Pre-flight checklist

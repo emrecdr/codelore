@@ -410,7 +410,6 @@ Release-ready alpha. **31 analyses × 8 output formats × `codelore diff` PR-mod
 
 Known limitations (the honest list, validated against the current codebase):
 
-- **Complexity metrics aren't re-aggregated after grouping** — `hotspots` + `code-health` analyses report 0 cognitive for `--group-file`-collapsed entities (group-level cognitive aggregation is on the follow-up list)
 - **Code-maat sliding-window `--temporal-period N`** is intentionally **not** emulated under `--code-maat-compat` — the modern `--time-bucket DAY|WEEK|MONTH` (non-overlapping buckets, no commit-duplication artifact) is the recommended surface and what ships; the legacy sliding-window-with-duplication is an opt-in future-work item if migration users hit it
 
 Full backlog: [`docs/roadmap-v1.x-and-beyond.md`](docs/roadmap-v1.x-and-beyond.md).

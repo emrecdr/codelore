@@ -328,7 +328,9 @@ fn analyze_hotspots_emits_sarif() {
         .assert()
         .success()
         .stdout(predicate::str::contains("CODELORE-HOTSPOT"))
-        .stdout(predicate::str::contains("schemastore.azurewebsites.net"));
+        .stdout(predicate::str::contains(
+            "json.schemastore.org/sarif-2.1.0.json",
+        ));
 }
 
 #[test]

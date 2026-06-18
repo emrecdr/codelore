@@ -47,7 +47,7 @@ const SQL: &str = "
     ),
     file_complexity AS (
         SELECT path, MAX(cognitive) AS max_cognitive
-        FROM complexity_metrics
+        FROM {cm_src}
         WHERE cognitive IS NOT NULL
         GROUP BY path
     )
@@ -96,9 +96,11 @@ pub fn run_stale_code(db: &FactsDb, opts: &Options) -> Result<Vec<StaleCodeRow>>
         n.minute(),
         n.second(),
     );
+    let cm_src = crate::analyses::grouped_complexity::source_table(opts);
+    let sql = SQL.replace("{cm_src}", cm_src);
     super::query::explain_if_requested(
         db,
-        SQL,
+        &sql,
         params![
             anchor,
             anchor,
@@ -112,7 +114,7 @@ pub fn run_stale_code(db: &FactsDb, opts: &Options) -> Result<Vec<StaleCodeRow>>
     )?;
     super::query::query_map_collect(
         db,
-        SQL,
+        &sql,
         params![
             anchor,
             anchor,

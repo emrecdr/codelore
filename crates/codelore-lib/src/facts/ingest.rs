@@ -1333,12 +1333,70 @@ pub fn apply_grouping(db: &super::FactsDb, group_map: &super::GroupMap) -> Resul
     )
     .map_err(|e| CodeLoreError::Analysis(format!("swap changes: {e}")))?;
 
+    // Step 6: materialise per-group `MAX(cognitive)` + `MAX(unit-MI)`
+    // rollups so the four path-aggregating analyses that join
+    // `complexity_metrics` (hotspots, code_health, god_classes,
+    // stale_code) see grouped paths in the same key space as the
+    // rewritten `changes.path`. Without this, those analyses LEFT
+    // JOIN raw-path complexity rows against group-name change rows
+    // and silently report `0` cognitive for every grouped entity.
+    // `_grouping_v1` must still exist (TEMPORARY TABLE,
+    // connection-scoped) so this step runs HERE inside
+    // `apply_grouping`, not at analysis time.
+    materialize_complexity_grouped(conn)?;
+
     tracing::info!(
         "grouping applied: {} rules, {} distinct paths, strict={}",
         group_map.rules.len(),
         distinct_paths.len(),
         group_map.strict
     );
+
+    Ok(())
+}
+
+/// Build `complexity_metrics_grouped` from the raw `complexity_metrics`
+/// and `entities` tables joined through `_grouping_v1`. One permanent
+/// row per group, with `MAX` cognitive across all entities of all
+/// files in the group and `MAX` MI restricted to `kind='unit'` rows
+/// (the file-level Maintainability Index per the
+/// `rust-code-analysis` convention). `MAX` is the right rollup because
+/// each consuming analysis treats cognitive as a "worst function" risk
+/// signal; `MAX(MAX) = MAX` composes to "worst function anywhere in
+/// this group".
+///
+/// Stored as a permanent (not TEMPORARY) table so it survives cache
+/// replay — on cache hit, `FactsDb::open_read_only` opens a fresh
+/// connection that has no access to `_grouping_v1`, but the persisted
+/// rollup table is in the `DuckDB` file and is what the analyses read
+/// via `crate::analyses::grouped_complexity::source_table`.
+fn materialize_complexity_grouped(conn: &duckdb::Connection) -> Result<()> {
+    conn.execute("DROP TABLE IF EXISTS complexity_metrics_grouped", [])
+        .map_err(|e| CodeLoreError::Analysis(format!("drop complexity_metrics_grouped: {e}")))?;
+
+    conn.execute(
+        "CREATE TABLE complexity_metrics_grouped AS \
+         WITH cog AS ( \
+             SELECT g.group_name AS path, MAX(cm.cognitive)::INTEGER AS cognitive \
+             FROM complexity_metrics cm \
+             INNER JOIN _grouping_v1 g ON g.raw_path = cm.path \
+             WHERE g.group_name IS NOT NULL AND cm.cognitive IS NOT NULL \
+             GROUP BY g.group_name \
+         ), \
+         mi AS ( \
+             SELECT g.group_name AS path, MAX(cm.mi)::DOUBLE AS mi \
+             FROM complexity_metrics cm \
+             INNER JOIN entities e \
+                 ON e.path = cm.path AND e.name = cm.name AND e.rev_last_seen = cm.rev \
+             INNER JOIN _grouping_v1 g ON g.raw_path = cm.path \
+             WHERE g.group_name IS NOT NULL AND e.kind = 'unit' AND cm.mi IS NOT NULL \
+             GROUP BY g.group_name \
+         ) \
+         SELECT COALESCE(cog.path, mi.path) AS path, cog.cognitive, mi.mi \
+         FROM cog FULL OUTER JOIN mi ON cog.path = mi.path",
+        [],
+    )
+    .map_err(|e| CodeLoreError::Analysis(format!("materialize complexity_metrics_grouped: {e}")))?;
 
     Ok(())
 }

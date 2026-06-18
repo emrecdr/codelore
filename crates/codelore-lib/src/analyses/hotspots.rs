@@ -84,11 +84,24 @@ pub struct HotspotRow {
 //                  ∈ [0, 10] — see module-level docstring for why the divisor
 //                  is 4, not 10 (code_health bottoms at 60, not 0).
 /// `{src}` becomes `changes` (legacy) or `changes_lineage` (canonical
-/// rename-aware). Kept as a `format!()` template so `--use-canonical-lineage`
-/// flips the table without rewriting the rest of the SQL.
+/// rename-aware). `{cm_src}` becomes `complexity_metrics` or
+/// `complexity_metrics_grouped` (per `analyses::grouped_complexity`).
+/// `{file_mi_cte}` swaps the `file_mi` CTE body between the
+/// `entities`-join (raw paths) form and the pre-baked-from-grouped
+/// form — the entities join can't be reused post-grouping because
+/// `entities.path` is never rewritten by `apply_grouping`, so the
+/// rolled-up `mi` must come straight from
+/// `complexity_metrics_grouped.mi`.
 #[must_use]
-pub fn build_sql(src: &str) -> String {
+pub fn build_sql(src: &str, cm_src: &str) -> String {
+    let file_mi_cte = if cm_src == "complexity_metrics_grouped" {
+        FILE_MI_GROUPED
+    } else {
+        FILE_MI_RAW
+    };
     SQL.replace("FROM changes\n", &format!("FROM {src}\n"))
+        .replace("{cm_src}", cm_src)
+        .replace("{file_mi_cte}", file_mi_cte)
 }
 
 /// Returns the SAME hotspots SQL with `?` placeholders substituted for
@@ -97,13 +110,48 @@ pub fn build_sql(src: &str) -> String {
 /// formula with [`build_sql`] eliminates the silent-drift risk between
 /// the two paths.
 #[must_use]
-pub fn build_inlined_sql(src: &str, min_revs: u32, row_limit: i64) -> String {
+pub fn build_inlined_sql(src: &str, cm_src: &str, min_revs: u32, row_limit: i64) -> String {
     // SQL has exactly two `?` placeholders: first is min_revs (HAVING),
     // second is row_limit (LIMIT). Substitute in order.
-    build_sql(src)
+    build_sql(src, cm_src)
         .replacen('?', &min_revs.to_string(), 1)
         .replace('?', &row_limit.to_string())
 }
+
+/// `file_mi` body for the raw (ungrouped) path — joins `entities` to
+/// filter `kind='unit'` since `complexity_metrics` doesn't store kind.
+/// The `e.rev_last_seen = cm.rev` predicate is the lockstep invariant:
+/// `append_entity_row` and `append_metric_row` both receive the same
+/// `head_rev`, so the alive entity at the metric's rev is the only
+/// row that should match. Lex-comparing SHA strings as if chronological
+/// is unreliable (lex order on SHA hex is essentially random vs commit
+/// order). `MAX(cm.mi)` collapses to the single matched row by
+/// construction.
+const FILE_MI_RAW: &str = "file_mi AS (
+        SELECT
+            cm.path,
+            MAX(cm.mi) AS mi
+        FROM complexity_metrics cm
+        INNER JOIN entities e
+            ON e.path = cm.path
+            AND e.name = cm.name
+            AND e.rev_last_seen = cm.rev
+        WHERE e.kind = 'unit' AND cm.mi IS NOT NULL
+        GROUP BY cm.path
+    )";
+
+/// `file_mi` body for the grouped path — `complexity_metrics_grouped.mi`
+/// is already the per-group `MAX` of `kind='unit'` MI rows (the
+/// `apply_grouping` materialiser applied the same `entities`-join +
+/// `kind='unit'` filter before collapsing to one row per group). Read
+/// it directly — re-joining `entities` here would silently produce
+/// NULL MI for every grouped entity because `entities.path` is
+/// never rewritten by `apply_grouping`.
+const FILE_MI_GROUPED: &str = "file_mi AS (
+        SELECT path, mi
+        FROM complexity_metrics_grouped
+        WHERE mi IS NOT NULL
+    )";
 
 pub const SQL: &str = "
     WITH file_revs AS (
@@ -116,35 +164,14 @@ pub const SQL: &str = "
     ),
     file_complexity AS (
         SELECT path, MAX(cognitive) AS cognitive
-        FROM complexity_metrics
+        FROM {cm_src}
         GROUP BY path
     ),
-    -- File-level MI: rust-code-analysis emits one `kind='unit'` entity per
-    -- file (the root space). Its `mi` is computed from the file's cumulative
-    -- Halstead / Cyclomatic / SLOC inputs per Coleman 1994 + SEI 1997. We
-    -- join `entities` to filter by kind because `complexity_metrics` doesn't
-    -- store kind.
-    --
-    -- The `e.rev_last_seen = cm.rev` filter is the lockstep invariant:
-    -- `append_entity_row` and `append_metric_row` in `facts/ingest.rs`
-    -- both receive the same `head_rev`, so for any (path, name) in this
-    -- run, the entity row alive at the metric's rev is the only one
-    -- that should match. Without this filter we'd lex-compare SHA
-    -- strings as if chronological, which is unreliable (lex order on
-    -- SHA hex is essentially random vs commit order). MAX(cm.mi)
-    -- collapses to the single matched row by construction.
-    file_mi AS (
-        SELECT
-            cm.path,
-            MAX(cm.mi) AS mi
-        FROM complexity_metrics cm
-        INNER JOIN entities e
-            ON e.path = cm.path
-            AND e.name = cm.name
-            AND e.rev_last_seen = cm.rev
-        WHERE e.kind = 'unit' AND cm.mi IS NOT NULL
-        GROUP BY cm.path
-    ),
+    -- File-level MI body is swapped at build time depending on whether
+    -- grouping is active — see `FILE_MI_RAW` / `FILE_MI_GROUPED`. The
+    -- raw form joins `entities` to filter `kind='unit'`; the grouped
+    -- form reads pre-baked `mi` from `complexity_metrics_grouped`.
+    {file_mi_cte},
     -- Per-file AI-attribution percentage: share of commits touching this
     -- file that carry an AI-attribution signal (ai-assisted or
     -- ai-authored). NULLIF guards against div-by-zero on the empty join
@@ -225,7 +252,8 @@ pub fn run_hotspots(db: &FactsDb, opts: &Options) -> Result<Vec<HotspotRow>> {
     // lineage-resolved view).
     crate::analyses::lineage::materialize_source(db, opts)?;
     let src = crate::analyses::lineage::source_table(opts);
-    let sql = build_sql(src);
+    let cm_src = crate::analyses::grouped_complexity::source_table(opts);
+    let sql = build_sql(src, cm_src);
     crate::analyses::query::explain_if_requested(
         db,
         &sql,

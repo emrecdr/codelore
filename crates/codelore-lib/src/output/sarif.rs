@@ -10,7 +10,7 @@ use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use sha2::{Digest, Sha256};
 use std::io::Write;
 
-const SARIF_SCHEMA: &str = "https://schemastore.azurewebsites.net/schemas/json/sarif-2.1.0.json";
+const SARIF_SCHEMA: &str = "https://json.schemastore.org/sarif-2.1.0.json";
 const RULE_ID: &str = "CODELORE-HOTSPOT";
 const AUTOMATION_ID_PREFIX: &str = "codelore/hotspots/run";
 
