@@ -231,63 +231,54 @@ Once you've run those four, you have enough signal to triage. From here, [the ad
 
 ## Interactive dashboard (`--format spa`)
 
-For an at-a-glance CodeScene-equivalent surface, emit a single
-self-contained HTML file that opens in any browser, runs offline,
-and fits in a CI artefact:
+Emit a single self-contained HTML file you can open in any browser,
+share via Slack, attach to a CI run, or install as a PWA. Runs
+fully offline — no server, no CDN, no JavaScript bundles to host.
 
 ```bash
 codelore analyze --format spa --output codelore.html --repo .
 ```
 
-**Fifteen interactive widgets** plus a click-target detail drawer, all from a single embedded JSON blob:
+### What's inside
 
-- **KPI tiles** — files / commits / authors / median code-health / cognitive p95 / coupling density / MI band breakdown
-- **Knowledge islands** — CodeLore's strategic differentiator vs CodeScene
-- **Hotspot circle-pack** — seven color modes: cognitive complexity / **code health (DaisyUI 3-band)** / **tech-debt friction (OKLCH heat ramp)** / knowledge map / AI attribution / clones / **knowledge loss (offboarding scenario)** — with **yellow ring overlay on top-quartile hotspots**
-- **Coupling arc overlay** — click any file → arcs to its top-5 Fisher-significant coupling partners, with arc opacity encoding p-value and width encoding coupling degree (CodeScene-exceeding signal density)
-- **Offboarding scenario picker** — DaisyUI dropdown of authors → reactive recolor + at-risk KPI tile, persisted via `$persist` (works on air-gapped CI artefacts)
-- **Sortable hotspot table** + **parallel DOM tree** (WCAG-conformant keyboard a11y alternative to the canvas)
-- **Change-coupling sankey** · **monthly trends** · **calendar heatmap** · **function X-Ray sunburst** with cognitive heatmap
-- **Delivery Risk Sparkline** — last 30 commits as bars, composite Kamei JIT-SDP risk with dominant-dimension tooltip (size / spread / concurrency / inexperience / entropy)
-- **Hotspot treemap** · **multi-metric parallel coordinates** · **cognitive boxplot** · **module chord** · **architecture force-graph** (consumes the resolved F-A1 import edges)
-- **Per-file radar** inside the detail drawer — 6-axis behavioural profile (cognitive / churn / coupling / MI / AI% / health)
+Fifteen interactive widgets driven by a single embedded JSON blob:
 
-**Native `<dialog>` + View Transitions + Popover-pattern tooltips + PWA manifest** — modern web platform primitives, no tooltip lib, no drawer logic, installable on iOS/Android via Add-to-Home-Screen.
+- **Codebase at a glance** — KPIs: files, commits, contributors, median code-health, complexity peaks, MI band breakdown
+- **Knowledge islands** — files whose primary author has departed and where no other substantial owner exists (no manual ex-developer marking required)
+- **Hotspots circle-pack** — files sized by churn, recoloured across seven behavioural lenses: complexity, code health, tech-debt friction, knowledge map, AI attribution, clones, and knowledge loss under your off-boarding scenario
+- **Hotspots table + treemap** — same data, sortable / filterable / strict-area comparison
+- **Trends** — monthly revision counts for the top-N hotspots
+- **Multi-metric comparison** — parallel coordinates across five behavioural axes, drag-filter on any axis
+- **Delivery risk** — per-commit risk (Kamei JIT-SDP) for the last N commits, with the dominant risk dimension annotated
+- **Module coupling + Architecture graph** — change-coupling chord vs. resolved-import force-graph (agreement = healthy modularity; disagreement = signal worth investigating)
+- **Change coupling sankey** — Fisher-significant file pairs
+- **Cognitive distribution** — boxplot across every file with measured complexity
+- **Function X-Ray** — function-level cognitive complexity sunburst
+- **Commit activity** — GitHub-style calendar heatmap
+- **File detail drawer** — click any file anywhere to slide in a side panel with its full profile
 
-### What you can do with the dashboard
+### What you can do with it
 
-- **Tune every chart in place** — depth selectors on the module-coupling chord, architecture force-graph, and change-coupling sankey; Top-N selectors on Trends, Multi-metric, and Delivery-risk Kamei. Defaults stay quiet; the panel re-renders the moment you tap a tab. Selections survive reload via `Alpine.$persist` (localStorage).
-- **Share the exact view** — depth, Top-N, off-boarding scenario, and other tunables sync to the URL hash. Copy the link into Slack and your teammate sees the same dashboard you do — even on an air-gapped CI artefact.
-- **Simulate off-boarding reactively** — pick departing authors from the dropdown and the *Hotspots* circle-pack switches to its knowledge-loss colour mode, the *Hotspot table* flags affected rows with a red accent + badge, the *Keyboard-accessible file list* lights up, and the detail drawer surfaces a knowledge-loss flag on every coupling partner and top contributor owned by a departed author.
-- **Click any file anywhere** — Hotspot table, parallel-coords polyline, keyboard list, KI row, treemap rectangle — and the right-side detail drawer slides in with the file's complete behavioural profile: 6-axis radar, hotspot metrics, knowledge-island data, top contributors with `+added/-deleted` LoC and knowledge-loss flags, coupling partners with their primary authors, top-N most complex functions (from X-Ray), and clone-group membership. The drawer is non-modal — click another row and the content swaps in place.
-- **Cross-widget highlight** — selecting a file in any path-aware widget lights it up across Trends and Multi-metric comparison so its profile reads at a glance across all panels.
-- **Explain every panel** — every widget carries an inline *Learn more* disclosure with academic citation, how to read the chart, what signal to watch for, and a recommended action. Hover the small `?` icons next to tab buttons for one-line explanations of each color mode, depth level, or top-N choice.
-- **Full-screen + pan/zoom** — every widget has a fullscreen toggle in its top-right corner. The Hotspots circle-pack and Architecture graph also have a reset-zoom button; the former supports wheel-zoom + drag-pan (with double-click to reset), the latter uses ECharts' native graph roam.
-- **Ultra-wide ready** — the dashboard fills viewports up to 2400 px wide with the grid auto-centred beyond that. Two-column layout for the small widgets, full-width for the large ones, vertical right-side legend on the trends chart with All / Swap selectors for one-click isolate.
+- **Tune every chart in place.** Depth selectors on the coupling chord / arch graph / sankey; Top-N tabs on Trends / Multi-metric / Delivery risk. Selections survive reload and sync to the URL hash so a pasted link reproduces the exact view your teammate is looking at.
+- **Simulate off-boarding.** Tick departing authors → the hotspot circle-pack recolours, the hotspot table flags affected rows, and the file drawer flags every coupling partner and contributor owned by a departing author. See the bus-factor exposure before it becomes an incident.
+- **Click any file.** The right-side drawer slides in with a 6-axis behavioural radar, hotspot metrics, knowledge-island data, top contributors with `+added/-deleted` LoC, coupling partners + their authors, top complex functions with line numbers, and clone-group membership. Non-modal — click another row and the content swaps in place.
+- **Cross-widget highlight.** Selecting a file in any widget lights it up across Trends and Multi-metric so its profile reads at a glance across panels.
+- **Self-explanatory.** Every widget has a *Learn more* disclosure: what it measures, how to read it, what signal to watch for, recommended action, and citation. Hover the `?` icons on tabs for one-line explanations.
+- **Fullscreen any panel.** Top-right corner toggle. The hotspots and architecture graphs also have wheel-zoom + drag-pan and a reset button.
+- **Share the exact view.** URL hash carries depth, Top-N, and off-boarding picks. Works on air-gapped CI artefacts too — the link is just a fragment in a file URL.
 
-Stack: **Tailwind v4** for utility-first layout, **DaisyUI 5**
-for themed components, **Alpine.js 3.15** for HTML-attribute
-reactivity (cross-widget filter state, persisted theme toggle,
-detail-drawer state), **Apache ECharts** + **d3-hierarchy.pack()**
-for the visualisations. All four SHA-pinned at build time; bundle
-stays fully self-contained (~1.5 MB rendered SPA, no CDN at
-runtime). Theme follows the OS-level `prefers-color-scheme` on
-first paint and survives reload via `localStorage`.
+### Differentiation
 
-The `spa` Cargo feature gates the JS deps so default `cargo
-install codelore` builds clean offline. Released binaries
-(Homebrew / ghcr / GitHub Releases) enable the feature, so
-`codelore --format spa` works out of the box.
+Signals CodeScene doesn't expose: **auto-detected knowledge
+islands** (no manual ex-developer marking), **AI-attribution
+filtering** as a hotspot colour mode, **clone-detection overlay**
+on the same hotspot view, and **auditable per-metric formulas**
+(every number links back to the SQL query that produced it via
+the provenance sidecar).
 
-CodeLore's UI exposes signals CodeScene doesn't:
-**auto-detected knowledge islands** (departed-author × clones
-× co-change intersection — no manual ex-developer marking),
-**AI-attribution filtering** (per-file AI-authorship percentage
-as a circle-pack colour mode), **clone-detection overlay** (per-file
-clone-group counts as another colour mode on the same hotspot
-view — structural-duplication hotspots where you already navigate),
-and **auditable per-metric formulas** (provenance sidecar links
-every dashboard number to the SQL query that produced it).
+The `spa` Cargo feature gates the visualisation deps. Pre-built
+binaries (Homebrew, ghcr, GitHub Releases) enable it, so the
+dashboard works out of the box.
 
 ---
 
