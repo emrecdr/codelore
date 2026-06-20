@@ -84,6 +84,8 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 | F118 | gix walker thread panic silently swallowed | **Fixed** | PR #62 → main. `WalkerStream` joins handle on EOF; panic mapped to `CodeLoreError::Repo` → exit 3 |
 | F127 | Kamei `enrich_diffusion` NS/ND/NF correlated subqueries | **Fixed** (partial — entropy block remains) | PR #64 → main collapsed the NS/ND/NF triple. See F127 in §4 for the entropy-block remainder. |
 | F128 | Kamei `enrich_size` correlated subqueries | **Fixed** | PR #64 → main. Grouped `UPDATE … FROM (… GROUP BY rev)` |
+| F134 | Hotspot 'Show all' synchronously builds full HTML | **Fixed** | This session. `renderNextPage` now async + chunked in 50-row batches with `await yieldToMain()` between each; `Show all` wrapped in element-scoped `startViewTransition(.., container)`; `.hotspot-row { view-transition-name: match-element }` for per-row crossfades |
+| F135 | Theme toggle re-runs full d3.pack layout | **Fixed** | This session. `Alpine.effect` rerenderer loop now yields between widgets via `window._codeloreYieldToMain()`; `.widget { view-transition-name: match-element }` so widgets animate independently |
 | F138 | `startViewTransition` ignores `prefers-reduced-motion` | **Fixed** | PR #62 → main. `matchMedia('(prefers-reduced-motion: reduce)')` short-circuits the transition |
 | F139 | `DiffGates` parsed but never evaluated | **Fixed** | `549c460` (evaluator + CLI wiring) |
 | F140 | Six new analyses lack integration tests | **Fixed** | `7b43593` (5 new `tests/*_test.rs`) |
@@ -243,16 +245,6 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 *   **Severity**: HIGH
 *   **Validation note (2026-06-18)**: 15 responsive Tailwind classes total in `template.html` (drifted +1), all `xl:` (≥ 1280px). Zero `sm:` / `md:` / `lg:` — confirms the finding: viewports from 320px up to 1279px get the desktop layout uncompressed. Phones/tablets either zoom out or scroll-bar.
 
-#### F134 — Hotspot table "Show all" synchronously builds full HTML
-
-*   **Location**: `crates/codelore-lib/src/output/spa/widgets.js:1377`
-*   **Severity**: HIGH
-
-#### F135 — Theme toggle re-runs full `d3.pack` layout
-
-*   **Location**: `crates/codelore-lib/src/output/spa/widgets.js:204`
-*   **Severity**: MED
-
 #### F136 — Color-mode tablist mismatches WAI-ARIA Tabs pattern
 
 *   **Location**: `crates/codelore-lib/src/output/spa/template.html:621-636`
@@ -362,8 +354,8 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 | F131 | Tooltip 14×14 trigger | `template.html:311` (drifted from :259) literal `width: 14px; height: 14px; cursor: help` | Active confirmed |
 | F132 | Hardcoded hex in widgets.js | 6 sites — examples: `:1992 '#e6e6e6'`, `:2406 '#fff'`, `:2933` visualMap ramp `['#1a4a2c','#2ea44f','#7dd87a','#f59e0b','#e0584e']`, `:3273-3275` author palette | Active confirmed |
 | F133 | No responsive < 900px | 15 responsive classes total (drifted +1), all `xl:`. Zero `sm:` / `md:` / `lg:` | Active confirmed |
-| F134 | Hotspot 'Show all' synchronous | `widgets.js:1836-1837` `showAll.addEventListener('click', function () { renderNextPage(Infinity); })` — no virtualization / requestIdleCallback / requestAnimationFrame | Active confirmed |
-| F135 | Theme toggle re-runs `d3.pack` | `widgets.js:429-431` `registerThemeRerender(...)` → `renderHotspotCirclePack` → `:1268` `d3.pack().size([side, side]).padding(2)(root)` — full re-layout | Active confirmed |
+| F134 | Hotspot 'Show all' synchronous | `widgets.js` now chunks `renderNextPage` into 50-row batches with `await yieldToMain()` between each; the `Show all` click is also wrapped in element-scoped `startViewTransition(..., container)` (Chrome 147+) so the table animates without freezing other widgets; `view-transition-name: match-element` on `.hotspot-row` gives per-row crossfades | **Fixed on main (this session)** |
+| F135 | Theme toggle re-runs `d3.pack` | `template.html`'s `Alpine.effect` rerenderer loop now `await window._codeloreYieldToMain()` between each registered rerenderer (the d3.pack pass still runs but yields the main thread between widgets); `.widget { view-transition-name: match-element }` per-widget animation | **Fixed on main (this session)** |
 | F136 | Color-mode tablist non-ARIA | `template.html` has ~40 `role="tab"` but no `aria-selected`/`aria-controls`; `initHotspotColorToggles` at widgets.js:3066-3098 only swaps `tab-active` class on click; no arrow-key handler | Active confirmed |
 | F137 | Knowledge-islands rows mouse-only | widgets.js:1196-1211 only `addEventListener('click', ...)`+`cursor: pointer`; no `tabindex`, no `role="button"`, no `keydown` | Active confirmed |
 | F138 | `startViewTransition` ignores reduced-motion | widgets.js:694-700 now matches `prefers-reduced-motion` and runs `updateFn()` synchronously | **Fixed on main (PR #62)** |
@@ -401,9 +393,9 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 
 **Current Active count after this validation pass + closure annotations**:
 
-- **Closed on main (added to §3 closure-log)**: F110, F112, F118, F120 (URL half), F124 (policy half), F125, F126, F128, F138, F143, F150, F151, F152, F154, F155, F156, F157, F158, F159, F160, F163. F127 partial-closed (NS/ND/NF triple done; entropy remains).
+- **Closed on main (added to §3 closure-log)**: F110, F112, F118, F120 (URL half), F124 (policy half), F125, F126, F128, F134, F135, F138, F143, F150, F151, F152, F154, F155, F156, F157, F158, F159, F160, F163. F127 partial-closed (NS/ND/NF triple done; entropy remains).
 - **REFUTED this session**: F116 — see §3 newly-refuted block. Renovate + Dependabot are partitioned by ecosystem (cargo vs github-actions), not duplicated.
-- **Active**: F94, F97, V4, V5, V6, F111, F113, F114, F115, F117, F119, F121, F122, F123, F127 (partial — entropy), F129, F130, F131, F132, F133, F134, F135, F136, F137, F142, F144, F145, F146, F148, F149, F153, F161, F162 = **32 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
+- **Active**: F94, F97, V4, V5, V6, F111, F113, F114, F115, F117, F119, F121, F122, F123, F127 (partial — entropy), F129, F130, F131, F132, F133, F136, F137, F142, F144, F145, F146, F148, F149, F153, F161, F162 = **30 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
 
 The next sweep should re-open with F-IDs starting at **F164**.
 

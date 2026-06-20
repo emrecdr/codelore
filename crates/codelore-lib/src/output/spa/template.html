@@ -122,6 +122,22 @@
          corner. */
       padding: 20px;
       position: relative;
+      /* `view-transition-name: match-element` (Chrome 147+) auto-
+         assigns a stable transition identity to every `.widget` so
+         theme toggles, layout swaps, and 'Show all' expansions
+         crossfade per-widget instead of as one document-wide
+         repaint. Falls through harmlessly on older browsers — the
+         transition still runs document-scoped. F135 finish. */
+      view-transition-name: match-element;
+    }
+    /* Per-row transitions on hotspot table — `match-element` assigns a
+       stable identity so sort, filter, and 'Show all' expansion animate
+       row-by-row rather than as one full-table crossfade. CSS Containment
+       caps the cost: each row's transition is independent of its siblings.
+       F134 finish. */
+    .hotspot-row {
+      view-transition-name: match-element;
+      contain: layout style;
     }
     .widget h2 {
       margin: 0 0 4px 0;
@@ -1835,10 +1851,22 @@
         // new resolved palette / scenario state / aggregation depth.
         // Wrapped in try/catch per-renderer so one broken widget
         // doesn't break the rest.
+        //
+        // Cooperative scheduling: re-renderers full-recompute layouts
+        // (d3.pack on the hotspot circle-pack, ECharts setOption on
+        // every widget) — running all of them synchronously blocks
+        // the main thread for hundreds of ms on big repos. We yield
+        // between each so user input (drawer open, tab switch) stays
+        // responsive during the cascade. F135 root-cause fix.
         const rerenderers = window._codeloreRerenderers || [];
-        for (let i = 0; i < rerenderers.length; i++) {
-          try { rerenderers[i](); } catch (e) { console.warn('rerender failed:', e); }
-        }
+        (async function runRerenderers() {
+          for (let i = 0; i < rerenderers.length; i++) {
+            try { rerenderers[i](); } catch (e) { console.warn('rerender failed:', e); }
+            if (i + 1 < rerenderers.length && typeof window._codeloreYieldToMain === 'function') {
+              await window._codeloreYieldToMain();
+            }
+          }
+        })();
       });
       // Cross-widget selection bridge: fire listeners registered by
       // path-aware widgets whenever `$store.selection.path` changes.

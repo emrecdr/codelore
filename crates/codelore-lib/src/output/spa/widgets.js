@@ -680,7 +680,7 @@
   // (Safari < 18, Firefox < 124 — both currently shipping).
   // The transition itself is purely visual; correctness is in
   // updateFn, which runs synchronously either way.
-  function startViewTransition(updateFn) {
+  function startViewTransition(updateFn, scope) {
     if (typeof document.startViewTransition !== 'function') {
       updateFn();
       return;
@@ -698,8 +698,51 @@
       updateFn();
       return;
     }
+    // Element-scoped View Transitions (Chrome 147+) animate only the
+    // subtree rooted at `scope` and leave the rest of the dashboard
+    // interactive during the transition. The document-scoped form
+    // blocks every other widget until the crossfade settles —
+    // theme-toggle and `show all` were the worst offenders. When
+    // `scope` is missing or the browser doesn't support per-element
+    // transitions, fall back to the document-scoped path.
+    if (scope && typeof scope.startViewTransition === 'function') {
+      scope.startViewTransition(updateFn);
+      return;
+    }
     document.startViewTransition(updateFn);
   }
+
+  // ─── yieldToMain ────────────────────────────────────────────────
+  // Cooperative yield primitive: surrender the main thread so the
+  // browser can paint queued work and process pending input before
+  // the caller resumes. Prefers `scheduler.yield()` (Chrome 129+,
+  // continuation-prioritised) and falls back to a `MessageChannel`
+  // postMessage trick on browsers without scheduler — that pattern
+  // beats `setTimeout(0)` because postMessage isn't clamped to 4ms
+  // and runs at the same priority as input. Used to break up the
+  // hotspot-table 'Show all' rebuild and the theme-toggle re-layout
+  // so user input stays responsive during heavy renders.
+  //
+  // References:
+  // - https://developer.chrome.com/blog/use-scheduler-yield
+  const _yieldFallbackChannel =
+    typeof MessageChannel === 'function' ? new MessageChannel() : null;
+  function yieldToMain() {
+    if (typeof scheduler === 'object' && scheduler && typeof scheduler.yield === 'function') {
+      return scheduler.yield();
+    }
+    if (_yieldFallbackChannel) {
+      return new Promise(function (resolve) {
+        _yieldFallbackChannel.port1.onmessage = function () { resolve(); };
+        _yieldFallbackChannel.port2.postMessage(0);
+      });
+    }
+    return Promise.resolve();
+  }
+  // Expose on `window` so the template's Alpine.effect (which lives
+  // in a different lexical scope) can yield between rerenderers
+  // without duplicating the feature-detection logic. F135 fix.
+  window._codeloreYieldToMain = yieldToMain;
 
 
   // ─── §5  Detail drawer (cross-widget click target) ────────────────
@@ -1739,10 +1782,32 @@
       }
     }
 
-    function renderNextPage(count) {
+    async function renderNextPage(count) {
       const tbody = container.querySelector('#hotspot-tbody');
       if (!tbody) return;
-      const next = Math.min(renderedRows + count, filteredView.length);
+      // Chunk the rebuild — `Show all` historically called this with
+      // `Infinity` and blocked the main thread for hundreds of ms on
+      // large repos (one HTML string built, one insertAdjacentHTML
+      // call, one querySelectorAll over the full table for click
+      // wiring). Walk in CHUNK_SIZE batches and `await yieldToMain()`
+      // between each so user input (drawer open, tab switch,
+      // scrolling) stays responsive during the expansion. F134 root-
+      // cause fix.
+      const CHUNK_SIZE = 50;
+      const totalEnd = Math.min(renderedRows + count, filteredView.length);
+      while (renderedRows < totalEnd) {
+        const next = Math.min(renderedRows + CHUNK_SIZE, totalEnd);
+        await renderPageChunk(tbody, next);
+        if (renderedRows < totalEnd) {
+          // Only yield between chunks, not after the final one — the
+          // caller's continuation (refreshActions) can run inline.
+          await yieldToMain();
+        }
+      }
+      refreshActions();
+    }
+
+    function renderPageChunk(tbody, next) {
       var html = '';
       for (var i = renderedRows; i < next; i++) {
         const r = filteredView[i];
@@ -1806,7 +1871,7 @@
           if (window._codeloreShowDetail) window._codeloreShowDetail(path);
         });
       }
-      refreshActions();
+      return Promise.resolve();
     }
 
     function refreshActions() {
@@ -1827,14 +1892,20 @@
       // specificity now that we declare them explicitly.
       showNext.className = 'btn btn-outline btn-sm';
       showNext.textContent = 'Show next ' + next;
-      showNext.addEventListener('click', function () { renderNextPage(PAGE_SIZE); });
+      // Element-scoped transition on `container` — the rest of the
+      // dashboard stays interactive while the table animates.
+      showNext.addEventListener('click', function () {
+        startViewTransition(function () { renderNextPage(PAGE_SIZE); }, container);
+      });
       actionsEl.appendChild(showNext);
       if (more > PAGE_SIZE) {
         const showAll = document.createElement('button');
         showAll.type = 'button';
         showAll.className = 'btn btn-outline btn-sm';
         showAll.textContent = 'Show all (' + more + ' more)';
-        showAll.addEventListener('click', function () { renderNextPage(Infinity); });
+        showAll.addEventListener('click', function () {
+          startViewTransition(function () { renderNextPage(Infinity); }, container);
+        });
         actionsEl.appendChild(showAll);
       }
     }
