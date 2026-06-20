@@ -72,7 +72,7 @@ impl Repo for GitCliRepo {
         //         committer_email, author ISO date, full message body.
         let mut args = vec![
             "log",
-            "--pretty=format:%H%x1f%P%x1f%ae%x1f%an%x1f%ce%x1f%aI%x1f%B%x1e",
+            "--pretty=format:%H%x1f%P%x1f%ae%x1f%an%x1f%ce%x1f%aI%x1f%cI%x1f%B%x1e",
             // `--raw --numstat` together produce a per-commit block of raw
             // lines (status + paths, `:`-prefixed) immediately followed by
             // numstat lines (added/deleted/path). They appear in matching
@@ -437,8 +437,8 @@ fn find_double_newline(s: &str) -> Option<usize> {
 }
 
 fn parse_pretty_block(pretty: &str, name_status: &str) -> Option<CommitEvent> {
-    // pretty is: SHA\x1fPARENTS\x1fAE\x1fAN\x1fCE\x1fAISO\x1fMESSAGE\n
-    let mut parts = pretty.splitn(7, '\x1f');
+    // pretty is: SHA\x1fPARENTS\x1fAE\x1fAN\x1fCE\x1fAISO\x1fCISO\x1fMESSAGE\n
+    let mut parts = pretty.splitn(8, '\x1f');
     let sha = parts.next()?.trim().to_string();
     if sha.is_empty() || sha.len() < 7 {
         return None;
@@ -448,6 +448,7 @@ fn parse_pretty_block(pretty: &str, name_status: &str) -> Option<CommitEvent> {
     let author_name = parts.next()?.trim().to_string();
     let committer_email = parts.next()?.trim().to_string();
     let date_str = parts.next()?.trim().to_string();
+    let committer_date_str = parts.next()?.trim().to_string();
     let message = parts
         .next()
         .unwrap_or("")
@@ -461,6 +462,7 @@ fn parse_pretty_block(pretty: &str, name_status: &str) -> Option<CommitEvent> {
     };
 
     let date = parse_iso_timestamp(&date_str)?;
+    let committer_date = parse_iso_timestamp(&committer_date_str)?;
     let changes = parse_changes_block(name_status);
 
     Some(CommitEvent {
@@ -469,6 +471,7 @@ fn parse_pretty_block(pretty: &str, name_status: &str) -> Option<CommitEvent> {
         author_name,
         committer_email,
         date,
+        committer_date,
         message,
         parents,
         changes,
@@ -939,9 +942,9 @@ mod tests {
         // diff line (status + paths); the bare line after is the numstat
         // line (added \t deleted \t path).
         let raw = format!(
-            "{sha_a}\x1f\x1fa@x\x1fAlice\x1fce@x\x1f2025-01-01T00:00:00+00:00\x1fmsg A\n\x1e\n:100644 100644 a000 a001 M\tsrc/foo.rs\n3\t1\tsrc/foo.rs\n\n\
-            {sha_b}\x1f{sha_a} {sha_x}\x1fa@x\x1fAlice\x1fce@x\x1f2025-01-02T00:00:00+00:00\x1fmsg B\n\x1e\n\
-            {sha_c}\x1f{sha_b}\x1fa@x\x1fAlice\x1fce@x\x1f2025-01-03T00:00:00+00:00\x1fmsg C\n\x1e\n:000000 100644 0000 c001 A\tsrc/bar.rs\n5\t0\tsrc/bar.rs\n\n"
+            "{sha_a}\x1f\x1fa@x\x1fAlice\x1fce@x\x1f2025-01-01T00:00:00+00:00\x1f2025-01-01T00:00:00+00:00\x1fmsg A\n\x1e\n:100644 100644 a000 a001 M\tsrc/foo.rs\n3\t1\tsrc/foo.rs\n\n\
+            {sha_b}\x1f{sha_a} {sha_x}\x1fa@x\x1fAlice\x1fce@x\x1f2025-01-02T00:00:00+00:00\x1f2025-01-02T00:00:00+00:00\x1fmsg B\n\x1e\n\
+            {sha_c}\x1f{sha_b}\x1fa@x\x1fAlice\x1fce@x\x1f2025-01-03T00:00:00+00:00\x1f2025-01-03T00:00:00+00:00\x1fmsg C\n\x1e\n:000000 100644 0000 c001 A\tsrc/bar.rs\n5\t0\tsrc/bar.rs\n\n"
         );
 
         let events = parse_git_log_stream(&raw);

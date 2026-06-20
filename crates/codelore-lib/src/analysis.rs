@@ -84,14 +84,21 @@ pub enum AnalysisName {
     // more `Co-Authored-By:` trailers, by unique author pair.
     // Surfaces who pair-programs with whom.
     PairProgramming,
-    // Lead-time per commit (DORA metric). Today's schema carries
-    // only committer date so rows ship zero lead-time; a future
-    // schema bump adds author_date and surfaces real review-time
-    // values.
+    // Lead-time per commit (DORA metric). Computed as `committer_date
+    // - date` (committer time minus author time); rebase/squash
+    // workflows produce many zeros, merge-via-merge-commit + review
+    // workflows surface real values.
     LeadTime,
     // Per-module bus factor (Filatov 2010). Module = top-level
     // directory or --group-file group.
     BusFactor,
+    // Per-file delivery friction composite: where technical debt
+    // actively slows delivery. Product of three percentile ranks
+    // (revisions × median lead-time × cognitive). High requires
+    // elevation on ALL THREE axes — one dominant signal alone does
+    // not. Counters CodeScene v7.4's Delivery Analysis surface while
+    // staying SQL-driven and CLI-only.
+    DeliveryFriction,
 }
 
 impl AnalysisName {
@@ -129,6 +136,7 @@ impl AnalysisName {
             Self::PairProgramming => "pair-programming",
             Self::LeadTime => "lead-time",
             Self::BusFactor => "bus-factor",
+            Self::DeliveryFriction => "delivery-friction",
         }
     }
 
@@ -194,6 +202,7 @@ impl AnalysisName {
             PairProgramming,
             LeadTime,
             BusFactor,
+            DeliveryFriction,
         )
     }
 

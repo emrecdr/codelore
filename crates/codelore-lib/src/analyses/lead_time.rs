@@ -44,15 +44,14 @@ pub struct LeadTimeRow {
 /// lead-time DESC. Merge commits are excluded — their lead-time is
 /// architecturally zero on most workflows.
 ///
-/// ## Note on `commits.date` semantics
+/// ## `commits.date` vs `commits.committer_date` semantics
 ///
-/// `CodeLore`'s `commits.date` column carries the **committer** date
-/// (committer email's `date` field). The current schema doesn't
-/// preserve the separate `author_date`, so this analysis emits
-/// `0` lead-time across the board today; once an `author_date`
-/// column is added to the commits table, the query becomes
-/// `DATE_DIFF('second', author_date, date)` and the analysis
-/// returns real values.
+/// `commits.date` is the **author** date (when the commit was first
+/// authored — `git commit`'s `%aI`); `commits.committer_date` is when
+/// it last entered mainline (`%cI`). On linear-history workflows
+/// (rebase, squash) these are often equal — the squash commit is born
+/// at merge. On merge-via-merge-commit + review workflows the delta is
+/// the true in-flight review time.
 ///
 /// # Errors
 ///
@@ -60,22 +59,25 @@ pub struct LeadTimeRow {
 pub fn run_lead_time(db: &FactsDb, opts: &Options) -> Result<Vec<LeadTimeRow>> {
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
 
-    // Current schema carries only `commits.date` (committer date).
-    // Without a separate `author_date` column we emit zero-lead-time
-    // rows; the analysis surface exists so downstream analyses can
-    // build against it. Once `author_date` is added the query
-    // becomes `DATE_DIFF('second', author_date, date)`.
+    // `date` is the author date; `committer_date` is when the commit
+    // last entered mainline. Their delta in seconds is the lead time.
+    // `EPOCH` extraction returns DOUBLE; we cast to BIGINT for the
+    // typed-row binding.
     let sql = "
         SELECT
             rev,
             canonical_author,
             CAST(CAST(date AS TIMESTAMP) AS TEXT) AS author_date,
-            CAST(CAST(date AS TIMESTAMP) AS TEXT) AS committer_date,
-            CAST(0 AS BIGINT) AS lead_time_seconds
+            CAST(CAST(committer_date AS TIMESTAMP) AS TEXT) AS committer_date,
+            CAST(
+                EXTRACT(EPOCH FROM committer_date) - EXTRACT(EPOCH FROM date)
+                AS BIGINT
+            ) AS lead_time_seconds
         FROM commits
         WHERE is_merge = FALSE
           AND date IS NOT NULL
-        ORDER BY date DESC
+          AND committer_date IS NOT NULL
+        ORDER BY lead_time_seconds DESC
         LIMIT ?
     ";
 
@@ -83,9 +85,6 @@ pub fn run_lead_time(db: &FactsDb, opts: &Options) -> Result<Vec<LeadTimeRow>> {
         .conn()
         .prepare(sql)
         .map_err(|e| CodeLoreError::Analysis(format!("prepare lead-time: {e}")))?;
-    tracing::warn!(
-        "lead-time: schema carries only committer date; all rows report 0-second lead time until a future schema bump adds author_date. Use `codelore explain lead-time` for the planned semantic."
-    );
     let rows = stmt
         .query_map(params![row_limit], |r| {
             let lead_time_seconds: i64 = r.get(4)?;

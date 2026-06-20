@@ -938,6 +938,7 @@ fn format_timestamp(ts: time::OffsetDateTime) -> String {
 fn append_commit(app: &mut Appender<'_>, e: &CommitEvent) -> Result<()> {
     use duckdb::params;
     let date_str = format_timestamp(e.date);
+    let committer_date_str = format_timestamp(e.committer_date);
     let canonical = e
         .canonical_author
         .as_deref()
@@ -952,6 +953,7 @@ fn append_commit(app: &mut Appender<'_>, e: &CommitEvent) -> Result<()> {
         canonical,
         ai_attr,
         date_str,
+        committer_date_str,
         e.message,
         e.parents.len() > 1,
         i32::try_from(e.parents.len()).unwrap_or(i32::MAX),

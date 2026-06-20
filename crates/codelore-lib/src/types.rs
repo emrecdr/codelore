@@ -6,12 +6,18 @@ use time::OffsetDateTime;
 
 /// Bumped on any breaking change to facts or output schemas.
 ///
+/// Schema 3 adds `commits.committer_date TIMESTAMP NOT NULL` alongside
+/// the author-date `commits.date`. The delta `(committer_date - date)`
+/// is the in-flight time the `lead-time` and `delivery-friction`
+/// analyses surface; without the separate column, `lead-time` silently
+/// emitted zero rows for every commit.
+///
 /// Schema 2 promoted `commits.date` from `DATE` to `TIMESTAMP` so HEAD
 /// resolution and same-day chronology are precise — no more lexicographical
 /// rev tiebreaks deciding which commit "is" HEAD when multiple commits
 /// share a calendar day. `CommitEvent.date` carries a full `OffsetDateTime`
 /// (stored as UTC; tz offset is currently discarded at the schema boundary).
-pub const SCHEMA_VERSION: u8 = 2;
+pub const SCHEMA_VERSION: u8 = 3;
 
 /// One commit, as observed by the parser stage. Immutable event.
 // Eq removed: CommitEvent contains Option<KameiFeatures> which has f64 fields (not Eq).
@@ -25,6 +31,15 @@ pub struct CommitEvent {
     /// (UTC-normalised). The original tz offset is not currently persisted —
     /// see the `commits` table comment for the tz-preservation roadmap.
     pub date: OffsetDateTime,
+    /// Committer time as a full `OffsetDateTime`. Stored in `DuckDB` as
+    /// `TIMESTAMP` (UTC-normalised). On linear-history workflows (rebase,
+    /// squash) this often equals `date`; on merge-via-merge-commit and
+    /// review workflows the delta `(committer_date - date)` is the
+    /// in-flight time the `lead-time` and `delivery-friction` analyses
+    /// surface. Both backends (`GixRepo`, `GitCliRepo`) populate this
+    /// from the raw commit object — the differential test gate
+    /// asserts they agree.
+    pub committer_date: OffsetDateTime,
     pub message: String,
     pub parents: Vec<String>,
     pub changes: Vec<FileChange>,

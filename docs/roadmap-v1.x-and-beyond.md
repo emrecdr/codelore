@@ -43,7 +43,7 @@ The current state of the codebase. For per-release history see `CHANGELOG.md`.
 
 ### Analysis surface
 
-- **31 analyses** including hotspots, change-coupling, ownership, code-health, clones, live-clones, Kamei JIT-SDP features, knowledge-islands, centrality, behavioural communities (Leiden), god-classes, architecture-violations, stale-code, pair-programming, lead-time, and bus-factor
+- **32 analyses** including hotspots, change-coupling, ownership, code-health, clones, live-clones, Kamei JIT-SDP features, knowledge-islands, centrality, behavioural communities (Leiden), god-classes, architecture-violations, stale-code, pair-programming, lead-time, and bus-factor
 - **MI (Maintainability Index) surfacing** — `mi_sei()` per-function values from `codelore-rca` joined onto hotspots and code-health, banded into Low/Moderate/High via SQL `CASE WHEN` and rolled up on the KPI tiles (Coleman 1994 + SEI variant; polyglot across the languages `codelore-rca` parses)
 - **Behavioural-graph centrality** as a first-class analysis (degree / in / out on the Fisher-significant co-change graph) — previously an internal TEMP TABLE, now a queryable output row type
 - **Behavioural communities (Leiden)** over the Fisher-significant coupling graph — different signal vs static-import modularity tools (we cluster on git co-change). Output: per-file community ID + global Q score, surfaced on a KPI tile, in the sankey node coloring, and in the drawer's "behavioural module" section
@@ -158,6 +158,28 @@ Lower priority until real-world traction is measured.
 | ADRs for major design picks (gix, DuckDB, SARIF, RCA vendor) | Documents the *why*. |
 | Migration guide from code-maat | Lowers switching cost. |
 | Glossary (Fractal Value, Code Health, Behavioral SARIF, Kamei vector) | No current single source of truth. |
+
+---
+
+## Deliberately out of scope
+
+Forward-looking exclusions surfaced from competitive + literature audits. Each entry names the competitor / paper that does the thing, why it looked attractive, and the binding reason CodeLore won't follow. Capturing them here prevents rediscovery in the next audit cycle.
+
+### LLM-based PR Refactoring Agent
+
+CodeScene v7.5.0 combines AI-assisted refactoring with a local deterministic CodeHealth MCP server to auto-fix PRs ([CodeScene changelog](https://community.codescene.com/changelog), [CodeScene blog](https://codescene.com/blog/deterministic-pr-refactoring-agents), [Code Health MCP](https://codescene.com/product/code-health-mcp)). Well-engineered for their SaaS product surface. CodeLore declines because the README's stated brand is "no LLM-based scoring" + CLI-only / self-contained-SPA — auto-fix requires a SaaS or persistent agent runtime. Anchored by [`feedback_no_copypaste_features`](../../.claude/memory/feedback_no_copypaste_features.md).
+
+### Synthetic "4-factor" composite score (Code Health + Knowledge Distribution + Team/Code Alignment + Delivery)
+
+CodeScene 6.0's executive-dashboard framing bundles four behavioral axes into one synthetic composite ([CodeScene 6.0 release notes](https://docs.enterprise.codescene.io/versions/6.0.0/release-notes/history.html)). CodeLore already exposes every substantive axis discretely: hotspots/code-health, knowledge-islands/bus-factor, ownership/pair-programming, lead-time. Bundling them into a composite would (a) hide signal behind a black-box weighting, (b) duplicate per-analysis output the user can already aggregate, (c) lock in vendor-marketing semantics that drift each upstream release. Keep the analyses discrete.
+
+### Online / streaming JIT-SDP mode
+
+Tempting under the "concept-drift adaptation" framing, but Cabral & Minku (EMSE 2023, [paper](https://link.springer.com/article/10.1007/s10664-023-10335-6) / [PDF](https://minkull.github.io/publications/CabralEMSE2023.pdf)) show offline BORB-MLP beats the top online ORB approach by 2.76–23.19% absolute G-mean (median 6.36%) across projects. CodeLore's post-ingest SQL UPDATE pass is already structurally batch-mode and the cost is paid once per cache key. Adding online learning would multiply ingest complexity for a measured loss in predictive performance.
+
+### Contributor-burnout / contributor-health signals from git history
+
+The most-cited recent qualitative work on the topic — Heath's 2025 OSS Burnout report ([PDF](https://mirandaheath.website/static/oss_burnout_report_mh_25.pdf)) — explicitly scopes itself away from quantitative git-mineable signals and proposes only system-level interventions (pay developers, foster recognition, grow community, advocate). No validated commit-history-derived burnout signal exists in the surveyed literature; any commit-cadence-as-burnout proxy would be speculative inference about humans from machine data — a known false-positive trap.
 
 ---
 

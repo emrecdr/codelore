@@ -266,7 +266,7 @@ rill start codelore.sqlite       # local-first BI
 # point Metabase / Superset / Evidence.dev / Observable Framework at it
 ```
 
-`docs/bi-integration.md` (planned) will document this with example queries that reproduce each of the 31 analyses. This path is complementary to the SPA emitter — users who want raw exploration can stay here; users who want the curated CodeLore narrative get the SPA.
+`docs/bi-integration.md` (planned) will document this with example queries that reproduce each of the 32 analyses. This path is complementary to the SPA emitter — users who want raw exploration can stay here; users who want the curated CodeLore narrative get the SPA.
 
 ---
 

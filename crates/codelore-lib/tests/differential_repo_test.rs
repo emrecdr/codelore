@@ -534,6 +534,51 @@ fn head_sha_matches() {
     );
 }
 
+/// `CommitEvent.committer_date` must agree across backends — the
+/// `lead-time` and `delivery-friction` analyses both derive their
+/// signal from `(committer_date - date)` and silent divergence
+/// would produce different friction scores depending on which
+/// backend ingested the cache. Asserts byte-equality on the
+/// `OffsetDateTime` for every commit in the differential fixture.
+#[test]
+fn committer_date_matches_across_walkers() {
+    use codelore_lib::Options;
+    use codelore_lib::repo::Repo;
+    use std::collections::HashMap;
+    let (gix, cli) = open_both();
+    let opts = Options::default();
+    let gix_events: HashMap<String, time::OffsetDateTime> = gix
+        .walk_commits(&opts)
+        .expect("gix walk")
+        .filter_map(std::result::Result::ok)
+        .map(|e| (e.rev, e.committer_date))
+        .collect();
+    let cli_events: HashMap<String, time::OffsetDateTime> = cli
+        .walk_commits(&opts)
+        .expect("cli walk")
+        .filter_map(std::result::Result::ok)
+        .map(|e| (e.rev, e.committer_date))
+        .collect();
+    assert!(
+        !gix_events.is_empty(),
+        "fixture must have at least one commit"
+    );
+    assert_eq!(
+        gix_events.len(),
+        cli_events.len(),
+        "committer_date event count differs between walkers"
+    );
+    for (rev, gix_ts) in &gix_events {
+        let cli_ts = cli_events
+            .get(rev)
+            .unwrap_or_else(|| panic!("rev {rev} missing from cli stream"));
+        assert_eq!(
+            gix_ts, cli_ts,
+            "committer_date diverges for rev {rev}: gix={gix_ts}, cli={cli_ts}"
+        );
+    }
+}
+
 /// `is_worktree_dirty()` gates whether the persistent cache is
 /// written (a dirty worktree means HEAD-time metrics — complexity,
 /// clones — may not match the clean HEAD SHA, so we skip the cache

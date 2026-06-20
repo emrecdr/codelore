@@ -1294,6 +1294,31 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             (fmt, AnalysisName::BusFactor) => {
                 anyhow::bail!("bus-factor analysis supports csv|json|markdown; got {fmt:?}")
             }
+            // --- delivery-friction (composite: revs × lead-time × cognitive) ---
+            ("csv", AnalysisName::DeliveryFriction) => {
+                let rows =
+                    codelore_lib::analyses::delivery_friction::run_delivery_friction(&db, &opts)
+                        .context("run delivery-friction")?;
+                codelore_lib::output::csv::write_delivery_friction_csv(&rows, &mut out)
+                    .context("write csv")?;
+            }
+            ("json", AnalysisName::DeliveryFriction) => {
+                let rows =
+                    codelore_lib::analyses::delivery_friction::run_delivery_friction(&db, &opts)
+                        .context("run delivery-friction")?;
+                codelore_lib::output::json::write_delivery_friction_json(&rows, &mut out)
+                    .context("write json")?;
+            }
+            ("markdown", AnalysisName::DeliveryFriction) => {
+                let rows =
+                    codelore_lib::analyses::delivery_friction::run_delivery_friction(&db, &opts)
+                        .context("run delivery-friction")?;
+                codelore_lib::output::markdown::write_delivery_friction_markdown(&rows, &mut out)
+                    .context("write markdown")?;
+            }
+            (fmt, AnalysisName::DeliveryFriction) => {
+                anyhow::bail!("delivery-friction analysis supports csv|json|markdown; got {fmt:?}")
+            }
             // --- knowledge-islands (T8: bus-factor / knowledge-loss risk) ---
             ("csv", AnalysisName::KnowledgeIslands) => {
                 let rows =

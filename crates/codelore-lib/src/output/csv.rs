@@ -578,6 +578,33 @@ pub fn write_bus_factor_csv<W: Write>(
     Ok(())
 }
 
+/// `delivery-friction` CSV emitter.
+pub fn write_delivery_friction_csv<W: Write>(
+    rows: &[crate::analyses::delivery_friction::DeliveryFrictionRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(
+        w,
+        "entity,revisions,cognitive,median_lead_time_days,p95_lead_time_days,wip_age_days,friction_score"
+    )
+    .map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{:.1},{:.2},{:.2},{:.2},{:.2}",
+            quote_if_needed(&row.path),
+            row.revisions,
+            row.cognitive,
+            row.median_lead_time_days,
+            row.p95_lead_time_days,
+            row.wip_age_days,
+            row.friction_score,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 /// T8: per-file knowledge-loss risk (`knowledge-islands` analysis).
 /// No code-maat equivalent — strict `CodeLore` extension; no compat-mode
 /// header variant needed.

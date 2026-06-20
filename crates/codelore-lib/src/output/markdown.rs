@@ -487,6 +487,35 @@ pub fn write_lead_time_markdown<W: Write>(
     Ok(())
 }
 
+/// delivery-friction markdown emitter.
+pub fn write_delivery_friction_markdown<W: Write>(
+    rows: &[crate::analyses::delivery_friction::DeliveryFrictionRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore delivery-friction")?;
+    writeln!(
+        w,
+        "| Entity | Revisions | Cognitive | Median lead-time (days) | p95 lead-time (days) | WIP age (days) | Friction score |"
+    )
+    .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---:|---:|---:|---:|---:|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| {} | {} | {:.1} | {:.2} | {:.2} | {:.1} | {:.2} |",
+            escape_md_cell(&row.path),
+            row.revisions,
+            row.cognitive,
+            row.median_lead_time_days,
+            row.p95_lead_time_days,
+            row.wip_age_days,
+            row.friction_score,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 /// bus-factor markdown emitter.
 pub fn write_bus_factor_markdown<W: Write>(
     rows: &[crate::analyses::bus_factor::BusFactorRow],

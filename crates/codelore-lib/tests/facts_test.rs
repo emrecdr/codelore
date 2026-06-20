@@ -24,7 +24,7 @@ fn provenance_records_schema_version() {
     let v: String = db
         .query_one_value("SELECT value FROM provenance WHERE key = 'schema_version'")
         .expect("query");
-    assert_eq!(v, "1");
+    assert_eq!(v, "2");
 }
 
 #[test]
@@ -63,7 +63,7 @@ fn open_read_only_rejects_mismatched_schema_version() {
         Err(e) => format!("{e}"),
     };
     assert!(
-        msg.contains("schema_version=999") && msg.contains("expects 1"),
+        msg.contains("schema_version=999") && msg.contains("expects 2"),
         "expected mismatch error, got: {msg}"
     );
 }
@@ -109,6 +109,6 @@ fn file_backed_db_persists_and_reopens() {
         let schema_version: String = db
             .query_one_value("SELECT value FROM provenance WHERE key = 'schema_version'")
             .expect("query");
-        assert_eq!(schema_version, "1");
+        assert_eq!(schema_version, "2");
     }
 }

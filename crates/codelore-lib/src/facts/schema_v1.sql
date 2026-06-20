@@ -1,11 +1,22 @@
--- Schema v2: `commits.date` is TIMESTAMP. Promoted from DATE so HEAD
--- resolution and same-day chronology are precise — previously two
--- commits sharing a calendar day forced a lexicographical rev tiebreak,
--- which silently picked the wrong HEAD on the final day and stamped
--- complexity/clones rows with the wrong rev. The original author tz
--- offset is discarded at this boundary; a future schema version may
--- add a sibling `author_tz_offset_seconds INTEGER` for tz-aware
--- analyses.
+-- Schema v3: `commits` gains a `committer_date TIMESTAMP NOT NULL`
+-- column alongside `date` (which is the author date). The delta
+-- `(committer_date - date)` is the in-flight time that the
+-- `lead-time` and `delivery-friction` analyses surface. On
+-- linear-history workflows (rebase, squash) the two are often
+-- equal; on merge-via-merge-commit + review workflows the delta is
+-- the review-bottleneck signal.
+--
+-- Schema v2 had only `commits.date` (author date) and `lead-time`
+-- silently emitted zero rows for every commit; v3 closes that gap.
+--
+-- `commits.date` itself remained TIMESTAMP from v2, promoted from
+-- DATE so HEAD resolution and same-day chronology stay precise —
+-- previously two commits sharing a calendar day forced a
+-- lexicographical rev tiebreak, which silently picked the wrong
+-- HEAD on the final day and stamped complexity/clones rows with
+-- the wrong rev. The original author tz offset is discarded at
+-- this boundary; a future schema version may add a sibling
+-- `author_tz_offset_seconds INTEGER` for tz-aware analyses.
 
 CREATE TABLE IF NOT EXISTS commits (
     rev TEXT PRIMARY KEY,
@@ -15,6 +26,7 @@ CREATE TABLE IF NOT EXISTS commits (
     canonical_author TEXT NOT NULL,
     ai_attribution TEXT,
     date TIMESTAMP NOT NULL,
+    committer_date TIMESTAMP NOT NULL,
     message TEXT NOT NULL,
     is_merge BOOLEAN NOT NULL,
     parent_count INTEGER NOT NULL,

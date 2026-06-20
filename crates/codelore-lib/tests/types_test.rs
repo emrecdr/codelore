@@ -4,11 +4,14 @@ use codelore_lib::types::{ChangeType, CommitEvent, FileChange, Hunk, SCHEMA_VERS
 use time::macros::datetime;
 
 #[test]
-fn schema_version_is_two() {
-    // Schema v2: `commits.date` promoted from DATE to TIMESTAMP so HEAD
-    // resolution and same-day chronology are precise. Cache key includes
-    // this version sentinel so v1 caches are naturally invalidated.
-    assert_eq!(SCHEMA_VERSION, 2);
+fn schema_version_is_three() {
+    // Schema v3: adds `commits.committer_date TIMESTAMP NOT NULL`
+    // alongside the author `date`. The `(committer_date - date)` delta
+    // is the in-flight time `lead-time` and `delivery-friction` need;
+    // without it, `lead-time` silently emitted zero for every commit.
+    // Cache key includes this version sentinel so v2 caches are
+    // naturally invalidated.
+    assert_eq!(SCHEMA_VERSION, 3);
 }
 
 #[test]
@@ -19,6 +22,7 @@ fn commit_event_construction() {
         author_name: "A B".into(),
         committer_email: "a@b.com".into(),
         date: datetime!(2026-06-06 12:30:45 UTC),
+        committer_date: datetime!(2026-06-06 12:30:45 UTC),
         message: "test".into(),
         parents: vec![],
         changes: vec![FileChange {

@@ -652,6 +652,24 @@ fn commit_author_date(commit: &gix::Commit<'_>) -> Result<time::OffsetDateTime> 
         .map_err(|e| CodeLoreError::Repo(format!("commit timestamp {ts_seconds}: {e}")))
 }
 
+/// Extract the committer-time as a full `OffsetDateTime`. Mirrors
+/// `commit_author_date` but reads the committer signature. The delta
+/// `(committer_date - date)` is the in-flight time the `lead-time`
+/// and `delivery-friction` analyses surface. Same tz-stripping
+/// behaviour as the author variant.
+fn commit_committer_date(commit: &gix::Commit<'_>) -> Result<time::OffsetDateTime> {
+    use time::OffsetDateTime;
+    let committer_ref = commit
+        .committer()
+        .map_err(|e| CodeLoreError::Repo(format!("committer: {e}")))?;
+    let ts_seconds = committer_ref
+        .time()
+        .map_err(|e| CodeLoreError::Repo(format!("committer time: {e}")))?
+        .seconds;
+    OffsetDateTime::from_unix_timestamp(ts_seconds)
+        .map_err(|e| CodeLoreError::Repo(format!("committer timestamp {ts_seconds}: {e}")))
+}
+
 /// F13 helper: extract a fully-resolved `CommitEvent` from a single oid.
 /// Called by every rayon worker in the chunked walker — each worker
 /// constructs its own thread-local `gix::Repository` from the shared
@@ -760,6 +778,8 @@ fn commit_event_from_gix(commit: &gix::Commit<'_>) -> Result<CommitEvent> {
     let date = OffsetDateTime::from_unix_timestamp(ts_seconds)
         .map_err(|e| CodeLoreError::Repo(format!("commit timestamp {ts_seconds}: {e}")))?;
 
+    let committer_date = commit_committer_date(commit)?;
+
     let message = commit
         .message_raw()
         .map(ToString::to_string)
@@ -771,6 +791,7 @@ fn commit_event_from_gix(commit: &gix::Commit<'_>) -> Result<CommitEvent> {
         author_name: author_ref.name.to_string(),
         committer_email: committer_ref.email.to_string(),
         date,
+        committer_date,
         message,
         parents,
         changes: vec![],        // Populated by the caller; see walk_commits.

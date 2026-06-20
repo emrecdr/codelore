@@ -135,6 +135,13 @@ pub fn write_bus_factor_json<W: Write>(
     write_json(rows, w)
 }
 
+pub fn write_delivery_friction_json<W: Write>(
+    rows: &[crate::analyses::delivery_friction::DeliveryFrictionRow],
+    w: &mut W,
+) -> Result<()> {
+    write_json(rows, w)
+}
+
 pub fn write_knowledge_islands_json<W: Write>(
     rows: &[crate::analyses::knowledge_islands::KnowledgeIslandRow],
     w: &mut W,

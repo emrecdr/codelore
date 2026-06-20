@@ -4,6 +4,14 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **`delivery-friction` analysis (analysis #32).** Composite signal answering "where is technical debt actively slowing us down right now?". Combines `percent_rank(revisions) × percent_rank(median_lead_time) × percent_rank(cognitive)` scaled to `[0, 100]` — a file scoring high requires elevation on all three axes; one dominant signal alone does not light it up. Each row carries the underlying values plus `p95_lead_time_days` (right-tail surfacing) and `wip_age_days` (days since the file's last commit, distinguishing stale-but-still-touched from hot-but-recently-active). Counters CodeScene v7.4's Delivery Analysis surface while staying SQL-driven, CLI-only, and citation-grounded. CSV / JSON / Markdown emitters; SARIF NOT included (not a defect-risk surface).
+
+### Changed
+
+- **Schema v3 — `commits` table gains a `committer_date TIMESTAMP NOT NULL` column.** The pre-v3 schema persisted only the author date (in `commits.date`); the `lead-time` analysis emitted zero rows for every commit and silently warned. v3 persists both timestamps; the delta `(committer_date - date)` is the in-flight time that `lead-time` and the new `delivery-friction` analysis surface. `CURRENT_SCHEMA_VERSION` bumped `1 → 2` (provenance stamp), `types::SCHEMA_VERSION` bumped `2 → 3`, `cache::SCHEMA_VERSION` bumped `schema_v3 → schema_v4` (cache invalidates naturally on bump per the design). Both `GixRepo` and `GitCliRepo` populate the new field; the differential test `committer_date_matches_across_walkers` asserts byte-identical agreement across backends. `lead-time` SQL now computes `EXTRACT(EPOCH FROM committer_date) - EXTRACT(EPOCH FROM date)` and the `tracing::warn!` about always-zero output is gone.
+
 ### Fixed
 
 - **SARIF `$schema` URL points at the canonical SchemaStore host.** The constant in `sarif.rs` swapped from `https://schemastore.azurewebsites.net/schemas/json/sarif-2.1.0.json` (Microsoft's legacy `azurewebsites.net` origin) to `https://json.schemastore.org/sarif-2.1.0.json` (the canonical SchemaStore CDN). All three SARIF emitters (hotspots, clones, live-clones) inherit the fix through the shared constant. Closes F120 (URL half).
