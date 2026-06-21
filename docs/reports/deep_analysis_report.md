@@ -93,6 +93,7 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 | F143 | SPA headless-browser smoke test | **Fixed** | PR #56 → main. `tests/spa_browser_test.rs` + `browser-tests` feature + CI job |
 | F127 (full) | Kamei `enrich_diffusion` entropy block correlated subquery | **Fixed** | This session. Entropy block rewritten as 2-pass (reset to 0.0 + grouped `UPDATE ... FROM` with window-function `p_i = loc_added / SUM(loc_added) OVER (PARTITION BY rev)`), mirroring `enrich_history`'s shape. Byte-identical semantics proven via `kamei_entropy_per_commit_distribution` regression test (3 hand-computed cases: single-file = 0.0, even 2-way = 1.0, uneven 3-way = 1.2987949...). |
 | F117 | First-party GHA actions use floating tags despite credential permissions | **Fixed** | This session. 5 credential-handling actions SHA-pinned via `@<commit-sha> # vN` convention (matches existing `softprops/action-gh-release` pin): `actions/attest-build-provenance` (issues OIDC token for SLSA provenance), `docker/login-action` (consumes `GITHUB_TOKEN` for ghcr.io auth), `docker/build-push-action`, `docker/metadata-action`, `docker/setup-buildx-action`. 8 use-sites across `container.yml` + `release.yml`. Non-credential actions (`actions/checkout`, `actions/cache`, etc) intentionally left as `@vN` per finding's "credential-handling subset" framing — pinning them too would balloon Dependabot bump-PR surface without commensurate attack-surface reduction. |
+| F129 | `arch_violations` materialises full imports Vec then truncates post-Rust | **Fixed** | This session. Removed the intermediate `Vec<(String, String, String)>` collect; the rows iterator is walked directly and early-breaks when `opts.rows_limit` is hit. SQL's `ORDER BY src_path ASC, target_path ASC` makes the early-break deterministic — first N violations are the same N the prior collect-then-truncate produced. On a monorepo with millions of imports + `--rows 50`, validation stops after 50 hits instead of validating every row. Smaller scope than the finding's "push validation into SQL" suggestion (SQL would need per-prefix LIKE join with planner-risk) but same observable win without the architectural change. |
 | F142 | Tracing instrumentation skewed across `analyses/` (3 lines total) | **Fixed** | This session. `#[tracing::instrument(name = "<analysis-name>", skip_all, fields(min_revs = opts.min_revs))]` added to all 32 `run_*` entry points across 31 files. Operators get per-analysis spans with timing + the input gate for free via `RUST_LOG`. Verified end-to-end: hotspots span emits `hotspots{min_revs=1}` with `time.busy=6.87ms time.idle=2.25µs`. |
 | F146 | `json.rs` trivial `write_*_json` shims (29 total) | **Fixed** | This session. `write_json<T: Serialize>` made `pub`; 27 trivial shims deleted, 2 non-trivial kept (`write_revisions_json` tuple→struct wrap, `write_communities_json` wrapper struct emit). 33 CLI call sites updated. Net: -137 LOC. |
 | F147 | `AnalysisName` 3-way sync no exhaustiveness guard | **Fixed** | `549c460` (initial `_exhaustive_check`) + PR #60 (`registry!` macro). F157 closed by the macro. |
@@ -207,11 +208,6 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 *   **Severity**: LOW
 
 ### NEW Active Findings — Backend performance
-
-#### F129 — `arch_violations` materializes full imports set, truncates post-Rust
-
-*   **Location**: `crates/codelore-lib/src/analyses/arch_violations.rs:73-92`
-*   **Severity**: MED
 
 #### F130 — `pair_programming` O(P²) per commit with `String::clone` per probe
 
@@ -373,9 +369,9 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 
 **Current Active count after this validation pass + closure annotations**:
 
-- **Closed on main (added to §3 closure-log)**: F110, F112, F117, F118, F120 (URL half), F124 (policy half), F125, F126, F127 (full — entropy rewrite closes the remainder), F128, F134, F135, F138, F142, F143, F146, F150, F151, F152, F154, F155, F156, F157, F158, F159, F160, F163.
+- **Closed on main (added to §3 closure-log)**: F110, F112, F117, F118, F120 (URL half), F124 (policy half), F125, F126, F127 (full — entropy rewrite closes the remainder), F128, F129, F134, F135, F138, F142, F143, F146, F150, F151, F152, F154, F155, F156, F157, F158, F159, F160, F163.
 - **REFUTED this session**: F116 — see §3 newly-refuted block. Renovate + Dependabot are partitioned by ecosystem (cargo vs github-actions), not duplicated.
-- **Active**: F94, F97, V4, V5, V6, F111, F113, F114, F115, F119, F121, F122, F123, F129, F130, F131, F132, F133, F136, F137, F144, F145, F148, F149, F153, F161, F162 = **26 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
+- **Active**: F94, F97, V4, V5, V6, F111, F113, F114, F115, F119, F121, F122, F123, F130, F131, F132, F133, F136, F137, F144, F145, F148, F149, F153, F161, F162 = **25 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
 
 The next sweep should re-open with F-IDs starting at **F164**.
 

@@ -71,12 +71,20 @@ pub fn run_arch_violations(db: &FactsDb, opts: &Options) -> Result<Vec<ArchViola
             ))
         })
         .map_err(|e| CodeLoreError::Analysis(format!("query arch-violations scan: {e}")))?;
-    let imports: Vec<(String, String, String)> =
-        rows.collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|e| CodeLoreError::Analysis(format!("collect arch-violations scan: {e}")))?;
 
-    let mut out = Vec::new();
-    for (src_path, target_path, raw_target) in imports {
+    // Stream-validate: walk the rows iterator directly without
+    // materialising every import row into an intermediate Vec, and
+    // early-break as soon as the row-limit is hit. The SQL above
+    // `ORDER BY src_path, target_path ASC` makes the early-break
+    // deterministic — the first N violations are the same N the prior
+    // `collect → loop → truncate` shape produced. On a monorepo with
+    // millions of imports and `--rows 50`, this stops after finding
+    // the first 50 violations instead of iterating every row.
+    let limit = opts.rows_limit.map(|n| n as usize);
+    let mut out: Vec<ArchViolationRow> = Vec::new();
+    for row in rows {
+        let (src_path, target_path, raw_target) =
+            row.map_err(|e| CodeLoreError::Analysis(format!("read arch-violations row: {e}")))?;
         if let Some(v) = rules.validate(&src_path, &target_path) {
             out.push(ArchViolationRow {
                 src_path,
@@ -85,12 +93,13 @@ pub fn run_arch_violations(db: &FactsDb, opts: &Options) -> Result<Vec<ArchViola
                 target_layer: v.target_layer,
                 raw_target,
             });
+            if let Some(cap) = limit
+                && out.len() >= cap
+            {
+                break;
+            }
         }
     }
 
-    // Apply rows-limit if set.
-    if let Some(limit) = opts.rows_limit {
-        out.truncate(limit as usize);
-    }
     Ok(out)
 }
