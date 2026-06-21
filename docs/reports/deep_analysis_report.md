@@ -114,6 +114,7 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 | F163 | SARIF `automationDetails.id` is static | **Fixed** | PR #63 → main. `automation_id_for(prefix)` appends per-run 16-hex suffix |
 | F162 | Parquet column types drift from CSV row-type contract | **Fixed (already-closed by side-effect)** | Parquet writers now delegate to `analyses::hotspots::build_inlined_sql` / `revisions::build_inlined_sql` shared SQL generators. Those generators already use the explicit-cast convention the original finding requested, so the CSV row-type contract is preserved verbatim through to Parquet. The 51-line `parquet.rs` shim has no remaining type-inference call site. Verified 2026-06-21 validation pass. |
 | F131 | Provenance tooltip triggers 14×14 px target | **Fixed** | This session. `.tooltip-trigger` in `template.html` bumped from `width/height: 14px` → `24px` to meet WCAG 2.5.5 Target Size (Minimum). Glyph stays visually moderate (`font-size: 12px` on a 24×24 button) so the trigger doesn't dominate dense table headers, but the click/tap area is reachable for coarse pointers. `line-height: 22px` keeps the `?` glyph vertically centered inside the 24px circle minus 1px borders top+bottom; `vertical-align: -7px` re-baselines the larger button against adjacent text without disturbing label rhythm. CSS anchor positioning + the `:hover/:focus-visible` reveal path are unchanged — F131 is purely about target size, not the popup. |
+| F137 | Knowledge-islands rows not keyboard-activable | **Fixed** | This session. New `wireRowKbActivation(rowEl)` helper in `widgets.js` sets `tabindex="0"` + `role="button"` on each row and forwards Enter/Space to the existing click handler (preventDefault on Space so the page doesn't scroll). Called from BOTH the KI row loop (renderKnowledgeIslands) AND the hotspot table row loop (renderNextPage) — the audit only flagged KI but the hotspot table had the same gap; one helper, two call sites. `tr.hotspot-row:focus-visible, tr.ki-row:focus-visible` paints a `2px solid var(--accent)` outline so keyboard users can see which row is about to be activated. Other table-row-as-button widgets discovered via `cursor:pointer` grep — only the two were click-on-tr; the rest are widget-level handlers (sankey, sunburst, etc.) which already route through `_codeloreShowDetail`. |
 
 **Newly REFUTED (2026-06-18 / 2026-06-21)**:
 
@@ -227,11 +228,6 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 *   **Location**: `crates/codelore-lib/src/output/spa/template.html:621-636`
 *   **Severity**: MED
 
-#### F137 — Knowledge-islands rows not keyboard-activable
-
-*   **Location**: `crates/codelore-lib/src/output/spa/widgets.js:847-854`
-*   **Severity**: MED
-
 ### NEW Active Findings — Test / CI / observability
 
 #### F144 — No CI dogfooding of `codelore` against `codelore`
@@ -308,7 +304,7 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 | F134 | Hotspot 'Show all' synchronous | `widgets.js` now chunks `renderNextPage` into 50-row batches with `await yieldToMain()` between each; the `Show all` click is also wrapped in element-scoped `startViewTransition(..., container)` (Chrome 147+) so the table animates without freezing other widgets; `view-transition-name: match-element` on `.hotspot-row` gives per-row crossfades | **Fixed on main (this session)** |
 | F135 | Theme toggle re-runs `d3.pack` | `template.html`'s `Alpine.effect` rerenderer loop now `await window._codeloreYieldToMain()` between each registered rerenderer (the d3.pack pass still runs but yields the main thread between widgets); `.widget { view-transition-name: match-element }` per-widget animation | **Fixed on main (this session)** |
 | F136 | Color-mode tablist non-ARIA | `template.html` has ~40 `role="tab"` but no `aria-selected`/`aria-controls`; `initHotspotColorToggles` at widgets.js:3066-3098 only swaps `tab-active` class on click; no arrow-key handler | Active confirmed |
-| F137 | Knowledge-islands rows mouse-only | widgets.js:1196-1211 only `addEventListener('click', ...)`+`cursor: pointer`; no `tabindex`, no `role="button"`, no `keydown` | Active confirmed |
+| F137 | Knowledge-islands rows mouse-only | widgets.js `wireRowKbActivation(rowEl)` helper + applied to both KI and hotspot row sites; `tabindex=0` + `role=button` + Enter/Space forward → click; `:focus-visible` outline on `tr.{hotspot,ki}-row` | **Fixed (this session)** |
 | F138 | `startViewTransition` ignores reduced-motion | widgets.js:694-700 now matches `prefers-reduced-motion` and runs `updateFn()` synchronously | **Fixed on main (PR #62)** |
 | F142 | Sparse tracing in analyses | Exactly 3 `tracing::*` calls across 32 analysis files (lead_time.rs:86, clones.rs:95, clone_coupling.rs:278) | Active confirmed |
 | F144 | No CI dogfooding | `grep -rE 'codelore (analyze\|check\|diff)' .github/workflows/ = ∅` | Active confirmed |
@@ -347,7 +343,7 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 - **Closed on main (added to §3 closure-log)**: F110, F112, F117, F118, F120 (URL half), F124 (policy half), F125, F126, F127 (full — entropy rewrite closes the remainder), F128, F129, F130, F134, F135, F138, F142, F143, F146, F150, F151, F152, F153, F154, F155, F156, F157, F158, F159, F160, F163.
 - **REFUTED this session**: F116 (Renovate + Dependabot partitioned by ecosystem) + F123 (crossbeam 0.8.4 + num-format 0.4.4 are current releases) — see §3 newly-refuted block.
 - **Closed by side-effect**: F162 — Parquet writers now delegate to shared SQL generators that preserve CSV row-type contract via explicit casts. Verified 2026-06-21.
-- **Active**: F94, F97, V4, V5, V6, F111, F113, F114, F115, F119, F121, F122, F132, F133, F136, F137, F144, F145, F148, F149, F161 = **20 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
+- **Active**: F94, F97, V4, V5, V6, F111, F113, F114, F115, F119, F121, F122, F132, F133, F136, F144, F145, F148, F149, F161 = **19 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
 
 The next sweep should re-open with F-IDs starting at **F164**.
 

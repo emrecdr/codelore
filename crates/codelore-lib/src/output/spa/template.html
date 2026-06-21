@@ -139,6 +139,19 @@
       view-transition-name: match-element;
       contain: layout style;
     }
+    /* Keyboard-focus affordance for table rows that act as buttons
+       (hotspot table, knowledge-islands table). `wireRowKbActivation`
+       in widgets.js promotes each `<tr>` to `tabindex="0"` +
+       `role="button"`; this rule paints a visible focus ring so
+       keyboard users can see which row is about to be activated by
+       Enter/Space. `:focus-visible` (not bare `:focus`) keeps mouse
+       clicks from drawing the ring — same UA heuristic native
+       buttons use. WCAG 2.4.7. */
+    tr.hotspot-row:focus-visible,
+    tr.ki-row:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: -2px;
+    }
     .widget h2 {
       margin: 0 0 4px 0;
       font-size: 14px;

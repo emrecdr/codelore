@@ -183,6 +183,27 @@
     installWidgetFullscreenButtons();
     installWidgetResetZoomButtons();
   }
+
+  // Promote a `<tr>` (or any container that already has a click handler
+  // wired to drill into the detail drawer) into a keyboard-activable
+  // control. WCAG 2.1.1 — every operation reachable by mouse must also
+  // be reachable by keyboard. Sets `tabindex="0"` to enter the tab
+  // order, `role="button"` so screen readers announce it as a control
+  // (otherwise it announces as "row" — correct for table semantics but
+  // gives no hint that it's interactive), and forwards Enter / Space
+  // to the existing click listener so the caller doesn't have to
+  // duplicate handler logic. Space is `preventDefault()`-ed so the
+  // page doesn't scroll when the row is focused.
+  function wireRowKbActivation(rowEl) {
+    rowEl.setAttribute('tabindex', '0');
+    rowEl.setAttribute('role', 'button');
+    rowEl.addEventListener('keydown', function (evt) {
+      if (evt.key === 'Enter' || evt.key === ' ') {
+        evt.preventDefault();
+        evt.currentTarget.click();
+      }
+    });
+  }
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', installPanelControls);
   } else {
@@ -1261,6 +1282,7 @@
         }
       });
       trs[j].style.cursor = 'pointer';
+      wireRowKbActivation(trs[j]);
     }
   }
 
@@ -1892,6 +1914,7 @@
           const path = evt.currentTarget.getAttribute('data-path');
           if (window._codeloreShowDetail) window._codeloreShowDetail(path);
         });
+        wireRowKbActivation(newRows[k]);
       }
       return Promise.resolve();
     }
