@@ -1,12 +1,15 @@
 //! End-to-end `criterion` benches for the `CodeLore` ingest pipeline.
 //!
-//! Five targets:
+//! Six targets:
 //!   - `ingest_tiny`: 5 commits (sanity benchmark; sub-ms).
 //!   - `ingest_medium`: 500 commits across 25 files (CI baseline).
 //!   - `ingest_medium_parallel`: complexity extraction with the default
 //!     Rayon thread pool (logical-CPU count).
 //!   - `ingest_medium_serial`: complexity extraction pinned to 1 thread, used
 //!     as the serial baseline for the parallel-vs-serial comparison.
+//!   - `ingest_capacity_sweep`: producer→consumer channel capacity swept across
+//!     `[16, 64, 256, 1024]` on the medium fixture, surfacing the curve so the
+//!     default `64` can be re-tuned against empirical data instead of folklore.
 //!   - `ingest_linux_kernel_snapshot`: only runs when
 //!     `CODELORE_BENCH_LINUX_KERNEL_PATH` env var is set (CI fetches a cached
 //!     snapshot once a week). Validates the release blockers: < 10 min wall-
@@ -19,8 +22,9 @@ use std::hint::black_box;
 
 use codelore_lib::Options;
 use codelore_lib::facts::FactsDb;
+use codelore_lib::facts::ingest::set_channel_capacity_override;
 use codelore_lib::repo::GixRepo;
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 
 fn ingest_tiny(c: &mut Criterion) {
     let tiny = codelore_lib::test_support::tiny_repo::build();
@@ -128,6 +132,45 @@ fn ingest_medium_serial(c: &mut Criterion) {
     group.finish();
 }
 
+/// V6: sweep the producer→consumer channel capacity across
+/// `[16, 64, 256, 1024]` on the medium fixture. The default `64` was
+/// folklore — no empirical measurement existed. This bench surfaces
+/// the wall-clock × capacity curve so the constant can be re-tuned
+/// from data the next time someone touches the ingest hot path.
+///
+/// Mechanism: a process-wide `AtomicUsize` override in `ingest.rs`
+/// (`set_channel_capacity_override`) lets one `cargo bench`
+/// invocation iterate every capacity in turn without
+/// `unsafe { env::set_var }` (workspace `unsafe_code = "forbid"`
+/// blocks that). The override is reset to `0` at the end of the
+/// sweep so any later bench in the same invocation falls back to
+/// the const default.
+fn ingest_capacity_sweep(c: &mut Criterion) {
+    let medium = codelore_lib::test_support::medium_repo::build();
+    let opts = Options {
+        repo_path: medium.dir.path().to_path_buf(),
+        ..Options::default()
+    };
+    let mut group = c.benchmark_group("ingest_capacity_sweep");
+    group.sample_size(10);
+    for capacity in &[16_usize, 64, 256, 1024] {
+        group.bench_with_input(
+            BenchmarkId::from_parameter(capacity),
+            capacity,
+            |b, &cap| {
+                set_channel_capacity_override(cap);
+                b.iter(|| {
+                    let repo = GixRepo::open(medium.dir.path()).unwrap();
+                    let db = FactsDb::new_in_memory().unwrap();
+                    db.ingest(black_box(&repo), black_box(&opts)).unwrap();
+                });
+            },
+        );
+    }
+    set_channel_capacity_override(0);
+    group.finish();
+}
+
 fn ingest_linux_kernel_snapshot(c: &mut Criterion) {
     let Some(path) = std::env::var_os("CODELORE_BENCH_LINUX_KERNEL_PATH") else {
         eprintln!(
@@ -161,6 +204,7 @@ criterion_group!(
     ingest_medium,
     ingest_medium_parallel,
     ingest_medium_serial,
+    ingest_capacity_sweep,
     ingest_linux_kernel_snapshot
 );
 criterion_main!(benches);

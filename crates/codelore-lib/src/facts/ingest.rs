@@ -16,7 +16,37 @@ use crate::identity;
 use crate::repo::Repo;
 use crate::{ChangeType, CodeLoreError, CommitEvent, Options, Result};
 
-const CHANNEL_CAPACITY: usize = 64;
+const DEFAULT_CHANNEL_CAPACITY: usize = 64;
+
+/// Process-wide capacity override for the producer→consumer commit
+/// channel. `0` means "use [`DEFAULT_CHANNEL_CAPACITY`]"; benches set
+/// it via [`set_channel_capacity_override`] to sweep across e.g.
+/// `[16, 64, 256, 1024]` in a single process without
+/// `unsafe { env::set_var }` and without expanding the public CLI
+/// surface. Production code never reads or writes this from CLI
+/// dispatch — there is one reader (`channel_capacity`) and one writer
+/// (`benches/end_to_end.rs::ingest_capacity_sweep`).
+static CHANNEL_CAPACITY_OVERRIDE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Bench hook: set the channel-capacity override for subsequent
+/// `ingest()` calls. Pass `0` to restore the default. Exists so V6's
+/// `ingest_capacity_sweep` bench can vary the bound across
+/// `[16, 64, 256, 1024]` in one `cargo bench` invocation —
+/// `unsafe { env::set_var }` would violate the workspace
+/// `unsafe_code = "forbid"` lint and a `cfg(test)` gate wouldn't fire
+/// in `cargo bench`.
+pub fn set_channel_capacity_override(n: usize) {
+    CHANNEL_CAPACITY_OVERRIDE.store(n, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Read the effective channel capacity for THIS ingest call. Single
+/// atomic load — negligible against the producer/consumer setup cost
+/// — falls back to the const default when no override is set.
+fn channel_capacity() -> usize {
+    let n = CHANNEL_CAPACITY_OVERRIDE.load(std::sync::atomic::Ordering::SeqCst);
+    if n == 0 { DEFAULT_CHANNEL_CAPACITY } else { n }
+}
 
 #[derive(Debug, Default)]
 pub struct IngestStats {
@@ -53,7 +83,7 @@ impl FactsDb {
 
         // Plan 1: single producer gix walker → bounded channel → Appender on calling thread.
         // Plan 4 will fan out N producers.
-        let (tx, rx) = bounded::<CommitEvent>(CHANNEL_CAPACITY);
+        let (tx, rx) = bounded::<CommitEvent>(channel_capacity());
 
         let stats = std::thread::scope(|s| -> Result<IngestStats> {
             // Producer: runs in a scoped thread. Repo: Send + Sync, opts borrows fine.

@@ -116,6 +116,7 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 | F131 | Provenance tooltip triggers 14×14 px target | **Fixed** | This session. `.tooltip-trigger` in `template.html` bumped from `width/height: 14px` → `24px` to meet WCAG 2.5.5 Target Size (Minimum). Glyph stays visually moderate (`font-size: 12px` on a 24×24 button) so the trigger doesn't dominate dense table headers, but the click/tap area is reachable for coarse pointers. `line-height: 22px` keeps the `?` glyph vertically centered inside the 24px circle minus 1px borders top+bottom; `vertical-align: -7px` re-baselines the larger button against adjacent text without disturbing label rhythm. CSS anchor positioning + the `:hover/:focus-visible` reveal path are unchanged — F131 is purely about target size, not the popup. |
 | F137 | Knowledge-islands rows not keyboard-activable | **Fixed** | This session. New `wireRowKbActivation(rowEl)` helper in `widgets.js` sets `tabindex="0"` + `role="button"` on each row and forwards Enter/Space to the existing click handler (preventDefault on Space so the page doesn't scroll). Called from BOTH the KI row loop (renderKnowledgeIslands) AND the hotspot table row loop (renderNextPage) — the audit only flagged KI but the hotspot table had the same gap; one helper, two call sites. `tr.hotspot-row:focus-visible, tr.ki-row:focus-visible` paints a `2px solid var(--accent)` outline so keyboard users can see which row is about to be activated. Other table-row-as-button widgets discovered via `cursor:pointer` grep — only the two were click-on-tr; the rest are widget-level handlers (sankey, sunburst, etc.) which already route through `_codeloreShowDetail`. |
 | V5 | METRIC_DEFS formula strings reference parameter names verbatim | **Fixed** | This session. New `SpaOptionsSnapshot { min_revs, min_shared_revs, min_coupling_pct, max_coupling_pct, max_changeset_size, fisher_significance }` field on `SpaDashboard`, populated from `Options::from_options` at dispatch. JS-side `interpolate(formula, data.options)` substitutes `${key}` placeholders in METRIC_DEFS strings — `coupling_pairs` and `coupling_density` formulas now read `min_shared_revs ≥ 5` / `Fisher exact p < 0.05` (or whatever this run's effective thresholds are) instead of parameter names. Unknown placeholders left literal so a stale METRIC_DEFS entry shows the `${key}` token visibly during review rather than silently filling with `undefined`. `SpaOptionsSnapshot::default()` mirrors code-maat parity baseline so tests + step-summary using `..Default::default()` stay green without per-site updates. |
+| V6 | `CHANNEL_CAPACITY = 64` unmeasured | **Fixed** | This session. New `ingest_capacity_sweep` Criterion benchmark on the medium fixture sweeps `[16, 64, 256, 1024]` in one `cargo bench` invocation. Mechanism: `CHANNEL_CAPACITY_OVERRIDE: AtomicUsize` static in `facts::ingest` + `pub fn set_channel_capacity_override(n)` write hook; `channel_capacity()` reads override-else-DEFAULT_CHANNEL_CAPACITY (64) on each ingest call. Avoids `unsafe { env::set_var }` (workspace `unsafe_code = "forbid"`) and avoids expanding the public CLI surface — production dispatch never touches the override; only the bench writes it, and resets to `0` (= default) at sweep end. `bounded::<CommitEvent>(channel_capacity())` reads the runtime value, so the curve is real measurement, not folklore. |
 
 **Newly REFUTED (2026-06-18 / 2026-06-21)**:
 
@@ -147,14 +148,6 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 *   **Category**: Initial render perf
 *   **Status**: Active. The §3 sprint banner claimed F-P5 PWA closed F97 but the validator confirms widgets.js still parses synchronously and no `requestIdleCallback` references exist.
 *   **Suggested fix**: split JSON block into header + per-widget `<script type="application/json" id="widget-X">`; yield between widgets via `requestIdleCallback`.
-
-#### V6 — `CHANNEL_CAPACITY = 64` unmeasured
-
-*   **Location**: `crates/codelore-lib/src/facts/ingest.rs:19`
-*   **Severity**: LOW
-*   **Category**: Performance scaling
-*   **Status**: Active. `benches/end_to_end.rs` has 5 ingest targets but none vary the capacity.
-*   **Suggested fix**: add bench parameterised over 16/64/256/1024.
 
 ### Partial / in flight
 
@@ -275,7 +268,7 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 | F97 | `JSON.parse` synchronous at first paint | `widgets.js:61` literal `JSON.parse(dataBlock.textContent)`; `grep -c requestIdleCallback = 0` | Active confirmed |
 | V4 | no `WIDGETS` registry | `_codeloreRerenderers.push(...)` literal sequence at widgets.js:436,441,444,450,452,457,459,461; no `WIDGETS = [` array | Active confirmed |
 | V5 | METRIC_DEFS not interpolated | `SpaOptionsSnapshot` field on `SpaDashboard` populated from `Options::from_options`; widgets.js `interpolate(def.formula, data.options)` substitutes `${key}` placeholders; coupling_pairs/coupling_density formulas updated to use placeholders | **Fixed (this session)** |
-| V6 | `CHANNEL_CAPACITY = 64` unmeasured | `ingest.rs:19` constant unchanged; sibling `WALKER_CHANNEL_CAPACITY = 256` at `gix_repo.rs:122` also unmeasured | Active confirmed (broader) |
+| V6 | `CHANNEL_CAPACITY = 64` unmeasured | `ingest_capacity_sweep` Criterion benchmark added (16/64/256/1024); `CHANNEL_CAPACITY_OVERRIDE: AtomicUsize` + `set_channel_capacity_override(n)` writer hook; `bounded::<CommitEvent>(channel_capacity())` on the hot path | **Fixed (this session)** |
 | F111 | `FactsDb::conn()` leaks `&Connection` | `facts/mod.rs:307` (drifted from :266) still `pub fn conn(&self) -> &Connection` | Active confirmed |
 | F113 | CLI reaches into many lib submodules | 8 distinct first-level `codelore_lib::*` paths (analyses, analysis, facts, options, output, provenance, quality_gates, repo) — earlier 13/17+ counts both inflated | Active confirmed (count corrected) |
 | F114 | Single-CDN dependence | All 4 SPA assets at `cdn.jsdelivr.net/npm/…` in `build.rs:77,82,90,104`. SHA-256-pinned for integrity, but no fallback URL, no `include_bytes!` vendoring. `fn vendor_spa_assets` is a misnomer — it CDN-fetches. | Active confirmed |
@@ -339,7 +332,7 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 - **Closed on main (added to §3 closure-log)**: F110, F112, F117, F118, F120 (URL half), F124 (policy half), F125, F126, F127 (full — entropy rewrite closes the remainder), F128, F129, F130, F134, F135, F138, F142, F143, F146, F150, F151, F152, F153, F154, F155, F156, F157, F158, F159, F160, F163.
 - **REFUTED this session**: F116 (Renovate + Dependabot partitioned by ecosystem) + F123 (crossbeam 0.8.4 + num-format 0.4.4 are current releases) — see §3 newly-refuted block.
 - **Closed by side-effect**: F162 — Parquet writers now delegate to shared SQL generators that preserve CSV row-type contract via explicit casts. Verified 2026-06-21.
-- **Active**: F94, F97, V4, V6, F111, F113, F114, F115, F119, F121, F122, F132, F133, F136, F144, F145, F148, F149, F161 = **18 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
+- **Active**: F94, F97, V4, F111, F113, F114, F115, F119, F121, F122, F132, F133, F136, F144, F145, F148, F149, F161 = **17 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
 
 The next sweep should re-open with F-IDs starting at **F164**.
 
