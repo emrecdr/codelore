@@ -98,3 +98,91 @@ fn pair_programming_surfaces_real_pairs_from_co_authored_trailers() {
         "co-authored author missing from pair: {pair:?}",
     );
 }
+
+/// Canonical-ordering + dedup regression guard for the integer-interned
+/// pair-counter shape. Constructs a fixture where the same author pair
+/// (alice ↔ bob) is encountered in DIFFERENT orderings across commits:
+/// one commit has alice as primary + bob as co-author; another has bob
+/// as primary + alice as co-author. The analysis must emit ONE row for
+/// this pair with `pair_commits = 2`, and `author_a < author_b`
+/// lexicographically (the analysis's documented canonical contract).
+///
+/// The prior `HashMap<(String, String), u32>` keyed shape achieved this
+/// by sorting the per-commit `participants: Vec<String>` lex-ascending,
+/// so the pair tuple always landed as `(alice, bob)` regardless of who
+/// was primary. The integer-interned shape sorts indices instead — same
+/// invariant per commit, dedup across commits via the append-only
+/// interner, but the lex contract is recovered at output time. This
+/// test guards both halves.
+#[test]
+fn pair_programming_dedupes_pair_regardless_of_primary_orientation() {
+    use std::process::Command;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path();
+
+    let git = |args: &[&str]| {
+        let s = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .status()
+            .expect("git");
+        assert!(s.success(), "git {args:?} failed");
+    };
+    let write = |rel: &str, contents: &str| {
+        std::fs::write(path.join(rel), contents).unwrap();
+    };
+
+    git(&["init", "-b", "main", "--quiet"]);
+
+    // Commit 1: bob is primary; alice is co-author.
+    git(&["config", "user.email", "bob@example.com"]);
+    git(&["config", "user.name", "Bob"]);
+    write("a.txt", "v1\n");
+    git(&["add", "."]);
+    git(&[
+        "commit",
+        "-m",
+        "c1\n\nCo-Authored-By: Alice <alice@example.com>",
+        "--quiet",
+    ]);
+
+    // Commit 2: alice is primary; bob is co-author. Same logical
+    // pair, opposite orientation.
+    git(&["config", "user.email", "alice@example.com"]);
+    git(&["config", "user.name", "Alice"]);
+    write("a.txt", "v2\n");
+    git(&["add", "."]);
+    git(&[
+        "commit",
+        "-m",
+        "c2\n\nCo-Authored-By: Bob <bob@example.com>",
+        "--quiet",
+    ]);
+
+    let repo = GixRepo::open(path).expect("gix open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: path.to_path_buf(),
+        min_shared_revs: 1,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let rows = run_pair_programming(&db, &opts).expect("run pair-programming");
+
+    assert_eq!(
+        rows.len(),
+        1,
+        "alice↔bob encountered in two orientations must dedup to 1 pair row; got {rows:?}",
+    );
+    assert_eq!(
+        rows[0].pair_commits, 2,
+        "both commits should count toward the same pair (got {:?})",
+        rows[0],
+    );
+    // Canonical lex ordering — `author_a < author_b`. alice < bob.
+    assert_eq!(rows[0].author_a, "alice@example.com");
+    assert_eq!(rows[0].author_b, "bob@example.com");
+}

@@ -70,7 +70,33 @@ pub fn run_pair_programming(db: &FactsDb, opts: &Options) -> Result<Vec<PairRow>
     // ingest also covers trailer-emitted co-authors.
     let bot_patterns = crate::identity::BotPatterns::from_repo(&opts.repo_path);
 
-    let mut pair_counts: HashMap<(String, String), u32> = HashMap::new();
+    // Intern author identities into a per-run lookup so the hot pair-
+    // counting loop never allocates a `String` for known authors.
+    // Each unique identity gets a stable `usize` id; the
+    // `(idx_a, idx_b)` integer pair becomes the HashMap key. Pair
+    // lookups are pure integer hashes — no String construction per
+    // probe, no `to_string()` per inner-loop iteration.
+    //
+    // The prior shape allocated two `String`s per pair × commit (via
+    // `pair_counts.entry((a.clone(), b.clone()))`) even when the pair
+    // was already counted. On repos with heavy pair-programming
+    // (~100 commits per pair) that was ~200 String allocs per pair
+    // wasted to discover the pair was already present.
+    let mut author_idx: HashMap<String, u32> = HashMap::new();
+    let mut authors: Vec<String> = Vec::new();
+    let mut intern = |id: String| -> u32 {
+        if let Some(&idx) = author_idx.get(&id) {
+            return idx;
+        }
+        let idx = u32::try_from(authors.len()).unwrap_or(u32::MAX);
+        author_idx.insert(id.clone(), idx);
+        authors.push(id);
+        idx
+    };
+    let mut pair_counts: HashMap<(u32, u32), u32> = HashMap::new();
+    // Per-commit participant scratch buffer, reused across the commit
+    // loop. `clear()` keeps the allocation; we just truncate length.
+    let mut participants_buf: Vec<u32> = Vec::with_capacity(8);
     for row in rows {
         let (primary, message) = row.map_err(|e| {
             crate::CodeLoreError::Analysis(format!("row pair-programming scan: {e}"))
@@ -87,35 +113,64 @@ pub fn run_pair_programming(db: &FactsDb, opts: &Options) -> Result<Vec<PairRow>
         if bot_patterns.is_bot(&primary_norm, &primary) {
             continue;
         }
-        // Build the unique-pair set for this commit. Primary author
-        // pairs with each co-author; co-authors pair with each other
-        // (true mob session). Drop any bot identity surfacing through
-        // the Co-Authored-By trailers.
-        let mut participants: Vec<String> = std::iter::once(primary_norm)
-            .chain(
-                co_authors
-                    .into_iter()
-                    .filter(|a| !bot_patterns.is_bot(a, a)),
-            )
-            .collect();
-        participants.sort();
-        participants.dedup();
-        for i in 0..participants.len() {
-            for j in (i + 1)..participants.len() {
-                let key = (participants[i].clone(), participants[j].clone());
-                *pair_counts.entry(key).or_insert(0) += 1;
+        // Intern each participant once into the per-run author table,
+        // building the per-commit `participants_buf` as a `Vec<u32>`
+        // of indices. Sort + dedup the indices so within each commit
+        // the inner loop emits `(idx_a, idx_b)` with `idx_a < idx_b`.
+        // Indices are stable across commits (interner is append-
+        // only), so the same author pair always hashes to the same
+        // `(min_idx, max_idx)` tuple regardless of which commit
+        // surfaced them — guaranteeing pair counts dedup correctly.
+        // The eventual string ordering (author_a < author_b
+        // lexicographically) is recovered at output time below; the
+        // interner's encounter-order indices don't preserve lex
+        // order, which is why the per-row swap is necessary.
+        participants_buf.clear();
+        participants_buf.push(intern(primary_norm));
+        for co in co_authors {
+            if bot_patterns.is_bot(&co, &co) {
+                continue;
+            }
+            participants_buf.push(intern(co));
+        }
+        participants_buf.sort_unstable();
+        participants_buf.dedup();
+        for (i, &a) in participants_buf.iter().enumerate() {
+            for &b in &participants_buf[(i + 1)..] {
+                // Pure integer-pair key — `entry((a, b))` does not
+                // allocate (the tuple is two stack words; the
+                // HashMap stores it inline).
+                *pair_counts.entry((a, b)).or_insert(0) += 1;
             }
         }
     }
 
     // Sort by pair_commits DESC, then author_a / author_b for stable
-    // tie-break.
+    // tie-break. The string ordering at output time matches what the
+    // prior `(String, String)` keyed map produced — author_idx
+    // assigns indices in encounter order, but the final sort is on
+    // the recovered string identities, not the indices.
     let mut out: Vec<PairRow> = pair_counts
         .into_iter()
-        .map(|((a, b), n)| PairRow {
-            author_a: a,
-            author_b: b,
-            pair_commits: n,
+        .map(|((a_idx, b_idx), n)| {
+            let a_idx = a_idx as usize;
+            let b_idx = b_idx as usize;
+            // The interner enforces idx in encounter order; within a
+            // single commit we sort the index buffer ascending, so
+            // a_idx < b_idx, but globally `authors[a_idx]` may not be
+            // lexicographically less than `authors[b_idx]`. Re-sort
+            // the pair lexicographically for the canonical-ordering
+            // contract this analysis's docstring promises.
+            let (a, b) = if authors[a_idx] <= authors[b_idx] {
+                (authors[a_idx].clone(), authors[b_idx].clone())
+            } else {
+                (authors[b_idx].clone(), authors[a_idx].clone())
+            };
+            PairRow {
+                author_a: a,
+                author_b: b,
+                pair_commits: n,
+            }
         })
         .collect();
     out.sort_by(|x, y| {
