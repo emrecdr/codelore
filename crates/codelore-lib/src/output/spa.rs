@@ -130,6 +130,66 @@ pub struct SpaDashboard {
     /// dimensions).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub kamei_risk: Vec<KameiRiskRow>,
+    /// Effective thresholds for THIS run, snapshotted at dispatch.
+    /// Surfaced into the SPA's `data.options` block so per-metric
+    /// tooltips can interpolate `${min_shared_revs}` /
+    /// `${fisher_significance}` / `${min_revs}` and show the actual
+    /// values used — V5: tooltips claimed to surface formula
+    /// provenance but referenced parameter NAMES verbatim, hiding the
+    /// effective gates. `Default` so callers (tests, step-summary)
+    /// continue to use `..Default::default()` unchanged; production
+    /// dispatch in `build_spa_dashboard` populates from real `Options`.
+    #[serde(default)]
+    pub options: SpaOptionsSnapshot,
+}
+
+/// Snapshot of the analysis-threshold subset of `Options` that drive
+/// formula provenance in the SPA. Kept narrow (six numeric fields) so
+/// the JSON payload doesn't balloon; the broader `Options` carries
+/// path filters, AI-detection toggles, output routing flags, etc., which
+/// have no place in a UI tooltip. Fields are public for `Default::default`
+/// to populate them with reasonable code-maat parity values when a test
+/// constructs `SpaDashboard` without going through `build_spa_dashboard`.
+#[derive(Debug, Clone, Serialize)]
+pub struct SpaOptionsSnapshot {
+    pub min_revs: u32,
+    pub min_shared_revs: u32,
+    pub min_coupling_pct: u8,
+    pub max_coupling_pct: u8,
+    pub max_changeset_size: u32,
+    pub fisher_significance: f64,
+}
+
+impl Default for SpaOptionsSnapshot {
+    fn default() -> Self {
+        // Mirrors `Options::default()` — code-maat parity baseline.
+        // Kept in sync via `default_options_match_code_maat_thresholds`
+        // in tests/types_test.rs (asserts the source-of-truth values
+        // haven't drifted).
+        Self {
+            min_revs: 5,
+            min_shared_revs: 5,
+            min_coupling_pct: 30,
+            max_coupling_pct: 100,
+            max_changeset_size: 30,
+            fisher_significance: 0.05,
+        }
+    }
+}
+
+impl SpaOptionsSnapshot {
+    /// Snapshot the threshold subset of [`crate::Options`].
+    #[must_use]
+    pub fn from_options(opts: &crate::Options) -> Self {
+        Self {
+            min_revs: opts.min_revs,
+            min_shared_revs: opts.min_shared_revs,
+            min_coupling_pct: opts.min_coupling_pct,
+            max_coupling_pct: opts.max_coupling_pct,
+            max_changeset_size: opts.max_changeset_size,
+            fisher_significance: opts.fisher_significance,
+        }
+    }
 }
 
 /// One function in the X-Ray sunburst.

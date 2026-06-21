@@ -1952,6 +1952,7 @@ fn build_spa_dashboard(
         clones,
         kamei_risk,
         imports,
+        options: codelore_lib::output::spa::SpaOptionsSnapshot::from_options(opts),
     })
 }
 

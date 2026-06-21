@@ -344,11 +344,11 @@
       citation: { label: 'Knowledge-island detector', anchor: '#knowledge-islands-' },
     },
     coupling_pairs: {
-      formula: 'Pairs (a, b) where the two files change in the same commit, gated by min_shared_revs and Fisher exact p < fisher_significance.',
+      formula: 'Pairs (a, b) where the two files change in the same commit, gated by min_shared_revs ≥ ${min_shared_revs} and Fisher exact p < ${fisher_significance}.',
       citation: { label: 'Gall et al. 1998 + Tornhill 2015', anchor: '#coupling-' },
     },
     coupling_density: {
-      formula: 'edges / (V·(V−1)/2) where V is the candidate node set (files with revs ≥ min_revs) and edges are Fisher-significant coupling pairs.',
+      formula: 'edges / (V·(V−1)/2) where V is the candidate node set (files with revs ≥ ${min_revs}) and edges are Fisher-significant coupling pairs (p < ${fisher_significance}).',
       citation: { label: 'Newman 2010 §6.10 — graph density', anchor: '#hotspots-' },
     },
     mi_band: {
@@ -605,15 +605,32 @@
   // an absolutely-positioned popup with the formula + citation link.
   // Caller is responsible for putting `.tooltip-host` on the wrapping
   // element so the popup positions correctly.
+  // V5: substitute `${key}` placeholders in METRIC_DEFS formula
+  // strings with the run's effective threshold values (data.options).
+  // Without this the tooltip read "Fisher exact p < fisher_significance"
+  // (the parameter NAME) instead of "Fisher exact p < 0.05" (the value
+  // actually in force on this run). Unknown keys are left as-is so a
+  // stale METRIC_DEFS placeholder shows as the literal `${key}` and
+  // the gap is visible during review rather than silently filled with
+  // `undefined`. Pure formatting — runs OUTSIDE escapeHtml so the `<`,
+  // `>`, etc. inside formulas are escaped together with the
+  // substituted values.
+  function interpolate(formula, opts) {
+    return formula.replace(/\$\{([a-z_][a-z0-9_]*)\}/g, function (match, key) {
+      return Object.prototype.hasOwnProperty.call(opts, key) ? String(opts[key]) : match;
+    });
+  }
+
   function buildTooltipHtml(defKey) {
     const def = METRIC_DEFS[defKey];
     if (!def) return '';
     const citationHref = RESEARCH_FOUNDATIONS_URL + (def.citation.anchor || '');
+    const formulaResolved = interpolate(def.formula, data.options || {});
     return '<span class="tooltip-host">' +
       '<button type="button" class="tooltip-trigger" aria-label="What does this metric mean?" tabindex="0">?</button>' +
       '<span class="tooltip-popup" role="tooltip">' +
         '<strong>Formula</strong>' +
-        '<div class="tooltip-formula">' + escapeHtml(def.formula) + '</div>' +
+        '<div class="tooltip-formula">' + escapeHtml(formulaResolved) + '</div>' +
         '<div class="tooltip-citation">📖 <a href="' + escapeHtml(citationHref) + '" target="_blank" rel="noopener">' +
           escapeHtml(def.citation.label) + ' ↗</a></div>' +
       '</span>' +
