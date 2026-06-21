@@ -33,13 +33,15 @@ pub type TeamMap = HashMap<String, String>;
 /// # Errors
 ///
 /// Returns [`CodeLoreError::MalformedTeamMap`] for parse problems and
-/// [`CodeLoreError::Io`] for I/O failures.
+/// [`CodeLoreError::RepoIo`] for I/O failures (the user pointed
+/// `--team-map FILE` at something unreadable — same exit-code bucket
+/// as "the repo path didn't exist", not as "the output pipe broke").
 pub fn load(path: Option<&Path>) -> Result<TeamMap> {
     let Some(path) = path else {
         return Ok(TeamMap::new());
     };
     let raw = fs::read_to_string(path).map_err(|e| {
-        CodeLoreError::Io(std::io::Error::new(
+        CodeLoreError::RepoIo(std::io::Error::new(
             e.kind(),
             format!("read team-map {}: {e}", path.display()),
         ))

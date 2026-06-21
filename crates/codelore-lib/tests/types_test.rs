@@ -51,9 +51,18 @@ fn bca_error_exit_codes_match_spec() {
     assert_eq!(CodeLoreError::Repo("x".into()).exit_code(), 3);
     assert_eq!(CodeLoreError::Analysis("x".into()).exit_code(), 4);
     assert_eq!(CodeLoreError::Output("x".into()).exit_code(), 5);
-    // Io variant: construct via a real io::Error
+    // Io variant (write-side, generic): exit 5 — broken pipe writing
+    // CSV/JSON/markdown, etc.
     let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "x");
     assert_eq!(CodeLoreError::Io(io_err).exit_code(), 5);
+    // RepoIo variant (read-side input): exit 3 — `--team-map FILE`
+    // failed to open, `--arch-rules-file` unreadable, etc. The user
+    // pointed CodeLore at unreadable input; same exit bucket as "the
+    // repo path didn't exist". Distinct from write-side `Io` because
+    // CI orchestrators dispatch differently: exit 3 = "fix the input
+    // you pointed me at", exit 5 = "something went wrong on output".
+    let repo_io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "team-map");
+    assert_eq!(CodeLoreError::RepoIo(repo_io_err).exit_code(), 3);
 }
 
 #[test]
