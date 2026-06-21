@@ -119,6 +119,7 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 | V6 | `CHANNEL_CAPACITY = 64` unmeasured | **Fixed** | This session. New `ingest_capacity_sweep` Criterion benchmark on the medium fixture sweeps `[16, 64, 256, 1024]` in one `cargo bench` invocation. Mechanism: `CHANNEL_CAPACITY_OVERRIDE: AtomicUsize` static in `facts::ingest` + `pub fn set_channel_capacity_override(n)` write hook; `channel_capacity()` reads override-else-DEFAULT_CHANNEL_CAPACITY (64) on each ingest call. Avoids `unsafe { env::set_var }` (workspace `unsafe_code = "forbid"`) and avoids expanding the public CLI surface — production dispatch never touches the override; only the bench writes it, and resets to `0` (= default) at sweep end. `bounded::<CommitEvent>(channel_capacity())` reads the runtime value, so the curve is real measurement, not folklore. |
 | F114 | Single-CDN dependence for all 4 SPA assets | **Fixed** | This session. `AssetPin` extended with `url_fallbacks: &'static [&'static str]`; `fetch_and_pin` walks primary URL first, then each fallback in declaration order. Every asset's fallback is the `unpkg.com` equivalent — both jsDelivr and unpkg pull from the same npm registry, so the bytes are identical and the same SHA-256 validates whichever mirror responds. SHA-256 mismatch on ANY URL is a hard fail (not "skip to next mirror") so a tampered mirror can't be silently replaced by a clean one. A jsDelivr availability incident (DNS outage, regional block, rate-limit) no longer breaks every `--features spa` build. |
 | F115 | Container base images use mutable tags | **Fixed** | This session. Both `Containerfile` base images pinned to immutable `@sha256:...` digests INLINE on the `FROM` instructions (not via ARG — Dependabot/Renovate parsers don't resolve ARG substitutions). `rust:1.96-bookworm@sha256:19817ead...` for the builder; `gcr.io/distroless/cc-debian12:nonroot@sha256:b0ae8e98...` for runtime. Renovate (not Dependabot) handles digest bumps because Dependabot's docker ecosystem only detects `Dockerfile`/`*.Dockerfile` and skips `Containerfile`; `renovate.json` extended with `dockerfile.managerFilePatterns: ["/Containerfile/"]` + a `matchManagers: ["dockerfile"]` package rule grouping all container-base bumps weekly. Reproducibility + cosign/SLSA provenance attestation now work the way they're supposed to. |
+| F122 | `toml = "0.8"` one major behind | **Fixed** | This session. Workspace bumped to `toml = "1"` (latest 1.1.2+spec-1.1.0). The 1.0 release split `parse` (low-level parser) from `serde` (`from_str` / `Deserialize` glue); the dep declaration now opts into BOTH features explicitly so `Thresholds::parse` and `LayerRules::parse` keep their typed `from_str` API. No call-site changes — the high-level `toml::from_str` / `toml::Table` surface is stable across the major. Cargo.lock drops `toml_datetime` 0.6 / `toml_edit` 0.22 / `winnow` 0.7 (replaced by their 1.x successors). 652-test workspace + clippy clean. |
 
 **Newly REFUTED (2026-06-18 / 2026-06-21)**:
 
@@ -181,10 +182,6 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 *   **Severity**: MED
 
 #### F121 — `fishers_exact` crate unmaintained since 2018-11
-
-*   **Severity**: LOW
-
-#### F122 — `toml = "0.8"` one major behind (1.1.x current)
 
 *   **Severity**: LOW
 
@@ -268,7 +265,7 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 | F119 | csv.rs 826 LOC | `wc -l = 826` ✓ (no drift); `grep 'use csv' = 0` — still hand-rolled | Active confirmed |
 | F120 | SARIF schema URL on legacy host | `sarif.rs:13` swapped to `https://json.schemastore.org/sarif-2.1.0.json` | **Fixed (URL half) — hand-rolled JSON / serde-sarif migration NOT closed** |
 | F121 | `fishers_exact` unmaintained | `Cargo.toml:42 = "1"` resolves to `Cargo.lock:1357 v1.0.1` (2018-11 release). Identical to prior audit. `cargo deny check advisories` clean — no live CVE | Active (informational) |
-| F122 | toml on 0.8.x | `Cargo.lock:4391` `toml v0.8.23` — unchanged; upstream on 1.x | Active confirmed |
+| F122 | toml on 0.8.x | Workspace dep bumped to `toml = "1"` with `features = ["parse", "serde"]` (the 1.0 feature split); Cargo.lock now `toml 1.1.2+spec-1.1.0`; 652-test workspace + clippy clean | **Fixed (this session)** |
 | F123 | codelore-rca stale crossbeam/num-format | `Cargo.toml:40 crossbeam = "0.8"`, `:47 num-format = "0.4"`; lock resolves crossbeam v0.8.4 + num-format v0.4.4 — identical to prior. Hands-off policy on the MPL fork. | Active confirmed |
 | F124 | MSRV pinned to current stable, undocumented | `docs/RELEASING.md` now carries an "MSRV (Minimum Supported Rust Version) Policy" section: documents the deliberate "MSRV tracks channel" stance for the pre-1.0 binary-distribution model + the post-1.0 reconsideration trigger | **Fixed (policy)** |
 | F125 | redundant queries fire 4× per ingest | `ingest.rs:92-98` hoist `current_head_rev` + `query_live_paths` once; threaded as `&[String]` + `&str` into 4 HEAD-time passes | **Fixed on main (PR #58)** |
@@ -322,7 +319,7 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 - **Closed on main (added to §3 closure-log)**: F110, F112, F117, F118, F120 (URL half), F124 (policy half), F125, F126, F127 (full — entropy rewrite closes the remainder), F128, F129, F130, F134, F135, F138, F142, F143, F146, F150, F151, F152, F153, F154, F155, F156, F157, F158, F159, F160, F163.
 - **REFUTED this session**: F116 (Renovate + Dependabot partitioned by ecosystem) + F123 (crossbeam 0.8.4 + num-format 0.4.4 are current releases) — see §3 newly-refuted block.
 - **Closed by side-effect**: F162 — Parquet writers now delegate to shared SQL generators that preserve CSV row-type contract via explicit casts. Verified 2026-06-21.
-- **Active**: F94, F97, V4, F111, F113, F119, F121, F122, F132, F133, F136, F144, F145, F148, F149, F161 = **15 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
+- **Active**: F94, F97, V4, F111, F113, F119, F121, F132, F133, F136, F144, F145, F148, F149, F161 = **14 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
 
 The next sweep should re-open with F-IDs starting at **F164**.
 
