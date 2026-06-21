@@ -595,8 +595,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
                     .context("write csv")?;
             }
             "json" => {
-                codelore_lib::output::json::write_clones_json(&rows, &mut out)
-                    .context("write json")?;
+                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
             }
             "markdown" => {
                 codelore_lib::output::markdown::write_clones_markdown(&rows, &mut out)
@@ -881,8 +880,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             ("json", AnalysisName::Hotspots) => {
                 let rows = codelore_lib::analyses::hotspots::run_hotspots(&db, &opts)
                     .context("run hotspots")?;
-                codelore_lib::output::json::write_hotspots_json(&rows, &mut out)
-                    .context("write json")?;
+                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
             }
             ("markdown", AnalysisName::Hotspots) => {
                 let rows = codelore_lib::analyses::hotspots::run_hotspots(&db, &opts)
@@ -919,8 +917,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             ("json", AnalysisName::CodeHealth) => {
                 let rows = codelore_lib::analyses::code_health::run_code_health(&db, &opts)
                     .context("run code-health")?;
-                codelore_lib::output::json::write_code_health_json(&rows, &mut out)
-                    .context("write json")?;
+                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
             }
             ("markdown", AnalysisName::CodeHealth) => {
                 let rows = codelore_lib::analyses::code_health::run_code_health(&db, &opts)
@@ -948,8 +945,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             ("json", AnalysisName::CodeAge) => {
                 let rows = codelore_lib::analyses::code_age::run_code_age(&db, &opts)
                     .context("run code-age")?;
-                codelore_lib::output::json::write_code_age_json(&rows, &mut out)
-                    .context("write json")?;
+                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
             }
             ("markdown", AnalysisName::CodeAge) => {
                 let rows = codelore_lib::analyses::code_age::run_code_age(&db, &opts)
@@ -967,8 +963,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             ("json", AnalysisName::AbsChurn) => {
                 let rows = codelore_lib::analyses::churn::run_abs_churn(&db, &opts)
                     .context("run abs-churn")?;
-                codelore_lib::output::json::write_abs_churn_json(&rows, &mut out)
-                    .context("write json")?;
+                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
             }
             ("markdown", AnalysisName::AbsChurn) => {
                 let rows = codelore_lib::analyses::churn::run_abs_churn(&db, &opts)
@@ -986,8 +981,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             ("json", AnalysisName::AuthorChurn) => {
                 let rows = codelore_lib::analyses::churn::run_author_churn(&db, &opts)
                     .context("run author-churn")?;
-                codelore_lib::output::json::write_author_churn_json(&rows, &mut out)
-                    .context("write json")?;
+                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
             }
             ("markdown", AnalysisName::AuthorChurn) => {
                 let rows = codelore_lib::analyses::churn::run_author_churn(&db, &opts)
@@ -1005,8 +999,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             ("json", AnalysisName::EntityChurn) => {
                 let rows = codelore_lib::analyses::churn::run_entity_churn(&db, &opts)
                     .context("run entity-churn")?;
-                codelore_lib::output::json::write_entity_churn_json(&rows, &mut out)
-                    .context("write json")?;
+                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
             }
             ("markdown", AnalysisName::EntityChurn) => {
                 let rows = codelore_lib::analyses::churn::run_entity_churn(&db, &opts)
@@ -1028,8 +1021,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             ("json", AnalysisName::Communication) => {
                 let rows = codelore_lib::analyses::communication::run_communication(&db, &opts)
                     .context("run communication")?;
-                codelore_lib::output::json::write_communication_json(&rows, &mut out)
-                    .context("write json")?;
+                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
             }
             ("markdown", AnalysisName::Communication) => {
                 let rows = codelore_lib::analyses::communication::run_communication(&db, &opts)
@@ -1051,8 +1043,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             ("json", AnalysisName::Ownership) => {
                 let rows = codelore_lib::analyses::ownership::run_ownership(&db, &opts)
                     .context("run ownership")?;
-                codelore_lib::output::json::write_ownership_json(&rows, &mut out)
-                    .context("write json")?;
+                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
             }
             ("markdown", AnalysisName::Ownership) => {
                 let rows = codelore_lib::analyses::ownership::run_ownership(&db, &opts)
@@ -1074,8 +1065,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             ("json", AnalysisName::Coupling) => {
                 let rows = codelore_lib::analyses::coupling::run_coupling(&db, &opts)
                     .context("run coupling")?;
-                codelore_lib::output::json::write_coupling_json(&rows, &mut out)
-                    .context("write json")?;
+                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
             }
             ("markdown", AnalysisName::Coupling) => {
                 let rows = codelore_lib::analyses::coupling::run_coupling(&db, &opts)
@@ -1103,8 +1093,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             ("json", AnalysisName::Summary) => {
                 let rows = codelore_lib::analyses::summary::run_summary(&db, &opts)
                     .context("run summary")?;
-                codelore_lib::output::json::write_summary_json(&rows, &mut out)
-                    .context("write json")?;
+                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
             }
             ("markdown", AnalysisName::Summary) => {
                 let rows = codelore_lib::analyses::summary::run_summary(&db, &opts)
@@ -1122,8 +1111,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             ("json", AnalysisName::Clones) => {
                 let rows =
                     codelore_lib::analyses::clones::run_clones(&opts).context("run clones")?;
-                codelore_lib::output::json::write_clones_json(&rows, &mut out)
-                    .context("write json")?;
+                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
             }
             ("markdown", AnalysisName::Clones) => {
                 let rows =
@@ -1155,8 +1143,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             ("json", AnalysisName::Authors) => {
                 let rows = codelore_lib::analyses::authors::run_authors(&db, &opts)
                     .context("run authors")?;
-                codelore_lib::output::json::write_authors_json(&rows, &mut out)
-                    .context("write json")?;
+                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
             }
             ("markdown", AnalysisName::Authors) => {
                 let rows = codelore_lib::analyses::authors::run_authors(&db, &opts)
@@ -1177,8 +1164,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             ("json", AnalysisName::TopCommitters) => {
                 let rows = codelore_lib::analyses::top_committers::run_top_committers(&db, &opts)
                     .context("run top-committers")?;
-                codelore_lib::output::json::write_top_committers_json(&rows, &mut out)
-                    .context("write json")?;
+                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
             }
             ("markdown", AnalysisName::TopCommitters) => {
                 let rows = codelore_lib::analyses::top_committers::run_top_committers(&db, &opts)
@@ -1199,8 +1185,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             ("json", AnalysisName::GodClasses) => {
                 let rows = codelore_lib::analyses::god_classes::run_god_classes(&db, &opts)
                     .context("run god-classes")?;
-                codelore_lib::output::json::write_god_classes_json(&rows, &mut out)
-                    .context("write json")?;
+                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
             }
             ("markdown", AnalysisName::GodClasses) => {
                 let rows = codelore_lib::analyses::god_classes::run_god_classes(&db, &opts)
@@ -1221,8 +1206,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             ("json", AnalysisName::ArchViolations) => {
                 let rows = codelore_lib::analyses::arch_violations::run_arch_violations(&db, &opts)
                     .context("run architecture-violations")?;
-                codelore_lib::output::json::write_arch_violations_json(&rows, &mut out)
-                    .context("write json")?;
+                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
             }
             ("markdown", AnalysisName::ArchViolations) => {
                 let rows = codelore_lib::analyses::arch_violations::run_arch_violations(&db, &opts)
@@ -1245,8 +1229,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             ("json", AnalysisName::StaleCode) => {
                 let rows = codelore_lib::analyses::stale_code::run_stale_code(&db, &opts)
                     .context("run stale-code")?;
-                codelore_lib::output::json::write_stale_code_json(&rows, &mut out)
-                    .context("write json")?;
+                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
             }
             ("markdown", AnalysisName::StaleCode) => {
                 let rows = codelore_lib::analyses::stale_code::run_stale_code(&db, &opts)
@@ -1269,8 +1252,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
                 let rows =
                     codelore_lib::analyses::pair_programming::run_pair_programming(&db, &opts)
                         .context("run pair-programming")?;
-                codelore_lib::output::json::write_pair_programming_json(&rows, &mut out)
-                    .context("write json")?;
+                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
             }
             ("markdown", AnalysisName::PairProgramming) => {
                 let rows =
@@ -1292,8 +1274,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             ("json", AnalysisName::LeadTime) => {
                 let rows = codelore_lib::analyses::lead_time::run_lead_time(&db, &opts)
                     .context("run lead-time")?;
-                codelore_lib::output::json::write_lead_time_json(&rows, &mut out)
-                    .context("write json")?;
+                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
             }
             ("markdown", AnalysisName::LeadTime) => {
                 let rows = codelore_lib::analyses::lead_time::run_lead_time(&db, &opts)
@@ -1320,8 +1301,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             ("json", AnalysisName::BusFactor) => {
                 let rows = codelore_lib::analyses::bus_factor::run_bus_factor(&db, &opts)
                     .context("run bus-factor")?;
-                codelore_lib::output::json::write_bus_factor_json(&rows, &mut out)
-                    .context("write json")?;
+                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
             }
             ("markdown", AnalysisName::BusFactor) => {
                 let rows = codelore_lib::analyses::bus_factor::run_bus_factor(&db, &opts)
@@ -1344,8 +1324,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
                 let rows =
                     codelore_lib::analyses::delivery_friction::run_delivery_friction(&db, &opts)
                         .context("run delivery-friction")?;
-                codelore_lib::output::json::write_delivery_friction_json(&rows, &mut out)
-                    .context("write json")?;
+                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
             }
             ("markdown", AnalysisName::DeliveryFriction) => {
                 let rows =
@@ -1369,8 +1348,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
                 let rows =
                     codelore_lib::analyses::knowledge_islands::run_knowledge_islands(&db, &opts)
                         .context("run knowledge-islands")?;
-                codelore_lib::output::json::write_knowledge_islands_json(&rows, &mut out)
-                    .context("write json")?;
+                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
             }
             ("markdown", AnalysisName::KnowledgeIslands) => {
                 let rows =
@@ -1389,8 +1367,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             }
             ("json", AnalysisName::Soc) => {
                 let rows = codelore_lib::analyses::soc::run_soc(&db, &opts).context("run soc")?;
-                codelore_lib::output::json::write_soc_json(&rows, &mut out)
-                    .context("write json")?;
+                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
             }
             ("markdown", AnalysisName::Soc) => {
                 let rows = codelore_lib::analyses::soc::run_soc(&db, &opts).context("run soc")?;
@@ -1410,8 +1387,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             ("json", AnalysisName::Messages) => {
                 let rows = codelore_lib::analyses::messages::run_messages(&db, &opts)
                     .context("run messages")?;
-                codelore_lib::output::json::write_messages_json(&rows, &mut out)
-                    .context("write json")?;
+                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
             }
             ("markdown", AnalysisName::Messages) => {
                 let rows = codelore_lib::analyses::messages::run_messages(&db, &opts)
@@ -1432,8 +1408,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             ("json", AnalysisName::MainDev) => {
                 let rows = codelore_lib::analyses::main_dev::run_main_dev(&db, &opts)
                     .context("run main-dev")?;
-                codelore_lib::output::json::write_main_dev_json(&rows, &mut out)
-                    .context("write json")?;
+                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
             }
             ("markdown", AnalysisName::MainDev) => {
                 let rows = codelore_lib::analyses::main_dev::run_main_dev(&db, &opts)
@@ -1458,8 +1433,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             ("json", AnalysisName::MainDevByRevs) => {
                 let rows = codelore_lib::analyses::main_dev::run_main_dev_by_revs(&db, &opts)
                     .context("run main-dev-by-revs")?;
-                codelore_lib::output::json::write_main_dev_json(&rows, &mut out)
-                    .context("write json")?;
+                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
             }
             ("markdown", AnalysisName::MainDevByRevs) => {
                 let rows = codelore_lib::analyses::main_dev::run_main_dev_by_revs(&db, &opts)
@@ -1480,8 +1454,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             ("json", AnalysisName::MainDevByDeletions) => {
                 let rows = codelore_lib::analyses::main_dev::run_main_dev_by_deletions(&db, &opts)
                     .context("run main-dev-by-deletions")?;
-                codelore_lib::output::json::write_main_dev_json(&rows, &mut out)
-                    .context("write json")?;
+                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
             }
             ("markdown", AnalysisName::MainDevByDeletions) => {
                 let rows = codelore_lib::analyses::main_dev::run_main_dev_by_deletions(&db, &opts)
@@ -1506,8 +1479,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             ("json", AnalysisName::EntityEffort) => {
                 let rows = codelore_lib::analyses::entity_effort::run_entity_effort(&db, &opts)
                     .context("run entity-effort")?;
-                codelore_lib::output::json::write_entity_effort_json(&rows, &mut out)
-                    .context("write json")?;
+                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
             }
             ("markdown", AnalysisName::EntityEffort) => {
                 let rows = codelore_lib::analyses::entity_effort::run_entity_effort(&db, &opts)
@@ -1530,8 +1502,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
                 let rows =
                     codelore_lib::analyses::entity_ownership::run_entity_ownership(&db, &opts)
                         .context("run entity-ownership")?;
-                codelore_lib::output::json::write_entity_ownership_json(&rows, &mut out)
-                    .context("write json")?;
+                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
             }
             ("markdown", AnalysisName::EntityOwnership) => {
                 let rows =
@@ -1553,8 +1524,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             ("json", AnalysisName::CloneCoupling) => {
                 let rows = codelore_lib::analyses::clone_coupling::run_clone_coupling(&db, &opts)
                     .context("run clone-coupling")?;
-                codelore_lib::output::json::write_clone_coupling_json(&rows, &mut out)
-                    .context("write json")?;
+                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
             }
             ("markdown", AnalysisName::CloneCoupling) => {
                 let rows = codelore_lib::analyses::clone_coupling::run_clone_coupling(&db, &opts)
@@ -1586,8 +1556,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             ("json", AnalysisName::Centrality) => {
                 let rows = codelore_lib::analyses::centrality::run_centrality(&db, &opts)
                     .context("run centrality")?;
-                codelore_lib::output::json::write_centrality_json(&rows, &mut out)
-                    .context("write json")?;
+                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
             }
             ("markdown", AnalysisName::Centrality) => {
                 let rows = codelore_lib::analyses::centrality::run_centrality(&db, &opts)

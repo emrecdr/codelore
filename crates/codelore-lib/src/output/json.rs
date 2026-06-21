@@ -1,27 +1,43 @@
-//! JSON output emitter for all 11 analyses.
+//! JSON output emitter for all analyses.
 //!
-//! Each writer takes a slice of typed rows + writer; serializes as a JSON array.
+//! Most analyses emit their rows directly via [`write_json`] — a single
+//! generic over any `serde::Serialize` slice. The two exceptions are
+//! `revisions` (whose `(String, u32)` tuple needs a struct wrapping for
+//! named-field JSON output) and `communities` (whose output is a
+//! wrapper struct carrying the row array plus partition-level summary
+//! statistics, not the rows alone).
+//!
+//! CLI dispatch calls `write_json::<HotspotRow>(&rows, &mut out)`
+//! directly with a turbofished row type — the same pattern the
+//! `output::ndjson::write_ndjson` emitter uses. Per-analysis wrapper
+//! shims (`write_hotspots_json`, `write_code_health_json`, etc.) were
+//! retired in commit b2efe20's successor: 27 shims removed, 33 call
+//! sites updated to use the generic.
 
-use crate::analyses::{
-    authors::AuthorsRow,
-    churn::{AbsChurnRow, AuthorChurnRow, EntityChurnRow},
-    clone_coupling::CloneCouplingRow,
-    clones::ClonesRow,
-    code_age::CodeAgeRow,
-    code_health::CodeHealthRow,
-    communication::CommunicationRow,
-    coupling::CouplingRow,
-    hotspots::HotspotRow,
-    ownership::OwnershipRow,
-    summary::SummaryRow,
-};
 use crate::{CodeLoreError, Result};
 use std::io::Write;
 
-fn write_json<W: Write, T: serde::Serialize>(rows: &[T], w: &mut W) -> Result<()> {
+/// Generic JSON emitter. Serialises any `serde::Serialize` slice as a
+/// pretty-printed JSON array. The pretty form matches the historic
+/// shape from the pre-shim era; downstream consumers that expect
+/// stream-parseable single-row-per-line semantics should use
+/// `--format ndjson` instead.
+///
+/// # Errors
+///
+/// Returns [`CodeLoreError::Output`] on serialisation or I/O failure.
+pub fn write_json<W: Write, T: serde::Serialize>(rows: &[T], w: &mut W) -> Result<()> {
     serde_json::to_writer_pretty(w, rows).map_err(|e| CodeLoreError::Output(format!("json: {e}")))
 }
 
+/// `revisions` emitter — the tuple `(path, n_revs)` is serialised as a
+/// named-field struct so JSON consumers see `{"entity": "...",
+/// "n_revs": N}` rather than `["...", N]` (which would be the default
+/// tuple serialisation).
+///
+/// # Errors
+///
+/// Returns [`CodeLoreError::Output`] on serialisation or I/O failure.
 pub fn write_revisions_json<W: Write>(rows: &[(String, u32)], w: &mut W) -> Result<()> {
     #[derive(serde::Serialize)]
     struct R<'a> {
@@ -38,168 +54,17 @@ pub fn write_revisions_json<W: Write>(rows: &[(String, u32)], w: &mut W) -> Resu
     write_json(&typed, w)
 }
 
-pub fn write_hotspots_json<W: Write>(rows: &[HotspotRow], w: &mut W) -> Result<()> {
-    write_json(rows, w)
-}
-
-pub fn write_code_health_json<W: Write>(rows: &[CodeHealthRow], w: &mut W) -> Result<()> {
-    write_json(rows, w)
-}
-
-pub fn write_code_age_json<W: Write>(rows: &[CodeAgeRow], w: &mut W) -> Result<()> {
-    write_json(rows, w)
-}
-
-pub fn write_abs_churn_json<W: Write>(rows: &[AbsChurnRow], w: &mut W) -> Result<()> {
-    write_json(rows, w)
-}
-
-pub fn write_author_churn_json<W: Write>(rows: &[AuthorChurnRow], w: &mut W) -> Result<()> {
-    write_json(rows, w)
-}
-
-pub fn write_entity_churn_json<W: Write>(rows: &[EntityChurnRow], w: &mut W) -> Result<()> {
-    write_json(rows, w)
-}
-
-pub fn write_communication_json<W: Write>(rows: &[CommunicationRow], w: &mut W) -> Result<()> {
-    write_json(rows, w)
-}
-
-pub fn write_ownership_json<W: Write>(rows: &[OwnershipRow], w: &mut W) -> Result<()> {
-    write_json(rows, w)
-}
-
-pub fn write_coupling_json<W: Write>(rows: &[CouplingRow], w: &mut W) -> Result<()> {
-    write_json(rows, w)
-}
-
-pub fn write_summary_json<W: Write>(rows: &[SummaryRow], w: &mut W) -> Result<()> {
-    write_json(rows, w)
-}
-
-pub fn write_clones_json<W: Write>(rows: &[ClonesRow], w: &mut W) -> Result<()> {
-    write_json(rows, w)
-}
-
-pub fn write_authors_json<W: Write>(rows: &[AuthorsRow], w: &mut W) -> Result<()> {
-    write_json(rows, w)
-}
-
-pub fn write_top_committers_json<W: Write>(
-    rows: &[crate::analyses::top_committers::TopCommittersRow],
-    w: &mut W,
-) -> Result<()> {
-    write_json(rows, w)
-}
-
-pub fn write_god_classes_json<W: Write>(
-    rows: &[crate::analyses::god_classes::GodClassRow],
-    w: &mut W,
-) -> Result<()> {
-    write_json(rows, w)
-}
-
-pub fn write_arch_violations_json<W: Write>(
-    rows: &[crate::analyses::arch_violations::ArchViolationRow],
-    w: &mut W,
-) -> Result<()> {
-    write_json(rows, w)
-}
-
-pub fn write_stale_code_json<W: Write>(
-    rows: &[crate::analyses::stale_code::StaleCodeRow],
-    w: &mut W,
-) -> Result<()> {
-    write_json(rows, w)
-}
-
-pub fn write_pair_programming_json<W: Write>(
-    rows: &[crate::analyses::pair_programming::PairRow],
-    w: &mut W,
-) -> Result<()> {
-    write_json(rows, w)
-}
-
-pub fn write_lead_time_json<W: Write>(
-    rows: &[crate::analyses::lead_time::LeadTimeRow],
-    w: &mut W,
-) -> Result<()> {
-    write_json(rows, w)
-}
-
-pub fn write_bus_factor_json<W: Write>(
-    rows: &[crate::analyses::bus_factor::BusFactorRow],
-    w: &mut W,
-) -> Result<()> {
-    write_json(rows, w)
-}
-
-pub fn write_delivery_friction_json<W: Write>(
-    rows: &[crate::analyses::delivery_friction::DeliveryFrictionRow],
-    w: &mut W,
-) -> Result<()> {
-    write_json(rows, w)
-}
-
-pub fn write_knowledge_islands_json<W: Write>(
-    rows: &[crate::analyses::knowledge_islands::KnowledgeIslandRow],
-    w: &mut W,
-) -> Result<()> {
-    write_json(rows, w)
-}
-
-pub fn write_soc_json<W: Write>(rows: &[crate::analyses::soc::SocRow], w: &mut W) -> Result<()> {
-    write_json(rows, w)
-}
-
-pub fn write_messages_json<W: Write>(
-    rows: &[crate::analyses::messages::MessagesRow],
-    w: &mut W,
-) -> Result<()> {
-    write_json(rows, w)
-}
-
-pub fn write_main_dev_json<W: Write>(
-    rows: &[crate::analyses::main_dev::MainDevRow],
-    w: &mut W,
-) -> Result<()> {
-    write_json(rows, w)
-}
-
-pub fn write_entity_effort_json<W: Write>(
-    rows: &[crate::analyses::entity_effort::EntityEffortRow],
-    w: &mut W,
-) -> Result<()> {
-    write_json(rows, w)
-}
-
-pub fn write_entity_ownership_json<W: Write>(
-    rows: &[crate::analyses::entity_ownership::EntityOwnershipRow],
-    w: &mut W,
-) -> Result<()> {
-    write_json(rows, w)
-}
-
-pub fn write_clone_coupling_json<W: Write>(rows: &[CloneCouplingRow], w: &mut W) -> Result<()> {
-    write_json(rows, w)
-}
-
-pub fn write_centrality_json<W: Write>(
-    rows: &[crate::analyses::centrality::CentralityRow],
-    w: &mut W,
-) -> Result<()> {
-    write_json(rows, w)
-}
-
-/// Communities emits the wrapper struct (`rows` + `modularity` +
-/// `community_count`), not just the row array — the partition-level
-/// summary is the headline metric and JSON consumers expect it
-/// alongside the per-file mapping.
+/// `communities` emitter — emits the wrapper struct (`rows` +
+/// `modularity` + `community_count`), not just the row array — the
+/// partition-level summary is the headline metric and JSON consumers
+/// expect it alongside the per-file mapping.
+///
+/// # Errors
+///
+/// Returns [`CodeLoreError::Output`] on serialisation or I/O failure.
 pub fn write_communities_json<W: Write>(
     result: &crate::analyses::communities::CommunitiesResult,
     w: &mut W,
 ) -> Result<()> {
-    serde_json::to_writer_pretty(w, result)
-        .map_err(|e| crate::CodeLoreError::Output(format!("json: {e}")))
+    serde_json::to_writer_pretty(w, result).map_err(|e| CodeLoreError::Output(format!("json: {e}")))
 }

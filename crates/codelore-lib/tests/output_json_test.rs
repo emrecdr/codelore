@@ -15,7 +15,7 @@ fn json_hotspots_emits_array() {
         ai_pct: None,
     }];
     let mut buf = Vec::new();
-    json::write_hotspots_json(&rows, &mut Cursor::new(&mut buf)).expect("write");
+    json::write_json(&rows, &mut Cursor::new(&mut buf)).expect("write");
     let s = String::from_utf8(buf).expect("utf8");
     // Expect valid JSON with the path and a numeric score
     assert!(s.starts_with('['), "should start with array");

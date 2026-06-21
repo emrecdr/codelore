@@ -9,6 +9,10 @@ Conventional Commits format. All notable changes documented here.
 - **`--format ndjson` extended to `code-health`, `coupling`, and `lead-time`** (alongside the existing hotspots wiring). The 3 most-commonly-piped behavioural analyses now stream as newline-delimited JSON for `jq -c` / LSP / CI log consumption.
 - **SPA: treemap semantic-zoom drill-down.** The hotspot treemap widget now supports click-to-drill into directory subtrees via ECharts' `leafDepth: 2` + native breadcrumb. Per-depth `levels[]` styling adds progressive border + gap thickness so directory vs file cells read distinctly. Spec: [Apache ECharts treemap-drill-down example](https://echarts.apache.org/examples/en/editor.html?c=treemap-drill-down). Zero bundle delta — uses the already-pinned ECharts 6.1.0.
 
+### Changed
+
+- **`output::json::write_json` is now `pub`; 27 trivial `write_*_json` shim functions retired.** The JSON emitter previously carried one wrapper function per analysis (`write_hotspots_json`, `write_code_health_json`, etc.) — each one a 5-line shim that called `write_json(rows, w)`. The generic `write_json<T: Serialize>` is now public and called directly from CLI dispatch via turbofish (`output::json::write_json::<HotspotRow>(&rows, &mut out)`), matching the existing `output::ndjson::write_ndjson` pattern. Two non-trivial emitters preserved: `write_revisions_json` (wraps the `(String, u32)` tuple into a named-field struct for JSON output) and `write_communities_json` (emits the wrapper struct carrying partition-level summary alongside per-file mapping). Net: -137 LOC across emitter + 33 call sites. Closes F146.
+
 ### Added
 
 - **`--format ndjson`** — newline-delimited JSON output for `codelore analyze`. Each row is emitted as its own line of compact JSON (no enclosing array), so LSP integrations, `jq -c` filters, and CI log pipelines can stream-parse as analyses complete instead of waiting for the closing `]`. Spec: <https://github.com/ndjson/ndjson-spec>. Wired for hotspots (Plan 9 will extend to all analyses); same `HotspotRow` shape as the batch JSON emitter, only the framing changes.

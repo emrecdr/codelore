@@ -91,6 +91,7 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 | F140 | Six new analyses lack integration tests | **Fixed** | `7b43593` (5 new `tests/*_test.rs`) |
 | F141 | `imports_factsdb_test` only asserts unresolved | **Fixed** | `7b43593` (`ingest_resolves_imports_to_target_paths`) |
 | F143 | SPA headless-browser smoke test | **Fixed** | PR #56 → main. `tests/spa_browser_test.rs` + `browser-tests` feature + CI job |
+| F146 | `json.rs` trivial `write_*_json` shims (29 total) | **Fixed** | This session. `write_json<T: Serialize>` made `pub`; 27 trivial shims deleted, 2 non-trivial kept (`write_revisions_json` tuple→struct wrap, `write_communities_json` wrapper struct emit). 33 CLI call sites updated. Net: -137 LOC. |
 | F147 | `AnalysisName` 3-way sync no exhaustiveness guard | **Fixed** | `549c460` (initial `_exhaustive_check`) + PR #60 (`registry!` macro). F157 closed by the macro. |
 | F120 | SARIF schema URL on legacy `schemastore.azurewebsites.net` host | **Fixed (URL)** | This session. `sarif.rs:13` swapped to canonical `https://json.schemastore.org/sarif-2.1.0.json`. The hand-rolled-JSON / `serde-sarif` migration concern in the original finding was a separate refactor and is NOT closed — re-surfaces in next discovery pass if still material. |
 | F124 | MSRV pin has zero buffer behind toolchain | **Fixed (policy)** | This session. `docs/RELEASING.md` now carries an "MSRV (Minimum Supported Rust Version) Policy" section explaining the deliberate "MSRV tracks channel" stance for the pre-1.0 binary-distribution model + post-1.0 reconsideration trigger. The zero-buffer is now a deliberate documented decision, not an oversight. |
@@ -274,11 +275,6 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 *   **Severity**: HIGH
 *   **Drift note**: the prior 720-LOC estimate was correct at the time of the audit; the file has grown roughly proportionally with new analyses (lead-time, bus-factor, stale-code, god-classes, etc.). The architectural concern is the same — the routing table grew, the abstraction didn't.
 
-#### F146 — `json.rs` `write_*_json` shims (count drifted)
-
-*   **Location**: `crates/codelore-lib/src/output/json.rs` — **29 trivial shim functions** today (audit logged 14 at the time of capture; new analyses added more).
-*   **Severity**: MED
-
 #### F148 — `csv.rs` + `markdown.rs` per-analysis emitters
 
 *   **Severity**: LOW
@@ -393,9 +389,9 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 
 **Current Active count after this validation pass + closure annotations**:
 
-- **Closed on main (added to §3 closure-log)**: F110, F112, F118, F120 (URL half), F124 (policy half), F125, F126, F128, F134, F135, F138, F143, F150, F151, F152, F154, F155, F156, F157, F158, F159, F160, F163. F127 partial-closed (NS/ND/NF triple done; entropy remains).
+- **Closed on main (added to §3 closure-log)**: F110, F112, F118, F120 (URL half), F124 (policy half), F125, F126, F128, F134, F135, F138, F143, F146, F150, F151, F152, F154, F155, F156, F157, F158, F159, F160, F163. F127 partial-closed (NS/ND/NF triple done; entropy remains).
 - **REFUTED this session**: F116 — see §3 newly-refuted block. Renovate + Dependabot are partitioned by ecosystem (cargo vs github-actions), not duplicated.
-- **Active**: F94, F97, V4, V5, V6, F111, F113, F114, F115, F117, F119, F121, F122, F123, F127 (partial — entropy), F129, F130, F131, F132, F133, F136, F137, F142, F144, F145, F146, F148, F149, F153, F161, F162 = **30 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
+- **Active**: F94, F97, V4, V5, V6, F111, F113, F114, F115, F117, F119, F121, F122, F123, F127 (partial — entropy), F129, F130, F131, F132, F133, F136, F137, F142, F144, F145, F148, F149, F153, F161, F162 = **29 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
 
 The next sweep should re-open with F-IDs starting at **F164**.
 
