@@ -184,10 +184,6 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 *   **Location**: `crates/codelore-lib/src/output/csv.rs`
 *   **Severity**: MED
 
-#### F121 — `fishers_exact` crate unmaintained since 2018-11
-
-*   **Severity**: LOW
-
 ### NEW Active Findings — Backend performance
 
 ### NEW Active Findings — SPA UI/UX
@@ -249,7 +245,7 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 | F117 | First-party GHA floating tags | `release.yml`: 6 `actions/...@vN` lines (52, 88, 95, 148, 153, 165, 168, 207, 266) all floating. `container.yml`: 6 `docker/...@vN` lines (59, 61, 69, 119, 121, 129). Audit cited release.yml for the docker actions — they actually live in container.yml. | Active confirmed (location refined) |
 | F119 | csv.rs 826 LOC | `wc -l = 826` ✓ (no drift); `grep 'use csv' = 0` — still hand-rolled | Active confirmed |
 | F120 | SARIF schema URL on legacy host | `sarif.rs:13` swapped to `https://json.schemastore.org/sarif-2.1.0.json` | **Fixed (URL half) — hand-rolled JSON / serde-sarif migration NOT closed** |
-| F121 | `fishers_exact` unmaintained | `Cargo.toml:42 = "1"` resolves to `Cargo.lock:1357 v1.0.1` (2018-11 release). Identical to prior audit. `cargo deny check advisories` clean — no live CVE | Active (informational) |
+| F121 | `fishers_exact` unmaintained | Ported in-tree as `crate::stats::fisher_two_tail_pvalue` (hypergeometric tail in log space via `ln_factorial`); supply-chain dep removed; 8 regression cases match upstream to 1e-12 relative error | **Fixed (this session)** |
 | F122 | toml on 0.8.x | Workspace dep bumped to `toml = "1"` with `features = ["parse", "serde"]` (the 1.0 feature split); Cargo.lock now `toml 1.1.2+spec-1.1.0`; 652-test workspace + clippy clean | **Fixed (this session)** |
 | F123 | codelore-rca stale crossbeam/num-format | `Cargo.toml:40 crossbeam = "0.8"`, `:47 num-format = "0.4"`; lock resolves crossbeam v0.8.4 + num-format v0.4.4 — identical to prior. Hands-off policy on the MPL fork. | Active confirmed |
 | F124 | MSRV pinned to current stable, undocumented | `docs/RELEASING.md` now carries an "MSRV (Minimum Supported Rust Version) Policy" section: documents the deliberate "MSRV tracks channel" stance for the pre-1.0 binary-distribution model + the post-1.0 reconsideration trigger | **Fixed (policy)** |
@@ -273,6 +269,7 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 | F146 | json.rs trivial shims | `grep -cE '^pub fn write_[a-z_]+_json' = 29` — no change | Active confirmed |
 | F148 | csv.rs + markdown.rs per-analysis emitters | Both still ~25KB per-analysis files (csv.rs 25825 bytes, markdown.rs 25534 bytes) | Active confirmed |
 | F149 | hunks schema lacks PK / NOT NULL | Schema tightened to NOT NULL + composite PK + index; wired entire ingest pipeline (gix `count_loc_and_hunks` + `diff_hunks` proper impl + walker populates `FileChange.hunks` + `append_change` writes rows); differential test asserts gix == cli hunks | **Fixed (this session)** |
+| F121 | `fishers_exact` crate unmaintained (last release 2018-11) | In-tree port in new `crate::stats::fisher_two_tail_pvalue` module (~150 LOC); supply-chain dependency eliminated; output matches the upstream's `fishers_exact(&[a,b,c,d]).two_tail_pvalue` to ≤ 1e-12 relative error across 8 regression cases | **Fixed (this session)** |
 | F150 | Schema version disjoint, no startup validation | `facts/schema.rs:10` `CURRENT_SCHEMA_VERSION` const + `facts/mod.rs:69` `validate_schema_version()` at `open_read_only` bails on mismatch | **Fixed on main (PR #61)** |
 | F151 | Leiden non-deterministic | `communities.rs:58 LEIDEN_SEED` + `:148-150 LeidenConfig { seed: Some(LEIDEN_SEED), .. }` + regression test :269-316 | **Fixed on main (PR #61)** |
 | F152 | clone_group_id std HashMap | `clones/extractor.rs:151-152` switched to `BTreeMap<[u8;32], _>` | **Fixed on main (PR #61)** |
@@ -304,7 +301,7 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 - **Closed on main (added to §3 closure-log)**: F110, F112, F117, F118, F120 (URL half), F124 (policy half), F125, F126, F127 (full — entropy rewrite closes the remainder), F128, F129, F130, F134, F135, F138, F142, F143, F146, F150, F151, F152, F153, F154, F155, F156, F157, F158, F159, F160, F163.
 - **REFUTED this session**: F116 (Renovate + Dependabot partitioned by ecosystem) + F123 (crossbeam 0.8.4 + num-format 0.4.4 are current releases) — see §3 newly-refuted block.
 - **Closed by side-effect**: F162 — Parquet writers now delegate to shared SQL generators that preserve CSV row-type contract via explicit casts. Verified 2026-06-21.
-- **Active**: F94, F97, V4, F111, F113, F119, F121, F132, F133, F145, F148, F161 = **11 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
+- **Active**: F94, F97, V4, F111, F113, F119, F132, F133, F145, F148, F161 = **10 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
 
 The next sweep should re-open with F-IDs starting at **F164**.
 

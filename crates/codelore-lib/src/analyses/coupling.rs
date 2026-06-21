@@ -295,7 +295,7 @@ fn fisher_two_tail(shared: u32, revs_a: u32, revs_b: u32, total: u32) -> Option<
     // `good_commits` filter, a post-cache hot-fix UPDATE, a
     // `--group-file` collapse that merges A and B into the same
     // logical entity), the saturating_subs that used to live here
-    // would silently clamp the cells to 0, `fishers_exact`'s input
+    // would silently clamp the cells to 0, the Fisher kernel's input
     // validation may still accept the degenerate table, and we'd
     // get a "meaningful" p-value on garbage. Return None on any
     // violation so the caller's existing None-filtered path drops
@@ -314,9 +314,7 @@ fn fisher_two_tail(shared: u32, revs_a: u32, revs_b: u32, total: u32) -> Option<
     let b = revs_a - shared; // checked above
     let c = revs_b - shared; // checked above
     let d = total - union_ab; // checked above
-    fishers_exact::fishers_exact(&[a, b, c, d])
-        .ok()
-        .map(|pv| pv.two_tail_pvalue)
+    crate::stats::fisher_two_tail_pvalue(a, b, c, d)
 }
 
 /// Run change-coupling analysis over the ingested fact store.
@@ -561,7 +559,7 @@ mod fisher_two_tail_invariant_tests {
     use super::fisher_two_tail;
 
     /// Sanity check that the happy path still computes a valid p-value.
-    /// The exact value isn't asserted (`fishers_exact` is the source of
+    /// The exact value isn't asserted (`crate::stats::fisher_two_tail_pvalue` is the source of
     /// truth); we just check it's in `[0, 1]`.
     #[test]
     fn happy_path_returns_some_in_unit_interval() {

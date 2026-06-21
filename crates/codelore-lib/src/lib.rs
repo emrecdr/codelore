@@ -24,6 +24,7 @@ pub mod paths_filter;
 pub mod provenance;
 pub mod quality_gates;
 pub mod repo;
+pub mod stats;
 #[cfg(feature = "test-support")]
 pub mod test_support;
 pub mod types;
