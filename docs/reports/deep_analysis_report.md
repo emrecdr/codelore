@@ -91,6 +91,7 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 | F140 | Six new analyses lack integration tests | **Fixed** | `7b43593` (5 new `tests/*_test.rs`) |
 | F141 | `imports_factsdb_test` only asserts unresolved | **Fixed** | `7b43593` (`ingest_resolves_imports_to_target_paths`) |
 | F143 | SPA headless-browser smoke test | **Fixed** | PR #56 → main. `tests/spa_browser_test.rs` + `browser-tests` feature + CI job |
+| F127 (full) | Kamei `enrich_diffusion` entropy block correlated subquery | **Fixed** | This session. Entropy block rewritten as 2-pass (reset to 0.0 + grouped `UPDATE ... FROM` with window-function `p_i = loc_added / SUM(loc_added) OVER (PARTITION BY rev)`), mirroring `enrich_history`'s shape. Byte-identical semantics proven via `kamei_entropy_per_commit_distribution` regression test (3 hand-computed cases: single-file = 0.0, even 2-way = 1.0, uneven 3-way = 1.2987949...). |
 | F146 | `json.rs` trivial `write_*_json` shims (29 total) | **Fixed** | This session. `write_json<T: Serialize>` made `pub`; 27 trivial shims deleted, 2 non-trivial kept (`write_revisions_json` tuple→struct wrap, `write_communities_json` wrapper struct emit). 33 CLI call sites updated. Net: -137 LOC. |
 | F147 | `AnalysisName` 3-way sync no exhaustiveness guard | **Fixed** | `549c460` (initial `_exhaustive_check`) + PR #60 (`registry!` macro). F157 closed by the macro. |
 | F120 | SARIF schema URL on legacy `schemastore.azurewebsites.net` host | **Fixed (URL)** | This session. `sarif.rs:13` swapped to canonical `https://json.schemastore.org/sarif-2.1.0.json`. The hand-rolled-JSON / `serde-sarif` migration concern in the original finding was a separate refactor and is NOT closed — re-surfaces in next discovery pass if still material. |
@@ -210,14 +211,6 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 *   **Severity**: LOW
 
 ### NEW Active Findings — Backend performance
-
-#### F127 — Kamei `enrich_diffusion` entropy block still correlated (partial)
-
-*   **Location**: `crates/codelore-lib/src/kamei/mod.rs:72-83` (entropy block) — comment at `:39-43` documents the partial fix
-*   **Severity**: MED
-*   **Status**: Partial. The NS/ND/NF triple at `:44-65` was collapsed into one `UPDATE commits SET nf=..., ns=..., nd=... FROM (... GROUP BY rev) AS d WHERE commits.rev = d.rev` on `main` (PR #64 landed). The entropy block at `:72-83` remained correlated (`WHERE changes.rev = commits.rev`) because the rewrite was found not to be semantically equivalent without a separate reset pass (validation observation 30251). The original "three correlated subqueries" claim is closed by the letter; the entropy follow-up is the remainder.
-*   **Failure scenario**: large monorepo Kamei enrichment still streams `changes` once for NS/ND/NF (fast path) but pays the per-row scan for entropy.
-*   **Suggested fix**: rewrite entropy as `UPDATE commits SET entropy = e.h FROM (SELECT rev, -SUM(p * LOG(p)) AS h FROM (SELECT rev, COUNT(*)::DOUBLE / SUM(COUNT(*)) OVER (PARTITION BY rev) AS p FROM changes GROUP BY rev, path) GROUP BY rev) AS e WHERE commits.rev = e.rev` — paired with a regression test asserting byte-identical entropy values vs. the correlated form on the fixture.
 
 #### F129 — `arch_violations` materializes full imports set, truncates post-Rust
 
@@ -389,9 +382,9 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 
 **Current Active count after this validation pass + closure annotations**:
 
-- **Closed on main (added to §3 closure-log)**: F110, F112, F118, F120 (URL half), F124 (policy half), F125, F126, F128, F134, F135, F138, F143, F146, F150, F151, F152, F154, F155, F156, F157, F158, F159, F160, F163. F127 partial-closed (NS/ND/NF triple done; entropy remains).
+- **Closed on main (added to §3 closure-log)**: F110, F112, F118, F120 (URL half), F124 (policy half), F125, F126, F127 (full — entropy rewrite closes the remainder), F128, F134, F135, F138, F143, F146, F150, F151, F152, F154, F155, F156, F157, F158, F159, F160, F163.
 - **REFUTED this session**: F116 — see §3 newly-refuted block. Renovate + Dependabot are partitioned by ecosystem (cargo vs github-actions), not duplicated.
-- **Active**: F94, F97, V4, V5, V6, F111, F113, F114, F115, F117, F119, F121, F122, F123, F127 (partial — entropy), F129, F130, F131, F132, F133, F136, F137, F142, F144, F145, F148, F149, F153, F161, F162 = **29 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
+- **Active**: F94, F97, V4, V5, V6, F111, F113, F114, F115, F117, F119, F121, F122, F123, F129, F130, F131, F132, F133, F136, F137, F142, F144, F145, F148, F149, F153, F161, F162 = **28 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
 
 The next sweep should re-open with F-IDs starting at **F164**.
 

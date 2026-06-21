@@ -67,20 +67,50 @@ fn enrich_diffusion(db: &FactsDb) -> Result<()> {
         .execute_batch(sql_counts)
         .map_err(|e| CodeLoreError::Analysis(format!("kamei diffusion counts: {e}")))?;
 
-    // entropy = -Σ p_i log2(p_i) over LOC distribution across files
-    // Run as a separate statement so errors are easier to isolate.
+    // entropy = -Σ p_i log2(p_i) over the LOC distribution across files
+    // within each commit.
+    //
+    // Rewritten from a correlated subquery (a per-row WITH-CTE that
+    // re-scanned `changes` against every `commits.rev`) into the same
+    // 2-pass shape `enrich_history` uses:
+    //
+    //   Pass 1: reset every commits.entropy to 0.0 — commits whose
+    //           `changes` rows all have `loc_added = 0` (binary-only
+    //           changes, deletes, the LA stub) silently miss the
+    //           grouped UPDATE's join key and would otherwise retain
+    //           whatever entropy they had pre-call. The reset
+    //           preserves the prior `COALESCE(..., 0.0)` semantics
+    //           where the correlated-subquery's NULL becomes 0.0.
+    //
+    //   Pass 2: grouped UPDATE...FROM that walks `changes` once,
+    //           computes p_i = loc_added / SUM(loc_added) per rev via a
+    //           window function partitioned by rev, then aggregates
+    //           -Σ p log2(p) per rev. DuckDB resolves the cross-rev
+    //           join in a single hash pass.
+    //
+    // Byte-identical semantics validated against the prior shape by
+    // `kamei_entropy_per_commit_distribution` in tests/kamei_test.rs:
+    // single-file commits emit 0.0, even 2-way splits emit log2(2) =
+    // 1.0, the uneven 3-way reference case emits ≈ 1.29879494...
+    db.conn()
+        .execute_batch("UPDATE commits SET entropy = 0.0;")
+        .map_err(|e| CodeLoreError::Analysis(format!("kamei diffusion entropy reset: {e}")))?;
+
     let sql_entropy = "
-        UPDATE commits SET
-          entropy = COALESCE((
-              WITH dist AS (
-                  SELECT CAST(loc_added AS DOUBLE) AS x
-                  FROM changes
-                  WHERE changes.rev = commits.rev AND loc_added > 0
-              ),
-              total AS (SELECT SUM(x) AS t FROM dist)
-              SELECT -SUM((x / NULLIF(total.t, 0)) * LOG2(NULLIF(x / NULLIF(total.t, 0), 0)))
-              FROM dist, total
-          ), 0.0);
+        UPDATE commits SET entropy = e.h
+        FROM (
+            SELECT rev, -SUM(p * LOG2(p)) AS h
+            FROM (
+                SELECT
+                    rev,
+                    CAST(loc_added AS DOUBLE)
+                        / SUM(CAST(loc_added AS DOUBLE)) OVER (PARTITION BY rev) AS p
+                FROM changes
+                WHERE loc_added > 0
+            )
+            GROUP BY rev
+        ) AS e
+        WHERE commits.rev = e.rev;
     ";
     db.conn()
         .execute_batch(sql_entropy)

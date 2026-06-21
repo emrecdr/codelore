@@ -217,6 +217,136 @@ fn kamei_fix_flag_detects_bug_keywords() {
     );
 }
 
+/// Entropy correctness regression guard. The Kamei diffusion entropy
+/// is `-Σ p_i log2(p_i)` over the per-file LOC distribution within a
+/// commit:
+///
+/// * Single-file commit (one file gets all LOC): `p_0 = 1` → entropy = 0
+/// * Even split across 2 files: `p = [0.5, 0.5]` → entropy = `log2(2)` = 1
+/// * Uneven 3-way split — hand-computed below
+///
+/// Pins the SQL semantics so that the next rewrite of the entropy
+/// block (the correlated-subquery form is flagged in F127 as
+/// remaining work) cannot silently shift any of these values. The
+/// `enrich_history` 2-pass pattern (reset then grouped UPDATE) is
+/// the planned shape; this test must keep producing the same numbers
+/// after that rewrite.
+#[test]
+fn kamei_entropy_per_commit_distribution() {
+    use std::fmt::Write as _;
+    use std::process::Command;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path();
+
+    let mut s = String::new();
+    let write_lines = |buf: &mut String, prefix: char, n: usize| {
+        buf.clear();
+        for i in 0..n {
+            writeln!(buf, "{prefix}{i}").unwrap();
+        }
+    };
+
+    let git = |args: &[&str]| {
+        let ok = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .status()
+            .expect("spawn git")
+            .success();
+        assert!(ok, "git {args:?} failed");
+    };
+    let commit_at = |msg: &str, date: &str| {
+        let ok = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(["commit", "-m", msg, "--quiet"])
+            .env("GIT_AUTHOR_DATE", date)
+            .env("GIT_COMMITTER_DATE", date)
+            .status()
+            .expect("spawn git commit")
+            .success();
+        assert!(ok);
+    };
+
+    git(&["init", "-b", "main", "--quiet"]);
+    git(&["config", "user.email", "entropy@example.com"]);
+    git(&["config", "user.name", "Entropy"]);
+
+    // C1 — single file, 10 lines. Entropy MUST be exactly 0 (p=1,
+    // log2(1)=0). One-file commits anchor the lower bound of the
+    // distribution; any rewrite that emits NULL or a tiny positive
+    // value here is a regression.
+    write_lines(&mut s, 'a', 10);
+    std::fs::write(path.join("a.txt"), &s).unwrap();
+    git(&["add", "."]);
+    commit_at("c1: single file 10 lines", "2026-06-01T10:00:00");
+
+    // C2 — two files, 4 + 4 lines. Entropy MUST be exactly log2(2) = 1.
+    write_lines(&mut s, 'b', 4);
+    std::fs::write(path.join("b.txt"), &s).unwrap();
+    write_lines(&mut s, 'c', 4);
+    std::fs::write(path.join("c.txt"), &s).unwrap();
+    git(&["add", "."]);
+    commit_at("c2: two files even", "2026-06-02T10:00:00");
+
+    // C3 — three files, 1 + 2 + 5 lines (total 8). Hand-computed:
+    //   p = [1/8, 2/8, 5/8] = [0.125, 0.25, 0.625]
+    //   entropy = -(0.125 * log2(0.125) + 0.25 * log2(0.25) + 0.625 * log2(0.625))
+    //           = -(0.125 * -3.0 + 0.25 * -2.0 + 0.625 * -0.6780719051126377)
+    //           =   0.375 + 0.5 + 0.42379494069539855
+    //           ≈ 1.2987949406953984
+    std::fs::write(path.join("d.txt"), "d0\n").unwrap();
+    std::fs::write(path.join("e.txt"), "e0\ne1\n").unwrap();
+    write_lines(&mut s, 'f', 5);
+    std::fs::write(path.join("f.txt"), &s).unwrap();
+    git(&["add", "."]);
+    commit_at("c3: three files uneven", "2026-06-03T10:00:00");
+
+    let repo = codelore_lib::repo::GixRepo::open(path).expect("gix open");
+    let db = codelore_lib::facts::FactsDb::new_in_memory().expect("db");
+    let opts = codelore_lib::Options {
+        repo_path: path.to_path_buf(),
+        min_revs: 1,
+        ..codelore_lib::Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    // Read the three commits in date order.
+    let entropies: Vec<f64> = (1..=3)
+        .map(|i| {
+            let s: String = db
+                .query_one_value(&format!(
+                    "SELECT CAST(entropy AS TEXT) FROM commits WHERE message LIKE 'c{i}:%'",
+                ))
+                .unwrap_or_else(|e| panic!("entropy query c{i}: {e}"));
+            s.parse::<f64>()
+                .unwrap_or_else(|e| panic!("entropy parse c{i}={s:?}: {e}"))
+        })
+        .collect();
+
+    // C1 single-file: entropy MUST be exactly 0.
+    assert!(
+        (entropies[0] - 0.0).abs() < 1e-9,
+        "C1 single-file entropy must be 0.0; got {}",
+        entropies[0]
+    );
+    // C2 even 2-file split: entropy MUST be exactly 1.0 (log2(2)).
+    assert!(
+        (entropies[1] - 1.0).abs() < 1e-9,
+        "C2 even 2-file entropy must be 1.0; got {}",
+        entropies[1]
+    );
+    // C3 uneven 3-file split: hand-computed expected.
+    let expected_c3 = 1.298_794_940_695_398_4_f64;
+    assert!(
+        (entropies[2] - expected_c3).abs() < 1e-9,
+        "C3 uneven 3-file entropy must be {expected_c3}; got {}",
+        entropies[2]
+    );
+}
+
 /// Directory-skew protection: a synthetic repo where every commit
 /// lands in the same top-level dir touches the worst-case (dir, author)
 /// partition. Before the O(K) rewrite, this exploded via list / cross-
