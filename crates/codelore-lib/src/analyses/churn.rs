@@ -158,6 +158,7 @@ pub struct EntityChurnRow {
     pub commits: u32,
 }
 
+#[tracing::instrument(name = "abs-churn", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_abs_churn(db: &FactsDb, opts: &Options) -> Result<Vec<AbsChurnRow>> {
     materialize(db, opts)?;
     let sql = build_abs_churn_sql(source_table(opts));
@@ -181,6 +182,7 @@ pub fn run_abs_churn(db: &FactsDb, opts: &Options) -> Result<Vec<AbsChurnRow>> {
         .map_err(|e| CodeLoreError::Analysis(format!("collect abs-churn: {e}")))
 }
 
+#[tracing::instrument(name = "author-churn", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_author_churn(db: &FactsDb, opts: &Options) -> Result<Vec<AuthorChurnRow>> {
     materialize(db, opts)?;
     let sql = build_author_churn_sql(source_table(opts));
@@ -210,6 +212,7 @@ pub fn run_author_churn(db: &FactsDb, opts: &Options) -> Result<Vec<AuthorChurnR
         .map_err(|e| CodeLoreError::Analysis(format!("collect author-churn: {e}")))
 }
 
+#[tracing::instrument(name = "entity-churn", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_entity_churn(db: &FactsDb, opts: &Options) -> Result<Vec<EntityChurnRow>> {
     materialize(db, opts)?;
     let sql = build_entity_churn_sql(source_table(opts));

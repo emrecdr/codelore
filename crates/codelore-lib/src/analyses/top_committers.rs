@@ -90,6 +90,7 @@ const SQL: &str = "
     LIMIT ?
 ";
 
+#[tracing::instrument(name = "top-committers", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_top_committers(db: &FactsDb, opts: &Options) -> Result<Vec<TopCommittersRow>> {
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
     super::query::explain_if_requested(db, SQL, params![row_limit], "top-committers", opts)?;

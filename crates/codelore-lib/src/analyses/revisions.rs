@@ -40,6 +40,7 @@ pub fn build_inlined_sql(src: &str, min_revs: u32) -> String {
         .replace('?', "9223372036854775807")
 }
 
+#[tracing::instrument(name = "revisions", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_revisions(db: &FactsDb, opts: &Options) -> Result<Vec<(String, u32)>> {
     super::lineage::materialize_if_needed(db, opts)?;
     let sql = super::lineage::rewrite(SQL_RAW, opts);

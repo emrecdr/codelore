@@ -146,6 +146,7 @@ const SQL: &str = "
     LIMIT ?
 ";
 
+#[tracing::instrument(name = "authors", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_authors(db: &FactsDb, opts: &Options) -> Result<Vec<AuthorsRow>> {
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
     crate::analyses::lineage::materialize_if_needed(db, opts)?;

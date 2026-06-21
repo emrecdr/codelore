@@ -34,6 +34,7 @@ const SQL: &str = "
     LIMIT ?
 ";
 
+#[tracing::instrument(name = "entity-ownership", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_entity_ownership(db: &FactsDb, opts: &Options) -> Result<Vec<EntityOwnershipRow>> {
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
     crate::analyses::lineage::materialize_if_needed(db, opts)?;

@@ -144,6 +144,7 @@ fn run(db: &FactsDb, opts: &Options, metric: MainDevMetric) -> Result<Vec<MainDe
 }
 
 /// Top author per file ranked by lines added. Code-maat parity.
+#[tracing::instrument(name = "main-dev", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_main_dev(db: &FactsDb, opts: &Options) -> Result<Vec<MainDevRow>> {
     run(db, opts, MainDevMetric::Added)
 }
@@ -152,11 +153,13 @@ pub fn run_main_dev(db: &FactsDb, opts: &Options) -> Result<Vec<MainDevRow>> {
 /// `refactoring-main-dev` (Tornhill's heuristic that removing code is a
 /// deliberate design choice). The honest name is `main-dev-by-deletions`;
 /// `refactoring-main-dev` is an accepted alias.
+#[tracing::instrument(name = "main-dev-by-deletions", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_main_dev_by_deletions(db: &FactsDb, opts: &Options) -> Result<Vec<MainDevRow>> {
     run(db, opts, MainDevMetric::Deleted)
 }
 
 /// Top author per file ranked by revision count. Code-maat parity.
+#[tracing::instrument(name = "main-dev-by-revs", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_main_dev_by_revs(db: &FactsDb, opts: &Options) -> Result<Vec<MainDevRow>> {
     run(db, opts, MainDevMetric::RevCount)
 }

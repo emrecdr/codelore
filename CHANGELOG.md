@@ -11,6 +11,7 @@ Conventional Commits format. All notable changes documented here.
 
 ### Performance
 
+- **Observability: `#[tracing::instrument]` on all 32 `run_*` analysis entry points.** Each span carries `name="<analysis-name>"`, `skip_all` (drops the `db` and `opts` debug-bloat), and `fields(min_revs = opts.min_revs)` as a structured field — the input gate that explains "I ran hotspots and got zero rows". Operators get per-analysis wall-clock + busy/idle breakdown via `RUST_LOG=codelore_lib::analyses=debug` (or `=info` for span open/close only). Verified end-to-end: `hotspots{min_revs=1}` emits with `time.busy=6.87ms time.idle=2.25µs` on a tiny fixture. Closes F142.
 - **Kamei `enrich_diffusion` entropy block rewritten from correlated subquery → 2-pass grouped UPDATE** (reset to 0.0 + single hash-joined UPDATE with window-function `p_i = loc_added / SUM(loc_added) OVER (PARTITION BY rev)`). Mirrors `enrich_history`'s shape: DuckDB walks `changes` exactly once per ingest instead of re-scanning per `commits.rev`. Byte-identical semantics validated via a new `kamei_entropy_per_commit_distribution` regression test with 3 hand-computed cases (single-file commit = 0.0, even 2-way split = log2(2) = 1.0, uneven 3-way reference case = 1.2987949...). Closes F127 — the NS/ND/NF triple was collapsed in PR #64; the entropy remainder is now also closed.
 
 ### Changed

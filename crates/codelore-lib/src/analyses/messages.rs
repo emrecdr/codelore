@@ -35,6 +35,7 @@ const SQL: &str = "
     LIMIT ?
 ";
 
+#[tracing::instrument(name = "messages", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_messages(db: &FactsDb, opts: &Options) -> Result<Vec<MessagesRow>> {
     let expr = opts.message_regex.as_deref().ok_or_else(|| {
         CodeLoreError::Analysis(

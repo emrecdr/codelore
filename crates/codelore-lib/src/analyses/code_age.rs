@@ -130,6 +130,7 @@ const SQL: &str = "
     LIMIT ?
 ";
 
+#[tracing::instrument(name = "code-age", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_code_age(db: &FactsDb, opts: &Options) -> Result<Vec<CodeAgeRow>> {
     // Reference anchor for the "now" of age calculation, with two
     // separate semantics depending on whether the user passed

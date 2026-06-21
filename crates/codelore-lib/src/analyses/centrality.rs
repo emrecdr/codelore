@@ -97,6 +97,7 @@ pub struct CentralityRow {
 /// Returns [`CodeLoreError::Analysis`] if the underlying coupling query
 /// fails. An empty coupling result (small repos, threshold filtered
 /// everything out) yields an empty `Vec` — not an error.
+#[tracing::instrument(name = "centrality", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_centrality(db: &FactsDb, opts: &Options) -> Result<Vec<CentralityRow>> {
     let pairs = run_coupling(db, opts)?;
     Ok(compute_centrality(&pairs))

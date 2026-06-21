@@ -46,6 +46,7 @@ pub struct ArchViolationRow {
 ///
 /// Returns [`CodeLoreError::Analysis`] on `DuckDB` query errors or
 /// arch-rules file I/O / parse errors.
+#[tracing::instrument(name = "arch-violations", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_arch_violations(db: &FactsDb, opts: &Options) -> Result<Vec<ArchViolationRow>> {
     let rules = LayerRules::discover(&opts.repo_path)?;
     if rules.is_empty() {

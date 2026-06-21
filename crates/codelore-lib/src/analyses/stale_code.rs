@@ -84,6 +84,7 @@ const SQL: &str = "
 /// # Errors
 ///
 /// Returns [`crate::CodeLoreError::Analysis`] on `DuckDB` errors.
+#[tracing::instrument(name = "stale-code", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_stale_code(db: &FactsDb, opts: &Options) -> Result<Vec<StaleCodeRow>> {
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
     let n = time::OffsetDateTime::now_utc();

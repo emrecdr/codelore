@@ -94,6 +94,7 @@ fn build_soc_sql(
     )
 }
 
+#[tracing::instrument(name = "soc", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_soc(db: &FactsDb, opts: &Options) -> Result<Vec<SocRow>> {
     // Unified dispatch: --time-bucket > canonical lineage > raw.
     crate::analyses::lineage::materialize_source(db, opts)?;

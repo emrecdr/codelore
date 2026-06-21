@@ -92,6 +92,7 @@ pub struct CloneCouplingRow {
 /// is `O(k²)` per family rather than `O(pairs²)` across the whole repo —
 /// follows the `SourcererCC` index-then-probe pattern from the research brief.
 #[allow(clippy::too_many_lines)]
+#[tracing::instrument(name = "clone-coupling", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_clone_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CloneCouplingRow>> {
     use std::collections::HashMap;
 

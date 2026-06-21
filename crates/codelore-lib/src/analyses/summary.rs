@@ -14,6 +14,7 @@ pub struct SummaryRow {
     pub value: i64,
 }
 
+#[tracing::instrument(name = "summary", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_summary(db: &FactsDb, opts: &Options) -> Result<Vec<SummaryRow>> {
     // DEEP-15: Under `--code-maat-compat`, emit code-maat's exact statistic
     // names (hyphenated `number-of-X`) so downstream scripts parsing CSV

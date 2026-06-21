@@ -54,6 +54,7 @@ pub struct BusFactorRow {
 /// # Errors
 ///
 /// Returns [`CodeLoreError::Analysis`] on `DuckDB` errors.
+#[tracing::instrument(name = "bus-factor", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_bus_factor(db: &FactsDb, opts: &Options) -> Result<Vec<BusFactorRow>> {
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
 

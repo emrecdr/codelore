@@ -326,6 +326,7 @@ fn fisher_two_tail(shared: u32, revs_a: u32, revs_b: u32, total: u32) -> Option<
 /// # Errors
 ///
 /// Returns [`CodeLoreError::Analysis`] on any SQL error.
+#[tracing::instrument(name = "coupling", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
     // Unified dispatch: --time-bucket > canonical lineage > raw. When both
     // bucketing and lineage are on, lineage is materialised first and

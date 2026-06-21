@@ -39,6 +39,7 @@ pub struct ClonesRow {
 /// Run the clones analysis at HEAD. Walks `opts.repo_path`'s working tree,
 /// reads each Tier-1 file, fingerprints every function, groups, and returns
 /// one `ClonesRow` per clone-family member.
+#[tracing::instrument(name = "clones", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_clones(opts: &Options) -> Result<Vec<ClonesRow>> {
     use rayon::iter::{IntoParallelIterator, ParallelIterator};
     // Plan 8 §2 Task 8: combine --exclude patterns with any .codeloreignore

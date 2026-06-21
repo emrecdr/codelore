@@ -97,6 +97,7 @@ pub struct CommunitiesResult {
 /// fails or if `leiden-rs` reports an internal error (malformed input,
 /// numerical breakdown — neither expected on the well-formed inputs
 /// `coupling::run_coupling` produces, but the error path stays typed).
+#[tracing::instrument(name = "communities", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_communities(db: &FactsDb, opts: &Options) -> Result<CommunitiesResult> {
     let pairs = run_coupling(db, opts)?;
     if pairs.is_empty() {

@@ -213,6 +213,7 @@ const SQL: &str = "
     LIMIT ?
 ";
 
+#[tracing::instrument(name = "knowledge-islands", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_knowledge_islands(db: &FactsDb, opts: &Options) -> Result<Vec<KnowledgeIslandRow>> {
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
     // Anchor for "departed" calculation. Re-uses `--age-time-now` when set

@@ -129,6 +129,7 @@ const SQL: &str = "
 ///
 /// Returns [`CodeLoreError::Analysis`] on `DuckDB` prepare / query /
 /// collect errors.
+#[tracing::instrument(name = "delivery-friction", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_delivery_friction(db: &FactsDb, opts: &Options) -> Result<Vec<DeliveryFrictionRow>> {
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
     let n = time::OffsetDateTime::now_utc();

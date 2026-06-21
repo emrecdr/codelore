@@ -106,6 +106,7 @@ fn build_communication_sql(code_maat_compat: bool) -> String {
     )
 }
 
+#[tracing::instrument(name = "communication", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_communication(db: &FactsDb, opts: &Options) -> Result<Vec<CommunicationRow>> {
     // Route through `changes_lineage` when canonical lineage is enabled so
     // two authors who co-edited the SAME logical file across a rename still

@@ -56,6 +56,7 @@ pub struct LeadTimeRow {
 /// # Errors
 ///
 /// Returns [`CodeLoreError::Analysis`] on `DuckDB` errors.
+#[tracing::instrument(name = "lead-time", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_lead_time(db: &FactsDb, opts: &Options) -> Result<Vec<LeadTimeRow>> {
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
 

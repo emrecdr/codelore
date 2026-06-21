@@ -171,6 +171,7 @@ fn materialize_centrality(db: &FactsDb, opts: &Options) -> Result<()> {
     Ok(())
 }
 
+#[tracing::instrument(name = "code-health", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_code_health(db: &FactsDb, opts: &Options) -> Result<Vec<CodeHealthRow>> {
     // Materialize Fisher-filtered coupling centrality before the SQL runs.
     // `materialize_centrality` -> `run_coupling` ALSO materializes

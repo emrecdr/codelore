@@ -44,6 +44,7 @@ pub struct PairRow {
 /// # Errors
 ///
 /// Returns [`crate::CodeLoreError::Analysis`] on `DuckDB` errors.
+#[tracing::instrument(name = "pair-programming", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_pair_programming(db: &FactsDb, opts: &Options) -> Result<Vec<PairRow>> {
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
 

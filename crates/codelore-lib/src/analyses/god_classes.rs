@@ -105,6 +105,7 @@ const SQL: &str = "
 ///
 /// Returns [`crate::CodeLoreError::Analysis`] on `DuckDB` prepare /
 /// query / collect errors.
+#[tracing::instrument(name = "god-classes", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_god_classes(db: &FactsDb, opts: &Options) -> Result<Vec<GodClassRow>> {
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
     let cm_src = crate::analyses::grouped_complexity::source_table(opts);

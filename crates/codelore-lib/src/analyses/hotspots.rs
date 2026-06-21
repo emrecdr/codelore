@@ -245,6 +245,7 @@ pub const SQL: &str = "
     LIMIT ?
 ";
 
+#[tracing::instrument(name = "hotspots", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_hotspots(db: &FactsDb, opts: &Options) -> Result<Vec<HotspotRow>> {
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
     // Unified dispatch: honours both --time-bucket and --use-canonical-lineage,
