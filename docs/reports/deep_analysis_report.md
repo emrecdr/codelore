@@ -112,12 +112,14 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 | F159 | SARIF `artifactLocation.uri` not percent-encoded | **Fixed** | PR #63 → main. `percent_encode_path()` helper + non-ASCII/space/# regression test |
 | F160 | Kamei NDEV/EXP same-second peer semantics inconsistent | **Fixed** | PR #64 → main. Strict `prev.date < c.date` uniformly across NDEV/NUC/EXP/REXP/SEXP |
 | F163 | SARIF `automationDetails.id` is static | **Fixed** | PR #63 → main. `automation_id_for(prefix)` appends per-run 16-hex suffix |
+| F162 | Parquet column types drift from CSV row-type contract | **Fixed (already-closed by side-effect)** | Parquet writers now delegate to `analyses::hotspots::build_inlined_sql` / `revisions::build_inlined_sql` shared SQL generators. Those generators already use the explicit-cast convention the original finding requested, so the CSV row-type contract is preserved verbatim through to Parquet. The 51-line `parquet.rs` shim has no remaining type-inference call site. Verified 2026-06-21 validation pass. |
 
-**Newly REFUTED (2026-06-18)**:
+**Newly REFUTED (2026-06-18 / 2026-06-21)**:
 
 | F-ID | Original claim | Why refuted |
 |---|---|---|
 | F116 | Renovate AND Dependabot configured for same ecosystems | The two bots are partitioned by `package-ecosystem`, not duplicated. `.github/dependabot.yml` opens with `package-ecosystem: github-actions` (only updates `.github/workflows/*.yml` action pins). `renovate.json` carries `matchManagers: ["cargo"]` rules exclusively (Rust deps). The original audit treated the presence of both config files as evidence of duplication without reading either's scope. Keep both; they're the right split — Renovate's `matchPackageNames: ["duckdb"] rangeStrategy: pin` + `tree-sitter enabled: false` rules carry the same Cargo-bump policy CLAUDE.md documents in §"Dependabot has intentional ignore rules" but for the cargo ecosystem, which Dependabot is NOT configured to touch. |
+| F123 | `crossbeam = "0.8"` + `num-format = "0.4"` in codelore-rca stale | Both pins resolve to the latest published versions. `crossbeam 0.8.4` is the current release on crates.io (no 0.9 or 1.x line exists); `num-format 0.4.4` is the current release (no 0.5 line exists). The hands-off-MPL-fork policy is intact AND the pins are current — the "stale" claim was unverified at the time. Re-checked via lib.rs / crates.io advisories index 2026-06-21. |
 
 **Refuted findings preserved**: F88 (silent ODB skip rationale), F95 (window filter at ingest level), plus from §3/§4 of the prior report — apply_grouping JOIN shape, renderHeader listener leak, parquet/SQLite backslash escape, hotspots CTE leak, color-mode aria-label, Kamei SEXP `<` vs `<=`, tree-sitter `kind_id` ABI, AI-assist false positives, NULL-conflated AI attribution, DuckDB pinning speculation, code-health weights citation, SoC inclusive thresholds. Rationale in commits `f1aa0e7` (PR #36) + `13fefcb` (PR #38).
 
@@ -205,10 +207,6 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 
 *   **Severity**: LOW
 
-#### F123 — `num-format` + `crossbeam` stale in codelore-rca
-
-*   **Severity**: LOW
-
 ### NEW Active Findings — Backend performance
 
 ### NEW Active Findings — SPA UI/UX
@@ -276,16 +274,6 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 *   **Description**: Every `run_*` collects from the DuckDB cursor into a `Vec<Row>`; emitter signature `fn write_X(rows: &[Row], w: &mut W)` iterates over the slice. Peak memory grows with row count. On a 100k-file monorepo, HotspotRow Vec (~40 MB data + double during query→Vec staging) plus CSV staging strings can hit hundreds of MB.
 *   **Failure scenario**: `codelore analyze --analysis hotspots --format csv` on a 200k-touched-path monorepo: ~5-8 GB resident peak; OOM on 4 GB CI runner.
 *   **Suggested fix**: `EmitterStream<W>` trait with `emit_header` / `emit_row` / `finish`. CSV is mechanical; JSON/markdown need array streaming; SARIF stays batch (needs run-level totals).
-
-#### F162 — Parquet column types drift from CSV row-type contract (`u32` → `INT64`)
-
-*   **Location**: `crates/codelore-lib/src/output/parquet.rs:10-17`
-*   **Severity**: LOW
-*   **Category**: Output type contract
-*   **Status**: Active
-*   **Description**: `copy_to_parquet` leaves type decisions to DuckDB's COPY...TO PARQUET inference. `revisions` ends up INT64 while `HotspotRow.revisions: u32`; `clone_group_id` is i32 in DuckDB but u32 in the CSV row type. Downstream Parquet consumers schema-checking against the CSV contract see Int64 not UInt32.
-*   **Failure scenario**: Spark/Polars consumer reads Parquet with UInt32 schema cast — fails type-cast on Int64 column. Same logical column, two contracts.
-*   **Suggested fix**: (a) `CAST(revisions AS UINTEGER)` in the COPY query so Parquet emits UInt32, OR (b) document a "Parquet uses widest-fit integer" convention in `docs/advanced-usage.md`.
 
 ---
 
@@ -361,8 +349,9 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 **Current Active count after this validation pass + closure annotations**:
 
 - **Closed on main (added to §3 closure-log)**: F110, F112, F117, F118, F120 (URL half), F124 (policy half), F125, F126, F127 (full — entropy rewrite closes the remainder), F128, F129, F130, F134, F135, F138, F142, F143, F146, F150, F151, F152, F153, F154, F155, F156, F157, F158, F159, F160, F163.
-- **REFUTED this session**: F116 — see §3 newly-refuted block. Renovate + Dependabot are partitioned by ecosystem (cargo vs github-actions), not duplicated.
-- **Active**: F94, F97, V4, V5, V6, F111, F113, F114, F115, F119, F121, F122, F123, F131, F132, F133, F136, F137, F144, F145, F148, F149, F161, F162 = **23 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
+- **REFUTED this session**: F116 (Renovate + Dependabot partitioned by ecosystem) + F123 (crossbeam 0.8.4 + num-format 0.4.4 are current releases) — see §3 newly-refuted block.
+- **Closed by side-effect**: F162 — Parquet writers now delegate to shared SQL generators that preserve CSV row-type contract via explicit casts. Verified 2026-06-21.
+- **Active**: F94, F97, V4, V5, V6, F111, F113, F114, F115, F119, F121, F122, F131, F132, F133, F136, F137, F144, F145, F148, F149, F161 = **21 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
 
 The next sweep should re-open with F-IDs starting at **F164**.
 
