@@ -57,38 +57,44 @@ pub struct DeliveryFrictionRow {
 
 const SQL: &str = "
     WITH file_lead_times AS (
+        -- Per-file aggregation. The inline subquery computes the per-
+        -- commit lead-time ONCE so MEDIAN and QUANTILE_CONT both
+        -- aggregate over the same precomputed `lead_secs` column —
+        -- avoids the two EXTRACT(EPOCH) calls per row the prior shape
+        -- carried.
         SELECT
-            ch.path,
-            COUNT(c.rev) AS revisions,
-            COALESCE(
-                MEDIAN(EXTRACT(EPOCH FROM c.committer_date)
-                       - EXTRACT(EPOCH FROM c.date)),
-                0.0
-            ) / 86400.0 AS median_lead_time_days,
-            COALESCE(
-                QUANTILE_CONT(
-                    EXTRACT(EPOCH FROM c.committer_date)
-                    - EXTRACT(EPOCH FROM c.date),
-                    0.95
-                ),
-                0.0
-            ) / 86400.0 AS p95_lead_time_days,
-            MAX(c.committer_date) AS last_touched
-        FROM changes ch
-        INNER JOIN commits c ON c.rev = ch.rev
-        WHERE c.is_merge = FALSE
-          AND c.date IS NOT NULL
-          AND c.committer_date IS NOT NULL
-        GROUP BY ch.path
+            path,
+            COUNT(rev) AS revisions,
+            COALESCE(MEDIAN(lead_secs), 0.0) / 86400.0 AS median_lead_time_days,
+            COALESCE(QUANTILE_CONT(lead_secs, 0.95), 0.0) / 86400.0 AS p95_lead_time_days,
+            MAX(committer_date) AS last_touched
+        FROM (
+            SELECT
+                ch.path,
+                c.rev,
+                c.committer_date,
+                EXTRACT(EPOCH FROM c.committer_date)
+                    - EXTRACT(EPOCH FROM c.date) AS lead_secs
+            FROM changes ch
+            INNER JOIN commits c ON c.rev = ch.rev
+            WHERE c.is_merge = FALSE
+              AND c.date IS NOT NULL
+              AND c.committer_date IS NOT NULL
+        )
+        GROUP BY path
         HAVING revisions >= ?
     ),
     file_complexity AS (
         SELECT path, MAX(cognitive)::DOUBLE AS cognitive
-        FROM complexity_metrics
+        FROM {cm_src}
         WHERE cognitive IS NOT NULL
         GROUP BY path
     ),
-    joined AS (
+    -- The previous shape had a pass-through `joined` CTE feeding a
+    -- `ranked` CTE with the window functions. Collapse: compute the
+    -- LEFT JOIN, wip_age_days, and the three PERCENT_RANK windows in
+    -- one CTE — one less SQL hop for the planner to materialise.
+    ranked AS (
         SELECT
             flt.path,
             flt.revisions,
@@ -96,22 +102,12 @@ const SQL: &str = "
             flt.p95_lead_time_days,
             COALESCE(fc.cognitive, 0.0) AS cognitive,
             EXTRACT(EPOCH FROM (CAST(? AS TIMESTAMP) - flt.last_touched))
-                / 86400.0 AS wip_age_days
+                / 86400.0 AS wip_age_days,
+            PERCENT_RANK() OVER (ORDER BY flt.revisions) AS pr_rev,
+            PERCENT_RANK() OVER (ORDER BY flt.median_lead_time_days) AS pr_lt,
+            PERCENT_RANK() OVER (ORDER BY COALESCE(fc.cognitive, 0.0)) AS pr_cx
         FROM file_lead_times flt
         LEFT JOIN file_complexity fc ON fc.path = flt.path
-    ),
-    ranked AS (
-        SELECT
-            path,
-            revisions,
-            cognitive,
-            median_lead_time_days,
-            p95_lead_time_days,
-            wip_age_days,
-            PERCENT_RANK() OVER (ORDER BY revisions) AS pr_rev,
-            PERCENT_RANK() OVER (ORDER BY median_lead_time_days) AS pr_lt,
-            PERCENT_RANK() OVER (ORDER BY cognitive) AS pr_cx
-        FROM joined
     )
     SELECT
         path,
@@ -145,16 +141,26 @@ pub fn run_delivery_friction(db: &FactsDb, opts: &Options) -> Result<Vec<Deliver
         n.minute(),
         n.second(),
     );
+    // Route `complexity_metrics` read through the same dispatcher the
+    // four sibling complexity-reading analyses use. Without this,
+    // `--group-file` would silently emit `0.0` cognitive for every
+    // grouped entity (the LEFT JOIN against raw-path complexity rows
+    // never matches the rewritten group paths) and the `pr_cx`
+    // percentile rank would collapse to a constant — same class of
+    // bug `grouped_complexity::source_table` was built to prevent for
+    // hotspots / code_health / god_classes / stale_code.
+    let cm_src = crate::analyses::grouped_complexity::source_table(opts);
+    let sql = SQL.replace("{cm_src}", cm_src);
     super::query::explain_if_requested(
         db,
-        SQL,
+        &sql,
         params![opts.min_revs, anchor, row_limit],
         "delivery-friction",
         opts,
     )?;
     super::query::query_map_collect(
         db,
-        SQL,
+        &sql,
         params![opts.min_revs, anchor, row_limit],
         "delivery-friction",
         |r| {

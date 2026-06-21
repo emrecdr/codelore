@@ -725,11 +725,21 @@
   //
   // References:
   // - https://developer.chrome.com/blog/use-scheduler-yield
-  const _yieldFallbackChannel =
-    typeof MessageChannel === 'function' ? new MessageChannel() : null;
+  //
+  // The MessageChannel fallback is lazy-initialized inside the function
+  // so browsers with `scheduler.yield()` (Chrome 129+, the common case
+  // for this dashboard's audience) never allocate one at module load.
+  let _yieldFallbackChannel = null;
+  let _yieldFallbackInitialized = false;
   function yieldToMain() {
     if (typeof scheduler === 'object' && scheduler && typeof scheduler.yield === 'function') {
       return scheduler.yield();
+    }
+    if (!_yieldFallbackInitialized) {
+      _yieldFallbackInitialized = true;
+      if (typeof MessageChannel === 'function') {
+        _yieldFallbackChannel = new MessageChannel();
+      }
     }
     if (_yieldFallbackChannel) {
       return new Promise(function (resolve) {
@@ -1793,8 +1803,20 @@
       // between each so user input (drawer open, tab switch,
       // scrolling) stays responsive during the expansion. F134 root-
       // cause fix.
+      //
+      // Small expansions render synchronously — the per-yield cost
+      // (~0.5-2 ms message-channel round-trip + an extra paint cycle)
+      // exceeds the gain when only a few chunks would run. The chunked
+      // path is for the genuine "Show all on a 5000-row table" case.
       const CHUNK_SIZE = 50;
+      const SYNC_THRESHOLD = 200;
       const totalEnd = Math.min(renderedRows + count, filteredView.length);
+      const remaining = totalEnd - renderedRows;
+      if (remaining <= SYNC_THRESHOLD) {
+        await renderPageChunk(tbody, totalEnd);
+        refreshActions();
+        return;
+      }
       while (renderedRows < totalEnd) {
         const next = Math.min(renderedRows + CHUNK_SIZE, totalEnd);
         await renderPageChunk(tbody, next);
@@ -2497,14 +2519,15 @@
         upperLabel: { show: true, height: 18, color: getCssVar('--fg-dim'), fontSize: 11 },
         // Per-depth styling: directory level (depth 1) carries a
         // thicker border + larger gap to read as a container; file
-        // level (depth 2) tightens both so leaves pack densely.
+        // level (depth 2) tightens both so leaves pack densely. With
+        // `leafDepth: 2` only depths 1 and 2 are ever rendered, so a
+        // depth-3 levels entry would be dead config.
         // Progressive color saturation is left to ECharts' default
         // visualMin/visualMax behavior so the existing tooltip
         // color-coding (revisions × hotspot_score) survives.
         levels: [
           { itemStyle: { borderColor: getCssVar('--border'), borderWidth: 3, gapWidth: 3 } },
           { itemStyle: { borderColor: getCssVar('--border'), borderWidth: 2, gapWidth: 2 } },
-          { itemStyle: { borderColor: getCssVar('--border'), borderWidth: 1, gapWidth: 1 } },
         ],
       }],
     });

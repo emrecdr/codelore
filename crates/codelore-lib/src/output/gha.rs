@@ -51,18 +51,36 @@ use std::io::Write;
 const ERROR_FLOOR: f64 = 7.0;
 const WARNING_FLOOR: f64 = 4.0;
 
-/// Escape a property-value or full message according to the GH workflow-
-/// command grammar. `properties = true` engages the wider escape set
-/// (`:` and `,`); messages need only `%` / `\r` / `\n`.
-fn escape(s: &str, properties: bool) -> String {
+/// Escape a property value (the `file=`, `line=`, `title=` slots).
+/// Property fields are comma-separated and colon-prefixed at the
+/// runner's parser, so `:` and `,` are reserved in addition to the
+/// always-escaped `%` / `\r` / `\n`.
+fn escape_property(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for ch in s.chars() {
         match ch {
             '%' => out.push_str("%25"),
             '\r' => out.push_str("%0D"),
             '\n' => out.push_str("%0A"),
-            ':' if properties => out.push_str("%3A"),
-            ',' if properties => out.push_str("%2C"),
+            ':' => out.push_str("%3A"),
+            ',' => out.push_str("%2C"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Escape a workflow-command message body. The message is the last
+/// field after `::`, so `:` and `,` pass through unchanged — only
+/// `%` / `\r` / `\n` need encoding to keep the runner from breaking
+/// the command across lines.
+fn escape_message(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '%' => out.push_str("%25"),
+            '\r' => out.push_str("%0D"),
+            '\n' => out.push_str("%0A"),
             c => out.push(c),
         }
     }
@@ -99,9 +117,9 @@ pub fn write_hotspots_gha<W: Write>(rows: &[HotspotRow], w: &mut W) -> Result<()
             w,
             "::{level} file={file},title={title}::{message}",
             level = level,
-            file = escape(&row.path, true),
-            title = escape(&title, true),
-            message = escape(&message, false),
+            file = escape_property(&row.path),
+            title = escape_property(&title),
+            message = escape_message(&message),
         )
         .map_err(CodeLoreError::Io)?;
     }
