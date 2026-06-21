@@ -190,3 +190,72 @@ jobs:
       - name: Vendor patched libduckdb-sys (duckdb-rs#786)
         run: bash scripts/vendor-duckdb-rs.sh
       - uses: EmbarkStudios/cargo-deny-action@v2
+
+  dogfood:
+    # Run the release `codelore` binary against this repo's own history
+    # so every PR surfaces what CodeLore thinks of its own changes —
+    # hotspots, code-health drift, and (on PRs) the gate verdict. Output
+    # is piped to GitHub's job summary so reviewers see it inline on
+    # the Checks tab; the GHA workflow-command format also produces
+    # inline annotations on the diff for any hotspot scoring as
+    # `::warning::` or `::error::` per the bucketing in `output::gha`.
+    #
+    # `continue-on-error: true` during the bake-in period — the goal is
+    # to surface signal, not to block merges while we're still calibrating
+    # what the dogfood thresholds should be. Drop the flag once the
+    # output stabilises across a few releases.
+    name: dogfood
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    env:
+      RUSTC_WRAPPER: sccache
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Same reason as the `test` job: dogfood walks this repo's
+          # own history, so the gix walker needs parent ancestry.
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - uses: Swatinem/rust-cache@v2
+      - name: Vendor patched libduckdb-sys (duckdb-rs#786)
+        run: bash scripts/vendor-duckdb-rs.sh
+      - name: Build release codelore
+        run: cargo build --release -p codelore-cli --features spa
+      - name: Analyze hotspots, code-health, knowledge-islands (GHA annotations)
+        # `--format gha` surfaces hotspots as inline annotations on the
+        # PR diff via the workflow-command lines printed to stdout.
+        # `code-health` + `knowledge-islands` only support tabular
+        # output today, so they run separately and land in step-summary
+        # via the second step below.
+        run: ./target/release/codelore analyze --analysis hotspots --repo . --format gha
+      - name: Append behavioral summary to step-summary
+        if: always()
+        run: |
+          {
+            echo "## CodeLore behavioral summary"
+            echo
+            echo "### Top hotspots"
+            ./target/release/codelore analyze --analysis hotspots --repo . --format markdown --rows 10
+            echo
+            echo "### Code health (worst 10)"
+            ./target/release/codelore analyze --analysis code-health --repo . --format markdown --rows 10
+            echo
+            echo "### Knowledge islands"
+            ./target/release/codelore analyze --analysis knowledge-islands --repo . --format markdown --rows 10
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: PR diff summary
+        # Only meaningful on `pull_request` events — `codelore diff`
+        # takes a positional `<base>...<head>` range (3-dot = use
+        # merge-base of base & head). Pushed commits to main itself
+        # get just the summary above.
+        if: github.event_name == 'pull_request'
+        run: |
+          {
+            echo "### PR change summary"
+            ./target/release/codelore diff "origin/${{ github.base_ref }}...HEAD" --format markdown
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats

@@ -121,6 +121,7 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 | F115 | Container base images use mutable tags | **Fixed** | This session. Both `Containerfile` base images pinned to immutable `@sha256:...` digests INLINE on the `FROM` instructions (not via ARG — Dependabot/Renovate parsers don't resolve ARG substitutions). `rust:1.96-bookworm@sha256:19817ead...` for the builder; `gcr.io/distroless/cc-debian12:nonroot@sha256:b0ae8e98...` for runtime. Renovate (not Dependabot) handles digest bumps because Dependabot's docker ecosystem only detects `Dockerfile`/`*.Dockerfile` and skips `Containerfile`; `renovate.json` extended with `dockerfile.managerFilePatterns: ["/Containerfile/"]` + a `matchManagers: ["dockerfile"]` package rule grouping all container-base bumps weekly. Reproducibility + cosign/SLSA provenance attestation now work the way they're supposed to. |
 | F122 | `toml = "0.8"` one major behind | **Fixed** | This session. Workspace bumped to `toml = "1"` (latest 1.1.2+spec-1.1.0). The 1.0 release split `parse` (low-level parser) from `serde` (`from_str` / `Deserialize` glue); the dep declaration now opts into BOTH features explicitly so `Thresholds::parse` and `LayerRules::parse` keep their typed `from_str` API. No call-site changes — the high-level `toml::from_str` / `toml::Table` surface is stable across the major. Cargo.lock drops `toml_datetime` 0.6 / `toml_edit` 0.22 / `winnow` 0.7 (replaced by their 1.x successors). 652-test workspace + clippy clean. |
 | F136 | Color-mode tablist mismatches WAI-ARIA Tabs pattern (no `aria-selected`) | **Fixed** | This session. JS-driven hotspot color-mode handler (`initHotspotColorToggles`) now sets `aria-selected` on every tab in the toggle loop alongside the existing `tab-active`/`active` class toggles. Initial `aria-selected="true"` on the cognitive button (default active) and `aria-selected="false"` on the other six in `template.html`. The six Alpine-driven tablists (trends, module-chord, arch-graph, multi-metric, delivery-risk, change-coupling) each gained `:aria-selected="$store.layout.<key> === <value> ? 'true' : 'false'"` next to the existing `:class` binding via a one-shot Python regex pass — 30 buttons updated total (4 hand-edits for the trends tablist + 26 from the regex). Verified by `awk` count: every `:class` `tab-active` binding is now paired with a `:aria-selected` binding on the following line. SPA integration test green. Screen readers now announce the selected tab; the WAI-ARIA Tabs pattern's "tab → tabpanel → aria-selected" loop is complete. |
+| F144 | No CI dogfooding of `codelore` against `codelore` | **Fixed** | This session. New `dogfood` job in `ci.yml` builds release `codelore-cli --features spa`, runs `codelore analyze --analysis hotspots --format gha --repo .` so hotspots stream into the PR's Checks panel as inline annotations (`::warning::` / `::notice::` per the existing GHA emitter's bucketing). Same step also writes a markdown summary (top hotspots / code-health worst-10 / knowledge islands) into `$GITHUB_STEP_SUMMARY` so reviewers see CodeLore's verdict inline on every PR. PR events additionally run `codelore diff origin/${{ github.base_ref }}...HEAD --format markdown` and append the delta. `continue-on-error: true` during the bake-in period so the job surfaces signal without gating merges while thresholds are still calibrating. Uses sccache + rust-cache for sub-30s incremental runs. Verified the binary's `--format gha` + `diff <range>` syntax actually work on this repo before committing the workflow. |
 
 **Newly REFUTED (2026-06-18 / 2026-06-21)**:
 
@@ -202,10 +203,6 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 
 ### NEW Active Findings — Test / CI / observability
 
-#### F144 — No CI dogfooding of `codelore` against `codelore`
-
-*   **Severity**: MED
-
 ### NEW Active Findings — Code complexity / maintainability
 
 #### F145 — `main.rs` dispatch boilerplate is the bulk of the file
@@ -279,7 +276,7 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 | F137 | Knowledge-islands rows mouse-only | widgets.js `wireRowKbActivation(rowEl)` helper + applied to both KI and hotspot row sites; `tabindex=0` + `role=button` + Enter/Space forward → click; `:focus-visible` outline on `tr.{hotspot,ki}-row` | **Fixed (this session)** |
 | F138 | `startViewTransition` ignores reduced-motion | widgets.js:694-700 now matches `prefers-reduced-motion` and runs `updateFn()` synchronously | **Fixed on main (PR #62)** |
 | F142 | Sparse tracing in analyses | Exactly 3 `tracing::*` calls across 32 analysis files (lead_time.rs:86, clones.rs:95, clone_coupling.rs:278) | Active confirmed |
-| F144 | No CI dogfooding | `grep -rE 'codelore (analyze\|check\|diff)' .github/workflows/ = ∅` | Active confirmed |
+| F144 | No CI dogfooding | New `dogfood` job in `ci.yml` runs release `codelore analyze --format gha` for PR annotations + `codelore diff` on PR events for step-summary; `continue-on-error: true` during bake-in | **Fixed (this session)** |
 | F145 | main.rs dispatch boilerplate | `main.rs = 2047 LOC` (drifted +3); dispatch arm ~1201 LOC (≈59%) | Active confirmed (essentially unchanged) |
 | F146 | json.rs trivial shims | `grep -cE '^pub fn write_[a-z_]+_json' = 29` — no change | Active confirmed |
 | F148 | csv.rs + markdown.rs per-analysis emitters | Both still ~25KB per-analysis files (csv.rs 25825 bytes, markdown.rs 25534 bytes) | Active confirmed |
@@ -315,7 +312,7 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 - **Closed on main (added to §3 closure-log)**: F110, F112, F117, F118, F120 (URL half), F124 (policy half), F125, F126, F127 (full — entropy rewrite closes the remainder), F128, F129, F130, F134, F135, F138, F142, F143, F146, F150, F151, F152, F153, F154, F155, F156, F157, F158, F159, F160, F163.
 - **REFUTED this session**: F116 (Renovate + Dependabot partitioned by ecosystem) + F123 (crossbeam 0.8.4 + num-format 0.4.4 are current releases) — see §3 newly-refuted block.
 - **Closed by side-effect**: F162 — Parquet writers now delegate to shared SQL generators that preserve CSV row-type contract via explicit casts. Verified 2026-06-21.
-- **Active**: F94, F97, V4, F111, F113, F119, F121, F132, F133, F144, F145, F148, F149, F161 = **13 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
+- **Active**: F94, F97, V4, F111, F113, F119, F121, F132, F133, F145, F148, F149, F161 = **12 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
 
 The next sweep should re-open with F-IDs starting at **F164**.
 
