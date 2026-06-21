@@ -436,56 +436,62 @@
   // for the theme-toggle re-render path (`window._codeloreRerenderers`)
   // when its visuals depend on resolved CSS variables.
 
-  renderKpiTiles(data);                                            // → §6
-
-  renderKnowledgeIslands(data.knowledge_islands || []);            // → §7
-
+  // `currentHotspotColorMode` lives at IIFE scope because the user-
+  // controlled color-toggle handler (§14) mutates it and the
+  // hotspot-circle-pack render closure in WIDGETS below reads the
+  // latest value via closure capture. Declared before the registry
+  // so the closure has a binding to capture.
   let currentHotspotColorMode = 'cognitive';
-  renderHotspotCirclePack(data.hotspots || [], currentHotspotColorMode);  // → §8
-  // Use registerThemeRerender (not the raw push) because §8 reads
-  // theme tokens via the cached `token()` helper (friction heat ramp,
-  // health 3-band, top-quartile ring overlay). Flushing the cache
-  // before the chart redraws keeps colours in lockstep with the live
-  // theme.
-  registerThemeRerender(function () {
-    renderHotspotCirclePack(data.hotspots || [], currentHotspotColorMode);
+
+  // ─── Widget registry ────────────────────────────────────────────
+  // Single source of truth for the boot sequence. Each entry is a
+  // `{ name, render, rerender }` triple:
+  //
+  //   - `name`     — human-readable id for logging/observability
+  //   - `render`   — `() => {}` thunk closing over `data` (parsed at
+  //                  the top of the IIFE) and any mutable state
+  //                  (e.g. `currentHotspotColorMode`). Called once
+  //                  at boot AND on every theme-toggle re-render
+  //                  pass, unless `rerender` opts out.
+  //   - `rerender` — `'theme'` registers via `registerThemeRerender`
+  //                  (which invalidates the token cache before
+  //                  calling the render — see §8's friction heat
+  //                  ramp / health bands). `false` opts out of any
+  //                  theme rerender (pure-DOM widgets that don't
+  //                  read CSS variables — KPI tiles, KI table,
+  //                  hotspot table). Omitted/undefined defaults to
+  //                  the regular `_codeloreRerenderers.push` path.
+  //
+  // Adding a widget = appending one entry to the array. Pre-V4 the
+  // boot section had the render call AND the `_codeloreRerenderers
+  // .push(() => ...)` line duplicated per widget, which invited
+  // theme-rerender drift every time a new widget landed.
+  const WIDGETS = [
+    { name: 'kpi-tiles',          rerender: false, render: () => renderKpiTiles(data) },
+    { name: 'knowledge-islands',  rerender: false, render: () => renderKnowledgeIslands(data.knowledge_islands || []) },
+    { name: 'hotspot-circle-pack', rerender: 'theme', render: () => renderHotspotCirclePack(data.hotspots || [], currentHotspotColorMode) },
+    { name: 'hotspot-table',      rerender: false, render: () => renderHotspotTable(data.hotspots || []) },
+    { name: 'coupling-sankey',    render: () => renderCouplingSankey(data.coupling || []) },
+    { name: 'trends',             render: () => renderTrends(data.trends || []) },
+    { name: 'kamei-risk-sparkline', render: () => renderKameiRiskSparkline(data.kamei_risk || []) },
+    { name: 'hotspot-treemap',    render: () => renderHotspotTreemap(data.hotspots || []) },
+    { name: 'parallel-coords',    render: () => renderParallelCoords(data.hotspots || []) },
+    { name: 'cognitive-boxplot',  render: () => renderCognitiveBoxplot(data.hotspots || []) },
+    { name: 'module-chord',       render: () => renderModuleChord(data.coupling || []) },
+    { name: 'arch-graph',         render: () => renderArchGraph(data.imports || []) },
+    { name: 'calendar-heatmap',   render: () => renderCalendarHeatmap(data.daily_commits || []) },
+    { name: 'xray-sunburst',      render: () => renderXRaySunburst(data.xray || []) },
+  ];
+
+  WIDGETS.forEach(function (w) {
+    w.render();
+    if (w.rerender === false) return;
+    if (w.rerender === 'theme') {
+      registerThemeRerender(w.render);
+    } else {
+      window._codeloreRerenderers.push(w.render);
+    }
   });
-
-  renderHotspotTable(data.hotspots || []);                         // → §9
-
-  renderCouplingSankey(data.coupling || []);                       // → §10
-  window._codeloreRerenderers.push(function () {
-    renderCouplingSankey(data.coupling || []);
-  });
-
-  renderTrends(data.trends || []);                                 // → §11
-  window._codeloreRerenderers.push(function () { renderTrends(data.trends || []); });
-
-  renderKameiRiskSparkline(data.kamei_risk || []);                 // → §11b
-  window._codeloreRerenderers.push(function () { renderKameiRiskSparkline(data.kamei_risk || []); });
-
-  // Treemap and parallel-coordinates views. Both consume the
-  // existing hotspots payload (no new SQL); they're alternative
-  // views surfaced as their own sections.
-  renderHotspotTreemap(data.hotspots || []);                       // → §11c
-  window._codeloreRerenderers.push(function () { renderHotspotTreemap(data.hotspots || []); });
-  renderParallelCoords(data.hotspots || []);                       // → §11d
-  window._codeloreRerenderers.push(function () { renderParallelCoords(data.hotspots || []); });
-
-  // Cognitive-complexity boxplot, module-to-module chord, and
-  // architecture force-graph.
-  renderCognitiveBoxplot(data.hotspots || []);                     // → §11e
-  window._codeloreRerenderers.push(function () { renderCognitiveBoxplot(data.hotspots || []); });
-  renderModuleChord(data.coupling || []);                          // → §11f
-  window._codeloreRerenderers.push(function () { renderModuleChord(data.coupling || []); });
-  renderArchGraph(data.imports || []);                             // → §11g
-  window._codeloreRerenderers.push(function () { renderArchGraph(data.imports || []); });
-
-  renderCalendarHeatmap(data.daily_commits || []);                 // → §12
-  window._codeloreRerenderers.push(function () { renderCalendarHeatmap(data.daily_commits || []); });
-
-  renderXRaySunburst(data.xray || []);                             // → §13
-  window._codeloreRerenderers.push(function () { renderXRaySunburst(data.xray || []); });
 
   // Expose the drawer-show callback so the hotspot-table row-click
   // handler can fire it. Must execute after `data` is loaded (above);

@@ -155,13 +155,6 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 *   **Status**: Active. The §3 sprint banner claimed F-P5 PWA closed F97 but the validator confirms widgets.js still parses synchronously and no `requestIdleCallback` references exist.
 *   **Suggested fix**: split JSON block into header + per-widget `<script type="application/json" id="widget-X">`; yield between widgets via `requestIdleCallback`.
 
-### Partial / in flight
-
-#### V4 — `widgets.js` per-widget registry (PARTIAL)
-
-*   **Status**: Per-widget function declarations exist; no `Widget = { id, render, rerender, dataKey }` registry struct. Boot section §3 is still a flat sequence of `renderXxx()` + literal `_codeloreRerenderers.push(...)` calls.
-*   **Next step**: introduce a `WIDGETS = [{name, render, dataKey}]` array; the boot loop iterates uniformly.
-
 ### NEW Active Findings — Architecture & supply chain
 
 #### F111 — `FactsDb::conn()` leaks `&duckdb::Connection` into public API
@@ -234,7 +227,7 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 |---|---|---|---|
 | F94 | ingest.rs monolithic | `wc -l = 1453` (drifted +109 LOC) ; `facts/ingest/` subdir exists empty | Active confirmed (drifted larger) |
 | F97 | `JSON.parse` synchronous at first paint | `widgets.js:61` literal `JSON.parse(dataBlock.textContent)`; `grep -c requestIdleCallback = 0` | Active confirmed |
-| V4 | no `WIDGETS` registry | `_codeloreRerenderers.push(...)` literal sequence at widgets.js:436,441,444,450,452,457,459,461; no `WIDGETS = [` array | Active confirmed |
+| V4 | no `WIDGETS` registry | `const WIDGETS = [{ name, render, rerender? }]` introduced at §3 boot; single `WIDGETS.forEach` loop replaces 60 LOC of duplicated render + rerender lines; 14 widgets registered uniformly; integration + browser smoke tests green | **Fixed (this session)** |
 | V5 | METRIC_DEFS not interpolated | `SpaOptionsSnapshot` field on `SpaDashboard` populated from `Options::from_options`; widgets.js `interpolate(def.formula, data.options)` substitutes `${key}` placeholders; coupling_pairs/coupling_density formulas updated to use placeholders | **Fixed (this session)** |
 | V6 | `CHANNEL_CAPACITY = 64` unmeasured | `ingest_capacity_sweep` Criterion benchmark added (16/64/256/1024); `CHANNEL_CAPACITY_OVERRIDE: AtomicUsize` + `set_channel_capacity_override(n)` writer hook; `bounded::<CommitEvent>(channel_capacity())` on the hot path | **Fixed (this session)** |
 | F111 | `FactsDb::conn()` leaks `&Connection` | `facts/mod.rs:307` (drifted from :266) still `pub fn conn(&self) -> &Connection` | Active confirmed |
@@ -270,6 +263,7 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 | F148 | csv.rs + markdown.rs per-analysis emitters | Both still ~25KB per-analysis files (csv.rs 25825 bytes, markdown.rs 25534 bytes) | Active confirmed |
 | F149 | hunks schema lacks PK / NOT NULL | Schema tightened to NOT NULL + composite PK + index; wired entire ingest pipeline (gix `count_loc_and_hunks` + `diff_hunks` proper impl + walker populates `FileChange.hunks` + `append_change` writes rows); differential test asserts gix == cli hunks | **Fixed (this session)** |
 | F121 | `fishers_exact` crate unmaintained (last release 2018-11) | In-tree port in new `crate::stats::fisher_two_tail_pvalue` module (~150 LOC); supply-chain dependency eliminated; output matches the upstream's `fishers_exact(&[a,b,c,d]).two_tail_pvalue` to ≤ 1e-12 relative error across 8 regression cases | **Fixed (this session)** |
+| V4 | `widgets.js` per-widget registry | New `const WIDGETS = [{ name, render, rerender? }]` array at the top of §3 Boot; single `WIDGETS.forEach(w => { w.render(); /* register theme rerender per the `rerender` flag */ })` loop replaces the prior 60-LOC sequence of duplicated `renderXxx()` + `_codeloreRerenderers.push(() => renderXxx(...))` blocks. 14 widgets registered uniformly; `rerender: false` opts out (KPI tiles, KI table, hotspot table), `rerender: 'theme'` opts into the token-cache-invalidating path (hotspot circle-pack), default falls through to `_codeloreRerenderers.push`. SPA integration test + browser smoke test green. Adding a widget is now one line. | **Fixed (this session)** |
 | F150 | Schema version disjoint, no startup validation | `facts/schema.rs:10` `CURRENT_SCHEMA_VERSION` const + `facts/mod.rs:69` `validate_schema_version()` at `open_read_only` bails on mismatch | **Fixed on main (PR #61)** |
 | F151 | Leiden non-deterministic | `communities.rs:58 LEIDEN_SEED` + `:148-150 LeidenConfig { seed: Some(LEIDEN_SEED), .. }` + regression test :269-316 | **Fixed on main (PR #61)** |
 | F152 | clone_group_id std HashMap | `clones/extractor.rs:151-152` switched to `BTreeMap<[u8;32], _>` | **Fixed on main (PR #61)** |
@@ -301,7 +295,7 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 - **Closed on main (added to §3 closure-log)**: F110, F112, F117, F118, F120 (URL half), F124 (policy half), F125, F126, F127 (full — entropy rewrite closes the remainder), F128, F129, F130, F134, F135, F138, F142, F143, F146, F150, F151, F152, F153, F154, F155, F156, F157, F158, F159, F160, F163.
 - **REFUTED this session**: F116 (Renovate + Dependabot partitioned by ecosystem) + F123 (crossbeam 0.8.4 + num-format 0.4.4 are current releases) — see §3 newly-refuted block.
 - **Closed by side-effect**: F162 — Parquet writers now delegate to shared SQL generators that preserve CSV row-type contract via explicit casts. Verified 2026-06-21.
-- **Active**: F94, F97, V4, F111, F113, F119, F132, F133, F145, F148, F161 = **10 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
+- **Active**: F94, F97, F111, F113, F119, F132, F133, F145, F148, F161 = **9 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
 
 The next sweep should re-open with F-IDs starting at **F164**.
 
