@@ -65,3 +65,10 @@ updates:
       - dependency-name: "tree-sitter-*"
       - dependency-name: "bca-tree-sitter-*"
       - dependency-name: "petgraph"
+
+  # Docker / container-image digests are handled by Renovate (not
+  # Dependabot) because Dependabot's `docker` ecosystem only detects
+  # `Dockerfile` / `*.Dockerfile` and skips files named `Containerfile`
+  # (the OCI-canonical name we use). Renovate's `dockerfile` manager
+  # picks Containerfile up natively. See `renovate.json` for the
+  # docker package rule.

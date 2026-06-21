@@ -2,6 +2,9 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended"],
   "rangeStrategy": "bump",
+  "dockerfile": {
+    "managerFilePatterns": ["/Containerfile/"]
+  },
   "packageRules": [
     {
       "matchManagers": ["cargo"],
@@ -24,6 +27,12 @@
       "matchPackageNames": ["tree-sitter"],
       "enabled": false,
       "description": "tree-sitter pinned to =0.25.3 for RCA compat — manual bump only"
+    },
+    {
+      "matchManagers": ["dockerfile"],
+      "groupName": "container base images",
+      "schedule": ["before 6am on Monday"],
+      "description": "track @sha256 digests on Containerfile base images so reproducibility + cosign/SLSA attestation work; Containerfile (vs Dockerfile) is handled by Renovate because Dependabot's docker ecosystem doesn't detect that filename"
     }
   ]
 }
