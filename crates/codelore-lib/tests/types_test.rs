@@ -4,14 +4,14 @@ use codelore_lib::types::{ChangeType, CommitEvent, FileChange, Hunk, SCHEMA_VERS
 use time::macros::datetime;
 
 #[test]
-fn schema_version_is_three() {
-    // Schema v3: adds `commits.committer_date TIMESTAMP NOT NULL`
-    // alongside the author `date`. The `(committer_date - date)` delta
-    // is the in-flight time `lead-time` and `delivery-friction` need;
-    // without it, `lead-time` silently emitted zero for every commit.
-    // Cache key includes this version sentinel so v2 caches are
-    // naturally invalidated.
-    assert_eq!(SCHEMA_VERSION, 3);
+fn schema_version_is_four() {
+    // Schema v4: wires `Hunk` rows from `FileChange.hunks` through to
+    // the `hunks` table (pre-v4 the table was created in schema and
+    // never written to) and tightens the schema with NOT NULL on all
+    // four offsets, composite PK `(rev, path, old_start, new_start)`,
+    // and the `(rev, path)` index for FK clean-up. Cache key
+    // includes this sentinel so v3 caches are naturally invalidated.
+    assert_eq!(SCHEMA_VERSION, 4);
 }
 
 #[test]

@@ -60,13 +60,38 @@ CREATE TABLE IF NOT EXISTS changes (
     PRIMARY KEY (rev, path)
 );
 
+-- Per-hunk diff line-range rows, one per `@@ -old_start[,old_lines]
+-- +new_start[,new_lines] @@` header in the diff. Populated alongside
+-- `changes` by `append_change` (each FileChange.hunks slice expands
+-- into N rows here, where N = number of hunks in the diff).
+--
+-- All four offset columns are NOT NULL (a hunk that's missing any of
+-- old_start / old_lines / new_start / new_lines is malformed; the
+-- parser in `repo::git_cli_repo::parse_hunk_headers` returns None on
+-- such headers so they never reach the Appender, and the gix path
+-- constructs `Hunk` from u32 fields that can't be NULL).
+--
+-- PRIMARY KEY (rev, path, old_start, new_start) — a hunk inside a
+-- single (rev, path) is uniquely identified by its two start
+-- offsets; a single commit cannot apply two hunks to the same file
+-- starting at the same old AND new line. This also gives DuckDB a
+-- physical index for the FK clean-up DELETE in `apply_grouping`,
+-- replacing the unindexed table-scan that the audit flagged as
+-- expensive on diff-heavy repos.
+--
+-- `idx_hunks_rev_path` accelerates the `apply_grouping` FK cleanup
+-- (`DELETE FROM hunks h WHERE NOT EXISTS ... AND c.rev = h.rev AND
+-- c.path = h.path`) on diff-heavy repos. The PK above is the
+-- physical order; this secondary index is the lookup path.
 CREATE TABLE IF NOT EXISTS hunks (
     rev TEXT NOT NULL,
     path TEXT NOT NULL,
-    old_start INTEGER, old_lines INTEGER,
-    new_start INTEGER, new_lines INTEGER,
+    old_start INTEGER NOT NULL, old_lines INTEGER NOT NULL,
+    new_start INTEGER NOT NULL, new_lines INTEGER NOT NULL,
+    PRIMARY KEY (rev, path, old_start, new_start),
     FOREIGN KEY (rev, path) REFERENCES changes(rev, path)
 );
+CREATE INDEX IF NOT EXISTS idx_hunks_rev_path ON hunks(rev, path);
 
 CREATE TABLE IF NOT EXISTS entities (
     path TEXT NOT NULL, name TEXT NOT NULL, kind TEXT NOT NULL,

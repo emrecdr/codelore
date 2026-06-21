@@ -865,6 +865,16 @@ fn ingest_loop(
         .conn()
         .appender("changes")
         .map_err(|e| CodeLoreError::Analysis(format!("appender changes: {e}")))?;
+    // Hunks appender — populated alongside changes. Pre-F149 fix the
+    // `Hunk` payload was parsed by `Repo::diff_hunks`, attached to
+    // `FileChange.hunks`, but never written: the table existed in
+    // schema, was `DELETE`-cleaned defensively in `apply_grouping`,
+    // and was dumped by the SQLite output emitter — all over an
+    // empty table. Now `append_change` writes one row per hunk.
+    let mut hunks_app = db
+        .conn()
+        .appender("hunks")
+        .map_err(|e| CodeLoreError::Analysis(format!("appender hunks: {e}")))?;
 
     // Collect unique (raw_email, canonical, is_bot) for deferred author_aliases insert.
     let mut alias_map: HashMap<String, (String, bool)> = HashMap::new();
@@ -917,7 +927,7 @@ fn ingest_loop(
             {
                 continue;
             }
-            append_change(&mut changes_app, &event.rev, ch)?;
+            append_change(&mut changes_app, &mut hunks_app, &event.rev, ch)?;
             stats.changes_ingested += 1;
         }
         stats.commits_ingested += 1;
@@ -928,6 +938,9 @@ fn ingest_loop(
     changes_app
         .flush()
         .map_err(|e| CodeLoreError::Analysis(format!("flush changes: {e}")))?;
+    hunks_app
+        .flush()
+        .map_err(|e| CodeLoreError::Analysis(format!("flush hunks: {e}")))?;
 
     // Populate author_aliases table.
     let mut aliases_app = db
@@ -1007,7 +1020,12 @@ fn append_commit(app: &mut Appender<'_>, e: &CommitEvent) -> Result<()> {
     Ok(())
 }
 
-fn append_change(app: &mut Appender<'_>, rev: &str, ch: &crate::FileChange) -> Result<()> {
+fn append_change(
+    changes_app: &mut Appender<'_>,
+    hunks_app: &mut Appender<'_>,
+    rev: &str,
+    ch: &crate::FileChange,
+) -> Result<()> {
     use duckdb::params;
     let (type_str, rename_from, similarity) = match &ch.change_type {
         ChangeType::Added => ("added", None, None),
@@ -1021,16 +1039,36 @@ fn append_change(app: &mut Appender<'_>, rev: &str, ch: &crate::FileChange) -> R
         }
         ChangeType::BinaryOrUnknown => ("binary", None, None),
     };
-    app.append_row(params![
-        rev,
-        ch.path,
-        type_str,
-        rename_from,
-        similarity,
-        i32::try_from(ch.loc_added).unwrap_or(i32::MAX),
-        i32::try_from(ch.loc_deleted).unwrap_or(i32::MAX),
-    ])
-    .map_err(|err| CodeLoreError::Analysis(format!("append change: {err}")))?;
+    changes_app
+        .append_row(params![
+            rev,
+            ch.path,
+            type_str,
+            rename_from,
+            similarity,
+            i32::try_from(ch.loc_added).unwrap_or(i32::MAX),
+            i32::try_from(ch.loc_deleted).unwrap_or(i32::MAX),
+        ])
+        .map_err(|err| CodeLoreError::Analysis(format!("append change: {err}")))?;
+    // Hunks — one row per `@@ -old_start,old_lines +new_start,new_lines @@`
+    // header. The schema requires the composite key (rev, path,
+    // old_start, new_start) to be unique within a single ingest; the
+    // gix and git-cli backends both parse hunk headers from `git diff`
+    // / gix-diff which guarantees uniqueness per (file, commit). The
+    // four u32 fields can never be NULL in Rust, so the new NOT NULL
+    // columns in schema_v1.sql match the producer side.
+    for hunk in &ch.hunks {
+        hunks_app
+            .append_row(params![
+                rev,
+                ch.path,
+                i32::try_from(hunk.old_start).unwrap_or(i32::MAX),
+                i32::try_from(hunk.old_lines).unwrap_or(i32::MAX),
+                i32::try_from(hunk.new_start).unwrap_or(i32::MAX),
+                i32::try_from(hunk.new_lines).unwrap_or(i32::MAX),
+            ])
+            .map_err(|err| CodeLoreError::Analysis(format!("append hunk: {err}")))?;
+    }
     Ok(())
 }
 

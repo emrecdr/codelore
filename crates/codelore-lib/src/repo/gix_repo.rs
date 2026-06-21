@@ -191,8 +191,33 @@ impl Repo for GixRepo {
         compute_changed_files(&self.inner, rev)
     }
 
-    fn diff_hunks(&self, _rev: &str, _path: &str) -> Result<Vec<Hunk>> {
-        Ok(vec![]) // Plan 4 lands real hunk extraction
+    fn diff_hunks(&self, rev: &str, path: &str) -> Result<Vec<Hunk>> {
+        // Resolve the commit + its first parent and look up the
+        // before/after blob OIDs for `path`. Root commits (no parent)
+        // diff against the empty tree — `count_loc_and_hunks` takes
+        // `Option<ObjectId>` precisely so a `None` on either side is
+        // interpreted as "empty" without needing a synthetic empty blob.
+        let repo = self.inner.to_thread_local();
+        let commit_id = repo
+            .rev_parse_single(rev)
+            .map_err(|e| CodeLoreError::Repo(format!("rev-parse {rev}: {e}")))?;
+        let commit = repo
+            .find_object(commit_id)
+            .map_err(|e| CodeLoreError::Repo(format!("find commit {rev}: {e}")))?
+            .into_commit();
+        let new_oid = blob_at_path(&repo, &commit, path)?;
+        let parent_id_opt = commit.parent_ids().next().map(gix::Id::detach);
+        let old_oid = if let Some(parent_id) = parent_id_opt {
+            let parent = repo
+                .find_object(parent_id)
+                .map_err(|e| CodeLoreError::Repo(format!("find parent {parent_id}: {e}")))?
+                .into_commit();
+            blob_at_path(&repo, &parent, path)?
+        } else {
+            None
+        };
+        let (_, _, hunks) = count_loc_and_hunks(&repo, old_oid, new_oid)?;
+        Ok(hunks)
     }
 
     fn resolve_alias(&self, name: &str, email: &str) -> String {
@@ -457,13 +482,17 @@ fn gix_change_to_file_change(
             id,
             ..
         } if is_blob(entry_mode) => {
-            let (loc_added, loc_deleted) = count_loc(repo, Some(previous_id), Some(id))?;
+            // Modifications carry hunks: the gix-diff machinery that
+            // computes loc_added/loc_deleted ALSO walks the diff hunks
+            // for free. We extract both in a single pass.
+            let (loc_added, loc_deleted, hunks) =
+                count_loc_and_hunks(repo, Some(previous_id), Some(id))?;
             Ok(Some(FileChange {
                 path: location.to_string(),
                 change_type: ChangeType::Modified,
                 loc_added,
                 loc_deleted,
-                hunks: vec![],
+                hunks,
             }))
         }
         GixChange::Rewrite {
@@ -550,23 +579,35 @@ fn count_loc(
     old_oid: Option<gix::ObjectId>,
     new_oid: Option<gix::ObjectId>,
 ) -> Result<(u32, u32)> {
+    let (added, removed, _) = count_loc_and_hunks(repo, old_oid, new_oid)?;
+    Ok((added, removed))
+}
+
+/// `count_loc` + the per-hunk `(old_start, old_lines, new_start, new_lines)`
+/// rows that drive the `hunks` table. The histogram diff is the
+/// expensive step (already paid for `loc_added` / `loc_deleted`); the
+/// hunk iterator is essentially free on top — `imara_diff::Diff` keeps
+/// the line-range ops in memory and yields them via `.hunks()`. So one
+/// blob diff produces both metrics + hunks; no second pass.
+///
+/// Returns `(loc_added, loc_deleted, hunks)`. For binary / oversized
+/// blobs and pure adds/deletes the hunks vector is empty (the simple
+/// "every line of one side is added/removed" case doesn't carry
+/// useful per-hunk granularity).
+fn count_loc_and_hunks(
+    repo: &gix::Repository,
+    old_oid: Option<gix::ObjectId>,
+    new_oid: Option<gix::ObjectId>,
+) -> Result<(u32, u32, Vec<Hunk>)> {
     use gix::diff::blob::{Algorithm, InternedInput, diff_with_slider_heuristics};
 
     let empty: Vec<u8> = Vec::new();
     let read_blob = |oid: gix::ObjectId| -> Result<Vec<u8>> {
         let mut obj = repo.find_object(oid).map_err(|_e| {
-            // Distinguish "object missing" from other repo errors so a
-            // shallow / corrupted repo can be detected upstream.
             CodeLoreError::BlobNotFound {
                 oid: oid.to_string(),
             }
         })?;
-        // `gix::Object` implements Drop, so we can't partial-move out
-        // of `obj.data` directly. `mem::take` swaps in
-        // `Vec::default()` (which doesn't allocate) and returns the
-        // original buffer — avoids re-allocating + memcpy'ing up to
-        // `MAX_DIFF_BLOB_BYTES` of bytes per changed-file per commit
-        // on the diff hot path.
         Ok(std::mem::take(&mut obj.data))
     };
 
@@ -588,21 +629,24 @@ fn count_loc(
     };
 
     if is_binary_or_oversized(&old_bytes) || is_binary_or_oversized(&new_bytes) {
-        return Ok((0, 0));
+        return Ok((0, 0, Vec::new()));
     }
 
-    // Short-circuit pure additions and pure deletions. The histogram
-    // diff against an empty input degenerates to "every line of the
-    // non-empty side is added / removed", which we can compute by
-    // counting line terminators directly. This skips InternedInput's
-    // tokenization + Algorithm::Histogram's slider pass on a hot path
-    // (every Added / Deleted change in the walk would otherwise pay
-    // the full diff cost).
+    // Pure add / pure delete short-circuits skip the InternedInput
+    // tokenization. They don't produce per-hunk rows: with one side
+    // empty, the diff is a single trivial "everything was
+    // added/removed" range that adds no information beyond the
+    // already-stored `change_type` + `loc_added` / `loc_deleted` row
+    // in `changes`. Leaving `hunks` empty here matches what
+    // `git show -p` emits for additions/deletions (a single `@@ -0,0
+    // +1,N @@` or `@@ -1,N +0,0 @@` header) and keeps the table from
+    // accumulating one-row-per-file for those cases where the data
+    // is redundant.
     if old_oid.is_none() {
-        return Ok((count_lines(&new_bytes), 0));
+        return Ok((count_lines(&new_bytes), 0, Vec::new()));
     }
     if new_oid.is_none() {
-        return Ok((0, count_lines(&old_bytes)));
+        return Ok((0, count_lines(&old_bytes), Vec::new()));
     }
 
     let input = InternedInput::new(old_bytes.as_slice(), new_bytes.as_slice());
@@ -611,7 +655,75 @@ fn count_loc(
     let added = diff.count_additions() as u32;
     #[allow(clippy::cast_possible_truncation)]
     let removed = diff.count_removals() as u32;
-    Ok((added, removed))
+    // `Diff::hunks()` is a free walk over the already-computed change
+    // regions in the diff — no second diff pass. Each `imara_diff::Hunk`
+    // carries `before: Range<u32>` / `after: Range<u32>` (0-indexed,
+    // half-open). Convert to git's hunk-header convention so the
+    // gix backend's output stays comparable to `GitCliRepo`'s parsed
+    // `@@ -old_start,old_lines +new_start,new_lines @@` lines:
+    //
+    //   - `lines = range.end - range.start`
+    //   - `start = range.start + 1` for non-empty sides (1-indexed)
+    //   - `start = range.start    ` for empty   sides (git renders
+    //     the line-BEFORE-which the change is inserted / from which
+    //     lines were removed)
+    //
+    // Differential-test invariant: parse `git show -p --unified=0`
+    // output via `parse_hunk_headers`, run gix-side extraction over
+    // the same commit×file, assert equal. The conversion above is
+    // exactly what `git diff --unified=0` emits.
+    let hunks = diff
+        .hunks()
+        .map(|h| {
+            let old_lines = h.before.end.saturating_sub(h.before.start);
+            let new_lines = h.after.end.saturating_sub(h.after.start);
+            let old_start = if old_lines == 0 {
+                h.before.start
+            } else {
+                h.before.start + 1
+            };
+            let new_start = if new_lines == 0 {
+                h.after.start
+            } else {
+                h.after.start + 1
+            };
+            Hunk {
+                old_start,
+                old_lines,
+                new_start,
+                new_lines,
+            }
+        })
+        .collect();
+    Ok((added, removed, hunks))
+}
+
+/// Resolve `path` to a blob `ObjectId` in `commit`'s tree, or `None` if
+/// the path doesn't exist in that tree (i.e. the file was added in the
+/// commit and the lookup is against the parent, or the file was deleted
+/// in the commit and the lookup is against the head — both `None`
+/// branches feed `count_loc_and_hunks` which interprets them as
+/// "empty side"). Used by `GixRepo::diff_hunks` to resolve the
+/// before/after blob OIDs for a (rev, path) pair.
+fn blob_at_path(
+    repo: &gix::Repository,
+    commit: &gix::Commit<'_>,
+    path: &str,
+) -> Result<Option<gix::ObjectId>> {
+    let tree = commit
+        .tree()
+        .map_err(|e| CodeLoreError::Repo(format!("commit tree: {e}")))?;
+    match tree.lookup_entry_by_path(path) {
+        Ok(Some(entry)) => {
+            let oid = entry.id().detach();
+            let _ = repo; // tree-lookup doesn't need the repo handle directly
+            Ok(Some(oid))
+        }
+        Ok(None) => Ok(None),
+        Err(e) => Err(CodeLoreError::Repo(format!(
+            "lookup `{path}` in tree: {e}"
+        ))),
+    }
 }
 
 /// Count line terminators (LF) in a byte slice, capping at `u32::MAX`.

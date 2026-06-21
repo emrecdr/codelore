@@ -122,6 +122,7 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 | F122 | `toml = "0.8"` one major behind | **Fixed** | This session. Workspace bumped to `toml = "1"` (latest 1.1.2+spec-1.1.0). The 1.0 release split `parse` (low-level parser) from `serde` (`from_str` / `Deserialize` glue); the dep declaration now opts into BOTH features explicitly so `Thresholds::parse` and `LayerRules::parse` keep their typed `from_str` API. No call-site changes — the high-level `toml::from_str` / `toml::Table` surface is stable across the major. Cargo.lock drops `toml_datetime` 0.6 / `toml_edit` 0.22 / `winnow` 0.7 (replaced by their 1.x successors). 652-test workspace + clippy clean. |
 | F136 | Color-mode tablist mismatches WAI-ARIA Tabs pattern (no `aria-selected`) | **Fixed** | This session. JS-driven hotspot color-mode handler (`initHotspotColorToggles`) now sets `aria-selected` on every tab in the toggle loop alongside the existing `tab-active`/`active` class toggles. Initial `aria-selected="true"` on the cognitive button (default active) and `aria-selected="false"` on the other six in `template.html`. The six Alpine-driven tablists (trends, module-chord, arch-graph, multi-metric, delivery-risk, change-coupling) each gained `:aria-selected="$store.layout.<key> === <value> ? 'true' : 'false'"` next to the existing `:class` binding via a one-shot Python regex pass — 30 buttons updated total (4 hand-edits for the trends tablist + 26 from the regex). Verified by `awk` count: every `:class` `tab-active` binding is now paired with a `:aria-selected` binding on the following line. SPA integration test green. Screen readers now announce the selected tab; the WAI-ARIA Tabs pattern's "tab → tabpanel → aria-selected" loop is complete. |
 | F144 | No CI dogfooding of `codelore` against `codelore` | **Fixed** | This session. New `dogfood` job in `ci.yml` builds release `codelore-cli --features spa`, runs `codelore analyze --analysis hotspots --format gha --repo .` so hotspots stream into the PR's Checks panel as inline annotations (`::warning::` / `::notice::` per the existing GHA emitter's bucketing). Same step also writes a markdown summary (top hotspots / code-health worst-10 / knowledge islands) into `$GITHUB_STEP_SUMMARY` so reviewers see CodeLore's verdict inline on every PR. PR events additionally run `codelore diff origin/${{ github.base_ref }}...HEAD --format markdown` and append the delta. `continue-on-error: true` during the bake-in period so the job surfaces signal without gating merges while thresholds are still calibrating. Uses sccache + rust-cache for sub-30s incremental runs. Verified the binary's `--format gha` + `diff <range>` syntax actually work on this repo before committing the workflow. |
+| F149 | `hunks` table lacks PK + NOT NULL + `(rev,path)` index | **Fixed** | This session. Recon-revealed 3-layer gap: `Hunk` parsed at walk time, `Repo::diff_hunks` stubbed in `GixRepo`, walker constructed `FileChange.hunks: vec![]`, `append_change` never wrote rows. Wired all three layers: (1) Extended `count_loc` → `count_loc_and_hunks` in `gix_repo.rs` walking `imara_diff::Diff::hunks()` from the SAME histogram diff already running for `loc_added/loc_deleted` (no extra blob read, no second pass; converts to git's 1-indexed `@@ -old_start,old_lines +new_start,new_lines @@` convention so the differential test stays trivially green). (2) `GixRepo::diff_hunks` now resolves the commit's before/after blob OIDs via new `blob_at_path` helper + calls `count_loc_and_hunks` — root-commit-safe via `Option<ObjectId>` empty-side handling. (3) `compute_changed_files` Modification arm consumes the new tuple and populates `FileChange.hunks`. (4) `append_change` writes one hunks row per `FileChange.hunks` entry alongside the changes row. (5) Schema v3 / SCHEMA_VERSION 4 / cache `schema_v5` bumps invalidate caches naturally. (6) New `ingest_writes_hunk_rows_to_hunks_table` regression test (modify two non-adjacent regions, assert ≥2 rows + zero NULL offsets). (7) Differential test asserts gix == cli hunks across README/Cargo.toml/CHANGELOG. 653-test workspace + clippy clean. ~80 LOC net (vs the audit's "M not L" estimate — recon revealed the gix-diff API already exposed `hunks()` for free). |
 
 **Newly REFUTED (2026-06-18 / 2026-06-21)**:
 
@@ -215,15 +216,6 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 
 *   **Severity**: LOW
 
-### Fourth audit pass — schema / determinism / error UX
-
-#### F149 — `hunks` table lacks PRIMARY KEY, NOT NULL on offsets, `(rev, path)` index
-
-*   **Location**: `crates/codelore-lib/src/facts/schema_v1.sql:51`
-*   **Severity**: MED
-*   **Description**: Outlier among 8 tables. All four offset columns nullable; FK validation queries scan the entire `hunks` table on large repos.
-*   **Suggested fix**: add `PRIMARY KEY (rev, path, old_start, new_start)`, `NOT NULL` on all four offset columns, `CREATE INDEX idx_hunks_rev_path ON hunks(rev, path)`.
-
 ### Sixth audit pass — F161, F162 (emit memory / type contract)
 
 #### F161 — Every emitter materializes the full `Vec<Row>` — no streaming path
@@ -280,7 +272,7 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 | F145 | main.rs dispatch boilerplate | `main.rs = 2047 LOC` (drifted +3); dispatch arm ~1201 LOC (≈59%) | Active confirmed (essentially unchanged) |
 | F146 | json.rs trivial shims | `grep -cE '^pub fn write_[a-z_]+_json' = 29` — no change | Active confirmed |
 | F148 | csv.rs + markdown.rs per-analysis emitters | Both still ~25KB per-analysis files (csv.rs 25825 bytes, markdown.rs 25534 bytes) | Active confirmed |
-| F149 | hunks schema lacks PK / NOT NULL | `schema_v1.sql:51-57` — 4 offset columns plain INTEGER (nullable); no PK; no `(rev,path)` index | Active confirmed |
+| F149 | hunks schema lacks PK / NOT NULL | Schema tightened to NOT NULL + composite PK + index; wired entire ingest pipeline (gix `count_loc_and_hunks` + `diff_hunks` proper impl + walker populates `FileChange.hunks` + `append_change` writes rows); differential test asserts gix == cli hunks | **Fixed (this session)** |
 | F150 | Schema version disjoint, no startup validation | `facts/schema.rs:10` `CURRENT_SCHEMA_VERSION` const + `facts/mod.rs:69` `validate_schema_version()` at `open_read_only` bails on mismatch | **Fixed on main (PR #61)** |
 | F151 | Leiden non-deterministic | `communities.rs:58 LEIDEN_SEED` + `:148-150 LeidenConfig { seed: Some(LEIDEN_SEED), .. }` + regression test :269-316 | **Fixed on main (PR #61)** |
 | F152 | clone_group_id std HashMap | `clones/extractor.rs:151-152` switched to `BTreeMap<[u8;32], _>` | **Fixed on main (PR #61)** |
@@ -312,7 +304,7 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 - **Closed on main (added to §3 closure-log)**: F110, F112, F117, F118, F120 (URL half), F124 (policy half), F125, F126, F127 (full — entropy rewrite closes the remainder), F128, F129, F130, F134, F135, F138, F142, F143, F146, F150, F151, F152, F153, F154, F155, F156, F157, F158, F159, F160, F163.
 - **REFUTED this session**: F116 (Renovate + Dependabot partitioned by ecosystem) + F123 (crossbeam 0.8.4 + num-format 0.4.4 are current releases) — see §3 newly-refuted block.
 - **Closed by side-effect**: F162 — Parquet writers now delegate to shared SQL generators that preserve CSV row-type contract via explicit casts. Verified 2026-06-21.
-- **Active**: F94, F97, V4, F111, F113, F119, F121, F132, F133, F145, F148, F149, F161 = **12 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
+- **Active**: F94, F97, V4, F111, F113, F119, F121, F132, F133, F145, F148, F161 = **11 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
 
 The next sweep should re-open with F-IDs starting at **F164**.
 

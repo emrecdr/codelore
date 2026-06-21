@@ -151,3 +151,75 @@ fn ingest_populates_complexity_for_tier1_files() {
         "expected ≥1 complexity row for src/main.rs, got {m}"
     );
 }
+
+/// Regression test for F149. Pre-fix the `hunks` table existed in
+/// schema but `append_change` never wrote to it — `Repo::diff_hunks`
+/// parsed the headers, attached them to `FileChange.hunks`, and the
+/// payload was dropped on the floor. The new ingest path writes one
+/// row per hunk; this test makes two edits to the same file in
+/// separate, non-adjacent regions (the gix diff splits them into two
+/// hunks) and asserts both land in the table with the schema-required
+/// NOT NULL fields and unique composite key.
+#[test]
+fn ingest_writes_hunk_rows_to_hunks_table() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path();
+    run_git(path, &["init", "-b", "main", "--quiet"]);
+    run_git(path, &["config", "user.email", "alice@example.com"]);
+    run_git(path, &["config", "user.name", "Alice"]);
+
+    // Initial file with a 30-line body — two later edits will land in
+    // separate hunks (gix's diff coalesces only within ~3-line
+    // proximity, so an edit at line 2 and an edit at line 25 are
+    // guaranteed to surface as two distinct `@@ … @@` headers).
+    let initial: String = (1..=30)
+        .map(|n| format!("line {n}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    write_file(path, "src/code.rs", &format!("{initial}\n"));
+    run_git(path, &["add", "."]);
+    run_git(path, &["commit", "-m", "initial", "--quiet"]);
+
+    // Edit lines 2 and 25 — far enough apart that gix emits two hunks.
+    let edited: String = (1..=30)
+        .map(|n| match n {
+            2 => "line 2 EDITED".to_string(),
+            25 => "line 25 EDITED".to_string(),
+            other => format!("line {other}"),
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    write_file(path, "src/code.rs", &format!("{edited}\n"));
+    run_git(path, &["commit", "-am", "two non-adjacent edits", "--quiet"]);
+
+    let repo = GixRepo::open(path).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options::default();
+    db.ingest(&repo, &opts).expect("ingest");
+
+    // Pre-fix this returned 0 — `append_change` never wrote a hunks
+    // row, even though `FileChange.hunks` carried the parsed payload.
+    let hunk_count: String = db
+        .query_one_value(
+            "SELECT CAST(COUNT(*) AS TEXT) FROM hunks WHERE path = 'src/code.rs'",
+        )
+        .expect("hunk count query");
+    let n: u32 = hunk_count.parse().unwrap();
+    assert!(
+        n >= 2,
+        "expected ≥2 hunk rows for the two-edit commit on src/code.rs, got {n}"
+    );
+
+    // Verify schema v4 NOT NULL invariant: every persisted hunk row
+    // has all four offsets populated (the parser drops malformed
+    // hunks, and `Hunk` fields are u32 in Rust, so NULLs would only
+    // happen if a future code path bypassed the type system).
+    let nulls: String = db
+        .query_one_value(
+            "SELECT CAST(COUNT(*) AS TEXT) FROM hunks \
+             WHERE old_start IS NULL OR old_lines IS NULL \
+                OR new_start IS NULL OR new_lines IS NULL",
+        )
+        .expect("null offsets query");
+    assert_eq!(nulls, "0", "no hunk row may have NULL offset columns");
+}

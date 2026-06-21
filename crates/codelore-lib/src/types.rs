@@ -17,7 +17,14 @@ use time::OffsetDateTime;
 /// rev tiebreaks deciding which commit "is" HEAD when multiple commits
 /// share a calendar day. `CommitEvent.date` carries a full `OffsetDateTime`
 /// (stored as UTC; tz offset is currently discarded at the schema boundary).
-pub const SCHEMA_VERSION: u8 = 3;
+///
+/// Schema 4 made every `Hunk` row actually reach the `hunks` table
+/// (previously parsed by `Repo::diff_hunks` and attached to
+/// `FileChange.hunks` but dropped on the floor) and tightened the
+/// schema to NOT NULL on all four offsets, composite PRIMARY KEY
+/// `(rev, path, old_start, new_start)`, and a `(rev, path)` index
+/// for the `apply_grouping` FK clean-up.
+pub const SCHEMA_VERSION: u8 = 4;
 
 /// One commit, as observed by the parser stage. Immutable event.
 // Eq removed: CommitEvent contains Option<KameiFeatures> which has f64 fields (not Eq).

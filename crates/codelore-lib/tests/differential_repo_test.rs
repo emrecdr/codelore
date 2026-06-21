@@ -612,32 +612,33 @@ fn read_blob_at_head_matches_on_tracked_and_untracked_paths() {
     );
 }
 
-/// `diff_hunks(rev, path)` has a known divergence: `GixRepo` returns
-/// an empty-vec stub (real hunk extraction is a deferred work item)
-/// while `GitCliRepo` shells out to `git diff` and returns actual
-/// hunks. This is documented at `gix_repo.rs::diff_hunks` and the
-/// only production consumer is `codelore diff` which is git-CLI-backed
-/// today. The test below documents the divergence as an EXPECTED
-/// state so a future implementation either flips the assertion (when
-/// `GixRepo::diff_hunks` lands) or makes the divergence loud (a
-/// silent re-stub of `GitCliRepo` would break this test).
+/// `diff_hunks(rev, path)` must agree byte-for-byte across the two
+/// backends: gix-imara-diff's `Diff::hunks()` iterator converted to
+/// git's 1-indexed `@@ -old_start,old_lines +new_start,new_lines @@`
+/// convention vs `git show -p --unified=0`'s parsed hunk headers.
+/// Both backends now produce real hunks (gix via `count_loc_and_hunks`
+/// which extends `count_loc` with `Diff::hunks()` walk; cli via shell-
+/// out to `git show -p --unified=0`).
 #[test]
-fn diff_hunks_gix_is_empty_stub_cli_returns_real_hunks() {
+fn diff_hunks_match_across_backends() {
     let (gix, cli) = open_both();
-    // Pick the most recent commit and ask for hunks against
-    // README.md — the fixture's first-touched file.
     let head = gix.head_sha().expect("head_sha");
-    let gix_hunks = gix.diff_hunks(&head, "README.md").expect("gix diff_hunks");
-    let cli_hunks = cli.diff_hunks(&head, "README.md").expect("cli diff_hunks");
-    assert!(
-        gix_hunks.is_empty(),
-        "GixRepo::diff_hunks is documented as an empty-vec stub; \
-         this test must be updated when real extraction lands",
-    );
-    // GitCliRepo's hunks for the HEAD commit's README.md change can
-    // be empty (e.g. if the file wasn't touched in HEAD) but the
-    // call must succeed. We don't assert non-empty because the
-    // fixture's HEAD commit may or may not touch this specific file
-    // depending on regeneration order.
-    let _ = cli_hunks;
+    // Probe a handful of paths from this repo (the fixture is
+    // `open_both()` of THIS workspace). README.md is touched in some
+    // commits; for paths that don't appear in HEAD the call returns
+    // an empty vec on both sides, which is fine — the assertion is
+    // EQUALITY, not non-emptiness.
+    for path in &["README.md", "Cargo.toml", "CHANGELOG.md"] {
+        let gix_hunks = gix
+            .diff_hunks(&head, path)
+            .unwrap_or_else(|e| panic!("gix diff_hunks for {path}: {e}"));
+        let cli_hunks = cli
+            .diff_hunks(&head, path)
+            .unwrap_or_else(|e| panic!("cli diff_hunks for {path}: {e}"));
+        assert_eq!(
+            gix_hunks, cli_hunks,
+            "diff_hunks divergence between gix and cli for {path} at {head}: \
+             gix={gix_hunks:?} cli={cli_hunks:?}",
+        );
+    }
 }
