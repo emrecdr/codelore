@@ -185,8 +185,16 @@ fn run_docs_cmd() -> Result<()> {
     for fmt in &[
         ("csv", "code-maat-compatible flat tables"),
         ("json", "stable JSON shape per row type"),
+        (
+            "ndjson",
+            "newline-delimited JSON — one row per line for stream consumers (LSP, `jq -c`, CI pipelines)",
+        ),
         ("sarif", "SARIF 2.1.0 — surfaces in GitHub Code Scanning"),
         ("markdown", "GFM tables for `$GITHUB_STEP_SUMMARY`"),
+        (
+            "gha",
+            "GitHub Actions workflow commands — `::error::` / `::warning::` / `::notice::` on stdout, surfaced as inline PR annotations",
+        ),
         ("parquet", "columnar bulk export for analytical pipelines"),
         ("sqlite", "full DuckDB fact-store dump"),
         ("html", "self-contained per-analysis HTML report"),
@@ -464,10 +472,10 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
 
     let format = args.format.as_str();
     match format {
-        "csv" | "json" | "sarif" | "markdown" | "parquet" | "sqlite" | "html" | "spa"
-        | "step-summary" => {}
+        "csv" | "json" | "ndjson" | "sarif" | "markdown" | "parquet" | "sqlite" | "html"
+        | "spa" | "step-summary" | "gha" => {}
         other => anyhow::bail!(
-            "unknown --format {other:?}. Supported: csv, json, sarif, markdown, parquet, sqlite, html, spa, step-summary"
+            "unknown --format {other:?}. Supported: csv, json, ndjson, sarif, markdown, parquet, sqlite, html, spa, step-summary, gha"
         ),
     }
 
@@ -888,6 +896,18 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
                 let repo_root = args.repo.display().to_string();
                 codelore_lib::output::sarif::write_hotspots_sarif(&rows, &repo_root, &mut out)
                     .context("write sarif")?;
+            }
+            ("ndjson", AnalysisName::Hotspots) => {
+                let rows = codelore_lib::analyses::hotspots::run_hotspots(&db, &opts)
+                    .context("run hotspots")?;
+                codelore_lib::output::ndjson::write_ndjson(&rows, &mut out)
+                    .context("write ndjson")?;
+            }
+            ("gha", AnalysisName::Hotspots) => {
+                let rows = codelore_lib::analyses::hotspots::run_hotspots(&db, &opts)
+                    .context("run hotspots")?;
+                codelore_lib::output::gha::write_hotspots_gha(&rows, &mut out)
+                    .context("write gha")?;
             }
             // --- code-health ---
             ("csv", AnalysisName::CodeHealth) => {

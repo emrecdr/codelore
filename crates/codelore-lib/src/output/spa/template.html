@@ -340,6 +340,14 @@
       font-family: inherit;
       text-transform: none;
       letter-spacing: 0;
+      /* Anchor name binds this element as the reference point for any
+         `.tooltip-popup` inside the same `.tooltip-host` — the popup's
+         `position-anchor: --tooltip-trigger` resolves against it via
+         CSS anchor positioning (Chrome 125+, Firefox 147+, Safari 26).
+         The fallback `position: absolute` on `.tooltip-popup` keeps
+         older browsers rendering against `.tooltip-host { position:
+         relative }` exactly as before. */
+      anchor-name: --tooltip-trigger;
     }
     .tooltip-trigger:hover,
     .tooltip-trigger:focus-visible {
@@ -348,6 +356,12 @@
       outline: none;
     }
     .tooltip-host {
+      /* `position: relative` is the legacy fallback anchor — Chromium
+         <125 / Firefox <147 / Safari <26 ignore `anchor-name` /
+         `position-anchor` and fall back to absolute-against-relative
+         positioning. The popup's `position: absolute` resolves to this
+         element on those browsers; new browsers prefer the
+         `anchor()`-driven coordinates below. */
       position: relative;
       display: inline;
     }
@@ -384,6 +398,45 @@
       line-height: 1.5;
       white-space: normal;
       text-align: left;
+      /* CSS anchor positioning (Baseline 2026 newly available — Chrome
+         125+, Firefox 147+, Safari 26). When the browser supports
+         `anchor()`, the popup pins itself to the `.tooltip-trigger`
+         (anchor-name: --tooltip-trigger) regardless of where in the DOM
+         the popup lives — viewport-resize and scroll tracking are
+         handled by the browser, retiring the `position: relative` hack
+         on the host element. `top` + `left` declared via `anchor()`
+         take precedence over the fallback `left/top: 100%/0` above.
+         Older browsers ignore these declarations and use the legacy
+         path; `@supports` would be redundant since `anchor()` is
+         self-rejecting on unsupported engines.
+         Spec: https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_anchor_positioning/Using */
+      position-anchor: --tooltip-trigger;
+      top: calc(anchor(bottom) + 6px);
+      left: anchor(center);
+      translate: -50% 0;
+      /* `@position-try-fallbacks` lists alternate placements the
+         browser tries when the primary placement would overflow the
+         viewport. The browser walks the list and picks the first that
+         fits. Mirror above / below / right / left so the popup never
+         clips off-screen at table edges or fullscreen-mode panels. */
+      position-try-fallbacks: --tooltip-above, --tooltip-right, --tooltip-left;
+    }
+    @position-try --tooltip-above {
+      top: auto;
+      bottom: calc(anchor(top) + 6px);
+      left: anchor(center);
+      translate: -50% 0;
+    }
+    @position-try --tooltip-right {
+      top: anchor(center);
+      left: calc(anchor(right) + 6px);
+      translate: 0 -50%;
+    }
+    @position-try --tooltip-left {
+      top: anchor(center);
+      left: auto;
+      right: calc(100% - anchor(left) + 6px);
+      translate: 0 -50%;
     }
     .tooltip-host:hover .tooltip-popup,
     .tooltip-host:focus-within .tooltip-popup {

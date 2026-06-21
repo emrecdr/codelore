@@ -4,6 +4,11 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **`--format ndjson`** — newline-delimited JSON output for `codelore analyze`. Each row is emitted as its own line of compact JSON (no enclosing array), so LSP integrations, `jq -c` filters, and CI log pipelines can stream-parse as analyses complete instead of waiting for the closing `]`. Spec: <https://github.com/ndjson/ndjson-spec>. Wired for hotspots (Plan 9 will extend to all analyses); same `HotspotRow` shape as the batch JSON emitter, only the framing changes.
+- **`--format gha`** — GitHub Actions workflow-command output for `codelore analyze --analysis hotspots`. Each hotspot becomes one `::error file=...,title=...::msg`, `::warning::`, or `::notice::` line on stdout, bucketed by composite `hotspot_score` (≥ 7 = error, ≥ 4 = warning, otherwise notice). When run inside a GitHub Actions job the runner surfaces each line as an inline annotation on the pull-request diff — same surface Code Scanning uses, but with no SARIF upload, no API call, no `security-events: write` permission required. Property values are escaped per the [official workflow-commands spec](https://docs.github.com/en/actions/reference/workflow-commands-for-github-actions) (`%` → `%25`, `\r` → `%0D`, `\n` → `%0A`, plus `:` and `,` inside property fields).
+
 ### Performance
 
 - **SPA: cooperative scheduling for the hotspot table's `Show all` rebuild and the theme-toggle rerender cascade.** Both used to block the main thread for hundreds of ms on large repos (one 5000-row HTML string + one `insertAdjacentHTML` + one `querySelectorAll` over the full table for `Show all`; the full d3.pack re-layout + every ECharts widget's `setOption` running synchronously for theme toggle). `widgets.js` now ships a `yieldToMain()` primitive that prefers `scheduler.yield()` (Chrome 129+, continuation-prioritised) and falls back to a `MessageChannel.postMessage` trick on browsers without it (the postMessage path beats `setTimeout(0)` because it isn't clamped to 4ms and runs at the same priority as input). `renderNextPage` is now `async` and walks in 50-row chunks with `await yieldToMain()` between each; the template's `Alpine.effect` rerenderer loop yields between each registered widget. Closes F134 + F135.
@@ -12,6 +17,7 @@ Conventional Commits format. All notable changes documented here.
 
 - **SPA: element-scoped View Transitions (Chrome 147+) for theme toggle, color-mode swap, and `Show all` expansion.** `startViewTransition(updateFn, scope)` now prefers `scope.startViewTransition(...)` when available so the transition runs only on the affected widget — the rest of the dashboard stays interactive during the crossfade. Document-scoped transitions remain the fallback on older browsers.
 - **SPA: `view-transition-name: match-element` on `.widget` and `.hotspot-row`.** Hotspot table sort / filter / `Show all` expansion now animate row-by-row rather than as one full-table crossfade; theme + color-mode swaps animate per-widget rather than as a document-wide repaint. `contain: layout style` on `.hotspot-row` caps the per-row cost. Falls through harmlessly on Chrome < 147 (no-op).
+- **SPA: CSS anchor positioning for the `?` tooltip popups (Baseline 2026 newly available — Chrome 125+, Firefox 147+, Safari 26).** Each `.tooltip-trigger` declares `anchor-name: --tooltip-trigger`; the popup uses `position-anchor` + `anchor(bottom) + 6px` to pin against it, with `@position-try-fallbacks --tooltip-above, --tooltip-right, --tooltip-left` so the browser auto-flips against viewport edges. The legacy `position: absolute` + `.tooltip-host { position: relative }` path remains as the fallback for browsers below the Baseline cut. Browser handles scroll- and resize-tracking natively, retiring JS reposition math for these triggers.
 
 ### Added
 

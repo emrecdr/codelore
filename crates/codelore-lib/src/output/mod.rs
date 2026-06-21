@@ -4,9 +4,11 @@
 
 pub mod banner;
 pub mod csv;
+pub mod gha;
 pub mod html;
 pub mod json;
 pub mod markdown;
+pub mod ndjson;
 pub mod parquet;
 pub mod sarif;
 #[cfg(feature = "spa")]
