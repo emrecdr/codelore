@@ -117,6 +117,7 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 | F137 | Knowledge-islands rows not keyboard-activable | **Fixed** | This session. New `wireRowKbActivation(rowEl)` helper in `widgets.js` sets `tabindex="0"` + `role="button"` on each row and forwards Enter/Space to the existing click handler (preventDefault on Space so the page doesn't scroll). Called from BOTH the KI row loop (renderKnowledgeIslands) AND the hotspot table row loop (renderNextPage) — the audit only flagged KI but the hotspot table had the same gap; one helper, two call sites. `tr.hotspot-row:focus-visible, tr.ki-row:focus-visible` paints a `2px solid var(--accent)` outline so keyboard users can see which row is about to be activated. Other table-row-as-button widgets discovered via `cursor:pointer` grep — only the two were click-on-tr; the rest are widget-level handlers (sankey, sunburst, etc.) which already route through `_codeloreShowDetail`. |
 | V5 | METRIC_DEFS formula strings reference parameter names verbatim | **Fixed** | This session. New `SpaOptionsSnapshot { min_revs, min_shared_revs, min_coupling_pct, max_coupling_pct, max_changeset_size, fisher_significance }` field on `SpaDashboard`, populated from `Options::from_options` at dispatch. JS-side `interpolate(formula, data.options)` substitutes `${key}` placeholders in METRIC_DEFS strings — `coupling_pairs` and `coupling_density` formulas now read `min_shared_revs ≥ 5` / `Fisher exact p < 0.05` (or whatever this run's effective thresholds are) instead of parameter names. Unknown placeholders left literal so a stale METRIC_DEFS entry shows the `${key}` token visibly during review rather than silently filling with `undefined`. `SpaOptionsSnapshot::default()` mirrors code-maat parity baseline so tests + step-summary using `..Default::default()` stay green without per-site updates. |
 | V6 | `CHANNEL_CAPACITY = 64` unmeasured | **Fixed** | This session. New `ingest_capacity_sweep` Criterion benchmark on the medium fixture sweeps `[16, 64, 256, 1024]` in one `cargo bench` invocation. Mechanism: `CHANNEL_CAPACITY_OVERRIDE: AtomicUsize` static in `facts::ingest` + `pub fn set_channel_capacity_override(n)` write hook; `channel_capacity()` reads override-else-DEFAULT_CHANNEL_CAPACITY (64) on each ingest call. Avoids `unsafe { env::set_var }` (workspace `unsafe_code = "forbid"`) and avoids expanding the public CLI surface — production dispatch never touches the override; only the bench writes it, and resets to `0` (= default) at sweep end. `bounded::<CommitEvent>(channel_capacity())` reads the runtime value, so the curve is real measurement, not folklore. |
+| F114 | Single-CDN dependence for all 4 SPA assets | **Fixed** | This session. `AssetPin` extended with `url_fallbacks: &'static [&'static str]`; `fetch_and_pin` walks primary URL first, then each fallback in declaration order. Every asset's fallback is the `unpkg.com` equivalent — both jsDelivr and unpkg pull from the same npm registry, so the bytes are identical and the same SHA-256 validates whichever mirror responds. SHA-256 mismatch on ANY URL is a hard fail (not "skip to next mirror") so a tampered mirror can't be silently replaced by a clean one. A jsDelivr availability incident (DNS outage, regional block, rate-limit) no longer breaks every `--features spa` build. |
 
 **Newly REFUTED (2026-06-18 / 2026-06-21)**:
 
@@ -170,12 +171,6 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 *   **Severity**: MED
 *   **Status**: Active. The 2026-06-16 validator's "17+" claim and the original "13" claim both over-counted. Verified count is 8 distinct first-level submodule paths: `analyses`, `analysis`, `facts`, `options`, `output`, `provenance`, `quality_gates`, `repo` (plus root-level `CodeLoreError`, `AnalysisName`, `Options`). The architectural smell — no `cli_api` façade, CLI reaches across many internal modules — is unchanged; only the count was inflated.
 *   **Suggested fix**: introduce `codelore_lib::cli_api` as the only `pub` surface CLI imports.
-
-#### F114 — Single-CDN dependence for all 4 SPA assets
-
-*   **Location**: `crates/codelore-lib/build.rs:77`
-*   **Severity**: MED
-*   **Suggested fix**: vendor the 4 files (~1.2 MB) into `crates/codelore-lib/vendor/spa/` + `include_bytes!`, OR fallback URL chain.
 
 #### F115 — Container base images use mutable tags
 
@@ -271,7 +266,7 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 | V6 | `CHANNEL_CAPACITY = 64` unmeasured | `ingest_capacity_sweep` Criterion benchmark added (16/64/256/1024); `CHANNEL_CAPACITY_OVERRIDE: AtomicUsize` + `set_channel_capacity_override(n)` writer hook; `bounded::<CommitEvent>(channel_capacity())` on the hot path | **Fixed (this session)** |
 | F111 | `FactsDb::conn()` leaks `&Connection` | `facts/mod.rs:307` (drifted from :266) still `pub fn conn(&self) -> &Connection` | Active confirmed |
 | F113 | CLI reaches into many lib submodules | 8 distinct first-level `codelore_lib::*` paths (analyses, analysis, facts, options, output, provenance, quality_gates, repo) — earlier 13/17+ counts both inflated | Active confirmed (count corrected) |
-| F114 | Single-CDN dependence | All 4 SPA assets at `cdn.jsdelivr.net/npm/…` in `build.rs:77,82,90,104`. SHA-256-pinned for integrity, but no fallback URL, no `include_bytes!` vendoring. `fn vendor_spa_assets` is a misnomer — it CDN-fetches. | Active confirmed |
+| F114 | Single-CDN dependence | `AssetPin.url_fallbacks` added with `unpkg.com` mirror per asset; `fetch_and_pin` walks primary→fallbacks; SHA-256 enforced on whichever mirror responds; tampered-mirror substitution still fails the build loudly | **Fixed (this session)** |
 | F115 | Container mutable tags | `Containerfile:29` `rust:${RUST_VERSION}-${DEBIAN_RELEASE}` and `:62` `gcr.io/distroless/cc-debian12:nonroot` — zero `@sha256:` | Active confirmed |
 | F116 | Dependabot + Renovate duplicate | Both files present BUT partitioned by `package-ecosystem`: Dependabot owns `github-actions`, Renovate owns `cargo`. Not duplicated. | **REFUTED** (see refuted-findings block above) |
 | F117 | First-party GHA floating tags | `release.yml`: 6 `actions/...@vN` lines (52, 88, 95, 148, 153, 165, 168, 207, 266) all floating. `container.yml`: 6 `docker/...@vN` lines (59, 61, 69, 119, 121, 129). Audit cited release.yml for the docker actions — they actually live in container.yml. | Active confirmed (location refined) |
@@ -332,7 +327,7 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 - **Closed on main (added to §3 closure-log)**: F110, F112, F117, F118, F120 (URL half), F124 (policy half), F125, F126, F127 (full — entropy rewrite closes the remainder), F128, F129, F130, F134, F135, F138, F142, F143, F146, F150, F151, F152, F153, F154, F155, F156, F157, F158, F159, F160, F163.
 - **REFUTED this session**: F116 (Renovate + Dependabot partitioned by ecosystem) + F123 (crossbeam 0.8.4 + num-format 0.4.4 are current releases) — see §3 newly-refuted block.
 - **Closed by side-effect**: F162 — Parquet writers now delegate to shared SQL generators that preserve CSV row-type contract via explicit casts. Verified 2026-06-21.
-- **Active**: F94, F97, V4, F111, F113, F114, F115, F119, F121, F122, F132, F133, F136, F144, F145, F148, F149, F161 = **17 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
+- **Active**: F94, F97, V4, F111, F113, F115, F119, F121, F122, F132, F133, F136, F144, F145, F148, F149, F161 = **16 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
 
 The next sweep should re-open with F-IDs starting at **F164**.
 
