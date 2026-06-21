@@ -928,6 +928,12 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
                 codelore_lib::output::markdown::write_code_health_markdown(&rows, &mut out)
                     .context("write markdown")?;
             }
+            ("ndjson", AnalysisName::CodeHealth) => {
+                let rows = codelore_lib::analyses::code_health::run_code_health(&db, &opts)
+                    .context("run code-health")?;
+                codelore_lib::output::ndjson::write_ndjson(&rows, &mut out)
+                    .context("write ndjson")?;
+            }
             // --- code-age ---
             ("csv", AnalysisName::CodeAge) => {
                 let rows = codelore_lib::analyses::code_age::run_code_age(&db, &opts)
@@ -1076,6 +1082,12 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
                     .context("run coupling")?;
                 codelore_lib::output::markdown::write_coupling_markdown(&rows, &mut out)
                     .context("write markdown")?;
+            }
+            ("ndjson", AnalysisName::Coupling) => {
+                let rows = codelore_lib::analyses::coupling::run_coupling(&db, &opts)
+                    .context("run coupling")?;
+                codelore_lib::output::ndjson::write_ndjson(&rows, &mut out)
+                    .context("write ndjson")?;
             }
             // --- summary ---
             ("csv", AnalysisName::Summary) => {
@@ -1289,8 +1301,14 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
                 codelore_lib::output::markdown::write_lead_time_markdown(&rows, &mut out)
                     .context("write markdown")?;
             }
+            ("ndjson", AnalysisName::LeadTime) => {
+                let rows = codelore_lib::analyses::lead_time::run_lead_time(&db, &opts)
+                    .context("run lead-time")?;
+                codelore_lib::output::ndjson::write_ndjson(&rows, &mut out)
+                    .context("write ndjson")?;
+            }
             (fmt, AnalysisName::LeadTime) => {
-                anyhow::bail!("lead-time analysis supports csv|json|markdown; got {fmt:?}")
+                anyhow::bail!("lead-time analysis supports csv|json|ndjson|markdown; got {fmt:?}")
             }
             // --- bus-factor (per-module Filatov 2010) ---
             ("csv", AnalysisName::BusFactor) => {

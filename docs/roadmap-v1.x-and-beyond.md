@@ -181,6 +181,26 @@ Tempting under the "concept-drift adaptation" framing, but Cabral & Minku (EMSE 
 
 The most-cited recent qualitative work on the topic — Heath's 2025 OSS Burnout report ([PDF](https://mirandaheath.website/static/oss_burnout_report_mh_25.pdf)) — explicitly scopes itself away from quantitative git-mineable signals and proposes only system-level interventions (pay developers, foster recognition, grow community, advocate). No validated commit-history-derived burnout signal exists in the surveyed literature; any commit-cadence-as-burnout proxy would be speculative inference about humans from machine data — a known false-positive trap.
 
+### Louvain modularity Q as parallel community-detection pipeline
+
+The Code Health Meter paper ([CHM, ACM TOSEM 2025, DOI 10.1145/3737670](https://dl.acm.org/doi/10.1145/3737670)) ships a 6-dimensional module signature with Louvain modularity as an "architectural soundness" score. CodeLore already ships Leiden communities — a strict improvement (no resolution-limit pathology, deterministic, peer-reviewed superior partition quality). Adding a second community-detection pipeline for a 6D composite would (a) violate [`feedback_use_existing_conventions`](../../.claude/memory/feedback_use_existing_conventions.md) (no parallel patterns), (b) confuse users about which output to trust when Leiden and Louvain disagree on a partition, (c) most of CHM's other dimensions (Maintainability Index, Cyclomatic Complexity, duplication) are already covered by CodeLore's tree-sitter complexity scan + AST-hash clone detection. Skip.
+
+### AI-attribution productivity-impact / "AI-code ages differently" columns
+
+Tempting given CodeLore's existing `commits.ai_attribution` column, but the strongest research to date refutes the framing. Borg et al. *Echoes of AI* RCT (N=151, [arxiv 2507.00788](https://arxiv.org/pdf/2507.00788)) found no significant downstream-maintainability difference (completion time or code quality) when developers evolved AI-co-developed vs human-only code; Bayesian analysis suggests any effect is small and highly uncertain. Borg/Tornhill *Code for Machines* ([arxiv 2601.02200](https://arxiv.org/abs/2601.02200)) does show CodeHealth associates with AI refactoring success, but only on 5,000 short Python competitive-programming files — explicitly NOT representative of industrial monorepos per the authors' own caveat. Shipping aging/impact columns would overclaim without controlled comparison data and contradict the "no LLM-based scoring as primary signal" constraint by proxy. The existing authorship-only attribution is the correct scope.
+
+### `cs rules-config` CLI command family clone
+
+CodeScene 7.4.7 introduced a `cs rules-config` CLI command family ([changelog](https://community.codescene.com/changelog)) for managing custom rules from the CLI. CodeLore already has `.codelore-thresholds.toml` + `codelore check` covering the same surface. Adding a parallel `codelore rules` family would duplicate the existing path and create a "legacy thresholds.toml vs new rules-config" migration trap. The valuable signal from CodeScene's move is *validation* that vendors are moving toward CLI-first config management — which CodeLore already does. Treat as architectural confirmation, not a feature to copy.
+
+### "SLSA Build L4" as a meaningful target
+
+The original supply-chain research framing assumed SLSA Build L4 existed and was the next step beyond CodeLore's current L3 attestation. SLSA v1.0 defines only L0–L3; there is no L4 ([SLSA v1.0 spec](https://slsa.dev/spec/v1.0/levels)). Chasing a phantom level is a feature-flag-graveyard pattern. The credible "beyond L3" hardening is **reproducible-builds bit-identical verification** ([reproducible-builds.org](https://reproducible-builds.org/docs/definition/)) — a second builder rebuilds each release and asserts byte-for-byte equality against the published artifact. That is the next supply-chain target when prioritised; the SLSA L4 phrase should never appear in CodeLore roadmap entries.
+
+### Mermaid emitter for architecture or change-coupling graphs
+
+Mermaid's C4 diagram syntax is officially experimental ([Mermaid C4 docs](https://mermaid.js.org/syntax/c4.html)) and carries an explicit syntax-change risk warning. Shipping a Mermaid emitter for behavioural-coupling graphs would lock CodeLore output into a moving target whose breaking changes are not on a SemVer cadence. The right alternative is the Cytoscape.js elements-JSON format ([js.cytoscape.org/#notation/elements-json](https://js.cytoscape.org/#notation/elements-json)) — stable spec, supports directed multigraphs and hierarchical compound nodes, has multiple downstream renderers (graphviz, sigma.js, vis.js). If a Mermaid alternative ever materialises in this space with a stable spec, this entry gets revisited.
+
 ---
 
 ## Active F-findings

@@ -6,6 +6,11 @@ Conventional Commits format. All notable changes documented here.
 
 ### Added
 
+- **`--format ndjson` extended to `code-health`, `coupling`, and `lead-time`** (alongside the existing hotspots wiring). The 3 most-commonly-piped behavioural analyses now stream as newline-delimited JSON for `jq -c` / LSP / CI log consumption.
+- **SPA: treemap semantic-zoom drill-down.** The hotspot treemap widget now supports click-to-drill into directory subtrees via ECharts' `leafDepth: 2` + native breadcrumb. Per-depth `levels[]` styling adds progressive border + gap thickness so directory vs file cells read distinctly. Spec: [Apache ECharts treemap-drill-down example](https://echarts.apache.org/examples/en/editor.html?c=treemap-drill-down). Zero bundle delta — uses the already-pinned ECharts 6.1.0.
+
+### Added
+
 - **`--format ndjson`** — newline-delimited JSON output for `codelore analyze`. Each row is emitted as its own line of compact JSON (no enclosing array), so LSP integrations, `jq -c` filters, and CI log pipelines can stream-parse as analyses complete instead of waiting for the closing `]`. Spec: <https://github.com/ndjson/ndjson-spec>. Wired for hotspots (Plan 9 will extend to all analyses); same `HotspotRow` shape as the batch JSON emitter, only the framing changes.
 - **`--format gha`** — GitHub Actions workflow-command output for `codelore analyze --analysis hotspots`. Each hotspot becomes one `::error file=...,title=...::msg`, `::warning::`, or `::notice::` line on stdout, bucketed by composite `hotspot_score` (≥ 7 = error, ≥ 4 = warning, otherwise notice). When run inside a GitHub Actions job the runner surfaces each line as an inline annotation on the pull-request diff — same surface Code Scanning uses, but with no SARIF upload, no API call, no `security-events: write` permission required. Property values are escaped per the [official workflow-commands spec](https://docs.github.com/en/actions/reference/workflow-commands-for-github-actions) (`%` → `%25`, `\r` → `%0D`, `\n` → `%0A`, plus `:` and `,` inside property fields).
 

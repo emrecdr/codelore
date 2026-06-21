@@ -2473,10 +2473,36 @@
         type: 'treemap',
         data: treeData,
         roam: false,
-        breadcrumb: { show: false },
+        // Semantic-zoom drill-down. `leafDepth: 2` collapses the tree
+        // so the top-level directories render first; clicking a
+        // directory drills into its file children with an ECharts-
+        // internal morph animation. The native breadcrumb (top-left
+        // by default) tracks the drill path and gives one-click
+        // ascent back up the hierarchy — much cleaner than the prior
+        // single-flat-view that buried every file in a 200-leaf grid.
+        // Spec: Apache ECharts treemap-drill-down example
+        // <https://echarts.apache.org/examples/en/editor.html?c=treemap-drill-down>.
+        leafDepth: 2,
+        breadcrumb: {
+          show: true,
+          top: 6,
+          left: 6,
+          itemStyle: {
+            color: getCssVar('--bg-elev-1'),
+            borderColor: getCssVar('--border'),
+            textStyle: { color: getCssVar('--fg') },
+          },
+        },
         label: { show: true, color: '#fff', fontSize: 11 },
         upperLabel: { show: true, height: 18, color: getCssVar('--fg-dim'), fontSize: 11 },
+        // Per-depth styling: directory level (depth 1) carries a
+        // thicker border + larger gap to read as a container; file
+        // level (depth 2) tightens both so leaves pack densely.
+        // Progressive color saturation is left to ECharts' default
+        // visualMin/visualMax behavior so the existing tooltip
+        // color-coding (revisions × hotspot_score) survives.
         levels: [
+          { itemStyle: { borderColor: getCssVar('--border'), borderWidth: 3, gapWidth: 3 } },
           { itemStyle: { borderColor: getCssVar('--border'), borderWidth: 2, gapWidth: 2 } },
           { itemStyle: { borderColor: getCssVar('--border'), borderWidth: 1, gapWidth: 1 } },
         ],
