@@ -3238,10 +3238,14 @@
         // `active` for any legacy markup. Both classes are written
         // as complete literals so the Tailwind v4 `@source` scanner
         // sees them (otherwise dynamic suffixes drop out of the bundle).
+        // `aria-selected` mirrors the visual state for the WAI-ARIA
+        // tabs pattern — without it screen readers see every tab as
+        // equally focusable but none as "selected" (F136).
         for (var j = 0; j < buttons.length; j++) {
           const isCurrent = (buttons[j] === evt.currentTarget);
           buttons[j].classList.toggle('tab-active', isCurrent);
           buttons[j].classList.toggle('active', isCurrent);
+          buttons[j].setAttribute('aria-selected', isCurrent ? 'true' : 'false');
         }
         // Wrap the re-render in startViewTransition so the colour-
         // mode swap smoothly crossfades. On unsupported

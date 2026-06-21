@@ -948,27 +948,27 @@
            buttons are invalid HTML — the parent `.tab` is the
            clickable element. -->
       <div role="tablist" class="tabs tabs-boxed" id="hotspot-color-toggles">
-        <button type="button" role="tab" data-mode="cognitive"      class="tab tab-active tooltip-host">
+        <button type="button" role="tab" data-mode="cognitive"      class="tab tab-active tooltip-host" aria-selected="true">
           Complexity
           <span class="tooltip-trigger" aria-hidden="true">?</span>
           <span class="tooltip-popup" role="tooltip">Cognitive complexity per file: yellow (low) → red (high). Counts nested decisions and control-flow breaks — how hard the code is to reason about.</span>
         </button>
-        <button type="button" role="tab" data-mode="health"         class="tab tooltip-host">
+        <button type="button" role="tab" data-mode="health"         class="tab tooltip-host" aria-selected="false">
           Code health
           <span class="tooltip-trigger" aria-hidden="true">?</span>
           <span class="tooltip-popup" role="tooltip">3-band code-health score: green ≥71 (healthy), yellow 41–70 (warning), red ≤40 (critical). Composite of complexity, duplication, and structural smells.</span>
         </button>
-        <button type="button" role="tab" data-mode="friction"       class="tab tooltip-host">
+        <button type="button" role="tab" data-mode="friction"       class="tab tooltip-host" aria-selected="false">
           Tech-debt friction
           <span class="tooltip-trigger" aria-hidden="true">?</span>
           <span class="tooltip-popup" role="tooltip">Tornhill 2018 tech-debt friction: how expensive each file is to change, weighted by churn × complexity × low-coverage proxies.</span>
         </button>
-        <button type="button" role="tab" data-mode="author"         class="tab tooltip-host">
+        <button type="button" role="tab" data-mode="author"         class="tab tooltip-host" aria-selected="false">
           Knowledge map
           <span class="tooltip-trigger" aria-hidden="true">?</span>
           <span class="tooltip-popup" role="tooltip">Each file coloured by its primary author. Large monochrome regions = single-developer ownership (silo risk).</span>
         </button>
-        <button type="button" role="tab" data-mode="ai"             class="tab tooltip-host">
+        <button type="button" role="tab" data-mode="ai"             class="tab tooltip-host" aria-selected="false">
           AI attribution
           <span class="tooltip-trigger" aria-hidden="true">?</span>
           <span class="tooltip-popup" role="tooltip">Files with substantial AI-authored commits (Copilot / Claude / ChatGPT / Cursor — inferred from commit metadata + author patterns).</span>
@@ -977,7 +977,7 @@
              code by departed authors per the offboarding scenario
              dropdown above. Auto-pinged from the dropdown when the
              user toggles their first author. -->
-        <button type="button" role="tab" data-mode="knowledge-loss" class="tab tooltip-host">
+        <button type="button" role="tab" data-mode="knowledge-loss" class="tab tooltip-host" aria-selected="false">
           Knowledge loss
           <span class="tooltip-trigger" aria-hidden="true">?</span>
           <span class="tooltip-popup" role="tooltip">Knowledge loss under your off-boarding scenario: blue = code owned by the current team; red = code primarily authored by the departed authors selected above.</span>
@@ -986,7 +986,7 @@
              ≥ 1 clone family. Files with zero clone groups render
              neutral grey, so structural-duplication hotspots pop
              visually against the rest of the codebase. -->
-        <button type="button" role="tab" data-mode="clones"         class="tab tooltip-host">
+        <button type="button" role="tab" data-mode="clones"         class="tab tooltip-host" aria-selected="false">
           Clones
           <span class="tooltip-trigger" aria-hidden="true">?</span>
           <span class="tooltip-popup" role="tooltip">Structural duplication: yellow→red ramp on files appearing in at least one Type-1 / Type-2 clone family. Grey = no detected clones.</span>
@@ -1078,6 +1078,7 @@
       <div role="tablist" class="tabs tabs-boxed mb-2" aria-label="Trends top N files">
         <button type="button" role="tab" class="tab tooltip-host"
                 :class="$store.layout.trendsTopN === 5 && 'tab-active'"
+                :aria-selected="$store.layout.trendsTopN === 5 ? 'true' : 'false'"
                 @click="$store.layout.trendsTopN = 5">
           5
           <span class="tooltip-trigger" aria-hidden="true">?</span>
@@ -1085,6 +1086,7 @@
         </button>
         <button type="button" role="tab" class="tab tooltip-host"
                 :class="$store.layout.trendsTopN === 10 && 'tab-active'"
+                :aria-selected="$store.layout.trendsTopN === 10 ? 'true' : 'false'"
                 @click="$store.layout.trendsTopN = 10">
           10
           <span class="tooltip-trigger" aria-hidden="true">?</span>
@@ -1092,6 +1094,7 @@
         </button>
         <button type="button" role="tab" class="tab tooltip-host"
                 :class="$store.layout.trendsTopN === 20 && 'tab-active'"
+                :aria-selected="$store.layout.trendsTopN === 20 ? 'true' : 'false'"
                 @click="$store.layout.trendsTopN = 20">
           20
           <span class="tooltip-trigger" aria-hidden="true">?</span>
@@ -1099,6 +1102,7 @@
         </button>
         <button type="button" role="tab" class="tab tooltip-host"
                 :class="$store.layout.trendsTopN === 'all' && 'tab-active'"
+                :aria-selected="$store.layout.trendsTopN === 'all' ? 'true' : 'false'"
                 @click="$store.layout.trendsTopN = 'all'">
           All
           <span class="tooltip-trigger" aria-hidden="true">?</span>
@@ -1164,6 +1168,7 @@
       <div role="tablist" class="tabs tabs-boxed mb-2" aria-label="Module coupling depth">
         <button type="button" role="tab" class="tab tooltip-host"
                 :class="$store.layout.chordDepth === 'auto' && 'tab-active'"
+                :aria-selected="$store.layout.chordDepth === 'auto' ? 'true' : 'false'"
                 @click="$store.layout.chordDepth = 'auto'">
           Auto
           <span class="tooltip-trigger" aria-hidden="true">?</span>
@@ -1171,6 +1176,7 @@
         </button>
         <button type="button" role="tab" class="tab tooltip-host"
                 :class="$store.layout.chordDepth === 2 && 'tab-active'"
+                :aria-selected="$store.layout.chordDepth === 2 ? 'true' : 'false'"
                 @click="$store.layout.chordDepth = 2">
           2
           <span class="tooltip-trigger" aria-hidden="true">?</span>
@@ -1178,6 +1184,7 @@
         </button>
         <button type="button" role="tab" class="tab tooltip-host"
                 :class="$store.layout.chordDepth === 3 && 'tab-active'"
+                :aria-selected="$store.layout.chordDepth === 3 ? 'true' : 'false'"
                 @click="$store.layout.chordDepth = 3">
           3
           <span class="tooltip-trigger" aria-hidden="true">?</span>
@@ -1185,6 +1192,7 @@
         </button>
         <button type="button" role="tab" class="tab tooltip-host"
                 :class="$store.layout.chordDepth === 4 && 'tab-active'"
+                :aria-selected="$store.layout.chordDepth === 4 ? 'true' : 'false'"
                 @click="$store.layout.chordDepth = 4">
           4
           <span class="tooltip-trigger" aria-hidden="true">?</span>
@@ -1192,6 +1200,7 @@
         </button>
         <button type="button" role="tab" class="tab tooltip-host"
                 :class="$store.layout.chordDepth === 5 && 'tab-active'"
+                :aria-selected="$store.layout.chordDepth === 5 ? 'true' : 'false'"
                 @click="$store.layout.chordDepth = 5">
           5
           <span class="tooltip-trigger" aria-hidden="true">?</span>
@@ -1199,6 +1208,7 @@
         </button>
         <button type="button" role="tab" class="tab tooltip-host"
                 :class="$store.layout.chordDepth === 6 && 'tab-active'"
+                :aria-selected="$store.layout.chordDepth === 6 ? 'true' : 'false'"
                 @click="$store.layout.chordDepth = 6">
           6
           <span class="tooltip-trigger" aria-hidden="true">?</span>
@@ -1237,6 +1247,7 @@
       <div role="tablist" class="tabs tabs-boxed mb-2" aria-label="Architecture graph depth">
         <button type="button" role="tab" class="tab tooltip-host"
                 :class="$store.layout.archGraphDepth === 'auto' && 'tab-active'"
+                :aria-selected="$store.layout.archGraphDepth === 'auto' ? 'true' : 'false'"
                 @click="$store.layout.archGraphDepth = 'auto'">
           Auto
           <span class="tooltip-trigger" aria-hidden="true">?</span>
@@ -1244,6 +1255,7 @@
         </button>
         <button type="button" role="tab" class="tab tooltip-host"
                 :class="$store.layout.archGraphDepth === 2 && 'tab-active'"
+                :aria-selected="$store.layout.archGraphDepth === 2 ? 'true' : 'false'"
                 @click="$store.layout.archGraphDepth = 2">
           2
           <span class="tooltip-trigger" aria-hidden="true">?</span>
@@ -1251,6 +1263,7 @@
         </button>
         <button type="button" role="tab" class="tab tooltip-host"
                 :class="$store.layout.archGraphDepth === 3 && 'tab-active'"
+                :aria-selected="$store.layout.archGraphDepth === 3 ? 'true' : 'false'"
                 @click="$store.layout.archGraphDepth = 3">
           3
           <span class="tooltip-trigger" aria-hidden="true">?</span>
@@ -1258,6 +1271,7 @@
         </button>
         <button type="button" role="tab" class="tab tooltip-host"
                 :class="$store.layout.archGraphDepth === 4 && 'tab-active'"
+                :aria-selected="$store.layout.archGraphDepth === 4 ? 'true' : 'false'"
                 @click="$store.layout.archGraphDepth = 4">
           4
           <span class="tooltip-trigger" aria-hidden="true">?</span>
@@ -1265,6 +1279,7 @@
         </button>
         <button type="button" role="tab" class="tab tooltip-host"
                 :class="$store.layout.archGraphDepth === 5 && 'tab-active'"
+                :aria-selected="$store.layout.archGraphDepth === 5 ? 'true' : 'false'"
                 @click="$store.layout.archGraphDepth = 5">
           5
           <span class="tooltip-trigger" aria-hidden="true">?</span>
@@ -1272,6 +1287,7 @@
         </button>
         <button type="button" role="tab" class="tab tooltip-host"
                 :class="$store.layout.archGraphDepth === 6 && 'tab-active'"
+                :aria-selected="$store.layout.archGraphDepth === 6 ? 'true' : 'false'"
                 @click="$store.layout.archGraphDepth = 6">
           6
           <span class="tooltip-trigger" aria-hidden="true">?</span>
@@ -1333,6 +1349,7 @@
       <div role="tablist" class="tabs tabs-boxed mb-2" aria-label="Multi-metric top N hotspots">
         <button type="button" role="tab" class="tab tooltip-host"
                 :class="$store.layout.parallelTopN === 10 && 'tab-active'"
+                :aria-selected="$store.layout.parallelTopN === 10 ? 'true' : 'false'"
                 @click="$store.layout.parallelTopN = 10">
           10
           <span class="tooltip-trigger" aria-hidden="true">?</span>
@@ -1340,6 +1357,7 @@
         </button>
         <button type="button" role="tab" class="tab tooltip-host"
                 :class="$store.layout.parallelTopN === 20 && 'tab-active'"
+                :aria-selected="$store.layout.parallelTopN === 20 ? 'true' : 'false'"
                 @click="$store.layout.parallelTopN = 20">
           20
           <span class="tooltip-trigger" aria-hidden="true">?</span>
@@ -1347,6 +1365,7 @@
         </button>
         <button type="button" role="tab" class="tab tooltip-host"
                 :class="$store.layout.parallelTopN === 50 && 'tab-active'"
+                :aria-selected="$store.layout.parallelTopN === 50 ? 'true' : 'false'"
                 @click="$store.layout.parallelTopN = 50">
           50
           <span class="tooltip-trigger" aria-hidden="true">?</span>
@@ -1354,6 +1373,7 @@
         </button>
         <button type="button" role="tab" class="tab tooltip-host"
                 :class="$store.layout.parallelTopN === 'all' && 'tab-active'"
+                :aria-selected="$store.layout.parallelTopN === 'all' ? 'true' : 'false'"
                 @click="$store.layout.parallelTopN = 'all'">
           All
           <span class="tooltip-trigger" aria-hidden="true">?</span>
@@ -1393,6 +1413,7 @@
       <div role="tablist" class="tabs tabs-boxed mb-2" aria-label="Delivery risk window">
         <button type="button" role="tab" class="tab tooltip-host"
                 :class="$store.layout.kameiWindow === 10 && 'tab-active'"
+                :aria-selected="$store.layout.kameiWindow === 10 ? 'true' : 'false'"
                 @click="$store.layout.kameiWindow = 10">
           10
           <span class="tooltip-trigger" aria-hidden="true">?</span>
@@ -1400,6 +1421,7 @@
         </button>
         <button type="button" role="tab" class="tab tooltip-host"
                 :class="$store.layout.kameiWindow === 30 && 'tab-active'"
+                :aria-selected="$store.layout.kameiWindow === 30 ? 'true' : 'false'"
                 @click="$store.layout.kameiWindow = 30">
           30
           <span class="tooltip-trigger" aria-hidden="true">?</span>
@@ -1407,6 +1429,7 @@
         </button>
         <button type="button" role="tab" class="tab tooltip-host"
                 :class="$store.layout.kameiWindow === 60 && 'tab-active'"
+                :aria-selected="$store.layout.kameiWindow === 60 ? 'true' : 'false'"
                 @click="$store.layout.kameiWindow = 60">
           60
           <span class="tooltip-trigger" aria-hidden="true">?</span>
@@ -1414,6 +1437,7 @@
         </button>
         <button type="button" role="tab" class="tab tooltip-host"
                 :class="$store.layout.kameiWindow === 'all' && 'tab-active'"
+                :aria-selected="$store.layout.kameiWindow === 'all' ? 'true' : 'false'"
                 @click="$store.layout.kameiWindow = 'all'">
           All
           <span class="tooltip-trigger" aria-hidden="true">?</span>
@@ -1509,6 +1533,7 @@
       <div role="tablist" class="tabs tabs-boxed mb-2" aria-label="Change coupling depth">
         <button type="button" role="tab" class="tab tooltip-host"
                 :class="$store.layout.sankeyDepth === 'files' && 'tab-active'"
+                :aria-selected="$store.layout.sankeyDepth === 'files' ? 'true' : 'false'"
                 @click="$store.layout.sankeyDepth = 'files'">
           Files
           <span class="tooltip-trigger" aria-hidden="true">?</span>
@@ -1516,6 +1541,7 @@
         </button>
         <button type="button" role="tab" class="tab tooltip-host"
                 :class="$store.layout.sankeyDepth === 2 && 'tab-active'"
+                :aria-selected="$store.layout.sankeyDepth === 2 ? 'true' : 'false'"
                 @click="$store.layout.sankeyDepth = 2">
           2
           <span class="tooltip-trigger" aria-hidden="true">?</span>
@@ -1523,6 +1549,7 @@
         </button>
         <button type="button" role="tab" class="tab tooltip-host"
                 :class="$store.layout.sankeyDepth === 3 && 'tab-active'"
+                :aria-selected="$store.layout.sankeyDepth === 3 ? 'true' : 'false'"
                 @click="$store.layout.sankeyDepth = 3">
           3
           <span class="tooltip-trigger" aria-hidden="true">?</span>
@@ -1530,6 +1557,7 @@
         </button>
         <button type="button" role="tab" class="tab tooltip-host"
                 :class="$store.layout.sankeyDepth === 4 && 'tab-active'"
+                :aria-selected="$store.layout.sankeyDepth === 4 ? 'true' : 'false'"
                 @click="$store.layout.sankeyDepth = 4">
           4
           <span class="tooltip-trigger" aria-hidden="true">?</span>
@@ -1537,6 +1565,7 @@
         </button>
         <button type="button" role="tab" class="tab tooltip-host"
                 :class="$store.layout.sankeyDepth === 5 && 'tab-active'"
+                :aria-selected="$store.layout.sankeyDepth === 5 ? 'true' : 'false'"
                 @click="$store.layout.sankeyDepth = 5">
           5
           <span class="tooltip-trigger" aria-hidden="true">?</span>
@@ -1544,6 +1573,7 @@
         </button>
         <button type="button" role="tab" class="tab tooltip-host"
                 :class="$store.layout.sankeyDepth === 6 && 'tab-active'"
+                :aria-selected="$store.layout.sankeyDepth === 6 ? 'true' : 'false'"
                 @click="$store.layout.sankeyDepth = 6">
           6
           <span class="tooltip-trigger" aria-hidden="true">?</span>
