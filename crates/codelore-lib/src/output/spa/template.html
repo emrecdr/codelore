@@ -324,18 +324,23 @@
        already do). */
     .tooltip-trigger {
       display: inline-block;
-      width: 14px;
-      height: 14px;
+      /* 24×24 to meet WCAG 2.5.5 Target Size (Minimum). The glyph is
+         visually small (12px font on a 24×24 button) so the trigger
+         doesn't look heavy next to dense table headers, but the full
+         24×24 click/tap area is reachable for coarse pointers — same
+         pattern WCAG suggests for inline help affordances. */
+      width: 24px;
+      height: 24px;
       margin-left: 4px;
       padding: 0;
       border: 1px solid var(--border);
       border-radius: 50%;
       background: transparent;
       color: var(--fg-dim);
-      font-size: 9px;
+      font-size: 12px;
       font-weight: bold;
-      line-height: 12px;
-      vertical-align: 1px;
+      line-height: 22px;
+      vertical-align: -7px;
       cursor: help;
       font-family: inherit;
       text-transform: none;

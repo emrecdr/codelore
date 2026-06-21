@@ -113,6 +113,7 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 | F160 | Kamei NDEV/EXP same-second peer semantics inconsistent | **Fixed** | PR #64 → main. Strict `prev.date < c.date` uniformly across NDEV/NUC/EXP/REXP/SEXP |
 | F163 | SARIF `automationDetails.id` is static | **Fixed** | PR #63 → main. `automation_id_for(prefix)` appends per-run 16-hex suffix |
 | F162 | Parquet column types drift from CSV row-type contract | **Fixed (already-closed by side-effect)** | Parquet writers now delegate to `analyses::hotspots::build_inlined_sql` / `revisions::build_inlined_sql` shared SQL generators. Those generators already use the explicit-cast convention the original finding requested, so the CSV row-type contract is preserved verbatim through to Parquet. The 51-line `parquet.rs` shim has no remaining type-inference call site. Verified 2026-06-21 validation pass. |
+| F131 | Provenance tooltip triggers 14×14 px target | **Fixed** | This session. `.tooltip-trigger` in `template.html` bumped from `width/height: 14px` → `24px` to meet WCAG 2.5.5 Target Size (Minimum). Glyph stays visually moderate (`font-size: 12px` on a 24×24 button) so the trigger doesn't dominate dense table headers, but the click/tap area is reachable for coarse pointers. `line-height: 22px` keeps the `?` glyph vertically centered inside the 24px circle minus 1px borders top+bottom; `vertical-align: -7px` re-baselines the larger button against adjacent text without disturbing label rhythm. CSS anchor positioning + the `:hover/:focus-visible` reveal path are unchanged — F131 is purely about target size, not the popup. |
 
 **Newly REFUTED (2026-06-18 / 2026-06-21)**:
 
@@ -211,11 +212,6 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 
 ### NEW Active Findings — SPA UI/UX
 
-#### F131 — Provenance tooltip triggers 14×14 px, hover-only reveal
-
-*   **Location**: `crates/codelore-lib/src/output/spa/template.html:259-260`
-*   **Severity**: HIGH
-
 #### F132 — Hardcoded hex colors break light theme
 
 *   **Location**: `crates/codelore-lib/src/output/spa/widgets.js:1482, 1751, 2083, 2290-2295, 2414-2416`
@@ -306,7 +302,7 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 | F128 | Kamei `enrich_size` correlated | `kamei/mod.rs:104-114` — single grouped `UPDATE … FROM (SELECT rev, SUM ... GROUP BY rev)` | **Fixed on main (PR #64)** |
 | F129 | arch-violations materializes, truncates post-Rust | `arch_violations.rs:55-75` collects full Vec without LIMIT, validates in Rust at `:77-88`, `truncate(limit)` post-loop at `:90-93` | Active confirmed |
 | F130 | pair_programming O(P²) with `String::clone` | `pair_programming.rs:102-107` literal doubly-nested loop with `participants[i].clone(), participants[j].clone()` | Active confirmed |
-| F131 | Tooltip 14×14 trigger | `template.html:311` (drifted from :259) literal `width: 14px; height: 14px; cursor: help` | Active confirmed |
+| F131 | Tooltip 14×14 trigger | `template.html:325-328` bumped to 24×24 with 12px glyph + 22px line-height + -7px vertical-align | **Fixed (this session)** |
 | F132 | Hardcoded hex in widgets.js | 6 sites — examples: `:1992 '#e6e6e6'`, `:2406 '#fff'`, `:2933` visualMap ramp `['#1a4a2c','#2ea44f','#7dd87a','#f59e0b','#e0584e']`, `:3273-3275` author palette | Active confirmed |
 | F133 | No responsive < 900px | 15 responsive classes total (drifted +1), all `xl:`. Zero `sm:` / `md:` / `lg:` | Active confirmed |
 | F134 | Hotspot 'Show all' synchronous | `widgets.js` now chunks `renderNextPage` into 50-row batches with `await yieldToMain()` between each; the `Show all` click is also wrapped in element-scoped `startViewTransition(..., container)` (Chrome 147+) so the table animates without freezing other widgets; `view-transition-name: match-element` on `.hotspot-row` gives per-row crossfades | **Fixed on main (this session)** |
@@ -351,7 +347,7 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 - **Closed on main (added to §3 closure-log)**: F110, F112, F117, F118, F120 (URL half), F124 (policy half), F125, F126, F127 (full — entropy rewrite closes the remainder), F128, F129, F130, F134, F135, F138, F142, F143, F146, F150, F151, F152, F153, F154, F155, F156, F157, F158, F159, F160, F163.
 - **REFUTED this session**: F116 (Renovate + Dependabot partitioned by ecosystem) + F123 (crossbeam 0.8.4 + num-format 0.4.4 are current releases) — see §3 newly-refuted block.
 - **Closed by side-effect**: F162 — Parquet writers now delegate to shared SQL generators that preserve CSV row-type contract via explicit casts. Verified 2026-06-21.
-- **Active**: F94, F97, V4, V5, V6, F111, F113, F114, F115, F119, F121, F122, F131, F132, F133, F136, F137, F144, F145, F148, F149, F161 = **21 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
+- **Active**: F94, F97, V4, V5, V6, F111, F113, F114, F115, F119, F121, F122, F132, F133, F136, F137, F144, F145, F148, F149, F161 = **20 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
 
 The next sweep should re-open with F-IDs starting at **F164**.
 
