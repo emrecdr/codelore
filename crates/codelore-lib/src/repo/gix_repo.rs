@@ -603,11 +603,11 @@ fn count_loc_and_hunks(
 
     let empty: Vec<u8> = Vec::new();
     let read_blob = |oid: gix::ObjectId| -> Result<Vec<u8>> {
-        let mut obj = repo.find_object(oid).map_err(|_e| {
-            CodeLoreError::BlobNotFound {
+        let mut obj = repo
+            .find_object(oid)
+            .map_err(|_e| CodeLoreError::BlobNotFound {
                 oid: oid.to_string(),
-            }
-        })?;
+            })?;
         Ok(std::mem::take(&mut obj.data))
     };
 
@@ -720,9 +720,7 @@ fn blob_at_path(
             Ok(Some(oid))
         }
         Ok(None) => Ok(None),
-        Err(e) => Err(CodeLoreError::Repo(format!(
-            "lookup `{path}` in tree: {e}"
-        ))),
+        Err(e) => Err(CodeLoreError::Repo(format!("lookup `{path}` in tree: {e}"))),
     }
 }
 

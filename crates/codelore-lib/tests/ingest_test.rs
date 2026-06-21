@@ -190,7 +190,10 @@ fn ingest_writes_hunk_rows_to_hunks_table() {
         .collect::<Vec<_>>()
         .join("\n");
     write_file(path, "src/code.rs", &format!("{edited}\n"));
-    run_git(path, &["commit", "-am", "two non-adjacent edits", "--quiet"]);
+    run_git(
+        path,
+        &["commit", "-am", "two non-adjacent edits", "--quiet"],
+    );
 
     let repo = GixRepo::open(path).expect("open");
     let db = FactsDb::new_in_memory().expect("db");
@@ -200,9 +203,7 @@ fn ingest_writes_hunk_rows_to_hunks_table() {
     // Pre-fix this returned 0 — `append_change` never wrote a hunks
     // row, even though `FileChange.hunks` carried the parsed payload.
     let hunk_count: String = db
-        .query_one_value(
-            "SELECT CAST(COUNT(*) AS TEXT) FROM hunks WHERE path = 'src/code.rs'",
-        )
+        .query_one_value("SELECT CAST(COUNT(*) AS TEXT) FROM hunks WHERE path = 'src/code.rs'")
         .expect("hunk count query");
     let n: u32 = hunk_count.parse().unwrap();
     assert!(
