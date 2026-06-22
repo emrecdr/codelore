@@ -179,13 +179,6 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 
 ### NEW Active Findings — Backend performance
 
-### NEW Active Findings — SPA UI/UX
-
-#### F133 — No responsive layout below ~900px viewport
-
-*   **Severity**: HIGH
-*   **Validation note (2026-06-18)**: 15 responsive Tailwind classes total in `template.html` (drifted +1), all `xl:` (≥ 1280px). Zero `sm:` / `md:` / `lg:` — confirms the finding: viewports from 320px up to 1279px get the desktop layout uncompressed. Phones/tablets either zoom out or scroll-bar.
-
 ### NEW Active Findings — Test / CI / observability
 
 ### NEW Active Findings — Code complexity / maintainability
@@ -245,7 +238,7 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 | F130 | pair_programming O(P²) with `String::clone` | `pair_programming.rs:102-107` literal doubly-nested loop with `participants[i].clone(), participants[j].clone()` | Active confirmed |
 | F131 | Tooltip 14×14 trigger | `template.html:325-328` bumped to 24×24 with 12px glyph + 22px line-height + -7px vertical-align | **Fixed (this session)** |
 | F132 | Hardcoded hex in widgets.js | All 4 sites swapped to `token('--name')` reads (label-on-dark, label-on-saturated, heatmap-1..5, chart-palette-1..15); light-theme overrides added; widget entries upgraded to `rerender: 'theme'`; zero hex literals remain in widgets.js | **Fixed (this session)** |
-| F133 | No responsive < 900px | 15 responsive classes total (drifted +1), all `xl:`. Zero `sm:` / `md:` / `lg:` | Active confirmed |
+| F133 | No responsive < 900px | Dashboard grid swapped from `xl:grid-cols-2` to `md:grid-cols-2`; Tailwind bundle rebuilt with `md\:grid-cols-2`; 2-col kicks in at ≥768px (tablet portrait); SPA + browser tests green | **Fixed (this session)** |
 | F134 | Hotspot 'Show all' synchronous | `widgets.js` now chunks `renderNextPage` into 50-row batches with `await yieldToMain()` between each; the `Show all` click is also wrapped in element-scoped `startViewTransition(..., container)` (Chrome 147+) so the table animates without freezing other widgets; `view-transition-name: match-element` on `.hotspot-row` gives per-row crossfades | **Fixed on main (this session)** |
 | F135 | Theme toggle re-runs `d3.pack` | `template.html`'s `Alpine.effect` rerenderer loop now `await window._codeloreYieldToMain()` between each registered rerenderer (the d3.pack pass still runs but yields the main thread between widgets); `.widget { view-transition-name: match-element }` per-widget animation | **Fixed on main (this session)** |
 | F136 | Color-mode tablist non-ARIA | JS-driven hotspot toggle sets `aria-selected` in the toggle loop; 6 Alpine tablists carry `:aria-selected` next to `:class`; template ships with `aria-selected="true"` on the default-active tab; 30 buttons paired total | **Fixed (this session)** |
@@ -260,6 +253,7 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 | F121 | `fishers_exact` crate unmaintained (last release 2018-11) | In-tree port in new `crate::stats::fisher_two_tail_pvalue` module (~150 LOC); supply-chain dependency eliminated; output matches the upstream's `fishers_exact(&[a,b,c,d]).two_tail_pvalue` to ≤ 1e-12 relative error across 8 regression cases | **Fixed (this session)** |
 | V4 | `widgets.js` per-widget registry | New `const WIDGETS = [{ name, render, rerender? }]` array at the top of §3 Boot; single `WIDGETS.forEach(w => { w.render(); /* register theme rerender per the `rerender` flag */ })` loop replaces the prior 60-LOC sequence of duplicated `renderXxx()` + `_codeloreRerenderers.push(() => renderXxx(...))` blocks. 14 widgets registered uniformly; `rerender: false` opts out (KPI tiles, KI table, hotspot table), `rerender: 'theme'` opts into the token-cache-invalidating path (hotspot circle-pack), default falls through to `_codeloreRerenderers.push`. SPA integration test + browser smoke test green. Adding a widget is now one line. | **Fixed (this session)** |
 | F132 | Hardcoded hex colors break light theme | 4 sites in `widgets.js` (sankey label `#e6e6e6`, treemap label `#fff`, calendar-heatmap 5-band ramp, 15-color author palette) externalised to CSS custom properties — new `--label-on-dark`, `--label-on-saturated`, `--heatmap-{1..5}`, `--chart-palette-{1..15}` tokens with separate light-theme overrides that retune the heatmap ramp's "low" band (from `#1a4a2c` invisible-on-white to `#c8e6c9` desaturated mint) and deepen the author palette saturation so colors don't wash out against light cards. JS sites swapped to `token('--name')` (theme-aware + cache-invalidating). Widget entries `coupling-sankey` / `hotspot-treemap` / `calendar-heatmap` upgraded to `rerender: 'theme'` so the token cache flushes on theme toggle. `grep` for `'#[0-9a-fA-F]{3,6}'` in widgets.js now returns zero hits; browser smoke test green. |
+| F133 | No responsive layout below ~1280px viewport | Dashboard grid container swapped from `xl:grid-cols-2` to `md:grid-cols-2` so 2-col kicks in at tablet portrait (≥ 768 px) instead of waiting until desktop (≥ 1280 px). Wide widgets keep `xl:col-span-2` so they only span both columns at desktop; at md/lg they sit in the normal 2-col grid one per column. Mobile (< 768 px) stays at single-column. The Tailwind v4 bundle was rebuilt (`tailwindcss -i tailwind-src/input.css -o tailwind.daisyui.min.css --minify`) so `md\:grid-cols-2` is included alongside the existing `xl\:grid-cols-2`. SPA integration + browser smoke tests green; viewports 768–1279 px now get a proper 2-col layout instead of the uncompressed desktop view. |
 | F150 | Schema version disjoint, no startup validation | `facts/schema.rs:10` `CURRENT_SCHEMA_VERSION` const + `facts/mod.rs:69` `validate_schema_version()` at `open_read_only` bails on mismatch | **Fixed on main (PR #61)** |
 | F151 | Leiden non-deterministic | `communities.rs:58 LEIDEN_SEED` + `:148-150 LeidenConfig { seed: Some(LEIDEN_SEED), .. }` + regression test :269-316 | **Fixed on main (PR #61)** |
 | F152 | clone_group_id std HashMap | `clones/extractor.rs:151-152` switched to `BTreeMap<[u8;32], _>` | **Fixed on main (PR #61)** |
@@ -291,7 +285,7 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 - **Closed on main (added to §3 closure-log)**: F110, F112, F117, F118, F120 (URL half), F124 (policy half), F125, F126, F127 (full — entropy rewrite closes the remainder), F128, F129, F130, F134, F135, F138, F142, F143, F146, F150, F151, F152, F153, F154, F155, F156, F157, F158, F159, F160, F163.
 - **REFUTED this session**: F116 (Renovate + Dependabot partitioned by ecosystem) + F123 (crossbeam 0.8.4 + num-format 0.4.4 are current releases) — see §3 newly-refuted block.
 - **Closed by side-effect**: F162 — Parquet writers now delegate to shared SQL generators that preserve CSV row-type contract via explicit casts. Verified 2026-06-21.
-- **Active**: F94, F97, F111, F113, F119, F133, F145, F148, F161 = **9 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
+- **Active**: F94, F97, F111, F113, F119, F145, F148, F161 = **8 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
 
 The next sweep should re-open with F-IDs starting at **F164**.
 

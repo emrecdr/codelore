@@ -886,17 +886,27 @@
     </label>
   </header>
 
-  <!-- Responsive widget grid:
-       - mobile / md (< 1280 px): 1 column (`grid-cols-1`)
-       - xl (≥ 1280 px): 2 columns (`xl:grid-cols-2`)
-       Widgets that need horizontal real estate
-       (`xl:col-span-2`): hotspot circle-pack, trends, calendar
-       heatmap, X-Ray sunburst, hotspot table, change-coupling
-       sankey. Two compact widgets pair on row 1 (kpi-tiles +
+  <!-- Responsive widget grid (F133):
+       - mobile (< 768 px):     1 column (`grid-cols-1`) — every widget
+                                gets full width, charts can pan but
+                                don't squeeze.
+       - tablet+ (≥ 768 px):    2 columns (`md:grid-cols-2`) — narrow
+                                tablets in portrait already have
+                                enough horizontal room for two
+                                cards side-by-side, especially after
+                                each chart's container takes care
+                                of overflow.
+       - desktop (≥ 1280 px):   wide widgets span both columns
+                                (`xl:col-span-2`) — hotspot circle-pack,
+                                trends, calendar heatmap, X-Ray
+                                sunburst, hotspot table, change-coupling
+                                sankey. At md/lg they sit in the normal
+                                2-col grid taking 1 col each.
+       Two compact widgets pair on row 1 (kpi-tiles +
        knowledge-islands). The 1600 px max-width matches the
        dashboard's preferred layout — `max-w-screen-2xl` (1536 px)
        would shrink the dashboard on ultra-wide displays. -->
-  <main class="mx-auto grid grid-cols-1 xl:grid-cols-2 gap-7 p-7 dashboard-main">
+  <main class="mx-auto grid grid-cols-1 md:grid-cols-2 gap-7 p-7 dashboard-main">
     <section class="widget card bg-base-200 shadow-lg" id="widget-kpi-tiles">
       <h2>Codebase at a glance</h2>
       <div class="subtitle">
