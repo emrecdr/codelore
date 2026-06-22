@@ -471,15 +471,15 @@
     { name: 'knowledge-islands',  rerender: false, render: () => renderKnowledgeIslands(data.knowledge_islands || []) },
     { name: 'hotspot-circle-pack', rerender: 'theme', render: () => renderHotspotCirclePack(data.hotspots || [], currentHotspotColorMode) },
     { name: 'hotspot-table',      rerender: false, render: () => renderHotspotTable(data.hotspots || []) },
-    { name: 'coupling-sankey',    render: () => renderCouplingSankey(data.coupling || []) },
+    { name: 'coupling-sankey',    rerender: 'theme', render: () => renderCouplingSankey(data.coupling || []) },
     { name: 'trends',             render: () => renderTrends(data.trends || []) },
     { name: 'kamei-risk-sparkline', render: () => renderKameiRiskSparkline(data.kamei_risk || []) },
-    { name: 'hotspot-treemap',    render: () => renderHotspotTreemap(data.hotspots || []) },
+    { name: 'hotspot-treemap',    rerender: 'theme', render: () => renderHotspotTreemap(data.hotspots || []) },
     { name: 'parallel-coords',    render: () => renderParallelCoords(data.hotspots || []) },
     { name: 'cognitive-boxplot',  render: () => renderCognitiveBoxplot(data.hotspots || []) },
     { name: 'module-chord',       render: () => renderModuleChord(data.coupling || []) },
     { name: 'arch-graph',         render: () => renderArchGraph(data.imports || []) },
-    { name: 'calendar-heatmap',   render: () => renderCalendarHeatmap(data.daily_commits || []) },
+    { name: 'calendar-heatmap',   rerender: 'theme', render: () => renderCalendarHeatmap(data.daily_commits || []) },
     { name: 'xray-sunburst',      render: () => renderXRaySunburst(data.xray || []) },
   ];
 
@@ -2128,7 +2128,7 @@
         data: nodes,
         links: links,
         lineStyle: { color: 'gradient', curveness: 0.5 },
-        label: { color: '#e6e6e6', fontSize: 11 },
+        label: { color: token('--label-on-dark'), fontSize: 11 },
       }],
     });
 
@@ -2561,7 +2561,7 @@
             textStyle: { color: getCssVar('--fg') },
           },
         },
-        label: { show: true, color: '#fff', fontSize: 11 },
+        label: { show: true, color: token('--label-on-saturated'), fontSize: 11 },
         upperLabel: { show: true, height: 18, color: getCssVar('--fg-dim'), fontSize: 11 },
         // Per-depth styling: directory level (depth 1) carries a
         // thicker border + larger gap to read as a container; file
@@ -3096,7 +3096,15 @@
         itemWidth: 12,
         itemHeight: 12,
         itemGap: 6,
-        inRange: { color: ['#1a4a2c', '#2ea44f', '#7dd87a', '#f59e0b', '#e0584e'] },
+        inRange: {
+          color: [
+            token('--heatmap-1'),
+            token('--heatmap-2'),
+            token('--heatmap-3'),
+            token('--heatmap-4'),
+            token('--heatmap-5'),
+          ],
+        },
       },
       calendar: calendars,
       series: series,
@@ -3439,10 +3447,16 @@
   // palette tuned for dark-background readability; cycles if there are
   // more authors than colors.
   function makeAuthorPalette(authors) {
+    // F132: palette read from CSS custom properties so light theme
+    // gets a deeper-saturation set that's readable on white cards.
+    // The 15-token chain mirrors the previous hard-coded array;
+    // `token()` is theme-aware and cache-invalidated on rerender.
     const palette = [
-      '#5fa472', '#2ea44f', '#7dd87a', '#f59e0b', '#e0584e',
-      '#c47ddb', '#8ab4ff', '#5bcdd5', '#d4953b', '#a8a8a8',
-      '#b53935', '#3d7d4f', '#c97600', '#6a6aef', '#ce62a6',
+      token('--chart-palette-1'),  token('--chart-palette-2'),  token('--chart-palette-3'),
+      token('--chart-palette-4'),  token('--chart-palette-5'),  token('--chart-palette-6'),
+      token('--chart-palette-7'),  token('--chart-palette-8'),  token('--chart-palette-9'),
+      token('--chart-palette-10'), token('--chart-palette-11'), token('--chart-palette-12'),
+      token('--chart-palette-13'), token('--chart-palette-14'), token('--chart-palette-15'),
     ];
     const sorted = authors.slice().sort();
     const out = {};

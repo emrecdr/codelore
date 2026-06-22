@@ -80,6 +80,39 @@
       --xray-ring-2: #2c5d3a;
       --xray-ring-label: #ffffff;
       --xray-leaf-label: #1a1a1a;
+      /* F132: per-widget chart palette tokens. Previously these hex
+         literals were inlined in `widgets.js` (sankey label color,
+         treemap label-on-saturated, friction calendar 5-band ramp,
+         15-color author palette), so light-theme rendering used the
+         dark-mode palette and the calendar-heatmap "low" band was
+         barely visible against the white card. Each token has a
+         light-theme override in `[data-theme="light"]` below. */
+      --label-on-dark: #e6e6e6;
+      --label-on-saturated: #ffffff;
+      /* Friction calendar 5-band ramp (low → high). Tuned for dark
+         backgrounds. */
+      --heatmap-1: #1a4a2c;
+      --heatmap-2: #2ea44f;
+      --heatmap-3: #7dd87a;
+      --heatmap-4: #f59e0b;
+      --heatmap-5: #e0584e;
+      /* 15-color categorical palette for the author / knowledge-map
+         widget. Same hex set the JS used pre-F132. */
+      --chart-palette-1:  #5fa472;
+      --chart-palette-2:  #2ea44f;
+      --chart-palette-3:  #7dd87a;
+      --chart-palette-4:  #f59e0b;
+      --chart-palette-5:  #e0584e;
+      --chart-palette-6:  #c47ddb;
+      --chart-palette-7:  #8ab4ff;
+      --chart-palette-8:  #5bcdd5;
+      --chart-palette-9:  #d4953b;
+      --chart-palette-10: #a8a8a8;
+      --chart-palette-11: #b53935;
+      --chart-palette-12: #3d7d4f;
+      --chart-palette-13: #c97600;
+      --chart-palette-14: #6a6aef;
+      --chart-palette-15: #ce62a6;
     }
     * { box-sizing: border-box; }
     body {
@@ -751,6 +784,42 @@
       --xray-ring-1: #5c8a6a;
       --xray-ring-2: #8fb59c;
       --xray-ring-label: #1a1a1a;
+      /* Sankey labels and treemap leaf labels need to be readable on
+         dark / saturated chart fills regardless of theme. Sankey
+         labels stay light (dark theme keeps `#e6e6e6`-equivalent
+         contrast; light-theme labels darken to match the rendered
+         text on adjacent cards). Treemap labels stay white — the
+         tile fill is saturated heat-ramp orange/red where dark text
+         falls below WCAG AA. */
+      --label-on-dark: #1a1a1a;
+      --label-on-saturated: #ffffff;
+      /* Friction calendar ramp re-tuned for light backgrounds — the
+         dark-mode `#1a4a2c` low end disappeared against `#fafafa`.
+         The new low end is a desaturated mint that reads as
+         "present but cool"; the high end mirrors the dark-mode red
+         (saturation high enough to read on white). */
+      --heatmap-1: #c8e6c9;
+      --heatmap-2: #66bb6a;
+      --heatmap-3: #43a047;
+      --heatmap-4: #ef6c00;
+      --heatmap-5: #c62828;
+      /* Author palette: same hue family as dark mode, slightly
+         deepened so colors don't wash out on a white background. */
+      --chart-palette-1:  #3d7d4f;
+      --chart-palette-2:  #2ea44f;
+      --chart-palette-3:  #4caf50;
+      --chart-palette-4:  #ef6c00;
+      --chart-palette-5:  #c62828;
+      --chart-palette-6:  #8e24aa;
+      --chart-palette-7:  #1976d2;
+      --chart-palette-8:  #0097a7;
+      --chart-palette-9:  #a36500;
+      --chart-palette-10: #757575;
+      --chart-palette-11: #b71c1c;
+      --chart-palette-12: #2e7d32;
+      --chart-palette-13: #6a4a00;
+      --chart-palette-14: #303f9f;
+      --chart-palette-15: #ad1457;
     }
     footer {
       padding: 20px 28px;
