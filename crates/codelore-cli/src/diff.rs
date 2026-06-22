@@ -13,12 +13,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, anyhow};
-use codelore_lib::Options;
-use codelore_lib::analyses::clones::{ClonesRow, run_clones};
-use codelore_lib::analyses::coupling::{CouplingRow, run_coupling};
-use codelore_lib::analyses::hotspots::{HotspotRow, run_hotspots};
-use codelore_lib::facts::FactsDb;
-use codelore_lib::repo::GixRepo;
+use codelore_lib::cli_api::Options;
+use codelore_lib::cli_api::analyses::clones::{ClonesRow, run_clones};
+use codelore_lib::cli_api::analyses::coupling::{CouplingRow, run_coupling};
+use codelore_lib::cli_api::analyses::hotspots::{HotspotRow, run_hotspots};
+use codelore_lib::cli_api::facts::FactsDb;
+use codelore_lib::cli_api::repo::GixRepo;
 use serde::{Deserialize, Serialize};
 
 use crate::args::DiffArgs;
@@ -70,8 +70,8 @@ pub struct GateViolationOut {
     pub threshold: String,
 }
 
-impl From<codelore_lib::quality_gates::GateViolation> for GateViolationOut {
-    fn from(v: codelore_lib::quality_gates::GateViolation) -> Self {
+impl From<codelore_lib::cli_api::quality_gates::GateViolation> for GateViolationOut {
+    fn from(v: codelore_lib::cli_api::quality_gates::GateViolation) -> Self {
         Self {
             gate: v.gate,
             path: v.path,
@@ -239,11 +239,11 @@ impl Drop for Worktree {
 
 fn add_worktree(repo: &Path, sha: &str) -> Result<Worktree> {
     // Tempdir under codelore's cache root so cleanup is in our own scope.
-    // Routed through `codelore_lib::cache::default_cache_root()` so the
+    // Routed through `codelore_lib::cli_api::cache::default_cache_root()` so the
     // user-namespaced `/tmp` fallback is applied here too — earlier
     // versions hardcoded a bare `/tmp` which collided across users on
     // shared hosts when `dirs::cache_dir()` returned `None`.
-    let cache_root = codelore_lib::cache::default_cache_root()
+    let cache_root = codelore_lib::cli_api::cache::default_cache_root()
         .join("codelore")
         .join("diff-worktrees");
     std::fs::create_dir_all(&cache_root)?;
@@ -492,13 +492,13 @@ const STALE_WORKTREE_AGE_HOURS: u64 = 24;
 fn prune_stale_worktrees(repo_root: &Path) {
     // 1. Sweep $XDG_CACHE_HOME/codelore/diff-worktrees/ for old directories.
     //
-    // F4 fix: route through `codelore_lib::cache::default_cache_root()`
+    // F4 fix: route through `codelore_lib::cli_api::cache::default_cache_root()`
     // so the user-namespaced `/tmp` fallback applies here too. Earlier
     // versions hardcoded a bare `/tmp` which collided across users on
     // shared hosts and missed namespaced worktrees of the current user
     // (the namespacing fix in `add_worktree` was a no-op for cleanup as
     // long as the sweep stayed on bare `/tmp`).
-    let cache_root = codelore_lib::cache::default_cache_root()
+    let cache_root = codelore_lib::cli_api::cache::default_cache_root()
         .join("codelore")
         .join("diff-worktrees");
     if cache_root.exists()
@@ -658,11 +658,11 @@ pub fn run_diff(args: &DiffArgs) -> Result<DiffOutput> {
     // its `[diff]` section without needing the flag every time.
     let thresholds_opt = if let Some(path) = args.thresholds_file.as_ref() {
         Some(
-            codelore_lib::quality_gates::Thresholds::from_path(path)
+            codelore_lib::cli_api::quality_gates::Thresholds::from_path(path)
                 .map_err(|e| anyhow::anyhow!("load thresholds file: {e}"))?,
         )
     } else {
-        let discovered = codelore_lib::quality_gates::Thresholds::discover(&args.repo)
+        let discovered = codelore_lib::cli_api::quality_gates::Thresholds::discover(&args.repo)
             .map_err(|e| anyhow::anyhow!("discover thresholds file: {e}"))?;
         if discovered.is_empty() {
             None
@@ -679,7 +679,7 @@ pub fn run_diff(args: &DiffArgs) -> Result<DiffOutput> {
         let delta = head_med - base_med;
         let new_hotspot_count = u32::try_from(hotspots.rank_entrants.len()).unwrap_or(u32::MAX);
         let violations: Vec<GateViolationOut> =
-            codelore_lib::quality_gates::evaluate_diff_gate(t, new_hotspot_count, delta)
+            codelore_lib::cli_api::quality_gates::evaluate_diff_gate(t, new_hotspot_count, delta)
                 .into_iter()
                 .map(Into::into)
                 .collect();
@@ -841,7 +841,7 @@ mod prune_tests {
         // call. The "repo" is a tempdir that is NOT a git repository —
         // `git worktree add` will fail loudly.
         let not_a_repo = tempfile::tempdir().expect("tempdir");
-        let cache_root = codelore_lib::cache::default_cache_root()
+        let cache_root = codelore_lib::cli_api::cache::default_cache_root()
             .join("codelore")
             .join("diff-worktrees");
         // Snapshot the cache directory state BEFORE the call so we can

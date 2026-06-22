@@ -9,6 +9,7 @@ pub mod analysis;
 pub mod arch_rules;
 pub mod arrow_facade;
 pub mod cache;
+pub mod cli_api;
 pub mod clones;
 pub mod complexity;
 pub mod constants;

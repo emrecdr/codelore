@@ -9,9 +9,9 @@ use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use codelore_lib::facts::FactsDb;
-use codelore_lib::repo::{GixRepo, Repo as _};
-use codelore_lib::{AnalysisName, Options};
+use codelore_lib::cli_api::facts::FactsDb;
+use codelore_lib::cli_api::repo::{GixRepo, Repo as _};
+use codelore_lib::cli_api::{AnalysisName, Options};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 
@@ -24,8 +24,8 @@ fn main() {
         // Falls back to 1 for non-CodeLoreError errors (e.g. clap parse errors).
         let code = e
             .chain()
-            .find_map(|cause| cause.downcast_ref::<codelore_lib::CodeLoreError>())
-            .map_or(1, codelore_lib::CodeLoreError::exit_code);
+            .find_map(|cause| cause.downcast_ref::<codelore_lib::cli_api::CodeLoreError>())
+            .map_or(1, codelore_lib::cli_api::CodeLoreError::exit_code);
         std::process::exit(code);
     }
 }
@@ -55,11 +55,11 @@ fn run() -> Result<()> {
 /// `$GITHUB_OUTPUT` for direct GitHub Actions step-output
 /// consumption.
 fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
-    use codelore_lib::Options;
-    use codelore_lib::analyses::hotspots::run_hotspots;
-    use codelore_lib::facts::FactsDb;
-    use codelore_lib::quality_gates::{Thresholds, evaluate_full_tree};
-    use codelore_lib::repo::GixRepo;
+    use codelore_lib::cli_api::Options;
+    use codelore_lib::cli_api::analyses::hotspots::run_hotspots;
+    use codelore_lib::cli_api::facts::FactsDb;
+    use codelore_lib::cli_api::quality_gates::{Thresholds, evaluate_full_tree};
+    use codelore_lib::cli_api::repo::GixRepo;
 
     let thresholds = if let Some(path) = &args.thresholds_file {
         Thresholds::from_path(path).context("load thresholds file")?
@@ -85,7 +85,7 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
     let hotspots = run_hotspots(&db, &opts).context("run hotspots")?;
     let mut violations = evaluate_full_tree(&thresholds, &hotspots);
     violations.extend(
-        codelore_lib::quality_gates::evaluate_clone_gate(&thresholds, &db)
+        codelore_lib::cli_api::quality_gates::evaluate_clone_gate(&thresholds, &db)
             .context("evaluate clone gate")?,
     );
 
@@ -139,7 +139,7 @@ fn write_github_output(key: &str, value: &str) {
 /// when behaviour surprises a user.
 #[allow(clippy::unnecessary_wraps)] // dispatcher uniformity — every arm returns Result<()>
 fn run_profile_cmd() -> Result<()> {
-    use codelore_lib::analysis::AnalysisName;
+    use codelore_lib::cli_api::analysis::AnalysisName;
     println!("# CodeLore profile\n");
     println!("**Version**: {}", env!("CARGO_PKG_VERSION"));
     println!("**Schema**: schema_v3 (`facts/schema_v1.sql`)");
@@ -147,8 +147,8 @@ fn run_profile_cmd() -> Result<()> {
     println!("**Output formats**: csv | json | sarif | markdown | parquet | sqlite | html | spa");
     println!(
         "**Pinned third-party**:\n  - gix {gix}\n  - DuckDB {duckdb}\n  - tree-sitter 0.25.x (Rust/Python/Java/JS/TS/TSX/C++)",
-        gix = codelore_lib::provenance::GIX_VERSION,
-        duckdb = codelore_lib::provenance::DUCKDB_VERSION,
+        gix = codelore_lib::cli_api::provenance::GIX_VERSION,
+        duckdb = codelore_lib::cli_api::provenance::DUCKDB_VERSION,
     );
     println!("\n**Cache root**:");
     if let Some(dir) = dirs::cache_dir() {
@@ -172,7 +172,7 @@ fn run_profile_cmd() -> Result<()> {
 /// full static-HTML doc site.
 #[allow(clippy::unnecessary_wraps)] // dispatcher uniformity — every arm returns Result<()>
 fn run_docs_cmd() -> Result<()> {
-    use codelore_lib::analysis::AnalysisName;
+    use codelore_lib::cli_api::analysis::AnalysisName;
     println!("# CodeLore — Analysis catalogue\n");
     println!(
         "Auto-generated from `AnalysisName::all()`. Run `codelore explain <topic>` for per-analysis citations and formulas. The full citation chain lives in `docs/research-foundations.md`.\n"
@@ -460,7 +460,7 @@ fn init_logging(verbose: bool) {
 
 #[allow(clippy::too_many_lines)]
 fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
-    use codelore_lib::output::banner;
+    use codelore_lib::cli_api::output::banner;
     // Bracket the whole run with a wall-clock timer so the footer can report
     // "completed in 4.3s". Started before any work so pre-flight, ingest,
     // analysis, and emit all count toward the displayed duration — matches
@@ -500,7 +500,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
     }
 
     let complexity_sample = match args.complexity_sample.as_str() {
-        "head" => codelore_lib::options::ComplexitySample::Head,
+        "head" => codelore_lib::cli_api::options::ComplexitySample::Head,
         "adaptive" | "full" => anyhow::bail!(
             "Plan 4 walking skeleton only supports --complexity-sample head. \
              adaptive and full land in Plan 5."
@@ -588,23 +588,27 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             Some(path) => Box::new(std::fs::File::create(path)?),
             None => Box::new(std::io::stdout().lock()),
         };
-        let rows = codelore_lib::analyses::clones::run_clones(&opts).context("run clones")?;
+        let rows =
+            codelore_lib::cli_api::analyses::clones::run_clones(&opts).context("run clones")?;
         match format {
             "csv" => {
-                codelore_lib::output::csv::write_clones_csv(&rows, &mut out)
+                codelore_lib::cli_api::output::csv::write_clones_csv(&rows, &mut out)
                     .context("write csv")?;
             }
             "json" => {
-                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
+                codelore_lib::cli_api::output::json::write_json(&rows, &mut out)
+                    .context("write json")?;
             }
             "markdown" => {
-                codelore_lib::output::markdown::write_clones_markdown(&rows, &mut out)
+                codelore_lib::cli_api::output::markdown::write_clones_markdown(&rows, &mut out)
                     .context("write markdown")?;
             }
             "sarif" => {
                 let repo_root = args.repo.display().to_string();
-                codelore_lib::output::sarif::write_clones_sarif(&rows, &repo_root, &mut out)
-                    .context("write sarif")?;
+                codelore_lib::cli_api::output::sarif::write_clones_sarif(
+                    &rows, &repo_root, &mut out,
+                )
+                .context("write sarif")?;
             }
             _ => unreachable!("format validated by outer matches!()"),
         }
@@ -659,7 +663,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
     }
     if format == "sqlite" {
         let path = args.output.as_ref().expect("validated above");
-        codelore_lib::output::sqlite::write_full_fact_store_sqlite(&db, &opts, path)
+        codelore_lib::cli_api::output::sqlite::write_full_fact_store_sqlite(&db, &opts, path)
             .context("write sqlite")?;
         // No sidecar — provenance table lives inside the SQLite DB.
         return Ok(());
@@ -721,875 +725,88 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             None => Box::new(std::io::stdout().lock()),
         };
 
-        // T11: HTML dispatch handled BEFORE the per-analysis match.
-        // Generic `write_html<T: Serialize>(rows, w, title, ...)` works
-        // for any analysis whose row type is `Serialize`. Single dispatch
-        // block keeps the main match tidy; this scales to all analyses
-        // without per-format code duplication.
-        if format == "html" {
-            let now = time::OffsetDateTime::now_utc();
-            let generated_at = format!(
-                "{:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC",
-                now.year(),
-                u8::from(now.month()),
-                now.day(),
-                now.hour(),
-                now.minute(),
-                now.second(),
-            );
-            let repo_path = args.repo.display().to_string();
-            let title = format!("CodeLore: {}", analysis.as_str());
-            match analysis {
-                AnalysisName::Hotspots => {
-                    let rows = codelore_lib::analyses::hotspots::run_hotspots(&db, &opts)
-                        .context("run hotspots")?;
-                    codelore_lib::output::html::write_html(
-                        &rows,
-                        &mut out,
-                        &title,
-                        &repo_path,
-                        &generated_at,
-                    )
-                    .context("write html")?;
-                }
-                AnalysisName::CodeHealth => {
-                    let rows = codelore_lib::analyses::code_health::run_code_health(&db, &opts)
-                        .context("run code-health")?;
-                    codelore_lib::output::html::write_html(
-                        &rows,
-                        &mut out,
-                        &title,
-                        &repo_path,
-                        &generated_at,
-                    )
-                    .context("write html")?;
-                }
-                AnalysisName::KnowledgeIslands => {
-                    let rows = codelore_lib::analyses::knowledge_islands::run_knowledge_islands(
-                        &db, &opts,
-                    )
-                    .context("run knowledge-islands")?;
-                    codelore_lib::output::html::write_html(
-                        &rows,
-                        &mut out,
-                        &title,
-                        &repo_path,
-                        &generated_at,
-                    )
-                    .context("write html")?;
-                }
-                AnalysisName::CloneCoupling => {
-                    let rows =
-                        codelore_lib::analyses::clone_coupling::run_clone_coupling(&db, &opts)
-                            .context("run clone-coupling")?;
-                    codelore_lib::output::html::write_html(
-                        &rows,
-                        &mut out,
-                        &title,
-                        &repo_path,
-                        &generated_at,
-                    )
-                    .context("write html")?;
-                }
-                AnalysisName::Summary => {
-                    let rows = codelore_lib::analyses::summary::run_summary(&db, &opts)
-                        .context("run summary")?;
-                    codelore_lib::output::html::write_html(
-                        &rows,
-                        &mut out,
-                        &title,
-                        &repo_path,
-                        &generated_at,
-                    )
-                    .context("write html")?;
-                }
-                AnalysisName::Revisions => {
-                    let rows = codelore_lib::analyses::revisions::run_revisions(&db, &opts)
-                        .context("run revisions")?;
-                    codelore_lib::output::html::write_html(
-                        &rows,
-                        &mut out,
-                        &title,
-                        &repo_path,
-                        &generated_at,
-                    )
-                    .context("write html")?;
-                }
-                AnalysisName::Authors => {
-                    let rows = codelore_lib::analyses::authors::run_authors(&db, &opts)
-                        .context("run authors")?;
-                    codelore_lib::output::html::write_html(
-                        &rows,
-                        &mut out,
-                        &title,
-                        &repo_path,
-                        &generated_at,
-                    )
-                    .context("write html")?;
-                }
-                AnalysisName::TopCommitters => {
-                    let rows =
-                        codelore_lib::analyses::top_committers::run_top_committers(&db, &opts)
-                            .context("run top-committers")?;
-                    codelore_lib::output::html::write_html(
-                        &rows,
-                        &mut out,
-                        &title,
-                        &repo_path,
-                        &generated_at,
-                    )
-                    .context("write html")?;
-                }
-                other => anyhow::bail!(
-                    "--format html for analysis `{}` not yet wired (covered: hotspots, \
-                     code-health, knowledge-islands, clone-coupling, summary, revisions, \
-                     authors, top-committers — file an issue if you need another)",
-                    other.as_str()
-                ),
-            }
-            return Ok(());
-        }
+        // SARIF needs the repo root; HTML needs the page title plus a
+        // generated-at timestamp. Bundle them once and hand the same context
+        // to every per-analysis dispatch fn so each can pick the bits its
+        // wired formats require. The timestamp is computed unconditionally —
+        // it is read only by the HTML page chrome, so it is inert for every
+        // other format.
+        let now = time::OffsetDateTime::now_utc();
+        let generated_at = format!(
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC",
+            now.year(),
+            u8::from(now.month()),
+            now.day(),
+            now.hour(),
+            now.minute(),
+            now.second(),
+        );
+        let ctx = EmitCtx {
+            repo_root: args.repo.display().to_string(),
+            title: format!("CodeLore: {}", analysis.as_str()),
+            generated_at,
+            analysis_name: analysis.as_str(),
+        };
 
-        match (format, &analysis) {
-            // --- revisions ---
-            ("csv", AnalysisName::Revisions) => {
-                let rows = codelore_lib::analyses::revisions::run_revisions(&db, &opts)
-                    .context("run revisions")?;
-                codelore_lib::output::csv::write_revisions_csv(&rows, &mut out)
-                    .context("write csv")?;
-            }
-            ("json", AnalysisName::Revisions) => {
-                let rows = codelore_lib::analyses::revisions::run_revisions(&db, &opts)
-                    .context("run revisions")?;
-                codelore_lib::output::json::write_revisions_json(&rows, &mut out)
-                    .context("write json")?;
-            }
-            ("markdown", AnalysisName::Revisions) => {
-                let rows = codelore_lib::analyses::revisions::run_revisions(&db, &opts)
-                    .context("run revisions")?;
-                codelore_lib::output::markdown::write_revisions_markdown(&rows, &mut out)
-                    .context("write markdown")?;
-            }
-            // --- hotspots ---
-            ("csv", AnalysisName::Hotspots) => {
-                let rows = codelore_lib::analyses::hotspots::run_hotspots(&db, &opts)
-                    .context("run hotspots")?;
-                codelore_lib::output::csv::write_hotspots_csv(&rows, &mut out)
-                    .context("write csv")?;
-            }
-            ("json", AnalysisName::Hotspots) => {
-                let rows = codelore_lib::analyses::hotspots::run_hotspots(&db, &opts)
-                    .context("run hotspots")?;
-                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
-            }
-            ("markdown", AnalysisName::Hotspots) => {
-                let rows = codelore_lib::analyses::hotspots::run_hotspots(&db, &opts)
-                    .context("run hotspots")?;
-                codelore_lib::output::markdown::write_hotspots_markdown(&rows, &mut out)
-                    .context("write markdown")?;
-            }
-            ("sarif", AnalysisName::Hotspots) => {
-                let rows = codelore_lib::analyses::hotspots::run_hotspots(&db, &opts)
-                    .context("run hotspots")?;
-                let repo_root = args.repo.display().to_string();
-                codelore_lib::output::sarif::write_hotspots_sarif(&rows, &repo_root, &mut out)
-                    .context("write sarif")?;
-            }
-            ("ndjson", AnalysisName::Hotspots) => {
-                let rows = codelore_lib::analyses::hotspots::run_hotspots(&db, &opts)
-                    .context("run hotspots")?;
-                codelore_lib::output::ndjson::write_ndjson(&rows, &mut out)
-                    .context("write ndjson")?;
-            }
-            ("gha", AnalysisName::Hotspots) => {
-                let rows = codelore_lib::analyses::hotspots::run_hotspots(&db, &opts)
-                    .context("run hotspots")?;
-                codelore_lib::output::gha::write_hotspots_gha(&rows, &mut out)
-                    .context("write gha")?;
-            }
-            // --- code-health ---
-            ("csv", AnalysisName::CodeHealth) => {
-                let rows = codelore_lib::analyses::code_health::run_code_health(&db, &opts)
-                    .context("run code-health")?;
-                codelore_lib::output::csv::write_code_health_csv(&rows, &mut out)
-                    .context("write csv")?;
-            }
-            ("json", AnalysisName::CodeHealth) => {
-                let rows = codelore_lib::analyses::code_health::run_code_health(&db, &opts)
-                    .context("run code-health")?;
-                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
-            }
-            ("markdown", AnalysisName::CodeHealth) => {
-                let rows = codelore_lib::analyses::code_health::run_code_health(&db, &opts)
-                    .context("run code-health")?;
-                codelore_lib::output::markdown::write_code_health_markdown(&rows, &mut out)
-                    .context("write markdown")?;
-            }
-            ("ndjson", AnalysisName::CodeHealth) => {
-                let rows = codelore_lib::analyses::code_health::run_code_health(&db, &opts)
-                    .context("run code-health")?;
-                codelore_lib::output::ndjson::write_ndjson(&rows, &mut out)
-                    .context("write ndjson")?;
-            }
-            // --- code-age ---
-            ("csv", AnalysisName::CodeAge) => {
-                let rows = codelore_lib::analyses::code_age::run_code_age(&db, &opts)
-                    .context("run code-age")?;
-                codelore_lib::output::csv::write_code_age_csv(
-                    &rows,
-                    &mut out,
-                    opts.code_maat_compat,
-                )
-                .context("write csv")?;
-            }
-            ("json", AnalysisName::CodeAge) => {
-                let rows = codelore_lib::analyses::code_age::run_code_age(&db, &opts)
-                    .context("run code-age")?;
-                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
-            }
-            ("markdown", AnalysisName::CodeAge) => {
-                let rows = codelore_lib::analyses::code_age::run_code_age(&db, &opts)
-                    .context("run code-age")?;
-                codelore_lib::output::markdown::write_code_age_markdown(&rows, &mut out)
-                    .context("write markdown")?;
-            }
-            // --- abs-churn ---
-            ("csv", AnalysisName::AbsChurn) => {
-                let rows = codelore_lib::analyses::churn::run_abs_churn(&db, &opts)
-                    .context("run abs-churn")?;
-                codelore_lib::output::csv::write_abs_churn_csv(&rows, &mut out)
-                    .context("write csv")?;
-            }
-            ("json", AnalysisName::AbsChurn) => {
-                let rows = codelore_lib::analyses::churn::run_abs_churn(&db, &opts)
-                    .context("run abs-churn")?;
-                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
-            }
-            ("markdown", AnalysisName::AbsChurn) => {
-                let rows = codelore_lib::analyses::churn::run_abs_churn(&db, &opts)
-                    .context("run abs-churn")?;
-                codelore_lib::output::markdown::write_abs_churn_markdown(&rows, &mut out)
-                    .context("write markdown")?;
-            }
-            // --- author-churn ---
-            ("csv", AnalysisName::AuthorChurn) => {
-                let rows = codelore_lib::analyses::churn::run_author_churn(&db, &opts)
-                    .context("run author-churn")?;
-                codelore_lib::output::csv::write_author_churn_csv(&rows, &mut out)
-                    .context("write csv")?;
-            }
-            ("json", AnalysisName::AuthorChurn) => {
-                let rows = codelore_lib::analyses::churn::run_author_churn(&db, &opts)
-                    .context("run author-churn")?;
-                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
-            }
-            ("markdown", AnalysisName::AuthorChurn) => {
-                let rows = codelore_lib::analyses::churn::run_author_churn(&db, &opts)
-                    .context("run author-churn")?;
-                codelore_lib::output::markdown::write_author_churn_markdown(&rows, &mut out)
-                    .context("write markdown")?;
-            }
-            // --- entity-churn ---
-            ("csv", AnalysisName::EntityChurn) => {
-                let rows = codelore_lib::analyses::churn::run_entity_churn(&db, &opts)
-                    .context("run entity-churn")?;
-                codelore_lib::output::csv::write_entity_churn_csv(&rows, &mut out)
-                    .context("write csv")?;
-            }
-            ("json", AnalysisName::EntityChurn) => {
-                let rows = codelore_lib::analyses::churn::run_entity_churn(&db, &opts)
-                    .context("run entity-churn")?;
-                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
-            }
-            ("markdown", AnalysisName::EntityChurn) => {
-                let rows = codelore_lib::analyses::churn::run_entity_churn(&db, &opts)
-                    .context("run entity-churn")?;
-                codelore_lib::output::markdown::write_entity_churn_markdown(&rows, &mut out)
-                    .context("write markdown")?;
-            }
-            // --- communication ---
-            ("csv", AnalysisName::Communication) => {
-                let rows = codelore_lib::analyses::communication::run_communication(&db, &opts)
-                    .context("run communication")?;
-                codelore_lib::output::csv::write_communication_csv(
-                    &rows,
-                    &mut out,
-                    opts.code_maat_compat,
-                )
-                .context("write csv")?;
-            }
-            ("json", AnalysisName::Communication) => {
-                let rows = codelore_lib::analyses::communication::run_communication(&db, &opts)
-                    .context("run communication")?;
-                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
-            }
-            ("markdown", AnalysisName::Communication) => {
-                let rows = codelore_lib::analyses::communication::run_communication(&db, &opts)
-                    .context("run communication")?;
-                codelore_lib::output::markdown::write_communication_markdown(&rows, &mut out)
-                    .context("write markdown")?;
-            }
-            // --- ownership ---
-            ("csv", AnalysisName::Ownership) => {
-                let rows = codelore_lib::analyses::ownership::run_ownership(&db, &opts)
-                    .context("run ownership")?;
-                codelore_lib::output::csv::write_ownership_csv(
-                    &rows,
-                    &mut out,
-                    opts.code_maat_compat,
-                )
-                .context("write csv")?;
-            }
-            ("json", AnalysisName::Ownership) => {
-                let rows = codelore_lib::analyses::ownership::run_ownership(&db, &opts)
-                    .context("run ownership")?;
-                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
-            }
-            ("markdown", AnalysisName::Ownership) => {
-                let rows = codelore_lib::analyses::ownership::run_ownership(&db, &opts)
-                    .context("run ownership")?;
-                codelore_lib::output::markdown::write_ownership_markdown(&rows, &mut out)
-                    .context("write markdown")?;
-            }
-            // --- coupling ---
-            ("csv", AnalysisName::Coupling) => {
-                let rows = codelore_lib::analyses::coupling::run_coupling(&db, &opts)
-                    .context("run coupling")?;
-                codelore_lib::output::csv::write_coupling_csv(
-                    &rows,
-                    &mut out,
-                    opts.code_maat_compat,
-                )
-                .context("write csv")?;
-            }
-            ("json", AnalysisName::Coupling) => {
-                let rows = codelore_lib::analyses::coupling::run_coupling(&db, &opts)
-                    .context("run coupling")?;
-                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
-            }
-            ("markdown", AnalysisName::Coupling) => {
-                let rows = codelore_lib::analyses::coupling::run_coupling(&db, &opts)
-                    .context("run coupling")?;
-                codelore_lib::output::markdown::write_coupling_markdown(&rows, &mut out)
-                    .context("write markdown")?;
-            }
-            ("ndjson", AnalysisName::Coupling) => {
-                let rows = codelore_lib::analyses::coupling::run_coupling(&db, &opts)
-                    .context("run coupling")?;
-                codelore_lib::output::ndjson::write_ndjson(&rows, &mut out)
-                    .context("write ndjson")?;
-            }
-            // --- summary ---
-            ("csv", AnalysisName::Summary) => {
-                let rows = codelore_lib::analyses::summary::run_summary(&db, &opts)
-                    .context("run summary")?;
-                codelore_lib::output::csv::write_summary_csv(
-                    &rows,
-                    &mut out,
-                    opts.code_maat_compat,
-                )
-                .context("write csv")?;
-            }
-            ("json", AnalysisName::Summary) => {
-                let rows = codelore_lib::analyses::summary::run_summary(&db, &opts)
-                    .context("run summary")?;
-                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
-            }
-            ("markdown", AnalysisName::Summary) => {
-                let rows = codelore_lib::analyses::summary::run_summary(&db, &opts)
-                    .context("run summary")?;
-                codelore_lib::output::markdown::write_summary_markdown(&rows, &mut out)
-                    .context("write markdown")?;
-            }
-            // --- clones (Plan 7) ---
-            ("csv", AnalysisName::Clones) => {
-                let rows =
-                    codelore_lib::analyses::clones::run_clones(&opts).context("run clones")?;
-                codelore_lib::output::csv::write_clones_csv(&rows, &mut out)
-                    .context("write csv")?;
-            }
-            ("json", AnalysisName::Clones) => {
-                let rows =
-                    codelore_lib::analyses::clones::run_clones(&opts).context("run clones")?;
-                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
-            }
-            ("markdown", AnalysisName::Clones) => {
-                let rows =
-                    codelore_lib::analyses::clones::run_clones(&opts).context("run clones")?;
-                codelore_lib::output::markdown::write_clones_markdown(&rows, &mut out)
-                    .context("write markdown")?;
-            }
-            ("sarif", AnalysisName::Clones) => {
-                let rows =
-                    codelore_lib::analyses::clones::run_clones(&opts).context("run clones")?;
-                let repo_root = args.repo.display().to_string();
-                codelore_lib::output::sarif::write_clones_sarif(&rows, &repo_root, &mut out)
-                    .context("write sarif")?;
-            }
-            (fmt, AnalysisName::Clones) => {
-                anyhow::bail!("clones analysis supports csv|json|markdown|sarif; got {fmt:?}")
-            }
-            // --- authors (per-entity Bird et al. risk indicator; modernised) ---
-            ("csv", AnalysisName::Authors) => {
-                let rows = codelore_lib::analyses::authors::run_authors(&db, &opts)
-                    .context("run authors")?;
-                codelore_lib::output::csv::write_authors_csv(
-                    &rows,
-                    &mut out,
-                    opts.code_maat_compat,
-                )
-                .context("write csv")?;
-            }
-            ("json", AnalysisName::Authors) => {
-                let rows = codelore_lib::analyses::authors::run_authors(&db, &opts)
-                    .context("run authors")?;
-                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
-            }
-            ("markdown", AnalysisName::Authors) => {
-                let rows = codelore_lib::analyses::authors::run_authors(&db, &opts)
-                    .context("run authors")?;
-                codelore_lib::output::markdown::write_authors_markdown(&rows, &mut out)
-                    .context("write markdown")?;
-            }
-            (fmt, AnalysisName::Authors) => {
-                anyhow::bail!("authors analysis supports csv|json|markdown; got {fmt:?}")
-            }
-            // --- top-committers (per-author commit leaderboard) ---
-            ("csv", AnalysisName::TopCommitters) => {
-                let rows = codelore_lib::analyses::top_committers::run_top_committers(&db, &opts)
-                    .context("run top-committers")?;
-                codelore_lib::output::csv::write_top_committers_csv(&rows, &mut out)
-                    .context("write csv")?;
-            }
-            ("json", AnalysisName::TopCommitters) => {
-                let rows = codelore_lib::analyses::top_committers::run_top_committers(&db, &opts)
-                    .context("run top-committers")?;
-                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
-            }
-            ("markdown", AnalysisName::TopCommitters) => {
-                let rows = codelore_lib::analyses::top_committers::run_top_committers(&db, &opts)
-                    .context("run top-committers")?;
-                codelore_lib::output::markdown::write_top_committers_markdown(&rows, &mut out)
-                    .context("write markdown")?;
-            }
-            (fmt, AnalysisName::TopCommitters) => {
-                anyhow::bail!("top-committers analysis supports csv|json|markdown; got {fmt:?}")
-            }
-            // --- god-classes (cognitive × fan-in × fan-out intersection) ---
-            ("csv", AnalysisName::GodClasses) => {
-                let rows = codelore_lib::analyses::god_classes::run_god_classes(&db, &opts)
-                    .context("run god-classes")?;
-                codelore_lib::output::csv::write_god_classes_csv(&rows, &mut out)
-                    .context("write csv")?;
-            }
-            ("json", AnalysisName::GodClasses) => {
-                let rows = codelore_lib::analyses::god_classes::run_god_classes(&db, &opts)
-                    .context("run god-classes")?;
-                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
-            }
-            ("markdown", AnalysisName::GodClasses) => {
-                let rows = codelore_lib::analyses::god_classes::run_god_classes(&db, &opts)
-                    .context("run god-classes")?;
-                codelore_lib::output::markdown::write_god_classes_markdown(&rows, &mut out)
-                    .context("write markdown")?;
-            }
-            (fmt, AnalysisName::GodClasses) => {
-                anyhow::bail!("god-classes analysis supports csv|json|markdown; got {fmt:?}")
-            }
-            // --- architecture-violations (layered-rule validation) ---
-            ("csv", AnalysisName::ArchViolations) => {
-                let rows = codelore_lib::analyses::arch_violations::run_arch_violations(&db, &opts)
-                    .context("run architecture-violations")?;
-                codelore_lib::output::csv::write_arch_violations_csv(&rows, &mut out)
-                    .context("write csv")?;
-            }
-            ("json", AnalysisName::ArchViolations) => {
-                let rows = codelore_lib::analyses::arch_violations::run_arch_violations(&db, &opts)
-                    .context("run architecture-violations")?;
-                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
-            }
-            ("markdown", AnalysisName::ArchViolations) => {
-                let rows = codelore_lib::analyses::arch_violations::run_arch_violations(&db, &opts)
-                    .context("run architecture-violations")?;
-                codelore_lib::output::markdown::write_arch_violations_markdown(&rows, &mut out)
-                    .context("write markdown")?;
-            }
-            (fmt, AnalysisName::ArchViolations) => {
-                anyhow::bail!(
-                    "architecture-violations analysis supports csv|json|markdown; got {fmt:?}"
-                )
-            }
-            // --- stale-code (untouched + low cognitive) ---
-            ("csv", AnalysisName::StaleCode) => {
-                let rows = codelore_lib::analyses::stale_code::run_stale_code(&db, &opts)
-                    .context("run stale-code")?;
-                codelore_lib::output::csv::write_stale_code_csv(&rows, &mut out)
-                    .context("write csv")?;
-            }
-            ("json", AnalysisName::StaleCode) => {
-                let rows = codelore_lib::analyses::stale_code::run_stale_code(&db, &opts)
-                    .context("run stale-code")?;
-                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
-            }
-            ("markdown", AnalysisName::StaleCode) => {
-                let rows = codelore_lib::analyses::stale_code::run_stale_code(&db, &opts)
-                    .context("run stale-code")?;
-                codelore_lib::output::markdown::write_stale_code_markdown(&rows, &mut out)
-                    .context("write markdown")?;
-            }
-            (fmt, AnalysisName::StaleCode) => {
-                anyhow::bail!("stale-code analysis supports csv|json|markdown; got {fmt:?}")
-            }
-            // --- pair-programming (Co-Authored-By trailer pairs) ---
-            ("csv", AnalysisName::PairProgramming) => {
-                let rows =
-                    codelore_lib::analyses::pair_programming::run_pair_programming(&db, &opts)
-                        .context("run pair-programming")?;
-                codelore_lib::output::csv::write_pair_programming_csv(&rows, &mut out)
-                    .context("write csv")?;
-            }
-            ("json", AnalysisName::PairProgramming) => {
-                let rows =
-                    codelore_lib::analyses::pair_programming::run_pair_programming(&db, &opts)
-                        .context("run pair-programming")?;
-                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
-            }
-            ("markdown", AnalysisName::PairProgramming) => {
-                let rows =
-                    codelore_lib::analyses::pair_programming::run_pair_programming(&db, &opts)
-                        .context("run pair-programming")?;
-                codelore_lib::output::markdown::write_pair_programming_markdown(&rows, &mut out)
-                    .context("write markdown")?;
-            }
-            (fmt, AnalysisName::PairProgramming) => {
-                anyhow::bail!("pair-programming analysis supports csv|json|markdown; got {fmt:?}")
-            }
-            // --- lead-time (DORA in-flight time per commit) ---
-            ("csv", AnalysisName::LeadTime) => {
-                let rows = codelore_lib::analyses::lead_time::run_lead_time(&db, &opts)
-                    .context("run lead-time")?;
-                codelore_lib::output::csv::write_lead_time_csv(&rows, &mut out)
-                    .context("write csv")?;
-            }
-            ("json", AnalysisName::LeadTime) => {
-                let rows = codelore_lib::analyses::lead_time::run_lead_time(&db, &opts)
-                    .context("run lead-time")?;
-                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
-            }
-            ("markdown", AnalysisName::LeadTime) => {
-                let rows = codelore_lib::analyses::lead_time::run_lead_time(&db, &opts)
-                    .context("run lead-time")?;
-                codelore_lib::output::markdown::write_lead_time_markdown(&rows, &mut out)
-                    .context("write markdown")?;
-            }
-            ("ndjson", AnalysisName::LeadTime) => {
-                let rows = codelore_lib::analyses::lead_time::run_lead_time(&db, &opts)
-                    .context("run lead-time")?;
-                codelore_lib::output::ndjson::write_ndjson(&rows, &mut out)
-                    .context("write ndjson")?;
-            }
-            (fmt, AnalysisName::LeadTime) => {
-                anyhow::bail!("lead-time analysis supports csv|json|ndjson|markdown; got {fmt:?}")
-            }
-            // --- bus-factor (per-module Filatov 2010) ---
-            ("csv", AnalysisName::BusFactor) => {
-                let rows = codelore_lib::analyses::bus_factor::run_bus_factor(&db, &opts)
-                    .context("run bus-factor")?;
-                codelore_lib::output::csv::write_bus_factor_csv(&rows, &mut out)
-                    .context("write csv")?;
-            }
-            ("json", AnalysisName::BusFactor) => {
-                let rows = codelore_lib::analyses::bus_factor::run_bus_factor(&db, &opts)
-                    .context("run bus-factor")?;
-                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
-            }
-            ("markdown", AnalysisName::BusFactor) => {
-                let rows = codelore_lib::analyses::bus_factor::run_bus_factor(&db, &opts)
-                    .context("run bus-factor")?;
-                codelore_lib::output::markdown::write_bus_factor_markdown(&rows, &mut out)
-                    .context("write markdown")?;
-            }
-            (fmt, AnalysisName::BusFactor) => {
-                anyhow::bail!("bus-factor analysis supports csv|json|markdown; got {fmt:?}")
-            }
-            // --- delivery-friction (composite: revs × lead-time × cognitive) ---
-            ("csv", AnalysisName::DeliveryFriction) => {
-                let rows =
-                    codelore_lib::analyses::delivery_friction::run_delivery_friction(&db, &opts)
-                        .context("run delivery-friction")?;
-                codelore_lib::output::csv::write_delivery_friction_csv(&rows, &mut out)
-                    .context("write csv")?;
-            }
-            ("json", AnalysisName::DeliveryFriction) => {
-                let rows =
-                    codelore_lib::analyses::delivery_friction::run_delivery_friction(&db, &opts)
-                        .context("run delivery-friction")?;
-                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
-            }
-            ("markdown", AnalysisName::DeliveryFriction) => {
-                let rows =
-                    codelore_lib::analyses::delivery_friction::run_delivery_friction(&db, &opts)
-                        .context("run delivery-friction")?;
-                codelore_lib::output::markdown::write_delivery_friction_markdown(&rows, &mut out)
-                    .context("write markdown")?;
-            }
-            (fmt, AnalysisName::DeliveryFriction) => {
-                anyhow::bail!("delivery-friction analysis supports csv|json|markdown; got {fmt:?}")
-            }
-            // --- knowledge-islands (T8: bus-factor / knowledge-loss risk) ---
-            ("csv", AnalysisName::KnowledgeIslands) => {
-                let rows =
-                    codelore_lib::analyses::knowledge_islands::run_knowledge_islands(&db, &opts)
-                        .context("run knowledge-islands")?;
-                codelore_lib::output::csv::write_knowledge_islands_csv(&rows, &mut out)
-                    .context("write csv")?;
-            }
-            ("json", AnalysisName::KnowledgeIslands) => {
-                let rows =
-                    codelore_lib::analyses::knowledge_islands::run_knowledge_islands(&db, &opts)
-                        .context("run knowledge-islands")?;
-                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
-            }
-            ("markdown", AnalysisName::KnowledgeIslands) => {
-                let rows =
-                    codelore_lib::analyses::knowledge_islands::run_knowledge_islands(&db, &opts)
-                        .context("run knowledge-islands")?;
-                codelore_lib::output::markdown::write_knowledge_islands_markdown(&rows, &mut out)
-                    .context("write markdown")?;
-            }
-            (fmt, AnalysisName::KnowledgeIslands) => {
-                anyhow::bail!("knowledge-islands analysis supports csv|json|markdown; got {fmt:?}")
-            }
-            // --- soc (Sum of Coupling) ---
-            ("csv", AnalysisName::Soc) => {
-                let rows = codelore_lib::analyses::soc::run_soc(&db, &opts).context("run soc")?;
-                codelore_lib::output::csv::write_soc_csv(&rows, &mut out).context("write csv")?;
-            }
-            ("json", AnalysisName::Soc) => {
-                let rows = codelore_lib::analyses::soc::run_soc(&db, &opts).context("run soc")?;
-                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
-            }
-            ("markdown", AnalysisName::Soc) => {
-                let rows = codelore_lib::analyses::soc::run_soc(&db, &opts).context("run soc")?;
-                codelore_lib::output::markdown::write_soc_markdown(&rows, &mut out)
-                    .context("write markdown")?;
-            }
-            (fmt, AnalysisName::Soc) => {
-                anyhow::bail!("soc analysis supports csv|json|markdown; got {fmt:?}")
-            }
-            // --- messages (commit-message regex matcher) ---
-            ("csv", AnalysisName::Messages) => {
-                let rows = codelore_lib::analyses::messages::run_messages(&db, &opts)
-                    .context("run messages")?;
-                codelore_lib::output::csv::write_messages_csv(&rows, &mut out)
-                    .context("write csv")?;
-            }
-            ("json", AnalysisName::Messages) => {
-                let rows = codelore_lib::analyses::messages::run_messages(&db, &opts)
-                    .context("run messages")?;
-                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
-            }
-            ("markdown", AnalysisName::Messages) => {
-                let rows = codelore_lib::analyses::messages::run_messages(&db, &opts)
-                    .context("run messages")?;
-                codelore_lib::output::markdown::write_messages_markdown(&rows, &mut out)
-                    .context("write markdown")?;
-            }
-            (fmt, AnalysisName::Messages) => {
-                anyhow::bail!("messages analysis supports csv|json|markdown; got {fmt:?}")
-            }
-            // --- main-dev (top author by lines added) ---
-            ("csv", AnalysisName::MainDev) => {
-                let rows = codelore_lib::analyses::main_dev::run_main_dev(&db, &opts)
-                    .context("run main-dev")?;
-                codelore_lib::output::csv::write_main_dev_csv(&rows, &mut out)
-                    .context("write csv")?;
-            }
-            ("json", AnalysisName::MainDev) => {
-                let rows = codelore_lib::analyses::main_dev::run_main_dev(&db, &opts)
-                    .context("run main-dev")?;
-                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
-            }
-            ("markdown", AnalysisName::MainDev) => {
-                let rows = codelore_lib::analyses::main_dev::run_main_dev(&db, &opts)
-                    .context("run main-dev")?;
-                codelore_lib::output::markdown::write_main_dev_markdown(&rows, &mut out)
-                    .context("write markdown")?;
-            }
-            (fmt, AnalysisName::MainDev) => {
-                anyhow::bail!("main-dev analysis supports csv|json|markdown; got {fmt:?}")
-            }
-            // --- main-dev-by-revs (top author by revision count) ---
-            ("csv", AnalysisName::MainDevByRevs) => {
-                let rows = codelore_lib::analyses::main_dev::run_main_dev_by_revs(&db, &opts)
-                    .context("run main-dev-by-revs")?;
-                codelore_lib::output::csv::write_main_dev_by_revs_csv(
-                    &rows,
-                    &mut out,
-                    opts.code_maat_compat,
-                )
-                .context("write csv")?;
-            }
-            ("json", AnalysisName::MainDevByRevs) => {
-                let rows = codelore_lib::analyses::main_dev::run_main_dev_by_revs(&db, &opts)
-                    .context("run main-dev-by-revs")?;
-                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
-            }
-            ("markdown", AnalysisName::MainDevByRevs) => {
-                let rows = codelore_lib::analyses::main_dev::run_main_dev_by_revs(&db, &opts)
-                    .context("run main-dev-by-revs")?;
-                codelore_lib::output::markdown::write_main_dev_by_revs_markdown(&rows, &mut out)
-                    .context("write markdown")?;
-            }
-            (fmt, AnalysisName::MainDevByRevs) => {
-                anyhow::bail!("main-dev-by-revs analysis supports csv|json|markdown; got {fmt:?}")
-            }
-            // --- main-dev-by-deletions (alias: refactoring-main-dev) ---
-            ("csv", AnalysisName::MainDevByDeletions) => {
-                let rows = codelore_lib::analyses::main_dev::run_main_dev_by_deletions(&db, &opts)
-                    .context("run main-dev-by-deletions")?;
-                codelore_lib::output::csv::write_main_dev_by_deletions_csv(&rows, &mut out)
-                    .context("write csv")?;
-            }
-            ("json", AnalysisName::MainDevByDeletions) => {
-                let rows = codelore_lib::analyses::main_dev::run_main_dev_by_deletions(&db, &opts)
-                    .context("run main-dev-by-deletions")?;
-                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
-            }
-            ("markdown", AnalysisName::MainDevByDeletions) => {
-                let rows = codelore_lib::analyses::main_dev::run_main_dev_by_deletions(&db, &opts)
-                    .context("run main-dev-by-deletions")?;
-                codelore_lib::output::markdown::write_main_dev_by_deletions_markdown(
-                    &rows, &mut out,
-                )
-                .context("write markdown")?;
-            }
-            (fmt, AnalysisName::MainDevByDeletions) => {
-                anyhow::bail!(
-                    "main-dev-by-deletions analysis supports csv|json|markdown; got {fmt:?}"
-                )
-            }
-            // --- entity-effort (per-author revs per file) ---
-            ("csv", AnalysisName::EntityEffort) => {
-                let rows = codelore_lib::analyses::entity_effort::run_entity_effort(&db, &opts)
-                    .context("run entity-effort")?;
-                codelore_lib::output::csv::write_entity_effort_csv(&rows, &mut out)
-                    .context("write csv")?;
-            }
-            ("json", AnalysisName::EntityEffort) => {
-                let rows = codelore_lib::analyses::entity_effort::run_entity_effort(&db, &opts)
-                    .context("run entity-effort")?;
-                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
-            }
-            ("markdown", AnalysisName::EntityEffort) => {
-                let rows = codelore_lib::analyses::entity_effort::run_entity_effort(&db, &opts)
-                    .context("run entity-effort")?;
-                codelore_lib::output::markdown::write_entity_effort_markdown(&rows, &mut out)
-                    .context("write markdown")?;
-            }
-            (fmt, AnalysisName::EntityEffort) => {
-                anyhow::bail!("entity-effort analysis supports csv|json|markdown; got {fmt:?}")
-            }
-            // --- entity-ownership (per-author churn per file) ---
-            ("csv", AnalysisName::EntityOwnership) => {
-                let rows =
-                    codelore_lib::analyses::entity_ownership::run_entity_ownership(&db, &opts)
-                        .context("run entity-ownership")?;
-                codelore_lib::output::csv::write_entity_ownership_csv(&rows, &mut out)
-                    .context("write csv")?;
-            }
-            ("json", AnalysisName::EntityOwnership) => {
-                let rows =
-                    codelore_lib::analyses::entity_ownership::run_entity_ownership(&db, &opts)
-                        .context("run entity-ownership")?;
-                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
-            }
-            ("markdown", AnalysisName::EntityOwnership) => {
-                let rows =
-                    codelore_lib::analyses::entity_ownership::run_entity_ownership(&db, &opts)
-                        .context("run entity-ownership")?;
-                codelore_lib::output::markdown::write_entity_ownership_markdown(&rows, &mut out)
-                    .context("write markdown")?;
-            }
-            (fmt, AnalysisName::EntityOwnership) => {
-                anyhow::bail!("entity-ownership analysis supports csv|json|markdown; got {fmt:?}")
-            }
-            // --- clone-coupling (Plan 8 §6) ---
-            ("csv", AnalysisName::CloneCoupling) => {
-                let rows = codelore_lib::analyses::clone_coupling::run_clone_coupling(&db, &opts)
-                    .context("run clone-coupling")?;
-                codelore_lib::output::csv::write_clone_coupling_csv(&rows, &mut out)
-                    .context("write csv")?;
-            }
-            ("json", AnalysisName::CloneCoupling) => {
-                let rows = codelore_lib::analyses::clone_coupling::run_clone_coupling(&db, &opts)
-                    .context("run clone-coupling")?;
-                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
-            }
-            ("markdown", AnalysisName::CloneCoupling) => {
-                let rows = codelore_lib::analyses::clone_coupling::run_clone_coupling(&db, &opts)
-                    .context("run clone-coupling")?;
-                codelore_lib::output::markdown::write_clone_coupling_markdown(&rows, &mut out)
-                    .context("write markdown")?;
-            }
-            ("sarif", AnalysisName::CloneCoupling) => {
-                let rows = codelore_lib::analyses::clone_coupling::run_clone_coupling(&db, &opts)
-                    .context("run clone-coupling")?;
-                let repo_root = args.repo.display().to_string();
-                codelore_lib::output::sarif::write_clone_coupling_sarif(
-                    &rows, &repo_root, &mut out,
-                )
-                .context("write sarif")?;
-            }
-            (fmt, AnalysisName::CloneCoupling) => {
-                anyhow::bail!(
-                    "clone-coupling analysis supports csv|json|markdown|sarif; got {fmt:?}"
-                )
-            }
-            // --- centrality (per-file centrality on the coupling graph) ---
-            ("csv", AnalysisName::Centrality) => {
-                let rows = codelore_lib::analyses::centrality::run_centrality(&db, &opts)
-                    .context("run centrality")?;
-                codelore_lib::output::csv::write_centrality_csv(&rows, &mut out)
-                    .context("write csv")?;
-            }
-            ("json", AnalysisName::Centrality) => {
-                let rows = codelore_lib::analyses::centrality::run_centrality(&db, &opts)
-                    .context("run centrality")?;
-                codelore_lib::output::json::write_json(&rows, &mut out).context("write json")?;
-            }
-            ("markdown", AnalysisName::Centrality) => {
-                let rows = codelore_lib::analyses::centrality::run_centrality(&db, &opts)
-                    .context("run centrality")?;
-                codelore_lib::output::markdown::write_centrality_markdown(&rows, &mut out)
-                    .context("write markdown")?;
-            }
-            (fmt, AnalysisName::Centrality) => {
-                anyhow::bail!("centrality analysis supports csv|json|markdown; got {fmt:?}")
-            }
-            // --- communities (Leiden partition of the coupling graph) ---
-            ("csv", AnalysisName::Communities) => {
-                let result = codelore_lib::analyses::communities::run_communities(&db, &opts)
-                    .context("run communities")?;
-                codelore_lib::output::csv::write_communities_csv(&result, &mut out)
-                    .context("write csv")?;
-            }
-            ("json", AnalysisName::Communities) => {
-                let result = codelore_lib::analyses::communities::run_communities(&db, &opts)
-                    .context("run communities")?;
-                codelore_lib::output::json::write_communities_json(&result, &mut out)
-                    .context("write json")?;
-            }
-            ("markdown", AnalysisName::Communities) => {
-                let result = codelore_lib::analyses::communities::run_communities(&db, &opts)
-                    .context("run communities")?;
-                codelore_lib::output::markdown::write_communities_markdown(&result, &mut out)
-                    .context("write markdown")?;
-            }
-            (fmt, AnalysisName::Communities) => {
-                anyhow::bail!("communities analysis supports csv|json|markdown; got {fmt:?}")
-            }
-            _ => unreachable!("format/analysis combination should have been validated above"),
+        match &analysis {
+            AnalysisName::Hotspots => dispatch_hotspots(&db, &opts, format, &ctx, &mut out)?,
+            AnalysisName::CodeHealth => dispatch_code_health(&db, &opts, format, &ctx, &mut out)?,
+            AnalysisName::CodeAge => dispatch_code_age(&db, &opts, format, &ctx, &mut out)?,
+            AnalysisName::AbsChurn => dispatch_abs_churn(&db, &opts, format, &ctx, &mut out)?,
+            AnalysisName::AuthorChurn => {
+                dispatch_author_churn(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::EntityChurn => {
+                dispatch_entity_churn(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::Communication => {
+                dispatch_communication(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::Ownership => dispatch_ownership(&db, &opts, format, &ctx, &mut out)?,
+            AnalysisName::Coupling => dispatch_coupling(&db, &opts, format, &ctx, &mut out)?,
+            AnalysisName::Summary => dispatch_summary(&db, &opts, format, &ctx, &mut out)?,
+            AnalysisName::Clones => dispatch_clones(&db, &opts, format, &ctx, &mut out)?,
+            AnalysisName::Revisions => dispatch_revisions(&db, &opts, format, &ctx, &mut out)?,
+            AnalysisName::Authors => dispatch_authors(&db, &opts, format, &ctx, &mut out)?,
+            AnalysisName::TopCommitters => {
+                dispatch_top_committers(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::GodClasses => dispatch_god_classes(&db, &opts, format, &ctx, &mut out)?,
+            AnalysisName::ArchViolations => {
+                dispatch_arch_violations(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::StaleCode => dispatch_stale_code(&db, &opts, format, &ctx, &mut out)?,
+            AnalysisName::PairProgramming => {
+                dispatch_pair_programming(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::LeadTime => dispatch_lead_time(&db, &opts, format, &ctx, &mut out)?,
+            AnalysisName::BusFactor => dispatch_bus_factor(&db, &opts, format, &ctx, &mut out)?,
+            AnalysisName::DeliveryFriction => {
+                dispatch_delivery_friction(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::KnowledgeIslands => {
+                dispatch_knowledge_islands(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::Soc => dispatch_soc(&db, &opts, format, &ctx, &mut out)?,
+            AnalysisName::Messages => dispatch_messages(&db, &opts, format, &ctx, &mut out)?,
+            AnalysisName::MainDev => dispatch_main_dev(&db, &opts, format, &ctx, &mut out)?,
+            AnalysisName::MainDevByRevs => {
+                dispatch_main_dev_by_revs(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::MainDevByDeletions => {
+                dispatch_main_dev_by_deletions(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::EntityEffort => {
+                dispatch_entity_effort(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::EntityOwnership => {
+                dispatch_entity_ownership(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::CloneCoupling => {
+                dispatch_clone_coupling(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::Centrality => dispatch_centrality(&db, &opts, format, &ctx, &mut out)?,
+            AnalysisName::Communities => dispatch_communities(&db, &opts, format, &ctx, &mut out)?,
         }
     } // out is dropped here, flushing any buffered writes
 
@@ -1616,6 +833,1265 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
     Ok(())
 }
 
+/// Side-channel context every per-analysis dispatch fn needs beyond `db`,
+/// `opts`, and `format`: SARIF wants the repo root; HTML wants the page title,
+/// a generated-at timestamp, and the analysis name (for the not-wired message).
+struct EmitCtx {
+    repo_root: String,
+    title: String,
+    generated_at: String,
+    analysis_name: &'static str,
+}
+
+/// The verbatim error for `--format html` on an analysis whose row type is not
+/// yet wired through the generic HTML emitter. Shared so every non-HTML
+/// dispatch fn reports the same coverage list.
+fn html_not_wired(analysis_name: &str) -> anyhow::Error {
+    anyhow::anyhow!(
+        "--format html for analysis `{analysis_name}` not yet wired (covered: hotspots, \
+         code-health, knowledge-islands, clone-coupling, summary, revisions, \
+         authors, top-committers — file an issue if you need another)"
+    )
+}
+
+fn dispatch_revisions(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows = codelore_lib::cli_api::analyses::revisions::run_revisions(db, opts)
+                .context("run revisions")?;
+            codelore_lib::cli_api::output::csv::write_revisions_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::revisions::run_revisions(db, opts)
+                .context("run revisions")?;
+            codelore_lib::cli_api::output::json::write_revisions_json(&rows, out)
+                .context("write json")?;
+        }
+        "markdown" => {
+            let rows = codelore_lib::cli_api::analyses::revisions::run_revisions(db, opts)
+                .context("run revisions")?;
+            codelore_lib::cli_api::output::markdown::write_revisions_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => {
+            let rows = codelore_lib::cli_api::analyses::revisions::run_revisions(db, opts)
+                .context("run revisions")?;
+            codelore_lib::cli_api::output::html::write_html(
+                &rows,
+                out,
+                &ctx.title,
+                &ctx.repo_root,
+                &ctx.generated_at,
+            )
+            .context("write html")?;
+        }
+        _ => unreachable!("format/analysis combination should have been validated above"),
+    }
+    Ok(())
+}
+
+fn dispatch_hotspots(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows = codelore_lib::cli_api::analyses::hotspots::run_hotspots(db, opts)
+                .context("run hotspots")?;
+            codelore_lib::cli_api::output::csv::write_hotspots_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::hotspots::run_hotspots(db, opts)
+                .context("run hotspots")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows = codelore_lib::cli_api::analyses::hotspots::run_hotspots(db, opts)
+                .context("run hotspots")?;
+            codelore_lib::cli_api::output::markdown::write_hotspots_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "sarif" => {
+            let rows = codelore_lib::cli_api::analyses::hotspots::run_hotspots(db, opts)
+                .context("run hotspots")?;
+            codelore_lib::cli_api::output::sarif::write_hotspots_sarif(&rows, &ctx.repo_root, out)
+                .context("write sarif")?;
+        }
+        "ndjson" => {
+            let rows = codelore_lib::cli_api::analyses::hotspots::run_hotspots(db, opts)
+                .context("run hotspots")?;
+            codelore_lib::cli_api::output::ndjson::write_ndjson(&rows, out)
+                .context("write ndjson")?;
+        }
+        "gha" => {
+            let rows = codelore_lib::cli_api::analyses::hotspots::run_hotspots(db, opts)
+                .context("run hotspots")?;
+            codelore_lib::cli_api::output::gha::write_hotspots_gha(&rows, out)
+                .context("write gha")?;
+        }
+        "html" => {
+            let rows = codelore_lib::cli_api::analyses::hotspots::run_hotspots(db, opts)
+                .context("run hotspots")?;
+            codelore_lib::cli_api::output::html::write_html(
+                &rows,
+                out,
+                &ctx.title,
+                &ctx.repo_root,
+                &ctx.generated_at,
+            )
+            .context("write html")?;
+        }
+        _ => unreachable!("format/analysis combination should have been validated above"),
+    }
+    Ok(())
+}
+
+fn dispatch_code_health(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows = codelore_lib::cli_api::analyses::code_health::run_code_health(db, opts)
+                .context("run code-health")?;
+            codelore_lib::cli_api::output::csv::write_code_health_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::code_health::run_code_health(db, opts)
+                .context("run code-health")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows = codelore_lib::cli_api::analyses::code_health::run_code_health(db, opts)
+                .context("run code-health")?;
+            codelore_lib::cli_api::output::markdown::write_code_health_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "ndjson" => {
+            let rows = codelore_lib::cli_api::analyses::code_health::run_code_health(db, opts)
+                .context("run code-health")?;
+            codelore_lib::cli_api::output::ndjson::write_ndjson(&rows, out)
+                .context("write ndjson")?;
+        }
+        "html" => {
+            let rows = codelore_lib::cli_api::analyses::code_health::run_code_health(db, opts)
+                .context("run code-health")?;
+            codelore_lib::cli_api::output::html::write_html(
+                &rows,
+                out,
+                &ctx.title,
+                &ctx.repo_root,
+                &ctx.generated_at,
+            )
+            .context("write html")?;
+        }
+        _ => unreachable!("format/analysis combination should have been validated above"),
+    }
+    Ok(())
+}
+
+fn dispatch_code_age(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows = codelore_lib::cli_api::analyses::code_age::run_code_age(db, opts)
+                .context("run code-age")?;
+            codelore_lib::cli_api::output::csv::write_code_age_csv(
+                &rows,
+                out,
+                opts.code_maat_compat,
+            )
+            .context("write csv")?;
+        }
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::code_age::run_code_age(db, opts)
+                .context("run code-age")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows = codelore_lib::cli_api::analyses::code_age::run_code_age(db, opts)
+                .context("run code-age")?;
+            codelore_lib::cli_api::output::markdown::write_code_age_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        _ => unreachable!("format/analysis combination should have been validated above"),
+    }
+    Ok(())
+}
+
+fn dispatch_abs_churn(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows = codelore_lib::cli_api::analyses::churn::run_abs_churn(db, opts)
+                .context("run abs-churn")?;
+            codelore_lib::cli_api::output::csv::write_abs_churn_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::churn::run_abs_churn(db, opts)
+                .context("run abs-churn")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows = codelore_lib::cli_api::analyses::churn::run_abs_churn(db, opts)
+                .context("run abs-churn")?;
+            codelore_lib::cli_api::output::markdown::write_abs_churn_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        _ => unreachable!("format/analysis combination should have been validated above"),
+    }
+    Ok(())
+}
+
+fn dispatch_author_churn(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows = codelore_lib::cli_api::analyses::churn::run_author_churn(db, opts)
+                .context("run author-churn")?;
+            codelore_lib::cli_api::output::csv::write_author_churn_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::churn::run_author_churn(db, opts)
+                .context("run author-churn")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows = codelore_lib::cli_api::analyses::churn::run_author_churn(db, opts)
+                .context("run author-churn")?;
+            codelore_lib::cli_api::output::markdown::write_author_churn_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        _ => unreachable!("format/analysis combination should have been validated above"),
+    }
+    Ok(())
+}
+
+fn dispatch_entity_churn(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows = codelore_lib::cli_api::analyses::churn::run_entity_churn(db, opts)
+                .context("run entity-churn")?;
+            codelore_lib::cli_api::output::csv::write_entity_churn_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::churn::run_entity_churn(db, opts)
+                .context("run entity-churn")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows = codelore_lib::cli_api::analyses::churn::run_entity_churn(db, opts)
+                .context("run entity-churn")?;
+            codelore_lib::cli_api::output::markdown::write_entity_churn_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        _ => unreachable!("format/analysis combination should have been validated above"),
+    }
+    Ok(())
+}
+
+fn dispatch_communication(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows = codelore_lib::cli_api::analyses::communication::run_communication(db, opts)
+                .context("run communication")?;
+            codelore_lib::cli_api::output::csv::write_communication_csv(
+                &rows,
+                out,
+                opts.code_maat_compat,
+            )
+            .context("write csv")?;
+        }
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::communication::run_communication(db, opts)
+                .context("run communication")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows = codelore_lib::cli_api::analyses::communication::run_communication(db, opts)
+                .context("run communication")?;
+            codelore_lib::cli_api::output::markdown::write_communication_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        _ => unreachable!("format/analysis combination should have been validated above"),
+    }
+    Ok(())
+}
+
+fn dispatch_ownership(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows = codelore_lib::cli_api::analyses::ownership::run_ownership(db, opts)
+                .context("run ownership")?;
+            codelore_lib::cli_api::output::csv::write_ownership_csv(
+                &rows,
+                out,
+                opts.code_maat_compat,
+            )
+            .context("write csv")?;
+        }
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::ownership::run_ownership(db, opts)
+                .context("run ownership")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows = codelore_lib::cli_api::analyses::ownership::run_ownership(db, opts)
+                .context("run ownership")?;
+            codelore_lib::cli_api::output::markdown::write_ownership_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        _ => unreachable!("format/analysis combination should have been validated above"),
+    }
+    Ok(())
+}
+
+fn dispatch_coupling(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows = codelore_lib::cli_api::analyses::coupling::run_coupling(db, opts)
+                .context("run coupling")?;
+            codelore_lib::cli_api::output::csv::write_coupling_csv(
+                &rows,
+                out,
+                opts.code_maat_compat,
+            )
+            .context("write csv")?;
+        }
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::coupling::run_coupling(db, opts)
+                .context("run coupling")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows = codelore_lib::cli_api::analyses::coupling::run_coupling(db, opts)
+                .context("run coupling")?;
+            codelore_lib::cli_api::output::markdown::write_coupling_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "ndjson" => {
+            let rows = codelore_lib::cli_api::analyses::coupling::run_coupling(db, opts)
+                .context("run coupling")?;
+            codelore_lib::cli_api::output::ndjson::write_ndjson(&rows, out)
+                .context("write ndjson")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        _ => unreachable!("format/analysis combination should have been validated above"),
+    }
+    Ok(())
+}
+
+fn dispatch_summary(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows = codelore_lib::cli_api::analyses::summary::run_summary(db, opts)
+                .context("run summary")?;
+            codelore_lib::cli_api::output::csv::write_summary_csv(
+                &rows,
+                out,
+                opts.code_maat_compat,
+            )
+            .context("write csv")?;
+        }
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::summary::run_summary(db, opts)
+                .context("run summary")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows = codelore_lib::cli_api::analyses::summary::run_summary(db, opts)
+                .context("run summary")?;
+            codelore_lib::cli_api::output::markdown::write_summary_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => {
+            let rows = codelore_lib::cli_api::analyses::summary::run_summary(db, opts)
+                .context("run summary")?;
+            codelore_lib::cli_api::output::html::write_html(
+                &rows,
+                out,
+                &ctx.title,
+                &ctx.repo_root,
+                &ctx.generated_at,
+            )
+            .context("write html")?;
+        }
+        _ => unreachable!("format/analysis combination should have been validated above"),
+    }
+    Ok(())
+}
+
+fn dispatch_clones(
+    _db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    // csv | json | markdown | sarif are short-circuited before the repo opens
+    // (a HEAD-only tree-sitter walk needs no history); the arms remain here so
+    // the wired-format set stays the single source of truth for clones.
+    match format {
+        "csv" => {
+            let rows =
+                codelore_lib::cli_api::analyses::clones::run_clones(opts).context("run clones")?;
+            codelore_lib::cli_api::output::csv::write_clones_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows =
+                codelore_lib::cli_api::analyses::clones::run_clones(opts).context("run clones")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows =
+                codelore_lib::cli_api::analyses::clones::run_clones(opts).context("run clones")?;
+            codelore_lib::cli_api::output::markdown::write_clones_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "sarif" => {
+            let rows =
+                codelore_lib::cli_api::analyses::clones::run_clones(opts).context("run clones")?;
+            codelore_lib::cli_api::output::sarif::write_clones_sarif(&rows, &ctx.repo_root, out)
+                .context("write sarif")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            anyhow::bail!("clones analysis supports csv|json|markdown|sarif; got {fmt:?}")
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_authors(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows = codelore_lib::cli_api::analyses::authors::run_authors(db, opts)
+                .context("run authors")?;
+            codelore_lib::cli_api::output::csv::write_authors_csv(
+                &rows,
+                out,
+                opts.code_maat_compat,
+            )
+            .context("write csv")?;
+        }
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::authors::run_authors(db, opts)
+                .context("run authors")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows = codelore_lib::cli_api::analyses::authors::run_authors(db, opts)
+                .context("run authors")?;
+            codelore_lib::cli_api::output::markdown::write_authors_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => {
+            let rows = codelore_lib::cli_api::analyses::authors::run_authors(db, opts)
+                .context("run authors")?;
+            codelore_lib::cli_api::output::html::write_html(
+                &rows,
+                out,
+                &ctx.title,
+                &ctx.repo_root,
+                &ctx.generated_at,
+            )
+            .context("write html")?;
+        }
+        fmt => {
+            anyhow::bail!("authors analysis supports csv|json|markdown; got {fmt:?}")
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_top_committers(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows =
+                codelore_lib::cli_api::analyses::top_committers::run_top_committers(db, opts)
+                    .context("run top-committers")?;
+            codelore_lib::cli_api::output::csv::write_top_committers_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows =
+                codelore_lib::cli_api::analyses::top_committers::run_top_committers(db, opts)
+                    .context("run top-committers")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows =
+                codelore_lib::cli_api::analyses::top_committers::run_top_committers(db, opts)
+                    .context("run top-committers")?;
+            codelore_lib::cli_api::output::markdown::write_top_committers_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => {
+            let rows =
+                codelore_lib::cli_api::analyses::top_committers::run_top_committers(db, opts)
+                    .context("run top-committers")?;
+            codelore_lib::cli_api::output::html::write_html(
+                &rows,
+                out,
+                &ctx.title,
+                &ctx.repo_root,
+                &ctx.generated_at,
+            )
+            .context("write html")?;
+        }
+        fmt => {
+            anyhow::bail!("top-committers analysis supports csv|json|markdown; got {fmt:?}")
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_god_classes(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows = codelore_lib::cli_api::analyses::god_classes::run_god_classes(db, opts)
+                .context("run god-classes")?;
+            codelore_lib::cli_api::output::csv::write_god_classes_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::god_classes::run_god_classes(db, opts)
+                .context("run god-classes")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows = codelore_lib::cli_api::analyses::god_classes::run_god_classes(db, opts)
+                .context("run god-classes")?;
+            codelore_lib::cli_api::output::markdown::write_god_classes_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            anyhow::bail!("god-classes analysis supports csv|json|markdown; got {fmt:?}")
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_arch_violations(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows =
+                codelore_lib::cli_api::analyses::arch_violations::run_arch_violations(db, opts)
+                    .context("run architecture-violations")?;
+            codelore_lib::cli_api::output::csv::write_arch_violations_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows =
+                codelore_lib::cli_api::analyses::arch_violations::run_arch_violations(db, opts)
+                    .context("run architecture-violations")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows =
+                codelore_lib::cli_api::analyses::arch_violations::run_arch_violations(db, opts)
+                    .context("run architecture-violations")?;
+            codelore_lib::cli_api::output::markdown::write_arch_violations_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            anyhow::bail!(
+                "architecture-violations analysis supports csv|json|markdown; got {fmt:?}"
+            )
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_stale_code(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows = codelore_lib::cli_api::analyses::stale_code::run_stale_code(db, opts)
+                .context("run stale-code")?;
+            codelore_lib::cli_api::output::csv::write_stale_code_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::stale_code::run_stale_code(db, opts)
+                .context("run stale-code")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows = codelore_lib::cli_api::analyses::stale_code::run_stale_code(db, opts)
+                .context("run stale-code")?;
+            codelore_lib::cli_api::output::markdown::write_stale_code_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            anyhow::bail!("stale-code analysis supports csv|json|markdown; got {fmt:?}")
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_pair_programming(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows =
+                codelore_lib::cli_api::analyses::pair_programming::run_pair_programming(db, opts)
+                    .context("run pair-programming")?;
+            codelore_lib::cli_api::output::csv::write_pair_programming_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows =
+                codelore_lib::cli_api::analyses::pair_programming::run_pair_programming(db, opts)
+                    .context("run pair-programming")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows =
+                codelore_lib::cli_api::analyses::pair_programming::run_pair_programming(db, opts)
+                    .context("run pair-programming")?;
+            codelore_lib::cli_api::output::markdown::write_pair_programming_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            anyhow::bail!("pair-programming analysis supports csv|json|markdown; got {fmt:?}")
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_lead_time(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows = codelore_lib::cli_api::analyses::lead_time::run_lead_time(db, opts)
+                .context("run lead-time")?;
+            codelore_lib::cli_api::output::csv::write_lead_time_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::lead_time::run_lead_time(db, opts)
+                .context("run lead-time")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows = codelore_lib::cli_api::analyses::lead_time::run_lead_time(db, opts)
+                .context("run lead-time")?;
+            codelore_lib::cli_api::output::markdown::write_lead_time_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "ndjson" => {
+            let rows = codelore_lib::cli_api::analyses::lead_time::run_lead_time(db, opts)
+                .context("run lead-time")?;
+            codelore_lib::cli_api::output::ndjson::write_ndjson(&rows, out)
+                .context("write ndjson")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            anyhow::bail!("lead-time analysis supports csv|json|ndjson|markdown; got {fmt:?}")
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_bus_factor(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows = codelore_lib::cli_api::analyses::bus_factor::run_bus_factor(db, opts)
+                .context("run bus-factor")?;
+            codelore_lib::cli_api::output::csv::write_bus_factor_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::bus_factor::run_bus_factor(db, opts)
+                .context("run bus-factor")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows = codelore_lib::cli_api::analyses::bus_factor::run_bus_factor(db, opts)
+                .context("run bus-factor")?;
+            codelore_lib::cli_api::output::markdown::write_bus_factor_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            anyhow::bail!("bus-factor analysis supports csv|json|markdown; got {fmt:?}")
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_delivery_friction(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows =
+                codelore_lib::cli_api::analyses::delivery_friction::run_delivery_friction(db, opts)
+                    .context("run delivery-friction")?;
+            codelore_lib::cli_api::output::csv::write_delivery_friction_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows =
+                codelore_lib::cli_api::analyses::delivery_friction::run_delivery_friction(db, opts)
+                    .context("run delivery-friction")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows =
+                codelore_lib::cli_api::analyses::delivery_friction::run_delivery_friction(db, opts)
+                    .context("run delivery-friction")?;
+            codelore_lib::cli_api::output::markdown::write_delivery_friction_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            anyhow::bail!("delivery-friction analysis supports csv|json|markdown; got {fmt:?}")
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_knowledge_islands(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows =
+                codelore_lib::cli_api::analyses::knowledge_islands::run_knowledge_islands(db, opts)
+                    .context("run knowledge-islands")?;
+            codelore_lib::cli_api::output::csv::write_knowledge_islands_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows =
+                codelore_lib::cli_api::analyses::knowledge_islands::run_knowledge_islands(db, opts)
+                    .context("run knowledge-islands")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows =
+                codelore_lib::cli_api::analyses::knowledge_islands::run_knowledge_islands(db, opts)
+                    .context("run knowledge-islands")?;
+            codelore_lib::cli_api::output::markdown::write_knowledge_islands_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => {
+            let rows =
+                codelore_lib::cli_api::analyses::knowledge_islands::run_knowledge_islands(db, opts)
+                    .context("run knowledge-islands")?;
+            codelore_lib::cli_api::output::html::write_html(
+                &rows,
+                out,
+                &ctx.title,
+                &ctx.repo_root,
+                &ctx.generated_at,
+            )
+            .context("write html")?;
+        }
+        fmt => {
+            anyhow::bail!("knowledge-islands analysis supports csv|json|markdown; got {fmt:?}")
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_soc(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows =
+                codelore_lib::cli_api::analyses::soc::run_soc(db, opts).context("run soc")?;
+            codelore_lib::cli_api::output::csv::write_soc_csv(&rows, out).context("write csv")?;
+        }
+        "json" => {
+            let rows =
+                codelore_lib::cli_api::analyses::soc::run_soc(db, opts).context("run soc")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows =
+                codelore_lib::cli_api::analyses::soc::run_soc(db, opts).context("run soc")?;
+            codelore_lib::cli_api::output::markdown::write_soc_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            anyhow::bail!("soc analysis supports csv|json|markdown; got {fmt:?}")
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_messages(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows = codelore_lib::cli_api::analyses::messages::run_messages(db, opts)
+                .context("run messages")?;
+            codelore_lib::cli_api::output::csv::write_messages_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::messages::run_messages(db, opts)
+                .context("run messages")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows = codelore_lib::cli_api::analyses::messages::run_messages(db, opts)
+                .context("run messages")?;
+            codelore_lib::cli_api::output::markdown::write_messages_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            anyhow::bail!("messages analysis supports csv|json|markdown; got {fmt:?}")
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_main_dev(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows = codelore_lib::cli_api::analyses::main_dev::run_main_dev(db, opts)
+                .context("run main-dev")?;
+            codelore_lib::cli_api::output::csv::write_main_dev_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::main_dev::run_main_dev(db, opts)
+                .context("run main-dev")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows = codelore_lib::cli_api::analyses::main_dev::run_main_dev(db, opts)
+                .context("run main-dev")?;
+            codelore_lib::cli_api::output::markdown::write_main_dev_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            anyhow::bail!("main-dev analysis supports csv|json|markdown; got {fmt:?}")
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_main_dev_by_revs(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows = codelore_lib::cli_api::analyses::main_dev::run_main_dev_by_revs(db, opts)
+                .context("run main-dev-by-revs")?;
+            codelore_lib::cli_api::output::csv::write_main_dev_by_revs_csv(
+                &rows,
+                out,
+                opts.code_maat_compat,
+            )
+            .context("write csv")?;
+        }
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::main_dev::run_main_dev_by_revs(db, opts)
+                .context("run main-dev-by-revs")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows = codelore_lib::cli_api::analyses::main_dev::run_main_dev_by_revs(db, opts)
+                .context("run main-dev-by-revs")?;
+            codelore_lib::cli_api::output::markdown::write_main_dev_by_revs_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            anyhow::bail!("main-dev-by-revs analysis supports csv|json|markdown; got {fmt:?}")
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_main_dev_by_deletions(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows =
+                codelore_lib::cli_api::analyses::main_dev::run_main_dev_by_deletions(db, opts)
+                    .context("run main-dev-by-deletions")?;
+            codelore_lib::cli_api::output::csv::write_main_dev_by_deletions_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows =
+                codelore_lib::cli_api::analyses::main_dev::run_main_dev_by_deletions(db, opts)
+                    .context("run main-dev-by-deletions")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows =
+                codelore_lib::cli_api::analyses::main_dev::run_main_dev_by_deletions(db, opts)
+                    .context("run main-dev-by-deletions")?;
+            codelore_lib::cli_api::output::markdown::write_main_dev_by_deletions_markdown(
+                &rows, out,
+            )
+            .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            anyhow::bail!("main-dev-by-deletions analysis supports csv|json|markdown; got {fmt:?}")
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_entity_effort(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows = codelore_lib::cli_api::analyses::entity_effort::run_entity_effort(db, opts)
+                .context("run entity-effort")?;
+            codelore_lib::cli_api::output::csv::write_entity_effort_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::entity_effort::run_entity_effort(db, opts)
+                .context("run entity-effort")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows = codelore_lib::cli_api::analyses::entity_effort::run_entity_effort(db, opts)
+                .context("run entity-effort")?;
+            codelore_lib::cli_api::output::markdown::write_entity_effort_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            anyhow::bail!("entity-effort analysis supports csv|json|markdown; got {fmt:?}")
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_entity_ownership(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows =
+                codelore_lib::cli_api::analyses::entity_ownership::run_entity_ownership(db, opts)
+                    .context("run entity-ownership")?;
+            codelore_lib::cli_api::output::csv::write_entity_ownership_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows =
+                codelore_lib::cli_api::analyses::entity_ownership::run_entity_ownership(db, opts)
+                    .context("run entity-ownership")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows =
+                codelore_lib::cli_api::analyses::entity_ownership::run_entity_ownership(db, opts)
+                    .context("run entity-ownership")?;
+            codelore_lib::cli_api::output::markdown::write_entity_ownership_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            anyhow::bail!("entity-ownership analysis supports csv|json|markdown; got {fmt:?}")
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_clone_coupling(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows =
+                codelore_lib::cli_api::analyses::clone_coupling::run_clone_coupling(db, opts)
+                    .context("run clone-coupling")?;
+            codelore_lib::cli_api::output::csv::write_clone_coupling_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows =
+                codelore_lib::cli_api::analyses::clone_coupling::run_clone_coupling(db, opts)
+                    .context("run clone-coupling")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows =
+                codelore_lib::cli_api::analyses::clone_coupling::run_clone_coupling(db, opts)
+                    .context("run clone-coupling")?;
+            codelore_lib::cli_api::output::markdown::write_clone_coupling_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "sarif" => {
+            let rows =
+                codelore_lib::cli_api::analyses::clone_coupling::run_clone_coupling(db, opts)
+                    .context("run clone-coupling")?;
+            codelore_lib::cli_api::output::sarif::write_clone_coupling_sarif(
+                &rows,
+                &ctx.repo_root,
+                out,
+            )
+            .context("write sarif")?;
+        }
+        "html" => {
+            let rows =
+                codelore_lib::cli_api::analyses::clone_coupling::run_clone_coupling(db, opts)
+                    .context("run clone-coupling")?;
+            codelore_lib::cli_api::output::html::write_html(
+                &rows,
+                out,
+                &ctx.title,
+                &ctx.repo_root,
+                &ctx.generated_at,
+            )
+            .context("write html")?;
+        }
+        fmt => {
+            anyhow::bail!("clone-coupling analysis supports csv|json|markdown|sarif; got {fmt:?}")
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_centrality(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows = codelore_lib::cli_api::analyses::centrality::run_centrality(db, opts)
+                .context("run centrality")?;
+            codelore_lib::cli_api::output::csv::write_centrality_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::centrality::run_centrality(db, opts)
+                .context("run centrality")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows = codelore_lib::cli_api::analyses::centrality::run_centrality(db, opts)
+                .context("run centrality")?;
+            codelore_lib::cli_api::output::markdown::write_centrality_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            anyhow::bail!("centrality analysis supports csv|json|markdown; got {fmt:?}")
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_communities(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let result = codelore_lib::cli_api::analyses::communities::run_communities(db, opts)
+                .context("run communities")?;
+            codelore_lib::cli_api::output::csv::write_communities_csv(&result, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let result = codelore_lib::cli_api::analyses::communities::run_communities(db, opts)
+                .context("run communities")?;
+            codelore_lib::cli_api::output::json::write_communities_json(&result, out)
+                .context("write json")?;
+        }
+        "markdown" => {
+            let result = codelore_lib::cli_api::analyses::communities::run_communities(db, opts)
+                .context("run communities")?;
+            codelore_lib::cli_api::output::markdown::write_communities_markdown(&result, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            anyhow::bail!("communities analysis supports csv|json|markdown; got {fmt:?}")
+        }
+    }
+    Ok(())
+}
+
 /// Pre-flight: cheap validations BEFORE the expensive ingest. Builds the
 /// Style-B banner from `Options` + `GixRepo` state, prints to stderr (always
 /// on failure, conditionally on success per `should_print`), and either
@@ -1632,9 +2108,9 @@ fn preflight_and_open_repo(
     analysis_name: &str,
     no_banner: bool,
 ) -> Result<GixRepo> {
-    use codelore_lib::CodeLoreError;
-    use codelore_lib::output::banner::{self, Banner, Preflight};
-    use codelore_lib::provenance::{DUCKDB_VERSION, GIX_VERSION};
+    use codelore_lib::cli_api::CodeLoreError;
+    use codelore_lib::cli_api::output::banner::{self, Banner, Preflight};
+    use codelore_lib::cli_api::provenance::{DUCKDB_VERSION, GIX_VERSION};
 
     let repo_path_str = args.repo.display().to_string();
     let options_summary = format_options_summary(opts);
@@ -1767,7 +2243,7 @@ fn write_provenance_sidecar(
     analysis_name: &str,
     output_path: &std::path::Path,
 ) -> Result<()> {
-    let manifest = codelore_lib::provenance::Manifest::capture(db, opts, analysis_name)
+    let manifest = codelore_lib::cli_api::provenance::Manifest::capture(db, opts, analysis_name)
         .context("capture provenance manifest")?;
     let json = manifest
         .to_json()
@@ -1838,15 +2314,15 @@ fn write_parquet(
 ) -> Result<()> {
     match analysis {
         AnalysisName::Hotspots => {
-            codelore_lib::output::parquet::write_hotspots_parquet(db, opts, path)
+            codelore_lib::cli_api::output::parquet::write_hotspots_parquet(db, opts, path)
                 .context("write parquet")
         }
         AnalysisName::Revisions => {
-            codelore_lib::output::parquet::write_revisions_parquet(db, opts, path)
+            codelore_lib::cli_api::output::parquet::write_revisions_parquet(db, opts, path)
                 .context("write parquet")
         }
         AnalysisName::Summary => {
-            codelore_lib::output::parquet::write_summary_parquet(db, opts, path)
+            codelore_lib::cli_api::output::parquet::write_summary_parquet(db, opts, path)
                 .context("write parquet")
         }
         other => anyhow::bail!(
@@ -1862,10 +2338,10 @@ fn write_parquet(
 /// same data into different output shapes.
 #[cfg(feature = "spa")]
 fn build_spa_dashboard(
-    db: &codelore_lib::facts::FactsDb,
-    opts: &codelore_lib::Options,
-) -> anyhow::Result<codelore_lib::output::spa::SpaDashboard> {
-    use codelore_lib::output::spa::{
+    db: &codelore_lib::cli_api::facts::FactsDb,
+    opts: &codelore_lib::cli_api::Options,
+) -> anyhow::Result<codelore_lib::cli_api::output::spa::SpaDashboard> {
+    use codelore_lib::cli_api::output::spa::{
         SpaDashboard, run_clone_summary, run_daily_commits, run_trends, run_xray,
     };
 
@@ -1874,28 +2350,29 @@ fn build_spa_dashboard(
     // (typically <1s on mid-size repos). Optional widgets degrade
     // gracefully (warn + empty vec) on tiny fixtures or when the
     // analysis can't run.
-    let hotspots = codelore_lib::analyses::hotspots::run_hotspots(db, opts)
+    let hotspots = codelore_lib::cli_api::analyses::hotspots::run_hotspots(db, opts)
         .context("run hotspots for dashboard")?;
-    let summary = codelore_lib::analyses::summary::run_summary(db, opts)
+    let summary = codelore_lib::cli_api::analyses::summary::run_summary(db, opts)
         .context("run summary for dashboard")?;
-    let code_health = codelore_lib::analyses::code_health::run_code_health(db, opts)
+    let code_health = codelore_lib::cli_api::analyses::code_health::run_code_health(db, opts)
         .context("run code-health for dashboard")?;
-    let coupling = codelore_lib::analyses::coupling::run_coupling(db, opts).unwrap_or_else(|e| {
-        tracing::warn!("dashboard: coupling analysis failed; skipping: {e}");
-        Vec::new()
-    });
-    let knowledge_islands = codelore_lib::analyses::knowledge_islands::run_knowledge_islands(
-        db, opts,
-    )
-    .unwrap_or_else(|e| {
-        tracing::warn!("dashboard: knowledge-islands analysis failed; skipping: {e}");
-        Vec::new()
-    });
-    let entity_ownership = codelore_lib::analyses::entity_ownership::run_entity_ownership(db, opts)
+    let coupling = codelore_lib::cli_api::analyses::coupling::run_coupling(db, opts)
         .unwrap_or_else(|e| {
-            tracing::warn!("dashboard: entity-ownership analysis failed; skipping: {e}");
+            tracing::warn!("dashboard: coupling analysis failed; skipping: {e}");
             Vec::new()
         });
+    let knowledge_islands =
+        codelore_lib::cli_api::analyses::knowledge_islands::run_knowledge_islands(db, opts)
+            .unwrap_or_else(|e| {
+                tracing::warn!("dashboard: knowledge-islands analysis failed; skipping: {e}");
+                Vec::new()
+            });
+    let entity_ownership =
+        codelore_lib::cli_api::analyses::entity_ownership::run_entity_ownership(db, opts)
+            .unwrap_or_else(|e| {
+                tracing::warn!("dashboard: entity-ownership analysis failed; skipping: {e}");
+                Vec::new()
+            });
     let xray = run_xray(db, 500).unwrap_or_else(|e| {
         tracing::warn!("dashboard: xray query failed; skipping: {e}");
         Vec::new()
@@ -1914,9 +2391,7 @@ fn build_spa_dashboard(
         tracing::warn!("dashboard: trends query failed; skipping: {e}");
         Vec::new()
     });
-    let mi_rollup = Some(codelore_lib::analyses::mi::MiRollup::from_hotspots(
-        &hotspots,
-    ));
+    let mi_rollup = Some(codelore_lib::cli_api::analyses::mi::MiRollup::from_hotspots(&hotspots));
     let coupling_density = compute_spa_coupling_density(db, opts, &coupling);
     let clones = run_clone_summary(db).unwrap_or_else(|e| {
         tracing::warn!("dashboard: clone summary query failed; skipping: {e}");
@@ -1926,17 +2401,19 @@ fn build_spa_dashboard(
     // non-merge commits so the SPA's window selector can show 10,
     // 30, 60, or all-100 without a re-run. Default render is the
     // last 30 (historical view); the frontend slices reactively.
-    let kamei_risk = codelore_lib::output::spa::run_kamei_risk(db, 100).unwrap_or_else(|e| {
-        tracing::warn!("dashboard: kamei risk query failed; skipping: {e}");
-        Vec::new()
-    });
+    let kamei_risk =
+        codelore_lib::cli_api::output::spa::run_kamei_risk(db, 100).unwrap_or_else(|e| {
+            tracing::warn!("dashboard: kamei risk query failed; skipping: {e}");
+            Vec::new()
+        });
     // Resolved import edges for the architecture force-graph widget.
     // Empty when the resolver hasn't covered the repo's language mix
     // yet.
-    let imports = codelore_lib::output::spa::run_imports_for_arch_graph(db).unwrap_or_else(|e| {
-        tracing::warn!("dashboard: imports query failed; skipping: {e}");
-        Vec::new()
-    });
+    let imports = codelore_lib::cli_api::output::spa::run_imports_for_arch_graph(db)
+        .unwrap_or_else(|e| {
+            tracing::warn!("dashboard: imports query failed; skipping: {e}");
+            Vec::new()
+        });
     Ok(SpaDashboard {
         hotspots,
         summary,
@@ -1952,18 +2429,18 @@ fn build_spa_dashboard(
         clones,
         kamei_risk,
         imports,
-        options: codelore_lib::output::spa::SpaOptionsSnapshot::from_options(opts),
+        options: codelore_lib::cli_api::output::spa::SpaOptionsSnapshot::from_options(opts),
     })
 }
 
 #[cfg(feature = "spa")]
 fn run_spa_dispatch(
-    db: &codelore_lib::facts::FactsDb,
-    opts: &codelore_lib::Options,
+    db: &codelore_lib::cli_api::facts::FactsDb,
+    opts: &codelore_lib::cli_api::Options,
     repo_path: &std::path::Path,
     output: &std::path::Path,
 ) -> anyhow::Result<()> {
-    use codelore_lib::output::spa::write_spa;
+    use codelore_lib::cli_api::output::spa::write_spa;
 
     let dash = build_spa_dashboard(db, opts)?;
 
@@ -2017,12 +2494,12 @@ fn run_spa_dispatch(
 
 #[cfg(feature = "spa")]
 fn run_step_summary_dispatch(
-    db: &codelore_lib::facts::FactsDb,
-    opts: &codelore_lib::Options,
+    db: &codelore_lib::cli_api::facts::FactsDb,
+    opts: &codelore_lib::cli_api::Options,
     repo_path: &std::path::Path,
     output: Option<&std::path::Path>,
 ) -> anyhow::Result<()> {
-    use codelore_lib::output::step_summary::write_step_summary;
+    use codelore_lib::cli_api::output::step_summary::write_step_summary;
 
     let dash = build_spa_dashboard(db, opts)?;
     let now = time::OffsetDateTime::now_utc();
@@ -2063,15 +2540,18 @@ fn run_step_summary_dispatch(
 /// secondary metric.
 #[cfg(feature = "spa")]
 fn compute_spa_coupling_density(
-    db: &codelore_lib::facts::FactsDb,
-    opts: &codelore_lib::Options,
-    coupling: &[codelore_lib::analyses::coupling::CouplingRow],
+    db: &codelore_lib::cli_api::facts::FactsDb,
+    opts: &codelore_lib::cli_api::Options,
+    coupling: &[codelore_lib::cli_api::analyses::coupling::CouplingRow],
 ) -> Option<f64> {
     if coupling.is_empty() {
         return None;
     }
-    match codelore_lib::analyses::coupling::count_coupling_nodes(db, opts) {
-        Ok(n) => Some(codelore_lib::analyses::coupling::density(n, coupling.len())),
+    match codelore_lib::cli_api::analyses::coupling::count_coupling_nodes(db, opts) {
+        Ok(n) => Some(codelore_lib::cli_api::analyses::coupling::density(
+            n,
+            coupling.len(),
+        )),
         Err(e) => {
             tracing::warn!("spa: coupling-density node count failed; skipping: {e}");
             None

@@ -82,6 +82,7 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 | F110 | Differential test only 4 of 8 trait methods | **Fixed** | PR #57 → main. `head_sha_matches` + 11 sibling tests now in `differential_repo_test.rs` |
 | F111 | `FactsDb::conn()` leaks `&duckdb::Connection` into public API | **Fixed** | This session. Tightened `conn()` to `pub(crate)` so external consumers can't bypass FactsDb's safety surface; added narrow safe methods `prepare` / `execute_batch` / `query_row` (each wrapping the SQL error in `CodeLoreError::Analysis`, exit 4). All 9 external `.conn()` call sites across 5 test files migrated to the safe methods — 7 chained `db.conn().<m>()` calls rewritten mechanically, plus the two multi-query `let conn = db.conn();` bindings in `imports_factsdb_test.rs` expanded to direct `db.query_row(...)` calls. Zero CLI `.conn()` uses, so production callers see no API change — the finding was API hygiene, not breakage. |
 | F112 | Provenance manifest missing reproducibility fields | **Fixed** | PR #57 → main. `head_sha`, `cache_key_hash`, `rust_version`, `target_triple`, `grammars: BTreeMap<String,String>` populated in `provenance/mod.rs` |
+| F113 | `codelore-cli` reaches into many `codelore_lib` submodules — no façade | **Fixed** | This session. Added `codelore_lib::cli_api` — the single surface the CLI imports through. It re-exports the modules (`analyses`, `analysis`, `cache`, `constants`, `facts`, `options`, `output`, `provenance`, `quality_gates`, `repo`) and root types (`AnalysisName`, `CodeLoreError`, `Options`, `Result`) the CLI needs. Every CLI file migrated so `grep -rn 'codelore_lib::' crates/codelore-cli/src \| grep -v cli_api` returns 0. Internal modules stay `pub` (the integration-test crate needs deep white-box access — forcing 55 test files through a CLI-shaped façade would either bloat it or need a second `test_api`), so this is an ADDITIVE, non-breaking façade: the CLI↔library contract now lives in one file even though the compiler doesn't seal the internals. Shipped together with F145. |
 | F118 | gix walker thread panic silently swallowed | **Fixed** | PR #62 → main. `WalkerStream` joins handle on EOF; panic mapped to `CodeLoreError::Repo` → exit 3 |
 | F127 | Kamei `enrich_diffusion` NS/ND/NF correlated subqueries | **Fixed** (partial — entropy block remains) | PR #64 → main collapsed the NS/ND/NF triple. See F127 in §4 for the entropy-block remainder. |
 | F128 | Kamei `enrich_size` correlated subqueries | **Fixed** | PR #64 → main. Grouped `UPDATE … FROM (… GROUP BY rev)` |
@@ -99,6 +100,7 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 | F153 | Generic I/O errors from `--team-map` config-file read exit code 5 instead of 3 | **Fixed** | This session. Added `CodeLoreError::RepoIo(std::io::Error)` variant mapped to exit 3 in the `exit_code()` match (no `#[from]` so generic `?` propagation still defaults to write-side `Io` → exit 5). The single load-bearing call site (`identity::team_map::load` reading a user-supplied `--team-map FILE`) now constructs `RepoIo` instead of `Io`. Recon revealed only ONE site explicitly constructed `Io` for a read-side input failure; every other `Io` use is `writeln!(...).map_err(CodeLoreError::Io)` from output emitters where exit 5 is correct. Smaller scope than the audit's "repo probing" framing because `GixRepo::open` and `GitCliRepo::open` already mapped their underlying errors to `CodeLoreError::Repo(String)` (exit 3). Updated `bca_error_exit_codes_match_spec` test to cover `RepoIo` → 3. |
 | F142 | Tracing instrumentation skewed across `analyses/` (3 lines total) | **Fixed** | This session. `#[tracing::instrument(name = "<analysis-name>", skip_all, fields(min_revs = opts.min_revs))]` added to all 32 `run_*` entry points across 31 files. Operators get per-analysis spans with timing + the input gate for free via `RUST_LOG`. Verified end-to-end: hotspots span emits `hotspots{min_revs=1}` with `time.busy=6.87ms time.idle=2.25µs`. |
 | F146 | `json.rs` trivial `write_*_json` shims (29 total) | **Fixed** | This session. `write_json<T: Serialize>` made `pub`; 27 trivial shims deleted, 2 non-trivial kept (`write_revisions_json` tuple→struct wrap, `write_communities_json` wrapper struct emit). 33 CLI call sites updated. Net: -137 LOC. |
+| F145 | `main.rs` dispatch boilerplate is the bulk of the file | **Fixed** | This session. The 2-D `match (format, &analysis)` (≈1200 LOC, the abstraction the finding said was missing) collapsed to a 1-D `match &analysis` delegating to 32 per-analysis `dispatch_<x>` fns, each running its analysis then matching `format` to the right emitter; SARIF/HTML needs (repo_root, title, generated-at) carried in a shared `EmitCtx`; the HTML pre-branch folded into the same per-analysis fns (with a shared `html_not_wired` helper). Proven semantic-preserving by a byte-identical capture across all 228 analysis×format pairs: exit codes identical (incl. the 22 pre-existing `unreachable!` panics, now logged as F165), and the only 9 stdout diffs are environmental — clones (HEAD-time tree-sitter walk over the working tree now sees the new `dispatch_*` fns as clones), delivery-friction (`wip_age_days` wall-clock drift), and SARIF (per-run `run/<id>`). main.rs grew ~+480 LOC: the per-fn structure re-states each `run_*` per format arm rather than hoisting it (hoisting would run the analysis before the `unreachable!` for unwired ndjson/gha, risking an exit-code change), the price of exact-semantics preservation. Shipped with the F113 `cli_api` façade. |
 | F147 | `AnalysisName` 3-way sync no exhaustiveness guard | **Fixed** | `549c460` (initial `_exhaustive_check`) + PR #60 (`registry!` macro). F157 closed by the macro. |
 | F120 | SARIF schema URL on legacy `schemastore.azurewebsites.net` host | **Fixed (URL)** | This session. `sarif.rs:13` swapped to canonical `https://json.schemastore.org/sarif-2.1.0.json`. The hand-rolled-JSON / `serde-sarif` migration concern in the original finding was a separate refactor and is NOT closed — re-surfaces in next discovery pass if still material. |
 | F124 | MSRV pin has zero buffer behind toolchain | **Fixed (policy)** | This session. `docs/RELEASING.md` now carries an "MSRV (Minimum Supported Rust Version) Policy" section explaining the deliberate "MSRV tracks channel" stance for the pre-1.0 binary-distribution model + post-1.0 reconsideration trigger. The zero-buffer is now a deliberate documented decision, not an oversight. |
@@ -138,15 +140,6 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 
 ## 4. Active Findings
 
-### NEW Active Findings — Architecture & supply chain
-
-#### F113 — `codelore-cli` reaches into 8 distinct `codelore_lib` submodules — no façade
-
-*   **Location**: `crates/codelore-cli/src/main.rs` — all `use codelore_lib::*` statements
-*   **Severity**: MED
-*   **Status**: Active. The 2026-06-16 validator's "17+" claim and the original "13" claim both over-counted. Verified count is 8 distinct first-level submodule paths: `analyses`, `analysis`, `facts`, `options`, `output`, `provenance`, `quality_gates`, `repo` (plus root-level `CodeLoreError`, `AnalysisName`, `Options`). The architectural smell — no `cli_api` façade, CLI reaches across many internal modules — is unchanged; only the count was inflated.
-*   **Suggested fix**: introduce `codelore_lib::cli_api` as the only `pub` surface CLI imports.
-
 ### NEW Active Findings — Tool replacement / dep currency
 
 #### F119 — Hand-rolled 826-line CSV emitter → use `csv` crate
@@ -168,15 +161,17 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 *   **Detail**: Comments anchor their rationale to finding/task IDs ("F33 fix: …") instead of stating the current contract directly. The IDs are meaningless to a reader without the report and rot as findings close. The project convention is that history lives only in `CHANGELOG.md`; code comments describe the *current* state. Surfaced while splitting `ingest.rs` (F94) — the six in-ingest occurrences were preserved verbatim to keep that split a pure move, rather than cleaned inline.
 *   **Suggested fix**: a codebase-wide sweep rewording each `F<NN> fix:`/`(F<NN>)` comment to keep only the WHY, dropping the ID. Mechanical but wide; best as its own focused commit so the diff is reviewable and doesn't ride along with a behavioural change.
 
-#### F145 — `main.rs` dispatch boilerplate is the bulk of the file
-
-*   **Location**: `crates/codelore-cli/src/main.rs:846-2047` — the `match (format, &analysis)` block (line 846) extends to roughly EOF. `main.rs` is now **2047 LOC** (drifted +3 since prior audit); the dispatch arm body is ~1201 LOC (≈59% of the file).
-*   **Severity**: HIGH
-*   **Drift note**: the prior 720-LOC estimate was correct at the time of the audit; the file has grown roughly proportionally with new analyses (lead-time, bus-factor, stale-code, god-classes, etc.). The architectural concern is the same — the routing table grew, the abstraction didn't.
-
 #### F148 — `csv.rs` + `markdown.rs` per-analysis emitters
 
 *   **Severity**: LOW
+
+#### F165 — `--format ndjson`/`gha` on an unsupported analysis panics (reachable `unreachable!`)
+
+*   **Location**: `crates/codelore-cli/src/main.rs` — the per-analysis dispatch fns' `_ => unreachable!("format/analysis combination should have been validated above")` arm (was the trailing arm of the old `match (format, &analysis)`).
+*   **Severity**: MED
+*   **Category**: Robustness / error handling
+*   **Detail**: `ndjson` and `gha` pass top-level format validation but are only wired for a few analyses (hotspots, plus ndjson for code-health/coupling/lead-time). For every other analysis, `--format ndjson` / `--format gha` falls through to the `unreachable!` and **panics (exit 101)** instead of bailing cleanly. 22 analysis×format pairs hit this (e.g. `abs-churn --format gha`, `revisions --format ndjson`). The comment claims the combination "should have been validated above" — but nothing validates per-analysis format support for ndjson/gha the way the SARIF guard (`--format sarif` → bail for unsupported analyses, exit 1) does. Surfaced during the F145 byte-identical verification (preserved verbatim there — fixing it changes exit 101→non-panic and is out of scope for a behaviour-preserving refactor).
+*   **Suggested fix**: mirror the SARIF guard — a pre-dispatch check that bails with a descriptive error (exit 1) for `ndjson`/`gha` on analyses that don't support them, OR wire those formats for all analyses. Either way the `unreachable!` becomes genuinely unreachable.
 
 ### Sixth audit pass — F161, F162 (emit memory / type contract)
 
@@ -204,7 +199,7 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 | V5 | METRIC_DEFS not interpolated | `SpaOptionsSnapshot` field on `SpaDashboard` populated from `Options::from_options`; widgets.js `interpolate(def.formula, data.options)` substitutes `${key}` placeholders; coupling_pairs/coupling_density formulas updated to use placeholders | **Fixed (this session)** |
 | V6 | `CHANNEL_CAPACITY = 64` unmeasured | `ingest_capacity_sweep` Criterion benchmark added (16/64/256/1024); `CHANNEL_CAPACITY_OVERRIDE: AtomicUsize` + `set_channel_capacity_override(n)` writer hook; `bounded::<CommitEvent>(channel_capacity())` on the hot path | **Fixed (this session)** |
 | F111 | `FactsDb::conn()` leaks `&Connection` | `conn()` tightened to `pub(crate)`; `prepare` / `execute_batch` / `query_row` safe methods added; all 9 external `.conn()` test call sites migrated; zero CLI uses | **Fixed (this session)** |
-| F113 | CLI reaches into many lib submodules | 8 distinct first-level `codelore_lib::*` paths (analyses, analysis, facts, options, output, provenance, quality_gates, repo) — earlier 13/17+ counts both inflated | Active confirmed (count corrected) |
+| F113 | CLI reaches into many lib submodules | `codelore_lib::cli_api` façade added (re-exports the modules + root types the CLI needs); all CLI files migrated so `grep codelore_lib:: \| grep -v cli_api` = 0; internals stay `pub` for the test crate | **Fixed (this session)** |
 | F114 | Single-CDN dependence | `AssetPin.url_fallbacks` added with `unpkg.com` mirror per asset; `fetch_and_pin` walks primary→fallbacks; SHA-256 enforced on whichever mirror responds; tampered-mirror substitution still fails the build loudly | **Fixed (this session)** |
 | F115 | Container mutable tags | Both `FROM` lines now carry inline `@sha256:` digests; Renovate `dockerfile` manager pattern set to `/Containerfile/` (Dependabot only detects `Dockerfile`); base-image bumps grouped weekly | **Fixed (this session)** |
 | F116 | Dependabot + Renovate duplicate | Both files present BUT partitioned by `package-ecosystem`: Dependabot owns `github-actions`, Renovate owns `cargo`. Not duplicated. | **REFUTED** (see refuted-findings block above) |
@@ -231,7 +226,7 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 | F138 | `startViewTransition` ignores reduced-motion | widgets.js:694-700 now matches `prefers-reduced-motion` and runs `updateFn()` synchronously | **Fixed on main (PR #62)** |
 | F142 | Sparse tracing in analyses | Exactly 3 `tracing::*` calls across 32 analysis files (lead_time.rs:86, clones.rs:95, clone_coupling.rs:278) | Active confirmed |
 | F144 | No CI dogfooding | New `dogfood` job in `ci.yml` runs release `codelore analyze --format gha` for PR annotations + `codelore diff` on PR events for step-summary; `continue-on-error: true` during bake-in | **Fixed (this session)** |
-| F145 | main.rs dispatch boilerplate | `main.rs = 2047 LOC` (drifted +3); dispatch arm ~1201 LOC (≈59%) | Active confirmed (essentially unchanged) |
+| F145 | main.rs dispatch boilerplate | 2-D `match (format, &analysis)` collapsed to a 1-D `match &analysis` delegating to 32 per-analysis `dispatch_*` fns + an `EmitCtx`; byte-identical output verified (228 pairs, only env-driven diffs in clones/wip_age_days/sarif-run-id), exit codes identical | **Fixed (this session)** |
 | F146 | json.rs trivial shims | `grep -cE '^pub fn write_[a-z_]+_json' = 29` — no change | Active confirmed |
 | F148 | csv.rs + markdown.rs per-analysis emitters | Both still ~25KB per-analysis files (csv.rs 25825 bytes, markdown.rs 25534 bytes) | Active confirmed |
 | F149 | hunks schema lacks PK / NOT NULL | Schema tightened to NOT NULL + composite PK + index; wired entire ingest pipeline (gix `count_loc_and_hunks` + `diff_hunks` proper impl + walker populates `FileChange.hunks` + `append_change` writes rows); differential test asserts gix == cli hunks | **Fixed (this session)** |
@@ -271,9 +266,9 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 - **Closed on main (added to §3 closure-log)**: F110, F112, F117, F118, F120 (URL half), F124 (policy half), F125, F126, F127 (full — entropy rewrite closes the remainder), F128, F129, F130, F134, F135, F138, F142, F143, F146, F150, F151, F152, F153, F154, F155, F156, F157, F158, F159, F160, F163.
 - **REFUTED this session**: F116 (Renovate + Dependabot partitioned by ecosystem) + F123 (crossbeam 0.8.4 + num-format 0.4.4 are current releases) — see §3 newly-refuted block.
 - **Closed by side-effect**: F162 — Parquet writers now delegate to shared SQL generators that preserve CSV row-type contract via explicit casts. Verified 2026-06-21.
-- **Active**: F113, F119, F145, F148, F161, F164 = **6 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
+- **Active**: F119, F148, F161, F164, F165 = **5 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
 
-The next sweep should re-open with F-IDs starting at **F165**.
+The next sweep should re-open with F-IDs starting at **F166**.
 
 ### Deferred — discovery pass (Workflow `wf_902c8b32-45d`)
 

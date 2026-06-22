@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use codelore_lib::constants::{
+use codelore_lib::cli_api::constants::{
     DEFAULT_FISHER_SIGNIFICANCE, DEFAULT_MAX_CHANGESET_SIZE, DEFAULT_MAX_COUPLING_PCT,
     DEFAULT_MIN_COUPLING_PCT, DEFAULT_MIN_REVS, DEFAULT_MIN_SHARED_REVS,
 };
@@ -381,13 +381,13 @@ pub struct AnalyzeArgs {
     /// OSS maintainer codebases (180+).
     #[arg(
         long = "departed-threshold-days",
-        default_value_t = codelore_lib::constants::DEFAULT_DEPARTED_THRESHOLD_DAYS
+        default_value_t = codelore_lib::cli_api::constants::DEFAULT_DEPARTED_THRESHOLD_DAYS
     )]
     pub departed_threshold_days: u32,
 }
 
 /// `TimeBucket` mirror on the CLI surface (clap-friendly value enum).
-/// Maps 1:1 to `codelore_lib::options::TimeBucket`.
+/// Maps 1:1 to `codelore_lib::cli_api::options::TimeBucket`.
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 #[clap(rename_all = "lowercase")]
 pub enum TimeBucketArg {
@@ -396,7 +396,7 @@ pub enum TimeBucketArg {
     Month,
 }
 
-impl From<TimeBucketArg> for codelore_lib::options::TimeBucket {
+impl From<TimeBucketArg> for codelore_lib::cli_api::options::TimeBucket {
     fn from(t: TimeBucketArg) -> Self {
         match t {
             TimeBucketArg::Day => Self::Day,

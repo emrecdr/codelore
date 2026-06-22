@@ -179,9 +179,9 @@ fn emit_markdown(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
             writeln!(
                 out,
                 "| `{}` | `{}` | `{}` |",
-                codelore_lib::output::markdown::escape_md_cell(&v.gate),
-                codelore_lib::output::markdown::escape_md_cell(&v.actual),
-                codelore_lib::output::markdown::escape_md_cell(&v.threshold),
+                codelore_lib::cli_api::output::markdown::escape_md_cell(&v.gate),
+                codelore_lib::cli_api::output::markdown::escape_md_cell(&v.actual),
+                codelore_lib::cli_api::output::markdown::escape_md_cell(&v.threshold),
             )?;
         }
         writeln!(out)?;
@@ -206,7 +206,7 @@ fn emit_markdown(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
             writeln!(
                 out,
                 "| `{}` | {:.4} | {} | {:.1} |",
-                codelore_lib::output::markdown::escape_md_cell(&h.path),
+                codelore_lib::cli_api::output::markdown::escape_md_cell(&h.path),
                 h.hotspot_score,
                 h.revisions,
                 h.cognitive
@@ -228,7 +228,7 @@ fn emit_markdown(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
             writeln!(
                 out,
                 "| `{}` | {:.4} | {:.4} | +{:.4} |",
-                codelore_lib::output::markdown::escape_md_cell(&s.path),
+                codelore_lib::cli_api::output::markdown::escape_md_cell(&s.path),
                 s.base_score,
                 s.head_score,
                 s.delta
@@ -258,8 +258,8 @@ fn emit_markdown(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
             writeln!(
                 out,
                 "| `{}` | `{}` | {:.1}% | {} | {:.4} |",
-                codelore_lib::output::markdown::escape_md_cell(&a.touched_file),
-                codelore_lib::output::markdown::escape_md_cell(&a.expected_partner),
+                codelore_lib::cli_api::output::markdown::escape_md_cell(&a.touched_file),
+                codelore_lib::cli_api::output::markdown::escape_md_cell(&a.expected_partner),
                 a.historical_coupling,
                 a.historical_shared_revs,
                 a.fisher_p,
@@ -282,8 +282,8 @@ fn emit_markdown(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
                 out,
                 "| {} | `{}` | `{}` | {}-{} | {} |",
                 c.clone_group_id,
-                codelore_lib::output::markdown::escape_md_cell(&c.entity),
-                codelore_lib::output::markdown::escape_md_cell(&c.function),
+                codelore_lib::cli_api::output::markdown::escape_md_cell(&c.entity),
+                codelore_lib::cli_api::output::markdown::escape_md_cell(&c.function),
                 c.start_line,
                 c.end_line,
                 c.node_count
