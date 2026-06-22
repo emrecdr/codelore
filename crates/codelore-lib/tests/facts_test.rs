@@ -54,8 +54,7 @@ fn open_read_only_rejects_mismatched_schema_version() {
     let path = dir.path().join("stale.duckdb");
     {
         let db = FactsDb::open(&path).expect("create");
-        db.conn()
-            .execute_batch("UPDATE provenance SET value = '999' WHERE key = 'schema_version'")
+        db.execute_batch("UPDATE provenance SET value = '999' WHERE key = 'schema_version'")
             .expect("bump schema_version");
     }
     let msg = match FactsDb::open_read_only(&path) {

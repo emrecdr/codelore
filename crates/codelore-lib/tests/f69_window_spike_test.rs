@@ -169,7 +169,7 @@ struct HhiRow {
 }
 
 fn collect_hhi(db: &FactsDb, sql: &str) -> Vec<HhiRow> {
-    let mut stmt = db.conn().prepare(sql).expect("prepare");
+    let mut stmt = db.prepare(sql).expect("prepare");
     let rows = stmt
         .query_map([], |r| {
             Ok(HhiRow {
@@ -261,7 +261,7 @@ fn capture_explain_analyze_plans() {
         // `explain_value` (the actual plan text). Reading only column 0
         // surfaces the key, not the plan; we want column 1.
         let explain_sql = format!("EXPLAIN ANALYZE {sql}");
-        let mut stmt = db.conn().prepare(&explain_sql).expect("prepare");
+        let mut stmt = db.prepare(&explain_sql).expect("prepare");
         let rows = stmt
             .query_map([], |r| r.get::<_, String>(1))
             .expect("query_map");

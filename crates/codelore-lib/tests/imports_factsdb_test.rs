@@ -58,14 +58,13 @@ fn ingest_populates_imports_table_from_multilang_fixture() {
 
     // -- Row count -----------------------------------------------------
     // Rust: 2 · Python: 2 · JS: 2 · Java: 2 = 8 total.
-    let conn = db.conn();
-    let total: i64 = conn
+    let total: i64 = db
         .query_row("SELECT COUNT(*) FROM imports", [], |r| r.get(0))
         .expect("count imports");
     assert_eq!(total, 8, "expected 8 import edges, got {total}");
 
     // -- All rows have resolved=false / target_path NULL on Day 4 -----
-    let unresolved: i64 = conn
+    let unresolved: i64 = db
         .query_row(
             "SELECT COUNT(*) FROM imports WHERE resolved = FALSE AND target_path IS NULL",
             [],
@@ -78,7 +77,7 @@ fn ingest_populates_imports_table_from_multilang_fixture() {
     );
 
     // -- Per-language correctness checks ------------------------------
-    let rust_abs: i64 = conn
+    let rust_abs: i64 = db
         .query_row(
             "SELECT COUNT(*) FROM imports \
              WHERE src_path = 'src/main.rs' AND kind = 'absolute' AND target = 'std::fs::read_to_string'",
@@ -91,7 +90,7 @@ fn ingest_populates_imports_table_from_multilang_fixture() {
         "expected std::fs::read_to_string absolute import"
     );
 
-    let rust_rel: i64 = conn
+    let rust_rel: i64 = db
         .query_row(
             "SELECT COUNT(*) FROM imports \
              WHERE src_path = 'src/main.rs' AND kind = 'relative'",
@@ -101,7 +100,7 @@ fn ingest_populates_imports_table_from_multilang_fixture() {
         .unwrap();
     assert_eq!(rust_rel, 1, "expected one relative (crate::) Rust import");
 
-    let py_count: i64 = conn
+    let py_count: i64 = db
         .query_row(
             "SELECT COUNT(*) FROM imports WHERE src_path = 'src/app.py'",
             [],
@@ -110,7 +109,7 @@ fn ingest_populates_imports_table_from_multilang_fixture() {
         .unwrap();
     assert_eq!(py_count, 2, "expected 2 Python imports");
 
-    let js_react: i64 = conn
+    let js_react: i64 = db
         .query_row(
             "SELECT COUNT(*) FROM imports \
              WHERE src_path = 'src/ui.js' AND target = 'react' AND kind = 'absolute'",
@@ -120,7 +119,7 @@ fn ingest_populates_imports_table_from_multilang_fixture() {
         .unwrap();
     assert_eq!(js_react, 1, "expected react import as absolute");
 
-    let js_rel: i64 = conn
+    let js_rel: i64 = db
         .query_row(
             "SELECT COUNT(*) FROM imports \
              WHERE src_path = 'src/ui.js' AND kind = 'relative'",
@@ -130,7 +129,7 @@ fn ingest_populates_imports_table_from_multilang_fixture() {
         .unwrap();
     assert_eq!(js_rel, 1, "expected one relative ./util JS import");
 
-    let java_wild: i64 = conn
+    let java_wild: i64 = db
         .query_row(
             "SELECT COUNT(*) FROM imports \
              WHERE src_path = 'src/A.java' AND kind = 'wildcard'",
@@ -211,11 +210,9 @@ fn ingest_resolves_imports_to_target_paths() {
     };
     db.ingest(&repo, &opts).expect("ingest");
 
-    let conn = db.conn();
-
     // At least one row resolved overall — sanity check that the
     // UPDATE path fired.
-    let resolved_count: i64 = conn
+    let resolved_count: i64 = db
         .query_row(
             "SELECT COUNT(*) FROM imports WHERE resolved = TRUE",
             [],
@@ -228,7 +225,7 @@ fn ingest_resolves_imports_to_target_paths() {
     );
 
     // Rust: crate::lib::foo from src/main.rs → src/lib.rs.
-    let rust_target: Option<String> = conn
+    let rust_target: Option<String> = db
         .query_row(
             "SELECT target_path FROM imports \
              WHERE src_path = 'src/main.rs' AND target LIKE '%lib::foo%' AND resolved = TRUE",
@@ -243,7 +240,7 @@ fn ingest_resolves_imports_to_target_paths() {
     );
 
     // JS: ./util from src/app.js → src/util.js.
-    let js_target: Option<String> = conn
+    let js_target: Option<String> = db
         .query_row(
             "SELECT target_path FROM imports \
              WHERE src_path = 'src/app.js' AND target = './util' AND resolved = TRUE",
@@ -258,7 +255,7 @@ fn ingest_resolves_imports_to_target_paths() {
     );
 
     // Python: .core from src/pkg/main.py → src/pkg/core.py.
-    let py_target: Option<String> = conn
+    let py_target: Option<String> = db
         .query_row(
             "SELECT target_path FROM imports \
              WHERE src_path = 'src/pkg/main.py' AND target LIKE '.core%' AND resolved = TRUE",
@@ -277,7 +274,7 @@ fn ingest_resolves_imports_to_target_paths() {
     // targets. The `imports_pass_skips_non_tier1_files` neighbor test
     // covers the unresolved-external-imports inverse case, so this
     // test is allowed to fully resolve.
-    let total: i64 = conn
+    let total: i64 = db
         .query_row("SELECT COUNT(*) FROM imports", [], |r| r.get(0))
         .expect("count total");
     assert_eq!(
@@ -318,7 +315,6 @@ fn imports_pass_skips_non_tier1_files() {
     db.ingest(&repo, &opts).expect("ingest");
 
     let count: i64 = db
-        .conn()
         .query_row("SELECT COUNT(*) FROM imports", [], |r| r.get(0))
         .unwrap();
     assert_eq!(count, 0, "non-Tier-1 files must not produce import rows");

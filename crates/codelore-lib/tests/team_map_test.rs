@@ -43,7 +43,6 @@ fn team_map_renames_authors_in_output() {
     // The aliasing lands in `commits.canonical_author`. Query the table
     // directly — it's the strongest guarantee the team-map ran.
     let team_count: i64 = db
-        .conn()
         .query_row(
             "SELECT COUNT(*) FROM commits WHERE canonical_author = 'Backend Team'",
             [],
@@ -79,7 +78,6 @@ fn dot_codelore_teams_is_auto_discovered() {
     db.ingest(&repo, &opts).expect("ingest");
 
     let team_count: i64 = db
-        .conn()
         .query_row(
             "SELECT COUNT(*) FROM commits WHERE canonical_author = 'AutoTeam'",
             [],

@@ -53,7 +53,6 @@ fn ingest_populates_clones_table_for_type2_clone_pair() {
 
     // Spot-check the table by counting.
     let count: i64 = db
-        .conn()
         .query_row("SELECT COUNT(*) FROM clones", [], |r| r.get(0))
         .expect("count clones");
     assert_eq!(count, 2);

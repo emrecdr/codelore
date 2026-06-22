@@ -80,6 +80,7 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 | F107 / F108 | SPA runtime errors hotfix | **Shipped** (v0.5.1 hotfix) | _CHANGELOG.md_ |
 | F109 | `diff_output.rs` missed by F91 sweep | **Shipped** | PR #53 |
 | F110 | Differential test only 4 of 8 trait methods | **Fixed** | PR #57 → main. `head_sha_matches` + 11 sibling tests now in `differential_repo_test.rs` |
+| F111 | `FactsDb::conn()` leaks `&duckdb::Connection` into public API | **Fixed** | This session. Tightened `conn()` to `pub(crate)` so external consumers can't bypass FactsDb's safety surface; added narrow safe methods `prepare` / `execute_batch` / `query_row` (each wrapping the SQL error in `CodeLoreError::Analysis`, exit 4). All 9 external `.conn()` call sites across 5 test files migrated to the safe methods — 7 chained `db.conn().<m>()` calls rewritten mechanically, plus the two multi-query `let conn = db.conn();` bindings in `imports_factsdb_test.rs` expanded to direct `db.query_row(...)` calls. Zero CLI `.conn()` uses, so production callers see no API change — the finding was API hygiene, not breakage. |
 | F112 | Provenance manifest missing reproducibility fields | **Fixed** | PR #57 → main. `head_sha`, `cache_key_hash`, `rust_version`, `target_triple`, `grammars: BTreeMap<String,String>` populated in `provenance/mod.rs` |
 | F118 | gix walker thread panic silently swallowed | **Fixed** | PR #62 → main. `WalkerStream` joins handle on EOF; panic mapped to `CodeLoreError::Repo` → exit 3 |
 | F127 | Kamei `enrich_diffusion` NS/ND/NF correlated subqueries | **Fixed** (partial — entropy block remains) | PR #64 → main collapsed the NS/ND/NF triple. See F127 in §4 for the entropy-block remainder. |
@@ -150,12 +151,6 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 
 ### NEW Active Findings — Architecture & supply chain
 
-#### F111 — `FactsDb::conn()` leaks `&duckdb::Connection` into public API
-
-*   **Location**: `crates/codelore-lib/src/facts/mod.rs:307`
-*   **Severity**: HIGH
-*   **Suggested fix**: `pub(crate) fn conn()` + narrower safe methods (`prepare`, `query_map`, `execute`).
-
 #### F113 — `codelore-cli` reaches into 8 distinct `codelore_lib` submodules — no façade
 
 *   **Location**: `crates/codelore-cli/src/main.rs` — all `use codelore_lib::*` statements
@@ -211,7 +206,7 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 | V4 | no `WIDGETS` registry | `const WIDGETS = [{ name, render, rerender? }]` introduced at §3 boot; single `WIDGETS.forEach` loop replaces 60 LOC of duplicated render + rerender lines; 14 widgets registered uniformly; integration + browser smoke tests green | **Fixed (this session)** |
 | V5 | METRIC_DEFS not interpolated | `SpaOptionsSnapshot` field on `SpaDashboard` populated from `Options::from_options`; widgets.js `interpolate(def.formula, data.options)` substitutes `${key}` placeholders; coupling_pairs/coupling_density formulas updated to use placeholders | **Fixed (this session)** |
 | V6 | `CHANNEL_CAPACITY = 64` unmeasured | `ingest_capacity_sweep` Criterion benchmark added (16/64/256/1024); `CHANNEL_CAPACITY_OVERRIDE: AtomicUsize` + `set_channel_capacity_override(n)` writer hook; `bounded::<CommitEvent>(channel_capacity())` on the hot path | **Fixed (this session)** |
-| F111 | `FactsDb::conn()` leaks `&Connection` | `facts/mod.rs:307` (drifted from :266) still `pub fn conn(&self) -> &Connection` | Active confirmed |
+| F111 | `FactsDb::conn()` leaks `&Connection` | `conn()` tightened to `pub(crate)`; `prepare` / `execute_batch` / `query_row` safe methods added; all 9 external `.conn()` test call sites migrated; zero CLI uses | **Fixed (this session)** |
 | F113 | CLI reaches into many lib submodules | 8 distinct first-level `codelore_lib::*` paths (analyses, analysis, facts, options, output, provenance, quality_gates, repo) — earlier 13/17+ counts both inflated | Active confirmed (count corrected) |
 | F114 | Single-CDN dependence | `AssetPin.url_fallbacks` added with `unpkg.com` mirror per asset; `fetch_and_pin` walks primary→fallbacks; SHA-256 enforced on whichever mirror responds; tampered-mirror substitution still fails the build loudly | **Fixed (this session)** |
 | F115 | Container mutable tags | Both `FROM` lines now carry inline `@sha256:` digests; Renovate `dockerfile` manager pattern set to `/Containerfile/` (Dependabot only detects `Dockerfile`); base-image bumps grouped weekly | **Fixed (this session)** |
@@ -279,7 +274,7 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 - **Closed on main (added to §3 closure-log)**: F110, F112, F117, F118, F120 (URL half), F124 (policy half), F125, F126, F127 (full — entropy rewrite closes the remainder), F128, F129, F130, F134, F135, F138, F142, F143, F146, F150, F151, F152, F153, F154, F155, F156, F157, F158, F159, F160, F163.
 - **REFUTED this session**: F116 (Renovate + Dependabot partitioned by ecosystem) + F123 (crossbeam 0.8.4 + num-format 0.4.4 are current releases) — see §3 newly-refuted block.
 - **Closed by side-effect**: F162 — Parquet writers now delegate to shared SQL generators that preserve CSV row-type contract via explicit casts. Verified 2026-06-21.
-- **Active**: F94, F111, F113, F119, F145, F148, F161 = **7 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
+- **Active**: F94, F113, F119, F145, F148, F161 = **6 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
 
 The next sweep should re-open with F-IDs starting at **F164**.
 

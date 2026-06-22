@@ -304,7 +304,64 @@ impl FactsDb {
         Ok(v)
     }
 
-    pub fn conn(&self) -> &Connection {
+    /// Prepare a SQL statement against the underlying connection. Returns
+    /// a `duckdb::Statement<'_>` whose lifetime is tied to `&self`. Use
+    /// for the `prepare → query_map / query_row → collect` pattern when
+    /// the caller needs multi-row iteration. Errors are wrapped in
+    /// [`CodeLoreError::Analysis`] so they share the analysis-error exit
+    /// code (4) the rest of the lib uses for SQL failures.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CodeLoreError::Analysis`] if statement preparation fails.
+    pub fn prepare<'a>(&'a self, sql: &str) -> Result<duckdb::Statement<'a>> {
+        self.conn
+            .prepare(sql)
+            .map_err(|e| CodeLoreError::Analysis(format!("prepare: {e}")))
+    }
+
+    /// Run multiple SQL statements separated by `;`. Useful for test
+    /// fixtures and one-shot DDL/DML. Single-statement SQL also works
+    /// — `DuckDB`'s `execute_batch` just feeds the whole string through
+    /// the parser.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CodeLoreError::Analysis`] on any SQL error.
+    pub fn execute_batch(&self, sql: &str) -> Result<()> {
+        self.conn
+            .execute_batch(sql)
+            .map_err(|e| CodeLoreError::Analysis(format!("execute_batch: {e}")))
+    }
+
+    /// Run a single SQL statement that returns exactly one row, mapping
+    /// it via the caller-supplied closure. Mirrors `rusqlite`'s shape so
+    /// migration from `db.conn().query_row(...)` is mechanical.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CodeLoreError::Analysis`] on prepare / execute / no-rows
+    /// error.
+    pub fn query_row<T, P, F>(&self, sql: &str, params: P, mapper: F) -> Result<T>
+    where
+        P: duckdb::Params,
+        F: FnOnce(&duckdb::Row<'_>) -> duckdb::Result<T>,
+    {
+        self.conn
+            .query_row(sql, params, mapper)
+            .map_err(|e| CodeLoreError::Analysis(format!("query_row: {e}")))
+    }
+
+    /// Internal raw-connection accessor. `pub(crate)` so the rest of
+    /// `codelore-lib` (kamei, `quality_gates`, `output::spa`, ingest, etc.)
+    /// can still reach the underlying `duckdb::Connection` for
+    /// `Appender` / multi-statement transactions / etc. without
+    /// re-implementing every primitive on `FactsDb`. External callers
+    /// must use the narrow safe methods above (`prepare`,
+    /// `execute_batch`, `query_row`, `query_one_value`, `list_tables`,
+    /// `explain_sql`, `flush`) rather than reaching for the raw
+    /// connection.
+    pub(crate) fn conn(&self) -> &Connection {
         &self.conn
     }
 }
