@@ -1,40 +1,67 @@
 # Handoff — resuming the active-findings sweep
 
-Session paused 2026-06-22. **7 Active findings** remain in
-`docs/reports/deep_analysis_report.md`. This document captures each
-remaining finding with concrete implementation details, verification
-commands, and prior-session notes — paste a finding ID + the relevant
-section into a fresh session to pick up exactly where this one left
-off.
+> **Status update 2026-06-22 (continuation session).** Of the 7 findings
+> this doc was written to resume, **4 are now closed and on `main`**:
+> F111 (`7534025`), F94 (`99a06ef`), and F113 + F145 together (`b734d45`).
+> **5 Active findings** now remain in
+> `docs/reports/deep_analysis_report.md` (the source of truth): F119,
+> F148, F161, F164, F165.
+>
+> - **F119 / F148 / F161** — the output-emitter cluster. Deliberately
+>   deferred to its own focused session: validation showed the handoff's
+>   "single generic `TabularEmit`" design is leakier than assumed (7 CSV
+>   emitters carry a `code_maat_compat` flag that changes their schema at
+>   runtime, `revisions` is a tuple, `hotspots` has heavy conditional
+>   formatting), and the change is byte-identical-critical across 64
+>   emitters. F145 was done WITHOUT touching the emitter internals, so
+>   those internals stay byte-identical by construction.
+> - **F164** (new) — task-ID (`F<NN>`) references in code comments,
+>   codebase-wide (~48 sites). Documentation-hygiene sweep.
+> - **F165** (new) — `--format ndjson`/`gha` on an unsupported analysis
+>   panics via a reachable `unreachable!` (exit 101). Surfaced during the
+>   F145 byte-identical verification; preserved verbatim there. Mirror the
+>   SARIF guard to bail cleanly instead.
+>
+> The §F111 / §F113 / §F94 / cluster sections below are retained as
+> historical reference; the first three are DONE. For the cluster, the
+> §"F119 + F148 + F145 + F161" section's design sketch should be revisited
+> against the leakiness notes above before implementing.
+>
+> Verification harness note for the cluster: a byte-identical baseline
+> across all 228 analysis×format pairs is the right gate. Capture with a
+> binary COPIED to a stable path (e.g. `/tmp/codelore_stable`) — the live
+> `target/debug/codelore` gets wiped by concurrent rust-analyzer/cargo
+> churn mid-capture, which silently produces all-empty (exit 127) outputs
+> and a misleading diff. Compare stdout + exit codes; expect benign diffs
+> in clones (working-tree-sensitive), delivery-friction (`wip_age_days`
+> wall-clock drift), and SARIF (`run/<id>` per-run).
 
-## Session state (clean main, e848621 → 6218fd1 → 5c10a3e → 6218fd1)
+---
 
-Closed this session (Wave 1 + Wave 2 + partial Wave 3): F123 (refuted),
-F162 (already-closed), F131, F137, V5, V6, F114, F115, F122, F136,
-F144, F149, F121, V4, F132, F133, F97. **14 fixes + 2 prior closures
-= 16 total**. Active 23 → 7.
+Session paused 2026-06-22. This document captures each remaining finding
+with concrete implementation details, verification commands, and
+prior-session notes — paste a finding ID + the relevant section into a
+fresh session to pick up exactly where this one left off.
 
-A `git stash` entry titled "F111 WIP — see HANDOFF.md for resume notes"
-holds incomplete F111 work; the next session can `git stash pop` or
-`git stash drop` it (the WIP captured in §F111 below is a clean
-restart; the stash is optional).
+## Original session state (clean main, e848621 → 6218fd1 → 5c10a3e → 6218fd1)
 
-The 7 remaining findings ranked by leverage:
+Closed in the prior session (Wave 1 + Wave 2 + partial Wave 3): F123
+(refuted), F162 (already-closed), F131, F137, V5, V6, F114, F115, F122,
+F136, F144, F149, F121, V4, F132, F133, F97. **14 fixes + 2 prior
+closures = 16 total**. Active 23 → 7.
+
+The 7 findings this doc was written to resume, ranked by leverage
+(✅ = closed in the continuation session):
 
 | ID    | Effort | Blast        | Why it's last |
 |-------|--------|--------------|---------------|
-| F111  | S      | cross-cutting| Visibility + safe methods. ~80 LOC + ~10 test migrations. **High-confidence quick win** — start here. |
-| F113  | M      | cross-cutting| `codelore_lib::cli_api` façade — design decision + several CLI-side import refactors. |
-| F94   | L      | architectural| Mechanical split of `ingest.rs` (1455 LOC) into 6 submodules. No behavior change but touches every internal caller. |
-| F119  | L      | cross-cutting| `csv` crate sweep. Pairs with F148/F161 — best done together. |
-| F148  | L      | architectural| `TabularEmit` trait, replaces ~33 hand-rolled CSV + ~33 hand-rolled markdown emitters. Pairs with F119/F145/F161. |
-| F145  | L      | cross-cutting| `main.rs` dispatch matrix collapse via trait-based registry. Pairs with F119/F148. |
-| F161  | L      | cross-cutting| `EmitterStream` trait for streaming emit (no `Vec<Row>` materialization). Pairs with F148/F119. |
-
-**Recommended sequencing**: F111 → F113 → F94 → (one cohesive PR for
-F119+F148+F145+F161). The cluster is L-architectural enough that
-shipping it as a single coherent commit is cleaner than 4 partial
-ones; the audit's original triage flagged it as best done together.
+| ✅ F111 | S    | cross-cutting| Visibility + safe methods. **Done** (`7534025`). |
+| ✅ F113 | M    | cross-cutting| `codelore_lib::cli_api` façade (additive). **Done** (`b734d45`, with F145). |
+| ✅ F94  | L    | architectural| Split of `ingest.rs` into 7 submodules. **Done** (`99a06ef`). |
+| F119  | L      | cross-cutting| `csv` crate sweep. Pairs with F148/F161 — deferred cluster. |
+| F148  | L      | architectural| `TabularEmit` trait. Pairs with F119/F161 — deferred cluster. |
+| ✅ F145 | L    | cross-cutting| `main.rs` dispatch collapse (per-analysis fns). **Done** (`b734d45`). |
+| F161  | L      | cross-cutting| `EmitterStream` trait for streaming emit. Pairs with F148/F119 — deferred cluster. |
 
 ---
 
