@@ -67,7 +67,7 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 | F94 | `ingest.rs` monolithic | **Active** — _see §4_ |
 | F95 | `communication.rs` window filter | **Refuted** (filter at ingest level) |
 | F96 | ECharts mount + dispose duplicated | **Fixed** | `7f36a7f` (`mountEcharts` @ 13+ sites) |
-| F97 | SPA `JSON.parse` blocks first paint | **Active** — _see §4_ |
+| F97 | SPA boot-time render storm blocks first paint | **Fixed (this session)** — see §3 closure log |
 | F98 | Chart-click drawer no keyboard equivalent | **Fixed** | F-P4 parallel DOM tree |
 | F99 | Container OCI label `<owner>` placeholder | **Fixed** | `f6848e6` |
 | F100 | `cut-release.sh` trap hang on stuck `gh api` | **Fixed** | `f6eb953` |
@@ -147,13 +147,6 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 *   **Status**: Active. `facts/ingest/` subdirectory exists but empty — split attempted and abandoned.
 *   **Suggested fix**: split into `ingest/loop.rs`, `ingest/complexity.rs`, `ingest/clones_head.rs`, `ingest/imports_head.rs`, `ingest/lineage.rs`, `ingest/grouping.rs`. Re-export from `facts/ingest/mod.rs`.
 
-#### F97 — SPA `JSON.parse` synchronous at first paint
-
-*   **Location**: `crates/codelore-lib/src/output/spa/widgets.js:61`
-*   **Severity**: MED
-*   **Category**: Initial render perf
-*   **Status**: Active. The §3 sprint banner claimed F-P5 PWA closed F97 but the validator confirms widgets.js still parses synchronously and no `requestIdleCallback` references exist.
-*   **Suggested fix**: split JSON block into header + per-widget `<script type="application/json" id="widget-X">`; yield between widgets via `requestIdleCallback`.
 
 ### NEW Active Findings — Architecture & supply chain
 
@@ -214,7 +207,7 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 | Finding | Claim | Verified state on main | Status |
 |---|---|---|---|
 | F94 | ingest.rs monolithic | `wc -l = 1453` (drifted +109 LOC) ; `facts/ingest/` subdir exists empty | Active confirmed (drifted larger) |
-| F97 | `JSON.parse` synchronous at first paint | `widgets.js:61` literal `JSON.parse(dataBlock.textContent)`; `grep -c requestIdleCallback = 0` | Active confirmed |
+| F97 | `JSON.parse` synchronous at first paint | Recon clarified the bottleneck was the boot-time WIDGETS.forEach render storm, not the JSON.parse itself. Boot converted to async with `yieldToMain` between widgets. First paint is now bounded by 1 widget render (kpi-tiles) instead of all 14. | **Fixed (this session)** |
 | V4 | no `WIDGETS` registry | `const WIDGETS = [{ name, render, rerender? }]` introduced at §3 boot; single `WIDGETS.forEach` loop replaces 60 LOC of duplicated render + rerender lines; 14 widgets registered uniformly; integration + browser smoke tests green | **Fixed (this session)** |
 | V5 | METRIC_DEFS not interpolated | `SpaOptionsSnapshot` field on `SpaDashboard` populated from `Options::from_options`; widgets.js `interpolate(def.formula, data.options)` substitutes `${key}` placeholders; coupling_pairs/coupling_density formulas updated to use placeholders | **Fixed (this session)** |
 | V6 | `CHANNEL_CAPACITY = 64` unmeasured | `ingest_capacity_sweep` Criterion benchmark added (16/64/256/1024); `CHANNEL_CAPACITY_OVERRIDE: AtomicUsize` + `set_channel_capacity_override(n)` writer hook; `bounded::<CommitEvent>(channel_capacity())` on the hot path | **Fixed (this session)** |
@@ -254,6 +247,7 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 | V4 | `widgets.js` per-widget registry | New `const WIDGETS = [{ name, render, rerender? }]` array at the top of §3 Boot; single `WIDGETS.forEach(w => { w.render(); /* register theme rerender per the `rerender` flag */ })` loop replaces the prior 60-LOC sequence of duplicated `renderXxx()` + `_codeloreRerenderers.push(() => renderXxx(...))` blocks. 14 widgets registered uniformly; `rerender: false` opts out (KPI tiles, KI table, hotspot table), `rerender: 'theme'` opts into the token-cache-invalidating path (hotspot circle-pack), default falls through to `_codeloreRerenderers.push`. SPA integration test + browser smoke test green. Adding a widget is now one line. | **Fixed (this session)** |
 | F132 | Hardcoded hex colors break light theme | 4 sites in `widgets.js` (sankey label `#e6e6e6`, treemap label `#fff`, calendar-heatmap 5-band ramp, 15-color author palette) externalised to CSS custom properties — new `--label-on-dark`, `--label-on-saturated`, `--heatmap-{1..5}`, `--chart-palette-{1..15}` tokens with separate light-theme overrides that retune the heatmap ramp's "low" band (from `#1a4a2c` invisible-on-white to `#c8e6c9` desaturated mint) and deepen the author palette saturation so colors don't wash out against light cards. JS sites swapped to `token('--name')` (theme-aware + cache-invalidating). Widget entries `coupling-sankey` / `hotspot-treemap` / `calendar-heatmap` upgraded to `rerender: 'theme'` so the token cache flushes on theme toggle. `grep` for `'#[0-9a-fA-F]{3,6}'` in widgets.js now returns zero hits; browser smoke test green. |
 | F133 | No responsive layout below ~1280px viewport | Dashboard grid container swapped from `xl:grid-cols-2` to `md:grid-cols-2` so 2-col kicks in at tablet portrait (≥ 768 px) instead of waiting until desktop (≥ 1280 px). Wide widgets keep `xl:col-span-2` so they only span both columns at desktop; at md/lg they sit in the normal 2-col grid one per column. Mobile (< 768 px) stays at single-column. The Tailwind v4 bundle was rebuilt (`tailwindcss -i tailwind-src/input.css -o tailwind.daisyui.min.css --minify`) so `md\:grid-cols-2` is included alongside the existing `xl\:grid-cols-2`. SPA integration + browser smoke tests green; viewports 768–1279 px now get a proper 2-col layout instead of the uncompressed desktop view. |
+| F97 | SPA boot-time render storm blocks first paint | Synchronous `WIDGETS.forEach` boot loop replaced by an `async function bootWidgets()` IIFE that calls `w.render()` for each entry, registers the rerenderer (theme/regular/none), and `await yieldToMain()` between widgets (not after the last — a trailing yield is a wasted task). First widget (kpi-tiles) is cheap structural HTML, so the browser paints page chrome + KPI cards immediately, then incrementally fills in the 13 heavier widgets as the event loop yields. `yieldToMain` uses the existing `scheduler.yield()` / `MessageChannel.postMessage` fallback ladder shipped for F134/F135. Smaller scope than the audit's "split JSON into per-widget blocks" — the JSON parse itself is fast (a few hundred KB worst-case); the bottleneck was synchronously rendering 14 ECharts widgets before yielding. SPA integration + browser smoke tests green. |
 | F150 | Schema version disjoint, no startup validation | `facts/schema.rs:10` `CURRENT_SCHEMA_VERSION` const + `facts/mod.rs:69` `validate_schema_version()` at `open_read_only` bails on mismatch | **Fixed on main (PR #61)** |
 | F151 | Leiden non-deterministic | `communities.rs:58 LEIDEN_SEED` + `:148-150 LeidenConfig { seed: Some(LEIDEN_SEED), .. }` + regression test :269-316 | **Fixed on main (PR #61)** |
 | F152 | clone_group_id std HashMap | `clones/extractor.rs:151-152` switched to `BTreeMap<[u8;32], _>` | **Fixed on main (PR #61)** |
@@ -285,7 +279,7 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 - **Closed on main (added to §3 closure-log)**: F110, F112, F117, F118, F120 (URL half), F124 (policy half), F125, F126, F127 (full — entropy rewrite closes the remainder), F128, F129, F130, F134, F135, F138, F142, F143, F146, F150, F151, F152, F153, F154, F155, F156, F157, F158, F159, F160, F163.
 - **REFUTED this session**: F116 (Renovate + Dependabot partitioned by ecosystem) + F123 (crossbeam 0.8.4 + num-format 0.4.4 are current releases) — see §3 newly-refuted block.
 - **Closed by side-effect**: F162 — Parquet writers now delegate to shared SQL generators that preserve CSV row-type contract via explicit casts. Verified 2026-06-21.
-- **Active**: F94, F97, F111, F113, F119, F145, F148, F161 = **8 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
+- **Active**: F94, F111, F113, F119, F145, F148, F161 = **7 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
 
 The next sweep should re-open with F-IDs starting at **F164**.
 

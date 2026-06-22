@@ -483,15 +483,44 @@
     { name: 'xray-sunburst',      render: () => renderXRaySunburst(data.xray || []) },
   ];
 
-  WIDGETS.forEach(function (w) {
-    w.render();
-    if (w.rerender === false) return;
-    if (w.rerender === 'theme') {
-      registerThemeRerender(w.render);
-    } else {
-      window._codeloreRerenderers.push(w.render);
+  // F97: boot widgets cooperatively. The synchronous `forEach` blocked
+  // first paint until all 14 widgets had run their initial render
+  // (ECharts mount + d3.pack layout + initial DOM injection each
+  // costs tens of ms on large repos). Now: render the first widget
+  // synchronously so the user sees SOMETHING immediately, then yield
+  // between each subsequent widget so the browser can paint progress.
+  // The theme/regular rerender registration is unchanged (those
+  // rerenderers still fire as a single batch on theme toggle — F135
+  // already yields between them via _codeloreYieldToMain).
+  //
+  // `yieldToMain` prefers `scheduler.yield()` on Chrome 129+ and falls
+  // back to MessageChannel-postMessage (sub-millisecond, no 4 ms
+  // clamp like setTimeout(0)). On browsers without either the
+  // `Promise.resolve()` fallback degrades to "run on the next
+  // microtask" — still better than fully synchronous.
+  //
+  // The boot is fire-and-forget: any synchronous follow-up below
+  // (window._codeloreShowDetail registration, Alpine store wiring)
+  // does NOT depend on widget rendering being complete.
+  (async function bootWidgets() {
+    for (var i = 0; i < WIDGETS.length; i++) {
+      var w = WIDGETS[i];
+      w.render();
+      if (w.rerender === 'theme') {
+        registerThemeRerender(w.render);
+      } else if (w.rerender !== false) {
+        window._codeloreRerenderers.push(w.render);
+      }
+      // Yield between widgets, NOT after the last one (a trailing
+      // yield is a wasted task). The first widget (kpi-tiles) is
+      // cheap structural HTML, so by the time we yield after it the
+      // browser has already painted the page chrome + KPI cards.
+      if (i < WIDGETS.length - 1) {
+        // eslint-disable-next-line no-await-in-loop -- sequential yield is the point
+        await yieldToMain();
+      }
     }
-  });
+  })();
 
   // Expose the drawer-show callback so the hotspot-table row-click
   // handler can fire it. Must execute after `data` is loaded (above);
