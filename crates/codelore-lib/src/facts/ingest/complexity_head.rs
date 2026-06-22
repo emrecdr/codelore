@@ -11,7 +11,7 @@ impl FactsDb {
     pub(super) fn ingest_complexity_at_head<R: crate::repo::Repo>(
         &self,
         repo: &R,
-        // After F59 (blob reads instead of disk), the complexity pass
+        // Because the complexity pass reads blobs instead of disk, it
         // no longer needs `opts.repo_path` — every file is sourced via
         // `repo.read_blob_at_head`. Kept on the signature for forward
         // compatibility (future per-language flags may need it).

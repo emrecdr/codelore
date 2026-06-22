@@ -61,7 +61,7 @@ pub const DEFAULT_CLONE_SIMILARITY_FLOOR: f64 = 0.70;
 /// signal. Users who want them can opt back in.
 pub const DEFAULT_CLONE_SKIP_SAME_DIR: bool = true;
 
-/// F10: maximum source-file size in bytes that we'll feed to tree-sitter
+/// Maximum source-file size in bytes that we'll feed to tree-sitter
 /// for complexity / clones extraction at HEAD. Files larger than this
 /// are skipped with a tracing-debug log entry and excluded from
 /// AST-based metrics.

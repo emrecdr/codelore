@@ -490,7 +490,7 @@ fn parse_pretty_block(pretty: &str, name_status: &str) -> Option<CommitEvent> {
 /// 0\t0\tsrc/old.rs => src/new.rs
 /// ```
 ///
-/// **F8 fix**: previously we zipped raw and numstat lines positionally.
+/// Previously we zipped raw and numstat lines positionally.
 /// That assumption broke on commits with submodule additions/removals
 /// or binary exclusions where the two streams diverge in length — the
 /// trailing entries got dropped silently and any pre-divergence
@@ -617,7 +617,7 @@ fn raw_destination_path(raw: &str) -> Option<String> {
 /// Raw format: `<mode1> <mode2> <hash1> <hash2> <STATUS>\t<path>[\t<path2>]`
 /// (the leading `:` has already been stripped by the caller). The
 /// `(loc_added, loc_deleted)` tuple comes from `parse_numstat_with_key`
-/// joined by destination path — see `parse_changes_block` for the F8
+/// joined by destination path — see `parse_changes_block` for the
 /// rationale.
 fn parse_raw_with_stat(raw: &str, stat: (u32, u32)) -> Option<FileChange> {
     let tab = raw.find('\t')?;
@@ -835,7 +835,7 @@ mod tests {
         assert_eq!(stat, (12, 3));
     }
 
-    // F8 regression: path-key extraction must match between raw and
+    // Path-key extraction must match between raw and
     // numstat streams so HashMap-join can correctly pair them.
 
     #[test]
@@ -878,7 +878,7 @@ mod tests {
         );
     }
 
-    /// F8 regression: when raw and numstat streams have UNEQUAL lengths
+    /// When raw and numstat streams have UNEQUAL lengths
     /// (the original positional zip dropped trailing entries and
     /// corrupted preceding ones), HashMap-join must still produce
     /// correct line counts for every raw entry. We simulate a submodule

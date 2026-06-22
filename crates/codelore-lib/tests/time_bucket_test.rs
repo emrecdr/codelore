@@ -126,7 +126,7 @@ fn time_bucket_sql_unit_strings() {
     assert_eq!(TimeBucket::Month.as_sql_unit(), "month");
 }
 
-/// F29 regression — pre-fix, `--time-bucket day` + `--max-changeset-size 5`
+/// Previously, `--time-bucket day` + `--max-changeset-size 5`
 /// would silently drop an active day whose total distinct files exceeds
 /// 5, even if every individual commit only touched 1-2 files. Post-fix,
 /// the filter applies to PHYSICAL commits via `MAX(files) <= ?` so the
@@ -157,8 +157,8 @@ fn time_bucket_with_max_changeset_keeps_active_day_with_many_small_commits() {
 
     // 8 commits on the same day, each touching exactly 1 small file.
     // Per-commit size = 1; per-bucket distinct files = 8.
-    // Pre-F29 with `max_changeset_size = 5`: bucket dropped (8 > 5).
-    // Post-F29: bucket kept (MAX per-commit = 1 ≤ 5).
+    // Previously with `max_changeset_size = 5`: bucket dropped (8 > 5).
+    // Now: bucket kept (MAX per-commit = 1 ≤ 5).
     for i in 0..8 {
         write(path.join(format!("f{i}.rs")), &format!("v1 for f{i}\n"));
         run_git(path, &["add", "."]);
@@ -197,9 +197,9 @@ fn time_bucket_with_max_changeset_keeps_active_day_with_many_small_commits() {
     }
 }
 
-/// F29 control case — a single giant commit in the bucket SHOULD still
+/// Control case — a single giant commit in the bucket SHOULD still
 /// drop the whole bucket under the conservative MAX(files) semantic.
-/// This confirms the F5 anti-monorepo-sweep intent survives the F29 fix.
+/// This confirms the anti-monorepo-sweep intent survives the per-commit change.
 #[test]
 fn time_bucket_with_max_changeset_drops_bucket_containing_giant_commit() {
     let dir = tempfile::tempdir().unwrap();

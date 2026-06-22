@@ -149,7 +149,7 @@ impl Manifest {
         };
         // Resolve HEAD SHA from the fact store. The commits table is
         // populated by ingest; the most-recently-inserted commit (by
-        // rowid) is HEAD per the F12 invariant (rowid ASC = walk
+        // rowid) is HEAD per the rowid-ASC invariant (rowid ASC = walk
         // order, gix walks newest-first). Falls back to empty string
         // if the query fails (no commits ingested — degenerate state).
         let head_sha: String = db

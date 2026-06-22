@@ -92,7 +92,7 @@ pub struct KnowledgeIslandRow {
 ///
 /// 1. `author_last_commit` — per author's MAX(commit date) ANYWHERE.
 /// 2. `live_paths` — files whose most-recent change isn't `'deleted'`
-///    (same F16 pattern used in `code_age` / `entity-churn`).
+///    (same live-at-anchor pattern used in `code_age` / `entity-churn`).
 /// 3. `per_path_author` — per `(path, author)`: SUM(loc_added).
 /// 4. `totals` — per path: SUM of all authors' LoC.
 /// 5. `main_per_path` — per path: pick the author with max LoC
@@ -104,7 +104,7 @@ pub struct KnowledgeIslandRow {
 ///
 /// Bind values: `[substantial_threshold, anchor, anchor,
 /// departed_threshold_days, row_limit]`.
-// F18 fix: the anchor (`?` placeholder) is applied to EVERY CTE that
+// The anchor (`?` placeholder) is applied to EVERY CTE that
 // touches `commits.date` so back-test mode (`--age-time-now <past>`)
 // gets a temporally-isolated view. Previously the anchor was only
 // applied at the outer SELECT's `DATE_DIFF` and the `WHERE
@@ -245,9 +245,9 @@ pub fn run_knowledge_islands(db: &FactsDb, opts: &Options) -> Result<Vec<Knowled
         db,
         &sql,
         params![
-            anchor_str,                   // [1] F18: author_last_commit CTE WHERE
-            anchor_str,                   // [2] F18: live_paths inner SELECT WHERE
-            anchor_str,                   // [3] F18: per_path_author WHERE
+            anchor_str,                   // [1] author_last_commit CTE WHERE
+            anchor_str,                   // [2] live_paths inner SELECT WHERE
+            anchor_str,                   // [3] per_path_author WHERE
             substantial_threshold,        // [4] substantial_others CASE
             anchor_str,                   // [5] main SELECT DATE_DIFF for days_since
             anchor_str,                   // [6] WHERE DATE_DIFF (departure filter)
@@ -261,9 +261,9 @@ pub fn run_knowledge_islands(db: &FactsDb, opts: &Options) -> Result<Vec<Knowled
         db,
         &sql,
         params![
-            anchor_str,                   // [1] F18: author_last_commit CTE WHERE
-            anchor_str,                   // [2] F18: live_paths inner SELECT WHERE
-            anchor_str,                   // [3] F18: per_path_author WHERE
+            anchor_str,                   // [1] author_last_commit CTE WHERE
+            anchor_str,                   // [2] live_paths inner SELECT WHERE
+            anchor_str,                   // [3] per_path_author WHERE
             substantial_threshold,        // [4] substantial_others CASE
             anchor_str,                   // [5] main SELECT DATE_DIFF for days_since
             anchor_str,                   // [6] WHERE DATE_DIFF (departure filter)

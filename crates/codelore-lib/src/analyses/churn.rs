@@ -87,7 +87,7 @@ fn build_author_churn_sql(src: &str) -> String {
     )
 }
 
-// F16 fix: entity-churn now filters to files currently live at HEAD.
+// Entity-churn filters to files currently live at HEAD.
 // Without this, a file deleted years ago still shows up with full
 // historical churn numbers — useful for retroactive forensics but
 // confusing for triage dashboards which are the dominant use case.

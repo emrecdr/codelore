@@ -1,6 +1,6 @@
 //! End-to-end coverage of `run_bus_factor` against an ingested `FactsDb`.
 //!
-//! The audit cycle (F140) called out that bus-factor had a row struct,
+//! The audit cycle called out that bus-factor had a row struct,
 //! a unit test, but no integration test against a real ingested
 //! repository — so SQL typos or schema renames would surface only at
 //! customer runtime. This test exercises the full path through

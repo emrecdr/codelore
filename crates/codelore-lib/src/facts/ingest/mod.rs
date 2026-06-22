@@ -110,8 +110,8 @@ impl FactsDb {
 
             // Consumer: runs on the calling thread — FactsDb / Connection stays single-threaded.
             // Combined path filter — respects --exclude + .gitignore +
-            // .codeloreignore for the commit-walk ingest path. F30 fix
-            // (rel-path matching) preserved by PathsFilter internals.
+            // .codeloreignore for the commit-walk ingest path. Rel-path
+            // matching is handled by PathsFilter internals.
             let paths_filter = crate::paths_filter::PathsFilter::from_opts(opts)?;
             let stats = ingest_loop(self, rx, &team_map, &bot_patterns, &paths_filter)?;
 
@@ -192,7 +192,7 @@ impl FactsDb {
 /// Resolve HEAD's rev from the commits table (most recent commit by date).
 /// Used to stamp the `rev` column on inserted clone rows.
 fn current_head_rev(db: &FactsDb) -> Result<String> {
-    // F12 fix: SHA-1 lex order (`rev DESC`) is arbitrary and has no
+    // SHA-1 lex order (`rev DESC`) is arbitrary and has no
     // relationship to git topology. When two commits share the exact
     // same second timestamp (common with bot commits, rebases,
     // scripted backfills), the lex tiebreak can pick the PARENT as
@@ -233,7 +233,7 @@ fn current_head_rev(db: &FactsDb) -> Result<String> {
 /// SHA-1 hex string whose lex order has no relationship to commit order.
 /// `commits.date DESC` first, then `commits.rowid ASC` (insertion order — gix
 /// walks reverse-chronologically so children get smaller rowids than parents)
-/// as a deterministic, topologically-correct tiebreak. F12 fix: previously
+/// as a deterministic, topologically-correct tiebreak. Previously this
 /// used `c.rev DESC` (SHA-1 lex) which is arbitrary and could pick the parent
 /// commit as HEAD instead of the child on same-second pairs.
 fn query_live_paths(db: &FactsDb) -> Result<Vec<String>> {

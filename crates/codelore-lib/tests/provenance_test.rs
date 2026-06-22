@@ -48,7 +48,7 @@ fn manifest_captures_reproducibility_fields() {
 
     let m = Manifest::capture(&db, &opts, "revisions").expect("capture");
 
-    // Schema version pinned at 2 (post-F112 bump). Bump again when
+    // Schema version pinned at 2. Bump again when
     // future field changes break consumer compatibility.
     assert_eq!(m.schema_version, 2);
 

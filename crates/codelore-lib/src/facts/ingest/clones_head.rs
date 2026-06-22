@@ -55,7 +55,7 @@ impl FactsDb {
                 let Ok(Some(code)) = repo.read_blob_at_head(&rel) else {
                     return Ok(Vec::new());
                 };
-                // F10: skip oversized files (generated / minified) before
+                // Skip oversized files (generated / minified) before
                 // tree-sitter to avoid OOM / stack-overflow on deeply
                 // nested generated code. Same cap as complexity pass.
                 if code.len() > crate::constants::DEFAULT_MAX_AST_FILE_BYTES {

@@ -71,7 +71,7 @@ impl Repo for GixRepo {
                 order: gix::traverse::commit::simple::CommitTimeOrder::NewestFirst,
             });
         }
-        // F27 fix: collect OIDs WITHOUT parsing commit objects on the main
+        // Collect OIDs WITHOUT parsing commit objects on the main
         // thread. The previous filter pass called `repo.find_commit(oid)`
         // for every reachable commit on the hot path, then `process_commit_oid`
         // called `find_commit` AGAIN on the worker — two object-store lookups
@@ -80,7 +80,7 @@ impl Repo for GixRepo {
         // (returning `Result<Option<CommitEvent>>`), so the OID gather is
         // pure index iteration and filtering parallelises across workers.
         //
-        // F12 invariant (commits.rowid ASC = gix walk order) is preserved:
+        // The rowid-ASC invariant (commits.rowid ASC = gix walk order) is preserved:
         // the OID vec retains walk order, par_iter().collect() preserves
         // per-chunk order, and the driver thread drains Nones without
         // inserting them — so rowid still tracks walk order on the
@@ -97,17 +97,17 @@ impl Repo for GixRepo {
         let filter_after = opts.after;
         let filter_before = opts.before;
 
-        // F13 fix: stream events through a bounded crossbeam channel
+        // Stream events through a bounded crossbeam channel
         // rather than eagerly collecting the full event list into memory.
-        // The previous F9 implementation called `par_iter().collect()`
+        // The previous implementation called `par_iter().collect()`
         // which materialised gigabytes on large repos (100k+ commits with
         // rich changes/hunks per commit), bypassed the producer-consumer
         // channel architecture, and could OOM CI runners.
         //
-        // The architectural challenge: F12's `commits.rowid ASC` tiebreak
+        // The architectural challenge: the `commits.rowid ASC` tiebreak
         // REQUIRES insertion order to match commit-walk order. Pure
         // streaming (`par_iter().for_each(send)`) scrambles order across
-        // worker threads and silently breaks F12.
+        // worker threads and silently breaks that ordering.
         //
         // Resolution: chunked rayon. Process oids in batches of
         // `WALKER_CHUNK_SIZE`, each batch parallelised with
@@ -132,7 +132,7 @@ impl Repo for GixRepo {
             .spawn(move || {
                 for chunk in oids.chunks(WALKER_CHUNK_SIZE) {
                     // Order-preserving parallel map over this chunk. Filter
-                    // logic moved INSIDE the worker (F27): each worker opens
+                    // logic moved INSIDE the worker: each worker opens
                     // the commit object ONCE for both filtering and event
                     // construction; filtered-out commits return Ok(None).
                     let events: Result<Vec<Option<CommitEvent>>> = chunk
@@ -267,7 +267,7 @@ impl Repo for GixRepo {
         //   2. Untracked files (via the dirwalk),
         //   3. Staged-vs-HEAD differences.
         //
-        // F11 fix: previously we used `into_index_worktree_iter` which
+        // Previously we used `into_index_worktree_iter` which
         // ONLY yields (1) — it SKIPS the dirwalk and therefore reports
         // untracked-only repos as clean. `GitCliRepo` (via
         // `git status --porcelain`) DOES report untracked files. The
@@ -563,10 +563,10 @@ const MAX_DIFF_BLOB_BYTES: usize = 1024 * 1024;
 /// receives `- -` from `git diff --numstat` for binary files).
 const BINARY_SNIFF_BYTES: usize = 8000;
 
-/// F34 fix: blobs larger than [`MAX_DIFF_BLOB_BYTES`] on either side, or
+/// Blobs larger than [`MAX_DIFF_BLOB_BYTES`] on either side, or
 /// containing a NUL byte in the first [`BINARY_SNIFF_BYTES`], return
 /// `(0, 0)` without ever loading the full bytes into `InternedInput` or
-/// running the histogram diff. Pre-F34, `count_loc` blindly read raw
+/// running the histogram diff. Previously, `count_loc` blindly read raw
 /// bytes for any oid: a single commit touching a 50 MiB `SQLite` database
 /// allocated 100 MiB of `Vec<u8>` per worker thread and spent seconds in
 /// imara-diff on noise (random newline bytes), polluting hotspots /
@@ -780,7 +780,7 @@ fn commit_committer_date(commit: &gix::Commit<'_>) -> Result<time::OffsetDateTim
         .map_err(|e| CodeLoreError::Repo(format!("committer timestamp {ts_seconds}: {e}")))
 }
 
-/// F13 helper: extract a fully-resolved `CommitEvent` from a single oid.
+/// Extract a fully-resolved `CommitEvent` from a single oid.
 /// Called by every rayon worker in the chunked walker — each worker
 /// constructs its own thread-local `gix::Repository` from the shared
 /// `ThreadSafeRepository` clone, finds the commit, computes changes,
@@ -790,7 +790,7 @@ fn commit_committer_date(commit: &gix::Commit<'_>) -> Result<time::OffsetDateTim
 /// directly without dragging closure-capture lifetimes through the
 /// channel-spawned thread.
 /// Returns `Ok(None)` for commits filtered out by the merge or date
-/// predicates (F27: filtering used to happen on the main thread with its
+/// predicates (filtering used to happen on the main thread with its
 /// own `find_commit` call; both lookups are now folded here so each
 /// surviving commit is parsed exactly once per worker).
 fn process_commit_oid(

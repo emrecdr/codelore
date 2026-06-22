@@ -152,7 +152,7 @@ fn ingest_populates_complexity_for_tier1_files() {
     );
 }
 
-/// Regression test for F149. Pre-fix the `hunks` table existed in
+/// Regression test: previously the `hunks` table existed in
 /// schema but `append_change` never wrote to it — `Repo::diff_hunks`
 /// parsed the headers, attached them to `FileChange.hunks`, and the
 /// payload was dropped on the floor. The new ingest path writes one

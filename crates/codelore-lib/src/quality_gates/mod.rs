@@ -287,7 +287,7 @@ mod tests {
     #[test]
     fn unknown_key_in_gates_is_rejected() {
         // `cognative_max` (transposed letters) used to parse as
-        // default-disabled — the exact failure mode F156 captures.
+        // default-disabled — the exact failure mode this guards against.
         let raw = "[gates]\ncognative_max = 30\n";
         let err = Thresholds::from_text(raw).expect_err("typo'd gate key should reject");
         assert!(

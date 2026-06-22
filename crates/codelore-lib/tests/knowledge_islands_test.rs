@@ -174,7 +174,7 @@ fn knowledge_islands_threshold_gates_inclusion() {
 
 #[test]
 fn knowledge_islands_excludes_deleted_files() {
-    // F16 carry-over: knowledge-islands uses the same live-paths CTE
+    // Knowledge-islands uses the same live-paths CTE
     // pattern; deleted files shouldn't surface even with departed
     // authors.
     use std::process::Command;

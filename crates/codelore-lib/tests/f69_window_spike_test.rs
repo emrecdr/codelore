@@ -1,4 +1,4 @@
-//! F69 bench-gate spike: compare totals-CTE pattern vs window-function
+//! Bench-gate spike: compare totals-CTE pattern vs window-function
 //! rewrite for the ownership / code-health HHI fractal-value computation.
 //!
 //! The current production SQL (see `analyses/ownership.rs::SQL`) computes

@@ -54,7 +54,7 @@ pub fn cache_path(key: &[u8; 32], repo_path: &Path) -> PathBuf {
 
 /// Same as [`cache_path`] but with an explicit root (for `--cache-dir` override).
 ///
-/// F33 fix: `repo_path` is canonicalised before hashing the
+/// `repo_path` is canonicalised before hashing the
 /// per-repo subdirectory name so this function and [`cache_key`] (which
 /// already canonicalises) stay in lockstep. Without this, calling
 /// `codelore analyze .` and `codelore analyze $(pwd)` produced identical

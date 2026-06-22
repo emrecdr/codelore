@@ -28,10 +28,10 @@ fn changed_files_for_modify_commit() {
     assert!(matches!(c.change_type, ChangeType::Modified));
 }
 
-/// F34 regression — a commit that adds a small binary blob (containing
+/// A commit that adds a small binary blob (containing
 /// NUL bytes in the first 8 KB) must report `loc_added = 0` and
 /// `loc_deleted = 0`, mirroring `GitCliRepo` (which sees `- -` for
-/// binary files from `git log --numstat`). Pre-F34, `count_loc` ran
+/// binary files from `git log --numstat`). Previously, `count_loc` ran
 /// imara-diff over arbitrary byte arrays and produced nonsense
 /// "additions" / "removals" counts.
 #[test]

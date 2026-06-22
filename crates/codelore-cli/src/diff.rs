@@ -251,7 +251,7 @@ fn add_worktree(repo: &Path, sha: &str) -> Result<Worktree> {
         .prefix(&format!("wt-{}-", &sha[..8.min(sha.len())]))
         .tempdir_in(&cache_root)?;
     let path = tmp.path().to_path_buf();
-    // F6 fix: run `git worktree add` FIRST, then `tmp.keep()` only on
+    // Run `git worktree add` FIRST, then `tmp.keep()` only on
     // success. If `keep()` ran first (as the previous code did) and git
     // failed (invalid rev, local corruption, lock error), the TempDir
     // had already been demoted to a plain owned path and the directory
@@ -473,7 +473,7 @@ const STALE_WORKTREE_AGE_HOURS: u64 = 24;
 
 /// Best-effort cleanup of orphan worktrees from prior aborted runs.
 ///
-/// Two passes (order matters — F28 fix):
+/// Two passes (order matters):
 ///   1. Walk `$XDG_CACHE_HOME/codelore/diff-worktrees/` and remove any
 ///      subdirectory whose mtime is older than [`STALE_WORKTREE_AGE_HOURS`].
 ///   2. `git -C <repo> worktree prune` — clears the git-side registry of
@@ -492,7 +492,7 @@ const STALE_WORKTREE_AGE_HOURS: u64 = 24;
 fn prune_stale_worktrees(repo_root: &Path) {
     // 1. Sweep $XDG_CACHE_HOME/codelore/diff-worktrees/ for old directories.
     //
-    // F4 fix: route through `codelore_lib::cli_api::cache::default_cache_root()`
+    // Route through `codelore_lib::cli_api::cache::default_cache_root()`
     // so the user-namespaced `/tmp` fallback applies here too. Earlier
     // versions hardcoded a bare `/tmp` which collided across users on
     // shared hosts and missed namespaced worktrees of the current user
@@ -570,7 +570,7 @@ pub fn run_diff(args: &DiffArgs) -> Result<DiffOutput> {
 
     // Base analysis: load from --base-cache if present, otherwise compute + maybe cache.
     //
-    // F32 fix: validate `cached.sha == base_sha` before reusing the cache.
+    // Validate `cached.sha == base_sha` before reusing the cache.
     // When `main` (or any base ref) advances, or when multiple PR branches
     // in a shared CI environment reuse the same cache path, a stale cache
     // would silently poison the delta computation — yielding incorrect
@@ -780,7 +780,7 @@ mod prune_tests {
         (dir, sha1, sha2)
     }
 
-    /// F26: omitted base side of a two-dot range defaults to HEAD
+    /// Omitted base side of a two-dot range defaults to HEAD
     /// (matching `git log ..main` / `git diff ..main` semantics).
     #[test]
     fn parse_rev_range_two_dot_omitted_base_defaults_to_head() {
@@ -791,7 +791,7 @@ mod prune_tests {
         assert!(!mb, "two-dot form should not flag merge-base");
     }
 
-    /// F26: omitted head side of a two-dot range defaults to HEAD.
+    /// Omitted head side of a two-dot range defaults to HEAD.
     #[test]
     fn parse_rev_range_two_dot_omitted_head_defaults_to_head() {
         let (dir, sha1, sha2) = tiny_two_commit_repo();
@@ -801,7 +801,7 @@ mod prune_tests {
         assert!(!mb);
     }
 
-    /// F26: omitted head side of a three-dot range defaults to HEAD.
+    /// Omitted head side of a three-dot range defaults to HEAD.
     #[test]
     fn parse_rev_range_three_dot_omitted_head_defaults_to_head() {
         let (dir, _sha1, sha2) = tiny_two_commit_repo();
@@ -827,7 +827,7 @@ mod prune_tests {
         prune_stale_worktrees(tmp.path()); // doesn't panic
     }
 
-    /// F6 regression: when `git worktree add` fails (we point at a
+    /// When `git worktree add` fails (we point at a
     /// non-git path so the command errors out), `add_worktree` must NOT
     /// leak the temp directory it allocated. Earlier code called
     /// `tmp.keep()` BEFORE running git, which converted the `TempDir` to a

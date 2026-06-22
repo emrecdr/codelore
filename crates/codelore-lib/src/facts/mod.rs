@@ -165,7 +165,7 @@ impl FactsDb {
 
         if cache_p.exists() {
             tracing::info!("cache hit: {}", cache_p.display());
-            // F3: warn when a cache hit happens on a dirty working tree.
+            // Warn when a cache hit happens on a dirty working tree.
             // The cache key is (canonical_repo_path, head_sha, opts, version,
             // schema) — it does NOT hash worktree state, so HEAD-time metrics
             // (complexity, clones) that were computed from disk at ingest can
@@ -188,7 +188,7 @@ impl FactsDb {
 
         tracing::info!("cache miss: ingesting to {}", cache_p.display());
 
-        // F3 strengthen: skip cache WRITE when the working tree is dirty.
+        // Skip cache WRITE when the working tree is dirty.
         // HEAD-time metrics (complexity, clones) are computed from disk at
         // ingest time; persisting them under the clean head_sha cache key
         // would poison the cache — a later run on a CLEAN tree would

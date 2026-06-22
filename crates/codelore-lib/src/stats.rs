@@ -3,7 +3,7 @@
 //! contingency table, used by `analyses::coupling` to gate
 //! coupling pairs at `p < fisher_significance`.
 //!
-//! In-tree port (F121) of the algorithm previously consumed via the
+//! In-tree port of the algorithm previously consumed via the
 //! `fishers_exact` crate (last release 2018-11). The crate had no live
 //! CVE but was unmaintained for 7+ years; we eliminated the
 //! supply-chain dependency by porting the algorithm here. The numeric

@@ -77,7 +77,7 @@ pub struct CodeAgeRow {
 // `EXTRACT(year/month/day FROM ...)` calls work on both `DATE` and
 // `TIMESTAMP` types, so we don't need to cast the anchor or the
 // `MAX(...)` aggregate to a specific shape.
-// F16 fix: code-age now filters to files that are LIVE AS OF THE ANCHOR
+// Code-age filters to files that are LIVE AS OF THE ANCHOR
 // MOMENT (not just live at HEAD — back-test pattern needs the historical
 // view). The `live_paths_at_anchor` CTE takes the same anchor parameter
 // as the existing PAR-2 filter and selects paths whose latest change

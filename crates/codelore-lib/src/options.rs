@@ -254,7 +254,7 @@ impl Options {
 
     /// Like [`with_no_row_limit`], but also lowers `min_shared_revs` to
     /// at most `min_clone_shared_revs`. Used by `clone-coupling`'s
-    /// internal call to `run_coupling` (F2 fix).
+    /// internal call to `run_coupling`.
     ///
     /// Without this override, the inner coupling call applies the
     /// default `min_shared_revs = 5` even though `clone-coupling`'s own

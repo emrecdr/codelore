@@ -50,7 +50,7 @@ pub fn run_clones(opts: &Options) -> Result<Vec<ClonesRow>> {
     // precedence rules.
     let filter = crate::paths_filter::PathsFilter::from_opts(opts)?;
 
-    // F17 fix: split into two phases — (1) a serial WalkDir+filter pass to
+    // Split into two phases — (1) a serial WalkDir+filter pass to
     // gather the candidate file list, (2) a parallel rayon pass to read +
     // tree-sitter-fingerprint each candidate. Mirrors the proven pattern
     // already used in `ingest::populate_clones_at_head` (parallelised in
@@ -72,8 +72,8 @@ pub fn run_clones(opts: &Options) -> Result<Vec<ClonesRow>> {
                 return None;
             }
             // Combined filter: respects user --exclude, .codeloreignore,
-            // and (by default) the project's .gitignore. F30 fix
-            // preserved: matched on the REPO-RELATIVE path, not the
+            // and (by default) the project's .gitignore. Matching is
+            // on the REPO-RELATIVE path, not the
             // absolute path.
             if filter.is_excluded(rel_path, false) {
                 return None;
@@ -89,7 +89,7 @@ pub fn run_clones(opts: &Options) -> Result<Vec<ClonesRow>> {
         .into_par_iter()
         .filter_map(|(path, rel, lang)| -> Option<Result<Vec<_>>> {
             let code = fs::read(&path).ok()?;
-            // F10: skip oversized files (generated / minified) before
+            // Skip oversized files (generated / minified) before
             // tree-sitter to avoid OOM / stack-overflow on deeply nested
             // generated code.
             if code.len() > crate::constants::DEFAULT_MAX_AST_FILE_BYTES {

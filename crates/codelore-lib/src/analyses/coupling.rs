@@ -21,7 +21,7 @@ use crate::facts::FactsDb;
 use crate::options::TimeBucket;
 use crate::{CodeLoreError, Options, Result};
 
-/// F29: build the `good_commits` CTE so the per-commit
+/// Build the `good_commits` CTE so the per-commit
 /// `max_changeset_size` filter is applied to PHYSICAL commits even when
 /// the analysis runs against a time-bucketed source.
 ///
@@ -32,7 +32,7 @@ use crate::{CodeLoreError, Options, Result};
 ///   files (`HAVING MAX(files) <= ?`). Conservative semantic — a bucket
 ///   with even one giant commit is excluded — but no longer drops
 ///   active periods just because their TOTAL file count exceeds the
-///   per-commit threshold (the pre-F29 bug).
+///   per-commit threshold (the previous bug).
 ///
 /// The first placeholder in the returned CTE is always
 /// `max_changeset_size`, matching the legacy CTE shape so callers'
@@ -254,7 +254,7 @@ fn build_coupling_sql(
 }
 
 fn build_total_commits_sql(bucket: Option<TimeBucket>, use_lineage: bool) -> String {
-    // F29: the "total commits" denominator for Fisher's contingency
+    // The "total commits" denominator for Fisher's contingency
     // table must count the same units (physical commits, or buckets)
     // that `good_commits` filters. Reuse the bucketing-aware CTE so
     // the numerator and denominator stay in lockstep — otherwise the

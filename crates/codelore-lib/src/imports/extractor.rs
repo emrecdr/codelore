@@ -2,7 +2,7 @@
 //! Tier-1 source files.
 //!
 //! Mirrors the iterative `TreeCursor` pattern from
-//! `crate::clones::fingerprint` (F45 fix — one cursor allocation
+//! `crate::clones::fingerprint` (one cursor allocation
 //! regardless of subtree size). Each `import_node_kinds()` hit is
 //! recorded as a [`RawImport`] with the raw target text + a coarse
 //! [`ImportKind`] classification.
@@ -91,7 +91,7 @@ pub fn extract_imports(source: &[u8], lang: ImportLanguage) -> Result<Vec<RawImp
 }
 
 /// Iterative preorder walk over the AST using a single `TreeCursor`.
-/// Mirrors `clones::fingerprint::fingerprint_recursive`'s F45 pattern
+/// Mirrors `clones::fingerprint::fingerprint_recursive`'s pattern
 /// (cursor allocated once vs once-per-node).
 fn walk_imports(root: Node<'_>, source: &[u8], lang: ImportLanguage, out: &mut Vec<RawImport>) {
     let kinds = lang.import_node_kinds();

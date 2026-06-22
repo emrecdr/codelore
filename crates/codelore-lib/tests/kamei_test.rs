@@ -226,7 +226,7 @@ fn kamei_fix_flag_detects_bug_keywords() {
 /// * Uneven 3-way split — hand-computed below
 ///
 /// Pins the SQL semantics so that the next rewrite of the entropy
-/// block (the correlated-subquery form is flagged in F127 as
+/// block (the correlated-subquery form is flagged as
 /// remaining work) cannot silently shift any of these values. The
 /// `enrich_history` 2-pass pattern (reset then grouped UPDATE) is
 /// the planned shape; this test must keep producing the same numbers

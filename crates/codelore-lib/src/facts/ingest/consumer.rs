@@ -29,7 +29,7 @@ pub(super) fn ingest_loop(
         .conn()
         .appender("changes")
         .map_err(|e| CodeLoreError::Analysis(format!("appender changes: {e}")))?;
-    // Hunks appender — populated alongside changes. Pre-F149 fix the
+    // Hunks appender — populated alongside changes. Previously the
     // `Hunk` payload was parsed by `Repo::diff_hunks`, attached to
     // `FileChange.hunks`, but never written: the table existed in
     // schema, was `DELETE`-cleaned defensively in `apply_grouping`,

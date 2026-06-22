@@ -1,16 +1,16 @@
 //! Headless-browser smoke test for the `--format spa` dashboard.
 //!
-//! Closes the runtime-defect blind spot the F107/F108 post-mortem
+//! Closes the runtime-defect blind spot the SPA-runtime post-mortem
 //! flagged: the existing `spa_integration_test` greps the rendered
-//! HTML for string presence but never *runs* the JS. Both F107
-//! (`METRIC_DEFS` Temporal Dead Zone) and F108 (Alpine init order)
+//! HTML for string presence but never *runs* the JS. Both the
+//! `METRIC_DEFS` Temporal Dead Zone and the Alpine init-order defects
 //! shipped through every SPA-touching PR because no JS executed at
 //! CI time.
 //!
 //! This test renders the SPA via the real emitter, opens it in
 //! headless Chrome, lets Alpine + widgets boot, then asserts:
 //!
-//! 1. **No console errors** — the F107/F108 class of runtime init
+//! 1. **No console errors** — the runtime-init class of
 //!    bug surfaces as a console error within milliseconds of load.
 //! 2. **KPI tiles rendered** — proves `renderKpiTiles` actually ran
 //!    against the embedded JSON without throwing.
@@ -43,7 +43,7 @@ use headless_chrome::protocol::cdp::types::Event;
 /// Render the SPA from the differential fixture and run it in a real
 /// browser. Fails on any browser-console error within a short
 /// post-boot window — which is the exact failure shape of the
-/// F107/F108 class of bug.
+/// runtime-init class of bug.
 #[test]
 #[allow(clippy::too_many_lines)] // mirror of the existing spa_integration_test shape
 fn rendered_spa_boots_without_console_errors() {
@@ -114,7 +114,7 @@ fn rendered_spa_boots_without_console_errors() {
     tab.enable_runtime().expect("enable runtime");
 
     // -- Step 3: collect console errors + thrown exceptions. ----------
-    // Both surfaces matter — F107 surfaced as a `console.error`
+    // Both surfaces matter — the `METRIC_DEFS` TDZ surfaced as a `console.error`
     // (`Uncaught ReferenceError: Cannot access 'METRIC_DEFS' before
     // initialization`) while a future ECharts crash could surface as
     // `RuntimeExceptionThrown` (a top-level throw out of an async
@@ -182,7 +182,7 @@ fn rendered_spa_boots_without_console_errors() {
 
     // -- Step 6: assert KPI tiles rendered with real values. ----------
     // The KPI tiles are the first widget the boot section invokes;
-    // if `renderKpiTiles` threw (the F107 surface), they'd stay
+    // if `renderKpiTiles` threw (the `METRIC_DEFS` TDZ surface), they'd stay
     // empty. We pull the rendered text out of the widget container
     // and assert it's non-trivial. Choose a specific KPI selector to
     // avoid false-passes on whitespace-only nodes.

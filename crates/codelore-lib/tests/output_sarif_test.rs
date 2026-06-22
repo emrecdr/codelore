@@ -207,7 +207,7 @@ fn sarif_fingerprint_is_stable() {
 
 #[test]
 fn sarif_information_uri_points_at_codelore_repo() {
-    // F158: every SARIF report's tool.driver.informationUri previously
+    // Every SARIF report's tool.driver.informationUri previously
     // hardcoded `github.com/emre/codescene` — wrong org, wrong project.
     // Must be the canonical codelore repo URL so GH Code Scanning's
     // tool-details link resolves.
@@ -238,7 +238,7 @@ fn sarif_information_uri_points_at_codelore_repo() {
 
 #[test]
 fn sarif_artifact_uri_percent_encodes_special_chars() {
-    // F159: paths with spaces / `#` / non-ASCII used to ship as raw
+    // Paths with spaces / `#` / non-ASCII used to ship as raw
     // bytes in artifactLocation.uri — invalid per RFC 3986 §4.1.
     // Three probes cover the most common breakage classes.
     let probes = [
@@ -280,7 +280,7 @@ fn sarif_artifact_uri_percent_encodes_special_chars() {
 
 #[test]
 fn sarif_automation_id_is_unique_per_run() {
-    // F163: SARIF 2.1.0 §3.17.3 wants per-run correlation IDs so GH
+    // SARIF 2.1.0 §3.17.3 wants per-run correlation IDs so GH
     // Code Scanning doesn't collapse multiple runs into a single
     // timeline. Two back-to-back emissions must differ in the
     // automationDetails.id suffix.

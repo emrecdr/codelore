@@ -49,7 +49,7 @@ fn version_flag_works() {
 
 #[test]
 fn diff_rejects_base_equals_head() {
-    // F154: a `--range` whose base resolves to the same SHA as head
+    // A `--range` whose base resolves to the same SHA as head
     // used to run two identical analyses and emit an empty diff with
     // no signal. Now the entry point bails early with a typed error.
     let tiny = codelore_lib::test_support::tiny_repo::build();
@@ -705,12 +705,12 @@ fn cache_dir_flag_writes_cache_to_custom_location() {
     );
 }
 
-/// F14 + F15 regression: `--time-bucket` on an incompatible analysis
+/// `--time-bucket` on an incompatible analysis
 /// must be rejected at the CLI boundary with a descriptive error,
 /// pointing the user at the supported analyses (coupling, soc,
 /// hotspots, code-health). Previously this either crashed with
-/// `Catalog Error: changes_bucketed does not exist` (F14) or silently
-/// returned empty rows (F15).
+/// `Catalog Error: changes_bucketed does not exist` or silently
+/// returned empty rows.
 #[test]
 fn time_bucket_rejected_for_incompatible_analysis() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
@@ -737,7 +737,7 @@ fn time_bucket_rejected_for_incompatible_analysis() {
         ));
 }
 
-/// F14 + F15 control: `--time-bucket` on a compatible analysis
+/// Control case: `--time-bucket` on a compatible analysis
 /// (coupling) must succeed.
 #[test]
 fn time_bucket_accepted_for_coupling() {

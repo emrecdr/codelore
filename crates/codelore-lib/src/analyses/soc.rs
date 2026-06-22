@@ -37,7 +37,7 @@ pub struct SocRow {
 /// multiple physical commits — affects `SoC` because `rev_sizes` then
 /// counts unique paths-per-bucket instead of paths-per-commit.
 ///
-/// F5 fix: pre-filter changesets by `max_changeset_size` so a single
+/// pre-filter changesets by `max_changeset_size` so a single
 /// massive sweep (lockfile bump, monorepo-wide rename, vendored
 /// dependency import) doesn't dominate every participating file's `SoC`.
 /// Without this, a 1000-file commit added 999 to every one of those
@@ -45,9 +45,9 @@ pub struct SocRow {
 /// really just bystanders of a one-off sweep. Mirrors the `good_commits`
 /// CTE pattern in `coupling.rs`.
 ///
-/// F29 fix: under `--time-bucket` the `good_commits` filter now counts
+/// Under `--time-bucket` the `good_commits` filter now counts
 /// files per PHYSICAL commit (via `good_commits_cte`), then derives
-/// surviving bucket keys via `HAVING MAX(files) <= ?`. Pre-F29 the
+/// surviving bucket keys via `HAVING MAX(files) <= ?`. Previously the
 /// filter counted paths per bucket — drowning any active week/month
 /// in active repos and silently returning empty results.
 fn build_soc_sql(

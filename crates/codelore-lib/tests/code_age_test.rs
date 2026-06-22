@@ -189,7 +189,7 @@ fn code_age_never_returns_negative_age() {
     }
 }
 
-/// F16 regression: a file added and then DELETED before the analysis
+/// A file added and then DELETED before the analysis
 /// runs must NOT appear in `code-age` output. Previously deleted files
 /// were included (cluttered output with historical noise). The
 /// `live_paths_at_anchor` CTE in `code_age.rs`'s SQL drops them.

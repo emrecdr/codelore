@@ -554,11 +554,11 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
     // empty output downstream.
     opts.validate().context("validate options")?;
 
-    // F14 + F15 fix: `--time-bucket` is only semantically valid for
+    // `--time-bucket` is only semantically valid for
     // four analyses (coupling, soc, hotspots, code-health). The other
     // 18 either crash with a Catalog Error (no `changes_bucketed`
-    // table — F14) or silently return empty rows (rev-on-rev JOIN
-    // against the date-string-keyed bucketed table fails — F15). Reject
+    // table) or silently return empty rows (rev-on-rev JOIN
+    // against the date-string-keyed bucketed table fails). Reject
     // at the CLI boundary with a descriptive error rather than letting
     // either failure mode surprise the user downstream.
     if opts.time_bucket.is_some() && !analysis.supports_time_bucket() {
@@ -626,7 +626,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         preflight_and_open_repo(args, &opts, analysis_name, no_banner)?
     };
 
-    // F7 (refined): the persistent cache opens its DuckDB file read-only.
+    // The persistent cache opens its DuckDB file read-only.
     // SQLite output requires `INSTALL sqlite; LOAD sqlite;` which writes
     // to the DuckDB extension registry on the connected database — that
     // cannot run on a read-only connection. Parquet output uses core

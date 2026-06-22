@@ -111,7 +111,7 @@ pub fn run_clone_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CloneCoupl
     // - `--min-shared-revs` default (5) would silently drop clone pairs
     //   that co-changed exactly 3 or 4 times — even though
     //   `--min-clone-shared-revs` (default 3) explicitly allows them.
-    //   F2 fix: `for_clone_coupling_inner_coupling` lowers the floor to
+    //   `for_clone_coupling_inner_coupling` lowers the floor to
     //   the clone-coupling threshold so the candidate pool is correct
     //   BEFORE we filter by clone-coupling's own threshold below.
     //
@@ -262,13 +262,13 @@ pub fn run_clone_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CloneCoupl
     // at_risk = false if the sub-analysis errors (the clone-coupling
     // analysis itself is the primary product; knowledge-loss is an
     // enrichment signal).
-    // F19 fix: pass `opts.with_no_row_limit()` (NOT the raw opts) to the
+    // Pass `opts.with_no_row_limit()` (NOT the raw opts) to the
     // inner sub-analysis. With raw opts, a user-supplied `--rows 10` on
     // the outer `clone-coupling` would also cap knowledge-islands to 10
     // rows — silently misclassifying any clone-coupling pair whose
     // partner sits in island rank 11+ as `at_risk = false`. The
     // `--rows N` flag is meant for the FINAL output cap, not the
-    // intermediate join. Same pattern as F2's
+    // intermediate join. Same pattern as the
     // `for_clone_coupling_inner_coupling` fix for the inner coupling
     // call.
     let inner_opts = opts.with_no_row_limit();

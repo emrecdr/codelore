@@ -206,15 +206,15 @@ impl AnalysisName {
         )
     }
 
-    /// F14 + F15 fix: classify which analyses can run under
+    /// Classify which analyses can run under
     /// `--time-bucket`. The bucketed source table (`changes_bucketed`)
     /// is materialised by `lineage::materialize_source` and synthesises
     /// `rev` as a date-truncated string. Any analysis that JOINs
     /// `c.rev = commits.rev` against the non-bucketed `commits` table
-    /// silently returns zero rows (F15). Any analysis that uses
+    /// silently returns zero rows. Any analysis that uses
     /// `materialize_if_needed` (no-op on the bucketed branch) crashes
-    /// with `Catalog Error: Table changes_bucketed does not exist`
-    /// (F14). Both failure modes are unacceptable user experiences.
+    /// with `Catalog Error: Table changes_bucketed does not exist`.
+    /// Both failure modes are unacceptable user experiences.
     ///
     /// Currently only `coupling`, `soc`, `hotspots`, and `code-health`
     /// invoke `materialize_source` AND have SQL that doesn't depend on

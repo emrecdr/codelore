@@ -3,7 +3,7 @@
 //! lead-time is a DORA metric (review wait between author-time and
 //! committer-time). Today's `commits` schema carries only committer
 //! date, so every row reports 0 lead-time — but the SQL must still
-//! execute cleanly + the row shape must hold. F140 flagged that a
+//! execute cleanly + the row shape must hold. The audit cycle flagged that a
 //! schema rename or typo would only surface at customer runtime; this
 //! test pins the runtime contract.
 

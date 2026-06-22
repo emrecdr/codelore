@@ -151,7 +151,7 @@ fn prune_global_cache_removes_oldest_beyond_byte_cap() {
     );
 }
 
-/// F25 — pruner removes the `.duckdb.wal` companion alongside the database.
+/// Pruner removes the `.duckdb.wal` companion alongside the database.
 /// Without this, DuckDB-WAL files orphaned by a crashed write would survive
 /// every prune cycle, silently growing cache disk usage.
 #[test]
@@ -192,7 +192,7 @@ fn prune_repo_cache_removes_wal_companion() {
     );
 }
 
-/// F25 — stale `.tmp.<pid>` artifacts older than the threshold are swept;
+/// Stale `.tmp.<pid>` artifacts older than the threshold are swept;
 /// fresh `.tmp` files are preserved.
 #[test]
 fn cleanup_stale_tmp_files_removes_old_artifacts_only() {
@@ -226,7 +226,7 @@ fn cleanup_stale_tmp_files_removes_old_artifacts_only() {
     assert!(unrelated.exists(), ".duckdb files must NOT be touched");
 }
 
-/// F33 — `cache_key` and `cache_path_with_root` both canonicalize the
+/// `cache_key` and `cache_path_with_root` both canonicalize the
 /// repo path now, so invoking codelore as `codelore analyze .` and
 /// `codelore analyze $PWD` from the same directory must resolve to the
 /// exact same on-disk cache file. Pre-fix, the key was identical but

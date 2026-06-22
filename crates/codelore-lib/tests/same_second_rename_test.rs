@@ -1,4 +1,4 @@
-//! F22 regression — same-second rename chains must traverse the full
+//! Same-second rename chains must traverse the full
 //! lineage when `--canonical-lineage` is on.
 //!
 //! Earlier the recursive CTE used strict `co.date > l.current_date` to
@@ -85,7 +85,7 @@ fn same_second_rename_chain_merges_under_canonical_path() {
 
     let rows = run_revisions(&db, &opts).expect("revisions");
 
-    // With the F22 fix, the lineage must traverse a.txt → b.txt → c.txt
+    // The lineage must traverse a.txt → b.txt → c.txt
     // even though b → c shares the same second as a → b. Result: only
     // c.txt appears (the canonical path), with 3 revisions accumulated.
     let by_path: std::collections::HashMap<_, _> = rows
