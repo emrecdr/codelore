@@ -892,7 +892,7 @@ fn dispatch_revisions(
             )
             .context("write html")?;
         }
-        _ => unreachable!("format/analysis combination should have been validated above"),
+        fmt => anyhow::bail!("revisions analysis supports csv|json|markdown|html; got {fmt:?}"),
     }
     Ok(())
 }
@@ -952,7 +952,9 @@ fn dispatch_hotspots(
             )
             .context("write html")?;
         }
-        _ => unreachable!("format/analysis combination should have been validated above"),
+        fmt => anyhow::bail!(
+            "hotspots analysis supports csv|json|markdown|sarif|ndjson|gha|html; got {fmt:?}"
+        ),
     }
     Ok(())
 }
@@ -1000,7 +1002,9 @@ fn dispatch_code_health(
             )
             .context("write html")?;
         }
-        _ => unreachable!("format/analysis combination should have been validated above"),
+        fmt => anyhow::bail!(
+            "code-health analysis supports csv|json|markdown|ndjson|html; got {fmt:?}"
+        ),
     }
     Ok(())
 }
@@ -1035,7 +1039,7 @@ fn dispatch_code_age(
                 .context("write markdown")?;
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
-        _ => unreachable!("format/analysis combination should have been validated above"),
+        fmt => anyhow::bail!("code-age analysis supports csv|json|markdown; got {fmt:?}"),
     }
     Ok(())
 }
@@ -1066,7 +1070,7 @@ fn dispatch_abs_churn(
                 .context("write markdown")?;
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
-        _ => unreachable!("format/analysis combination should have been validated above"),
+        fmt => anyhow::bail!("abs-churn analysis supports csv|json|markdown; got {fmt:?}"),
     }
     Ok(())
 }
@@ -1097,7 +1101,7 @@ fn dispatch_author_churn(
                 .context("write markdown")?;
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
-        _ => unreachable!("format/analysis combination should have been validated above"),
+        fmt => anyhow::bail!("author-churn analysis supports csv|json|markdown; got {fmt:?}"),
     }
     Ok(())
 }
@@ -1128,7 +1132,7 @@ fn dispatch_entity_churn(
                 .context("write markdown")?;
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
-        _ => unreachable!("format/analysis combination should have been validated above"),
+        fmt => anyhow::bail!("entity-churn analysis supports csv|json|markdown; got {fmt:?}"),
     }
     Ok(())
 }
@@ -1163,7 +1167,7 @@ fn dispatch_communication(
                 .context("write markdown")?;
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
-        _ => unreachable!("format/analysis combination should have been validated above"),
+        fmt => anyhow::bail!("communication analysis supports csv|json|markdown; got {fmt:?}"),
     }
     Ok(())
 }
@@ -1198,7 +1202,7 @@ fn dispatch_ownership(
                 .context("write markdown")?;
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
-        _ => unreachable!("format/analysis combination should have been validated above"),
+        fmt => anyhow::bail!("ownership analysis supports csv|json|markdown; got {fmt:?}"),
     }
     Ok(())
 }
@@ -1239,7 +1243,7 @@ fn dispatch_coupling(
                 .context("write ndjson")?;
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
-        _ => unreachable!("format/analysis combination should have been validated above"),
+        fmt => anyhow::bail!("coupling analysis supports csv|json|markdown|ndjson; got {fmt:?}"),
     }
     Ok(())
 }
@@ -1285,7 +1289,7 @@ fn dispatch_summary(
             )
             .context("write html")?;
         }
-        _ => unreachable!("format/analysis combination should have been validated above"),
+        fmt => anyhow::bail!("summary analysis supports csv|json|markdown|html; got {fmt:?}"),
     }
     Ok(())
 }

@@ -764,3 +764,33 @@ fn time_bucket_accepted_for_coupling() {
         .assert()
         .success();
 }
+
+#[test]
+fn unsupported_format_bails_cleanly_instead_of_panicking() {
+    // `--format ndjson`/`gha` pass top-level format validation but are only
+    // wired for a few analyses. For the rest, the dispatch must bail with a
+    // clean, descriptive error (exit 1) — NOT panic through a reachable
+    // `unreachable!` (exit 101). Cover both an ndjson and a gha case.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    for fmt in ["ndjson", "gha"] {
+        Command::cargo_bin("codelore")
+            .unwrap()
+            .args([
+                "analyze",
+                "--analysis",
+                "abs-churn",
+                "--repo",
+                tiny.dir.path().to_str().unwrap(),
+                "--format",
+                fmt,
+                "--no-banner",
+                "--min-revs",
+                "1",
+            ])
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains("abs-churn"))
+            .stderr(predicate::str::contains("panicked").not())
+            .stderr(predicate::str::contains("unreachable").not());
+    }
+}
