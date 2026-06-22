@@ -64,7 +64,7 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 | F91 | Markdown emitter unescaped `\|` in cells | **Fixed** | `7f36a7f` + `49196ad` (PR #53 diff_output.rs sweep) |
 | F92 | Provenance sidecar atomicity gap | **Fixed** | `38df3d0` |
 | F93 | `cache_key` silent canonicalize fallback | **Fixed** | `8e52984` |
-| F94 | `ingest.rs` monolithic | **Active** — _see §4_ |
+| F94 | `ingest.rs` monolithic | **Fixed** | This session. Split the 1523-LOC `facts/ingest.rs` into a directory module `facts/ingest/` with topical submodules: `mod.rs` (entry-point `FactsDb::ingest` + channel-capacity controls + `IngestStats` + shared `current_head_rev`/`query_live_paths` helpers + `format_panic_payload`), `complexity_head.rs`, `clones_head.rs`, `imports_head.rs` (the three rayon-then-serial-drain HEAD passes + import resolution), `consumer.rs` (the connection-owning `ingest_loop` pump + `append_*` row writers), `lineage.rs` (path-lineage CTEs), `grouping.rs` (`apply_grouping` + bucketed/grouped materialisation). Pure code movement, zero behavior change: identical 26-function inventory, normalized content diff shows only `pub(super)` visibility widening (so the parent can call methods relocated into child submodules) + path-qualifier adjustments forced by the depth change. External path contracts preserved via `pub use` re-exports in `mod.rs` (`materialize_changes_lineage`/`materialize_changes_bucketed`/`materialize_path_lineage`/`apply_grouping`) and by keeping `IngestStats`/`set_channel_capacity_override`/`format_panic_payload` defined in `mod.rs`. Gate: fmt + clippy `-D warnings` clean, 663 tests pass / 0 fail (same count as pre-split). |
 | F95 | `communication.rs` window filter | **Refuted** (filter at ingest level) |
 | F96 | ECharts mount + dispose duplicated | **Fixed** | `7f36a7f` (`mountEcharts` @ 13+ sites) |
 | F97 | SPA boot-time render storm blocks first paint | **Fixed (this session)** — see §3 closure log |
@@ -138,17 +138,6 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 
 ## 4. Active Findings
 
-### Active carryover
-
-#### F94 — `ingest.rs` monolithic (1453 LOC, still unsplit)
-
-*   **Location**: `crates/codelore-lib/src/facts/ingest.rs` — 1453 lines (grew +109 since prior audit)
-*   **Severity**: MED
-*   **Category**: Maintainability
-*   **Status**: Active. `facts/ingest/` subdirectory exists but empty — split attempted and abandoned.
-*   **Suggested fix**: split into `ingest/loop.rs`, `ingest/complexity.rs`, `ingest/clones_head.rs`, `ingest/imports_head.rs`, `ingest/lineage.rs`, `ingest/grouping.rs`. Re-export from `facts/ingest/mod.rs`.
-
-
 ### NEW Active Findings — Architecture & supply chain
 
 #### F113 — `codelore-cli` reaches into 8 distinct `codelore_lib` submodules — no façade
@@ -170,6 +159,14 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 ### NEW Active Findings — Test / CI / observability
 
 ### NEW Active Findings — Code complexity / maintainability
+
+#### F164 — Task-ID (`F<NN>`) references embedded in code comments codebase-wide
+
+*   **Location**: ~48 occurrences across `crates/codelore-lib/src/` (e.g. `cache.rs:57` "F33 fix", `analysis.rs:209` "F14 + F15 fix", `constants.rs:64` "F10:", `stats.rs:6` "(F121)", `quality_gates/mod.rs:290` "F156", `output/html.rs:298` "F20 fix", plus 6 in the `facts/ingest/` submodules).
+*   **Severity**: LOW
+*   **Category**: Documentation hygiene
+*   **Detail**: Comments anchor their rationale to finding/task IDs ("F33 fix: …") instead of stating the current contract directly. The IDs are meaningless to a reader without the report and rot as findings close. The project convention is that history lives only in `CHANGELOG.md`; code comments describe the *current* state. Surfaced while splitting `ingest.rs` (F94) — the six in-ingest occurrences were preserved verbatim to keep that split a pure move, rather than cleaned inline.
+*   **Suggested fix**: a codebase-wide sweep rewording each `F<NN> fix:`/`(F<NN>)` comment to keep only the WHY, dropping the ID. Mechanical but wide; best as its own focused commit so the diff is reviewable and doesn't ride along with a behavioural change.
 
 #### F145 — `main.rs` dispatch boilerplate is the bulk of the file
 
@@ -201,7 +198,7 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 
 | Finding | Claim | Verified state on main | Status |
 |---|---|---|---|
-| F94 | ingest.rs monolithic | `wc -l = 1453` (drifted +109 LOC) ; `facts/ingest/` subdir exists empty | Active confirmed (drifted larger) |
+| F94 | ingest.rs monolithic | Split into `facts/ingest/` directory module (mod + 6 topical submodules); pure code movement verified by identical function inventory + normalized diff; 663 tests pass | **Fixed (this session)** |
 | F97 | `JSON.parse` synchronous at first paint | Recon clarified the bottleneck was the boot-time WIDGETS.forEach render storm, not the JSON.parse itself. Boot converted to async with `yieldToMain` between widgets. First paint is now bounded by 1 widget render (kpi-tiles) instead of all 14. | **Fixed (this session)** |
 | V4 | no `WIDGETS` registry | `const WIDGETS = [{ name, render, rerender? }]` introduced at §3 boot; single `WIDGETS.forEach` loop replaces 60 LOC of duplicated render + rerender lines; 14 widgets registered uniformly; integration + browser smoke tests green | **Fixed (this session)** |
 | V5 | METRIC_DEFS not interpolated | `SpaOptionsSnapshot` field on `SpaDashboard` populated from `Options::from_options`; widgets.js `interpolate(def.formula, data.options)` substitutes `${key}` placeholders; coupling_pairs/coupling_density formulas updated to use placeholders | **Fixed (this session)** |
@@ -274,9 +271,9 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 - **Closed on main (added to §3 closure-log)**: F110, F112, F117, F118, F120 (URL half), F124 (policy half), F125, F126, F127 (full — entropy rewrite closes the remainder), F128, F129, F130, F134, F135, F138, F142, F143, F146, F150, F151, F152, F153, F154, F155, F156, F157, F158, F159, F160, F163.
 - **REFUTED this session**: F116 (Renovate + Dependabot partitioned by ecosystem) + F123 (crossbeam 0.8.4 + num-format 0.4.4 are current releases) — see §3 newly-refuted block.
 - **Closed by side-effect**: F162 — Parquet writers now delegate to shared SQL generators that preserve CSV row-type contract via explicit casts. Verified 2026-06-21.
-- **Active**: F94, F113, F119, F145, F148, F161 = **6 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
+- **Active**: F113, F119, F145, F148, F161, F164 = **6 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
 
-The next sweep should re-open with F-IDs starting at **F164**.
+The next sweep should re-open with F-IDs starting at **F165**.
 
 ### Deferred — discovery pass (Workflow `wf_902c8b32-45d`)
 
