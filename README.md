@@ -23,7 +23,7 @@
 
 Behind every codebase is a human narrative your linter cannot see: who wrote this, who still understands it, which corners hide tribal knowledge nobody's written down, and where the historical scars are buried. Every commit is a piece of this **lore**.
 
-**CodeLore** mines your repository's git history and projects it into **31 behavioral analyses** — hotspots, change-coupling, ownership maps, knowledge fragmentation, code health scores, copy-paste clones, live clones (clones × Fisher-significant co-change), Leiden community detection on the coupling graph, per-file centrality, knowledge-island bus-factor risk, god-class detection, layered-architecture rule validation, per-module bus factor, pair-programming detection, stale-code surfacing, and more — surfaced as SARIF for your existing CI dashboard. The socio-technical signal your linter cannot see, with the methodological honesty your team can audit.
+**CodeLore** mines your repository's git history and projects it into **32 behavioral analyses** — hotspots, change-coupling, ownership maps, knowledge fragmentation, code health scores, copy-paste clones, live clones (clones × Fisher-significant co-change), Leiden community detection on the coupling graph, per-file centrality, knowledge-island bus-factor risk, god-class detection, layered-architecture rule validation, per-module bus factor, pair-programming detection, stale-code surfacing, and more — surfaced as SARIF for your existing CI dashboard. The socio-technical signal your linter cannot see, with the methodological honesty your team can audit.
 
 A Rust **drop-in successor** to Adam Tornhill's [code-maat](https://github.com/adamtornhill/code-maat) — every published code-maat analysis is supported under the same `--analysis NAME` flag, with modern improvements: deterministic tiebreaks, Fisher exact significance gates, SARIF output, persistent cache, PR-mode diffing, and a SQL-queryable fact store. Built on [gix](https://github.com/GitoxideLabs/gitoxide) (pure-Rust git), [DuckDB](https://duckdb.org) (embedded analytics), [fancy-regex](https://github.com/fancy-regex/fancy-regex) (lookaround support for architectural grouping), and a vendored fork of Mozilla's [rust-code-analysis](https://github.com/mozilla/rust-code-analysis) (tree-sitter complexity).
 
@@ -365,7 +365,7 @@ Default: **non-strict** (unmapped paths keep their raw names; safer than silent 
             │ SQL queries (bind-parameterized) + Rust orchestrators
             ▼
    ┌─────────────────────┐
-   │  23 Analyses         │  → 7 output formats (CSV/JSON/SARIF/
+   │  32 Analyses         │  → 7 output formats (CSV/JSON/SARIF/
    │                     │     Markdown/Parquet/SQLite/SPA*)
    │                     │  → persistent cache (10-100× speedup)
    │                     │  → provenance.json sidecar

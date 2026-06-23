@@ -33,7 +33,7 @@ graph TD
     C -->|DuckDB Appender bulk-insert| D[(DuckDB fact store)]
     E[HEAD-time blob walk @ HEAD] -->|tree-sitter parsing via rayon| F[Complexity + clones + imports extraction]
     F -->|HEAD-time metrics| D
-    D -->|SQL views / parameterized queries| G[31 behavioral analyses]
+    D -->|SQL views / parameterized queries| G[32 behavioral analyses]
     G -->|emitters| H[CSV · JSON · SARIF 2.1.0 · Markdown · Parquet · SQLite · HTML · SPA · Step-Summary]
     G -->|provenance| I[manifest sidecars]
 ```
@@ -98,7 +98,7 @@ The differential test suite (`tests/differential_repo_test.rs`) is the load-bear
 | Graph-analytics ★ (3) | knowledge-islands, centrality, communities | Leiden-algorithm community detection + PageRank centrality + auto-detected bus-factor risk on the Fisher-significant coupling graph |
 | Architecture-analytics ★★ (6) | god-classes, architecture-violations, stale-code, pair-programming, lead-time, bus-factor | Consume the `imports` table for structural fan-in/fan-out; `architecture-violations` reads `.codelore-arch-rules.toml`; `lead-time` is a DORA Accelerate metric |
 
-All 31 are pure SQL views over the DuckDB fact store with a thin Rust orchestrator each (except `pair-programming`, which extracts Co-Authored-By trailers in Rust for case-insensitive matching). Adding a new analysis = adding one SQL string + one row-struct + entries in the dispatch ladder. Each carries a `Research basis: see docs/research-foundations.md entry "<name>"` rustdoc cross-link.
+All 32 are pure SQL views over the DuckDB fact store with a thin Rust orchestrator each (except `pair-programming`, which extracts Co-Authored-By trailers in Rust for case-insensitive matching). Adding a new analysis = adding one SQL string + one row-struct + entries in the dispatch ladder. Each carries a `Research basis: see docs/research-foundations.md entry "<name>"` rustdoc cross-link.
 
 ## 6. Identity resolution
 

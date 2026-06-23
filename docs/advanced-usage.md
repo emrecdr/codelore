@@ -4,7 +4,7 @@ This guide is the developer-facing reference for CodeLore. The [README](../READM
 
 ## Table of contents
 
-1. [The 32 analyses (what they tell you)](#1-the-31-analyses-what-they-tell-you)
+1. [The 32 analyses (what they tell you)](#1-the-32-analyses-what-they-tell-you)
 2. [Output formats deep-dive](#2-output-formats-deep-dive)
 3. [Every CLI flag explained](#3-every-cli-flag-explained)
 4. [PR-mode: `codelore diff`](#4-pr-mode-codelore-diff)
