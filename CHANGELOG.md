@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-06-23
+
 ### Added
 
 - **CI: `dogfood` job runs CodeLore against CodeLore on every PR + main push.** Until now, nothing in the workflow surfaced what the analyzer thought of its own changes — a behavioural-analysis tool with no behavioural signal on its own commits. The new `dogfood` job builds release `codelore-cli --features spa`, then runs `codelore analyze --analysis hotspots --format gha --repo .` so hotspots stream into the PR's Checks panel as inline annotations via the GHA workflow-command emitter (`::warning::` / `::notice::` per the existing `output::gha` bucketing). The same step writes a markdown summary (top hotspots / code-health worst-10 / knowledge islands) into `$GITHUB_STEP_SUMMARY` so reviewers see CodeLore's verdict inline on every PR. PR events additionally run `codelore diff "origin/${{ github.base_ref }}...HEAD" --format markdown` and append the delta. `continue-on-error: true` during the bake-in period so the job surfaces signal without gating merges while thresholds are still calibrating — drop the flag once output stabilises across a few releases. Uses sccache + rust-cache for sub-30s incremental runs. Closes F144.
