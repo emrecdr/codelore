@@ -4,6 +4,14 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Dependabot's weekly Cargo job no longer fails on the vendored `libduckdb-sys` patch.** The workspace `[patch.crates-io] libduckdb-sys` resolves to a vendor tree that is git-ignored and materialised at build time by `scripts/vendor-duckdb-rs.sh`; Dependabot's updater container never runs that script, so `cargo metadata` could not read the patched manifest and every major-bump trigger failed (2026-06-15, -21, -22). A minimal stub — the manifest plus a stub `src/lib.rs` (~10.6 KB) — is now committed so `cargo metadata` resolves the patch path; the full vendor tree still overwrites it with byte-identical content at build time, so builds and `git status` are unaffected. `.gitignore` switches from a blanket `vendor/` to `vendor/*` with leaf negations (a parent-excluded path can't be re-included), and the vendor script now strips the nested `.git/` so the stub files are trackable. Unblocks automated dependency updates.
+
+### Changed
+
+- **CI/release GitHub Actions bumped.** `actions/checkout` 6 → 7 (kept as a floating `@vN` tag, per the policy of pinning only credential-handling actions) and `softprops/action-gh-release` 3.0.0 → 3.0.1 (SHA-pin refreshed to `718ea10b… # v3.0.1`, preserving the `@<40-char-sha> # vN` form). Maintenance bump across `ci.yml`, `bench.yml`, `container.yml`, and `release.yml`; released binaries are unchanged.
+
 ## [0.9.0] - 2026-06-23
 
 ### Added
