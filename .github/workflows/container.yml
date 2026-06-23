@@ -44,7 +44,7 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # Populate vendor/ on the host before docker buildx sends the build
       # context. Workspace Cargo.toml's `[patch.crates-io]` block points at

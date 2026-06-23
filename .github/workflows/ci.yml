@@ -44,7 +44,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.96.0
         with:
           components: rustfmt
@@ -64,7 +64,7 @@ jobs:
     env:
       RUSTC_WRAPPER: sccache
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.96.0
         with:
           components: clippy
@@ -90,7 +90,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # CodeLore's integration tests walk this repo's own history (e.g.
           # gix_repo_walks_self_repo). gix needs parent ancestry to walk
@@ -157,7 +157,7 @@ jobs:
     env:
       RUSTC_WRAPPER: sccache
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@1.96.0
@@ -181,7 +181,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       # cargo-deny-action runs `cargo metadata` inside a Docker container that
       # mounts the host workspace. The workspace Cargo.toml's `[patch.crates-io]`
       # block resolves to vendor/, which must exist on the host before the
@@ -211,7 +211,7 @@ jobs:
     env:
       RUSTC_WRAPPER: sccache
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Same reason as the `test` job: dogfood walks this repo's
           # own history, so the gix walker needs parent ancestry.
