@@ -37,6 +37,15 @@ git clone --depth=1 --branch "${DUCKDB_RS_TAG}" \
 echo "[vendor-duckdb-rs] applying patches/duckdb-rs-msvc-1940.patch..."
 (cd "${VENDOR_DIR}" && git apply "${PATCH_FILE}")
 
+# Strip the nested `.git/` directory after the patch is applied so the
+# vendored tree isn't a sub-repository. Otherwise `git add` in the host
+# workspace treats `vendor/duckdb-rs/` as a potential submodule and
+# refuses to track the manifest stub paths that Dependabot needs (see
+# the `.gitignore` block on `vendor/duckdb-rs/crates/libduckdb-sys/` for
+# the wider context). The clone + patch + flatten still produces a
+# deterministic working tree without the nested repo.
+rm -rf "${VENDOR_DIR}/.git"
+
 # When cargo's `[patch.crates-io]` brings the vendored libduckdb-sys into
 # our workspace, its `Cargo.toml` resolves `authors / homepage / readme /
 # keywords / version / license / repository / edition / rust-version` via

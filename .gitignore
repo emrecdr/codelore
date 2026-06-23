@@ -51,7 +51,47 @@ graphify-out/manifest.json
 # Populated by scripts/vendor-duckdb-rs.sh + patches/duckdb-rs-msvc-1940.patch
 # Tracked OUT of source control because the script reproduces it deterministically.
 # Remove this entry when the upstream patch ships in a released duckdb crate.
-vendor/
+vendor/*
+# EXCEPT the two manifest-only stub paths inside the duckdb-rs vendor:
+# Dependabot's `cargo metadata` and `cargo update` both walk
+# `[patch.crates-io] libduckdb-sys = { path = "vendor/duckdb-rs/crates/
+# libduckdb-sys" }` from the workspace manifest. With vendor/ fully ignored,
+# that path doesn't exist in Dependabot's container (which doesn't run our
+# vendor script) and the resolver bails with
+# `dependency_file_not_resolvable: failed to read .../Cargo.toml`, failing
+# the weekly Dependabot Cargo job on any update that triggers a workspace
+# resolve.
+#
+# Committing JUST the manifest + a stub `src/lib.rs` (byte-identical to what
+# `scripts/vendor-duckdb-rs.sh` produces — verified across two fresh runs)
+# lets the resolver succeed without committing the full 19 MB vendored
+# tree. The script's `rm -rf` + re-vendor pass overwrites these with the
+# same bytes, so `git status` stays clean after CI / local builds.
+#
+# Gitignore pitfall: git's docs say "It is not possible to re-include a
+# file if a parent directory of that file is excluded." The classic
+# `vendor/` form excludes the directory itself, blocking recursion. Using
+# `vendor/*` excludes only the dir's contents (one level), keeping the
+# parent walkable so the negations below can re-include specific files.
+# Each intermediate directory on the path to the target files must be
+# explicitly un-ignored or git won't descend into them either.
+!vendor/duckdb-rs
+!vendor/duckdb-rs/crates
+!vendor/duckdb-rs/crates/libduckdb-sys
+!vendor/duckdb-rs/crates/libduckdb-sys/Cargo.toml
+!vendor/duckdb-rs/crates/libduckdb-sys/src
+!vendor/duckdb-rs/crates/libduckdb-sys/src/lib.rs
+# Re-ignore everything else inside the un-ignored directories so only the
+# two leaf paths above are trackable.
+vendor/duckdb-rs/*
+!vendor/duckdb-rs/crates
+vendor/duckdb-rs/crates/*
+!vendor/duckdb-rs/crates/libduckdb-sys
+vendor/duckdb-rs/crates/libduckdb-sys/*
+!vendor/duckdb-rs/crates/libduckdb-sys/Cargo.toml
+!vendor/duckdb-rs/crates/libduckdb-sys/src
+vendor/duckdb-rs/crates/libduckdb-sys/src/*
+!vendor/duckdb-rs/crates/libduckdb-sys/src/lib.rs
 
 # Session-tooling artefacts — runtime state generated per developer
 # by Claude Code / devt / graphify / serena / per-project MCP servers.
