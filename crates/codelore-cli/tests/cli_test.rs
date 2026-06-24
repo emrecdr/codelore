@@ -794,3 +794,31 @@ fn unsupported_format_bails_cleanly_instead_of_panicking() {
             .stderr(predicate::str::contains("unreachable").not());
     }
 }
+
+#[cfg(feature = "spa")]
+#[test]
+fn spa_without_output_defaults_to_dot_codelore() {
+    // `--format spa` no longer requires --output; it defaults to
+    // `.codelore/spa.html` under the current working directory.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let cwd = tempfile::tempdir().unwrap();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .current_dir(cwd.path())
+        .args([
+            "analyze",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "spa",
+            "--no-banner",
+            "--min-revs",
+            "1",
+        ])
+        .assert()
+        .success();
+    assert!(
+        cwd.path().join(".codelore").join("spa.html").is_file(),
+        "spa without --output should create .codelore/spa.html in the cwd"
+    );
+}

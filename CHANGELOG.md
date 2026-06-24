@@ -4,6 +4,10 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **`--format spa` no longer requires `--output`.** When omitted, the dashboard is written to `.codelore/spa.html` under the current working directory (the `.codelore/` directory is created if missing); `--output PATH` still overrides it. So `codelore analyze --format spa --repo .` now just works instead of erroring. `--format parquet` and `--format sqlite` still require `--output` — they're binary fact-store dumps with no sensible default filename.
+
 ## [0.9.1] - 2026-06-23
 
 ### Fixed

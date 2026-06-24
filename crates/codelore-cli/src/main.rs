@@ -479,8 +479,11 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         ),
     }
 
-    // Format constraints
-    if matches!(format, "parquet" | "sqlite" | "spa") && args.output.is_none() {
+    // Format constraints. parquet + sqlite are binary fact-store dumps with no
+    // sensible default filename, so they still require --output. `spa` defaults
+    // to ./.codelore/spa.html under the current directory when --output is
+    // omitted (handled in the spa block below).
+    if matches!(format, "parquet" | "sqlite") && args.output.is_none() {
         anyhow::bail!(
             "--format {format} requires --output PATH (binary format, cannot stream to stdout)"
         );
@@ -674,17 +677,26 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         // single row-type emission. Each new widget gets a new field
         // on `SpaDashboard` and a new analysis call inside
         // `build_spa_dashboard`.
-        let path = args.output.as_ref().expect("validated above");
         #[cfg(feature = "spa")]
         {
+            // --output is optional for spa. When omitted, default to
+            // `.codelore/spa.html` under the current working directory,
+            // creating the `.codelore` dir if needed.
+            let default_path = std::path::PathBuf::from(".codelore/spa.html");
+            let path: &std::path::Path = if let Some(p) = args.output.as_deref() {
+                p
+            } else {
+                if let Some(parent) = default_path.parent() {
+                    std::fs::create_dir_all(parent)
+                        .with_context(|| format!("create {}", parent.display()))?;
+                }
+                &default_path
+            };
             run_spa_dispatch(&db, &opts, &args.repo, path)?;
             return Ok(());
         }
         #[cfg(not(feature = "spa"))]
         {
-            // Argument is consumed at compile time when the feature is
-            // off, but keep it referenced so the var isn't flagged unused.
-            let _ = path;
             anyhow::bail!(
                 "--format spa requires CodeLore to be built with the `spa` Cargo feature. \
                  Reinstall with `cargo install codelore --features spa`, build from source \
