@@ -198,3 +198,221 @@ fn rendered_spa_boots_without_console_errors() {
         &kpi_html[..kpi_html.len().min(500)]
     );
 }
+
+/// Click a Knowledge-Islands row and assert the file-detail drawer
+/// opens POPULATED and then closes again. Guards the exact symptom
+/// class the boot-only smoke test can't see: the drawer rendering as a
+/// blank popup (no body, no close affordance) or refusing to close.
+///
+/// The boot test above only proves the page loads without console
+/// errors; it never drives the row → drawer → close interaction, so a
+/// regression in `showFileDetailDrawer` / the `detail` Alpine store /
+/// the dialog close wiring would ship undetected.
+#[test]
+#[allow(clippy::too_many_lines)] // mirror of the boot test's shape + the interaction steps
+fn knowledge_islands_row_opens_and_closes_detail_drawer() {
+    // -- Step 1: produce a SPA that ACTUALLY has knowledge-island rows. --
+    // The differential fixture's commits are all dated early-Jan 2026,
+    // so a far-future anchor makes every author "departed" by tens of
+    // thousands of days — every solo/dominant-owned live file surfaces
+    // as a knowledge island regardless of the wall-clock date the test
+    // runs on. Deterministic by construction.
+    let fixture = differential_repo::build();
+    let repo = GixRepo::open(fixture.dir.path()).expect("open fixture repo");
+    let db = FactsDb::new_in_memory().expect("in-memory facts db");
+    let opts = Options {
+        repo_path: fixture.dir.path().to_path_buf(),
+        min_revs: 1,
+        min_shared_revs: 1,
+        // Far-future anchor → every contributor is "departed" relative to
+        // their last commit, so the knowledge-islands table is populated.
+        age_time_now: Some(time::macros::date!(2099 - 01 - 01)),
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest fixture");
+
+    let hotspots = run_hotspots(&db, &opts).expect("hotspots");
+    let summary = run_summary(&db, &opts).expect("summary");
+    let code_health = run_code_health(&db, &opts).expect("code-health");
+    let coupling = run_coupling(&db, &opts).expect("coupling");
+    let knowledge_islands = run_knowledge_islands(&db, &opts).expect("knowledge-islands");
+
+    // Fail loudly if the fixture stops producing KI rows — otherwise the
+    // browser-side assertions would pass vacuously on an empty table.
+    assert!(
+        !knowledge_islands.is_empty(),
+        "fixture produced no knowledge-island rows; the drawer-open \
+         assertions below would be vacuous. Adjust the anchor / fixture."
+    );
+    let ki_row_count = knowledge_islands.len();
+    println!("knowledge_islands_row_opens_and_closes_detail_drawer: {ki_row_count} KI rows");
+
+    let dash = SpaDashboard {
+        hotspots,
+        summary,
+        code_health,
+        coupling,
+        knowledge_islands,
+        ..SpaDashboard::default()
+    };
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let html_path = tmp.path().join("codelore.html");
+    let mut f = std::fs::File::create(&html_path).expect("create html");
+    write_spa(
+        &dash,
+        "CodeLore KI Drawer Test",
+        &fixture.dir.path().display().to_string(),
+        "2026-06-16 00:00:00 UTC",
+        &mut f,
+    )
+    .expect("write_spa");
+    drop(f);
+
+    // -- Step 2: launch headless Chrome (skip if unavailable). -----------
+    let browser = match Browser::default() {
+        Ok(b) => b,
+        Err(e) => {
+            println!(
+                "spa_browser_test: skipping — could not launch Chrome ({e}). \
+                 Install Chrome / Chromium and retry."
+            );
+            return;
+        }
+    };
+
+    let tab = browser.new_tab().expect("new tab");
+
+    // -- Step 3: navigate + let Alpine/widgets boot. ---------------------
+    let url = format!("file://{}", html_path.display());
+    tab.navigate_to(&url).expect("navigate");
+    tab.wait_until_navigated().expect("wait navigation");
+    // Same boot window as the smoke test: the KI table renders inside the
+    // cooperative widget-boot loop, and the row click handlers attach
+    // during that render.
+    std::thread::sleep(Duration::from_secs(2));
+
+    // -- Step 4: click a Knowledge-Islands row. --------------------------
+    // `wait_for_element` polls until the KI render has produced rows, so
+    // we don't race the cooperative boot scheduler.
+    let row = tab
+        .wait_for_element("tr.ki-row")
+        .expect("at least one knowledge-islands row should render");
+    row.click().expect("click KI row");
+    // The drawer-show path mutates the DOM synchronously on click; a short
+    // settle covers the radar ECharts mount + Alpine store propagation.
+    std::thread::sleep(Duration::from_millis(300));
+
+    // -- Step 5: assert the drawer OPENED and is POPULATED. --------------
+    // `open === true`, no `[hidden]`, and computed `display !== 'none'`
+    // is exactly the inverse of the "blank popup" symptom.
+    let drawer_open: bool = serde_json::from_value(
+        tab.evaluate(
+            "document.getElementById('file-detail-drawer').open === true",
+            false,
+        )
+        .expect("eval drawer.open")
+        .value
+        .expect("drawer.open value"),
+    )
+    .expect("drawer.open bool");
+    assert!(drawer_open, "detail drawer did not open on KI row click");
+
+    let drawer_not_hidden: bool = serde_json::from_value(
+        tab.evaluate(
+            "!document.getElementById('file-detail-drawer').hasAttribute('hidden')",
+            false,
+        )
+        .expect("eval drawer hidden")
+        .value
+        .expect("drawer hidden value"),
+    )
+    .expect("drawer hidden bool");
+    assert!(
+        drawer_not_hidden,
+        "detail drawer kept the [hidden] attribute after open"
+    );
+
+    let drawer_displayed: bool = serde_json::from_value(
+        tab.evaluate(
+            "getComputedStyle(document.getElementById('file-detail-drawer')).display !== 'none'",
+            false,
+        )
+        .expect("eval drawer display")
+        .value
+        .expect("drawer display value"),
+    )
+    .expect("drawer display bool");
+    assert!(
+        drawer_displayed,
+        "detail drawer computed display:none after open (invisible popup)"
+    );
+
+    let title_len: i64 = serde_json::from_value(
+        tab.evaluate(
+            "document.getElementById('drawer-title').textContent.trim().length",
+            false,
+        )
+        .expect("eval title len")
+        .value
+        .expect("title len value"),
+    )
+    .expect("title len i64");
+    assert!(
+        title_len > 0,
+        "drawer title (clicked path) was empty; title_len={title_len}"
+    );
+
+    let body_len: i64 = serde_json::from_value(
+        tab.evaluate(
+            "document.getElementById('drawer-body').innerHTML.length",
+            false,
+        )
+        .expect("eval body len")
+        .value
+        .expect("body len value"),
+    )
+    .expect("body len i64");
+    assert!(body_len > 0, "drawer body was empty; body_len={body_len}");
+
+    let has_ki_section: bool = serde_json::from_value(
+        tab.evaluate(
+            "document.getElementById('drawer-body').textContent.includes('Knowledge island')",
+            false,
+        )
+        .expect("eval ki section")
+        .value
+        .expect("ki section value"),
+    )
+    .expect("ki section bool");
+    assert!(
+        has_ki_section,
+        "drawer body had no 'Knowledge island' section for a KI-row click"
+    );
+
+    // -- Step 6: assert the × close button actually closes the drawer. ---
+    let close_btn = tab
+        .find_element("#drawer-close")
+        .expect("drawer close button should exist while drawer is open");
+    close_btn.click().expect("click drawer close");
+    // The dialog `close` event listener re-adds [hidden] + syncs the store
+    // asynchronously; give it a turn before re-reading state.
+    std::thread::sleep(Duration::from_millis(300));
+
+    let drawer_closed: bool = serde_json::from_value(
+        tab.evaluate(
+            "(() => { const d = document.getElementById('file-detail-drawer'); \
+             return d.open === false && (d.hasAttribute('hidden') || \
+             getComputedStyle(d).display === 'none'); })()",
+            false,
+        )
+        .expect("eval drawer closed")
+        .value
+        .expect("drawer closed value"),
+    )
+    .expect("drawer closed bool");
+    assert!(
+        drawer_closed,
+        "detail drawer did not close after clicking the × button"
+    );
+}
