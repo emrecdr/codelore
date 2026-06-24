@@ -4,6 +4,10 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **SPA: Hotspots and Trends panels now stack on narrow screens and sit side-by-side on wide screens** (the responsive behaviour was inverted). Both carried `xl:col-span-2`, which made them share a row at md/lg widths (768–1279 px) yet each span the full width — stacked — at xl (≥ 1280 px). They're now `md:col-span-2 xl:col-span-1`: full-width and stacked up to lg, side-by-side only once there's room at xl. The Tailwind bundle was rebuilt to emit the new `md:col-span-2` / `xl:col-span-1` classes. Verified in a headless browser via measured layout (wide: two half-width columns; narrow: two stacked full-width rows).
+
 ### Changed
 
 - **`--format spa` no longer requires `--output`.** When omitted, the dashboard is written to `.codelore/spa.html` under the current working directory (the `.codelore/` directory is created if missing); `--output PATH` still overrides it. So `codelore analyze --format spa --repo .` now just works instead of erroring. `--format parquet` and `--format sqlite` still require `--output` — they're binary fact-store dumps with no sensible default filename.
