@@ -1691,7 +1691,8 @@
        440px → CSS spec resolves by ignoring `right`, putting the
        drawer at the top-left corner). `.detail-drawer` alone gives
        the right-side slide-in correctly. -->
-  <dialog class="detail-drawer" id="file-detail-drawer" hidden>
+  <dialog class="detail-drawer" id="file-detail-drawer"
+          aria-labelledby="drawer-title" hidden>
     <div class="modal-box max-w-2xl">
       <div class="drawer-header flex items-center justify-between mb-2">
         <h3 id="drawer-title" class="text-lg font-semibold">File details</h3>
@@ -1803,17 +1804,31 @@
   <script>
     document.addEventListener('alpine:init', () => {
       Alpine.store('detail', {
-        // Drawer is backed by a native <dialog>. show()/hide() route
-        // through the dialog's modal API so we get free focus-trap
-        // + Escape-closes + ::backdrop.
+        // Drawer is backed by a native <dialog> opened in NON-MODAL
+        // mode (`.show()`), so the platform gives no focus trap and no
+        // backdrop. Focus management is wired by hand here: `show()`
+        // records the trigger and moves focus into the drawer; the
+        // dialog `close` listener below restores focus to the trigger.
         // Keeping `open` for backwards-compat with any widget that
         // still queries it (e.g. an Alpine.effect bridge), but the
         // canonical source of truth is the dialog's .open property.
         open: false,
+        // Element focused immediately before the drawer opened, so
+        // focus can be returned there on close. Null when the drawer
+        // is closed or the trigger was lost (e.g. re-rendered away).
+        _trigger: null,
         show() {
           this.open = true;
           const d = document.getElementById('file-detail-drawer');
           if (!d) return;
+          // Capture the trigger BEFORE moving focus, but only on a
+          // fresh open — clicking another row while the drawer is
+          // already open (the non-modal use case) must not overwrite
+          // the original trigger with an in-drawer element.
+          if (!d.open) {
+            const active = document.activeElement;
+            this._trigger = (active && active !== document.body) ? active : null;
+          }
           d.removeAttribute('hidden');
           // Non-modal `.show()` instead of `.showModal()`: the drawer
           // floats on top of the page WITHOUT a backdrop that blocks
@@ -1825,6 +1840,12 @@
           if (typeof d.show === 'function' && !d.open) {
             d.show();
           }
+          // Move focus into the drawer so keyboard / screen-reader
+          // users land on the revealed content instead of the now-
+          // occluded trigger row. The close button is the simplest
+          // stable target and lets Escape-then-Enter dismiss quickly.
+          const closeBtn = document.getElementById('drawer-close');
+          if (closeBtn) closeBtn.focus();
         },
         hide() {
           this.open = false;
@@ -1850,8 +1871,21 @@
       if (detailDialog) {
         detailDialog.addEventListener('close', function () {
           detailDialog.setAttribute('hidden', '');
-          if (Alpine.store('detail')) {
-            Alpine.store('detail').open = false;
+          const store = Alpine.store('detail');
+          if (store) {
+            store.open = false;
+            // Restore focus to the element that opened the drawer so
+            // keyboard users resume where they left off. Guard for a
+            // trigger that's been detached from the document (e.g. its
+            // table re-rendered while the drawer was open) — focusing a
+            // detached node throws / silently no-ops, so fall back to
+            // doing nothing rather than stranding focus on <body>.
+            const trigger = store._trigger;
+            store._trigger = null;
+            if (trigger && document.contains(trigger) &&
+                typeof trigger.focus === 'function') {
+              trigger.focus();
+            }
           }
           // Clear the cross-widget selection so the trends /
           // parallel-coords highlights fade back to neutral when

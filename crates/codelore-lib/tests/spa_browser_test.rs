@@ -416,3 +416,221 @@ fn knowledge_islands_row_opens_and_closes_detail_drawer() {
         "detail drawer did not close after clicking the × button"
     );
 }
+
+/// Open the file-detail drawer from a Knowledge-Islands row and assert
+/// the a11y contract holds:
+///
+/// 1. The drawer carries an accessible NAME — `aria-labelledby` points
+///    at the visible title — so assistive tech announces "<path>
+///    dialog" instead of an unnamed group. A bare `<dialog>` has no
+///    implicit name, so this is wired by hand and is the assertion that
+///    fails on the un-fixed source.
+/// 2. On open, focus is INSIDE the drawer (keyboard / screen-reader
+///    users land on the freshly-revealed content, not the occluded
+///    trigger).
+/// 3. On close, focus RETURNS to the trigger row (the user resumes
+///    where they left off).
+///
+/// The drawer is deliberately NON-MODAL (`dialog.show()`, not
+/// `showModal()`) so a user can click another row while it is open. We
+/// also wire the focus move-in / restore-out explicitly rather than
+/// leaning on the platform's dialog-focusing steps, so the contract
+/// holds even on engines whose non-modal focus handling diverges from
+/// current Chrome.
+#[test]
+#[allow(clippy::too_many_lines)] // mirror of the KI-drawer test's shape + a11y assertions
+fn detail_drawer_has_accessible_name_and_manages_focus() {
+    // -- Step 1: produce a SPA that ACTUALLY has knowledge-island rows. --
+    // Same far-future-anchor trick as the KI-drawer open/close test so
+    // every solo-owned live file surfaces as a knowledge island.
+    let fixture = differential_repo::build();
+    let repo = GixRepo::open(fixture.dir.path()).expect("open fixture repo");
+    let db = FactsDb::new_in_memory().expect("in-memory facts db");
+    let opts = Options {
+        repo_path: fixture.dir.path().to_path_buf(),
+        min_revs: 1,
+        min_shared_revs: 1,
+        age_time_now: Some(time::macros::date!(2099 - 01 - 01)),
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest fixture");
+
+    let hotspots = run_hotspots(&db, &opts).expect("hotspots");
+    let summary = run_summary(&db, &opts).expect("summary");
+    let code_health = run_code_health(&db, &opts).expect("code-health");
+    let coupling = run_coupling(&db, &opts).expect("coupling");
+    let knowledge_islands = run_knowledge_islands(&db, &opts).expect("knowledge-islands");
+
+    assert!(
+        !knowledge_islands.is_empty(),
+        "fixture produced no knowledge-island rows; the focus assertions \
+         below would be vacuous. Adjust the anchor / fixture."
+    );
+
+    let dash = SpaDashboard {
+        hotspots,
+        summary,
+        code_health,
+        coupling,
+        knowledge_islands,
+        ..SpaDashboard::default()
+    };
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let html_path = tmp.path().join("codelore.html");
+    let mut f = std::fs::File::create(&html_path).expect("create html");
+    write_spa(
+        &dash,
+        "CodeLore Drawer Focus Test",
+        &fixture.dir.path().display().to_string(),
+        "2026-06-16 00:00:00 UTC",
+        &mut f,
+    )
+    .expect("write_spa");
+    drop(f);
+
+    // -- Step 2: launch headless Chrome (skip if unavailable). -----------
+    let browser = match Browser::default() {
+        Ok(b) => b,
+        Err(e) => {
+            println!(
+                "spa_browser_test: skipping — could not launch Chrome ({e}). \
+                 Install Chrome / Chromium and retry."
+            );
+            return;
+        }
+    };
+
+    let tab = browser.new_tab().expect("new tab");
+
+    // -- Step 3: navigate + let Alpine/widgets boot. ---------------------
+    let url = format!("file://{}", html_path.display());
+    tab.navigate_to(&url).expect("navigate");
+    tab.wait_until_navigated().expect("wait navigation");
+    std::thread::sleep(Duration::from_secs(2));
+
+    // -- Step 4: focus the first KI row, then activate it. ---------------
+    // The rows are keyboard-activable, so focusing first models the
+    // keyboard-user path and gives `document.activeElement` a stable,
+    // assertable trigger to restore to on close. We tag the row with a
+    // marker attribute so we can identify "the same element" after the
+    // drawer round-trips (DOM identity isn't queryable across evaluate
+    // calls otherwise).
+    tab.wait_for_element("tr.ki-row")
+        .expect("at least one knowledge-islands row should render");
+    tab.evaluate(
+        "(() => { const r = document.querySelector('tr.ki-row'); \
+         r.setAttribute('data-focus-trigger-marker', '1'); r.focus(); \
+         return document.activeElement === r; })()",
+        false,
+    )
+    .expect("focus the KI row");
+
+    let row_focused_before: bool = serde_json::from_value(
+        tab.evaluate(
+            "document.activeElement === document.querySelector('tr[data-focus-trigger-marker]')",
+            false,
+        )
+        .expect("eval row focused before")
+        .value
+        .expect("row focused before value"),
+    )
+    .expect("row focused before bool");
+    assert!(
+        row_focused_before,
+        "could not focus the KI row before activation; test premise broken"
+    );
+
+    // Activate the row the way a keyboard user would (Enter). The row's
+    // keydown handler routes to the same drawer-open path as a click.
+    tab.evaluate(
+        "(() => { const r = document.querySelector('tr[data-focus-trigger-marker]'); \
+         r.dispatchEvent(new KeyboardEvent('keydown', \
+         { key: 'Enter', bubbles: true })); })()",
+        false,
+    )
+    .expect("activate KI row via Enter");
+    std::thread::sleep(Duration::from_millis(300));
+
+    // -- Step 5: assert the drawer opened and focus moved INTO it. -------
+    let drawer_open: bool = serde_json::from_value(
+        tab.evaluate(
+            "document.getElementById('file-detail-drawer').open === true",
+            false,
+        )
+        .expect("eval drawer open")
+        .value
+        .expect("drawer open value"),
+    )
+    .expect("drawer open bool");
+    assert!(
+        drawer_open,
+        "detail drawer did not open on KI row keyboard activation"
+    );
+
+    // The drawer must expose an accessible name via aria-labelledby ->
+    // the visible title. We resolve the reference end-to-end (the IDREF
+    // must point at an element whose text is non-empty) rather than
+    // just asserting the attribute string, so a dangling reference
+    // can't pass. This is the assertion that fails on un-fixed source.
+    let drawer_named: bool = serde_json::from_value(
+        tab.evaluate(
+            "(() => { const d = document.getElementById('file-detail-drawer'); \
+             const ref = d.getAttribute('aria-labelledby'); \
+             if (!ref) return false; \
+             const labelEl = document.getElementById(ref); \
+             return !!labelEl && labelEl.textContent.trim().length > 0; })()",
+            false,
+        )
+        .expect("eval drawer aria-labelledby")
+        .value
+        .expect("drawer aria-labelledby value"),
+    )
+    .expect("drawer named bool");
+    assert!(
+        drawer_named,
+        "detail drawer has no resolvable accessible name \
+         (aria-labelledby -> non-empty title); screen readers announce \
+         it as an unnamed dialog"
+    );
+
+    let focus_inside_drawer: bool = serde_json::from_value(
+        tab.evaluate(
+            "(() => { const d = document.getElementById('file-detail-drawer'); \
+             const a = document.activeElement; \
+             return !!a && (a === d || d.contains(a)); })()",
+            false,
+        )
+        .expect("eval focus inside drawer")
+        .value
+        .expect("focus inside drawer value"),
+    )
+    .expect("focus inside drawer bool");
+    assert!(
+        focus_inside_drawer,
+        "focus did not move into the drawer on open — keyboard / screen-reader \
+         users are stranded on the occluded trigger row"
+    );
+
+    // -- Step 6: close via the × button, assert focus RETURNS to row. ----
+    let close_btn = tab
+        .find_element("#drawer-close")
+        .expect("drawer close button should exist while drawer is open");
+    close_btn.click().expect("click drawer close");
+    std::thread::sleep(Duration::from_millis(300));
+
+    let focus_restored: bool = serde_json::from_value(
+        tab.evaluate(
+            "document.activeElement === document.querySelector('tr[data-focus-trigger-marker]')",
+            false,
+        )
+        .expect("eval focus restored")
+        .value
+        .expect("focus restored value"),
+    )
+    .expect("focus restored bool");
+    assert!(
+        focus_restored,
+        "focus did not return to the trigger row after the drawer closed"
+    );
+}

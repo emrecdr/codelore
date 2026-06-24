@@ -2585,7 +2585,7 @@
           top: 6,
           left: 6,
           itemStyle: {
-            color: getCssVar('--bg-elev-1'),
+            color: getCssVar('--bg-elev'),
             borderColor: getCssVar('--border'),
             textStyle: { color: getCssVar('--fg') },
           },
@@ -3061,9 +3061,18 @@
     }
 
     const data = rows.map(function (r) { return [r.date, r.count]; });
+    // Single-pass min/max. `Math.min.apply(null, counts)` spreads every
+    // element as an argument; on multi-year repos `counts` holds one
+    // entry per active day (thousands), overflowing the call-stack arg
+    // limit (RangeError). `rows.length` is guaranteed > 0 by the early
+    // return above, so seeding from counts[0] is safe.
     const counts = rows.map(function (r) { return r.count; });
-    const minVal = Math.min.apply(null, counts);
-    const maxVal = Math.max.apply(null, counts);
+    let minVal = counts[0];
+    let maxVal = counts[0];
+    for (var ci = 1; ci < counts.length; ci++) {
+      if (counts[ci] < minVal) minVal = counts[ci];
+      if (counts[ci] > maxVal) maxVal = counts[ci];
+    }
 
     // Determine which years to render — one calendar block per year
     // present in the data. Many heatmaps cap at one year; we want
