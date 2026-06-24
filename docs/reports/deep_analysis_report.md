@@ -171,6 +171,142 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 
 ---
 
+### Discovery pass — 2026-06-24 (F166–F199)
+
+Read-only fan-out across 5 dimensions (architecture, performance, SPA/accessibility, tooling/CI/dependencies, correctness/testing/CLI). Every candidate validated against source before logging. Tier 1 (F166–F172) + Tier 2 (F173–F178) are being closed this session; Tier 3/4 (F179–F199) are logged for follow-up.
+
+#### F166 — `codelore schema` row-type list drifted from the analysis registry
+
+*   **Location**: `crates/codelore-cli/src/main.rs:369-402` (`run_schema_cmd` — hardcoded `row_types` array + literal `"Supported row types (29)"`)
+*   **Severity**: MED · **Category**: list duplication / drift (user-visible)
+*   **Status**: Active
+*   **Description**: The array holds 29 names; `AnalysisName::all()` has 32. `delivery-friction`, `main-dev-by-revs`, `main-dev-by-deletions` are missing, so `codelore schema delivery-friction` errors "unknown row type" for a fully-supported analysis.
+*   **Suggested fix**: Derive the list + count from `AnalysisName::all().iter().map(AnalysisName::as_str)` (the pattern `run_docs_cmd` already uses).
+
+#### F167 — `stale-code` + `delivery-friction` non-deterministic (wall-clock anchor, no `--age-time-now` hatch)
+
+*   **Location**: `crates/codelore-lib/src/analyses/stale_code.rs:90`, `crates/codelore-lib/src/analyses/delivery_friction.rs:135` (`time::OffsetDateTime::now_utc()`)
+*   **Severity**: HIGH · **Category**: correctness (determinism)
+*   **Status**: Active
+*   **Description**: Analysis SQL re-runs at query time on the cached fact store. Both inject a fresh wall-clock anchor into a threshold gate, so identical repo + HEAD + cache key yields different rows between runs. `code_age.rs` + `knowledge_islands.rs` already honor `opts.age_time_now`; these two have no anchor override at all.
+*   **Suggested fix**: Default anchor to `MAX(commits.date)` (deterministic from the store), honor `opts.age_time_now` override — parity with the sibling analyses.
+
+#### F168 — `lead-time` final `ORDER BY` lacks a tiebreaker → non-deterministic under `LIMIT`
+
+*   **Location**: `crates/codelore-lib/src/analyses/lead_time.rs:81` (`ORDER BY lead_time_seconds DESC` then `LIMIT ?`)
+*   **Severity**: MED · **Category**: correctness (determinism)
+*   **Status**: Active
+*   **Description**: `lead_time_seconds` is heavily tie-laden (squash/rebase → bulk `0`s, per the module docstring). With `LIMIT` over a tie-only sort and no unique key, which rows survive is at the mercy of scan order. Every sibling analysis appends a tiebreaker; this one selects `rev` but omits it from `ORDER BY`.
+*   **Suggested fix**: `ORDER BY lead_time_seconds DESC, rev ASC`.
+
+#### F169 — Treemap breadcrumb reads an undefined CSS variable
+
+*   **Location**: `crates/codelore-lib/src/output/spa/widgets.js:2588` (`getCssVar('--bg-elev-1')`)
+*   **Severity**: LOW · **Category**: theming bug
+*   **Status**: Active
+*   **Description**: Only `--bg-elev` and `--bg-elev-2` are defined (template.html:59-60,772-773); `--bg-elev-1` resolves to `""`, so the treemap breadcrumb falls back to ECharts' theme-unaware default in both themes.
+*   **Suggested fix**: `getCssVar('--bg-elev')`.
+
+#### F170 — CSV emitter has no formula-injection guard
+
+*   **Location**: `crates/codelore-lib/src/output/csv.rs:18-29` (`quote_if_needed`)
+*   **Severity**: MED · **Category**: output / security
+*   **Status**: Active
+*   **Description**: RFC-4180 quoting is correct, but fields starting with `= + - @` pass through verbatim. CodeLore emits attacker-influenceable git strings (author names, paths) into CSVs maintainers open in spreadsheets — the classic CSV-injection vector. The markdown emitter escapes `|`; CSV has no equivalent.
+*   **Suggested fix**: Force-quote and prepend a `'` guard when a string cell's first char is `= + - @` (or tab).
+
+#### F171 — `bus-factor` drops repo-root files and is not rename-aware
+
+*   **Location**: `crates/codelore-lib/src/analyses/bus_factor.rs:67,73` (`regexp_extract(c.path, '^[^/]+', 0)` + `AND c.path LIKE '%/%'`)
+*   **Severity**: MED · **Category**: correctness
+*   **Status**: Active
+*   **Description**: (a) `LIKE '%/%'` excludes every file with no `/`, so all repo-root files are silently dropped (empty/skewed report on flat repos). (b) It is the only path-derived-aggregation analysis that does NOT opt into the lineage rewriter, so renames split history across old/new module names.
+*   **Suggested fix**: `CASE WHEN c.path LIKE '%/%' THEN regexp_extract(...) ELSE '<root>' END`; opt into `lineage::rewrite` (byte-identical-baseline guarded for the lineage half).
+
+#### F172 — Calendar heatmap `Math.min.apply(null, counts)` can `RangeError` on long histories
+
+*   **Location**: `crates/codelore-lib/src/output/spa/widgets.js:3065-3066`
+*   **Severity**: MED · **Category**: JS robustness
+*   **Status**: Active
+*   **Description**: `daily_commits` is one row per active day; a multi-year repo yields thousands of elements. `apply`-spread of a huge array risks `RangeError: Maximum call stack size exceeded`, throwing the whole heatmap.
+*   **Suggested fix**: Single-pass `for` loop (also faster — no argument-array construction).
+
+#### F173 — Same HEAD blobs read + tree re-walked up to 3× across complexity/clones/imports
+
+*   **Location**: `crates/codelore-lib/src/facts/ingest/mod.rs:145-165` (3 sequential passes) → `repo/gix_repo.rs::read_blob_at_head`
+*   **Severity**: HIGH · **Category**: performance (redundant I/O + decompression)
+*   **Status**: Active
+*   **Description**: The three language detectors share an overlapping extension set, so each common Tier-1 file's blob is OID-looked-up, inflated, and root-tree-walked 3 separate times. Distinct from F125 (which dedup'd the SQL, not the blob reads).
+*   **Suggested fix**: Read each live Tier-1 blob once, fan the bytes to all three extractors; keep the rayon-then-serial-drain shape. Byte-identical output; preserve each pass's distinct skip/log semantics.
+
+#### F174 — `run_coupling` recomputed 2–5× per dashboard / multi-analysis run, no memoization
+
+*   **Location**: `crates/codelore-lib/src/analyses/coupling.rs:328` + callers `code_health.rs:143`, `centrality.rs:102`, `communities.rs:102`, `clone_coupling.rs:120`, `main.rs:2375`
+*   **Severity**: HIGH · **Category**: performance (repeated heavy query)
+*   **Status**: Active
+*   **Description**: The O(K²) `filtered_changes` self-join + Fisher pass is pure per (db, opts) yet fires ≥2× in a `--format spa` run and up to 5× across code-health/centrality/communities/clone-coupling. It is the single most expensive analysis query.
+*   **Suggested fix**: Per-`FactsDb` `RefCell<HashMap<key, Rc<Vec<CouplingRow>>>>` memo keyed on the coupling-affecting opts subset (NOT `rows_limit` — callers already strip it). Byte-identical.
+
+#### F175 — SPA detail drawer has no focus management
+
+*   **Location**: `crates/codelore-lib/src/output/spa/template.html:1813-1828` (`store.show()`) + `widgets.js:858-1050` (`showFileDetailDrawer`); `<dialog>` at template.html:1694
+*   **Severity**: HIGH · **Category**: accessibility (WCAG 2.4.3, 4.1.2)
+*   **Status**: Active
+*   **Description**: Deliberate non-modal `dialog.show()` (so users can click another row) gives none of `showModal()`'s a11y freebies, but no compensating wiring exists: focus never enters the drawer, never returns on close; no `aria-modal`; the `#drawer-title` is not referenced via `aria-labelledby`.
+*   **Suggested fix**: On open, move focus to close-button/title (record prior `activeElement`); restore on close; add `aria-labelledby="drawer-title"`. Keep non-modal behavior.
+
+#### F176 — Six SQL analyses live in `output/spa.rs` and mislabel query failures as `Output` (exit 5 vs 4)
+
+*   **Location**: `crates/codelore-lib/src/output/spa.rs` — `run_xray` (349), `run_clone_summary` (407), `run_trends` (433), `run_daily_commits` (478), `run_kamei_risk` (515), `run_imports_for_arch_graph` (248); 20 `CodeLoreError::Output(format!(...))` wraps
+*   **Severity**: MED · **Category**: layering + error-category leak
+*   **Status**: Active
+*   **Description**: These are analyses (parameterized SQL → row structs) sitting in the output layer; a SQL failure surfaces as `Output` → exit code 5 (output/I/O) when the contract reserves 4 for analysis failures.
+*   **Suggested fix**: Move the six `run_*` + row structs into `analyses/` (e.g. `analyses/dashboard.rs`); reclassify errors as `Analysis`. Byte-identical output.
+
+#### F177 — Three divergent schema-version sentinels, hand-synchronized
+
+*   **Location**: `facts/schema.rs:10` (`CURRENT_SCHEMA_VERSION = "3"`), `cache.rs:20` (`SCHEMA_VERSION = "schema_v5"`), `codelore-cli/src/main.rs:145` (hardcoded `"schema_v3"`) + `:297` prose
+*   **Severity**: MED · **Category**: duplicated source-of-truth / doc drift
+*   **Status**: Active
+*   **Description**: Three values for one logical concept, none derived from another. The cache sentinel was hand-bumped to `v5` for a non-schema (hunks) fix — contradicting CLAUDE.md's "never hand-invalidate". The `profile` literal is stale duplication that will misreport after the next schema bump.
+*   **Suggested fix**: Make `profile`/`explain` read `CURRENT_SCHEMA_VERSION`; rename the cache sentinel to an honest `CACHE_EPOCH` and document the deliberate cache-vs-schema split in CLAUDE.md.
+
+#### F178 — `query_map_collect` helper adopted by only ~30% of single-query analyses
+
+*   **Location**: `crates/codelore-lib/src/analyses/query.rs:28` (helper) vs ~18 analyses hand-rolling the identical prepare/query_map/collect triple
+*   **Severity**: MED · **Category**: copy-paste drift / under-adopted abstraction
+*   **Status**: Active
+*   **Description**: The helper exists precisely to stop error-message drift across the 7-line pattern, but adoption stalled; new analyses copy whichever neighbor they open.
+*   **Suggested fix**: Convert the ~10 single-query, no-post-process analyses (ownership, soc, hotspots, main_dev×3, code_age, communication, entity_effort, entity_ownership, summary, messages). Byte-identical (same SQL/params/mapper).
+
+#### Tier 3 / Tier 4 — logged for follow-up
+
+| ID | Title | Location | Sev |
+|---|---|---|---|
+| F179 | Tablists have `role=tab`+`aria-selected` but no arrow-key nav / roving tabindex | template.html (8 tablists), widgets.js:3269 | MED |
+| F180 | Canvas/ECharts/d3 charts expose no text alternative (`role=img`/`aria-label`) | ~12 `*-body` chart divs | MED |
+| F181 | No `prefers-reduced-motion` CSS block (CSS transitions + `view-transition-name` animate regardless) | template.html CSS (164,172,223,549) | MED |
+| F182 | Dynamic updates silent to SR (no `aria-live` on filter summary / color-mode) | template.html:1593, widgets.js:1975 | LOW-MED |
+| F183 | Selection-listener registry accumulates stale closures on re-render (leak + stale-chart dispatch) | widgets.js:2330,2722 | LOW-MED |
+| F184 | `changes_lineage` temp table fully rebuilt on every analysis call under `--use-canonical-lineage` | facts/ingest/lineage.rs:93-123 | MED |
+| F185 | Clone `Fingerprint` retains unused per-node `sequence: Vec<(u16,u16)>` repo-wide at HEAD ingest | clones/fingerprint.rs:28-63 | MED |
+| F186 | Bench regression gate never runs on PRs (advisory-only weekly cron) | bench.yml:3-6,104-113 | MED |
+| F187 | `just test --all-features` diverges from CI test invocation + browser test silently skips | justfile:18-19, RELEASING.md:93 | MED |
+| F188 | `cut-release.sh` hardcoded ruleset body (6 check contexts) drifts from CI job names | scripts/cut-release.sh:125-155 | MED |
+| F189 | `vendor-duckdb-rs.sh` `rm -rf`+clone: no retry, mutable-tag TOFU, offline cliff, re-clones per cold job | scripts/vendor-duckdb-rs.sh:23-38 | MED |
+| F190 | `explain` covers 15/32 analyses; unknown topic hard-errors; no anti-drift test | main.rs:239-330 | MED |
+| F191 | Format/usage errors exit `1` instead of typed `4`/`5` | main.rs:477,487,500,568 | MED |
+| F192 | `mi` / `communities` / `centrality` have no integration tests of `run_*` | tests/ | MED |
+| F193 | `resolve_imports_at_head` builds the live-path set twice (`&str` then owned clone) | imports_head.rs:133-169 | LOW |
+| F194 | Kamei `enrich` re-materializes `changes_lineage` at ingest (subsumed by F184) | kamei/mod.rs:18-31 | LOW |
+| F195 | 5× `hashbrown` (+ getrandom/digest/rustix splits) under `multiple-versions="warn"`, no skip-list | deny.toml:34-35 | LOW |
+| F196 | `release.yml` uses `actions/cache` namespace, not CI's sccache → no warm-cache reuse | release.yml:94-106 | LOW |
+| F197 | `dogfood` cold `--release` build on every PR, advisory-only, separate cache | ci.yml:221-225 | LOW |
+| F198 | Two parallel SQL source-swap mechanisms (lineage regex vs grouped_complexity `{cm_src}`); doc claims false symmetry | analyses/lineage.rs:81 vs grouped_complexity.rs:29 | LOW |
+| F199 | `Options::validate()` reports CLI arg errors as `CodeLoreError::Provenance` (variant overload) | options.rs:292 | LOW |
+
+---
+
 ## 4½. Validation Pass — 2026-06-18
 
 Every Active / Partial entry above re-verified against current `main` HEAD via direct source inspection by a fan-out of 8 parallel validation subagents. Backwards-evidence summary so the next reader doesn't redo the same checks:
@@ -250,9 +386,10 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 - **Closed on main (added to §3 closure-log)**: F110, F112, F117, F118, F120 (URL half), F124 (policy half), F125, F126, F127 (full — entropy rewrite closes the remainder), F128, F129, F130, F134, F135, F138, F142, F143, F146, F150, F151, F152, F153, F154, F155, F156, F157, F158, F159, F160, F163.
 - **REFUTED this session**: F116 (Renovate + Dependabot partitioned by ecosystem) + F123 (crossbeam 0.8.4 + num-format 0.4.4 are current releases) — see §3 newly-refuted block.
 - **Closed by side-effect**: F162 — Parquet writers now delegate to shared SQL generators that preserve CSV row-type contract via explicit casts. Verified 2026-06-21.
-- **Active**: F119, F148, F161 = **3 Active findings** with file:line citations + severity + suggested-fix shape, ready for the next contributor to pick up.
+- **Active (carried)**: F119, F148, F161 — the deferred output-emitter cluster.
+- **Discovery pass 2026-06-24 (F166–F199)**: 34 new findings logged (see §4). Tier 1 (F166–F172) + Tier 2 (F173–F178) being closed this session; Tier 3/4 (F179–F199) Active, ready for follow-up.
 
-The next sweep should re-open with F-IDs starting at **F166**.
+The next sweep should re-open with F-IDs starting at **F200**.
 
 ### Deferred — discovery pass (Workflow `wf_902c8b32-45d`)
 
