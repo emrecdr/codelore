@@ -48,3 +48,49 @@ fn lead_time_emits_one_row_per_commit() {
         );
     }
 }
+
+#[test]
+fn lead_time_breaks_ties_by_rev_under_limit() {
+    // `tiny_repo`'s commits all carry equal author and committer
+    // timestamps, so every row's `lead_time_seconds` is 0 — a fully
+    // tied ranking. With a small LIMIT, which rows survive must be
+    // deterministic: ordered by `rev` ASC as the tiebreaker, not by
+    // scan order. The full unlimited result, truncated to the same
+    // count, is the deterministic baseline.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let repo = GixRepo::open(tiny.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+
+    let full_opts = Options {
+        repo_path: tiny.dir.path().to_path_buf(),
+        ..Options::default()
+    };
+    db.ingest(&repo, &full_opts).expect("ingest");
+
+    let all_rows = run_lead_time(&db, &full_opts).expect("run lead-time unlimited");
+    assert!(all_rows.len() >= 3, "fixture needs enough tied rows");
+
+    // All lead times tie at 0 for this fixture.
+    assert!(
+        all_rows.iter().all(|r| r.lead_time_seconds == 0),
+        "tiny_repo commits should all tie at 0 lead-time seconds"
+    );
+
+    // Independent expectation: the revs that should survive a LIMIT 2
+    // are the two smallest by `rev` ASC.
+    let mut expected_revs: Vec<String> = all_rows.iter().map(|r| r.rev.clone()).collect();
+    expected_revs.sort();
+    expected_revs.truncate(2);
+
+    let limited_opts = Options {
+        rows_limit: Some(2),
+        ..full_opts
+    };
+    let limited = run_lead_time(&db, &limited_opts).expect("run lead-time limited");
+    let got_revs: Vec<String> = limited.iter().map(|r| r.rev.clone()).collect();
+
+    assert_eq!(
+        got_revs, expected_revs,
+        "tied lead times must break by rev ASC so LIMIT is deterministic",
+    );
+}

@@ -132,16 +132,13 @@ const SQL: &str = "
 #[tracing::instrument(name = "delivery-friction", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_delivery_friction(db: &FactsDb, opts: &Options) -> Result<Vec<DeliveryFrictionRow>> {
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
-    let n = time::OffsetDateTime::now_utc();
-    let anchor = format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-        n.year(),
-        u8::from(n.month()),
-        n.day(),
-        n.hour(),
-        n.minute(),
-        n.second(),
-    );
+    // `wip_age_days` anchor. `--age-time-now` (end-of-day of the given
+    // calendar date) when set — matching `code-age` / `knowledge-islands`
+    // — so the back-test pattern works; otherwise the newest committer
+    // date in the store. The default is the max committer date (NOT the
+    // wall clock) so `wip_age_days` is deterministic across runs on the
+    // same cached store; a wall-clock anchor drifts second-to-second.
+    let anchor = anchor_str(db, opts)?;
     // Route `complexity_metrics` read through the same dispatcher the
     // four sibling complexity-reading analyses use. Without this,
     // `--group-file` would silently emit `0.0` cognitive for every
@@ -175,5 +172,28 @@ pub fn run_delivery_friction(db: &FactsDb, opts: &Options) -> Result<Vec<Deliver
                 friction_score: r.get::<_, f64>(6)?,
             })
         },
+    )
+}
+
+/// Resolve the `wip_age_days` anchor. `--age-time-now` (end-of-day of
+/// the given calendar date) when set; otherwise the newest committer
+/// date in the store, which keeps the result deterministic across runs.
+fn anchor_str(db: &FactsDb, opts: &Options) -> Result<String> {
+    if let Some(d) = opts.age_time_now {
+        return Ok(format!(
+            "{:04}-{:02}-{:02} 23:59:59",
+            d.year(),
+            u8::from(d.month()),
+            d.day()
+        ));
+    }
+    // `wip_age_days` is measured against `MAX(committer_date)`, so the
+    // default anchor is the newest committer date. An empty store yields
+    // NULL → fall back to the Unix epoch so the timestamp cast in the
+    // query still parses.
+    db.query_row(
+        "SELECT COALESCE(CAST(MAX(committer_date) AS TEXT), '1970-01-01 00:00:00') FROM commits",
+        [],
+        |r| r.get::<_, String>(0),
     )
 }

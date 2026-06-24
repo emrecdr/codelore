@@ -78,7 +78,7 @@ pub fn run_lead_time(db: &FactsDb, opts: &Options) -> Result<Vec<LeadTimeRow>> {
         WHERE is_merge = FALSE
           AND date IS NOT NULL
           AND committer_date IS NOT NULL
-        ORDER BY lead_time_seconds DESC
+        ORDER BY lead_time_seconds DESC, rev ASC
         LIMIT ?
     ";
 

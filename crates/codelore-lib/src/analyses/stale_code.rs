@@ -87,16 +87,14 @@ const SQL: &str = "
 #[tracing::instrument(name = "stale-code", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_stale_code(db: &FactsDb, opts: &Options) -> Result<Vec<StaleCodeRow>> {
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
-    let n = time::OffsetDateTime::now_utc();
-    let anchor = format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-        n.year(),
-        u8::from(n.month()),
-        n.day(),
-        n.hour(),
-        n.minute(),
-        n.second(),
-    );
+    // Staleness anchor. `--age-time-now` (end-of-day of the given
+    // calendar date) when set — matching `code-age` / `knowledge-islands`
+    // — so the back-test pattern works; otherwise the newest commit date
+    // in the store. The default is the max commit date (NOT the wall
+    // clock) so output is deterministic across runs on the same cached
+    // store; a wall-clock anchor drifts the months-since-touch arithmetic
+    // second-to-second.
+    let anchor = anchor_str(db, opts)?;
     let cm_src = crate::analyses::grouped_complexity::source_table(opts);
     let sql = SQL.replace("{cm_src}", cm_src);
     super::query::explain_if_requested(
@@ -133,5 +131,28 @@ pub fn run_stale_code(db: &FactsDb, opts: &Options) -> Result<Vec<StaleCodeRow>>
                 max_cognitive: r.get::<_, f64>(3)?,
             })
         },
+    )
+}
+
+/// Resolve the staleness anchor. `--age-time-now` (end-of-day of the
+/// given calendar date) when set; otherwise the newest commit date in
+/// the store, which keeps the result deterministic across runs.
+fn anchor_str(db: &FactsDb, opts: &Options) -> Result<String> {
+    if let Some(d) = opts.age_time_now {
+        return Ok(format!(
+            "{:04}-{:02}-{:02} 23:59:59",
+            d.year(),
+            u8::from(d.month()),
+            d.day()
+        ));
+    }
+    // `MAX(date)` is the newest commit; cast to TEXT for a parseable
+    // anchor. An empty store yields NULL → fall back to the Unix epoch
+    // so the timestamp cast in the query still parses (the result is an
+    // empty stale-code set either way).
+    db.query_row(
+        "SELECT COALESCE(CAST(MAX(date) AS TEXT), '1970-01-01 00:00:00') FROM commits",
+        [],
+        |r| r.get::<_, String>(0),
     )
 }

@@ -795,6 +795,22 @@ fn unsupported_format_bails_cleanly_instead_of_panicking() {
     }
 }
 
+#[test]
+fn schema_lists_every_registered_analysis() {
+    // The schema row-type catalogue must cover every analysis the
+    // registry knows about. `delivery-friction`, `main-dev-by-revs`,
+    // and `main-dev-by-deletions` are registered analyses that were
+    // missing from the hardcoded catalogue.
+    for name in codelore_lib::analysis::AnalysisName::all() {
+        Command::cargo_bin("codelore")
+            .unwrap()
+            .args(["schema", name.as_str()])
+            .assert()
+            .success()
+            .stderr(predicate::str::contains("unknown row type").not());
+    }
+}
+
 #[cfg(feature = "spa")]
 #[test]
 fn spa_without_output_defaults_to_dot_codelore() {

@@ -366,40 +366,10 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
 /// `#[derive(JsonSchema)]` adds across the analyses module) and
 /// will populate the `items` shape once `schemars` derive lands.
 fn run_schema_cmd(args: &args::SchemaArgs) -> Result<()> {
-    let row_types = [
-        "hotspots",
-        "code-health",
-        "coupling",
-        "ownership",
-        "code-age",
-        "abs-churn",
-        "author-churn",
-        "entity-churn",
-        "communication",
-        "summary",
-        "revisions",
-        "authors",
-        "clones",
-        "clone-coupling",
-        "soc",
-        "messages",
-        "main-dev",
-        "entity-effort",
-        "entity-ownership",
-        "top-committers",
-        "knowledge-islands",
-        "centrality",
-        "communities",
-        "god-classes",
-        "architecture-violations",
-        "stale-code",
-        "pair-programming",
-        "lead-time",
-        "bus-factor",
-    ];
+    let row_types: Vec<&str> = AnalysisName::all().iter().map(|a| a.as_str()).collect();
     match &args.row_type {
         None => {
-            println!("Supported row types (29):");
+            println!("Supported row types ({}):", row_types.len());
             for name in &row_types {
                 println!("  {name}");
             }

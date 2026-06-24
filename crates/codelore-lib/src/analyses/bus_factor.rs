@@ -49,28 +49,26 @@ pub struct BusFactorRow {
     pub top_contributor_share: f64,
 }
 
-/// Run the `bus-factor` analysis.
-///
-/// # Errors
-///
-/// Returns [`CodeLoreError::Analysis`] on `DuckDB` errors.
-#[tracing::instrument(name = "bus-factor", skip_all, fields(min_revs = opts.min_revs))]
-pub fn run_bus_factor(db: &FactsDb, opts: &Options) -> Result<Vec<BusFactorRow>> {
-    let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
-
-    // SQL: build per-(module, author) commit counts, sort within
-    // each module by count DESC, compute the cumulative share, and
-    // surface the threshold-crossing position as the bus factor.
-    let sql = "
+// SQL: build per-(module, author) commit counts, sort within each
+// module by count DESC, compute the cumulative share, and surface the
+// threshold-crossing position as the bus factor.
+//
+// Module boundary: the top-level directory of each path. Repo-root
+// files (no `/`) fall into a `<root>` bucket so they are counted rather
+// than silently dropped — every commit contributes to some module's
+// bus-factor risk.
+const SQL: &str = "
         WITH per_module_author AS (
             SELECT
-                regexp_extract(c.path, '^[^/]+', 0) AS module,
+                CASE
+                    WHEN c.path LIKE '%/%' THEN regexp_extract(c.path, '^[^/]+', 0)
+                    ELSE '<root>'
+                END AS module,
                 co.canonical_author AS author,
                 COUNT(DISTINCT c.rev) AS commits
             FROM changes c
             INNER JOIN commits co ON co.rev = c.rev
             WHERE co.is_merge = FALSE
-              AND c.path LIKE '%/%'
             GROUP BY module, co.canonical_author
         ),
         per_module AS (
@@ -122,9 +120,23 @@ pub fn run_bus_factor(db: &FactsDb, opts: &Options) -> Result<Vec<BusFactorRow>>
         LIMIT ?
     ";
 
+/// Run the `bus-factor` analysis.
+///
+/// # Errors
+///
+/// Returns [`CodeLoreError::Analysis`] on `DuckDB` errors.
+#[tracing::instrument(name = "bus-factor", skip_all, fields(min_revs = opts.min_revs))]
+pub fn run_bus_factor(db: &FactsDb, opts: &Options) -> Result<Vec<BusFactorRow>> {
+    let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
+    // Path-aggregating analysis: route `FROM changes` through the
+    // rename-aware lineage view when `--use-canonical-lineage` is set so
+    // a renamed file's history attributes to one module, not two.
+    crate::analyses::lineage::materialize_if_needed(db, opts)?;
+    let sql = crate::analyses::lineage::rewrite(SQL, opts);
+
     let mut stmt = db
         .conn()
-        .prepare(sql)
+        .prepare(&sql)
         .map_err(|e| CodeLoreError::Analysis(format!("prepare bus-factor: {e}")))?;
     let rows = stmt
         .query_map(params![row_limit], |r| {

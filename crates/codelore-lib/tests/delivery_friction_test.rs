@@ -72,3 +72,98 @@ fn delivery_friction_runs_cleanly_on_tiny_repo() {
         );
     }
 }
+
+/// Build a repo whose newest commit is years in the past, so a
+/// wall-clock `wip_age_days` anchor would report a large (and
+/// non-deterministic) age while the deterministic max-commit-date
+/// anchor reports ~0 days for the most-recently-touched file.
+fn build_aged_repo() -> tempfile::TempDir {
+    use std::process::Command;
+    fn run(path: &std::path::Path, date: &str, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .env("GIT_AUTHOR_DATE", date)
+            .env("GIT_COMMITTER_DATE", date)
+            .status()
+            .expect("git");
+        assert!(status.success());
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path();
+    run(
+        path,
+        "2023-01-01T00:00:00Z",
+        &["init", "-b", "main", "--quiet"],
+    );
+    run(
+        path,
+        "2023-01-01T00:00:00Z",
+        &["config", "user.email", "t@t"],
+    );
+    run(
+        path,
+        "2023-01-01T00:00:00Z",
+        &["config", "user.name", "Tiny"],
+    );
+
+    std::fs::write(path.join("app.txt"), "one\n").unwrap();
+    run(path, "2023-06-01T12:00:00Z", &["add", "app.txt"]);
+    run(
+        path,
+        "2023-06-01T12:00:00Z",
+        &["commit", "-m", "c1", "--quiet"],
+    );
+    std::fs::write(path.join("app.txt"), "one\ntwo\n").unwrap();
+    run(
+        path,
+        "2023-07-01T12:00:00Z",
+        &["commit", "-am", "c2", "--quiet"],
+    );
+    dir
+}
+
+#[test]
+fn delivery_friction_wip_age_anchored_to_newest_commit_deterministically() {
+    let aged = build_aged_repo();
+    let repo = GixRepo::open(aged.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    // No `age_time_now` set — the `wip_age_days` anchor must default to
+    // the newest commit date in the store, NOT the wall clock, so the
+    // output is deterministic across runs on a cached store.
+    let opts = Options {
+        repo_path: aged.path().to_path_buf(),
+        min_revs: 1,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let first = run_delivery_friction(&db, &opts).expect("run delivery-friction");
+    let second = run_delivery_friction(&db, &opts).expect("run again");
+
+    let project = |rows: &[codelore_lib::analyses::delivery_friction::DeliveryFrictionRow]| {
+        rows.iter()
+            .map(|r| (r.path.clone(), r.wip_age_days, r.friction_score))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        project(&first),
+        project(&second),
+        "delivery-friction output must be deterministic across runs"
+    );
+
+    // The most-recently-touched file is the anchor commit itself, so
+    // its wip_age_days must be ~0 — a wall-clock anchor (today minus a
+    // 2023 commit) would report hundreds of days.
+    let app = first
+        .iter()
+        .find(|r| r.path == "app.txt")
+        .expect("app.txt must surface");
+    assert!(
+        app.wip_age_days < 1.0,
+        "wip_age_days for the newest-touched file must be ~0 under the \
+         max-commit-date anchor; got {}",
+        app.wip_age_days,
+    );
+}

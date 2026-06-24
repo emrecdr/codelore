@@ -16,11 +16,28 @@ use crate::analyses::summary::SummaryRow;
 use crate::{CodeLoreError, Result};
 
 fn quote_if_needed(s: &str) -> String {
+    // Formula-injection guard: a cell whose FIRST character is one a
+    // spreadsheet treats as a formula trigger (`=`, `+`, `-`, `@`, or a
+    // leading tab) is force-quoted and prefixed with a `'` inside the
+    // quotes — the standard CSV-injection mitigation. An author name or
+    // path beginning with such a character would otherwise execute as a
+    // formula when the CSV is opened in Excel / Sheets.
+    let needs_formula_guard = matches!(
+        s.as_bytes().first(),
+        Some(b'=' | b'+' | b'-' | b'@' | b'\t')
+    );
+
     // RFC 4180 §2.5: fields containing `,`, `"`, CR, or LF MUST be quoted.
     // Missing `\r` here would split a row in two if an author name or commit
     // metadata carried a bare carriage return (rare but legal in git's byte
     // stream).
-    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
+    let needs_rfc_quote =
+        s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r');
+
+    if needs_formula_guard {
+        let escaped = s.replace('"', "\"\"");
+        format!("\"'{escaped}\"")
+    } else if needs_rfc_quote {
         let escaped = s.replace('"', "\"\"");
         format!("\"{escaped}\"")
     } else {
@@ -849,5 +866,25 @@ mod tests {
     #[test]
     fn leaves_plain_string_alone() {
         assert_eq!(quote_if_needed("plain"), "plain");
+    }
+
+    #[test]
+    fn guards_formula_injection_leading_chars() {
+        // A cell whose first character is a spreadsheet formula trigger
+        // (`=`, `+`, `-`, `@`, or a tab) must be force-quoted AND
+        // prefixed with a single-quote inside the quotes so a
+        // spreadsheet treats it as literal text, not a formula.
+        assert_eq!(quote_if_needed("=cmd"), "\"'=cmd\"");
+        assert_eq!(quote_if_needed("+1"), "\"'+1\"");
+        assert_eq!(quote_if_needed("-2"), "\"'-2\"");
+        assert_eq!(quote_if_needed("@SUM"), "\"'@SUM\"");
+        assert_eq!(quote_if_needed("\tlead"), "\"'\tlead\"");
+    }
+
+    #[test]
+    fn formula_guard_escapes_embedded_quotes() {
+        // The guard composes with RFC-4180 quote-doubling: an embedded
+        // double-quote is still escaped inside the guarded cell.
+        assert_eq!(quote_if_needed("=\"x\""), "\"'=\"\"x\"\"\"");
     }
 }

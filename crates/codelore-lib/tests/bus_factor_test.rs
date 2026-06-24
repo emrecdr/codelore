@@ -45,3 +45,185 @@ fn bus_factor_on_tiny_repo_concentrates_to_one_author() {
         );
     }
 }
+
+/// Build a repo containing a repo-root file (no directory prefix)
+/// alongside a nested file. The root file must still be counted.
+fn build_root_file_repo() -> tempfile::TempDir {
+    use std::process::Command;
+    fn run(path: &std::path::Path, date: &str, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .env("GIT_AUTHOR_DATE", date)
+            .env("GIT_COMMITTER_DATE", date)
+            .status()
+            .expect("git");
+        assert!(status.success());
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path();
+    run(
+        path,
+        "2026-01-01T00:00:00Z",
+        &["init", "-b", "main", "--quiet"],
+    );
+    run(
+        path,
+        "2026-01-01T00:00:00Z",
+        &["config", "user.email", "t@t"],
+    );
+    run(
+        path,
+        "2026-01-01T00:00:00Z",
+        &["config", "user.name", "Tiny"],
+    );
+
+    std::fs::write(path.join("README.md"), "hello\n").unwrap();
+    run(path, "2026-01-02T12:00:00Z", &["add", "README.md"]);
+    run(
+        path,
+        "2026-01-02T12:00:00Z",
+        &["commit", "-m", "readme", "--quiet"],
+    );
+
+    std::fs::create_dir_all(path.join("src")).unwrap();
+    std::fs::write(path.join("src/main.rs"), "fn main() {}\n").unwrap();
+    run(path, "2026-01-03T12:00:00Z", &["add", "src/main.rs"]);
+    run(
+        path,
+        "2026-01-03T12:00:00Z",
+        &["commit", "-m", "src", "--quiet"],
+    );
+    dir
+}
+
+#[test]
+fn bus_factor_includes_repo_root_files() {
+    let fixture = build_root_file_repo();
+    let repo = GixRepo::open(fixture.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: fixture.path().to_path_buf(),
+        min_revs: 1,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let rows = run_bus_factor(&db, &opts).expect("run bus-factor");
+
+    // `README.md` lives at the repo root (no `/`), so it must be
+    // counted under a root bucket rather than silently dropped.
+    let root = rows
+        .iter()
+        .find(|r| r.module == "<root>")
+        .expect("repo-root files must be counted under a <root> bucket");
+    assert!(
+        root.total_commits >= 1,
+        "the <root> bucket must count the README.md commit; got {}",
+        root.total_commits,
+    );
+
+    // The nested file's top-level directory must still bucket normally.
+    assert!(
+        rows.iter().any(|r| r.module == "src"),
+        "nested files must still bucket by top-level directory",
+    );
+}
+
+/// Build a repo where a file is renamed across directories so its
+/// commit history spans two top-level modules.
+fn build_renamed_file_repo() -> tempfile::TempDir {
+    use std::process::Command;
+    fn run(path: &std::path::Path, date: &str, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .env("GIT_AUTHOR_DATE", date)
+            .env("GIT_COMMITTER_DATE", date)
+            .status()
+            .expect("git");
+        assert!(status.success());
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path();
+    run(
+        path,
+        "2026-01-01T00:00:00Z",
+        &["init", "-b", "main", "--quiet"],
+    );
+    run(
+        path,
+        "2026-01-01T00:00:00Z",
+        &["config", "user.email", "t@t"],
+    );
+    run(
+        path,
+        "2026-01-01T00:00:00Z",
+        &["config", "user.name", "Tiny"],
+    );
+
+    std::fs::create_dir_all(path.join("old")).unwrap();
+    std::fs::write(path.join("old/a.txt"), "one\n").unwrap();
+    run(path, "2026-01-02T12:00:00Z", &["add", "old/a.txt"]);
+    run(
+        path,
+        "2026-01-02T12:00:00Z",
+        &["commit", "-m", "c1", "--quiet"],
+    );
+    std::fs::write(path.join("old/a.txt"), "one\ntwo\n").unwrap();
+    run(
+        path,
+        "2026-01-03T12:00:00Z",
+        &["commit", "-am", "c2", "--quiet"],
+    );
+
+    std::fs::create_dir_all(path.join("new")).unwrap();
+    run(
+        path,
+        "2026-01-04T12:00:00Z",
+        &["mv", "old/a.txt", "new/a.txt"],
+    );
+    run(
+        path,
+        "2026-01-04T12:00:00Z",
+        &["commit", "-m", "rename", "--quiet"],
+    );
+    std::fs::write(path.join("new/a.txt"), "one\ntwo\nthree\n").unwrap();
+    run(
+        path,
+        "2026-01-05T12:00:00Z",
+        &["commit", "-am", "c3", "--quiet"],
+    );
+    dir
+}
+
+#[test]
+fn bus_factor_attributes_renamed_file_to_one_module_under_lineage() {
+    let fixture = build_renamed_file_repo();
+    let repo = GixRepo::open(fixture.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: fixture.path().to_path_buf(),
+        min_revs: 1,
+        use_canonical_lineage: true,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    // Under canonical lineage the renamed file's history resolves to a
+    // single canonical path, so its commits attribute to ONE module —
+    // not split across `old` and `new`.
+    let rows = run_bus_factor(&db, &opts).expect("run bus-factor under lineage");
+    let modules: Vec<&str> = rows.iter().map(|r| r.module.as_str()).collect();
+    assert!(
+        !(modules.contains(&"old") && modules.contains(&"new")),
+        "renamed file should not split across `old` and `new` under \
+         canonical lineage; got modules {modules:?}",
+    );
+    assert!(
+        !rows.is_empty(),
+        "lineage-routed bus-factor must still produce rows",
+    );
+}
