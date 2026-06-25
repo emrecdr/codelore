@@ -173,7 +173,9 @@ Validated against current branch HEAD. Status notes ⚠️ findings that live on
 
 ### Discovery pass — 2026-06-24 (F166–F199)
 
-Read-only fan-out across 5 dimensions (architecture, performance, SPA/accessibility, tooling/CI/dependencies, correctness/testing/CLI). Every candidate validated against source before logging. Tier 1 (F166–F172) + Tier 2 (F173–F178) are being closed this session; Tier 3/4 (F179–F199) are logged for follow-up.
+Read-only fan-out across 5 dimensions (architecture, performance, SPA/accessibility, tooling/CI/dependencies, correctness/testing/CLI). Every candidate validated against source before logging. Tier 1 (F166–F172) + Tier 2 (F173–F178) were the session target; Tier 3/4 (F179–F199) are logged for follow-up.
+
+**Session closure**: F166–F172 + F174–F178 **Fixed** (each landed test-first / byte-identical-verified, full CI-exact gate + the gix-vs-cli differential test green). **F173 deferred** (escape hatch) — see its entry. Tier 3/4 remain Active.
 
 #### F166 — `codelore schema` row-type list drifted from the analysis registry
 
@@ -235,9 +237,10 @@ Read-only fan-out across 5 dimensions (architecture, performance, SPA/accessibil
 
 *   **Location**: `crates/codelore-lib/src/facts/ingest/mod.rs:145-165` (3 sequential passes) → `repo/gix_repo.rs::read_blob_at_head`
 *   **Severity**: HIGH · **Category**: performance (redundant I/O + decompression)
-*   **Status**: Active
+*   **Status**: Active — **attempted + deferred** (needs a dedicated pass; see blocker)
 *   **Description**: The three language detectors share an overlapping extension set, so each common Tier-1 file's blob is OID-looked-up, inflated, and root-tree-walked 3 separate times. Distinct from F125 (which dedup'd the SQL, not the blob reads).
 *   **Suggested fix**: Read each live Tier-1 blob once, fan the bytes to all three extractors; keep the rayon-then-serial-drain shape. Byte-identical output; preserve each pass's distinct skip/log semantics.
+*   **Deferral blocker (discovered this session)**: a naive merge is NOT cleanly byte-identical for two reasons. (1) The three detectors diverge — `Tier1Language` accepts `.pyi` and folds `.tsx` into TypeScript, while `CloneLanguage`/`ImportLanguage` reject `.pyi` and split `.tsx` into a separate grammar — so only the raw blob read + 2 MiB byte-cap is shareable; each extractor must still re-gate. (2) Divergent error/write ordering: complexity drains its Appender first and swallows extract errors (warn/debug + skip), imports swallows too, but **clones propagates `extract_functions` errors via `collect::<Result>>?`, aborting the whole ingest**. A single merged parallel pass cannot preserve "complexity rows committed before a later clones-extract abort" AND "read each blob once" without either re-serializing (no win) or hoisting all live Tier-1 blobs into one in-memory map (an unbounded memory regression the current one-blob-per-task-then-drop design deliberately avoids). The dedicated pass must first either (a) adopt a bounded shared-blob LRU, or (b) unify the three extractors' error contracts.
 
 #### F174 — `run_coupling` recomputed 2–5× per dashboard / multi-analysis run, no memoization
 
@@ -387,7 +390,9 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 - **REFUTED this session**: F116 (Renovate + Dependabot partitioned by ecosystem) + F123 (crossbeam 0.8.4 + num-format 0.4.4 are current releases) — see §3 newly-refuted block.
 - **Closed by side-effect**: F162 — Parquet writers now delegate to shared SQL generators that preserve CSV row-type contract via explicit casts. Verified 2026-06-21.
 - **Active (carried)**: F119, F148, F161 — the deferred output-emitter cluster.
-- **Discovery pass 2026-06-24 (F166–F199)**: 34 new findings logged (see §4). Tier 1 (F166–F172) + Tier 2 (F173–F178) being closed this session; Tier 3/4 (F179–F199) Active, ready for follow-up.
+- **Discovery pass 2026-06-24 (F166–F199)**: 34 new findings logged (see §4).
+  - **Fixed this session**: F166, F167, F168, F169, F170, F171, F172 (Tier 1) + F174, F175, F176, F177, F178 (Tier 2) — 12 closed, each test-first or byte-identical-verified.
+  - **Active**: F173 (attempted + deferred — hot-path blocker documented in its entry) + F179–F199 (Tier 3/4 follow-up).
 
 The next sweep should re-open with F-IDs starting at **F200**.
 
