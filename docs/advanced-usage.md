@@ -106,7 +106,7 @@ codelore analyze --analysis <NAME> --format <FORMAT>
 | `sarif` | GitHub Code Scanning / GitLab security / Defectdojo | SARIF 2.1.0; supported for `hotspots`, `clones`, `clone-coupling`, and `codelore diff` (CODELORE-MISSING-COCHANGE) today |
 | `parquet` | DuckDB / Polars / pandas / Spark | `--output PATH` required; binary format |
 | `sqlite` | Ad-hoc SQL exploration of the full fact store | `--output PATH` required; dumps all 9 tables (`commits`, `changes`, `hunks`, `entities`, `complexity_metrics`, `clones`, `imports`, `author_aliases`, `provenance`). Strict superset of code-maat's `--analysis identity` raw-dataset dump. |
-| `spa` | Single-HTML interactive dashboard (CodeScene-equivalent surface). Opens in any browser, runs offline, fits in a CI artefact. | `--output PATH` required; ~1.2 MB self-contained HTML. Embeds Apache ECharts + d3-hierarchy SHA-pinned at build time. Composite (multi-analysis) emitter — bypasses `--analysis`. **Opt-in `spa` Cargo feature**: default `cargo install codelore` builds offline-clean without this. Released binaries / Homebrew / ghcr ship with `spa` enabled. |
+| `spa` | Single-HTML interactive dashboard (CodeScene-equivalent surface). Opens in any browser, runs offline, fits in a CI artefact. | `--output PATH` optional (defaults to `.codelore/spa.html`); ~1.5 MB self-contained HTML. Embeds Apache ECharts + d3-hierarchy SHA-pinned at build time. Composite (multi-analysis) emitter — bypasses `--analysis`. **Opt-in `spa` Cargo feature**: default `cargo install codelore` builds offline-clean without this. Released binaries / Homebrew / ghcr ship with `spa` enabled. |
 | `step-summary` | GitHub Actions `$GITHUB_STEP_SUMMARY`. Single GFM Markdown summary with KPI table, top-10 hotspots (MI band emoji), MI band breakdown (unicode bars), behavioral coupling density, knowledge islands `<details>` collapsible. | Streams to stdout by default; redirect with `>> $GITHUB_STEP_SUMMARY` in CI. Typical 2–10 KB; well under GitHub's 1 MB step-summary cap. Same composite-dashboard inputs as `--format spa` so a single ingest run can emit BOTH (run `--format step-summary` first to stdout, then `--format spa` to file). Requires the same `spa` Cargo feature as `--format spa`. |
 
 Every file output (except SQLite, where the provenance table lives inside the DB, and SPA, where it's embedded as a JSON block in the page) emits a `{output}.provenance.json` sidecar with the bca/gix/duckdb versions, every threshold knob, mailmap state, and UTC timestamp. This is your reproducibility receipt.
@@ -612,7 +612,7 @@ codescene/
 │   │   │   ├── kamei/                    # 14-feature change vector
 │   │   │   ├── cache.rs                  # persistent fact-store cache
 │   │   │   ├── provenance/               # manifest sidecar
-│   │   │   └── options.rs                # the 25-field runtime config
+│   │   │   └── options.rs                # the runtime config struct
 │   │   ├── tests/                        # integration tests
 │   │   └── benches/end_to_end.rs         # criterion harness
 │   ├── codelore-cli/                     # clap CLI

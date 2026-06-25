@@ -359,7 +359,7 @@ Default: **non-strict** (unmapped paths keep their raw names; safer than silent 
             ▼  + Kamei 14-feature enrichment
    ┌─────────────────────┐
    │   DuckDB Fact Store  │  commits · changes · hunks · entities ·
-   │                     │  complexity_metrics · clones ·
+   │                     │  complexity_metrics · clones · imports ·
    │                     │  author_aliases · provenance
    └────────┬────────────┘
             │ SQL queries (bind-parameterized) + Rust orchestrators
