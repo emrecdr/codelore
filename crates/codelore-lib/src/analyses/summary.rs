@@ -6,7 +6,7 @@
 //! "is the data healthy?" panels).
 
 use crate::facts::FactsDb;
-use crate::{CodeLoreError, Options, Result};
+use crate::{Options, Result};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SummaryRow {
@@ -44,18 +44,10 @@ pub fn run_summary(db: &FactsDb, opts: &Options) -> Result<Vec<SummaryRow>> {
     "
     };
     crate::analyses::query::explain_if_requested(db, sql, [], "summary", opts)?;
-    let mut stmt = db
-        .conn()
-        .prepare(sql)
-        .map_err(|e| CodeLoreError::Analysis(format!("prepare summary: {e}")))?;
-    let rows = stmt
-        .query_map([], |r| {
-            Ok(SummaryRow {
-                metric: r.get::<_, String>(0)?,
-                value: r.get::<_, i64>(1)?,
-            })
+    crate::analyses::query::query_map_collect(db, sql, [], "summary", |r| {
+        Ok(SummaryRow {
+            metric: r.get::<_, String>(0)?,
+            value: r.get::<_, i64>(1)?,
         })
-        .map_err(|e| CodeLoreError::Analysis(format!("query summary: {e}")))?;
-    rows.collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|e| CodeLoreError::Analysis(format!("collect summary: {e}")))
+    })
 }

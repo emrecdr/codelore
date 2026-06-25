@@ -4,7 +4,7 @@
 //!   `$XDG_CACHE_HOME/codelore/<repo_hash_8>/<cache_key_16>.duckdb`
 //!
 //! Cache key covers: `canonical_repo_path`, HEAD SHA, crate version, options
-//! thresholds, schema version. Excludes: `rows_limit`, `repo_path` (already
+//! thresholds, cache epoch. Excludes: `rows_limit`, `repo_path` (already
 //! folded into `repo_hash_8`), cosmetic flags.
 
 use std::fs;
@@ -15,16 +15,21 @@ use sha2::{Digest, Sha256};
 
 use crate::Options;
 
-/// Schema version sentinel. Bump whenever the `DuckDB` schema changes so that
-/// old cache files are not opened with a new schema.
-const SCHEMA_VERSION: &str = "schema_v5";
+/// Cache-invalidation epoch — a manual cache-buster folded into the cache
+/// key. Bump on any correctness fix that should orphan existing cache files,
+/// whether or not the `DuckDB` schema shape changed. This is deliberately
+/// independent of `facts::schema::CURRENT_SCHEMA_VERSION` (the on-disk schema
+/// version): a non-schema correctness fix bumps this without touching the
+/// schema version, and the historical `schema_v` prefix on the value is
+/// retained so older cache files stay invalidated.
+const CACHE_EPOCH: &str = "schema_v5";
 
 /// Compute a 32-byte SHA-256 cache key from:
 ///   `canonical_repo_path || NUL || head_sha || NUL || CARGO_PKG_VERSION || NUL`
-///   `|| opts_hash(opts) || NUL || SCHEMA_VERSION`
+///   `|| opts_hash(opts) || NUL || CACHE_EPOCH`
 ///
 /// The key is deterministic for identical inputs and changes whenever any
-/// threshold knob or schema version changes.
+/// threshold knob or the cache epoch changes.
 #[must_use]
 pub fn cache_key(repo_path: &Path, head_sha: &str, opts: &Options) -> [u8; 32] {
     let mut hasher = Sha256::new();
@@ -37,7 +42,7 @@ pub fn cache_key(repo_path: &Path, head_sha: &str, opts: &Options) -> [u8; 32] {
     hasher.update(b"\x00");
     hasher.update(opts_hash(opts).as_bytes());
     hasher.update(b"\x00");
-    hasher.update(SCHEMA_VERSION.as_bytes());
+    hasher.update(CACHE_EPOCH.as_bytes());
     let mut out = [0u8; 32];
     out.copy_from_slice(&hasher.finalize());
     out

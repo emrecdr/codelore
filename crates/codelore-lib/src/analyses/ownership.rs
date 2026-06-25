@@ -13,7 +13,7 @@
 use duckdb::params;
 
 use crate::facts::FactsDb;
-use crate::{CodeLoreError, Options, Result};
+use crate::{Options, Result};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct OwnershipRow {
@@ -80,20 +80,18 @@ pub fn run_ownership(db: &FactsDb, opts: &Options) -> Result<Vec<OwnershipRow>> 
         "ownership",
         opts,
     )?;
-    let mut stmt = db
-        .conn()
-        .prepare(&sql)
-        .map_err(|e| CodeLoreError::Analysis(format!("prepare ownership: {e}")))?;
-    let rows = stmt
-        .query_map(params![opts.min_revs, row_limit], |r| {
+    crate::analyses::query::query_map_collect(
+        db,
+        &sql,
+        params![opts.min_revs, row_limit],
+        "ownership",
+        |r| {
             Ok(OwnershipRow {
                 path: r.get::<_, String>(0)?,
                 main_author: r.get::<_, String>(1)?,
                 total_revs: u32::try_from(r.get::<_, i64>(2)?).unwrap_or(u32::MAX),
                 fractal_value: r.get::<_, f64>(3)?,
             })
-        })
-        .map_err(|e| CodeLoreError::Analysis(format!("query ownership: {e}")))?;
-    rows.collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|e| CodeLoreError::Analysis(format!("collect ownership: {e}")))
+        },
+    )
 }

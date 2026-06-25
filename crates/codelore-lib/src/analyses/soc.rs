@@ -23,7 +23,7 @@
 use duckdb::params;
 
 use crate::facts::FactsDb;
-use crate::{CodeLoreError, Options, Result};
+use crate::{Options, Result};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SocRow {
@@ -123,21 +123,16 @@ pub fn run_soc(db: &FactsDb, opts: &Options) -> Result<Vec<SocRow>> {
         "soc",
         opts,
     )?;
-    let mut stmt = db
-        .conn()
-        .prepare(&sql)
-        .map_err(|e| CodeLoreError::Analysis(format!("prepare soc: {e}")))?;
-    let rows = stmt
-        .query_map(
-            params![opts.max_changeset_size, threshold, row_limit],
-            |r| {
-                Ok(SocRow {
-                    entity: r.get::<_, String>(0)?,
-                    soc: u32::try_from(r.get::<_, i64>(1)?).unwrap_or(u32::MAX),
-                })
-            },
-        )
-        .map_err(|e| CodeLoreError::Analysis(format!("query soc: {e}")))?;
-    rows.collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|e| CodeLoreError::Analysis(format!("collect soc: {e}")))
+    crate::analyses::query::query_map_collect(
+        db,
+        &sql,
+        params![opts.max_changeset_size, threshold, row_limit],
+        "soc",
+        |r| {
+            Ok(SocRow {
+                entity: r.get::<_, String>(0)?,
+                soc: u32::try_from(r.get::<_, i64>(1)?).unwrap_or(u32::MAX),
+            })
+        },
+    )
 }

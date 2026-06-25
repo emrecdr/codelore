@@ -36,7 +36,7 @@
 use duckdb::params;
 
 use crate::facts::FactsDb;
-use crate::{CodeLoreError, Options, Result};
+use crate::{Options, Result};
 
 /// Which metric drives the "main developer" ranking.
 #[derive(Debug, Clone, Copy)]
@@ -124,12 +124,12 @@ fn run(db: &FactsDb, opts: &Options, metric: MainDevMetric) -> Result<Vec<MainDe
         "main-dev",
         opts,
     )?;
-    let mut stmt = db
-        .conn()
-        .prepare(&sql)
-        .map_err(|e| CodeLoreError::Analysis(format!("prepare main-dev: {e}")))?;
-    let rows = stmt
-        .query_map(params![opts.min_revs, row_limit], |r| {
+    crate::analyses::query::query_map_collect(
+        db,
+        &sql,
+        params![opts.min_revs, row_limit],
+        "main-dev",
+        |r| {
             Ok(MainDevRow {
                 entity: r.get::<_, String>(0)?,
                 main_dev: r.get::<_, String>(1)?,
@@ -137,10 +137,8 @@ fn run(db: &FactsDb, opts: &Options, metric: MainDevMetric) -> Result<Vec<MainDe
                 total: u64::try_from(r.get::<_, i64>(3)?).unwrap_or(u64::MAX),
                 ownership: r.get::<_, f64>(4)?,
             })
-        })
-        .map_err(|e| CodeLoreError::Analysis(format!("query main-dev: {e}")))?;
-    rows.collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|e| CodeLoreError::Analysis(format!("collect main-dev: {e}")))
+        },
+    )
 }
 
 /// Top author per file ranked by lines added. Code-maat parity.

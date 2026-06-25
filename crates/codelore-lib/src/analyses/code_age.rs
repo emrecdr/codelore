@@ -41,7 +41,7 @@
 use duckdb::params;
 
 use crate::facts::FactsDb;
-use crate::{CodeLoreError, Options, Result};
+use crate::{Options, Result};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CodeAgeRow {
@@ -189,32 +189,27 @@ pub fn run_code_age(db: &FactsDb, opts: &Options) -> Result<Vec<CodeAgeRow>> {
         "code-age",
         opts,
     )?;
-    let mut stmt = db
-        .conn()
-        .prepare(&sql)
-        .map_err(|e| CodeLoreError::Analysis(format!("prepare code-age: {e}")))?;
-    let rows = stmt
-        .query_map(
-            params![
-                now_str,
-                now_str,
-                now_str,
-                now_str,
-                now_str,
-                now_str,
-                opts.min_revs,
-                row_limit
-            ],
-            |r| {
-                Ok(CodeAgeRow {
-                    path: r.get::<_, String>(0)?,
-                    age_months: i32::try_from(r.get::<_, i64>(1)?).unwrap_or(i32::MAX),
-                    age_days: i32::try_from(r.get::<_, i64>(2)?).unwrap_or(i32::MAX),
-                    last_modified: r.get::<_, String>(3)?,
-                })
-            },
-        )
-        .map_err(|e| CodeLoreError::Analysis(format!("query code-age: {e}")))?;
-    rows.collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|e| CodeLoreError::Analysis(format!("collect code-age: {e}")))
+    crate::analyses::query::query_map_collect(
+        db,
+        &sql,
+        params![
+            now_str,
+            now_str,
+            now_str,
+            now_str,
+            now_str,
+            now_str,
+            opts.min_revs,
+            row_limit
+        ],
+        "code-age",
+        |r| {
+            Ok(CodeAgeRow {
+                path: r.get::<_, String>(0)?,
+                age_months: i32::try_from(r.get::<_, i64>(1)?).unwrap_or(i32::MAX),
+                age_days: i32::try_from(r.get::<_, i64>(2)?).unwrap_or(i32::MAX),
+                last_modified: r.get::<_, String>(3)?,
+            })
+        },
+    )
 }

@@ -46,7 +46,7 @@
 use duckdb::params;
 
 use crate::facts::FactsDb;
-use crate::{CodeLoreError, Options, Result};
+use crate::{Options, Result};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct HotspotRow {
@@ -262,12 +262,12 @@ pub fn run_hotspots(db: &FactsDb, opts: &Options) -> Result<Vec<HotspotRow>> {
         "hotspots",
         opts,
     )?;
-    let mut stmt = db
-        .conn()
-        .prepare(&sql)
-        .map_err(|e| CodeLoreError::Analysis(format!("prepare hotspots: {e}")))?;
-    let rows = stmt
-        .query_map(params![opts.min_revs, row_limit], |r| {
+    crate::analyses::query::query_map_collect(
+        db,
+        &sql,
+        params![opts.min_revs, row_limit],
+        "hotspots",
+        |r| {
             Ok(HotspotRow {
                 path: r.get::<_, String>(0)?,
                 revisions: u32::try_from(r.get::<_, i64>(1)?).unwrap_or(u32::MAX),
@@ -278,8 +278,6 @@ pub fn run_hotspots(db: &FactsDb, opts: &Options) -> Result<Vec<HotspotRow>> {
                 mi_rank: r.get::<_, Option<f64>>(6)?,
                 ai_pct: r.get::<_, Option<f64>>(7)?,
             })
-        })
-        .map_err(|e| CodeLoreError::Analysis(format!("query hotspots: {e}")))?;
-    rows.collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|e| CodeLoreError::Analysis(format!("collect hotspots: {e}")))
+        },
+    )
 }

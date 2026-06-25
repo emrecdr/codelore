@@ -16,7 +16,7 @@
 use duckdb::params;
 
 use crate::facts::FactsDb;
-use crate::{CodeLoreError, Options, Result};
+use crate::{Options, Result};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CommunicationRow {
@@ -124,12 +124,12 @@ pub fn run_communication(db: &FactsDb, opts: &Options) -> Result<Vec<Communicati
         "communication",
         opts,
     )?;
-    let mut stmt = db
-        .conn()
-        .prepare(&sql)
-        .map_err(|e| CodeLoreError::Analysis(format!("prepare communication: {e}")))?;
-    let rows = stmt
-        .query_map(params![opts.min_shared_revs, row_limit], |r| {
+    crate::analyses::query::query_map_collect(
+        db,
+        &sql,
+        params![opts.min_shared_revs, row_limit],
+        "communication",
+        |r| {
             Ok(CommunicationRow {
                 author_a: r.get::<_, String>(0)?,
                 author_b: r.get::<_, String>(1)?,
@@ -137,8 +137,6 @@ pub fn run_communication(db: &FactsDb, opts: &Options) -> Result<Vec<Communicati
                 average: u32::try_from(r.get::<_, i64>(3)?).unwrap_or(u32::MAX),
                 strength: r.get::<_, f64>(4)?,
             })
-        })
-        .map_err(|e| CodeLoreError::Analysis(format!("query communication: {e}")))?;
-    rows.collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|e| CodeLoreError::Analysis(format!("collect communication: {e}")))
+        },
+    )
 }

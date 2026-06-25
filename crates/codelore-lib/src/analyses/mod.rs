@@ -13,6 +13,7 @@ pub mod code_health;
 pub mod communication;
 pub mod communities;
 pub mod coupling;
+pub mod dashboard;
 pub mod delivery_friction;
 pub mod entity_effort;
 pub mod entity_ownership;

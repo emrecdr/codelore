@@ -142,7 +142,10 @@ fn run_profile_cmd() -> Result<()> {
     use codelore_lib::cli_api::analysis::AnalysisName;
     println!("# CodeLore profile\n");
     println!("**Version**: {}", env!("CARGO_PKG_VERSION"));
-    println!("**Schema**: schema_v3 (`facts/schema_v1.sql`)");
+    println!(
+        "**Schema**: schema_v{} (`facts/schema_v1.sql`)",
+        codelore_lib::cli_api::facts::schema::CURRENT_SCHEMA_VERSION
+    );
     println!("**Analyses**: {} registered", AnalysisName::all().len());
     println!("**Output formats**: csv | json | sarif | markdown | parquet | sqlite | html | spa");
     println!(
@@ -2327,9 +2330,10 @@ fn build_spa_dashboard(
     db: &codelore_lib::cli_api::facts::FactsDb,
     opts: &codelore_lib::cli_api::Options,
 ) -> anyhow::Result<codelore_lib::cli_api::output::spa::SpaDashboard> {
-    use codelore_lib::cli_api::output::spa::{
-        SpaDashboard, run_clone_summary, run_daily_commits, run_trends, run_xray,
+    use codelore_lib::cli_api::analyses::dashboard::{
+        run_clone_summary, run_daily_commits, run_trends, run_xray,
     };
+    use codelore_lib::cli_api::output::spa::SpaDashboard;
 
     // Each run_* call is an SQL query over the already-ingested fact
     // store, so the composite cost is bounded by the query mix
@@ -2387,15 +2391,15 @@ fn build_spa_dashboard(
     // non-merge commits so the SPA's window selector can show 10,
     // 30, 60, or all-100 without a re-run. Default render is the
     // last 30 (historical view); the frontend slices reactively.
-    let kamei_risk =
-        codelore_lib::cli_api::output::spa::run_kamei_risk(db, 100).unwrap_or_else(|e| {
+    let kamei_risk = codelore_lib::cli_api::analyses::dashboard::run_kamei_risk(db, 100)
+        .unwrap_or_else(|e| {
             tracing::warn!("dashboard: kamei risk query failed; skipping: {e}");
             Vec::new()
         });
     // Resolved import edges for the architecture force-graph widget.
     // Empty when the resolver hasn't covered the repo's language mix
     // yet.
-    let imports = codelore_lib::cli_api::output::spa::run_imports_for_arch_graph(db)
+    let imports = codelore_lib::cli_api::analyses::dashboard::run_imports_for_arch_graph(db)
         .unwrap_or_else(|e| {
             tracing::warn!("dashboard: imports query failed; skipping: {e}");
             Vec::new()

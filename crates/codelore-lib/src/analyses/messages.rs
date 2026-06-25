@@ -61,18 +61,10 @@ pub fn run_messages(db: &FactsDb, opts: &Options) -> Result<Vec<MessagesRow>> {
         "messages",
         opts,
     )?;
-    let mut stmt = db
-        .conn()
-        .prepare(&sql)
-        .map_err(|e| CodeLoreError::Analysis(format!("prepare messages: {e}")))?;
-    let rows = stmt
-        .query_map(params![expr, row_limit], |r| {
-            Ok(MessagesRow {
-                entity: r.get::<_, String>(0)?,
-                matches: u32::try_from(r.get::<_, i64>(1)?).unwrap_or(u32::MAX),
-            })
+    crate::analyses::query::query_map_collect(db, &sql, params![expr, row_limit], "messages", |r| {
+        Ok(MessagesRow {
+            entity: r.get::<_, String>(0)?,
+            matches: u32::try_from(r.get::<_, i64>(1)?).unwrap_or(u32::MAX),
         })
-        .map_err(|e| CodeLoreError::Analysis(format!("query messages: {e}")))?;
-    rows.collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|e| CodeLoreError::Analysis(format!("collect messages: {e}")))
+    })
 }

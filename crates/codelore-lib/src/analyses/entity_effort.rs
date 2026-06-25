@@ -17,7 +17,7 @@
 use duckdb::params;
 
 use crate::facts::FactsDb;
-use crate::{CodeLoreError, Options, Result};
+use crate::{Options, Result};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EntityEffortRow {
@@ -56,20 +56,12 @@ pub fn run_entity_effort(db: &FactsDb, opts: &Options) -> Result<Vec<EntityEffor
         "entity-effort",
         opts,
     )?;
-    let mut stmt = db
-        .conn()
-        .prepare(&sql)
-        .map_err(|e| CodeLoreError::Analysis(format!("prepare entity-effort: {e}")))?;
-    let rows = stmt
-        .query_map(params![row_limit], |r| {
-            Ok(EntityEffortRow {
-                entity: r.get::<_, String>(0)?,
-                author: r.get::<_, String>(1)?,
-                author_revs: u32::try_from(r.get::<_, i64>(2)?).unwrap_or(u32::MAX),
-                total_revs: u32::try_from(r.get::<_, i64>(3)?).unwrap_or(u32::MAX),
-            })
+    crate::analyses::query::query_map_collect(db, &sql, params![row_limit], "entity-effort", |r| {
+        Ok(EntityEffortRow {
+            entity: r.get::<_, String>(0)?,
+            author: r.get::<_, String>(1)?,
+            author_revs: u32::try_from(r.get::<_, i64>(2)?).unwrap_or(u32::MAX),
+            total_revs: u32::try_from(r.get::<_, i64>(3)?).unwrap_or(u32::MAX),
         })
-        .map_err(|e| CodeLoreError::Analysis(format!("query entity-effort: {e}")))?;
-    rows.collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|e| CodeLoreError::Analysis(format!("collect entity-effort: {e}")))
+    })
 }
