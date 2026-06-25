@@ -22,7 +22,7 @@ pub enum ComplexitySample {
 /// for code-maat's `--temporal-period`). Backed by `DuckDB`'s `date_trunc`
 /// — produces clean non-overlapping buckets rather than the sliding-window
 /// duplication code-maat does.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TimeBucket {
     Day,

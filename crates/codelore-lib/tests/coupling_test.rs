@@ -31,6 +31,186 @@ fn coupling_for_tiny_repo() {
     );
 }
 
+/// Build a throwaway repo whose history yields three Fisher-significant
+/// coupling pairs — (a,b), (a,c), (b,c). The three files co-change in
+/// `n_shared` commits; each file then gets its OWN solo commits and a
+/// fourth file `x` provides "neither" rows, so every pair's 2x2 contingency
+/// table has off-diagonal mass (p < 1) rather than the degenerate p = 1 a
+/// perfectly-correlated pair would produce. This gives the memo tests a
+/// fixture with multiple surviving pairs for truncation + keyed-recompute.
+fn build_trio_repo(n_shared: usize) -> tempfile::TempDir {
+    use std::process::Command;
+    fn git(path: &std::path::Path, date: &str, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .env("GIT_AUTHOR_DATE", date)
+            .env("GIT_COMMITTER_DATE", date)
+            .status()
+            .expect("git");
+        assert!(status.success());
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path();
+    git(
+        path,
+        "2026-01-01T00:00:00Z",
+        &["init", "-b", "main", "--quiet"],
+    );
+    git(
+        path,
+        "2026-01-01T00:00:00Z",
+        &["config", "user.email", "t@t"],
+    );
+    git(
+        path,
+        "2026-01-01T00:00:00Z",
+        &["config", "user.name", "Trio"],
+    );
+    let mut day = 1u32;
+    let mut commit = |files: &[&str], tag: &str| {
+        let date = format!("2026-01-{day:02}T12:00:00Z");
+        for name in files {
+            std::fs::write(path.join(name), format!("{name}-{tag}")).unwrap();
+        }
+        git(path, &date, &["add", "."]);
+        git(path, &date, &["commit", "-m", tag, "--quiet"]);
+        day += 1;
+    };
+    // n_shared commits touching a, b, c together.
+    for i in 1..=n_shared {
+        commit(&["a.txt", "b.txt", "c.txt"], &format!("trio{i}"));
+    }
+    // Per-file solo commits break perfect correlation so each pair's Fisher
+    // table has a non-zero "one but not the other" cell.
+    for i in 1..=2 {
+        commit(&["a.txt"], &format!("soloA{i}"));
+    }
+    for i in 1..=2 {
+        commit(&["b.txt"], &format!("soloB{i}"));
+    }
+    for i in 1..=2 {
+        commit(&["c.txt"], &format!("soloC{i}"));
+    }
+    // "Neither" rows: an unrelated file changing alone supplies the d-cell.
+    for i in 1..=3 {
+        commit(&["x.txt"], &format!("x{i}"));
+    }
+    dir
+}
+
+/// The per-`FactsDb` coupling memo must be transparent: a second identical
+/// call returns a result equal to the first (same pairs, same order, same
+/// p-values), and a call with a DIFFERENT coupling-affecting option must NOT
+/// serve the first call's cached entry.
+#[test]
+fn coupling_memo_is_transparent_and_keyed() {
+    let dir = build_trio_repo(8);
+    let repo = GixRepo::open(dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: dir.path().to_path_buf(),
+        min_revs: 1,
+        min_shared_revs: 1,
+        min_coupling_pct: 0,
+        max_coupling_pct: 100,
+        fisher_significance: 1.0,
+        use_canonical_lineage: false,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    // First call populates the memo; second call must hit it and return an
+    // equal result. Compare on the field tuple so a future field addition to
+    // CouplingRow is caught.
+    let first = run_coupling(&db, &opts).expect("first");
+    let second = run_coupling(&db, &opts).expect("second (memo hit)");
+    assert_eq!(first.len(), 3, "trio repo should yield (a,b),(a,c),(b,c)");
+    assert_eq!(first.len(), second.len(), "memo hit changed row count");
+    for (a, b) in first.iter().zip(second.iter()) {
+        assert_eq!(a.entity_a, b.entity_a);
+        assert_eq!(a.entity_b, b.entity_b);
+        assert_eq!(a.shared, b.shared);
+        assert_eq!(a.revs_a, b.revs_a);
+        assert_eq!(a.revs_b, b.revs_b);
+        assert_eq!(a.average_revs, b.average_revs);
+        assert!((a.degree - b.degree).abs() < f64::EPSILON);
+        assert!((a.fisher_p - b.fisher_p).abs() < f64::EPSILON);
+    }
+
+    // A different coupling-affecting option — here driving `fisher_significance`
+    // to 0.0 — must NOT reuse the prior cache entry. p-values are strictly
+    // positive, so a 0.0 threshold rejects every pair: a stale-memo bug would
+    // wrongly return the 3-row baseline.
+    let opts_no_sig = Options {
+        fisher_significance: 0.0,
+        ..opts.clone()
+    };
+    let no_sig = run_coupling(&db, &opts_no_sig).expect("no-sig");
+    assert!(
+        no_sig.is_empty(),
+        "fisher_significance=0.0 is a distinct key and must recompute to empty, \
+         not serve the cached 3-row baseline; got {} rows",
+        no_sig.len()
+    );
+
+    // The original opts must still memo-hit to its UNCHANGED baseline after
+    // the distinct-key call cached its own (empty) entry — no overwrite, no
+    // aliasing between the two keys.
+    let third = run_coupling(&db, &opts).expect("third (original key)");
+    assert_eq!(
+        third.len(),
+        first.len(),
+        "original key's entry was clobbered by the distinct-key call"
+    );
+}
+
+/// `--rows N` must truncate the returned vec but NOT the shared memo entry,
+/// so a later un-capped call still sees the full graph.
+#[test]
+fn coupling_memo_row_limit_does_not_poison_full_result() {
+    let dir = build_trio_repo(8);
+    let repo = GixRepo::open(dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let base = Options {
+        repo_path: dir.path().to_path_buf(),
+        min_revs: 1,
+        min_shared_revs: 1,
+        min_coupling_pct: 0,
+        max_coupling_pct: 100,
+        fisher_significance: 1.0,
+        use_canonical_lineage: false,
+        ..Options::default()
+    };
+    db.ingest(&repo, &base).expect("ingest");
+
+    let full = run_coupling(&db, &base).expect("full");
+    assert_eq!(full.len(), 3, "trio repo should yield 3 pairs");
+
+    // Capped call (same key, only rows_limit differs) returns a prefix.
+    let capped = run_coupling(
+        &db,
+        &Options {
+            rows_limit: Some(1),
+            ..base.clone()
+        },
+    )
+    .expect("capped");
+    assert_eq!(capped.len(), 1, "rows_limit=1 must truncate to 1");
+    assert_eq!(capped[0].entity_a, full[0].entity_a);
+    assert_eq!(capped[0].entity_b, full[0].entity_b);
+
+    // A later un-capped call must STILL return the full graph — proving the
+    // cached entry was never truncated.
+    let full_again = run_coupling(&db, &base).expect("full again");
+    assert_eq!(
+        full_again.len(),
+        full.len(),
+        "rows_limit poisoned the shared memo entry"
+    );
+}
+
 #[test]
 fn coupling_struct_shape() {
     use codelore_lib::analyses::coupling::CouplingRow;

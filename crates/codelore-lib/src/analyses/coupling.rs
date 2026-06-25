@@ -70,6 +70,52 @@ pub(crate) fn good_commits_cte(bucket: Option<TimeBucket>, use_lineage: bool) ->
     }
 }
 
+/// Memo key for [`run_coupling`]. Carries EXACTLY the `Options` fields that
+/// `build_coupling_sql`, `good_commits_cte`, `source_table`,
+/// `build_total_commits_sql`, or the Rust-side Fisher pass branch on — and
+/// nothing else. Two `Options` that agree on every field here produce a
+/// byte-identical un-row-limited result, so they may share a memo entry.
+///
+/// Deliberately EXCLUDED: `rows_limit` (applied as a post-memo
+/// `Vec::truncate`, so the stored result is the full graph regardless of the
+/// caller's `--rows N`) and every field that only affects ingest or other
+/// analyses (`after`/`before`/`commit_range`/`group_file`/… are baked into
+/// the fact store at ingest time, before any coupling call runs).
+///
+/// `fisher_significance` is an `f64`; we key on its raw bit pattern
+/// (`f64::to_bits`) for total, exact-equality hashing — the value flows into
+/// the Rust filter `fisher_p < opts.fisher_significance`, and exact equality
+/// is the right notion (the same `Options.fisher_significance` must map to
+/// the same entry; a different one must not collide).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CouplingMemoKey {
+    max_changeset_size: u32,
+    min_revs: u32,
+    min_shared_revs: u32,
+    min_coupling_pct: u8,
+    max_coupling_pct: u8,
+    fisher_significance_bits: u64,
+    time_bucket: Option<TimeBucket>,
+    use_canonical_lineage: bool,
+    code_maat_compat: bool,
+}
+
+impl CouplingMemoKey {
+    fn from_opts(opts: &Options) -> Self {
+        Self {
+            max_changeset_size: opts.max_changeset_size,
+            min_revs: opts.min_revs,
+            min_shared_revs: opts.min_shared_revs,
+            min_coupling_pct: opts.min_coupling_pct,
+            max_coupling_pct: opts.max_coupling_pct,
+            fisher_significance_bits: opts.fisher_significance.to_bits(),
+            time_bucket: opts.time_bucket,
+            use_canonical_lineage: opts.use_canonical_lineage,
+            code_maat_compat: opts.code_maat_compat,
+        }
+    }
+}
+
 /// A single coupling pair produced by [`run_coupling`].
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CouplingRow {
@@ -326,6 +372,21 @@ fn fisher_two_tail(shared: u32, revs_a: u32, revs_b: u32, total: u32) -> Option<
 /// Returns [`CodeLoreError::Analysis`] on any SQL error.
 #[tracing::instrument(name = "coupling", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
+    // Per-`FactsDb` memo. `run_coupling` is pure per (db, coupling-affecting
+    // opts) but a single CLI run invokes it 2-5× on identical inputs
+    // (code-health, centrality, communities, clone-coupling, SPA dashboard).
+    // The stored value is the FULL Fisher-filtered graph BEFORE `rows_limit`
+    // truncation, so a hit short-circuits the O(K²) self-join + Fisher pass
+    // and each caller still re-applies its own row cap below.
+    let memo_key = CouplingMemoKey::from_opts(opts);
+    if let Some(cached) = db.coupling_memo_get(&memo_key) {
+        let mut out = (*cached).clone();
+        if let Some(n) = opts.rows_limit {
+            out.truncate(n as usize);
+        }
+        return Ok(out);
+    }
+
     // Unified dispatch: --time-bucket > canonical lineage > raw. When both
     // bucketing and lineage are on, lineage is materialised first and
     // bucketing happens on top so rename ancestry survives.
@@ -427,6 +488,15 @@ pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
         }
     }
 
+    // Memoise the FULL (un-row-limited) result so a later identical call
+    // skips the recompute. Apply `rows_limit` to a fresh copy AFTER caching
+    // — exactly where the limit was applied before this memo existed — so
+    // the cached entry stays caller-agnostic and a `--rows N` choice never
+    // poisons it.
+    let full = std::rc::Rc::new(out);
+    db.coupling_memo_put(memo_key, std::rc::Rc::clone(&full));
+
+    let mut out = (*full).clone();
     if let Some(n) = opts.rows_limit {
         out.truncate(n as usize);
     }

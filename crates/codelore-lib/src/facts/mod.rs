@@ -17,13 +17,59 @@ use crate::{CodeLoreError, Options, Result};
 
 pub struct FactsDb {
     conn: Connection,
+    /// Process-local memo for [`crate::analyses::coupling::run_coupling`].
+    /// That function is pure per `(db, coupling-affecting opts)` but is
+    /// invoked 2-5× per CLI run on identical inputs (code-health,
+    /// centrality, communities, clone-coupling, and the SPA dashboard all
+    /// re-derive the same global coupling graph). The result is the full,
+    /// Fisher-filtered, un-row-limited `Vec` — callers re-apply their own
+    /// `rows_limit` after the lookup, so a `--rows N` choice never poisons
+    /// the shared entry. `RefCell` + `Rc` (not a `Mutex`/`Arc`) because the
+    /// `DuckDB` `Connection` is `!Send + !Sync` and every coupling call
+    /// already runs on the single connection-owning thread.
+    coupling_memo: std::cell::RefCell<
+        std::collections::HashMap<
+            crate::analyses::coupling::CouplingMemoKey,
+            std::rc::Rc<Vec<crate::analyses::coupling::CouplingRow>>,
+        >,
+    >,
 }
 
 impl FactsDb {
+    /// Wrap an open `DuckDB` connection with an empty coupling memo. The
+    /// single point where the `coupling_memo` field is initialised so the
+    /// four public constructors stay in lockstep.
+    fn from_conn(conn: Connection) -> Self {
+        Self {
+            conn,
+            coupling_memo: std::cell::RefCell::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// Look up a memoised coupling result for `key`. Returns a shared
+    /// handle to the full, un-row-limited `Vec` so the caller re-applies
+    /// its own `rows_limit` without recomputing the O(K²) self-join +
+    /// Fisher pass. `None` on a miss; the caller then computes and stores.
+    pub(crate) fn coupling_memo_get(
+        &self,
+        key: &crate::analyses::coupling::CouplingMemoKey,
+    ) -> Option<std::rc::Rc<Vec<crate::analyses::coupling::CouplingRow>>> {
+        self.coupling_memo.borrow().get(key).cloned()
+    }
+
+    /// Store the full, un-row-limited coupling result under `key`.
+    pub(crate) fn coupling_memo_put(
+        &self,
+        key: crate::analyses::coupling::CouplingMemoKey,
+        rows: std::rc::Rc<Vec<crate::analyses::coupling::CouplingRow>>,
+    ) {
+        self.coupling_memo.borrow_mut().insert(key, rows);
+    }
+
     pub fn new_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()
             .map_err(|e| CodeLoreError::Analysis(format!("open in-memory duckdb: {e}")))?;
-        let db = Self { conn };
+        let db = Self::from_conn(conn);
         db.create_schema()?;
         Ok(db)
     }
@@ -31,7 +77,7 @@ impl FactsDb {
     pub fn open(path: impl AsRef<std::path::Path>) -> Result<Self> {
         let conn = Connection::open(path)
             .map_err(|e| CodeLoreError::Analysis(format!("open duckdb: {e}")))?;
-        let db = Self { conn };
+        let db = Self::from_conn(conn);
         db.create_schema()?;
         Ok(db)
     }
@@ -42,7 +88,7 @@ impl FactsDb {
     pub fn open_file(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)
             .map_err(|e| CodeLoreError::Analysis(format!("open_file duckdb: {e}")))?;
-        Ok(Self { conn })
+        Ok(Self::from_conn(conn))
     }
 
     /// Open an existing `DuckDB` file in read-only mode.
@@ -65,7 +111,7 @@ impl FactsDb {
             .map_err(|e| CodeLoreError::Analysis(format!("duckdb config read-only: {e}")))?;
         let conn = Connection::open_with_flags(path, config)
             .map_err(|e| CodeLoreError::Analysis(format!("open_read_only duckdb: {e}")))?;
-        let db = Self { conn };
+        let db = Self::from_conn(conn);
         db.validate_schema_version(path)?;
         Ok(db)
     }
