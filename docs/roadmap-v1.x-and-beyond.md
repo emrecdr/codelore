@@ -69,7 +69,7 @@ Single self-contained HTML file behind the `spa` Cargo feature. Tailwind v4 + Da
 - **Per-language path resolvers** for Rust (`crate::`), Python (`.`), JS/TS (`./`), TypeScript declaration types, and the JS/TS resolver pack
 - **Layered-architecture rule validation** via `.codelore-arch-rules.toml` — declarative allow/forbid edges, evaluated by the `architecture-violations` analysis
 - **Quality gates** via `.codelore-thresholds.toml` consumed by `codelore check` with `$GITHUB_OUTPUT` integration for CI step summaries
-- **Persistent DuckDB cache** keyed on `SHA256(canonical_repo_path || head_sha || pkg_version || opts_hash || SCHEMA_VERSION)` — cache key invalidates naturally on schema migrations
+- **Persistent DuckDB cache** keyed on `SHA256(canonical_repo_path || head_sha || pkg_version || opts_hash || CACHE_EPOCH)` — `CACHE_EPOCH` is a manually-bumped sentinel that orphans stale cache files (the on-disk schema version is tracked separately)
 - **Mailmap + bot patterns + AI-author attribution** at the identity layer; `.gitignore`-aware exclude defaults
 
 ### Release pipeline

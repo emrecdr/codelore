@@ -34,7 +34,7 @@ After `1.0.0`:
   - CLI flag names or values
   - Default values that change output meaningfully
   - Output schema (CSV columns, JSON field shape, SARIF rule IDs, provenance manifest layout)
-  - Cache file format (the `cache.rs` `SCHEMA_VERSION` constant)
+  - Cache file format (the `cache.rs` `CACHE_EPOCH` constant)
   - Public Rust API (codelore-lib's exported items)
 - **MINOR** — new flags, new analyses, new output formats, new SARIF rules. No removals.
 - **PATCH** — bug fixes, perf improvements, internal refactors. No new flags or analyses.

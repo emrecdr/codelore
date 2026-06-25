@@ -181,9 +181,12 @@ pub struct AnalyzeArgs {
     #[arg(short, long, default_value = ".")]
     pub repo: PathBuf,
 
-    /// Output format: csv | json | sarif | markdown | parquet | sqlite.
-    /// sarif: hotspots only. parquet: hotspots, revisions, summary; requires --output.
-    /// sqlite: full fact-store dump; requires --output.
+    /// Output format: csv | json | ndjson | sarif | markdown | gha | html | parquet | sqlite | spa.
+    /// Most analyses emit csv/json/markdown. ndjson: hotspots, code-health, coupling, lead-time.
+    /// sarif: hotspots, clones, clone-coupling. gha: hotspots. html: hotspots, code-health,
+    /// knowledge-islands, clone-coupling, summary, revisions, authors, top-committers.
+    /// parquet: hotspots, revisions, summary; requires --output. sqlite: full fact-store dump;
+    /// requires --output. spa: interactive dashboard; --output optional (defaults to .codelore/spa.html).
     #[arg(short, long, default_value = "csv")]
     pub format: String,
 

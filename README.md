@@ -365,8 +365,9 @@ Default: **non-strict** (unmapped paths keep their raw names; safer than silent 
             │ SQL queries (bind-parameterized) + Rust orchestrators
             ▼
    ┌─────────────────────┐
-   │  32 Analyses         │  → 7 output formats (CSV/JSON/SARIF/
-   │                     │     Markdown/Parquet/SQLite/SPA*)
+   │  32 Analyses         │  → 10 output formats (CSV/JSON/NDJSON/
+   │                     │     SARIF/Markdown/GHA/HTML/Parquet/
+   │                     │     SQLite/SPA)
    │                     │  → persistent cache (10-100× speedup)
    │                     │  → provenance.json sidecar
    │                     │

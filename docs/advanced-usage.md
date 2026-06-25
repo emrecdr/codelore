@@ -193,11 +193,11 @@ All four use versioned `partialFingerprints` so cross-run identity stays stable.
 ```
 codelore analyze [OPTIONS]
   -a, --analysis NAME           Which analysis [default: revisions]
-                                (any of the 22 above; passing an unknown
+                                (any of the 32 above; passing an unknown
                                 name prints the full valid list)
   -r, --repo PATH               Git repo path [default: .]
   -f, --format FORMAT           Output format [default: csv]
-                                csv | json | sarif | markdown | parquet | sqlite | spa
+                                csv | json | ndjson | sarif | markdown | gha | html | parquet | sqlite | spa
   -o, --output PATH             Write to file instead of stdout
       --min-revs N              Min revisions per entity [default: 5]
       --rows N                  Cap output to N rows
@@ -581,7 +581,7 @@ spans stay out of normal-verbosity output.
 |---|---|---|
 | `error: ingest commits: repository error: find_parent_commit ... could not be found` | Shallow clone (`--depth=N`) is missing parent ancestry for analyses that walk back | Use a full clone or run only HEAD-only analyses (`clones` works on shallow clones — it short-circuits the ingest) |
 | Hotspot scores are all `0.0` | Repo has only one commit, OR `fetch-depth: 0` not set in CI | Set `fetch-depth: 0` in `actions/checkout` |
-| `codelore analyze --analysis bogus` errors with help-text | Typo on analysis name | The error message lists all 13 supported analyses |
+| `codelore analyze --analysis bogus` errors with help-text | Typo on analysis name | The error message lists all 32 supported analyses |
 | Same file appears twice in `revisions` output (e.g. `crates/bca-lib/foo.rs` AND `crates/codelore-lib/foo.rs`) | Git rename split — CodeLore doesn't follow renames yet | Known limitation; tracked in [`roadmap-v1.x-and-beyond.md`](roadmap-v1.x-and-beyond.md) (Tier 3, "Rename tracking") |
 | `clone-coupling` returns 0 rows on a small repo | Fisher exact test needs ≥ 3 shared commits AND non-degenerate contingency table | Verify with `--analysis coupling` first; if that's empty too, the repo doesn't have enough history |
 | `--format parquet` fails with "requires --output" | Binary format can't stream to stdout | Pass `--output FILE.parquet` |
