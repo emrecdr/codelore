@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-06-25
+
 ### Fixed
 
 - **SPA: Hotspots and Trends panels now stack on narrow screens and sit side-by-side on wide screens** (the responsive behaviour was inverted). Both carried `xl:col-span-2`, which made them share a row at md/lg widths (768–1279 px) yet each span the full width — stacked — at xl (≥ 1280 px). They're now `md:col-span-2 xl:col-span-1`: full-width and stacked up to lg, side-by-side only once there's room at xl. The Tailwind bundle was rebuilt to emit the new `md:col-span-2` / `xl:col-span-1` classes. Verified in a headless browser via measured layout (wide: two half-width columns; narrow: two stacked full-width rows).
