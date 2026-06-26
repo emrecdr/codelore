@@ -580,6 +580,7 @@
     { name: 'cognitive-boxplot',  render: () => renderCognitiveBoxplot(data.hotspots || []) },
     { name: 'module-chord',       render: () => renderModuleChord(data.coupling || []) },
     { name: 'arch-graph',         render: () => renderArchGraph(data.imports || [], data.modularity_violations || [], data.unstable_interface || [], data.architecture_roles || []) },
+    { name: 'arch-matrix',        render: () => renderArchMatrix(data.imports || [], data.architecture_roles || []) },
     { name: 'calendar-heatmap',   rerender: 'theme', render: () => renderCalendarHeatmap(data.daily_commits || []) },
     { name: 'xray-sunburst',      render: () => renderXRaySunburst(data.xray || []) },
   ];
@@ -3356,6 +3357,155 @@
     window._codeloreResetZoomHandlers['widget-arch-graph'] = function () {
       renderArchGraph(imports, violations, unstable, roles);
     };
+  }
+
+
+  // ─── §11h Widget: Dependency Structure Matrix ────────────────────
+
+  // The scalable, layer-ordered view of the same import graph. A DSM
+  // (Steward 1981; Sangal et al. 2005) is the matrix form of the
+  // dependency graph: it does not hairball as the module count grows.
+  // Modules are ordered by architectural layer (from architecture-
+  // roles' topological `level`); a cell (row imports col) coloured blue
+  // is a healthy forward dependency (above the diagonal), red is a
+  // back-edge (below the diagonal) — which only happens inside a
+  // dependency cycle. A clean acyclic architecture is a triangular,
+  // all-blue matrix.
+  function renderArchMatrix(imports, roles) {
+    roles = roles || [];
+    const container = document.getElementById('widget-arch-matrix-body');
+    if (!container) return;
+    if (!imports.length) {
+      container.innerHTML = '<div class="empty">No resolved import edges to matrix yet (Rust + Python + JS/TS).</div>';
+      return;
+    }
+    // Same path-prefix module roll-up as the force graph.
+    function modulePath(p, depth) {
+      const parts = (p || '').split('/');
+      if (parts.length <= depth) {
+        const lastSlash = (p || '').lastIndexOf('/');
+        return lastSlash < 0 ? (p || '') : p.slice(0, lastSlash);
+      }
+      return parts.slice(0, depth).join('/');
+    }
+    const archLayout = (window.Alpine && window.Alpine.store)
+      ? window.Alpine.store('layout') : null;
+    const userDepth = archLayout ? archLayout.archGraphDepth : 'auto';
+    function aggregateAt(depth) {
+      const ee = {};
+      const nn = {};
+      for (var i = 0; i < imports.length; i++) {
+        const imp = imports[i];
+        if (!imp.target_path) continue;
+        const s = modulePath(imp.src_path, depth);
+        const t = modulePath(imp.target_path, depth);
+        if (!s || !t || s === t) continue;
+        const key = s + '\x00' + t;
+        ee[key] = (ee[key] || 0) + 1;
+        nn[s] = true;
+        nn[t] = true;
+      }
+      return { edges: ee, nodes: nn };
+    }
+    var edges = {};
+    var nodes = {};
+    var chosenDepth = (typeof userDepth === 'number') ? userDepth : 6;
+    if (typeof userDepth === 'number') {
+      const r = aggregateAt(userDepth);
+      edges = r.edges;
+      nodes = r.nodes;
+    } else {
+      for (var d = 2; d <= 6; d++) {
+        const r = aggregateAt(d);
+        edges = r.edges;
+        nodes = r.nodes;
+        chosenDepth = d;
+        if (Object.keys(nodes).length >= 8) break;
+      }
+    }
+    const mods = Object.keys(nodes);
+    if (!mods.length) {
+      container.innerHTML = '<div class="empty">All resolved imports stay intra-module — no inter-module matrix.</div>';
+      return;
+    }
+    // Module layer = shallowest member file's topological level (from
+    // architecture-roles). Modules with no level sink to the bottom.
+    const moduleLevel = {};
+    for (var ri = 0; ri < roles.length; ri++) {
+      const m = modulePath(roles[ri].path, chosenDepth);
+      if (!m || !nodes[m]) continue;
+      const lv = (typeof roles[ri].level === 'number') ? roles[ri].level : 1e9;
+      if (moduleLevel[m] === undefined || lv < moduleLevel[m]) moduleLevel[m] = lv;
+    }
+    // Order entry points first, foundations last → forward deps read
+    // above the diagonal, back-edges (cycles) below it.
+    const order = mods.slice().sort(function (a, b) {
+      const la = (moduleLevel[a] === undefined) ? 1e9 : moduleLevel[a];
+      const lb = (moduleLevel[b] === undefined) ? 1e9 : moduleLevel[b];
+      return la - lb || (a < b ? -1 : (a > b ? 1 : 0));
+    });
+    const idxOf = {};
+    order.forEach(function (m, i) { idxOf[m] = i; });
+    const labels = order.map(function (m) {
+      return m.length > 24 ? '…' + m.slice(-23) : m;
+    });
+    const fwdColor = token('--color-info') || '#2563eb';
+    const backColor = token('--color-error') || '#dc2626';
+    var maxCount = 1;
+    Object.keys(edges).forEach(function (k) { if (edges[k] > maxCount) maxCount = edges[k]; });
+    const cells = [];
+    var backEdges = 0;
+    Object.keys(edges).forEach(function (k) {
+      const parts = k.split('\x00');
+      const r = idxOf[parts[0]]; // importer → row
+      const c = idxOf[parts[1]]; // imported → col
+      if (r === undefined || c === undefined) return;
+      const count = edges[k];
+      const isBack = r > c; // imports own-layer-or-shallower = cycle/back-edge
+      if (isBack) backEdges += 1;
+      cells.push({
+        value: [c, r, count],
+        itemStyle: {
+          color: isBack ? backColor : fwdColor,
+          opacity: isBack ? 0.95 : (0.35 + 0.6 * (count / maxCount)),
+        },
+      });
+    });
+    setChartAriaLabel(container,
+      'Dependency structure matrix, ' + order.length + ' modules ordered by architectural layer, ' +
+      Object.keys(edges).length + ' dependency cells, ' + backEdges +
+      ' below-diagonal back-edges (dependency cycles / layering violations) in red.');
+    const chart = mountEcharts(container);
+    chart.setOption({
+      tooltip: {
+        position: 'top',
+        formatter: function (p) {
+          const c = p.value[0];
+          const r = p.value[1];
+          const v = p.value[2];
+          return order[r] + ' &rarr; ' + order[c] + '<br/>' + v + ' import' + (v === 1 ? '' : 's') +
+            (r > c ? '<br/><strong>back-edge — dependency cycle / layering violation</strong>' : '');
+        },
+      },
+      grid: { left: 4, right: 16, top: 8, bottom: 4, containLabel: true },
+      xAxis: {
+        type: 'category', data: labels, position: 'top',
+        axisLabel: { rotate: 60, fontSize: 9, color: getCssVar('--fg-dim') },
+        splitArea: { show: true },
+      },
+      yAxis: {
+        type: 'category', data: labels, inverse: true,
+        axisLabel: { fontSize: 9, color: getCssVar('--fg-dim') },
+        splitArea: { show: true },
+      },
+      series: [{
+        type: 'heatmap',
+        data: cells,
+        label: { show: false },
+        itemStyle: { borderColor: getCssVar('--bg'), borderWidth: 0.5 },
+        emphasis: { itemStyle: { borderColor: getCssVar('--fg'), borderWidth: 1 } },
+      }],
+    });
   }
 
 

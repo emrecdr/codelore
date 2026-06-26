@@ -1406,6 +1406,32 @@
       <div id="widget-arch-graph-body" class="widget-body" style="height: 380px;"></div>
     </section>
 
+    <!-- Dependency Structure Matrix: the scalable, layer-ordered view
+         of the same import graph. Modules ordered by architectural
+         layer (architecture-roles' topological level); cells = inter-
+         module imports; below-diagonal red cells = back-edges
+         (dependency cycles / layering violations). Shares the depth
+         selector with the force graph above. -->
+    <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-arch-matrix">
+      <h2>Dependency structure matrix</h2>
+      <div class="subtitle">
+        The same import graph as a layer-ordered matrix — it scales
+        where the force graph hairballs. Rows import columns; cells
+        <strong>below the diagonal (red)</strong> are <em>back-edges</em>:
+        dependency cycles and layering violations. A clean, acyclic
+        architecture is a triangular, all-blue matrix.
+      </div>
+      <details class="learn-more">
+        <summary>Learn more — how to read this panel</summary>
+        <div class="learn-more-content">
+          <p><strong>What it measures.</strong> The resolved import graph rolled up to modules (same depth selector as the graph above), rendered as a Dependency Structure Matrix (Steward 1981; Sangal et al. 2005). Modules are ordered by architectural layer — entry points first, foundations last — using the topological level from <code>--analysis architecture-roles</code>.</p>
+          <p><strong>How to read it.</strong> Each cell <code>(row, col)</code> means "row imports col"; blue intensity = number of imports. Because modules are layer-ordered, healthy forward dependencies fall <em>above</em> the diagonal. A cell <em>below</em> the diagonal is <strong>red</strong> — a back-edge, where a module imports something in its own layer or shallower, which only happens inside a dependency cycle. A perfectly triangular all-blue matrix is an acyclic, cleanly-layered architecture.</p>
+          <p><strong>What to watch for.</strong> Red cells below the diagonal are your cycles / layering violations — cross-reference <code>--analysis dependency-cycles</code>. A dense red block straddling the diagonal is a large tangle (the Core). Unlike the force graph, the matrix stays readable as the module count grows — this is the scalable default for big repos.</p>
+        </div>
+      </details>
+      <div id="widget-arch-matrix-body" class="widget-body" style="height: 460px;"></div>
+    </section>
+
     <!-- Treemap alternative view to the circle-pack. Same
          `hotspots` data, rendered as nested rectangles. Strict
          area encoding (cognitive complexity × revisions); useful
