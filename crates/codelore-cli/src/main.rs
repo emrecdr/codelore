@@ -277,6 +277,12 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
             "See analyses/god_classes.rs.",
         ),
         (
+            "architecture-roles",
+            "Baldwin, MacCormack & Rusnak 2014 — Hidden Structure (Research Policy 43:8)",
+            "Per-file Core/Shared/Control/Periphery from transitive visibility fan-in (vfi) / fan-out (vfo) on the import graph: Core = the largest cyclic group; Shared = vfi≥core, vfo<core; Control = vfi<core, vfo≥core; Periphery = both below. reach_pct = vfo/n×100; mean(vfo/n) = MacCormack propagation cost.",
+            "See analyses/architecture_roles.rs + analyses/import_graph.rs::reachability.",
+        ),
+        (
             "dependency-cycles",
             "Tarjan 1972 SCC + Fontana et al. 2017 (Arcan) Cyclic Dependency smell",
             "Non-trivial strongly-connected components (size ≥ 2) of the structural import graph — files that import each other transitively. cycle_id groups a tangle; size is its member count. Accuracy follows the import resolver's language coverage.",
@@ -823,6 +829,9 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             }
             AnalysisName::DependencyCycles => {
                 dispatch_dependency_cycles(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::ArchitectureRoles => {
+                dispatch_architecture_roles(&db, &opts, format, &ctx, &mut out)?;
             }
             AnalysisName::ModularityViolations => {
                 dispatch_modularity_violations(&db, &opts, format, &ctx, &mut out)?;
@@ -1588,6 +1597,49 @@ fn dispatch_arch_violations(
         fmt => {
             return Err(unsupported_format(
                 "architecture-violations",
+                "csv|json|markdown",
+                fmt,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_architecture_roles(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows = codelore_lib::cli_api::analyses::architecture_roles::run_architecture_roles(
+                db, opts,
+            )
+            .context("run architecture-roles")?;
+            codelore_lib::cli_api::output::csv::write_architecture_roles_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::architecture_roles::run_architecture_roles(
+                db, opts,
+            )
+            .context("run architecture-roles")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows = codelore_lib::cli_api::analyses::architecture_roles::run_architecture_roles(
+                db, opts,
+            )
+            .context("run architecture-roles")?;
+            codelore_lib::cli_api::output::markdown::write_architecture_roles_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format(
+                "architecture-roles",
                 "csv|json|markdown",
                 fmt,
             ));

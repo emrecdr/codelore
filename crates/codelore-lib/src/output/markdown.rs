@@ -375,6 +375,35 @@ pub fn write_god_classes_markdown<W: Write>(
     Ok(())
 }
 
+/// architecture-roles markdown emitter — per-file role + visibility reach.
+pub fn write_architecture_roles_markdown<W: Write>(
+    rows: &[crate::analyses::architecture_roles::ArchitectureRoleRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore architecture-roles")?;
+    if rows.is_empty() {
+        writeln!(w, "_No resolved import graph — nothing to classify._")
+            .map_err(CodeLoreError::Io)?;
+        return Ok(());
+    }
+    writeln!(w, "| Path | Role | VFI | VFO | In cycle | Reach % |").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---|---:|---:|:--:|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| `{}` | {} | {} | {} | {} | {:.1} |",
+            escape_md_cell(&row.path),
+            row.role,
+            row.vfi,
+            row.vfo,
+            row.in_cycle,
+            row.reach_pct,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 /// dependency-cycles markdown emitter — one row per (cycle, member).
 pub fn write_dependency_cycles_markdown<W: Write>(
     rows: &[crate::analyses::dependency_cycles::DependencyCycleRow],

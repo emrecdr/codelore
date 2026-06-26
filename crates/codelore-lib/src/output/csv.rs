@@ -480,6 +480,29 @@ pub fn write_god_classes_csv<W: Write>(
     Ok(())
 }
 
+/// `architecture-roles` CSV emitter — per-file Core/Shared/Control/
+/// Periphery role + visibility fan-in/out.
+pub fn write_architecture_roles_csv<W: Write>(
+    rows: &[crate::analyses::architecture_roles::ArchitectureRoleRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(w, "path,role,vfi,vfo,in_cycle,reach_pct").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{},{},{},{:.2}",
+            quote_if_needed(&row.path),
+            row.role,
+            row.vfi,
+            row.vfo,
+            row.in_cycle,
+            row.reach_pct,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 /// `dependency-cycles` CSV emitter — one row per (cycle, member file);
 /// rows sharing a `cycle_id` form one tangle.
 pub fn write_dependency_cycles_csv<W: Write>(

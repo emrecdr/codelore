@@ -80,6 +80,11 @@ pub enum AnalysisName {
     // the structural import graph (Tarjan SCC). Files that import each
     // other transitively (a "tangle"); Arcan "Cyclic Dependency" smell.
     DependencyCycles,
+    // Architecture roles — per-file Core/Shared/Control/Periphery
+    // classification from the import graph's transitive reachability
+    // (Baldwin, MacCormack & Rusnak 2014 "Hidden Structure"). Carries
+    // visibility fan-in/out; the mean of vfo/n is the propagation cost.
+    ArchitectureRoles,
     // Modularity violations — file pairs that co-change
     // (Fisher-significant) yet have NO structural import edge between
     // them. The structure×history fusion: implicit cross-module
@@ -148,6 +153,7 @@ impl AnalysisName {
             Self::GodClasses => "god-classes",
             Self::ArchViolations => "architecture-violations",
             Self::DependencyCycles => "dependency-cycles",
+            Self::ArchitectureRoles => "architecture-roles",
             Self::ModularityViolations => "modularity-violations",
             Self::UnstableInterface => "unstable-interface",
             Self::StaleCode => "stale-code",
@@ -217,6 +223,7 @@ impl AnalysisName {
             GodClasses,
             ArchViolations,
             DependencyCycles,
+            ArchitectureRoles,
             ModularityViolations,
             UnstableInterface,
             StaleCode,

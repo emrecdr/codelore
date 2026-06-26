@@ -23,7 +23,7 @@
 
 Behind every codebase is a human narrative your linter cannot see: who wrote this, who still understands it, which corners hide tribal knowledge nobody's written down, and where the historical scars are buried. Every commit is a piece of this **lore**.
 
-**CodeLore** mines your repository's git history and projects it into **35 behavioral analyses** — hotspots, change-coupling, ownership maps, knowledge fragmentation, code health scores, copy-paste clones, live clones (clones × Fisher-significant co-change), Leiden community detection on the coupling graph, per-file centrality, knowledge-island bus-factor risk, god-class detection, layered-architecture rule validation, modularity-violation detection (co-change without imports), unstable-interface detection, per-module bus factor, pair-programming detection, stale-code surfacing, and more — surfaced as SARIF for your existing CI dashboard. The socio-technical signal your linter cannot see, with the methodological honesty your team can audit.
+**CodeLore** mines your repository's git history and projects it into **36 behavioral analyses** — hotspots, change-coupling, ownership maps, knowledge fragmentation, code health scores, copy-paste clones, live clones (clones × Fisher-significant co-change), Leiden community detection on the coupling graph, per-file centrality, knowledge-island bus-factor risk, god-class detection, layered-architecture rule validation, modularity-violation detection (co-change without imports), unstable-interface detection, per-module bus factor, pair-programming detection, stale-code surfacing, and more — surfaced as SARIF for your existing CI dashboard. The socio-technical signal your linter cannot see, with the methodological honesty your team can audit.
 
 A Rust **drop-in successor** to Adam Tornhill's [code-maat](https://github.com/adamtornhill/code-maat) — every published code-maat analysis is supported under the same `--analysis NAME` flag, with modern improvements: deterministic tiebreaks, Fisher exact significance gates, SARIF output, persistent cache, PR-mode diffing, and a SQL-queryable fact store. Built on [gix](https://github.com/GitoxideLabs/gitoxide) (pure-Rust git), [DuckDB](https://duckdb.org) (embedded analytics), [fancy-regex](https://github.com/fancy-regex/fancy-regex) (lookaround support for architectural grouping), and a vendored fork of Mozilla's [rust-code-analysis](https://github.com/mozilla/rust-code-analysis) (tree-sitter complexity).
 
@@ -57,7 +57,7 @@ What separates CodeLore from code-maat, CodeScene, and jscpd:
 
 ---
 
-## The 35 analyses
+## The 36 analyses
 
 Use `codelore analyze --analysis NAME` for any of these. Code-maat parity is **complete**; modern additions are marked **★**.
 
@@ -98,6 +98,7 @@ Use `codelore analyze --analysis NAME` for any of these. Code-maat parity is **c
 | `god-classes` ★ | files combining high cognitive × fan-in × fan-out | Brown et al. 1998 AntiPatterns §3.1 — surfaces files where every dimension pulls up |
 | `architecture-violations` ★ | imports crossing forbidden layer boundaries per `.codelore-arch-rules.toml` | Layered-architecture enforcement at CI time |
 | `dependency-cycles` ★ | strongly-connected components (tangles) of the import graph | Tarjan SCC — the cyclic-dependency smell a DSM shows as a red diagonal block (Fontana et al. 2017) |
+| `architecture-roles` ★ | per-file Core / Shared / Control / Periphery from import-graph reachability | Baldwin & MacCormack "hidden structure" — maps the architecture + per-file blast radius (propagation cost) |
 | `modularity-violations` ★ | co-change pairs (Fisher-significant) with **no** import edge between them | The structure×history fusion — implicit cross-module dependencies (Mo, Cai & Kazman 2015 *Hotspot Patterns*) no import-only graph can see |
 | `unstable-interface` ★ | widely-imported files that change often AND drag their dependents | DV8 "Unstable Interface" — instability that propagates through the dependency graph |
 | `stale-code` ★ | files alive at HEAD untouched ≥12 months AND low cognitive | The intersection minimises false-positive deletion candidates |

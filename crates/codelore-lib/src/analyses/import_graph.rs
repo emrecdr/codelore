@@ -181,9 +181,113 @@ pub fn tarjan_scc(adj: &[Vec<usize>]) -> Vec<Vec<usize>> {
     sccs
 }
 
+/// Per-node transitive reachability counts over the import graph.
+pub struct Reach {
+    /// SCC id of each node (dense, indexed by node id).
+    pub scc_of: Vec<usize>,
+    /// Member count of each SCC (indexed by SCC id).
+    pub scc_size: Vec<usize>,
+    /// Visibility fan-in: number of nodes that can reach this node
+    /// (directly or transitively), including its own SCC. The column
+    /// sum of the reflexive transitive-closure (visibility) matrix.
+    pub vfi: Vec<u32>,
+    /// Visibility fan-out: number of nodes reachable from this node,
+    /// including its own SCC. The row sum of the visibility matrix.
+    pub vfo: Vec<u32>,
+}
+
+/// Compute per-node visibility fan-in / fan-out over the directed
+/// import graph, given its SCCs (from [`tarjan_scc`]).
+///
+/// Method (Baldwin, `MacCormack` & Rusnak 2014, "Hidden Structure"):
+/// condense the graph to its SCC DAG, then propagate reach-sets in
+/// Tarjan's emission order (which is reverse-topological — a component
+/// is emitted only after every component it can reach). Each node's
+/// `vfo` is the total size of the SCCs reachable from its SCC; `vfi` is
+/// the total size of the SCCs that can reach it. Self is included
+/// (the visibility matrix is reflexive). Propagation cost — the metric
+/// "a change to a random file can reach X% of the system" — is
+/// `sum(vfo) / n²` = `mean(vfi) / n`.
+///
+/// Reach-sets are kept on the *condensation* and stay sparse for real
+/// import graphs; dense pathological graphs trade memory for the exact
+/// count (no N×N matrix is ever materialised).
+#[must_use]
+pub fn reachability(adj: &[Vec<usize>], sccs: &[Vec<usize>]) -> Reach {
+    let n = adj.len();
+    let c = sccs.len();
+    let mut scc_of = vec![0usize; n];
+    let mut scc_size = vec![0usize; c];
+    for (cid, comp) in sccs.iter().enumerate() {
+        scc_size[cid] = comp.len();
+        for &node in comp {
+            scc_of[node] = cid;
+        }
+    }
+
+    // Condensation edges (deduped), forward and reversed.
+    let mut cond_fwd: Vec<HashSet<usize>> = vec![HashSet::new(); c];
+    let mut cond_rev: Vec<HashSet<usize>> = vec![HashSet::new(); c];
+    for (u, edges) in adj.iter().enumerate() {
+        let cu = scc_of[u];
+        for &v in edges {
+            let cv = scc_of[v];
+            if cu != cv {
+                cond_fwd[cu].insert(cv);
+                cond_rev[cv].insert(cu);
+            }
+        }
+    }
+
+    // VFO reach: forward closure. Emission order = reverse-topological,
+    // so a component's successors are already computed when we reach it.
+    let mut reach_fwd: Vec<HashSet<usize>> = vec![HashSet::new(); c];
+    for cid in 0..c {
+        let mut set = HashSet::new();
+        set.insert(cid);
+        for &succ in &cond_fwd[cid] {
+            for &r in &reach_fwd[succ] {
+                set.insert(r);
+            }
+        }
+        reach_fwd[cid] = set;
+    }
+    // VFI reach: reverse closure. Process in reverse emission order so a
+    // component's predecessors (ancestors) are computed first.
+    let mut reach_rev: Vec<HashSet<usize>> = vec![HashSet::new(); c];
+    for cid in (0..c).rev() {
+        let mut set = HashSet::new();
+        set.insert(cid);
+        for &pred in &cond_rev[cid] {
+            for &r in &reach_rev[pred] {
+                set.insert(r);
+            }
+        }
+        reach_rev[cid] = set;
+    }
+
+    let sum_sizes = |set: &HashSet<usize>| -> u32 {
+        u32::try_from(set.iter().map(|&r| scc_size[r]).sum::<usize>()).unwrap_or(u32::MAX)
+    };
+    let mut vfi = vec![0u32; n];
+    let mut vfo = vec![0u32; n];
+    for node in 0..n {
+        let cid = scc_of[node];
+        vfo[node] = sum_sizes(&reach_fwd[cid]);
+        vfi[node] = sum_sizes(&reach_rev[cid]);
+    }
+
+    Reach {
+        scc_of,
+        scc_size,
+        vfi,
+        vfo,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::tarjan_scc;
+    use super::{reachability, tarjan_scc};
     use std::collections::BTreeSet;
 
     /// Normalise SCC output to a comparable set-of-sorted-sets so tests
@@ -249,5 +353,29 @@ mod tests {
             }
         }
         assert_eq!(count, adj.len(), "every node must be covered");
+    }
+
+    #[test]
+    fn reachability_on_a_chain() {
+        // 0 → 1 → 2. Each node is its own SCC.
+        let adj = vec![vec![1], vec![2], vec![]];
+        let r = reachability(&adj, &tarjan_scc(&adj));
+        // vfo (reachable downstream, incl self): 3, 2, 1.
+        assert_eq!(r.vfo, vec![3, 2, 1]);
+        // vfi (who reaches me, incl self): 1, 2, 3.
+        assert_eq!(r.vfi, vec![1, 2, 3]);
+        // Propagation cost = sum(vfo) / n² = 6 / 9.
+        assert_eq!(r.vfo.iter().sum::<u32>(), 6);
+    }
+
+    #[test]
+    fn reachability_on_a_full_cycle_is_total() {
+        // 0 → 1 → 2 → 0: one SCC of size 3, everything reaches everything.
+        let adj = vec![vec![1], vec![2], vec![0]];
+        let r = reachability(&adj, &tarjan_scc(&adj));
+        assert_eq!(r.vfo, vec![3, 3, 3]);
+        assert_eq!(r.vfi, vec![3, 3, 3]);
+        // Propagation cost = 9 / 9 = 1.0 — a change touches everything.
+        assert_eq!(r.vfo.iter().sum::<u32>(), 9);
     }
 }

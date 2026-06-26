@@ -2,6 +2,7 @@
 //! plus a thin Rust orchestrator.
 
 pub mod arch_violations;
+pub mod architecture_roles;
 pub mod authors;
 pub mod bus_factor;
 pub mod centrality;
