@@ -1331,19 +1331,20 @@
       <h2>Architecture graph</h2>
       <div class="subtitle">
         Force-directed import graph (Rust + Python + JS/TS) fused with
-        git history: <strong>solid</strong> edges are imports;
-        <strong>dashed amber</strong> edges are <em>modularity
-        violations</em> — modules that change together but never import
-        each other (implicit coupling no import-only graph can show);
-        <strong>red</strong> nodes are <em>unstable interfaces</em>
-        (widely imported, change often, drag their dependents).
+        git history. Nodes are coloured by <em>architectural role</em>
+        (core / control / shared / periphery); <strong>diamonds</strong>
+        are unstable interfaces; <strong>ringed</strong> nodes sit in a
+        dependency cycle. <strong>Solid</strong> edges are imports;
+        <strong>dashed</strong> edges are <em>modularity violations</em>
+        (co-change with no import). The title reports the system
+        <em>propagation cost</em>.
       </div>
       <details class="learn-more">
         <summary>Learn more — how to read this panel</summary>
         <div class="learn-more-content">
           <p><strong>What it measures.</strong> The structural import graph as resolved from source: Rust <code>use</code>, Python <code>import</code>, JS/TS <code>import</code>. The depth selector below controls how aggressively paths are rolled up into "modules" — <em>Auto</em> deepens until at least 8 distinct nodes surface, fixed numbers force a specific roll-up depth.</p>
-          <p><strong>How to read it.</strong> Force-directed layout: modules that import each other settle next to each other. <strong>Solid</strong> edges are import edges (one or more imports). <strong>Dashed amber</strong> edges are <em>modularity violations</em> — Fisher-significant co-change between modules with <em>no</em> import edge between them, aggregated to the same depth. <strong>Red, enlarged</strong> nodes are <em>unstable interfaces</em>. Drag a node to reposition; scroll inside the panel to zoom; hover an edge to see whether it is structural or temporal-only.</p>
-          <p><strong>What to watch for.</strong> Dashed edges are the headline: two modules that change together but don't import each other are coupled through something invisible — a shared global, a leaky abstraction, or a contract honoured through a third party (Kazman &amp; Cai's "implicit cross-module dependency"). Red nodes that sit on many edges are unstable hubs whose churn propagates. Bridge nodes connecting otherwise-disjoint clusters are architectural seams worth protecting; tight clusters are cohesive subsystems.</p>
+          <p><strong>How to read it.</strong> Force-directed layout: modules that import each other settle next to each other. <strong>Node colour = architectural role</strong> (Baldwin &amp; MacCormack "hidden structure", from transitive reachability): <em>core</em> = the dominant dependency cycle; <em>shared</em> = depended on as widely as the core but depends on little (utilities); <em>control</em> = the inverse (orchestrators); <em>periphery</em> = the healthy leaf bulk. <strong>Diamonds</strong> = unstable interfaces; a <strong>ring</strong> = the module sits in a dependency cycle. <strong>Solid</strong> edges are imports; <strong>dashed</strong> edges are modularity violations (Fisher-significant co-change with <em>no</em> import edge). The title shows <em>propagation cost</em> — the share of the system a random change can reach.</p>
+          <p><strong>What to watch for.</strong> A large red <em>core</em> means a big tangle everything routes through (hard to change in isolation) — confirm with <code>--analysis dependency-cycles</code>. A high propagation cost means changes ripple widely. Dashed edges are hidden coupling — two modules that change together but don't import each other, coupled through a shared global, a leaky abstraction, or a third party (Kazman &amp; Cai's "implicit cross-module dependency"). Diamonds sitting on many edges are unstable hubs whose churn propagates.</p>
           <p><strong>Suggested action.</strong> Compare against the Module coupling chord above. <em>Agreement</em> (modules that import each other also change together) = healthy modularity. <em>Disagreement</em> = behaviour bleeds across structural boundaries; root-cause is usually a shared mutable state, a leaky framework, or a contract violated through string-typed APIs.</p>
         </div>
       </details>

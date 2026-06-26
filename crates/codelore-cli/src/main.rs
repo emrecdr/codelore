@@ -2729,6 +2729,17 @@ fn build_spa_dashboard(
                 tracing::warn!("dashboard: unstable-interface failed; skipping: {e}");
                 Vec::new()
             });
+    // Full per-file roles (no row cap) so the graph colours every module
+    // and the propagation-cost caption sums over the whole graph.
+    let architecture_roles =
+        codelore_lib::cli_api::analyses::architecture_roles::run_architecture_roles(
+            db,
+            &opts.with_no_row_limit(),
+        )
+        .unwrap_or_else(|e| {
+            tracing::warn!("dashboard: architecture-roles failed; skipping: {e}");
+            Vec::new()
+        });
     Ok(SpaDashboard {
         hotspots,
         summary,
@@ -2746,6 +2757,7 @@ fn build_spa_dashboard(
         imports,
         modularity_violations,
         unstable_interface,
+        architecture_roles,
         options: codelore_lib::cli_api::output::spa::SpaOptionsSnapshot::from_options(opts),
     })
 }

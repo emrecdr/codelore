@@ -285,9 +285,54 @@ pub fn reachability(adj: &[Vec<usize>], sccs: &[Vec<usize>]) -> Reach {
     }
 }
 
+/// Per-node topological layer of the import graph: the longest path (in
+/// the SCC condensation) from a source to the node's SCC. Cycle members
+/// share their SCC's level.
+///
+/// Level `0` = files that nothing imports (entry points / `main`); deeper
+/// levels are foundations the upper layers depend on. An edge that runs
+/// from a deeper level back up to a shallower one is a back-edge — and
+/// every back-edge sits inside a cycle, so the layering violations are
+/// exactly the dependency cycles (see `dependency-cycles`).
+#[must_use]
+pub fn topo_levels(adj: &[Vec<usize>], sccs: &[Vec<usize>]) -> Vec<u32> {
+    let n = adj.len();
+    let c = sccs.len();
+    let mut scc_of = vec![0usize; n];
+    for (cid, comp) in sccs.iter().enumerate() {
+        for &node in comp {
+            scc_of[node] = cid;
+        }
+    }
+    // Condensation forward edges (deduped).
+    let mut cond_fwd: Vec<HashSet<usize>> = vec![HashSet::new(); c];
+    for (u, edges) in adj.iter().enumerate() {
+        let cu = scc_of[u];
+        for &v in edges {
+            let cv = scc_of[v];
+            if cu != cv {
+                cond_fwd[cu].insert(cv);
+            }
+        }
+    }
+    // Longest-path level. Emission order is reverse-topological, so
+    // reverse emission order is topological (ancestors before
+    // descendants): relax each SCC's successors to at least level+1.
+    let mut scc_level = vec![0u32; c];
+    for cid in (0..c).rev() {
+        let lvl = scc_level[cid];
+        for &succ in &cond_fwd[cid] {
+            if scc_level[succ] < lvl + 1 {
+                scc_level[succ] = lvl + 1;
+            }
+        }
+    }
+    (0..n).map(|node| scc_level[scc_of[node]]).collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{reachability, tarjan_scc};
+    use super::{reachability, tarjan_scc, topo_levels};
     use std::collections::BTreeSet;
 
     /// Normalise SCC output to a comparable set-of-sorted-sets so tests
@@ -377,5 +422,19 @@ mod tests {
         assert_eq!(r.vfi, vec![3, 3, 3]);
         // Propagation cost = 9 / 9 = 1.0 — a change touches everything.
         assert_eq!(r.vfo.iter().sum::<u32>(), 9);
+    }
+
+    #[test]
+    fn topo_levels_on_a_chain() {
+        // 0 → 1 → 2: longest path from the source gives levels 0,1,2.
+        let adj = vec![vec![1], vec![2], vec![]];
+        assert_eq!(topo_levels(&adj, &tarjan_scc(&adj)), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn topo_levels_share_a_level_within_a_cycle() {
+        // Cycle {0,1} → 2 → cycle {3,4}: levels 0,0,1,2,2.
+        let adj = vec![vec![1], vec![0, 2], vec![3], vec![4], vec![3]];
+        assert_eq!(topo_levels(&adj, &tarjan_scc(&adj)), vec![0, 0, 1, 2, 2]);
     }
 }

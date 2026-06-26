@@ -10,6 +10,7 @@
 #![cfg(feature = "spa")]
 
 use codelore_lib::Options;
+use codelore_lib::analyses::architecture_roles::ArchitectureRoleRow;
 use codelore_lib::analyses::code_health::run_code_health;
 use codelore_lib::analyses::coupling::run_coupling;
 use codelore_lib::analyses::hotspots::run_hotspots;
@@ -222,6 +223,15 @@ fn spa_embeds_fusion_overlay_data() {
             coupled_dependents: 4,
             instability_score: 120.0,
         }],
+        architecture_roles: vec![ArchitectureRoleRow {
+            path: "src/hub.rs".into(),
+            role: "core".into(),
+            vfi: 12,
+            vfo: 8,
+            in_cycle: true,
+            level: 2,
+            reach_pct: 40.0,
+        }],
         ..SpaDashboard::default()
     };
 
@@ -236,12 +246,12 @@ fn spa_embeds_fusion_overlay_data() {
     .expect("write_spa");
     let html = String::from_utf8(buf).expect("utf8 html");
 
-    // The arch-graph widget must receive all three data arrays.
+    // The arch-graph widget must receive all four data arrays.
     assert!(
         html.contains(
-            "renderArchGraph(data.imports || [], data.modularity_violations || [], data.unstable_interface || [])"
+            "renderArchGraph(data.imports || [], data.modularity_violations || [], data.unstable_interface || [], data.architecture_roles || [])"
         ),
-        "arch-graph widget must be wired to the fusion data arrays",
+        "arch-graph widget must be wired to the fusion + roles data arrays",
     );
 
     let data = extract_data_json(&html).expect("parse data block");
@@ -268,6 +278,19 @@ fn spa_embeds_fusion_overlay_data() {
             .get("coupled_dependents")
             .and_then(serde_json::Value::as_u64),
         Some(4),
+    );
+    let ar = data
+        .get("architecture_roles")
+        .and_then(|v| v.as_array())
+        .expect("architecture_roles array");
+    assert_eq!(ar.len(), 1, "one architecture-role row expected");
+    assert_eq!(
+        ar[0].get("role").and_then(serde_json::Value::as_str),
+        Some("core"),
+    );
+    assert_eq!(
+        ar[0].get("level").and_then(serde_json::Value::as_u64),
+        Some(2),
     );
 }
 

@@ -82,4 +82,10 @@ fn architecture_roles_classifies_core_and_control() {
     // itself reaches c (vfi = 1).
     assert_eq!(c.vfi, 1, "nothing imports c");
     assert!(c.vfo >= 3, "c reaches itself + the a↔b core: {c:?}");
+
+    // Layering: c imports the core, nothing imports c → c is the source
+    // (level 0); the a↔b core sits one layer down (level 1).
+    assert_eq!(c.level, 0, "c is a source (nothing imports it): {c:?}");
+    assert_eq!(a.level, 1, "the core sits below c: {a:?}");
+    assert_eq!(b.level, 1, "the core sits below c: {b:?}");
 }

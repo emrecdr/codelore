@@ -25,7 +25,7 @@
 //! Accuracy follows the import resolver's language coverage, same caveat
 //! as `god_classes` fan-in.
 
-use crate::analyses::import_graph::{build_import_graph, reachability, tarjan_scc};
+use crate::analyses::import_graph::{build_import_graph, reachability, tarjan_scc, topo_levels};
 use crate::facts::FactsDb;
 use crate::{Options, Result};
 
@@ -41,6 +41,9 @@ pub struct ArchitectureRoleRow {
     pub vfo: u32,
     /// Whether this file sits in a dependency cycle (SCC of size ≥ 2).
     pub in_cycle: bool,
+    /// Topological layer: longest dependency path from a file nothing
+    /// imports. `0` = entry points; deeper = foundations.
+    pub level: u32,
     /// Downstream blast radius `vfo / file_count × 100`.
     pub reach_pct: f64,
 }
@@ -73,6 +76,7 @@ pub fn run_architecture_roles(db: &FactsDb, opts: &Options) -> Result<Vec<Archit
     }
     let sccs = tarjan_scc(&graph.adj);
     let reach = reachability(&graph.adj, &sccs);
+    let levels = topo_levels(&graph.adj, &sccs);
 
     // The Core is the largest cyclic group (SCC of size ≥ 2), if one
     // exists. Tie-break on the smallest member id for determinism.
@@ -123,6 +127,7 @@ pub fn run_architecture_roles(db: &FactsDb, opts: &Options) -> Result<Vec<Archit
                 vfi,
                 vfo,
                 in_cycle,
+                level: levels[node],
                 reach_pct: 100.0 * f64::from(vfo) / n_f,
             }
         })

@@ -579,7 +579,7 @@
     { name: 'parallel-coords',    render: () => renderParallelCoords(data.hotspots || []) },
     { name: 'cognitive-boxplot',  render: () => renderCognitiveBoxplot(data.hotspots || []) },
     { name: 'module-chord',       render: () => renderModuleChord(data.coupling || []) },
-    { name: 'arch-graph',         render: () => renderArchGraph(data.imports || [], data.modularity_violations || [], data.unstable_interface || []) },
+    { name: 'arch-graph',         render: () => renderArchGraph(data.imports || [], data.modularity_violations || [], data.unstable_interface || [], data.architecture_roles || []) },
     { name: 'calendar-heatmap',   rerender: 'theme', render: () => renderCalendarHeatmap(data.daily_commits || []) },
     { name: 'xray-sunburst',      render: () => renderXRaySunburst(data.xray || []) },
   ];
@@ -3116,9 +3116,10 @@
 
   // ─── §11g Widget: Architecture force-graph ───────────────────────
 
-  function renderArchGraph(imports, violations, unstable) {
+  function renderArchGraph(imports, violations, unstable, roles) {
     violations = violations || [];
     unstable = unstable || [];
+    roles = roles || [];
     const container = document.getElementById('widget-arch-graph-body');
     if (!container) return;
     if (!imports.length) {
@@ -3215,18 +3216,59 @@
       unstableModules[um] = (unstableModules[um] || 0) + 1;
       nodes[um] = true;
     }
+    // Architecture roles (Core/Shared/Control/Periphery) + cycle
+    // membership, aggregated to module level. A module takes the
+    // highest-precedence role among its files (core > control > shared >
+    // periphery). Roles only COLOUR existing nodes — they don't add
+    // isolated single-file nodes. Also accumulate the propagation cost.
+    const ROLE_RANK = { core: 3, control: 2, shared: 1, periphery: 0 };
+    const moduleRole = {};
+    const moduleInCycle = {};
+    var vfoSum = 0;
+    var fileCount = 0;
+    var filesInCycles = 0;
+    for (var rri = 0; rri < roles.length; rri++) {
+      const rr = roles[rri];
+      fileCount += 1;
+      vfoSum += (typeof rr.vfo === 'number') ? rr.vfo : 0;
+      if (rr.in_cycle) filesInCycles += 1;
+      const rm = modulePath(rr.path, chosenDepth);
+      if (!rm) continue;
+      const cur = moduleRole[rm];
+      if (cur === undefined || (ROLE_RANK[rr.role] || 0) > (ROLE_RANK[cur] || 0)) {
+        moduleRole[rm] = rr.role;
+      }
+      if (rr.in_cycle) moduleInCycle[rm] = true;
+    }
+    // Propagation cost = mean(vfo)/fileCount = sum(vfo)/fileCount² — "a
+    // change to a random file reaches this fraction of the system".
+    const propagationCost = fileCount > 0 ? (vfoSum / (fileCount * fileCount)) : 0;
     if (!Object.keys(nodes).length) {
       container.innerHTML = '<div class="empty">All resolved imports stay intra-module — no inter-module edges to graph.</div>';
       return;
     }
-    const dangerColor = token('--color-error') || '#dc2626';
-    const violColor = token('--color-warning') || '#d97706';
+    const roleColors = {
+      core: token('--color-error') || '#dc2626',
+      control: token('--color-warning') || '#d97706',
+      shared: token('--color-info') || '#2563eb',
+      periphery: token('--color-neutral') || '#6b7280',
+    };
+    const violColor = roleColors.control;
+    const cycleRing = getCssVar('--fg') || '#111827';
+    const ROLE_ORDER = ['core', 'control', 'shared', 'periphery'];
     const nodeArr = Object.keys(nodes).map(function (n) {
+      const role = moduleRole[n] || 'periphery';
       const isUnstable = !!unstableModules[n];
+      const inCycle = !!moduleInCycle[n];
+      const cat = ROLE_ORDER.indexOf(role);
       return {
         name: n,
+        symbol: isUnstable ? 'diamond' : 'circle',
         symbolSize: isUnstable ? 42 : 30,
-        category: isUnstable ? 1 : 0,
+        category: cat < 0 ? 3 : cat,
+        // A high-contrast ring marks modules that sit in a dependency
+        // cycle; the fill stays the role colour.
+        itemStyle: inCycle ? { borderColor: cycleRing, borderWidth: 3 } : undefined,
       };
     });
     const structuralLinks = Object.keys(edges).map(function (k) {
@@ -3244,13 +3286,26 @@
       };
     });
     const edgeArr = structuralLinks.concat(violationLinks);
+    const cycleModuleCount = Object.keys(moduleInCycle).length;
     setChartAriaLabel(container,
-      'Architecture graph, ' + nodeArr.length + ' modules, ' +
-      structuralLinks.length + ' import edges, ' + violationLinks.length +
-      ' dashed modularity-violation (co-change, no import) edges, ' +
-      Object.keys(unstableModules).length + ' unstable-interface modules');
+      'Architecture graph, ' + nodeArr.length + ' modules coloured by role ' +
+      '(core/control/shared/periphery), ' + structuralLinks.length + ' import edges, ' +
+      violationLinks.length + ' dashed modularity-violation edges, ' +
+      Object.keys(unstableModules).length + ' unstable-interface modules shown as diamonds, ' +
+      cycleModuleCount + ' modules in dependency cycles shown ringed. Propagation cost ' +
+      (propagationCost * 100).toFixed(1) + ' percent.');
     const chart = mountEcharts(container);
+    const titleText = fileCount > 0
+      ? 'Propagation cost ' + (propagationCost * 100).toFixed(1) + '%  ·  ' +
+        filesInCycles + ' files in cycles'
+      : '';
     chart.setOption({
+      title: {
+        text: titleText,
+        left: 'center',
+        top: 4,
+        textStyle: { color: getCssVar('--fg-dim'), fontSize: 12, fontWeight: 'normal' },
+      },
       tooltip: {
         trigger: 'item',
         formatter: function (p) {
@@ -3263,13 +3318,13 @@
             return 'Imports: ' + p.data.source + ' &rarr; ' + p.data.target +
               ' (' + p.data.value + ')';
           }
-          return unstableModules[p.name]
-            ? p.name + '<br/>unstable interface'
-            : p.name;
+          return p.name + '<br/>role: ' + (moduleRole[p.name] || 'periphery') +
+            (moduleInCycle[p.name] ? ' &middot; in cycle' : '') +
+            (unstableModules[p.name] ? ' &middot; unstable interface' : '');
         },
       },
       legend: [{
-        data: ['module', 'unstable interface'],
+        data: ROLE_ORDER,
         textStyle: { color: getCssVar('--fg-dim') },
         bottom: 0,
       }],
@@ -3277,8 +3332,10 @@
         type: 'graph',
         layout: 'force',
         categories: [
-          { name: 'module' },
-          { name: 'unstable interface', itemStyle: { color: dangerColor } },
+          { name: 'core', itemStyle: { color: roleColors.core } },
+          { name: 'control', itemStyle: { color: roleColors.control } },
+          { name: 'shared', itemStyle: { color: roleColors.shared } },
+          { name: 'periphery', itemStyle: { color: roleColors.periphery } },
         ],
         data: nodeArr,
         links: edgeArr,
@@ -3297,7 +3354,7 @@
     // ECharts' built-in roam reset instead of the CSS-transform
     // overlay.
     window._codeloreResetZoomHandlers['widget-arch-graph'] = function () {
-      renderArchGraph(imports, violations, unstable);
+      renderArchGraph(imports, violations, unstable, roles);
     };
   }
 

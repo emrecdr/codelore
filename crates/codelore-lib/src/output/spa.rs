@@ -33,6 +33,7 @@ use std::io::Write;
 
 use serde::Serialize;
 
+use crate::analyses::architecture_roles::ArchitectureRoleRow;
 use crate::analyses::code_health::CodeHealthRow;
 use crate::analyses::coupling::CouplingRow;
 use crate::analyses::dashboard::{
@@ -134,6 +135,13 @@ pub struct SpaDashboard {
     /// both widely-imported and churning.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unstable_interface: Vec<UnstableInterfaceRow>,
+    /// Per-file architectural role (Core/Shared/Control/Periphery) +
+    /// visibility reach + cycle/layer info, from the import-graph
+    /// reachability kernel. Colours the architecture-graph nodes by
+    /// role, rings cycle members, and drives the propagation-cost
+    /// caption. Empty when no imports resolve.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub architecture_roles: Vec<ArchitectureRoleRow>,
     /// Per-commit Kamei JIT-SDP feature vector for the Delivery Risk
     /// Sparkline widget. One row per commit in the last-N (capped at
     /// 30) chronological window. Surfaces the raw Kamei 14-feature

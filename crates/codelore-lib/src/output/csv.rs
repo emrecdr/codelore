@@ -486,16 +486,17 @@ pub fn write_architecture_roles_csv<W: Write>(
     rows: &[crate::analyses::architecture_roles::ArchitectureRoleRow],
     w: &mut W,
 ) -> Result<()> {
-    writeln!(w, "path,role,vfi,vfo,in_cycle,reach_pct").map_err(CodeLoreError::Io)?;
+    writeln!(w, "path,role,vfi,vfo,in_cycle,level,reach_pct").map_err(CodeLoreError::Io)?;
     for row in rows {
         writeln!(
             w,
-            "{},{},{},{},{},{:.2}",
+            "{},{},{},{},{},{},{:.2}",
             quote_if_needed(&row.path),
             row.role,
             row.vfi,
             row.vfo,
             row.in_cycle,
+            row.level,
             row.reach_pct,
         )
         .map_err(CodeLoreError::Io)?;
