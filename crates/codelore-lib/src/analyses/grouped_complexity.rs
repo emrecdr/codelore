@@ -12,8 +12,14 @@
 //! cognitive + `MAX` `kind='unit'` MI rolled up; analyses opt in by
 //! reading from the table named here.
 //!
-//! Centralised so the four affected analyses share one dispatch —
-//! mirrors `analyses::lineage` for `--use-canonical-lineage`.
+//! Centralised so the four affected analyses share one dispatch. This
+//! solves the same class of problem as `analyses::lineage` (swap an
+//! analysis's source table based on an `Options` flag) but with a
+//! deliberately different mechanism: `lineage` regex-rewrites `FROM
+//! changes` in place, whereas this exposes a table name that callers
+//! substitute into an explicit `{cm_src}` placeholder. A placeholder is
+//! simpler and safer than a general SQL rewrite for the small, fixed set
+//! of complexity-reading analyses — they are NOT mirror images.
 
 use crate::Options;
 

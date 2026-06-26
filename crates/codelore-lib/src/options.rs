@@ -287,23 +287,24 @@ impl Options {
     ///
     /// # Errors
     ///
-    /// Returns [`crate::CodeLoreError::Provenance`] (config-violation
-    /// category) with a message naming the offending field pair.
+    /// Returns [`crate::CodeLoreError::InvalidOptions`] (exit-2
+    /// configuration-error category) with a message naming the offending
+    /// field pair.
     pub fn validate(&self) -> crate::Result<()> {
         if self.min_coupling_pct > self.max_coupling_pct {
-            return Err(crate::CodeLoreError::Provenance(format!(
+            return Err(crate::CodeLoreError::InvalidOptions(format!(
                 "--min-coupling ({}) must be <= --max-coupling ({})",
                 self.min_coupling_pct, self.max_coupling_pct
             )));
         }
         if !(0.0..=1.0).contains(&self.clone_similarity_floor) {
-            return Err(crate::CodeLoreError::Provenance(format!(
+            return Err(crate::CodeLoreError::InvalidOptions(format!(
                 "--clone-similarity-floor must be in [0.0, 1.0]; got {}",
                 self.clone_similarity_floor
             )));
         }
         if !(0.0..=1.0).contains(&self.fisher_significance) {
-            return Err(crate::CodeLoreError::Provenance(format!(
+            return Err(crate::CodeLoreError::InvalidOptions(format!(
                 "--fisher-significance must be in [0.0, 1.0]; got {}",
                 self.fisher_significance
             )));
@@ -311,7 +312,7 @@ impl Options {
         if let (Some(after), Some(before)) = (self.after, self.before)
             && after > before
         {
-            return Err(crate::CodeLoreError::Provenance(format!(
+            return Err(crate::CodeLoreError::InvalidOptions(format!(
                 "--after ({after}) must be <= --before ({before})"
             )));
         }
@@ -377,6 +378,29 @@ mod tests {
         assert!(
             format!("{err}").contains("min-coupling"),
             "error must name the offending field: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_reports_invalid_options_not_provenance() {
+        // An argument conflict is a configuration error, not a
+        // reproducibility-manifest (provenance) violation. Both map to
+        // exit 2, but the variant must name the cause honestly so a
+        // consumer matching on `Provenance` isn't tripped by a CLI typo.
+        let opts = Options {
+            min_coupling_pct: 80,
+            max_coupling_pct: 30,
+            ..Options::default()
+        };
+        let err = opts.validate().expect_err("inverted range must fail");
+        assert!(
+            matches!(err, crate::CodeLoreError::InvalidOptions(_)),
+            "arg-conflict must be InvalidOptions, got: {err:?}"
+        );
+        assert_eq!(
+            err.exit_code(),
+            2,
+            "config errors stay in the exit-2 bucket"
         );
     }
 

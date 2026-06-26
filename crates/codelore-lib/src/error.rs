@@ -69,6 +69,15 @@ pub enum CodeLoreError {
     /// errors so consumers can refuse to retry on bad data.
     #[error("blob {oid} not found in object database — repo may be shallow or corrupted")]
     BlobNotFound { oid: String },
+
+    /// Cross-field validation of CLI options failed (e.g. `--min-coupling`
+    /// exceeds `--max-coupling`, an out-of-range clone-similarity floor, or
+    /// `--after` later than `--before`). A pure argument conflict — distinct
+    /// from `Provenance` (the reproducibility-manifest contract) which it
+    /// previously overloaded. Shares the exit-2 configuration-error bucket
+    /// with `Provenance` / `MalformedTeamMap`.
+    #[error("invalid options: {0}")]
+    InvalidOptions(String),
 }
 
 impl CodeLoreError {
@@ -76,7 +85,7 @@ impl CodeLoreError {
     #[must_use]
     pub fn exit_code(&self) -> i32 {
         match self {
-            Self::Provenance(_) | Self::MalformedTeamMap { .. } => 2,
+            Self::Provenance(_) | Self::MalformedTeamMap { .. } | Self::InvalidOptions(_) => 2,
             Self::Repo(_) | Self::BlobNotFound { .. } | Self::RepoIo(_) => 3,
             Self::Analysis(_) | Self::UnknownAnalysisName { .. } => 4,
             Self::Output(_) | Self::Io(_) => 5,
