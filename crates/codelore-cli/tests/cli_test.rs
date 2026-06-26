@@ -568,6 +568,8 @@ fn analyze_skips_sidecar_for_stdout() {
 
 #[test]
 fn parquet_requires_output_flag() {
+    // A binary format with no --output is an output-side usage error →
+    // CodeLoreError::Output → spec §6.6 exit 5 (not the generic 1).
     let tiny = codelore_lib::test_support::tiny_repo::build();
     Command::cargo_bin("codelore")
         .unwrap()
@@ -583,7 +585,7 @@ fn parquet_requires_output_flag() {
             "1",
         ])
         .assert()
-        .failure()
+        .code(5)
         .stderr(predicate::str::contains("requires --output"));
 }
 
@@ -769,8 +771,10 @@ fn time_bucket_accepted_for_coupling() {
 fn unsupported_format_bails_cleanly_instead_of_panicking() {
     // `--format ndjson`/`gha` pass top-level format validation but are only
     // wired for a few analyses. For the rest, the dispatch must bail with a
-    // clean, descriptive error (exit 1) — NOT panic through a reachable
-    // `unreachable!` (exit 101). Cover both an ndjson and a gha case.
+    // clean, descriptive error — NOT panic through a reachable
+    // `unreachable!` (exit 101). The per-analysis format mismatch carries
+    // CodeLoreError::Analysis → spec §6.6 exit 4 (was the generic 1 before
+    // the dispatch bails grew typed error buckets). Cover ndjson and gha.
     let tiny = codelore_lib::test_support::tiny_repo::build();
     for fmt in ["ndjson", "gha"] {
         Command::cargo_bin("codelore")
@@ -788,11 +792,36 @@ fn unsupported_format_bails_cleanly_instead_of_panicking() {
                 "1",
             ])
             .assert()
-            .code(1)
+            .code(4)
             .stderr(predicate::str::contains("abs-churn"))
             .stderr(predicate::str::contains("panicked").not())
             .stderr(predicate::str::contains("unreachable").not());
     }
+}
+
+#[test]
+fn unknown_format_exits_with_analysis_code() {
+    // An unrecognised `--format` value is an analysis-selection error →
+    // CodeLoreError::Analysis → spec §6.6 exit 4, never a panic or a bare 1.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "revisions",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "bogusfmt",
+            "--no-banner",
+            "--min-revs",
+            "1",
+        ])
+        .assert()
+        .code(4)
+        .stderr(predicate::str::contains("unknown --format"))
+        .stderr(predicate::str::contains("panicked").not());
 }
 
 #[test]
@@ -808,6 +837,54 @@ fn schema_lists_every_registered_analysis() {
             .assert()
             .success()
             .stderr(predicate::str::contains("unknown row type").not());
+    }
+}
+
+/// Analyses that intentionally have NO `codelore explain` topic yet —
+/// either the formula is too involved to state accurately in one line, or
+/// the analysis is low-value for the explain surface. Anti-drift contract:
+/// to add a new analysis you must EITHER add an explain entry in
+/// `run_explain_cmd` OR add the name here (and document why). A name listed
+/// here that later gains an explain topic flips the assertion below, forcing
+/// the stale allowlist entry to be removed.
+const EXPLAIN_UNCOVERED: &[&str] = &[
+    "coupling",
+    "author-churn",
+    "entity-churn",
+    "communication",
+    "summary",
+    "clones",
+    "clone-coupling",
+    "messages",
+    "main-dev",
+    "main-dev-by-revs",
+    "main-dev-by-deletions",
+    "entity-effort",
+    "entity-ownership",
+    "top-committers",
+    "delivery-friction",
+];
+
+#[test]
+fn explain_covers_every_registered_analysis_or_allowlists_it() {
+    // Every registered analysis must either resolve to an `explain` topic
+    // (exit 0) or be on the explicit uncovered allowlist (exit non-zero
+    // with an "unknown topic" message). This stops a newly-added analysis
+    // from silently shipping with no explain coverage and no decision
+    // recorded about it.
+    for name in codelore_lib::analysis::AnalysisName::all() {
+        let allowlisted = EXPLAIN_UNCOVERED.contains(&name.as_str());
+        let assert = Command::cargo_bin("codelore")
+            .unwrap()
+            .args(["explain", name.as_str()])
+            .assert();
+        if allowlisted {
+            assert
+                .failure()
+                .stderr(predicate::str::contains("unknown topic"));
+        } else {
+            assert.success();
+        }
     }
 }
 

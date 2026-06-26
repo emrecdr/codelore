@@ -281,3 +281,15 @@ required-features = ["test-support"]
 [[test]]
 name = "spa_browser_test"
 required-features = ["browser-tests", "test-support"]
+
+[[test]]
+name = "centrality_test"
+required-features = ["test-support"]
+
+[[test]]
+name = "communities_test"
+required-features = ["test-support"]
+
+[[test]]
+name = "mi_test"
+required-features = ["test-support"]

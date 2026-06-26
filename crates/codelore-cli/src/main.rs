@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use codelore_lib::cli_api::facts::FactsDb;
 use codelore_lib::cli_api::repo::{GixRepo, Repo as _};
-use codelore_lib::cli_api::{AnalysisName, Options};
+use codelore_lib::cli_api::{AnalysisName, CodeLoreError, Options};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 
@@ -330,6 +330,42 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
             "Per-commit 14-feature vector (la, ld, nf, nd, ns, entropy, fix, ndev, age, nuc, exp, rexp, sexp, lt). Composite risk dimension explanation in the SPA's Delivery Risk Sparkline.",
             "See output/spa.rs::run_kamei_risk + facts/schema_v1.sql commits table.",
         ),
+        (
+            "revisions",
+            "Nagappan & Ball 2005 — relative churn predicts defect density",
+            "COUNT(rev) per file — distinct commits touching the path. Gated by --min-revs, ordered by n-revs descending.",
+            "See analyses/revisions.rs.",
+        ),
+        (
+            "authors",
+            "Bird, Nagappan, Murphy, Devanbu & Zeller 2011 — \"Don't Touch My Code!\"",
+            "Distinct canonical authors per file (n-authors = COUNT(DISTINCT author)), split into human vs bot via .mailmap + bot/AI attribution; n-revs = Σ per-author commit counts.",
+            "See analyses/authors.rs.",
+        ),
+        (
+            "ownership",
+            "Mockus & Herbsleb 2002 + Hirschman 1980 (Herfindahl–Hirschman index)",
+            "Fractal Value = 1 − Σᵢ (aᵢ / nc)², where aᵢ is author i's commit count on the file and nc the file's total commits. 0 = single owner, → 1 = fragmented. main-author = author with the most revisions.",
+            "See analyses/ownership.rs.",
+        ),
+        (
+            "code-age",
+            "Tornhill 2015 — Your Code as a Crime Scene (software half-life)",
+            "Whole calendar months between the file's latest commit (at-or-before the --age-time-now anchor, default now) and the anchor: 12·(yr−yr) + (mo−mo) − 1 if the anchor day-of-month is earlier than the last-commit day. Only files live at the anchor.",
+            "See analyses/code_age.rs.",
+        ),
+        (
+            "soc",
+            "Tornhill 2018 — Software Design X-Rays (Sum of Coupling)",
+            "Σ (commit_size − 1) over every commit the file appears in; a solo commit contributes 0. Per-file centrality across the change-coupling graph. Gated by --min-soc.",
+            "See analyses/soc.rs.",
+        ),
+        (
+            "abs-churn",
+            "Nagappan & Ball 2005 — relative code churn predicts defect density",
+            "Per calendar day across the repo: SUM(lines added), SUM(lines deleted), COUNT(commits). The absolute-churn time series.",
+            "See analyses/churn.rs.",
+        ),
     ];
     match &args.topic {
         None => {
@@ -353,11 +389,10 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
                     );
                     Ok(())
                 }
-                None => {
-                    anyhow::bail!(
-                        "unknown topic `{topic}` — run `codelore explain` (no arg) to list supported topics"
-                    )
-                }
+                None => Err(CodeLoreError::Analysis(format!(
+                    "unknown topic `{topic}` — run `codelore explain` (no arg) to list supported topics"
+                ))
+                .into()),
             }
         }
     }
@@ -388,9 +423,10 @@ fn run_schema_cmd(args: &args::SchemaArgs) -> Result<()> {
                 );
                 Ok(())
             } else {
-                anyhow::bail!(
+                Err(CodeLoreError::Analysis(format!(
                     "unknown row type `{name}` — run `codelore schema` (no arg) to list supported row types"
-                )
+                ))
+                .into())
             }
         }
     }
@@ -447,9 +483,12 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
     match format {
         "csv" | "json" | "ndjson" | "sarif" | "markdown" | "parquet" | "sqlite" | "html"
         | "spa" | "step-summary" | "gha" => {}
-        other => anyhow::bail!(
-            "unknown --format {other:?}. Supported: csv, json, ndjson, sarif, markdown, parquet, sqlite, html, spa, step-summary, gha"
-        ),
+        other => {
+            return Err(CodeLoreError::Analysis(format!(
+                "unknown --format {other:?}. Supported: csv, json, ndjson, sarif, markdown, parquet, sqlite, html, spa, step-summary, gha"
+            ))
+            .into());
+        }
     }
 
     // Format constraints. parquet + sqlite are binary fact-store dumps with no
@@ -457,9 +496,10 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
     // to ./.codelore/spa.html under the current directory when --output is
     // omitted (handled in the spa block below).
     if matches!(format, "parquet" | "sqlite") && args.output.is_none() {
-        anyhow::bail!(
+        return Err(CodeLoreError::Output(format!(
             "--format {format} requires --output PATH (binary format, cannot stream to stdout)"
-        );
+        ))
+        .into());
     }
     // step-summary can stream to stdout (it's small GFM text), but typically
     // gets redirected to $GITHUB_STEP_SUMMARY by the caller's CI workflow.
@@ -470,9 +510,11 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             AnalysisName::Hotspots | AnalysisName::Clones | AnalysisName::CloneCoupling
         )
     {
-        anyhow::bail!(
+        return Err(CodeLoreError::Analysis(
             "--format sarif currently supports --analysis hotspots, clones, and clone-coupling (other analyses land in Plan 9)"
-        );
+                .to_string(),
+        )
+        .into());
     }
 
     let complexity_sample = match args.complexity_sample.as_str() {
@@ -538,13 +580,14 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
     // at the CLI boundary with a descriptive error rather than letting
     // either failure mode surprise the user downstream.
     if opts.time_bucket.is_some() && !analysis.supports_time_bucket() {
-        anyhow::bail!(
+        return Err(CodeLoreError::Analysis(format!(
             "--time-bucket is not supported for analysis {:?}. \
              Bucketing only applies to co-change analyses; supported: \
              coupling, soc, hotspots, code-health. Remove --time-bucket \
              or switch to one of those analyses.",
             analysis.as_str()
-        );
+        ))
+        .into());
     }
 
     let analysis_name = args.analysis.as_str();
@@ -832,11 +875,12 @@ struct EmitCtx {
 /// yet wired through the generic HTML emitter. Shared so every non-HTML
 /// dispatch fn reports the same coverage list.
 fn html_not_wired(analysis_name: &str) -> anyhow::Error {
-    anyhow::anyhow!(
+    CodeLoreError::Analysis(format!(
         "--format html for analysis `{analysis_name}` not yet wired (covered: hotspots, \
          code-health, knowledge-islands, clone-coupling, summary, revisions, \
          authors, top-committers — file an issue if you need another)"
-    )
+    ))
+    .into()
 }
 
 fn dispatch_revisions(
@@ -877,7 +921,9 @@ fn dispatch_revisions(
             )
             .context("write html")?;
         }
-        fmt => anyhow::bail!("revisions analysis supports csv|json|markdown|html; got {fmt:?}"),
+        fmt => anyhow::bail!(CodeLoreError::Analysis(format!(
+            "revisions analysis supports csv|json|markdown|html; got {fmt:?}"
+        ))),
     }
     Ok(())
 }
@@ -937,9 +983,9 @@ fn dispatch_hotspots(
             )
             .context("write html")?;
         }
-        fmt => anyhow::bail!(
+        fmt => anyhow::bail!(CodeLoreError::Analysis(format!(
             "hotspots analysis supports csv|json|markdown|sarif|ndjson|gha|html; got {fmt:?}"
-        ),
+        ))),
     }
     Ok(())
 }
@@ -987,9 +1033,9 @@ fn dispatch_code_health(
             )
             .context("write html")?;
         }
-        fmt => anyhow::bail!(
+        fmt => anyhow::bail!(CodeLoreError::Analysis(format!(
             "code-health analysis supports csv|json|markdown|ndjson|html; got {fmt:?}"
-        ),
+        ))),
     }
     Ok(())
 }
@@ -1024,7 +1070,9 @@ fn dispatch_code_age(
                 .context("write markdown")?;
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
-        fmt => anyhow::bail!("code-age analysis supports csv|json|markdown; got {fmt:?}"),
+        fmt => anyhow::bail!(CodeLoreError::Analysis(format!(
+            "code-age analysis supports csv|json|markdown; got {fmt:?}"
+        ))),
     }
     Ok(())
 }
@@ -1055,7 +1103,9 @@ fn dispatch_abs_churn(
                 .context("write markdown")?;
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
-        fmt => anyhow::bail!("abs-churn analysis supports csv|json|markdown; got {fmt:?}"),
+        fmt => anyhow::bail!(CodeLoreError::Analysis(format!(
+            "abs-churn analysis supports csv|json|markdown; got {fmt:?}"
+        ))),
     }
     Ok(())
 }
@@ -1086,7 +1136,9 @@ fn dispatch_author_churn(
                 .context("write markdown")?;
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
-        fmt => anyhow::bail!("author-churn analysis supports csv|json|markdown; got {fmt:?}"),
+        fmt => anyhow::bail!(CodeLoreError::Analysis(format!(
+            "author-churn analysis supports csv|json|markdown; got {fmt:?}"
+        ))),
     }
     Ok(())
 }
@@ -1117,7 +1169,9 @@ fn dispatch_entity_churn(
                 .context("write markdown")?;
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
-        fmt => anyhow::bail!("entity-churn analysis supports csv|json|markdown; got {fmt:?}"),
+        fmt => anyhow::bail!(CodeLoreError::Analysis(format!(
+            "entity-churn analysis supports csv|json|markdown; got {fmt:?}"
+        ))),
     }
     Ok(())
 }
@@ -1152,7 +1206,9 @@ fn dispatch_communication(
                 .context("write markdown")?;
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
-        fmt => anyhow::bail!("communication analysis supports csv|json|markdown; got {fmt:?}"),
+        fmt => anyhow::bail!(CodeLoreError::Analysis(format!(
+            "communication analysis supports csv|json|markdown; got {fmt:?}"
+        ))),
     }
     Ok(())
 }
@@ -1187,7 +1243,9 @@ fn dispatch_ownership(
                 .context("write markdown")?;
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
-        fmt => anyhow::bail!("ownership analysis supports csv|json|markdown; got {fmt:?}"),
+        fmt => anyhow::bail!(CodeLoreError::Analysis(format!(
+            "ownership analysis supports csv|json|markdown; got {fmt:?}"
+        ))),
     }
     Ok(())
 }
@@ -1228,7 +1286,9 @@ fn dispatch_coupling(
                 .context("write ndjson")?;
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
-        fmt => anyhow::bail!("coupling analysis supports csv|json|markdown|ndjson; got {fmt:?}"),
+        fmt => anyhow::bail!(CodeLoreError::Analysis(format!(
+            "coupling analysis supports csv|json|markdown|ndjson; got {fmt:?}"
+        ))),
     }
     Ok(())
 }
@@ -1274,7 +1334,9 @@ fn dispatch_summary(
             )
             .context("write html")?;
         }
-        fmt => anyhow::bail!("summary analysis supports csv|json|markdown|html; got {fmt:?}"),
+        fmt => anyhow::bail!(CodeLoreError::Analysis(format!(
+            "summary analysis supports csv|json|markdown|html; got {fmt:?}"
+        ))),
     }
     Ok(())
 }
@@ -1315,7 +1377,9 @@ fn dispatch_clones(
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
         fmt => {
-            anyhow::bail!("clones analysis supports csv|json|markdown|sarif; got {fmt:?}")
+            anyhow::bail!(CodeLoreError::Analysis(format!(
+                "clones analysis supports csv|json|markdown|sarif; got {fmt:?}"
+            )))
         }
     }
     Ok(())
@@ -1363,7 +1427,9 @@ fn dispatch_authors(
             .context("write html")?;
         }
         fmt => {
-            anyhow::bail!("authors analysis supports csv|json|markdown; got {fmt:?}")
+            anyhow::bail!(CodeLoreError::Analysis(format!(
+                "authors analysis supports csv|json|markdown; got {fmt:?}"
+            )))
         }
     }
     Ok(())
@@ -1411,7 +1477,9 @@ fn dispatch_top_committers(
             .context("write html")?;
         }
         fmt => {
-            anyhow::bail!("top-committers analysis supports csv|json|markdown; got {fmt:?}")
+            anyhow::bail!(CodeLoreError::Analysis(format!(
+                "top-committers analysis supports csv|json|markdown; got {fmt:?}"
+            )))
         }
     }
     Ok(())
@@ -1444,7 +1512,9 @@ fn dispatch_god_classes(
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
         fmt => {
-            anyhow::bail!("god-classes analysis supports csv|json|markdown; got {fmt:?}")
+            anyhow::bail!(CodeLoreError::Analysis(format!(
+                "god-classes analysis supports csv|json|markdown; got {fmt:?}"
+            )))
         }
     }
     Ok(())
@@ -1480,9 +1550,9 @@ fn dispatch_arch_violations(
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
         fmt => {
-            anyhow::bail!(
+            anyhow::bail!(CodeLoreError::Analysis(format!(
                 "architecture-violations analysis supports csv|json|markdown; got {fmt:?}"
-            )
+            )))
         }
     }
     Ok(())
@@ -1515,7 +1585,9 @@ fn dispatch_stale_code(
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
         fmt => {
-            anyhow::bail!("stale-code analysis supports csv|json|markdown; got {fmt:?}")
+            anyhow::bail!(CodeLoreError::Analysis(format!(
+                "stale-code analysis supports csv|json|markdown; got {fmt:?}"
+            )))
         }
     }
     Ok(())
@@ -1551,7 +1623,9 @@ fn dispatch_pair_programming(
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
         fmt => {
-            anyhow::bail!("pair-programming analysis supports csv|json|markdown; got {fmt:?}")
+            anyhow::bail!(CodeLoreError::Analysis(format!(
+                "pair-programming analysis supports csv|json|markdown; got {fmt:?}"
+            )))
         }
     }
     Ok(())
@@ -1590,7 +1664,9 @@ fn dispatch_lead_time(
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
         fmt => {
-            anyhow::bail!("lead-time analysis supports csv|json|ndjson|markdown; got {fmt:?}")
+            anyhow::bail!(CodeLoreError::Analysis(format!(
+                "lead-time analysis supports csv|json|ndjson|markdown; got {fmt:?}"
+            )))
         }
     }
     Ok(())
@@ -1623,7 +1699,9 @@ fn dispatch_bus_factor(
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
         fmt => {
-            anyhow::bail!("bus-factor analysis supports csv|json|markdown; got {fmt:?}")
+            anyhow::bail!(CodeLoreError::Analysis(format!(
+                "bus-factor analysis supports csv|json|markdown; got {fmt:?}"
+            )))
         }
     }
     Ok(())
@@ -1659,7 +1737,9 @@ fn dispatch_delivery_friction(
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
         fmt => {
-            anyhow::bail!("delivery-friction analysis supports csv|json|markdown; got {fmt:?}")
+            anyhow::bail!(CodeLoreError::Analysis(format!(
+                "delivery-friction analysis supports csv|json|markdown; got {fmt:?}"
+            )))
         }
     }
     Ok(())
@@ -1707,7 +1787,9 @@ fn dispatch_knowledge_islands(
             .context("write html")?;
         }
         fmt => {
-            anyhow::bail!("knowledge-islands analysis supports csv|json|markdown; got {fmt:?}")
+            anyhow::bail!(CodeLoreError::Analysis(format!(
+                "knowledge-islands analysis supports csv|json|markdown; got {fmt:?}"
+            )))
         }
     }
     Ok(())
@@ -1739,7 +1821,9 @@ fn dispatch_soc(
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
         fmt => {
-            anyhow::bail!("soc analysis supports csv|json|markdown; got {fmt:?}")
+            anyhow::bail!(CodeLoreError::Analysis(format!(
+                "soc analysis supports csv|json|markdown; got {fmt:?}"
+            )))
         }
     }
     Ok(())
@@ -1772,7 +1856,9 @@ fn dispatch_messages(
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
         fmt => {
-            anyhow::bail!("messages analysis supports csv|json|markdown; got {fmt:?}")
+            anyhow::bail!(CodeLoreError::Analysis(format!(
+                "messages analysis supports csv|json|markdown; got {fmt:?}"
+            )))
         }
     }
     Ok(())
@@ -1805,7 +1891,9 @@ fn dispatch_main_dev(
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
         fmt => {
-            anyhow::bail!("main-dev analysis supports csv|json|markdown; got {fmt:?}")
+            anyhow::bail!(CodeLoreError::Analysis(format!(
+                "main-dev analysis supports csv|json|markdown; got {fmt:?}"
+            )))
         }
     }
     Ok(())
@@ -1842,7 +1930,9 @@ fn dispatch_main_dev_by_revs(
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
         fmt => {
-            anyhow::bail!("main-dev-by-revs analysis supports csv|json|markdown; got {fmt:?}")
+            anyhow::bail!(CodeLoreError::Analysis(format!(
+                "main-dev-by-revs analysis supports csv|json|markdown; got {fmt:?}"
+            )))
         }
     }
     Ok(())
@@ -1880,7 +1970,9 @@ fn dispatch_main_dev_by_deletions(
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
         fmt => {
-            anyhow::bail!("main-dev-by-deletions analysis supports csv|json|markdown; got {fmt:?}")
+            anyhow::bail!(CodeLoreError::Analysis(format!(
+                "main-dev-by-deletions analysis supports csv|json|markdown; got {fmt:?}"
+            )))
         }
     }
     Ok(())
@@ -1913,7 +2005,9 @@ fn dispatch_entity_effort(
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
         fmt => {
-            anyhow::bail!("entity-effort analysis supports csv|json|markdown; got {fmt:?}")
+            anyhow::bail!(CodeLoreError::Analysis(format!(
+                "entity-effort analysis supports csv|json|markdown; got {fmt:?}"
+            )))
         }
     }
     Ok(())
@@ -1949,7 +2043,9 @@ fn dispatch_entity_ownership(
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
         fmt => {
-            anyhow::bail!("entity-ownership analysis supports csv|json|markdown; got {fmt:?}")
+            anyhow::bail!(CodeLoreError::Analysis(format!(
+                "entity-ownership analysis supports csv|json|markdown; got {fmt:?}"
+            )))
         }
     }
     Ok(())
@@ -2008,7 +2104,9 @@ fn dispatch_clone_coupling(
             .context("write html")?;
         }
         fmt => {
-            anyhow::bail!("clone-coupling analysis supports csv|json|markdown|sarif; got {fmt:?}")
+            anyhow::bail!(CodeLoreError::Analysis(format!(
+                "clone-coupling analysis supports csv|json|markdown|sarif; got {fmt:?}"
+            )))
         }
     }
     Ok(())
@@ -2041,7 +2139,9 @@ fn dispatch_centrality(
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
         fmt => {
-            anyhow::bail!("centrality analysis supports csv|json|markdown; got {fmt:?}")
+            anyhow::bail!(CodeLoreError::Analysis(format!(
+                "centrality analysis supports csv|json|markdown; got {fmt:?}"
+            )))
         }
     }
     Ok(())
@@ -2075,7 +2175,9 @@ fn dispatch_communities(
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
         fmt => {
-            anyhow::bail!("communities analysis supports csv|json|markdown; got {fmt:?}")
+            anyhow::bail!(CodeLoreError::Analysis(format!(
+                "communities analysis supports csv|json|markdown; got {fmt:?}"
+            )))
         }
     }
     Ok(())
@@ -2097,7 +2199,6 @@ fn preflight_and_open_repo(
     analysis_name: &str,
     no_banner: bool,
 ) -> Result<GixRepo> {
-    use codelore_lib::cli_api::CodeLoreError;
     use codelore_lib::cli_api::output::banner::{self, Banner, Preflight};
     use codelore_lib::cli_api::provenance::{DUCKDB_VERSION, GIX_VERSION};
 
