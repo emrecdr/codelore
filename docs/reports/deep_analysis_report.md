@@ -389,10 +389,12 @@ Every Active / Partial entry above re-verified against current `main` HEAD via d
 - **Closed on main (added to §3 closure-log)**: F110, F112, F117, F118, F120 (URL half), F124 (policy half), F125, F126, F127 (full — entropy rewrite closes the remainder), F128, F129, F130, F134, F135, F138, F142, F143, F146, F150, F151, F152, F153, F154, F155, F156, F157, F158, F159, F160, F163.
 - **REFUTED this session**: F116 (Renovate + Dependabot partitioned by ecosystem) + F123 (crossbeam 0.8.4 + num-format 0.4.4 are current releases) — see §3 newly-refuted block.
 - **Closed by side-effect**: F162 — Parquet writers now delegate to shared SQL generators that preserve CSV row-type contract via explicit casts. Verified 2026-06-21.
-- **Active (carried)**: F119, F148, F161 — the deferred output-emitter cluster.
-- **Discovery pass 2026-06-24 (F166–F199)**: 34 new findings logged (see §4).
-  - **Fixed this session**: F166, F167, F168, F169, F170, F171, F172 (Tier 1) + F174, F175, F176, F177, F178 (Tier 2) — 12 closed, each test-first or byte-identical-verified.
-  - **Active**: F173 (attempted + deferred — hot-path blocker documented in its entry) + F179–F199 (Tier 3/4 follow-up).
+- **Discovery pass 2026-06-24 (F166–F199)**: 34 findings logged (see §4).
+  - **Fixed (v0.9.2, 2026-06-25)**: F166–F172 (Tier 1) + F174–F178 (Tier 2) — 12 closed.
+  - **Fixed (2026-06-26)**: F179–F199 (all 21 Tier 3/4 findings) — closed across SPA-a11y (F179–F182), perf/JS/ingest (F183–F185, F193, F194 + the F184 lineage-build guard), testing/CLI (F190–F192), tooling/CI/deps (F186–F189, F195–F197), and code-quality (F198, F199). Each landed test-first or byte-identical-verified; full CI-exact gate + the gix-vs-cli differential test green.
+- **Active (deferred — each needs its own focused session)**:
+  - **F173** — read each HEAD blob once. Attempted + deferred; the divergent extractor error contracts + memory-regression blocker are documented in its §4 entry. Needs a bounded shared-blob LRU or unified error contracts first.
+  - **F119 / F148 / F161** — the output-emitter cluster (csv-crate migration / `TabularEmit` dedup / `EmitterStream` streaming). Byte-identical-critical across 64 per-analysis emitters, and the runtime-schema leak from `code_maat_compat` makes a clean `TabularEmit` non-trivial. NOTE: F119 (csv-crate migration) is no longer a clean byte-identical swap — the hand-rolled emitter now carries a deliberate formula-injection guard (see F170) and uses `\n` line endings; the `csv` crate would change both. Re-scope before attempting.
 
 The next sweep should re-open with F-IDs starting at **F200**.
 

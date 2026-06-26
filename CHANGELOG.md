@@ -4,6 +4,22 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **SPA dashboard accessibility pass.** Tablists now support full keyboard navigation (Arrow / Home / End with roving tabindex), completing the WAI-ARIA Tabs pattern they previously had only the `aria-selected` half of. The 10 canvas / ECharts / d3 charts (trends, sankey, chord, arch-graph, treemap, parallel-coords, boxplot, kamei, calendar, sunburst) now expose a `role="img"` + a data-derived `aria-label`, so screen readers announce a summary instead of an unlabeled graphic. The hotspot filter-summary is now an `aria-live="polite"` status region, and a `@media (prefers-reduced-motion: reduce)` block suppresses the CSS-driven motion (transitions + view-transition crossfades) the existing JS guard didn't cover. Closes F179, F180, F181, F182.
+- **`codelore explain` covers six more analyses** — revisions, authors, ownership, code-age, soc, abs-churn — each with a formula derived from the analysis's own SQL, plus an anti-drift test asserting every registered analysis either has an `explain` topic or is on an explicit allowlist (so a new analysis can't ship without explain coverage). Closes F190.
+
+### Changed
+
+- **Format / usage errors now exit with a typed code instead of `1`.** An unsupported `analysis × format` combination, an unknown `--format`, an unknown `explain` / `schema` topic, and `--format html` on an unwired analysis now exit `4` (analysis); `--format parquet` / `sqlite` without `--output` exits `5` (output). CI orchestrators dispatching on exit code can now tell a usage mistake from a real failure. Closes F191.
+- **CLI argument-conflict errors use a dedicated `InvalidOptions` error variant** (exit code `2`, unchanged) instead of overloading the provenance-manifest variant, so a `--min-coupling > --max-coupling` typo no longer reads as a reproducibility violation. Closes F199.
+- **Contributor tooling aligned with CI.** `just test` now runs CI's non-browser scope (`--features test-support,spa`) instead of `--all-features` (which silently skipped browser tests without Chrome); a new `just test-browser` recipe mirrors the CI `spa-browser` job. Release builds reuse CI's sccache, the `deny.toml` dup-version baseline is made explicit via a `skip` allowlist, and the duckdb-rs vendor script now retries + verifies the upstream commit SHA. Closes F186, F187, F188, F189, F195, F196, F197.
+
+### Performance
+
+- **`changes_lineage` is now materialised once per run** instead of once per lineage-opt-in analysis (12+ rebuilds of the recursive rename CTE + full table copy + indexes under `--use-canonical-lineage`). A per-fact-store guard skips the rebuild after the first; the `--group-file` in-place path swap invalidates the guard so the post-grouping rebuild still happens exactly once. Byte-identical output (verified, including a grouping + canonical-lineage combo test). Closes F184, F194.
+- **Lower per-function memory + allocation in ingest, and a fixed SPA listener leak.** The clone fingerprint no longer stores the unused per-node `sequence` vector (held for every function across the whole repo), the imports resolver builds its live-path set once instead of cloning a throwaway `&str` set, and the SPA cross-widget selection listeners deduplicate by source so re-rendering trends / parallel-coords no longer leaks a closure over a disposed chart. Byte-identical analysis output. Closes F183, F185, F193.
+
 ## [0.9.2] - 2026-06-25
 
 ### Fixed
