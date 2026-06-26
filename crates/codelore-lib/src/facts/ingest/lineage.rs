@@ -80,8 +80,16 @@ pub fn materialize_path_lineage(db: &FactsDb) -> Result<()> {
 }
 
 /// Materialize `changes_lineage` — `changes` with `path` canonicalized via
-/// the rename-lineage map. Idempotent (`CREATE OR REPLACE`). Calls
-/// [`materialize_path_lineage`] first so the lookup table is in scope.
+/// the rename-lineage map. Calls [`materialize_path_lineage`] first so the
+/// lookup table is in scope.
+///
+/// Built once per fact store: the view's content is a pure function of the
+/// immutable `changes` / `commits` tables, so a per-`FactsDb` guard skips
+/// the recursive CTE + full table copy + index builds on every call after
+/// the first (12+ lineage-opt-in callers under `--use-canonical-lineage`
+/// otherwise each rebuilt it). `apply_grouping`'s in-place `changes` swap
+/// invalidates the guard so the post-grouping rebuild still happens exactly
+/// once.
 ///
 /// Analyses that opt into rename-aware aggregation should `FROM
 /// changes_lineage` instead of `FROM changes`. The schema is identical
@@ -92,6 +100,9 @@ pub fn materialize_path_lineage(db: &FactsDb) -> Result<()> {
 /// Returns [`CodeLoreError::Analysis`] on any SQL error.
 pub fn materialize_changes_lineage(db: &FactsDb) -> Result<()> {
     use duckdb::params;
+    if db.is_changes_lineage_built() {
+        return Ok(());
+    }
     materialize_path_lineage(db)?;
     let sql = "CREATE OR REPLACE TEMPORARY TABLE changes_lineage AS
         SELECT
@@ -118,6 +129,7 @@ pub fn materialize_changes_lineage(db: &FactsDb) -> Result<()> {
             .execute(stmt, params![])
             .map_err(|e| CodeLoreError::Analysis(format!("index changes_lineage: {e}")))?;
     }
+    db.mark_changes_lineage_built();
     tracing::info!("materialized changes_lineage with canonical rename paths");
     Ok(())
 }

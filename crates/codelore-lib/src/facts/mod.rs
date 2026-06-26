@@ -33,6 +33,16 @@ pub struct FactsDb {
             std::rc::Rc<Vec<crate::analyses::coupling::CouplingRow>>,
         >,
     >,
+    /// Set once `changes_lineage` has been materialised for this fact
+    /// store, so the recursive rename CTE + full table copy + index builds
+    /// run ONCE per run instead of once per lineage-opt-in caller (12+
+    /// analyses plus kamei under `--use-canonical-lineage`). The view's
+    /// content is a pure function of the immutable `changes` / `commits`
+    /// tables; the only post-build mutation is `apply_grouping`'s in-place
+    /// `changes` swap, which calls `invalidate_changes_lineage` so the next
+    /// materialise rebuilds against the grouped paths. `Cell` (not
+    /// `RefCell`) — a plain `bool` on the single connection-owning thread.
+    changes_lineage_built: std::cell::Cell<bool>,
 }
 
 impl FactsDb {
@@ -43,6 +53,7 @@ impl FactsDb {
         Self {
             conn,
             coupling_memo: std::cell::RefCell::new(std::collections::HashMap::new()),
+            changes_lineage_built: std::cell::Cell::new(false),
         }
     }
 
@@ -64,6 +75,23 @@ impl FactsDb {
         rows: std::rc::Rc<Vec<crate::analyses::coupling::CouplingRow>>,
     ) {
         self.coupling_memo.borrow_mut().insert(key, rows);
+    }
+
+    /// Whether `changes_lineage` is already materialised for this run.
+    pub(crate) fn is_changes_lineage_built(&self) -> bool {
+        self.changes_lineage_built.get()
+    }
+
+    /// Record that `changes_lineage` has been materialised.
+    pub(crate) fn mark_changes_lineage_built(&self) {
+        self.changes_lineage_built.set(true);
+    }
+
+    /// Invalidate the `changes_lineage` guard after a `changes` mutation
+    /// (the `apply_grouping` swap) so the next materialise rebuilds the
+    /// view against the new path set.
+    pub(crate) fn invalidate_changes_lineage(&self) {
+        self.changes_lineage_built.set(false);
     }
 
     pub fn new_in_memory() -> Result<Self> {

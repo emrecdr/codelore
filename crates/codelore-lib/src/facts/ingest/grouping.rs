@@ -223,6 +223,12 @@ pub fn apply_grouping(db: &FactsDb, group_map: &GroupMap) -> Result<()> {
     )
     .map_err(|e| CodeLoreError::Analysis(format!("swap changes: {e}")))?;
 
+    // `changes.path` was just rewritten in place; any `changes_lineage`
+    // built earlier (e.g. by kamei during ingest) now reflects the
+    // pre-grouping paths, so invalidate the guard — the next lineage-opt-in
+    // analysis rebuilds the view exactly once against the grouped paths.
+    db.invalidate_changes_lineage();
+
     // Step 6: materialise per-group `MAX(cognitive)` + `MAX(unit-MI)`
     // rollups so the four path-aggregating analyses that join
     // `complexity_metrics` (hotspots, code_health, god_classes,

@@ -101,6 +101,67 @@ fn grouping_rewrites_paths_to_logical_groups() {
 }
 
 #[test]
+fn grouping_with_canonical_lineage_sees_grouped_paths() {
+    // Combining --group-file with --use-canonical-lineage exercises the
+    // changes_lineage rebuild guard. The lineage view is materialised once
+    // during ingest (kamei enrichment) from the pre-grouping paths; the
+    // grouping swap then rewrites changes.path in place. The swap must
+    // invalidate the guard so the first lineage-opt-in analysis rebuilds the
+    // view against the GROUPED paths — otherwise it would reuse the stale
+    // pre-grouping view and report raw file paths instead of group names.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path();
+
+    run_git(path, &["init", "-b", "main", "--quiet"]);
+    run_git(path, &["config", "user.email", "t@e.com"]);
+    run_git(path, &["config", "user.name", "T"]);
+
+    write(
+        path.join("groups.txt"),
+        "src/auth => Auth\nsrc/db   => DB\n",
+    );
+
+    write(path.join("src/auth/login.rs"), "v1\n");
+    write(path.join("src/db/migrate.rs"), "v1\n");
+    run_git(path, &["add", "."]);
+    run_git(path, &["commit", "-m", "c1", "--quiet"]);
+
+    write(path.join("src/auth/session.rs"), "v1\n");
+    write(path.join("src/db/migrate.rs"), "v2\n");
+    run_git(path, &["add", "."]);
+    run_git(path, &["commit", "-m", "c2", "--quiet"]);
+
+    let repo = GixRepo::open(path).expect("gix open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: path.to_path_buf(),
+        min_revs: 0,
+        group_file: Some(path.join("groups.txt")),
+        use_canonical_lineage: true,
+        strict_grouping: false,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let revs = run_revisions(&db, &opts).expect("revisions");
+    let entities: Vec<&str> = revs.iter().map(|(e, _)| e.as_str()).collect();
+
+    // The lineage-routed analysis must see the GROUPED entities, proving the
+    // view was rebuilt after the grouping swap rather than served stale.
+    assert!(
+        entities.contains(&"Auth") && entities.contains(&"DB"),
+        "grouped entities must appear with lineage on: {entities:?}"
+    );
+    assert!(
+        !entities.iter().any(|e| {
+            e.contains("login.rs") || e.contains("session.rs") || e.contains("migrate.rs")
+        }),
+        "stale raw paths must NOT appear — that would mean the lineage guard \
+         served a pre-grouping view: {entities:?}"
+    );
+}
+
+#[test]
 fn grouping_strict_mode_drops_unmapped_paths() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path();
