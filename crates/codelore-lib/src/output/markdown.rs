@@ -375,6 +375,35 @@ pub fn write_god_classes_markdown<W: Write>(
     Ok(())
 }
 
+/// dependency-cycles markdown emitter — one row per (cycle, member).
+pub fn write_dependency_cycles_markdown<W: Write>(
+    rows: &[crate::analyses::dependency_cycles::DependencyCycleRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore dependency-cycles")?;
+    if rows.is_empty() {
+        writeln!(
+            w,
+            "_No dependency cycles — the resolved import graph is acyclic (or no imports resolved)._"
+        )
+        .map_err(CodeLoreError::Io)?;
+        return Ok(());
+    }
+    writeln!(w, "| Cycle | Size | Path |").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---:|---:|---|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| {} | {} | `{}` |",
+            row.cycle_id,
+            row.size,
+            escape_md_cell(&row.path),
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 /// modularity-violations markdown emitter — Fisher-significant
 /// co-change pairs with no structural import edge.
 pub fn write_modularity_violations_markdown<W: Write>(

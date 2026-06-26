@@ -277,6 +277,12 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
             "See analyses/god_classes.rs.",
         ),
         (
+            "dependency-cycles",
+            "Tarjan 1972 SCC + Fontana et al. 2017 (Arcan) Cyclic Dependency smell",
+            "Non-trivial strongly-connected components (size ≥ 2) of the structural import graph — files that import each other transitively. cycle_id groups a tangle; size is its member count. Accuracy follows the import resolver's language coverage.",
+            "See analyses/dependency_cycles.rs + analyses/import_graph.rs.",
+        ),
+        (
             "modularity-violations",
             "Mo, Cai, Kazman, Xiao 2015 *Hotspot Patterns* (DV8) + Baldwin/MacCormack 2014 hidden structure",
             "Fisher-significant co-change pairs (from coupling) with NO structural import edge in either direction — implicit cross-module dependencies. Ranked by coupling degree. Direct edges only; accuracy follows the import resolver's language coverage.",
@@ -814,6 +820,9 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             AnalysisName::GodClasses => dispatch_god_classes(&db, &opts, format, &ctx, &mut out)?,
             AnalysisName::ArchViolations => {
                 dispatch_arch_violations(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::DependencyCycles => {
+                dispatch_dependency_cycles(&db, &opts, format, &ctx, &mut out)?;
             }
             AnalysisName::ModularityViolations => {
                 dispatch_modularity_violations(&db, &opts, format, &ctx, &mut out)?;
@@ -1579,6 +1588,46 @@ fn dispatch_arch_violations(
         fmt => {
             return Err(unsupported_format(
                 "architecture-violations",
+                "csv|json|markdown",
+                fmt,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_dependency_cycles(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows =
+                codelore_lib::cli_api::analyses::dependency_cycles::run_dependency_cycles(db, opts)
+                    .context("run dependency-cycles")?;
+            codelore_lib::cli_api::output::csv::write_dependency_cycles_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows =
+                codelore_lib::cli_api::analyses::dependency_cycles::run_dependency_cycles(db, opts)
+                    .context("run dependency-cycles")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows =
+                codelore_lib::cli_api::analyses::dependency_cycles::run_dependency_cycles(db, opts)
+                    .context("run dependency-cycles")?;
+            codelore_lib::cli_api::output::markdown::write_dependency_cycles_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format(
+                "dependency-cycles",
                 "csv|json|markdown",
                 fmt,
             ));

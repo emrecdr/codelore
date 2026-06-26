@@ -76,6 +76,10 @@ pub enum AnalysisName {
     // table; flags every import edge that crosses a forbidden layer
     // boundary. No rules file → empty output (opt-in).
     ArchViolations,
+    // Dependency cycles — non-trivial strongly-connected components of
+    // the structural import graph (Tarjan SCC). Files that import each
+    // other transitively (a "tangle"); Arcan "Cyclic Dependency" smell.
+    DependencyCycles,
     // Modularity violations — file pairs that co-change
     // (Fisher-significant) yet have NO structural import edge between
     // them. The structure×history fusion: implicit cross-module
@@ -143,6 +147,7 @@ impl AnalysisName {
             Self::Communities => "communities",
             Self::GodClasses => "god-classes",
             Self::ArchViolations => "architecture-violations",
+            Self::DependencyCycles => "dependency-cycles",
             Self::ModularityViolations => "modularity-violations",
             Self::UnstableInterface => "unstable-interface",
             Self::StaleCode => "stale-code",
@@ -211,6 +216,7 @@ impl AnalysisName {
             Communities,
             GodClasses,
             ArchViolations,
+            DependencyCycles,
             ModularityViolations,
             UnstableInterface,
             StaleCode,

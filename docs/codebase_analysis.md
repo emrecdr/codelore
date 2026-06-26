@@ -21,7 +21,7 @@ CodeLore is a 3-crate Cargo workspace:
 | Crate | Responsibility |
 |---|---|
 | `codelore-rca` | Vendored + modified fork of Mozilla's `rust-code-analysis` (MPL-2.0). Provides cyclomatic / cognitive / Halstead / MI complexity metrics. Isolated as its own crate so the vendored license stays cleanly separated. |
-| `codelore-lib` | Core library: the `Repo` trait (`GixRepo` default, `GitCliRepo` oracle for differential tests), the DuckDB-backed `FactsDb` fact store, the 34 analyses, the persistent cache, the multi-format output emitters, identity resolution (mailmap + bot + AI-attribution), and the Kamei change-feature enrichment. |
+| `codelore-lib` | Core library: the `Repo` trait (`GixRepo` default, `GitCliRepo` oracle for differential tests), the DuckDB-backed `FactsDb` fact store, the 35 analyses, the persistent cache, the multi-format output emitters, identity resolution (mailmap + bot + AI-attribution), and the Kamei change-feature enrichment. |
 | `codelore-cli` | Clap CLI binary: `analyze` and `diff` subcommands, ignore-file parsing, `Options` construction, output routing. |
 
 ## 3. Pipeline data flow
@@ -33,7 +33,7 @@ graph TD
     C -->|DuckDB Appender bulk-insert| D[(DuckDB fact store)]
     E[HEAD-time blob walk @ HEAD] -->|tree-sitter parsing via rayon| F[Complexity + clones + imports extraction]
     F -->|HEAD-time metrics| D
-    D -->|SQL views / parameterized queries| G[34 behavioral analyses]
+    D -->|SQL views / parameterized queries| G[35 behavioral analyses]
     G -->|emitters| H[CSV · JSON · SARIF 2.1.0 · Markdown · Parquet · SQLite · HTML · SPA · Step-Summary]
     G -->|provenance| I[manifest sidecars]
 ```
@@ -88,7 +88,7 @@ Two implementations:
 
 The differential test suite (`tests/differential_repo_test.rs`) is the load-bearing correctness check: any divergence between backends fails CI.
 
-## 5. The 34 analyses
+## 5. The 35 analyses
 
 | Tier | Surface | What they share |
 |---|---|---|
@@ -96,10 +96,10 @@ The differential test suite (`tests/differential_repo_test.rs`) is the load-bear
 | Modern signals (1) | top-committers | Per-author leaderboard with LoC + first/last commit + bot flag — code-maat approximated this with `-a author-churn` + sort; CodeLore exposes it first-class |
 | Modern foundations ★ (4) | hotspots, code-health, clones, clone-coupling | The behavioral-SARIF differentiators — not in code-maat, not opaque-ML like CodeScene; published deterministic formulas |
 | Graph-analytics ★ (3) | knowledge-islands, centrality, communities | Leiden-algorithm community detection + PageRank centrality + auto-detected bus-factor risk on the Fisher-significant coupling graph |
-| Architecture-analytics ★★ (6) | god-classes, architecture-violations, stale-code, pair-programming, lead-time, bus-factor | Consume the `imports` table for structural fan-in/fan-out; `architecture-violations` reads `.codelore-arch-rules.toml`; `lead-time` is a DORA Accelerate metric |
+| Architecture-analytics ★★ (7) | god-classes, architecture-violations, dependency-cycles, stale-code, pair-programming, lead-time, bus-factor | Consume the `imports` table for structural fan-in/fan-out; `architecture-violations` reads `.codelore-arch-rules.toml`; `dependency-cycles` runs Tarjan SCC on the import-graph kernel (`analyses/import_graph.rs`); `lead-time` is a DORA Accelerate metric |
 | Structure×history fusion ★★ (2) | modularity-violations, unstable-interface | Fuse the structural `imports` graph with the temporal Fisher-significant co-change graph — modularity violations (co-change without an import edge) + unstable interfaces (churning hubs that drag their dependents). Mo, Cai & Kazman 2015 *Hotspot Patterns* / DV8 |
 
-All 34 are SQL-driven over the DuckDB fact store with a thin Rust orchestrator each (`pair-programming` extracts Co-Authored-By trailers in Rust; `modularity-violations` and `unstable-interface` fuse the import graph with the co-change graph via Rust set logic). Adding a new analysis = adding one SQL string + one row-struct + entries in the dispatch ladder. Each carries a `Research basis: see docs/research-foundations.md entry "<name>"` rustdoc cross-link.
+All 35 are SQL-driven over the DuckDB fact store with a thin Rust orchestrator each (`pair-programming` extracts Co-Authored-By trailers in Rust; `dependency-cycles` runs an iterative-Tarjan SCC kernel; `modularity-violations` and `unstable-interface` fuse the import graph with the co-change graph via Rust set logic). Adding a new analysis = adding one SQL string + one row-struct + entries in the dispatch ladder. Each carries a `Research basis: see docs/research-foundations.md entry "<name>"` rustdoc cross-link.
 
 ## 6. Identity resolution
 

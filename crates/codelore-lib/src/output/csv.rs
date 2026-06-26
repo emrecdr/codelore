@@ -480,6 +480,26 @@ pub fn write_god_classes_csv<W: Write>(
     Ok(())
 }
 
+/// `dependency-cycles` CSV emitter — one row per (cycle, member file);
+/// rows sharing a `cycle_id` form one tangle.
+pub fn write_dependency_cycles_csv<W: Write>(
+    rows: &[crate::analyses::dependency_cycles::DependencyCycleRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(w, "cycle_id,size,path").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{}",
+            row.cycle_id,
+            row.size,
+            quote_if_needed(&row.path),
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 /// `modularity-violations` CSV emitter — Fisher-significant co-change
 /// pairs with no structural import edge (the structure×history fusion).
 pub fn write_modularity_violations_csv<W: Write>(
