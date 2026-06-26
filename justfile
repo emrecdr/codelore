@@ -14,9 +14,17 @@ build:
 release:
     cargo build --workspace --release
 
-# Run all tests
+# Run all tests (matches CI's non-browser test scope). `--all-features` would
+# pull in `browser-tests`, which SILENTLY SKIPS without Chrome — giving false
+# "just ci == CI" confidence. Browser tests are isolated in `test-browser`,
+# mirroring CI's separate spa-browser job.
 test:
-    cargo test --workspace --all-features
+    cargo test --workspace --features test-support,spa
+
+# Run the SPA headless-browser smoke test (mirrors CI's spa-browser job).
+# Requires a Chrome/Chromium binary on PATH; skips gracefully without one.
+test-browser:
+    cargo test -p codelore-lib --features browser-tests,spa,test-support --test spa_browser_test
 
 # Run clippy with our hard standards
 lint:

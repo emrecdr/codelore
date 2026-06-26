@@ -17,6 +17,13 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENDOR_DIR="${REPO_ROOT}/vendor/duckdb-rs"
 DUCKDB_RS_TAG="v1.10503.1"
+# Trust-on-first-use pin for the mutable upstream tag. `--branch ${DUCKDB_RS_TAG}`
+# fetches whatever commit the (re-pointable) tag names *today*; recording the
+# expected commit lets us DETECT a silent upstream re-point. Refresh the tag and
+# this SHA together when bumping duckdb-rs:
+#   git ls-remote https://github.com/duckdb/duckdb-rs.git <new-tag>
+# Leave empty to skip verification (capture-and-log only).
+DUCKDB_RS_EXPECTED_SHA="3191caa111f4e6d16affbc3b7cfd8f43d1593545"
 PATCH_FILE="${REPO_ROOT}/patches/duckdb-rs-msvc-1940.patch"
 STAMP="${VENDOR_DIR}/.patched-${DUCKDB_RS_TAG}"
 
@@ -29,10 +36,41 @@ fi
 rm -rf "${VENDOR_DIR}"
 mkdir -p "$(dirname "${VENDOR_DIR}")"
 
+# Retry the clone a few times — a single un-retried HTTPS clone is fragile on
+# flaky CI networks (mirrors the bench.yml kernel-clone retry pattern). Clean
+# the partial tree between attempts so each retry starts from a known state.
 echo "[vendor-duckdb-rs] cloning duckdb/duckdb-rs at ${DUCKDB_RS_TAG}..."
-git clone --depth=1 --branch "${DUCKDB_RS_TAG}" \
-    https://github.com/duckdb/duckdb-rs.git \
-    "${VENDOR_DIR}" 2>&1 | sed 's/^/[vendor-duckdb-rs]   /'
+clone_ok=false
+for attempt in 1 2 3; do
+    if git clone --depth=1 --branch "${DUCKDB_RS_TAG}" \
+        https://github.com/duckdb/duckdb-rs.git \
+        "${VENDOR_DIR}" 2>&1 | sed 's/^/[vendor-duckdb-rs]   /'; then
+        clone_ok=true
+        break
+    fi
+    echo "[vendor-duckdb-rs] clone attempt ${attempt}/3 failed" >&2
+    rm -rf "${VENDOR_DIR}"
+    if [[ "${attempt}" -lt 3 ]]; then
+        sleep 5
+    fi
+done
+if [[ "${clone_ok}" != "true" ]]; then
+    echo "[vendor-duckdb-rs] ✗ clone failed after 3 attempts" >&2
+    exit 1
+fi
+
+# Record + verify the commit the mutable tag actually resolved to (TOFU pin).
+# rev-parse runs while the clone's .git/ still exists (stripped further down).
+RESOLVED_SHA="$(git -C "${VENDOR_DIR}" rev-parse HEAD)"
+echo "[vendor-duckdb-rs] ${DUCKDB_RS_TAG} resolved to ${RESOLVED_SHA}"
+if [[ -n "${DUCKDB_RS_EXPECTED_SHA}" && "${RESOLVED_SHA}" != "${DUCKDB_RS_EXPECTED_SHA}" ]]; then
+    echo "[vendor-duckdb-rs] ✗ tag ${DUCKDB_RS_TAG} resolved to ${RESOLVED_SHA}," >&2
+    echo "[vendor-duckdb-rs]   but expected ${DUCKDB_RS_EXPECTED_SHA}. The upstream" >&2
+    echo "[vendor-duckdb-rs]   tag may have been re-pointed — refusing to vendor an" >&2
+    echo "[vendor-duckdb-rs]   unverified tree. Reconcile DUCKDB_RS_EXPECTED_SHA if" >&2
+    echo "[vendor-duckdb-rs]   the move is intentional." >&2
+    exit 1
+fi
 
 echo "[vendor-duckdb-rs] applying patches/duckdb-rs-msvc-1940.patch..."
 (cd "${VENDOR_DIR}" && git apply "${PATCH_FILE}")

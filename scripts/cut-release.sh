@@ -223,6 +223,44 @@ if ! command -v gh >/dev/null; then die "gh CLI not on PATH"; fi
 if ! gh auth status >/dev/null 2>&1; then die "gh CLI not authenticated. Run 'gh auth login'."; fi
 ok "gh CLI authenticated"
 
+# ──────────────────────────────────────────────────────────────────────
+# Ruleset-drift check (best-effort, NON-FATAL)
+# ──────────────────────────────────────────────────────────────────────
+# The disable + restore heredocs further down hardcode the canonical
+# `required_status_checks` contexts (rustfmt / clippy / cargo-deny / test×3).
+# CI has since grown jobs (spa-browser, dogfood); if the LIVE ruleset was
+# ever updated to require any context this script doesn't know about, the
+# trap-driven restore would silently rewrite the ruleset back to this stale
+# list — dropping the newer required checks. Surface that drift HERE, before
+# the dance touches anything, so the maintainer reconciles the heredocs
+# first. This is read-only and never aborts the cut (the load-bearing
+# disable/restore logic is untouched).
+EXPECTED_CONTEXTS="$(printf '%s\n' \
+  "rustfmt" "clippy" "cargo-deny" \
+  "test (ubuntu-latest)" "test (macos-latest)" "test (windows-latest)" \
+  | sort)"
+LIVE_CONTEXTS="$( { gh api "repos/${REPO}/rulesets/${RULESET_ID}" 2>/dev/null \
+  | jq -r '.rules[]? | select(.type=="required_status_checks")
+            | .parameters.required_status_checks[]?.context' 2>/dev/null \
+  | sort; } || true )"
+if [[ -z "${LIVE_CONTEXTS}" ]]; then
+  warn "could not read live ruleset ${RULESET_ID} required_status_checks (gh/jq"
+  warn "  returned nothing) — skipping drift check. Eyeball the restore heredoc"
+  warn "  by hand if you suspect the ruleset changed."
+elif [[ "${LIVE_CONTEXTS}" != "${EXPECTED_CONTEXTS}" ]]; then
+  warn "RULESET DRIFT: live protect-release-tags required_status_checks differ"
+  warn "  from this script's hardcoded disable/restore heredocs."
+  warn "  live ruleset requires:"
+  printf '%s\n' "${LIVE_CONTEXTS}"   | sed 's/^/[cut-release]       - /' >&2
+  warn "  this script hardcodes:"
+  printf '%s\n' "${EXPECTED_CONTEXTS}" | sed 's/^/[cut-release]       - /' >&2
+  warn "  RECONCILE the heredocs (and EXPECTED_CONTEXTS above) before trusting"
+  warn "  the auto-restore — otherwise the trap will rewrite the ruleset to the"
+  warn "  stale list. Proceeding anyway (non-fatal)."
+else
+  ok "ruleset required_status_checks match the script's hardcoded restore body"
+fi
+
 # Idempotent resume: if any commit in recent history (up to 20 back) is a
 # `chore(release): vX.Y.Z` commit AND Cargo.toml workspace version matches
 # X.Y.Z AND CHANGELOG has a `## [X.Y.Z]` section, the prep work has already

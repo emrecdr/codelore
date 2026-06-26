@@ -34,6 +34,22 @@ allow = ["GPL-3.0-or-later"]
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Known-unavoidable duplicate versions in the resolved (all-features) graph.
+# Each is a transitive pin we don't control; the OLDER copy of each pair is
+# skipped while the newest is left in the graph, so a NEW avoidable duplicate
+# (a second copy of the un-skipped version) still trips the warning instead of
+# drowning in known noise. Versions verified against `cargo deny check bans`;
+# refresh with `cargo tree -d` when bumping gix/duckdb/arrow. (Their transitive
+# by-products — block-buffer/crypto-common/foldhash/linux-raw-sys/windows-sys —
+# split for the same root reasons and intentionally remain visible.)
+skip = [
+    "hashbrown@0.14.5",  # via dashmap
+    "hashbrown@0.15.5",  # via hashlink (duckdb)
+    "hashbrown@0.16.1",  # via clru (gix object cache); 0.17.1 left in graph
+    "getrandom@0.2.17",  # via ring / rand_core / ahash; 0.3.4 left in graph
+    "digest@0.10.7",     # via sha1 / sha1-checked (gix); 0.11.3 left in graph
+    "rustix@0.38.44",    # via crossterm; 1.1.4 (gix-index/tempfile) left in graph
+]
 
 [sources]
 unknown-registry = "deny"

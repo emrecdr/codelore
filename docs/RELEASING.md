@@ -90,7 +90,7 @@ Run `scripts/cut-release.sh` for the coordinated update. Never hand-edit a singl
 
 Before bumping the version, every item must be true:
 
-- [ ] `cargo test --workspace --all-features` is green
+- [ ] `cargo test --workspace --features test-support,spa` is green (CI's non-browser test scope; `--all-features` silently skips browser-tests without Chrome)
 - [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` is green
 - [ ] `cargo fmt --all --check` is green
 - [ ] `cargo deny check` is green
@@ -121,7 +121,7 @@ $EDITOR Cargo.toml
 cargo update --workspace
 
 # 3. Run the full gate one more time
-cargo test --workspace --all-features
+cargo test --workspace --features test-support,spa
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo fmt --all --check
 

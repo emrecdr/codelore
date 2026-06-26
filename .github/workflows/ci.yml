@@ -219,6 +219,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.96.0
       - uses: mozilla-actions/sccache-action@v0.0.10
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Stable, release-profile-scoped cache slot. Dogfood is the only
+          # `--release` compile in this workflow, so it cannot reuse the debug
+          # target caches of clippy/test — a shared-key keeps its own cache
+          # deterministic across PR runs (and lets a future release-profile job
+          # share it). Deliberately NOT shared with the debug jobs: mixing
+          # debug+release artifacts under one key would thrash both. The heavy
+          # release dep objects are additionally reused cross-workflow via
+          # sccache (release.yml builds --release with the same backend).
+          shared-key: release-dogfood
       - name: Vendor patched libduckdb-sys (duckdb-rs#786)
         run: bash scripts/vendor-duckdb-rs.sh
       - name: Build release codelore
