@@ -126,14 +126,7 @@ impl FactsDb {
     ) -> Result<usize> {
         use crate::imports::{resolve_js_relative, resolve_python_relative, resolve_rust_path};
 
-        // 1. Build the live-at-HEAD path set as a `HashSet` for O(1)
-        //    candidate lookups inside the resolver. Caller hoisted
-        //    `query_live_paths` to compute-once across all HEAD-time
-        //    passes; we just lift the slice into a hash set here.
-        let live_paths_set: std::collections::HashSet<&str> =
-            live_paths.iter().map(String::as_str).collect();
-
-        // 2. Pull every unresolved import row scoped to a language
+        // 1. Pull every unresolved import row scoped to a language
         //    the multi-language resolver supports (JS/TS, Python,
         //    Rust). Java FQNs are project-layout-specific and stay
         //    deferred until a Java-specific resolver lands.
@@ -157,16 +150,17 @@ impl FactsDb {
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|e| CodeLoreError::Analysis(format!("collect imports scan: {e}")))?;
 
-        // 3. Dispatch to the per-language resolver by file extension.
+        // 2. Dispatch to the per-language resolver by file extension.
         //    First-match wins; falls through to `None` for external
         //    targets the resolver can't map to a tracked path.
         //
-        //    The resolvers want an owned-string hash set; we adapt the
-        //    `&str` set above into a single shared owned copy so each
-        //    resolver call gets the same `&HashSet<String>` without
-        //    rebuilding it per row.
+        //    The resolvers want an owned-string hash set; build it once
+        //    directly from the live-path slice (the caller hoisted
+        //    `query_live_paths` to compute-once across all HEAD-time
+        //    passes) and share the same `&HashSet<String>` across every
+        //    resolver call instead of rebuilding it per row.
         let live_paths_owned: std::collections::HashSet<String> =
-            live_paths_set.iter().map(|s| (*s).to_string()).collect();
+            live_paths.iter().cloned().collect();
         let mut hits: Vec<(String, String, String)> = Vec::new();
         for (src_path, target) in candidates {
             let ext = std::path::Path::new(&src_path)

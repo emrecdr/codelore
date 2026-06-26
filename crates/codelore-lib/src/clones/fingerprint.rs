@@ -8,9 +8,6 @@
 //!   - is identical for Type 2 (renamed/parameterized) clones — names and
 //!     literals are normalized away
 //!   - diverges for structurally different code
-//!
-//! The full pre-order `sequence` is kept so the optional Type 3 detector
-//! (`MinHash + LSH`; Plan 7 Task 4) can shingle it without re-parsing.
 
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -25,9 +22,6 @@ pub struct Fingerprint {
     /// 256-bit SHA-256 of the pre-order `(kind_id, child_count)` byte
     /// sequence (identifiers + literals omitted).
     pub digest: [u8; 32],
-    /// Pre-order sequence of `(kind_id, child_count)` pairs that produced
-    /// `digest`. Kept for future `MinHash` shingling.
-    pub sequence: Vec<(u16, u16)>,
     /// Number of AST nodes that contributed to the fingerprint (i.e. the
     /// nodes that survived the identifier/literal skip filter). Use this as
     /// the minimum-fragment-size knob to drop trivial getters/setters.
@@ -46,20 +40,18 @@ impl Fingerprint {
     /// can run the same walk over a subtree (the function body) instead of
     /// the full file.
     #[must_use]
-    pub fn from_sequence(sequence: Vec<(u16, u16)>) -> Self {
+    pub fn from_sequence(sequence: &[(u16, u16)]) -> Self {
         let mut hasher = Sha256::new();
-        for (kind, arity) in &sequence {
+        for (kind, arity) in sequence {
             hasher.update(kind.to_le_bytes());
             hasher.update(arity.to_le_bytes());
         }
         let mut digest = [0u8; 32];
         digest.copy_from_slice(&hasher.finalize());
         let node_count = u32::try_from(sequence.len()).unwrap_or(u32::MAX);
-        Self {
-            digest,
-            sequence,
-            node_count,
-        }
+        // Only `digest` and `node_count` are kept; the pre-order sequence
+        // is borrowed for hashing + length and then dropped by the caller.
+        Self { digest, node_count }
     }
 }
 
@@ -81,7 +73,7 @@ pub fn fingerprint_source(code: &[u8], lang: CloneLanguage) -> Result<Fingerprin
     let mut sequence: Vec<(u16, u16)> = Vec::new();
     let root = tree.root_node();
     walk_preorder_internal(root, &skip, &mut sequence);
-    Ok(Fingerprint::from_sequence(sequence))
+    Ok(Fingerprint::from_sequence(&sequence))
 }
 
 /// Pre-order walk: emit `(kind_id, child_count)` for nodes whose kind is
@@ -185,13 +177,12 @@ mod tests {
     }
 
     #[test]
-    fn fingerprint_carries_sequence_and_node_count() {
+    fn fingerprint_carries_node_count_and_hex_digest() {
         let f = fp(
             CloneLanguage::Rust,
             "fn add(a: i32, b: i32) -> i32 { a + b }",
         );
-        assert!(!f.sequence.is_empty(), "sequence should not be empty");
-        assert_eq!(f.node_count as usize, f.sequence.len());
+        assert!(f.node_count > 0, "node_count should be positive");
         assert_eq!(f.hex().len(), 64, "hex digest is 64 chars");
     }
 }

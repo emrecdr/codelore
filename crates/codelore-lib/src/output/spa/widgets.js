@@ -110,6 +110,22 @@
   // registered a listener.
   window._codeloreSelectionListeners = [];
 
+  // Register a selection listener keyed by its source widget. Widgets
+  // that re-render on theme / Top-N changes (trends, parallel-coords)
+  // call this from inside their render fn; tagging by `source` and
+  // dropping any prior listener from the same widget before pushing
+  // keeps the array bounded (one entry per widget) instead of leaking a
+  // fresh closure — over a now-disposed chart — on every re-render. The
+  // `__source` tag is inert to the firing loop, which just calls each fn.
+  window._codeloreRegisterSelectionListener = function (source, fn) {
+    window._codeloreSelectionListeners =
+      window._codeloreSelectionListeners.filter(function (l) {
+        return l.__source !== source;
+      });
+    fn.__source = source;
+    window._codeloreSelectionListeners.push(fn);
+  };
+
   // ─── §3a  Fullscreen toggle per widget ──────────────────────────
   // Injects a button into every `<section class="widget">` at boot
   // and wires it to the native HTML5 Fullscreen API. Listens for
@@ -2420,7 +2436,7 @@
     // path (the path array's indexing matches the series array),
     // so selecting a file dispatches `highlight` on that series
     // index. Empty selection downplays everything back to neutral.
-    window._codeloreSelectionListeners.push(function (selectedPath) {
+    window._codeloreRegisterSelectionListener('trends', function (selectedPath) {
       if (!selectedPath) {
         chart.dispatchAction({ type: 'downplay' });
         return;
@@ -2826,7 +2842,7 @@
     // highlight` with that data index lights the matching polyline
     // (and the existing emphasis/blur protocol fades the others).
     const parallelPaths = top.map(function (r) { return r.path; });
-    window._codeloreSelectionListeners.push(function (selectedPath) {
+    window._codeloreRegisterSelectionListener('parallel-coords', function (selectedPath) {
       if (!selectedPath) {
         chart.dispatchAction({ type: 'downplay', seriesIndex: 0 });
         return;

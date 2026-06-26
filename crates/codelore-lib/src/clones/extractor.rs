@@ -75,7 +75,7 @@ fn visit(
         if func_kinds.contains(current.kind()) {
             let mut sequence: Vec<(u16, u16)> = Vec::new();
             walk_preorder_internal(current, skip, &mut sequence);
-            let fingerprint = Fingerprint::from_sequence(sequence);
+            let fingerprint = Fingerprint::from_sequence(&sequence);
             let function_name = extract_function_name(current, code).unwrap_or_default();
             let start_line = u32::try_from(current.start_position().row + 1).unwrap_or(u32::MAX);
             let end_line = u32::try_from(current.end_position().row + 1).unwrap_or(u32::MAX);
