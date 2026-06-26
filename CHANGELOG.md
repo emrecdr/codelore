@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-06-26
+
 ### Added
 
 - **SPA dashboard accessibility pass.** Tablists now support full keyboard navigation (Arrow / Home / End with roving tabindex), completing the WAI-ARIA Tabs pattern they previously had only the `aria-selected` half of. The 10 canvas / ECharts / d3 charts (trends, sankey, chord, arch-graph, treemap, parallel-coords, boxplot, kamei, calendar, sunburst) now expose a `role="img"` + a data-derived `aria-label`, so screen readers announce a summary instead of an unlabeled graphic. The hotspot filter-summary is now an `aria-live="polite"` status region, and a `@media (prefers-reduced-motion: reduce)` block suppresses the CSS-driven motion (transitions + view-transition crossfades) the existing JS guard didn't cover. Closes F179, F180, F181, F182.
