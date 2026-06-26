@@ -185,6 +185,24 @@
       outline: 2px solid var(--accent);
       outline-offset: -2px;
     }
+    /* Respect the OS "reduce motion" preference. The JS
+       `startViewTransition` guard only covers the programmatic
+       crossfade path; CSS transitions/animations and the document-wide
+       `view-transition-name` crossfades still animate without this.
+       Near-zero (not 0) durations keep transitionend / animationend
+       listeners firing so nothing that waits on them stalls, while
+       opting every widget + hotspot row out of the per-element
+       view-transition so theme/layout swaps repaint instantly for users
+       who asked for no motion. WCAG 2.3.3. */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+      }
+      .widget, .hotspot-row {
+        view-transition-name: none;
+      }
+    }
     .widget h2 {
       margin: 0 0 4px 0;
       font-size: 14px;
@@ -1590,7 +1608,7 @@
           autocomplete="off"
           spellcheck="false"
           aria-label="Filter hotspots by path">
-        <span class="table-summary" id="hotspot-table-summary"></span>
+        <span class="table-summary" id="hotspot-table-summary" role="status" aria-live="polite"></span>
         <span class="table-actions" id="hotspot-table-actions"></span>
       </div>
       <div id="widget-hotspot-table-body" class="table-container"></div>

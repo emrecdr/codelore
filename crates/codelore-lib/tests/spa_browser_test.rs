@@ -634,3 +634,335 @@ fn detail_drawer_has_accessible_name_and_manages_focus() {
         "focus did not return to the trigger row after the drawer closed"
     );
 }
+
+/// Render an SPA from the differential fixture to `html_path`, with
+/// every chart-feeding payload field populated so the full widget set
+/// actually mounts. Shared by the a11y-interaction tests below so each
+/// one doesn't re-spell the ingest + emit boilerplate.
+///
+/// The differential fixture only ingests history (hotspots / coupling /
+/// knowledge-islands), so the trends / calendar / X-Ray / arch-graph /
+/// Kamei chart payloads would be empty and their renderers would bail to
+/// the empty-state path — leaving too few charts mounted to exercise the
+/// text-alternative contract. We synthesise small, well-formed rows for
+/// those fields so each renderer reaches its chart-mount path. The values
+/// are arbitrary-but-realistic; the assertions only inspect the a11y
+/// attributes the renderers stamp, never the chart geometry.
+fn write_smoke_spa(html_path: &std::path::Path, title: &str) {
+    use codelore_lib::analyses::dashboard::{
+        DailyCommit, ImportEdgeRow, KameiRiskRow, TrendPoint, XRayEntry,
+    };
+
+    let fixture = differential_repo::build();
+    let repo = GixRepo::open(fixture.dir.path()).expect("open fixture repo");
+    let db = FactsDb::new_in_memory().expect("in-memory facts db");
+    let opts = Options {
+        repo_path: fixture.dir.path().to_path_buf(),
+        min_revs: 1,
+        min_shared_revs: 1,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest fixture");
+
+    let hotspots = run_hotspots(&db, &opts).expect("hotspots");
+    let summary = run_summary(&db, &opts).expect("summary");
+    let code_health = run_code_health(&db, &opts).expect("code-health");
+    let coupling = run_coupling(&db, &opts).expect("coupling");
+    let knowledge_islands = run_knowledge_islands(&db, &opts).expect("knowledge-islands");
+
+    // --- Synthetic chart payloads (see doc comment). -----------------
+    // Trends: two files over three months.
+    let trends: Vec<TrendPoint> = ["2026-01-01", "2026-02-01", "2026-03-01"]
+        .iter()
+        .enumerate()
+        .flat_map(|(i, month)| {
+            let step = f64::from(u32::try_from(i).unwrap_or(0));
+            [
+                ("src/alpha/service.rs", 0.1f64.mul_add(-step, 0.9)),
+                ("src/beta/handler.rs", 0.1f64.mul_add(step, 0.4)),
+            ]
+            .into_iter()
+            .map(move |(path, score)| TrendPoint {
+                month: (*month).to_string(),
+                path: path.to_string(),
+                hotspot_score: score,
+            })
+        })
+        .collect();
+    // Calendar heatmap: a handful of active days.
+    let daily_commits: Vec<DailyCommit> = (1..=8)
+        .map(|d| DailyCommit {
+            date: format!("2026-01-{d:02}"),
+            count: d,
+        })
+        .collect();
+    // X-Ray sunburst: functions across two top-level paths.
+    let xray: Vec<XRayEntry> = (0..6)
+        .map(|i| XRayEntry {
+            path: if i % 2 == 0 {
+                "src/alpha/service.rs".to_string()
+            } else {
+                "src/beta/handler.rs".to_string()
+            },
+            function: format!("fn_{i}"),
+            cognitive: 3.0 + f64::from(i),
+            start_line: 1 + i * 10,
+            end_line: 9 + i * 10,
+        })
+        .collect();
+    // Arch graph: cross-module import edges.
+    let imports: Vec<ImportEdgeRow> = (0..4)
+        .map(|i| ImportEdgeRow {
+            src_path: format!("src/alpha/mod_{i}.rs"),
+            target_path: format!("src/beta/mod_{i}.rs"),
+        })
+        .collect();
+    // Kamei delivery-risk sparkline: a short commit window.
+    let kamei_risk: Vec<KameiRiskRow> = (0..10)
+        .map(|i| KameiRiskRow {
+            rev: format!("{:040x}", i + 1),
+            date: format!("2026-02-{:02}", i + 1),
+            la: 20 + i,
+            ld: 5 + i,
+            nf: 1 + i % 4,
+            nd: 1 + i % 2,
+            ndev: 1 + i % 3,
+            nuc: i,
+            exp: 100 - i * 5,
+            entropy: 0.1 * f64::from(i),
+            fix: i % 3 == 0,
+        })
+        .collect();
+
+    let dash = SpaDashboard {
+        hotspots,
+        summary,
+        code_health,
+        coupling,
+        knowledge_islands,
+        trends,
+        daily_commits,
+        xray,
+        imports,
+        kamei_risk,
+        ..SpaDashboard::default()
+    };
+
+    let mut f = std::fs::File::create(html_path).expect("create html");
+    write_spa(
+        &dash,
+        title,
+        &fixture.dir.path().display().to_string(),
+        "2026-06-16 00:00:00 UTC",
+        &mut f,
+    )
+    .expect("write_spa");
+    drop(f);
+}
+
+/// A `role="tablist"` must support arrow-key navigation per the
+/// WAI-ARIA Tabs pattern: focus a tab, press `ArrowRight`, and focus +
+/// the selected state move to the next tab. On the un-fixed source the
+/// tabs carry `role="tab"` + `aria-selected` but no keyboard handler,
+/// so focus stays put and the selection never advances — this test
+/// fails until `wireTablistArrows` is wired at boot.
+#[test]
+fn tablist_arrow_keys_move_focus_and_selection() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let html_path = tmp.path().join("codelore.html");
+    write_smoke_spa(&html_path, "CodeLore Tablist Keyboard Test");
+
+    let browser = match Browser::default() {
+        Ok(b) => b,
+        Err(e) => {
+            println!(
+                "spa_browser_test: skipping — could not launch Chrome ({e}). \
+                 Install Chrome / Chromium and retry."
+            );
+            return;
+        }
+    };
+
+    let tab = browser.new_tab().expect("new tab");
+    let url = format!("file://{}", html_path.display());
+    tab.navigate_to(&url).expect("navigate");
+    tab.wait_until_navigated().expect("wait navigation");
+    std::thread::sleep(Duration::from_secs(2));
+
+    // Use the hotspot color-mode tablist — it always renders (static
+    // markup, no data dependency) and its first tab starts selected.
+    // Mark the first two tabs so we can assert identity across evaluate
+    // calls, focus the first, then press ArrowRight.
+    let setup_ok: bool = serde_json::from_value(
+        tab.evaluate(
+            "(() => { const bar = document.getElementById('hotspot-color-toggles'); \
+             if (!bar) return false; \
+             const tabs = bar.querySelectorAll('[role=\"tab\"]'); \
+             if (tabs.length < 2) return false; \
+             tabs[0].setAttribute('data-kb-first', '1'); \
+             tabs[1].setAttribute('data-kb-second', '1'); \
+             tabs[0].focus(); \
+             return document.activeElement === tabs[0] && \
+                    tabs[0].getAttribute('tabindex') === '0'; })()",
+            false,
+        )
+        .expect("eval tablist setup")
+        .value
+        .expect("tablist setup value"),
+    )
+    .expect("tablist setup bool");
+    assert!(
+        setup_ok,
+        "could not focus the first tab with roving tabindex=0; \
+         either the tablist is missing or wireTablistArrows did not run"
+    );
+
+    // ArrowRight: focus + selection must advance to the second tab.
+    tab.evaluate(
+        "(() => { const t = document.querySelector('[data-kb-first]'); \
+         t.dispatchEvent(new KeyboardEvent('keydown', \
+         { key: 'ArrowRight', bubbles: true })); })()",
+        false,
+    )
+    .expect("dispatch ArrowRight");
+    // Selection is driven through the tab's click handler (imperative on
+    // this tablist, Alpine-reactive on the others); a short settle covers
+    // either propagation path.
+    std::thread::sleep(Duration::from_millis(200));
+
+    let focus_moved: bool = serde_json::from_value(
+        tab.evaluate(
+            "document.activeElement === document.querySelector('[data-kb-second]')",
+            false,
+        )
+        .expect("eval focus moved")
+        .value
+        .expect("focus moved value"),
+    )
+    .expect("focus moved bool");
+    assert!(
+        focus_moved,
+        "ArrowRight did not move focus to the next tab — tablist has no \
+         arrow-key navigation"
+    );
+
+    let selection_moved: bool = serde_json::from_value(
+        tab.evaluate(
+            "(() => { const first = document.querySelector('[data-kb-first]'); \
+             const second = document.querySelector('[data-kb-second]'); \
+             return second.getAttribute('aria-selected') === 'true' && \
+                    first.getAttribute('aria-selected') === 'false' && \
+                    second.getAttribute('tabindex') === '0' && \
+                    first.getAttribute('tabindex') === '-1'; })()",
+            false,
+        )
+        .expect("eval selection moved")
+        .value
+        .expect("selection moved value"),
+    )
+    .expect("selection moved bool");
+    assert!(
+        selection_moved,
+        "ArrowRight moved focus but not the aria-selected / roving-tabindex \
+         state to the next tab"
+    );
+}
+
+/// Chart containers (`ECharts` / d3 canvases) carry no text alternative
+/// on the un-fixed source — `role="img"` count is 0, so a screen reader
+/// announces them as empty regions. Each chart renderer must, after its
+/// data is computed, stamp `role="img"` + a non-empty `aria-label` on
+/// its container. This asserts at least eight chart containers expose
+/// that contract after boot.
+#[test]
+fn chart_containers_expose_text_alternative() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let html_path = tmp.path().join("codelore.html");
+    write_smoke_spa(&html_path, "CodeLore Chart A11y Test");
+
+    let browser = match Browser::default() {
+        Ok(b) => b,
+        Err(e) => {
+            println!(
+                "spa_browser_test: skipping — could not launch Chrome ({e}). \
+                 Install Chrome / Chromium and retry."
+            );
+            return;
+        }
+    };
+
+    let tab = browser.new_tab().expect("new tab");
+    let url = format!("file://{}", html_path.display());
+    tab.navigate_to(&url).expect("navigate");
+    tab.wait_until_navigated().expect("wait navigation");
+    // Charts mount across the cooperative boot loop; give the slowest a
+    // window. Same 2s budget the boot smoke test uses.
+    std::thread::sleep(Duration::from_secs(2));
+
+    // Count chart-body containers that expose BOTH role="img" and a
+    // non-empty aria-label. Scoped to `.widget-body` so we don't count
+    // incidental img-role nodes elsewhere.
+    let labelled_count: i64 = serde_json::from_value(
+        tab.evaluate(
+            "Array.from(document.querySelectorAll('.widget-body[role=\"img\"]')) \
+             .filter(el => (el.getAttribute('aria-label') || '').trim().length > 0) \
+             .length",
+            false,
+        )
+        .expect("eval labelled chart count")
+        .value
+        .expect("labelled chart count value"),
+    )
+    .expect("labelled chart count i64");
+    assert!(
+        labelled_count >= 8,
+        "expected >=8 chart containers with role=img + non-empty aria-label, \
+         found {labelled_count}; chart renderers are not stamping text alternatives"
+    );
+}
+
+/// The hotspot-table filter summary ("N of M rows shown") updates
+/// silently on the un-fixed source — a screen reader never hears the
+/// row count change. It must be a live region (`aria-live="polite"` +
+/// `role="status"`) so assistive tech announces filter results.
+#[test]
+fn hotspot_table_summary_is_a_live_region() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let html_path = tmp.path().join("codelore.html");
+    write_smoke_spa(&html_path, "CodeLore Live-Region Test");
+
+    let browser = match Browser::default() {
+        Ok(b) => b,
+        Err(e) => {
+            println!(
+                "spa_browser_test: skipping — could not launch Chrome ({e}). \
+                 Install Chrome / Chromium and retry."
+            );
+            return;
+        }
+    };
+
+    let tab = browser.new_tab().expect("new tab");
+    let url = format!("file://{}", html_path.display());
+    tab.navigate_to(&url).expect("navigate");
+    tab.wait_until_navigated().expect("wait navigation");
+    std::thread::sleep(Duration::from_secs(2));
+
+    let is_live_region: bool = serde_json::from_value(
+        tab.evaluate(
+            "(() => { const el = document.getElementById('hotspot-table-summary'); \
+             return !!el && el.getAttribute('aria-live') === 'polite' && \
+                    el.getAttribute('role') === 'status'; })()",
+            false,
+        )
+        .expect("eval live region")
+        .value
+        .expect("live region value"),
+    )
+    .expect("live region bool");
+    assert!(
+        is_live_region,
+        "hotspot-table summary is not a polite live region; filter-count \
+         updates are silent to screen readers"
+    );
+}

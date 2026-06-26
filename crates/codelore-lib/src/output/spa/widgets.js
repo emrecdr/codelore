@@ -204,6 +204,88 @@
       }
     });
   }
+
+  // Wire a `role="tablist"` for the WAI-ARIA Tabs keyboard pattern.
+  // The tabs already carry `role="tab"` + `aria-selected` (set either
+  // imperatively by initHotspotColorToggles or reactively by Alpine
+  // bindings), but without this they have no arrow-key navigation and
+  // every tab sits in the tab order. We add:
+  //   - a roving tabindex (the selected tab is `tabindex="0"`, the rest
+  //     `-1`) so Tab lands on one tab and arrows move within the group;
+  //   - Left/Right (and Home/End) handlers that move focus AND activate
+  //     (click) the target tab. Activation reuses each tab's existing
+  //     click handler so selection state stays owned by whoever owns
+  //     it — no duplicated selection logic here.
+  // Mirrors `wireRowKbActivation`: focus management + forward to click.
+  function wireTablistArrows(tablistEl) {
+    const tabs = Array.prototype.slice.call(
+      tablistEl.querySelectorAll('[role="tab"]')
+    );
+    if (!tabs.length) return;
+    // Roving tabindex: the currently-selected tab (or the first) is the
+    // single tab stop; all others are removed from the sequential order.
+    function syncRovingTabindex() {
+      var selectedIdx = tabs.findIndex(function (t) {
+        return t.getAttribute('aria-selected') === 'true';
+      });
+      if (selectedIdx < 0) selectedIdx = 0;
+      for (var i = 0; i < tabs.length; i++) {
+        tabs[i].setAttribute('tabindex', i === selectedIdx ? '0' : '-1');
+      }
+    }
+    syncRovingTabindex();
+    function focusAndActivate(idx) {
+      const target = tabs[idx];
+      if (!target) return;
+      // Activate first (updates aria-selected via the tab's own click
+      // handler / Alpine binding), then move focus + roving tabindex so
+      // the freshly-selected tab is the one carrying tabindex="0".
+      target.click();
+      target.focus();
+      // The selection may settle on a later microtask (Alpine effects),
+      // so set the roving tabindex against the just-activated tab
+      // directly rather than re-reading aria-selected synchronously.
+      for (var i = 0; i < tabs.length; i++) {
+        tabs[i].setAttribute('tabindex', i === idx ? '0' : '-1');
+      }
+    }
+    tablistEl.addEventListener('keydown', function (evt) {
+      const current = tabs.indexOf(document.activeElement);
+      if (current < 0) return;
+      var next = null;
+      if (evt.key === 'ArrowRight' || evt.key === 'ArrowDown') {
+        next = (current + 1) % tabs.length;
+      } else if (evt.key === 'ArrowLeft' || evt.key === 'ArrowUp') {
+        next = (current - 1 + tabs.length) % tabs.length;
+      } else if (evt.key === 'Home') {
+        next = 0;
+      } else if (evt.key === 'End') {
+        next = tabs.length - 1;
+      }
+      if (next === null) return;
+      evt.preventDefault();
+      focusAndActivate(next);
+    });
+  }
+  function wireAllTablists() {
+    const tablists = document.querySelectorAll('[role="tablist"]');
+    for (var i = 0; i < tablists.length; i++) {
+      wireTablistArrows(tablists[i]);
+    }
+  }
+
+  // Expose a chart container to assistive tech as a single labelled
+  // image. Canvas/ECharts/d3 charts paint to a bitmap that screen
+  // readers can't interpret, so without this they announce as an empty
+  // region. `role="img"` collapses the subtree to one node; the
+  // `aria-label` is the chart's text alternative — a concise one-line
+  // summary derived from the real data each renderer holds. Idempotent:
+  // renderers that re-run on theme toggle just overwrite the label.
+  function setChartAriaLabel(containerEl, label) {
+    if (!containerEl) return;
+    containerEl.setAttribute('role', 'img');
+    containerEl.setAttribute('aria-label', label);
+  }
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', installPanelControls);
   } else {
@@ -298,6 +380,9 @@
   // this script doesn't manage the toggle directly anymore.
   // Color-mode toggles for the hotspot circle-pack (cognitive / author / ai).
   initHotspotColorToggles();
+  // Arrow-key navigation + roving tabindex for every `role="tablist"`
+  // (hotspot color modes, trends, chord/arch depth, kamei, sankey).
+  wireAllTablists();
 
 
   // ═════════════════════════════════════════════════════════════════
@@ -2136,6 +2221,10 @@
       return { name: name };
     });
 
+    setChartAriaLabel(container,
+      'Change-coupling Sankey flow across ' + nodes.length + ' entities, ' +
+      links.length + ' co-change links');
+
     const chart = mountEcharts(container);
     chart.setOption({
       tooltip: {
@@ -2236,6 +2325,10 @@
     const legendData = paths.map(function (p) { return shortPath(p); });
     const longByShort = {};
     paths.forEach(function (p) { longByShort[shortPath(p)] = p; });
+
+    setChartAriaLabel(container,
+      'Hotspot-score trend for ' + paths.length + ' files over ' +
+      months.length + ' months');
 
     const chart = mountEcharts(container);
     chart.setOption({
@@ -2436,6 +2529,14 @@
       };
     });
 
+    var fixCount = 0;
+    for (var fi = 0; fi < rows.length; fi++) {
+      if (rows[fi].fix) fixCount++;
+    }
+    setChartAriaLabel(container,
+      'Kamei delivery-risk per commit over ' + rows.length + ' recent commits, ' +
+      fixCount + ' flagged as bug-fixes');
+
     const chart = mountEcharts(container);
     chart.setOption({
       tooltip: {
@@ -2553,6 +2654,9 @@
     const treeData = Object.keys(grouped).sort().map(function (dir) {
       return { name: dir, children: grouped[dir] };
     });
+    setChartAriaLabel(container,
+      'Hotspot treemap of ' + top.length + ' files across ' +
+      treeData.length + ' top-level directories, sized by revisions');
     const chart = mountEcharts(container);
     chart.setOption({
       tooltip: {
@@ -2638,6 +2742,9 @@
         return sb - sa;
       });
     const top = (parallelTopN === 'all') ? sorted : sorted.slice(0, Number(parallelTopN));
+    setChartAriaLabel(container,
+      'Parallel-coordinates plot of ' + top.length + ' files across ' +
+      'revisions, cognitive complexity, code health, hotspot score and MI rank');
     const chart = mountEcharts(container);
     chart.setOption({
       parallelAxis: [
@@ -2779,6 +2886,9 @@
     const maxOutlier = outliers.length
       ? outliers.reduce(function (m, o) { return o[1] > m ? o[1] : m; }, 0)
       : 0;
+    setChartAriaLabel(container,
+      'Cognitive-complexity distribution across ' + values.length +
+      ' functions, median ' + Math.round(med) + ', ' + outliers.length + ' outliers');
     const yAxisMax = Math.ceil(upperFence * 1.15);
     chart.setOption({
       tooltip: { trigger: 'item' },
@@ -2922,6 +3032,9 @@
       nodes[linkRows[ei].target] = true;
     }
     const nodeArr = Object.keys(nodes).sort().map(function (n) { return { name: n }; });
+    setChartAriaLabel(container,
+      'Module change-coupling chord diagram, ' + nodeArr.length + ' modules and ' +
+      linkRows.length + ' coupled pairs');
     const chart = mountEcharts(container);
     chart.setOption({
       tooltip: { trigger: 'item' },
@@ -3022,6 +3135,9 @@
       container.innerHTML = '<div class="empty">All resolved imports stay intra-module — no inter-module edges to graph.</div>';
       return;
     }
+    setChartAriaLabel(container,
+      'Architecture import force-graph, ' + nodeArr.length + ' modules and ' +
+      edgeArr.length + ' inter-module import edges');
     const chart = mountEcharts(container);
     chart.setOption({
       tooltip: { trigger: 'item' },
@@ -3107,6 +3223,9 @@
       };
     });
 
+    setChartAriaLabel(container,
+      'Commit-activity calendar heatmap over ' + years.length + ' year(s), ' +
+      data.length + ' active days');
     const chart = mountEcharts(container);
     chart.setOption({
       tooltip: {
@@ -3211,6 +3330,9 @@
       }
     }
 
+    setChartAriaLabel(container,
+      'X-Ray complexity sunburst of ' + rows.length + ' functions across ' +
+      root.children.length + ' top-level paths, coloured by cognitive complexity');
     const chart = mountEcharts(container);
     chart.setOption({
       tooltip: {
