@@ -14,6 +14,11 @@ Conventional Commits format. All notable changes documented here.
 - **Format / usage errors now exit with a typed code instead of `1`.** An unsupported `analysis × format` combination, an unknown `--format`, an unknown `explain` / `schema` topic, and `--format html` on an unwired analysis now exit `4` (analysis); `--format parquet` / `sqlite` without `--output` exits `5` (output). CI orchestrators dispatching on exit code can now tell a usage mistake from a real failure. Closes F191.
 - **CLI argument-conflict errors use a dedicated `InvalidOptions` error variant** (exit code `2`, unchanged) instead of overloading the provenance-manifest variant, so a `--min-coupling > --max-coupling` typo no longer reads as a reproducibility violation. Closes F199.
 - **Contributor tooling aligned with CI.** `just test` now runs CI's non-browser scope (`--features test-support,spa`) instead of `--all-features` (which silently skipped browser tests without Chrome); a new `just test-browser` recipe mirrors the CI `spa-browser` job. Release builds reuse CI's sccache, the `deny.toml` dup-version baseline is made explicit via a `skip` allowlist, and the duckdb-rs vendor script now retries + verifies the upstream commit SHA. Closes F186, F187, F188, F189, F195, F196, F197.
+- **SPA: the Hotspots and Trends panels each occupy their own full-width row at every breakpoint** (previously they sat side-by-side at xl ≥ 1280 px via `xl:col-span-1`). They now use `md:col-span-2` so the two largest widgets always get the full width they need; no Tailwind rebuild required (the class was already in the bundle).
+
+### Fixed
+
+- **SPA: the file-detail drawer can no longer render as a totally-blank popup.** A row that resolves to an empty or missing path (a malformed entry with neither a `path` nor an `entity` field) previously set the drawer title to the empty string and produced an empty body. The drawer now falls back to a stable "File details" title and an explanatory body ("this row had no resolvable file path …") so it is always self-explanatory. A headless-browser regression test opens the drawer with an empty path and asserts a non-empty title + body.
 
 ### Performance
 

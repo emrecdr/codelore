@@ -966,3 +966,68 @@ fn hotspot_table_summary_is_a_live_region() {
          updates are silent to screen readers"
     );
 }
+
+#[test]
+fn detail_drawer_never_renders_empty_for_a_pathless_row() {
+    // Defensive guard: even when a row resolves to an empty/missing path
+    // (a malformed entry with neither `path` nor `entity`), the drawer must
+    // still open with a non-empty title and an explanatory body — never a
+    // totally-blank, titleless popup. Without the guard the title is set to
+    // the empty string and this assertion fails.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let html_path = tmp.path().join("codelore.html");
+    write_smoke_spa(&html_path, "CodeLore Empty-Path Drawer Test");
+
+    let browser = match Browser::default() {
+        Ok(b) => b,
+        Err(e) => {
+            println!(
+                "spa_browser_test: skipping — could not launch Chrome ({e}). \
+                 Install Chrome / Chromium and retry."
+            );
+            return;
+        }
+    };
+
+    let tab = browser.new_tab().expect("new tab");
+    let url = format!("file://{}", html_path.display());
+    tab.navigate_to(&url).expect("navigate");
+    tab.wait_until_navigated().expect("wait navigation");
+    std::thread::sleep(Duration::from_secs(2));
+
+    // Open the drawer with an EMPTY path — models a row whose path/entity
+    // field was missing, the scenario that produced a blank popup.
+    tab.evaluate("window._codeloreShowDetail('')", false)
+        .expect("invoke detail with empty path");
+    std::thread::sleep(Duration::from_millis(300));
+
+    let title_nonempty: bool = serde_json::from_value(
+        tab.evaluate(
+            "document.getElementById('drawer-title').textContent.trim().length > 0",
+            false,
+        )
+        .expect("eval drawer title")
+        .value
+        .expect("drawer title value"),
+    )
+    .expect("drawer title bool");
+    assert!(
+        title_nonempty,
+        "drawer title is blank for a pathless row — the popup renders empty"
+    );
+
+    let body_nonempty: bool = serde_json::from_value(
+        tab.evaluate(
+            "document.getElementById('drawer-body').textContent.trim().length > 0",
+            false,
+        )
+        .expect("eval drawer body")
+        .value
+        .expect("drawer body value"),
+    )
+    .expect("drawer body bool");
+    assert!(
+        body_nonempty,
+        "drawer body is blank for a pathless row — the popup renders empty"
+    );
+}

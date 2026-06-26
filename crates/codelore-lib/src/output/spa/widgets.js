@@ -961,7 +961,12 @@
     const title = document.getElementById('drawer-title');
     const body = document.getElementById('drawer-body');
     if (!drawer || !title || !body) return;
-    title.textContent = path;
+    // Defensive: a malformed row (no resolvable path/entity → empty/non-
+    // string `path`) must never produce a blank, titleless drawer. Fall
+    // back to a stable label; `hasPath` also drives a clearer empty-body
+    // message below so the drawer is always self-explanatory.
+    const hasPath = typeof path === 'string' && path.length > 0;
+    title.textContent = hasPath ? path : 'File details';
 
     var html = '';
 
@@ -1122,9 +1127,13 @@
     }
 
     if (!html) {
-      html = '<div class="empty">No additional details for this path. ' +
-        'The path may have been filtered out by minimum-revision thresholds, ' +
-        'or its row type is not yet wired into the dashboard.</div>';
+      html = hasPath
+        ? '<div class="empty">No additional details for this path. ' +
+          'The path may have been filtered out by minimum-revision thresholds, ' +
+          'or its row type is not yet wired into the dashboard.</div>'
+        : '<div class="empty">This row had no resolvable file path, so no ' +
+          'metrics could be looked up — the underlying data may be missing ' +
+          'its path/entity field.</div>';
     }
 
     // Radar chart at the top of the drawer. Six axes profile the
