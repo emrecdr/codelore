@@ -639,9 +639,13 @@
     }
     // Then publish selection so registered listeners (trends, parallel-
     // coords, etc.) light up the same file across every widget. Best-effort
-    // and isolated: a selection-store hiccup must not block the drawer (this
-    // ordering is the fix for an empty, titleless popup). Drawer-close clears
-    // the selection via the dialog `close` listener in template.html.
+    // and isolated: a selection-store hiccup must not block the drawer.
+    // Defensive ordering — the drawer is opened and populated above, BEFORE
+    // this selection-publish, so a throw from the selection store can't
+    // pre-empt the drawer from showing. (The blank-popup symptom itself is
+    // fixed by the `.detail-drawer .modal-box { opacity: 1 }` CSS override,
+    // not by this ordering.) Drawer-close clears the selection via the dialog
+    // `close` listener in template.html.
     try {
       if (window.Alpine && window.Alpine.store) {
         const sel = window.Alpine.store('selection');

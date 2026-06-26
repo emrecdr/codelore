@@ -9,6 +9,25 @@
 //! git bundle via a single atomic `git clone`. Used to assert
 //! `GixRepo` ≡ `GitCliRepo`.
 
+/// Coupling-permissive `Options` so a small fixture's co-change pairs
+/// survive into a non-empty graph: every p-value allowed
+/// (`fisher_significance = 1.0`), no degree floor/ceiling, `min_revs = 1`.
+/// Shared by the centrality + communities end-to-end tests, which both
+/// need the differential fixture's pairs to reach the graph builders.
+#[cfg(feature = "test-support")]
+#[must_use]
+pub fn permissive_coupling_opts(repo_path: std::path::PathBuf) -> crate::Options {
+    crate::Options {
+        repo_path,
+        min_revs: 1,
+        min_shared_revs: 1,
+        min_coupling_pct: 0,
+        max_coupling_pct: 100,
+        fisher_significance: 1.0,
+        ..crate::Options::default()
+    }
+}
+
 #[cfg(feature = "test-support")]
 pub mod tiny_repo {
     use std::path::PathBuf;

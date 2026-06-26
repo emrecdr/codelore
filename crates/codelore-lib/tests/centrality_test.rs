@@ -11,29 +11,15 @@ use codelore_lib::analyses::centrality::run_centrality;
 use codelore_lib::analyses::coupling::run_coupling;
 use codelore_lib::facts::FactsDb;
 use codelore_lib::repo::GixRepo;
+use codelore_lib::test_support::permissive_coupling_opts;
 use std::collections::{HashMap, HashSet};
-
-/// Coupling-permissive options so the differential fixture's co-change
-/// pairs survive into a non-empty graph: every p-value allowed
-/// (`fisher_significance = 1.0`), no degree floor/ceiling, `min_revs = 1`.
-fn permissive_opts(repo_path: std::path::PathBuf) -> Options {
-    Options {
-        repo_path,
-        min_revs: 1,
-        min_shared_revs: 1,
-        min_coupling_pct: 0,
-        max_coupling_pct: 100,
-        fisher_significance: 1.0,
-        ..Options::default()
-    }
-}
 
 #[test]
 fn centrality_metrics_agree_with_coupling_oracle() {
     let fixture = codelore_lib::test_support::differential_repo::build();
     let repo = GixRepo::open(fixture.dir.path()).expect("open");
     let db = FactsDb::new_in_memory().expect("db");
-    let opts = permissive_opts(fixture.dir.path().to_path_buf());
+    let opts = permissive_coupling_opts(fixture.dir.path().to_path_buf());
     db.ingest(&repo, &opts).expect("ingest");
 
     let pairs = run_coupling(&db, &opts).expect("coupling oracle");
@@ -141,7 +127,7 @@ fn centrality_empty_when_no_significant_coupling() {
     let db = FactsDb::new_in_memory().expect("db");
     let opts = Options {
         fisher_significance: 0.0,
-        ..permissive_opts(fixture.dir.path().to_path_buf())
+        ..permissive_coupling_opts(fixture.dir.path().to_path_buf())
     };
     db.ingest(&repo, &opts).expect("ingest");
 

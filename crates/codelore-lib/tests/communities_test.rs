@@ -6,33 +6,19 @@
 //! the differential fixture, runs Leiden detection on its coupling graph,
 //! and asserts the structural contract of the returned partition.
 
-use codelore_lib::Options;
 use codelore_lib::analyses::communities::run_communities;
 use codelore_lib::analyses::coupling::run_coupling;
 use codelore_lib::facts::FactsDb;
 use codelore_lib::repo::GixRepo;
+use codelore_lib::test_support::permissive_coupling_opts;
 use std::collections::{HashMap, HashSet};
-
-/// Coupling-permissive options so the fixture's co-change pairs survive
-/// into a non-empty graph for Leiden to partition.
-fn permissive_opts(repo_path: std::path::PathBuf) -> Options {
-    Options {
-        repo_path,
-        min_revs: 1,
-        min_shared_revs: 1,
-        min_coupling_pct: 0,
-        max_coupling_pct: 100,
-        fisher_significance: 1.0,
-        ..Options::default()
-    }
-}
 
 #[test]
 fn communities_partition_is_a_valid_dense_cover() {
     let fixture = codelore_lib::test_support::differential_repo::build();
     let repo = GixRepo::open(fixture.dir.path()).expect("open");
     let db = FactsDb::new_in_memory().expect("db");
-    let opts = permissive_opts(fixture.dir.path().to_path_buf());
+    let opts = permissive_coupling_opts(fixture.dir.path().to_path_buf());
     db.ingest(&repo, &opts).expect("ingest");
 
     let pairs = run_coupling(&db, &opts).expect("coupling oracle");
@@ -122,7 +108,7 @@ fn communities_are_deterministic_across_runs() {
     let fixture = codelore_lib::test_support::differential_repo::build();
     let repo = GixRepo::open(fixture.dir.path()).expect("open");
     let db = FactsDb::new_in_memory().expect("db");
-    let opts = permissive_opts(fixture.dir.path().to_path_buf());
+    let opts = permissive_coupling_opts(fixture.dir.path().to_path_buf());
     db.ingest(&repo, &opts).expect("ingest");
 
     let first = run_communities(&db, &opts).expect("first run");

@@ -269,28 +269,13 @@ fn knowledge_islands_row_opens_and_closes_detail_drawer() {
     .expect("write_spa");
     drop(f);
 
-    // -- Step 2: launch headless Chrome (skip if unavailable). -----------
-    let browser = match Browser::default() {
-        Ok(b) => b,
-        Err(e) => {
-            println!(
-                "spa_browser_test: skipping — could not launch Chrome ({e}). \
-                 Install Chrome / Chromium and retry."
-            );
-            return;
-        }
+    // -- Step 2: launch Chrome + let Alpine/widgets boot (skip if no Chrome). --
+    // The KI table renders inside the cooperative widget-boot loop, and the
+    // row click handlers attach during that render — so the helper's 2s
+    // settle is what we wait on before driving the row.
+    let Some((_browser, tab)) = boot_spa_tab(&html_path) else {
+        return;
     };
-
-    let tab = browser.new_tab().expect("new tab");
-
-    // -- Step 3: navigate + let Alpine/widgets boot. ---------------------
-    let url = format!("file://{}", html_path.display());
-    tab.navigate_to(&url).expect("navigate");
-    tab.wait_until_navigated().expect("wait navigation");
-    // Same boot window as the smoke test: the KI table renders inside the
-    // cooperative widget-boot loop, and the row click handlers attach
-    // during that render.
-    std::thread::sleep(Duration::from_secs(2));
 
     // -- Step 4: click a Knowledge-Islands row. --------------------------
     // `wait_for_element` polls until the KI render has produced rows, so
@@ -306,85 +291,49 @@ fn knowledge_islands_row_opens_and_closes_detail_drawer() {
     // -- Step 5: assert the drawer OPENED and is POPULATED. --------------
     // `open === true`, no `[hidden]`, and computed `display !== 'none'`
     // is exactly the inverse of the "blank popup" symptom.
-    let drawer_open: bool = serde_json::from_value(
-        tab.evaluate(
-            "document.getElementById('file-detail-drawer').open === true",
-            false,
-        )
-        .expect("eval drawer.open")
-        .value
-        .expect("drawer.open value"),
-    )
-    .expect("drawer.open bool");
+    let drawer_open: bool = eval_json(
+        &tab,
+        "document.getElementById('file-detail-drawer').open === true",
+    );
     assert!(drawer_open, "detail drawer did not open on KI row click");
 
-    let drawer_not_hidden: bool = serde_json::from_value(
-        tab.evaluate(
-            "!document.getElementById('file-detail-drawer').hasAttribute('hidden')",
-            false,
-        )
-        .expect("eval drawer hidden")
-        .value
-        .expect("drawer hidden value"),
-    )
-    .expect("drawer hidden bool");
+    let drawer_not_hidden: bool = eval_json(
+        &tab,
+        "!document.getElementById('file-detail-drawer').hasAttribute('hidden')",
+    );
     assert!(
         drawer_not_hidden,
         "detail drawer kept the [hidden] attribute after open"
     );
 
-    let drawer_displayed: bool = serde_json::from_value(
-        tab.evaluate(
-            "getComputedStyle(document.getElementById('file-detail-drawer')).display !== 'none'",
-            false,
-        )
-        .expect("eval drawer display")
-        .value
-        .expect("drawer display value"),
-    )
-    .expect("drawer display bool");
+    let drawer_displayed: bool = eval_json(
+        &tab,
+        "getComputedStyle(document.getElementById('file-detail-drawer')).display !== 'none'",
+    );
     assert!(
         drawer_displayed,
         "detail drawer computed display:none after open (invisible popup)"
     );
 
-    let title_len: i64 = serde_json::from_value(
-        tab.evaluate(
-            "document.getElementById('drawer-title').textContent.trim().length",
-            false,
-        )
-        .expect("eval title len")
-        .value
-        .expect("title len value"),
-    )
-    .expect("title len i64");
+    let title_len: i64 = eval_json(
+        &tab,
+        "document.getElementById('drawer-title').textContent.trim().length",
+    );
     assert!(
         title_len > 0,
         "drawer title (clicked path) was empty; title_len={title_len}"
     );
 
-    let body_len: i64 = serde_json::from_value(
-        tab.evaluate(
-            "document.getElementById('drawer-body').innerHTML.length",
-            false,
-        )
-        .expect("eval body len")
-        .value
-        .expect("body len value"),
-    )
-    .expect("body len i64");
+    let body_len: i64 = eval_json(
+        &tab,
+        "document.getElementById('drawer-body').innerHTML.length",
+    );
     assert!(body_len > 0, "drawer body was empty; body_len={body_len}");
 
-    let has_ki_section: bool = serde_json::from_value(
-        tab.evaluate(
-            "document.getElementById('drawer-body').textContent.includes('Knowledge island')",
-            false,
-        )
-        .expect("eval ki section")
-        .value
-        .expect("ki section value"),
-    )
-    .expect("ki section bool");
+    let has_ki_section: bool = eval_json(
+        &tab,
+        "document.getElementById('drawer-body').textContent.includes('Knowledge island')",
+    );
     assert!(
         has_ki_section,
         "drawer body had no 'Knowledge island' section for a KI-row click"
@@ -399,18 +348,12 @@ fn knowledge_islands_row_opens_and_closes_detail_drawer() {
     // asynchronously; give it a turn before re-reading state.
     std::thread::sleep(Duration::from_millis(300));
 
-    let drawer_closed: bool = serde_json::from_value(
-        tab.evaluate(
-            "(() => { const d = document.getElementById('file-detail-drawer'); \
+    let drawer_closed: bool = eval_json(
+        &tab,
+        "(() => { const d = document.getElementById('file-detail-drawer'); \
              return d.open === false && (d.hasAttribute('hidden') || \
              getComputedStyle(d).display === 'none'); })()",
-            false,
-        )
-        .expect("eval drawer closed")
-        .value
-        .expect("drawer closed value"),
-    )
-    .expect("drawer closed bool");
+    );
     assert!(
         drawer_closed,
         "detail drawer did not close after clicking the × button"
@@ -489,25 +432,10 @@ fn detail_drawer_has_accessible_name_and_manages_focus() {
     .expect("write_spa");
     drop(f);
 
-    // -- Step 2: launch headless Chrome (skip if unavailable). -----------
-    let browser = match Browser::default() {
-        Ok(b) => b,
-        Err(e) => {
-            println!(
-                "spa_browser_test: skipping — could not launch Chrome ({e}). \
-                 Install Chrome / Chromium and retry."
-            );
-            return;
-        }
+    // -- Step 2: launch Chrome + let Alpine/widgets boot (skip if no Chrome). --
+    let Some((_browser, tab)) = boot_spa_tab(&html_path) else {
+        return;
     };
-
-    let tab = browser.new_tab().expect("new tab");
-
-    // -- Step 3: navigate + let Alpine/widgets boot. ---------------------
-    let url = format!("file://{}", html_path.display());
-    tab.navigate_to(&url).expect("navigate");
-    tab.wait_until_navigated().expect("wait navigation");
-    std::thread::sleep(Duration::from_secs(2));
 
     // -- Step 4: focus the first KI row, then activate it. ---------------
     // The rows are keyboard-activable, so focusing first models the
@@ -526,16 +454,10 @@ fn detail_drawer_has_accessible_name_and_manages_focus() {
     )
     .expect("focus the KI row");
 
-    let row_focused_before: bool = serde_json::from_value(
-        tab.evaluate(
-            "document.activeElement === document.querySelector('tr[data-focus-trigger-marker]')",
-            false,
-        )
-        .expect("eval row focused before")
-        .value
-        .expect("row focused before value"),
-    )
-    .expect("row focused before bool");
+    let row_focused_before: bool = eval_json(
+        &tab,
+        "document.activeElement === document.querySelector('tr[data-focus-trigger-marker]')",
+    );
     assert!(
         row_focused_before,
         "could not focus the KI row before activation; test premise broken"
@@ -553,16 +475,10 @@ fn detail_drawer_has_accessible_name_and_manages_focus() {
     std::thread::sleep(Duration::from_millis(300));
 
     // -- Step 5: assert the drawer opened and focus moved INTO it. -------
-    let drawer_open: bool = serde_json::from_value(
-        tab.evaluate(
-            "document.getElementById('file-detail-drawer').open === true",
-            false,
-        )
-        .expect("eval drawer open")
-        .value
-        .expect("drawer open value"),
-    )
-    .expect("drawer open bool");
+    let drawer_open: bool = eval_json(
+        &tab,
+        "document.getElementById('file-detail-drawer').open === true",
+    );
     assert!(
         drawer_open,
         "detail drawer did not open on KI row keyboard activation"
@@ -573,20 +489,14 @@ fn detail_drawer_has_accessible_name_and_manages_focus() {
     // must point at an element whose text is non-empty) rather than
     // just asserting the attribute string, so a dangling reference
     // can't pass. This is the assertion that fails on un-fixed source.
-    let drawer_named: bool = serde_json::from_value(
-        tab.evaluate(
-            "(() => { const d = document.getElementById('file-detail-drawer'); \
+    let drawer_named: bool = eval_json(
+        &tab,
+        "(() => { const d = document.getElementById('file-detail-drawer'); \
              const ref = d.getAttribute('aria-labelledby'); \
              if (!ref) return false; \
              const labelEl = document.getElementById(ref); \
              return !!labelEl && labelEl.textContent.trim().length > 0; })()",
-            false,
-        )
-        .expect("eval drawer aria-labelledby")
-        .value
-        .expect("drawer aria-labelledby value"),
-    )
-    .expect("drawer named bool");
+    );
     assert!(
         drawer_named,
         "detail drawer has no resolvable accessible name \
@@ -594,18 +504,12 @@ fn detail_drawer_has_accessible_name_and_manages_focus() {
          it as an unnamed dialog"
     );
 
-    let focus_inside_drawer: bool = serde_json::from_value(
-        tab.evaluate(
-            "(() => { const d = document.getElementById('file-detail-drawer'); \
+    let focus_inside_drawer: bool = eval_json(
+        &tab,
+        "(() => { const d = document.getElementById('file-detail-drawer'); \
              const a = document.activeElement; \
              return !!a && (a === d || d.contains(a)); })()",
-            false,
-        )
-        .expect("eval focus inside drawer")
-        .value
-        .expect("focus inside drawer value"),
-    )
-    .expect("focus inside drawer bool");
+    );
     assert!(
         focus_inside_drawer,
         "focus did not move into the drawer on open — keyboard / screen-reader \
@@ -619,16 +523,10 @@ fn detail_drawer_has_accessible_name_and_manages_focus() {
     close_btn.click().expect("click drawer close");
     std::thread::sleep(Duration::from_millis(300));
 
-    let focus_restored: bool = serde_json::from_value(
-        tab.evaluate(
-            "document.activeElement === document.querySelector('tr[data-focus-trigger-marker]')",
-            false,
-        )
-        .expect("eval focus restored")
-        .value
-        .expect("focus restored value"),
-    )
-    .expect("focus restored bool");
+    let focus_restored: bool = eval_json(
+        &tab,
+        "document.activeElement === document.querySelector('tr[data-focus-trigger-marker]')",
+    );
     assert!(
         focus_restored,
         "focus did not return to the trigger row after the drawer closed"
@@ -760,6 +658,44 @@ fn write_smoke_spa(html_path: &std::path::Path, title: &str) {
     drop(f);
 }
 
+/// Launch headless Chrome, open a tab on `file://<html_path>`, and give
+/// Alpine + the cooperative widget-boot loop the standard 2-second settle
+/// window every interaction test relies on. Returns `None` — after printing
+/// the standard skip line — when Chrome can't be launched, so a contributor
+/// machine without Chrome `return`s cleanly instead of panicking. The
+/// `Browser` is handed back alongside the tab; callers must keep it bound
+/// (dropping it would close the tab).
+fn boot_spa_tab(html_path: &std::path::Path) -> Option<(Browser, Arc<headless_chrome::Tab>)> {
+    let browser = match Browser::default() {
+        Ok(b) => b,
+        Err(e) => {
+            println!(
+                "spa_browser_test: skipping — could not launch Chrome ({e}). \
+                 Install Chrome / Chromium and retry."
+            );
+            return None;
+        }
+    };
+    let tab = browser.new_tab().expect("new tab");
+    let url = format!("file://{}", html_path.display());
+    tab.navigate_to(&url).expect("navigate");
+    tab.wait_until_navigated().expect("wait navigation");
+    std::thread::sleep(Duration::from_secs(2));
+    Some((browser, tab))
+}
+
+/// Evaluate `js` in the page and deserialize the returned JSON value into
+/// `T`. Collapses the `evaluate → .value.expect → serde_json::from_value`
+/// readback ladder every assertion repeats.
+fn eval_json<T: serde::de::DeserializeOwned>(tab: &headless_chrome::Tab, js: &str) -> T {
+    let value = tab
+        .evaluate(js, false)
+        .expect("evaluate js")
+        .value
+        .expect("js returned a value");
+    serde_json::from_value(value).expect("deserialize js result")
+}
+
 /// A `role="tablist"` must support arrow-key navigation per the
 /// WAI-ARIA Tabs pattern: focus a tab, press `ArrowRight`, and focus +
 /// the selected state move to the next tab. On the un-fixed source the
@@ -772,30 +708,17 @@ fn tablist_arrow_keys_move_focus_and_selection() {
     let html_path = tmp.path().join("codelore.html");
     write_smoke_spa(&html_path, "CodeLore Tablist Keyboard Test");
 
-    let browser = match Browser::default() {
-        Ok(b) => b,
-        Err(e) => {
-            println!(
-                "spa_browser_test: skipping — could not launch Chrome ({e}). \
-                 Install Chrome / Chromium and retry."
-            );
-            return;
-        }
+    let Some((_browser, tab)) = boot_spa_tab(&html_path) else {
+        return;
     };
-
-    let tab = browser.new_tab().expect("new tab");
-    let url = format!("file://{}", html_path.display());
-    tab.navigate_to(&url).expect("navigate");
-    tab.wait_until_navigated().expect("wait navigation");
-    std::thread::sleep(Duration::from_secs(2));
 
     // Use the hotspot color-mode tablist — it always renders (static
     // markup, no data dependency) and its first tab starts selected.
     // Mark the first two tabs so we can assert identity across evaluate
     // calls, focus the first, then press ArrowRight.
-    let setup_ok: bool = serde_json::from_value(
-        tab.evaluate(
-            "(() => { const bar = document.getElementById('hotspot-color-toggles'); \
+    let setup_ok: bool = eval_json(
+        &tab,
+        "(() => { const bar = document.getElementById('hotspot-color-toggles'); \
              if (!bar) return false; \
              const tabs = bar.querySelectorAll('[role=\"tab\"]'); \
              if (tabs.length < 2) return false; \
@@ -804,13 +727,7 @@ fn tablist_arrow_keys_move_focus_and_selection() {
              tabs[0].focus(); \
              return document.activeElement === tabs[0] && \
                     tabs[0].getAttribute('tabindex') === '0'; })()",
-            false,
-        )
-        .expect("eval tablist setup")
-        .value
-        .expect("tablist setup value"),
-    )
-    .expect("tablist setup bool");
+    );
     assert!(
         setup_ok,
         "could not focus the first tab with roving tabindex=0; \
@@ -830,37 +747,25 @@ fn tablist_arrow_keys_move_focus_and_selection() {
     // either propagation path.
     std::thread::sleep(Duration::from_millis(200));
 
-    let focus_moved: bool = serde_json::from_value(
-        tab.evaluate(
-            "document.activeElement === document.querySelector('[data-kb-second]')",
-            false,
-        )
-        .expect("eval focus moved")
-        .value
-        .expect("focus moved value"),
-    )
-    .expect("focus moved bool");
+    let focus_moved: bool = eval_json(
+        &tab,
+        "document.activeElement === document.querySelector('[data-kb-second]')",
+    );
     assert!(
         focus_moved,
         "ArrowRight did not move focus to the next tab — tablist has no \
          arrow-key navigation"
     );
 
-    let selection_moved: bool = serde_json::from_value(
-        tab.evaluate(
-            "(() => { const first = document.querySelector('[data-kb-first]'); \
+    let selection_moved: bool = eval_json(
+        &tab,
+        "(() => { const first = document.querySelector('[data-kb-first]'); \
              const second = document.querySelector('[data-kb-second]'); \
              return second.getAttribute('aria-selected') === 'true' && \
                     first.getAttribute('aria-selected') === 'false' && \
                     second.getAttribute('tabindex') === '0' && \
                     first.getAttribute('tabindex') === '-1'; })()",
-            false,
-        )
-        .expect("eval selection moved")
-        .value
-        .expect("selection moved value"),
-    )
-    .expect("selection moved bool");
+    );
     assert!(
         selection_moved,
         "ArrowRight moved focus but not the aria-selected / roving-tabindex \
@@ -880,40 +785,21 @@ fn chart_containers_expose_text_alternative() {
     let html_path = tmp.path().join("codelore.html");
     write_smoke_spa(&html_path, "CodeLore Chart A11y Test");
 
-    let browser = match Browser::default() {
-        Ok(b) => b,
-        Err(e) => {
-            println!(
-                "spa_browser_test: skipping — could not launch Chrome ({e}). \
-                 Install Chrome / Chromium and retry."
-            );
-            return;
-        }
+    // Charts mount across the cooperative boot loop; the helper's 2s settle
+    // gives the slowest a window before we count labelled containers.
+    let Some((_browser, tab)) = boot_spa_tab(&html_path) else {
+        return;
     };
-
-    let tab = browser.new_tab().expect("new tab");
-    let url = format!("file://{}", html_path.display());
-    tab.navigate_to(&url).expect("navigate");
-    tab.wait_until_navigated().expect("wait navigation");
-    // Charts mount across the cooperative boot loop; give the slowest a
-    // window. Same 2s budget the boot smoke test uses.
-    std::thread::sleep(Duration::from_secs(2));
 
     // Count chart-body containers that expose BOTH role="img" and a
     // non-empty aria-label. Scoped to `.widget-body` so we don't count
     // incidental img-role nodes elsewhere.
-    let labelled_count: i64 = serde_json::from_value(
-        tab.evaluate(
-            "Array.from(document.querySelectorAll('.widget-body[role=\"img\"]')) \
+    let labelled_count: i64 = eval_json(
+        &tab,
+        "Array.from(document.querySelectorAll('.widget-body[role=\"img\"]')) \
              .filter(el => (el.getAttribute('aria-label') || '').trim().length > 0) \
              .length",
-            false,
-        )
-        .expect("eval labelled chart count")
-        .value
-        .expect("labelled chart count value"),
-    )
-    .expect("labelled chart count i64");
+    );
     assert!(
         labelled_count >= 8,
         "expected >=8 chart containers with role=img + non-empty aria-label, \
@@ -931,35 +817,16 @@ fn hotspot_table_summary_is_a_live_region() {
     let html_path = tmp.path().join("codelore.html");
     write_smoke_spa(&html_path, "CodeLore Live-Region Test");
 
-    let browser = match Browser::default() {
-        Ok(b) => b,
-        Err(e) => {
-            println!(
-                "spa_browser_test: skipping — could not launch Chrome ({e}). \
-                 Install Chrome / Chromium and retry."
-            );
-            return;
-        }
+    let Some((_browser, tab)) = boot_spa_tab(&html_path) else {
+        return;
     };
 
-    let tab = browser.new_tab().expect("new tab");
-    let url = format!("file://{}", html_path.display());
-    tab.navigate_to(&url).expect("navigate");
-    tab.wait_until_navigated().expect("wait navigation");
-    std::thread::sleep(Duration::from_secs(2));
-
-    let is_live_region: bool = serde_json::from_value(
-        tab.evaluate(
-            "(() => { const el = document.getElementById('hotspot-table-summary'); \
+    let is_live_region: bool = eval_json(
+        &tab,
+        "(() => { const el = document.getElementById('hotspot-table-summary'); \
              return !!el && el.getAttribute('aria-live') === 'polite' && \
                     el.getAttribute('role') === 'status'; })()",
-            false,
-        )
-        .expect("eval live region")
-        .value
-        .expect("live region value"),
-    )
-    .expect("live region bool");
+    );
     assert!(
         is_live_region,
         "hotspot-table summary is not a polite live region; filter-count \
@@ -978,22 +845,9 @@ fn detail_drawer_never_renders_empty_for_a_pathless_row() {
     let html_path = tmp.path().join("codelore.html");
     write_smoke_spa(&html_path, "CodeLore Empty-Path Drawer Test");
 
-    let browser = match Browser::default() {
-        Ok(b) => b,
-        Err(e) => {
-            println!(
-                "spa_browser_test: skipping — could not launch Chrome ({e}). \
-                 Install Chrome / Chromium and retry."
-            );
-            return;
-        }
+    let Some((_browser, tab)) = boot_spa_tab(&html_path) else {
+        return;
     };
-
-    let tab = browser.new_tab().expect("new tab");
-    let url = format!("file://{}", html_path.display());
-    tab.navigate_to(&url).expect("navigate");
-    tab.wait_until_navigated().expect("wait navigation");
-    std::thread::sleep(Duration::from_secs(2));
 
     // Open the drawer with an EMPTY path — models a row whose path/entity
     // field was missing, the scenario that produced a blank popup.
@@ -1001,31 +855,19 @@ fn detail_drawer_never_renders_empty_for_a_pathless_row() {
         .expect("invoke detail with empty path");
     std::thread::sleep(Duration::from_millis(300));
 
-    let title_nonempty: bool = serde_json::from_value(
-        tab.evaluate(
-            "document.getElementById('drawer-title').textContent.trim().length > 0",
-            false,
-        )
-        .expect("eval drawer title")
-        .value
-        .expect("drawer title value"),
-    )
-    .expect("drawer title bool");
+    let title_nonempty: bool = eval_json(
+        &tab,
+        "document.getElementById('drawer-title').textContent.trim().length > 0",
+    );
     assert!(
         title_nonempty,
         "drawer title is blank for a pathless row — the popup renders empty"
     );
 
-    let body_nonempty: bool = serde_json::from_value(
-        tab.evaluate(
-            "document.getElementById('drawer-body').textContent.trim().length > 0",
-            false,
-        )
-        .expect("eval drawer body")
-        .value
-        .expect("drawer body value"),
-    )
-    .expect("drawer body bool");
+    let body_nonempty: bool = eval_json(
+        &tab,
+        "document.getElementById('drawer-body').textContent.trim().length > 0",
+    );
     assert!(
         body_nonempty,
         "drawer body is blank for a pathless row — the popup renders empty"
@@ -1045,38 +887,19 @@ fn detail_drawer_content_is_opaque_when_open() {
     let html_path = tmp.path().join("codelore.html");
     write_smoke_spa(&html_path, "CodeLore Drawer Visibility Test");
 
-    let browser = match Browser::default() {
-        Ok(b) => b,
-        Err(e) => {
-            println!(
-                "spa_browser_test: skipping — could not launch Chrome ({e}). \
-                 Install Chrome / Chromium and retry."
-            );
-            return;
-        }
+    let Some((_browser, tab)) = boot_spa_tab(&html_path) else {
+        return;
     };
-
-    let tab = browser.new_tab().expect("new tab");
-    let url = format!("file://{}", html_path.display());
-    tab.navigate_to(&url).expect("navigate");
-    tab.wait_until_navigated().expect("wait navigation");
-    std::thread::sleep(Duration::from_secs(2));
 
     tab.evaluate("window._codeloreShowDetail('any/path')", false)
         .expect("open the drawer");
     std::thread::sleep(Duration::from_millis(400));
 
-    let box_opaque: bool = serde_json::from_value(
-        tab.evaluate(
-            "(() => { const b = document.querySelector('#file-detail-drawer .modal-box'); \
+    let box_opaque: bool = eval_json(
+        &tab,
+        "(() => { const b = document.querySelector('#file-detail-drawer .modal-box'); \
              return !!b && getComputedStyle(b).opacity === '1'; })()",
-            false,
-        )
-        .expect("eval modal-box opacity")
-        .value
-        .expect("modal-box opacity value"),
-    )
-    .expect("modal-box opacity bool");
+    );
     assert!(
         box_opaque,
         "drawer .modal-box is not opaque (opacity != 1) — the populated \
