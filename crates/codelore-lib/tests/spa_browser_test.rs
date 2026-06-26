@@ -1031,3 +1031,55 @@ fn detail_drawer_never_renders_empty_for_a_pathless_row() {
         "drawer body is blank for a pathless row — the popup renders empty"
     );
 }
+
+#[test]
+fn detail_drawer_content_is_opaque_when_open() {
+    // The drawer content lives in a DaisyUI `.modal-box`, which ships
+    // `opacity: 0` and only fades to 1 via a `.modal.modal-open` ancestor
+    // this drawer deliberately drops (for positioning). Without an explicit
+    // override the content renders fully TRANSPARENT — a blank popup (black
+    // in dark mode) even though the DOM is populated. Every other drawer
+    // test checks DOM content, not pixels, so this class of bug slipped
+    // through; assert the box is actually opaque when the drawer opens.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let html_path = tmp.path().join("codelore.html");
+    write_smoke_spa(&html_path, "CodeLore Drawer Visibility Test");
+
+    let browser = match Browser::default() {
+        Ok(b) => b,
+        Err(e) => {
+            println!(
+                "spa_browser_test: skipping — could not launch Chrome ({e}). \
+                 Install Chrome / Chromium and retry."
+            );
+            return;
+        }
+    };
+
+    let tab = browser.new_tab().expect("new tab");
+    let url = format!("file://{}", html_path.display());
+    tab.navigate_to(&url).expect("navigate");
+    tab.wait_until_navigated().expect("wait navigation");
+    std::thread::sleep(Duration::from_secs(2));
+
+    tab.evaluate("window._codeloreShowDetail('any/path')", false)
+        .expect("open the drawer");
+    std::thread::sleep(Duration::from_millis(400));
+
+    let box_opaque: bool = serde_json::from_value(
+        tab.evaluate(
+            "(() => { const b = document.querySelector('#file-detail-drawer .modal-box'); \
+             return !!b && getComputedStyle(b).opacity === '1'; })()",
+            false,
+        )
+        .expect("eval modal-box opacity")
+        .value
+        .expect("modal-box opacity value"),
+    )
+    .expect("modal-box opacity bool");
+    assert!(
+        box_opaque,
+        "drawer .modal-box is not opaque (opacity != 1) — the populated \
+         content is invisible, which reads as a blank popup"
+    );
+}

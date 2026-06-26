@@ -18,7 +18,7 @@ Conventional Commits format. All notable changes documented here.
 
 ### Fixed
 
-- **SPA: the file-detail drawer can no longer render as a totally-blank popup.** A row that resolves to an empty or missing path (a malformed entry with neither a `path` nor an `entity` field) previously set the drawer title to the empty string and produced an empty body. The drawer now falls back to a stable "File details" title and an explanatory body ("this row had no resolvable file path …") so it is always self-explanatory. A headless-browser regression test opens the drawer with an empty path and asserts a non-empty title + body.
+- **SPA: the file-detail drawer rendered as a blank popup (black in dark mode) on click.** Root cause: the drawer's content container is a DaisyUI `.modal-box`, which ships `opacity: 0` and is only faded to `1` by a `.modal.modal-open` ancestor — but the drawer deliberately drops the `.modal` class (it over-constrains the right-side positioning), so the populated content was always fully *transparent*. Fixed with an explicit `.detail-drawer .modal-box { opacity: 1 }`. A new headless-browser regression test asserts the `.modal-box` is actually opaque when the drawer opens — every prior drawer test checked DOM content, not pixel visibility, which is exactly how this slipped through. The render path was also hardened: the drawer now opens + populates *before* publishing the cross-widget selection (each isolated in try/catch) and falls back to a stable "File details" title, so a malformed row (no `path`/`entity`) can't produce an empty popup either.
 
 ### Performance
 

@@ -698,6 +698,14 @@
       flex-direction: column;
     }
     .detail-drawer[hidden] { display: none; }
+    /* DaisyUI's `.modal-box` ships `opacity: 0` and only fades to 1 via a
+       `.modal.modal-open` / `.modal[open]` ancestor. This drawer deliberately
+       drops the `.modal` class (see the <dialog> note below) to fix
+       positioning, so nothing ever set the content opaque — it rendered fully
+       transparent, i.e. a blank popup (black in dark mode) even though the DOM
+       was populated. The slide-in panel is `.detail-drawer` itself, so force
+       its content visible and clear any DaisyUI open/close transform. */
+    .detail-drawer .modal-box { opacity: 1; transform: none; }
     /* Suppress flash-of-visible-drawer before Alpine.js's
        `x-show="$store.detail.open"` runs. Alpine sets `x-cloak`
        attributes pre-init; this rule hides them until Alpine
