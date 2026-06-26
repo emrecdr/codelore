@@ -330,9 +330,67 @@ pub fn topo_levels(adj: &[Vec<usize>], sccs: &[Vec<usize>]) -> Vec<u32> {
     (0..n).map(|node| scc_level[scc_of[node]]).collect()
 }
 
+/// Transitive-reachability index for pairwise "is there a dependency
+/// path between these two files?" queries. Built on the SCC
+/// condensation so cycles collapse to a point; the forward reach-sets
+/// stay sparse for real import graphs (no N×N matrix).
+pub struct ReachIndex {
+    scc_of: Vec<usize>,
+    /// `reach_fwd[scc]` = the set of SCCs reachable from `scc` (incl. self).
+    reach_fwd: Vec<HashSet<usize>>,
+}
+
+impl ReachIndex {
+    /// True iff a directed dependency path exists from `a` to `b` or
+    /// from `b` to `a` — i.e. one file (transitively) imports the other.
+    #[must_use]
+    pub fn connected(&self, a: usize, b: usize) -> bool {
+        let ca = self.scc_of[a];
+        let cb = self.scc_of[b];
+        self.reach_fwd[ca].contains(&cb) || self.reach_fwd[cb].contains(&ca)
+    }
+}
+
+/// Build a [`ReachIndex`] for pairwise connectivity queries. Same
+/// forward-closure construction as [`reachability`], but retains the
+/// reach-sets instead of collapsing them to counts.
+#[must_use]
+pub fn reach_index(adj: &[Vec<usize>], sccs: &[Vec<usize>]) -> ReachIndex {
+    let n = adj.len();
+    let c = sccs.len();
+    let mut scc_of = vec![0usize; n];
+    for (cid, comp) in sccs.iter().enumerate() {
+        for &node in comp {
+            scc_of[node] = cid;
+        }
+    }
+    let mut cond_fwd: Vec<HashSet<usize>> = vec![HashSet::new(); c];
+    for (u, edges) in adj.iter().enumerate() {
+        let cu = scc_of[u];
+        for &v in edges {
+            let cv = scc_of[v];
+            if cu != cv {
+                cond_fwd[cu].insert(cv);
+            }
+        }
+    }
+    let mut reach_fwd: Vec<HashSet<usize>> = vec![HashSet::new(); c];
+    for cid in 0..c {
+        let mut set = HashSet::new();
+        set.insert(cid);
+        for &succ in &cond_fwd[cid] {
+            for &r in &reach_fwd[succ] {
+                set.insert(r);
+            }
+        }
+        reach_fwd[cid] = set;
+    }
+    ReachIndex { scc_of, reach_fwd }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{reachability, tarjan_scc, topo_levels};
+    use super::{reach_index, reachability, tarjan_scc, topo_levels};
     use std::collections::BTreeSet;
 
     /// Normalise SCC output to a comparable set-of-sorted-sets so tests
@@ -436,5 +494,22 @@ mod tests {
         // Cycle {0,1} → 2 → cycle {3,4}: levels 0,0,1,2,2.
         let adj = vec![vec![1], vec![0, 2], vec![3], vec![4], vec![3]];
         assert_eq!(topo_levels(&adj, &tarjan_scc(&adj)), vec![0, 0, 1, 2, 2]);
+    }
+
+    #[test]
+    fn reach_index_pairwise_connectivity() {
+        // 0 → 1 → 2, node 3 isolated.
+        let adj = vec![vec![1], vec![2], vec![], vec![]];
+        let idx = reach_index(&adj, &tarjan_scc(&adj));
+        assert!(idx.connected(0, 2), "0 reaches 2 transitively");
+        assert!(
+            idx.connected(2, 0),
+            "connected is symmetric (either direction)"
+        );
+        assert!(
+            !idx.connected(0, 3),
+            "nothing connects 0 and the isolated 3"
+        );
+        assert!(!idx.connected(2, 3), "no path between 2 and 3");
     }
 }

@@ -14,28 +14,30 @@
 //!
 //! - **Temporal:** [`coupling::run_coupling`](crate::analyses::coupling::run_coupling)
 //!   Fisher-significant co-change pairs.
-//! - **Structural:** the `imports` table (resolved file → file edges).
+//! - **Structural:** the import graph
+//!   ([`import_graph`](crate::analyses::import_graph)) with transitive
+//!   reachability.
 //!
-//! A modularity violation is a temporal edge with no structural edge
-//! in EITHER direction — the "co-change ∧ ¬import" cell of the
-//! structure×history matrix that neither an import-only graph (it has
-//! no history) nor a history-only tool (it has no structure) can
-//! populate.
+//! A modularity violation is a co-change pair with **no directed
+//! dependency path** between the two files in either direction — neither
+//! (transitively) imports the other. That is the "co-change ∧
+//! ¬structurally-connected" cell of the structure×history matrix that
+//! neither an import-only graph (it has no history) nor a history-only
+//! tool (it has no structure) can populate.
 //!
 //! ## Scope & limits
 //!
-//! - **Direct edges only.** A pair coupled solely through a transitive
-//!   import chain (`a → b → c`, with `a` and `c` co-changing) is still
-//!   reported here. Transitive-reachability filtering is a follow-up
-//!   that consumes the structural reachability kernel.
-//! - **Resolver language coverage.** "No structural edge" relies on the
-//!   resolved `imports.target_path`, populated for Rust + Python + JS/TS.
+//! - **Transitive.** A pair coupled through an import chain
+//!   (`a → b → c`, with `a` and `c` co-changing) is *not* a violation —
+//!   `a` does depend on `c`, just not directly. Only pairs with no path
+//!   between them are flagged. Files with no resolved imports aren't
+//!   graph nodes, so any co-change with them is (correctly) a violation.
+//! - **Resolver language coverage.** Connectivity relies on the resolved
+//!   `imports.target_path`, populated for Rust + Python + JS/TS.
 //!   Languages whose resolver leaves `target_path` NULL (e.g. Java) make
 //!   real import edges look absent, so such repos over-report. Same
 //!   caveat [`god_classes`](crate::analyses::god_classes) documents for
 //!   fan-in.
-
-use std::collections::HashSet;
 
 use crate::facts::FactsDb;
 use crate::{Options, Result};
@@ -85,27 +87,32 @@ pub fn run_modularity_violations(
         return Ok(Vec::new());
     }
 
-    // Resolved structural import edges, as a directed set. We probe both
-    // orientations below, so a single orientation in the set is enough.
-    let import_edges: HashSet<(String, String)> = crate::analyses::query::query_map_collect(
-        db,
-        "SELECT src_path, target_path FROM imports WHERE target_path IS NOT NULL",
-        [],
-        "modularity-violations imports",
-        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-    )?
-    .into_iter()
-    .collect();
+    // Structural import graph + transitive reachability index. A
+    // co-change pair is a violation unless a directed dependency path
+    // connects the two files (either direction) — i.e. one transitively
+    // imports the other.
+    let graph = crate::analyses::import_graph::build_import_graph(db)?;
+    let sccs = crate::analyses::import_graph::tarjan_scc(&graph.adj);
+    let reach = crate::analyses::import_graph::reach_index(&graph.adj, &sccs);
 
-    // Keep co-change pairs with no import edge in either direction.
+    // Keep co-change pairs that are not structurally connected.
     // `run_coupling` already orders by `(degree DESC, average_revs DESC,
     // entity_a, entity_b)`; the filter is stable, so the output stays
     // ranked by coupling strength. Apply the final row limit last.
     let mut out: Vec<ModularityViolationRow> = coupling_rows
         .into_iter()
         .filter(|p| {
-            !import_edges.contains(&(p.entity_a.clone(), p.entity_b.clone()))
-                && !import_edges.contains(&(p.entity_b.clone(), p.entity_a.clone()))
+            // Both files must be import-graph nodes AND have a path
+            // between them to count as structurally connected. A file
+            // with no resolved imports isn't a node, so a co-change with
+            // it is correctly kept as a violation.
+            match (
+                graph.path_to_id.get(&p.entity_a),
+                graph.path_to_id.get(&p.entity_b),
+            ) {
+                (Some(&a), Some(&b)) => !reach.connected(a, b),
+                _ => true,
+            }
         })
         .map(|p| ModularityViolationRow {
             entity_a: p.entity_a,

@@ -291,7 +291,7 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
         (
             "modularity-violations",
             "Mo, Cai, Kazman, Xiao 2015 *Hotspot Patterns* (DV8) + Baldwin/MacCormack 2014 hidden structure",
-            "Fisher-significant co-change pairs (from coupling) with NO structural import edge in either direction — implicit cross-module dependencies. Ranked by coupling degree. Direct edges only; accuracy follows the import resolver's language coverage.",
+            "Fisher-significant co-change pairs (from coupling) with NO directed dependency path between them (transitive reachability, either direction) — implicit cross-module dependencies. Ranked by coupling degree. Accuracy follows the import resolver's language coverage.",
             "See analyses/modularity_violations.rs.",
         ),
         (
