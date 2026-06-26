@@ -628,15 +628,28 @@
   // order vs the renderXxx() calls is immaterial because this is
   // invoked at user-click time.
   window._codeloreShowDetail = function (path) {
-    // Publish selection so registered listeners (trends, parallel-
-    // coords, etc.) light up the same file across every widget.
-    // Drawer-close clears the selection via the dialog `close`
-    // event listener registered in template.html.
-    if (window.Alpine && window.Alpine.store) {
-      const sel = window.Alpine.store('selection');
-      if (sel) sel.set(path);
+    // Open + populate the drawer FIRST, isolated, so nothing below can
+    // leave a blank popup. A failure rendering one row's details is logged
+    // to the console (for diagnosis) but the drawer still shows its title
+    // and a fallback body.
+    try {
+      showFileDetailDrawer(path, data);
+    } catch (e) {
+      console.error('codelore: detail drawer render failed for', path, e);
     }
-    showFileDetailDrawer(path, data);
+    // Then publish selection so registered listeners (trends, parallel-
+    // coords, etc.) light up the same file across every widget. Best-effort
+    // and isolated: a selection-store hiccup must not block the drawer (this
+    // ordering is the fix for an empty, titleless popup). Drawer-close clears
+    // the selection via the dialog `close` listener in template.html.
+    try {
+      if (window.Alpine && window.Alpine.store) {
+        const sel = window.Alpine.store('selection');
+        if (sel) sel.set(path);
+      }
+    } catch (e) {
+      console.error('codelore: selection publish failed for', path, e);
+    }
   };
 
   // Populate the offboarding picker's author list from the
@@ -970,6 +983,10 @@
 
     var html = '';
 
+    // All section lookups are wrapped so one row's malformed data can't
+    // blank the drawer: partial html built before any throw is still shown,
+    // and the underlying error is surfaced to the console for diagnosis.
+    try {
     // Section: hotspot row
     const hot = (d.hotspots || []).find(function (r) { return r.path === path; });
     if (hot) {
@@ -1125,6 +1142,9 @@
         '<dt>Cognitive</dt><dd>' + fmtNumberFlex(ch.cognitive, 0) + '</dd>' +
         '</dl>';
     }
+    } catch (e) {
+      console.error('codelore: drawer section render failed for', path, e);
+    }
 
     if (!html) {
       html = hasPath
@@ -1146,7 +1166,15 @@
     body.innerHTML = html;
 
     // Render the radar after body.innerHTML so the container exists.
-    renderDrawerRadar(path, d);
+    // Isolated: an ECharts failure on sparse/edge-case data must not wipe
+    // the drawer body that's already populated above — just hide the radar.
+    try {
+      renderDrawerRadar(path, d);
+    } catch (e) {
+      console.error('codelore: drawer radar render failed for', path, e);
+      const radarEl = document.getElementById('drawer-radar');
+      if (radarEl) radarEl.style.display = 'none';
+    }
 
     // Native <dialog>. Alpine.store('detail') routes show()/hide()
     // through showModal()/close(). Fallback path for environments
