@@ -76,6 +76,17 @@ pub enum AnalysisName {
     // table; flags every import edge that crosses a forbidden layer
     // boundary. No rules file → empty output (opt-in).
     ArchViolations,
+    // Modularity violations — file pairs that co-change
+    // (Fisher-significant) yet have NO structural import edge between
+    // them. The structure×history fusion: implicit cross-module
+    // dependencies (Mo et al. 2015 *Hotspot Patterns*, DV8). CodeLore
+    // differentiator — needs BOTH the import graph and the co-change
+    // graph, which import-only and history-only tools each lack.
+    ModularityViolations,
+    // Unstable interfaces — heavily-imported files that change often
+    // AND co-change with their dependents, so the instability
+    // propagates outward (Mo et al. 2015 *Hotspot Patterns*, DV8).
+    UnstableInterface,
     // Stale-code surfacer — files alive at HEAD untouched ≥N months
     // AND low cognitive (trivial). Intersection minimises false
     // positives.
@@ -132,6 +143,8 @@ impl AnalysisName {
             Self::Communities => "communities",
             Self::GodClasses => "god-classes",
             Self::ArchViolations => "architecture-violations",
+            Self::ModularityViolations => "modularity-violations",
+            Self::UnstableInterface => "unstable-interface",
             Self::StaleCode => "stale-code",
             Self::PairProgramming => "pair-programming",
             Self::LeadTime => "lead-time",
@@ -198,6 +211,8 @@ impl AnalysisName {
             Communities,
             GodClasses,
             ArchViolations,
+            ModularityViolations,
+            UnstableInterface,
             StaleCode,
             PairProgramming,
             LeadTime,

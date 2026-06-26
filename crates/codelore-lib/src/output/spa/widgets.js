@@ -579,7 +579,7 @@
     { name: 'parallel-coords',    render: () => renderParallelCoords(data.hotspots || []) },
     { name: 'cognitive-boxplot',  render: () => renderCognitiveBoxplot(data.hotspots || []) },
     { name: 'module-chord',       render: () => renderModuleChord(data.coupling || []) },
-    { name: 'arch-graph',         render: () => renderArchGraph(data.imports || []) },
+    { name: 'arch-graph',         render: () => renderArchGraph(data.imports || [], data.modularity_violations || [], data.unstable_interface || []) },
     { name: 'calendar-heatmap',   rerender: 'theme', render: () => renderCalendarHeatmap(data.daily_commits || []) },
     { name: 'xray-sunburst',      render: () => renderXRaySunburst(data.xray || []) },
   ];
@@ -3116,7 +3116,9 @@
 
   // ─── §11g Widget: Architecture force-graph ───────────────────────
 
-  function renderArchGraph(imports) {
+  function renderArchGraph(imports, violations, unstable) {
+    violations = violations || [];
+    unstable = unstable || [];
     const container = document.getElementById('widget-arch-graph-body');
     if (!container) return;
     if (!imports.length) {
@@ -3171,6 +3173,10 @@
     }
     var edges = {};
     var nodes = {};
+    // The depth the structural aggregation settled on — reused for the
+    // fusion overlay so violation edges + unstable nodes roll up to the
+    // SAME module granularity as the import edges.
+    var chosenDepth = (typeof userArchDepth === 'number') ? userArchDepth : 6;
     if (typeof userArchDepth === 'number') {
       const result = aggregateArchAt(userArchDepth);
       edges = result.edges;
@@ -3180,27 +3186,100 @@
         const result = aggregateArchAt(depth);
         edges = result.edges;
         nodes = result.nodes;
+        chosenDepth = depth;
         if (Object.keys(nodes).length >= MIN_NODES_FOR_USEFUL_GRAPH) break;
       }
     }
-    const nodeArr = Object.keys(nodes).map(function (n) { return { name: n, symbolSize: 30 }; });
-    const edgeArr = Object.keys(edges).map(function (k) {
-      const parts = k.split('\x00');
-      return { source: parts[0], target: parts[1], value: edges[k] };
-    });
-    if (!nodeArr.length) {
+    // Fusion overlay #1 — modularity-violation edges: Fisher-significant
+    // co-change pairs with NO structural import edge, aggregated to
+    // module level. These are the "temporal-only" edges an import graph
+    // cannot show (implicit/hidden coupling). Keyed strongest-degree.
+    const violEdges = {};
+    for (var vi = 0; vi < violations.length; vi++) {
+      const v = violations[vi];
+      const vs = modulePath(v.entity_a, chosenDepth);
+      const vt = modulePath(v.entity_b, chosenDepth);
+      if (!vs || !vt || vs === vt) continue;
+      const vkey = vs + '\x00' + vt;
+      const vd = (typeof v.degree === 'number') ? v.degree : 0;
+      if (!(vkey in violEdges) || vd > violEdges[vkey]) violEdges[vkey] = vd;
+      nodes[vs] = true;
+      nodes[vt] = true;
+    }
+    // Fusion overlay #2 — unstable-interface modules (warning nodes):
+    // heavily-imported files that change often and drag their dependents.
+    const unstableModules = {};
+    for (var ui = 0; ui < unstable.length; ui++) {
+      const um = modulePath(unstable[ui].path, chosenDepth);
+      if (!um) continue;
+      unstableModules[um] = (unstableModules[um] || 0) + 1;
+      nodes[um] = true;
+    }
+    if (!Object.keys(nodes).length) {
       container.innerHTML = '<div class="empty">All resolved imports stay intra-module — no inter-module edges to graph.</div>';
       return;
     }
+    const dangerColor = token('--color-error') || '#dc2626';
+    const violColor = token('--color-warning') || '#d97706';
+    const nodeArr = Object.keys(nodes).map(function (n) {
+      const isUnstable = !!unstableModules[n];
+      return {
+        name: n,
+        symbolSize: isUnstable ? 42 : 30,
+        category: isUnstable ? 1 : 0,
+      };
+    });
+    const structuralLinks = Object.keys(edges).map(function (k) {
+      const parts = k.split('\x00');
+      return { source: parts[0], target: parts[1], value: edges[k], _kind: 'import' };
+    });
+    const violationLinks = Object.keys(violEdges).map(function (k) {
+      const parts = k.split('\x00');
+      return {
+        source: parts[0],
+        target: parts[1],
+        value: violEdges[k],
+        _kind: 'violation',
+        lineStyle: { color: violColor, type: 'dashed', opacity: 0.9, width: 2, curveness: 0.2 },
+      };
+    });
+    const edgeArr = structuralLinks.concat(violationLinks);
     setChartAriaLabel(container,
-      'Architecture import force-graph, ' + nodeArr.length + ' modules and ' +
-      edgeArr.length + ' inter-module import edges');
+      'Architecture graph, ' + nodeArr.length + ' modules, ' +
+      structuralLinks.length + ' import edges, ' + violationLinks.length +
+      ' dashed modularity-violation (co-change, no import) edges, ' +
+      Object.keys(unstableModules).length + ' unstable-interface modules');
     const chart = mountEcharts(container);
     chart.setOption({
-      tooltip: { trigger: 'item' },
+      tooltip: {
+        trigger: 'item',
+        formatter: function (p) {
+          if (p.dataType === 'edge') {
+            if (p.data && p.data._kind === 'violation') {
+              return 'Modularity violation — co-change, no import<br/>' +
+                p.data.source + ' &harr; ' + p.data.target +
+                '<br/>coupling degree ' + (Number(p.data.value) || 0).toFixed(1) + '%';
+            }
+            return 'Imports: ' + p.data.source + ' &rarr; ' + p.data.target +
+              ' (' + p.data.value + ')';
+          }
+          return unstableModules[p.name]
+            ? p.name + '<br/>unstable interface'
+            : p.name;
+        },
+      },
+      legend: [{
+        data: ['module', 'unstable interface'],
+        textStyle: { color: getCssVar('--fg-dim') },
+        bottom: 0,
+      }],
       series: [{
         type: 'graph',
         layout: 'force',
+        categories: [
+          { name: 'module' },
+          { name: 'unstable interface', itemStyle: { color: dangerColor } },
+        ],
         data: nodeArr,
         links: edgeArr,
         roam: true,
@@ -3218,7 +3297,7 @@
     // ECharts' built-in roam reset instead of the CSS-transform
     // overlay.
     window._codeloreResetZoomHandlers['widget-arch-graph'] = function () {
-      renderArchGraph(imports);
+      renderArchGraph(imports, violations, unstable);
     };
   }
 

@@ -1330,17 +1330,20 @@
     <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-arch-graph">
       <h2>Architecture graph</h2>
       <div class="subtitle">
-        Force-directed import graph from the resolved imports
-        (Rust + Python + JS/TS). Compare to the behavioural coupling
-        sankey — agreement = healthy modularity; disagreement =
-        signal worth investigating.
+        Force-directed import graph (Rust + Python + JS/TS) fused with
+        git history: <strong>solid</strong> edges are imports;
+        <strong>dashed amber</strong> edges are <em>modularity
+        violations</em> — modules that change together but never import
+        each other (implicit coupling no import-only graph can show);
+        <strong>red</strong> nodes are <em>unstable interfaces</em>
+        (widely imported, change often, drag their dependents).
       </div>
       <details class="learn-more">
         <summary>Learn more — how to read this panel</summary>
         <div class="learn-more-content">
           <p><strong>What it measures.</strong> The structural import graph as resolved from source: Rust <code>use</code>, Python <code>import</code>, JS/TS <code>import</code>. The depth selector below controls how aggressively paths are rolled up into "modules" — <em>Auto</em> deepens until at least 8 distinct nodes surface, fixed numbers force a specific roll-up depth.</p>
-          <p><strong>How to read it.</strong> Force-directed layout: modules that import each other settle next to each other. Each edge represents one or more imports. Drag a node to reposition; the layout settles to a new minimum. Scroll inside the panel to zoom.</p>
-          <p><strong>What to watch for.</strong> Bridge nodes connecting otherwise-disjoint clusters — they're architectural seams worth protecting. Tight clusters = cohesive subsystems. Long edges crossing the layout = "this module imports something far away", often a sign of a misplaced dependency.</p>
+          <p><strong>How to read it.</strong> Force-directed layout: modules that import each other settle next to each other. <strong>Solid</strong> edges are import edges (one or more imports). <strong>Dashed amber</strong> edges are <em>modularity violations</em> — Fisher-significant co-change between modules with <em>no</em> import edge between them, aggregated to the same depth. <strong>Red, enlarged</strong> nodes are <em>unstable interfaces</em>. Drag a node to reposition; scroll inside the panel to zoom; hover an edge to see whether it is structural or temporal-only.</p>
+          <p><strong>What to watch for.</strong> Dashed edges are the headline: two modules that change together but don't import each other are coupled through something invisible — a shared global, a leaky abstraction, or a contract honoured through a third party (Kazman &amp; Cai's "implicit cross-module dependency"). Red nodes that sit on many edges are unstable hubs whose churn propagates. Bridge nodes connecting otherwise-disjoint clusters are architectural seams worth protecting; tight clusters are cohesive subsystems.</p>
           <p><strong>Suggested action.</strong> Compare against the Module coupling chord above. <em>Agreement</em> (modules that import each other also change together) = healthy modularity. <em>Disagreement</em> = behaviour bleeds across structural boundaries; root-cause is usually a shared mutable state, a leaky framework, or a contract violated through string-typed APIs.</p>
         </div>
       </details>

@@ -14,7 +14,9 @@ use codelore_lib::analyses::code_health::run_code_health;
 use codelore_lib::analyses::coupling::run_coupling;
 use codelore_lib::analyses::hotspots::run_hotspots;
 use codelore_lib::analyses::knowledge_islands::run_knowledge_islands;
+use codelore_lib::analyses::modularity_violations::ModularityViolationRow;
 use codelore_lib::analyses::summary::run_summary;
+use codelore_lib::analyses::unstable_interface::UnstableInterfaceRow;
 use codelore_lib::facts::FactsDb;
 use codelore_lib::output::spa::{SpaDashboard, write_spa};
 use codelore_lib::repo::GixRepo;
@@ -195,6 +197,77 @@ fn spa_emits_full_dashboard_from_differential_fixture() {
         (800_000..50_000_000).contains(&bytes),
         "emitted HTML size {bytes} bytes is outside the sane window \
          [800 KB, 50 MB] — an asset may have failed to embed",
+    );
+}
+
+/// The structure×history fusion overlay (`modularity-violations` +
+/// `unstable-interface`) must round-trip into the embedded SPA JSON,
+/// and the architecture-graph widget must be wired to consume all
+/// three data arrays. Guards against the bundle field or the widget
+/// call silently dropping the fusion data.
+#[test]
+fn spa_embeds_fusion_overlay_data() {
+    let dash = SpaDashboard {
+        modularity_violations: vec![ModularityViolationRow {
+            entity_a: "src/alpha.rs".into(),
+            entity_b: "src/beta.rs".into(),
+            shared: 9,
+            degree: 81.5,
+            fisher_p: 0.001,
+        }],
+        unstable_interface: vec![UnstableInterfaceRow {
+            path: "src/hub.rs".into(),
+            fan_in: 7,
+            revisions: 30,
+            coupled_dependents: 4,
+            instability_score: 120.0,
+        }],
+        ..SpaDashboard::default()
+    };
+
+    let mut buf = Vec::new();
+    write_spa(
+        &dash,
+        "CodeLore Dashboard",
+        "/tmp/x",
+        "2026-06-26 00:00:00 UTC",
+        &mut buf,
+    )
+    .expect("write_spa");
+    let html = String::from_utf8(buf).expect("utf8 html");
+
+    // The arch-graph widget must receive all three data arrays.
+    assert!(
+        html.contains(
+            "renderArchGraph(data.imports || [], data.modularity_violations || [], data.unstable_interface || [])"
+        ),
+        "arch-graph widget must be wired to the fusion data arrays",
+    );
+
+    let data = extract_data_json(&html).expect("parse data block");
+    let mv = data
+        .get("modularity_violations")
+        .and_then(|v| v.as_array())
+        .expect("modularity_violations array");
+    assert_eq!(mv.len(), 1, "one modularity-violation row expected");
+    assert_eq!(
+        mv[0].get("entity_a").and_then(serde_json::Value::as_str),
+        Some("src/alpha.rs"),
+    );
+    let ui = data
+        .get("unstable_interface")
+        .and_then(|v| v.as_array())
+        .expect("unstable_interface array");
+    assert_eq!(ui.len(), 1, "one unstable-interface row expected");
+    assert_eq!(
+        ui[0].get("path").and_then(serde_json::Value::as_str),
+        Some("src/hub.rs"),
+    );
+    assert_eq!(
+        ui[0]
+            .get("coupled_dependents")
+            .and_then(serde_json::Value::as_u64),
+        Some(4),
     );
 }
 

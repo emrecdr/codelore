@@ -375,6 +375,75 @@ pub fn write_god_classes_markdown<W: Write>(
     Ok(())
 }
 
+/// modularity-violations markdown emitter — Fisher-significant
+/// co-change pairs with no structural import edge.
+pub fn write_modularity_violations_markdown<W: Write>(
+    rows: &[crate::analyses::modularity_violations::ModularityViolationRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore modularity-violations")?;
+    if rows.is_empty() {
+        writeln!(
+            w,
+            "_No modularity violations — every Fisher-significant co-change pair also has a structural import edge (or no co-change pairs were found)._"
+        )
+        .map_err(CodeLoreError::Io)?;
+        return Ok(());
+    }
+    writeln!(w, "| Entity A | Entity B | Shared | Degree | Fisher p |")
+        .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---|---:|---:|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| `{}` | `{}` | {} | {:.2} | {:.4} |",
+            escape_md_cell(&row.entity_a),
+            escape_md_cell(&row.entity_b),
+            row.shared,
+            row.degree,
+            row.fisher_p,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+/// unstable-interface markdown emitter — interfaces whose instability
+/// propagates to their dependents.
+pub fn write_unstable_interface_markdown<W: Write>(
+    rows: &[crate::analyses::unstable_interface::UnstableInterfaceRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore unstable-interface")?;
+    if rows.is_empty() {
+        writeln!(
+            w,
+            "_No unstable interfaces — no widely-imported file changes often enough to drag its dependents (or the import graph is empty)._"
+        )
+        .map_err(CodeLoreError::Io)?;
+        return Ok(());
+    }
+    writeln!(
+        w,
+        "| Path | Fan-in | Revisions | Coupled dependents | Instability score |"
+    )
+    .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---:|---:|---:|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| `{}` | {} | {} | {} | {:.1} |",
+            escape_md_cell(&row.path),
+            row.fan_in,
+            row.revisions,
+            row.coupled_dependents,
+            row.instability_score,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 /// architecture-violations markdown emitter — one row per import
 /// edge that crosses a forbidden layer boundary.
 pub fn write_arch_violations_markdown<W: Write>(

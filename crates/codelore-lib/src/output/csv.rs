@@ -480,6 +480,54 @@ pub fn write_god_classes_csv<W: Write>(
     Ok(())
 }
 
+/// `modularity-violations` CSV emitter — Fisher-significant co-change
+/// pairs with no structural import edge (the structure×history fusion).
+pub fn write_modularity_violations_csv<W: Write>(
+    rows: &[crate::analyses::modularity_violations::ModularityViolationRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(w, "entity_a,entity_b,shared,degree,fisher_p").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{},{:.4},{:.6}",
+            quote_if_needed(&row.entity_a),
+            quote_if_needed(&row.entity_b),
+            row.shared,
+            row.degree,
+            row.fisher_p,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+/// `unstable-interface` CSV emitter — heavily-imported files that
+/// change often and co-change with their dependents.
+pub fn write_unstable_interface_csv<W: Write>(
+    rows: &[crate::analyses::unstable_interface::UnstableInterfaceRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(
+        w,
+        "path,fan_in,revisions,coupled_dependents,instability_score"
+    )
+    .map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{},{},{:.2}",
+            quote_if_needed(&row.path),
+            row.fan_in,
+            row.revisions,
+            row.coupled_dependents,
+            row.instability_score,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 /// `architecture-violations` CSV emitter — one row per import edge
 /// that crosses a forbidden layer boundary per
 /// `.codelore-arch-rules.toml`.

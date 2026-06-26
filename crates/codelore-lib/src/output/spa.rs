@@ -41,7 +41,9 @@ use crate::analyses::dashboard::{
 use crate::analyses::entity_ownership::EntityOwnershipRow;
 use crate::analyses::hotspots::HotspotRow;
 use crate::analyses::knowledge_islands::KnowledgeIslandRow;
+use crate::analyses::modularity_violations::ModularityViolationRow;
 use crate::analyses::summary::SummaryRow;
+use crate::analyses::unstable_interface::UnstableInterfaceRow;
 use crate::{CodeLoreError, Result};
 
 const TEMPLATE: &str = include_str!("spa/template.html");
@@ -119,6 +121,19 @@ pub struct SpaDashboard {
     /// (Rust + Python + JS/TS today).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub imports: Vec<ImportEdgeRow>,
+    /// Modularity violations — Fisher-significant co-change pairs with
+    /// NO structural import edge. Overlaid on the architecture graph as
+    /// "temporal-only" edges: the implicit/hidden coupling that an
+    /// import-only graph cannot show (the structure×history fusion).
+    /// Empty when every co-change pair also imports.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modularity_violations: Vec<ModularityViolationRow>,
+    /// Unstable interfaces — heavily-imported files that change often
+    /// and co-change with their dependents. Highlighted as warning
+    /// nodes on the architecture graph. Empty when no interface is
+    /// both widely-imported and churning.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unstable_interface: Vec<UnstableInterfaceRow>,
     /// Per-commit Kamei JIT-SDP feature vector for the Delivery Risk
     /// Sparkline widget. One row per commit in the last-N (capped at
     /// 30) chronological window. Surfaces the raw Kamei 14-feature

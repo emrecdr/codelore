@@ -4,6 +4,12 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **`modularity-violations` analysis — the structure×history fusion.** Surfaces Fisher-significant co-change pairs that have *no* structural import edge between them: the "implicit cross-module dependency" of Mo, Cai & Kazman 2015 *Hotspot Patterns* (DV8). These are files that change together but don't import each other — coupled through a shared global, a leaky abstraction, or a contract honoured through a third party, and empirically more change-prone. Computed by anti-joining the resolved `imports` table against the existing Fisher-significant coupling pairs (no new extraction). Available in CSV/JSON/Markdown and the SPA. Direct edges only; transitive-reachability filtering is a follow-up.
+- **`unstable-interface` analysis.** Flags heavily-imported files (high afferent fan-in) that change often AND co-change with their dependents, so their instability propagates outward (Mo, Cai & Kazman 2015 *Hotspot Patterns* / DV8). Composite `instability_score = revisions × coupled_dependents`, gated on `fan_in ≥ 3` and `revisions ≥ min_revs`.
+- **Architecture-graph fusion overlay (SPA dashboard).** The Architecture graph now fuses git history onto the structural import graph: modularity violations render as **dashed amber "temporal-only" edges** (co-change with no import edge) and unstable interfaces render as **enlarged red nodes**, both rolled up to the same module depth as the import edges. The widget that previously drew only an untyped force layout now shows where structure and history agree — and, more usefully, where they disagree.
+
 ## [0.9.3] - 2026-06-26
 
 ### Added

@@ -277,6 +277,18 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
             "See analyses/god_classes.rs.",
         ),
         (
+            "modularity-violations",
+            "Mo, Cai, Kazman, Xiao 2015 *Hotspot Patterns* (DV8) + Baldwin/MacCormack 2014 hidden structure",
+            "Fisher-significant co-change pairs (from coupling) with NO structural import edge in either direction — implicit cross-module dependencies. Ranked by coupling degree. Direct edges only; accuracy follows the import resolver's language coverage.",
+            "See analyses/modularity_violations.rs.",
+        ),
+        (
+            "unstable-interface",
+            "Mo, Cai, Kazman, Xiao 2015 *Hotspot Patterns* (DV8)",
+            "revisions × coupled_dependents, gated on fan_in ≥ 3 and revisions ≥ min_revs. A widely-imported file that changes often and co-changes with its dependents, so its instability propagates.",
+            "See analyses/unstable_interface.rs.",
+        ),
+        (
             "bus-factor",
             "Filatov 2010",
             "Min number of authors whose combined commits cover ≥80% of a module's commits. Smaller = more concentrated knowledge.",
@@ -802,6 +814,12 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             AnalysisName::GodClasses => dispatch_god_classes(&db, &opts, format, &ctx, &mut out)?,
             AnalysisName::ArchViolations => {
                 dispatch_arch_violations(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::ModularityViolations => {
+                dispatch_modularity_violations(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::UnstableInterface => {
+                dispatch_unstable_interface(&db, &opts, format, &ctx, &mut out)?;
             }
             AnalysisName::StaleCode => dispatch_stale_code(&db, &opts, format, &ctx, &mut out)?,
             AnalysisName::PairProgramming => {
@@ -1561,6 +1579,97 @@ fn dispatch_arch_violations(
         fmt => {
             return Err(unsupported_format(
                 "architecture-violations",
+                "csv|json|markdown",
+                fmt,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_modularity_violations(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows =
+                codelore_lib::cli_api::analyses::modularity_violations::run_modularity_violations(
+                    db, opts,
+                )
+                .context("run modularity-violations")?;
+            codelore_lib::cli_api::output::csv::write_modularity_violations_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows =
+                codelore_lib::cli_api::analyses::modularity_violations::run_modularity_violations(
+                    db, opts,
+                )
+                .context("run modularity-violations")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows =
+                codelore_lib::cli_api::analyses::modularity_violations::run_modularity_violations(
+                    db, opts,
+                )
+                .context("run modularity-violations")?;
+            codelore_lib::cli_api::output::markdown::write_modularity_violations_markdown(
+                &rows, out,
+            )
+            .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format(
+                "modularity-violations",
+                "csv|json|markdown",
+                fmt,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_unstable_interface(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows = codelore_lib::cli_api::analyses::unstable_interface::run_unstable_interface(
+                db, opts,
+            )
+            .context("run unstable-interface")?;
+            codelore_lib::cli_api::output::csv::write_unstable_interface_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::unstable_interface::run_unstable_interface(
+                db, opts,
+            )
+            .context("run unstable-interface")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows = codelore_lib::cli_api::analyses::unstable_interface::run_unstable_interface(
+                db, opts,
+            )
+            .context("run unstable-interface")?;
+            codelore_lib::cli_api::output::markdown::write_unstable_interface_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format(
+                "unstable-interface",
                 "csv|json|markdown",
                 fmt,
             ));
@@ -2506,6 +2615,19 @@ fn build_spa_dashboard(
             tracing::warn!("dashboard: imports query failed; skipping: {e}");
             Vec::new()
         });
+    // Structure×history fusion overlaid on the architecture graph.
+    let modularity_violations =
+        codelore_lib::cli_api::analyses::modularity_violations::run_modularity_violations(db, opts)
+            .unwrap_or_else(|e| {
+                tracing::warn!("dashboard: modularity-violations failed; skipping: {e}");
+                Vec::new()
+            });
+    let unstable_interface =
+        codelore_lib::cli_api::analyses::unstable_interface::run_unstable_interface(db, opts)
+            .unwrap_or_else(|e| {
+                tracing::warn!("dashboard: unstable-interface failed; skipping: {e}");
+                Vec::new()
+            });
     Ok(SpaDashboard {
         hotspots,
         summary,
@@ -2521,6 +2643,8 @@ fn build_spa_dashboard(
         clones,
         kamei_risk,
         imports,
+        modularity_violations,
+        unstable_interface,
         options: codelore_lib::cli_api::output::spa::SpaOptionsSnapshot::from_options(opts),
     })
 }
