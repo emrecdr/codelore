@@ -15,6 +15,8 @@
 //! (Gall, Hajek & Jazayeri, ICSM 1998 — original logical-coupling paper;
 //! Tornhill, *Your Code as a Crime Scene*, 2015 — productisation).
 
+use std::collections::{HashMap, HashSet};
+
 use duckdb::params;
 
 use crate::facts::FactsDb;
@@ -135,6 +137,27 @@ pub struct CouplingRow {
     pub degree: f64,
     /// Two-tailed Fisher exact p-value for the 2×2 contingency table.
     pub fisher_p: f64,
+}
+
+/// Build a bidirectional partner index from coupling rows: for each
+/// file, the set of files it is Fisher-significantly coupled with. The
+/// structure×history fusion analyses (`unstable-interface`, `crossing`)
+/// intersect this with the import graph, so the construction lives here
+/// next to [`CouplingRow`] rather than being re-derived in each.
+#[must_use]
+pub fn partner_index(rows: &[CouplingRow]) -> HashMap<String, HashSet<String>> {
+    let mut partners: HashMap<String, HashSet<String>> = HashMap::new();
+    for r in rows {
+        partners
+            .entry(r.entity_a.clone())
+            .or_default()
+            .insert(r.entity_b.clone());
+        partners
+            .entry(r.entity_b.clone())
+            .or_default()
+            .insert(r.entity_a.clone());
+    }
+    partners
 }
 
 /// Source-table selector for the coupling query family. Returns the SQL

@@ -25,9 +25,9 @@ use crate::facts::FactsDb;
 use crate::{Options, Result};
 
 /// One repo-level architecture metric: `(metric, value)`. The value is a
-/// string so numeric metrics and the `architecture_type` label share one
-/// row shape (mirrors [`SummaryRow`](crate::analyses::summary::SummaryRow));
-/// numeric values are bare numbers so downstream tooling can parse them.
+/// string so the numeric metrics and the textual `architecture_type`
+/// label can share one row shape; numeric values are written as bare,
+/// parseable numbers (e.g. `0.0607`) so downstream tooling can read them.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ArchitectureMetricRow {
     pub metric: String,

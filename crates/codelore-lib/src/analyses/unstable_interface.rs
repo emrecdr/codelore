@@ -98,17 +98,7 @@ pub fn run_unstable_interface(db: &FactsDb, opts: &Options) -> Result<Vec<Unstab
     // Fisher-significant co-change partners per file, both directions.
     // Memoized inner call; `--rows N` must not cap the partner pool.
     let coupling_rows = crate::analyses::coupling::run_coupling(db, &opts.with_no_row_limit())?;
-    let mut partners: HashMap<String, HashSet<String>> = HashMap::new();
-    for p in &coupling_rows {
-        partners
-            .entry(p.entity_a.clone())
-            .or_default()
-            .insert(p.entity_b.clone());
-        partners
-            .entry(p.entity_b.clone())
-            .or_default()
-            .insert(p.entity_a.clone());
-    }
+    let partners = crate::analyses::coupling::partner_index(&coupling_rows);
 
     let mut out: Vec<UnstableInterfaceRow> = Vec::new();
     for (path, deps) in &importers {

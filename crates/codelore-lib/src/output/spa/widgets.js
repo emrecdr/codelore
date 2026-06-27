@@ -3115,6 +3115,43 @@
   }
 
 
+  // ─── §11g Architecture widgets: shared module roll-up ────────────
+  // Both the force graph and the dependency-structure matrix roll file
+  // paths up to their module at `depth` segments and aggregate the
+  // resolved import edges the same way; the shared helpers live here so
+  // the two views can never drift.
+
+  // Roll a file path up to its module at `depth` path segments (parent
+  // dir when the file has fewer than `depth` segments, so leaf-level
+  // imports don't collapse onto themselves).
+  function modulePath(p, depth) {
+    const parts = (p || '').split('/');
+    if (parts.length <= depth) {
+      const lastSlash = (p || '').lastIndexOf('/');
+      return lastSlash < 0 ? (p || '') : p.slice(0, lastSlash);
+    }
+    return parts.slice(0, depth).join('/');
+  }
+
+  // Aggregate resolved import edges to module granularity at `depth`,
+  // dropping self-edges. Returns `{ edges: {src\x00tgt: count}, nodes }`.
+  function aggregateImportsAt(imports, depth) {
+    const ee = {};
+    const nn = {};
+    for (var i = 0; i < imports.length; i++) {
+      const imp = imports[i];
+      if (!imp.target_path) continue;
+      const s = modulePath(imp.src_path, depth);
+      const t = modulePath(imp.target_path, depth);
+      if (!s || !t || s === t) continue;
+      const key = s + '\x00' + t;
+      ee[key] = (ee[key] || 0) + 1;
+      nn[s] = true;
+      nn[t] = true;
+    }
+    return { edges: ee, nodes: nn };
+  }
+
   // ─── §11g Widget: Architecture force-graph ───────────────────────
 
   function renderArchGraph(imports, violations, unstable, roles) {
@@ -3136,16 +3173,6 @@
     // like `app/services/` — we'd then show the misleading "stays
     // intra-module" message. Caps at 6 segments to keep labels
     // readable.
-    function modulePath(p, depth) {
-      const parts = (p || '').split('/');
-      if (parts.length <= depth) {
-        // Use parent dir if file has fewer than `depth` segments;
-        // avoids collapsing leaf-level imports onto themselves.
-        const lastSlash = (p || '').lastIndexOf('/');
-        return lastSlash < 0 ? (p || '') : p.slice(0, lastSlash);
-      }
-      return parts.slice(0, depth).join('/');
-    }
     // Depth source:
     //   'auto' (default) → adaptive loop, deepens until ≥ MIN_NODES
     //   integer 2-6     → user-fixed depth, no adaptation
@@ -3157,22 +3184,6 @@
     const archLayout = (window.Alpine && window.Alpine.store)
       ? window.Alpine.store('layout') : null;
     const userArchDepth = archLayout ? archLayout.archGraphDepth : 'auto';
-    function aggregateArchAt(depth) {
-      const ee = {};
-      const nn = {};
-      for (var i = 0; i < imports.length; i++) {
-        const imp = imports[i];
-        if (!imp.target_path) continue;
-        const s = modulePath(imp.src_path, depth);
-        const t = modulePath(imp.target_path, depth);
-        if (!s || !t || s === t) continue;
-        const key = s + '\x00' + t;
-        ee[key] = (ee[key] || 0) + 1;
-        nn[s] = true;
-        nn[t] = true;
-      }
-      return { edges: ee, nodes: nn };
-    }
     var edges = {};
     var nodes = {};
     // The depth the structural aggregation settled on — reused for the
@@ -3180,12 +3191,12 @@
     // SAME module granularity as the import edges.
     var chosenDepth = (typeof userArchDepth === 'number') ? userArchDepth : 6;
     if (typeof userArchDepth === 'number') {
-      const result = aggregateArchAt(userArchDepth);
+      const result = aggregateImportsAt(imports, userArchDepth);
       edges = result.edges;
       nodes = result.nodes;
     } else {
       for (var depth = 2; depth <= 6; depth++) {
-        const result = aggregateArchAt(depth);
+        const result = aggregateImportsAt(imports, depth);
         edges = result.edges;
         nodes = result.nodes;
         chosenDepth = depth;
@@ -3379,44 +3390,20 @@
       container.innerHTML = '<div class="empty">No resolved import edges to matrix yet (Rust + Python + JS/TS).</div>';
       return;
     }
-    // Same path-prefix module roll-up as the force graph.
-    function modulePath(p, depth) {
-      const parts = (p || '').split('/');
-      if (parts.length <= depth) {
-        const lastSlash = (p || '').lastIndexOf('/');
-        return lastSlash < 0 ? (p || '') : p.slice(0, lastSlash);
-      }
-      return parts.slice(0, depth).join('/');
-    }
+    // Same module roll-up + edge aggregation as the force graph.
     const archLayout = (window.Alpine && window.Alpine.store)
       ? window.Alpine.store('layout') : null;
     const userDepth = archLayout ? archLayout.archGraphDepth : 'auto';
-    function aggregateAt(depth) {
-      const ee = {};
-      const nn = {};
-      for (var i = 0; i < imports.length; i++) {
-        const imp = imports[i];
-        if (!imp.target_path) continue;
-        const s = modulePath(imp.src_path, depth);
-        const t = modulePath(imp.target_path, depth);
-        if (!s || !t || s === t) continue;
-        const key = s + '\x00' + t;
-        ee[key] = (ee[key] || 0) + 1;
-        nn[s] = true;
-        nn[t] = true;
-      }
-      return { edges: ee, nodes: nn };
-    }
     var edges = {};
     var nodes = {};
     var chosenDepth = (typeof userDepth === 'number') ? userDepth : 6;
     if (typeof userDepth === 'number') {
-      const r = aggregateAt(userDepth);
+      const r = aggregateImportsAt(imports, userDepth);
       edges = r.edges;
       nodes = r.nodes;
     } else {
       for (var d = 2; d <= 6; d++) {
-        const r = aggregateAt(d);
+        const r = aggregateImportsAt(imports, d);
         edges = r.edges;
         nodes = r.nodes;
         chosenDepth = d;

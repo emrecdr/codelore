@@ -196,6 +196,33 @@ pub struct Reach {
     pub vfo: Vec<u32>,
 }
 
+/// Build the SCC condensation of `adj` given its `sccs`: the per-node
+/// SCC id (`scc_of[node]`) plus the deduped forward condensation edges
+/// (`cond_fwd[s]` = the SCCs that `s` points to). Shared by every
+/// reach / level pass so the condensation is built identically in each;
+/// the reverse edges are only needed by [`reachability`], which derives
+/// them locally rather than make the other callers compute a reverse
+/// graph they would discard.
+fn condensation(adj: &[Vec<usize>], sccs: &[Vec<usize>]) -> (Vec<usize>, Vec<HashSet<usize>>) {
+    let mut scc_of = vec![0usize; adj.len()];
+    for (cid, comp) in sccs.iter().enumerate() {
+        for &node in comp {
+            scc_of[node] = cid;
+        }
+    }
+    let mut cond_fwd: Vec<HashSet<usize>> = vec![HashSet::new(); sccs.len()];
+    for (u, edges) in adj.iter().enumerate() {
+        let cu = scc_of[u];
+        for &v in edges {
+            let cv = scc_of[v];
+            if cu != cv {
+                cond_fwd[cu].insert(cv);
+            }
+        }
+    }
+    (scc_of, cond_fwd)
+}
+
 /// Compute per-node visibility fan-in / fan-out over the directed
 /// import graph, given its SCCs (from [`tarjan_scc`]).
 ///
@@ -216,26 +243,14 @@ pub struct Reach {
 pub fn reachability(adj: &[Vec<usize>], sccs: &[Vec<usize>]) -> Reach {
     let n = adj.len();
     let c = sccs.len();
-    let mut scc_of = vec![0usize; n];
-    let mut scc_size = vec![0usize; c];
-    for (cid, comp) in sccs.iter().enumerate() {
-        scc_size[cid] = comp.len();
-        for &node in comp {
-            scc_of[node] = cid;
-        }
-    }
+    let scc_size: Vec<usize> = sccs.iter().map(Vec::len).collect();
+    let (scc_of, cond_fwd) = condensation(adj, sccs);
 
-    // Condensation edges (deduped), forward and reversed.
-    let mut cond_fwd: Vec<HashSet<usize>> = vec![HashSet::new(); c];
+    // Reverse condensation edges, derived from the forward ones.
     let mut cond_rev: Vec<HashSet<usize>> = vec![HashSet::new(); c];
-    for (u, edges) in adj.iter().enumerate() {
-        let cu = scc_of[u];
-        for &v in edges {
-            let cv = scc_of[v];
-            if cu != cv {
-                cond_fwd[cu].insert(cv);
-                cond_rev[cv].insert(cu);
-            }
+    for (cu, succs) in cond_fwd.iter().enumerate() {
+        for &cv in succs {
+            cond_rev[cv].insert(cu);
         }
     }
 
@@ -298,23 +313,7 @@ pub fn reachability(adj: &[Vec<usize>], sccs: &[Vec<usize>]) -> Reach {
 pub fn topo_levels(adj: &[Vec<usize>], sccs: &[Vec<usize>]) -> Vec<u32> {
     let n = adj.len();
     let c = sccs.len();
-    let mut scc_of = vec![0usize; n];
-    for (cid, comp) in sccs.iter().enumerate() {
-        for &node in comp {
-            scc_of[node] = cid;
-        }
-    }
-    // Condensation forward edges (deduped).
-    let mut cond_fwd: Vec<HashSet<usize>> = vec![HashSet::new(); c];
-    for (u, edges) in adj.iter().enumerate() {
-        let cu = scc_of[u];
-        for &v in edges {
-            let cv = scc_of[v];
-            if cu != cv {
-                cond_fwd[cu].insert(cv);
-            }
-        }
-    }
+    let (scc_of, cond_fwd) = condensation(adj, sccs);
     // Longest-path level. Emission order is reverse-topological, so
     // reverse emission order is topological (ancestors before
     // descendants): relax each SCC's successors to at least level+1.
@@ -356,24 +355,8 @@ impl ReachIndex {
 /// reach-sets instead of collapsing them to counts.
 #[must_use]
 pub fn reach_index(adj: &[Vec<usize>], sccs: &[Vec<usize>]) -> ReachIndex {
-    let n = adj.len();
     let c = sccs.len();
-    let mut scc_of = vec![0usize; n];
-    for (cid, comp) in sccs.iter().enumerate() {
-        for &node in comp {
-            scc_of[node] = cid;
-        }
-    }
-    let mut cond_fwd: Vec<HashSet<usize>> = vec![HashSet::new(); c];
-    for (u, edges) in adj.iter().enumerate() {
-        let cu = scc_of[u];
-        for &v in edges {
-            let cv = scc_of[v];
-            if cu != cv {
-                cond_fwd[cu].insert(cv);
-            }
-        }
-    }
+    let (scc_of, cond_fwd) = condensation(adj, sccs);
     let mut reach_fwd: Vec<HashSet<usize>> = vec![HashSet::new(); c];
     for cid in 0..c {
         let mut set = HashSet::new();
