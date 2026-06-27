@@ -610,7 +610,7 @@ codescene/
 │   ├── codelore-lib/                     # the library
 │   │   ├── src/
 │   │   │   ├── facts/                    # DuckDB fact store + ingest pipeline
-│   │   │   ├── analyses/                 # the 32 analyses (one file each)
+│   │   │   ├── analyses/                 # the 39 analyses (one file each)
 │   │   │   ├── output/                   # 6 format emitters
 │   │   │   ├── repo/                     # GixRepo + GitCliRepo + Repo trait
 │   │   │   ├── complexity/               # tree-sitter dispatch + ComplexityEntity
