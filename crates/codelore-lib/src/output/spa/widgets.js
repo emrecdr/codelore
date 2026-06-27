@@ -3433,6 +3433,7 @@
     });
     const idxOf = {};
     order.forEach(function (m, i) { idxOf[m] = i; });
+    const n = order.length;
     const labels = order.map(function (m) {
       return m.length > 24 ? '…' + m.slice(-23) : m;
     });
@@ -3454,14 +3455,39 @@
         value: [c, r, count],
         itemStyle: {
           color: isBack ? backColor : fwdColor,
-          opacity: isBack ? 0.95 : (0.35 + 0.6 * (count / maxCount)),
+          // Forward edges fade by weight; back-edges stay loud (they're the
+          // thing to notice). Floor kept high enough to read on the dark grid.
+          opacity: isBack ? 0.95 : (0.5 + 0.45 * (count / maxCount)),
         },
       });
     });
+    // Diagonal guide cells. No file imports itself, so every r==c cell is
+    // empty — without a marker the eye has nothing to anchor the triangle to
+    // (the caption's "triangular, all-blue = clean" is otherwise invisible).
+    // value[2] = -1 lets the tooltip tell a guide cell from a real edge.
+    for (var di = 0; di < n; di++) {
+      cells.push({
+        value: [di, di, -1],
+        itemStyle: { color: getCssVar('--fg-dim') || '#888', opacity: 0.22 },
+      });
+    }
     setChartAriaLabel(container,
-      'Dependency structure matrix, ' + order.length + ' modules ordered by architectural layer, ' +
+      'Dependency structure matrix, ' + n + ' modules ordered by architectural layer, ' +
       Object.keys(edges).length + ' dependency cells, ' + backEdges +
       ' below-diagonal back-edges (dependency cycles / layering violations) in red.');
+
+    // Square cells so the diagonal is a true 45° line rather than the shallow
+    // slope a full-width stretch produces. Reserve fixed margins for the
+    // (rotated) labels, size the plot box to n×n equal cells, and centre it
+    // when the panel is wider than the matrix.
+    const cell = Math.max(11, Math.min(26, Math.round(620 / Math.max(n, 1))));
+    const padTop = 128;   // rotated column labels
+    const padLeft = 156;  // row labels
+    const span = n * cell;
+    const cw = container.clientWidth || 900;
+    const gridLeft = Math.max(padLeft, Math.round((cw - span) / 2));
+    container.style.height = (padTop + span + 10) + 'px';
+
     const chart = mountEcharts(container);
     chart.setOption({
       tooltip: {
@@ -3470,20 +3496,25 @@
           const c = p.value[0];
           const r = p.value[1];
           const v = p.value[2];
+          if (r === c) return order[r] + '<br/><span style="opacity:.7">diagonal (self)</span>';
           return order[r] + ' &rarr; ' + order[c] + '<br/>' + v + ' import' + (v === 1 ? '' : 's') +
             (r > c ? '<br/><strong>back-edge — dependency cycle / layering violation</strong>' : '');
         },
       },
-      grid: { left: 4, right: 16, top: 8, bottom: 4, containLabel: true },
+      grid: { left: gridLeft, top: padTop, width: span, height: span, containLabel: false },
       xAxis: {
         type: 'category', data: labels, position: 'top',
-        axisLabel: { rotate: 60, fontSize: 9, color: getCssVar('--fg-dim') },
-        splitArea: { show: true },
+        axisTick: { show: false },
+        axisLabel: { rotate: 55, fontSize: 9, color: getCssVar('--fg-dim'), margin: 8 },
+        // Faint column banding ONLY — banding both axes cross-hatches into the
+        // heavy checkerboard that drowns the data cells.
+        splitArea: { show: true, areaStyle: { color: ['transparent', 'rgba(128,128,128,0.05)'] } },
       },
       yAxis: {
         type: 'category', data: labels, inverse: true,
-        axisLabel: { fontSize: 9, color: getCssVar('--fg-dim') },
-        splitArea: { show: true },
+        axisTick: { show: false },
+        axisLabel: { fontSize: 9, color: getCssVar('--fg-dim'), margin: 8 },
+        splitArea: { show: false },
       },
       series: [{
         type: 'heatmap',
