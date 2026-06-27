@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-06-27
+
 ### Added
 
 - **`crossing` analysis — completes the DV8 hotspot-pattern trilogy.** Flags a structural "X": a file with high fan-in **and** high fan-out (a hub *and* a sink) that co-changes with **both** its importers and its imports, coupling upstream and downstream together *through itself* — the hardest shape to change safely, because edits ripple in both directions at once (Mo, Cai & Kazman 2015 *Hotspot Patterns* / DV8). Fuses the `imports` table (both directions) with `run_coupling`; `crossing_score = coupled_upstream + coupled_downstream`. With `modularity-violations` and `unstable-interface`, CodeLore now ships all three history-fused DV8 patterns.
