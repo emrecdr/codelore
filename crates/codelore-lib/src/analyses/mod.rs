@@ -15,6 +15,7 @@ pub mod code_health;
 pub mod communication;
 pub mod communities;
 pub mod coupling;
+pub mod crossing;
 pub mod dashboard;
 pub mod delivery_friction;
 pub mod dependency_cycles;

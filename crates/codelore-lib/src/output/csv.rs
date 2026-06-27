@@ -584,6 +584,33 @@ pub fn write_modularity_violations_csv<W: Write>(
     Ok(())
 }
 
+/// `crossing` CSV emitter — structural "X" files that co-change in both
+/// directions (DV8 Crossing).
+pub fn write_crossing_csv<W: Write>(
+    rows: &[crate::analyses::crossing::CrossingRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(
+        w,
+        "path,fan_in,fan_out,coupled_upstream,coupled_downstream,crossing_score"
+    )
+    .map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{},{},{},{:.1}",
+            quote_if_needed(&row.path),
+            row.fan_in,
+            row.fan_out,
+            row.coupled_upstream,
+            row.coupled_downstream,
+            row.crossing_score,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 /// `unstable-interface` CSV emitter — heavily-imported files that
 /// change often and co-change with their dependents.
 pub fn write_unstable_interface_csv<W: Write>(

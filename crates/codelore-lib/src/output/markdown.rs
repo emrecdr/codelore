@@ -522,6 +522,43 @@ pub fn write_modularity_violations_markdown<W: Write>(
     Ok(())
 }
 
+/// crossing markdown emitter — structural "X" files coupling upstream
+/// and downstream through themselves (DV8 Crossing).
+pub fn write_crossing_markdown<W: Write>(
+    rows: &[crate::analyses::crossing::CrossingRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore crossing")?;
+    if rows.is_empty() {
+        writeln!(
+            w,
+            "_No crossings — no file is both a wide hub and a wide sink that co-changes in both directions._"
+        )
+        .map_err(CodeLoreError::Io)?;
+        return Ok(());
+    }
+    writeln!(
+        w,
+        "| Path | Fan-in | Fan-out | Coupled upstream | Coupled downstream | Crossing score |"
+    )
+    .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---:|---:|---:|---:|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| `{}` | {} | {} | {} | {} | {:.1} |",
+            escape_md_cell(&row.path),
+            row.fan_in,
+            row.fan_out,
+            row.coupled_upstream,
+            row.coupled_downstream,
+            row.crossing_score,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 /// unstable-interface markdown emitter — interfaces whose instability
 /// propagates to their dependents.
 pub fn write_unstable_interface_markdown<W: Write>(

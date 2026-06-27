@@ -104,6 +104,10 @@ pub enum AnalysisName {
     // AND co-change with their dependents, so the instability
     // propagates outward (Mo et al. 2015 *Hotspot Patterns*, DV8).
     UnstableInterface,
+    // Crossing — a structural "X" (high fan-in AND fan-out) that
+    // co-changes with both its importers and its imports, coupling
+    // upstream and downstream through itself (Mo et al. 2015 DV8).
+    Crossing,
     // Stale-code surfacer — files alive at HEAD untouched ≥N months
     // AND low cognitive (trivial). Intersection minimises false
     // positives.
@@ -166,6 +170,7 @@ impl AnalysisName {
             Self::ArchitectureMetrics => "architecture-metrics",
             Self::ModularityViolations => "modularity-violations",
             Self::UnstableInterface => "unstable-interface",
+            Self::Crossing => "crossing",
             Self::StaleCode => "stale-code",
             Self::PairProgramming => "pair-programming",
             Self::LeadTime => "lead-time",
@@ -238,6 +243,7 @@ impl AnalysisName {
             ArchitectureMetrics,
             ModularityViolations,
             UnstableInterface,
+            Crossing,
             StaleCode,
             PairProgramming,
             LeadTime,

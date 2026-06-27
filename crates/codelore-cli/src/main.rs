@@ -313,6 +313,12 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
             "See analyses/unstable_interface.rs.",
         ),
         (
+            "crossing",
+            "Mo, Cai, Kazman, Xiao 2015 *Hotspot Patterns* (DV8)",
+            "A structural 'X' — fan_in ≥ 3 AND fan_out ≥ 3 — that co-changes with ≥1 importer AND ≥1 import, coupling upstream and downstream through itself. crossing_score = coupled_upstream + coupled_downstream.",
+            "See analyses/crossing.rs.",
+        ),
+        (
             "bus-factor",
             "Filatov 2010",
             "Min number of authors whose combined commits cover ≥80% of a module's commits. Smaller = more concentrated knowledge.",
@@ -857,6 +863,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             AnalysisName::UnstableInterface => {
                 dispatch_unstable_interface(&db, &opts, format, &ctx, &mut out)?;
             }
+            AnalysisName::Crossing => dispatch_crossing(&db, &opts, format, &ctx, &mut out)?,
             AnalysisName::StaleCode => dispatch_stale_code(&db, &opts, format, &ctx, &mut out)?,
             AnalysisName::PairProgramming => {
                 dispatch_pair_programming(&db, &opts, format, &ctx, &mut out)?;
@@ -1829,6 +1836,37 @@ fn dispatch_modularity_violations(
                 fmt,
             ));
         }
+    }
+    Ok(())
+}
+
+fn dispatch_crossing(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows = codelore_lib::cli_api::analyses::crossing::run_crossing(db, opts)
+                .context("run crossing")?;
+            codelore_lib::cli_api::output::csv::write_crossing_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::crossing::run_crossing(db, opts)
+                .context("run crossing")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows = codelore_lib::cli_api::analyses::crossing::run_crossing(db, opts)
+                .context("run crossing")?;
+            codelore_lib::cli_api::output::markdown::write_crossing_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => return Err(unsupported_format("crossing", "csv|json|markdown", fmt)),
     }
     Ok(())
 }
