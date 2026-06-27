@@ -85,6 +85,14 @@ pub enum AnalysisName {
     // (Baldwin, MacCormack & Rusnak 2014 "Hidden Structure"). Carries
     // visibility fan-in/out; the mean of vfo/n is the propagation cost.
     ArchitectureRoles,
+    // Instability — Robert C. Martin's per-file coupling metrics:
+    // afferent Ca (in-degree), efferent Ce (out-degree), instability
+    // I = Ce/(Ca+Ce). Martin 1994; the import graph's in/out degree.
+    Instability,
+    // Architecture metrics — repo-level structural-health numbers:
+    // propagation cost, Lakos ACD/NCCD, cycle count, architecture type
+    // (Lakos 1996, MacCormack/Baldwin). Emitted as (metric, value) rows.
+    ArchitectureMetrics,
     // Modularity violations — file pairs that co-change
     // (Fisher-significant) yet have NO structural import edge between
     // them. The structure×history fusion: implicit cross-module
@@ -154,6 +162,8 @@ impl AnalysisName {
             Self::ArchViolations => "architecture-violations",
             Self::DependencyCycles => "dependency-cycles",
             Self::ArchitectureRoles => "architecture-roles",
+            Self::Instability => "instability",
+            Self::ArchitectureMetrics => "architecture-metrics",
             Self::ModularityViolations => "modularity-violations",
             Self::UnstableInterface => "unstable-interface",
             Self::StaleCode => "stale-code",
@@ -224,6 +234,8 @@ impl AnalysisName {
             ArchViolations,
             DependencyCycles,
             ArchitectureRoles,
+            Instability,
+            ArchitectureMetrics,
             ModularityViolations,
             UnstableInterface,
             StaleCode,

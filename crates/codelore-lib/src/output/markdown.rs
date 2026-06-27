@@ -375,6 +375,57 @@ pub fn write_god_classes_markdown<W: Write>(
     Ok(())
 }
 
+/// instability markdown emitter — Martin Ca/Ce/Instability per file.
+pub fn write_instability_markdown<W: Write>(
+    rows: &[crate::analyses::instability::InstabilityRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore instability")?;
+    if rows.is_empty() {
+        writeln!(w, "_No resolved import graph — nothing to score._").map_err(CodeLoreError::Io)?;
+        return Ok(());
+    }
+    writeln!(w, "| Path | Ca | Ce | Instability |").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---:|---:|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| `{}` | {} | {} | {:.2} |",
+            escape_md_cell(&row.path),
+            row.ca,
+            row.ce,
+            row.instability,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+/// architecture-metrics markdown emitter — repo-level `(metric, value)`.
+pub fn write_architecture_metrics_markdown<W: Write>(
+    rows: &[crate::analyses::architecture_metrics::ArchitectureMetricRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore architecture-metrics")?;
+    if rows.is_empty() {
+        writeln!(w, "_No resolved import graph — no metrics to compute._")
+            .map_err(CodeLoreError::Io)?;
+        return Ok(());
+    }
+    writeln!(w, "| Metric | Value |").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| {} | {} |",
+            escape_md_cell(&row.metric),
+            escape_md_cell(&row.value),
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 /// architecture-roles markdown emitter — per-file role + visibility reach.
 pub fn write_architecture_roles_markdown<W: Write>(
     rows: &[crate::analyses::architecture_roles::ArchitectureRoleRow],

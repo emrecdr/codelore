@@ -283,6 +283,18 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
             "See analyses/architecture_roles.rs + analyses/import_graph.rs::reachability.",
         ),
         (
+            "instability",
+            "Martin 1994 — OO Design Quality Metrics (Clean Architecture 2017)",
+            "Per file: afferent coupling ca (files importing it / in-degree), efferent coupling ce (files it imports / out-degree), instability I = ce/(ca+ce) in [0,1]. 0 = stable (depended-on, depends on nothing), 1 = unstable. Resolved import graph; Abstractness/Distance need symbol data and are out of scope.",
+            "See analyses/instability.rs.",
+        ),
+        (
+            "architecture-metrics",
+            "Lakos 1996 (CCD/ACD/NCCD) + MacCormack/Rusnak/Baldwin 2006/2014",
+            "Repo-level (metric, value) rows: propagation_cost = density of the transitive-closure matrix; acd = mean transitive dependency set size; nccd = CCD / balanced-binary-tree CCD (<1 flat, >1 layered, >2 likely cyclic); dependency_cycles, largest_cycle; architecture_type = hierarchical / core-periphery / multi-core.",
+            "See analyses/architecture_metrics.rs.",
+        ),
+        (
             "dependency-cycles",
             "Tarjan 1972 SCC + Fontana et al. 2017 (Arcan) Cyclic Dependency smell",
             "Non-trivial strongly-connected components (size ≥ 2) of the structural import graph — files that import each other transitively. cycle_id groups a tangle; size is its member count. Accuracy follows the import resolver's language coverage.",
@@ -832,6 +844,12 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             }
             AnalysisName::ArchitectureRoles => {
                 dispatch_architecture_roles(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::Instability => {
+                dispatch_instability(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::ArchitectureMetrics => {
+                dispatch_architecture_metrics(&db, &opts, format, &ctx, &mut out)?;
             }
             AnalysisName::ModularityViolations => {
                 dispatch_modularity_violations(&db, &opts, format, &ctx, &mut out)?;
@@ -1597,6 +1615,85 @@ fn dispatch_arch_violations(
         fmt => {
             return Err(unsupported_format(
                 "architecture-violations",
+                "csv|json|markdown",
+                fmt,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_instability(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows = codelore_lib::cli_api::analyses::instability::run_instability(db, opts)
+                .context("run instability")?;
+            codelore_lib::cli_api::output::csv::write_instability_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::instability::run_instability(db, opts)
+                .context("run instability")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows = codelore_lib::cli_api::analyses::instability::run_instability(db, opts)
+                .context("run instability")?;
+            codelore_lib::cli_api::output::markdown::write_instability_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => return Err(unsupported_format("instability", "csv|json|markdown", fmt)),
+    }
+    Ok(())
+}
+
+fn dispatch_architecture_metrics(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows =
+                codelore_lib::cli_api::analyses::architecture_metrics::run_architecture_metrics(
+                    db, opts,
+                )
+                .context("run architecture-metrics")?;
+            codelore_lib::cli_api::output::csv::write_architecture_metrics_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows =
+                codelore_lib::cli_api::analyses::architecture_metrics::run_architecture_metrics(
+                    db, opts,
+                )
+                .context("run architecture-metrics")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows =
+                codelore_lib::cli_api::analyses::architecture_metrics::run_architecture_metrics(
+                    db, opts,
+                )
+                .context("run architecture-metrics")?;
+            codelore_lib::cli_api::output::markdown::write_architecture_metrics_markdown(
+                &rows, out,
+            )
+            .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format(
+                "architecture-metrics",
                 "csv|json|markdown",
                 fmt,
             ));

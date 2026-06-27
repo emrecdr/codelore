@@ -2,6 +2,7 @@
 //! plus a thin Rust orchestrator.
 
 pub mod arch_violations;
+pub mod architecture_metrics;
 pub mod architecture_roles;
 pub mod authors;
 pub mod bus_factor;
@@ -23,6 +24,7 @@ pub mod god_classes;
 pub mod grouped_complexity;
 pub mod hotspots;
 pub mod import_graph;
+pub mod instability;
 pub mod knowledge_islands;
 pub mod lead_time;
 pub mod lineage;

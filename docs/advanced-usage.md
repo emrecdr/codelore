@@ -4,7 +4,7 @@ This guide is the developer-facing reference for CodeLore. The [README](../READM
 
 ## Table of contents
 
-1. [The 36 analyses (what they tell you)](#1-the-36-analyses-what-they-tell-you)
+1. [The 38 analyses (what they tell you)](#1-the-38-analyses-what-they-tell-you)
 2. [Output formats deep-dive](#2-output-formats-deep-dive)
 3. [Every CLI flag explained](#3-every-cli-flag-explained)
 4. [PR-mode: `codelore diff`](#4-pr-mode-codelore-diff)
@@ -20,9 +20,9 @@ This guide is the developer-facing reference for CodeLore. The [README](../READM
 
 ---
 
-## 1. The 36 analyses (what they tell you)
+## 1. The 38 analyses (what they tell you)
 
-The table below is split into the **17 code-maat-parity analyses** (drop-in successors to legacy code-maat), **1 modern signal** (`top-committers` — a first-class per-author leaderboard that code-maat approximated via `-a author-churn` + sort), **4 modern foundations** marked ★ (the SARIF-backed differentiators), **3 graph-analytics analyses** marked ★ (knowledge-islands + centrality + communities), and **10 architecture-analytics analyses** marked ★★ (god-classes + architecture-violations + dependency-cycles + architecture-roles + modularity-violations + unstable-interface + stale-code + pair-programming + lead-time + bus-factor — `dependency-cycles` finds import-graph tangles (Tarjan SCC) and `architecture-roles` classifies Core/Shared/Control/Periphery via reachability, both on a shared import-graph kernel; `modularity-violations` and `unstable-interface` fuse the structural import graph with the temporal co-change graph; see `docs/maximum-feature-plan.md`).
+The table below is split into the **17 code-maat-parity analyses** (drop-in successors to legacy code-maat), **1 modern signal** (`top-committers` — a first-class per-author leaderboard that code-maat approximated via `-a author-churn` + sort), **4 modern foundations** marked ★ (the SARIF-backed differentiators), **3 graph-analytics analyses** marked ★ (knowledge-islands + centrality + communities), and **12 architecture-analytics analyses** marked ★★ (god-classes + architecture-violations + dependency-cycles + architecture-roles + instability + architecture-metrics + modularity-violations + unstable-interface + stale-code + pair-programming + lead-time + bus-factor — `dependency-cycles` (Tarjan SCC), `architecture-roles` (Core/Shared/Control/Periphery), `instability` (Martin Ca/Ce/I) and `architecture-metrics` (Lakos ACD/NCCD + propagation cost) all run on a shared import-graph kernel; `modularity-violations` and `unstable-interface` fuse the structural import graph with the temporal co-change graph; see `docs/maximum-feature-plan.md`).
 
 ### Code-maat parity (17) + modern signal
 
@@ -72,6 +72,8 @@ The table below is split into the **17 code-maat-parity analyses** (drop-in succ
 | `architecture-violations` ★★ | "Are layer boundaries respected?" | Imports crossing forbidden boundaries per `.codelore-arch-rules.toml` | CI gate for layered architecture |
 | `dependency-cycles` ★★ | "Where are my import tangles?" | Strongly-connected components (size ≥ 2) of the import graph via Tarjan SCC (Fontana et al. 2017) | Break cycles to restore testability/replaceability; rank by tangle size |
 | `architecture-roles` ★★ | "What shape is my architecture, and what's each file's blast radius?" | Core/Shared/Control/Periphery from transitive visibility fan-in/out (Baldwin & MacCormack 2014); `reach_pct = vfo/n` | Find the Core knot + the widely-reaching files; trend propagation cost over time |
+| `instability` ★★ | "Which widely-used files are themselves unstable?" | Martin Ca (in-degree) / Ce (out-degree) / `I = Ce/(Ca+Ce)` (Martin 1994) | Spot Stable-Dependencies-Principle violations — high Ca + high I is dangerous |
+| `architecture-metrics` ★★ | "How tangled/layered is the architecture overall?" | Propagation cost, Lakos ACD/NCCD, cycle count, architecture type (Lakos 1996; MacCormack/Baldwin) | One trendable repo-level structural-health number for CI |
 | `modularity-violations` ★★ | "Which files change together but don't import each other?" | Fisher-significant co-change pairs with no import edge in either direction (Mo, Cai & Kazman 2015 *Hotspot Patterns* / DV8) | Find implicit/hidden coupling — shared globals, leaky abstractions, contracts honoured through a third party |
 | `unstable-interface` ★★ | "Which interfaces are unstable enough to drag their dependents?" | `revisions × coupled_dependents`, gated on `fan_in ≥ 3` and `revisions ≥ min_revs` (DV8) | Prioritise stabilising the hubs whose churn propagates |
 | `stale-code` ★★ | "Which trivial files are likely abandoned?" | Alive at HEAD AND untouched ≥12 months AND `max(cognitive) ≤ 5` | Delete-candidate surfacing (intersection minimises false positives) |

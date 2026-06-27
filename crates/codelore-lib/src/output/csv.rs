@@ -480,6 +480,44 @@ pub fn write_god_classes_csv<W: Write>(
     Ok(())
 }
 
+/// `instability` CSV emitter — Martin Ca/Ce/Instability per file.
+pub fn write_instability_csv<W: Write>(
+    rows: &[crate::analyses::instability::InstabilityRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(w, "path,ca,ce,instability").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{},{:.4}",
+            quote_if_needed(&row.path),
+            row.ca,
+            row.ce,
+            row.instability,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+/// `architecture-metrics` CSV emitter — repo-level `(metric, value)` rows.
+pub fn write_architecture_metrics_csv<W: Write>(
+    rows: &[crate::analyses::architecture_metrics::ArchitectureMetricRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(w, "metric,value").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{}",
+            quote_if_needed(&row.metric),
+            quote_if_needed(&row.value),
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 /// `architecture-roles` CSV emitter — per-file Core/Shared/Control/
 /// Periphery role + visibility fan-in/out.
 pub fn write_architecture_roles_csv<W: Write>(
