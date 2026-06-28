@@ -612,6 +612,53 @@ fn read_blob_at_head_matches_on_tracked_and_untracked_paths() {
     );
 }
 
+/// `read_blob_at(rev, path)` must agree across backends for an explicit
+/// (non-symbolic) commit SHA — the historical-scan path (architecture-
+/// trend) reads blobs at SHAs returned by `walk_commits`, so gix's
+/// `rev_parse_single` and git's `git show <sha>:<path>` must resolve the
+/// same bytes. Probes the OLDEST commit in the fixture so the rev is
+/// genuinely not HEAD.
+#[test]
+fn read_blob_at_matches_for_an_explicit_old_rev() {
+    let (gix, cli) = open_both();
+    let opts = opts_with_merges();
+
+    // Oldest commit = last in the (reverse-chronological) walk.
+    let events: Vec<_> = gix
+        .walk_commits(&opts)
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let old_rev = events.last().expect("fixture has commits").rev.clone();
+
+    // Probe several paths; for each, the two backends must return
+    // byte-identical results (Some-or-None must match exactly) at that
+    // historical rev. At least one probe must resolve to Some so the
+    // test actually exercises the read path, not just the None branch.
+    let probes = ["README.md", "src/main.rs", "Cargo.toml", "src/lib.rs"];
+    let mut any_some = false;
+    for path in probes {
+        let g = gix
+            .read_blob_at(&old_rev, path)
+            .unwrap_or_else(|e| panic!("gix read_blob_at {old_rev}:{path}: {e}"));
+        let c = cli
+            .read_blob_at(&old_rev, path)
+            .unwrap_or_else(|e| panic!("cli read_blob_at {old_rev}:{path}: {e}"));
+        assert_eq!(
+            g,
+            c,
+            "backends disagree on {path} at {old_rev} (gix Some={}, cli Some={})",
+            g.is_some(),
+            c.is_some(),
+        );
+        any_some = any_some || g.is_some();
+    }
+    assert!(
+        any_some,
+        "no probe resolved at {old_rev} — test never exercised a real blob read",
+    );
+}
+
 /// `diff_hunks(rev, path)` must agree byte-for-byte across the two
 /// backends: gix-imara-diff's `Diff::hunks()` iterator converted to
 /// git's 1-indexed `@@ -old_start,old_lines +new_start,new_lines @@`

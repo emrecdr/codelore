@@ -290,39 +290,37 @@ impl Repo for GixRepo {
         iter.flatten().next().is_some()
     }
 
-    fn read_blob_at_head(&self, path: &str) -> Result<Option<Vec<u8>>> {
+    fn read_blob_at(&self, rev: &str, path: &str) -> Result<Option<Vec<u8>>> {
         let repo = self.inner.to_thread_local();
-        let head_id = match repo.head_id() {
-            Ok(id) => id,
-            Err(e) => {
-                return Err(CodeLoreError::Repo(format!(
-                    "read_blob_at_head head_id: {e}"
-                )));
-            }
-        };
+        // Resolve `rev` to a single object id. `rev_parse_single` handles
+        // "HEAD", full/abbrev SHAs, tags, etc. — the same resolver the
+        // commit walker uses, so a SHA from `walk_commits` round-trips.
+        let commit_id = repo
+            .rev_parse_single(rev)
+            .map_err(|e| CodeLoreError::Repo(format!("read_blob_at rev_parse {rev}: {e}")))?;
         let commit = repo
-            .find_commit(head_id)
-            .map_err(|e| CodeLoreError::Repo(format!("read_blob_at_head find_commit: {e}")))?;
+            .find_commit(commit_id)
+            .map_err(|e| CodeLoreError::Repo(format!("read_blob_at find_commit {rev}: {e}")))?;
         let tree = commit
             .tree()
-            .map_err(|e| CodeLoreError::Repo(format!("read_blob_at_head tree: {e}")))?;
+            .map_err(|e| CodeLoreError::Repo(format!("read_blob_at tree {rev}: {e}")))?;
         // `lookup_entry_by_path` accepts a POSIX-separated repo-relative
         // string and walks the tree segment by segment. Returns
         // `Ok(None)` if any segment is missing — that's the "not tracked
-        // at HEAD" case the trait wants surfaced as `Ok(None)`.
+        // at this rev" case the trait wants surfaced as `Ok(None)`.
         let entry = tree
             .lookup_entry_by_path(path)
-            .map_err(|e| CodeLoreError::Repo(format!("read_blob_at_head lookup {path}: {e}")))?;
+            .map_err(|e| CodeLoreError::Repo(format!("read_blob_at lookup {rev}:{path}: {e}")))?;
         let Some(entry) = entry else {
             return Ok(None);
         };
         // Reject non-blob entries (directories, submodule gitlinks, etc.).
-        // The HEAD-time scan only cares about file contents.
+        // The scan only cares about file contents.
         if !entry.mode().is_blob() {
             return Ok(None);
         }
         let mut obj = repo.find_object(entry.id()).map_err(|e| {
-            CodeLoreError::Repo(format!("read_blob_at_head find_object {path}: {e}"))
+            CodeLoreError::Repo(format!("read_blob_at find_object {rev}:{path}: {e}"))
         })?;
         // Move the buffer out of the gix::Object via mem::take (gix::Object
         // implements Drop so partial-move isn't permitted). Avoids

@@ -289,18 +289,18 @@ impl Repo for GitCliRepo {
         }
     }
 
-    fn read_blob_at_head(&self, path: &str) -> Result<Option<Vec<u8>>> {
-        // `git show HEAD:<path>` resolves the path through HEAD's tree
-        // and writes the blob's raw bytes to stdout. Matches GixRepo's
-        // ODB-backed read semantics (bare-repo safe, no working-tree
-        // dependency). Missing paths produce exit code 128 with a
-        // "fatal: path '...' exists on disk, but not in 'HEAD'" or
-        // similar stderr — we map any non-success to `Ok(None)` per
-        // the trait contract; GixRepo does the same.
+    fn read_blob_at(&self, rev: &str, path: &str) -> Result<Option<Vec<u8>>> {
+        // `git show <rev>:<path>` resolves the path through that rev's
+        // tree and writes the blob's raw bytes to stdout. Matches
+        // GixRepo's ODB-backed read semantics (bare-repo safe, no
+        // working-tree dependency). Missing paths produce exit code 128
+        // with a "fatal: path '...' does not exist in '<rev>'" or similar
+        // stderr — we map any non-success to `Ok(None)` per the trait
+        // contract; GixRepo does the same.
         //
         // `--textconv` is NOT passed: we want raw bytes, not the
         // user-configurable smudged form.
-        let output = self.run_git(&["show", &format!("HEAD:{path}")])?;
+        let output = self.run_git(&["show", &format!("{rev}:{path}")])?;
         if output.status.success() {
             Ok(Some(output.stdout))
         } else {

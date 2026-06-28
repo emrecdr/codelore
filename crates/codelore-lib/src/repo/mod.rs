@@ -68,36 +68,36 @@ pub trait Repo: Send + Sync {
         false
     }
 
-    /// Read the blob bytes at HEAD for `path` (POSIX-separated, repo-
-    /// relative). Returns `Ok(None)` if the path isn't tracked at
-    /// HEAD (deleted upstream, or a directory). Returns `Err` only
-    /// on real I/O failure.
+    /// Read the blob bytes at revision `rev` for `path` (POSIX-
+    /// separated, repo-relative). `rev` is any git revision the backend
+    /// can resolve — a commit SHA, `"HEAD"`, a tag, etc. Returns
+    /// `Ok(None)` if the path isn't a tracked blob at that revision
+    /// (deleted there, a directory, or a submodule gitlink). Returns
+    /// `Err` only on real object-database I/O failure (corrupted pack,
+    /// missing shallow object) — NOT on "path doesn't exist at `rev`".
     ///
-    /// HEAD-time scans (complexity, clones) use this instead of
-    /// reading the working-tree file via `std::fs::read`. Reading
-    /// blobs avoids three failure modes:
-    ///   1. Bare repos have no working tree — `fs::read` always
-    ///      fails. Blob reads work.
-    ///   2. Dirty working trees: `fs::read` returns the user's
-    ///      uncommitted edits, contaminating HEAD-time metrics with
-    ///      changes that aren't yet in the fact store's commit
-    ///      history.
-    ///   3. Untracked files (created locally, never committed)
-    ///      would be picked up by a working-tree walk but have no
-    ///      blob — the HEAD-time semantic is to skip them, which
-    ///      blob reads enforce by construction.
+    /// Reading blobs from the object database (rather than the working
+    /// tree via `std::fs::read`) is what lets HEAD-time scans
+    /// (complexity, clones) AND historical scans (architecture-trend)
+    /// work on bare repos, ignore dirty-worktree edits, and skip
+    /// untracked files by construction.
     ///
-    /// Default impl returns `Ok(None)` so backends without an
-    /// efficient blob lookup can opt out and fall back to the
-    /// working-tree disk path.
+    /// Default impl returns `Ok(None)` so backends without an efficient
+    /// blob lookup can opt out and fall back to the working-tree path.
+    fn read_blob_at(&self, _rev: &str, _path: &str) -> Result<Option<Vec<u8>>> {
+        Ok(None)
+    }
+
+    /// Read the blob bytes at HEAD for `path`. Convenience wrapper over
+    /// [`read_blob_at`](Self::read_blob_at) — the HEAD-time scans' entry
+    /// point. Backends override `read_blob_at`, not this.
     ///
     /// # Errors
     ///
-    /// Returns an error on object-database I/O failures (corrupted
-    /// pack, missing shallow object, etc.) but NOT on "path doesn't
-    /// exist at HEAD" — that case returns `Ok(None)`.
-    fn read_blob_at_head(&self, _path: &str) -> Result<Option<Vec<u8>>> {
-        Ok(None)
+    /// Propagates object-database I/O failures from `read_blob_at`;
+    /// "not tracked at HEAD" is `Ok(None)`, not an error.
+    fn read_blob_at_head(&self, path: &str) -> Result<Option<Vec<u8>>> {
+        self.read_blob_at("HEAD", path)
     }
 }
 
