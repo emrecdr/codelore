@@ -53,6 +53,33 @@ pub fn write_revisions_csv<W: Write>(rows: &[(String, u32)], w: &mut W) -> Resul
     Ok(())
 }
 
+/// `hotspot-velocity` CSV emitter — recent vs baseline churn rate +
+/// acceleration (heating up / cooling down).
+pub fn write_hotspot_velocity_csv<W: Write>(
+    rows: &[crate::analyses::hotspot_velocity::HotspotVelocityRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(
+        w,
+        "entity,revs-recent,revs-baseline,recent-per-week,baseline-per-week,acceleration"
+    )
+    .map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{},{:.2},{:.2},{:.2}",
+            quote_if_needed(&row.path),
+            row.revs_recent,
+            row.revs_baseline,
+            row.recent_per_week,
+            row.baseline_per_week,
+            row.acceleration,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_hotspots_csv<W: Write>(rows: &[HotspotRow], w: &mut W) -> Result<()> {
     // `mi` is the SEI-variant Maintainability Index per Coleman 1994 / SEI 1997.
     // `mi-rank` is the file's repo-relative percentile in `[0,1]` (PERCENT_RANK

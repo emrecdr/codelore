@@ -68,6 +68,47 @@ pub fn write_revisions_markdown<W: Write>(rows: &[(String, u32)], w: &mut W) -> 
     Ok(())
 }
 
+/// `hotspot-velocity` markdown emitter — files ranked by change
+/// acceleration (heating up first).
+pub fn write_hotspot_velocity_markdown<W: Write>(
+    rows: &[crate::analyses::hotspot_velocity::HotspotVelocityRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore hotspot velocity")?;
+    if rows.is_empty() {
+        writeln!(w, "_No files changed in the recent window._").map_err(CodeLoreError::Io)?;
+        return Ok(());
+    }
+    writeln!(
+        w,
+        "| Path | Trend | Revs (recent) | Revs (baseline) | Recent/wk | Baseline/wk | Acceleration |"
+    )
+    .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|:---:|---:|---:|---:|---:|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        let trend = if row.acceleration > 0.0 {
+            "▲ heating"
+        } else if row.acceleration < 0.0 {
+            "▼ cooling"
+        } else {
+            "– steady"
+        };
+        writeln!(
+            w,
+            "| `{}` | {} | {} | {} | {:.2} | {:.2} | {:+.2} |",
+            escape_md_cell(&row.path),
+            trend,
+            row.revs_recent,
+            row.revs_baseline,
+            row.recent_per_week,
+            row.baseline_per_week,
+            row.acceleration,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_hotspots_markdown<W: Write>(rows: &[HotspotRow], w: &mut W) -> Result<()> {
     header(w, "CodeLore hotspots")?;
     // The MI cell renders `value (band, rank%)` when the file has a known

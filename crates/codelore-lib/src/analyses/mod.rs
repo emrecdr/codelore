@@ -23,6 +23,7 @@ pub mod entity_effort;
 pub mod entity_ownership;
 pub mod god_classes;
 pub mod grouped_complexity;
+pub mod hotspot_velocity;
 pub mod hotspots;
 pub mod import_graph;
 pub mod instability;

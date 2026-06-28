@@ -271,6 +271,12 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
             "See analyses/hotspots.rs.",
         ),
         (
+            "hotspot-velocity",
+            "Change-acceleration early warning (recent vs baseline churn)",
+            "Per file: acceleration = recent_per_week − baseline_per_week over a 30-day recent window vs the 90 days before it, anchored at MAX(commits.date). Positive = heating up (becoming a hotspot before its all-time count shows it); negative = cooling down.",
+            "See analyses/hotspot_velocity.rs.",
+        ),
+        (
             "god-classes",
             "Brown et al. 1998 *AntiPatterns* §3.1 + Riel 1996 *Object-Oriented Design Heuristics*",
             "(cognitive / 100.0) × (fan_in + fan_out). Ranks files where all three pull up.",
@@ -820,6 +826,9 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
 
         match &analysis {
             AnalysisName::Hotspots => dispatch_hotspots(&db, &opts, format, &ctx, &mut out)?,
+            AnalysisName::HotspotVelocity => {
+                dispatch_hotspot_velocity(&db, &opts, format, &ctx, &mut out)?;
+            }
             AnalysisName::CodeHealth => dispatch_code_health(&db, &opts, format, &ctx, &mut out)?,
             AnalysisName::CodeAge => dispatch_code_age(&db, &opts, format, &ctx, &mut out)?,
             AnalysisName::AbsChurn => dispatch_abs_churn(&db, &opts, format, &ctx, &mut out)?,
@@ -997,6 +1006,46 @@ fn dispatch_revisions(
             return Err(unsupported_format(
                 "revisions",
                 "csv|json|markdown|html",
+                fmt,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_hotspot_velocity(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows =
+                codelore_lib::cli_api::analyses::hotspot_velocity::run_hotspot_velocity(db, opts)
+                    .context("run hotspot-velocity")?;
+            codelore_lib::cli_api::output::csv::write_hotspot_velocity_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows =
+                codelore_lib::cli_api::analyses::hotspot_velocity::run_hotspot_velocity(db, opts)
+                    .context("run hotspot-velocity")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows =
+                codelore_lib::cli_api::analyses::hotspot_velocity::run_hotspot_velocity(db, opts)
+                    .context("run hotspot-velocity")?;
+            codelore_lib::cli_api::output::markdown::write_hotspot_velocity_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format(
+                "hotspot-velocity",
+                "csv|json|markdown",
                 fmt,
             ));
         }

@@ -8,6 +8,8 @@ use std::str::FromStr;
 pub enum AnalysisName {
     // v1 Spine — 10 core
     Hotspots,
+    // Change-acceleration early warning (recent vs baseline churn rate).
+    HotspotVelocity,
     Coupling,
     Ownership,
     CodeAge,
@@ -138,6 +140,7 @@ impl AnalysisName {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Hotspots => "hotspots",
+            Self::HotspotVelocity => "hotspot-velocity",
             Self::Coupling => "coupling",
             Self::Ownership => "ownership",
             Self::CodeAge => "code-age",
@@ -211,6 +214,7 @@ impl AnalysisName {
         }
         registry!(
             Hotspots,
+            HotspotVelocity,
             Coupling,
             Ownership,
             CodeAge,
