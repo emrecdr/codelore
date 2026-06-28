@@ -31,7 +31,7 @@
 
 use std::collections::HashSet;
 
-use crate::analyses::import_graph::{build_import_graph_from_edges, reachability, tarjan_scc};
+use crate::analyses::import_graph::{build_import_graph_from_edges, graph_metrics};
 use crate::facts::FactsDb;
 use crate::repo::Repo;
 use crate::{Options, Result};
@@ -66,27 +66,21 @@ pub struct ArchitectureTrendRow {
 ///
 /// Returns [`crate::CodeLoreError::Analysis`] on `DuckDB` query errors
 /// and [`crate::CodeLoreError::Repo`] on object-database I/O failures.
-#[tracing::instrument(name = "architecture-trend", skip_all, fields(min_revs = opts.min_revs))]
+#[tracing::instrument(name = "architecture-trend", skip_all)]
 pub fn run_architecture_trend<R: Repo>(
     db: &FactsDb,
     repo: &R,
-    opts: &Options,
+    // Unused, but kept for signature parity with the other analyses.
+    _opts: &Options,
 ) -> Result<Vec<ArchitectureTrendRow>> {
-    let _ = opts;
-    // All commits, oldest → newest: (rev, calendar date, full timestamp).
-    let commits: Vec<(String, String, String)> = crate::analyses::query::query_map_collect(
+    // All commits, oldest → newest: (rev, full timestamp). The calendar
+    // date for display is the `YYYY-MM-DD` prefix of the timestamp.
+    let commits: Vec<(String, String)> = crate::analyses::query::query_map_collect(
         db,
-        "SELECT rev, CAST(CAST(date AS DATE) AS TEXT), CAST(date AS TEXT) \
-         FROM commits ORDER BY date ASC, rowid ASC",
+        "SELECT rev, CAST(date AS TEXT) FROM commits ORDER BY date ASC, rowid ASC",
         [],
         "architecture-trend commits",
-        |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-            ))
-        },
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
     )?;
     if commits.is_empty() {
         return Ok(Vec::new());
@@ -95,47 +89,24 @@ pub fn run_architecture_trend<R: Repo>(
     let picks = evenly_spaced_indices(commits.len(), SAMPLE_POINTS);
     let mut rows = Vec::with_capacity(picks.len());
     for idx in picks {
-        let (rev, date, ts) = &commits[idx];
+        let (rev, ts) = &commits[idx];
         let live = live_paths_at(db, ts)?;
         let edges = resolve_imports_at_rev(repo, rev, &live);
         let graph = build_import_graph_from_edges(&edges);
-        let (propagation_cost, cycle_count, largest_cycle) = metrics(&graph);
+        // Shared kernel — so `architecture-trend` and the HEAD
+        // `architecture-metrics` report the same numbers by construction.
+        let m = graph_metrics(&graph);
         rows.push(ArchitectureTrendRow {
-            date: date.clone(),
+            // Calendar date = the `YYYY-MM-DD` prefix of the timestamp text.
+            date: ts.get(..10).unwrap_or(ts).to_string(),
             rev: rev.chars().take(12).collect(),
-            files: u32::try_from(graph.len()).unwrap_or(u32::MAX),
-            propagation_cost,
-            cycle_count,
-            largest_cycle,
+            files: u32::try_from(m.n).unwrap_or(u32::MAX),
+            propagation_cost: m.propagation_cost,
+            cycle_count: m.cycle_count,
+            largest_cycle: m.largest_cycle,
         });
     }
     Ok(rows)
-}
-
-/// `(propagation_cost, cycle_count, largest_cycle)` for a graph.
-fn metrics(graph: &crate::analyses::import_graph::ImportGraph) -> (f64, u32, u32) {
-    let n = graph.len();
-    if n == 0 {
-        return (0.0, 0, 0);
-    }
-    let sccs = tarjan_scc(&graph.adj);
-    let reach = reachability(&graph.adj, &sccs);
-    let ccd: f64 = reach.vfo.iter().map(|&v| f64::from(v)).sum();
-    let n_f = f64::from(u32::try_from(n).unwrap_or(u32::MAX));
-    let propagation_cost = ccd / (n_f * n_f);
-    let mut cycle_count = 0u32;
-    let mut largest = 0usize;
-    for comp in &sccs {
-        if comp.len() >= 2 {
-            cycle_count += 1;
-            largest = largest.max(comp.len());
-        }
-    }
-    (
-        propagation_cost,
-        cycle_count,
-        u32::try_from(largest).unwrap_or(u32::MAX),
-    )
 }
 
 /// Pick up to `k` evenly-spaced indices over `0..len`, always including
@@ -187,10 +158,7 @@ fn resolve_imports_at_rev<R: Repo>(
     rev: &str,
     live_paths: &[String],
 ) -> Vec<(String, String)> {
-    use crate::imports::{
-        ImportLanguage, extract_imports, resolve_js_relative, resolve_python_relative,
-        resolve_rust_path,
-    };
+    use crate::imports::{ImportLanguage, extract_imports, resolve_by_extension};
     use rayon::prelude::*;
 
     let live_set: HashSet<String> = live_paths.iter().cloned().collect();
@@ -218,19 +186,8 @@ fn resolve_imports_at_rev<R: Repo>(
             let Ok(imports) = extract_imports(&code, lang) else {
                 return out.into_iter();
             };
-            let ext = std::path::Path::new(&rel)
-                .extension()
-                .and_then(std::ffi::OsStr::to_str);
             for imp in imports {
-                let resolved = match ext {
-                    Some("rs") => resolve_rust_path(&rel, &imp.target, &live_set),
-                    Some("py" | "pyi") => resolve_python_relative(&rel, &imp.target, &live_set),
-                    Some("js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx") => {
-                        resolve_js_relative(&rel, &imp.target, &live_set)
-                    }
-                    _ => None,
-                };
-                if let Some(target_path) = resolved {
+                if let Some(target_path) = resolve_by_extension(&rel, &imp.target, &live_set) {
                     out.push((rel.clone(), target_path));
                 }
             }

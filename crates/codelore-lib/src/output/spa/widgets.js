@@ -3304,15 +3304,16 @@
       const minSpacingX = 96; // horizontal room per node so labels don't collide
       const usableW = W - 2 * padX;
       const perRow = Math.max(1, Math.floor(usableW / minSpacingX));
-      // Distinct levels, shallow→deep (entry points first).
-      const levelsPresent = Array.from(new Set(nodeArr.map(function (nd) {
-        return (moduleLevel[nd.name] === undefined) ? 0 : moduleLevel[nd.name];
-      }))).sort(function (a, b) { return a - b; });
+      // Bucket nodes by level in one pass; the distinct levels (shallow→
+      // deep, entry points first) fall out of the bucket keys.
       const byLevel = {};
       nodeArr.forEach(function (nd) {
         const lv = (moduleLevel[nd.name] === undefined) ? 0 : moduleLevel[nd.name];
         (byLevel[lv] = byLevel[lv] || []).push(nd);
       });
+      const levelsPresent = Object.keys(byLevel)
+        .map(Number)
+        .sort(function (a, b) { return a - b; });
       // Each level occupies one or more sub-rows: a band wider than
       // `perRow` wraps instead of squeezing its nodes (and their labels)
       // into an unreadable single line. Rows accumulate top-to-bottom so

@@ -23,6 +23,32 @@ use std::path::{Path, PathBuf};
 const JS_EXTENSIONS: &[&str] = &["js", "jsx", "mjs", "cjs"];
 const TS_EXTENSIONS: &[&str] = &["ts", "tsx"];
 
+/// Resolve an import `target` from `importer_path` to a tracked path,
+/// dispatching to the per-language resolver by the importer's file
+/// extension. Returns `None` for languages without a resolver (Java
+/// FQNs, etc.) or for unresolvable targets. The single dispatch point
+/// shared by the HEAD ingest (`resolve_imports_at_head`) and the
+/// historical scan (`architecture-trend`), so language coverage — and
+/// which extensions route where — is defined in exactly one place.
+#[must_use]
+pub fn resolve_by_extension<S: std::hash::BuildHasher>(
+    importer_path: &str,
+    target: &str,
+    live_paths: &HashSet<String, S>,
+) -> Option<String> {
+    let ext = Path::new(importer_path)
+        .extension()
+        .and_then(std::ffi::OsStr::to_str);
+    match ext {
+        Some("rs") => resolve_rust_path(importer_path, target, live_paths),
+        Some("py" | "pyi") => resolve_python_relative(importer_path, target, live_paths),
+        Some("js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx") => {
+            resolve_js_relative(importer_path, target, live_paths)
+        }
+        _ => None,
+    }
+}
+
 /// Resolve a Rust `use` path against the live-at-HEAD set. Handles
 /// the conventional `crate::foo::bar` → `src/foo/bar.rs` |
 /// `src/foo/bar/mod.rs` mapping. `self::` and `super::` resolve

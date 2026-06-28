@@ -124,7 +124,7 @@ impl FactsDb {
         live_paths: &[String],
         head_rev: &str,
     ) -> Result<usize> {
-        use crate::imports::{resolve_js_relative, resolve_python_relative, resolve_rust_path};
+        use crate::imports::resolve_by_extension;
 
         // 1. Pull every unresolved import row scoped to a language
         //    the multi-language resolver supports (JS/TS, Python,
@@ -150,9 +150,10 @@ impl FactsDb {
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|e| CodeLoreError::Analysis(format!("collect imports scan: {e}")))?;
 
-        // 2. Dispatch to the per-language resolver by file extension.
-        //    First-match wins; falls through to `None` for external
-        //    targets the resolver can't map to a tracked path.
+        // 2. Dispatch to the per-language resolver by file extension
+        //    (shared with the historical `architecture-trend` scan via
+        //    `resolve_by_extension`, so language coverage lives in one
+        //    place). Falls through to `None` for external targets.
         //
         //    The resolvers want an owned-string hash set; build it once
         //    directly from the live-path slice (the caller hoisted
@@ -163,20 +164,9 @@ impl FactsDb {
             live_paths.iter().cloned().collect();
         let mut hits: Vec<(String, String, String)> = Vec::new();
         for (src_path, target) in candidates {
-            let ext = std::path::Path::new(&src_path)
-                .extension()
-                .and_then(std::ffi::OsStr::to_str);
-            let resolved = match ext {
-                Some("rs") => resolve_rust_path(&src_path, &target, &live_paths_owned),
-                Some("py" | "pyi") => {
-                    resolve_python_relative(&src_path, &target, &live_paths_owned)
-                }
-                Some("js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx") => {
-                    resolve_js_relative(&src_path, &target, &live_paths_owned)
-                }
-                _ => None,
-            };
-            if let Some(resolved_target_path) = resolved {
+            if let Some(resolved_target_path) =
+                resolve_by_extension(&src_path, &target, &live_paths_owned)
+            {
                 hits.push((resolved_target_path, src_path, target));
             }
         }

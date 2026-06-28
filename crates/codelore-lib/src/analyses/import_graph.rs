@@ -380,6 +380,67 @@ pub fn reach_index(adj: &[Vec<usize>], sccs: &[Vec<usize>]) -> ReachIndex {
     ReachIndex { scc_of, reach_fwd }
 }
 
+/// Repo-level structural metrics derived from one SCC + reachability
+/// pass. The single source of truth shared by `architecture-metrics`
+/// (HEAD) and `architecture-trend` (sampled history) so the two can
+/// never disagree on propagation cost or cycle structure.
+pub struct GraphMetrics {
+    /// Node count (files in the resolved import graph).
+    pub n: usize,
+    /// Cumulative Component Dependency = Σ visibility-fan-out (each
+    /// file's transitive dependency set incl. self). Feeds Lakos ACD/NCCD.
+    pub ccd: f64,
+    /// Density of the visibility matrix = `ccd / n²` — "a change to a
+    /// random file reaches this fraction of the system".
+    pub propagation_cost: f64,
+    /// Non-trivial dependency cycles (SCCs of size ≥ 2).
+    pub cycle_count: u32,
+    /// Size of the largest cycle (0 if acyclic).
+    pub largest_cycle: u32,
+    /// Total nodes that sit in some cycle (for core-periphery dominance).
+    pub cyclic_nodes: u32,
+}
+
+/// Compute [`GraphMetrics`] for `graph`. Empty graph → all zeros.
+#[must_use]
+pub fn graph_metrics(graph: &ImportGraph) -> GraphMetrics {
+    let n = graph.len();
+    if n == 0 {
+        return GraphMetrics {
+            n: 0,
+            ccd: 0.0,
+            propagation_cost: 0.0,
+            cycle_count: 0,
+            largest_cycle: 0,
+            cyclic_nodes: 0,
+        };
+    }
+    let sccs = tarjan_scc(&graph.adj);
+    let reach = reachability(&graph.adj, &sccs);
+    let ccd: f64 = reach.vfo.iter().map(|&v| f64::from(v)).sum();
+    let n_f = f64::from(u32::try_from(n).unwrap_or(u32::MAX));
+    let propagation_cost = ccd / (n_f * n_f);
+
+    let mut cycle_count = 0u32;
+    let mut largest = 0usize;
+    let mut cyclic = 0usize;
+    for comp in &sccs {
+        if comp.len() >= 2 {
+            cycle_count += 1;
+            cyclic += comp.len();
+            largest = largest.max(comp.len());
+        }
+    }
+    GraphMetrics {
+        n,
+        ccd,
+        propagation_cost,
+        cycle_count,
+        largest_cycle: u32::try_from(largest).unwrap_or(u32::MAX),
+        cyclic_nodes: u32::try_from(cyclic).unwrap_or(u32::MAX),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{reach_index, reachability, tarjan_scc, topo_levels};

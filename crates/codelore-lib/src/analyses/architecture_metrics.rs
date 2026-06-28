@@ -20,7 +20,7 @@
 //! reachability), so this adds no new query cost beyond building the
 //! graph. Accuracy follows the import resolver's language coverage.
 
-use crate::analyses::import_graph::{build_import_graph, reachability, tarjan_scc};
+use crate::analyses::import_graph::{build_import_graph, graph_metrics};
 use crate::facts::FactsDb;
 use crate::{Options, Result};
 
@@ -52,41 +52,25 @@ pub fn run_architecture_metrics(
     opts: &Options,
 ) -> Result<Vec<ArchitectureMetricRow>> {
     let graph = build_import_graph(db)?;
-    let n = graph.len();
-    if n == 0 {
+    let m = graph_metrics(&graph);
+    if m.n == 0 {
         return Ok(Vec::new());
     }
-    let sccs = tarjan_scc(&graph.adj);
-    let reach = reachability(&graph.adj, &sccs);
 
-    let n_f = f64::from(u32::try_from(n).unwrap_or(u32::MAX));
-    // Cumulative Component Dependency = Σ visibility-fan-out (each file's
-    // transitive dependency set incl. self).
-    let ccd: f64 = reach.vfo.iter().map(|&v| f64::from(v)).sum();
-    let acd = ccd / n_f;
-    let propagation_cost = ccd / (n_f * n_f);
+    let n_f = f64::from(u32::try_from(m.n).unwrap_or(u32::MAX));
+    // ACD/NCCD layer on top of the shared kernel's CCD + propagation cost.
+    let acd = m.ccd / n_f;
     // CCD of a balanced binary tree of n nodes = (n+1)·log2(n+1) − n.
     let ccd_btree = (n_f + 1.0) * (n_f + 1.0).log2() - n_f;
     let nccd = if ccd_btree > 0.0 {
-        ccd / ccd_btree
+        m.ccd / ccd_btree
     } else {
         0.0
     };
 
-    // Cycle structure.
-    let mut cycle_count = 0u32;
-    let mut largest_cycle = 0usize;
-    let mut cyclic_nodes = 0usize;
-    for comp in &sccs {
-        if comp.len() >= 2 {
-            cycle_count += 1;
-            cyclic_nodes += comp.len();
-            largest_cycle = largest_cycle.max(comp.len());
-        }
-    }
-    let largest_f = f64::from(u32::try_from(largest_cycle).unwrap_or(u32::MAX));
-    let cyclic_f = f64::from(u32::try_from(cyclic_nodes).unwrap_or(u32::MAX));
-    let arch_type = if cycle_count == 0 {
+    let largest_f = f64::from(m.largest_cycle);
+    let cyclic_f = f64::from(m.cyclic_nodes);
+    let arch_type = if m.cycle_count == 0 {
         "hierarchical"
     } else if cyclic_f > 0.0 && largest_f / cyclic_f >= CORE_DOMINANCE {
         "core-periphery"
@@ -95,12 +79,12 @@ pub fn run_architecture_metrics(
     };
 
     Ok(vec![
-        row("propagation_cost", format!("{propagation_cost:.4}")),
+        row("propagation_cost", format!("{:.4}", m.propagation_cost)),
         row("acd", format!("{acd:.2}")),
         row("nccd", format!("{nccd:.2}")),
-        row("dependency_cycles", cycle_count.to_string()),
-        row("largest_cycle", largest_cycle.to_string()),
-        row("files", n.to_string()),
+        row("dependency_cycles", m.cycle_count.to_string()),
+        row("largest_cycle", m.largest_cycle.to_string()),
+        row("files", m.n.to_string()),
         row("architecture_type", arch_type.to_owned()),
     ])
 }
