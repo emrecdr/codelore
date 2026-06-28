@@ -1403,6 +1403,29 @@
           <span class="tooltip-popup" role="tooltip">Aggregate to 6 path segments. Maximum granularity — close to per-file imports.</span>
         </button>
       </div>
+      <!-- Layout toggle. 'Force' is the physics layout (good for small
+           graphs); 'Layered' stacks modules in topological bands so
+           forward deps flow downward and back-edges (cycles) run back
+           up — de-hairballs medium graphs. Persisted on
+           `$store.layout.archGraphLayout`. -->
+      <div role="tablist" class="tabs tabs-boxed mb-2" aria-label="Architecture graph layout">
+        <button type="button" role="tab" class="tab tooltip-host"
+                :class="$store.layout.archGraphLayout === 'force' && 'tab-active'"
+                :aria-selected="$store.layout.archGraphLayout === 'force' ? 'true' : 'false'"
+                @click="$store.layout.archGraphLayout = 'force'">
+          Force
+          <span class="tooltip-trigger" aria-hidden="true">?</span>
+          <span class="tooltip-popup" role="tooltip">Physics layout — nodes repel, edges pull. Best for small graphs; large ones hairball.</span>
+        </button>
+        <button type="button" role="tab" class="tab tooltip-host"
+                :class="$store.layout.archGraphLayout === 'layered' && 'tab-active'"
+                :aria-selected="$store.layout.archGraphLayout === 'layered' ? 'true' : 'false'"
+                @click="$store.layout.archGraphLayout = 'layered'">
+          Layered
+          <span class="tooltip-trigger" aria-hidden="true">?</span>
+          <span class="tooltip-popup" role="tooltip">Topological bands by architectural level. Forward dependencies flow downward (arrows); back-edges that run upward are dependency cycles / layering violations.</span>
+        </button>
+      </div>
       <div id="widget-arch-graph-body" class="widget-body" style="height: 380px;"></div>
     </section>
 
@@ -1993,6 +2016,9 @@
       Alpine.store('layout', {
         chordDepth: Alpine.$persist('auto').as('codelore_chord_depth'),
         archGraphDepth: Alpine.$persist('auto').as('codelore_arch_graph_depth'),
+        // Architecture-graph layout: 'force' (physics) or 'layered'
+        // (topological bands). Persisted across reloads.
+        archGraphLayout: Alpine.$persist('force').as('codelore_arch_graph_layout'),
         // Sankey 'files' = no aggregation (top-30 file pairs, the
         // canonical view). Integer 2-6 collapses each pair's
         // entities to N path segments and re-tops the aggregated
@@ -2112,6 +2138,7 @@
         void Alpine.store('scenario').departed.length;
         void Alpine.store('layout').chordDepth;
         void Alpine.store('layout').archGraphDepth;
+        void Alpine.store('layout').archGraphLayout;
         void Alpine.store('layout').sankeyDepth;
         void Alpine.store('layout').trendsTopN;
         void Alpine.store('layout').parallelTopN;

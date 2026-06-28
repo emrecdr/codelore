@@ -3236,6 +3236,9 @@
     const ROLE_RANK = { core: 3, control: 2, shared: 1, periphery: 0 };
     const moduleRole = {};
     const moduleInCycle = {};
+    // Shallowest topological level among a module's files — the band a
+    // module sits in for the layered layout (entry points = level 0).
+    const moduleLevel = {};
     var vfoSum = 0;
     var fileCount = 0;
     var filesInCycles = 0;
@@ -3251,6 +3254,8 @@
         moduleRole[rm] = rr.role;
       }
       if (rr.in_cycle) moduleInCycle[rm] = true;
+      const lv = (typeof rr.level === 'number') ? rr.level : 1e9;
+      if (moduleLevel[rm] === undefined || lv < moduleLevel[rm]) moduleLevel[rm] = lv;
     }
     // Propagation cost = mean(vfo)/fileCount = sum(vfo)/fileCount² — "a
     // change to a random file reaches this fraction of the system".
@@ -3283,6 +3288,58 @@
         itemStyle: inCycle ? { borderColor: cycleRing, borderWidth: 3 } : undefined,
       };
     });
+    // Layout mode: 'force' (default physics) or 'layered' (topological
+    // bands). Layered de-hairballs the graph — modules stack in
+    // horizontal bands by level, so forward deps flow downward and
+    // back-edges (cycles) visibly run back up. Encodings (role colour,
+    // cycle ring, unstable diamond) are on the nodes, so they carry over.
+    const layoutMode = (archLayout && archLayout.archGraphLayout === 'layered')
+      ? 'layered' : 'force';
+    if (layoutMode === 'layered') {
+      const W = container.clientWidth || 900;
+      const padX = 64;
+      const padTop = 40;
+      const padBot = 40;
+      const rowGap = 96;
+      const minSpacingX = 96; // horizontal room per node so labels don't collide
+      const usableW = W - 2 * padX;
+      const perRow = Math.max(1, Math.floor(usableW / minSpacingX));
+      // Distinct levels, shallow→deep (entry points first).
+      const levelsPresent = Array.from(new Set(nodeArr.map(function (nd) {
+        return (moduleLevel[nd.name] === undefined) ? 0 : moduleLevel[nd.name];
+      }))).sort(function (a, b) { return a - b; });
+      const byLevel = {};
+      nodeArr.forEach(function (nd) {
+        const lv = (moduleLevel[nd.name] === undefined) ? 0 : moduleLevel[nd.name];
+        (byLevel[lv] = byLevel[lv] || []).push(nd);
+      });
+      // Each level occupies one or more sub-rows: a band wider than
+      // `perRow` wraps instead of squeezing its nodes (and their labels)
+      // into an unreadable single line. Rows accumulate top-to-bottom so
+      // level order — and the downward forward-dep flow — is preserved.
+      var rowCursor = 0;
+      levelsPresent.forEach(function (lv) {
+        const band = byLevel[lv].sort(function (a, c) { return a.name < c.name ? -1 : 1; });
+        const subRows = Math.max(1, Math.ceil(band.length / perRow));
+        for (var sr = 0; sr < subRows; sr++) {
+          const slice = band.slice(sr * perRow, (sr + 1) * perRow);
+          const k = slice.length;
+          const yRow = padTop + (rowCursor + sr) * rowGap;
+          slice.forEach(function (nd, i) {
+            nd.x = (k === 1) ? (W / 2) : (padX + (i / (k - 1)) * usableW);
+            nd.y = yRow;
+          });
+        }
+        rowCursor += subRows;
+      });
+      // Grow the container to fit all rows (force mode keeps the compact
+      // default); panning via roam handles anything still off-screen.
+      const totalRows = Math.max(rowCursor, 1);
+      container.style.height = (padTop + padBot + (totalRows - 1) * rowGap + 40) + 'px';
+    } else {
+      // Restore the template's default height when leaving layered mode.
+      container.style.height = '380px';
+    }
     const structuralLinks = Object.keys(edges).map(function (k) {
       const parts = k.split('\x00');
       return { source: parts[0], target: parts[1], value: edges[k], _kind: 'import' };
@@ -3352,8 +3409,24 @@
         data: nodeArr,
         links: edgeArr,
         roam: true,
+        layout: layoutMode === 'layered' ? 'none' : 'force',
         force: { repulsion: 200, edgeLength: 80 },
-        label: { show: true, color: getCssVar('--fg-dim'), fontSize: 11 },
+        // In layered mode draw arrowheads so the downward = forward,
+        // upward = back-edge (cycle) flow is legible; force mode keeps
+        // the cleaner undecorated lines.
+        edgeSymbol: layoutMode === 'layered' ? ['none', 'arrow'] : 'none',
+        edgeSymbolSize: 7,
+        // Layered mode packs nodes tightly, so label with the leaf
+        // segment only (full module path still shows in the tooltip);
+        // force mode has room for the full name.
+        label: {
+          show: true,
+          color: getCssVar('--fg-dim'),
+          fontSize: 11,
+          formatter: layoutMode === 'layered'
+            ? function (p) { const s = String(p.name).split('/'); return s[s.length - 1]; }
+            : undefined,
+        },
         lineStyle: { color: token('--color-info'), opacity: 0.6, width: 1.5 },
         emphasis: { focus: 'adjacency', lineStyle: { width: 3 } },
       }],
