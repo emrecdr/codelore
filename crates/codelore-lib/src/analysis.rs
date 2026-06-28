@@ -95,6 +95,10 @@ pub enum AnalysisName {
     // propagation cost, Lakos ACD/NCCD, cycle count, architecture type
     // (Lakos 1996, MacCormack/Baldwin). Emitted as (metric, value) rows.
     ArchitectureMetrics,
+    // Architecture trend — structural-health metrics (propagation cost,
+    // cycle count, largest tangle) recomputed at sampled historical revs
+    // to show architectural decay over time. Reads blobs at past revs.
+    ArchitectureTrend,
     // Modularity violations — file pairs that co-change
     // (Fisher-significant) yet have NO structural import edge between
     // them. The structure×history fusion: implicit cross-module
@@ -171,6 +175,7 @@ impl AnalysisName {
             Self::ArchitectureRoles => "architecture-roles",
             Self::Instability => "instability",
             Self::ArchitectureMetrics => "architecture-metrics",
+            Self::ArchitectureTrend => "architecture-trend",
             Self::ModularityViolations => "modularity-violations",
             Self::UnstableInterface => "unstable-interface",
             Self::Crossing => "crossing",
@@ -245,6 +250,7 @@ impl AnalysisName {
             ArchitectureRoles,
             Instability,
             ArchitectureMetrics,
+            ArchitectureTrend,
             ModularityViolations,
             UnstableInterface,
             Crossing,

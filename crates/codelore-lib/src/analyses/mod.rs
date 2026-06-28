@@ -4,6 +4,7 @@
 pub mod arch_violations;
 pub mod architecture_metrics;
 pub mod architecture_roles;
+pub mod architecture_trend;
 pub mod authors;
 pub mod bus_factor;
 pub mod centrality;

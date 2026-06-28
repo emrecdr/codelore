@@ -443,6 +443,38 @@ pub fn write_instability_markdown<W: Write>(
 }
 
 /// architecture-metrics markdown emitter — repo-level `(metric, value)`.
+/// `architecture-trend` markdown emitter — structural decay over time.
+pub fn write_architecture_trend_markdown<W: Write>(
+    rows: &[crate::analyses::architecture_trend::ArchitectureTrendRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore architecture trend")?;
+    if rows.is_empty() {
+        writeln!(w, "_No commit history to sample._").map_err(CodeLoreError::Io)?;
+        return Ok(());
+    }
+    writeln!(
+        w,
+        "| Date | Rev | Files | Propagation cost | Cycles | Largest cycle |"
+    )
+    .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---|---:|---:|---:|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| {} | `{}` | {} | {:.1}% | {} | {} |",
+            escape_md_cell(&row.date),
+            escape_md_cell(&row.rev),
+            row.files,
+            row.propagation_cost * 100.0,
+            row.cycle_count,
+            row.largest_cycle,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_architecture_metrics_markdown<W: Write>(
     rows: &[crate::analyses::architecture_metrics::ArchitectureMetricRow],
     w: &mut W,

@@ -528,6 +528,33 @@ pub fn write_instability_csv<W: Write>(
 }
 
 /// `architecture-metrics` CSV emitter — repo-level `(metric, value)` rows.
+/// `architecture-trend` CSV emitter — structural-health metrics at
+/// sampled historical revs.
+pub fn write_architecture_trend_csv<W: Write>(
+    rows: &[crate::analyses::architecture_trend::ArchitectureTrendRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(
+        w,
+        "date,rev,files,propagation-cost,cycle-count,largest-cycle"
+    )
+    .map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{},{:.4},{},{}",
+            quote_if_needed(&row.date),
+            quote_if_needed(&row.rev),
+            row.files,
+            row.propagation_cost,
+            row.cycle_count,
+            row.largest_cycle,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_architecture_metrics_csv<W: Write>(
     rows: &[crate::analyses::architecture_metrics::ArchitectureMetricRow],
     w: &mut W,

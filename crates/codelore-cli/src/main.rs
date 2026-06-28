@@ -301,6 +301,12 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
             "See analyses/architecture_metrics.rs.",
         ),
         (
+            "architecture-trend",
+            "Architectural decay over the commit sequence",
+            "Recomputes propagation cost, dependency-cycle count and largest tangle at up to 12 historical revs (evenly spaced across history), rebuilding the import graph in memory at each by reading + resolving source blobs at that rev. Shows whether structure is decaying and roughly when it started. Heavier than the SQL-only analyses (it re-parses source per sample); computed on demand, never cached.",
+            "See analyses/architecture_trend.rs.",
+        ),
+        (
             "dependency-cycles",
             "Tarjan 1972 SCC + Fontana et al. 2017 (Arcan) Cyclic Dependency smell",
             "Non-trivial strongly-connected components (size ≥ 2) of the structural import graph — files that import each other transitively. cycle_id groups a tangle; size is its member count. Accuracy follows the import resolver's language coverage.",
@@ -865,6 +871,12 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             }
             AnalysisName::ArchitectureMetrics => {
                 dispatch_architecture_metrics(&db, &opts, format, &ctx, &mut out)?;
+            }
+            // The only analysis that needs the Repo (it reads blobs at
+            // historical revs), so it gets the opened `repo` directly
+            // rather than the (db, opts) signature the rest share.
+            AnalysisName::ArchitectureTrend => {
+                dispatch_architecture_trend(&db, &repo, &opts, format, &ctx, &mut out)?;
             }
             AnalysisName::ModularityViolations => {
                 dispatch_modularity_violations(&db, &opts, format, &ctx, &mut out)?;
@@ -1706,6 +1718,50 @@ fn dispatch_instability(
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
         fmt => return Err(unsupported_format("instability", "csv|json|markdown", fmt)),
+    }
+    Ok(())
+}
+
+fn dispatch_architecture_trend(
+    db: &FactsDb,
+    repo: &GixRepo,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows = codelore_lib::cli_api::analyses::architecture_trend::run_architecture_trend(
+                db, repo, opts,
+            )
+            .context("run architecture-trend")?;
+            codelore_lib::cli_api::output::csv::write_architecture_trend_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::architecture_trend::run_architecture_trend(
+                db, repo, opts,
+            )
+            .context("run architecture-trend")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows = codelore_lib::cli_api::analyses::architecture_trend::run_architecture_trend(
+                db, repo, opts,
+            )
+            .context("run architecture-trend")?;
+            codelore_lib::cli_api::output::markdown::write_architecture_trend_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format(
+                "architecture-trend",
+                "csv|json|markdown",
+                fmt,
+            ));
+        }
     }
     Ok(())
 }

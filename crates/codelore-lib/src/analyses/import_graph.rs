@@ -61,13 +61,22 @@ pub fn build_import_graph(db: &FactsDb) -> Result<ImportGraph> {
         "import-graph edges",
         |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
     )?;
+    Ok(build_import_graph_from_edges(&edges))
+}
 
+/// Build the directed import graph from an in-memory `(src, target)`
+/// edge list — the same dedup/self-loop handling as
+/// [`build_import_graph`], but from resolved edges already in memory
+/// (the historical `architecture-trend` scan resolves blobs at a past
+/// rev without round-tripping through the `imports` table).
+#[must_use]
+pub fn build_import_graph_from_edges(edges: &[(String, String)]) -> ImportGraph {
     let mut path_to_id: HashMap<String, usize> = HashMap::new();
     let mut id_to_path: Vec<String> = Vec::new();
 
     // Dedup edges into a set first so parallel imports collapse.
     let mut edge_set: HashSet<(usize, usize)> = HashSet::with_capacity(edges.len());
-    for (src, tgt) in &edges {
+    for (src, tgt) in edges {
         if src == tgt {
             continue; // drop self-loops (resolver re-export artifacts)
         }
@@ -81,11 +90,11 @@ pub fn build_import_graph(db: &FactsDb) -> Result<ImportGraph> {
         adj[s].push(t);
     }
 
-    Ok(ImportGraph {
+    ImportGraph {
         id_to_path,
         path_to_id,
         adj,
-    })
+    }
 }
 
 /// Intern a path into the dense id space, returning its id.
