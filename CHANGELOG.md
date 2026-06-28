@@ -4,6 +4,17 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **`hotspot-velocity` analysis — change-acceleration early warning.** Hotspots rank all-time churn; velocity asks whether a file is *accelerating*. Per file: `acceleration = recent_per_week − baseline_per_week` over a 30-day recent window vs the 90 days before it, anchored at `MAX(commits.date)` (reproducible, back-testable). Positive = heating up (becoming a hotspot before its all-time count shows it); negative = cooling down. Subtracting per-week rates keeps brand-new files at the top instead of dividing by zero. Pure SQL over the existing tables.
+- **`architecture-trend` analysis — structural decay over the commit sequence.** Recomputes propagation cost, dependency-cycle count and largest tangle at up to 12 historical revs (evenly spaced across history), rebuilding the import graph from scratch in memory at each: files-live-at-rev from history, source blobs read at that rev, imports extracted + resolved in memory, then the shared SCC + reachability kernel. Answers "is the architecture decaying, and when did it start?" — structure × history over *time*. The one analysis that re-parses source at past revisions (computed on demand, never cached); needs repository access via the new `Repo::read_blob_at`.
+- **`Repo::read_blob_at(rev, path)`.** Generalises blob reads to any revision (`read_blob_at_head` is now a wrapper). Both backends override it (gix `rev_parse_single`, git `git show <rev>:<path>`); differential-tested for byte-identical reads at a historical commit SHA.
+- **Layered DAG layout for the architecture-graph SPA widget.** A Force/Layered toggle stacks modules in topological bands so forward dependencies flow downward (arrows) and back-edges (cycles) run upward; dense bands wrap into sub-rows. Reuses architecture-roles' per-file level. De-hairballs medium graphs.
+
+### Changed
+
+- **Dependency-structure-matrix readability.** Square cells (true 45° diagonal), a drawn diagonal guide, and calmer column-only banding so the "triangular = clean" framing is legible on real repos.
+
 ## [0.10.0] - 2026-06-27
 
 ### Added
