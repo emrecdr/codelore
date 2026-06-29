@@ -36,7 +36,7 @@ thiserror = "2"
 arrow = "58.3"
 gix = { version = "0.84", features = ["max-performance", "blob-diff"] }
 tempfile = { version = "3", optional = true }
-duckdb = { version = "=1.10503.1", features = ["bundled", "appender-arrow"] }
+duckdb = { version = "=1.10504.0", features = ["bundled", "appender-arrow"] }
 crossbeam-channel = "0.5"
 codelore-rca = { path = "../codelore-rca", version = "0.11.0" }
 # RFC 3986 §4.1 percent-encoding for SARIF artifactLocation.uri values.
