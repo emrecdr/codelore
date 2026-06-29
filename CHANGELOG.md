@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-06-29
+
 ### Added
 
 - **`hotspot-velocity` analysis — change-acceleration early warning.** Hotspots rank all-time churn; velocity asks whether a file is *accelerating*. Per file: `acceleration = recent_per_week − baseline_per_week` over a 30-day recent window vs the 90 days before it, anchored at `MAX(commits.date)` (reproducible, back-testable). Positive = heating up (becoming a hotspot before its all-time count shows it); negative = cooling down. Subtracting per-week rates keeps brand-new files at the top instead of dividing by zero. Pure SQL over the existing tables.
