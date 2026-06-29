@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-06-29
+
 ### Added
 
 - **Architectural quality gates.** `codelore check` can now fail CI on structure, not just per-file metrics. New `[gates]` keys `max_dependency_cycles` (e.g. `0` to forbid any import-graph cycle) and `max_propagation_cost` (a ceiling on change-reach density), evaluated via the shared `graph_metrics` kernel. New `[diff]` key `no_new_cycles = true` makes a PR fail when it introduces a dependency cycle the base branch didn't have — computed by comparing the base-rev and head-rev import graphs (`codelore diff` already analyses both revs in worktrees). The "don't let me merge a cycle" guard.

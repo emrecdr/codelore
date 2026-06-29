@@ -38,7 +38,7 @@ gix = { version = "0.84", features = ["max-performance", "blob-diff"] }
 tempfile = { version = "3", optional = true }
 duckdb = { version = "=1.10503.1", features = ["bundled", "appender-arrow"] }
 crossbeam-channel = "0.5"
-codelore-rca = { path = "../codelore-rca", version = "0.11.0" }
+codelore-rca = { path = "../codelore-rca", version = "0.12.0" }
 # RFC 3986 §4.1 percent-encoding for SARIF artifactLocation.uri values.
 # Paths with spaces / `#` / non-ASCII chars must be percent-encoded;
 # unencoded URIs are rejected by GitHub Code Scanning's SARIF upload.
