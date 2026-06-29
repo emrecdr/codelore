@@ -10,10 +10,13 @@
 //! code_health_min = 60      # any file below fails
 //! hotspot_score_max = 8.0   # any file above fails
 //! disallow_clone_type_1 = true
+//! max_dependency_cycles = 0 # no import-graph cycles allowed
+//! max_propagation_cost = 0.15  # change-reach ceiling (0..1)
 //!
 //! [diff]
 //! delta_code_health_min = -5  # health may drop at most 5 pts in a PR
 //! new_hotspot_max = 0         # zero new hotspots allowed
+//! no_new_cycles = true        # a PR may not introduce a dependency cycle
 //! ```
 //!
 //! ## Why thresholds-in-repo vs CLI flags
@@ -64,6 +67,14 @@ pub struct Gates {
     /// Disallow ANY Type-1 clone families.
     #[serde(default)]
     pub disallow_clone_type_1: bool,
+    /// Maximum number of dependency cycles (non-trivial import-graph
+    /// SCCs) allowed repo-wide. Exceeding fails the gate. `0` enforces a
+    /// fully acyclic architecture.
+    pub max_dependency_cycles: Option<u32>,
+    /// Maximum propagation cost (import-graph transitive-closure density,
+    /// `[0,1]`). Exceeding fails — a ceiling on "a change to a random
+    /// file reaches this fraction of the system".
+    pub max_propagation_cost: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -74,6 +85,11 @@ pub struct DiffGates {
     pub delta_code_health_min: Option<f64>,
     /// Maximum number of NEW hotspots a PR may introduce.
     pub new_hotspot_max: Option<u32>,
+    /// When true, a PR that introduces a NEW dependency cycle (more
+    /// import-graph cycles at head than at base) fails the gate — the
+    /// "don't let me merge a cycle" guard.
+    #[serde(default)]
+    pub no_new_cycles: bool,
 }
 
 impl Thresholds {
@@ -123,8 +139,11 @@ impl Thresholds {
             && self.gates.code_health_min.is_none()
             && self.gates.hotspot_score_max.is_none()
             && !self.gates.disallow_clone_type_1
+            && self.gates.max_dependency_cycles.is_none()
+            && self.gates.max_propagation_cost.is_none()
             && self.diff.delta_code_health_min.is_none()
             && self.diff.new_hotspot_max.is_none()
+            && !self.diff.no_new_cycles
     }
 }
 
@@ -173,6 +192,50 @@ pub fn evaluate_clone_gate(
     }])
 }
 
+/// Evaluate the architecture `[gates]` (`max_dependency_cycles`,
+/// `max_propagation_cost`) against the import graph in the fact store.
+/// Builds the graph once via the shared kernel; a noop (no graph build)
+/// when neither gate is configured.
+///
+/// # Errors
+///
+/// Returns [`crate::CodeLoreError::Analysis`] on `DuckDB` errors
+/// (propagated from the import-graph build).
+pub fn evaluate_architecture_gate(
+    thresholds: &Thresholds,
+    db: &crate::facts::FactsDb,
+) -> crate::Result<Vec<GateViolation>> {
+    let g = &thresholds.gates;
+    if g.max_dependency_cycles.is_none() && g.max_propagation_cost.is_none() {
+        return Ok(Vec::new());
+    }
+    let graph = crate::analyses::import_graph::build_import_graph(db)?;
+    let m = crate::analyses::import_graph::graph_metrics(&graph);
+
+    let mut out = Vec::new();
+    if let Some(max) = g.max_dependency_cycles
+        && m.cycle_count > max
+    {
+        out.push(GateViolation {
+            gate: "max_dependency_cycles".into(),
+            path: "(repo-wide)".into(),
+            actual: m.cycle_count.to_string(),
+            threshold: max.to_string(),
+        });
+    }
+    if let Some(max) = g.max_propagation_cost
+        && m.propagation_cost > max
+    {
+        out.push(GateViolation {
+            gate: "max_propagation_cost".into(),
+            path: "(repo-wide)".into(),
+            actual: format!("{:.4}", m.propagation_cost),
+            threshold: format!("{max:.4}"),
+        });
+    }
+    Ok(out)
+}
+
 /// Evaluate the `[diff]` section against a base→head delta.
 ///
 /// `new_hotspot_count` is the number of files that newly enter the
@@ -192,6 +255,8 @@ pub fn evaluate_diff_gate(
     thresholds: &Thresholds,
     new_hotspot_count: u32,
     delta_code_health: f64,
+    base_cycles: u32,
+    head_cycles: u32,
 ) -> Vec<GateViolation> {
     let mut out = Vec::new();
     let d = &thresholds.diff;
@@ -213,6 +278,14 @@ pub fn evaluate_diff_gate(
             path: "(diff-summary)".into(),
             actual: format!("{delta_code_health:+.2}"),
             threshold: format!("{min:+.2}"),
+        });
+    }
+    if d.no_new_cycles && head_cycles > base_cycles {
+        out.push(GateViolation {
+            gate: "no_new_cycles".into(),
+            path: "(diff-summary)".into(),
+            actual: format!("{head_cycles} cycles (base {base_cycles})"),
+            threshold: format!("≤ {base_cycles}"),
         });
     }
     out
@@ -384,7 +457,7 @@ new_hotspot_max = 0
     #[test]
     fn diff_gate_vacuous_when_unconfigured() {
         let t = Thresholds::default();
-        let v = evaluate_diff_gate(&t, 999, -100.0);
+        let v = evaluate_diff_gate(&t, 999, -100.0, 0, 5);
         assert!(
             v.is_empty(),
             "no [diff] gates ⇒ no violations regardless of inputs"
@@ -395,7 +468,7 @@ new_hotspot_max = 0
     fn diff_gate_new_hotspot_max_flags_excess() {
         let mut t = Thresholds::default();
         t.diff.new_hotspot_max = Some(2);
-        let v = evaluate_diff_gate(&t, 5, 0.0);
+        let v = evaluate_diff_gate(&t, 5, 0.0, 0, 0);
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].gate, "new_hotspot_max");
         assert_eq!(v[0].actual, "5");
@@ -407,7 +480,7 @@ new_hotspot_max = 0
         // Equal-to-threshold is allowed (`> max`, not `>= max`).
         let mut t = Thresholds::default();
         t.diff.new_hotspot_max = Some(3);
-        let v = evaluate_diff_gate(&t, 3, 0.0);
+        let v = evaluate_diff_gate(&t, 3, 0.0, 0, 0);
         assert!(v.is_empty());
     }
 
@@ -418,7 +491,7 @@ new_hotspot_max = 0
         // includes the sign so the human-readable output is unambiguous.
         let mut t = Thresholds::default();
         t.diff.delta_code_health_min = Some(-5.0);
-        let v = evaluate_diff_gate(&t, 0, -10.0);
+        let v = evaluate_diff_gate(&t, 0, -10.0, 0, 0);
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].gate, "delta_code_health_min");
         assert_eq!(v[0].actual, "-10.00");
@@ -430,7 +503,7 @@ new_hotspot_max = 0
         // Positive delta (health improved) trivially clears any floor.
         let mut t = Thresholds::default();
         t.diff.delta_code_health_min = Some(-5.0);
-        let v = evaluate_diff_gate(&t, 0, 3.0);
+        let v = evaluate_diff_gate(&t, 0, 3.0, 0, 0);
         assert!(v.is_empty());
     }
 
@@ -439,10 +512,24 @@ new_hotspot_max = 0
         let mut t = Thresholds::default();
         t.diff.delta_code_health_min = Some(0.0);
         t.diff.new_hotspot_max = Some(0);
-        let v = evaluate_diff_gate(&t, 2, -1.0);
+        let v = evaluate_diff_gate(&t, 2, -1.0, 0, 0);
         assert_eq!(v.len(), 2);
         let gates: Vec<&str> = v.iter().map(|g| g.gate.as_str()).collect();
         assert!(gates.contains(&"new_hotspot_max"));
         assert!(gates.contains(&"delta_code_health_min"));
+    }
+
+    #[test]
+    fn diff_gate_no_new_cycles_flags_a_new_loop() {
+        let mut t = Thresholds::default();
+        t.diff.no_new_cycles = true;
+        // head introduces a cycle the base didn't have → violation.
+        let v = evaluate_diff_gate(&t, 0, 0.0, 1, 2);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].gate, "no_new_cycles");
+        // Same or fewer cycles than base → clean (refactors that remove a
+        // cycle, or leave the count unchanged, never fail this gate).
+        assert!(evaluate_diff_gate(&t, 0, 0.0, 2, 2).is_empty());
+        assert!(evaluate_diff_gate(&t, 0, 0.0, 3, 1).is_empty());
     }
 }

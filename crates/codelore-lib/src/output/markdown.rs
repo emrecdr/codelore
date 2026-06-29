@@ -443,6 +443,33 @@ pub fn write_instability_markdown<W: Write>(
 }
 
 /// architecture-metrics markdown emitter — repo-level `(metric, value)`.
+/// `cycle-origins` markdown emitter — when each HEAD cycle first formed.
+pub fn write_cycle_origins_markdown<W: Write>(
+    rows: &[crate::analyses::cycle_origins::CycleOriginRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore cycle origins")?;
+    if rows.is_empty() {
+        writeln!(w, "_No dependency cycles at HEAD — nothing to trace._")
+            .map_err(CodeLoreError::Io)?;
+        return Ok(());
+    }
+    writeln!(w, "| Size | Formed at | Date | Members |").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---:|---|---|---|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| {} | `{}` | {} | {} |",
+            row.size,
+            escape_md_cell(&row.formed_at_rev),
+            escape_md_cell(&row.formed_at_date),
+            escape_md_cell(&row.members),
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 /// `architecture-trend` markdown emitter — structural decay over time.
 pub fn write_architecture_trend_markdown<W: Write>(
     rows: &[crate::analyses::architecture_trend::ArchitectureTrendRow],

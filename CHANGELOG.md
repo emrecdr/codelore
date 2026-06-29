@@ -4,6 +4,12 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **Architectural quality gates.** `codelore check` can now fail CI on structure, not just per-file metrics. New `[gates]` keys `max_dependency_cycles` (e.g. `0` to forbid any import-graph cycle) and `max_propagation_cost` (a ceiling on change-reach density), evaluated via the shared `graph_metrics` kernel. New `[diff]` key `no_new_cycles = true` makes a PR fail when it introduces a dependency cycle the base branch didn't have — computed by comparing the base-rev and head-rev import graphs (`codelore diff` already analyses both revs in worktrees). The "don't let me merge a cycle" guard.
+- **`cycle-origins` analysis.** For each dependency cycle at HEAD, binary-searches history — reading + resolving source at past revisions via `Repo::read_blob_at` — to find the commit that first closed the loop. Reports the forming commit's SHA + date and the member files: "the 9-file `rca` tangle formed at `93ea0d1` on 2026-06-06." Commit-level archaeology that `dependency-cycles` (which only shows what's tangled *now*) can't give. Traces the largest cycles first (`log₂(commits)` graph rebuilds each) to bound cost.
+- **Architecture-trend SPA chart.** The decay timeline (`architecture-trend`) is now a dual-axis line in the dashboard — propagation cost and dependency-cycle count over the sampled revisions — so the architecture's history is visible, not just CLI-only. Degrades gracefully (empty chart) if the historical scan is skipped.
+
 ## [0.11.0] - 2026-06-29
 
 ### Added

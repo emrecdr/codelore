@@ -90,9 +90,7 @@ pub fn run_architecture_trend<R: Repo>(
     let mut rows = Vec::with_capacity(picks.len());
     for idx in picks {
         let (rev, ts) = &commits[idx];
-        let live = live_paths_at(db, ts)?;
-        let edges = resolve_imports_at_rev(repo, rev, &live);
-        let graph = build_import_graph_from_edges(&edges);
+        let graph = import_graph_at_rev(db, repo, rev, ts)?;
         // Shared kernel — so `architecture-trend` and the HEAD
         // `architecture-metrics` report the same numbers by construction.
         let m = graph_metrics(&graph);
@@ -107,6 +105,28 @@ pub fn run_architecture_trend<R: Repo>(
         });
     }
     Ok(rows)
+}
+
+/// Reconstruct the resolved import graph as it existed at `rev` (whose
+/// commit timestamp is `ts`), entirely in memory — no `imports`-table
+/// writes. The shared historical-scan primitive: `architecture-trend`
+/// calls it once per sample point; `cycle-origins` calls it repeatedly
+/// while bisecting history for a cycle's formation commit.
+///
+/// # Errors
+///
+/// Returns [`crate::CodeLoreError`] on the `DuckDB` live-paths query.
+/// Per-file blob/parse failures are swallowed (the file is skipped),
+/// matching the HEAD scan's tolerance.
+pub(crate) fn import_graph_at_rev<R: Repo>(
+    db: &FactsDb,
+    repo: &R,
+    rev: &str,
+    ts: &str,
+) -> Result<crate::analyses::import_graph::ImportGraph> {
+    let live = live_paths_at(db, ts)?;
+    let edges = resolve_imports_at_rev(repo, rev, &live);
+    Ok(build_import_graph_from_edges(&edges))
 }
 
 /// Pick up to `k` evenly-spaced indices over `0..len`, always including

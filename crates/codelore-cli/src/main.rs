@@ -88,6 +88,10 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
         codelore_lib::cli_api::quality_gates::evaluate_clone_gate(&thresholds, &db)
             .context("evaluate clone gate")?,
     );
+    violations.extend(
+        codelore_lib::cli_api::quality_gates::evaluate_architecture_gate(&thresholds, &db)
+            .context("evaluate architecture gate")?,
+    );
 
     if violations.is_empty() {
         println!(
@@ -305,6 +309,12 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
             "Architectural decay over the commit sequence",
             "Recomputes propagation cost, dependency-cycle count and largest tangle at up to 12 historical revs (evenly spaced across history), rebuilding the import graph in memory at each by reading + resolving source blobs at that rev. Shows whether structure is decaying and roughly when it started. Heavier than the SQL-only analyses (it re-parses source per sample); computed on demand, never cached.",
             "See analyses/architecture_trend.rs.",
+        ),
+        (
+            "cycle-origins",
+            "Commit-level archaeology for dependency cycles",
+            "For each dependency cycle at HEAD, binary-searches history (reading + resolving source at past revisions) to find the earliest commit where that cycle existed — the commit that closed the loop. Reports the forming commit's SHA + date per cycle. Assumes a cycle, once formed, stays formed; traces the largest cycles first to bound cost.",
+            "See analyses/cycle_origins.rs.",
         ),
         (
             "dependency-cycles",
@@ -877,6 +887,10 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             // rather than the (db, opts) signature the rest share.
             AnalysisName::ArchitectureTrend => {
                 dispatch_architecture_trend(&db, &repo, &opts, format, &ctx, &mut out)?;
+            }
+            // Also needs the Repo (reads blobs at past revs while bisecting).
+            AnalysisName::CycleOrigins => {
+                dispatch_cycle_origins(&db, &repo, &opts, format, &ctx, &mut out)?;
             }
             AnalysisName::ModularityViolations => {
                 dispatch_modularity_violations(&db, &opts, format, &ctx, &mut out)?;
@@ -1718,6 +1732,47 @@ fn dispatch_instability(
         }
         "html" => return Err(html_not_wired(ctx.analysis_name)),
         fmt => return Err(unsupported_format("instability", "csv|json|markdown", fmt)),
+    }
+    Ok(())
+}
+
+fn dispatch_cycle_origins(
+    db: &FactsDb,
+    repo: &GixRepo,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows =
+                codelore_lib::cli_api::analyses::cycle_origins::run_cycle_origins(db, repo, opts)
+                    .context("run cycle-origins")?;
+            codelore_lib::cli_api::output::csv::write_cycle_origins_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows =
+                codelore_lib::cli_api::analyses::cycle_origins::run_cycle_origins(db, repo, opts)
+                    .context("run cycle-origins")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows =
+                codelore_lib::cli_api::analyses::cycle_origins::run_cycle_origins(db, repo, opts)
+                    .context("run cycle-origins")?;
+            codelore_lib::cli_api::output::markdown::write_cycle_origins_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format(
+                "cycle-origins",
+                "csv|json|markdown",
+                fmt,
+            ));
+        }
     }
     Ok(())
 }
@@ -2878,9 +2933,11 @@ fn write_parquet(
 /// `--format step-summary` (GFM markdown emitter) — they render the
 /// same data into different output shapes.
 #[cfg(feature = "spa")]
+#[allow(clippy::too_many_lines)] // one run-each-analysis-then-assemble sequence
 fn build_spa_dashboard(
     db: &codelore_lib::cli_api::facts::FactsDb,
     opts: &codelore_lib::cli_api::Options,
+    repo_path: &std::path::Path,
 ) -> anyhow::Result<codelore_lib::cli_api::output::spa::SpaDashboard> {
     use codelore_lib::cli_api::analyses::dashboard::{
         run_clone_summary, run_daily_commits, run_trends, run_xray,
@@ -2980,6 +3037,23 @@ fn build_spa_dashboard(
             tracing::warn!("dashboard: architecture-roles failed; skipping: {e}");
             Vec::new()
         });
+    // Architecture-trend is the one dashboard input that needs the repo
+    // (it re-reads source at sampled historical revs) and the only one
+    // markedly heavier than an SQL query — so it opens its own repo
+    // handle and degrades gracefully: any failure leaves the trend chart
+    // empty rather than sinking the whole dashboard.
+    let architecture_trend = codelore_lib::cli_api::repo::GixRepo::open(repo_path)
+        .map_err(anyhow::Error::from)
+        .and_then(|repo| {
+            codelore_lib::cli_api::analyses::architecture_trend::run_architecture_trend(
+                db, &repo, opts,
+            )
+            .map_err(anyhow::Error::from)
+        })
+        .unwrap_or_else(|e| {
+            tracing::warn!("dashboard: architecture-trend failed; skipping: {e}");
+            Vec::new()
+        });
     Ok(SpaDashboard {
         hotspots,
         summary,
@@ -2998,6 +3072,7 @@ fn build_spa_dashboard(
         modularity_violations,
         unstable_interface,
         architecture_roles,
+        architecture_trend,
         options: codelore_lib::cli_api::output::spa::SpaOptionsSnapshot::from_options(opts),
     })
 }
@@ -3011,7 +3086,7 @@ fn run_spa_dispatch(
 ) -> anyhow::Result<()> {
     use codelore_lib::cli_api::output::spa::write_spa;
 
-    let dash = build_spa_dashboard(db, opts)?;
+    let dash = build_spa_dashboard(db, opts, repo_path)?;
 
     let now = time::OffsetDateTime::now_utc();
     let generated_at = format!(
@@ -3070,7 +3145,7 @@ fn run_step_summary_dispatch(
 ) -> anyhow::Result<()> {
     use codelore_lib::cli_api::output::step_summary::write_step_summary;
 
-    let dash = build_spa_dashboard(db, opts)?;
+    let dash = build_spa_dashboard(db, opts, repo_path)?;
     let now = time::OffsetDateTime::now_utc();
     let generated_at = format!(
         "{:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC",

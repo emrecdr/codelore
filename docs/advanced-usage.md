@@ -4,7 +4,7 @@ This guide is the developer-facing reference for CodeLore. The [README](../READM
 
 ## Table of contents
 
-1. [The 41 analyses (what they tell you)](#1-the-39-analyses-what-they-tell-you)
+1. [The 42 analyses (what they tell you)](#1-the-42-analyses-what-they-tell-you)
 2. [Output formats deep-dive](#2-output-formats-deep-dive)
 3. [Every CLI flag explained](#3-every-cli-flag-explained)
 4. [PR-mode: `codelore diff`](#4-pr-mode-codelore-diff)
@@ -20,9 +20,9 @@ This guide is the developer-facing reference for CodeLore. The [README](../READM
 
 ---
 
-## 1. The 41 analyses (what they tell you)
+## 1. The 42 analyses (what they tell you)
 
-The table below is split into the **17 code-maat-parity analyses** (drop-in successors to legacy code-maat), **1 modern signal** (`top-committers` — a first-class per-author leaderboard that code-maat approximated via `-a author-churn` + sort), **5 modern foundations** marked ★ (the SARIF-backed differentiators, including `hotspot-velocity` — recent-vs-baseline change acceleration), **3 graph-analytics analyses** marked ★ (knowledge-islands + centrality + communities), and **14 architecture-analytics analyses** marked ★★ (god-classes + architecture-violations + dependency-cycles + architecture-roles + instability + architecture-metrics + architecture-trend + modularity-violations + unstable-interface + crossing + stale-code + pair-programming + lead-time + bus-factor — `dependency-cycles` (Tarjan SCC), `architecture-roles` (Core/Shared/Control/Periphery), `instability` (Martin Ca/Ce/I) and `architecture-metrics` (Lakos ACD/NCCD + propagation cost) all run on a shared import-graph kernel; `architecture-trend` reruns that kernel at sampled historical revisions to show structural decay over time; `modularity-violations`, `unstable-interface` and `crossing` fuse the structural import graph with the temporal co-change graph (the DV8 hotspot-pattern trilogy); see `docs/maximum-feature-plan.md`).
+The table below is split into the **17 code-maat-parity analyses** (drop-in successors to legacy code-maat), **1 modern signal** (`top-committers` — a first-class per-author leaderboard that code-maat approximated via `-a author-churn` + sort), **5 modern foundations** marked ★ (the SARIF-backed differentiators, including `hotspot-velocity` — recent-vs-baseline change acceleration), **3 graph-analytics analyses** marked ★ (knowledge-islands + centrality + communities), and **15 architecture-analytics analyses** marked ★★ (god-classes + architecture-violations + dependency-cycles + architecture-roles + instability + architecture-metrics + architecture-trend + cycle-origins + modularity-violations + unstable-interface + crossing + stale-code + pair-programming + lead-time + bus-factor — `dependency-cycles` (Tarjan SCC), `architecture-roles` (Core/Shared/Control/Periphery), `instability` (Martin Ca/Ce/I) and `architecture-metrics` (Lakos ACD/NCCD + propagation cost) all run on a shared import-graph kernel; `architecture-trend` reruns that kernel at sampled historical revisions to show structural decay over time; `modularity-violations`, `unstable-interface` and `crossing` fuse the structural import graph with the temporal co-change graph (the DV8 hotspot-pattern trilogy); see `docs/maximum-feature-plan.md`).
 
 ### Code-maat parity (17) + modern signal
 
@@ -350,6 +350,19 @@ codelore diff origin/main...HEAD --fail-on any            # block on any finding
 
 Exit 4 (the analysis-failure code) when the condition fires. Start with `--fail-on none` for a sprint to calibrate the noise floor, then raise the bar.
 
+The thresholds file (`.codelore-thresholds.toml`, auto-discovered at the repo root) gates on structure too, not just per-file metrics:
+
+```toml
+[gates]
+max_dependency_cycles = 0     # forbid any import-graph cycle repo-wide
+max_propagation_cost = 0.15   # ceiling on change-reach density (0..1)
+
+[diff]
+no_new_cycles = true          # a PR may not introduce a dependency cycle the base lacked
+```
+
+`max_dependency_cycles` / `max_propagation_cost` are evaluated against HEAD by `codelore check`; `no_new_cycles` compares the base-rev and head-rev import graphs in `codelore diff` and fails the PR when head has more cycles than base.
+
 ## 5. Configuration: `.codeloreignore` + thresholds
 
 ### `.codeloreignore`
@@ -610,7 +623,7 @@ codescene/
 │   ├── codelore-lib/                     # the library
 │   │   ├── src/
 │   │   │   ├── facts/                    # DuckDB fact store + ingest pipeline
-│   │   │   ├── analyses/                 # the 41 analyses (one file each)
+│   │   │   ├── analyses/                 # the 42 analyses (one file each)
 │   │   │   ├── output/                   # 6 format emitters
 │   │   │   ├── repo/                     # GixRepo + GitCliRepo + Repo trait
 │   │   │   ├── complexity/               # tree-sitter dispatch + ComplexityEntity

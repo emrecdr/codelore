@@ -1455,6 +1455,30 @@
       <div id="widget-arch-matrix-body" class="widget-body" style="height: 460px;"></div>
     </section>
 
+    <!-- Architecture decay trend: structural-health metrics recomputed
+         at sampled historical revisions. The HEAD metrics (graph / matrix
+         above) say how tangled the code is NOW; this says whether it's
+         getting worse and roughly when it started. -->
+    <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-arch-trend">
+      <h2>Architecture trend</h2>
+      <div class="subtitle">
+        Structural health over time — <strong>propagation cost</strong>
+        (blue, left) and <strong>dependency cycles</strong> (red, right)
+        recomputed at sampled historical commits. Rising lines mean the
+        architecture is decaying; a step up in cycles marks when a tangle
+        first formed.
+      </div>
+      <details class="learn-more">
+        <summary>Learn more — how to read this panel</summary>
+        <div class="learn-more-content">
+          <p><strong>What it measures.</strong> Up to 12 commits evenly spaced across history are re-analysed: the import graph is rebuilt from the source as it existed at each revision, and the same propagation cost + dependency-cycle count the HEAD architecture metrics report are recomputed at each point (<code>--analysis architecture-trend</code>).</p>
+          <p><strong>How to read it.</strong> The blue line is propagation cost (the share of the system a random change can reach, as a percentage); the red stepped line is the number of import-graph cycles. A propagation cost that climbs as the repo grows is healthy dilution turning into entanglement; a red step from 0 to 1 is the commit where the first dependency cycle appeared.</p>
+          <p><strong>What to watch for.</strong> Sustained upward drift in either line is architectural decay. Cross-reference the commit dates with the <code>dependency-cycles</code> and <code>architecture-metrics</code> analyses to find the change that introduced a tangle. The final point matches the current HEAD metrics by construction.</p>
+        </div>
+      </details>
+      <div id="widget-arch-trend-body" class="widget-body" style="height: 340px;"></div>
+    </section>
+
     <!-- Treemap alternative view to the circle-pack. Same
          `hotspots` data, rendered as nested rectangles. Strict
          area encoding (cognitive complexity × revisions); useful

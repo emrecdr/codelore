@@ -99,6 +99,9 @@ pub enum AnalysisName {
     // cycle count, largest tangle) recomputed at sampled historical revs
     // to show architectural decay over time. Reads blobs at past revs.
     ArchitectureTrend,
+    // Cycle origins — bisects history to find the commit where each HEAD
+    // dependency cycle first formed. Reads blobs at past revs.
+    CycleOrigins,
     // Modularity violations — file pairs that co-change
     // (Fisher-significant) yet have NO structural import edge between
     // them. The structure×history fusion: implicit cross-module
@@ -176,6 +179,7 @@ impl AnalysisName {
             Self::Instability => "instability",
             Self::ArchitectureMetrics => "architecture-metrics",
             Self::ArchitectureTrend => "architecture-trend",
+            Self::CycleOrigins => "cycle-origins",
             Self::ModularityViolations => "modularity-violations",
             Self::UnstableInterface => "unstable-interface",
             Self::Crossing => "crossing",
@@ -251,6 +255,7 @@ impl AnalysisName {
             Instability,
             ArchitectureMetrics,
             ArchitectureTrend,
+            CycleOrigins,
             ModularityViolations,
             UnstableInterface,
             Crossing,

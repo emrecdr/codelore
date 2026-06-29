@@ -11,6 +11,7 @@
 
 use codelore_lib::Options;
 use codelore_lib::analyses::architecture_roles::ArchitectureRoleRow;
+use codelore_lib::analyses::architecture_trend::ArchitectureTrendRow;
 use codelore_lib::analyses::code_health::run_code_health;
 use codelore_lib::analyses::coupling::run_coupling;
 use codelore_lib::analyses::hotspots::run_hotspots;
@@ -207,6 +208,7 @@ fn spa_emits_full_dashboard_from_differential_fixture() {
 /// three data arrays. Guards against the bundle field or the widget
 /// call silently dropping the fusion data.
 #[test]
+#[allow(clippy::too_many_lines)] // one cohesive round-trip contract over many fields
 fn spa_embeds_fusion_overlay_data() {
     let dash = SpaDashboard {
         modularity_violations: vec![ModularityViolationRow {
@@ -231,6 +233,14 @@ fn spa_embeds_fusion_overlay_data() {
             in_cycle: true,
             level: 2,
             reach_pct: 40.0,
+        }],
+        architecture_trend: vec![ArchitectureTrendRow {
+            date: "2026-01-01".into(),
+            rev: "abc123def456".into(),
+            files: 10,
+            propagation_cost: 0.25,
+            cycle_count: 1,
+            largest_cycle: 3,
         }],
         ..SpaDashboard::default()
     };
@@ -291,6 +301,30 @@ fn spa_embeds_fusion_overlay_data() {
     assert_eq!(
         ar[0].get("level").and_then(serde_json::Value::as_u64),
         Some(2),
+    );
+
+    // The arch-trend line chart must be wired + its data round-trip.
+    assert!(
+        html.contains("renderArchTrend(data.architecture_trend || [])"),
+        "arch-trend widget must be wired to the architecture_trend array",
+    );
+    let at = data
+        .get("architecture_trend")
+        .and_then(|v| v.as_array())
+        .expect("architecture_trend array");
+    assert_eq!(at.len(), 1, "one architecture-trend point expected");
+    assert_eq!(
+        at[0].get("cycle_count").and_then(serde_json::Value::as_u64),
+        Some(1),
+    );
+    assert!(
+        (at[0]
+            .get("propagation_cost")
+            .and_then(serde_json::Value::as_f64)
+            .expect("propagation_cost")
+            - 0.25)
+            .abs()
+            < 1e-9,
     );
 }
 

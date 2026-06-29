@@ -34,6 +34,7 @@ use std::io::Write;
 use serde::Serialize;
 
 use crate::analyses::architecture_roles::ArchitectureRoleRow;
+use crate::analyses::architecture_trend::ArchitectureTrendRow;
 use crate::analyses::code_health::CodeHealthRow;
 use crate::analyses::coupling::CouplingRow;
 use crate::analyses::dashboard::{
@@ -142,6 +143,14 @@ pub struct SpaDashboard {
     /// caption. Empty when no imports resolve.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub architecture_roles: Vec<ArchitectureRoleRow>,
+    /// Architecture-decay trend — structural-health metrics (propagation
+    /// cost, dependency-cycle count) recomputed at sampled historical
+    /// revisions. Drives the "Architecture trend" line chart so the SPA
+    /// shows whether the architecture is decaying over time, not just its
+    /// HEAD state. Empty when the historical scan is skipped or no
+    /// imports resolve at any sampled rev.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub architecture_trend: Vec<ArchitectureTrendRow>,
     /// Per-commit Kamei JIT-SDP feature vector for the Delivery Risk
     /// Sparkline widget. One row per commit in the last-N (capped at
     /// 30) chronological window. Surfaces the raw Kamei 14-feature

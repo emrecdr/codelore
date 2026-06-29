@@ -130,6 +130,11 @@ pub struct RevAnalyses {
     pub hotspots: Vec<HotspotRow>,
     pub coupling: Vec<CouplingRow>,
     pub clones: Vec<ClonesRow>,
+    /// Number of import-graph dependency cycles at this rev (non-trivial
+    /// SCCs). Powers the `[diff] no_new_cycles` gate. `#[serde(default)]`
+    /// so a base-cache written before this field deserialises to 0.
+    #[serde(default)]
+    pub dependency_cycles: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -297,12 +302,19 @@ fn analyze_at_rev(repo: &Path, sha: &str, args: &DiffArgs) -> Result<RevAnalyses
     let hotspots = run_hotspots(&db, &opts).context("hotspots at rev")?;
     let coupling = run_coupling(&db, &opts).context("coupling at rev")?;
     let clones = run_clones(&opts).context("clones at rev")?;
+    // Cheap (O(V+E)) relative to the analyses above; always computed so
+    // the value is available for the `no_new_cycles` gate and cached.
+    let graph = codelore_lib::cli_api::analyses::import_graph::build_import_graph(&db)
+        .context("import graph at rev")?;
+    let dependency_cycles =
+        codelore_lib::cli_api::analyses::import_graph::graph_metrics(&graph).cycle_count;
 
     Ok(RevAnalyses {
         sha: sha.to_string(),
         hotspots,
         coupling,
         clones,
+        dependency_cycles,
     })
 }
 
@@ -672,17 +684,25 @@ pub fn run_diff(args: &DiffArgs) -> Result<DiffOutput> {
     };
     let (base_median_code_health, head_median_code_health, gate_violations) = if let Some(t) =
         thresholds_opt.as_ref()
-        && (t.diff.delta_code_health_min.is_some() || t.diff.new_hotspot_max.is_some())
+        && (t.diff.delta_code_health_min.is_some()
+            || t.diff.new_hotspot_max.is_some()
+            || t.diff.no_new_cycles)
     {
         let base_med = median_code_health(&base_analyses.hotspots);
         let head_med = median_code_health(&head_analyses.hotspots);
         let delta = head_med - base_med;
         let new_hotspot_count = u32::try_from(hotspots.rank_entrants.len()).unwrap_or(u32::MAX);
         let violations: Vec<GateViolationOut> =
-            codelore_lib::cli_api::quality_gates::evaluate_diff_gate(t, new_hotspot_count, delta)
-                .into_iter()
-                .map(Into::into)
-                .collect();
+            codelore_lib::cli_api::quality_gates::evaluate_diff_gate(
+                t,
+                new_hotspot_count,
+                delta,
+                base_analyses.dependency_cycles,
+                head_analyses.dependency_cycles,
+            )
+            .into_iter()
+            .map(Into::into)
+            .collect();
         (Some(base_med), Some(head_med), violations)
     } else {
         (None, None, Vec::new())

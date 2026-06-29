@@ -581,6 +581,7 @@
     { name: 'module-chord',       render: () => renderModuleChord(data.coupling || []) },
     { name: 'arch-graph',         render: () => renderArchGraph(data.imports || [], data.modularity_violations || [], data.unstable_interface || [], data.architecture_roles || []) },
     { name: 'arch-matrix',        render: () => renderArchMatrix(data.imports || [], data.architecture_roles || []) },
+    { name: 'arch-trend',         render: () => renderArchTrend(data.architecture_trend || []) },
     { name: 'calendar-heatmap',   rerender: 'theme', render: () => renderCalendarHeatmap(data.daily_commits || []) },
     { name: 'xray-sunburst',      render: () => renderXRaySunburst(data.xray || []) },
   ];
@@ -3456,6 +3457,92 @@
   // back-edge (below the diagonal) — which only happens inside a
   // dependency cycle. A clean acyclic architecture is a triangular,
   // all-blue matrix.
+  // ─── §11i Widget: Architecture decay trend ──────────────────────
+  // Dual-axis line over the sampled historical revisions: propagation
+  // cost (left, blue) and dependency-cycle count (right, red, stepped).
+  // Answers "is the architecture decaying, and when did it start?" —
+  // the HEAD metrics projected back across history.
+  function renderArchTrend(rows) {
+    const container = document.getElementById('widget-arch-trend-body');
+    if (!container) return;
+    if (!rows.length) {
+      container.innerHTML = '<div class="empty">No architecture-trend data — repo too small, or the historical scan was skipped.</div>';
+      return;
+    }
+    const dates = rows.map(function (r) { return r.date; });
+    const propagation = rows.map(function (r) {
+      return Number(((r.propagation_cost || 0) * 100).toFixed(2));
+    });
+    const cycles = rows.map(function (r) { return r.cycle_count || 0; });
+    const infoColor = token('--color-info') || '#2563eb';
+    const errColor = token('--color-error') || '#dc2626';
+    const dim = getCssVar('--fg-dim');
+
+    setChartAriaLabel(container,
+      'Architecture decay trend over ' + rows.length +
+      ' sampled revisions: propagation cost (percent) and dependency-cycle count.');
+
+    const chart = mountEcharts(container);
+    chart.setOption({
+      tooltip: { trigger: 'axis' },
+      legend: {
+        data: ['Propagation cost %', 'Dependency cycles'],
+        textStyle: { color: dim },
+        bottom: 0,
+      },
+      grid: { left: 8, right: 8, top: 24, bottom: 48, containLabel: true },
+      xAxis: {
+        type: 'category',
+        data: dates,
+        axisLabel: { color: dim, rotate: 30, fontSize: 10 },
+      },
+      yAxis: [
+        {
+          type: 'value',
+          name: 'Propagation %',
+          position: 'left',
+          axisLabel: { color: dim },
+          nameTextStyle: { color: dim },
+          splitLine: { lineStyle: { color: getCssVar('--border') } },
+        },
+        {
+          type: 'value',
+          name: 'Cycles',
+          position: 'right',
+          minInterval: 1,
+          axisLabel: { color: dim },
+          nameTextStyle: { color: dim },
+          splitLine: { show: false },
+        },
+      ],
+      series: [
+        {
+          name: 'Propagation cost %',
+          type: 'line',
+          smooth: true,
+          symbol: 'circle',
+          symbolSize: 6,
+          yAxisIndex: 0,
+          data: propagation,
+          lineStyle: { color: infoColor, width: 2 },
+          itemStyle: { color: infoColor },
+          areaStyle: { color: infoColor, opacity: 0.08 },
+        },
+        {
+          name: 'Dependency cycles',
+          type: 'line',
+          step: 'end',
+          symbol: 'circle',
+          symbolSize: 6,
+          yAxisIndex: 1,
+          data: cycles,
+          lineStyle: { color: errColor, width: 2 },
+          itemStyle: { color: errColor },
+        },
+      ],
+    });
+  }
+
   function renderArchMatrix(imports, roles) {
     roles = roles || [];
     const container = document.getElementById('widget-arch-matrix-body');

@@ -528,6 +528,27 @@ pub fn write_instability_csv<W: Write>(
 }
 
 /// `architecture-metrics` CSV emitter — repo-level `(metric, value)` rows.
+/// `cycle-origins` CSV emitter — the commit each HEAD dependency cycle
+/// first formed at.
+pub fn write_cycle_origins_csv<W: Write>(
+    rows: &[crate::analyses::cycle_origins::CycleOriginRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(w, "size,formed-at-rev,formed-at-date,members").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{},{}",
+            row.size,
+            quote_if_needed(&row.formed_at_rev),
+            quote_if_needed(&row.formed_at_date),
+            quote_if_needed(&row.members),
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 /// `architecture-trend` CSV emitter — structural-health metrics at
 /// sampled historical revs.
 pub fn write_architecture_trend_csv<W: Write>(
