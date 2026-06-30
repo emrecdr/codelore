@@ -117,6 +117,15 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
         }
         write_github_output("result", "fail");
         write_github_output("violations", &violations.len().to_string());
+        // Inside GitHub Actions, also emit each violation as an inline
+        // `::error` annotation (on stdout, where the runner parses
+        // workflow commands) so the failing gate shows up against the
+        // file in the PR's Files-changed view — not just as a red check.
+        if std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true") {
+            let mut stdout = std::io::stdout();
+            codelore_lib::cli_api::output::gha::write_gate_violations_gha(&violations, &mut stdout)
+                .context("emit gate annotations")?;
+        }
         // Exit code 1 surfaces as gate failure in CI. Use anyhow::bail
         // so the existing exit-code handler routes to spec §6.6 code 4.
         anyhow::bail!("{} gate violation(s) — see above", violations.len());

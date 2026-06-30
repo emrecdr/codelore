@@ -126,6 +126,45 @@ pub fn write_hotspots_gha<W: Write>(rows: &[HotspotRow], w: &mut W) -> Result<()
     Ok(())
 }
 
+/// Emit quality-gate violations (`codelore check`) as GitHub Actions
+/// error annotations, so a failing gate shows up inline on the PR rather
+/// than only as a red check. File-anchored violations annotate that
+/// file; the gate evaluators wrap synthetic, non-file scopes in parens
+/// (`(repo-wide)`, `(diff-summary)`) — those get a file-less `::error`
+/// that still surfaces in the run's annotation summary.
+///
+/// # Errors
+///
+/// Returns [`CodeLoreError::Io`] on writer failure.
+pub fn write_gate_violations_gha<W: Write>(
+    violations: &[crate::quality_gates::GateViolation],
+    w: &mut W,
+) -> Result<()> {
+    for v in violations {
+        let title = format!("CodeLore gate: {}", v.gate);
+        let message = format!("{} = {} (threshold {})", v.gate, v.actual, v.threshold);
+        // A real path doesn't start with the evaluators' `(` scope marker.
+        if v.path.starts_with('(') {
+            writeln!(
+                w,
+                "::error title={title}::{message}",
+                title = escape_property(&title),
+                message = escape_message(&message),
+            )
+        } else {
+            writeln!(
+                w,
+                "::error file={file},title={title}::{message}",
+                file = escape_property(&v.path),
+                title = escape_property(&title),
+                message = escape_message(&message),
+            )
+        }
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,6 +238,48 @@ mod tests {
     fn empty_input_emits_no_lines() {
         let mut buf = Vec::new();
         write_hotspots_gha(&[], &mut buf).unwrap();
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn gate_violations_anchor_files_and_repo_wide_scopes() {
+        use crate::quality_gates::GateViolation;
+        let violations = vec![
+            GateViolation {
+                gate: "hotspot_score_max".into(),
+                path: "src/a.rs".into(),
+                actual: "9.3".into(),
+                threshold: "5.0".into(),
+            },
+            GateViolation {
+                gate: "max_dependency_cycles".into(),
+                path: "(repo-wide)".into(),
+                actual: "1".into(),
+                threshold: "0".into(),
+            },
+        ];
+        let mut buf = Vec::new();
+        write_gate_violations_gha(&violations, &mut buf).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        // File-anchored violation carries `file=`; the repo-wide one does not.
+        assert!(
+            out.contains("::error file=src/a.rs,title=CodeLore gate%3A hotspot_score_max::"),
+            "file-anchored annotation: {out}"
+        );
+        assert!(
+            out.contains("::error title=CodeLore gate%3A max_dependency_cycles::"),
+            "fileless repo-wide annotation: {out}"
+        );
+        assert!(
+            !out.lines().nth(1).unwrap().contains("file="),
+            "repo-wide line must NOT carry file=: {out}"
+        );
+    }
+
+    #[test]
+    fn gate_violations_empty_emits_no_lines() {
+        let mut buf = Vec::new();
+        write_gate_violations_gha(&[], &mut buf).unwrap();
         assert!(buf.is_empty());
     }
 }

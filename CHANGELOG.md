@@ -4,6 +4,10 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **Inline PR annotations for quality gates.** When `codelore check` fails inside GitHub Actions, every gate violation is now emitted as a `::error` workflow command, so the failure shows up against the offending file in the PR's Files-changed view — not just as a red check. Per-file gates (`cognitive_max`, `code_health_min`, `hotspot_score_max`) anchor to the file; repo-wide architectural gates (`max_dependency_cycles`, `max_propagation_cost`) emit a file-less annotation in the run summary. Local runs are unaffected (annotations are gated on `GITHUB_ACTIONS`).
+
 ## [0.12.0] - 2026-06-29
 
 ### Added
