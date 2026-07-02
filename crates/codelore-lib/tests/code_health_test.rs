@@ -146,6 +146,26 @@ fn biomarkers_flag_complex_functions() {
     assert_eq!(bad, 0, "all intensities must be in [0,1]");
 }
 
+#[test]
+fn coupling_becomes_shotgun_surgery_biomarker() {
+    let repo_fx = codelore_lib::test_support::differential_repo::build();
+    let repo = codelore_lib::repo::GixRepo::open(repo_fx.dir.path()).expect("open");
+    let db = codelore_lib::facts::FactsDb::new_in_memory().expect("db");
+    let opts = codelore_lib::test_support::permissive_coupling_opts(repo_fx.dir.path().to_path_buf());
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let _ = codelore_lib::analyses::code_health::run_code_health(&db, &opts).expect("run");
+
+    let n: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM code_health_biomarkers_v1 WHERE smell = 'shotgun-surgery'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("query");
+    assert!(n >= 1, "a coupling-heavy repo should yield shotgun-surgery biomarkers");
+}
+
 /// `--rows N` MUST NOT change the score computed for a path that survives
 /// the truncation. The bug it regression-protects: `materialize_centrality`
 /// used to pass the parent `opts` (with `rows_limit = N`) straight into

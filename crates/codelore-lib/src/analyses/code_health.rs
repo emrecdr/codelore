@@ -207,6 +207,17 @@ const BIOMARKERS_INSERT: &str = "
         FROM ranked GROUP BY path
 ";
 
+/// Shotgun Surgery / Divergent Change: a file that co-changes with many
+/// Fisher-significant partners is definitionally a temporal smell. Reuses the
+/// already-materialized centrality table; intensity = self-relative rank.
+const SHOTGUN_INSERT: &str = "
+    INSERT INTO code_health_biomarkers_v1 (path, smell, intensity)
+    SELECT path, 'shotgun-surgery' AS smell,
+           PERCENT_RANK() OVER (ORDER BY centrality) AS intensity
+    FROM coupling_centrality_v1
+    WHERE centrality > 0
+";
+
 fn materialize_biomarkers(db: &FactsDb) -> Result<()> {
     db.conn()
         .execute(BIOMARKERS_DDL, [])
@@ -214,6 +225,9 @@ fn materialize_biomarkers(db: &FactsDb) -> Result<()> {
     db.conn()
         .execute(BIOMARKERS_INSERT, [])
         .map_err(|e| CodeLoreError::Analysis(format!("insert complexity biomarkers: {e}")))?;
+    db.conn()
+        .execute(SHOTGUN_INSERT, [])
+        .map_err(|e| CodeLoreError::Analysis(format!("insert shotgun-surgery biomarkers: {e}")))?;
     Ok(())
 }
 
