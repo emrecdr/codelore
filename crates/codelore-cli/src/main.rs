@@ -2287,15 +2287,22 @@ fn dispatch_refactoring_targets(
     ctx: &EmitCtx,
     out: &mut Box<dyn Write>,
 ) -> Result<()> {
+    let rows =
+        codelore_lib::cli_api::analyses::refactoring_targets::run_refactoring_targets(db, opts)
+            .context("run refactoring-targets")?;
     match format {
+        "csv" => codelore_lib::cli_api::output::csv::write_refactoring_targets_csv(&rows, out)
+            .context("write csv")?,
         "json" => {
-            let rows = codelore_lib::cli_api::analyses::refactoring_targets::run_refactoring_targets(db, opts)
-                .context("run refactoring-targets")?;
             codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
         }
+        "markdown" => {
+            codelore_lib::cli_api::output::markdown::write_refactoring_targets_markdown(
+                &rows, out,
+            )
+            .context("write markdown")?;
+        }
         "ndjson" => {
-            let rows = codelore_lib::cli_api::analyses::refactoring_targets::run_refactoring_targets(db, opts)
-                .context("run refactoring-targets")?;
             codelore_lib::cli_api::output::ndjson::write_ndjson(&rows, out)
                 .context("write ndjson")?;
         }
@@ -2303,7 +2310,7 @@ fn dispatch_refactoring_targets(
         fmt => {
             return Err(unsupported_format(
                 "refactoring-targets",
-                "json|ndjson",
+                "csv|json|markdown|ndjson|html",
                 fmt,
             ));
         }

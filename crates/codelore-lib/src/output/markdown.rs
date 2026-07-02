@@ -1112,6 +1112,40 @@ pub fn write_communities_markdown<W: Write>(
     Ok(())
 }
 
+/// Markdown table emitter for the `refactoring-targets` analysis.
+///
+/// # Errors
+/// Propagates any write error from `w`.
+pub fn write_refactoring_targets_markdown<W: Write>(
+    rows: &[crate::analyses::refactoring_targets::RefactoringTargetRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(
+        w,
+        "| Entity | Priority | Combined risk | Structural risk | Hotspot | Revisions | LOC | Type | Band | ManualUp |"
+    )
+    .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---|---|---|---|---|---|---|---|---|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| `{}` | {:.6} | {:.6} | {:.4} | {:.4} | {} | {} | {} | {} | {} |",
+            escape_md_cell(&row.path),
+            row.priority,
+            row.combined_risk,
+            row.structural_risk,
+            row.hotspot_score,
+            row.revisions,
+            row.loc,
+            escape_md_cell(&row.dominant_type),
+            row.band,
+            row.manual_up_rank,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod escape_tests {
     use super::escape_md_cell;

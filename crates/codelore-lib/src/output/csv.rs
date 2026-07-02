@@ -1085,6 +1085,39 @@ pub fn write_communities_csv<W: Write>(
     Ok(())
 }
 
+/// CSV emitter for the `refactoring-targets` analysis.
+///
+/// # Errors
+/// Propagates any write error from `w`.
+pub fn write_refactoring_targets_csv<W: Write>(
+    rows: &[crate::analyses::refactoring_targets::RefactoringTargetRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(
+        w,
+        "entity,priority,combined_risk,structural_risk,hotspot_score,revisions,loc,dominant_type,band,manual_up_rank"
+    )
+    .map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{:.6},{:.6},{:.4},{:.4},{},{},{},{},{}",
+            quote_if_needed(&row.path),
+            row.priority,
+            row.combined_risk,
+            row.structural_risk,
+            row.hotspot_score,
+            row.revisions,
+            row.loc,
+            quote_if_needed(&row.dominant_type),
+            row.band,
+            row.manual_up_rank,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::quote_if_needed;

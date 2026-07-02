@@ -56,3 +56,20 @@ fn refactoring_targets_annotate_type_and_manualup() {
     let min_loc_row = rows.iter().min_by_key(|r| r.loc).unwrap();
     assert_eq!(min_loc_row.manual_up_rank, 1, "smallest file is ManualUp rank 1");
 }
+
+#[test]
+fn refactoring_targets_csv_has_header_and_rows() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let repo = GixRepo::open(tiny.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = opts_for(tiny.dir.path());
+    db.ingest(&repo, &opts).expect("ingest");
+    let rows = run_refactoring_targets(&db, &opts).expect("run");
+
+    let mut buf: Vec<u8> = Vec::new();
+    codelore_lib::output::csv::write_refactoring_targets_csv(&rows, &mut buf).expect("csv");
+    let out = String::from_utf8(buf).expect("utf8");
+    let header = out.lines().next().unwrap();
+    assert_eq!(header, "entity,priority,combined_risk,structural_risk,hotspot_score,revisions,loc,dominant_type,band,manual_up_rank");
+    assert!(out.lines().count() >= 2, "header + >=1 data row");
+}
