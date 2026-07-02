@@ -27,3 +27,32 @@ fn refactoring_targets_ranks_by_priority_desc() {
         assert!(w[0].priority >= w[1].priority - 1e-9, "must be sorted by priority DESC");
     }
 }
+
+#[test]
+fn refactoring_targets_annotate_type_and_manualup() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let repo = GixRepo::open(tiny.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = opts_for(tiny.dir.path());
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let rows = run_refactoring_targets(&db, &opts).expect("run");
+    assert!(!rows.is_empty());
+
+    let known = [
+        "complex-method", "large-method", "god-class", "dry", "shotgun-surgery", "none",
+    ];
+    for r in &rows {
+        assert!(known.contains(&r.dominant_type.as_str()), "unknown type: {}", r.dominant_type);
+        assert!(r.manual_up_rank >= 1, "manual_up_rank is 1-based: {}", r.manual_up_rank);
+    }
+    // manual_up_rank is a permutation of 1..=n.
+    let mut ranks: Vec<u32> = rows.iter().map(|r| r.manual_up_rank).collect();
+    ranks.sort_unstable();
+    let expected: Vec<u32> = (1..=u32::try_from(rows.len()).unwrap()).collect();
+    assert_eq!(ranks, expected, "manual_up_rank must be a permutation of 1..=n");
+
+    // ManualUp = ascending size. The smallest-loc row must have rank 1.
+    let min_loc_row = rows.iter().min_by_key(|r| r.loc).unwrap();
+    assert_eq!(min_loc_row.manual_up_rank, 1, "smallest file is ManualUp rank 1");
+}

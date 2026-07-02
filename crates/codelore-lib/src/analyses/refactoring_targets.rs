@@ -36,10 +36,11 @@ pub struct RefactoringTargetRow {
     pub hotspot_score: f64,
     pub revisions: u32,
     pub loc: u32,
-    /// Dominant biomarker for this file (`"none"` until biomarker enrichment runs).
+    /// Dominant biomarker smell for this file, or `"none"` if no biomarker is recorded.
     pub dominant_type: String,
     pub band: String,
-    /// `ManualUp` baseline rank (0 until manual-override enrichment runs).
+    /// `ManualUp` baseline rank: 1-based, ascending by `loc` (smallest file = 1),
+    /// ties broken by `path`. Assigned over the full set before any truncation.
     pub manual_up_rank: u32,
 }
 
@@ -81,6 +82,23 @@ pub fn run_refactoring_targets(db: &FactsDb, opts: &Options) -> Result<Vec<Refac
     let hs_by_path: HashMap<&str, &crate::analyses::hotspots::HotspotRow> =
         hotspots.iter().map(|h| (h.path.as_str(), h)).collect();
 
+    // Dominant biomarker per file: highest-intensity smell, ties broken by
+    // smell name so the pick is deterministic. Reads the temp table that
+    // run_code_health materialised above.
+    let dominant_by_path: HashMap<String, String> = query_map_collect(
+        db,
+        "SELECT path, smell FROM ( \
+             SELECT path, smell, \
+                    ROW_NUMBER() OVER (PARTITION BY path ORDER BY intensity DESC, smell ASC) AS rn \
+             FROM code_health_biomarkers_v1 \
+         ) WHERE rn = 1",
+        [],
+        "refactoring-targets:dominant",
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+    )?
+    .into_iter()
+    .collect();
+
     let mut rows: Vec<RefactoringTargetRow> = health
         .iter()
         .filter_map(|h| {
@@ -97,7 +115,10 @@ pub fn run_refactoring_targets(db: &FactsDb, opts: &Options) -> Result<Vec<Refac
                 hotspot_score: hs.hotspot_score,
                 revisions: hs.revisions,
                 loc,
-                dominant_type: "none".to_owned(),
+                dominant_type: dominant_by_path
+                    .get(&h.path)
+                    .cloned()
+                    .unwrap_or_else(|| "none".to_owned()),
                 band: h.band.clone(),
                 manual_up_rank: 0,
             })
@@ -111,6 +132,14 @@ pub fn run_refactoring_targets(db: &FactsDb, opts: &Options) -> Result<Vec<Refac
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a.path.cmp(&b.path))
     });
+
+    // ManualUp baseline: rank by ascending size (smallest first). Computed over
+    // the full set so the rank is stable regardless of the priority truncation.
+    let mut by_size: Vec<usize> = (0..rows.len()).collect();
+    by_size.sort_by(|&i, &j| rows[i].loc.cmp(&rows[j].loc).then_with(|| rows[i].path.cmp(&rows[j].path)));
+    for (rank, &idx) in by_size.iter().enumerate() {
+        rows[idx].manual_up_rank = u32::try_from(rank + 1).unwrap_or(u32::MAX);
+    }
 
     if let Some(limit) = opts.rows_limit {
         rows.truncate(limit as usize);
