@@ -157,15 +157,19 @@ pub fn write_hotspots_markdown<W: Write>(rows: &[HotspotRow], w: &mut W) -> Resu
 
 pub fn write_code_health_markdown<W: Write>(rows: &[CodeHealthRow], w: &mut W) -> Result<()> {
     header(w, "CodeLore code-health")?;
-    writeln!(w, "| Entity | Cognitive | Score |").map_err(CodeLoreError::Io)?;
-    writeln!(w, "|---|---|---|").map_err(CodeLoreError::Io)?;
+    writeln!(w, "| Entity | Cognitive | Score | Structural risk | Percentile | Band |")
+        .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---|---|---|---|---|").map_err(CodeLoreError::Io)?;
     for row in rows {
         writeln!(
             w,
-            "| `{}` | {:.2} | {:.2} |",
+            "| `{}` | {:.2} | {:.2} | {:.4} | {:.4} | {} |",
             escape_md_cell(&row.path),
             row.cognitive,
-            row.score
+            row.score,
+            row.structural_risk,
+            row.percentile,
+            row.band
         )
         .map_err(CodeLoreError::Io)?;
     }

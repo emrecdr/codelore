@@ -87,6 +87,34 @@ fn code_health_penalizes_churn() {
     }
 }
 
+#[test]
+fn code_health_reports_band_and_percentile() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let repo = codelore_lib::repo::GixRepo::open(tiny.dir.path()).expect("open");
+    let db = codelore_lib::facts::FactsDb::new_in_memory().expect("db");
+    let opts = codelore_lib::Options {
+        repo_path: tiny.dir.path().to_path_buf(),
+        min_revs: 1,
+        ..codelore_lib::Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let rows = codelore_lib::analyses::code_health::run_code_health(&db, &opts).expect("run");
+    assert!(!rows.is_empty());
+    for row in &rows {
+        assert!(
+            (0.0..=1.0).contains(&row.percentile),
+            "percentile in [0,1]: {}",
+            row.percentile
+        );
+        assert!(
+            matches!(row.band.as_str(), "red" | "yellow" | "green"),
+            "band must be red|yellow|green, got {}",
+            row.band
+        );
+    }
+}
+
 /// `--rows N` MUST NOT change the score computed for a path that survives
 /// the truncation. The bug it regression-protects: `materialize_centrality`
 /// used to pass the parent `opts` (with `rows_limit = N`) straight into

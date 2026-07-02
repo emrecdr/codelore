@@ -34,7 +34,10 @@ use crate::{CodeLoreError, Options, Result};
 pub struct CodeHealthRow {
     pub path: String,
     pub cognitive: f64,
-    pub score: f64, // 0..=100; higher = healthier
+    pub score: f64,           // 0..=100; higher = healthier
+    pub structural_risk: f64, // 0..=1; higher = worse (Task 2+ makes this biomarker-based)
+    pub percentile: f64,      // 0..=1; per-language self-relative rank of structural_risk (1 = riskiest)
+    pub band: String,         // "red" | "yellow" | "green"
 }
 
 const SQL: &str = "
@@ -105,19 +108,38 @@ const SQL: &str = "
             fv AS n_au,
             CASE WHEN MAX(centrality) OVER () > 0 THEN centrality::DOUBLE / MAX(centrality) OVER () ELSE 0 END AS n_cp
         FROM joined
+    ),
+    scored AS (
+        SELECT
+            path,
+            cognitive,
+            n_cx AS structural_risk,
+            GREATEST(0.0, LEAST(100.0,
+                100.0 * (1.0 - 0.40 * n_cx - 0.25 * n_cn - 0.15 * n_au - 0.20 * n_cp)
+            )) AS score,
+            CASE lower(split_part(path, '.', -1))
+                WHEN 'rs' THEN 'rust'
+                WHEN 'py' THEN 'python' WHEN 'pyi' THEN 'python'
+                WHEN 'java' THEN 'java'
+                WHEN 'js' THEN 'javascript' WHEN 'jsx' THEN 'javascript'
+                WHEN 'mjs' THEN 'javascript' WHEN 'cjs' THEN 'javascript'
+                WHEN 'ts' THEN 'typescript' WHEN 'tsx' THEN 'typescript'
+                ELSE 'other'
+            END AS lang
+        FROM normalized
     )
     SELECT
         path,
         cognitive,
-        GREATEST(0.0, LEAST(100.0,
-            100.0 * (1.0
-                - 0.40 * n_cx
-                - 0.25 * n_cn
-                - 0.15 * n_au
-                - 0.20 * n_cp
-            )
-        )) AS score
-    FROM normalized
+        score,
+        structural_risk,
+        PERCENT_RANK() OVER (PARTITION BY lang ORDER BY structural_risk) AS percentile,
+        CASE
+            WHEN structural_risk >= 0.66 THEN 'red'
+            WHEN structural_risk >= 0.33 THEN 'yellow'
+            ELSE 'green'
+        END AS band
+    FROM scored
     ORDER BY score ASC, path ASC
     LIMIT ?
 ";
@@ -204,6 +226,9 @@ pub fn run_code_health(db: &FactsDb, opts: &Options) -> Result<Vec<CodeHealthRow
                 path: r.get::<_, String>(0)?,
                 cognitive: r.get::<_, f64>(1)?,
                 score: r.get::<_, f64>(2)?,
+                structural_risk: r.get::<_, f64>(3)?,
+                percentile: r.get::<_, f64>(4)?,
+                band: r.get::<_, String>(5)?,
             })
         })
         .map_err(|e| CodeLoreError::Analysis(format!("query code-health: {e}")))?;
