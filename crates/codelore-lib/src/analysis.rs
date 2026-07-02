@@ -140,6 +140,12 @@ pub enum AnalysisName {
     // not. Counters CodeScene v7.4's Delivery Analysis surface while
     // staying SQL-driven and CLI-only.
     DeliveryFriction,
+    // Effort-aware refactoring ROI ranking: (structural_risk ×
+    // hotspot_score) / max(loc, floor). Surfaces files where low
+    // code health intersects high activity, normalised by inspection
+    // effort so small, dense, churning files outrank large ones with
+    // the same raw risk.
+    RefactoringTargets,
 }
 
 impl AnalysisName {
@@ -188,6 +194,7 @@ impl AnalysisName {
             Self::LeadTime => "lead-time",
             Self::BusFactor => "bus-factor",
             Self::DeliveryFriction => "delivery-friction",
+            Self::RefactoringTargets => "refactoring-targets",
         }
     }
 
@@ -264,6 +271,7 @@ impl AnalysisName {
             LeadTime,
             BusFactor,
             DeliveryFriction,
+            RefactoringTargets,
         )
     }
 

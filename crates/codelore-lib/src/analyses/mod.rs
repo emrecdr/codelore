@@ -39,6 +39,7 @@ pub mod modularity_violations;
 pub mod ownership;
 pub mod pair_programming;
 pub mod query;
+pub mod refactoring_targets;
 pub mod revisions;
 pub mod soc;
 pub mod stale_code;

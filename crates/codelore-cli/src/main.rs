@@ -926,6 +926,9 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             AnalysisName::DeliveryFriction => {
                 dispatch_delivery_friction(&db, &opts, format, &ctx, &mut out)?;
             }
+            AnalysisName::RefactoringTargets => {
+                dispatch_refactoring_targets(&db, &opts, format, &ctx, &mut out)?;
+            }
             AnalysisName::KnowledgeIslands => {
                 dispatch_knowledge_islands(&db, &opts, format, &ctx, &mut out)?;
             }
@@ -2270,6 +2273,37 @@ fn dispatch_delivery_friction(
             return Err(unsupported_format(
                 "delivery-friction",
                 "csv|json|markdown",
+                fmt,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_refactoring_targets(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::refactoring_targets::run_refactoring_targets(db, opts)
+                .context("run refactoring-targets")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "ndjson" => {
+            let rows = codelore_lib::cli_api::analyses::refactoring_targets::run_refactoring_targets(db, opts)
+                .context("run refactoring-targets")?;
+            codelore_lib::cli_api::output::ndjson::write_ndjson(&rows, out)
+                .context("write ndjson")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format(
+                "refactoring-targets",
+                "json|ndjson",
                 fmt,
             ));
         }
