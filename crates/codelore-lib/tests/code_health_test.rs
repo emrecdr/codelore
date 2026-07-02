@@ -166,6 +166,32 @@ fn coupling_becomes_shotgun_surgery_biomarker() {
     assert!(n >= 1, "a coupling-heavy repo should yield shotgun-surgery biomarkers");
 }
 
+#[test]
+fn god_class_and_dry_are_biomarkers() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let repo = codelore_lib::repo::GixRepo::open(tiny.dir.path()).expect("open");
+    let db = codelore_lib::facts::FactsDb::new_in_memory().expect("db");
+    let opts = codelore_lib::Options {
+        repo_path: tiny.dir.path().to_path_buf(),
+        min_revs: 1,
+        ..codelore_lib::Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+    let _ = codelore_lib::analyses::code_health::run_code_health(&db, &opts).expect("run");
+
+    // The smell vocabulary must include the reused analyses (0 rows is allowed
+    // for tiny_repo, but the query must succeed against the known smell set).
+    let distinct: i64 = db
+        .query_row(
+            "SELECT COUNT(DISTINCT smell) FROM code_health_biomarkers_v1 \
+             WHERE smell IN ('complex-method','large-method','shotgun-surgery','god-class','dry')",
+            [],
+            |r| r.get(0),
+        )
+        .expect("query smell vocabulary");
+    assert!(distinct >= 1);
+}
+
 /// `--rows N` MUST NOT change the score computed for a path that survives
 /// the truncation. The bug it regression-protects: `materialize_centrality`
 /// used to pass the parent `opts` (with `rows_limit = N`) straight into

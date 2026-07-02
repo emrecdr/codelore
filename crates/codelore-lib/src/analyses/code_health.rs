@@ -218,7 +218,7 @@ const SHOTGUN_INSERT: &str = "
     WHERE centrality > 0
 ";
 
-fn materialize_biomarkers(db: &FactsDb) -> Result<()> {
+fn materialize_biomarkers(db: &FactsDb, opts: &Options) -> Result<()> {
     db.conn()
         .execute(BIOMARKERS_DDL, [])
         .map_err(|e| CodeLoreError::Analysis(format!("create biomarker temp table: {e}")))?;
@@ -228,6 +228,37 @@ fn materialize_biomarkers(db: &FactsDb) -> Result<()> {
     db.conn()
         .execute(SHOTGUN_INSERT, [])
         .map_err(|e| CodeLoreError::Analysis(format!("insert shotgun-surgery biomarkers: {e}")))?;
+
+    // God Class: reuse the existing analysis; intensity = normalized god_score.
+    let gods = crate::analyses::god_classes::run_god_classes(db, opts)?;
+    let max_god = gods.iter().map(|g| g.god_score).fold(0.0_f64, f64::max);
+
+    // DRY: reuse clone detection (walks HEAD worktree); intensity = normalized
+    // count of cloned functions per file.
+    let clones = crate::analyses::clones::run_clones(opts)?;
+    let mut dry_counts: std::collections::HashMap<String, u32> =
+        std::collections::HashMap::new();
+    for c in &clones {
+        *dry_counts.entry(c.entity.clone()).or_insert(0) += 1;
+    }
+    let max_dry = dry_counts.values().copied().max().unwrap_or(0);
+
+    let mut stmt = db
+        .conn()
+        .prepare("INSERT INTO code_health_biomarkers_v1 (path, smell, intensity) VALUES (?, ?, ?)")
+        .map_err(|e| CodeLoreError::Analysis(format!("prepare biomarker insert: {e}")))?;
+    if max_god > 0.0 {
+        for g in &gods {
+            stmt.execute(params![g.path, "god-class", g.god_score / max_god])
+                .map_err(|e| CodeLoreError::Analysis(format!("god-class biomarker: {e}")))?;
+        }
+    }
+    if max_dry > 0 {
+        for (path, n) in &dry_counts {
+            stmt.execute(params![path, "dry", f64::from(*n) / f64::from(max_dry)])
+                .map_err(|e| CodeLoreError::Analysis(format!("dry biomarker: {e}")))?;
+        }
+    }
     Ok(())
 }
 
@@ -278,7 +309,7 @@ pub fn run_code_health(db: &FactsDb, opts: &Options) -> Result<Vec<CodeHealthRow
     // canonical centrality entries (otherwise renamed files lose their
     // centrality term silently).
     materialize_centrality(db, opts)?;
-    materialize_biomarkers(db)?;
+    materialize_biomarkers(db, opts)?;
 
     // Unified dispatch honours both --time-bucket and --use-canonical-lineage.
     crate::analyses::lineage::materialize_source(db, opts)?;
