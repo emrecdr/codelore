@@ -35,7 +35,7 @@ pub struct CodeHealthRow {
     pub path: String,
     pub cognitive: f64,
     pub score: f64,           // 0..=100; higher = healthier
-    pub structural_risk: f64, // 0..=1; higher = worse (Task 2+ makes this biomarker-based)
+    pub structural_risk: f64, // 0..=1; higher = worse
     pub percentile: f64,      // 0..=1; per-language self-relative rank of structural_risk (1 = riskiest)
     pub band: String,         // "red" | "yellow" | "green"
 }

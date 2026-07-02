@@ -112,6 +112,7 @@ fn code_health_reports_band_and_percentile() {
             "band must be red|yellow|green, got {}",
             row.band
         );
+        assert!((0.0..=1.0).contains(&row.structural_risk), "structural_risk in [0,1]: {}", row.structural_risk);
     }
 }
 
