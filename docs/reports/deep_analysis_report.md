@@ -306,6 +306,22 @@ Overall hygiene is strong: `thiserror 2`, `toml 1`, `ureq 3`, `anyhow`/`serde`/`
 *   **State on main**: `coupling_centrality_v1` (the per-file count of Fisher-significant coupling partners) feeds the composite score via two independent paths simultaneously: (1) the `shotgun-surgery` biomarker written by `SHOTGUN_INSERT` (`intensity = PERCENT_RANK(ORDER BY centrality)`) which flows into `structural_risk` (weight 0.40 via `w_sr`); and (2) directly as `n_cp = normalize(centrality)` (weight 0.20 via `w_cp`). A file with high coupling centrality therefore receives a penalty through both paths at the same time — a double-count of the same underlying signal in the current weight assignments. This is a known characteristic of the initial weight constants, not a code defect; the weights were always intended to be validated against real fixtures before being treated as final.
 *   **Recommended action**: Validate biomarker/behavioral orthogonality on a representative fixture (e.g. the `tiny_repo` integration fixture extended with a coupling-heavy file) before the 0.40 (`w_sr`) / 0.20 (`w_cp`) constants are treated as final. If the shotgun-surgery biomarker contribution is the intended mechanism for penalizing high-centrality files, `n_cp` may need to weight a decoupled signal or the weights recalibrated to reflect the shared lineage intentionally. See the design specification's composite-weight orthogonality section for the governing decision criteria.
 
+### 4.4 Refactoring-targets analysis — cross-analysis contract and display fidelity (2026-07-03)
+
+#### F233 — Implicit cross-analysis contract: `refactoring-targets` consumes `code_health_biomarkers_v1` temp table as a side-effect
+
+*   **Location**: `analyses/refactoring_targets.rs` (dominant-biomarker lookup query reads `code_health_biomarkers_v1`); `analyses/code_health.rs` (`materialize_biomarkers` creates the table as a side effect of `run_code_health`)
+*   **Severity**: MED · **Category**: implicit contract / latent-robustness · **Status**: Active
+*   **Description**: `refactoring-targets` is the first external consumer of the `code_health_biomarkers_v1` temporary table, which `run_code_health` materialises as a side effect via `materialize_biomarkers`. This elevates a private implementation detail of `code-health` into an implicit cross-analysis contract: if `code_health` were ever changed to drop the table before returning, or if the call order in `run_refactoring_targets` were changed so the biomarker query executed before `run_code_health`, the dominant-biomarker lookup would fail at runtime with a DuckDB "table not found" error. There is no guard or assertion on the consumer side to make this dependency visible.
+*   **Recommended action**: Either add a comment at the `code_health_biomarkers_v1` DDL in `analyses/code_health.rs` noting the external consumer (so the table cannot be silently dropped or scoped away), or add a consumer-side existence check before the biomarker query. The two `refactoring_targets` integration tests exercise the full path and would catch a regression, so this is latent-robustness rather than an active defect.
+
+#### F234 — `loc` display floor: files with no LOC entry show `loc = 1` (fabricated value)
+
+*   **Location**: `analyses/refactoring_targets.rs` — `loc_by_path.get(...).unwrap_or(0).max(1)` used for both the displayed `loc` column and the priority denominator
+*   **Severity**: LOW · **Category**: display fidelity / cosmetic · **Status**: Active
+*   **Description**: A file with no non-NULL LOC entry (e.g. a file the complexity walker skipped) has its `loc` stored as `0.max(1) = 1` — a fabricated value propagated directly into the output row. The `EA_Z_FLOOR` (25) already floors the priority denominator independently, so the `.max(1)` affects only the displayed `loc` column. A reader seeing `loc = 1` cannot distinguish a genuine 1-line file from a file whose LOC was unknown.
+*   **Recommended action**: Confine the floor to the priority denominator (`max(loc, EA_Z_FLOOR)`) and display the true value, treating `0` or a dedicated `None` as the honest unknown. Requires updating the `r.loc >= 1` assertion in the integration tests to match the new display semantics.
+
 ---
 
 ## 5. Next Audit Cycle
@@ -317,10 +333,11 @@ Overall hygiene is strong: `thiserror 2`, `toml 1`, `ureq 3`, `anyhow`/`serde`/`
 - **Deferred — large refactor / focused pass**: F206 (HEAD-scan I/O restructure — wants a benchmark), F215 (`enum Format`), F218 (render-cascade split), F231 (62-site `Plan N` scripted sweep).
 - **Carried-forward Active (output/blob cluster)**: F119 (csv-crate), F148 (`TabularEmit` dedup), F161 (`EmitterStream`), F173 (HEAD blob dedup) — byte-identical-critical (F206 is the deeper lever for F173).
 - **Carried-forward Partial / design**: F177 (schema sentinels), F186 (bench PR gate — design), F197 (dogfood advisory/separate-cache).
+- **New Active (2026-07-03)**: F233 (implicit `code_health_biomarkers_v1` cross-analysis contract in `refactoring-targets`), F234 (`loc` display floor fabricates `1` for files with no LOC entry).
 
 **Highest-leverage work remaining:**
 1. **HEAD-scan I/O** (F206 + F173) — resolve HEAD→tree once per pass with a per-worker cached repo; benchmark via `ingest_capacity_sweep`. Biggest large-repo wall-clock lever.
 2. **Output-emitter cluster** (F119 / F148 / F161) — csv-crate migration (preserve the F170 injection guard + `\n` endings), `TabularEmit` dedup, `EmitterStream` streaming, in one coordinated byte-identical pass.
 3. **`Plan N` marker sweep** (F231) — 62-site scripted comment cleanup (a hard-rule violation).
 
-The next sweep should re-open with F-IDs starting at **F233**.
+The next sweep should re-open with F-IDs starting at **F235**.
