@@ -13,16 +13,19 @@
 //!
 //! `structural_risk` is a probabilistic-OR aggregate over the per-file biomarker
 //! table (complex-method, large-method, shotgun-surgery, god-class, dry).
-//! Each biomarker carries an intensity ∈ [0,1]; the co-occurrence multiplier
-//! amplifies risk when multiple distinct smell types co-occur in the same file.
-//! Coupling centrality uses the Fisher-significant pairs from
-//! `coupling::run_coupling`. Score range: [0, 100]; higher = healthier.
+//! Each biomarker carries an intensity ∈ [0,1]; a co-occurrence multiplier
+//! (0.25 per additional distinct smell type) amplifies risk when multiple smells
+//! co-occur in the same file. Coupling centrality uses the Fisher-significant
+//! pairs from `coupling::run_coupling`. Score range: [0, 100]; higher = healthier.
+//! Band (red/yellow/green) is derived from `structural_risk` thresholds (0.66/0.33);
+//! percentile is the per-language `PERCENT_RANK` of `structural_risk` (Alves,
+//! Ypma & Visser 2010).
 //!
 //! Research basis: see `docs/research-foundations.md` entry
 //! "code-health" (composite signal developed in `CodeLore`; underlying
-//! inputs cite cognitive complexity (Campbell 2018), churn (Nagappan
-//! & Ball 2005), ownership fragmentation (Mockus & Herbsleb 2002), and
-//! coupling centrality (Tornhill 2018)).
+//! inputs cite cyclomatic complexity and LOC biomarker intensities (Campbell 2018),
+//! churn (Nagappan & Ball 2005), ownership fragmentation (Mockus & Herbsleb 2002),
+//! and coupling centrality (Tornhill 2018)).
 
 use std::collections::HashMap;
 
@@ -38,8 +41,8 @@ pub struct CodeHealthRow {
     pub cognitive: f64,
     pub score: f64,           // 0..=100; higher = healthier
     pub structural_risk: f64, // 0..=1; higher = worse
-    pub percentile: f64,      // 0..=1; per-language self-relative rank of structural_risk (1 = riskiest)
-    pub band: String,         // "red" | "yellow" | "green"
+    pub percentile: f64, // 0..=1; per-language self-relative rank of structural_risk (1 = riskiest)
+    pub band: String,    // "red" | "yellow" | "green"
 }
 
 const SQL: &str = "
@@ -254,8 +257,7 @@ fn materialize_biomarkers(db: &FactsDb, opts: &Options) -> Result<()> {
     // DRY: reuse clone detection (walks HEAD worktree); intensity = normalized
     // count of cloned functions per file.
     let clones = crate::analyses::clones::run_clones(opts)?;
-    let mut dry_counts: std::collections::HashMap<String, u32> =
-        std::collections::HashMap::new();
+    let mut dry_counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
     for c in &clones {
         *dry_counts.entry(c.entity.clone()).or_insert(0) += 1;
     }

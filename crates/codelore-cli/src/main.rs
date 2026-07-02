@@ -261,8 +261,8 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
         ),
         (
             "code-health",
-            "code-health composite (Campbell 2018 cognitive + Nagappan & Ball 2005 churn + Mockus & Herbsleb 2002 ownership + Tornhill 2018 coupling)",
-            "100 × (1 − 0.40 × normalize(cognitive)). Empirical range [60, 100]; lower = more cognitively complex.",
+            "code-health composite: biomarker structural risk (Complex/Large Method, God Class, DRY, Shotgun Surgery) fused with behavioral signal (Nagappan & Ball 2005 churn + Mockus & Herbsleb 2002 ownership + Tornhill 2018 coupling); self-relative percentile banding (Alves/Ypma/Visser 2010)",
+            "100 × (1 − 0.40·structural_risk − 0.25·churn − 0.15·ownership_fv − 0.20·coupling_centrality); band from structural_risk thresholds (0.66/0.33 → red/yellow/green); percentile = per-language PERCENT_RANK of structural_risk.",
             "See analyses/code_health.rs.",
         ),
         (

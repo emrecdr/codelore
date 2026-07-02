@@ -112,7 +112,11 @@ fn code_health_reports_band_and_percentile() {
             "band must be red|yellow|green, got {}",
             row.band
         );
-        assert!((0.0..=1.0).contains(&row.structural_risk), "structural_risk in [0,1]: {}", row.structural_risk);
+        assert!(
+            (0.0..=1.0).contains(&row.structural_risk),
+            "structural_risk in [0,1]: {}",
+            row.structural_risk
+        );
     }
 }
 
@@ -132,7 +136,9 @@ fn biomarkers_flag_complex_functions() {
     let _ = codelore_lib::analyses::code_health::run_code_health(&db, &opts).expect("run");
 
     let count: i64 = db
-        .query_row("SELECT COUNT(*) FROM code_health_biomarkers_v1", [], |r| r.get(0))
+        .query_row("SELECT COUNT(*) FROM code_health_biomarkers_v1", [], |r| {
+            r.get(0)
+        })
         .expect("query biomarkers");
     assert!(count >= 1, "tiny_repo should produce >=1 biomarker row");
 
@@ -151,7 +157,8 @@ fn coupling_becomes_shotgun_surgery_biomarker() {
     let repo_fx = codelore_lib::test_support::differential_repo::build();
     let repo = codelore_lib::repo::GixRepo::open(repo_fx.dir.path()).expect("open");
     let db = codelore_lib::facts::FactsDb::new_in_memory().expect("db");
-    let opts = codelore_lib::test_support::permissive_coupling_opts(repo_fx.dir.path().to_path_buf());
+    let opts =
+        codelore_lib::test_support::permissive_coupling_opts(repo_fx.dir.path().to_path_buf());
     db.ingest(&repo, &opts).expect("ingest");
 
     let _ = codelore_lib::analyses::code_health::run_code_health(&db, &opts).expect("run");
@@ -163,7 +170,10 @@ fn coupling_becomes_shotgun_surgery_biomarker() {
             |r| r.get(0),
         )
         .expect("query");
-    assert!(n >= 1, "a coupling-heavy repo should yield shotgun-surgery biomarkers");
+    assert!(
+        n >= 1,
+        "a coupling-heavy repo should yield shotgun-surgery biomarkers"
+    );
 }
 
 #[test]
@@ -208,16 +218,46 @@ fn structural_risk_rewards_multiple_cooccurring_smells() {
     db.ingest(&repo, &opts).expect("ingest");
     let rows = codelore_lib::analyses::code_health::run_code_health(&db, &opts).expect("run");
     for r in &rows {
-        assert!((0.0..=1.0).contains(&r.structural_risk), "risk in [0,1]: {}", r.structural_risk);
+        assert!(
+            (0.0..=1.0).contains(&r.structural_risk),
+            "risk in [0,1]: {}",
+            r.structural_risk
+        );
     }
     // Higher structural_risk must never correspond to a higher (healthier) score.
     let mut sorted = rows.clone();
     sorted.sort_by(|a, b| a.structural_risk.partial_cmp(&b.structural_risk).unwrap());
     for w in sorted.windows(2) {
         if (w[0].structural_risk - w[1].structural_risk).abs() > 1e-9 {
-            assert!(w[0].score >= w[1].score - 1e-6,
-                "riskier file must not score healthier");
+            assert!(
+                w[0].score >= w[1].score - 1e-6,
+                "riskier file must not score healthier"
+            );
         }
+    }
+}
+
+#[test]
+fn code_health_v2_is_deterministic() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let repo = codelore_lib::repo::GixRepo::open(tiny.dir.path()).expect("open");
+    let opts = codelore_lib::Options {
+        repo_path: tiny.dir.path().to_path_buf(),
+        min_revs: 1,
+        ..codelore_lib::Options::default()
+    };
+    let run = || {
+        let db = codelore_lib::facts::FactsDb::new_in_memory().expect("db");
+        db.ingest(&repo, &opts).expect("ingest");
+        codelore_lib::analyses::code_health::run_code_health(&db, &opts).expect("run")
+    };
+    let a = run();
+    let b = run();
+    assert_eq!(a.len(), b.len());
+    for (x, y) in a.iter().zip(b.iter()) {
+        assert_eq!(x.path, y.path);
+        assert!((x.score - y.score).abs() < 1e-9, "score must be stable");
+        assert_eq!(x.band, y.band, "band must be stable");
     }
 }
 
