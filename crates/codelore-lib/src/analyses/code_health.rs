@@ -155,6 +155,68 @@ const CENTRALITY_DDL: &str = "
     )
 ";
 
+const BIOMARKERS_DDL: &str = "
+    CREATE OR REPLACE TEMPORARY TABLE code_health_biomarkers_v1 (
+        path    TEXT   NOT NULL,
+        smell   TEXT   NOT NULL,
+        intensity DOUBLE NOT NULL
+    )
+";
+
+/// Populate function-level structural biomarkers from the raw
+/// `complexity_metrics` snapshot. Intensity is the per-language
+/// `PERCENT_RANK` of the function metric, rolled up to the file by `MAX`.
+/// Language is derived from the file extension; no stored language column
+/// exists in `complexity_metrics` so the CASE expression mirrors the one
+/// in the scored CTE of the main code-health SQL.
+const BIOMARKERS_INSERT: &str = "
+    INSERT INTO code_health_biomarkers_v1 (path, smell, intensity)
+    WITH lang_fn AS (
+        SELECT
+            path,
+            name,
+            cyclomatic,
+            loc,
+            CASE lower(split_part(path, '.', -1))
+                WHEN 'rs'  THEN 'rust'
+                WHEN 'py'  THEN 'python'
+                WHEN 'pyi' THEN 'python'
+                WHEN 'java' THEN 'java'
+                WHEN 'js'  THEN 'javascript'
+                WHEN 'jsx' THEN 'javascript'
+                WHEN 'mjs' THEN 'javascript'
+                WHEN 'cjs' THEN 'javascript'
+                WHEN 'ts'  THEN 'typescript'
+                WHEN 'tsx' THEN 'typescript'
+                ELSE 'other'
+            END AS lang
+        FROM complexity_metrics
+        WHERE cyclomatic IS NOT NULL
+    ),
+    ranked AS (
+        SELECT
+            path,
+            PERCENT_RANK() OVER (PARTITION BY lang ORDER BY cyclomatic) AS cx_i,
+            PERCENT_RANK() OVER (PARTITION BY lang ORDER BY loc)        AS loc_i
+        FROM lang_fn
+    )
+    SELECT path, 'complex-method' AS smell, MAX(cx_i) AS intensity
+        FROM ranked GROUP BY path
+    UNION ALL
+    SELECT path, 'large-method' AS smell, MAX(loc_i) AS intensity
+        FROM ranked GROUP BY path
+";
+
+fn materialize_biomarkers(db: &FactsDb) -> Result<()> {
+    db.conn()
+        .execute(BIOMARKERS_DDL, [])
+        .map_err(|e| CodeLoreError::Analysis(format!("create biomarker temp table: {e}")))?;
+    db.conn()
+        .execute(BIOMARKERS_INSERT, [])
+        .map_err(|e| CodeLoreError::Analysis(format!("insert complexity biomarkers: {e}")))?;
+    Ok(())
+}
+
 /// Build the centrality temp table from Fisher-significant coupling pairs.
 /// Each path appears once with `centrality = count of pairs that include it`.
 fn materialize_centrality(db: &FactsDb, opts: &Options) -> Result<()> {
@@ -202,6 +264,7 @@ pub fn run_code_health(db: &FactsDb, opts: &Options) -> Result<Vec<CodeHealthRow
     // canonical centrality entries (otherwise renamed files lose their
     // centrality term silently).
     materialize_centrality(db, opts)?;
+    materialize_biomarkers(db)?;
 
     // Unified dispatch honours both --time-bucket and --use-canonical-lineage.
     crate::analyses::lineage::materialize_source(db, opts)?;

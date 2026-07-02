@@ -116,6 +116,36 @@ fn code_health_reports_band_and_percentile() {
     }
 }
 
+#[test]
+fn biomarkers_flag_complex_functions() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let repo = codelore_lib::repo::GixRepo::open(tiny.dir.path()).expect("open");
+    let db = codelore_lib::facts::FactsDb::new_in_memory().expect("db");
+    let opts = codelore_lib::Options {
+        repo_path: tiny.dir.path().to_path_buf(),
+        min_revs: 1,
+        ..codelore_lib::Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    // Running code-health materializes the biomarker table as a side effect.
+    let _ = codelore_lib::analyses::code_health::run_code_health(&db, &opts).expect("run");
+
+    let count: i64 = db
+        .query_row("SELECT COUNT(*) FROM code_health_biomarkers_v1", [], |r| r.get(0))
+        .expect("query biomarkers");
+    assert!(count >= 1, "tiny_repo should produce >=1 biomarker row");
+
+    // intensities are valid probabilities
+    let bad: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM code_health_biomarkers_v1 WHERE intensity < 0.0 OR intensity > 1.0",
+            [], |r| r.get(0),
+        )
+        .expect("query range");
+    assert_eq!(bad, 0, "all intensities must be in [0,1]");
+}
+
 /// `--rows N` MUST NOT change the score computed for a path that survives
 /// the truncation. The bug it regression-protects: `materialize_centrality`
 /// used to pass the parent `opts` (with `rows_limit = N`) straight into
