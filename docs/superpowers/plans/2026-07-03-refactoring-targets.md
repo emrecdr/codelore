@@ -484,21 +484,12 @@ pub fn write_refactoring_targets_markdown<W: std::io::Write>(
 }
 ```
 
-- [ ] **Step 5: Add the dispatcher (mirror `dispatch_stale_code` at main.rs ~2095)**
+- [ ] **Step 5: Widen the existing dispatcher to add csv/markdown**
 
-In `crates/codelore-cli/src/main.rs`, add the function (place near the other `dispatch_*` fns) — verify current helper names by reading `dispatch_stale_code` and `dispatch_code_health` first (they show the exact `output::*` paths and `unsupported_format` signature):
+NOTE: Task 1 already added the `AnalysisName::RefactoringTargets` match arm and a MINIMAL `dispatch_refactoring_targets` fn supporting only `json|ndjson|html` (serde-auto) — because adding the enum variant made the CLI's exhaustive `match` non-exhaustive, so the arm had to exist for the workspace to compile. This step WIDENS that existing fn: add the `"csv"` and `"markdown"` arms and update the fallback string. Do NOT create a second fn or a second match arm.
 
+Edit the existing `dispatch_refactoring_targets` so its `match format` reads:
 ```rust
-fn dispatch_refactoring_targets(
-    db: &FactsDb,
-    opts: &Options,
-    format: &str,
-    ctx: &EmitCtx,
-    out: &mut Box<dyn Write>,
-) -> Result<()> {
-    let rows =
-        codelore_lib::analyses::refactoring_targets::run_refactoring_targets(db, opts)
-            .context("run refactoring-targets")?;
     match format {
         "csv" => codelore_lib::output::csv::write_refactoring_targets_csv(&rows, out)
             .context("write csv")?,
@@ -518,15 +509,6 @@ fn dispatch_refactoring_targets(
             ));
         }
     }
-    Ok(())
-}
-```
-
-Add the match arm near the others (~`:920`):
-```rust
-            AnalysisName::RefactoringTargets => {
-                dispatch_refactoring_targets(&db, &opts, format, &ctx, &mut out)?
-            }
 ```
 
 - [ ] **Step 6: Run the CSV test + build the CLI**
