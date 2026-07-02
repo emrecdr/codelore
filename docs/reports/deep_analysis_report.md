@@ -297,6 +297,15 @@ Overall hygiene is strong: `thiserror 2`, `toml 1`, `ureq 3`, `anyhow`/`serde`/`
 *   **Severity**: LOW · **Category**: dependency currency (routine) · **Status**: **Fixed (merged via #74)**
 *   **Outcome (2026-07-02)**: bumped `gix 0.84 → 0.85` (latest, published 2026-06-22) with `provenance::GIX_VERSION` + banner refs. API-compatible — the two-backend differential harness (`differential_repo_test.rs`) passed unchanged, so `GixRepo` still matches the `git`-CLI oracle. Consolidated Dependabot #68 (whose only failure was the drift guard) into #74; full CI matrix green. Related closed dep PRs: #69 (arrow 58→59 — deferred, would desync from duckdb's pinned arrow 58), #70 (duckdb group — superseded by F229).
 
+### 4.3 Code-health composite score — design observation (2026-07-02)
+
+#### F232 — Coupling centrality counted twice in the composite code-health score
+
+*   **Location**: `analyses/code_health.rs` — `SHOTGUN_INSERT` (reads `coupling_centrality_v1`, writes `shotgun-surgery` biomarker) + `normalized` CTE `n_cp` term (also reads `coupling_centrality_v1` directly)
+*   **Severity**: LOW · **Category**: scoring design / weight calibration · **Status**: Active
+*   **State on main**: `coupling_centrality_v1` (the per-file count of Fisher-significant coupling partners) feeds the composite score via two independent paths simultaneously: (1) the `shotgun-surgery` biomarker written by `SHOTGUN_INSERT` (`intensity = PERCENT_RANK(ORDER BY centrality)`) which flows into `structural_risk` (weight 0.40 via `w_sr`); and (2) directly as `n_cp = normalize(centrality)` (weight 0.20 via `w_cp`). A file with high coupling centrality therefore receives a penalty through both paths at the same time — a double-count of the same underlying signal in the current weight assignments. This is a known characteristic of the initial weight constants, not a code defect; the weights were always intended to be validated against real fixtures before being treated as final.
+*   **Recommended action**: Validate biomarker/behavioral orthogonality on a representative fixture (e.g. the `tiny_repo` integration fixture extended with a coupling-heavy file) before the 0.40 (`w_sr`) / 0.20 (`w_cp`) constants are treated as final. If the shotgun-surgery biomarker contribution is the intended mechanism for penalizing high-centrality files, `n_cp` may need to weight a decoupled signal or the weights recalibrated to reflect the shared lineage intentionally. See the design specification's composite-weight orthogonality section for the governing decision criteria.
+
 ---
 
 ## 5. Next Audit Cycle
@@ -314,4 +323,4 @@ Overall hygiene is strong: `thiserror 2`, `toml 1`, `ureq 3`, `anyhow`/`serde`/`
 2. **Output-emitter cluster** (F119 / F148 / F161) — csv-crate migration (preserve the F170 injection guard + `\n` endings), `TabularEmit` dedup, `EmitterStream` streaming, in one coordinated byte-identical pass.
 3. **`Plan N` marker sweep** (F231) — 62-site scripted comment cleanup (a hard-rule violation).
 
-The next sweep should re-open with F-IDs starting at **F232**.
+The next sweep should re-open with F-IDs starting at **F233**.
