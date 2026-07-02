@@ -1,20 +1,22 @@
-//! Code Health composite analysis per spec §4.6.
+//! Code Health composite analysis.
 //!
 //! ```text
 //! codehealth(entity) = 100 × (1
-//!     - w_cx · normalize(cognitive_complexity)
+//!     - w_sr · structural_risk(biomarkers)
 //!     - w_cn · normalize(churn_rate)
 //!     - w_au · normalize(author_fragmentation_FV)
 //!     - w_cp · normalize(coupling_centrality_SoC)
 //! )
 //!
-//! defaults: w_cx = 0.40, w_cn = 0.25, w_au = 0.15, w_cp = 0.20
+//! defaults: w_sr = 0.40, w_cn = 0.25, w_au = 0.15, w_cp = 0.20
 //! ```
 //!
-//! All 4 inputs are wired. Coupling centrality uses the Fisher-significant
-//! pairs from `coupling::run_coupling` (the same gate used in the standalone
-//! `coupling` analysis). Normalization uses the in-repo maximum as the
-//! empirical upper bound (min-max). Score range: [0, 100]; higher = healthier.
+//! `structural_risk` is a probabilistic-OR aggregate over the per-file biomarker
+//! table (complex-method, large-method, shotgun-surgery, god-class, dry).
+//! Each biomarker carries an intensity ∈ [0,1]; the co-occurrence multiplier
+//! amplifies risk when multiple distinct smell types co-occur in the same file.
+//! Coupling centrality uses the Fisher-significant pairs from
+//! `coupling::run_coupling`. Score range: [0, 100]; higher = healthier.
 //!
 //! Research basis: see `docs/research-foundations.md` entry
 //! "code-health" (composite signal developed in `CodeLore`; underlying
@@ -80,6 +82,20 @@ const SQL: &str = "
             ON ar.path = t.path
         GROUP BY ar.path
     ),
+    -- Probabilistic-OR aggregate of per-file biomarkers. Uses LN/EXP to
+    -- avoid floating-point underflow across many low-intensity rows.
+    -- Co-occurrence multiplier amplifies risk when multiple distinct smell
+    -- types appear in the same file.
+    file_structural AS (
+        SELECT
+            path,
+            LEAST(1.0,
+                (1.0 - EXP(SUM(LN(GREATEST(1e-9, 1.0 - intensity)))))
+                * (1.0 + 0.25 * (COUNT(DISTINCT smell) - 1))
+            ) AS structural_risk
+        FROM code_health_biomarkers_v1
+        GROUP BY path
+    ),
     -- coupling_centrality_v1 is a TEMPORARY TABLE populated from
     -- coupling::run_coupling output (Fisher-filtered pairs) before this
     -- SQL runs. Centrality = count of Fisher-significant partners.
@@ -89,12 +105,14 @@ const SQL: &str = "
             fc.cognitive,
             COALESCE(fch.churn, 0) AS churn,
             COALESCE(ffv.fv, 0.0) AS fv,
-            COALESCE(fcp.centrality, 0) AS centrality
+            COALESCE(fcp.centrality, 0) AS centrality,
+            COALESCE(fs.structural_risk, 0.0) AS structural_risk
         FROM file_cognitive fc
         INNER JOIN file_revs fr ON fc.path = fr.path
         LEFT JOIN file_churn fch ON fc.path = fch.path
         LEFT JOIN file_fv ffv ON fc.path = ffv.path
         LEFT JOIN coupling_centrality_v1 fcp ON fc.path = fcp.path
+        LEFT JOIN file_structural fs ON fc.path = fs.path
     ),
     normalized AS (
         SELECT
@@ -103,7 +121,7 @@ const SQL: &str = "
             churn,
             fv,
             centrality,
-            CASE WHEN MAX(cognitive) OVER () > 0 THEN cognitive / MAX(cognitive) OVER () ELSE 0 END AS n_cx,
+            structural_risk,
             CASE WHEN MAX(churn) OVER () > 0 THEN churn::DOUBLE / MAX(churn) OVER () ELSE 0 END AS n_cn,
             fv AS n_au,
             CASE WHEN MAX(centrality) OVER () > 0 THEN centrality::DOUBLE / MAX(centrality) OVER () ELSE 0 END AS n_cp
@@ -113,9 +131,9 @@ const SQL: &str = "
         SELECT
             path,
             cognitive,
-            n_cx AS structural_risk,
+            structural_risk,
             GREATEST(0.0, LEAST(100.0,
-                100.0 * (1.0 - 0.40 * n_cx - 0.25 * n_cn - 0.15 * n_au - 0.20 * n_cp)
+                100.0 * (1.0 - 0.40 * structural_risk - 0.25 * n_cn - 0.15 * n_au - 0.20 * n_cp)
             )) AS score,
             CASE lower(split_part(path, '.', -1))
                 WHEN 'rs' THEN 'rust'

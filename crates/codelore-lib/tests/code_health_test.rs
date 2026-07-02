@@ -192,6 +192,35 @@ fn god_class_and_dry_are_biomarkers() {
     assert!(distinct >= 1);
 }
 
+#[test]
+fn structural_risk_rewards_multiple_cooccurring_smells() {
+    // A file flagged by more distinct smells must not score healthier than a
+    // file flagged by fewer, all else equal. Assert the monotonic invariant via
+    // the exposed structural_risk, not an exact value.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let repo = codelore_lib::repo::GixRepo::open(tiny.dir.path()).expect("open");
+    let db = codelore_lib::facts::FactsDb::new_in_memory().expect("db");
+    let opts = codelore_lib::Options {
+        repo_path: tiny.dir.path().to_path_buf(),
+        min_revs: 1,
+        ..codelore_lib::Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+    let rows = codelore_lib::analyses::code_health::run_code_health(&db, &opts).expect("run");
+    for r in &rows {
+        assert!((0.0..=1.0).contains(&r.structural_risk), "risk in [0,1]: {}", r.structural_risk);
+    }
+    // Higher structural_risk must never correspond to a higher (healthier) score.
+    let mut sorted = rows.clone();
+    sorted.sort_by(|a, b| a.structural_risk.partial_cmp(&b.structural_risk).unwrap());
+    for w in sorted.windows(2) {
+        if (w[0].structural_risk - w[1].structural_risk).abs() > 1e-9 {
+            assert!(w[0].score >= w[1].score - 1e-6,
+                "riskier file must not score healthier");
+        }
+    }
+}
+
 /// `--rows N` MUST NOT change the score computed for a path that survives
 /// the truncation. The bug it regression-protects: `materialize_centrality`
 /// used to pass the parent `opts` (with `rows_limit = N`) straight into
