@@ -9,7 +9,7 @@ use serde::Serialize;
 /// in JSON sidecars and the pre-flight banner header. Kept in sync with the
 /// `gix` dep in workspace `Cargo.toml` via `tests/dep_versions_drift_test.rs`,
 /// which fails CI if these constants and `Cargo.lock` drift apart.
-pub const GIX_VERSION: &str = "0.84.0";
+pub const GIX_VERSION: &str = "0.85.0";
 /// Pinned `DuckDB` version — same drift guard applies.
 pub const DUCKDB_VERSION: &str = "1.10504.0";
 
