@@ -136,7 +136,12 @@ pub fn run_refactoring_targets(db: &FactsDb, opts: &Options) -> Result<Vec<Refac
     // ManualUp baseline: rank by ascending size (smallest first). Computed over
     // the full set so the rank is stable regardless of the priority truncation.
     let mut by_size: Vec<usize> = (0..rows.len()).collect();
-    by_size.sort_by(|&i, &j| rows[i].loc.cmp(&rows[j].loc).then_with(|| rows[i].path.cmp(&rows[j].path)));
+    by_size.sort_by(|&i, &j| {
+        rows[i]
+            .loc
+            .cmp(&rows[j].loc)
+            .then_with(|| rows[i].path.cmp(&rows[j].path))
+    });
     for (rank, &idx) in by_size.iter().enumerate() {
         rows[idx].manual_up_rank = u32::try_from(rank + 1).unwrap_or(u32::MAX);
     }

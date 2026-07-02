@@ -266,6 +266,12 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
             "See analyses/code_health.rs.",
         ),
         (
+            "refactoring-targets",
+            "effort-aware refactoring priority: (code-health structural_risk × hotspot_score) ÷ inspection effort, with a ManualUp baseline (Popt / PofB20 framing)",
+            "priority = (structural_risk × hotspot_score) / max(loc, 25). Ranked DESC. `manual_up_rank` ranks the same files by ascending LOC (the \"inspect the small dense files first\" baseline the composite is meant to beat); `dominant_type` is the file's highest-intensity biomarker.",
+            "See analyses/refactoring_targets.rs.",
+        ),
+        (
             "mi",
             "Coleman 1994 + SEI 1997",
             "171 − 5.2·log₂(V) − 0.23·CC − 16.2·log₂(SLOC) + 50·sin(√(2.4·comments%)). file-level `kind='unit'` entry.",
@@ -2297,10 +2303,8 @@ fn dispatch_refactoring_targets(
             codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
         }
         "markdown" => {
-            codelore_lib::cli_api::output::markdown::write_refactoring_targets_markdown(
-                &rows, out,
-            )
-            .context("write markdown")?;
+            codelore_lib::cli_api::output::markdown::write_refactoring_targets_markdown(&rows, out)
+                .context("write markdown")?;
         }
         "ndjson" => {
             codelore_lib::cli_api::output::ndjson::write_ndjson(&rows, out)

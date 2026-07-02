@@ -4,7 +4,11 @@ use codelore_lib::facts::FactsDb;
 use codelore_lib::repo::GixRepo;
 
 fn opts_for(dir: &std::path::Path) -> Options {
-    Options { repo_path: dir.to_path_buf(), min_revs: 1, ..Options::default() }
+    Options {
+        repo_path: dir.to_path_buf(),
+        min_revs: 1,
+        ..Options::default()
+    }
 }
 
 #[test]
@@ -19,12 +23,19 @@ fn refactoring_targets_ranks_by_priority_desc() {
     assert!(!rows.is_empty(), "tiny_repo should yield >=1 target");
     for r in &rows {
         assert!(r.priority >= 0.0, "priority non-negative: {}", r.priority);
-        assert!((0.0..=1.0).contains(&r.structural_risk), "risk in [0,1]: {}", r.structural_risk);
+        assert!(
+            (0.0..=1.0).contains(&r.structural_risk),
+            "risk in [0,1]: {}",
+            r.structural_risk
+        );
         assert!(r.loc >= 1, "loc floored >=1: {}", r.loc);
     }
     // Sorted by priority DESC.
     for w in rows.windows(2) {
-        assert!(w[0].priority >= w[1].priority - 1e-9, "must be sorted by priority DESC");
+        assert!(
+            w[0].priority >= w[1].priority - 1e-9,
+            "must be sorted by priority DESC"
+        );
     }
 }
 
@@ -40,21 +51,40 @@ fn refactoring_targets_annotate_type_and_manualup() {
     assert!(!rows.is_empty());
 
     let known = [
-        "complex-method", "large-method", "god-class", "dry", "shotgun-surgery", "none",
+        "complex-method",
+        "large-method",
+        "god-class",
+        "dry",
+        "shotgun-surgery",
+        "none",
     ];
     for r in &rows {
-        assert!(known.contains(&r.dominant_type.as_str()), "unknown type: {}", r.dominant_type);
-        assert!(r.manual_up_rank >= 1, "manual_up_rank is 1-based: {}", r.manual_up_rank);
+        assert!(
+            known.contains(&r.dominant_type.as_str()),
+            "unknown type: {}",
+            r.dominant_type
+        );
+        assert!(
+            r.manual_up_rank >= 1,
+            "manual_up_rank is 1-based: {}",
+            r.manual_up_rank
+        );
     }
     // manual_up_rank is a permutation of 1..=n.
     let mut ranks: Vec<u32> = rows.iter().map(|r| r.manual_up_rank).collect();
     ranks.sort_unstable();
     let expected: Vec<u32> = (1..=u32::try_from(rows.len()).unwrap()).collect();
-    assert_eq!(ranks, expected, "manual_up_rank must be a permutation of 1..=n");
+    assert_eq!(
+        ranks, expected,
+        "manual_up_rank must be a permutation of 1..=n"
+    );
 
     // ManualUp = ascending size. The smallest-loc row must have rank 1.
     let min_loc_row = rows.iter().min_by_key(|r| r.loc).unwrap();
-    assert_eq!(min_loc_row.manual_up_rank, 1, "smallest file is ManualUp rank 1");
+    assert_eq!(
+        min_loc_row.manual_up_rank, 1,
+        "smallest file is ManualUp rank 1"
+    );
 }
 
 #[test]
@@ -70,6 +100,9 @@ fn refactoring_targets_csv_has_header_and_rows() {
     codelore_lib::output::csv::write_refactoring_targets_csv(&rows, &mut buf).expect("csv");
     let out = String::from_utf8(buf).expect("utf8");
     let header = out.lines().next().unwrap();
-    assert_eq!(header, "entity,priority,combined_risk,structural_risk,hotspot_score,revisions,loc,dominant_type,band,manual_up_rank");
+    assert_eq!(
+        header,
+        "entity,priority,combined_risk,structural_risk,hotspot_score,revisions,loc,dominant_type,band,manual_up_rank"
+    );
     assert!(out.lines().count() >= 2, "header + >=1 data row");
 }
