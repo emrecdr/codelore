@@ -213,6 +213,7 @@ const BIOMARKERS_INSERT: &str = "
             END AS lang
         FROM complexity_metrics
         WHERE cyclomatic IS NOT NULL
+            AND loc IS NOT NULL
     ),
     ranked AS (
         SELECT
@@ -251,13 +252,16 @@ fn materialize_biomarkers(db: &FactsDb, opts: &Options) -> Result<()> {
         .map_err(|e| CodeLoreError::Analysis(format!("insert shotgun-surgery biomarkers: {e}")))?;
 
     // God Class: reuse the existing analysis; intensity = normalized god_score.
-    let gods = crate::analyses::god_classes::run_god_classes(db, opts)?;
+    // `--rows N` MUST NOT propagate here — the biomarker set needs ALL god
+    // classes, not the user's output truncation. A truncated set drifts a
+    // surviving file's normalized intensity and breaks the score invariant.
+    let gods = crate::analyses::god_classes::run_god_classes(db, &opts.with_no_row_limit())?;
     let max_god = gods.iter().map(|g| g.god_score).fold(0.0_f64, f64::max);
 
     // DRY: reuse clone detection (walks HEAD worktree); intensity = normalized
     // count of cloned functions per file.
     let clones = crate::analyses::clones::run_clones(opts)?;
-    let mut dry_counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    let mut dry_counts: std::collections::HashMap<String, u32> = HashMap::new();
     for c in &clones {
         *dry_counts.entry(c.entity.clone()).or_insert(0) += 1;
     }
