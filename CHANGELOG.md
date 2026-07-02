@@ -19,6 +19,11 @@ Conventional Commits format. All notable changes documented here.
 
 - **Determinism + performance hardening across the engine.** Time-bucketed and `--group-file` ingest now use deterministic aggregates (replacing `ANY_VALUE`); the structural import graph and `cycle-origins` historical graphs are memoised so the architecture analyses and SPA build reuse a single build instead of rebuilding per analysis; `--group-file` mapping bulk-loads through the DuckDB appender; and hot-loop allocations were removed from bot detection and clone-coupling. Dashboard SQL functions gained tracing spans and integration-test coverage. All output-affecting changes are byte-identical or determinism-only.
 - **Dropped the vendored `libduckdb-sys` fork.** The MSVC 19.40 build fix (duckdb-rs#786) shipped upstream in `libduckdb-sys 1.10504.0`, so `duckdb` is now pinned to `=1.10504.0` from crates.io and the whole vendoring apparatus is gone — the `[patch.crates-io]` block, `vendor/duckdb-rs/`, `scripts/vendor-duckdb-rs.sh`, the `patches/` file, the `.gitignore` stub-path handling, and the "Vendor patched libduckdb-sys" step in all CI/release/container/bench workflows. Fresh checkouts build with a plain `cargo build`; no pre-build vendor step.
+- **Dependency currency.** Bumped `gix 0.84 → 0.85` (differential backend tests pass unchanged), plus routine patch/minor bumps (`clap_complete`, `regex`, `time`, `ignore`, `insta`, `headless_chrome`) and pinned GitHub-Action SHAs.
+
+### CI
+
+- **Dependabot auto-merge for patch/minor bumps.** A new `dependabot-auto-merge.yml` workflow enables GitHub auto-merge (squash) for Dependabot patch + minor updates once all required checks pass, so routine dependency PRs stop piling up. Major bumps are intentionally excluded — they can carry breaking API changes and still open as normal PRs for review.
 
 ## [0.12.0] - 2026-06-29
 

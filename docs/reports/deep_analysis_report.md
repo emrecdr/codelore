@@ -3,7 +3,7 @@
 Read-only audit log. Findings are immutable F-IDs; the status field tracks state.
 Shipped/fixed findings are condensed to a one-line closure row once validated against `main` (full history in `CHANGELOG.md` + git); refuted findings stay documented to prevent rediscovery.
 
-**Last validation + discovery pass: 2026-07-01** (against `main` HEAD `64fa242`). Every previously-tracked finding was re-verified against current source by a read-only fan-out; a fresh 5-dimension discovery pass added **F200–F230**. No code was changed — this report is the only artifact.
+**Last pass: 2026-07-02.** The 2026-07-01 validation + 5-dimension discovery pass added **F200–F230**; the 2026-07-02 implementation pass landed 28 of them on `main` (PRs #71, #74) and refuted F188/F202. See §3 "Implemented" tables + §5 for the current disposition.
 
 ---
 
@@ -200,7 +200,7 @@ Deep validation of the deferred backlog: one clean win shipped, two findings ref
 | F200 | `commit_metadata` stub divergence + vacuous differential test | **Fixed** — deleted the unused `commit_metadata` trait method (both backends) + the `CommitMetadata` type + the vacuous `commit_metadata_match` test + two other dead references. **Kept** `changed_files`/`diff_hunks` (their differential tests are *real* cross-checks, not vacuous). Narrower than "delete all three oracle-only methods" — only `commit_metadata` was both divergent (gix stub vs cli-real) and vacuously tested. Gate green: fmt + clippy `--all-features -D warnings` + test (75 binaries) + deny. |
 | F188 | `cut-release.sh` ruleset body omits spa-browser/dogfood | **Refuted** — the omission is *intentional + documented*. `cut-release.sh:230-232` explicitly names spa-browser/dogfood as known-excluded; `dogfood` is `continue-on-error` (correctly not a required gate); and a live-vs-hardcoded drift-detector (`:250`) guards against divergence. Adding spa-browser would be a *policy* change (make it gate release tags), not a bug fix — the maintainer's call. |
 | F202 | Fan-in/out computed three inconsistent ways | **Refuted (mostly)** — god-classes fan_out *intentionally* counts external (npm/pypi/std) imports (documented as "total dependency breadth"), while crossing/instability measure *internal* coupling. That divergence is by design. The only genuine gap is crossing-vs-instability self-loop handling (a rare re-export edge case) — low value, output-changing, needs a semantics decision. Not the broad "three different numbers" defect the finding implied. |
-| F229 | Vendored `libduckdb-sys` fork (duckdb-rs#786) | **Implemented (macOS gate green; Windows CI pending on push)** — bumped `duckdb → =1.10504.0` (upstream #786 fix; the released `build.rs:66` emits `rustc-link-lib=dylib=rstrtmgr`) and removed the whole vendoring apparatus: the `[patch.crates-io]` block, `vendor/duckdb-rs/` + tracked stubs, `scripts/vendor-duckdb-rs.sh`, `patches/duckdb-rs-msvc-1940.patch`, the `.gitignore` stub-path handling, and the "Vendor patched libduckdb-sys" step at all 9 sites across ci/release/container/bench. No arrow-version conflict; a version-drift guard caught + forced `provenance::DUCKDB_VERSION` + banner test refs to `1.10504.0`. macOS gate green (fmt + clippy `--all-features -D warnings` + test 75 binaries + deny). **`test (windows-latest)` is the one thing not verifiable locally — the final gate on push.** |
+| F229 | Vendored `libduckdb-sys` fork (duckdb-rs#786) | **Fixed (merged to main via #71 — full CI matrix green incl. `test (windows-latest)`)** — bumped `duckdb → =1.10504.0` (upstream #786 fix; the released `build.rs:66` emits `rustc-link-lib=dylib=rstrtmgr`) and removed the whole vendoring apparatus: the `[patch.crates-io]` block, `vendor/duckdb-rs/` + tracked stubs, `scripts/vendor-duckdb-rs.sh`, `patches/duckdb-rs-msvc-1940.patch`, the `.gitignore` stub-path handling, and the "Vendor patched libduckdb-sys" step at all 9 sites across ci/release/container/bench. No arrow-version conflict; a version-drift guard caught + forced `provenance::DUCKDB_VERSION` + banner test refs to `1.10504.0`. The MSVC build (the whole reason the fork existed) is confirmed green on the Windows runner. |
 
 ### Refuted findings (preserved to prevent rediscovery)
 
@@ -292,20 +292,19 @@ The 5-dimension fan-out logged F200–F230; 25 landed in the 2026-07-01 pass and
 
 Overall hygiene is strong: `thiserror 2`, `toml 1`, `ureq 3`, `anyhow`/`serde`/`clap`/`rayon`/`time`/`percent-encoding` all current. `tree-sitter*` + `petgraph` are deliberately pinned (CLAUDE.md) — out of scope. Two items worth active tracking:
 
-##### F230 — `gix` bump (mostly refuted — already near-current)
-*   **Location**: `crates/codelore-lib/Cargo.toml` (`gix = "0.84"`, resolved 0.84.0)
-*   **Severity**: LOW · **Category**: dependency currency (routine) · **Status**: Near-current (mostly refuted)
-*   **Validation (2026-07-02)**: latest `gix` is **0.85.0** (published 2026-06-22); the project is on **0.84.0** — exactly *one* minor behind, ~1 week old. The earlier "few minors behind" premise is refuted. Near-zero urgency.
-*   **Suggested improvement**: A routine `0.84 → 0.85` bump whenever convenient; the two-backend differential harness (`differential_repo_test.rs`) de-risks it — a `GixRepo`-vs-`git`-CLI divergence fails the gate immediately. Move `arrow` only in lockstep with `duckdb`.
+##### F230 — `gix` 0.84 → 0.85 bump
+*   **Location**: `crates/codelore-lib/Cargo.toml`
+*   **Severity**: LOW · **Category**: dependency currency (routine) · **Status**: **Fixed (merged via #74)**
+*   **Outcome (2026-07-02)**: bumped `gix 0.84 → 0.85` (latest, published 2026-06-22) with `provenance::GIX_VERSION` + banner refs. API-compatible — the two-backend differential harness (`differential_repo_test.rs`) passed unchanged, so `GixRepo` still matches the `git`-CLI oracle. Consolidated Dependabot #68 (whose only failure was the drift guard) into #74; full CI matrix green. Related closed dep PRs: #69 (arrow 58→59 — deferred, would desync from duckdb's pinned arrow 58), #70 (duckdb group — superseded by F229).
 
 ---
 
 ## 5. Next Audit Cycle
 
-**State after the 2026-07-01 + 2026-07-02 implementation sessions (branch `fix/deep-audit-batch`):**
+**State after the 2026-07-01 + 2026-07-02 implementation sessions (all merged to `main`):**
 
-- **Implemented + gated green (27)**: 2026-07-01 (25) — F191, F201, F203, F204, F205, F207–F214, F216, F217, F219–F228; 2026-07-02 (2) — **F200** (deleted the divergent+vacuous `commit_metadata` + `CommitMetadata`, kept the real `changed_files`/`diff_hunks` cross-checks) and **F229** (dropped the vendored `libduckdb-sys` fork; `duckdb → =1.10504.0` — **Windows CI pending on push**). Each pass gated green on macOS: fmt, clippy `--all-targets --all-features -D warnings`, `test --features test-support,spa` (75 binaries / 0 failures), `cargo deny`.
-- **Refuted on validation (2026-07-02)**: F188 (ruleset omission is intentional + drift-guarded), F202 (fan-out divergence is mostly by design — god-classes externals vs internal coupling), F230 (already one minor behind, not "a few").
+- **Implemented + merged (28)**: 2026-07-01 (25) — F191, F201, F203, F204, F205, F207–F214, F216, F217, F219–F228 (PR #71); 2026-07-02 (3) — **F200** (deleted the divergent+vacuous `commit_metadata` + `CommitMetadata`, kept the real `changed_files`/`diff_hunks` cross-checks; #71), **F229** (dropped the vendored `libduckdb-sys` fork; `duckdb → =1.10504.0`; #71), **F230** (`gix 0.84 → 0.85`; #74). Full CI matrix green on every merge, including `test (windows-latest)`.
+- **Refuted on validation (2026-07-02)**: F188 (ruleset omission is intentional + drift-guarded), F202 (fan-out divergence is mostly by design — god-classes externals vs internal coupling).
 - **Deferred — large refactor / focused pass**: F206 (HEAD-scan I/O restructure — wants a benchmark), F215 (`enum Format`), F218 (render-cascade split), F231 (62-site `Plan N` scripted sweep).
 - **Carried-forward Active (output/blob cluster)**: F119 (csv-crate), F148 (`TabularEmit` dedup), F161 (`EmitterStream`), F173 (HEAD blob dedup) — byte-identical-critical (F206 is the deeper lever for F173).
 - **Carried-forward Partial / design**: F177 (schema sentinels), F186 (bench PR gate — design), F197 (dogfood advisory/separate-cache).
