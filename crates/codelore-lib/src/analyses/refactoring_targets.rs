@@ -8,6 +8,13 @@
 //! composite (which also materialises the per-file biomarker table) and the
 //! `hotspots` activity signal; joins them per file.
 //!
+//! **Join semantic**: results contain only files present in *both* the
+//! code-health output (files with parseable complexity surviving `min_revs`)
+//! and the hotspots output; because the code-health file set is a strict
+//! subset of the hotspots file set, code-health is the binding constraint —
+//! a churning file with no parseable complexity (unsupported, vendored, or
+//! skipped by the tree-sitter walker) will not appear in the output.
+//!
 //! Research basis: effort-aware defect ranking (risk per unit inspection
 //! effort; Popt / `PofB20`) with an EA-Z-style size floor to avoid tiny-file
 //! ranking artifacts.
