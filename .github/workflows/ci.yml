@@ -48,13 +48,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.96.0
         with:
           components: rustfmt
-      # Vendor + patch libduckdb-sys per duckdb-rs#786 (MSVC 19.40 fix).
-      # Required even for fmt because Cargo.toml's [patch.crates-io]
-      # entry points at vendor/duckdb-rs/ unconditionally; cargo's
-      # manifest validation reads the patch path. Idempotent; the
-      # script no-ops if vendor/ is already at the right rev.
-      - name: Vendor patched libduckdb-sys (duckdb-rs#786)
-        run: bash scripts/vendor-duckdb-rs.sh
       - run: cargo fmt --all --check
 
   clippy:
@@ -70,8 +63,6 @@ jobs:
           components: clippy
       - uses: mozilla-actions/sccache-action@v0.0.10
       - uses: Swatinem/rust-cache@v2
-      - name: Vendor patched libduckdb-sys (duckdb-rs#786)
-        run: bash scripts/vendor-duckdb-rs.sh
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: sccache stats
         if: always()
@@ -102,9 +93,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.96.0
       - uses: mozilla-actions/sccache-action@v0.0.10
       - uses: Swatinem/rust-cache@v2
-      - name: Vendor patched libduckdb-sys (duckdb-rs#786)
-        shell: bash
-        run: bash scripts/vendor-duckdb-rs.sh
       # cargo-nextest: ~20-30% faster than `cargo test` on this workspace
       # (smarter parallelism, faster process spawning, better failure
       # aggregation). Doesn't run doc tests — those still need `cargo test
@@ -163,8 +151,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.96.0
       - uses: mozilla-actions/sccache-action@v0.0.10
       - uses: Swatinem/rust-cache@v2
-      - name: Vendor patched libduckdb-sys (duckdb-rs#786)
-        run: bash scripts/vendor-duckdb-rs.sh
       - name: Run SPA browser smoke test
         # `--features browser-tests,spa,test-support` opts into all three:
         # the harness feature itself, the SPA emitter, and the in-process
@@ -182,13 +168,6 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-      # cargo-deny-action runs `cargo metadata` inside a Docker container that
-      # mounts the host workspace. The workspace Cargo.toml's `[patch.crates-io]`
-      # block resolves to vendor/, which must exist on the host before the
-      # action fires, or `cargo metadata` errors with "failed to read
-      # vendor/duckdb-rs/.../Cargo.toml". Idempotent vendoring per duckdb-rs#786.
-      - name: Vendor patched libduckdb-sys (duckdb-rs#786)
-        run: bash scripts/vendor-duckdb-rs.sh
       - uses: EmbarkStudios/cargo-deny-action@v2
 
   dogfood:
@@ -229,8 +208,6 @@ jobs:
           # release dep objects are additionally reused cross-workflow via
           # sccache (release.yml builds --release with the same backend).
           shared-key: release-dogfood
-      - name: Vendor patched libduckdb-sys (duckdb-rs#786)
-        run: bash scripts/vendor-duckdb-rs.sh
       - name: Build release codelore
         run: cargo build --release -p codelore-cli --features spa
       - name: Analyze hotspots, code-health, knowledge-islands (GHA annotations)

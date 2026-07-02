@@ -179,7 +179,17 @@ impl FactsDb {
         // Runs last so the rewrite sees all change rows from every commit.
         if let Some(group_file) = opts.group_file.as_ref() {
             let group_map = super::groups::GroupMap::from_file(group_file, opts.strict_grouping)
-                .map_err(|e| CodeLoreError::Analysis(format!("--group-file: {e}")))?;
+                .map_err(|e| match e {
+                    // Read-side input failure (unreadable `--group-file`) →
+                    // exit 3; parse failures stay analysis errors (exit 4).
+                    super::groups::GroupParseError::Io(io) => {
+                        CodeLoreError::RepoIo(std::io::Error::new(
+                            io.kind(),
+                            format!("read group-file {}: {io}", group_file.display()),
+                        ))
+                    }
+                    other => CodeLoreError::Analysis(format!("--group-file: {other}")),
+                })?;
             apply_grouping(self, &group_map)?;
         }
 
@@ -213,7 +223,9 @@ fn current_head_rev(db: &FactsDb) -> Result<String> {
         .next()
         .map_err(|e| CodeLoreError::Analysis(format!("head rev row: {e}")))?
     {
-        Ok(row.get::<_, String>(0).unwrap_or_default())
+        Ok(row
+            .get::<_, String>(0)
+            .map_err(|e| CodeLoreError::Analysis(format!("head rev value: {e}")))?)
     } else {
         Ok(String::new())
     }

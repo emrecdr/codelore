@@ -623,6 +623,12 @@
         await yieldToMain();
       }
     }
+    // Widget render fns register their reset-zoom handlers lazily as they
+    // run in this async loop, so the DOMContentLoaded-time installer ran
+    // before those handlers existed (the arch-graph is late enough to miss
+    // it reliably). Re-run it now that every widget has rendered; it is
+    // idempotent — it skips panels already carrying a reset-zoom button.
+    installWidgetResetZoomButtons();
   })();
 
   // Expose the drawer-show callback so the hotspot-table row-click
@@ -1040,8 +1046,8 @@
         const isDeparted = partnerAuthor && departedSet.has(partnerAuthor);
         html += '<li' + (isDeparted ? ' class="drawer-partner-departed"' : '') + '>' +
           '<code>' + escapeHtml(other) + '</code>' +
-          ' — ' + fmtInt(p.shared_revs) + ' shared revs' +
-          (p.combined_score != null ? (' (score ' + fmtNumberFlex(p.combined_score, 2) + ')') : '') +
+          ' — ' + fmtInt(p.shared) + ' shared revs' +
+          (p.degree != null ? (' (' + fmtNumberFlex(p.degree, 1) + '% coupling)') : '') +
           (partnerAuthor ? ' <span class="drawer-author">' + escapeHtml(partnerAuthor) + '</span>' : '') +
           (isDeparted ? ' <span class="ki-knowledge-loss-badge">knowledge-loss</span>' : '') +
           '</li>';
@@ -1997,6 +2003,11 @@
       const ths = container.querySelectorAll('th');
       for (var j = 0; j < ths.length; j++) {
         ths[j].addEventListener('click', function (evt) {
+          // A click (or keyboard activation) on the metric-help "?" button,
+          // which lives inside the <th>, must not also sort the column.
+          if (evt.target.closest && evt.target.closest('.tooltip-trigger')) {
+            return;
+          }
           const key = evt.currentTarget.getAttribute('data-key');
           if (sortKey === key) {
             sortDir *= -1;
@@ -2013,6 +2024,17 @@
     async function renderNextPage(count) {
       const tbody = container.querySelector('#hotspot-tbody');
       if (!tbody) return;
+      // Filter matched nothing: show an inline message instead of a blank
+      // body (which reads as "the table broke"). The whole-dataset-empty
+      // case is handled by the earlier `No hotspot rows.` return, so an
+      // empty view here always means an active filter with no matches.
+      if (filteredView.length === 0) {
+        tbody.innerHTML = '<tr><td class="empty" colspan="99">No paths match “' +
+          escapeHtml(filterText) + '”.</td></tr>';
+        renderedRows = 0;
+        refreshActions();
+        return;
+      }
       // Chunk the rebuild — `Show all` historically called this with
       // `Infinity` and blocked the main thread for hundreds of ms on
       // large repos (one HTML string built, one insertAdjacentHTML
@@ -2228,8 +2250,9 @@
     if (typeof userSankeyDepth === 'number') {
       // Aggregate file-pair coupling to module-pair coupling at the
       // chosen depth. Self-pairs (s === t after collapse) and
-      // duplicate (s, t) edges are merged by summing `shared_revs`
-      // and taking the max `combined_score`.
+      // duplicate (s, t) edges are merged by summing the shared-revision
+      // count (`shared`) and taking the max coupling strength (`degree`,
+      // the co-change percentage). These are CouplingRow's actual fields.
       const aggregated = {};
       for (var i = 0; i < rows.length; i++) {
         const r = rows[i];
@@ -2241,14 +2264,14 @@
           aggregated[key] = {
             entity_a: a < b ? a : b,
             entity_b: a < b ? b : a,
-            shared_revs: 0,
-            combined_score: 0,
+            shared: 0,
+            degree: 0,
           };
         }
-        aggregated[key].shared_revs += (r.shared_revs || 1);
-        const score = (typeof r.combined_score === 'number') ? r.combined_score : 0;
-        if (score > aggregated[key].combined_score) {
-          aggregated[key].combined_score = score;
+        aggregated[key].shared += (r.shared || 0);
+        const strength = (typeof r.degree === 'number') ? r.degree : 0;
+        if (strength > aggregated[key].degree) {
+          aggregated[key].degree = strength;
         }
       }
       workingRows = Object.keys(aggregated).map(function (k) { return aggregated[k]; });
@@ -2258,8 +2281,8 @@
 
     const topRows = workingRows.slice()
       .sort(function (a, b) {
-        const ca = (typeof a.combined_score === 'number') ? a.combined_score : 0;
-        const cb = (typeof b.combined_score === 'number') ? b.combined_score : 0;
+        const ca = (typeof a.degree === 'number') ? a.degree : 0;
+        const cb = (typeof b.degree === 'number') ? b.degree : 0;
         return cb - ca;
       })
       .slice(0, TOP_N);
@@ -2273,7 +2296,7 @@
       return {
         source: r.entity_a,
         target: r.entity_b,
-        value: r.shared_revs || 1,
+        value: r.shared || 0,
       };
     });
     const nodes = Array.from(nodeNames).map(function (name) {
@@ -2381,9 +2404,23 @@
       if (parts.length <= 3) return p;
       return parts[0] + '/…/' + parts.slice(-2).join('/');
     }
-    const legendData = paths.map(function (p) { return shortPath(p); });
+    // Disambiguate collisions: two paths that share head + tail segments
+    // (e.g. `app/a/svc/main.py` and `app/b/svc/main.py`) abbreviate to the
+    // same label. ECharts merges same-named series + legend entries, so one
+    // legend toggle would flip several files and the tooltip's full-path
+    // line would show the wrong (last-colliding) path. On collision, fall
+    // back to the full path, which is always unique.
+    const shortByLong = {};
     const longByShort = {};
-    paths.forEach(function (p) { longByShort[shortPath(p)] = p; });
+    paths.forEach(function (p) {
+      let label = shortPath(p);
+      if (longByShort[label] !== undefined && longByShort[label] !== p) {
+        label = p;
+      }
+      shortByLong[p] = label;
+      longByShort[label] = p;
+    });
+    const legendData = paths.map(function (p) { return shortByLong[p]; });
 
     setChartAriaLabel(container,
       'Hotspot-score trend for ' + paths.length + ' files over ' +
@@ -2472,7 +2509,7 @@
         splitLine: { lineStyle: { color: getCssVar('--bg-elev-2') } },
       },
       series: series.map(function (s) {
-        return Object.assign({}, s, { name: shortPath(s.name) });
+        return Object.assign({}, s, { name: shortByLong[s.name] || shortPath(s.name) });
       }),
     });
     // Cross-widget selection sync: each series corresponds to one
@@ -3765,7 +3802,11 @@
       // GitHub contributions-graph idiom and stays clear of every
       // month label.
       visualMap: {
-        min: minVal,
+        // A degenerate range (every active day shares one commit count)
+        // collapses the piecewise bands and renders cells near-invisible.
+        // Anchor the low end at 0 so the single value still paints a
+        // visible top-band shade.
+        min: minVal === maxVal ? 0 : minVal,
         max: maxVal,
         type: 'piecewise',
         orient: 'vertical',

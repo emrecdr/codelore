@@ -76,8 +76,8 @@ pub trait Repo {
     fn diff_hunks(&self, rev: &str, path: &str) -> Result<Vec<Hunk>>;
     fn resolve_alias(&self, name: &str, email: &str) -> String;
     fn is_worktree_dirty(&self) -> bool;
-    fn commit_metadata(&self, rev: &str) -> Result<CommitMetadata>;
     fn head_sha(&self) -> Result<String>;
+    fn read_blob_at(&self, rev: &str, path: &str) -> Result<Option<Vec<u8>>>;
 }
 ```
 

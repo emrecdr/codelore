@@ -592,11 +592,20 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
 
     let complexity_sample = match args.complexity_sample.as_str() {
         "head" => codelore_lib::cli_api::options::ComplexitySample::Head,
-        "adaptive" | "full" => anyhow::bail!(
-            "Plan 4 walking skeleton only supports --complexity-sample head. \
-             adaptive and full land in Plan 5."
-        ),
-        other => anyhow::bail!("unknown complexity-sample value: {other:?}"),
+        "adaptive" | "full" => {
+            return Err(CodeLoreError::InvalidOptions(
+                "--complexity-sample currently supports only 'head'; \
+                 'adaptive' and 'full' are not yet available"
+                    .to_string(),
+            )
+            .into());
+        }
+        other => {
+            return Err(CodeLoreError::InvalidOptions(format!(
+                "unknown --complexity-sample value {other:?}; expected 'head'"
+            ))
+            .into());
+        }
     };
 
     let opts = Options {

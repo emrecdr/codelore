@@ -11,7 +11,7 @@ use serde::Serialize;
 /// which fails CI if these constants and `Cargo.lock` drift apart.
 pub const GIX_VERSION: &str = "0.84.0";
 /// Pinned `DuckDB` version — same drift guard applies.
-pub const DUCKDB_VERSION: &str = "1.10503.1";
+pub const DUCKDB_VERSION: &str = "1.10504.0";
 
 /// Explicit schema version for the provenance manifest format. Bumped
 /// whenever a field is renamed, removed, or its semantic meaning

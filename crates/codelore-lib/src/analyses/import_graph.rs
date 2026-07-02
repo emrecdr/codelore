@@ -14,6 +14,7 @@
 //! a plain `Vec`-based adjacency walk.
 
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use crate::Result;
 use crate::facts::FactsDb;
@@ -50,10 +51,18 @@ impl ImportGraph {
 /// deduped and self-loops dropped — neither affects reachability or
 /// SCC membership, and removing them keeps the adjacency tight.
 ///
+/// Memoised per [`FactsDb`]: the graph is a pure function of the immutable
+/// `imports` table, so the several architecture analyses that each call
+/// this in one process (SPA dashboard, `codelore check` arch-suite) share a
+/// single build through the returned `Rc` handle.
+///
 /// # Errors
 ///
 /// Returns [`crate::CodeLoreError::Analysis`] on `DuckDB` query errors.
-pub fn build_import_graph(db: &FactsDb) -> Result<ImportGraph> {
+pub fn build_import_graph(db: &FactsDb) -> Result<Rc<ImportGraph>> {
+    if let Some(graph) = db.import_graph_memo_get() {
+        return Ok(graph);
+    }
     let edges: Vec<(String, String)> = crate::analyses::query::query_map_collect(
         db,
         "SELECT src_path, target_path FROM imports WHERE target_path IS NOT NULL",
@@ -61,7 +70,9 @@ pub fn build_import_graph(db: &FactsDb) -> Result<ImportGraph> {
         "import-graph edges",
         |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
     )?;
-    Ok(build_import_graph_from_edges(&edges))
+    let graph = Rc::new(build_import_graph_from_edges(&edges));
+    db.import_graph_memo_put(Rc::clone(&graph));
+    Ok(graph)
 }
 
 /// Build the directed import graph from an in-memory `(src, target)`
@@ -85,8 +96,16 @@ pub fn build_import_graph_from_edges(edges: &[(String, String)]) -> ImportGraph 
         edge_set.insert((s, t));
     }
 
+    // Drain the dedup set into a sorted edge list before building the
+    // adjacency. `HashSet` iteration order is seeded per process, so a
+    // raw `for (s, t) in edge_set` gave the adjacency lists a run-to-run
+    // ordering. SCC / reachability are set-based so outputs stay
+    // invariant, but a stable adjacency keeps intermediate state diffable
+    // and avoids a latent trap for any future consumer that reads order.
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); id_to_path.len()];
-    for (s, t) in edge_set {
+    let mut sorted_edges: Vec<(usize, usize)> = edge_set.into_iter().collect();
+    sorted_edges.sort_unstable();
+    for (s, t) in sorted_edges {
         adj[s].push(t);
     }
 

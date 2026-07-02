@@ -314,7 +314,7 @@ mod tests {
         Banner {
             codelore_version: "0.1.2",
             gix_version: "0.84.0",
-            duckdb_version: "1.10503.1",
+            duckdb_version: "1.10504.0",
             repo_path: "/Users/emrec/Projects/greenfield-api".to_string(),
             branch: Some("feature/GFBUGS-132-tr2-licenses-modify-perm".to_string()),
             head_short: Some("a891295".to_string()),
@@ -333,7 +333,7 @@ mod tests {
         );
         for needle in [
             "codelore 0.1.2",
-            "gix 0.84.0 · duckdb 1.10503.1",
+            "gix 0.84.0 · duckdb 1.10504.0",
             "Repo:",
             "Branch:",
             "Analysis:",

@@ -3,7 +3,7 @@
 
 use codelore_lib::CommitEvent;
 use codelore_lib::Options;
-use codelore_lib::repo::{CommitMetadata, GixRepo, Repo};
+use codelore_lib::repo::{GixRepo, Repo};
 
 #[test]
 fn gix_repo_walks_self_repo() {
@@ -38,5 +38,4 @@ fn _trait_object_compiles<R: Repo>(r: &R) {
     let _: codelore_lib::Result<Vec<codelore_lib::FileChange>> = r.changed_files("abc");
     let _: codelore_lib::Result<Vec<codelore_lib::Hunk>> = r.diff_hunks("abc", "src/main.rs");
     let _: String = r.resolve_alias("Some Name", "a@b.com");
-    let _: codelore_lib::Result<CommitMetadata> = r.commit_metadata("abc");
 }

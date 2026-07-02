@@ -210,43 +210,6 @@ fn changed_files_match() {
     }
 }
 
-/// `commit_metadata` (signed / signoffs) must agree for the first 5 commits.
-///
-/// NOTE: GPG signing is not configured in the fixture, so both impls are
-/// expected to return `signed = false` and `signed_by = None`.  This test
-/// guards against future divergence while acknowledging that the assertions
-/// are trivially satisfied (both return zero values) in the unsigned fixture.
-#[test]
-fn commit_metadata_match() {
-    let (gix, cli) = open_both();
-    let opts = opts_with_merges();
-
-    let revs: Vec<String> = gix
-        .walk_commits(&opts)
-        .unwrap()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap()
-        .into_iter()
-        .take(5)
-        .map(|e| e.rev)
-        .collect();
-
-    for rev in &revs {
-        let gix_md = gix.commit_metadata(rev).unwrap();
-        let cli_md = cli.commit_metadata(rev).unwrap();
-
-        assert_eq!(gix_md.signed, cli_md.signed, "signed mismatch at {rev}");
-        assert_eq!(
-            gix_md.signed_by, cli_md.signed_by,
-            "signed_by mismatch at {rev}"
-        );
-        assert_eq!(
-            gix_md.signoffs, cli_md.signoffs,
-            "signoffs mismatch at {rev}"
-        );
-    }
-}
-
 /// The fixture must contain exactly one merge commit (two parents).
 #[test]
 fn fixture_contains_merge_commit() {
@@ -657,6 +620,42 @@ fn read_blob_at_matches_for_an_explicit_old_rev() {
         any_some,
         "no probe resolved at {old_rev} — test never exercised a real blob read",
     );
+}
+
+/// A directory path (any non-blob tree entry) must resolve to `Ok(None)`
+/// on BOTH backends — the trait contract (`repo/mod.rs`). `GixRepo`
+/// enforces it via `entry.mode().is_blob()`; `GitCliRepo` must reject
+/// non-blobs too (`git cat-file blob <rev>:<dir>` errors), else
+/// `git show <rev>:<dir>` would succeed and return a tree listing,
+/// silently diverging.
+#[test]
+fn read_blob_at_returns_none_for_a_directory_path() {
+    let (gix, cli) = open_both();
+    let opts = opts_with_merges();
+    let events: Vec<_> = gix
+        .walk_commits(&opts)
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let head_rev = events.first().expect("fixture has commits").rev.clone();
+
+    // Find a tracked file nested in a directory at HEAD, then probe its
+    // parent directory (derived, so the test adapts to the fixture layout).
+    let nested = ["src/main.rs", "src/lib.rs", "src/repo/mod.rs"]
+        .into_iter()
+        .find(|p| gix.read_blob_at(&head_rev, p).ok().flatten().is_some())
+        .expect("fixture should have a file nested in a directory at HEAD");
+    let dir = &nested[..nested.rfind('/').unwrap()];
+
+    let g = gix
+        .read_blob_at(&head_rev, dir)
+        .expect("gix read_blob_at dir");
+    let c = cli
+        .read_blob_at(&head_rev, dir)
+        .expect("cli read_blob_at dir");
+    assert_eq!(g, None, "gix must return None for directory {dir}");
+    assert_eq!(c, None, "cli must return None for directory {dir}");
+    assert_eq!(g, c, "backends must agree a directory is not a blob");
 }
 
 /// `diff_hunks(rev, path)` must agree byte-for-byte across the two

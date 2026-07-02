@@ -44,23 +44,6 @@ pedantic = { level = "warn", priority = -1 }
 module_name_repetitions = "allow"
 missing_errors_doc = "allow"
 
-# Vendored libduckdb-sys patch — workaround for upstream issue
-# duckdb/duckdb-rs#786. MSVC 19.40 (toolchain version 14.51, rolled out
-# by GitHub Actions runners around 2026-06-12) removed
-# `stdext::checked_array_iterator`, breaking bundled DuckDB builds on
-# Windows. The upstream patch hasn't shipped in a released crate yet.
-#
-# `vendor/duckdb-rs/` is populated by `scripts/vendor-duckdb-rs.sh` —
-# run that before `cargo build` on a fresh checkout (CI does this
-# automatically; see ci.yml / release.yml). The directory is
-# `.gitignore`d.
-#
-# Remove this `[patch.crates-io]` block, the script, the patch file,
-# and the workflow steps when `duckdb/duckdb-rs#786` ships in a
-# released duckdb crate version.
-[patch.crates-io]
-libduckdb-sys = { path = "vendor/duckdb-rs/crates/libduckdb-sys" }
-
 [profile.release]
 lto = "fat"
 codegen-units = 1

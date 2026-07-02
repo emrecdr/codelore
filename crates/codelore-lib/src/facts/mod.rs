@@ -43,6 +43,17 @@ pub struct FactsDb {
     /// materialise rebuilds against the grouped paths. `Cell` (not
     /// `RefCell`) — a plain `bool` on the single connection-owning thread.
     changes_lineage_built: std::cell::Cell<bool>,
+    /// Process-local memo for the structural import graph
+    /// ([`crate::analyses::import_graph::build_import_graph`]). The graph is
+    /// a pure function of the immutable `imports` table, yet a `--format
+    /// spa` render or a `codelore check` arch-suite rebuilds it (SQL scan +
+    /// path interning + adjacency) once per arch analysis —
+    /// `architecture-roles`, `modularity-violations`, `instability`,
+    /// `architecture-metrics`, `dependency-cycles` — in a single process. A
+    /// shared `Rc` handed to every caller collapses those into one build.
+    /// Same single-thread `RefCell` + `Rc` rationale as `coupling_memo`.
+    import_graph_memo:
+        std::cell::RefCell<Option<std::rc::Rc<crate::analyses::import_graph::ImportGraph>>>,
 }
 
 impl FactsDb {
@@ -54,6 +65,7 @@ impl FactsDb {
             conn,
             coupling_memo: std::cell::RefCell::new(std::collections::HashMap::new()),
             changes_lineage_built: std::cell::Cell::new(false),
+            import_graph_memo: std::cell::RefCell::new(None),
         }
     }
 
@@ -75,6 +87,22 @@ impl FactsDb {
         rows: std::rc::Rc<Vec<crate::analyses::coupling::CouplingRow>>,
     ) {
         self.coupling_memo.borrow_mut().insert(key, rows);
+    }
+
+    /// Shared handle to the memoised structural import graph, if built this
+    /// run. `None` on a miss; the caller then builds and stores.
+    pub(crate) fn import_graph_memo_get(
+        &self,
+    ) -> Option<std::rc::Rc<crate::analyses::import_graph::ImportGraph>> {
+        self.import_graph_memo.borrow().clone()
+    }
+
+    /// Store the structural import graph for reuse across arch analyses.
+    pub(crate) fn import_graph_memo_put(
+        &self,
+        graph: std::rc::Rc<crate::analyses::import_graph::ImportGraph>,
+    ) {
+        *self.import_graph_memo.borrow_mut() = Some(graph);
     }
 
     /// Whether `changes_lineage` is already materialised for this run.

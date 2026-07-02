@@ -8,6 +8,18 @@ Conventional Commits format. All notable changes documented here.
 
 - **Inline PR annotations for quality gates.** When `codelore check` fails inside GitHub Actions, every gate violation is now emitted as a `::error` workflow command, so the failure shows up against the offending file in the PR's Files-changed view — not just as a red check. Per-file gates (`cognitive_max`, `code_health_min`, `hotspot_score_max`) anchor to the file; repo-wide architectural gates (`max_dependency_cycles`, `max_propagation_cost`) emit a file-less annotation in the run summary. Local runs are unaffected (annotations are gated on `GITHUB_ACTIONS`).
 
+### Fixed
+
+- **Change-coupling Sankey + file-detail drawer now show real coupling strength.** The SPA dashboard's coupling Sankey read fields that don't exist on the coupling row, so every band drew at the same width and the "top-30 by strength" ordering was a silent no-op. Bands are now weighted by shared-revision count and ranked by coupling degree, and the drawer shows the real shared-revs + coupling percentage.
+- **Config-file read failures now report the input-error exit code (3), not the analysis code (4).** A missing or unreadable `--arch-rules-file`, `--thresholds-file`, or `--group-file` is now categorised the same as `--team-map`, so CI can distinguish "you pointed me at unreadable input" from "the analysis failed". An invalid `--complexity-sample` value now exits `2` (configuration error) instead of `1`.
+- **Calendar heatmap renders on flat-activity repos.** A repo where every active day has the same commit count no longer collapses the heatmap's colour scale.
+- **Hotspot table shows a "no matches" message** when a filter matches nothing, instead of a blank body; **per-widget "reset zoom" buttons** now appear on the architecture graph and hotspot circle-pack (they were dropped by the async widget boot); the **trends chart** no longer merges files whose abbreviated legend labels collide; and clicking a metric-help **"?"** no longer re-sorts the column.
+
+### Changed
+
+- **Determinism + performance hardening across the engine.** Time-bucketed and `--group-file` ingest now use deterministic aggregates (replacing `ANY_VALUE`); the structural import graph and `cycle-origins` historical graphs are memoised so the architecture analyses and SPA build reuse a single build instead of rebuilding per analysis; `--group-file` mapping bulk-loads through the DuckDB appender; and hot-loop allocations were removed from bot detection and clone-coupling. Dashboard SQL functions gained tracing spans and integration-test coverage. All output-affecting changes are byte-identical or determinism-only.
+- **Dropped the vendored `libduckdb-sys` fork.** The MSVC 19.40 build fix (duckdb-rs#786) shipped upstream in `libduckdb-sys 1.10504.0`, so `duckdb` is now pinned to `=1.10504.0` from crates.io and the whole vendoring apparatus is gone — the `[patch.crates-io]` block, `vendor/duckdb-rs/`, `scripts/vendor-duckdb-rs.sh`, the `patches/` file, the `.gitignore` stub-path handling, and the "Vendor patched libduckdb-sys" step in all CI/release/container/bench workflows. Fresh checkouts build with a plain `cargo build`; no pre-build vendor step.
+
 ## [0.12.0] - 2026-06-29
 
 ### Added

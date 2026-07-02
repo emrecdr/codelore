@@ -55,11 +55,25 @@ const AI_ASSIST_PATTERNS: &[&str] = &[
 /// uses today.
 #[must_use]
 pub fn is_bot(email: &str, name: &str) -> bool {
-    let email_lc = email.to_lowercase();
-    let name_lc = name.to_lowercase();
     DEFAULT_BOT_PATTERNS
         .iter()
-        .any(|p| email_lc.contains(p) || name_lc.contains(p))
+        .any(|p| contains_ignore_ascii_case(email, p) || contains_ignore_ascii_case(name, p))
+}
+
+/// ASCII-case-insensitive substring search that allocates nothing. Bot
+/// patterns are ASCII tokens (`[bot]` suffixes, CI-vendor names, email
+/// domains), so ASCII case-folding matches exactly the substrings a
+/// `to_lowercase().contains()` would over ASCII patterns — but without the
+/// two heap allocations the lowercasing pass cost on every commit.
+fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    let (hay, ndl) = (haystack.as_bytes(), needle.as_bytes());
+    if ndl.is_empty() {
+        return true;
+    }
+    if ndl.len() > hay.len() {
+        return false;
+    }
+    hay.windows(ndl.len()).any(|w| w.eq_ignore_ascii_case(ndl))
 }
 
 /// User-extensible bot-pattern set. Merges built-in [`DEFAULT_BOT_PATTERNS`]
@@ -124,18 +138,11 @@ impl BotPatterns {
     /// and any user-additions from `.codelorebots`.
     #[must_use]
     pub fn is_bot(&self, email: &str, name: &str) -> bool {
-        let email_lc = email.to_lowercase();
-        let name_lc = name.to_lowercase();
+        let matches =
+            |p: &str| contains_ignore_ascii_case(email, p) || contains_ignore_ascii_case(name, p);
         // Defaults are always checked first — user file can't turn them off.
-        if DEFAULT_BOT_PATTERNS
-            .iter()
-            .any(|p| email_lc.contains(p) || name_lc.contains(p))
-        {
-            return true;
-        }
-        self.user_patterns
-            .iter()
-            .any(|p| email_lc.contains(p) || name_lc.contains(p))
+        DEFAULT_BOT_PATTERNS.iter().any(|p| matches(p))
+            || self.user_patterns.iter().any(|p| matches(p))
     }
 }
 

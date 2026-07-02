@@ -115,7 +115,13 @@ impl Thresholds {
     /// [`CodeLoreError::Analysis`] on I/O or parse errors.
     pub fn from_path(path: &Path) -> Result<Self> {
         let raw = fs::read_to_string(path).map_err(|e| {
-            CodeLoreError::Analysis(format!("read thresholds {}: {e}", path.display()))
+            // Read-side input failure (unreadable `--thresholds-file`) →
+            // exit 3, mirroring `team_map::load`. The parse failure below
+            // stays `Analysis` (exit 4).
+            CodeLoreError::RepoIo(std::io::Error::new(
+                e.kind(),
+                format!("read thresholds {}: {e}", path.display()),
+            ))
         })?;
         Self::from_text(&raw).map_err(|e| {
             CodeLoreError::Analysis(format!("parse thresholds {}: {e}", path.display()))

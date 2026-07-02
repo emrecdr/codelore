@@ -20,7 +20,6 @@
 //! (Renovate has historically added itself). The post-processing
 //! drops any pair where either side matches the known-bot list.
 
-use duckdb::params;
 use std::collections::HashMap;
 
 use crate::facts::FactsDb;
@@ -188,9 +187,6 @@ pub fn run_pair_programming(db: &FactsDb, opts: &Options) -> Result<Vec<PairRow>
     if let Ok(lim) = usize::try_from(row_limit) {
         out.truncate(lim);
     }
-
-    // Silence unused-params warning when explain isn't engaged.
-    let _ = params![row_limit];
 
     Ok(out)
 }

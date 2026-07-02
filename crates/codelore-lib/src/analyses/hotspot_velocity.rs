@@ -57,12 +57,17 @@ pub struct HotspotVelocityRow {
 // unequal-length windows compare fairly. Only files touched in the recent
 // window are reported (a file that went fully cold is stale-code's job);
 // the `>= ?` floor drops one-off noise.
-const SQL: &str = "
+// SQL template. The day-window placeholders `{recent}` / `{baseline}` /
+// `{boundary}` are resolved by `build_sql` from RECENT_DAYS / BASELINE_DAYS
+// so those constants are the single source of truth (a naive literal `30`
+// / `120` / `90` sprinkled through the SQL silently ignores the consts).
+// `{boundary}` = RECENT_DAYS + BASELINE_DAYS, the baseline window's far edge.
+const SQL_TEMPLATE: &str = "
     WITH win AS (
         SELECT
             MAX(date) AS now_ts,
-            MAX(date) - INTERVAL '30 days'  AS recent_start,
-            MAX(date) - INTERVAL '120 days' AS baseline_start
+            MAX(date) - INTERVAL '{recent} days'  AS recent_start,
+            MAX(date) - INTERVAL '{boundary} days' AS baseline_start
         FROM commits
     ),
     recent AS (
@@ -85,16 +90,27 @@ const SQL: &str = "
         r.path,
         r.revs_recent,
         COALESCE(b.revs_baseline, 0) AS revs_baseline,
-        r.revs_recent * 7.0 / 30.0 AS recent_per_week,
-        COALESCE(b.revs_baseline, 0) * 7.0 / 90.0 AS baseline_per_week,
-        (r.revs_recent * 7.0 / 30.0)
-            - (COALESCE(b.revs_baseline, 0) * 7.0 / 90.0) AS acceleration
+        r.revs_recent * 7.0 / {recent}.0 AS recent_per_week,
+        COALESCE(b.revs_baseline, 0) * 7.0 / {baseline}.0 AS baseline_per_week,
+        (r.revs_recent * 7.0 / {recent}.0)
+            - (COALESCE(b.revs_baseline, 0) * 7.0 / {baseline}.0) AS acceleration
     FROM recent r
     LEFT JOIN baseline b ON r.path = b.path
     WHERE (r.revs_recent + COALESCE(b.revs_baseline, 0)) >= ?
     ORDER BY acceleration DESC, revs_recent DESC, path ASC
     LIMIT ?
 ";
+
+/// Resolve the day-window placeholders in [`SQL_TEMPLATE`] from the
+/// [`RECENT_DAYS`] / [`BASELINE_DAYS`] constants (the single source of
+/// truth). `{boundary}` is the baseline window's far edge,
+/// `RECENT_DAYS + BASELINE_DAYS` days back from the anchor.
+fn build_sql() -> String {
+    SQL_TEMPLATE
+        .replace("{recent}", &RECENT_DAYS.to_string())
+        .replace("{baseline}", &BASELINE_DAYS.to_string())
+        .replace("{boundary}", &(RECENT_DAYS + BASELINE_DAYS).to_string())
+}
 
 /// Run the `hotspot-velocity` analysis. Returns files ranked by change
 /// acceleration (heating up first).
@@ -105,16 +121,17 @@ const SQL: &str = "
 #[tracing::instrument(name = "hotspot-velocity", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_hotspot_velocity(db: &FactsDb, opts: &Options) -> Result<Vec<HotspotVelocityRow>> {
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
+    let sql = build_sql();
     crate::analyses::query::explain_if_requested(
         db,
-        SQL,
+        &sql,
         params![opts.min_revs, row_limit],
         "hotspot-velocity",
         opts,
     )?;
     crate::analyses::query::query_map_collect(
         db,
-        SQL,
+        &sql,
         params![opts.min_revs, row_limit],
         "hotspot-velocity",
         |r| {
