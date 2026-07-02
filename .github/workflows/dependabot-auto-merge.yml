@@ -1,0 +1,35 @@
+name: Dependabot auto-merge
+
+# Keeps routine dependency PRs from piling up: once CI is green, patch and
+# minor Dependabot bumps merge themselves (squash), so nobody has to babysit
+# them. MAJOR bumps are deliberately NOT auto-merged — they can carry breaking
+# API changes (e.g. arrow 58 -> 59 desyncing from duckdb's pinned arrow, or a
+# gix major that diverges the two Repo backends) and need a human to review +
+# adapt code. Those still open as normal PRs for manual handling.
+#
+# `pull_request_target` runs from the base branch (main), so this workflow's
+# definition is always the trusted one on main, not the PR's. It only enables
+# auto-merge; the actual merge still waits on every required status check.
+
+on: pull_request_target
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    steps:
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+
+      - name: Enable auto-merge for patch + minor updates
+        if: >-
+          steps.meta.outputs.update-type == 'version-update:semver-patch' ||
+          steps.meta.outputs.update-type == 'version-update:semver-minor'
+        run: gh pr merge --auto --squash --delete-branch "${{ github.event.pull_request.html_url }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
