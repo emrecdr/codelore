@@ -96,6 +96,7 @@ pub struct KameiRiskRow {
 ///
 /// Propagates `DuckDB` prepare / query errors as
 /// [`CodeLoreError::Analysis`].
+#[tracing::instrument(name = "dashboard-imports", skip_all)]
 pub fn run_imports_for_arch_graph(db: &crate::facts::FactsDb) -> Result<Vec<ImportEdgeRow>> {
     let mut stmt = db
         .conn()
@@ -122,6 +123,7 @@ pub fn run_imports_for_arch_graph(db: &crate::facts::FactsDb) -> Result<Vec<Impo
 /// Returns at most `limit` rows ordered by `cognitive DESC`, since
 /// the sunburst becomes unreadable past a few hundred functions and
 /// the JSON payload would blow up on monorepos otherwise.
+#[tracing::instrument(name = "dashboard-xray", skip_all)]
 pub fn run_xray(db: &crate::facts::FactsDb, limit: i64) -> Result<Vec<XRayEntry>> {
     // Join `complexity_metrics` (cognitive score) with `entities`
     // (line range) on (path, name, rev). The entities table has the
@@ -180,6 +182,7 @@ pub fn run_xray(db: &crate::facts::FactsDb, limit: i64) -> Result<Vec<XRayEntry>
 ///
 /// # Errors
 /// Returns [`CodeLoreError::Analysis`] on any `DuckDB` failure.
+#[tracing::instrument(name = "dashboard-clone-summary", skip_all)]
 pub fn run_clone_summary(db: &crate::facts::FactsDb) -> Result<Vec<CloneSummary>> {
     let mut stmt = db
         .conn()
@@ -206,6 +209,7 @@ pub fn run_clone_summary(db: &crate::facts::FactsDb) -> Result<Vec<CloneSummary>
 /// the trends multi-line widget (W9). The score per (month, path) is
 /// the count of revisions that touched the path during the month.
 /// Empty `paths` returns an empty Vec — the widget renders nothing.
+#[tracing::instrument(name = "dashboard-trends", skip_all)]
 pub fn run_trends(db: &crate::facts::FactsDb, paths: &[String]) -> Result<Vec<TrendPoint>> {
     if paths.is_empty() {
         return Ok(Vec::new());
@@ -251,6 +255,7 @@ pub fn run_trends(db: &crate::facts::FactsDb, paths: &[String]) -> Result<Vec<Tr
 
 /// Per-day commit counts for the calendar heatmap (W10). Returns one
 /// row per day with at least one commit, sorted by date ascending.
+#[tracing::instrument(name = "dashboard-daily-commits", skip_all)]
 pub fn run_daily_commits(db: &crate::facts::FactsDb) -> Result<Vec<DailyCommit>> {
     let mut stmt = db
         .conn()
@@ -288,6 +293,7 @@ pub fn run_daily_commits(db: &crate::facts::FactsDb) -> Result<Vec<DailyCommit>>
 ///
 /// Propagates `DuckDB` prepare / query errors as
 /// [`CodeLoreError::Analysis`].
+#[tracing::instrument(name = "dashboard-kamei-risk", skip_all)]
 pub fn run_kamei_risk(db: &crate::facts::FactsDb, limit: i64) -> Result<Vec<KameiRiskRow>> {
     let sql = "
         WITH recent AS (

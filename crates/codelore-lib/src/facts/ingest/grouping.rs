@@ -54,8 +54,8 @@ pub fn materialize_changes_bucketed(
              CAST(date_trunc('{unit}', m.date) AS TEXT) AS rev, \
              c.path, \
              MAX(c.change_type) AS change_type, \
-             ANY_VALUE(c.rename_from) AS rename_from, \
-             ANY_VALUE(c.similarity) AS similarity, \
+             arg_max(c.rename_from, ROW(m.date, -m.rowid)) AS rename_from, \
+             arg_max(c.similarity, ROW(m.date, -m.rowid)) AS similarity, \
              SUM(c.loc_added)::INTEGER AS loc_added, \
              SUM(c.loc_deleted)::INTEGER AS loc_deleted \
          FROM {src} c \
@@ -150,14 +150,20 @@ pub fn apply_grouping(db: &FactsDb, group_map: &GroupMap) -> Result<()> {
             })
             .collect();
 
-        // Step 2b: serial INSERT (DuckDB Connection is !Send + !Sync).
-        let mut stmt = conn
-            .prepare("INSERT INTO _grouping_v1 (raw_path, group_name) VALUES (?, ?)")
-            .map_err(|e| CodeLoreError::Analysis(format!("prepare grouping insert: {e}")))?;
+        // Step 2b: bulk-append via the DuckDB Appender (Connection is
+        // !Send + !Sync, so this drains serially on the owning thread — the
+        // same shape the rest of ingest uses, instead of one prepared
+        // INSERT execution per distinct path, which on a large monorepo is
+        // the whole file universe).
+        let mut app = conn
+            .appender("_grouping_v1")
+            .map_err(|e| CodeLoreError::Analysis(format!("appender _grouping_v1: {e}")))?;
         for (raw, effective) in &mapped {
-            stmt.execute(params![raw, effective.as_deref()])
-                .map_err(|e| CodeLoreError::Analysis(format!("grouping insert row: {e}")))?;
+            app.append_row(params![raw, effective.as_deref()])
+                .map_err(|e| CodeLoreError::Analysis(format!("grouping append row: {e}")))?;
         }
+        app.flush()
+            .map_err(|e| CodeLoreError::Analysis(format!("flush _grouping_v1 appender: {e}")))?;
     }
 
     // Step 3+4: rewrite `changes` in place. CREATE OR REPLACE TEMPORARY
@@ -170,8 +176,8 @@ pub fn apply_grouping(db: &FactsDb, group_map: &GroupMap) -> Result<()> {
              c.rev, \
              g.group_name AS path, \
              MAX(c.change_type) AS change_type, \
-             ANY_VALUE(c.rename_from) AS rename_from, \
-             ANY_VALUE(c.similarity) AS similarity, \
+             arg_max(c.rename_from, c.path) AS rename_from, \
+             arg_max(c.similarity, c.path) AS similarity, \
              SUM(c.loc_added)::INTEGER AS loc_added, \
              SUM(c.loc_deleted)::INTEGER AS loc_deleted \
          FROM changes c \

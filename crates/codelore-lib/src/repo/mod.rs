@@ -1,17 +1,13 @@
 //! VCS-reading abstraction. The default impl is `gix` in Plan 1;
 //! a `GitCliRepo` differential-test oracle lands in Plan 6.
 
-pub mod types;
-
-pub use types::CommitMetadata;
-
 use crate::{CommitEvent, FileChange, Hunk, Options, Result};
 
 /// Read-only git operations needed by the codelore pipeline.
 /// See spec §3.3.
 pub trait Repo: Send + Sync {
-    /// Walk commits matching `opts.after`/`opts.before`/`opts.commit_range`.
-    /// Returns an iterator (Plan 4 will introduce Stream over async).
+    /// Walk commits matching `opts.after`/`opts.before`.
+    /// Returns an iterator over the resulting commit events.
     fn walk_commits<'a>(
         &'a self,
         opts: &'a Options,
@@ -42,9 +38,6 @@ pub trait Repo: Send + Sync {
     /// resolution that already passes name+email, while `GitCliRepo::walk_commits`
     /// went through this trait method).
     fn resolve_alias(&self, name: &str, email: &str) -> String;
-
-    /// Commit metadata not in `CommitEvent` (signed-by, signoffs).
-    fn commit_metadata(&self, rev: &str) -> Result<CommitMetadata>;
 
     /// Return the full SHA-1 hex string of HEAD.
     /// Used by the persistent cache (Plan 8 §3) to build the cache key.

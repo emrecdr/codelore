@@ -1,16 +1,18 @@
 # CodeLore — Deep Codebase Analysis Report
 
-Read-only audit log. Findings are immutable F-IDs; status field tracks state.
-Shipped findings are pruned from this report once their release ships (full history in `CHANGELOG.md`); refuted findings stay documented to prevent rediscovery.
+Read-only audit log. Findings are immutable F-IDs; the status field tracks state.
+Shipped/fixed findings are condensed to a one-line closure row once validated against `main` (full history in `CHANGELOG.md` + git); refuted findings stay documented to prevent rediscovery.
+
+**Last validation + discovery pass: 2026-07-01** (against `main` HEAD `64fa242`). Every previously-tracked finding was re-verified against current source by a read-only fan-out; a fresh 5-dimension discovery pass added **F200–F230**. No code was changed — this report is the only artifact.
 
 ---
 
 ## 1. Architectural Overview & Pipeline Data Flow
 
 CodeLore is a multi-crate Rust workspace:
-*   [codelore-rca](file:///Users/emrec/Projects/playground/codelore/crates/codelore-rca): Vendored fork of Mozilla `rust-code-analysis` — structural syntax hashing + complexity metrics.
-*   [codelore-lib](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib): Core engine — repository walk abstraction, identity resolution, fact-store management, analyses, caching, output emitters.
-*   [codelore-cli](file:///Users/emrec/Projects/playground/codelore/crates/codelore-cli): Argument parsing, option consolidation, output routing.
+*   **codelore-rca**: Vendored fork of Mozilla `rust-code-analysis` — structural syntax hashing + complexity metrics. Hands-off (MPL); out of audit scope.
+*   **codelore-lib**: Core engine — repository walk abstraction, identity resolution, fact-store management, analyses, caching, output emitters.
+*   **codelore-cli**: Argument parsing, option consolidation, dispatch, output routing.
 
 ### Data Ingest Flow
 
@@ -21,20 +23,20 @@ graph TD
     C -->|DuckDB Appender bulk-insert| D[(DuckDB fact store)]
     E[HEAD-time blob walk @ HEAD] -->|tree-sitter parsing via rayon| F[Complexity + clones + imports extraction]
     F -->|HEAD-time metrics| D
-    D -->|SQL views / parameterized queries| G[32 behavioral analyses]
-    G -->|emitters| H[CSV · JSON · SARIF 2.1.0 · Markdown · Parquet · SQLite · HTML · SPA]
+    D -->|SQL views / parameterized queries| G[42 behavioral analyses]
+    G -->|emitters| H[CSV · JSON · SARIF 2.1.0 · Markdown · Parquet · SQLite · HTML · SPA · GHA]
 ```
 
-1.  **Repository Traversal**: [GixRepo](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/repo/gix_repo.rs) (pure-Rust `gitoxide`, hot path) + [GitCliRepo](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/repo/git_cli_repo.rs) (differential-testing oracle).
-2.  **Event Ingestion**: `duckdb::Connection` is `!Send + !Sync`. Producer-consumer: background thread walks commits → bounded `crossbeam-channel` → connection-owning thread runs DuckDB Appender ([ingest_loop](file:///Users/emrec/Projects/playground/codelore/crates/codelore-lib/src/facts/ingest/consumer.rs)).
+1.  **Repository Traversal**: `GixRepo` (pure-Rust `gitoxide`, hot path) + `GitCliRepo` (differential-testing oracle).
+2.  **Event Ingestion**: `duckdb::Connection` is `!Send + !Sync`. Producer-consumer: background thread walks commits → bounded `crossbeam-channel` → connection-owning thread runs DuckDB Appender (`facts/ingest/consumer.rs::ingest_loop`).
 3.  **HEAD-time work**: complexity, clones, imports extraction read blobs from the gix ODB, parse via tree-sitter on a rayon pool, drain serially into the DuckDB Appender.
-4.  **SQL-Driven Analyses**: 32 behavioral analyses run as parameterised DuckDB queries. Path-aggregating analyses opt into rename-aware aggregation via the `changes_lineage` CTE rewriter.
+4.  **SQL-Driven Analyses**: 42 behavioral analyses run as parameterised DuckDB queries. Path-aggregating analyses opt into rename-aware aggregation via the `changes_lineage` CTE rewriter.
 
 ---
 
 ## 2. Historical Findings (F1–F87) — Shipped
 
-All prior findings (F1–F87) have shipped and were validated against `main` HEAD. Per-finding evidence is preserved in `CHANGELOG.md`. Audit-trail summary:
+All prior findings (F1–F87) shipped and were validated against `main`. Per-finding evidence is in `CHANGELOG.md`. Audit-trail summary:
 
 | Batch | Scope | Outcome |
 |---|---|---|
@@ -49,357 +51,268 @@ All prior findings (F1–F87) have shipped and were validated against `main` HEA
 | **F77–F87** | Bare-repo clone discovery, theme-controller migration, multi-column SPA grid, cognitive-color sunburst, JSX/TSX grammar coverage | Shipped |
 | **F84, F88** | Refuted at source-quote level | Refuted (preserved) |
 
-**Methodology note (F107 / F108 post-mortem)**: prior audit cycles ran read-only sub-agents over the source tree using static-grep + inspection. Neither surfaced F107 + F108 because both were *runtime* initialization-order defects — the bugs only manifested when the JS actually executed in a browser. **F143** captures the headless-browser smoke-test follow-up; currently PARTIAL — implementation lives on `feat/f143-headless-browser-smoke` branch awaiting merge.
-
 ---
 
-## 3. Findings F89–F147 — closure log
+## 3. Findings F89–F199 — closure log (validated 2026-07-01)
 
-Validated against current branch HEAD. Status notes ⚠️ findings that live on un-merged feature branches.
+Every row below was re-verified against `main` HEAD by read-only source inspection on 2026-07-01. Fixed rows are condensed to one line (details in `CHANGELOG.md` / git). Rows still open carry forward to §4.
 
-| F-ID | Subject | Status | Closing commit / branch |
-|---|---|---|---|
-| F89 | Producer-thread `.expect("producer panicked")` panic mapping | **Fixed** | `8e52984` |
-| F90 | SPA X-Ray sunburst hardcoded ring colors | **Fixed** | `7f36a7f` |
-| F91 | Markdown emitter unescaped `\|` in cells | **Fixed** | `7f36a7f` + `49196ad` (PR #53 diff_output.rs sweep) |
-| F92 | Provenance sidecar atomicity gap | **Fixed** | `38df3d0` |
-| F93 | `cache_key` silent canonicalize fallback | **Fixed** | `8e52984` |
-| F94 | `ingest.rs` monolithic | **Fixed** | This session. Split the 1523-LOC `facts/ingest.rs` into a directory module `facts/ingest/` with topical submodules: `mod.rs` (entry-point `FactsDb::ingest` + channel-capacity controls + `IngestStats` + shared `current_head_rev`/`query_live_paths` helpers + `format_panic_payload`), `complexity_head.rs`, `clones_head.rs`, `imports_head.rs` (the three rayon-then-serial-drain HEAD passes + import resolution), `consumer.rs` (the connection-owning `ingest_loop` pump + `append_*` row writers), `lineage.rs` (path-lineage CTEs), `grouping.rs` (`apply_grouping` + bucketed/grouped materialisation). Pure code movement, zero behavior change: identical 26-function inventory, normalized content diff shows only `pub(super)` visibility widening (so the parent can call methods relocated into child submodules) + path-qualifier adjustments forced by the depth change. External path contracts preserved via `pub use` re-exports in `mod.rs` (`materialize_changes_lineage`/`materialize_changes_bucketed`/`materialize_path_lineage`/`apply_grouping`) and by keeping `IngestStats`/`set_channel_capacity_override`/`format_panic_payload` defined in `mod.rs`. Gate: fmt + clippy `-D warnings` clean, 663 tests pass / 0 fail (same count as pre-split). |
-| F95 | `communication.rs` window filter | **Refuted** (filter at ingest level) |
-| F96 | ECharts mount + dispose duplicated | **Fixed** | `7f36a7f` (`mountEcharts` @ 13+ sites) |
-| F97 | SPA boot-time render storm blocks first paint | **Fixed (this session)** — see §3 closure log |
-| F98 | Chart-click drawer no keyboard equivalent | **Fixed** | F-P4 parallel DOM tree |
-| F99 | Container OCI label `<owner>` placeholder | **Fixed** | `f6848e6` |
-| F100 | `cut-release.sh` trap hang on stuck `gh api` | **Fixed** | `f6eb953` |
-| F101 | CI cache keys omit `rust-toolchain.toml` | **Fixed** | `f204088` |
-| F102 | `bench.yml` kernel-snapshot no error handling | **Fixed** | `957b3dd` |
-| F103 | `softprops/action-gh-release@v3` mutable | **Fixed** | `dc6ec60` |
-| F104 | Fisher-exact contingency degenerate cells | **Fixed** | `b15da46` |
-| F105 | `ureq = "2"` maintenance-only | **Fixed** | `ec33cf9` |
-| F106 | Provenance manifest no schema-version | **Fixed** | `7f36a7f` |
-| F107 / F108 | SPA runtime errors hotfix | **Shipped** (v0.5.1 hotfix) | _CHANGELOG.md_ |
-| F109 | `diff_output.rs` missed by F91 sweep | **Shipped** | PR #53 |
-| F110 | Differential test only 4 of 8 trait methods | **Fixed** | PR #57 → main. `head_sha_matches` + 11 sibling tests now in `differential_repo_test.rs` |
-| F111 | `FactsDb::conn()` leaks `&duckdb::Connection` into public API | **Fixed** | This session. Tightened `conn()` to `pub(crate)` so external consumers can't bypass FactsDb's safety surface; added narrow safe methods `prepare` / `execute_batch` / `query_row` (each wrapping the SQL error in `CodeLoreError::Analysis`, exit 4). All 9 external `.conn()` call sites across 5 test files migrated to the safe methods — 7 chained `db.conn().<m>()` calls rewritten mechanically, plus the two multi-query `let conn = db.conn();` bindings in `imports_factsdb_test.rs` expanded to direct `db.query_row(...)` calls. Zero CLI `.conn()` uses, so production callers see no API change — the finding was API hygiene, not breakage. |
-| F112 | Provenance manifest missing reproducibility fields | **Fixed** | PR #57 → main. `head_sha`, `cache_key_hash`, `rust_version`, `target_triple`, `grammars: BTreeMap<String,String>` populated in `provenance/mod.rs` |
-| F113 | `codelore-cli` reaches into many `codelore_lib` submodules — no façade | **Fixed** | This session. Added `codelore_lib::cli_api` — the single surface the CLI imports through. It re-exports the modules (`analyses`, `analysis`, `cache`, `constants`, `facts`, `options`, `output`, `provenance`, `quality_gates`, `repo`) and root types (`AnalysisName`, `CodeLoreError`, `Options`, `Result`) the CLI needs. Every CLI file migrated so `grep -rn 'codelore_lib::' crates/codelore-cli/src \| grep -v cli_api` returns 0. Internal modules stay `pub` (the integration-test crate needs deep white-box access — forcing 55 test files through a CLI-shaped façade would either bloat it or need a second `test_api`), so this is an ADDITIVE, non-breaking façade: the CLI↔library contract now lives in one file even though the compiler doesn't seal the internals. Shipped together with F145. |
-| F118 | gix walker thread panic silently swallowed | **Fixed** | PR #62 → main. `WalkerStream` joins handle on EOF; panic mapped to `CodeLoreError::Repo` → exit 3 |
-| F127 | Kamei `enrich_diffusion` NS/ND/NF correlated subqueries | **Fixed** (partial — entropy block remains) | PR #64 → main collapsed the NS/ND/NF triple. See F127 in §4 for the entropy-block remainder. |
-| F128 | Kamei `enrich_size` correlated subqueries | **Fixed** | PR #64 → main. Grouped `UPDATE … FROM (… GROUP BY rev)` |
-| F134 | Hotspot 'Show all' synchronously builds full HTML | **Fixed** | This session. `renderNextPage` now async + chunked in 50-row batches with `await yieldToMain()` between each; `Show all` wrapped in element-scoped `startViewTransition(.., container)`; `.hotspot-row { view-transition-name: match-element }` for per-row crossfades |
-| F135 | Theme toggle re-runs full d3.pack layout | **Fixed** | This session. `Alpine.effect` rerenderer loop now yields between widgets via `window._codeloreYieldToMain()`; `.widget { view-transition-name: match-element }` so widgets animate independently |
-| F138 | `startViewTransition` ignores `prefers-reduced-motion` | **Fixed** | PR #62 → main. `matchMedia('(prefers-reduced-motion: reduce)')` short-circuits the transition |
-| F139 | `DiffGates` parsed but never evaluated | **Fixed** | `549c460` (evaluator + CLI wiring) |
-| F140 | Six new analyses lack integration tests | **Fixed** | `7b43593` (5 new `tests/*_test.rs`) |
-| F141 | `imports_factsdb_test` only asserts unresolved | **Fixed** | `7b43593` (`ingest_resolves_imports_to_target_paths`) |
-| F143 | SPA headless-browser smoke test | **Fixed** | PR #56 → main. `tests/spa_browser_test.rs` + `browser-tests` feature + CI job |
-| F127 (full) | Kamei `enrich_diffusion` entropy block correlated subquery | **Fixed** | This session. Entropy block rewritten as 2-pass (reset to 0.0 + grouped `UPDATE ... FROM` with window-function `p_i = loc_added / SUM(loc_added) OVER (PARTITION BY rev)`), mirroring `enrich_history`'s shape. Byte-identical semantics proven via `kamei_entropy_per_commit_distribution` regression test (3 hand-computed cases: single-file = 0.0, even 2-way = 1.0, uneven 3-way = 1.2987949...). |
-| F117 | First-party GHA actions use floating tags despite credential permissions | **Fixed** | This session. 5 credential-handling actions SHA-pinned via `@<commit-sha> # vN` convention (matches existing `softprops/action-gh-release` pin): `actions/attest-build-provenance` (issues OIDC token for SLSA provenance), `docker/login-action` (consumes `GITHUB_TOKEN` for ghcr.io auth), `docker/build-push-action`, `docker/metadata-action`, `docker/setup-buildx-action`. 8 use-sites across `container.yml` + `release.yml`. Non-credential actions (`actions/checkout`, `actions/cache`, etc) intentionally left as `@vN` per finding's "credential-handling subset" framing — pinning them too would balloon Dependabot bump-PR surface without commensurate attack-surface reduction. |
-| F129 | `arch_violations` materialises full imports Vec then truncates post-Rust | **Fixed** | This session. Removed the intermediate `Vec<(String, String, String)>` collect; the rows iterator is walked directly and early-breaks when `opts.rows_limit` is hit. SQL's `ORDER BY src_path ASC, target_path ASC` makes the early-break deterministic — first N violations are the same N the prior collect-then-truncate produced. On a monorepo with millions of imports + `--rows 50`, validation stops after 50 hits instead of validating every row. Smaller scope than the finding's "push validation into SQL" suggestion (SQL would need per-prefix LIKE join with planner-risk) but same observable win without the architectural change. |
-| F130 | `pair_programming` O(P²) with `String::clone` per inner-loop probe | **Fixed** | This session. Refactored `HashMap<(String, String), u32>` → `HashMap<(u32, u32), u32>` with per-run author interner (`HashMap<String, u32>` + `Vec<String>` table). Inner loop now hashes pure integer-pair keys — zero `String` allocation per probe. The per-commit `participants` `Vec<String>` is replaced by a reusable `Vec<u32>` scratch buffer with `clear()` between iterations (preserves the allocation). On repos with heavy pair-programming (~100 commits per pair), the prior shape allocated ~200 redundant `String`s per pair just to discover the pair was already counted; the new shape allocates each author once at first encounter, period. New regression test `pair_programming_dedupes_pair_regardless_of_primary_orientation` guards the canonical-ordering invariant (alice↔bob encountered in two orientations must dedup to one row with `author_a` lex-less than `author_b`). |
-| F153 | Generic I/O errors from `--team-map` config-file read exit code 5 instead of 3 | **Fixed** | This session. Added `CodeLoreError::RepoIo(std::io::Error)` variant mapped to exit 3 in the `exit_code()` match (no `#[from]` so generic `?` propagation still defaults to write-side `Io` → exit 5). The single load-bearing call site (`identity::team_map::load` reading a user-supplied `--team-map FILE`) now constructs `RepoIo` instead of `Io`. Recon revealed only ONE site explicitly constructed `Io` for a read-side input failure; every other `Io` use is `writeln!(...).map_err(CodeLoreError::Io)` from output emitters where exit 5 is correct. Smaller scope than the audit's "repo probing" framing because `GixRepo::open` and `GitCliRepo::open` already mapped their underlying errors to `CodeLoreError::Repo(String)` (exit 3). Updated `bca_error_exit_codes_match_spec` test to cover `RepoIo` → 3. |
-| F142 | Tracing instrumentation skewed across `analyses/` (3 lines total) | **Fixed** | This session. `#[tracing::instrument(name = "<analysis-name>", skip_all, fields(min_revs = opts.min_revs))]` added to all 32 `run_*` entry points across 31 files. Operators get per-analysis spans with timing + the input gate for free via `RUST_LOG`. Verified end-to-end: hotspots span emits `hotspots{min_revs=1}` with `time.busy=6.87ms time.idle=2.25µs`. |
-| F146 | `json.rs` trivial `write_*_json` shims (29 total) | **Fixed** | This session. `write_json<T: Serialize>` made `pub`; 27 trivial shims deleted, 2 non-trivial kept (`write_revisions_json` tuple→struct wrap, `write_communities_json` wrapper struct emit). 33 CLI call sites updated. Net: -137 LOC. |
-| F145 | `main.rs` dispatch boilerplate is the bulk of the file | **Fixed** | This session. The 2-D `match (format, &analysis)` (≈1200 LOC, the abstraction the finding said was missing) collapsed to a 1-D `match &analysis` delegating to 32 per-analysis `dispatch_<x>` fns, each running its analysis then matching `format` to the right emitter; SARIF/HTML needs (repo_root, title, generated-at) carried in a shared `EmitCtx`; the HTML pre-branch folded into the same per-analysis fns (with a shared `html_not_wired` helper). Proven semantic-preserving by a byte-identical capture across all 228 analysis×format pairs: exit codes identical (incl. the 22 pre-existing `unreachable!` panics, now logged as F165), and the only 9 stdout diffs are environmental — clones (HEAD-time tree-sitter walk over the working tree now sees the new `dispatch_*` fns as clones), delivery-friction (`wip_age_days` wall-clock drift), and SARIF (per-run `run/<id>`). main.rs grew ~+480 LOC: the per-fn structure re-states each `run_*` per format arm rather than hoisting it (hoisting would run the analysis before the `unreachable!` for unwired ndjson/gha, risking an exit-code change), the price of exact-semantics preservation. Shipped with the F113 `cli_api` façade. |
-| F165 | `--format ndjson`/`gha` on an unsupported analysis panics (reachable `unreachable!`) | **Fixed** | This session. The 11 per-analysis `dispatch_*` fns whose catch-all was `_ => unreachable!("format/analysis combination should have been validated above")` now bail cleanly: `fmt => anyhow::bail!("<analysis> analysis supports <formats>; got {fmt:?}")`, matching the convention the other ~6 dispatch fns already used (e.g. `dispatch_authors`). `--format ndjson`/`gha` on an unsupported analysis (22 pairs, e.g. `abs-churn --format gha`) now exits 1 with a descriptive message instead of panicking (exit 101). Each fn's message lists exactly the formats it wires (verified against its arms). Regression test `unsupported_format_bails_cleanly_instead_of_panicking` asserts `code(1)` + no `panicked`/`unreachable` in stderr for both ndjson and gha. Discovered during the F145 byte-identical verification (where the panics were preserved verbatim). |
-| F164 | Task-ID (`F<NN>`) references embedded in code comments codebase-wide | **Fixed** | This session. Swept every `F<NN>` finding-ID reference out of `.rs` code comments across `codelore-lib/{src,tests}` + `codelore-cli/{src,tests}` — the grep `(//\|//!\|///\|\*).*\bF[0-9]{1,3}\b` over those trees now returns zero. Scope was wider than the finding's original "~48 in src": ~91 two-/three-digit IDs (56 src + 35 tests) plus the 1-digit F1–F9 stragglers. Each comment kept its rationale, dropping only the ID and its connective; where an ID named a concept it was replaced by the concept (`F12 invariant` → `rowid-ASC invariant`, `same F16 pattern` → `same live-at-anchor pattern`). Comment-only — verified the diff changes no code/string/identifier/SQL (the sole non-`//`-leading edits are `anchor_str` trailing comments with identical code). Vendored `codelore-rca` (MPL fork), `benches/`, and `.md` docs (which legitimately track F-IDs) were left untouched. Gate: fmt + clippy `-D warnings` clean, full suite passes. The two `// F20 fix:` comments inside the SPA `HTML_TEMPLATE` raw string were also cleaned (JS comments in emitted output — no behaviour change). |
-| F147 | `AnalysisName` 3-way sync no exhaustiveness guard | **Fixed** | `549c460` (initial `_exhaustive_check`) + PR #60 (`registry!` macro). F157 closed by the macro. |
-| F120 | SARIF schema URL on legacy `schemastore.azurewebsites.net` host | **Fixed (URL)** | This session. `sarif.rs:13` swapped to canonical `https://json.schemastore.org/sarif-2.1.0.json`. The hand-rolled-JSON / `serde-sarif` migration concern in the original finding was a separate refactor and is NOT closed — re-surfaces in next discovery pass if still material. |
-| F124 | MSRV pin has zero buffer behind toolchain | **Fixed (policy)** | This session. `docs/RELEASING.md` now carries an "MSRV (Minimum Supported Rust Version) Policy" section explaining the deliberate "MSRV tracks channel" stance for the pre-1.0 binary-distribution model + post-1.0 reconsideration trigger. The zero-buffer is now a deliberate documented decision, not an oversight. |
-| F150 | Schema version tracked in two disjoint places, no startup validation | **Fixed** | PR #61 → main. `CURRENT_SCHEMA_VERSION` const + `validate_schema_version()` on `open_read_only` |
-| F151 | Leiden communities non-deterministic | **Fixed** | PR #61 → main. `LEIDEN_SEED` constant threaded into `LeidenConfig` + regression test |
-| F152 | `clone_group_id` non-deterministic (std HashMap iteration) | **Fixed** | PR #61 → main. `BTreeMap<[u8;32], _>` |
-| F154 | `codelore diff` base==head produces empty SARIF | **Fixed** | PR #62 → main. `bail!` at diff entry with SHA + range context |
-| F155 | `DiffOutput.{base,head}_median_code_health` defaults to silent 0.0 | **Fixed** | PR #60 → main. `Option<f64>` + `skip_serializing_if` |
-| F156 | `Thresholds`/`Gates`/`DiffGates` don't `deny_unknown_fields` | **Fixed** | PR #60 → main. Attribute added to all three structs + 3 regression tests |
-| F157 | F147's exhaustiveness guard wraps the wrong list | **Fixed** | PR #60 → main. `registry!` macro forces single source-of-truth for both array and match |
-| F158 | SARIF `informationUri`/`helpUri` hardcodes wrong project URL | **Fixed** | PR #63 → main. `CODELORE_HOMEPAGE` constant + URL-guard regression test |
-| F159 | SARIF `artifactLocation.uri` not percent-encoded | **Fixed** | PR #63 → main. `percent_encode_path()` helper + non-ASCII/space/# regression test |
-| F160 | Kamei NDEV/EXP same-second peer semantics inconsistent | **Fixed** | PR #64 → main. Strict `prev.date < c.date` uniformly across NDEV/NUC/EXP/REXP/SEXP |
-| F163 | SARIF `automationDetails.id` is static | **Fixed** | PR #63 → main. `automation_id_for(prefix)` appends per-run 16-hex suffix |
-| F162 | Parquet column types drift from CSV row-type contract | **Fixed (already-closed by side-effect)** | Parquet writers now delegate to `analyses::hotspots::build_inlined_sql` / `revisions::build_inlined_sql` shared SQL generators. Those generators already use the explicit-cast convention the original finding requested, so the CSV row-type contract is preserved verbatim through to Parquet. The 51-line `parquet.rs` shim has no remaining type-inference call site. Verified 2026-06-21 validation pass. |
-| F131 | Provenance tooltip triggers 14×14 px target | **Fixed** | This session. `.tooltip-trigger` in `template.html` bumped from `width/height: 14px` → `24px` to meet WCAG 2.5.5 Target Size (Minimum). Glyph stays visually moderate (`font-size: 12px` on a 24×24 button) so the trigger doesn't dominate dense table headers, but the click/tap area is reachable for coarse pointers. `line-height: 22px` keeps the `?` glyph vertically centered inside the 24px circle minus 1px borders top+bottom; `vertical-align: -7px` re-baselines the larger button against adjacent text without disturbing label rhythm. CSS anchor positioning + the `:hover/:focus-visible` reveal path are unchanged — F131 is purely about target size, not the popup. |
-| F137 | Knowledge-islands rows not keyboard-activable | **Fixed** | This session. New `wireRowKbActivation(rowEl)` helper in `widgets.js` sets `tabindex="0"` + `role="button"` on each row and forwards Enter/Space to the existing click handler (preventDefault on Space so the page doesn't scroll). Called from BOTH the KI row loop (renderKnowledgeIslands) AND the hotspot table row loop (renderNextPage) — the audit only flagged KI but the hotspot table had the same gap; one helper, two call sites. `tr.hotspot-row:focus-visible, tr.ki-row:focus-visible` paints a `2px solid var(--accent)` outline so keyboard users can see which row is about to be activated. Other table-row-as-button widgets discovered via `cursor:pointer` grep — only the two were click-on-tr; the rest are widget-level handlers (sankey, sunburst, etc.) which already route through `_codeloreShowDetail`. |
-| V5 | METRIC_DEFS formula strings reference parameter names verbatim | **Fixed** | This session. New `SpaOptionsSnapshot { min_revs, min_shared_revs, min_coupling_pct, max_coupling_pct, max_changeset_size, fisher_significance }` field on `SpaDashboard`, populated from `Options::from_options` at dispatch. JS-side `interpolate(formula, data.options)` substitutes `${key}` placeholders in METRIC_DEFS strings — `coupling_pairs` and `coupling_density` formulas now read `min_shared_revs ≥ 5` / `Fisher exact p < 0.05` (or whatever this run's effective thresholds are) instead of parameter names. Unknown placeholders left literal so a stale METRIC_DEFS entry shows the `${key}` token visibly during review rather than silently filling with `undefined`. `SpaOptionsSnapshot::default()` mirrors code-maat parity baseline so tests + step-summary using `..Default::default()` stay green without per-site updates. |
-| V6 | `CHANNEL_CAPACITY = 64` unmeasured | **Fixed** | This session. New `ingest_capacity_sweep` Criterion benchmark on the medium fixture sweeps `[16, 64, 256, 1024]` in one `cargo bench` invocation. Mechanism: `CHANNEL_CAPACITY_OVERRIDE: AtomicUsize` static in `facts::ingest` + `pub fn set_channel_capacity_override(n)` write hook; `channel_capacity()` reads override-else-DEFAULT_CHANNEL_CAPACITY (64) on each ingest call. Avoids `unsafe { env::set_var }` (workspace `unsafe_code = "forbid"`) and avoids expanding the public CLI surface — production dispatch never touches the override; only the bench writes it, and resets to `0` (= default) at sweep end. `bounded::<CommitEvent>(channel_capacity())` reads the runtime value, so the curve is real measurement, not folklore. |
-| F114 | Single-CDN dependence for all 4 SPA assets | **Fixed** | This session. `AssetPin` extended with `url_fallbacks: &'static [&'static str]`; `fetch_and_pin` walks primary URL first, then each fallback in declaration order. Every asset's fallback is the `unpkg.com` equivalent — both jsDelivr and unpkg pull from the same npm registry, so the bytes are identical and the same SHA-256 validates whichever mirror responds. SHA-256 mismatch on ANY URL is a hard fail (not "skip to next mirror") so a tampered mirror can't be silently replaced by a clean one. A jsDelivr availability incident (DNS outage, regional block, rate-limit) no longer breaks every `--features spa` build. |
-| F115 | Container base images use mutable tags | **Fixed** | This session. Both `Containerfile` base images pinned to immutable `@sha256:...` digests INLINE on the `FROM` instructions (not via ARG — Dependabot/Renovate parsers don't resolve ARG substitutions). `rust:1.96-bookworm@sha256:19817ead...` for the builder; `gcr.io/distroless/cc-debian12:nonroot@sha256:b0ae8e98...` for runtime. Renovate (not Dependabot) handles digest bumps because Dependabot's docker ecosystem only detects `Dockerfile`/`*.Dockerfile` and skips `Containerfile`; `renovate.json` extended with `dockerfile.managerFilePatterns: ["/Containerfile/"]` + a `matchManagers: ["dockerfile"]` package rule grouping all container-base bumps weekly. Reproducibility + cosign/SLSA provenance attestation now work the way they're supposed to. |
-| F122 | `toml = "0.8"` one major behind | **Fixed** | This session. Workspace bumped to `toml = "1"` (latest 1.1.2+spec-1.1.0). The 1.0 release split `parse` (low-level parser) from `serde` (`from_str` / `Deserialize` glue); the dep declaration now opts into BOTH features explicitly so `Thresholds::parse` and `LayerRules::parse` keep their typed `from_str` API. No call-site changes — the high-level `toml::from_str` / `toml::Table` surface is stable across the major. Cargo.lock drops `toml_datetime` 0.6 / `toml_edit` 0.22 / `winnow` 0.7 (replaced by their 1.x successors). 652-test workspace + clippy clean. |
-| F136 | Color-mode tablist mismatches WAI-ARIA Tabs pattern (no `aria-selected`) | **Fixed** | This session. JS-driven hotspot color-mode handler (`initHotspotColorToggles`) now sets `aria-selected` on every tab in the toggle loop alongside the existing `tab-active`/`active` class toggles. Initial `aria-selected="true"` on the cognitive button (default active) and `aria-selected="false"` on the other six in `template.html`. The six Alpine-driven tablists (trends, module-chord, arch-graph, multi-metric, delivery-risk, change-coupling) each gained `:aria-selected="$store.layout.<key> === <value> ? 'true' : 'false'"` next to the existing `:class` binding via a one-shot Python regex pass — 30 buttons updated total (4 hand-edits for the trends tablist + 26 from the regex). Verified by `awk` count: every `:class` `tab-active` binding is now paired with a `:aria-selected` binding on the following line. SPA integration test green. Screen readers now announce the selected tab; the WAI-ARIA Tabs pattern's "tab → tabpanel → aria-selected" loop is complete. |
-| F144 | No CI dogfooding of `codelore` against `codelore` | **Fixed** | This session. New `dogfood` job in `ci.yml` builds release `codelore-cli --features spa`, runs `codelore analyze --analysis hotspots --format gha --repo .` so hotspots stream into the PR's Checks panel as inline annotations (`::warning::` / `::notice::` per the existing GHA emitter's bucketing). Same step also writes a markdown summary (top hotspots / code-health worst-10 / knowledge islands) into `$GITHUB_STEP_SUMMARY` so reviewers see CodeLore's verdict inline on every PR. PR events additionally run `codelore diff origin/${{ github.base_ref }}...HEAD --format markdown` and append the delta. `continue-on-error: true` during the bake-in period so the job surfaces signal without gating merges while thresholds are still calibrating. Uses sccache + rust-cache for sub-30s incremental runs. Verified the binary's `--format gha` + `diff <range>` syntax actually work on this repo before committing the workflow. |
-| F149 | `hunks` table lacks PK + NOT NULL + `(rev,path)` index | **Fixed** | This session. Recon-revealed 3-layer gap: `Hunk` parsed at walk time, `Repo::diff_hunks` stubbed in `GixRepo`, walker constructed `FileChange.hunks: vec![]`, `append_change` never wrote rows. Wired all three layers: (1) Extended `count_loc` → `count_loc_and_hunks` in `gix_repo.rs` walking `imara_diff::Diff::hunks()` from the SAME histogram diff already running for `loc_added/loc_deleted` (no extra blob read, no second pass; converts to git's 1-indexed `@@ -old_start,old_lines +new_start,new_lines @@` convention so the differential test stays trivially green). (2) `GixRepo::diff_hunks` now resolves the commit's before/after blob OIDs via new `blob_at_path` helper + calls `count_loc_and_hunks` — root-commit-safe via `Option<ObjectId>` empty-side handling. (3) `compute_changed_files` Modification arm consumes the new tuple and populates `FileChange.hunks`. (4) `append_change` writes one hunks row per `FileChange.hunks` entry alongside the changes row. (5) Schema v3 / SCHEMA_VERSION 4 / cache `schema_v5` bumps invalidate caches naturally. (6) New `ingest_writes_hunk_rows_to_hunks_table` regression test (modify two non-adjacent regions, assert ≥2 rows + zero NULL offsets). (7) Differential test asserts gix == cli hunks across README/Cargo.toml/CHANGELOG. 653-test workspace + clippy clean. ~80 LOC net (vs the audit's "M not L" estimate — recon revealed the gix-diff API already exposed `hunks()` for free). |
-
-**Newly REFUTED (2026-06-18 / 2026-06-21)**:
-
-| F-ID | Original claim | Why refuted |
+| F-ID | Subject | Status |
 |---|---|---|
-| F116 | Renovate AND Dependabot configured for same ecosystems | The two bots are partitioned by `package-ecosystem`, not duplicated. `.github/dependabot.yml` opens with `package-ecosystem: github-actions` (only updates `.github/workflows/*.yml` action pins). `renovate.json` carries `matchManagers: ["cargo"]` rules exclusively (Rust deps). The original audit treated the presence of both config files as evidence of duplication without reading either's scope. Keep both; they're the right split — Renovate's `matchPackageNames: ["duckdb"] rangeStrategy: pin` + `tree-sitter enabled: false` rules carry the same Cargo-bump policy CLAUDE.md documents in §"Dependabot has intentional ignore rules" but for the cargo ecosystem, which Dependabot is NOT configured to touch. |
-| F123 | `crossbeam = "0.8"` + `num-format = "0.4"` in codelore-rca stale | Both pins resolve to the latest published versions. `crossbeam 0.8.4` is the current release on crates.io (no 0.9 or 1.x line exists); `num-format 0.4.4` is the current release (no 0.5 line exists). The hands-off-MPL-fork policy is intact AND the pins are current — the "stale" claim was unverified at the time. Re-checked via lib.rs / crates.io advisories index 2026-06-21. |
+| F89 | Producer-thread `.expect` panic mapping | Fixed (`8e52984`) |
+| F90 | SPA X-Ray sunburst hardcoded ring colors | Fixed (`7f36a7f`) |
+| F91 | Markdown emitter unescaped `\|` in cells | Fixed (`7f36a7f`+`49196ad`) |
+| F92 | Provenance sidecar atomicity gap | Fixed (`38df3d0`) |
+| F93 | `cache_key` silent canonicalize fallback | Fixed (`8e52984`) |
+| F94 | `ingest.rs` monolithic → `facts/ingest/` module split | Fixed |
+| F95 | `communication.rs` window filter | Refuted (filter at ingest level) |
+| F96 | ECharts mount + dispose duplicated | Fixed (`7f36a7f`) |
+| F97 | SPA boot-time render storm blocks first paint | Fixed (async `bootWidgets`) |
+| F98 | Chart-click drawer no keyboard equivalent | Fixed |
+| F99 | Container OCI label `<owner>` placeholder | Fixed (`f6848e6`) |
+| F100 | `cut-release.sh` trap hang on stuck `gh api` | Fixed (`f6eb953`) |
+| F101 | CI cache keys omit `rust-toolchain.toml` | Fixed (`f204088`) |
+| F102 | `bench.yml` kernel-snapshot no error handling | Fixed (`957b3dd`) |
+| F103 | `softprops/action-gh-release@v3` mutable | Fixed (`dc6ec60`) |
+| F104 | Fisher-exact contingency degenerate cells | Fixed (`b15da46`) |
+| F105 | `ureq = "2"` maintenance-only | Fixed (`ec33cf9`; now `ureq 3`) |
+| F106 | Provenance manifest no schema-version | Fixed (`7f36a7f`) |
+| F107/F108 | SPA runtime errors hotfix | Shipped (v0.5.1) |
+| F109 | `diff_output.rs` missed by F91 sweep | Shipped (PR #53) |
+| F110 | Differential test only 4 of 8 trait methods | Fixed (PR #57) |
+| F111 | `FactsDb::conn()` leaks `&Connection` | Fixed (`pub(crate)` + safe methods) |
+| F112 | Provenance manifest missing reproducibility fields | Fixed (PR #57) |
+| F113 | CLI reaches into many lib submodules — no façade | Fixed (`cli_api`) |
+| F114 | Single-CDN dependence for SPA assets | Fixed (`url_fallbacks`) |
+| F115 | Container base images use mutable tags | Fixed (`@sha256:` pins) |
+| F116 | Renovate AND Dependabot duplicate ecosystems | Refuted (partitioned by ecosystem) |
+| F117 | First-party GHA credential actions use floating tags | Fixed (SHA-pinned) |
+| F118 | gix walker thread panic silently swallowed | Fixed (PR #62) |
+| F120 | SARIF schema URL on legacy host | Fixed (canonical schemastore URL) |
+| F121 | `fishers_exact` crate unmaintained | Fixed (in-tree `stats::fisher_two_tail_pvalue`) |
+| F122 | `toml = "0.8"` one major behind | Fixed (`toml = "1"`) |
+| F123 | codelore-rca crossbeam/num-format stale | Refuted (both are current releases) |
+| F124 | MSRV pin has zero buffer | Fixed (documented policy) |
+| F125 | Redundant queries fire 4× per ingest | Fixed (PR #58, hoisted once) |
+| F126 | N single-row UPDATEs in resolve_imports | Fixed (PR #58, bulk UPDATE…FROM) |
+| F127 | Kamei `enrich_diffusion` correlated subqueries | Fixed (full, incl. entropy block) |
+| F128 | Kamei `enrich_size` correlated subqueries | Fixed (PR #64) |
+| F129 | `arch_violations` materialise-then-truncate | Fixed (direct-iterate + early-break) |
+| F130 | `pair_programming` O(P²) with `String::clone` | Fixed (integer-interned keys) |
+| F131 | Provenance tooltip 14×14 px target | Fixed (24×24, WCAG 2.5.5) |
+| F132 | Hardcoded hex in widgets.js breaks light theme | Fixed (CSS tokens) |
+| F133 | No responsive layout < ~1280px | Fixed (`md:grid-cols-2`) |
+| F134 | Hotspot 'Show all' synchronous HTML build | Fixed (chunked + `yieldToMain`) |
+| F135 | Theme toggle re-runs full d3.pack layout | Fixed (yield between rerenderers) |
+| F136 | Color-mode tablist mismatches WAI-ARIA | Fixed (`aria-selected`) |
+| F137 | Knowledge-islands rows not keyboard-activable | Fixed (`wireRowKbActivation`) |
+| F138 | `startViewTransition` ignores reduced-motion | Fixed (PR #62) |
+| F139 | `DiffGates` parsed but never evaluated | Fixed (`549c460`) |
+| F140 | Six new analyses lack integration tests | Fixed (`7b43593`) |
+| F141 | `imports_factsdb_test` only asserts unresolved | Fixed (`7b43593`) |
+| F142 | Sparse tracing across `analyses/` | Fixed — **residual: 6 `dashboard.rs` fns still uninstrumented → new F224** |
+| F143 | SPA headless-browser smoke test | Fixed (PR #56) |
+| F144 | No CI dogfooding of `codelore` on itself | Fixed (`dogfood` job) |
+| F145 | `main.rs` dispatch boilerplate | Fixed (1-D dispatch fns) |
+| F146 | `json.rs` trivial `write_*_json` shims | Fixed (generic `write_json`) |
+| F147 | `AnalysisName` 3-way sync no exhaustiveness guard | Fixed (`registry!` macro) |
+| F149 | `hunks` table lacks PK + NOT NULL + index | Fixed (schema + full ingest wiring) |
+| F150 | Schema version disjoint, no startup validation | Fixed (PR #61) |
+| F151 | Leiden communities non-deterministic | Fixed (PR #61, `LEIDEN_SEED`) |
+| F152 | `clone_group_id` non-deterministic | Fixed (PR #61, `BTreeMap`) |
+| F153 | `--team-map` config IO error exits 5 not 3 | Fixed (`RepoIo`) — **residual: other config readers still wrong → new F211** |
+| F154 | `codelore diff` base==head empty SARIF | Fixed (PR #62) |
+| F155 | `DiffOutput` medians default silent 0.0 | Fixed (PR #60, `Option<f64>`) |
+| F156 | Thresholds/Gates/DiffGates no `deny_unknown_fields` | Fixed (PR #60) |
+| F157 | F147 guard wraps the wrong list | Fixed (PR #60) |
+| F158 | SARIF `informationUri` wrong project URL | Fixed (PR #63) |
+| F159 | SARIF `artifactLocation.uri` not percent-encoded | Fixed (PR #63) |
+| F160 | Kamei NDEV/EXP same-second `<` vs `<=` | Fixed (PR #64) |
+| F162 | Parquet column types drift from CSV row-type | Fixed (shared SQL generators) |
+| F163 | SARIF `automationDetails.id` static | Fixed (PR #63) |
+| F164 | Task-ID (`F<NN>`) refs in code comments | Fixed — **residual: `Plan 1/4` markers in gix_repo.rs → new F205** |
+| F165 | `--format ndjson`/`gha` panics `unreachable!` | Fixed (clean `bail!`) |
+| F166 | `codelore schema` row-type list drifted | Fixed (derives from `AnalysisName::all()`) |
+| F167 | stale-code/delivery-friction wall-clock anchor | Fixed (`MAX(commits.date)` + `age_time_now`) |
+| F168 | `lead-time` ORDER BY lacks tiebreaker | Fixed (`, rev ASC`) |
+| F169 | Treemap breadcrumb undefined `--bg-elev-1` | Fixed (`--bg-elev`) |
+| F170 | CSV emitter no formula-injection guard | Fixed (`'` prefix + force-quote) |
+| F171 | `bus-factor` drops root files + not rename-aware | Fixed (`<root>` bucket + lineage) |
+| F172 | Calendar heatmap `Math.min.apply` RangeError | Fixed (single-pass loop) |
+| F174 | `run_coupling` recomputed 2–5×, no memoization | Fixed (per-`FactsDb` `Rc` memo) |
+| F175 | SPA detail drawer no focus management | Fixed (focus enter/return + `aria-labelledby`) |
+| F176 | Six SQL analyses in `output/spa.rs`, exit-5 leak | Fixed (moved to `analyses/dashboard.rs`, exit-4) — **residual: no tests/tracing → new F223/F224** |
+| F178 | `query_map_collect` under-adopted | Fixed (~73% adoption) |
+| F179 | Tablists lack arrow-key nav / roving tabindex | Fixed (full WAI-ARIA tabs pattern) |
+| F180 | Charts expose no text alternative | Fixed (`role=img`+`aria-label` at 12 sites) |
+| F181 | No `prefers-reduced-motion` CSS block | Fixed |
+| F182 | Dynamic updates silent to screen readers | Fixed (`aria-live` summary) |
+| F183 | Selection-listener stale-closure leak | Fixed (dedup-by-source) |
+| F184 | `changes_lineage` rebuilt every analysis call | Fixed (build-once guard) |
+| F185 | Clone `Fingerprint` retains unused `sequence` | Fixed (field removed) |
+| F187 | `just test` diverges from CI invocation | Fixed (feature scope matches CI) |
+| F189 | `vendor-duckdb-rs.sh` no retry / mutable-tag TOFU | Fixed (retry + SHA pin + stamp) |
+| F190 | `explain` covers 15/32; no anti-drift test | Fixed (31 topics + enforced coverage test) |
+| F192 | mi/communities/centrality no `run_*` tests | Fixed (3 integration tests) |
+| F193 | `resolve_imports_at_head` builds path set twice | Fixed (built once, shared) |
+| F194 | Kamei `enrich` re-materializes `changes_lineage` | Fixed (subsumed by F184 guard) |
+| F195 | `deny.toml` multiple-versions, no skip-list | Fixed (explicit skip-list) |
+| F196 | `release.yml` no sccache warm-cache reuse | Fixed (sccache wired) |
+| F198 | Two SQL source-swap mechanisms, false-symmetry doc | Fixed (doc corrected; both intentional) |
+| F199 | `Options::validate()` reports `Provenance` variant | Fixed (`InvalidOptions` + test) |
 
-**Refuted findings preserved**: F88 (silent ODB skip rationale), F95 (window filter at ingest level), plus from §3/§4 of the prior report — apply_grouping JOIN shape, renderHeader listener leak, parquet/SQLite backslash escape, hotspots CTE leak, color-mode aria-label, Kamei SEXP `<` vs `<=`, tree-sitter `kind_id` ABI, AI-assist false positives, NULL-conflated AI attribution, DuckDB pinning speculation, code-health weights citation, SoC inclusive thresholds. Rationale in commits `f1aa0e7` (PR #36) + `13fefcb` (PR #38).
+### Implemented 2026-07-01 (this session — CI-exact gate green: fmt + clippy `--all-features -D warnings` + `test --features test-support,spa` (75 binaries) + `cargo deny`)
+
+| F-ID | Subject | Fix |
+|---|---|---|
+| F191 | Usage errors (`--complexity-sample`) exit 1 | Typed `CodeLoreError::InvalidOptions` (exit 2); leaked `Plan` markers dropped from the user-facing message |
+| F201 | `read_blob_at` directory-path divergence | `GitCliRepo` uses `git cat-file blob` (errors on non-blob → `Ok(None)`, matching `GixRepo`); differential test `read_blob_at_returns_none_for_a_directory_path` |
+| F203 | Dead `Options.commit_range` knob | Field + `Default` + two doc refs removed; cache key auto-updates via the serde derive |
+| F204 | Dead `CodeLoreError::Provenance` variant | Variant removed; exit-code test re-anchored on `InvalidOptions` |
+| F205 | Stale banned `Plan 1/4` markers on `compute_changed_files` | Comment rewritten to the current contract (real loc + hunks). Broader `Plan N` sweep → new F231 |
+| F207 | `cycle-origins` no rev-keyed graph memo | `HashMap<rev, Rc<ImportGraph>>` shared across bisections via `graph_at_rev_cached` |
+| F208 | Structural import graph rebuilt per arch analysis | Per-`FactsDb` `Rc<ImportGraph>` memo; `build_import_graph` returns the shared handle |
+| F209 | `apply_grouping` row-by-row INSERT | DuckDB Appender + `flush()` |
+| F210 | `clone-coupling` 4 `String` clones/edge | Borrowed `(&str, &str)` probe-map keys — zero clones |
+| F211 | Config file-reads → `Analysis` not `RepoIo` | arch-rules / thresholds / group-file read failures → `RepoIo` (exit 3); parse failures stay `Analysis` (exit 4). Finishes the F153 job |
+| F212 | `unwrap_or_default` masks head-rev read error | Typed `map_err` (consistent with the surrounding plumbing) |
+| F213 | `pair_programming` dead `params!` lint-defeat | `use duckdb::params;` + throwaway `let _ = params![…]` removed |
+| F214 | `is_bot` allocates 2 `String`s/commit | Non-allocating ASCII `contains_ignore_ascii_case`; both `is_bot` sites |
+| F216 | SPA coupling Sankey/drawer read non-existent fields | Read real `shared`/`degree`; band width, "top 30" sort, and drawer label all corrected |
+| F217 | Reset-zoom buttons never installed (async-boot race) | Idempotent installer re-run at end of `bootWidgets()` |
+| F219 | Trends `shortPath` label collisions | Collision falls back to the unique full path; series keyed by the disambiguated label |
+| F220 | Calendar `visualMap` degenerate at `min===max` | Anchor low end at 0 so the single value paints a visible band |
+| F221 | Tooltip `?` in `<th>` triggers sort | Sort handler skips clicks originating from `.tooltip-trigger` |
+| F222 | Hotspot zero-filter-match blank body | Inline "No paths match '…'" empty-state row |
+| F223 | Six `dashboard.rs` fns no integration test | New `tests/dashboard_test.rs` drives all six over the ingested fixture |
+| F224 | Six `dashboard.rs` fns lack tracing spans | `#[tracing::instrument]` on all six (matches every sibling analysis) |
+| F225 | No exit-2 CLI test | `invalid_options_exit_with_code_2` (`--min-coupling` > `--max-coupling` → exit 2) |
+| F226 | `build_import_graph_from_edges` HashSet iteration order | Sorted edge list before adjacency build (removes per-process nondeterminism) |
+| F227 | `ANY_VALUE()` nondeterministic in bucketed/grouped ingest | `arg_max(…, ROW(m.date, -m.rowid))` (bucketed) / `arg_max(…, c.path)` (grouped) |
+| F228 | hotspot-velocity window consts doc-only | SQL is now a `{recent}/{baseline}/{boundary}` template resolved from the consts (byte-identical) |
+
+### Implemented + validated 2026-07-02 (validate-then-implement over the deferred backlog)
+
+Deep validation of the deferred backlog: one clean win shipped, two findings refuted as intentional designs, one confirmed ready-to-execute.
+
+| F-ID | Subject | Outcome |
+|---|---|---|
+| F200 | `commit_metadata` stub divergence + vacuous differential test | **Fixed** — deleted the unused `commit_metadata` trait method (both backends) + the `CommitMetadata` type + the vacuous `commit_metadata_match` test + two other dead references. **Kept** `changed_files`/`diff_hunks` (their differential tests are *real* cross-checks, not vacuous). Narrower than "delete all three oracle-only methods" — only `commit_metadata` was both divergent (gix stub vs cli-real) and vacuously tested. Gate green: fmt + clippy `--all-features -D warnings` + test (75 binaries) + deny. |
+| F188 | `cut-release.sh` ruleset body omits spa-browser/dogfood | **Refuted** — the omission is *intentional + documented*. `cut-release.sh:230-232` explicitly names spa-browser/dogfood as known-excluded; `dogfood` is `continue-on-error` (correctly not a required gate); and a live-vs-hardcoded drift-detector (`:250`) guards against divergence. Adding spa-browser would be a *policy* change (make it gate release tags), not a bug fix — the maintainer's call. |
+| F202 | Fan-in/out computed three inconsistent ways | **Refuted (mostly)** — god-classes fan_out *intentionally* counts external (npm/pypi/std) imports (documented as "total dependency breadth"), while crossing/instability measure *internal* coupling. That divergence is by design. The only genuine gap is crossing-vs-instability self-loop handling (a rare re-export edge case) — low value, output-changing, needs a semantics decision. Not the broad "three different numbers" defect the finding implied. |
+| F229 | Vendored `libduckdb-sys` fork (duckdb-rs#786) | **Implemented (macOS gate green; Windows CI pending on push)** — bumped `duckdb → =1.10504.0` (upstream #786 fix; the released `build.rs:66` emits `rustc-link-lib=dylib=rstrtmgr`) and removed the whole vendoring apparatus: the `[patch.crates-io]` block, `vendor/duckdb-rs/` + tracked stubs, `scripts/vendor-duckdb-rs.sh`, `patches/duckdb-rs-msvc-1940.patch`, the `.gitignore` stub-path handling, and the "Vendor patched libduckdb-sys" step at all 9 sites across ci/release/container/bench. No arrow-version conflict; a version-drift guard caught + forced `provenance::DUCKDB_VERSION` + banner test refs to `1.10504.0`. macOS gate green (fmt + clippy `--all-features -D warnings` + test 75 binaries + deny). **`test (windows-latest)` is the one thing not verifiable locally — the final gate on push.** |
+
+### Refuted findings (preserved to prevent rediscovery)
+
+F84, F88 (silent ODB skip rationale), F95 (window filter at ingest level), F116 (Renovate/Dependabot partitioned by ecosystem — Renovate owns `cargo`, Dependabot owns `github-actions`), F123 (crossbeam 0.8.4 + num-format 0.4.4 are current releases), plus the earlier-report set: apply_grouping JOIN shape, renderHeader listener leak, parquet/SQLite backslash escape, hotspots CTE leak, color-mode aria-label, Kamei SEXP `<` vs `<=`, tree-sitter `kind_id` ABI, AI-assist false positives, NULL-conflated AI attribution, DuckDB pinning speculation, code-health weights citation, SoC inclusive thresholds. Rationale in `f1aa0e7` (PR #36) + `13fefcb` (PR #38).
 
 ---
 
 ## 4. Active Findings
 
-### NEW Active Findings — Tool replacement / dep currency
-
-#### F119 — Hand-rolled 826-line CSV emitter → use `csv` crate
-
-*   **Location**: `crates/codelore-lib/src/output/csv.rs`
-*   **Severity**: MED
-
-### NEW Active Findings — Backend performance
-
-### NEW Active Findings — Test / CI / observability
-
-#### F148 — `csv.rs` + `markdown.rs` per-analysis emitters
-
-*   **Severity**: LOW
-
-### Sixth audit pass — F161, F162 (emit memory / type contract)
-
-#### F161 — Every emitter materializes the full `Vec<Row>` — no streaming path
-
-*   **Location**: `crates/codelore-cli/src/main.rs:735-799` (HTML) + every CSV/JSON/markdown/SARIF arm
-*   **Severity**: LOW
-*   **Category**: Memory architecture
-*   **Status**: Active
-*   **Description**: Every `run_*` collects from the DuckDB cursor into a `Vec<Row>`; emitter signature `fn write_X(rows: &[Row], w: &mut W)` iterates over the slice. Peak memory grows with row count. On a 100k-file monorepo, HotspotRow Vec (~40 MB data + double during query→Vec staging) plus CSV staging strings can hit hundreds of MB.
-*   **Failure scenario**: `codelore analyze --analysis hotspots --format csv` on a 200k-touched-path monorepo: ~5-8 GB resident peak; OOM on 4 GB CI runner.
-*   **Suggested fix**: `EmitterStream<W>` trait with `emit_header` / `emit_row` / `finish`. CSV is mechanical; JSON/markdown need array streaming; SARIF stays batch (needs run-level totals).
-
----
-
-### Discovery pass — 2026-06-24 (F166–F199)
-
-Read-only fan-out across 5 dimensions (architecture, performance, SPA/accessibility, tooling/CI/dependencies, correctness/testing/CLI). Every candidate validated against source before logging. Tier 1 (F166–F172) + Tier 2 (F173–F178) were the session target; Tier 3/4 (F179–F199) are logged for follow-up.
-
-**Session closure**: F166–F172 + F174–F178 **Fixed** (each landed test-first / byte-identical-verified, full CI-exact gate + the gix-vs-cli differential test green). **F173 deferred** (escape hatch) — see its entry. Tier 3/4 remain Active.
-
-#### F166 — `codelore schema` row-type list drifted from the analysis registry
-
-*   **Location**: `crates/codelore-cli/src/main.rs:369-402` (`run_schema_cmd` — hardcoded `row_types` array + literal `"Supported row types (29)"`)
-*   **Severity**: MED · **Category**: list duplication / drift (user-visible)
-*   **Status**: Active
-*   **Description**: The array holds 29 names; `AnalysisName::all()` has 32. `delivery-friction`, `main-dev-by-revs`, `main-dev-by-deletions` are missing, so `codelore schema delivery-friction` errors "unknown row type" for a fully-supported analysis.
-*   **Suggested fix**: Derive the list + count from `AnalysisName::all().iter().map(AnalysisName::as_str)` (the pattern `run_docs_cmd` already uses).
-
-#### F167 — `stale-code` + `delivery-friction` non-deterministic (wall-clock anchor, no `--age-time-now` hatch)
-
-*   **Location**: `crates/codelore-lib/src/analyses/stale_code.rs:90`, `crates/codelore-lib/src/analyses/delivery_friction.rs:135` (`time::OffsetDateTime::now_utc()`)
-*   **Severity**: HIGH · **Category**: correctness (determinism)
-*   **Status**: Active
-*   **Description**: Analysis SQL re-runs at query time on the cached fact store. Both inject a fresh wall-clock anchor into a threshold gate, so identical repo + HEAD + cache key yields different rows between runs. `code_age.rs` + `knowledge_islands.rs` already honor `opts.age_time_now`; these two have no anchor override at all.
-*   **Suggested fix**: Default anchor to `MAX(commits.date)` (deterministic from the store), honor `opts.age_time_now` override — parity with the sibling analyses.
-
-#### F168 — `lead-time` final `ORDER BY` lacks a tiebreaker → non-deterministic under `LIMIT`
-
-*   **Location**: `crates/codelore-lib/src/analyses/lead_time.rs:81` (`ORDER BY lead_time_seconds DESC` then `LIMIT ?`)
-*   **Severity**: MED · **Category**: correctness (determinism)
-*   **Status**: Active
-*   **Description**: `lead_time_seconds` is heavily tie-laden (squash/rebase → bulk `0`s, per the module docstring). With `LIMIT` over a tie-only sort and no unique key, which rows survive is at the mercy of scan order. Every sibling analysis appends a tiebreaker; this one selects `rev` but omits it from `ORDER BY`.
-*   **Suggested fix**: `ORDER BY lead_time_seconds DESC, rev ASC`.
-
-#### F169 — Treemap breadcrumb reads an undefined CSS variable
-
-*   **Location**: `crates/codelore-lib/src/output/spa/widgets.js:2588` (`getCssVar('--bg-elev-1')`)
-*   **Severity**: LOW · **Category**: theming bug
-*   **Status**: Active
-*   **Description**: Only `--bg-elev` and `--bg-elev-2` are defined (template.html:59-60,772-773); `--bg-elev-1` resolves to `""`, so the treemap breadcrumb falls back to ECharts' theme-unaware default in both themes.
-*   **Suggested fix**: `getCssVar('--bg-elev')`.
-
-#### F170 — CSV emitter has no formula-injection guard
-
-*   **Location**: `crates/codelore-lib/src/output/csv.rs:18-29` (`quote_if_needed`)
-*   **Severity**: MED · **Category**: output / security
-*   **Status**: Active
-*   **Description**: RFC-4180 quoting is correct, but fields starting with `= + - @` pass through verbatim. CodeLore emits attacker-influenceable git strings (author names, paths) into CSVs maintainers open in spreadsheets — the classic CSV-injection vector. The markdown emitter escapes `|`; CSV has no equivalent.
-*   **Suggested fix**: Force-quote and prepend a `'` guard when a string cell's first char is `= + - @` (or tab).
-
-#### F171 — `bus-factor` drops repo-root files and is not rename-aware
-
-*   **Location**: `crates/codelore-lib/src/analyses/bus_factor.rs:67,73` (`regexp_extract(c.path, '^[^/]+', 0)` + `AND c.path LIKE '%/%'`)
-*   **Severity**: MED · **Category**: correctness
-*   **Status**: Active
-*   **Description**: (a) `LIKE '%/%'` excludes every file with no `/`, so all repo-root files are silently dropped (empty/skewed report on flat repos). (b) It is the only path-derived-aggregation analysis that does NOT opt into the lineage rewriter, so renames split history across old/new module names.
-*   **Suggested fix**: `CASE WHEN c.path LIKE '%/%' THEN regexp_extract(...) ELSE '<root>' END`; opt into `lineage::rewrite` (byte-identical-baseline guarded for the lineage half).
-
-#### F172 — Calendar heatmap `Math.min.apply(null, counts)` can `RangeError` on long histories
-
-*   **Location**: `crates/codelore-lib/src/output/spa/widgets.js:3065-3066`
-*   **Severity**: MED · **Category**: JS robustness
-*   **Status**: Active
-*   **Description**: `daily_commits` is one row per active day; a multi-year repo yields thousands of elements. `apply`-spread of a huge array risks `RangeError: Maximum call stack size exceeded`, throwing the whole heatmap.
-*   **Suggested fix**: Single-pass `for` loop (also faster — no argument-array construction).
+### 4.1 Carried forward from prior passes (re-validated 2026-07-01)
 
 #### F173 — Same HEAD blobs read + tree re-walked up to 3× across complexity/clones/imports
+*   **Location**: `facts/ingest/mod.rs:145,158,165` (three sequential passes); each `*_head.rs:55` independently calls `read_blob_at_head`
+*   **Severity**: HIGH · **Category**: performance (redundant I/O) · **Status**: Active
+*   **State on main**: Still three sequential HEAD passes each re-reading live blobs. Only `head_rev`/`live_paths` were hoisted once (SQL path-queries no longer repeated); blob reads + tree walks still happen 3×. Deepened by the newly-found per-file re-resolution cost in **F206** — even a single deduped pass keeps paying F206's per-file HEAD/commit/tree decode.
+*   **Deferral blocker**: divergent extractor error contracts (clones aborts ingest via `collect::<Result>>?`; complexity/imports warn-and-skip) + the memory-regression risk of hoisting all live blobs into one map. Needs a bounded shared-blob LRU or unified error contracts first.
 
-*   **Location**: `crates/codelore-lib/src/facts/ingest/mod.rs:145-165` (3 sequential passes) → `repo/gix_repo.rs::read_blob_at_head`
-*   **Severity**: HIGH · **Category**: performance (redundant I/O + decompression)
-*   **Status**: Active — **attempted + deferred** (needs a dedicated pass; see blocker)
-*   **Description**: The three language detectors share an overlapping extension set, so each common Tier-1 file's blob is OID-looked-up, inflated, and root-tree-walked 3 separate times. Distinct from F125 (which dedup'd the SQL, not the blob reads).
-*   **Suggested fix**: Read each live Tier-1 blob once, fan the bytes to all three extractors; keep the rayon-then-serial-drain shape. Byte-identical output; preserve each pass's distinct skip/log semantics.
-*   **Deferral blocker (discovered this session)**: a naive merge is NOT cleanly byte-identical for two reasons. (1) The three detectors diverge — `Tier1Language` accepts `.pyi` and folds `.tsx` into TypeScript, while `CloneLanguage`/`ImportLanguage` reject `.pyi` and split `.tsx` into a separate grammar — so only the raw blob read + 2 MiB byte-cap is shareable; each extractor must still re-gate. (2) Divergent error/write ordering: complexity drains its Appender first and swallows extract errors (warn/debug + skip), imports swallows too, but **clones propagates `extract_functions` errors via `collect::<Result>>?`, aborting the whole ingest**. A single merged parallel pass cannot preserve "complexity rows committed before a later clones-extract abort" AND "read each blob once" without either re-serializing (no win) or hoisting all live Tier-1 blobs into one in-memory map (an unbounded memory regression the current one-blob-per-task-then-drop design deliberately avoids). The dedicated pass must first either (a) adopt a bounded shared-blob LRU, or (b) unify the three extractors' error contracts.
+#### F119 — Hand-rolled CSV emitter (now 1122 LOC) instead of the `csv` crate
+*   **Location**: `output/csv.rs`
+*   **Severity**: MED · **Category**: tool replacement · **Status**: Active (re-scoped)
+*   **State on main**: Still hand-rolled (`wc -l` = 1122, up from ~826; no `csv` dep). **Re-scope note**: no longer a clean byte-identical swap — the emitter now carries a deliberate formula-injection guard (F170) and `\n` line endings; the `csv` crate would change both. Any migration must preserve the injection guard + line-ending contract, or the swap is rejected.
 
-#### F174 — `run_coupling` recomputed 2–5× per dashboard / multi-analysis run, no memoization
+#### F148 — `csv.rs` + `markdown.rs` per-analysis emitters, no shared row abstraction
+*   **Location**: `output/csv.rs` (~34 KB, 43 `write_*` fns), `output/markdown.rs` (~36 KB)
+*   **Severity**: LOW · **Category**: copy-paste drift · **Status**: Active
+*   **State on main**: Both grew past the previously-noted ~25 KB; still one `write_*` fn per analysis, no `TabularEmit`/row trait. Coupled to F119 (csv-crate) + F161 (streaming) — treat as one output-layer cluster.
 
-*   **Location**: `crates/codelore-lib/src/analyses/coupling.rs:328` + callers `code_health.rs:143`, `centrality.rs:102`, `communities.rs:102`, `clone_coupling.rs:120`, `main.rs:2375`
-*   **Severity**: HIGH · **Category**: performance (repeated heavy query)
-*   **Status**: Active
-*   **Description**: The O(K²) `filtered_changes` self-join + Fisher pass is pure per (db, opts) yet fires ≥2× in a `--format spa` run and up to 5× across code-health/centrality/communities/clone-coupling. It is the single most expensive analysis query.
-*   **Suggested fix**: Per-`FactsDb` `RefCell<HashMap<key, Rc<Vec<CouplingRow>>>>` memo keyed on the coupling-affecting opts subset (NOT `rows_limit` — callers already strip it). Byte-identical.
+#### F161 — Every emitter materializes the full `Vec<Row>` — no streaming path
+*   **Location**: `output/json.rs:29`, `sarif.rs:90`, `markdown.rs` — all `rows: &[T]`
+*   **Severity**: LOW · **Category**: memory architecture · **Status**: Active
+*   **State on main**: All emitters still take a fully-materialized slice; no `EmitterStream`. Peak memory grows with row count; a 200k-path monorepo CSV export can spike multi-GB. SARIF stays batch (needs run-level totals); CSV/JSON/markdown are the streamable targets.
 
-#### F175 — SPA detail drawer has no focus management
+#### F177 — Three schema-version sentinels still coexist
+*   **Location**: `facts/schema.rs:10` (`CURRENT_SCHEMA_VERSION="3"`), `cache.rs:25` (`CACHE_EPOCH="schema_v5"`), `schema_v1.sql` filename literal; stray `"schema_v3"` help-text at `main.rs:373`
+*   **Severity**: MED · **Category**: duplicated source-of-truth · **Status**: PARTIAL
+*   **State on main**: Both named sub-fixes landed — CLI `profile` now derives the schema string from `CURRENT_SCHEMA_VERSION`, and the cache sentinel was renamed to the honest `CACHE_EPOCH` (matches CLAUDE.md). But three version constants remain structurally disjoint (none derived from another) and a stray `"schema_v3"` help literal persists. Residual: unify or cross-reference the three; fix the stray literal.
 
-*   **Location**: `crates/codelore-lib/src/output/spa/template.html:1813-1828` (`store.show()`) + `widgets.js:858-1050` (`showFileDetailDrawer`); `<dialog>` at template.html:1694
-*   **Severity**: HIGH · **Category**: accessibility (WCAG 2.4.3, 4.1.2)
-*   **Status**: Active
-*   **Description**: Deliberate non-modal `dialog.show()` (so users can click another row) gives none of `showModal()`'s a11y freebies, but no compensating wiring exists: focus never enters the drawer, never returns on close; no `aria-modal`; the `#drawer-title` is not referenced via `aria-labelledby`.
-*   **Suggested fix**: On open, move focus to close-button/title (record prior `activeElement`); restore on close; add `aria-labelledby="drawer-title"`. Keep non-modal behavior.
+#### F186 — Bench regression gate never runs on PRs (advisory-only weekly cron)
+*   **Location**: `.github/workflows/bench.yml:3` (`schedule` + `workflow_dispatch`, no `pull_request`), `:116` (`fail-on-alert: false`)
+*   **Severity**: MED · **Category**: CI coverage / design tradeoff · **Status**: Active (design decision)
+*   **State on main**: Unchanged and explicitly documented as intentional post-merge advisory behavior. Kept as a design-review item, not a plain bug: a perf regression can merge unflagged until the Monday cron. Decision point — leave advisory, or add a non-gating PR-triggered bench comment.
 
-#### F176 — Six SQL analyses live in `output/spa.rs` and mislabel query failures as `Output` (exit 5 vs 4)
-
-*   **Location**: `crates/codelore-lib/src/output/spa.rs` — `run_xray` (349), `run_clone_summary` (407), `run_trends` (433), `run_daily_commits` (478), `run_kamei_risk` (515), `run_imports_for_arch_graph` (248); 20 `CodeLoreError::Output(format!(...))` wraps
-*   **Severity**: MED · **Category**: layering + error-category leak
-*   **Status**: Active
-*   **Description**: These are analyses (parameterized SQL → row structs) sitting in the output layer; a SQL failure surfaces as `Output` → exit code 5 (output/I/O) when the contract reserves 4 for analysis failures.
-*   **Suggested fix**: Move the six `run_*` + row structs into `analyses/` (e.g. `analyses/dashboard.rs`); reclassify errors as `Analysis`. Byte-identical output.
-
-#### F177 — Three divergent schema-version sentinels, hand-synchronized
-
-*   **Location**: `facts/schema.rs:10` (`CURRENT_SCHEMA_VERSION = "3"`), `cache.rs:20` (`SCHEMA_VERSION = "schema_v5"`), `codelore-cli/src/main.rs:145` (hardcoded `"schema_v3"`) + `:297` prose
-*   **Severity**: MED · **Category**: duplicated source-of-truth / doc drift
-*   **Status**: Active
-*   **Description**: Three values for one logical concept, none derived from another. The cache sentinel was hand-bumped to `v5` for a non-schema (hunks) fix — contradicting CLAUDE.md's "never hand-invalidate". The `profile` literal is stale duplication that will misreport after the next schema bump.
-*   **Suggested fix**: Make `profile`/`explain` read `CURRENT_SCHEMA_VERSION`; rename the cache sentinel to an honest `CACHE_EPOCH` and document the deliberate cache-vs-schema split in CLAUDE.md.
-
-#### F178 — `query_map_collect` helper adopted by only ~30% of single-query analyses
-
-*   **Location**: `crates/codelore-lib/src/analyses/query.rs:28` (helper) vs ~18 analyses hand-rolling the identical prepare/query_map/collect triple
-*   **Severity**: MED · **Category**: copy-paste drift / under-adopted abstraction
-*   **Status**: Active
-*   **Description**: The helper exists precisely to stop error-message drift across the 7-line pattern, but adoption stalled; new analyses copy whichever neighbor they open.
-*   **Suggested fix**: Convert the ~10 single-query, no-post-process analyses (ownership, soc, hotspots, main_dev×3, code_age, communication, entity_effort, entity_ownership, summary, messages). Byte-identical (same SQL/params/mapper).
-
-#### Tier 3 / Tier 4 — logged for follow-up
-
-| ID | Title | Location | Sev |
-|---|---|---|---|
-| F179 | Tablists have `role=tab`+`aria-selected` but no arrow-key nav / roving tabindex | template.html (8 tablists), widgets.js:3269 | MED |
-| F180 | Canvas/ECharts/d3 charts expose no text alternative (`role=img`/`aria-label`) | ~12 `*-body` chart divs | MED |
-| F181 | No `prefers-reduced-motion` CSS block (CSS transitions + `view-transition-name` animate regardless) | template.html CSS (164,172,223,549) | MED |
-| F182 | Dynamic updates silent to SR (no `aria-live` on filter summary / color-mode) | template.html:1593, widgets.js:1975 | LOW-MED |
-| F183 | Selection-listener registry accumulates stale closures on re-render (leak + stale-chart dispatch) | widgets.js:2330,2722 | LOW-MED |
-| F184 | `changes_lineage` temp table fully rebuilt on every analysis call under `--use-canonical-lineage` | facts/ingest/lineage.rs:93-123 | MED |
-| F185 | Clone `Fingerprint` retains unused per-node `sequence: Vec<(u16,u16)>` repo-wide at HEAD ingest | clones/fingerprint.rs:28-63 | MED |
-| F186 | Bench regression gate never runs on PRs (advisory-only weekly cron) | bench.yml:3-6,104-113 | MED |
-| F187 | `just test --all-features` diverges from CI test invocation + browser test silently skips | justfile:18-19, RELEASING.md:93 | MED |
-| F188 | `cut-release.sh` hardcoded ruleset body (6 check contexts) drifts from CI job names | scripts/cut-release.sh:125-155 | MED |
-| F189 | `vendor-duckdb-rs.sh` `rm -rf`+clone: no retry, mutable-tag TOFU, offline cliff, re-clones per cold job | scripts/vendor-duckdb-rs.sh:23-38 | MED |
-| F190 | `explain` covers 15/32 analyses; unknown topic hard-errors; no anti-drift test | main.rs:239-330 | MED |
-| F191 | Format/usage errors exit `1` instead of typed `4`/`5` | main.rs:477,487,500,568 | MED |
-| F192 | `mi` / `communities` / `centrality` have no integration tests of `run_*` | tests/ | MED |
-| F193 | `resolve_imports_at_head` builds the live-path set twice (`&str` then owned clone) | imports_head.rs:133-169 | LOW |
-| F194 | Kamei `enrich` re-materializes `changes_lineage` at ingest (subsumed by F184) | kamei/mod.rs:18-31 | LOW |
-| F195 | 5× `hashbrown` (+ getrandom/digest/rustix splits) under `multiple-versions="warn"`, no skip-list | deny.toml:34-35 | LOW |
-| F196 | `release.yml` uses `actions/cache` namespace, not CI's sccache → no warm-cache reuse | release.yml:94-106 | LOW |
-| F197 | `dogfood` cold `--release` build on every PR, advisory-only, separate cache | ci.yml:221-225 | LOW |
-| F198 | Two parallel SQL source-swap mechanisms (lineage regex vs grouped_complexity `{cm_src}`); doc claims false symmetry | analyses/lineage.rs:81 vs grouped_complexity.rs:29 | LOW |
-| F199 | `Options::validate()` reports CLI arg errors as `CodeLoreError::Provenance` (variant overload) | options.rs:292 | LOW |
+#### F197 — `dogfood` job: per-PR `--release` build, advisory-only, separate cache
+*   **Location**: `.github/workflows/ci.yml:210` (`continue-on-error: true`), `:231` (`shared-key: release-dogfood`), `:235` (`cargo build --release`)
+*   **Severity**: LOW · **Category**: CI cost · **Status**: PARTIAL
+*   **State on main**: The "cold" aspect is mitigated (sccache warms release objects cross-workflow), but the job is still a per-PR `--release` build, advisory-only, on a deliberately separate cache slot. Residual (deliberate bake-in): decide when to gate + whether to share the CI cache slot.
 
 ---
 
-## 4½. Validation Pass — 2026-06-18
+### 4.2 Discovery pass — 2026-07-01 (deferred remainder)
 
-Every Active / Partial entry above re-verified against current `main` HEAD via direct source inspection by a fan-out of 8 parallel validation subagents. Backwards-evidence summary so the next reader doesn't redo the same checks:
+The 5-dimension fan-out logged F200–F230; 25 landed in the 2026-07-01 pass and F200 (+ F188/F202 refutations) in the 2026-07-02 pass (see the §3 "Implemented" tables). The entries below are the deferred remainder — each is a large refactor with regression surface, a dependency-migration needing CI validation, or a low-value mechanical sweep, not a quick safe change.
 
-| Finding | Claim | Verified state on main | Status |
-|---|---|---|---|
-| F94 | ingest.rs monolithic | Split into `facts/ingest/` directory module (mod + 6 topical submodules); pure code movement verified by identical function inventory + normalized diff; 663 tests pass | **Fixed (this session)** |
-| F97 | `JSON.parse` synchronous at first paint | Recon clarified the bottleneck was the boot-time WIDGETS.forEach render storm, not the JSON.parse itself. Boot converted to async with `yieldToMain` between widgets. First paint is now bounded by 1 widget render (kpi-tiles) instead of all 14. | **Fixed (this session)** |
-| V4 | no `WIDGETS` registry | `const WIDGETS = [{ name, render, rerender? }]` introduced at §3 boot; single `WIDGETS.forEach` loop replaces 60 LOC of duplicated render + rerender lines; 14 widgets registered uniformly; integration + browser smoke tests green | **Fixed (this session)** |
-| V5 | METRIC_DEFS not interpolated | `SpaOptionsSnapshot` field on `SpaDashboard` populated from `Options::from_options`; widgets.js `interpolate(def.formula, data.options)` substitutes `${key}` placeholders; coupling_pairs/coupling_density formulas updated to use placeholders | **Fixed (this session)** |
-| V6 | `CHANNEL_CAPACITY = 64` unmeasured | `ingest_capacity_sweep` Criterion benchmark added (16/64/256/1024); `CHANNEL_CAPACITY_OVERRIDE: AtomicUsize` + `set_channel_capacity_override(n)` writer hook; `bounded::<CommitEvent>(channel_capacity())` on the hot path | **Fixed (this session)** |
-| F111 | `FactsDb::conn()` leaks `&Connection` | `conn()` tightened to `pub(crate)`; `prepare` / `execute_batch` / `query_row` safe methods added; all 9 external `.conn()` test call sites migrated; zero CLI uses | **Fixed (this session)** |
-| F113 | CLI reaches into many lib submodules | `codelore_lib::cli_api` façade added (re-exports the modules + root types the CLI needs); all CLI files migrated so `grep codelore_lib:: \| grep -v cli_api` = 0; internals stay `pub` for the test crate | **Fixed (this session)** |
-| F114 | Single-CDN dependence | `AssetPin.url_fallbacks` added with `unpkg.com` mirror per asset; `fetch_and_pin` walks primary→fallbacks; SHA-256 enforced on whichever mirror responds; tampered-mirror substitution still fails the build loudly | **Fixed (this session)** |
-| F115 | Container mutable tags | Both `FROM` lines now carry inline `@sha256:` digests; Renovate `dockerfile` manager pattern set to `/Containerfile/` (Dependabot only detects `Dockerfile`); base-image bumps grouped weekly | **Fixed (this session)** |
-| F116 | Dependabot + Renovate duplicate | Both files present BUT partitioned by `package-ecosystem`: Dependabot owns `github-actions`, Renovate owns `cargo`. Not duplicated. | **REFUTED** (see refuted-findings block above) |
-| F117 | First-party GHA floating tags | `release.yml`: 6 `actions/...@vN` lines (52, 88, 95, 148, 153, 165, 168, 207, 266) all floating. `container.yml`: 6 `docker/...@vN` lines (59, 61, 69, 119, 121, 129). Audit cited release.yml for the docker actions — they actually live in container.yml. | Active confirmed (location refined) |
-| F119 | csv.rs 826 LOC | `wc -l = 826` ✓ (no drift); `grep 'use csv' = 0` — still hand-rolled | Active confirmed |
-| F120 | SARIF schema URL on legacy host | `sarif.rs:13` swapped to `https://json.schemastore.org/sarif-2.1.0.json` | **Fixed (URL half) — hand-rolled JSON / serde-sarif migration NOT closed** |
-| F121 | `fishers_exact` unmaintained | Ported in-tree as `crate::stats::fisher_two_tail_pvalue` (hypergeometric tail in log space via `ln_factorial`); supply-chain dep removed; 8 regression cases match upstream to 1e-12 relative error | **Fixed (this session)** |
-| F122 | toml on 0.8.x | Workspace dep bumped to `toml = "1"` with `features = ["parse", "serde"]` (the 1.0 feature split); Cargo.lock now `toml 1.1.2+spec-1.1.0`; 652-test workspace + clippy clean | **Fixed (this session)** |
-| F123 | codelore-rca stale crossbeam/num-format | `Cargo.toml:40 crossbeam = "0.8"`, `:47 num-format = "0.4"`; lock resolves crossbeam v0.8.4 + num-format v0.4.4 — identical to prior. Hands-off policy on the MPL fork. | Active confirmed |
-| F124 | MSRV pinned to current stable, undocumented | `docs/RELEASING.md` now carries an "MSRV (Minimum Supported Rust Version) Policy" section: documents the deliberate "MSRV tracks channel" stance for the pre-1.0 binary-distribution model + the post-1.0 reconsideration trigger | **Fixed (policy)** |
-| F125 | redundant queries fire 4× per ingest | `ingest.rs:92-98` hoist `current_head_rev` + `query_live_paths` once; threaded as `&[String]` + `&str` into 4 HEAD-time passes | **Fixed on main (PR #58)** |
-| F126 | N single-row UPDATEs in resolve_imports | `ingest.rs:599-635` bulk Appender into `_resolved_imports` + single hash-joined UPDATE | **Fixed on main (PR #58)** |
-| F127 | Kamei `enrich_diffusion` correlated | NS/ND/NF collapsed (`kamei/mod.rs:44-65`). Entropy block (`:72-83`) **still correlated** — known follow-up per validation observation 30251. | Partial (entropy block remains — see updated §4 description) |
-| F128 | Kamei `enrich_size` correlated | `kamei/mod.rs:104-114` — single grouped `UPDATE … FROM (SELECT rev, SUM ... GROUP BY rev)` | **Fixed on main (PR #64)** |
-| F129 | arch-violations materializes, truncates post-Rust | `arch_violations.rs:55-75` collects full Vec without LIMIT, validates in Rust at `:77-88`, `truncate(limit)` post-loop at `:90-93` | Active confirmed |
-| F130 | pair_programming O(P²) with `String::clone` | `pair_programming.rs:102-107` literal doubly-nested loop with `participants[i].clone(), participants[j].clone()` | Active confirmed |
-| F131 | Tooltip 14×14 trigger | `template.html:325-328` bumped to 24×24 with 12px glyph + 22px line-height + -7px vertical-align | **Fixed (this session)** |
-| F132 | Hardcoded hex in widgets.js | All 4 sites swapped to `token('--name')` reads (label-on-dark, label-on-saturated, heatmap-1..5, chart-palette-1..15); light-theme overrides added; widget entries upgraded to `rerender: 'theme'`; zero hex literals remain in widgets.js | **Fixed (this session)** |
-| F133 | No responsive < 900px | Dashboard grid swapped from `xl:grid-cols-2` to `md:grid-cols-2`; Tailwind bundle rebuilt with `md\:grid-cols-2`; 2-col kicks in at ≥768px (tablet portrait); SPA + browser tests green | **Fixed (this session)** |
-| F134 | Hotspot 'Show all' synchronous | `widgets.js` now chunks `renderNextPage` into 50-row batches with `await yieldToMain()` between each; the `Show all` click is also wrapped in element-scoped `startViewTransition(..., container)` (Chrome 147+) so the table animates without freezing other widgets; `view-transition-name: match-element` on `.hotspot-row` gives per-row crossfades | **Fixed on main (this session)** |
-| F135 | Theme toggle re-runs `d3.pack` | `template.html`'s `Alpine.effect` rerenderer loop now `await window._codeloreYieldToMain()` between each registered rerenderer (the d3.pack pass still runs but yields the main thread between widgets); `.widget { view-transition-name: match-element }` per-widget animation | **Fixed on main (this session)** |
-| F136 | Color-mode tablist non-ARIA | JS-driven hotspot toggle sets `aria-selected` in the toggle loop; 6 Alpine tablists carry `:aria-selected` next to `:class`; template ships with `aria-selected="true"` on the default-active tab; 30 buttons paired total | **Fixed (this session)** |
-| F137 | Knowledge-islands rows mouse-only | widgets.js `wireRowKbActivation(rowEl)` helper + applied to both KI and hotspot row sites; `tabindex=0` + `role=button` + Enter/Space forward → click; `:focus-visible` outline on `tr.{hotspot,ki}-row` | **Fixed (this session)** |
-| F138 | `startViewTransition` ignores reduced-motion | widgets.js:694-700 now matches `prefers-reduced-motion` and runs `updateFn()` synchronously | **Fixed on main (PR #62)** |
-| F142 | Sparse tracing in analyses | Exactly 3 `tracing::*` calls across 32 analysis files (lead_time.rs:86, clones.rs:95, clone_coupling.rs:278) | Active confirmed |
-| F144 | No CI dogfooding | New `dogfood` job in `ci.yml` runs release `codelore analyze --format gha` for PR annotations + `codelore diff` on PR events for step-summary; `continue-on-error: true` during bake-in | **Fixed (this session)** |
-| F145 | main.rs dispatch boilerplate | 2-D `match (format, &analysis)` collapsed to a 1-D `match &analysis` delegating to 32 per-analysis `dispatch_*` fns + an `EmitCtx`; byte-identical output verified (228 pairs, only env-driven diffs in clones/wip_age_days/sarif-run-id), exit codes identical | **Fixed (this session)** |
-| F146 | json.rs trivial shims | `grep -cE '^pub fn write_[a-z_]+_json' = 29` — no change | Active confirmed |
-| F148 | csv.rs + markdown.rs per-analysis emitters | Both still ~25KB per-analysis files (csv.rs 25825 bytes, markdown.rs 25534 bytes) | Active confirmed |
-| F149 | hunks schema lacks PK / NOT NULL | Schema tightened to NOT NULL + composite PK + index; wired entire ingest pipeline (gix `count_loc_and_hunks` + `diff_hunks` proper impl + walker populates `FileChange.hunks` + `append_change` writes rows); differential test asserts gix == cli hunks | **Fixed (this session)** |
-| F121 | `fishers_exact` crate unmaintained (last release 2018-11) | In-tree port in new `crate::stats::fisher_two_tail_pvalue` module (~150 LOC); supply-chain dependency eliminated; output matches the upstream's `fishers_exact(&[a,b,c,d]).two_tail_pvalue` to ≤ 1e-12 relative error across 8 regression cases | **Fixed (this session)** |
-| V4 | `widgets.js` per-widget registry | New `const WIDGETS = [{ name, render, rerender? }]` array at the top of §3 Boot; single `WIDGETS.forEach(w => { w.render(); /* register theme rerender per the `rerender` flag */ })` loop replaces the prior 60-LOC sequence of duplicated `renderXxx()` + `_codeloreRerenderers.push(() => renderXxx(...))` blocks. 14 widgets registered uniformly; `rerender: false` opts out (KPI tiles, KI table, hotspot table), `rerender: 'theme'` opts into the token-cache-invalidating path (hotspot circle-pack), default falls through to `_codeloreRerenderers.push`. SPA integration test + browser smoke test green. Adding a widget is now one line. | **Fixed (this session)** |
-| F132 | Hardcoded hex colors break light theme | 4 sites in `widgets.js` (sankey label `#e6e6e6`, treemap label `#fff`, calendar-heatmap 5-band ramp, 15-color author palette) externalised to CSS custom properties — new `--label-on-dark`, `--label-on-saturated`, `--heatmap-{1..5}`, `--chart-palette-{1..15}` tokens with separate light-theme overrides that retune the heatmap ramp's "low" band (from `#1a4a2c` invisible-on-white to `#c8e6c9` desaturated mint) and deepen the author palette saturation so colors don't wash out against light cards. JS sites swapped to `token('--name')` (theme-aware + cache-invalidating). Widget entries `coupling-sankey` / `hotspot-treemap` / `calendar-heatmap` upgraded to `rerender: 'theme'` so the token cache flushes on theme toggle. `grep` for `'#[0-9a-fA-F]{3,6}'` in widgets.js now returns zero hits; browser smoke test green. |
-| F133 | No responsive layout below ~1280px viewport | Dashboard grid container swapped from `xl:grid-cols-2` to `md:grid-cols-2` so 2-col kicks in at tablet portrait (≥ 768 px) instead of waiting until desktop (≥ 1280 px). Wide widgets keep `xl:col-span-2` so they only span both columns at desktop; at md/lg they sit in the normal 2-col grid one per column. Mobile (< 768 px) stays at single-column. The Tailwind v4 bundle was rebuilt (`tailwindcss -i tailwind-src/input.css -o tailwind.daisyui.min.css --minify`) so `md\:grid-cols-2` is included alongside the existing `xl\:grid-cols-2`. SPA integration + browser smoke tests green; viewports 768–1279 px now get a proper 2-col layout instead of the uncompressed desktop view. |
-| F97 | SPA boot-time render storm blocks first paint | Synchronous `WIDGETS.forEach` boot loop replaced by an `async function bootWidgets()` IIFE that calls `w.render()` for each entry, registers the rerenderer (theme/regular/none), and `await yieldToMain()` between widgets (not after the last — a trailing yield is a wasted task). First widget (kpi-tiles) is cheap structural HTML, so the browser paints page chrome + KPI cards immediately, then incrementally fills in the 13 heavier widgets as the event loop yields. `yieldToMain` uses the existing `scheduler.yield()` / `MessageChannel.postMessage` fallback ladder shipped for F134/F135. Smaller scope than the audit's "split JSON into per-widget blocks" — the JSON parse itself is fast (a few hundred KB worst-case); the bottleneck was synchronously rendering 14 ECharts widgets before yielding. SPA integration + browser smoke tests green. |
-| F150 | Schema version disjoint, no startup validation | `facts/schema.rs:10` `CURRENT_SCHEMA_VERSION` const + `facts/mod.rs:69` `validate_schema_version()` at `open_read_only` bails on mismatch | **Fixed on main (PR #61)** |
-| F151 | Leiden non-deterministic | `communities.rs:58 LEIDEN_SEED` + `:148-150 LeidenConfig { seed: Some(LEIDEN_SEED), .. }` + regression test :269-316 | **Fixed on main (PR #61)** |
-| F152 | clone_group_id std HashMap | `clones/extractor.rs:151-152` switched to `BTreeMap<[u8;32], _>` | **Fixed on main (PR #61)** |
-| F153 | I/O errors → exit 5 | `error.rs:22` single `Io(#[from] std::io::Error)` variant; `:68` still maps `Io(_) → 5` alongside `Output(_)`; no `RepoIo` variant | Active confirmed |
-| F154 | diff base==head no guard | `diff.rs:563-569` explicit `if base_sha == head_sha { anyhow::bail!(...) }` pre-check with SHA + range context | **Fixed on main (PR #62)** |
-| F155 | DiffOutput medians default 0.0 | `diff.rs:48,52` `Option<f64>` for both fields; `:673` populates `Some/None` per gate-ran branch | **Fixed on main (PR #60)** |
-| F156 | Thresholds/Gates/DiffGates no `deny_unknown_fields` | `quality_gates/mod.rs:46,55,70` all three structs carry `#[serde(deny_unknown_fields)]` | **Fixed on main (PR #60)** |
-| F157 | F147's guard wraps wrong list | `analysis.rs:154-164 registry!` macro expands ONCE into both the `&[AnalysisName::$variant,*]` array and the const `_guard` match — single source of truth | **Fixed on main (PR #60)** |
-| F158 | SARIF informationUri hardcodes wrong URL | `sarif.rs:20 CODELORE_HOMEPAGE` + `:26-27 CODELORE_RESEARCH_FOUNDATIONS_URL` used at all 5 sites (informationUri ×3 + helpUri ×2). `grep emre/codescene = ∅` | **Fixed on main (PR #63)** |
-| F159 | SARIF artifactLocation.uri not percent-encoded | `Cargo.toml:46 percent-encoding = "2"` + `sarif.rs:54 percent_encode_path(p)` applied at `:177, :354, :531` (all 3 emitters) | **Fixed on main (PR #63)** |
-| F160 | Kamei NDEV/EXP same-second `<` vs `<=` inconsistent | `kamei/mod.rs:227, :246, :304` all use strict `prev.date < c.date`; `:278` documents the unified semantic; no `<=` in code paths | **Fixed on main (PR #64)** |
-| F161 | Vec<Row> in every emitter | json.rs/markdown.rs/sarif.rs all still `rows: &[T]`; no `EmitterStream` trait | Active confirmed |
-| F162 | Parquet types drift from CSV row-type | `parquet.rs:13` still raw `COPY … TO PARQUET`; no `CAST … AS UINTEGER`; no documentation note | Active confirmed |
-| F163 | SARIF automationDetails.id static | `sarif.rs:81 automation_id_for(prefix)` appends per-run 16-hex SHA-256 suffix; applied at all 3 sites (:124, :312, :474) | **Fixed on main (PR #63)** |
-| F110 | Differential test coverage incomplete | `differential_repo_test.rs:522 head_sha_matches` + 11 sibling tests at lines 62, 97, 139, 169, 209, 241, 265, 316, 390, 450, 485, 537 | **Fixed on main (PR #57)** |
-| F112 | Provenance manifest missing reproducibility | `provenance/mod.rs:94,98,114,117,122` — all 5 reproducibility fields present; builder populates from real sources | **Fixed on main (PR #57)** |
-| F143 | SPA browser smoke test | `tests/spa_browser_test.rs` exists; `Cargo.toml:127 browser-tests` feature wired; `ci.yml:174` runs `cargo test --features browser-tests,spa,test-support -p codelore-lib --test spa_browser_test` | **Fixed on main (PR #56)** |
+#### Backend performance
 
-`cargo deny check advisories` clean as of validation date — confirms no F-finding maps to a live CVE.
+##### F206 — `read_blob_at` re-resolves HEAD→commit→root-tree per file and discards the gix object cache each call
+*   **Location**: `repo/gix_repo.rs:293-329` (`to_thread_local()` per call → `rev_parse_single` → `find_commit` → `commit.tree()` → `lookup_entry_by_path`); default wrapper `repo/mod.rs:99-101`
+*   **Severity**: HIGH · **Category**: blob I/O / redundant recomputation · **Status**: Deferred (own perf pass)
+*   **Description**: Every HEAD-time blob read mints a fresh thread-local `Repository` (cold object cache), re-resolves `HEAD`, re-decodes the commit + root tree, and re-walks + re-decodes every intermediate directory tree — for *each* file. A file at depth `d` re-decodes `d` tree objects; every sibling re-decodes its parent tree again. Three HEAD passes × F live files = 3F redundant resolves. This is distinct from and **deeper than** F173 (which only dedups the blob across passes — the per-file HEAD/commit/tree re-decode remains even in one deduped pass). Dominant cost of HEAD scans on large deep-nested monorepos.
+*   **Suggested improvement**: Resolve HEAD → root tree once per pass and reuse it (batch `read_blobs_at_head(paths)` walking a single cached tree), or hold one `to_thread_local()` repo with `object_cache_size` enabled across the file loop. Same bytes returned — output-neutral, faster.
+*   **Deferral reason**: Restructures the hot HEAD-scan loop and overlaps the F173 blocker (divergent extractor error contracts); wants its own focused perf pass rather than riding this batch.
 
-**Pruning note**: 17 findings that the 2026-06-16 validator marked "Fixed-on-branch" all reached main (PRs #56-#64 merged via v0.7.0 / v0.8.0). Their full §4 bodies have been removed from this report and condensed into the §3 closure log per the report's stated policy (line 4). F113 count corrected (8, not 13/17). F127 reclassified as Partial — see updated §4 entry. F120 + F124 closed this session (URL fix + MSRV policy doc). F116 refuted this session after reading both bot configs — Renovate handles `cargo`, Dependabot handles `github-actions`; they're partitioned, not duplicated.
+#### Rust idioms / error handling
+
+##### F215 — Stringly-typed `format: &str` re-matched with `unreachable!()` in ~11 dispatchers
+*   **Location**: `codelore-cli/src/main.rs:705` + sibling dispatch fns; also `args.output…expect("validated above")` at `:751/757`
+*   **Severity**: LOW · **Category**: type-safety / simplification (optional) · **Status**: Deferred (large refactor)
+*   **Description**: `--format` is validated once then re-matched in many dispatchers, each carrying an `unreachable!("format validated…")` arm — a hand-maintained invariant a parse-once `enum Format` would make compile-time-total, deleting the arms + the "validated above" coupling.
+*   **Suggested improvement**: Parse `--format` into a `Format` enum at the boundary and thread it through dispatch. A non-trivial refactor across ~11 dispatchers — flagged, not forced.
+
+#### SPA / UI / UX
+
+##### F218 — Any single layout-selector change re-renders every widget (full-dashboard cascade)
+*   **Location**: `output/spa/template.html:2155-2191` (one `Alpine.effect` subscribing to all layout knobs → all `_codeloreRerenderers`); double-render at `:2072-2075`
+*   **Severity**: MED-HIGH · **Category**: render performance · **Status**: Deferred (perf refactor)
+*   **Description**: Bumping the Kamei window 30→60 (one sparkline) re-runs `d3.pack` over the whole hotspot tree, rebuilds every ECharts instance, and re-lays-out the arch graph + DSM. The code yields between rerenderers to stay responsive — treating the symptom. The scenario toggle also auto-clicks the knowledge-loss tab, double-rendering the circle-pack on the first pick.
+*   **Suggested improvement**: Split the monolithic effect into per-store effects that re-run only the affected widget(s); key the rerenderer registry by which store fields each entry depends on.
+*   **Deferral reason**: Reworks the Alpine reactivity graph — a render-perf polish with regression surface. Its own pass, validated by the SPA + browser tests, rather than riding this batch.
+
+#### Code hygiene
+
+##### F231 — Comprehensive `Plan N` version-phase marker sweep (comment rule violation)
+*   **Location**: **62 comment sites across 25 files** (validated 2026-07-02 via `grep -rn "Plan [0-9]" crates/codelore-lib/src crates/codelore-cli/src` → 62; files include `types.rs`, `analysis.rs`, `constants.rs`, `options.rs`, `output/{mod,sarif,parquet}.rs`, `provenance/mod.rs`, `clones/*`, `complexity/*`, `repo/{mod,git_cli_repo,gix_repo}.rs`, `facts/{schema_v1.sql,ingest/*}`, `arrow_facade.rs`, `codelore-cli/src/{args,diff,diff_output,main}.rs`)
+*   **Severity**: LOW · **Category**: comment rule violation (no version/task markers) · **Status**: Active (deferred — dedicated scripted sweep)
+*   **Description**: F164 swept `F<NN>` finding-IDs out of comments but left `Plan N` phase markers, which are the same banned class under the project's no-version/task-markers-in-comments hard rule. F205 fixed the one *factually-wrong* instance (`gix_repo.rs:355-356`); 62 more remain, several also stale (e.g. `repo/mod.rs:1-2` "the default impl is `gix` in Plan 1; a `GitCliRepo` … lands in Plan 6"). Deferred as a dedicated scripted sweep (like F164) rather than 62 hand-edits riding an unrelated branch — mixing prefixes, parentheticals, and stale future-tense claims, so a blind `sed` would mangle grammar.
+*   **Suggested improvement**: A mechanical comment-only sweep like F164's — drop each `Plan N` marker, keep or correct the surrounding rationale (some are false future-tense claims, e.g. "Plan 4 will add X" for X already shipped). Leave vendored `codelore-rca` (MPL fork) untouched.
+
+#### Dependency currency (verify latest before acting — assessed offline from declared/resolved versions)
+
+Overall hygiene is strong: `thiserror 2`, `toml 1`, `ureq 3`, `anyhow`/`serde`/`clap`/`rayon`/`time`/`percent-encoding` all current. `tree-sitter*` + `petgraph` are deliberately pinned (CLAUDE.md) — out of scope. Two items worth active tracking:
+
+##### F230 — `gix` bump (mostly refuted — already near-current)
+*   **Location**: `crates/codelore-lib/Cargo.toml` (`gix = "0.84"`, resolved 0.84.0)
+*   **Severity**: LOW · **Category**: dependency currency (routine) · **Status**: Near-current (mostly refuted)
+*   **Validation (2026-07-02)**: latest `gix` is **0.85.0** (published 2026-06-22); the project is on **0.84.0** — exactly *one* minor behind, ~1 week old. The earlier "few minors behind" premise is refuted. Near-zero urgency.
+*   **Suggested improvement**: A routine `0.84 → 0.85` bump whenever convenient; the two-backend differential harness (`differential_repo_test.rs`) de-risks it — a `GixRepo`-vs-`git`-CLI divergence fails the gate immediately. Move `arrow` only in lockstep with `duckdb`.
 
 ---
 
 ## 5. Next Audit Cycle
 
-**Current Active count after this validation pass + closure annotations**:
+**State after the 2026-07-01 + 2026-07-02 implementation sessions (branch `fix/deep-audit-batch`):**
 
-- **Closed on main (added to §3 closure-log)**: F110, F112, F117, F118, F120 (URL half), F124 (policy half), F125, F126, F127 (full — entropy rewrite closes the remainder), F128, F129, F130, F134, F135, F138, F142, F143, F146, F150, F151, F152, F153, F154, F155, F156, F157, F158, F159, F160, F163.
-- **REFUTED this session**: F116 (Renovate + Dependabot partitioned by ecosystem) + F123 (crossbeam 0.8.4 + num-format 0.4.4 are current releases) — see §3 newly-refuted block.
-- **Closed by side-effect**: F162 — Parquet writers now delegate to shared SQL generators that preserve CSV row-type contract via explicit casts. Verified 2026-06-21.
-- **Discovery pass 2026-06-24 (F166–F199)**: 34 findings logged (see §4).
-  - **Fixed (v0.9.2, 2026-06-25)**: F166–F172 (Tier 1) + F174–F178 (Tier 2) — 12 closed.
-  - **Fixed (2026-06-26)**: F179–F199 (all 21 Tier 3/4 findings) — closed across SPA-a11y (F179–F182), perf/JS/ingest (F183–F185, F193, F194 + the F184 lineage-build guard), testing/CLI (F190–F192), tooling/CI/deps (F186–F189, F195–F197), and code-quality (F198, F199). Each landed test-first or byte-identical-verified; full CI-exact gate + the gix-vs-cli differential test green.
-- **Active (deferred — each needs its own focused session)**:
-  - **F173** — read each HEAD blob once. Attempted + deferred; the divergent extractor error contracts + memory-regression blocker are documented in its §4 entry. Needs a bounded shared-blob LRU or unified error contracts first.
-  - **F119 / F148 / F161** — the output-emitter cluster (csv-crate migration / `TabularEmit` dedup / `EmitterStream` streaming). Byte-identical-critical across 64 per-analysis emitters, and the runtime-schema leak from `code_maat_compat` makes a clean `TabularEmit` non-trivial. NOTE: F119 (csv-crate migration) is no longer a clean byte-identical swap — the hand-rolled emitter now carries a deliberate formula-injection guard (see F170) and uses `\n` line endings; the `csv` crate would change both. Re-scope before attempting.
+- **Implemented + gated green (27)**: 2026-07-01 (25) — F191, F201, F203, F204, F205, F207–F214, F216, F217, F219–F228; 2026-07-02 (2) — **F200** (deleted the divergent+vacuous `commit_metadata` + `CommitMetadata`, kept the real `changed_files`/`diff_hunks` cross-checks) and **F229** (dropped the vendored `libduckdb-sys` fork; `duckdb → =1.10504.0` — **Windows CI pending on push**). Each pass gated green on macOS: fmt, clippy `--all-targets --all-features -D warnings`, `test --features test-support,spa` (75 binaries / 0 failures), `cargo deny`.
+- **Refuted on validation (2026-07-02)**: F188 (ruleset omission is intentional + drift-guarded), F202 (fan-out divergence is mostly by design — god-classes externals vs internal coupling), F230 (already one minor behind, not "a few").
+- **Deferred — large refactor / focused pass**: F206 (HEAD-scan I/O restructure — wants a benchmark), F215 (`enum Format`), F218 (render-cascade split), F231 (62-site `Plan N` scripted sweep).
+- **Carried-forward Active (output/blob cluster)**: F119 (csv-crate), F148 (`TabularEmit` dedup), F161 (`EmitterStream`), F173 (HEAD blob dedup) — byte-identical-critical (F206 is the deeper lever for F173).
+- **Carried-forward Partial / design**: F177 (schema sentinels), F186 (bench PR gate — design), F197 (dogfood advisory/separate-cache).
 
-The next sweep should re-open with F-IDs starting at **F200**.
+**Highest-leverage work remaining:**
+1. **HEAD-scan I/O** (F206 + F173) — resolve HEAD→tree once per pass with a per-worker cached repo; benchmark via `ingest_capacity_sweep`. Biggest large-repo wall-clock lever.
+2. **Output-emitter cluster** (F119 / F148 / F161) — csv-crate migration (preserve the F170 injection guard + `\n` endings), `TabularEmit` dedup, `EmitterStream` streaming, in one coordinated byte-identical pass.
+3. **`Plan N` marker sweep** (F231) — 62-site scripted comment cleanup (a hard-rule violation).
 
-### Deferred — discovery pass (Workflow `wf_902c8b32-45d`)
-
-The 2026-06-18 audit attempted to fan out 8 fresh discovery dimensions (architecture, backend-perf, rust-best-practices, spa-frontend, dep-currency, test-quality, code-design, security-correctness) with 3-lens adversarial verification per candidate, looped to dry. The validation half (54 findings re-verified in parallel) completed; the discovery half — 16 subagents across 2 rounds — was lost to an Anthropic weekly-quota cap (resets 2026-06-21 21:00 Europe/Amsterdam). The workflow script + run journal persist at `/Users/emrec/.claude/projects/-Users-emrec-Projects-playground-codelore/8db19d2a-538c-4ef3-aaaa-e3093c56c8c8/workflows/scripts/codelore-deep-audit-wf_902c8b32-45d.js` — resumable with `Workflow({scriptPath, resumeFromRunId: "wf_902c8b32-45d"})` once quota resets, which will cache the entire validation phase and only re-run the discovery half.
-
-**Validation methodology held**: every Active finding above re-verified against current `main` HEAD via direct source-line grep / wc / sed; results recorded in §4½. Closures show explicit PR numbers so the report doesn't claim closures that haven't reached main.
+The next sweep should re-open with F-IDs starting at **F232**.

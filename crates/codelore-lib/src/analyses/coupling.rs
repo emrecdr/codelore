@@ -81,7 +81,7 @@ pub(crate) fn good_commits_cte(bucket: Option<TimeBucket>, use_lineage: bool) ->
 /// Deliberately EXCLUDED: `rows_limit` (applied as a post-memo
 /// `Vec::truncate`, so the stored result is the full graph regardless of the
 /// caller's `--rows N`) and every field that only affects ingest or other
-/// analyses (`after`/`before`/`commit_range`/`group_file`/… are baked into
+/// analyses (`after`/`before`/`group_file`/… are baked into
 /// the fact store at ingest time, before any coupling call runs).
 ///
 /// `fisher_significance` is an `f64`; we key on its raw bit pattern

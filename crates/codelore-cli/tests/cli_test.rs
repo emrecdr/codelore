@@ -90,6 +90,32 @@ fn invalid_repo_exits_with_code_3() {
 }
 
 #[test]
+fn invalid_options_exit_with_code_2() {
+    // Inverted coupling range (`--min-coupling` > `--max-coupling`) is a
+    // cross-field config error → `CodeLoreError::InvalidOptions` → exit 2.
+    // Exit 2 (config errors) was the one bucket with no end-to-end CLI
+    // coverage; a refactor dropping the typed error to a bare
+    // `anyhow::bail!` would silently regress it to exit 1.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let output = Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "hotspots",
+            "--min-coupling",
+            "80",
+            "--max-coupling",
+            "30",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+}
+
+#[test]
 fn analyze_hotspots_emits_csv() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
     Command::cargo_bin("codelore")

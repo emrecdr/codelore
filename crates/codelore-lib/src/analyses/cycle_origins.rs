@@ -25,6 +25,9 @@
 //! point. Only the [`MAX_CYCLES`] largest cycles are traced (each costs
 //! ~log₂(commits) graph rebuilds), bounding cost on tangled repos.
 
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use crate::analyses::architecture_trend::import_graph_at_rev;
 use crate::analyses::import_graph::{ImportGraph, tarjan_scc};
 use crate::facts::FactsDb;
@@ -83,7 +86,15 @@ pub fn run_cycle_origins<R: Repo>(
     let Some((head_rev, head_ts, _)) = commits.last() else {
         return Ok(Vec::new());
     };
-    let head_graph = import_graph_at_rev(db, repo, head_rev, head_ts)?;
+    // Memoise the graph reconstructed at each probed rev for the lifetime
+    // of this call. The bisections over the same fixed commit list share
+    // midpoints heavily (every cycle's first probe is the identical
+    // midpoint), and each rebuild reads + tree-sitter-parses every live
+    // blob at that rev — so caching by rev collapses up to MAX_CYCLES
+    // rebuilds of the same rev into one. Bounded: distinct probed revs is
+    // O(log commits).
+    let mut graph_cache: HashMap<String, Rc<ImportGraph>> = HashMap::new();
+    let head_graph = graph_at_rev_cached(db, repo, head_rev, head_ts, &mut graph_cache)?;
     let mut cycles = cycle_member_sets(&head_graph);
     // Largest first; cap to bound historical-scan cost.
     cycles.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
@@ -91,7 +102,7 @@ pub fn run_cycle_origins<R: Repo>(
 
     let mut rows = Vec::with_capacity(cycles.len());
     for members in cycles {
-        let idx = bisect_formation(db, repo, &commits, &members)?;
+        let idx = bisect_formation(db, repo, &commits, &members, &mut graph_cache)?;
         let (rev, _, date) = &commits[idx];
         rows.push(CycleOriginRow {
             size: u32::try_from(members.len()).unwrap_or(u32::MAX),
@@ -101,6 +112,25 @@ pub fn run_cycle_origins<R: Repo>(
         });
     }
     Ok(rows)
+}
+
+/// Reconstruct (or reuse) the import graph at `rev`, memoised by rev for
+/// the lifetime of one `run_cycle_origins` call. Returns a shared handle so
+/// overlapping bisection probes across cycles don't re-read + re-parse the
+/// same revision's blobs.
+fn graph_at_rev_cached<R: Repo>(
+    db: &FactsDb,
+    repo: &R,
+    rev: &str,
+    ts: &str,
+    cache: &mut HashMap<String, Rc<ImportGraph>>,
+) -> Result<Rc<ImportGraph>> {
+    if let Some(g) = cache.get(rev) {
+        return Ok(Rc::clone(g));
+    }
+    let g = Rc::new(import_graph_at_rev(db, repo, rev, ts)?);
+    cache.insert(rev.to_string(), Rc::clone(&g));
+    Ok(g)
 }
 
 /// Member-path sets of every non-trivial SCC (cycle) in `graph`, each
@@ -129,13 +159,14 @@ fn bisect_formation<R: Repo>(
     repo: &R,
     commits: &[(String, String, String)],
     members: &[String],
+    cache: &mut HashMap<String, Rc<ImportGraph>>,
 ) -> Result<usize> {
     let mut lo = 0usize;
     let mut hi = commits.len() - 1; // present here by construction
     while lo < hi {
         let mid = lo + (hi - lo) / 2;
         let (rev, ts, _) = &commits[mid];
-        let graph = import_graph_at_rev(db, repo, rev, ts)?;
+        let graph = graph_at_rev_cached(db, repo, rev, ts, cache)?;
         if members_form_one_cycle(&graph, members) {
             hi = mid;
         } else {

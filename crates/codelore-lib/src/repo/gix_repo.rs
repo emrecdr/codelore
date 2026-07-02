@@ -5,7 +5,7 @@ use std::path::Path;
 use gix::diff::tree_with_rewrites::Change as GixChange;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
-use crate::repo::{CommitMetadata, Repo};
+use crate::repo::Repo;
 use crate::{ChangeType, CodeLoreError, CommitEvent, FileChange, Hunk, Options, Result};
 
 pub struct GixRepo {
@@ -243,15 +243,6 @@ impl Repo for GixRepo {
         }
     }
 
-    fn commit_metadata(&self, rev: &str) -> Result<CommitMetadata> {
-        Ok(CommitMetadata {
-            rev: rev.to_string(),
-            signed: false,
-            signed_by: None,
-            signoffs: vec![],
-        })
-    }
-
     fn head_sha(&self) -> Result<String> {
         let repo = self.inner.to_thread_local();
         let oid = repo
@@ -352,8 +343,9 @@ impl GixRepo {
 /// → call `repo.diff_tree_to_tree(parent_tree, commit_tree, options)` which
 /// returns `Vec<ChangeDetached>` (= `gix_diff::tree_with_rewrites::Change`).
 ///
-/// For Plan 1 we set `loc_added`/`loc_deleted` to 0 and `hunks` to empty;
-/// Plan 4 will add real blob-diff line counting.
+/// Modifications carry real `loc_added`/`loc_deleted` + hunks, computed by
+/// `changed_files_for_commit` via `count_loc_and_hunks`; pure
+/// adds/deletes/type-changes carry empty hunks.
 fn compute_changed_files(inner: &gix::ThreadSafeRepository, rev: &str) -> Result<Vec<FileChange>> {
     let repo = inner.to_thread_local();
 

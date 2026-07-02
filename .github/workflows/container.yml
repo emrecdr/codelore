@@ -46,16 +46,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Populate vendor/ on the host before docker buildx sends the build
-      # context. Workspace Cargo.toml's `[patch.crates-io]` block points at
-      # `vendor/duckdb-rs/...` (workaround for upstream duckdb-rs#786 — MSVC
-      # 19.40 build break). `cargo` errors when the patch path is missing,
-      # so the directory must be in the docker context for `COPY . .` inside
-      # the planner stage to pick it up. Idempotent; the script no-ops if
-      # the stamp file matches the pinned upstream tag.
-      - name: Vendor patched libduckdb-sys (duckdb-rs#786)
-        run: bash scripts/vendor-duckdb-rs.sh
-
       - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
 
       - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4

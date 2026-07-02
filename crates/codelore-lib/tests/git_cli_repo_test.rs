@@ -173,22 +173,6 @@ fn git_cli_repo_extracts_hunks_for_root_commit() {
     );
 }
 
-#[test]
-fn git_cli_repo_commit_metadata_unsigned() {
-    let tiny = codelore_lib::test_support::tiny_repo::build();
-    let repo = GitCliRepo::open(tiny.dir.path()).expect("open");
-    let meta = repo
-        .commit_metadata(&tiny.head_sha)
-        .expect("commit_metadata");
-    assert_eq!(meta.rev, tiny.head_sha);
-    assert!(!meta.signed, "tiny_repo commits are not GPG-signed");
-    assert!(meta.signed_by.is_none());
-    assert!(
-        meta.signoffs.is_empty(),
-        "no Signed-off-by trailers in tiny_repo"
-    );
-}
-
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------

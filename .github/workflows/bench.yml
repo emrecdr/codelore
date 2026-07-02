@@ -32,9 +32,6 @@ jobs:
           # linker errors that get misdiagnosed as flaky CI.
           key: bench-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
 
-      - name: Vendor patched libduckdb-sys (duckdb-rs#786)
-        run: bash scripts/vendor-duckdb-rs.sh
-
       - name: Cache Linux kernel snapshot
         id: kernel-cache
         uses: actions/cache@v5

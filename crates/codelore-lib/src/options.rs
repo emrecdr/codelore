@@ -50,7 +50,6 @@ pub struct Options {
     pub repo_path: PathBuf,
     pub after: Option<Date>,
     pub before: Option<Date>,
-    pub commit_range: Option<String>,
 
     // Aggregation
     pub group_file: Option<PathBuf>,
@@ -326,7 +325,6 @@ impl Default for Options {
             repo_path: PathBuf::from("."),
             after: None,
             before: None,
-            commit_range: None,
             group_file: None,
             team_map_file: None,
             min_revs: crate::constants::DEFAULT_MIN_REVS,

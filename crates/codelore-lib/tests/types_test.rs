@@ -47,7 +47,7 @@ fn commit_event_construction() {
 
 #[test]
 fn bca_error_exit_codes_match_spec() {
-    assert_eq!(CodeLoreError::Provenance("x".into()).exit_code(), 2);
+    assert_eq!(CodeLoreError::InvalidOptions("x".into()).exit_code(), 2);
     assert_eq!(CodeLoreError::Repo("x".into()).exit_code(), 3);
     assert_eq!(CodeLoreError::Analysis("x".into()).exit_code(), 4);
     assert_eq!(CodeLoreError::Output("x".into()).exit_code(), 5);

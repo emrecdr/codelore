@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use crate::repo::{CommitMetadata, Repo};
+use crate::repo::Repo;
 use crate::{ChangeType, CodeLoreError, CommitEvent, FileChange, Hunk, Options, Result};
 
 pub struct GitCliRepo {
@@ -212,56 +212,6 @@ impl Repo for GitCliRepo {
         parse_email_from_mailmap_line(s.trim()).unwrap_or_else(|| email.to_string())
     }
 
-    fn commit_metadata(&self, rev: &str) -> Result<CommitMetadata> {
-        // Signed status: %G? returns "G"=good, "B"=bad, "U"=unknown, "N"=no sig, "E"=error
-        // Signer key/name: %GS (signer name)
-        // Trailers: %(trailers:key=Signed-off-by,valueonly) — one per line
-        let output = self.run_git(&[
-            "show",
-            "--no-patch",
-            "--format=%G?%x1f%GS%x1f%(trailers:key=Signed-off-by,valueonly)",
-            rev,
-        ])?;
-        if !output.status.success() {
-            return Err(CodeLoreError::Repo(format!(
-                "git show (metadata): {}",
-                String::from_utf8_lossy(&output.stderr)
-            )));
-        }
-        let raw = String::from_utf8(output.stdout)
-            .map_err(|e| CodeLoreError::Repo(format!("git show metadata not utf-8: {e}")))?;
-
-        let raw = raw.trim();
-        // The format emits one line: "<gpg_flag>\x1f<signer>\x1f<trailers...>"
-        // but trailers may be empty or span multiple lines.
-        // Split on the first two \x1f separators.
-        let mut parts = raw.splitn(3, '\x1f');
-        let gpg_flag = parts.next().unwrap_or("N");
-        let signer_raw = parts.next().unwrap_or("").trim();
-        let trailers_block = parts.next().unwrap_or("");
-
-        let signed = matches!(gpg_flag, "G" | "U" | "X" | "Y");
-        let signed_by = if signed && !signer_raw.is_empty() {
-            Some(signer_raw.to_string())
-        } else {
-            None
-        };
-
-        let signoffs: Vec<String> = trailers_block
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty())
-            .map(str::to_string)
-            .collect();
-
-        Ok(CommitMetadata {
-            rev: rev.to_string(),
-            signed,
-            signed_by,
-            signoffs,
-        })
-    }
-
     fn head_sha(&self) -> Result<String> {
         let output = self.run_git(&["rev-parse", "HEAD"])?;
         if !output.status.success() {
@@ -290,17 +240,20 @@ impl Repo for GitCliRepo {
     }
 
     fn read_blob_at(&self, rev: &str, path: &str) -> Result<Option<Vec<u8>>> {
-        // `git show <rev>:<path>` resolves the path through that rev's
-        // tree and writes the blob's raw bytes to stdout. Matches
+        // `git cat-file blob <rev>:<path>` resolves the path through that
+        // rev's tree and writes the blob's raw bytes to stdout. Matches
         // GixRepo's ODB-backed read semantics (bare-repo safe, no
-        // working-tree dependency). Missing paths produce exit code 128
-        // with a "fatal: path '...' does not exist in '<rev>'" or similar
-        // stderr — we map any non-success to `Ok(None)` per the trait
-        // contract; GixRepo does the same.
+        // working-tree dependency). The `blob` type filter is load-bearing
+        // for parity: it errors (→ `Ok(None)`) when the spec resolves to a
+        // non-blob — a directory or a submodule gitlink — exactly where
+        // GixRepo returns `Ok(None)` via its `entry.mode().is_blob()`
+        // guard. `git show <rev>:<dir>` would instead succeed and print a
+        // tree listing, silently diverging from GixRepo. Missing paths
+        // also error → `Ok(None)`, per the trait contract.
         //
-        // `--textconv` is NOT passed: we want raw bytes, not the
-        // user-configurable smudged form.
-        let output = self.run_git(&["show", &format!("{rev}:{path}")])?;
+        // `cat-file` emits the object verbatim (never textconv-smudged),
+        // so the bytes match GixRepo's raw ODB read.
+        let output = self.run_git(&["cat-file", "blob", &format!("{rev}:{path}")])?;
         if output.status.success() {
             Ok(Some(output.stdout))
         } else {
