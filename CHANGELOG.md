@@ -4,6 +4,20 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **Code-health structural-risk fusion.** The `code-health` composite now derives its structural term from five named behavioral-code biomarkers — **Complex Method** (per-language cyclomatic `PERCENT_RANK`), **Large Method** (LOC `PERCENT_RANK`), **God Class** (normalized `god_score` from `run_god_classes`), **DRY** (normalized cloned-function count from `run_clones`), and **Shotgun Surgery** (coupling centrality `PERCENT_RANK` from Fisher-significant pairs) — aggregated via a probabilistic-OR formula with a co-occurrence multiplier (0.25 per additional distinct smell type). The behavioral terms (churn, ownership fragmentation, coupling centrality) are retained unchanged. Score formula: `100 × (1 − 0.40·structural_risk − 0.25·churn − 0.15·ownership_fv − 0.20·coupling_centrality)`.
+
+- **Code-health R/Y/G banding and self-relative percentile.** Every `code-health` row now carries a `band` (`red`/`yellow`/`green`, derived from `structural_risk` thresholds 0.66/0.33) and a `percentile` (per-language `PERCENT_RANK` of `structural_risk`, Alves/Ypma/Visser 2010). Both fields are exposed in all output formats (CSV, JSON, SARIF, Markdown, Parquet, SQLite).
+
+- **Code-health determinism gate.** A new integration test (`code_health_v2_is_deterministic`) runs `run_code_health` twice against independent in-memory DuckDB instances ingested from the same fixture and asserts byte-identical `path`/`score`/`band` across both runs. Locks score stability against unordered-aggregate drift.
+
+### Changed
+
+- **`CACHE_EPOCH` bumped to `schema_v6`.** Existing caches are automatically invalidated to reflect the widened `CodeHealthRow` output (new `structural_risk`, `percentile`, `band` columns) and the biomarker-derived scoring change.
+
+- **`codelore explain code-health` updated to v2 formula.** The explain entry now describes the biomarker structural-risk term, the four behavioral weights, the `structural_risk` threshold banding, and the per-language percentile rank.
+
 ## [0.13.0] - 2026-07-02
 
 ### Added
