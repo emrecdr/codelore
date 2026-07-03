@@ -1292,11 +1292,18 @@
     // unchanged so renderDrawerRadar still finds it after body.innerHTML.
     const radarDiv = '<div id="drawer-radar" style="height: 220px; margin-bottom: 14px;"></div>';
 
+    // The radar is always present, so Overview's emptiness is judged on its
+    // OTHER sections: when a metric-sparse file has none, the radar self-hides
+    // and we show a muted message instead of a visually blank default tab.
+    const overviewInner = radarDiv + (overviewHtml.length
+      ? overviewHtml
+      : ('<div class="empty">' + (hasPath
+          ? 'No overview metrics for this file — it may be below the minimum-revision threshold.'
+          : 'This row had no resolvable file path, so no metrics could be looked up.') + '</div>'));
+
     body.innerHTML =
       drawerTabBar() +
-      drawerPanel('drawer-panel-overview', 'drawer-tab-overview', radarDiv + overviewHtml,
-        hasPath ? 'No overview metrics for this file — it may be below the minimum-revision threshold.'
-                : 'This row had no resolvable file path, so no metrics could be looked up.') +
+      drawerPanel('drawer-panel-overview', 'drawer-tab-overview', overviewInner, '') +
       drawerPanel('drawer-panel-coupling', 'drawer-tab-coupling', couplingHtml,
         'No change-coupling partners recorded for this file.') +
       drawerPanel('drawer-panel-people', 'drawer-tab-people', peopleHtml,
@@ -1339,13 +1346,11 @@
       // Files with no hotspot row are typically empty / near-empty
       // (`__init__.py`, generated stubs) that have no functions or
       // classes for the complexity scan to measure. There's nothing
-      // useful to plot on the radar — but the Knowledge island /
-      // Coupling / Code-health sections below still surface what
-      // we DO know about this file (ownership, author, total LoC,
-      // change-coupling partners). Hide the radar container so the
-      // drawer goes straight to those sections instead of wasting
-      // 220px on an empty chart with a confusing "no metrics"
-      // message.
+      // useful to plot on the radar — but the Overview, Coupling and
+      // People tabs still surface what we DO know about this file
+      // (ownership, author, total LoC, change-coupling partners). Hide
+      // the radar container so the Overview tab shows its muted message
+      // instead of wasting 220px on an empty chart.
       container.style.display = 'none';
       return;
     }
