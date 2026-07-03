@@ -378,9 +378,9 @@ A post-slice deep validation of Plan 3b (four selection subscribers) ran three p
 #### F242 — module-depth coupling-subscriber browser test is inert against the differential fixture
 
 *   **Location**: `crates/codelore-lib/tests/spa_browser_test.rs` — Step 13 in `rendered_spa_boots_without_console_errors`
-*   **Severity**: LOW · **Category**: test coverage · **Status**: Active
-*   **Description**: Step 13 asserts the coupling subscriber highlights a selected file's `modulePathSeg(path, 2)` module prefix in module-depth sankey view (guarding the module-name-space mapping). The production mapping is correct (verified by source review), but the test's only fixture — `differential_repo::build()` — has near-zero co-changes, so at depth 2 the change-coupling sankey has no cross-module links and no qualifying node; the step always SKIPS. Net: the guard executes no assertion in CI and provides zero live regression protection today, and it spins a ~3s re-render poll to no effect on every run.
-*   **Fix (deferred)**: point the browser test at (or add) a coupling-capable fixture with cross-module co-changes at ≥2-deep directories so the module-prefix assertion actually fires. Until then the mapping is guarded by source review only, not an executing test. The step is correct-by-construction and will fire unchanged once such a fixture exists.
+*   **Severity**: LOW · **Category**: test coverage · **Status**: Fixed (Unreleased)
+*   **Description**: The original Step 13 (inside `rendered_spa_boots_without_console_errors`) asserted the coupling subscriber highlights a selected file's `modulePathSeg(path, 2)` module prefix in module-depth sankey view. The production mapping is correct (verified by source review), but that test's only fixture — `differential_repo::build()` — has near-zero co-changes, so at depth 2 the change-coupling sankey had no cross-module links and no qualifying node; the step always SKIPPED. Net: the guard executed no assertion in CI and provided zero live regression protection, and it spun a ~3s re-render poll to no effect on every run.
+*   **Fix (`373747e`, `9030159`)**: added a dedicated `coupling_repo` fixture (`test_support/mod.rs`) — three 2-segment modules (`src/alpha`, `src/beta`, `src/gamma`), with `alpha/svc.rs`↔`beta/svc.rs` co-changed across 6 commits so a `src/alpha`↔`src/beta` depth-2 edge is guaranteed under any coupling threshold, plus per-file solo churn for hotspot rows — and moved the assertion into its own test `sankey_module_depth_highlights_mapped_node` rendered from that fixture with `permissive_coupling_opts`. The inert Step 13 was removed from the smoke test. The new test FAILS (not skips) if the depth-2 sankey has no qualifying node, and asserts the captured highlight name equals the module prefix (not the raw path). Independently verified: `spa_browser_test` 9/9 (was 8), the new test exercises its assert (full-boot run, ~9.3s), `spa_integration_test` 4/4.
 
 ---
 
@@ -400,6 +400,6 @@ A post-slice deep validation of Plan 3b (four selection subscribers) ran three p
 2. **Output-emitter cluster** (F119 / F148 / F161) — csv-crate migration (preserve the F170 injection guard + `\n` endings), `TabularEmit` dedup, `EmitterStream` streaming, in one coordinated byte-identical pass.
 3. **`Plan N` marker sweep** (F231) — 62-site scripted comment cleanup (a hard-rule violation).
 
-Open from the SPA linked-brushing validation: **F242** (module-depth coupling-subscriber browser test is inert against the co-change-poor differential fixture — needs a coupling-rich fixture to fire).
+**F242 (module-depth coupling-subscriber browser test made live — new `coupling_repo` fixture + dedicated test; `373747e`, `9030159`)** closed the last SPA linked-brushing follow-up.
 
 The next sweep should re-open with F-IDs starting at **F243**.

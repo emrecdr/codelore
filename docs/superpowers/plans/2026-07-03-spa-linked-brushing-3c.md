@@ -37,7 +37,7 @@ The pre-existing `parallel-coords` subscriber calls ECharts `highlight`/`downpla
 
 ## Test hardening carried from the 3b improvement pass
 
-- **Module-depth coverage for the coupling subscriber — SHIPPED but inert (F242).** The module-depth mapping fix makes the sankey highlight fire in module-depth view by mapping the bus path through `modulePathSeg(selectedPath, userSankeyDepth)`. A `spa_browser_test` Step 13 (`5f7f5d0`) drives `sankeyDepth = 2`, polls for the re-render, and asserts the mapped module-prefix node highlights. It is correct-by-construction BUT always SKIPS on the `differential_repo` fixture (near-zero co-changes → no cross-module sankey nodes at depth 2), so it provides no live protection yet — tracked as **F242**. Follow-up: point the browser test at a coupling-rich, ≥2-deep-directory fixture so the assertion fires.
+- **Module-depth coverage for the coupling subscriber — SHIPPED + now LIVE (F242 resolved).** The module-depth mapping fix maps the bus path through `modulePathSeg(selectedPath, userSankeyDepth)`. The original Step 13 (`5f7f5d0`) always skipped on `differential_repo` (near-zero co-changes → no depth-2 sankey nodes). Resolved (`373747e`, `9030159`): a dedicated `coupling_repo` fixture (3 modules; `alpha/svc`↔`beta/svc` co-changed 6× → guaranteed `src/alpha`↔`src/beta` depth-2 edge) + a standalone `sankey_module_depth_highlights_mapped_node` test that FAILS-not-skips on a missing node and asserts the highlight name equals the module prefix; the inert step was removed from the smoke test. `spa_browser_test` now 9/9, the new test exercises its assert.
 
 ## Deferred to 3d / 3e (unchanged)
 
