@@ -1567,6 +1567,15 @@
     }
     const cloneScale = maxCloneGroups || 1;
 
+    // Build a path → composite code-health band map for the 'bivariate'
+    // colour mode. `data.code_health` is the composite-score overlay from
+    // the code-health analysis; each entry carries the pre-computed `band`
+    // (green / yellow / red). Falls back to an empty object when the payload
+    // omits the field (older fixtures, analysis not run). Mirrors the
+    // cloneCountByPath pattern above.
+    const bandByPath = {};
+    (data.code_health || []).forEach(function (r) { bandByPath[r.path] = r.band; });
+
     // Step 1: build a filesystem-style hierarchy from flat HotspotRow[].
     // Each row is { path, revisions, cognitive, code_health, hotspot_score }.
     // Path "a/b/c.rs" yields tree:
@@ -1846,6 +1855,15 @@
                   ? token('--color-error')
                   : token('--color-info');
               }
+            } else if (colorMode === 'bivariate') {
+              // Health × activity in one glyph: band (green/yellow/red) ×
+              // hotspot activity (low/med/high). The danger quadrant
+              // (red × high) is the darkest/most saturated cell — visible
+              // without swapping lenses. Missing band → neutral grey.
+              leafColor = bivariateColor(
+                bandByPath[n.data.fullPath],
+                m ? m.hotspot_score : null
+              );
             } else {
               leafColor = heatmapColor(ratio);
             }
