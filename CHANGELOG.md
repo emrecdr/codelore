@@ -18,7 +18,7 @@ Conventional Commits format. All notable changes documented here.
 
 - **`CACHE_EPOCH` bumped to `schema_v7`.** Existing caches are automatically invalidated to reflect the widened `CodeHealthRow` output (new `structural_risk`, `percentile`, `band` columns) and the biomarker-derived scoring change.
 
-- **`codelore explain code-health` updated to v2 formula.** The explain entry now describes the biomarker structural-risk term, the four behavioral weights, the `structural_risk` threshold banding, and the per-language percentile rank.
+- **`codelore explain code-health` updated to v2 formula.** The explain entry now describes the biomarker structural-risk term, the composite weights, the `structural_risk` threshold banding, and the per-language percentile rank.
 
 ## [0.13.0] - 2026-07-02
 

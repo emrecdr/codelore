@@ -433,7 +433,7 @@
       citation: { label: 'Bird et al. 2011 — Don\'t Touch My Code', anchor: '#authors-' },
     },
     median_code_health: {
-      formula: 'code_health = 100 × (1 − 0.40 × normalize(cognitive)). Median is the per-file midpoint across the analysed set.',
+      formula: 'code_health = 100 × (1 − 0.50·structural_risk − 0.30·churn − 0.20·ownership_fv), where structural_risk is a weighted sum of biomarker intensities. Median is the per-file midpoint across the analysed set.',
       citation: { label: 'code-health composite', anchor: '#code-health-' },
     },
     cognitive_p95: {
@@ -465,8 +465,8 @@
       citation: { label: 'Revisions analysis', anchor: '#revisions-' },
     },
     code_health: {
-      formula: '100 × (1 − 0.40 × normalize(cognitive)). Empirical range [60, 100]; lower = more cognitively complex.',
-      citation: { label: 'code-health composite', anchor: '#code-health-' },
+      formula: 'Hotspot-table Code Health column: the hotspots analysis\'s own inline signal, 100 × (1 − 0.40 × normalize(cognitive)), empirical range [60, 100]; lower = more cognitively complex. (Distinct from the code-health composite score.)',
+      citation: { label: 'hotspots inline code-health', anchor: '#hotspots-' },
     },
     cognitive: {
       formula: 'Max cognitive complexity across entities within the file (SonarSource formalisation, Campbell 2018).',
