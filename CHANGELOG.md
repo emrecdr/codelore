@@ -16,6 +16,8 @@ Conventional Commits format. All notable changes documented here.
 
 - **SPA bivariate health×activity map.** The dashboard hotspot circle-pack now defaults to a bivariate color mode: each file's glyph encodes its code-health band (green→red) *and* its development activity (low→high) at once, so the danger quadrant (unhealthy **and** churning) is visible without swapping color lenses. A 3×3 legend keys the encoding; the previous single-signal modes (Cognitive, Code Health, Friction, Author, AI, Knowledge-loss, Clones) remain available as tabs. The palette is colorblind-safe (health read via lightness, not hue alone).
 
+- **SPA linked brushing across all widgets.** Selecting a file in any dashboard view now highlights the same file everywhere at once — the hotspot table row, the coupling sankey node, the architecture DSM row/column, the trends and parallel-coordinates series, and the file's coupling arcs on the hotspot map. One shared focus, highlight (not hide) — clearing the selection downplays everything back to neutral.
+
 ### Changed
 
 - **`check` gate `code_health_min` now evaluates the composite code-health score** — the value `--analysis code-health` reports — instead of the hotspots inline cognitive-only proxy. Previously a file the analysis banded `red` (composite ~20) could pass a `code_health_min = 70` gate, because the gate read the inline proxy (floored at 60, ~85 for the same file). **Behavioral change** for CI configs using `code_health_min`: the gate is now stricter and consistent with the analysis users look at. `cognitive_max` and `hotspot_score_max` continue to evaluate the hotspots output.

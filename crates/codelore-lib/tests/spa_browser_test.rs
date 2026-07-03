@@ -232,6 +232,52 @@ fn rendered_spa_boots_without_console_errors() {
         "bivariate tab is not the default selected mode; the danger quadrant \
          is hidden on initial dashboard load"
     );
+
+    // -- Step 9: assert cross-widget linked brushing highlights the table row. -
+    // Publishing via the Alpine selection store fans out to all registered
+    // subscribers on the next microtask. We split the store write and the
+    // class read across two CDP round-trips so the microtask queue drains
+    // between them — reading in the same JS turn as `set()` races and fails.
+    // Scope both evals to #hotspot-tbody (not a bare tr[data-path] query)
+    // because the knowledge-islands table emits tr[data-path] rows too, and
+    // a KI-table path would not be found by the hotspot-table listener.
+    let selected_path: String = eval_json(
+        &tab,
+        "(function () { \
+             var tbody = document.getElementById('hotspot-tbody'); \
+             if (!tbody) return ''; \
+             var first = tbody.querySelector('tr[data-path]'); \
+             if (!first) return ''; \
+             var p = first.getAttribute('data-path'); \
+             window.__codeloreTestSelPath = p; \
+             window.Alpine.store('selection').set(p); \
+             return p; \
+         })()",
+    );
+    assert!(
+        !selected_path.is_empty(),
+        "no tr[data-path] row found in #hotspot-tbody; \
+         the linked-brushing assertion requires at least one rendered hotspot row"
+    );
+    // One CDP round-trip is enough for Alpine's microtask effects to flush;
+    // the class read is in a separate evaluate call so the queue has drained.
+    std::thread::sleep(Duration::from_millis(100));
+    let row_highlighted: bool = eval_json(
+        &tab,
+        "(function () { \
+             var tbody = document.getElementById('hotspot-tbody'); \
+             if (!tbody) return false; \
+             var p = window.__codeloreTestSelPath; \
+             if (!p) return false; \
+             var row = tbody.querySelector('tr[data-path=\"' + p + '\"]'); \
+             return !!row && row.classList.contains('!bg-base-300'); \
+         })()",
+    );
+    assert!(
+        row_highlighted,
+        "setting selection via Alpine store did not highlight the matching \
+         hotspot-table row — cross-widget linked brushing is not wired"
+    );
 }
 
 /// Click a Knowledge-Islands row and assert the file-detail drawer
