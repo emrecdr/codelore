@@ -197,6 +197,41 @@ fn rendered_spa_boots_without_console_errors() {
          renderKpiTiles probably threw silently. HTML: {}",
         &kpi_html[..kpi_html.len().min(500)]
     );
+
+    // -- Step 7: assert the bivariate legend rendered. -----------------
+    // `renderBivariateLegend` populates `#bivariate-legend` during the
+    // same widget-boot pass as `renderKpiTiles`; an empty container
+    // means the bivariate renderer threw or was not wired to boot.
+    let legend_html = tab
+        .find_element("#bivariate-legend")
+        .expect("bivariate legend container")
+        .get_content()
+        .expect("bivariate legend html");
+    assert!(
+        legend_html.len() > 50,
+        "bivariate legend container was empty; renderBivariateLegend \
+         probably did not run. HTML: {}",
+        &legend_html[..legend_html.len().min(200)]
+    );
+
+    // -- Step 8: assert bivariate tab is the default active selection. -
+    // The hotspot colour-mode toggle bar must start with the bivariate
+    // tab selected so the danger quadrant is visible on initial load
+    // without swapping lenses.
+    let bivariate_is_default: bool = eval_json(
+        &tab,
+        "(() => { \
+             const bar = document.getElementById('hotspot-color-toggles'); \
+             if (!bar) return false; \
+             const sel = bar.querySelector('[aria-selected=\"true\"]'); \
+             return !!sel && sel.getAttribute('data-mode') === 'bivariate'; \
+         })()",
+    );
+    assert!(
+        bivariate_is_default,
+        "bivariate tab is not the default selected mode; the danger quadrant \
+         is hidden on initial dashboard load"
+    );
 }
 
 /// Click a Knowledge-Islands row and assert the file-detail drawer
