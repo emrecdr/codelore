@@ -10,13 +10,13 @@ Conventional Commits format. All notable changes documented here.
 
 - **Code-health structural-risk fusion.** The `code-health` composite now derives its structural term from five named behavioral-code biomarkers — **Complex Method** (per-language cyclomatic `PERCENT_RANK`), **Large Method** (LOC `PERCENT_RANK`), **God Class** (normalized `god_score` from `run_god_classes`), **DRY** (normalized cloned-function count from `run_clones`), and **Shotgun Surgery** (coupling centrality `PERCENT_RANK` from Fisher-significant pairs). Each smell's intensity is a per-language `PERCENT_RANK` of the file's worst value (ranked across FILES, so the metric spreads instead of saturating), combined as a bounded weighted sum whose per-smell weights sum to 1.0 (absent smells contribute 0, so co-occurrence is implicit). Coupling enters the composite once, as the Shotgun Surgery biomarker — it is not also a separate behavioral term. The retained behavioral terms are churn and ownership fragmentation. Score formula: `100 × (1 − 0.50·structural_risk − 0.30·churn − 0.20·ownership_fv)`.
 
-- **Code-health R/Y/G banding and self-relative percentile.** Every `code-health` row now carries a `band` (`red`/`yellow`/`green`, derived from `structural_risk` thresholds 0.50/0.25) and a `percentile` (per-language `PERCENT_RANK` of `structural_risk`, Alves/Ypma/Visser 2010). Both fields are exposed in all `code-health` output formats (csv, json, markdown, ndjson, html).
+- **Code-health R/Y/G banding and self-relative percentile.** Every `code-health` row now carries a `band` (`red`/`yellow`/`green`, derived from `structural_risk` thresholds 0.55/0.28) and a `percentile` (per-language `PERCENT_RANK` of `structural_risk`, Alves/Ypma/Visser 2010). All five biomarkers use the same per-file percentile normalization over the full per-language file set, so the score discriminates across the codebase instead of saturating. Both fields are exposed in all `code-health` output formats (csv, json, markdown, ndjson, html).
 
 - **Code-health determinism gate.** A new integration test (`code_health_v2_is_deterministic`) runs `run_code_health` twice against independent in-memory DuckDB instances ingested from the same fixture and asserts byte-identical `path`/`score`/`band` across both runs. Locks score stability against unordered-aggregate drift.
 
 ### Changed
 
-- **`CACHE_EPOCH` bumped to `schema_v7`.** Existing caches are automatically invalidated to reflect the widened `CodeHealthRow` output (new `structural_risk`, `percentile`, `band` columns) and the biomarker-derived scoring change.
+- **`CACHE_EPOCH` bumped to `schema_v8`.** Existing caches are automatically invalidated to reflect the widened `CodeHealthRow` output (new `structural_risk`, `percentile`, `band` columns) and the biomarker-derived scoring change.
 
 - **`codelore explain code-health` updated to v2 formula.** The explain entry now describes the biomarker structural-risk term, the composite weights, the `structural_risk` threshold banding, and the per-language percentile rank.
 
