@@ -82,11 +82,16 @@ fn refactoring_targets_annotate_type_and_manualup() {
         "manual_up_rank must be a permutation of 1..=n"
     );
 
-    // ManualUp = ascending size. The smallest-loc row must have rank 1.
-    let min_loc_row = rows.iter().min_by_key(|r| r.loc).unwrap();
+    // ManualUp = ascending size, ties broken by path (the exact rank-1
+    // selection criterion). `min_by_key(loc)` alone returns the first minimum
+    // in priority order, which can differ from the path-tie-broken rank-1 file.
+    let min_loc_row = rows
+        .iter()
+        .min_by(|a, b| a.loc.cmp(&b.loc).then_with(|| a.path.cmp(&b.path)))
+        .unwrap();
     assert_eq!(
         min_loc_row.manual_up_rank, 1,
-        "smallest file is ManualUp rank 1"
+        "smallest file (path-tie-broken) is ManualUp rank 1"
     );
 }
 

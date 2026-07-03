@@ -75,16 +75,22 @@ fn code_health_penalizes_churn() {
     let rows = run_code_health(&db, &opts).expect("run");
     // tiny_repo has src/main.rs (4 commits = high churn) and src/lib.rs (1 commit = low churn).
     // src/main.rs should rank LOWER (less healthy) than src/lib.rs in Code Health.
-    let main = rows.iter().find(|r| r.path == "src/main.rs");
-    let lib = rows.iter().find(|r| r.path == "src/lib.rs");
-    if let (Some(m), Some(l)) = (main, lib) {
-        assert!(
-            m.score <= l.score,
-            "src/main.rs (4 commits) should rank <= src/lib.rs (1 commit) in code health, got main={} lib={}",
-            m.score,
-            l.score
-        );
-    }
+    // `.expect` (not `if let`) so a missing file fails loudly instead of
+    // silently skipping the assertion.
+    let m = rows
+        .iter()
+        .find(|r| r.path == "src/main.rs")
+        .expect("src/main.rs should be scored");
+    let l = rows
+        .iter()
+        .find(|r| r.path == "src/lib.rs")
+        .expect("src/lib.rs should be scored");
+    assert!(
+        m.score <= l.score,
+        "src/main.rs (4 commits) should rank <= src/lib.rs (1 commit) in code health, got main={} lib={}",
+        m.score,
+        l.score
+    );
 }
 
 #[test]
@@ -177,64 +183,34 @@ fn coupling_becomes_shotgun_surgery_biomarker() {
 }
 
 #[test]
-fn god_class_and_dry_are_biomarkers() {
-    let tiny = codelore_lib::test_support::tiny_repo::build();
-    let repo = codelore_lib::repo::GixRepo::open(tiny.dir.path()).expect("open");
-    let db = codelore_lib::facts::FactsDb::new_in_memory().expect("db");
-    let opts = codelore_lib::Options {
-        repo_path: tiny.dir.path().to_path_buf(),
-        min_revs: 1,
-        ..codelore_lib::Options::default()
-    };
-    db.ingest(&repo, &opts).expect("ingest");
-    let _ = codelore_lib::analyses::code_health::run_code_health(&db, &opts).expect("run");
-
-    // The smell vocabulary must include the reused analyses (0 rows is allowed
-    // for tiny_repo, but the query must succeed against the known smell set).
-    let distinct: i64 = db
-        .query_row(
-            "SELECT COUNT(DISTINCT smell) FROM code_health_biomarkers_v1 \
-             WHERE smell IN ('complex-method','large-method','shotgun-surgery','god-class','dry')",
-            [],
-            |r| r.get(0),
-        )
-        .expect("query smell vocabulary");
-    assert!(distinct >= 1);
-}
-
-#[test]
 fn structural_risk_rewards_multiple_cooccurring_smells() {
-    // A file flagged by more distinct smells must not score healthier than a
-    // file flagged by fewer, all else equal. Assert the monotonic invariant via
-    // the exposed structural_risk, not an exact value.
-    let tiny = codelore_lib::test_support::tiny_repo::build();
-    let repo = codelore_lib::repo::GixRepo::open(tiny.dir.path()).expect("open");
-    let db = codelore_lib::facts::FactsDb::new_in_memory().expect("db");
-    let opts = codelore_lib::Options {
-        repo_path: tiny.dir.path().to_path_buf(),
-        min_revs: 1,
-        ..codelore_lib::Options::default()
-    };
+    // Co-occurrence: a file flagged by MORE distinct biomarkers has higher
+    // structural_risk than one flagged by fewer, because the weighted sum
+    // accumulates terms. On the fixture, dup_a (complex-method + large-method +
+    // dry + shotgun-surgery) vs trivial (no smells). Asserted on
+    // structural_risk directly — the final score also mixes churn/ownership, so
+    // it is not a clean single-variable invariant (the prior version asserted
+    // that false invariant and passed only by tiny_repo coincidence).
+    let fx = codelore_lib::test_support::biomarker_repo::build();
+    let repo = GixRepo::open(fx.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = biomarker_opts(fx.dir.path());
     db.ingest(&repo, &opts).expect("ingest");
-    let rows = codelore_lib::analyses::code_health::run_code_health(&db, &opts).expect("run");
-    for r in &rows {
-        assert!(
-            (0.0..=1.0).contains(&r.structural_risk),
-            "risk in [0,1]: {}",
-            r.structural_risk
-        );
-    }
-    // Higher structural_risk must never correspond to a higher (healthier) score.
-    let mut sorted = rows.clone();
-    sorted.sort_by(|a, b| a.structural_risk.partial_cmp(&b.structural_risk).unwrap());
-    for w in sorted.windows(2) {
-        if (w[0].structural_risk - w[1].structural_risk).abs() > 1e-9 {
-            assert!(
-                w[0].score >= w[1].score - 1e-6,
-                "riskier file must not score healthier"
-            );
-        }
-    }
+    let rows = run_code_health(&db, &opts).expect("run");
+    let dup = rows
+        .iter()
+        .find(|r| r.path.ends_with("dup_a.rs"))
+        .expect("dup_a scored");
+    let trivial = rows
+        .iter()
+        .find(|r| r.path.ends_with("trivial.rs"))
+        .expect("trivial scored");
+    assert!(
+        dup.structural_risk > trivial.structural_risk,
+        "a file with several co-occurring smells (dup_a={}) must have higher structural_risk than a smell-free file (trivial={})",
+        dup.structural_risk,
+        trivial.structural_risk
+    );
 }
 
 #[test]
@@ -405,6 +381,60 @@ fn code_health_biomarkers_fire_distinct_smells() {
         assert!(
             smells.contains(expected),
             "expected smell {expected} to fire on the fixture, got {smells:?}"
+        );
+    }
+}
+
+/// Locks the code-health CSV column contract (order + names). refactoring-targets
+/// had this; code-health did not — a column rename/reorder would have gone
+/// undetected.
+#[test]
+fn code_health_csv_column_contract() {
+    let rows = vec![codelore_lib::analyses::code_health::CodeHealthRow {
+        path: "src/x.rs".to_string(),
+        cognitive: 12.0,
+        score: 88.5,
+        structural_risk: 0.3,
+        percentile: 0.5,
+        band: "yellow".to_string(),
+    }];
+    let mut buf: Vec<u8> = Vec::new();
+    codelore_lib::output::csv::write_code_health_csv(&rows, &mut buf).expect("csv");
+    let out = String::from_utf8(buf).expect("utf8");
+    assert_eq!(
+        out.lines().next().unwrap(),
+        "entity,cognitive,score,structural_risk,percentile,band"
+    );
+    assert!(
+        out.lines().nth(1).unwrap().starts_with("src/x.rs,"),
+        "data row should carry the path"
+    );
+}
+
+/// Locks the 0.55 / 0.28 band cut points: every row's band must equal the
+/// threshold function applied to its `structural_risk`. Catches a silent
+/// threshold change in the SQL that the range/membership tests would miss.
+#[test]
+fn code_health_band_matches_thresholds() {
+    let fx = codelore_lib::test_support::biomarker_repo::build();
+    let repo = GixRepo::open(fx.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = biomarker_opts(fx.dir.path());
+    db.ingest(&repo, &opts).expect("ingest");
+    let rows = run_code_health(&db, &opts).expect("run");
+    assert!(!rows.is_empty());
+    for r in &rows {
+        let expected = if r.structural_risk >= 0.55 {
+            "red"
+        } else if r.structural_risk >= 0.28 {
+            "yellow"
+        } else {
+            "green"
+        };
+        assert_eq!(
+            r.band, expected,
+            "band {} != expected {} for structural_risk {}",
+            r.band, expected, r.structural_risk
         );
     }
 }
