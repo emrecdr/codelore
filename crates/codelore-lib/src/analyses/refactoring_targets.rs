@@ -111,7 +111,9 @@ pub fn run_refactoring_targets(db: &FactsDb, opts: &Options) -> Result<Vec<Refac
         .filter_map(|h| {
             // Only files that are BOTH scored for health AND appear as hotspots.
             let hs = hs_by_path.get(h.path.as_str())?;
-            let loc = loc_by_path.get(&h.path).copied().unwrap_or(0).max(1);
+            // True file LOC (0 = no LOC data); the EA-Z effort floor is applied
+            // only inside the priority denominator, never to the reported value.
+            let loc = loc_by_path.get(&h.path).copied().unwrap_or(0);
             let combined_risk = h.structural_risk * hs.hotspot_score;
             let priority = combined_risk / f64::from(loc.max(EA_Z_FLOOR));
             Some(RefactoringTargetRow {

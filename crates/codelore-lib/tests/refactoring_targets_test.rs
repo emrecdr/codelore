@@ -28,7 +28,10 @@ fn refactoring_targets_ranks_by_priority_desc() {
             "risk in [0,1]: {}",
             r.structural_risk
         );
-        assert!(r.loc >= 1, "loc floored >=1: {}", r.loc);
+        // `loc` is the true file size (0 when no LOC data); the EA-Z effort
+        // floor lives only in the priority denominator, so `priority` stays
+        // finite regardless — verified by the non-negativity assert above.
+        assert!(r.priority.is_finite(), "priority finite: {}", r.priority);
     }
     // Sorted by priority DESC.
     for w in rows.windows(2) {
