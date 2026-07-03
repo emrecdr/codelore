@@ -109,3 +109,36 @@ fn refactoring_targets_csv_has_header_and_rows() {
     );
     assert!(out.lines().count() >= 2, "header + >=1 data row");
 }
+
+#[test]
+fn refactoring_targets_dominant_type_varies_on_biomarker_repo() {
+    // On a fixture that fires several distinct smells, `dominant_type` must
+    // actually resolve to real biomarkers (not stuck at "none") and vary by
+    // file — the tiny_repo fixtures can't exercise this.
+    let fx = codelore_lib::test_support::biomarker_repo::build();
+    let repo = GixRepo::open(fx.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = codelore_lib::Options {
+        repo_path: fx.dir.path().to_path_buf(),
+        min_revs: 1,
+        fisher_significance: 1.0,
+        min_shared_revs: 1,
+        min_coupling_pct: 0,
+        max_coupling_pct: 100,
+        ..codelore_lib::Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+    let rows = run_refactoring_targets(&db, &opts).expect("run");
+    assert!(rows.len() >= 5, "fixture should yield several targets");
+
+    let types: std::collections::HashSet<&str> =
+        rows.iter().map(|r| r.dominant_type.as_str()).collect();
+    assert!(
+        types.iter().any(|t| *t != "none"),
+        "at least one target must have a real dominant biomarker, got {types:?}"
+    );
+    assert!(
+        types.len() >= 2,
+        "dominant_type must vary across files, got {types:?}"
+    );
+}

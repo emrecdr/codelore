@@ -142,6 +142,166 @@ pub mod tiny_repo {
 }
 
 #[cfg(feature = "test-support")]
+pub mod biomarker_repo {
+    //! A repo with a deliberate complexity gradient plus a duplicated function
+    //! pair and co-changed files, so the `code-health` biomarker layer produces
+    //! a SPREAD of `structural_risk` and fires several distinct smells
+    //! (complex-method, large-method, dry, and — via co-change — shotgun).
+    //! Small fixtures like `tiny_repo` are too homogeneous to exercise the
+    //! metric's distribution; this one is purpose-built for that.
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    pub struct BiomarkerRepo {
+        pub dir: TempDir,
+        pub head_sha: String,
+    }
+
+    // A trivial function: cyclomatic 1, cognitive 0, few lines.
+    const TRIVIAL: &str = "pub fn trivial() -> i32 {\n    1\n}\n";
+
+    // A moderately-branchy function.
+    const MODERATE: &str = "pub fn moderate(x: i32, y: i32) -> i32 {\n    let mut r = 0;\n    for i in 0..x {\n        if i % 2 == 0 {\n            r += i;\n        } else {\n            r -= i;\n        }\n    }\n    if y > 0 {\n        r += y;\n    }\n    r\n}\n";
+
+    // A deeply-nested, high-cyclomatic function.
+    const COMPLEX: &str = "pub fn complex(a: i32, b: i32, c: i32) -> i32 {\n    let mut total = 0;\n    for i in 0..a {\n        if i % 2 == 0 {\n            for j in 0..b {\n                if j > c {\n                    if j % 3 == 0 {\n                        total += j;\n                    } else if j % 5 == 0 {\n                        total -= j;\n                    } else {\n                        total += 1;\n                    }\n                } else if j < 0 {\n                    total -= 1;\n                }\n            }\n        } else {\n            match i % 4 {\n                0 => total += 1,\n                1 => total -= 1,\n                2 => total *= 2,\n                _ => total = 0,\n            }\n        }\n    }\n    total\n}\n";
+
+    // A large but flat function (many statements, little branching): high LOC.
+    fn big_source() -> String {
+        let mut s = String::from("pub fn big() -> i64 {\n    let mut acc: i64 = 0;\n");
+        for i in 0..60 {
+            s.push_str("    acc += ");
+            s.push_str(&i.to_string());
+            s.push_str(";\n");
+        }
+        s.push_str("    acc\n}\n");
+        s
+    }
+
+    // An identical non-trivial function, written into two files → clone (DRY).
+    const DUPLICATED: &str = "pub fn shared_logic(items: &[i32]) -> i32 {\n    let mut sum = 0;\n    for it in items {\n        if *it > 0 {\n            sum += it;\n        } else {\n            sum -= it;\n        }\n    }\n    sum\n}\n";
+
+    /// Build the biomarker fixture.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the OS cannot create a temporary directory or any `git`
+    /// command fails.
+    #[must_use]
+    pub fn build() -> BiomarkerRepo {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path: PathBuf = dir.path().to_path_buf();
+
+        run_git(&path, &["init", "-b", "main", "--quiet"]);
+        run_git(&path, &["config", "user.email", "bio@example.com"]);
+        run_git(&path, &["config", "user.name", "Bio"]);
+
+        let dates = [
+            "2026-06-01T10:00:00Z",
+            "2026-06-02T10:00:00Z",
+            "2026-06-03T10:00:00Z",
+            "2026-06-04T10:00:00Z",
+            "2026-06-05T10:00:00Z",
+            "2026-06-06T10:00:00Z",
+        ];
+
+        // Seed the complexity gradient.
+        write(&path, "src/trivial.rs", TRIVIAL);
+        write(&path, "src/moderate.rs", MODERATE);
+        write(&path, "src/complex.rs", COMPLEX);
+        write(&path, "src/big.rs", &big_source());
+        write(&path, "src/dup_a.rs", DUPLICATED);
+        write(&path, "src/dup_b.rs", DUPLICATED);
+        run_git(&path, &["add", "."]);
+        run_git_at(&path, dates[0], &["commit", "-m", "seed", "--quiet"]);
+
+        // Several edit commits, co-changing pairs to create temporal coupling
+        // (complex+moderate change together; the dup pair changes together).
+        write(&path, "src/complex.rs", &format!("{COMPLEX}// tweak 1\n"));
+        write(&path, "src/moderate.rs", &format!("{MODERATE}// tweak 1\n"));
+        run_git_at(
+            &path,
+            dates[1],
+            &["commit", "-am", "co-change 1", "--quiet"],
+        );
+
+        write(&path, "src/complex.rs", &format!("{COMPLEX}// tweak 2\n"));
+        write(&path, "src/moderate.rs", &format!("{MODERATE}// tweak 2\n"));
+        run_git_at(
+            &path,
+            dates[2],
+            &["commit", "-am", "co-change 2", "--quiet"],
+        );
+
+        write(&path, "src/dup_a.rs", &format!("{DUPLICATED}// da\n"));
+        write(&path, "src/dup_b.rs", &format!("{DUPLICATED}// db\n"));
+        run_git_at(
+            &path,
+            dates[3],
+            &["commit", "-am", "dup co-change 1", "--quiet"],
+        );
+
+        write(&path, "src/dup_a.rs", &format!("{DUPLICATED}// da2\n"));
+        write(&path, "src/dup_b.rs", &format!("{DUPLICATED}// db2\n"));
+        run_git_at(
+            &path,
+            dates[4],
+            &["commit", "-am", "dup co-change 2", "--quiet"],
+        );
+
+        write(&path, "src/complex.rs", &format!("{COMPLEX}// tweak 3\n"));
+        run_git_at(
+            &path,
+            dates[5],
+            &["commit", "-am", "touch complex", "--quiet"],
+        );
+
+        let head_sha = String::from_utf8(
+            std::process::Command::new("git")
+                .args(["-C", path.to_str().unwrap(), "rev-parse", "HEAD"])
+                .output()
+                .expect("git rev-parse")
+                .stdout,
+        )
+        .expect("utf8")
+        .trim()
+        .to_string();
+
+        BiomarkerRepo { dir, head_sha }
+    }
+
+    fn run_git(path: &std::path::Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .status()
+            .expect("git");
+        assert!(status.success(), "git {args:?} failed");
+    }
+
+    fn run_git_at(path: &std::path::Path, iso_date: &str, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .env("GIT_AUTHOR_DATE", iso_date)
+            .env("GIT_COMMITTER_DATE", iso_date)
+            .status()
+            .expect("git");
+        assert!(status.success(), "git {args:?} (at {iso_date}) failed");
+    }
+
+    fn write(root: &std::path::Path, rel: &str, content: &str) {
+        let p = root.join(rel);
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(p, content).unwrap();
+    }
+}
+
+#[cfg(feature = "test-support")]
 pub mod differential_repo {
     //! 50-commit fixture exercising every `Repo`-trait method's edge cases:
     //! 3 authors + 1 bot, `.mailmap`, 1 rename, 1 merge, deterministic dates.

@@ -307,30 +307,104 @@ fn code_health_score_invariant_under_rows_limit() {
     }
 }
 
-/// Anti-saturation guard: `structural_risk` must not peg every file at the
-/// ceiling. The prior formula ranked functions then took the per-file MAX and
-/// OR-ed the intensities, so on a real codebase nearly every file saturated at
-/// 1.0 — the per-row range/monotonicity tests all passed while the metric was
-/// useless (67/69 files == 1.0). The fix ranks FILES (not functions) and takes
-/// a bounded weighted sum. The small test fixtures are too homogeneous to
-/// reproduce a full distribution (the authoritative check is empirical on real
-/// repos), but this reliably catches a regression to total saturation: with
-/// per-file `PERCENT_RANK`, the least-risky file is never pinned at 1.0.
-#[test]
-fn code_health_structural_risk_not_saturated() {
-    let tiny = codelore_lib::test_support::tiny_repo::build();
-    let repo = GixRepo::open(tiny.dir.path()).expect("open");
-    let db = FactsDb::new_in_memory().expect("db");
-    let opts = Options {
-        repo_path: tiny.dir.path().to_path_buf(),
+fn biomarker_opts(dir: &std::path::Path) -> Options {
+    Options {
+        repo_path: dir.to_path_buf(),
         min_revs: 1,
+        fisher_significance: 1.0,
+        min_shared_revs: 1,
+        min_coupling_pct: 0,
+        max_coupling_pct: 100,
         ..Options::default()
-    };
+    }
+}
+
+/// Distribution guard on a purpose-built fixture with a real complexity
+/// gradient, a duplicated pair, and co-changed files. `structural_risk` must
+/// DISCRIMINATE — spread across files, not collapse to the ceiling. This is the
+/// regression guard the per-row invariant tests lacked: the prior formula
+/// ranked functions then MAX-ed and OR-ed the intensities, pinning ~every file
+/// at 1.0 on real repos while every range/monotonicity test still passed.
+#[test]
+fn code_health_structural_risk_discriminates() {
+    let fx = codelore_lib::test_support::biomarker_repo::build();
+    let repo = GixRepo::open(fx.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = biomarker_opts(fx.dir.path());
     db.ingest(&repo, &opts).expect("ingest");
     let rows = run_code_health(&db, &opts).expect("run");
-    assert!(!rows.is_empty());
+    assert!(rows.len() >= 5, "fixture should score several files");
+
+    let distinct: std::collections::HashSet<String> = rows
+        .iter()
+        .map(|r| format!("{:.3}", r.structural_risk))
+        .collect();
     assert!(
-        rows.iter().any(|r| r.structural_risk < 1.0),
-        "every file is pinned at the structural_risk ceiling — saturation regressed"
+        distinct.len() >= 3,
+        "structural_risk must spread across files, got {} distinct value(s)",
+        distinct.len()
     );
+    let max = rows
+        .iter()
+        .map(|r| r.structural_risk)
+        .fold(0.0_f64, f64::max);
+    let min = rows
+        .iter()
+        .map(|r| r.structural_risk)
+        .fold(1.0_f64, f64::min);
+    assert!(
+        max < 1.0,
+        "no file should saturate at the ceiling, got max={max}"
+    );
+    assert!(max - min > 0.2, "expected a real spread, got {min}..{max}");
+
+    // Ordering sanity: the trivial file is healthiest; the deeply-nested file
+    // is among the worst.
+    let trivial = rows
+        .iter()
+        .find(|r| r.path.ends_with("trivial.rs"))
+        .expect("trivial file scored");
+    let complex = rows
+        .iter()
+        .find(|r| r.path.ends_with("complex.rs"))
+        .expect("complex file scored");
+    assert!(
+        trivial.structural_risk < complex.structural_risk,
+        "trivial ({}) must be less risky than complex ({})",
+        trivial.structural_risk,
+        complex.structural_risk
+    );
+}
+
+/// The biomarker layer fires the expected DISTINCT smells on the fixture.
+/// Closes the earlier gap where a test could pass while a `UNION` arm was
+/// silently dropped (the vocabulary was only asserted as `>= 1` distinct).
+/// god-class needs fan-in a tiny fixture can't manufacture, so it is not
+/// required here.
+#[test]
+fn code_health_biomarkers_fire_distinct_smells() {
+    let fx = codelore_lib::test_support::biomarker_repo::build();
+    let repo = GixRepo::open(fx.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = biomarker_opts(fx.dir.path());
+    db.ingest(&repo, &opts).expect("ingest");
+    let _ = run_code_health(&db, &opts).expect("run");
+
+    let smells: std::collections::HashSet<String> =
+        codelore_lib::analyses::query::query_map_collect(
+            &db,
+            "SELECT DISTINCT smell FROM code_health_biomarkers_v1",
+            [],
+            "smells",
+            |r| r.get::<_, String>(0),
+        )
+        .expect("smells")
+        .into_iter()
+        .collect();
+    for expected in ["complex-method", "large-method", "dry", "shotgun-surgery"] {
+        assert!(
+            smells.contains(expected),
+            "expected smell {expected} to fire on the fixture, got {smells:?}"
+        );
+    }
 }

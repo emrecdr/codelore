@@ -162,10 +162,10 @@ const SQL: &str = "
         PERCENT_RANK() OVER (PARTITION BY lang ORDER BY structural_risk) AS percentile,
         -- Absolute structural_risk thresholds (tunable; Phase-2 cross-repo
         -- corpus calibration will replace these self-relative cut points).
-        -- red = high on at least half the weighted smell mass.
+        -- red = high on a majority of the weighted smell mass.
         CASE
-            WHEN structural_risk >= 0.50 THEN 'red'
-            WHEN structural_risk >= 0.25 THEN 'yellow'
+            WHEN structural_risk >= 0.55 THEN 'red'
+            WHEN structural_risk >= 0.28 THEN 'yellow'
             ELSE 'green'
         END AS band
     FROM scored
@@ -274,36 +274,71 @@ fn materialize_biomarkers(db: &FactsDb, opts: &Options) -> Result<()> {
         .execute(SHOTGUN_INSERT, [])
         .map_err(|e| CodeLoreError::Analysis(format!("insert shotgun-surgery biomarkers: {e}")))?;
 
-    // God Class: reuse the existing analysis; intensity = normalized god_score.
-    // `--rows N` MUST NOT propagate here — the biomarker set needs ALL god
-    // classes, not the user's output truncation. A truncated set drifts a
-    // surviving file's normalized intensity and breaks the score invariant.
+    // God-class and DRY are SPARSE smells (present for few files). Rank each
+    // file's raw metric over the FULL per-language file universe — the same set
+    // complex-method / large-method rank over — with absent files contributing
+    // 0. This keeps a lone or tied occurrence high (it still ranks above the
+    // zero-majority) instead of collapsing to a 0 rank, and makes every
+    // biomarker a consistent per-file percentile rather than mixing schemes.
+    //
+    // `--rows N` MUST NOT propagate into `run_god_classes`: the biomarker set
+    // needs ALL god classes, not the user's output truncation.
     let gods = crate::analyses::god_classes::run_god_classes(db, &opts.with_no_row_limit())?;
-    let max_god = gods.iter().map(|g| g.god_score).fold(0.0_f64, f64::max);
+    let god_by_path: HashMap<String, f64> =
+        gods.iter().map(|g| (g.path.clone(), g.god_score)).collect();
 
-    // DRY: reuse clone detection (walks HEAD worktree); intensity = normalized
-    // count of cloned functions per file.
+    // DRY: reuse clone detection (walks HEAD worktree); metric = clone count.
     let clones = crate::analyses::clones::run_clones(opts)?;
-    let mut dry_counts: std::collections::HashMap<String, u32> = HashMap::new();
+    let mut dry_counts: HashMap<String, u32> = HashMap::new();
     for c in &clones {
         *dry_counts.entry(c.entity.clone()).or_insert(0) += 1;
     }
-    let max_dry = dry_counts.values().copied().max().unwrap_or(0);
+
+    // Full file universe (files with complexity data), grouped by language —
+    // the same universe the SQL-side complex/large biomarkers rank over.
+    let universe = crate::analyses::query::query_map_collect(
+        db,
+        "SELECT DISTINCT path FROM complexity_metrics WHERE cyclomatic IS NOT NULL",
+        [],
+        "biomarker-universe",
+        |r| r.get::<_, String>(0),
+    )?;
+    let mut by_lang: HashMap<&'static str, Vec<String>> = HashMap::new();
+    for path in universe {
+        let lang =
+            crate::complexity::Tier1Language::from_path(&path).map_or("other", |l| l.as_str());
+        by_lang.entry(lang).or_default().push(path);
+    }
 
     let mut stmt = db
         .conn()
         .prepare("INSERT INTO code_health_biomarkers_v1 (path, smell, intensity) VALUES (?, ?, ?)")
         .map_err(|e| CodeLoreError::Analysis(format!("prepare biomarker insert: {e}")))?;
-    if max_god > 0.0 {
-        for g in &gods {
-            stmt.execute(params![g.path, "god-class", g.god_score / max_god])
-                .map_err(|e| CodeLoreError::Analysis(format!("god-class biomarker: {e}")))?;
+    for files in by_lang.values() {
+        if files.len() <= 1 {
+            continue; // PERCENT_RANK is degenerate for a single-file language
         }
-    }
-    if max_dry > 0 {
-        for (path, n) in &dry_counts {
-            stmt.execute(params![path, "dry", f64::from(*n) / f64::from(max_dry)])
-                .map_err(|e| CodeLoreError::Analysis(format!("dry biomarker: {e}")))?;
+        let denom = f64::from(u32::try_from(files.len() - 1).unwrap_or(u32::MAX));
+        for smell in ["god-class", "dry"] {
+            let vals: Vec<f64> = files
+                .iter()
+                .map(|p| {
+                    if smell == "god-class" {
+                        god_by_path.get(p).copied().unwrap_or(0.0)
+                    } else {
+                        dry_counts.get(p).map_or(0.0, |n| f64::from(*n))
+                    }
+                })
+                .collect();
+            for (path, &v) in files.iter().zip(vals.iter()) {
+                if v <= 0.0 {
+                    continue; // only files that HAVE the smell get a row
+                }
+                let less = vals.iter().filter(|&&x| x < v).count();
+                let intensity = f64::from(u32::try_from(less).unwrap_or(u32::MAX)) / denom;
+                stmt.execute(params![path, smell, intensity])
+                    .map_err(|e| CodeLoreError::Analysis(format!("{smell} biomarker: {e}")))?;
+            }
         }
     }
     Ok(())
