@@ -2436,6 +2436,14 @@
       }
     });
 
+    // Cross-widget selection: emphasise the selected file's node (and its
+    // links) in the coupling sankey; a null selection downplays everything.
+    window._codeloreRegisterSelectionListener('coupling', function (selectedPath) {
+      chart.dispatchAction({ type: 'downplay' });
+      if (!selectedPath) return;
+      chart.dispatchAction({ type: 'highlight', seriesIndex: 0, name: selectedPath });
+    });
+
   }
 
 
