@@ -1193,6 +1193,7 @@
       html += '<h4>Code health</h4><dl>' +
         '<dt>Score</dt><dd>' + fmtNumberFlex(ch.score, 1) + '</dd>' +
         '<dt>Cognitive</dt><dd>' + fmtNumberFlex(ch.cognitive, 0) + '</dd>' +
+        '<dt>Health band</dt><dd>' + (ch ? ch.band : '—') + '</dd>' +
         '</dl>';
     }
     } catch (e) {

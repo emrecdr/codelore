@@ -14,6 +14,8 @@ Conventional Commits format. All notable changes documented here.
 
 - **Code-health determinism gate.** A new integration test (`code_health_v2_is_deterministic`) runs `run_code_health` twice against independent in-memory DuckDB instances ingested from the same fixture and asserts byte-identical `path`/`score`/`band` across both runs. Locks score stability against unordered-aggregate drift.
 
+- **SPA bivariate health×activity map.** The dashboard hotspot circle-pack now defaults to a bivariate color mode: each file's glyph encodes its code-health band (green→red) *and* its development activity (low→high) at once, so the danger quadrant (unhealthy **and** churning) is visible without swapping color lenses. A 3×3 legend keys the encoding; the previous single-signal modes (Cognitive, Code Health, Friction, Author, AI, Knowledge-loss, Clones) remain available as tabs. The palette is colorblind-safe (health read via lightness, not hue alone).
+
 ### Changed
 
 - **`check` gate `code_health_min` now evaluates the composite code-health score** — the value `--analysis code-health` reports — instead of the hotspots inline cognitive-only proxy. Previously a file the analysis banded `red` (composite ~20) could pass a `code_health_min = 70` gate, because the gate read the inline proxy (floored at 60, ~85 for the same file). **Behavioral change** for CI configs using `code_health_min`: the gate is now stricter and consistent with the analysis users look at. `cognitive_max` and `hotspot_score_max` continue to evaluate the hotspots output.
