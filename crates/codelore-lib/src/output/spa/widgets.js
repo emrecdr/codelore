@@ -862,14 +862,18 @@
   }
 
   // Bivariate health × activity encoding. A 3×3 matrix: rows = health
-  // (green/yellow/red), cols = activity (low/med/high). CVD-safe: the
-  // green→red health axis is paired with increasing saturation+darkness on
-  // the activity axis, so the danger cell (red × high) is the darkest/most
-  // saturated regardless of hue perception. Indexed [health*3 + activity].
+  // (green/yellow/red), cols = activity (low/med/high). CVD-safety rests on
+  // LIGHTNESS, not hue: the health axis descends monotonically in lightness
+  // (green row lightest → red row darkest, with a clear gap between rows at
+  // every activity column), and the activity axis darkens left→right within a
+  // row. So the danger cell (red × high) is the darkest of all nine and the
+  // health bands stay separable for deuteranopia/protanopia (amber-leaning
+  // yellows keep the middle row well below the green row in lightness).
+  // Indexed [health*3 + activity].
   const BIVARIATE_PALETTE = [
-    '#c3e8bd', '#8fd18a', '#4fae53', // green  × low/med/high
-    '#f6e5a3', '#e8c85a', '#c99a1f', // yellow × low/med/high
-    '#f0b0a0', '#dc7050', '#b52d16'  // red    × low/med/high (darkest = danger)
+    '#d4efd0', '#a3d99b', '#6bbf6b', // green  × low/med/high (lightest row)
+    '#d9b74a', '#c19a2e', '#a37d18', // yellow × low/med/high (amber, mid lightness)
+    '#c65c46', '#a83c28', '#7d2414'  // red    × low/med/high (darkest row; danger = last)
   ];
 
   // Health band → row index. Unknown/missing band → neutral (handled by caller).
