@@ -354,6 +354,31 @@ fn spa_embeds_bivariate_palette() {
     );
 }
 
+/// Asserts that the bivariate tab is the active default in the emitted
+/// SPA and that the legend mount ships alongside the circle-pack widget.
+#[test]
+fn spa_bivariate_is_default_map_mode() {
+    let dash = SpaDashboard::default();
+    let mut buf: Vec<u8> = Vec::new();
+    write_spa(&dash, "CodeLore Dashboard", ".", "now", &mut buf).expect("write_spa");
+    let html = String::from_utf8(buf).expect("utf8");
+    // The bivariate tab exists and is the active default.
+    assert!(html.contains("data-mode=\"bivariate\""), "bivariate tab must exist");
+    // The legend mount ships.
+    assert!(html.contains("id=\"bivariate-legend\""), "bivariate legend mount must exist");
+    // The bivariate tab carries tab-active (cognitive must not be the default).
+    // Capture the whole <button ...> open tag so whitespace alignment between
+    // data-mode and class does not affect the assertion.
+    let biv = html.find("data-mode=\"bivariate\"").unwrap();
+    let tab_open = html[..biv].rfind("<button").unwrap();
+    let tag_end = tab_open + html[tab_open..].find('>').unwrap();
+    let tab_html = &html[tab_open..tag_end];
+    assert!(
+        tab_html.contains("tab-active"),
+        "bivariate tab must be the default (tab-active); tag was: {tab_html}"
+    );
+}
+
 /// Walk the HTML, find the `<script type="application/json"
 /// id="codelore-data">…</script>` block, undo the `</` → `<\/`
 /// XSS-escape, and parse it.

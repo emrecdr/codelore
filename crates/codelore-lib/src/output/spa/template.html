@@ -1053,7 +1053,11 @@
            buttons are invalid HTML — the parent `.tab` is the
            clickable element. -->
       <div role="tablist" class="tabs tabs-boxed" id="hotspot-color-toggles">
-        <button type="button" role="tab" data-mode="cognitive"      class="tab tab-active tooltip-host" aria-selected="true">
+        <button type="button" role="tab" data-mode="bivariate" class="tab-active tab tooltip-host" aria-selected="true">
+          <span aria-hidden="true">▦</span> Health×Activity
+          <span class="tooltip-popup" role="tooltip">Bivariate map: code-health band (green→red) × development activity (low→high) in one glyph. The darkest cells are unhealthy AND churning — refactor there first. No lens swap needed.</span>
+        </button>
+        <button type="button" role="tab" data-mode="cognitive"      class="tab tooltip-host" aria-selected="false">
           Complexity
           <span class="tooltip-trigger" aria-hidden="true">?</span>
           <span class="tooltip-popup" role="tooltip">Cognitive complexity per file: yellow (low) → red (high). Counts nested decisions and control-flow breaks — how hard the code is to reason about.</span>
@@ -1097,6 +1101,7 @@
           <span class="tooltip-popup" role="tooltip">Structural duplication: yellow→red ramp on files appearing in at least one Type-1 / Type-2 clone family. Grey = no detected clones.</span>
         </button>
       </div>
+      <div id="bivariate-legend" class="mt-2" aria-label="Bivariate health × activity legend"></div>
       <div id="widget-hotspot-circle-pack-body" class="widget-body"></div>
       <!-- Parallel DOM tree — keyboard-accessible alternative for the
            canvas circle-pack above. Per WAI-ARIA treeview, canvas

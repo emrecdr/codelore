@@ -542,7 +542,7 @@
   // hotspot-circle-pack render closure in WIDGETS below reads the
   // latest value via closure capture. Declared before the registry
   // so the closure has a binding to capture.
-  let currentHotspotColorMode = 'cognitive';
+  let currentHotspotColorMode = 'bivariate';
 
   // ─── Widget registry ────────────────────────────────────────────
   // Single source of truth for the boot sequence. Each entry is a
@@ -1540,7 +1540,7 @@
         'The repository may be too small, or thresholds filtered everything out.</div>';
       return;
     }
-    colorMode = colorMode || 'cognitive';
+    colorMode = colorMode || 'bivariate';
     // Clear any prior ECharts instance so toggles re-render cleanly.
     container.innerHTML = '';
 
@@ -1973,6 +1973,24 @@
       }
     });
 
+    renderBivariateLegend();
+  }
+
+  // 3×3 bivariate legend: a small grid keyed to BIVARIATE_PALETTE, axes
+  // labeled health (green→red, top→bottom) × activity (low→high, left→right).
+  // Only shown when the map is in bivariate mode; a no-op if the mount is absent.
+  function renderBivariateLegend() {
+    const mount = document.getElementById('bivariate-legend');
+    if (!mount) return;
+    const cells = BIVARIATE_PALETTE.map(function (c, i) {
+      return '<div style="width:14px;height:14px;background:' + c + '" '
+        + 'title="health ' + (['healthy', 'warning', 'unhealthy'][Math.floor(i / 3)])
+        + ' × activity ' + (['low', 'med', 'high'][i % 3]) + '"></div>';
+    }).join('');
+    mount.innerHTML =
+      '<div class="text-xs opacity-70 mb-1">Health × Activity</div>' +
+      '<div style="display:grid;grid-template-columns:repeat(3,14px);gap:2px">' + cells + '</div>' +
+      '<div class="text-xs opacity-50 mt-1">↓ less healthy&nbsp;&nbsp;→ more active</div>';
   }
 
 
