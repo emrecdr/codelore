@@ -1193,7 +1193,7 @@
       html += '<h4>Code health</h4><dl>' +
         '<dt>Score</dt><dd>' + fmtNumberFlex(ch.score, 1) + '</dd>' +
         '<dt>Cognitive</dt><dd>' + fmtNumberFlex(ch.cognitive, 0) + '</dd>' +
-        '<dt>Health band</dt><dd>' + (ch ? ch.band : '—') + '</dd>' +
+        '<dt>Health band</dt><dd>' + (ch.band || '—') + '</dd>' +
         '</dl>';
     }
     } catch (e) {
@@ -1979,10 +1979,16 @@
 
   // 3×3 bivariate legend: a small grid keyed to BIVARIATE_PALETTE, axes
   // labeled health (green→red, top→bottom) × activity (low→high, left→right).
-  // Populates the legend mount whenever the circle-pack renders; a no-op if the mount is absent.
+  // Populates the legend mount whenever the circle-pack renders; a no-op if the
+  // mount is absent. Only visible while the bivariate mode is active — in the
+  // other colour modes the legend would describe an encoding not on screen, so
+  // it hides itself. The palette is a fixed CVD-tuned hex set (not DaisyUI theme
+  // tokens) on purpose: the health×activity blend must stay deterministic and
+  // lightness-monotonic regardless of theme.
   function renderBivariateLegend() {
     const mount = document.getElementById('bivariate-legend');
     if (!mount) return;
+    mount.style.display = (currentHotspotColorMode === 'bivariate') ? '' : 'none';
     const cells = BIVARIATE_PALETTE.map(function (c, i) {
       return '<div style="width:14px;height:14px;background:' + c + '" '
         + 'title="health ' + (['healthy', 'warning', 'unhealthy'][Math.floor(i / 3)])
