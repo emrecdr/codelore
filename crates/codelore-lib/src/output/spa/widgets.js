@@ -3828,6 +3828,27 @@
         emphasis: { itemStyle: { borderColor: getCssVar('--fg'), borderWidth: 1 } },
       }],
     });
+
+    // Cross-widget selection: emphasise the selected file's row and column
+    // in the DSM. The matrix axes are module-level prefixes (at `chosenDepth`
+    // segments); the bus delivers full file paths, so we truncate via the same
+    // `modulePath` helper before looking up in `idxOf`. The data array is
+    // sparse, so we scan `cells` rather than assuming a dense row-major layout.
+    // `value[0]` is the column (imported module), `value[1]` is the row
+    // (importer module). A null selection, or a path outside the visible
+    // modules, downplays everything back to neutral.
+    window._codeloreRegisterSelectionListener('dsm', function (selectedPath) {
+      chart.dispatchAction({ type: 'downplay' });
+      if (!selectedPath) return;
+      const mod = modulePath(selectedPath, chosenDepth);
+      const idx = idxOf[mod];
+      if (idx === undefined) return;
+      const indices = [];
+      for (var k = 0; k < cells.length; k++) {
+        if (cells[k].value[0] === idx || cells[k].value[1] === idx) indices.push(k);
+      }
+      chart.dispatchAction({ type: 'highlight', seriesIndex: 0, dataIndex: indices });
+    });
   }
 
 
