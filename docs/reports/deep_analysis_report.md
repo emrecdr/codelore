@@ -343,6 +343,38 @@ Overall hygiene is strong: `thiserror 2`, `toml 1`, `ureq 3`, `anyhow`/`serde`/`
 *   **Description**: A five-stream adversarial audit of the Phase-1/2 changes confirmed the core computations correct (bounded, NaN-free, deterministic) but surfaced: (a) HIGH — `codelore explain code-health` printed the pre-F232 formula (`0.40/0.25/0.15` + a separate coupling term, `0.66/0.33` bands); (b) HIGH — the `check` gate `code_health_min` evaluated the hotspots inline cognitive-only proxy (floored 60), not the composite, so a red file (composite ~20) silently passed a `code_health_min = 70` gate; (c) MED — `refactoring-targets` claimed `html` support but its dispatch returned `html_not_wired`; (d) LOW — `dominant_type` reported a biomarker at intensity 0 (should be "none"); (e) LOW — the module doc overstated per-language-percentile uniformity (shotgun excepted); plus several weak/tautological tests and untested contracts (weights, band thresholds, code-health CSV columns).
 *   **Fix**: (a) explain tuple updated to the current formula/weights/thresholds; (b) `code_health_min` rewired to the composite via a new `evaluate_code_health_gate(&[CodeHealthRow])` (breaking change, noted in CHANGELOG); (c) `html` wired via the generic `write_html`; (d) `WHERE intensity > 0` added to the dominant-type query; (e) module doc scoped. Tests: reframed the architecturally-invalid `structural_risk_rewards_multiple_cooccurring_smells`, hardened the silent-skip in `code_health_penalizes_churn`, removed the tautological `god_class_and_dry_are_biomarkers`, fixed the `min_by_key(loc)` tie in the ManualUp test, and added `code_health_csv_column_contract` + `code_health_band_matches_thresholds`. Residual (deferred): exact-weight assertion (needs exposing `n_cn`/`n_au`), god-class biomarker firing (needs a fan-in fixture), and churn/ownership global-vs-per-language normalization (a Phase-2 tuning consideration).
 
+### 4.5 SPA linked-brushing — publish-side + subscriber deep validation (2026-07-03)
+
+A post-slice deep validation of Plan 3b (four selection subscribers) ran three parallel source-level validators (subscribe correctness / publish completeness / test integrity) plus a validation-spec pass. The subscribe side was confirmed fully correct; the findings below are on the publish side and two subscriber edge cases. F239–F241 were fixed together in `0a41b1d`; F238 is the one that needs a design decision (tracked for Plan 3c).
+
+#### F238 — parallel-coords cross-widget highlight is visually inert (`emphasis.disabled`)
+
+*   **Location**: `output/spa/widgets.js` — parallel series config (`emphasis: { disabled: true }`) + the `parallel-coords` selection subscriber
+*   **Severity**: LOW · **Category**: UX / linked-brushing fidelity · **Status**: Active
+*   **Description**: The pre-existing `parallel-coords` subscriber calls ECharts `highlight`/`downplay` on selection, but the parallel series sets `emphasis: { disabled: true }`, so those actions have NO visible effect — a file selected in another widget does not visibly stand out in the parallel-coordinates plot. The subscriber is wired but inert.
+*   **Fix (deferred — needs a design decision)**: either re-enable `emphasis` on the parallel series with a tuned `lineStyle`/opacity (investigate WHY it was disabled first — likely visual clutter) and add the `downplay`-first guard (emphasis then becomes additive, per F239), or switch the subscriber to a non-emphasis mechanism. Tracked for Plan 3c.
+
+#### F239 — `trends` subscriber leaves a stale A→B highlight
+
+*   **Location**: `output/spa/widgets.js` — `trends` selection subscriber
+*   **Severity**: MED · **Category**: correctness / linked-brushing · **Status**: Fixed (Unreleased)
+*   **Description**: ECharts `dispatchAction({type:'highlight'})` is additive — it does not implicitly clear a prior highlight. The `trends` subscriber highlighted the selected series without downplaying first, and because the file-detail drawer is NON-modal (`.show()`, not `.showModal()`), a user can switch selection directly from file A to file B with no intervening null-clear. Result: both A's and B's trend lines stayed bold+un-blurred — a stale highlight of the previous file. (The `coupling`/`dsm` subscribers added in the slice already downplayed-first; `trends` and `parallel-coords` did not.)
+*   **Fix (`0a41b1d`)**: `trends` now `downplay`s unconditionally first, then early-returns on null, then highlights only on a match — matching the coupling/dsm shape. (`parallel-coords` was validated benign here — its `emphasis.disabled` means no highlight state persists; see F238.)
+
+#### F240 — linked-brushing publish side was asymmetric (receive-only widgets)
+
+*   **Location**: `output/spa/widgets.js` — click handlers for the circle-pack map, coupling sankey, treemap, X-Ray sunburst
+*   **Severity**: MED · **Category**: feature completeness · **Status**: Fixed (Unreleased)
+*   **Description**: "Select a file in ANY widget → highlight everywhere" needs both a publish and a subscribe half. Plan 3b completed the subscribe half but the publish half was asymmetric: only four surfaces (hotspot table, parallel-coords, KI-table, keyboard treeview) routed clicks through `_codeloreShowDetail` (which publishes `selection.set`); the map canvas, sankey, treemap, and X-Ray sunburst called `showFileDetailDrawer` DIRECTLY — opening the drawer without broadcasting. So the coupling sankey, DSM, trends, and the map canvas were effectively receive-only.
+*   **Fix (`0a41b1d`)**: the four direct-drawer file-clicks now route through the guarded `_codeloreShowDetail` idiom (sankey gated to files mode — a module-depth node name is a prefix, not a file, and must not go on the file-level bus). The map click drops its redundant direct `selectedCouplingFile`/`updateCouplingArcs()` in the broadcast branch (the `hotspot-map` subscriber does it on fan-out). Validated NOT-VALID and intentionally excluded: the DSM as a publish source — its axes/cells are module-level, so a click cannot identify a single file for the file-level bus. Follow-on (`27d666b`): the map's canvas background-click now clears the shared selection (bus) instead of only its local arcs, so deselection is symmetric with the new publish-on-select.
+
+#### F241 — coupling-sankey subscriber highlight dead in module-depth view
+
+*   **Location**: `output/spa/widgets.js` — `coupling` selection subscriber
+*   **Severity**: LOW · **Category**: linked-brushing fidelity · **Status**: Fixed (Unreleased)
+*   **Description**: The `coupling` subscriber highlighted the sankey node by the raw full path (`name: selectedPath`). In files mode (default) node names ARE full paths so it matched, but in module-depth view nodes are named by truncated `modulePathSeg` prefixes, so the highlight silently no-op'd — the sankey did not participate in cross-widget selection at non-file depths.
+*   **Fix (`0a41b1d`)**: the subscriber now maps the bus path into the current node-name space (`modulePathSeg(selectedPath, userSankeyDepth)` when depth is numeric, else the full path), mirroring the DSM subscriber's module-mapping. Also recorded as a validated non-issue: a proposed DSM "empty-indices" guard is dead code — the per-index diagonal guide cells guarantee the scan always yields ≥1 index.
+
 ---
 
 ## 5. Next Audit Cycle
@@ -354,11 +386,11 @@ Overall hygiene is strong: `thiserror 2`, `toml 1`, `ureq 3`, `anyhow`/`serde`/`
 - **Deferred — large refactor / focused pass**: F206 (HEAD-scan I/O restructure — wants a benchmark), F215 (`enum Format`), F218 (render-cascade split), F231 (62-site `Plan N` scripted sweep).
 - **Carried-forward Active (output/blob cluster)**: F119 (csv-crate), F148 (`TabularEmit` dedup), F161 (`EmitterStream`), F173 (HEAD blob dedup) — byte-identical-critical (F206 is the deeper lever for F173).
 - **Carried-forward Partial / design**: F177 (schema sentinels), F186 (bench PR gate — design), F197 (dogfood advisory/separate-cache).
-- **Fixed (Unreleased) 2026-07-03**: F232 (coupling double-count — `n_cp` removed, score reweighted), F233 (`code_health_biomarkers_v1` cross-analysis contract — documented at the DDL), F234 (`loc` display floor — reports true value), **F235 (`structural_risk` saturation — rank files not functions + weighted sum; 67/69-at-1.0 → 8/32/31 band split)**, **F236 (biomarker normalization unified on full-universe per-file percentile; `biomarker_repo` fixture + distribution/vocabulary/dominant-type tests)**, **F237 (deep-validation audit: stale explain, check-gate composite rewiring, refactoring-targets html, dominant-type intensity>0, test hardening)**.
+- **Fixed (Unreleased) 2026-07-03**: F232 (coupling double-count — `n_cp` removed, score reweighted), F233 (`code_health_biomarkers_v1` cross-analysis contract — documented at the DDL), F234 (`loc` display floor — reports true value), **F235 (`structural_risk` saturation — rank files not functions + weighted sum; 67/69-at-1.0 → 8/32/31 band split)**, **F236 (biomarker normalization unified on full-universe per-file percentile; `biomarker_repo` fixture + distribution/vocabulary/dominant-type tests)**, **F237 (deep-validation audit: stale explain, check-gate composite rewiring, refactoring-targets html, dominant-type intensity>0, test hardening)**, **F239 (trends A→B stale highlight — downplay-first)**, **F240 (SPA linked-brushing publish symmetry — map/sankey/treemap/X-Ray now broadcast)**, **F241 (coupling-sankey highlight fires in module-depth view)** (all `0a41b1d`). Active from the same validation: **F238** (parallel-coords highlight visually inert — `emphasis.disabled`; needs a Plan-3c design decision).
 
 **Highest-leverage work remaining:**
 1. **HEAD-scan I/O** (F206 + F173) — resolve HEAD→tree once per pass with a per-worker cached repo; benchmark via `ingest_capacity_sweep`. Biggest large-repo wall-clock lever.
 2. **Output-emitter cluster** (F119 / F148 / F161) — csv-crate migration (preserve the F170 injection guard + `\n` endings), `TabularEmit` dedup, `EmitterStream` streaming, in one coordinated byte-identical pass.
 3. **`Plan N` marker sweep** (F231) — 62-site scripted comment cleanup (a hard-rule violation).
 
-The next sweep should re-open with F-IDs starting at **F238**.
+The next sweep should re-open with F-IDs starting at **F242**.

@@ -16,7 +16,7 @@ Conventional Commits format. All notable changes documented here.
 
 - **SPA bivariate health×activity map.** The dashboard hotspot circle-pack now defaults to a bivariate color mode: each file's glyph encodes its code-health band (green→red) *and* its development activity (low→high) at once, so the danger quadrant (unhealthy **and** churning) is visible without swapping color lenses. A 3×3 legend keys the encoding; the previous single-signal modes (Cognitive, Code Health, Friction, Author, AI, Knowledge-loss, Clones) remain available as tabs. The palette is colorblind-safe (health read via lightness, not hue alone).
 
-- **SPA linked brushing across all widgets.** Selecting a file in any dashboard view now highlights the same file everywhere at once — the hotspot table row, the coupling sankey node, the architecture DSM row/column, the trends and parallel-coordinates series, and the file's coupling arcs on the hotspot map. One shared focus, highlight (not hide) — clearing the selection downplays everything back to neutral.
+- **SPA linked brushing across all widgets.** Selecting a file in any dashboard view now highlights the same file everywhere at once — the hotspot table row (also flagged `aria-current` for assistive tech), the coupling sankey node, the architecture DSM row/column, the trends and parallel-coordinates series, and the file's coupling arcs on the hotspot map. One shared focus, highlight (not hide) — clearing the selection downplays everything back to neutral. A selection can now be **originated from any of those widgets**: clicking a circle on the map, a sankey node, a treemap cell, or an X-Ray function broadcasts the shared focus (previously only the hotspot table, parallel-coordinates plot, and knowledge-islands list did). The sankey highlight tracks the selected file across module-depth views as well as the default file view. Clicking the map's empty background clears the shared selection everywhere, not just the map's own coupling arcs.
 
 ### Changed
 
@@ -25,6 +25,10 @@ Conventional Commits format. All notable changes documented here.
 - **`CACHE_EPOCH` bumped to `schema_v8`.** Existing caches are automatically invalidated to reflect the widened `CodeHealthRow` output (new `structural_risk`, `percentile`, `band` columns) and the biomarker-derived scoring change.
 
 - **`codelore explain code-health` updated to v2 formula.** The explain entry now describes the biomarker structural-risk term, the composite weights, the `structural_risk` threshold banding, and the per-language percentile rank.
+
+### Fixed
+
+- **SPA trends chart no longer keeps a stale highlight when switching files.** The detail drawer is non-modal, so selecting file A then file B without closing it left A's trend line still bold under B (ECharts `highlight` is additive). The trends listener now clears first, so only the current file is emphasised. The coupling-sankey highlight also now fires in module-depth view (previously it matched only full file paths, so it silently did nothing once the sankey was collapsed to modules).
 
 ## [0.13.0] - 2026-07-02
 
