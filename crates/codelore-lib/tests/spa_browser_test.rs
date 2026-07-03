@@ -1321,3 +1321,85 @@ fn sankey_module_depth_highlights_mapped_node() {
         captured, prefix_node
     );
 }
+
+/// The file-detail drawer groups its sections into a 3-tab layout
+/// (Overview / Coupling / People) with Overview shown by default, and
+/// activating another tab hides Overview and shows that panel.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn detail_drawer_groups_sections_into_tabs() {
+    let fixture = coupling_repo::build();
+    let opts = permissive_coupling_opts(fixture.dir.path().to_path_buf());
+    let repo = GixRepo::open(fixture.dir.path()).expect("open coupling fixture");
+    let db = FactsDb::new_in_memory().expect("in-memory facts db");
+    db.ingest(&repo, &opts).expect("ingest coupling fixture");
+    let hotspots = run_hotspots(&db, &opts).expect("hotspots");
+    let summary = run_summary(&db, &opts).expect("summary");
+    let code_health = run_code_health(&db, &opts).expect("code-health");
+    let coupling = run_coupling(&db, &opts).expect("coupling");
+    let knowledge_islands = run_knowledge_islands(&db, &opts).expect("knowledge-islands");
+    let dash = SpaDashboard {
+        hotspots, summary, code_health, coupling, knowledge_islands,
+        ..SpaDashboard::default()
+    };
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let html_path = tmp.path().join("codelore-drawer.html");
+    let mut f = std::fs::File::create(&html_path).expect("create html");
+    write_spa(&dash, "CodeLore Drawer Tabs Test",
+        &fixture.dir.path().display().to_string(), "2026-06-20 00:00:00 UTC", &mut f)
+        .expect("write_spa");
+    drop(f);
+
+    let Some((_browser, tab)) = boot_spa_tab(&html_path) else {
+        return;
+    };
+
+    /* Open the drawer for the first hotspot-table row via the publish path. */
+    let opened: bool = eval_json(
+        &tab,
+        "(function () { \
+             var tbody = document.getElementById('hotspot-tbody'); \
+             if (!tbody) return false; \
+             var row = tbody.querySelector('tr[data-path]'); \
+             if (!row) return false; \
+             window._codeloreShowDetail(row.getAttribute('data-path')); \
+             return true; \
+         })()",
+    );
+    assert!(opened, "no hotspot-table row to open the drawer from");
+    std::thread::sleep(Duration::from_millis(100));
+
+    let tab_count: i64 = eval_json(
+        &tab,
+        "(function () { \
+             var b = document.getElementById('drawer-body'); \
+             return b ? b.querySelectorAll('[role=\"tab\"]').length : -1; \
+         })()",
+    );
+    assert_eq!(tab_count, 3, "drawer should expose exactly 3 tabs");
+
+    let overview_default: bool = eval_json(
+        &tab,
+        "(function () { \
+             var ov = document.getElementById('drawer-panel-overview'); \
+             var cp = document.getElementById('drawer-panel-coupling'); \
+             return !!ov && !!cp && !ov.classList.contains('hidden') \
+                 && cp.classList.contains('hidden'); \
+         })()",
+    );
+    assert!(overview_default, "Overview panel must be visible and Coupling hidden by default");
+
+    let switched: bool = eval_json(
+        &tab,
+        "(function () { \
+             var t = document.getElementById('drawer-tab-coupling'); \
+             if (!t) return false; \
+             t.click(); \
+             var ov = document.getElementById('drawer-panel-overview'); \
+             var cp = document.getElementById('drawer-panel-coupling'); \
+             return ov.classList.contains('hidden') && !cp.classList.contains('hidden') \
+                 && t.getAttribute('aria-selected') === 'true'; \
+         })()",
+    );
+    assert!(switched, "activating the Coupling tab must show it and hide Overview");
+}

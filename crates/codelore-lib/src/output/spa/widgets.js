@@ -1058,6 +1058,54 @@
     });
   }
 
+  // Drawer tab bar: three DaisyUI tabs (in-bundle classes, no CSS rebuild)
+  // wired as an ARIA tablist. Overview is the default selection on every
+  // open. Panels are toggled by wireDrawerTabs below.
+  function drawerTabBar() {
+    return '<div class="tabs tabs-bordered" role="tablist" aria-label="File detail sections">' +
+      '<button type="button" class="tab tab-active" role="tab" id="drawer-tab-overview" aria-controls="drawer-panel-overview" aria-selected="true" tabindex="0">Overview</button>' +
+      '<button type="button" class="tab" role="tab" id="drawer-tab-coupling" aria-controls="drawer-panel-coupling" aria-selected="false" tabindex="-1">Coupling</button>' +
+      '<button type="button" class="tab" role="tab" id="drawer-tab-people" aria-controls="drawer-panel-people" aria-selected="false" tabindex="-1">People</button>' +
+      '</div>';
+  }
+
+  // One tabpanel. Non-overview panels start hidden. An empty section group
+  // shows a muted message rather than a blank panel.
+  function drawerPanel(id, labelledby, inner, emptyLabel) {
+    const content = (inner && inner.length) ? inner : ('<div class="empty">' + emptyLabel + '</div>');
+    const hidden = (id === 'drawer-panel-overview') ? '' : ' hidden';
+    return '<div id="' + id + '" role="tabpanel" aria-labelledby="' + labelledby + '" class="drawer-tabpanel' + hidden + '">' + content + '</div>';
+  }
+
+  // Wire the drawer tablist: click / ArrowLeft-Right / Home-End move the
+  // selection; only the active panel is shown. Roving tabindex + aria-selected
+  // mirror the colour-mode toggle's accessible-tablist convention.
+  function wireDrawerTabs(root) {
+    const tabs = Array.prototype.slice.call(root.querySelectorAll('[role="tab"]'));
+    const panels = tabs.map(function (t) { return document.getElementById(t.getAttribute('aria-controls')); });
+    function select(idx) {
+      for (var i = 0; i < tabs.length; i++) {
+        const on = i === idx;
+        tabs[i].setAttribute('aria-selected', on ? 'true' : 'false');
+        tabs[i].setAttribute('tabindex', on ? '0' : '-1');
+        tabs[i].classList.toggle('tab-active', on);
+        if (panels[i]) panels[i].classList.toggle('hidden', !on);
+      }
+    }
+    tabs.forEach(function (tab, i) {
+      tab.addEventListener('click', function () { select(i); });
+      tab.addEventListener('keydown', function (e) {
+        var next = -1;
+        if (e.key === 'ArrowRight') next = (i + 1) % tabs.length;
+        else if (e.key === 'ArrowLeft') next = (i - 1 + tabs.length) % tabs.length;
+        else if (e.key === 'Home') next = 0;
+        else if (e.key === 'End') next = tabs.length - 1;
+        if (next >= 0) { e.preventDefault(); tabs[next].focus(); select(next); }
+      });
+    });
+    select(0);
+  }
+
   function showFileDetailDrawer(path, d) {
     const drawer = document.getElementById('file-detail-drawer');
     const title = document.getElementById('drawer-title');
@@ -1070,7 +1118,9 @@
     const hasPath = typeof path === 'string' && path.length > 0;
     title.textContent = hasPath ? path : 'File details';
 
-    var html = '';
+    var overviewHtml = '';
+    var couplingHtml = '';
+    var peopleHtml = '';
 
     // All section lookups are wrapped so one row's malformed data can't
     // blank the drawer: partial html built before any throw is still shown,
@@ -1079,7 +1129,7 @@
     // Section: hotspot row
     const hot = (d.hotspots || []).find(function (r) { return r.path === path; });
     if (hot) {
-      html += '<h4>Hotspot</h4><dl>' +
+      overviewHtml += '<h4>Hotspot</h4><dl>' +
         '<dt>Revisions</dt><dd>' + fmtInt(hot.revisions) + '</dd>' +
         '<dt>Cognitive</dt><dd>' + fmtNumberFlex(hot.cognitive, 0) + '</dd>' +
         '<dt>Code health</dt><dd>' + fmtNumberFlex(hot.code_health, 1) + '</dd>' +
@@ -1094,7 +1144,7 @@
       return (r.path || r.entity) === path;
     });
     if (ki) {
-      html += '<h4>Knowledge island</h4><dl>' +
+      peopleHtml += '<h4>Knowledge island</h4><dl>' +
         '<dt>Primary author</dt><dd>' + escapeHtml(ki.main_author || '') + '</dd>' +
         '<dt>Ownership</dt><dd>' + fmtNumberFlex(ki.ownership_pct, 1) + ' %</dd>' +
         '<dt>Days since active</dt><dd>' + fmtInt(ki.days_since_main_active) + '</dd>' +
@@ -1115,13 +1165,13 @@
       return r.entity_a === path || r.entity_b === path;
     });
     if (partners.length) {
-      html += '<h4>Coupling partners</h4><ul class="drawer-partners">';
+      couplingHtml += '<h4>Coupling partners</h4><ul class="drawer-partners">';
       for (var i = 0; i < Math.min(partners.length, 20); i++) {
         const p = partners[i];
         const other = (p.entity_a === path) ? p.entity_b : p.entity_a;
         const partnerAuthor = primaryAuthorByPath[other] || '';
         const isDeparted = partnerAuthor && departedSet.has(partnerAuthor);
-        html += '<li' + (isDeparted ? ' class="drawer-partner-departed"' : '') + '>' +
+        couplingHtml += '<li' + (isDeparted ? ' class="drawer-partner-departed"' : '') + '>' +
           '<code>' + escapeHtml(other) + '</code>' +
           ' — ' + fmtInt(p.shared) + ' shared revs' +
           (p.degree != null ? (' (' + fmtNumberFlex(p.degree, 1) + '% coupling)') : '') +
@@ -1130,9 +1180,9 @@
           '</li>';
       }
       if (partners.length > 20) {
-        html += '<li>… ' + (partners.length - 20) + ' more</li>';
+        couplingHtml += '<li>… ' + (partners.length - 20) + ' more</li>';
       }
-      html += '</ul>';
+      couplingHtml += '</ul>';
     }
 
     // Section: top contributors. Aggregates entity_ownership rows
@@ -1168,21 +1218,21 @@
         });
       if (contribList.length) {
         const total = contribList.reduce(function (acc, r) { return acc + r.added + r.deleted; }, 0) || 1;
-        html += '<h4>Top contributors</h4><ul class="drawer-partners">';
+        peopleHtml += '<h4>Top contributors</h4><ul class="drawer-partners">';
         for (var pi = 0; pi < Math.min(contribList.length, 5); pi++) {
           const c = contribList[pi];
           const pct = Math.round(((c.added + c.deleted) / total) * 100);
           const cDeparted = departedSet.has(c.author);
-          html += '<li' + (cDeparted ? ' class="drawer-partner-departed"' : '') + '>' +
+          peopleHtml += '<li' + (cDeparted ? ' class="drawer-partner-departed"' : '') + '>' +
             escapeHtml(c.author) +
             ' — ' + pct + '% (<span class="drawer-author">+' + fmtInt(c.added) + ' / -' + fmtInt(c.deleted) + '</span>)' +
             (cDeparted ? ' <span class="ki-knowledge-loss-badge">knowledge-loss</span>' : '') +
             '</li>';
         }
         if (contribList.length > 5) {
-          html += '<li>… ' + (contribList.length - 5) + ' more contributors</li>';
+          peopleHtml += '<li>… ' + (contribList.length - 5) + ' more contributors</li>';
         }
-        html += '</ul>';
+        peopleHtml += '</ul>';
       }
     }
 
@@ -1197,18 +1247,18 @@
         return cb - ca;
       });
     if (fileFunctions.length) {
-      html += '<h4>Functions</h4><ul class="drawer-partners">';
+      overviewHtml += '<h4>Functions</h4><ul class="drawer-partners">';
       for (var fi = 0; fi < Math.min(fileFunctions.length, 8); fi++) {
         const f = fileFunctions[fi];
-        html += '<li><code>' + escapeHtml(f.function || '(anonymous)') + '</code>' +
+        overviewHtml += '<li><code>' + escapeHtml(f.function || '(anonymous)') + '</code>' +
           ' — cognitive <b>' + fmtNumberFlex(f.cognitive, 0) + '</b>' +
           (typeof f.start_line === 'number' ? ' <span class="drawer-author">L' + f.start_line + '</span>' : '') +
           '</li>';
       }
       if (fileFunctions.length > 8) {
-        html += '<li>… ' + (fileFunctions.length - 8) + ' more functions</li>';
+        overviewHtml += '<li>… ' + (fileFunctions.length - 8) + ' more functions</li>';
       }
-      html += '</ul>';
+      overviewHtml += '</ul>';
     }
 
     // Section: clone groups. If the file appears in any clone
@@ -1218,7 +1268,7 @@
     const cloneRow = (d.clones || []).find(function (r) { return r.path === path; });
     if (cloneRow && (cloneRow.groups || cloneRow.group_count || cloneRow.clone_groups)) {
       const groupCount = cloneRow.groups || cloneRow.group_count || cloneRow.clone_groups;
-      html += '<h4>Clones</h4><dl>' +
+      overviewHtml += '<h4>Clones</h4><dl>' +
         '<dt>Clone groups</dt><dd>' + fmtInt(groupCount) + '</dd>' +
         '</dl>';
     }
@@ -1226,34 +1276,32 @@
     // Section: code health
     const ch = (d.code_health || []).find(function (r) { return r.path === path; });
     if (ch) {
-      html += '<h4>Code health</h4><dl>' +
+      overviewHtml += '<h4>Code health</h4><dl>' +
         '<dt>Score</dt><dd>' + fmtNumberFlex(ch.score, 1) + '</dd>' +
         '<dt>Cognitive</dt><dd>' + fmtNumberFlex(ch.cognitive, 0) + '</dd>' +
         '<dt>Health band</dt><dd>' + (ch.band || '—') + '</dd>' +
         '</dl>';
     }
+
     } catch (e) {
       console.error('codelore: drawer section render failed for', path, e);
     }
 
-    if (!html) {
-      html = hasPath
-        ? '<div class="empty">No additional details for this path. ' +
-          'The path may have been filtered out by minimum-revision thresholds, ' +
-          'or its row type is not yet wired into the dashboard.</div>'
-        : '<div class="empty">This row had no resolvable file path, so no ' +
-          'metrics could be looked up — the underlying data may be missing ' +
-          'its path/entity field.</div>';
-    }
+    // Radar lives at the top of the Overview panel (the default-visible tab —
+    // ECharts needs a laid-out container with height). Its mount id is
+    // unchanged so renderDrawerRadar still finds it after body.innerHTML.
+    const radarDiv = '<div id="drawer-radar" style="height: 220px; margin-bottom: 14px;"></div>';
 
-    // Radar chart at the top of the drawer. Six axes profile the
-    // file across CodeLore's primary metrics: cognitive / churn /
-    // age / coupling / MI / AI%. Each axis is normalised to [0, 1]
-    // against the run's max so a small repo doesn't show every file
-    // at 0 — the radar is comparative within the current dataset.
-    html = '<div id="drawer-radar" style="height: 220px; margin-bottom: 14px;"></div>' + html;
-
-    body.innerHTML = html;
+    body.innerHTML =
+      drawerTabBar() +
+      drawerPanel('drawer-panel-overview', 'drawer-tab-overview', radarDiv + overviewHtml,
+        hasPath ? 'No overview metrics for this file — it may be below the minimum-revision threshold.'
+                : 'This row had no resolvable file path, so no metrics could be looked up.') +
+      drawerPanel('drawer-panel-coupling', 'drawer-tab-coupling', couplingHtml,
+        'No change-coupling partners recorded for this file.') +
+      drawerPanel('drawer-panel-people', 'drawer-tab-people', peopleHtml,
+        'No ownership or contributor data for this file.');
+    wireDrawerTabs(body);
 
     // Render the radar after body.innerHTML so the container exists.
     // Isolated: an ECharts failure on sparse/edge-case data must not wipe
