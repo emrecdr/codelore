@@ -3447,7 +3447,30 @@
       nodes[linkRows[ei].source] = true;
       nodes[linkRows[ei].target] = true;
     }
-    const nodeArr = Object.keys(nodes).sort().map(function (n) { return { name: n }; });
+    // Colour each module by its top-level (first path segment) group so
+    // clusters are visually distinct; the lexical sort already places
+    // same-group modules on a contiguous arc. When every module shares one
+    // top-level root (single-root repo → one group), fall back to one
+    // category per module so modules stay individually distinguishable
+    // rather than collapsing to a single colour.
+    function chordTopGroup(name) {
+      const slash = name.indexOf('/');
+      return slash < 0 ? name : name.slice(0, slash);
+    }
+    const sortedNames = Object.keys(nodes).sort();
+    const groupNames = [];
+    const groupIndex = {};
+    for (var gi = 0; gi < sortedNames.length; gi++) {
+      const g = chordTopGroup(sortedNames[gi]);
+      if (!(g in groupIndex)) { groupIndex[g] = groupNames.length; groupNames.push(g); }
+    }
+    const chordPerNode = groupNames.length < 2;
+    const categories = chordPerNode
+      ? sortedNames.map(function (n) { return { name: n }; })
+      : groupNames.map(function (g) { return { name: g }; });
+    const nodeArr = sortedNames.map(function (n, idx) {
+      return { name: n, category: chordPerNode ? idx : groupIndex[chordTopGroup(n)] };
+    });
     setChartAriaLabel(container,
       'Module change-coupling chord diagram, ' + nodeArr.length + ' modules and ' +
       linkRows.length + ' coupled pairs');
@@ -3459,13 +3482,14 @@
         layout: 'circular',
         circular: { rotateLabel: true },
         data: nodeArr,
+        categories: categories,
         links: linkRows,
         roam: false,
         label: { show: true, color: getCssVar('--fg-dim'), fontSize: 10, position: 'right' },
         lineStyle: {
           color: 'source',
-          opacity: 0.55,
-          curveness: 0.3,
+          opacity: 0.45,
+          curveness: 0.45,
         },
         emphasis: { focus: 'adjacency', lineStyle: { width: 3 } },
       }],

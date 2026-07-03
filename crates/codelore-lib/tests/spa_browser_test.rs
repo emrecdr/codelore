@@ -1403,3 +1403,70 @@ fn detail_drawer_groups_sections_into_tabs() {
     );
     assert!(switched, "activating the Coupling tab must show it and hide Overview");
 }
+
+/// The coupling chord assigns each module an ECharts category so clusters
+/// are colour-distinct (top-level module group, or one-per-module on a
+/// single-root repo). Rendered from a fixture with real cross-module coupling.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn module_chord_colours_clusters() {
+    let fixture = coupling_repo::build();
+    let opts = permissive_coupling_opts(fixture.dir.path().to_path_buf());
+    let repo = GixRepo::open(fixture.dir.path()).expect("open coupling fixture");
+    let db = FactsDb::new_in_memory().expect("in-memory facts db");
+    db.ingest(&repo, &opts).expect("ingest coupling fixture");
+    let hotspots = run_hotspots(&db, &opts).expect("hotspots");
+    let summary = run_summary(&db, &opts).expect("summary");
+    let code_health = run_code_health(&db, &opts).expect("code-health");
+    let coupling = run_coupling(&db, &opts).expect("coupling");
+    let knowledge_islands = run_knowledge_islands(&db, &opts).expect("knowledge-islands");
+    let dash = SpaDashboard {
+        hotspots, summary, code_health, coupling, knowledge_islands,
+        ..SpaDashboard::default()
+    };
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let html_path = tmp.path().join("codelore-chord.html");
+    let mut f = std::fs::File::create(&html_path).expect("create html");
+    write_spa(&dash, "CodeLore Chord Cluster Test",
+        &fixture.dir.path().display().to_string(), "2026-06-20 00:00:00 UTC", &mut f)
+        .expect("write_spa");
+    drop(f);
+
+    let Some((_browser, tab)) = boot_spa_tab(&html_path) else {
+        return;
+    };
+
+    /* The chord may need its widget scrolled/rendered; poll the ECharts option. */
+    let mut cats: i64 = -1;
+    let mut first_has_cat = false;
+    for _ in 0..30 {
+        std::thread::sleep(Duration::from_millis(100));
+        cats = eval_json(
+            &tab,
+            "(function () { \
+                 var el = document.getElementById('widget-module-chord-body'); \
+                 if (!el || !window.echarts) return -1; \
+                 var chart = window.echarts.getInstanceByDom(el); \
+                 if (!chart) return -1; \
+                 var opt = chart.getOption(); \
+                 var s = opt && opt.series && opt.series[0]; \
+                 if (!s || !s.categories) return -1; \
+                 return s.categories.length; \
+             })()",
+        );
+        if cats >= 1 {
+            first_has_cat = eval_json(
+                &tab,
+                "(function () { \
+                     var el = document.getElementById('widget-module-chord-body'); \
+                     var chart = window.echarts.getInstanceByDom(el); \
+                     var d = chart.getOption().series[0].data; \
+                     return !!d && d.length > 0 && typeof d[0].category === 'number'; \
+                 })()",
+            );
+            break;
+        }
+    }
+    assert!(cats >= 1, "module chord should expose at least one ECharts category");
+    assert!(first_has_cat, "each chord node should carry a numeric category index");
+}
