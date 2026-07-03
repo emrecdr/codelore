@@ -16,6 +16,8 @@ Conventional Commits format. All notable changes documented here.
 
 ### Changed
 
+- **`check` gate `code_health_min` now evaluates the composite code-health score** — the value `--analysis code-health` reports — instead of the hotspots inline cognitive-only proxy. Previously a file the analysis banded `red` (composite ~20) could pass a `code_health_min = 70` gate, because the gate read the inline proxy (floored at 60, ~85 for the same file). **Behavioral change** for CI configs using `code_health_min`: the gate is now stricter and consistent with the analysis users look at. `cognitive_max` and `hotspot_score_max` continue to evaluate the hotspots output.
+
 - **`CACHE_EPOCH` bumped to `schema_v8`.** Existing caches are automatically invalidated to reflect the widened `CodeHealthRow` output (new `structural_risk`, `percentile`, `band` columns) and the biomarker-derived scoring change.
 
 - **`codelore explain code-health` updated to v2 formula.** The explain entry now describes the biomarker structural-risk term, the composite weights, the `structural_risk` threshold banding, and the per-language percentile rank.
