@@ -459,9 +459,13 @@ fn rendered_spa_boots_without_console_errors() {
     // -- Step 13: coupling subscriber highlights the mapped node in module depth. -
     // Switch the sankey to module depth 2; nodes are then modulePathSeg(path,2)
     // prefixes. Set the selection to a full file path and assert the subscriber
-    // highlights its 2-segment module prefix, not the raw path (locks F241).
-    // Poll for the re-render (cooperatively scheduled). '' / skip if the fixture
-    // has no file whose module prefix is a visible sankey node.
+    // highlights its 2-segment module prefix, not the raw path — guarding the
+    // module-name-space mapping. Poll for the re-render (cooperatively
+    // scheduled). This is a correct-by-construction guard that only FIRES on a
+    // repo with cross-module change-coupling at depth 2; the differential
+    // fixture has near-zero co-changes, so the sankey is empty at depth 2 and
+    // this step skips (no qualifying node). A coupling-rich fixture would make
+    // it live — see the deep-analysis report follow-up.
     let module_target: String = eval_json(
         &tab,
         "(function () { \
@@ -545,7 +549,7 @@ fn rendered_spa_boots_without_console_errors() {
             assert_eq!(
                 captured, prefix_node,
                 "in module-depth view the coupling subscriber did not highlight the \
-                 selected file's module prefix — the modulePathSeg mapping (F241) is broken"
+                 selected file's module prefix — the modulePathSeg mapping is broken"
             );
         } else {
             println!(
