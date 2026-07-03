@@ -616,6 +616,16 @@
     .hotspot-row-departed td:first-child {
       box-shadow: inset 3px 0 0 var(--color-error, #e0584e);
     }
+    /* Hotspot table row inside the active bivariate quadrant brush. A SET
+       emphasis distinct from the single-selection `!bg-base-300` (neutral)
+       and the off-boarding `.hotspot-row-departed` (red): a faint blue wash
+       + info-blue left accent on the first cell (same alignment-safe
+       box-shadow trick as .hotspot-row-departed, so no column-width shift).
+       A row can carry this AND the selection background simultaneously. */
+    .hotspot-row-brushed { background: rgba(59, 130, 246, 0.06); }
+    .hotspot-row-brushed td:first-child {
+      box-shadow: inset 3px 0 0 var(--color-info, #3b82f6);
+    }
     .ki-knowledge-loss-badge {
       flex-shrink: 0;
       display: inline-block;
@@ -2035,6 +2045,23 @@
         set(p) { this.path = p || null; },
         clear() { this.path = null; },
       });
+      // Cross-widget SET brush: the bivariate legend publishes the set of
+      // file paths in a clicked health×activity quadrant here. Deliberately
+      // SEPARATE from `selection` (a single focused path): brush = context
+      // (many files), selection = focus (one file); a file can be in the
+      // brushed set AND the single focus at once. `cell` is null or
+      // [healthBucket, activityBucket]; `paths` is the quadrant's path list.
+      // Listeners registered in widgets.js via _codeloreRegisterBrushListener
+      // fire from the Alpine.effect below.
+      Alpine.store('brush', {
+        cell: null,
+        paths: [],
+        set(cell, paths) { this.cell = cell || null; this.paths = paths || []; },
+        clear() { this.cell = null; this.paths = []; },
+        isActive(hb, ab) {
+          return !!this.cell && this.cell[0] === hb && this.cell[1] === ab;
+        },
+      });
       // Per-widget layout settings. Module-coupling chord and
       // architecture force-graph aggregate file paths to N path
       // segments before rolling up; 'auto' lets the adaptive loop
@@ -2204,6 +2231,19 @@
         const listeners = window._codeloreSelectionListeners || [];
         for (let i = 0; i < listeners.length; i++) {
           try { listeners[i](path); } catch (e) { console.warn('selection listener failed:', e); }
+        }
+      });
+      // Cross-widget brush bridge: fire listeners registered by quadrant-
+      // aware widgets whenever `$store.brush.cell` changes. Reads both
+      // `cell` and `paths` so either mutation re-fires.
+      Alpine.effect(() => {
+        const cell = Alpine.store('brush').cell;
+        const paths = Alpine.store('brush').paths;
+        void (cell && cell.length);
+        void paths.length;
+        const listeners = window._codeloreBrushListeners || [];
+        for (let i = 0; i < listeners.length; i++) {
+          try { listeners[i](cell, paths); } catch (e) { console.warn('brush listener failed:', e); }
         }
       });
       // Hotspot-table knowledge-loss bridge: when `scenario.departed`

@@ -385,6 +385,76 @@ fn rendered_spa_boots_without_console_errors() {
              table-subscriber path is broken"
         );
     }
+
+    // -- Step 12: bivariate legend set-brush emphasises a quadrant. -------
+    // Click each legend cell until one selects a NON-EMPTY quadrant, then
+    // assert the matching hotspot-table rows carry `.hotspot-row-brushed`.
+    // Re-clicking the active cell clears. Return -1 = wiring missing (fail);
+    // 0 = fixture has no populated quadrant (skip, guards empty data).
+    let brushed_count: i64 = eval_json(
+        &tab,
+        "(function () { \
+             var mount = document.getElementById('bivariate-legend'); \
+             if (!mount) return -1; \
+             var cells = mount.querySelectorAll('[data-biv-cell]'); \
+             if (!cells.length) return -1; \
+             var store = window.Alpine && window.Alpine.store && window.Alpine.store('brush'); \
+             if (!store) return -1; \
+             for (var i = 0; i < cells.length; i++) { \
+                 store.clear(); \
+                 cells[i].click(); \
+                 if (store.paths && store.paths.length) { \
+                     window.__codeloreBrushCellIdx = i; return store.paths.length; \
+                 } \
+             } \
+             return 0; \
+         })()",
+    );
+    assert!(
+        brushed_count != -1,
+        "bivariate brush store / legend cells not wired (missing #bivariate-legend \
+         [data-biv-cell] cells or the `brush` Alpine store)"
+    );
+    if brushed_count > 0 {
+        std::thread::sleep(Duration::from_millis(100));
+        let rows_brushed: i64 = eval_json(
+            &tab,
+            "(function () { \
+                 var t = document.getElementById('hotspot-tbody'); \
+                 return t ? t.querySelectorAll('tr.hotspot-row-brushed').length : -1; \
+             })()",
+        );
+        assert!(
+            rows_brushed > 0,
+            "legend set-brush selected a non-empty quadrant but no hotspot-table row \
+             got `.hotspot-row-brushed` — the brush fan-out / table subscriber is not wired"
+        );
+        let _: bool = eval_json(
+            &tab,
+            "(function () { \
+                 var cells = document.getElementById('bivariate-legend') \
+                     .querySelectorAll('[data-biv-cell]'); \
+                 cells[window.__codeloreBrushCellIdx].click(); return true; \
+             })()",
+        );
+        std::thread::sleep(Duration::from_millis(100));
+        let rows_after_clear: i64 = eval_json(
+            &tab,
+            "(function () { \
+                 var t = document.getElementById('hotspot-tbody'); \
+                 return t ? t.querySelectorAll('tr.hotspot-row-brushed').length : -1; \
+             })()",
+        );
+        assert_eq!(
+            rows_after_clear, 0,
+            "re-clicking the active legend cell did not clear the quadrant brush"
+        );
+    } else {
+        println!(
+            "spa_browser_test: bivariate brush step skipped — fixture has no populated \
+             health×activity quadrant (no code_health bands intersecting hotspots)"
+        );
+    }
 }
 
 /// Click a Knowledge-Islands row and assert the file-detail drawer

@@ -82,6 +82,11 @@
   let selectedCouplingFile = null;
   let lastHotspotChart = null;
   let lastHotspotNodePositions = null;
+  // Module-scoped ref to the circle-pack render payload + the active
+  // bivariate quadrant brush set, so updateHotspotBrush() can re-tint leaf
+  // opacities on a brush change without re-running buildFsHierarchy/d3.pack.
+  let lastCirclePackData = null;
+  let brushedPaths = null; // Set<fullPath> for the active quadrant, or null
   // Shared arc-overlay data array. Owned at module scope so both the
   // arc-series renderItem inside renderHotspotCirclePack AND the
   // partial-update call from updateCouplingArcs (which runs on every
@@ -124,6 +129,20 @@
       });
     fn.__source = source;
     window._codeloreSelectionListeners.push(fn);
+  };
+
+  // Cross-widget quadrant BRUSH listeners — a SET emphasis, distinct from
+  // the single-file `selection` bus above. Fired from an Alpine.effect in
+  // template.html whenever `$store.brush.cell` changes. Same source-tagged
+  // de-dup so re-rendering widgets don't leak closures over disposed charts.
+  window._codeloreBrushListeners = [];
+  window._codeloreRegisterBrushListener = function (source, fn) {
+    window._codeloreBrushListeners =
+      window._codeloreBrushListeners.filter(function (l) {
+        return l.__source !== source;
+      });
+    fn.__source = source;
+    window._codeloreBrushListeners.push(fn);
   };
 
   // ─── §3a  Fullscreen toggle per widget ──────────────────────────
@@ -1950,6 +1969,12 @@
       }],
     });
 
+    // Stash the built render payload in module scope so updateHotspotBrush()
+    // can re-tint opacities via a partial setOption, and re-apply an active
+    // brush after a full re-render (theme toggle etc.).
+    lastCirclePackData = circlePackData;
+    if (brushedPaths) updateHotspotBrush();
+
     chart.on('click', function (params) {
       const d = params && params.data;
       if (d && d.fullPath && d.metrics) {
@@ -1999,6 +2024,15 @@
       updateCouplingArcs();
     });
 
+    // Bivariate quadrant brush: emphasise the set / dim the rest by
+    // recomputing per-leaf opacity. Registered here (mirrors the selection
+    // listener) so it closes over the fresh render; re-fires via the brush
+    // store's Alpine.effect fan-out.
+    window._codeloreRegisterBrushListener('hotspot-map', function (cell, paths) {
+      brushedPaths = (paths && paths.length) ? new Set(paths) : null;
+      updateHotspotBrush();
+    });
+
     renderBivariateLegend();
   }
 
@@ -2015,14 +2049,55 @@
     if (!mount) return;
     mount.style.display = (currentHotspotColorMode === 'bivariate') ? '' : 'none';
     const cells = BIVARIATE_PALETTE.map(function (c, i) {
-      return '<div style="width:14px;height:14px;background:' + c + '" '
-        + 'title="health ' + (['healthy', 'warning', 'unhealthy'][Math.floor(i / 3)])
-        + ' × activity ' + (['low', 'med', 'high'][i % 3]) + '"></div>';
+      const hb = Math.floor(i / 3);
+      const ab = i % 3;
+      return '<div data-biv-cell data-hb="' + hb + '" data-ab="' + ab + '" '
+        + 'style="width:14px;height:14px;background:' + c + ';cursor:pointer;outline-offset:1px" '
+        + 'title="health ' + (['healthy', 'warning', 'unhealthy'][hb])
+        + ' × activity ' + (['low', 'med', 'high'][ab])
+        + ' — click to brush this quadrant"></div>';
     }).join('');
     mount.innerHTML =
       '<div class="text-xs opacity-70 mb-1">Health × Activity</div>' +
       '<div style="display:grid;grid-template-columns:repeat(3,14px);gap:2px">' + cells + '</div>' +
       '<div class="text-xs opacity-50 mt-1">↓ less healthy&nbsp;&nbsp;→ more active</div>';
+
+    // Legend cell → quadrant set-brush. Band from data.code_health (same
+    // source as the circle-pack's bandByPath); activity from data.hotspots.
+    // Clicking the active cell again clears.
+    const bandByPath = {};
+    (data.code_health || []).forEach(function (r) { bandByPath[r.path] = r.band; });
+    const cellEls = mount.querySelectorAll('[data-biv-cell]');
+    for (var i = 0; i < cellEls.length; i++) {
+      cellEls[i].addEventListener('click', function (evt) {
+        const store = window.Alpine && window.Alpine.store && window.Alpine.store('brush');
+        if (!store) return;
+        const hb = Number(evt.currentTarget.getAttribute('data-hb'));
+        const ab = Number(evt.currentTarget.getAttribute('data-ab'));
+        if (store.isActive(hb, ab)) { store.clear(); return; }
+        const paths = (data.hotspots || []).filter(function (h) {
+          return healthBucket(bandByPath[h.path]) === hb
+            && activityBucket(h.hotspot_score) === ab;
+        }).map(function (h) { return h.path; });
+        store.set([hb, ab], paths);
+      });
+      wireRowKbActivation(cellEls[i]); // role=button + tabindex + Enter/Space → click
+    }
+
+    // Legend is itself a brush subscriber: outline the active quadrant cell.
+    if (window._codeloreRegisterBrushListener) {
+      window._codeloreRegisterBrushListener('bivariate-legend', function (cell) {
+        const m = document.getElementById('bivariate-legend');
+        if (!m) return;
+        const cs = m.querySelectorAll('[data-biv-cell]');
+        for (var k = 0; k < cs.length; k++) {
+          const on = !!cell
+            && Number(cs[k].getAttribute('data-hb')) === cell[0]
+            && Number(cs[k].getAttribute('data-ab')) === cell[1];
+          cs[k].style.outline = on ? '2px solid var(--color-base-content)' : '';
+        }
+      });
+    }
   }
 
 
@@ -2341,6 +2416,22 @@
         } else {
           rows[i].removeAttribute('aria-current');
         }
+      }
+    });
+
+    // Cross-widget quadrant brush: emphasise every row whose path is in the
+    // brushed set (distinct from the single-selection `!bg-base-300` — brush
+    // = context, selection = focus; a row can carry both). Rebuilt on
+    // sort/filter/paginate like the selection highlight, so it re-applies on
+    // the next brush change (same transient-drop behaviour as selection).
+    window._codeloreRegisterBrushListener('hotspot-table', function (cell, paths) {
+      const tbody = document.getElementById('hotspot-tbody');
+      if (!tbody) return;
+      const set = new Set(paths || []);
+      const rows = tbody.querySelectorAll('tr');
+      for (var i = 0; i < rows.length; i++) {
+        const p = rows[i].getAttribute('data-path');
+        rows[i].classList.toggle('hotspot-row-brushed', !!p && set.has(p));
       }
     });
   }
@@ -4174,6 +4265,12 @@
         // path sees the active mode too.
         startViewTransition(function () {
           currentHotspotColorMode = mode;
+          // Leaving bivariate hides the legend — drop any active quadrant
+          // brush so the map isn't left dimmed with no legend to clear it.
+          if (mode !== 'bivariate') {
+            const bs = window.Alpine && window.Alpine.store && window.Alpine.store('brush');
+            if (bs && bs.cell) bs.clear();
+          }
           renderHotspotCirclePack(data.hotspots || [], mode);
         });
       });
@@ -4346,6 +4443,23 @@
         { data: arcData },
       ],
     });
+  }
+
+  // Partial setOption update: re-tint per-leaf opacity to emphasise the
+  // brushed bivariate quadrant (members bright, non-members dimmed), leaving
+  // the arc series[1] untouched (`{}` = no change). Mirrors updateCouplingArcs'
+  // index-merge pattern. `brushedPaths === null` restores default leaf opacity.
+  function updateHotspotBrush() {
+    if (!lastHotspotChart || !lastCirclePackData) return;
+    if (lastHotspotChart.isDisposed && lastHotspotChart.isDisposed()) return;
+    for (var i = 0; i < lastCirclePackData.length; i++) {
+      const item = lastCirclePackData[i];
+      if (!item || !item._raw || !item.metrics) continue; // leaves only
+      item._raw.opacity = !brushedPaths
+        ? 0.85
+        : (brushedPaths.has(item.fullPath) ? 0.95 : 0.12);
+    }
+    lastHotspotChart.setOption({ series: [{ data: lastCirclePackData }, {}] });
   }
 
   // Stable palette assignment for author colors. A discrete categorical
