@@ -1953,14 +1953,19 @@
     chart.on('click', function (params) {
       const d = params && params.data;
       if (d && d.fullPath && d.metrics) {
-        // Clicking a leaf surfaces its coupling partners AND
-        // opens the drawer. Both behaviours co-exist intentionally
-        // — the arcs scaffold the drawer's narrative ("this file is
-        // tightly coupled to these others") rather than competing
-        // with it.
-        selectedCouplingFile = d.fullPath;
-        updateCouplingArcs();
-        showFileDetailDrawer(d.fullPath, data);
+        // Clicking a leaf surfaces its coupling partners AND opens the
+        // drawer. Route through _codeloreShowDetail so the click also
+        // broadcasts the selection — the 'hotspot-map' listener then sets
+        // selectedCouplingFile + redraws the arcs, so we must NOT do that
+        // here too (double redraw). The direct arc update stays only on the
+        // no-broadcast fallback path.
+        if (window._codeloreShowDetail) {
+          window._codeloreShowDetail(d.fullPath);
+        } else {
+          selectedCouplingFile = d.fullPath;
+          updateCouplingArcs();
+          showFileDetailDrawer(d.fullPath, data);
+        }
       }
     });
 
@@ -2316,7 +2321,16 @@
       const rows = tbody.querySelectorAll('tr');
       for (var i = 0; i < rows.length; i++) {
         const rowPath = rows[i].getAttribute('data-path');
-        rows[i].classList.toggle('!bg-base-300', !!selectedPath && rowPath === selectedPath);
+        const isSel = !!selectedPath && rowPath === selectedPath;
+        rows[i].classList.toggle('!bg-base-300', isSel);
+        // Mark the selected row for assistive tech, not just visually.
+        // aria-current is removed (not set to 'false') on non-selected rows
+        // so only one row ever carries the state.
+        if (isSel) {
+          rows[i].setAttribute('aria-current', 'true');
+        } else {
+          rows[i].removeAttribute('aria-current');
+        }
       }
     });
   }
@@ -2442,7 +2456,15 @@
 
     chart.on('click', function (params) {
       if (params.dataType === 'node' && params.data && params.data.name) {
-        showFileDetailDrawer(params.data.name, data);
+        // In 'files' mode the node name IS a full repo-relative path, so
+        // broadcast the selection. In module-depth mode the name is a
+        // truncated module prefix that no file-level subscriber matches —
+        // open the drawer directly without polluting the selection bus.
+        if (userSankeyDepth === 'files' && window._codeloreShowDetail) {
+          window._codeloreShowDetail(params.data.name);
+        } else {
+          showFileDetailDrawer(params.data.name, data);
+        }
       }
     });
 
@@ -2451,7 +2473,13 @@
     window._codeloreRegisterSelectionListener('coupling', function (selectedPath) {
       chart.dispatchAction({ type: 'downplay' });
       if (!selectedPath) return;
-      chart.dispatchAction({ type: 'highlight', seriesIndex: 0, name: selectedPath });
+      // Node names live in the current depth's name-space: full paths in
+      // 'files' mode, truncated module prefixes in module-depth mode. Map
+      // the bus's full path into that space or the module view no-ops.
+      const nodeName = (typeof userSankeyDepth === 'number')
+        ? modulePathSeg(selectedPath, userSankeyDepth)
+        : selectedPath;
+      chart.dispatchAction({ type: 'highlight', seriesIndex: 0, name: nodeName });
     });
 
   }
@@ -2633,15 +2661,14 @@
     // so selecting a file dispatches `highlight` on that series
     // index. Empty selection downplays everything back to neutral.
     window._codeloreRegisterSelectionListener('trends', function (selectedPath) {
-      if (!selectedPath) {
-        chart.dispatchAction({ type: 'downplay' });
-        return;
-      }
+      // Downplay first: ECharts highlight is additive, so without this a
+      // direct A→B selection (the drawer is non-modal, so switching files
+      // without closing it is reachable) leaves A's series bold under B.
+      chart.dispatchAction({ type: 'downplay' });
+      if (!selectedPath) return;
       const idx = paths.indexOf(selectedPath);
       if (idx >= 0) {
         chart.dispatchAction({ type: 'highlight', seriesIndex: idx });
-      } else {
-        chart.dispatchAction({ type: 'downplay' });
       }
     });
   }
@@ -2925,7 +2952,11 @@
     chart.on('click', function (params) {
       const d = params && params.data;
       if (d && d.cognitive != null) {
-        showFileDetailDrawer(d.name, data);
+        if (window._codeloreShowDetail) {
+          window._codeloreShowDetail(d.name);
+        } else {
+          showFileDetailDrawer(d.name, data);
+        }
       }
     });
   }
@@ -4082,7 +4113,11 @@
     chart.on('click', function (params) {
       const d = params && params.data;
       if (d && d.fullPath && d.cognitive != null) {
-        showFileDetailDrawer(d.fullPath, data);
+        if (window._codeloreShowDetail) {
+          window._codeloreShowDetail(d.fullPath);
+        } else {
+          showFileDetailDrawer(d.fullPath, data);
+        }
       }
     });
 

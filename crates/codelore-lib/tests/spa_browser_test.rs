@@ -278,6 +278,108 @@ fn rendered_spa_boots_without_console_errors() {
         "setting selection via Alpine store did not highlight the matching \
          hotspot-table row — cross-widget linked brushing is not wired"
     );
+
+    // -- Step 10: assert the coupling-sankey subscriber highlights on selection. -
+    // Clear any prior selection FIRST (its own round-trip) so the publish below
+    // is a guaranteed store CHANGE — re-setting the path the store already holds
+    // is a no-op that never fans out, and an earlier step may have left the same
+    // path selected. The sankey may be empty on a small fixture, so '' skips.
+    let sankey_node: String = eval_json(
+        &tab,
+        "(function () { \
+             var el = document.getElementById('widget-coupling-sankey-body'); \
+             if (!el || !window.echarts) return ''; \
+             var chart = window.echarts.getInstanceByDom(el); \
+             if (!chart) return ''; \
+             var opt = chart.getOption(); \
+             var series = opt && opt.series && opt.series[0]; \
+             var nodes = series && series.data; \
+             if (!nodes || !nodes.length) return ''; \
+             window.__codeloreSankeyTarget = nodes[0].name; \
+             window.Alpine.store('selection').clear(); \
+             return nodes[0].name; \
+         })()",
+    );
+    if !sankey_node.is_empty() {
+        std::thread::sleep(Duration::from_millis(100));
+        // Spy on the sankey's dispatchAction, then publish the node name — now a
+        // guaranteed change from the cleared (null) state — and read the captured
+        // highlight target.
+        let _: bool = eval_json(
+            &tab,
+            "(function () { \
+                 var el = document.getElementById('widget-coupling-sankey-body'); \
+                 var chart = el && window.echarts && window.echarts.getInstanceByDom(el); \
+                 if (!chart) return false; \
+                 window.__codeloreSankeyHi = null; \
+                 var orig = chart.dispatchAction.bind(chart); \
+                 chart.dispatchAction = function (p) { \
+                     if (p && p.type === 'highlight') window.__codeloreSankeyHi = p.name || ''; \
+                     return orig(p); \
+                 }; \
+                 window.Alpine.store('selection').set(window.__codeloreSankeyTarget); \
+                 return true; \
+             })()",
+        );
+        std::thread::sleep(Duration::from_millis(100));
+        let captured: String =
+            eval_json(&tab, "(function(){return window.__codeloreSankeyHi || '';})()");
+        assert_eq!(
+            captured, sankey_node,
+            "coupling-sankey selection listener did not dispatch a 'highlight' \
+             for the published node name — the cross-widget subscriber is not wired"
+        );
+    }
+
+    // -- Step 11: assert a sankey-originated publish highlights the table row. -
+    // The sankey click (files mode) now calls window._codeloreShowDetail(name).
+    // Clear first, then invoke it with a node name that is also a hotspot-table
+    // path, and assert the broadcast LIGHTS the row (not that it was already lit).
+    // '' sentinel => skip (empty sankey or no overlapping path).
+    let bridged_path: String = eval_json(
+        &tab,
+        "(function () { \
+             var el = document.getElementById('widget-coupling-sankey-body'); \
+             if (!el || !window.echarts) return ''; \
+             var chart = window.echarts.getInstanceByDom(el); \
+             if (!chart) return ''; \
+             var opt = chart.getOption(); \
+             var nodes = opt && opt.series && opt.series[0] && opt.series[0].data; \
+             var tbody = document.getElementById('hotspot-tbody'); \
+             if (!nodes || !tbody) return ''; \
+             for (var i = 0; i < nodes.length; i++) { \
+                 var n = nodes[i].name; \
+                 if (tbody.querySelector('tr[data-path=\"' + n + '\"]')) { \
+                     window.__codeloreBridge = n; \
+                     window.Alpine.store('selection').clear(); \
+                     return n; \
+                 } \
+             } \
+             return ''; \
+         })()",
+    );
+    if !bridged_path.is_empty() {
+        std::thread::sleep(Duration::from_millis(100));
+        // Publish via the exact call the files-mode sankey click now makes.
+        let _: bool = eval_json(
+            &tab,
+            "(function(){ window._codeloreShowDetail(window.__codeloreBridge); return true; })()",
+        );
+        std::thread::sleep(Duration::from_millis(100));
+        let row_lit: bool = eval_json(
+            &tab,
+            &format!(
+                "(function () {{ var r = document.querySelector('#hotspot-tbody \
+                  tr[data-path=\"{}\"]'); return !!r && r.classList.contains('!bg-base-300'); }})()",
+                bridged_path
+            ),
+        );
+        assert!(
+            row_lit,
+            "a sankey-node publish via _codeloreShowDetail did not highlight the \
+             matching hotspot-table row — publish symmetry is not wired"
+        );
+    }
 }
 
 /// Click a Knowledge-Islands row and assert the file-detail drawer
