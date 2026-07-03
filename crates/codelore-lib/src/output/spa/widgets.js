@@ -861,6 +861,43 @@
     return token('--color-success');
   }
 
+  // Bivariate health × activity encoding. A 3×3 matrix: rows = health
+  // (green/yellow/red), cols = activity (low/med/high). CVD-safe: the
+  // green→red health axis is paired with increasing saturation+darkness on
+  // the activity axis, so the danger cell (red × high) is the darkest/most
+  // saturated regardless of hue perception. Indexed [health*3 + activity].
+  const BIVARIATE_PALETTE = [
+    '#c3e8bd', '#8fd18a', '#4fae53', // green  × low/med/high
+    '#f6e5a3', '#e8c85a', '#c99a1f', // yellow × low/med/high
+    '#f0b0a0', '#dc7050', '#b52d16'  // red    × low/med/high (darkest = danger)
+  ];
+
+  // Health band → row index. Unknown/missing band → neutral (handled by caller).
+  function healthBucket(band) {
+    if (band === 'green') return 0;
+    if (band === 'yellow') return 1;
+    if (band === 'red') return 2;
+    return -1; // unknown
+  }
+
+  // Activity (hotspot_score ∈ [0,10]) → column index. Thresholds split the
+  // [0,10] range into low (<2), med (<5), high (>=5) — coarse on purpose so
+  // the encoding stays legible at 3 levels.
+  function activityBucket(hotspotScore) {
+    const s = (typeof hotspotScore === 'number') ? hotspotScore : 0;
+    if (s < 2) return 0;
+    if (s < 5) return 1;
+    return 2;
+  }
+
+  // Combined bivariate color. Missing band → neutral grey (same convention as
+  // the other modes' "no data" grey).
+  function bivariateColor(band, hotspotScore) {
+    const h = healthBucket(band);
+    if (h < 0) return 'rgba(140, 140, 140, 0.55)';
+    return BIVARIATE_PALETTE[h * 3 + activityBucket(hotspotScore)];
+  }
+
   // Continuous heat ramp from --color-warning to --color-error in OKLCH
   // space. Perceptually uniform — midpoint stays in the orange family,
   // unlike sRGB / HSL interpolation which mudbrowns through grey at

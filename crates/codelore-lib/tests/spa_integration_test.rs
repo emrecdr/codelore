@@ -328,6 +328,32 @@ fn spa_embeds_fusion_overlay_data() {
     );
 }
 
+/// Asserts that the bivariate health×activity color helpers are inlined
+/// into the emitted SPA bundle. The helpers are pure JS in widgets.js;
+/// this test proves they survive the include_str! embedding.
+#[test]
+fn spa_embeds_bivariate_palette() {
+    let dash = SpaDashboard::default();
+    let mut buf: Vec<u8> = Vec::new();
+    write_spa(
+        &dash,
+        "CodeLore Dashboard",
+        ".",
+        "now",
+        &mut buf,
+    )
+    .expect("write_spa");
+    let html = String::from_utf8(buf).expect("utf8");
+    assert!(
+        html.contains("BIVARIATE_PALETTE"),
+        "bivariate palette constant must ship in widgets.js",
+    );
+    assert!(
+        html.contains("function bivariateColor"),
+        "bivariateColor helper must ship in widgets.js",
+    );
+}
+
 /// Walk the HTML, find the `<script type="application/json"
 /// id="codelore-data">…</script>` block, undo the `</` → `<\/`
 /// XSS-escape, and parse it.
