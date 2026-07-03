@@ -36,7 +36,7 @@ use codelore_lib::analyses::summary::run_summary;
 use codelore_lib::facts::FactsDb;
 use codelore_lib::output::spa::{SpaDashboard, write_spa};
 use codelore_lib::repo::GixRepo;
-use codelore_lib::test_support::differential_repo;
+use codelore_lib::test_support::{coupling_repo, differential_repo, permissive_coupling_opts};
 use headless_chrome::Browser;
 use headless_chrome::protocol::cdp::types::Event;
 
@@ -456,108 +456,6 @@ fn rendered_spa_boots_without_console_errors() {
         );
     }
 
-    // -- Step 13: coupling subscriber highlights the mapped node in module depth. -
-    // Switch the sankey to module depth 2; nodes are then modulePathSeg(path,2)
-    // prefixes. Set the selection to a full file path and assert the subscriber
-    // highlights its 2-segment module prefix, not the raw path — guarding the
-    // module-name-space mapping. Poll for the re-render (cooperatively
-    // scheduled). This is a correct-by-construction guard that only FIRES on a
-    // repo with cross-module change-coupling at depth 2; the differential
-    // fixture has near-zero co-changes, so the sankey is empty at depth 2 and
-    // this step skips (no qualifying node). A coupling-rich fixture would make
-    // it live — see the deep-analysis report follow-up.
-    let module_target: String = eval_json(
-        &tab,
-        "(function () { \
-             var L = window.Alpine && window.Alpine.store && window.Alpine.store('layout'); \
-             if (!L) return ''; \
-             L.sankeyDepth = 2; \
-             return 'set'; \
-         })()",
-    );
-    if module_target == "set" {
-        // Poll up to ~3s for the sankey to re-render with prefix node names.
-        let mut prefix_node = String::new();
-        for _ in 0..30 {
-            std::thread::sleep(Duration::from_millis(100));
-            prefix_node = eval_json(
-                &tab,
-                "(function () { \
-                     var el = document.getElementById('widget-coupling-sankey-body'); \
-                     if (!el || !window.echarts) return ''; \
-                     var chart = window.echarts.getInstanceByDom(el); \
-                     if (!chart) return ''; \
-                     var opt = chart.getOption(); \
-                     var nodes = opt && opt.series && opt.series[0] && opt.series[0].data; \
-                     if (!nodes || !nodes.length) return ''; \
-                     var tbody = document.getElementById('hotspot-tbody'); \
-                     if (!tbody) return ''; \
-                     function modPrefix(p) { \
-                         var parts = (p || '').split('/'); \
-                         if (parts.length <= 2) { \
-                             var ls = (p || '').lastIndexOf('/'); \
-                             return ls < 0 ? (p || '') : p.slice(0, ls); \
-                         } \
-                         return parts.slice(0, 2).join('/'); \
-                     } \
-                     var rows = tbody.querySelectorAll('tr[data-path]'); \
-                     for (var r = 0; r < rows.length; r++) { \
-                         var p = rows[r].getAttribute('data-path'); \
-                         var pref = modPrefix(p); \
-                         for (var n = 0; n < nodes.length; n++) { \
-                             if (nodes[n].name === pref) { \
-                                 window.__codeloreModPath = p; \
-                                 window.__codeloreModPrefix = pref; \
-                                 return pref; \
-                             } \
-                         } \
-                     } \
-                     return ''; \
-                 })()",
-            );
-            if !prefix_node.is_empty() { break; }
-        }
-        if !prefix_node.is_empty() {
-            // Spy dispatchAction, clear then publish the full path, read the
-            // captured highlight name — must be the module PREFIX, not the path.
-            let _: bool = eval_json(
-                &tab,
-                "(function () { \
-                     var el = document.getElementById('widget-coupling-sankey-body'); \
-                     var chart = el && window.echarts && window.echarts.getInstanceByDom(el); \
-                     if (!chart) return false; \
-                     window.__codeloreModHi = null; \
-                     var orig = chart.dispatchAction.bind(chart); \
-                     chart.dispatchAction = function (pp) { \
-                         if (pp && pp.type === 'highlight') window.__codeloreModHi = pp.name || ''; \
-                         return orig(pp); \
-                     }; \
-                     window.Alpine.store('selection').clear(); \
-                     return true; \
-                 })()",
-            );
-            std::thread::sleep(Duration::from_millis(100));
-            let _: bool = eval_json(
-                &tab,
-                "(function () { \
-                     window.Alpine.store('selection').set(window.__codeloreModPath); return true; \
-                 })()",
-            );
-            std::thread::sleep(Duration::from_millis(100));
-            let captured: String =
-                eval_json(&tab, "(function(){return window.__codeloreModHi || '';})()");
-            assert_eq!(
-                captured, prefix_node,
-                "in module-depth view the coupling subscriber did not highlight the \
-                 selected file's module prefix — the modulePathSeg mapping is broken"
-            );
-        } else {
-            println!(
-                "spa_browser_test: module-depth sankey step skipped — no fixture file whose \
-                 2-segment module prefix is a visible sankey node"
-            );
-        }
-    }
 }
 
 /// Click a Knowledge-Islands row and assert the file-detail drawer
@@ -1265,5 +1163,161 @@ fn detail_drawer_content_is_opaque_when_open() {
         box_opaque,
         "drawer .modal-box is not opaque (opacity != 1) — the populated \
          content is invisible, which reads as a blank popup"
+    );
+}
+
+/// In module-depth mode the coupling sankey names nodes by the first two
+/// path segments (e.g. `src/alpha/svc.rs` → `src/alpha`). When the
+/// selection store is set to a full file path the subscriber must highlight
+/// the node whose name is the file's module prefix — not the raw path.
+/// This test uses a fixture that guarantees cross-module co-changes so the
+/// depth-2 sankey is always populated; a missing node is a fixture error,
+/// not a skip condition.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn sankey_module_depth_highlights_mapped_node() {
+    // -- Step 1: build a coupling-rich SPA from the dedicated fixture. --------
+    let fixture = coupling_repo::build();
+    let opts = permissive_coupling_opts(fixture.dir.path().to_path_buf());
+    let repo = GixRepo::open(fixture.dir.path()).expect("open coupling fixture");
+    let db = FactsDb::new_in_memory().expect("in-memory facts db");
+    db.ingest(&repo, &opts).expect("ingest coupling fixture");
+
+    let hotspots = run_hotspots(&db, &opts).expect("hotspots");
+    let summary = run_summary(&db, &opts).expect("summary");
+    let code_health = run_code_health(&db, &opts).expect("code-health");
+    let coupling = run_coupling(&db, &opts).expect("coupling");
+    let knowledge_islands = run_knowledge_islands(&db, &opts).expect("knowledge-islands");
+
+    let dash = SpaDashboard {
+        hotspots,
+        summary,
+        code_health,
+        coupling,
+        knowledge_islands,
+        ..SpaDashboard::default()
+    };
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let html_path = tmp.path().join("codelore-coupling.html");
+    let mut f = std::fs::File::create(&html_path).expect("create html");
+    write_spa(
+        &dash,
+        "CodeLore Module-Depth Coupling Test",
+        &fixture.dir.path().display().to_string(),
+        "2026-06-20 00:00:00 UTC",
+        &mut f,
+    )
+    .expect("write_spa");
+    drop(f);
+
+    // -- Step 2: launch Chrome and let Alpine/widgets boot (skip if absent). --
+    let Some((_browser, tab)) = boot_spa_tab(&html_path) else {
+        return;
+    };
+
+    // -- Step 3: switch the sankey to module depth 2. -------------------------
+    let _: bool = eval_json(
+        &tab,
+        "(function () { \
+             var L = window.Alpine && window.Alpine.store && window.Alpine.store('layout'); \
+             if (!L) return false; \
+             L.sankeyDepth = 2; \
+             return true; \
+         })()",
+    );
+
+    // -- Step 4: poll until the sankey re-renders with module-prefix nodes. ---
+    // We need a node whose name matches the 2-segment module prefix of some
+    // hotspot-table row. modulePathSeg(p, 2): first 2 segments when path has
+    // >2 segments, else dir-up-to-last-slash (or the full path if no slash).
+    let mut prefix_node = String::new();
+    for _ in 0..30 {
+        std::thread::sleep(Duration::from_millis(100));
+        prefix_node = eval_json(
+            &tab,
+            "(function () { \
+                 var el = document.getElementById('widget-coupling-sankey-body'); \
+                 if (!el || !window.echarts) return ''; \
+                 var chart = window.echarts.getInstanceByDom(el); \
+                 if (!chart) return ''; \
+                 var opt = chart.getOption(); \
+                 var nodes = opt && opt.series && opt.series[0] && opt.series[0].data; \
+                 if (!nodes || !nodes.length) return ''; \
+                 var tbody = document.getElementById('hotspot-tbody'); \
+                 if (!tbody) return ''; \
+                 function modPrefix(p) { \
+                     var parts = (p || '').split('/'); \
+                     if (parts.length <= 2) { \
+                         var ls = (p || '').lastIndexOf('/'); \
+                         return ls < 0 ? (p || '') : p.slice(0, ls); \
+                     } \
+                     return parts.slice(0, 2).join('/'); \
+                 } \
+                 var rows = tbody.querySelectorAll('tr[data-path]'); \
+                 for (var r = 0; r < rows.length; r++) { \
+                     var p = rows[r].getAttribute('data-path'); \
+                     var pref = modPrefix(p); \
+                     for (var n = 0; n < nodes.length; n++) { \
+                         if (nodes[n].name === pref) { \
+                             window.__codeloreModPath2 = p; \
+                             window.__codeloreModPrefix2 = pref; \
+                             return pref; \
+                         } \
+                     } \
+                 } \
+                 return ''; \
+             })()",
+        );
+        if !prefix_node.is_empty() {
+            break;
+        }
+    }
+
+    // A missing prefix node means the fixture is broken — fail, do not skip.
+    assert!(
+        !prefix_node.is_empty(),
+        "depth-2 sankey has no node matching any hotspot-table row's module prefix; \
+         the coupling_repo fixture must produce cross-module co-changes at depth 2"
+    );
+
+    // -- Step 5: spy dispatchAction, clear selection, publish the full path. --
+    let _: bool = eval_json(
+        &tab,
+        "(function () { \
+             var el = document.getElementById('widget-coupling-sankey-body'); \
+             var chart = el && window.echarts && window.echarts.getInstanceByDom(el); \
+             if (!chart) return false; \
+             window.__codeloreModHi2 = null; \
+             var orig = chart.dispatchAction.bind(chart); \
+             chart.dispatchAction = function (pp) { \
+                 if (pp && pp.type === 'highlight') window.__codeloreModHi2 = pp.name || ''; \
+                 return orig(pp); \
+             }; \
+             window.Alpine.store('selection').clear(); \
+             return true; \
+         })()",
+    );
+    std::thread::sleep(Duration::from_millis(100));
+
+    // -- Step 6: publish the full file path via the selection store. ----------
+    let _: bool = eval_json(
+        &tab,
+        "(function () { \
+             window.Alpine.store('selection').set(window.__codeloreModPath2); \
+             return true; \
+         })()",
+    );
+    std::thread::sleep(Duration::from_millis(100));
+
+    // -- Step 7: assert the captured highlight name == the module prefix. -----
+    let captured: String =
+        eval_json(&tab, "(function () { return window.__codeloreModHi2 || ''; })()");
+    assert_eq!(
+        captured, prefix_node,
+        "in module-depth view the coupling subscriber highlighted '{}' but expected \
+         module prefix '{}' — the modulePathSeg mapping is not applied to the \
+         incoming selection path",
+        captured, prefix_node
     );
 }
