@@ -455,6 +455,105 @@ fn rendered_spa_boots_without_console_errors() {
              health×activity quadrant (no code_health bands intersecting hotspots)"
         );
     }
+
+    // -- Step 13: coupling subscriber highlights the mapped node in module depth. -
+    // Switch the sankey to module depth 2; nodes are then modulePathSeg(path,2)
+    // prefixes. Set the selection to a full file path and assert the subscriber
+    // highlights its 2-segment module prefix, not the raw path (locks F241).
+    // Poll for the re-render (cooperatively scheduled). '' / skip if the fixture
+    // has no file whose module prefix is a visible sankey node.
+    let module_target: String = eval_json(
+        &tab,
+        "(function () { \
+             var L = window.Alpine && window.Alpine.store && window.Alpine.store('layout'); \
+             if (!L) return ''; \
+             L.sankeyDepth = 2; \
+             return 'set'; \
+         })()",
+    );
+    if module_target == "set" {
+        // Poll up to ~3s for the sankey to re-render with prefix node names.
+        let mut prefix_node = String::new();
+        for _ in 0..30 {
+            std::thread::sleep(Duration::from_millis(100));
+            prefix_node = eval_json(
+                &tab,
+                "(function () { \
+                     var el = document.getElementById('widget-coupling-sankey-body'); \
+                     if (!el || !window.echarts) return ''; \
+                     var chart = window.echarts.getInstanceByDom(el); \
+                     if (!chart) return ''; \
+                     var opt = chart.getOption(); \
+                     var nodes = opt && opt.series && opt.series[0] && opt.series[0].data; \
+                     if (!nodes || !nodes.length) return ''; \
+                     var tbody = document.getElementById('hotspot-tbody'); \
+                     if (!tbody) return ''; \
+                     function modPrefix(p) { \
+                         var parts = (p || '').split('/'); \
+                         if (parts.length <= 2) { \
+                             var ls = (p || '').lastIndexOf('/'); \
+                             return ls < 0 ? (p || '') : p.slice(0, ls); \
+                         } \
+                         return parts.slice(0, 2).join('/'); \
+                     } \
+                     var rows = tbody.querySelectorAll('tr[data-path]'); \
+                     for (var r = 0; r < rows.length; r++) { \
+                         var p = rows[r].getAttribute('data-path'); \
+                         var pref = modPrefix(p); \
+                         for (var n = 0; n < nodes.length; n++) { \
+                             if (nodes[n].name === pref) { \
+                                 window.__codeloreModPath = p; \
+                                 window.__codeloreModPrefix = pref; \
+                                 return pref; \
+                             } \
+                         } \
+                     } \
+                     return ''; \
+                 })()",
+            );
+            if !prefix_node.is_empty() { break; }
+        }
+        if !prefix_node.is_empty() {
+            // Spy dispatchAction, clear then publish the full path, read the
+            // captured highlight name — must be the module PREFIX, not the path.
+            let _: bool = eval_json(
+                &tab,
+                "(function () { \
+                     var el = document.getElementById('widget-coupling-sankey-body'); \
+                     var chart = el && window.echarts && window.echarts.getInstanceByDom(el); \
+                     if (!chart) return false; \
+                     window.__codeloreModHi = null; \
+                     var orig = chart.dispatchAction.bind(chart); \
+                     chart.dispatchAction = function (pp) { \
+                         if (pp && pp.type === 'highlight') window.__codeloreModHi = pp.name || ''; \
+                         return orig(pp); \
+                     }; \
+                     window.Alpine.store('selection').clear(); \
+                     return true; \
+                 })()",
+            );
+            std::thread::sleep(Duration::from_millis(100));
+            let _: bool = eval_json(
+                &tab,
+                "(function () { \
+                     window.Alpine.store('selection').set(window.__codeloreModPath); return true; \
+                 })()",
+            );
+            std::thread::sleep(Duration::from_millis(100));
+            let captured: String =
+                eval_json(&tab, "(function(){return window.__codeloreModHi || '';})()");
+            assert_eq!(
+                captured, prefix_node,
+                "in module-depth view the coupling subscriber did not highlight the \
+                 selected file's module prefix — the modulePathSeg mapping (F241) is broken"
+            );
+        } else {
+            println!(
+                "spa_browser_test: module-depth sankey step skipped — no fixture file whose \
+                 2-segment module prefix is a visible sankey node"
+            );
+        }
+    }
 }
 
 /// Click a Knowledge-Islands row and assert the file-detail drawer
