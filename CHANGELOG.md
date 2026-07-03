@@ -18,6 +18,10 @@ Conventional Commits format. All notable changes documented here.
 
 - **SPA linked brushing across all widgets.** Selecting a file in any dashboard view now highlights the same file everywhere at once — the hotspot table row (also flagged `aria-current` for assistive tech), the coupling sankey node, the architecture DSM row/column, the trends and parallel-coordinates series, and the file's coupling arcs on the hotspot map. One shared focus, highlight (not hide) — clearing the selection downplays everything back to neutral. A selection can now be **originated from any of those widgets**: clicking a circle on the map, a sankey node, a treemap cell, or an X-Ray function broadcasts the shared focus (previously only the hotspot table, parallel-coordinates plot, and knowledge-islands list did). The sankey highlight tracks the selected file across module-depth views as well as the default file view. Clicking the map's empty background clears the shared selection everywhere, not just the map's own coupling arcs.
 
+- **SPA bivariate quadrant set-brush.** Clicking a cell in the hotspot map's 3×3 health×activity legend now brushes every file in that quadrant at once — emphasising them on the circle-pack map (dimming the rest) and marking their rows in the hotspot table — so you can isolate, say, the "unhealthy × high-activity" danger group in one click. The brush is a separate layer from single-file selection: a file can be the focused selection and part of the brushed set at the same time. Click the same cell again to clear. The legend cells are keyboard-focusable and Enter/Space-activatable.
+
+- **Screen-reader announcements for cross-widget selection.** Selecting a file now updates a polite ARIA live region and marks the hotspot-table row with `aria-current`, so assistive-technology users are told which file is focused instead of only seeing the visual highlight.
+
 ### Changed
 
 - **`check` gate `code_health_min` now evaluates the composite code-health score** — the value `--analysis code-health` reports — instead of the hotspots inline cognitive-only proxy. Previously a file the analysis banded `red` (composite ~20) could pass a `code_health_min = 70` gate, because the gate read the inline proxy (floored at 60, ~85 for the same file). **Behavioral change** for CI configs using `code_health_min`: the gate is now stricter and consistent with the analysis users look at. `cognitive_max` and `hotspot_score_max` continue to evaluate the hotspots output.
@@ -29,6 +33,7 @@ Conventional Commits format. All notable changes documented here.
 ### Fixed
 
 - **SPA trends chart no longer keeps a stale highlight when switching files.** The detail drawer is non-modal, so selecting file A then file B without closing it left A's trend line still bold under B (ECharts `highlight` is additive). The trends listener now clears first, so only the current file is emphasised. The coupling-sankey highlight also now fires in module-depth view (previously it matched only full file paths, so it silently did nothing once the sankey was collapsed to modules).
+- **Parallel-coordinates plot now visibly reflects the cross-widget selection.** The parallel-coords listener was wired but inert — ECharts emphasis is disabled on that series (a hover-disappears workaround), so a selection produced no visible change. The selected file's polyline now restyles directly (bold, the rest fade), so linked brushing reaches the parallel plot too.
 
 ## [0.13.0] - 2026-07-02
 

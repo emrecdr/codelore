@@ -1,6 +1,8 @@
-# SPA Linked-Brushing 3c — Set-Brush + A11y + Emphasis (DRAFT)
+# SPA Linked-Brushing 3c — Set-Brush + A11y + Emphasis
 
-> **For agentic workers:** DRAFT plan — scope + design questions, not yet a task-by-task executable plan. Finalize the design decisions (marked **DECISION**) via superpowers:brainstorming before executing. Builds on Plan 3b (four single-`.path` subscribers, shipped) and the 3b improvement pass (publish symmetry — map/sankey/treemap/X-Ray now broadcast; trends A→B fix; sankey module-depth mapping; aria-current on the table row).
+> **Status (2026-07-03): the three core items below SHIPPED this session.** Bivariate set-brush (`7b9d3b6`, DECISION resolved: a separate `brush` store), screen-reader announce + parallel-coords visible highlight / F238 (`dd9cfad`, DECISION resolved: restyle per-item `lineStyle`, not re-enable the load-bearing-disabled emphasis), and the module-depth browser test (`5f7f5d0`). What remains is the 3d/3e work at the bottom. The task sections are kept for the record.
+>
+> **For agentic workers:** Builds on Plan 3b (four single-`.path` subscribers, shipped) and the 3b improvement pass (publish symmetry — map/sankey/treemap/X-Ray now broadcast; trends A→B fix; sankey module-depth mapping; aria-current on the table row).
 
 **Goal:** Advance spec §5 beyond single-focus highlighting: add the **bivariate legend set-brush** (click a 3×3 health×activity cell → brush ALL files in that quadrant), a **spoken announcement** for cross-widget selection (a11y), and resolve the **parallel-coords visually-inert highlight** (F238). Each is a distinct interaction the single-`.path` store cannot express as-is.
 
@@ -35,7 +37,7 @@ The pre-existing `parallel-coords` subscriber calls ECharts `highlight`/`downpla
 
 ## Test hardening carried from the 3b improvement pass
 
-- **Module-depth coverage for the coupling subscriber.** The 3b-improvement fix (F241) makes the sankey highlight fire in module-depth view by mapping the bus path through `modulePathSeg(selectedPath, userSankeyDepth)`. The browser test currently exercises only the files-mode identity path (the fixture's `.mailmap` node). Add a `spa_browser_test` step that drives `sankeyDepth` to an integer (via the persisted store), waits for the sankey re-render, then asserts the mapped module-prefix node highlights — locking the branch the fix was written for. Deferred here rather than in 3b-improvement because it requires driving the depth-toggle re-render (a timing/interaction surface better handled with 3c's interaction work, without risking a flaky assertion in the shipped commit).
+- **Module-depth coverage for the coupling subscriber — SHIPPED but inert (F242).** The module-depth mapping fix makes the sankey highlight fire in module-depth view by mapping the bus path through `modulePathSeg(selectedPath, userSankeyDepth)`. A `spa_browser_test` Step 13 (`5f7f5d0`) drives `sankeyDepth = 2`, polls for the re-render, and asserts the mapped module-prefix node highlights. It is correct-by-construction BUT always SKIPS on the `differential_repo` fixture (near-zero co-changes → no cross-module sankey nodes at depth 2), so it provides no live protection yet — tracked as **F242**. Follow-up: point the browser test at a coupling-rich, ≥2-deep-directory fixture so the assertion fires.
 
 ## Deferred to 3d / 3e (unchanged)
 

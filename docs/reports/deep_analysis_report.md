@@ -350,9 +350,9 @@ A post-slice deep validation of Plan 3b (four selection subscribers) ran three p
 #### F238 — parallel-coords cross-widget highlight is visually inert (`emphasis.disabled`)
 
 *   **Location**: `output/spa/widgets.js` — parallel series config (`emphasis: { disabled: true }`) + the `parallel-coords` selection subscriber
-*   **Severity**: LOW · **Category**: UX / linked-brushing fidelity · **Status**: Active
+*   **Severity**: LOW · **Category**: UX / linked-brushing fidelity · **Status**: Fixed (Unreleased)
 *   **Description**: The pre-existing `parallel-coords` subscriber calls ECharts `highlight`/`downplay` on selection, but the parallel series sets `emphasis: { disabled: true }`, so those actions have NO visible effect — a file selected in another widget does not visibly stand out in the parallel-coordinates plot. The subscriber is wired but inert.
-*   **Fix (deferred — needs a design decision)**: either re-enable `emphasis` on the parallel series with a tuned `lineStyle`/opacity (investigate WHY it was disabled first — likely visual clutter) and add the `downplay`-first guard (emphasis then becomes additive, per F239), or switch the subscriber to a non-emphasis mechanism. Tracked for Plan 3c.
+*   **Fix (`dd9cfad`)**: investigation confirmed `emphasis: { disabled: true }` is a LOAD-BEARING ECharts-6 regression workaround (the hovered polyline disappears under emphasis) — so re-enabling emphasis was NOT an option. Instead the subscriber now restyles the selected line's per-item `lineStyle` directly (bold `--color-info`, width 3, opacity 1; the rest fade to opacity 0.12; a null selection restores the default `--color-warning`), extracting the series data into `parallelData` once so it can mutate + re-apply without a rebuild. No emphasis transform, so the regression stays avoided. Setting every item each fire means no stale A→B highlight.
 
 #### F239 — `trends` subscriber leaves a stale A→B highlight
 
@@ -375,6 +375,13 @@ A post-slice deep validation of Plan 3b (four selection subscribers) ran three p
 *   **Description**: The `coupling` subscriber highlighted the sankey node by the raw full path (`name: selectedPath`). In files mode (default) node names ARE full paths so it matched, but in module-depth view nodes are named by truncated `modulePathSeg` prefixes, so the highlight silently no-op'd — the sankey did not participate in cross-widget selection at non-file depths.
 *   **Fix (`0a41b1d`)**: the subscriber now maps the bus path into the current node-name space (`modulePathSeg(selectedPath, userSankeyDepth)` when depth is numeric, else the full path), mirroring the DSM subscriber's module-mapping. Also recorded as a validated non-issue: a proposed DSM "empty-indices" guard is dead code — the per-index diagonal guide cells guarantee the scan always yields ≥1 index.
 
+#### F242 — module-depth coupling-subscriber browser test is inert against the differential fixture
+
+*   **Location**: `crates/codelore-lib/tests/spa_browser_test.rs` — Step 13 in `rendered_spa_boots_without_console_errors`
+*   **Severity**: LOW · **Category**: test coverage · **Status**: Active
+*   **Description**: Step 13 asserts the coupling subscriber highlights a selected file's `modulePathSeg(path, 2)` module prefix in module-depth sankey view (guarding the module-name-space mapping). The production mapping is correct (verified by source review), but the test's only fixture — `differential_repo::build()` — has near-zero co-changes, so at depth 2 the change-coupling sankey has no cross-module links and no qualifying node; the step always SKIPS. Net: the guard executes no assertion in CI and provides zero live regression protection today, and it spins a ~3s re-render poll to no effect on every run.
+*   **Fix (deferred)**: point the browser test at (or add) a coupling-capable fixture with cross-module co-changes at ≥2-deep directories so the module-prefix assertion actually fires. Until then the mapping is guarded by source review only, not an executing test. The step is correct-by-construction and will fire unchanged once such a fixture exists.
+
 ---
 
 ## 5. Next Audit Cycle
@@ -386,11 +393,13 @@ A post-slice deep validation of Plan 3b (four selection subscribers) ran three p
 - **Deferred — large refactor / focused pass**: F206 (HEAD-scan I/O restructure — wants a benchmark), F215 (`enum Format`), F218 (render-cascade split), F231 (62-site `Plan N` scripted sweep).
 - **Carried-forward Active (output/blob cluster)**: F119 (csv-crate), F148 (`TabularEmit` dedup), F161 (`EmitterStream`), F173 (HEAD blob dedup) — byte-identical-critical (F206 is the deeper lever for F173).
 - **Carried-forward Partial / design**: F177 (schema sentinels), F186 (bench PR gate — design), F197 (dogfood advisory/separate-cache).
-- **Fixed (Unreleased) 2026-07-03**: F232 (coupling double-count — `n_cp` removed, score reweighted), F233 (`code_health_biomarkers_v1` cross-analysis contract — documented at the DDL), F234 (`loc` display floor — reports true value), **F235 (`structural_risk` saturation — rank files not functions + weighted sum; 67/69-at-1.0 → 8/32/31 band split)**, **F236 (biomarker normalization unified on full-universe per-file percentile; `biomarker_repo` fixture + distribution/vocabulary/dominant-type tests)**, **F237 (deep-validation audit: stale explain, check-gate composite rewiring, refactoring-targets html, dominant-type intensity>0, test hardening)**, **F239 (trends A→B stale highlight — downplay-first)**, **F240 (SPA linked-brushing publish symmetry — map/sankey/treemap/X-Ray now broadcast)**, **F241 (coupling-sankey highlight fires in module-depth view)** (all `0a41b1d`). Active from the same validation: **F238** (parallel-coords highlight visually inert — `emphasis.disabled`; needs a Plan-3c design decision).
+- **Fixed (Unreleased) 2026-07-03**: F232 (coupling double-count — `n_cp` removed, score reweighted), F233 (`code_health_biomarkers_v1` cross-analysis contract — documented at the DDL), F234 (`loc` display floor — reports true value), **F235 (`structural_risk` saturation — rank files not functions + weighted sum; 67/69-at-1.0 → 8/32/31 band split)**, **F236 (biomarker normalization unified on full-universe per-file percentile; `biomarker_repo` fixture + distribution/vocabulary/dominant-type tests)**, **F237 (deep-validation audit: stale explain, check-gate composite rewiring, refactoring-targets html, dominant-type intensity>0, test hardening)**, **F239 (trends A→B stale highlight — downplay-first)**, **F240 (SPA linked-brushing publish symmetry — map/sankey/treemap/X-Ray now broadcast)**, **F241 (coupling-sankey highlight fires in module-depth view)** (all `0a41b1d`), **F238 (parallel-coords highlight made visible via a direct per-item `lineStyle` restyle — `dd9cfad`)**.
 
 **Highest-leverage work remaining:**
 1. **HEAD-scan I/O** (F206 + F173) — resolve HEAD→tree once per pass with a per-worker cached repo; benchmark via `ingest_capacity_sweep`. Biggest large-repo wall-clock lever.
 2. **Output-emitter cluster** (F119 / F148 / F161) — csv-crate migration (preserve the F170 injection guard + `\n` endings), `TabularEmit` dedup, `EmitterStream` streaming, in one coordinated byte-identical pass.
 3. **`Plan N` marker sweep** (F231) — 62-site scripted comment cleanup (a hard-rule violation).
 
-The next sweep should re-open with F-IDs starting at **F242**.
+Open from the SPA linked-brushing validation: **F242** (module-depth coupling-subscriber browser test is inert against the co-change-poor differential fixture — needs a coupling-rich fixture to fire).
+
+The next sweep should re-open with F-IDs starting at **F243**.
