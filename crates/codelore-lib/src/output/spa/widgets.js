@@ -1969,13 +1969,23 @@
       }
     });
 
-    // Clicking the canvas background (no shape under the
-    // pointer) clears the arc overlay. `e.target` is falsy for
-    // background clicks in zrender's event model.
+    // Clicking the canvas background (no shape under the pointer) clears the
+    // selection. `e.target` is falsy for background clicks in zrender's event
+    // model. The map now PUBLISHES on leaf click, so a background click must
+    // clear the shared focus across every widget — not just the local arcs —
+    // to stay symmetric. Broadcasting a clear fans out to the 'hotspot-map'
+    // listener, which nulls selectedCouplingFile + redraws. Fallback (Alpine
+    // absent): clear the arcs directly.
     chart.getZr().on('click', function (e) {
       if (!e.target) {
-        selectedCouplingFile = null;
-        updateCouplingArcs();
+        const sel =
+          window.Alpine && window.Alpine.store && window.Alpine.store('selection');
+        if (sel) {
+          sel.clear();
+        } else {
+          selectedCouplingFile = null;
+          updateCouplingArcs();
+        }
       }
     });
 

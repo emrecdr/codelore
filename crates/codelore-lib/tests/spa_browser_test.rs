@@ -331,11 +331,15 @@ fn rendered_spa_boots_without_console_errors() {
         );
     }
 
-    // -- Step 11: assert a sankey-originated publish highlights the table row. -
-    // The sankey click (files mode) now calls window._codeloreShowDetail(name).
-    // Clear first, then invoke it with a node name that is also a hotspot-table
-    // path, and assert the broadcast LIGHTS the row (not that it was already lit).
-    // '' sentinel => skip (empty sankey or no overlapping path).
+    // -- Step 11: assert the sankey publish path lights the matching table row. -
+    // A headless ECharts canvas click isn't reliably simulatable, so we invoke
+    // the exact call the files-mode sankey click now makes — _codeloreShowDetail
+    // on a node name that is also a hotspot-table path — and assert the broadcast
+    // LIGHTS the row (clear first, so this proves the publish lit it, not residue).
+    // This guards _codeloreShowDetail's publish + the hotspot-table subscriber,
+    // not the sankey click wiring itself. With the differential fixture the
+    // '.mailmap' node overlaps the table, so this exercises; '' => skip only if a
+    // future fixture has an empty sankey or no sankey∩table path.
     let bridged_path: String = eval_json(
         &tab,
         "(function () { \
@@ -376,8 +380,9 @@ fn rendered_spa_boots_without_console_errors() {
         );
         assert!(
             row_lit,
-            "a sankey-node publish via _codeloreShowDetail did not highlight the \
-             matching hotspot-table row — publish symmetry is not wired"
+            "publishing a sankey node name via _codeloreShowDetail did not \
+             highlight the matching hotspot-table row — the publish → \
+             table-subscriber path is broken"
         );
     }
 }
