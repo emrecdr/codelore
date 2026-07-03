@@ -278,8 +278,9 @@ fn materialize_biomarkers(db: &FactsDb, opts: &Options) -> Result<()> {
     // file's raw metric over the FULL per-language file universe — the same set
     // complex-method / large-method rank over — with absent files contributing
     // 0. This keeps a lone or tied occurrence high (it still ranks above the
-    // zero-majority) instead of collapsing to a 0 rank, and makes every
-    // biomarker a consistent per-file percentile rather than mixing schemes.
+    // zero-majority) instead of collapsing to a 0 rank, and aligns god-class /
+    // dry with the complex/large per-file percentile scheme (min-max before).
+    // (shotgun-surgery ranks over its own coupled-file set — see SHOTGUN_INSERT.)
     //
     // `--rows N` MUST NOT propagate into `run_god_classes`: the biomarker set
     // needs ALL god classes, not the user's output truncation.
@@ -298,7 +299,10 @@ fn materialize_biomarkers(db: &FactsDb, opts: &Options) -> Result<()> {
     // the same universe the SQL-side complex/large biomarkers rank over.
     let universe = crate::analyses::query::query_map_collect(
         db,
-        "SELECT DISTINCT path FROM complexity_metrics WHERE cyclomatic IS NOT NULL",
+        // Exactly the filter the SQL complex/large biomarkers rank over
+        // (`lang_fn`), so god-class/dry share an identical universe.
+        "SELECT DISTINCT path FROM complexity_metrics \
+         WHERE cyclomatic IS NOT NULL AND loc IS NOT NULL",
         [],
         "biomarker-universe",
         |r| r.get::<_, String>(0),
