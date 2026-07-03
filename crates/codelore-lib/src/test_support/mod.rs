@@ -398,6 +398,183 @@ pub mod differential_repo {
 }
 
 #[cfg(feature = "test-support")]
+pub mod coupling_repo {
+    //! A programmatically-built fixture with deliberate cross-module co-changes
+    //! so the depth-2 coupling sankey produces visible edges.
+    //!
+    //! Structure: 3 modules (`src/alpha`, `src/beta`, `src/gamma`), each with two
+    //! files. `alpha/svc.rs` and `beta/svc.rs` co-change together in ≥5 commits,
+    //! guaranteeing a `src/alpha`↔`src/beta` edge at depth 2 even under the most
+    //! conservative coupling thresholds. Additional single-file commits ensure
+    //! every file accrues enough churn to appear in the hotspot table.
+
+    use std::path::PathBuf;
+    use std::process::Command;
+    use tempfile::TempDir;
+
+    pub struct CouplingRepo {
+        pub dir: TempDir,
+        pub head_sha: String,
+    }
+
+    /// Build a ~20-commit fixture with guaranteed cross-module co-change pairs.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the OS cannot create a temporary directory or if any `git`
+    /// command fails.
+    #[must_use]
+    pub fn build() -> CouplingRepo {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path: PathBuf = dir.path().to_path_buf();
+
+        run_git(&path, &["init", "-b", "main", "--quiet"]);
+        run_git(&path, &["config", "user.email", "coupling@example.com"]);
+        run_git(&path, &["config", "user.name", "Coupling"]);
+
+        // Seed all six files with real content so complexity ingest is non-trivial.
+        write(&path, "src/alpha/svc.rs", "pub fn alpha_svc(x: i32) -> i32 { x + 1 }\n");
+        write(&path, "src/alpha/util.rs", "pub fn alpha_util(x: i32) -> i32 { x * 2 }\n");
+        write(&path, "src/beta/svc.rs",  "pub fn beta_svc(x: i32) -> i32 { x - 1 }\n");
+        write(&path, "src/beta/util.rs", "pub fn beta_util(x: i32) -> i32 { x / 2 }\n");
+        write(&path, "src/gamma/svc.rs", "pub fn gamma_svc(x: i32) -> i32 { x * x }\n");
+        write(&path, "src/gamma/util.rs","pub fn gamma_util(x: i32) -> i32 { x + x }\n");
+        run_git(&path, &["add", "."]);
+        commit_at(&path, "2026-06-01T10:00:00Z", "seed all modules");
+
+        // Co-change 1: alpha/svc + beta/svc together (→ depth-2 edge src/alpha↔src/beta).
+        write(&path, "src/alpha/svc.rs", "pub fn alpha_svc(x: i32) -> i32 { x + 2 }\n");
+        write(&path, "src/beta/svc.rs",  "pub fn beta_svc(x: i32) -> i32 { x - 2 }\n");
+        run_git(&path, &["add", "src/alpha/svc.rs", "src/beta/svc.rs"]);
+        commit_at(&path, "2026-06-02T10:00:00Z", "co-change alpha+beta 1");
+
+        // Co-change 2.
+        write(&path, "src/alpha/svc.rs", "pub fn alpha_svc(x: i32) -> i32 { x + 3 }\npub fn alpha_extra() {}\n");
+        write(&path, "src/beta/svc.rs",  "pub fn beta_svc(x: i32) -> i32 { x - 3 }\npub fn beta_extra() {}\n");
+        run_git(&path, &["add", "src/alpha/svc.rs", "src/beta/svc.rs"]);
+        commit_at(&path, "2026-06-03T10:00:00Z", "co-change alpha+beta 2");
+
+        // Co-change 3.
+        write(&path, "src/alpha/svc.rs", "pub fn alpha_svc(x: i32) -> i32 { x + 4 }\npub fn alpha_extra() { let _ = 1; }\n");
+        write(&path, "src/beta/svc.rs",  "pub fn beta_svc(x: i32) -> i32 { x - 4 }\npub fn beta_extra() { let _ = 2; }\n");
+        run_git(&path, &["add", "src/alpha/svc.rs", "src/beta/svc.rs"]);
+        commit_at(&path, "2026-06-04T10:00:00Z", "co-change alpha+beta 3");
+
+        // Co-change 4.
+        write(&path, "src/alpha/svc.rs", "pub fn alpha_svc(x: i32) -> i32 { x + 5 }\npub fn alpha_v2(y: i32) -> i32 { y }\n");
+        write(&path, "src/beta/svc.rs",  "pub fn beta_svc(x: i32) -> i32 { x - 5 }\npub fn beta_v2(y: i32) -> i32 { y }\n");
+        run_git(&path, &["add", "src/alpha/svc.rs", "src/beta/svc.rs"]);
+        commit_at(&path, "2026-06-05T10:00:00Z", "co-change alpha+beta 4");
+
+        // Co-change 5.
+        write(&path, "src/alpha/svc.rs", "pub fn alpha_svc(x: i32) -> i32 { x + 6 }\npub fn alpha_v2(y: i32) -> i32 { y + 1 }\n");
+        write(&path, "src/beta/svc.rs",  "pub fn beta_svc(x: i32) -> i32 { x - 6 }\npub fn beta_v2(y: i32) -> i32 { y + 1 }\n");
+        run_git(&path, &["add", "src/alpha/svc.rs", "src/beta/svc.rs"]);
+        commit_at(&path, "2026-06-06T10:00:00Z", "co-change alpha+beta 5");
+
+        // Single-file commits so every file gets individual churn (hotspot rows).
+        write(&path, "src/alpha/util.rs", "pub fn alpha_util(x: i32) -> i32 { x * 3 }\n");
+        run_git(&path, &["add", "src/alpha/util.rs"]);
+        commit_at(&path, "2026-06-07T10:00:00Z", "touch alpha/util");
+
+        write(&path, "src/beta/util.rs", "pub fn beta_util(x: i32) -> i32 { x / 3 }\n");
+        run_git(&path, &["add", "src/beta/util.rs"]);
+        commit_at(&path, "2026-06-08T10:00:00Z", "touch beta/util");
+
+        write(&path, "src/gamma/svc.rs", "pub fn gamma_svc(x: i32) -> i32 { x * x + 1 }\n");
+        run_git(&path, &["add", "src/gamma/svc.rs"]);
+        commit_at(&path, "2026-06-09T10:00:00Z", "touch gamma/svc");
+
+        write(&path, "src/gamma/util.rs","pub fn gamma_util(x: i32) -> i32 { x + x + 1 }\n");
+        run_git(&path, &["add", "src/gamma/util.rs"]);
+        commit_at(&path, "2026-06-10T10:00:00Z", "touch gamma/util");
+
+        // More individual churn to push rev counts above any default floor.
+        write(&path, "src/alpha/svc.rs", "pub fn alpha_svc(x: i32) -> i32 { x + 7 }\npub fn alpha_v3() -> i32 { 42 }\n");
+        run_git(&path, &["add", "src/alpha/svc.rs"]);
+        commit_at(&path, "2026-06-11T10:00:00Z", "alpha/svc solo");
+
+        write(&path, "src/beta/svc.rs",  "pub fn beta_svc(x: i32) -> i32 { x - 7 }\npub fn beta_v3() -> i32 { 99 }\n");
+        run_git(&path, &["add", "src/beta/svc.rs"]);
+        commit_at(&path, "2026-06-12T10:00:00Z", "beta/svc solo");
+
+        write(&path, "src/alpha/util.rs", "pub fn alpha_util(x: i32) -> i32 { x * 4 }\npub fn alpha_util2() {}\n");
+        run_git(&path, &["add", "src/alpha/util.rs"]);
+        commit_at(&path, "2026-06-13T10:00:00Z", "alpha/util 2");
+
+        write(&path, "src/beta/util.rs", "pub fn beta_util(x: i32) -> i32 { x / 4 }\npub fn beta_util2() {}\n");
+        run_git(&path, &["add", "src/beta/util.rs"]);
+        commit_at(&path, "2026-06-14T10:00:00Z", "beta/util 2");
+
+        write(&path, "src/gamma/svc.rs", "pub fn gamma_svc(x: i32) -> i32 { x * x + 2 }\npub fn gamma_v2() {}\n");
+        run_git(&path, &["add", "src/gamma/svc.rs"]);
+        commit_at(&path, "2026-06-15T10:00:00Z", "gamma/svc 2");
+
+        // One more co-change for good measure (total 6 shared revisions).
+        write(&path, "src/alpha/svc.rs", "pub fn alpha_svc(x: i32) -> i32 { x + 8 }\npub fn alpha_v3() -> i32 { 43 }\n");
+        write(&path, "src/beta/svc.rs",  "pub fn beta_svc(x: i32) -> i32 { x - 8 }\npub fn beta_v3() -> i32 { 100 }\n");
+        run_git(&path, &["add", "src/alpha/svc.rs", "src/beta/svc.rs"]);
+        commit_at(&path, "2026-06-16T10:00:00Z", "co-change alpha+beta 6");
+
+        // Final solo touches to widen the hotspot spread.
+        write(&path, "src/gamma/util.rs","pub fn gamma_util(x: i32) -> i32 { x + x + 2 }\npub fn gamma_util2() {}\n");
+        run_git(&path, &["add", "src/gamma/util.rs"]);
+        commit_at(&path, "2026-06-17T10:00:00Z", "gamma/util 2");
+
+        write(&path, "src/alpha/svc.rs", "pub fn alpha_svc(x: i32) -> i32 { x + 9 }\npub fn alpha_v4() -> bool { true }\n");
+        run_git(&path, &["add", "src/alpha/svc.rs"]);
+        commit_at(&path, "2026-06-18T10:00:00Z", "alpha/svc final");
+
+        write(&path, "src/beta/svc.rs",  "pub fn beta_svc(x: i32) -> i32 { x - 9 }\npub fn beta_v4() -> bool { false }\n");
+        run_git(&path, &["add", "src/beta/svc.rs"]);
+        commit_at(&path, "2026-06-19T10:00:00Z", "beta/svc final");
+
+        let head_sha = String::from_utf8(
+            Command::new("git")
+                .args(["-C", path.to_str().unwrap(), "rev-parse", "HEAD"])
+                .output()
+                .expect("git rev-parse")
+                .stdout,
+        )
+        .expect("utf8")
+        .trim()
+        .to_string();
+
+        CouplingRepo { dir, head_sha }
+    }
+
+    fn commit_at(path: &std::path::Path, iso_date: &str, msg: &str) {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(["commit", "-m", msg, "--quiet"])
+            .env("GIT_AUTHOR_DATE", iso_date)
+            .env("GIT_COMMITTER_DATE", iso_date)
+            .status()
+            .expect("git commit");
+        assert!(status.success(), "commit '{msg}' at {iso_date} failed");
+    }
+
+    fn run_git(path: &std::path::Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .status()
+            .expect("git");
+        assert!(status.success(), "git {args:?} failed");
+    }
+
+    fn write(root: &std::path::Path, rel: &str, content: &str) {
+        let p = root.join(rel);
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(p, content).unwrap();
+    }
+}
+
+#[cfg(feature = "test-support")]
 pub mod medium_repo {
     //! 500-commit fixture for criterion benchmarks. Heavier than `differential_repo`
     //! (which is 50 commits, optimized for differential-test edge-case coverage) but
