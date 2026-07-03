@@ -1053,8 +1053,9 @@
            buttons are invalid HTML — the parent `.tab` is the
            clickable element. -->
       <div role="tablist" class="tabs tabs-boxed" id="hotspot-color-toggles">
-        <button type="button" role="tab" data-mode="bivariate" class="tab-active tab tooltip-host" aria-selected="true">
+        <button type="button" role="tab" data-mode="bivariate"      class="tab tab-active tooltip-host" aria-selected="true">
           <span aria-hidden="true">▦</span> Health×Activity
+          <span class="tooltip-trigger" aria-hidden="true">?</span>
           <span class="tooltip-popup" role="tooltip">Bivariate map: code-health band (green→red) × development activity (low→high) in one glyph. The darkest cells are unhealthy AND churning — refactor there first. No lens swap needed.</span>
         </button>
         <button type="button" role="tab" data-mode="cognitive"      class="tab tooltip-host" aria-selected="false">

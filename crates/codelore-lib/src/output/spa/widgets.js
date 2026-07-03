@@ -1978,7 +1978,7 @@
 
   // 3×3 bivariate legend: a small grid keyed to BIVARIATE_PALETTE, axes
   // labeled health (green→red, top→bottom) × activity (low→high, left→right).
-  // Only shown when the map is in bivariate mode; a no-op if the mount is absent.
+  // Populates the legend mount whenever the circle-pack renders; a no-op if the mount is absent.
   function renderBivariateLegend() {
     const mount = document.getElementById('bivariate-legend');
     if (!mount) return;
