@@ -2295,6 +2295,20 @@
 
     // Initial render.
     rerender();
+
+    // Cross-widget selection: highlight the row for the selected path (if
+    // it's on the current page); a null selection clears all row highlights.
+    // Rows are rebuilt on sort/filter/paginate, so query the live DOM each
+    // time rather than caching nodes.
+    window._codeloreRegisterSelectionListener('hotspot-table', function (selectedPath) {
+      const tbody = document.getElementById('hotspot-tbody');
+      if (!tbody) return;
+      const rows = tbody.querySelectorAll('tr');
+      for (var i = 0; i < rows.length; i++) {
+        const rowPath = rows[i].getAttribute('data-path');
+        rows[i].classList.toggle('!bg-base-300', !!selectedPath && rowPath === selectedPath);
+      }
+    });
   }
 
 
