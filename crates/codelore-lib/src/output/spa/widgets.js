@@ -1974,6 +1974,16 @@
       }
     });
 
+    // Cross-widget selection: when a file is selected in ANY widget, light up
+    // its coupling arcs on the map — the same overlay a direct leaf-click
+    // shows. Reuses the existing selectedCouplingFile + updateCouplingArcs
+    // machinery, so the map participates in the shared focus without a
+    // second highlight mechanism. A null selection clears the arcs.
+    window._codeloreRegisterSelectionListener('hotspot-map', function (selectedPath) {
+      selectedCouplingFile = selectedPath || null;
+      updateCouplingArcs();
+    });
+
     renderBivariateLegend();
   }
 
