@@ -21,7 +21,7 @@ CodeLore is a 3-crate Cargo workspace:
 | Crate | Responsibility |
 |---|---|
 | `codelore-rca` | Vendored + modified fork of Mozilla's `rust-code-analysis` (MPL-2.0). Provides cyclomatic / cognitive / Halstead / MI complexity metrics. Isolated as its own crate so the vendored license stays cleanly separated. |
-| `codelore-lib` | Core library: the `Repo` trait (`GixRepo` default, `GitCliRepo` oracle for differential tests), the DuckDB-backed `FactsDb` fact store, the 42 analyses, the persistent cache, the multi-format output emitters, identity resolution (mailmap + bot + AI-attribution), and the Kamei change-feature enrichment. |
+| `codelore-lib` | Core library: the `Repo` trait (`GixRepo` default, `GitCliRepo` oracle for differential tests), the DuckDB-backed `FactsDb` fact store, the 43 analyses, the persistent cache, the multi-format output emitters, identity resolution (mailmap + bot + AI-attribution), and the Kamei change-feature enrichment. |
 | `codelore-cli` | Clap CLI binary: `analyze` and `diff` subcommands, ignore-file parsing, `Options` construction, output routing. |
 
 ## 3. Pipeline data flow
@@ -33,7 +33,7 @@ graph TD
     C -->|DuckDB Appender bulk-insert| D[(DuckDB fact store)]
     E[HEAD-time blob walk @ HEAD] -->|tree-sitter parsing via rayon| F[Complexity + clones + imports extraction]
     F -->|HEAD-time metrics| D
-    D -->|SQL views / parameterized queries| G[42 behavioral analyses]
+    D -->|SQL views / parameterized queries| G[43 behavioral analyses]
     G -->|emitters| H[CSV · JSON · SARIF 2.1.0 · Markdown · Parquet · SQLite · HTML · SPA · Step-Summary]
     G -->|provenance| I[manifest sidecars]
 ```
@@ -88,18 +88,18 @@ Two implementations:
 
 The differential test suite (`tests/differential_repo_test.rs`) is the load-bearing correctness check: any divergence between backends fails CI.
 
-## 5. The 42 analyses
+## 5. The 43 analyses
 
 | Tier | Surface | What they share |
 |---|---|---|
 | Code-maat parity (17) | revisions, summary, authors, code-age, abs-churn, author-churn, entity-churn, entity-effort, entity-ownership, communication, code-ownership, main-dev, main-dev-by-revs, main-dev-by-deletions (alias `refactoring-main-dev`), change-coupling, soc, messages | Output schemas match code-maat's CSV headers under `--code-maat-compat`; the modern default emits richer columns (identity layers, day-precision age, last-modified context) — see `docs/research-foundations.md` |
 | Modern signals (1) | top-committers | Per-author leaderboard with LoC + first/last commit + bot flag — code-maat approximated this with `-a author-churn` + sort; CodeLore exposes it first-class |
-| Modern foundations ★ (4) | hotspots, code-health, clones, clone-coupling | The behavioral-SARIF differentiators — not in code-maat, not opaque-ML like CodeScene; published deterministic formulas |
+| Modern foundations ★ (6) | hotspots, hotspot-velocity, code-health, clones, clone-coupling, refactoring-targets | The behavioral-SARIF differentiators — not in code-maat, not opaque-ML like CodeScene; published deterministic formulas. `code-health` is a biomarker composite: `100 × (1 − 0.50·structural_risk − 0.30·churn − 0.20·ownership_fv)` with five named biomarkers (Complex Method 0.30, God Class 0.25, Large Method 0.15, DRY 0.15, Shotgun Surgery 0.15). `refactoring-targets` ranks files by `priority = (structural_risk × hotspot_score) / max(loc, 25)`. |
 | Graph-analytics ★ (3) | knowledge-islands, centrality, communities | Leiden-algorithm community detection + PageRank centrality + auto-detected bus-factor risk on the Fisher-significant coupling graph |
 | Architecture-analytics ★★ (12) | god-classes, architecture-violations, dependency-cycles, architecture-roles, instability, architecture-metrics, architecture-trend, cycle-origins, stale-code, pair-programming, lead-time, bus-factor | Consume the `imports` table for structural fan-in/fan-out; `architecture-violations` reads `.codelore-arch-rules.toml`; `dependency-cycles` (Tarjan SCC), `architecture-roles` (Core/Shared/Control/Periphery), `instability` (Martin Ca/Ce/I) and `architecture-metrics` (Lakos ACD/NCCD + propagation cost) share the import-graph kernel (`analyses/import_graph.rs`); `architecture-trend` reruns that kernel at sampled historical revs (via `Repo::read_blob_at`) to show decay over time; `lead-time` is a DORA Accelerate metric |
 | Structure×history fusion ★★ (3) | modularity-violations, unstable-interface, crossing | Fuse the structural `imports` graph with the temporal Fisher-significant co-change graph — the DV8 hotspot-pattern trilogy: modularity violations (co-change without an import edge), unstable interfaces (churning hubs that drag their dependents), crossings (structural "X" that co-changes both ways). Mo, Cai & Kazman 2015 *Hotspot Patterns* / DV8 |
 
-Nearly all are SQL-driven over the DuckDB fact store with a thin Rust orchestrator each (`pair-programming` extracts Co-Authored-By trailers in Rust; `dependency-cycles`, `architecture-roles`, `instability` and `architecture-metrics` run on an iterative-Tarjan SCC + reachability kernel; `modularity-violations`, `unstable-interface` and `crossing` fuse the import graph with the co-change graph via Rust set logic). The exceptions are `architecture-trend` and `cycle-origins`, which re-read + re-parse source at historical revisions (via `Repo::read_blob_at`) — the former to recompute structural metrics over time, the latter to bisect history for each cycle's formation commit — so both need repository access and are computed on demand, never cached. Adding a new analysis = adding one SQL string + one row-struct + entries in the dispatch ladder. Each carries a `Research basis: see docs/research-foundations.md entry "<name>"` rustdoc cross-link.
+Nearly all are SQL-driven over the DuckDB fact store with a thin Rust orchestrator each (`pair-programming` extracts Co-Authored-By trailers in Rust; `dependency-cycles`, `architecture-roles`, `instability` and `architecture-metrics` run on an iterative-Tarjan SCC + reachability kernel; `modularity-violations`, `unstable-interface` and `crossing` fuse the import graph with the co-change graph via Rust set logic; `refactoring-targets` joins the output of `code-health` + `hotspots` in Rust and divides combined risk by per-file LOC). The exceptions are `architecture-trend` and `cycle-origins`, which re-read + re-parse source at historical revisions (via `Repo::read_blob_at`) — the former to recompute structural metrics over time, the latter to bisect history for each cycle's formation commit — so both need repository access and are computed on demand, never cached. Adding a new analysis = adding one SQL string + one row-struct + entries in the dispatch ladder. Each carries a `Research basis: see docs/research-foundations.md entry "<name>"` rustdoc cross-link.
 
 ## 6. Identity resolution
 

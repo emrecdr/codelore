@@ -536,19 +536,106 @@ knows what `mi: 54.0` means.
 
 ---
 
-### `code-health` ★ — Composite health score
+### `code-health` ★ — Biomarker composite health score
 
-**Citation**: Composite score combining hotspots, ownership, and
-churn ratios. Methodology developed in CodeLore (no single external
-citation — see `crates/codelore-lib/src/analyses/code_health.rs`
-docstring).
+**Citation**: Composite signal developed in CodeLore. Underlying
+inputs cite: Campbell 2018 (cognitive complexity / cyclomatic
+biomarker intensities); Nagappan & Ball 2005 (churn as defect
+predictor); Mockus & Herbsleb 2002 (ownership fragmentation —
+Fractal Value); Tornhill 2018 (coupling centrality / Shotgun Surgery);
+Alves, Ypma & Visser 2010 (percentile-based metric benchmarking, the
+basis of the per-language `PERCENT_RANK` intensity calibration).
+See `crates/codelore-lib/src/analyses/code_health.rs` docstring.
 
-**What the signal means**: A single 0–100 score per file summarising
-multiple signals. Useful when "list of hotspots" produces too many
-results to triage.
+**What the signal means**: A single score per file ∈ [0, 100] (higher
+= healthier) summarising five structural biomarkers fused with churn
+and ownership fragmentation. Useful when "list of hotspots" produces
+too many results to triage, and as the composite gate in
+`codelore check code_health_min`.
+
+Formula:
+
+```
+score = 100 × (1 − 0.50 · structural_risk
+               − 0.30 · normalize(churn)
+               − 0.20 · ownership_fv)
+```
+
+`structural_risk` is a bounded weighted sum of five biomarkers:
+
+| Biomarker | Weight | Intensity source |
+|---|---|---|
+| Complex Method | 0.30 | per-language `PERCENT_RANK` of file's max cyclomatic |
+| God Class | 0.25 | per-language `PERCENT_RANK` of god_score |
+| Large Method | 0.15 | per-language `PERCENT_RANK` of file's max LOC |
+| DRY (clone density) | 0.15 | per-language `PERCENT_RANK` of clone count |
+| Shotgun Surgery | 0.15 | `PERCENT_RANK` of Fisher-significant coupling-partner count |
+
+Weights sum to 1.0 so `structural_risk ∈ [0, 1]`. Each row also
+carries a `band` (`red` when `structural_risk ≥ 0.55`, `yellow` ≥
+0.28, else `green`) and a `percentile` — the per-language
+`PERCENT_RANK` of `structural_risk` (1 = riskiest in its language
+cohort).
+
+**What "good values" look like**:
+- Score ≥ 80 + green band: file is structurally sound.
+- Score < 50 or red band: prioritise for refactoring — pair with
+  `refactoring-targets` to get the effort-adjusted ROI rank.
+- `structural_risk` is more actionable than the score for triage:
+  inspect the `dominant_type` biomarker (via `refactoring-targets`)
+  to understand *which* smell drives the risk.
 
 **Implementation**: `crates/codelore-lib/src/analyses/code_health.rs`
 ([source](../crates/codelore-lib/src/analyses/code_health.rs))
+
+---
+
+### `refactoring-targets` ★ — Effort-aware refactoring ROI ranking
+
+**Citation**: Effort-aware defect ranking (Popt / PofB20 framework):
+- Kamei, Y., et al. (2013). "A Large-Scale Empirical Study of Just-in-Time
+  Quality Assurance." *IEEE TSE*, 39(6), 757–773 — Popt/PofB20 evaluation
+  criterion for effort-aware defect prediction models.
+- EA-Z size floor pattern: files smaller than a floor LOC are treated
+  as if they have that many lines, preventing near-zero denominators
+  from dominating the ranking (analogous to Effort-Aware Z-normalisation
+  in defect-prediction literature).
+
+Methodology developed in CodeLore; no single external citation covers
+the exact combination of structural_risk × hotspot_score / LOC.
+See `crates/codelore-lib/src/analyses/refactoring_targets.rs` docstring.
+
+**What the signal means**: Ranks files by return-on-investment for
+refactoring: the intersection of structural health deficit and
+development activity, divided by inspection effort (LOC).
+
+Formula:
+
+```
+priority = (structural_risk × hotspot_score) / max(loc, 25)
+```
+
+`structural_risk` comes from the `code-health` composite (the
+`code_health_biomarkers_v1` table materialised by `run_code_health`).
+`hotspot_score` is the `code-health`-fused hotspot rank ∈ [0, 10].
+The EA-Z floor of 25 lines prevents tiny files from dominating on a
+near-zero denominator.
+
+Each row carries:
+- `dominant_type` — the highest-intensity biomarker for this file
+  (the smell to address first).
+- `manual_up_rank` — 1-based ascending-size ManualUp baseline (smallest
+  file = rank 1), the effort-naïve comparator.
+
+**What "good values" look like**:
+- Top rows by `priority` are the files where refactoring pays off most
+  per line inspected — start here.
+- Compare `priority` rank vs `manual_up_rank`: a file that jumps far
+  up the priority list relative to its size is hiding disproportionate
+  risk.
+
+**Implementation**: `crates/codelore-lib/src/analyses/refactoring_targets.rs`
+([source](../crates/codelore-lib/src/analyses/refactoring_targets.rs))
 
 ---
 

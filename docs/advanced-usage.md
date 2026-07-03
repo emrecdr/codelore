@@ -4,7 +4,7 @@ This guide is the developer-facing reference for CodeLore. The [README](../READM
 
 ## Table of contents
 
-1. [The 42 analyses (what they tell you)](#1-the-42-analyses-what-they-tell-you)
+1. [The 43 analyses (what they tell you)](#1-the-43-analyses-what-they-tell-you)
 2. [Output formats deep-dive](#2-output-formats-deep-dive)
 3. [Every CLI flag explained](#3-every-cli-flag-explained)
 4. [PR-mode: `codelore diff`](#4-pr-mode-codelore-diff)
@@ -20,9 +20,9 @@ This guide is the developer-facing reference for CodeLore. The [README](../READM
 
 ---
 
-## 1. The 42 analyses (what they tell you)
+## 1. The 43 analyses (what they tell you)
 
-The table below is split into the **17 code-maat-parity analyses** (drop-in successors to legacy code-maat), **1 modern signal** (`top-committers` — a first-class per-author leaderboard that code-maat approximated via `-a author-churn` + sort), **5 modern foundations** marked ★ (the SARIF-backed differentiators, including `hotspot-velocity` — recent-vs-baseline change acceleration), **3 graph-analytics analyses** marked ★ (knowledge-islands + centrality + communities), and **15 architecture-analytics analyses** marked ★★ (god-classes + architecture-violations + dependency-cycles + architecture-roles + instability + architecture-metrics + architecture-trend + cycle-origins + modularity-violations + unstable-interface + crossing + stale-code + pair-programming + lead-time + bus-factor — `dependency-cycles` (Tarjan SCC), `architecture-roles` (Core/Shared/Control/Periphery), `instability` (Martin Ca/Ce/I) and `architecture-metrics` (Lakos ACD/NCCD + propagation cost) all run on a shared import-graph kernel; `architecture-trend` reruns that kernel at sampled historical revisions to show structural decay over time; `modularity-violations`, `unstable-interface` and `crossing` fuse the structural import graph with the temporal co-change graph (the DV8 hotspot-pattern trilogy); see `docs/maximum-feature-plan.md`).
+The table below is split into the **17 code-maat-parity analyses** (drop-in successors to legacy code-maat), **1 modern signal** (`top-committers` — a first-class per-author leaderboard that code-maat approximated via `-a author-churn` + sort), **6 modern foundations** marked ★ (the SARIF-backed differentiators: `hotspots`, `code-health`, `clones`, `clone-coupling`, `hotspot-velocity`, and `refactoring-targets`), **3 graph-analytics analyses** marked ★ (knowledge-islands + centrality + communities), and **16 architecture-analytics analyses** marked ★★ (god-classes + architecture-violations + dependency-cycles + architecture-roles + instability + architecture-metrics + architecture-trend + cycle-origins + modularity-violations + unstable-interface + crossing + stale-code + pair-programming + lead-time + bus-factor + delivery-friction — `dependency-cycles` (Tarjan SCC), `architecture-roles` (Core/Shared/Control/Periphery), `instability` (Martin Ca/Ce/I) and `architecture-metrics` (Lakos ACD/NCCD + propagation cost) all run on a shared import-graph kernel; `architecture-trend` reruns that kernel at sampled historical revisions to show structural decay over time; `modularity-violations`, `unstable-interface` and `crossing` fuse the structural import graph with the temporal co-change graph (the DV8 hotspot-pattern trilogy); see `docs/maximum-feature-plan.md`).
 
 ### Code-maat parity (17) + modern signal
 
@@ -47,14 +47,16 @@ The table below is split into the **17 code-maat-parity analyses** (drop-in succ
 | `soc` | "Sum of Coupling — how central is each file in the change-coupling graph?" | Σ(N−1) over each commit of size N the file appears in | Find systemic-coupling hubs (high `SoC`) |
 | `messages` | "Which entities co-occur with commits matching this message regex?" | Server-side `regexp_matches(message, --expression-to-match)` join with `changes` | Bug-fix density, label-driven hotspots |
 
-### Modern additions (4 ★)
+### Modern additions (6 ★)
 
 | Analysis | What you ask it | Formula / source | When to reach for it |
 |---|---|---|---|
-| `hotspots` ★ | "Which files are both complex AND change a lot?" | `percentile_rank(revs) × percentile_rank(cognitive) × (100 − code_health) / 10` ([see design spec](superpowers/specs/2026-06-06-codelore-design.md)) | The headline ranking signal — refactor priorities |
-| `code-health` ★ | "How healthy is each file's structure?" | 4-input composite: cognitive 0.40 + churn 0.25 + fragmentation 0.15 + coupling 0.20 (Fisher-filtered centrality) | Combined with `hotspots`; tracks degradation |
+| `hotspots` ★ | "Which files are both complex AND change a lot?" | `percentile_rank(revs) × percentile_rank(cognitive) × (100 − code_health) / 4` — `code_health` here is the inline cognitive-only proxy `100 × (1 − 0.40 · normalize(cognitive))` ∈ [60, 100], so the unscaled product caps at 40; dividing by 4 maps output to [0, 10] ([see design spec](superpowers/specs/2026-06-06-codelore-design.md)) | The headline ranking signal — refactor priorities |
+| `code-health` ★ | "How healthy is each file's structure?" | Biomarker composite: `100 × (1 − 0.50·structural_risk − 0.30·churn − 0.20·ownership_fv)`; `structural_risk` = weighted sum of five biomarkers — Complex Method (0.30), God Class (0.25), Large Method (0.15), DRY (0.15), Shotgun Surgery (0.15); each intensity is a per-language `PERCENT_RANK`; score ∈ [0, 100] (higher = healthier); each row carries a `band` (red ≥ 0.55 / yellow ≥ 0.28 / green) and per-language `percentile` of `structural_risk` | Multi-dimensional file-quality score with explicit biomarker breakdown; used as the composite gate in `codelore check code_health_min` |
 | `clones` ★ | "Where is code copy-pasted?" | Type 1 + Type 2 via AST structural hashing on tree-sitter | Refactoring candidates |
 | `clone-coupling` ★ | "Which copy-pasted blocks ALSO change together?" (the strategic differentiator) | Clones JOIN coupling, Fisher-significant only | Live debt that hurts you on every change |
+| `hotspot-velocity` ★ | "Which files are *accelerating* in churn?" | Recent vs baseline change rate | Early warning: a file becoming a hotspot before its all-time count shows it |
+| `refactoring-targets` ★ | "Where should I refactor first for maximum ROI?" | `priority = (structural_risk × hotspot_score) / max(loc, 25)`; rows carry `dominant_type` (highest-intensity biomarker) and `manual_up_rank` (ascending-size ManualUp baseline) | Effort-aware Popt/PofB20-style ranking — a small, dense, churning, unhealthy file outranks a large one with the same raw risk |
 
 ### Graph-analytics tier (3 ★)
 
@@ -64,7 +66,7 @@ The table below is split into the **17 code-maat-parity analyses** (drop-in succ
 | `centrality` ★ | "Which files are most central in the coupling graph?" | Degree / weighted-degree / PageRank on the Fisher-significant coupling graph | Network-centrality lens (Newman 2010 §7) |
 | `communities` ★ | "What are the actual Conway's-law clusters?" | Leiden algorithm (Traag, Waltman, van Eck 2019) on the coupling graph | Auto-detect socio-technical modules |
 
-### Architecture-analytics tier (6 ★★)
+### Architecture-analytics tier (16 ★★)
 
 | Analysis | What you ask it | Formula / source | When to reach for it |
 |---|---|---|---|
@@ -186,7 +188,7 @@ The step summary appears at the bottom of the workflow run page in the GitHub Ac
 
 | Rule ID | Tags | When it fires |
 |---|---|---|
-| `CODELORE-HOTSPOT` | `behavioral`, `hotspot` | One result per hotspot row; `security-severity = (100 − code_health) / 10`; `level` derived from severity band (≥7 = error, ≥4 = warning, else note) |
+| `CODELORE-HOTSPOT` | `behavioral`, `hotspot` | One result per hotspot row; `security-severity = (100 − code_health) / 4`; `level` derived from severity band (≥7 = error, ≥4 = warning, else note) |
 | `CODELORE-CLONE` | `behavioral`, `clone`, `type-1`, `type-2` | One result per clone family; `security-severity = 3 + family_size`, capped at 6 |
 | `CODELORE-LIVE-CLONE` | `behavioral`, `clone`, `live-clone`, `co-change`, `x-ray` | One result per `(clone_group_id, file_a, file_b)`; `security-severity = combined_score × 10` |
 | `CODELORE-MISSING-COCHANGE` | `behavioral`, `coupling`, `diff` | One result per absence: a historically-Fisher-significant coupling pair where this PR touched only one side. Surfaces missing partner-file edits |
@@ -200,7 +202,7 @@ All four use versioned `partialFingerprints` so cross-run identity stays stable.
 ```
 codelore analyze [OPTIONS]
   -a, --analysis NAME           Which analysis [default: revisions]
-                                (any of the 32 above; passing an unknown
+                                (any of the 43 above; passing an unknown
                                 name prints the full valid list)
   -r, --repo PATH               Git repo path [default: .]
   -f, --format FORMAT           Output format [default: csv]
@@ -601,7 +603,7 @@ spans stay out of normal-verbosity output.
 |---|---|---|
 | `error: ingest commits: repository error: find_parent_commit ... could not be found` | Shallow clone (`--depth=N`) is missing parent ancestry for analyses that walk back | Use a full clone or run only HEAD-only analyses (`clones` works on shallow clones — it short-circuits the ingest) |
 | Hotspot scores are all `0.0` | Repo has only one commit, OR `fetch-depth: 0` not set in CI | Set `fetch-depth: 0` in `actions/checkout` |
-| `codelore analyze --analysis bogus` errors with help-text | Typo on analysis name | The error message lists all 32 supported analyses |
+| `codelore analyze --analysis bogus` errors with help-text | Typo on analysis name | The error message lists all 43 supported analyses |
 | Same file appears twice in `revisions` output (e.g. `crates/bca-lib/foo.rs` AND `crates/codelore-lib/foo.rs`) | Git rename split — CodeLore doesn't follow renames yet | Known limitation; tracked in [`roadmap-v1.x-and-beyond.md`](roadmap-v1.x-and-beyond.md) (Tier 3, "Rename tracking") |
 | `clone-coupling` returns 0 rows on a small repo | Fisher exact test needs ≥ 3 shared commits AND non-degenerate contingency table | Verify with `--analysis coupling` first; if that's empty too, the repo doesn't have enough history |
 | `--format parquet` fails with "requires --output" | Binary format can't stream to stdout | Pass `--output FILE.parquet` |
@@ -623,7 +625,7 @@ codescene/
 │   ├── codelore-lib/                     # the library
 │   │   ├── src/
 │   │   │   ├── facts/                    # DuckDB fact store + ingest pipeline
-│   │   │   ├── analyses/                 # the 42 analyses (one file each)
+│   │   │   ├── analyses/                 # the 43 analyses (one file each)
 │   │   │   ├── output/                   # 6 format emitters
 │   │   │   ├── repo/                     # GixRepo + GitCliRepo + Repo trait
 │   │   │   ├── complexity/               # tree-sitter dispatch + ComplexityEntity

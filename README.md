@@ -23,7 +23,7 @@
 
 Behind every codebase is a human narrative your linter cannot see: who wrote this, who still understands it, which corners hide tribal knowledge nobody's written down, and where the historical scars are buried. Every commit is a piece of this **lore**.
 
-**CodeLore** mines your repository's git history and projects it into **42 behavioral analyses** — hotspots, change-coupling, ownership maps, knowledge fragmentation, code health scores, copy-paste clones, live clones (clones × Fisher-significant co-change), Leiden community detection on the coupling graph, per-file centrality, knowledge-island bus-factor risk, god-class detection, layered-architecture rule validation, modularity-violation detection (co-change without imports), unstable-interface detection, per-module bus factor, pair-programming detection, stale-code surfacing, and more — surfaced as SARIF for your existing CI dashboard. The socio-technical signal your linter cannot see, with the methodological honesty your team can audit.
+**CodeLore** mines your repository's git history and projects it into **43 behavioral analyses** — hotspots, change-coupling, ownership maps, knowledge fragmentation, code health scores, copy-paste clones, live clones (clones × Fisher-significant co-change), Leiden community detection on the coupling graph, per-file centrality, knowledge-island bus-factor risk, god-class detection, layered-architecture rule validation, modularity-violation detection (co-change without imports), unstable-interface detection, per-module bus factor, pair-programming detection, stale-code surfacing, refactoring-targets ROI ranking, and more — surfaced as SARIF for your existing CI dashboard. The socio-technical signal your linter cannot see, with the methodological honesty your team can audit.
 
 A Rust **drop-in successor** to Adam Tornhill's [code-maat](https://github.com/adamtornhill/code-maat) — every published code-maat analysis is supported under the same `--analysis NAME` flag, with modern improvements: deterministic tiebreaks, Fisher exact significance gates, SARIF output, persistent cache, PR-mode diffing, and a SQL-queryable fact store. Built on [gix](https://github.com/GitoxideLabs/gitoxide) (pure-Rust git), [DuckDB](https://duckdb.org) (embedded analytics), [fancy-regex](https://github.com/fancy-regex/fancy-regex) (lookaround support for architectural grouping), and a vendored fork of Mozilla's [rust-code-analysis](https://github.com/mozilla/rust-code-analysis) (tree-sitter complexity).
 
@@ -49,7 +49,7 @@ What separates CodeLore from code-maat, CodeScene, and jscpd:
 
 - **🎯 Live-clone × co-change intersection.** Every clone detector finds copy-pasted blocks. CodeLore intersects clones with Fisher-significant change-coupling — flagging only the clones whose copies actually evolve together. Dead clones (look-alike code nobody touches) are filtered out as noise; live clones (real debt) are surfaced with a `combined_score` ranking. We're not aware of another OSS tool that ships this intersection.
 - **📋 Behavioral SARIF.** Findings land natively in **SARIF 2.1.0** with three rules — `CODELORE-HOTSPOT`, `CODELORE-CLONE`, and `CODELORE-LIVE-CLONE`. Drop them straight into GitHub Code Scanning, GitLab security dashboards, or Defectdojo and alerts appear inline on pull requests.
-- **🔍 Transparency over opaque ML.** CodeScene's hotspot ranking is a closed ML model. CodeLore ranks with a **published deterministic formula**: `percentile_rank(revisions) × percentile_rank(cognitive_complexity) × (100 − code_health) / 10`. Every input is emitted alongside the score; anyone can reproduce it.
+- **🔍 Transparency over opaque ML.** CodeScene's hotspot ranking is a closed ML model. CodeLore ranks with a **published deterministic formula**: `percentile_rank(revisions) × percentile_rank(cognitive_complexity) × (100 − code_health) / 4`. Every input is emitted alongside the score; anyone can reproduce it.
 - **🧾 Provenance manifest.** Every run emits a `.provenance.json` sidecar recording every config knob (auto-derived via canonical Options serialization — adding a new field auto-propagates), version pin, and timestamp. Reproducibility receipt for the run; eliminates the "we got different numbers because we silently used different thresholds" failure mode.
 - **💾 SQL-queryable fact store.** No proprietary format lock-in. Export the full DuckDB store as Parquet or SQLite and query your git history as a database from the command line.
 - **⚡ Persistent cache.** Second invocation on the same `(repo, HEAD, options)` opens read-only in ~10 ms instead of re-walking history — typically a 10-100× speedup on the dev inner loop depending on repo size, and the foundation of the `codelore diff` PR-mode subcommand.
@@ -57,7 +57,7 @@ What separates CodeLore from code-maat, CodeScene, and jscpd:
 
 ---
 
-## The 42 analyses
+## The 43 analyses
 
 Use `codelore analyze --analysis NAME` for any of these. Code-maat parity is **complete**; modern additions are marked **★**.
 
@@ -88,9 +88,9 @@ Use `codelore analyze --analysis NAME` for any of these. Code-maat parity is **c
 
 | Analysis | Output | What it adds beyond code-maat |
 |---|---|---|
-| `hotspots` ★ | files ranked by `percentile_rank(revs) × percentile_rank(cognitive) × (100 − code_health) / 10` | Published formula transparency; CodeScene-equivalent signal |
+| `hotspots` ★ | files ranked by `percentile_rank(revs) × percentile_rank(cognitive) × (100 − code_health) / 4` | Published formula transparency; CodeScene-equivalent signal |
 | `hotspot-velocity` ★ | files *accelerating* in churn — recent vs baseline change rate | Early warning: a file becoming a hotspot before its all-time count shows it |
-| `code-health` ★ | composite score 0..100 per file (cognitive + churn + Fractal Value + Fisher-filtered coupling centrality) | Multi-dimensional file-quality score |
+| `code-health` ★ | biomarker composite score 0..100 per file: `100 × (1 − 0.50·structural_risk − 0.30·churn − 0.20·ownership_fv)`; `structural_risk` is a weighted sum of five biomarkers (Complex Method 0.30, God Class 0.25, Large Method 0.15, DRY 0.15, Shotgun Surgery 0.15); each row carries a `band` (red ≥ 0.55 / yellow ≥ 0.28 / green) and per-language `percentile` of structural risk | Multi-dimensional file-quality score with explicit biomarker breakdown |
 | `clones` ★ | Type 1 + Type 2 clone families via AST structural hashing | Function-level copy-paste detection across Rust/Python/Java/JS/TS |
 | `clone-coupling` ★ | clones intersected with Fisher-significant co-change | **The strategic differentiator** — separates live debt from dead noise |
 | `knowledge-islands` ★ | per-file bus-factor risk from departed primary authors | Auto-detects knowledge loss vs CodeScene's required manual Ex-Developer marking |
@@ -112,6 +112,7 @@ Use `codelore analyze --analysis NAME` for any of these. Code-maat parity is **c
 | `lead-time` ★ | per-commit author-date → committer-date delta (DORA metric) | In-flight review time without GitHub PR metadata |
 | `bus-factor` ★ | per-module Filatov 2010 bus factor | Lifts CodeScene's file-level "Key Personnel" to actionable module-level granularity |
 | `delivery-friction` ★ | composite of `percent_rank(revs) × percent_rank(median lead-time) × percent_rank(cognitive)` per file | Counters CodeScene v7.4's Delivery Analysis surface; lights up only files elevated on all three axes (churn × review-time × complexity), with p95 lead-time + WIP-age side columns |
+| `refactoring-targets` ★ | files ranked by refactoring ROI: `priority = (structural_risk × hotspot_score) / max(loc, 25)`; each row annotated with `dominant_type` (highest-intensity biomarker) and `manual_up_rank` (ascending-size ManualUp baseline) | Effort-aware Popt/PofB20-style ranking — a small, dense, churning, unhealthy file outranks a large one with the same raw risk |
 
 ### CLI subcommands
 
@@ -236,7 +237,7 @@ codelore analyze --analysis clone-coupling --repo . --format markdown
 
 Live clones — function-level copy-paste families whose copies co-change at Fisher-significant rates. Real code-duplication debt: every change has to be made in N places, every bug has N variants. Dead clones (filtered out) are noise.
 
-Once you've run those four, you have enough signal to triage. From here, [the advanced guide](docs/advanced-usage.md) covers all 42 analyses, every flag, configuration, CI integration, and tool-stack rationale.
+Once you've run those four, you have enough signal to triage. From here, [the advanced guide](docs/advanced-usage.md) covers all 43 analyses, every flag, configuration, CI integration, and tool-stack rationale.
 
 ---
 
@@ -375,7 +376,7 @@ Default: **non-strict** (unmapped paths keep their raw names; safer than silent 
             │ SQL queries (bind-parameterized) + Rust orchestrators
             ▼
    ┌─────────────────────┐
-   │  42 Analyses         │  → 10 output formats (CSV/JSON/NDJSON/
+   │  43 Analyses         │  → 10 output formats (CSV/JSON/NDJSON/
    │                     │     SARIF/Markdown/GHA/HTML/Parquet/
    │                     │     SQLite/SPA)
    │                     │  → persistent cache (10-100× speedup)
@@ -386,7 +387,7 @@ Default: **non-strict** (unmapped paths keep their raw names; safer than silent 
    └─────────────────────┘
 ```
 
-Every commit becomes a `CommitEvent` projected onto a DuckDB fact store. The 42 analyses are SQL queries over that store plus a thin Rust orchestrator each (the historical `architecture-trend` additionally re-reads source at sampled past revisions). Outputs flow through ten format emitters. Every run is cached and audit-trail-stamped with a provenance sidecar.
+Every commit becomes a `CommitEvent` projected onto a DuckDB fact store. The 43 analyses are SQL queries over that store plus a thin Rust orchestrator each (the historical `architecture-trend` additionally re-reads source at sampled past revisions). Outputs flow through ten format emitters. Every run is cached and audit-trail-stamped with a provenance sidecar.
 
 For deeper architecture, see the [design specification](docs/superpowers/specs/2026-06-06-codelore-design.md) (~1100 lines, covers every threshold and identity rule).
 
@@ -409,7 +410,7 @@ What we deliberately don't ship: no async runtime, no libgit2 binding, no LLM-ba
 
 ## Status
 
-Release-ready alpha. **42 analyses × 10 output formats × `codelore diff` PR-mode × `codelore check` quality gate × 4 SARIF rules.** Full test suite (`codelore-lib` unit + integration, `codelore-cli` integration, differential `GixRepo` vs `GitCliRepo` cross-walker parity, headless-browser SPA smoke) passes on Rust 1.96.0 across Linux, macOS, and Windows; `clippy -D warnings`, `rustfmt --check`, and `cargo deny check` all gate every push. Each tagged release ships prebuilt binaries for five targets (macOS arm64/x86_64, Linux arm64/x86_64-gnu, Windows x86_64-msvc), each with SLSA L3 build provenance attached, a distroless OCI container at `ghcr.io/emrecdr/codelore`, an auto-regenerated formula in the `emrecdr/codelore` Homebrew tap, and a `cargo binstall`-compatible asset layout — all produced by `.github/workflows/release.yml` on every `v*` tag push, gated by the `protect-release-tags` ruleset that requires green CI on the target commit before the tag is accepted.
+Release-ready alpha. **43 analyses × 10 output formats × `codelore diff` PR-mode × `codelore check` quality gate × 4 SARIF rules.** Full test suite (`codelore-lib` unit + integration, `codelore-cli` integration, differential `GixRepo` vs `GitCliRepo` cross-walker parity, headless-browser SPA smoke) passes on Rust 1.96.0 across Linux, macOS, and Windows; `clippy -D warnings`, `rustfmt --check`, and `cargo deny check` all gate every push. Each tagged release ships prebuilt binaries for five targets (macOS arm64/x86_64, Linux arm64/x86_64-gnu, Windows x86_64-msvc), each with SLSA L3 build provenance attached, a distroless OCI container at `ghcr.io/emrecdr/codelore`, an auto-regenerated formula in the `emrecdr/codelore` Homebrew tap, and a `cargo binstall`-compatible asset layout — all produced by `.github/workflows/release.yml` on every `v*` tag push, gated by the `protect-release-tags` ruleset that requires green CI on the target commit before the tag is accepted.
 
 **This session's deliverables** (3 sprints + GitHub tags + versioning):
 
@@ -432,7 +433,7 @@ Full backlog: [`docs/roadmap-v1.x-and-beyond.md`](docs/roadmap-v1.x-and-beyond.m
 
 | If you want… | Read |
 |---|---|
-| All 42 analyses + every flag + CI patterns + troubleshooting | [`docs/advanced-usage.md`](docs/advanced-usage.md) |
+| All 43 analyses + every flag + CI patterns + troubleshooting | [`docs/advanced-usage.md`](docs/advanced-usage.md) |
 | The full 27-feature v0.6.x implementation plan + validation | [`docs/maximum-feature-plan.md`](docs/maximum-feature-plan.md) |
 | CodeScene visual parity strategy + design decisions | [`docs/codescene-parity-plan.md`](docs/codescene-parity-plan.md) |
 | The architecture overview (workspace shape, pipeline data flow, threading model) | [`docs/codebase_analysis.md`](docs/codebase_analysis.md) |
