@@ -145,6 +145,23 @@
     window._codeloreBrushListeners.push(fn);
   };
 
+  // Screen-reader announcement of the shared selection. A dedicated polite
+  // live region (created once, kept visually hidden via .sr-only) speaks the
+  // selected file — the visual highlight + aria-current alone are silent to
+  // assistive tech. Registered once at boot, not per widget.
+  window._codeloreRegisterSelectionListener('a11y-announce', function (selectedPath) {
+    let live = document.getElementById('codelore-selection-live');
+    if (!live) {
+      live = document.createElement('div');
+      live.id = 'codelore-selection-live';
+      live.className = 'sr-only';
+      live.setAttribute('role', 'status');
+      live.setAttribute('aria-live', 'polite');
+      document.body.appendChild(live);
+    }
+    live.textContent = selectedPath ? ('Selected ' + selectedPath) : 'Selection cleared';
+  });
+
   // ─── §3a  Fullscreen toggle per widget ──────────────────────────
   // Injects a button into every `<section class="widget">` at boot
   // and wires it to the native HTML5 Fullscreen API. Listens for
@@ -3090,6 +3107,21 @@
       'Parallel-coordinates plot of ' + top.length + ' files across ' +
       'revisions, cognitive complexity, code health, hotspot score and MI rank');
     const chart = mountEcharts(container);
+    // Build the polyline data once so the cross-widget selection listener can
+    // re-style individual lines by mutating their per-item lineStyle (emphasis
+    // is disabled on this series — see below — so highlight/downplay are inert).
+    const parallelData = top.map(function (r) {
+      return {
+        name: r.path,
+        value: [
+          r.revisions || 0,
+          r.cognitive || 0,
+          r.code_health != null ? r.code_health : 0,
+          r.hotspot_score != null ? r.hotspot_score : 0,
+          typeof r.mi_rank === 'number' ? r.mi_rank : 0,
+        ],
+      };
+    });
     chart.setOption({
       parallelAxis: [
         { dim: 0, name: 'Revisions' },
@@ -3139,18 +3171,7 @@
         // hover affordance we need, the polyline remains its normal
         // colour and width regardless of hover state.
         emphasis: { disabled: true },
-        data: top.map(function (r) {
-          return {
-            name: r.path,
-            value: [
-              r.revisions || 0,
-              r.cognitive || 0,
-              r.code_health != null ? r.code_health : 0,
-              r.hotspot_score != null ? r.hotspot_score : 0,
-              typeof r.mi_rank === 'number' ? r.mi_rank : 0,
-            ],
-          };
-        }),
+        data: parallelData,
       }],
     });
     chart.on('click', function (params) {
@@ -3165,22 +3186,25 @@
         }
       }
     });
-    // Cross-widget selection sync: parallel-coords is a single
-    // series whose data array is indexed by path; `dispatchAction
-    // highlight` with that data index lights the matching polyline
-    // (and the existing emphasis/blur protocol fades the others).
+    // Cross-widget selection: emphasis is disabled on this series (ECharts 6
+    // hover-disappears regression), so highlight/downplay do nothing. Instead
+    // re-style the lines directly — the selected file's polyline goes bold
+    // info-blue while the rest fade; a null selection restores every line to
+    // the default warning colour. Mutates parallelData in place + re-applies.
     const parallelPaths = top.map(function (r) { return r.path; });
+    const parallelBase = { color: token('--color-warning'), width: 1, opacity: 0.6 };
     window._codeloreRegisterSelectionListener('parallel-coords', function (selectedPath) {
-      if (!selectedPath) {
-        chart.dispatchAction({ type: 'downplay', seriesIndex: 0 });
-        return;
+      const idx = selectedPath ? parallelPaths.indexOf(selectedPath) : -1;
+      for (var i = 0; i < parallelData.length; i++) {
+        if (idx < 0) {
+          parallelData[i].lineStyle = parallelBase;
+        } else if (i === idx) {
+          parallelData[i].lineStyle = { color: token('--color-info'), width: 3, opacity: 1 };
+        } else {
+          parallelData[i].lineStyle = { color: token('--color-warning'), width: 1, opacity: 0.12 };
+        }
       }
-      const idx = parallelPaths.indexOf(selectedPath);
-      if (idx >= 0) {
-        chart.dispatchAction({ type: 'highlight', seriesIndex: 0, dataIndex: idx });
-      } else {
-        chart.dispatchAction({ type: 'downplay', seriesIndex: 0 });
-      }
+      chart.setOption({ series: [{ data: parallelData }] });
     });
   }
 

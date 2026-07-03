@@ -626,6 +626,16 @@
     .hotspot-row-brushed td:first-child {
       box-shadow: inset 3px 0 0 var(--color-info, #3b82f6);
     }
+    /* Visually-hidden but screen-reader-available. The Tailwind bundle is
+       pre-built so `sr-only` isn't in it; this is the hand-rolled equivalent
+       used by the cross-widget selection live-region announcer. */
+    .sr-only {
+      position: absolute;
+      width: 1px; height: 1px;
+      padding: 0; margin: -1px;
+      overflow: hidden; clip: rect(0, 0, 0, 0);
+      white-space: nowrap; border: 0;
+    }
     .ki-knowledge-loss-badge {
       flex-shrink: 0;
       display: inline-block;
