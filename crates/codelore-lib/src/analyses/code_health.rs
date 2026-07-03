@@ -12,11 +12,14 @@
 //!
 //! `structural_risk` is a weighted sum over the per-file biomarker table
 //! (complex-method, large-method, shotgun-surgery, god-class, dry). Each
-//! biomarker carries an intensity ∈ [0,1] computed as a per-language
-//! `PERCENT_RANK` of the file's worst value for that smell; the per-smell
-//! weights sum to 1.0, so `structural_risk` stays in [0,1] and spreads across the
-//! file distribution. Smells absent for a file contribute 0, so co-occurrence
-//! is implicit — a file flagged by more smells accumulates more weighted terms.
+//! biomarker carries an intensity ∈ [0,1]. Four of them (complex-method,
+//! large-method, god-class, dry) are a per-language `PERCENT_RANK` of the
+//! file's worst value over the full file set; shotgun-surgery is a
+//! `PERCENT_RANK` over the coupled-file set only (no language partition). The
+//! per-smell weights sum to 1.0, so `structural_risk` stays in [0,1] and
+//! spreads across the file distribution. Smells absent for a file contribute
+//! 0, so co-occurrence is implicit — a file flagged by more smells accumulates
+//! more weighted terms.
 //! Coupling centrality (Fisher-significant pairs from `coupling::run_coupling`)
 //! enters once, as the shotgun-surgery biomarker; it is deliberately not also a
 //! separate behavioral term. Score range: [0, 100]; higher = healthier. Band

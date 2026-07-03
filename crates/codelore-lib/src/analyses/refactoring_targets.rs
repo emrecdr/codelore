@@ -91,13 +91,17 @@ pub fn run_refactoring_targets(db: &FactsDb, opts: &Options) -> Result<Vec<Refac
 
     // Dominant biomarker per file: highest-intensity smell, ties broken by
     // smell name so the pick is deterministic. Reads the temp table that
-    // run_code_health materialised above.
+    // run_code_health materialised above. `intensity > 0` excludes the
+    // zero-intensity rows the SQL biomarkers emit for the least-risky file in
+    // each language (a `PERCENT_RANK` of 0), so a file with no real smell is
+    // reported as "none" rather than a spurious biomarker name.
     let dominant_by_path: HashMap<String, String> = query_map_collect(
         db,
         "SELECT path, smell FROM ( \
              SELECT path, smell, \
                     ROW_NUMBER() OVER (PARTITION BY path ORDER BY intensity DESC, smell ASC) AS rn \
              FROM code_health_biomarkers_v1 \
+             WHERE intensity > 0 \
          ) WHERE rn = 1",
         [],
         "refactoring-targets:dominant",

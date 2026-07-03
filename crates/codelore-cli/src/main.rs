@@ -84,6 +84,13 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
 
     let hotspots = run_hotspots(&db, &opts).context("run hotspots")?;
     let mut violations = evaluate_full_tree(&thresholds, &hotspots);
+    // `code_health_min` gates the COMPOSITE code-health score (the one
+    // `--analysis code-health` reports), not the hotspots inline proxy.
+    let code_health = codelore_lib::cli_api::analyses::code_health::run_code_health(&db, &opts)
+        .context("run code-health")?;
+    violations.extend(
+        codelore_lib::cli_api::quality_gates::evaluate_code_health_gate(&thresholds, &code_health),
+    );
     violations.extend(
         codelore_lib::cli_api::quality_gates::evaluate_clone_gate(&thresholds, &db)
             .context("evaluate clone gate")?,
@@ -261,8 +268,8 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
         ),
         (
             "code-health",
-            "code-health composite: biomarker structural risk (Complex/Large Method, God Class, DRY, Shotgun Surgery) fused with behavioral signal (Nagappan & Ball 2005 churn + Mockus & Herbsleb 2002 ownership + Tornhill 2018 coupling); self-relative percentile banding (Alves/Ypma/Visser 2010)",
-            "100 × (1 − 0.40·structural_risk − 0.25·churn − 0.15·ownership_fv − 0.20·coupling_centrality); band from structural_risk thresholds (0.66/0.33 → red/yellow/green); percentile = per-language PERCENT_RANK of structural_risk.",
+            "code-health composite: biomarker structural risk (Complex/Large Method, God Class, DRY, Shotgun Surgery) fused with behavioral signal (Nagappan & Ball 2005 churn + Mockus & Herbsleb 2002 ownership); coupling centrality enters once via the Shotgun Surgery biomarker (Tornhill 2018); self-relative percentile banding (Alves/Ypma/Visser 2010)",
+            "100 × (1 − 0.50·structural_risk − 0.30·churn − 0.20·ownership_fv), where structural_risk is a weighted sum of biomarker intensities (complex-method 0.30, god-class 0.25, large-method 0.15, dry 0.15, shotgun-surgery 0.15); band from structural_risk thresholds (≥0.55 red, ≥0.28 yellow, else green); percentile = per-language PERCENT_RANK of structural_risk.",
             "See analyses/code_health.rs.",
         ),
         (
@@ -2310,7 +2317,16 @@ fn dispatch_refactoring_targets(
             codelore_lib::cli_api::output::ndjson::write_ndjson(&rows, out)
                 .context("write ndjson")?;
         }
-        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        "html" => {
+            codelore_lib::cli_api::output::html::write_html(
+                &rows,
+                out,
+                &ctx.title,
+                &ctx.repo_root,
+                &ctx.generated_at,
+            )
+            .context("write html")?;
+        }
         fmt => {
             return Err(unsupported_format(
                 "refactoring-targets",

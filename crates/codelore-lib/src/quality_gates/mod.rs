@@ -7,7 +7,7 @@
 //! ```toml
 //! [gates]
 //! cognitive_max = 30        # any file exceeding fails
-//! code_health_min = 60      # any file below fails
+//! code_health_min = 60      # any file below fails (composite code-health score, 0..=100)
 //! hotspot_score_max = 8.0   # any file above fails
 //! disallow_clone_type_1 = true
 //! max_dependency_cycles = 0 # no import-graph cycles allowed
@@ -317,16 +317,6 @@ pub fn evaluate_full_tree(
                 threshold: format!("{max:.0}"),
             });
         }
-        if let Some(min) = g.code_health_min
-            && row.code_health < min
-        {
-            out.push(GateViolation {
-                gate: "code_health_min".into(),
-                path: row.path.clone(),
-                actual: format!("{:.1}", row.code_health),
-                threshold: format!("{min:.1}"),
-            });
-        }
         if let Some(max) = g.hotspot_score_max
             && row.hotspot_score > max
         {
@@ -335,6 +325,37 @@ pub fn evaluate_full_tree(
                 path: row.path.clone(),
                 actual: format!("{:.2}", row.hotspot_score),
                 threshold: format!("{max:.2}"),
+            });
+        }
+    }
+    out
+}
+
+/// Evaluate the `code_health_min` gate against the COMPOSITE `code-health`
+/// score (`run_code_health`), not the hotspots inline cognitive-only proxy.
+/// This is the score `--analysis code-health` reports, so a file the analysis
+/// bands `red` is the file the gate flags — the two agree.
+///
+/// Kept separate from [`evaluate_full_tree`] (which evaluates the genuinely
+/// hotspot-scoped `cognitive_max` / `hotspot_score_max` gates) because
+/// `code_health_min` is a property of the code-health analysis, whose file set
+/// (files with complexity data) differs from the hotspots file set.
+#[must_use]
+pub fn evaluate_code_health_gate(
+    thresholds: &Thresholds,
+    code_health: &[crate::analyses::code_health::CodeHealthRow],
+) -> Vec<GateViolation> {
+    let mut out = Vec::new();
+    let Some(min) = thresholds.gates.code_health_min else {
+        return out;
+    };
+    for row in code_health {
+        if row.score < min {
+            out.push(GateViolation {
+                gate: "code_health_min".into(),
+                path: row.path.clone(),
+                actual: format!("{:.1}", row.score),
+                threshold: format!("{min:.1}"),
             });
         }
     }
@@ -440,14 +461,35 @@ new_hotspot_max = 0
         assert_eq!(v[0].gate, "cognitive_max");
     }
 
+    fn make_ch_row(path: &str, score: f64) -> crate::analyses::code_health::CodeHealthRow {
+        crate::analyses::code_health::CodeHealthRow {
+            path: path.to_string(),
+            cognitive: 0.0,
+            score,
+            structural_risk: 0.0,
+            percentile: 0.0,
+            band: "green".to_string(),
+        }
+    }
+
     #[test]
     fn code_health_min_flags_offending_file() {
         let mut t = Thresholds::default();
         t.gates.code_health_min = Some(70.0);
-        let rows = vec![make_row("a.rs", 10.0, 50.0, 1.0)];
-        let v = evaluate_full_tree(&t, &rows);
+        // The gate reads the COMPOSITE code-health score (not the hotspots
+        // inline proxy): 50 < 70 fails, 85 passes.
+        let rows = vec![make_ch_row("a.rs", 50.0), make_ch_row("b.rs", 85.0)];
+        let v = evaluate_code_health_gate(&t, &rows);
         assert_eq!(v.len(), 1);
+        assert_eq!(v[0].path, "a.rs");
         assert_eq!(v[0].gate, "code_health_min");
+    }
+
+    #[test]
+    fn code_health_gate_vacuous_when_unconfigured() {
+        let t = Thresholds::default();
+        let rows = vec![make_ch_row("a.rs", 0.0)];
+        assert!(evaluate_code_health_gate(&t, &rows).is_empty());
     }
 
     #[test]
