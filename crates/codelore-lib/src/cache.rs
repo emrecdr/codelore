@@ -22,7 +22,7 @@ use crate::Options;
 /// version): a non-schema correctness fix bumps this without touching the
 /// schema version, and the historical `schema_v` prefix on the value is
 /// retained so older cache files stay invalidated.
-const CACHE_EPOCH: &str = "schema_v6";
+const CACHE_EPOCH: &str = "schema_v7";
 
 /// Compute a 32-byte SHA-256 cache key from:
 ///   `canonical_repo_path || NUL || head_sha || NUL || CARGO_PKG_VERSION || NUL`

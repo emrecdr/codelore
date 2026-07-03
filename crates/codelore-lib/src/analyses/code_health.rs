@@ -5,21 +5,24 @@
 //!     - w_sr · structural_risk(biomarkers)
 //!     - w_cn · normalize(churn_rate)
 //!     - w_au · normalize(author_fragmentation_FV)
-//!     - w_cp · normalize(coupling_centrality_SoC)
 //! )
 //!
-//! defaults: w_sr = 0.40, w_cn = 0.25, w_au = 0.15, w_cp = 0.20
+//! defaults: w_sr = 0.50, w_cn = 0.30, w_au = 0.20
 //! ```
 //!
-//! `structural_risk` is a probabilistic-OR aggregate over the per-file biomarker
-//! table (complex-method, large-method, shotgun-surgery, god-class, dry).
-//! Each biomarker carries an intensity ∈ [0,1]; a co-occurrence multiplier
-//! (0.25 per additional distinct smell type) amplifies risk when multiple smells
-//! co-occur in the same file. Coupling centrality uses the Fisher-significant
-//! pairs from `coupling::run_coupling`. Score range: [0, 100]; higher = healthier.
-//! Band (red/yellow/green) is derived from `structural_risk` thresholds (0.66/0.33);
-//! percentile is the per-language `PERCENT_RANK` of `structural_risk` (Alves,
-//! Ypma & Visser 2010).
+//! `structural_risk` is a weighted sum over the per-file biomarker table
+//! (complex-method, large-method, shotgun-surgery, god-class, dry). Each
+//! biomarker carries an intensity ∈ [0,1] computed as a per-language
+//! `PERCENT_RANK` of the file's worst value for that smell; the per-smell
+//! weights sum to 1.0, so `structural_risk` stays in [0,1] and spreads across the
+//! file distribution. Smells absent for a file contribute 0, so co-occurrence
+//! is implicit — a file flagged by more smells accumulates more weighted terms.
+//! Coupling centrality (Fisher-significant pairs from `coupling::run_coupling`)
+//! enters once, as the shotgun-surgery biomarker; it is deliberately not also a
+//! separate behavioral term. Score range: [0, 100]; higher = healthier. Band
+//! (red/yellow/green) is derived from `structural_risk` thresholds; percentile
+//! is the per-language `PERCENT_RANK` of `structural_risk` (Alves, Ypma &
+//! Visser 2010).
 //!
 //! Research basis: see `docs/research-foundations.md` entry
 //! "code-health" (composite signal developed in `CodeLore`; underlying
@@ -85,36 +88,40 @@ const SQL: &str = "
             ON ar.path = t.path
         GROUP BY ar.path
     ),
-    -- Probabilistic-OR aggregate of per-file biomarkers. Uses LN/EXP to
-    -- avoid floating-point underflow across many low-intensity rows.
-    -- Co-occurrence multiplier amplifies risk when multiple distinct smell
-    -- types appear in the same file.
+    -- Weighted sum of per-file biomarker intensities (each a per-language
+    -- PERCENT_RANK in [0,1]; smells absent for a file contribute 0). The
+    -- weights sum to 1.0 and are ordered by empirical defect-correlation
+    -- strength, so structural risk stays in [0,1] and spreads across the file
+    -- distribution instead of saturating at the ceiling. Co-occurrence is
+    -- implicit: a file flagged by more smells accumulates more weighted terms.
     file_structural AS (
         SELECT
             path,
-            LEAST(1.0,
-                (1.0 - EXP(SUM(LN(GREATEST(1e-9, 1.0 - intensity)))))
-                * (1.0 + 0.25 * (COUNT(DISTINCT smell) - 1))
-            ) AS structural_risk
+            LEAST(1.0, SUM(intensity * CASE smell
+                WHEN 'complex-method'  THEN 0.30
+                WHEN 'god-class'       THEN 0.25
+                WHEN 'large-method'    THEN 0.15
+                WHEN 'dry'             THEN 0.15
+                WHEN 'shotgun-surgery' THEN 0.15
+                ELSE 0.0
+            END)) AS structural_risk
         FROM code_health_biomarkers_v1
         GROUP BY path
     ),
-    -- coupling_centrality_v1 is a TEMPORARY TABLE populated from
-    -- coupling::run_coupling output (Fisher-filtered pairs) before this
-    -- SQL runs. Centrality = count of Fisher-significant partners.
+    -- Coupling centrality enters the composite once, as the shotgun-surgery
+    -- biomarker inside structural_risk. It is deliberately NOT also added as a
+    -- separate behavioral term here — that would double-count the same signal.
     joined AS (
         SELECT
             fc.path,
             fc.cognitive,
             COALESCE(fch.churn, 0) AS churn,
             COALESCE(ffv.fv, 0.0) AS fv,
-            COALESCE(fcp.centrality, 0) AS centrality,
             COALESCE(fs.structural_risk, 0.0) AS structural_risk
         FROM file_cognitive fc
         INNER JOIN file_revs fr ON fc.path = fr.path
         LEFT JOIN file_churn fch ON fc.path = fch.path
         LEFT JOIN file_fv ffv ON fc.path = ffv.path
-        LEFT JOIN coupling_centrality_v1 fcp ON fc.path = fcp.path
         LEFT JOIN file_structural fs ON fc.path = fs.path
     ),
     normalized AS (
@@ -123,11 +130,9 @@ const SQL: &str = "
             cognitive,
             churn,
             fv,
-            centrality,
             structural_risk,
             CASE WHEN MAX(churn) OVER () > 0 THEN churn::DOUBLE / MAX(churn) OVER () ELSE 0 END AS n_cn,
-            fv AS n_au,
-            CASE WHEN MAX(centrality) OVER () > 0 THEN centrality::DOUBLE / MAX(centrality) OVER () ELSE 0 END AS n_cp
+            fv AS n_au
         FROM joined
     ),
     scored AS (
@@ -136,7 +141,7 @@ const SQL: &str = "
             cognitive,
             structural_risk,
             GREATEST(0.0, LEAST(100.0,
-                100.0 * (1.0 - 0.40 * structural_risk - 0.25 * n_cn - 0.15 * n_au - 0.20 * n_cp)
+                100.0 * (1.0 - 0.50 * structural_risk - 0.30 * n_cn - 0.20 * n_au)
             )) AS score,
             CASE lower(split_part(path, '.', -1))
                 WHEN 'rs' THEN 'rust'
@@ -155,9 +160,12 @@ const SQL: &str = "
         score,
         structural_risk,
         PERCENT_RANK() OVER (PARTITION BY lang ORDER BY structural_risk) AS percentile,
+        -- Absolute structural_risk thresholds (tunable; Phase-2 cross-repo
+        -- corpus calibration will replace these self-relative cut points).
+        -- red = high on at least half the weighted smell mass.
         CASE
-            WHEN structural_risk >= 0.66 THEN 'red'
-            WHEN structural_risk >= 0.33 THEN 'yellow'
+            WHEN structural_risk >= 0.50 THEN 'red'
+            WHEN structural_risk >= 0.25 THEN 'yellow'
             ELSE 'green'
         END AS band
     FROM scored
@@ -165,10 +173,11 @@ const SQL: &str = "
     LIMIT ?
 ";
 
-/// DDL for the temporary centrality table that backs the composite score's
-/// `n_cp` term. Computed in Rust from the Fisher-filtered output of
-/// `coupling::run_coupling`, then materialized in a session-local temp table
-/// so the main code-health SQL can JOIN it like any other source.
+/// DDL for the temporary centrality table that backs the `shotgun-surgery`
+/// biomarker (its intensity is the `PERCENT_RANK` of a file's Fisher-significant
+/// coupling-partner count). Computed in Rust from the Fisher-filtered output of
+/// `coupling::run_coupling`, then materialized in a session-local temp table so
+/// `SHOTGUN_INSERT` can read it.
 const CENTRALITY_DDL: &str = "
     CREATE OR REPLACE TEMPORARY TABLE coupling_centrality_v1 (
         path TEXT PRIMARY KEY,
@@ -176,6 +185,13 @@ const CENTRALITY_DDL: &str = "
     )
 ";
 
+/// DDL for the per-file biomarker table. NOTE: this session-local table is
+/// materialized as a side effect of `run_code_health` and is also read by an
+/// EXTERNAL consumer — `analyses::refactoring_targets` queries it (after
+/// calling `run_code_health`) to find each file's dominant smell. It is
+/// therefore a cross-analysis contract: it must stay session-scoped and
+/// readable after `run_code_health` returns — do not make it private, drop it
+/// on exit, or rename its columns without updating that consumer.
 const BIOMARKERS_DDL: &str = "
     CREATE OR REPLACE TEMPORARY TABLE code_health_biomarkers_v1 (
         path    TEXT   NOT NULL,
@@ -215,18 +231,25 @@ const BIOMARKERS_INSERT: &str = "
         WHERE cyclomatic IS NOT NULL
             AND loc IS NOT NULL
     ),
+    -- Aggregate to the file FIRST (worst function per file), THEN rank files.
+    -- Ranking functions and taking the per-file MAX saturates: any file with
+    -- enough functions has one in the top percentile, so nearly every file
+    -- scored ~1.0. Ranking files against files spreads the intensity uniformly.
+    file_metric AS (
+        SELECT path, lang, MAX(cyclomatic) AS file_cx, MAX(loc) AS file_loc
+        FROM lang_fn
+        GROUP BY path, lang
+    ),
     ranked AS (
         SELECT
             path,
-            PERCENT_RANK() OVER (PARTITION BY lang ORDER BY cyclomatic) AS cx_i,
-            PERCENT_RANK() OVER (PARTITION BY lang ORDER BY loc)        AS loc_i
-        FROM lang_fn
+            PERCENT_RANK() OVER (PARTITION BY lang ORDER BY file_cx) AS cx_i,
+            PERCENT_RANK() OVER (PARTITION BY lang ORDER BY file_loc) AS loc_i
+        FROM file_metric
     )
-    SELECT path, 'complex-method' AS smell, MAX(cx_i) AS intensity
-        FROM ranked GROUP BY path
+    SELECT path, 'complex-method' AS smell, cx_i AS intensity FROM ranked
     UNION ALL
-    SELECT path, 'large-method' AS smell, MAX(loc_i) AS intensity
-        FROM ranked GROUP BY path
+    SELECT path, 'large-method' AS smell, loc_i AS intensity FROM ranked
 ";
 
 /// Shotgun Surgery / Divergent Change: a file that co-changes with many

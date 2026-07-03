@@ -306,3 +306,31 @@ fn code_health_score_invariant_under_rows_limit() {
         );
     }
 }
+
+/// Anti-saturation guard: `structural_risk` must not peg every file at the
+/// ceiling. The prior formula ranked functions then took the per-file MAX and
+/// OR-ed the intensities, so on a real codebase nearly every file saturated at
+/// 1.0 — the per-row range/monotonicity tests all passed while the metric was
+/// useless (67/69 files == 1.0). The fix ranks FILES (not functions) and takes
+/// a bounded weighted sum. The small test fixtures are too homogeneous to
+/// reproduce a full distribution (the authoritative check is empirical on real
+/// repos), but this reliably catches a regression to total saturation: with
+/// per-file `PERCENT_RANK`, the least-risky file is never pinned at 1.0.
+#[test]
+fn code_health_structural_risk_not_saturated() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let repo = GixRepo::open(tiny.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: tiny.dir.path().to_path_buf(),
+        min_revs: 1,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+    let rows = run_code_health(&db, &opts).expect("run");
+    assert!(!rows.is_empty());
+    assert!(
+        rows.iter().any(|r| r.structural_risk < 1.0),
+        "every file is pinned at the structural_risk ceiling — saturation regressed"
+    );
+}
