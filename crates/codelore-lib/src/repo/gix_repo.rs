@@ -116,9 +116,9 @@ impl Repo for GixRepo {
         // chunks (chunks processed sequentially in the driver thread).
         // Peak memory: one chunk's events (~1 MB at 1000 × typical event
         // size) + channel buffer. Bounded regardless of repo size.
-        #[allow(clippy::items_after_statements)]
+        #[allow(clippy::items_after_statements)] // scoped to this function (the only call site); inline placement keeps the const adjacent to the comment that explains its value
         const WALKER_CHUNK_SIZE: usize = 1000;
-        #[allow(clippy::items_after_statements)]
+        #[allow(clippy::items_after_statements)] // same rationale as WALKER_CHUNK_SIZE — single call site, inline scoping keeps both tuning knobs together
         const WALKER_CHANNEL_CAPACITY: usize = 256;
 
         let inner_clone = self.inner.clone();
@@ -500,7 +500,7 @@ fn gix_change_to_file_change(
             // free. If `diff` is `None` (perfect 100% rename), all counts
             // are zero and similarity is 100.
             let (similarity, loc_added, loc_deleted) = if let Some(stats) = diff {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // explicit .clamp(0.0, 100.0) guarantees the value is in [0,100] before casting to u8; truncation and sign loss are impossible
                 let sim = (stats.similarity * 100.0).round().clamp(0.0, 100.0) as u8;
                 (sim, stats.insertions, stats.removals)
             } else {
@@ -641,9 +641,9 @@ fn count_loc_and_hunks(
 
     let input = InternedInput::new(old_bytes.as_slice(), new_bytes.as_slice());
     let diff = diff_with_slider_heuristics(Algorithm::Histogram, &input);
-    #[allow(clippy::cast_possible_truncation)]
+    #[allow(clippy::cast_possible_truncation)] // imara-diff addition counts are well below u32::MAX (4 billion lines) for any real source file
     let added = diff.count_additions() as u32;
-    #[allow(clippy::cast_possible_truncation)]
+    #[allow(clippy::cast_possible_truncation)] // imara-diff removal counts are well below u32::MAX (4 billion lines) for any real source file
     let removed = diff.count_removals() as u32;
     // `Diff::hunks()` is a free walk over the already-computed change
     // regions in the diff — no second diff pass. Each `imara_diff::Hunk`

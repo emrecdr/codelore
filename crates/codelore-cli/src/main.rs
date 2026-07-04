@@ -553,7 +553,7 @@ fn init_logging(verbose: bool) {
         .init();
 }
 
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines)] // long but linear: pre-flight → format-validate → ingest → 43-analysis dispatch → emit; splitting would obscure the top-level orchestration flow
 fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
     use codelore_lib::cli_api::output::banner;
     // Bracket the whole run with a wall-clock timer so the footer can report
@@ -3195,7 +3195,7 @@ fn run_spa_dispatch(
     // Linux terminals). Single eprintln to stderr so it doesn't
     // pollute stdout when callers pipe.
     let size_bytes = std::fs::metadata(output).map_or(0, |m| m.len());
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(clippy::cast_precision_loss)] // size_bytes is formatted to one decimal place; display-precision loss on u64→f64 is imperceptible and intentional
     let size_human = if size_bytes >= 1_000_000 {
         format!("{:.1} MB", size_bytes as f64 / 1_000_000.0)
     } else if size_bytes >= 1_000 {

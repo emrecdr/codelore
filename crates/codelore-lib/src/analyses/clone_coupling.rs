@@ -154,7 +154,7 @@ pub fn run_clone_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CloneCoupl
           AND c1.similarity >= ?
     ";
 
-    #[allow(clippy::items_after_statements)]
+    #[allow(clippy::items_after_statements)] // ClonePair defined inline to keep the struct immediately adjacent to the SQL it models; no other call site exists
     struct ClonePair {
         clone_group_id: u32,
         fingerprint: String,

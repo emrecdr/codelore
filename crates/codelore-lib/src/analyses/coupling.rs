@@ -590,7 +590,7 @@ pub fn count_coupling_nodes(db: &FactsDb, opts: &Options) -> Result<u64> {
 /// - `> 0.10` — tightly coupled; candidate for refactoring or a sign
 ///   of a small/cohesive codebase
 #[must_use]
-#[allow(clippy::cast_precision_loss)]
+#[allow(clippy::cast_precision_loss)] // edge/node counts in a coupling graph are bounded by file count; real values are far below 2^52 so both casts to f64 are exact
 pub fn density(node_count: u64, edge_count: usize) -> f64 {
     if node_count < 2 {
         return 0.0;

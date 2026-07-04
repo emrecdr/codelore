@@ -26,7 +26,7 @@ pub fn emit(out: &mut dyn Write, output: &DiffOutput, format: &str) -> Result<()
     }
 }
 
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines)] // long but linear: renders gate/hotspot/coupling/clone sections in fixed order; splitting would scatter the section sequence
 fn emit_text(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
     writeln!(
         out,
@@ -144,7 +144,7 @@ fn emit_json(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
     Ok(())
 }
 
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines)] // long but linear: renders each markdown section in fixed order; splitting would break the section structure
 fn emit_markdown(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
     writeln!(out, "# CodeLore PR Analysis")?;
     writeln!(out)?;
@@ -304,7 +304,7 @@ fn emit_markdown(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
     Ok(())
 }
 
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines)] // long but linear: constructs a complete SARIF document (rules + results for hotspot/coupling/clone) in one pass; splitting would fragment the schema structure
 fn emit_sarif(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
     // Build a SARIF document that mixes rank-entrant + score-increase
     // findings into CODELORE-HOTSPOT results with a `diff-classification`

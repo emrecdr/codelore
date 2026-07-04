@@ -99,7 +99,7 @@ fn write_at_a_glance<W: Write>(dash: &SpaDashboard, w: &mut W) -> Result<()> {
         .filter_map(|r| r.ai_pct.filter(|p| p.is_finite()))
         .collect();
     if !ai_values.is_empty() {
-        #[allow(clippy::cast_precision_loss)]
+        #[allow(clippy::cast_precision_loss)] // file count in the hotspot list is far below 2^52; the usize→f64 cast is exact
         let avg = ai_values.iter().sum::<f64>() / (ai_values.len() as f64);
         writeln!(w, "| AI authorship (avg across files) | {avg:.1}% |").map_err(io)?;
     }

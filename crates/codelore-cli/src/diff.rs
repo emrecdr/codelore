@@ -557,7 +557,7 @@ fn prune_stale_worktrees(repo_root: &Path) {
     }
 }
 
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines)] // long but linear: worktree setup → two independent ingests → delta computation → gate evaluation; splitting would break the sequential worktree-lifecycle flow
 pub fn run_diff(args: &DiffArgs) -> Result<DiffOutput> {
     // Best-effort cleanup of orphans from prior aborted runs before we add
     // a new worktree. Idempotent; errors logged only.

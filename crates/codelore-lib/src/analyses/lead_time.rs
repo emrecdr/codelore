@@ -89,7 +89,7 @@ pub fn run_lead_time(db: &FactsDb, opts: &Options) -> Result<Vec<LeadTimeRow>> {
     let rows = stmt
         .query_map(params![row_limit], |r| {
             let lead_time_seconds: i64 = r.get(4)?;
-            #[allow(clippy::cast_precision_loss)]
+            #[allow(clippy::cast_precision_loss)] // elapsed seconds in any real review cycle are far below 2^52; the i64→f64 cast preserves full precision
             let lead_time_days = (lead_time_seconds.max(0) as f64) / 86_400.0;
             Ok(LeadTimeRow {
                 rev: r.get(0)?,

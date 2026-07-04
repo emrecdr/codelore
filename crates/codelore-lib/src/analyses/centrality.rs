@@ -252,7 +252,7 @@ fn eigenvector_weighted(adj: &[Vec<(usize, f64)>]) -> Vec<f64> {
     if n == 0 {
         return Vec::new();
     }
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(clippy::cast_precision_loss)] // n is the distinct-file node count in the coupling graph; far below 2^52 so the usize→f64 cast is exact
     let n_f = n as f64;
     let init = 1.0 / n_f.sqrt();
     let mut vec_curr = vec![init; n];
