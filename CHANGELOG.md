@@ -36,6 +36,7 @@ Conventional Commits format. All notable changes documented here.
 
 ### Fixed
 
+- **`--format html` is now correctly advertised for `authors`, `top-committers`, `knowledge-islands`, and `clone-coupling`.** These analyses already emitted HTML, but the "unsupported format" error listed only csv/json/markdown, so the option looked unavailable.
 - **SPA trends chart no longer keeps a stale highlight when switching files.** The detail drawer is non-modal, so selecting file A then file B without closing it left A's trend line still bold under B (ECharts `highlight` is additive). The trends listener now clears first, so only the current file is emphasised. The coupling-sankey highlight also now fires in module-depth view (previously it matched only full file paths, so it silently did nothing once the sankey was collapsed to modules).
 - **Parallel-coordinates plot now visibly reflects the cross-widget selection.** The parallel-coords listener was wired but inert — ECharts emphasis is disabled on that series (a hover-disappears workaround), so a selection produced no visible change. The selected file's polyline now restyles directly (bold, the rest fade), so linked brushing reaches the parallel plot too.
 

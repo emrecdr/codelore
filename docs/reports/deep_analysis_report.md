@@ -382,6 +382,40 @@ A post-slice deep validation of Plan 3b (four selection subscribers) ran three p
 *   **Description**: The original Step 13 (inside `rendered_spa_boots_without_console_errors`) asserted the coupling subscriber highlights a selected file's `modulePathSeg(path, 2)` module prefix in module-depth sankey view. The production mapping is correct (verified by source review), but that test's only fixture — `differential_repo::build()` — has near-zero co-changes, so at depth 2 the change-coupling sankey had no cross-module links and no qualifying node; the step always SKIPPED. Net: the guard executed no assertion in CI and provided zero live regression protection, and it spun a ~3s re-render poll to no effect on every run.
 *   **Fix (`373747e`, `9030159`)**: added a dedicated `coupling_repo` fixture (`test_support/mod.rs`) — three 2-segment modules (`src/alpha`, `src/beta`, `src/gamma`), with `alpha/svc.rs`↔`beta/svc.rs` co-changed across 6 commits so a `src/alpha`↔`src/beta` depth-2 edge is guaranteed under any coupling threshold, plus per-file solo churn for hotspot rows — and moved the assertion into its own test `sankey_module_depth_highlights_mapped_node` rendered from that fixture with `permissive_coupling_opts`. The inert Step 13 was removed from the smoke test. The new test FAILS (not skips) if the depth-2 sankey has no qualifying node, and asserts the captured highlight name equals the module prefix (not the raw path). Independently verified: `spa_browser_test` 9/9 (was 8), the new test exercises its assert (full-boot run, ~9.3s), `spa_integration_test` 4/4.
 
+### 4.6 Whole-codebase architecture review + hygiene pass (2026-07-04)
+
+A five-dimension architecture review (four parallel read-only analysts: architecture/boundaries, coding-structure/patterns, performance, SPA; plus two validation-and-spec passes) surveyed the engine + SPA for improvement leverage. Headline: the codebase is genuinely well-built — error handling exemplary (3 non-test `unwrap`s, all justified), the `Repo` two-backend abstraction + `!Send` ingest pipeline + cross-crate boundaries clean, CSV-injection closed, test quality high. The real structural debt concentrates in one place: the analysis→output **dispatch fan-out** (43 stringly-typed dispatchers × per-format arms + 43+43 tabular emitter fns). The low-risk validated wins were fixed this pass; the large refactors are logged own-slice below.
+
+#### F243 — `html` output support un-advertised in 4 dispatchers (stringly-typed drift)
+
+*   **Location**: `codelore-cli/src/main.rs` — `dispatch_authors`/`dispatch_top_committers`/`dispatch_knowledge_islands`/`dispatch_clone_coupling`
+*   **Severity**: LOW · **Category**: correctness / user-facing message · **Status**: Fixed (Unreleased)
+*   **Description**: Each of these 4 dispatchers has a working `"html" => write_html(...)` arm, but its `unsupported_format(...)` error message advertised a format list OMITTING `html` (e.g. `"csv|json|markdown"`), so a user passing an invalid `--format` was told html isn't supported when it is. Same class as F237(c). This is a live symptom of the stringly-typed dispatch (the advertised list is a hand-maintained string parallel to the actual `match` arms — F215).
+*   **Fix (`acd9568`)**: added `html` (and `sarif` where applicable) to the 4 advertised strings. Byte-identical for every success path — only the error text for an unsupported format changed. This is a symptom patch; the root cause (parallel hand-maintained format lists) is F215, logged own-slice below.
+
+#### F231 — `Plan N` phase markers in code comments — now Fixed via a self-enforcing guard
+
+*   **Status**: **Fixed (Unreleased)** (`52c427c`) — previously Active/deferred.
+*   **Fix**: rather than the deferred one-off scripted sweep, the existing `comment_hygiene_test.rs` was extended with a `no_plan_phase_markers_in_code_comments` test (a `Plan`+digit whole-comment scan, sibling to the `F<NN>` guard), then all **69** existing markers were scrubbed — the majority stripped (parenthetical/provenance tags), ~18 stale future-tense/current-claim comments rewritten to present state (verified against source: single-producer ingest, Type 1/2 clones, all output formats shipped, `gix` default + `GitCliRepo` oracle). Test + fixes landed atomically; the guard makes the convention self-enforcing forever (strictly better than a sweep that can silently regress).
+
+#### Other validated DO-NOW improvements landed this pass
+
+*   **Clippy `#[allow]` justification** (`356efc9`) — 19 previously-unjustified `#[allow(clippy::…)]` sites gained a true per-site technical reason (Golden Rule #14). The tempting "consolidate casts to a workspace allow" was validated and REJECTED — it would disable the lint repo-wide.
+*   **SPA listener-bus unification** (`1d645af`) — the two byte-identical registries (`selection` + `brush`) collapsed to a `makeListenerBus(arrayName)` factory (behavior-preserving; browser tests green).
+*   **SPA browser-test coverage** (`e4ec986`) — the main browser test's dashboard fixture was broadened so previously-dark widget render branches (arch-trend, fusion overlays, MI tile, ownership/clones colour maps) now execute under the no-console-error / exception gate. No latent render bug surfaced.
+
+#### Logged own-slice (validated REAL, each warrants its own byte-identical/benchmark-gated slice)
+
+*   **F244 — Central analysis registry / `enum Format` + `TabularRow` (root cause behind the dispatch fan-out).** Refines/absorbs **F215** (stringly-typed dispatch), **F148** (no shared tabular-row trait; 88 csv/markdown `write_*` fns), **F119** (hand-rolled CSV). Validated true scope: 43 dispatchers + ~137 match arms; a clap `ValueEnum` `Format` is the minimal first increment (deletes the hand-maintained master-list `match`, adds parse-time validation + completions) — but carries an exit-2-vs-exit-4 contract delta for invalid `--format` and does NOT alone fix the per-dispatcher advertised-string drift (needs a `supported_formats()` source of truth). `main.rs` (3283 LOC) splits into `commands/`+`dispatch/` after the enum lands. L, byte-identical-gated. Sequence AHEAD of the output-emitter cluster.
+*   **F245 — SPA `widgets.js` build-time module split.** 4588-line single IIFE; split into topical source `.js` fragments concatenated into the `{{WIDGETS_JS}}` placeholder in `spa.rs` (fits the offline-single-file constraint — no build step, one output file). M; do in isolation with the browser-test net green.
+*   **F246 — SPA canvas-chart keyboard operability.** The arch-graph/DSM/module-chord/X-Ray/treemap have `role="img"`+`aria-label` but no keyboard-navigable data equivalent (only the circle-pack has its `role="tree"`). Largest remaining a11y gap; scope to the 1-2 highest-value widgets. M.
+*   **Still tracked:** F206/F173 (HEAD-scan I/O — the one big perf lever, benchmark-gated), F218 (SPA render cascade — do after F245's test net).
+
+#### Validated and REJECTED (do NOT act)
+
+*   **Domain newtypes (Golden Rule #15)** — low Rust ROI: values are string-shaped from DuckDB straight into emitters with no cross-type mixup risk; the one primitive-confusion bug (path vs module-prefix, F240/F241) was JS-side. Accepted deviation.
+*   **`Options` builder** — already rejected in the roadmap; its cross-field-validation value is already delivered by `Options::validate()`.
+
 ---
 
 ## 5. Next Audit Cycle
@@ -402,4 +436,6 @@ A post-slice deep validation of Plan 3b (four selection subscribers) ran three p
 
 **F242 (module-depth coupling-subscriber browser test made live — new `coupling_repo` fixture + dedicated test; `373747e`, `9030159`)** closed the last SPA linked-brushing follow-up.
 
-The next sweep should re-open with F-IDs starting at **F243**.
+**2026-07-04 architecture-review pass**: **F243** (html un-advertised in 4 dispatchers — Fixed `acd9568`) and **F231** (Plan-N markers — Fixed via self-enforcing hygiene guard `52c427c`) closed; clippy-allow justification + SPA listener-bus + browser-fixture coverage landed. New own-slice: **F244** (analysis registry / `enum Format` + `TabularRow`, absorbs F215/F148/F119), **F245** (widgets.js module split), **F246** (canvas keyboard a11y).
+
+The next sweep should re-open with F-IDs starting at **F247**.
