@@ -113,7 +113,24 @@
   // when the user opens the detail drawer, the file's profile lights
   // up across the trends, parallel-coords, and any other widget that
   // registered a listener.
-  window._codeloreSelectionListeners = [];
+  // Factory for a source-tagged listener bus. Both the single-file
+  // `selection` bus and the SET `brush` bus are identical: an array on
+  // `window[arrayName]` plus a register fn that drops any prior entry from
+  // the same `source` before pushing, so re-rendering widgets don't leak
+  // closures over disposed charts. The firing loops live in template.html
+  // and read `window[arrayName]` directly — the factory MUST reassign that
+  // global property (not a captured local) so those effects see the latest
+  // array.
+  function makeListenerBus(arrayName) {
+    window[arrayName] = [];
+    return function (source, fn) {
+      window[arrayName] = window[arrayName].filter(function (l) {
+        return l.__source !== source;
+      });
+      fn.__source = source;
+      window[arrayName].push(fn);
+    };
+  }
 
   // Register a selection listener keyed by its source widget. Widgets
   // that re-render on theme / Top-N changes (trends, parallel-coords)
@@ -122,28 +139,13 @@
   // keeps the array bounded (one entry per widget) instead of leaking a
   // fresh closure — over a now-disposed chart — on every re-render. The
   // `__source` tag is inert to the firing loop, which just calls each fn.
-  window._codeloreRegisterSelectionListener = function (source, fn) {
-    window._codeloreSelectionListeners =
-      window._codeloreSelectionListeners.filter(function (l) {
-        return l.__source !== source;
-      });
-    fn.__source = source;
-    window._codeloreSelectionListeners.push(fn);
-  };
+  window._codeloreRegisterSelectionListener = makeListenerBus('_codeloreSelectionListeners');
 
   // Cross-widget quadrant BRUSH listeners — a SET emphasis, distinct from
   // the single-file `selection` bus above. Fired from an Alpine.effect in
   // template.html whenever `$store.brush.cell` changes. Same source-tagged
   // de-dup so re-rendering widgets don't leak closures over disposed charts.
-  window._codeloreBrushListeners = [];
-  window._codeloreRegisterBrushListener = function (source, fn) {
-    window._codeloreBrushListeners =
-      window._codeloreBrushListeners.filter(function (l) {
-        return l.__source !== source;
-      });
-    fn.__source = source;
-    window._codeloreBrushListeners.push(fn);
-  };
+  window._codeloreRegisterBrushListener = makeListenerBus('_codeloreBrushListeners');
 
   // Screen-reader announcement of the shared selection. A dedicated polite
   // live region (created once, kept visually hidden via .sr-only) speaks the
