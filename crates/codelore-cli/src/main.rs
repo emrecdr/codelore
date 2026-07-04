@@ -1611,7 +1611,7 @@ fn dispatch_authors(
             )
             .context("write html")?;
         }
-        fmt => return Err(unsupported_format("authors", "csv|json|markdown", fmt)),
+        fmt => return Err(unsupported_format("authors", "csv|json|markdown|html", fmt)),
     }
     Ok(())
 }
@@ -1660,7 +1660,7 @@ fn dispatch_top_committers(
         fmt => {
             return Err(unsupported_format(
                 "top-committers",
-                "csv|json|markdown",
+                "csv|json|markdown|html",
                 fmt,
             ));
         }
@@ -2382,7 +2382,7 @@ fn dispatch_knowledge_islands(
         fmt => {
             return Err(unsupported_format(
                 "knowledge-islands",
-                "csv|json|markdown",
+                "csv|json|markdown|html",
                 fmt,
             ));
         }
@@ -2697,7 +2697,7 @@ fn dispatch_clone_coupling(
         fmt => {
             return Err(unsupported_format(
                 "clone-coupling",
-                "csv|json|markdown|sarif",
+                "csv|json|markdown|sarif|html",
                 fmt,
             ));
         }
