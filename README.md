@@ -257,24 +257,24 @@ Fifteen interactive widgets driven by a single embedded JSON blob:
 
 - **Codebase at a glance** — KPIs: files, commits, contributors, median code-health, complexity peaks, MI band breakdown
 - **Knowledge islands** — files whose primary author has departed and where no other substantial owner exists (no manual ex-developer marking required)
-- **Hotspots circle-pack** — files sized by churn, recoloured across seven behavioural lenses: complexity, code health, tech-debt friction, knowledge map, AI attribution, clones, and knowledge loss under your off-boarding scenario
+- **Hotspots circle-pack** — files sized by churn, coloured by default as a **bivariate health×activity map** (the unhealthy-and-churning danger quadrant reads at a glance), with seven single-signal lenses one tab away: complexity, code health, tech-debt friction, knowledge map, AI attribution, clones, and knowledge loss under your off-boarding scenario
 - **Hotspots table + treemap** — same data, sortable / filterable / strict-area comparison
 - **Trends** — monthly revision counts for the top-N hotspots
 - **Multi-metric comparison** — parallel coordinates across five behavioural axes, drag-filter on any axis
 - **Delivery risk** — per-commit risk (Kamei JIT-SDP) for the last N commits, with the dominant risk dimension annotated
-- **Module coupling + Architecture graph** — change-coupling chord vs. resolved-import force-graph (agreement = healthy modularity; disagreement = signal worth investigating)
+- **Module coupling + Architecture graph** — change-coupling chord (modules coloured by top-level cluster) vs. resolved-import force-graph (agreement = healthy modularity; disagreement = signal worth investigating)
 - **Change coupling sankey** — Fisher-significant file pairs
 - **Cognitive distribution** — boxplot across every file with measured complexity
 - **Function X-Ray** — function-level cognitive complexity sunburst
 - **Commit activity** — GitHub-style calendar heatmap
-- **File detail drawer** — click any file anywhere to slide in a side panel with its full profile
+- **File detail drawer** — click any file anywhere to slide in a tabbed side panel (Overview / Coupling / People) with its full profile
 
 ### What you can do with it
 
 - **Tune every chart in place.** Depth selectors on the coupling chord / arch graph / sankey; Top-N tabs on Trends / Multi-metric / Delivery risk. Selections survive reload and sync to the URL hash so a pasted link reproduces the exact view your teammate is looking at.
 - **Simulate off-boarding.** Tick departing authors → the hotspot circle-pack recolours, the hotspot table flags affected rows, and the file drawer flags every coupling partner and contributor owned by a departing author. See the bus-factor exposure before it becomes an incident.
-- **Click any file.** The right-side drawer slides in with a 6-axis behavioural radar, hotspot metrics, knowledge-island data, top contributors with `+added/-deleted` LoC, coupling partners + their authors, top complex functions with line numbers, and clone-group membership. Non-modal — click another row and the content swaps in place.
-- **Cross-widget highlight.** Selecting a file in any widget lights it up across Trends and Multi-metric so its profile reads at a glance across panels.
+- **Click any file.** The right-side drawer slides in with its full profile organised into **Overview / Coupling / People** tabs — a 6-axis behavioural radar, hotspot metrics, knowledge-island data, top contributors with `+added/-deleted` LoC, coupling partners + their authors, top complex functions with line numbers, and clone-group membership. Non-modal — click another row and the content swaps in place.
+- **Linked brushing everywhere.** Select a file in *any* view — the hotspot map, table, coupling sankey, architecture DSM, trends, or multi-metric plot — and it lights up across all of them at once (and is announced to screen readers). Click a cell in the health×activity legend to brush every file in that quadrant. One shared focus; highlight, not hide.
 - **Self-explanatory.** Every widget has a *Learn more* disclosure: what it measures, how to read it, what signal to watch for, recommended action, and citation. Hover the `?` icons on tabs for one-line explanations.
 - **Fullscreen any panel.** Top-right corner toggle. The hotspots and architecture graphs also have wheel-zoom + drag-pan and a reset button.
 - **Share the exact view.** URL hash carries depth, Top-N, and off-boarding picks. Works on air-gapped CI artefacts too — the link is just a fragment in a file URL.
@@ -426,6 +426,39 @@ Known limitations (the honest list, validated against the current codebase):
 - **Code-maat sliding-window `--temporal-period N`** is intentionally **not** emulated under `--code-maat-compat` — the modern `--time-bucket DAY|WEEK|MONTH` (non-overlapping buckets, no commit-duplication artifact) is the recommended surface and what ships; the legacy sliding-window-with-duplication is an opt-in future-work item if migration users hit it
 
 Full backlog: [`docs/roadmap-v1.x-and-beyond.md`](docs/roadmap-v1.x-and-beyond.md).
+
+---
+
+## Building & testing
+
+CodeLore is a Cargo workspace; the toolchain is pinned in `rust-toolchain.toml`. The task runner is [`just`](https://github.com/casey/just) (`cargo install just`) — every recipe below is a thin wrapper over the exact command shown, so you can run the raw `cargo` line instead if you prefer.
+
+```bash
+just build          # cargo build --workspace
+just release        # cargo build --workspace --release
+just test           # cargo test --workspace --features test-support,spa   (CI's non-browser scope)
+just test-browser   # headless-Chrome SPA smoke test — needs Chrome/Chromium on PATH; skips gracefully without one
+just lint           # cargo clippy --workspace --all-targets --all-features -- -D warnings
+just fmt-check      # cargo fmt --all --check
+just deny           # cargo deny check   (licenses + advisories)
+just ci             # fmt-check + lint + deny + test — the full local gate CI runs
+```
+
+Run the CLI against any repository:
+
+```bash
+just codelore -- analyze --analysis hotspots --repo /path/to/repo
+```
+
+The interactive dashboard (`--format spa`) needs the optional `spa` feature, which inlines Apache ECharts + d3-hierarchy at build time. `just codelore` does **not** enable it, so build/run the CLI with the feature explicitly:
+
+```bash
+cargo run --release -p codelore-cli --features spa -- \
+    analyze --format spa --output codelore.html --repo .
+# then open codelore.html in a browser
+```
+
+> **Recent macOS:** if the `spa`-feature link step fails with a deployment-target mismatch, prefix cargo commands with `MACOSX_DEPLOYMENT_TARGET=15.0`.
 
 ---
 
