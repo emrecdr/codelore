@@ -1,8 +1,8 @@
 //! Per-language complexity metric computation via vendored codelore-rca.
 //!
-//! Plan 3 scope: HEAD-only file-level + function-level entity extraction
+//! HEAD-only file-level + function-level entity extraction
 //! for Tier-1 languages (Rust, TS/JS, Python, Java).
-//! See spec §4 and Plan 3 §3.
+//! See spec §4.
 
 pub mod language;
 

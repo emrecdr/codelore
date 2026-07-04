@@ -22,7 +22,7 @@ fn abs_churn_groups_by_date() {
     let opts = Options::default();
     let rows = run_abs_churn(&db, &opts).expect("run");
     assert!(!rows.is_empty(), "abs-churn should produce ≥1 row");
-    // Plan 1's gix LOC stub means added/deleted are 0; just check the date column has data
+    // The gix LOC stub means added/deleted are 0; just check the date column has data
     for row in &rows {
         // date should be a non-empty ISO date string
         assert!(!row.date.is_empty());

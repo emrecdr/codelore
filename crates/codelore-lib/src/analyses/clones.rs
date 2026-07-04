@@ -1,4 +1,4 @@
-//! Clones analysis (Plan 7). Walks the working tree at HEAD, fingerprints
+//! Clones analysis. Walks the working tree at HEAD, fingerprints
 //! every function in every Tier-1 file, groups by structural digest, emits
 //! one row per clone-family member.
 //!
@@ -42,7 +42,7 @@ pub struct ClonesRow {
 #[tracing::instrument(name = "clones", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_clones(opts: &Options) -> Result<Vec<ClonesRow>> {
     use rayon::iter::{IntoParallelIterator, ParallelIterator};
-    // Plan 8 §2 Task 8: combine --exclude patterns with any .codeloreignore
+    // Combine --exclude patterns with any .codeloreignore
     // file at the repo root into one GlobSet, then short-circuit per-file walks
     // that match. The .git/target/node_modules hard-skips are kept as defaults.
     // Combined filter: --exclude globs + .gitignore + .git/info/exclude

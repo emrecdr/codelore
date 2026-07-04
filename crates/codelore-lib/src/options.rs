@@ -8,13 +8,12 @@ use time::Date;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ComplexitySample {
-    /// Parse every file at HEAD only. Plan 3 default; Plan 4 ships this.
+    /// Parse every file at HEAD only. The default.
     #[default]
     Head,
     /// Adaptive: every commit for low-revision files; sampled for high-revision.
-    /// Plan 5 work.
     Adaptive,
-    /// Parse every revision of every changed file. Plan 5 work.
+    /// Parse every revision of every changed file.
     Full,
 }
 
@@ -84,15 +83,15 @@ pub struct Options {
     /// implies `use_canonical_lineage = false` for bit-for-bit parity.
     pub use_canonical_lineage: bool,
 
-    // Plan 7: clone detection. Minimum AST node count (post-skip) for a
+    // Minimum AST node count (post-skip) for a
     // function to be eligible as a clone-family member. Default 30 ≈ 5-8
     // statements after identifier/literal normalization — keeps trivial
     // getters/setters and empty constructors out of clone reports.
     pub min_clone_node_count: u32,
 
-    // Plan 8 §2 Task 8: path-glob patterns to exclude from analyses.
+    // Path-glob patterns to exclude from analyses.
     // Built from `--exclude` flags + any `.codeloreignore` file in repo_path.
-    // Currently honored by `clones`; other analyses gain support in Plan 9.
+    // Currently honored by `clones`.
     pub exclude_patterns: Vec<String>,
 
     /// When false (default), `paths_filter::PathsFilter` auto-respects
@@ -111,7 +110,7 @@ pub struct Options {
     /// rationale on this default.
     pub departed_threshold_days: u32,
 
-    // Plan 8 §6: clone-coupling false-positive mitigations (research brief
+    // Clone-coupling false-positive mitigations (research brief
     // a0a6cf3534a65a643). Defaults locked from the brief.
     //
     /// Minimum `shared_revs` for a clone pair to count as "live". Below this

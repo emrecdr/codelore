@@ -1,9 +1,9 @@
-//! Clone-coupling intersection (Plan 8 §6). The strategic differentiator
+//! Clone-coupling intersection. The strategic differentiator
 //! vs every existing clone detector: only flag clones that ALSO change
 //! together at Fisher-significant rates. `CodeScene` calls this "X-Ray"; we
 //! ship the same analytical pattern with our published-formula transparency.
 //!
-//! Algorithm (locked from the Plan 8 research brief):
+//! Algorithm (locked from the research brief):
 //!
 //! 1. **Any-pair** intersection. A clone family is "live" if **any two
 //!    members** of the same `clone_group_id` are themselves a
@@ -20,7 +20,7 @@
 //! X-Ray analysis; `CodeScene` productisation). `CodeLore` ships the
 //! same analytical pattern with published-formula transparency.
 //!
-//! NOTE: This analysis assumes Plan 8 §4 (`extract_clones_at_head` populates
+//! NOTE: This analysis assumes `extract_clones_at_head` populates
 //! the `clones` table during `FactsDb::ingest`) has shipped. Before §4 lands,
 //! the JOIN returns 0 rows because the `clones` table stays empty even though
 //! the `--analysis clones` CLI path (which runs ad-hoc) produces rows.
@@ -53,7 +53,7 @@ pub struct CloneCouplingRow {
     /// Number of AST nodes in each member's fingerprint (shared by both —
     /// they're in the same clone family).
     pub node_count: u32,
-    /// 1.0 for T1+T2 exact matches; < 1.0 for Type-3 near-miss (Plan 7 §2 T4).
+    /// 1.0 for T1+T2 exact matches; < 1.0 for Type-3 near-miss.
     pub similarity: f64,
     /// Commits where both files co-changed.
     pub shared_revs: u32,

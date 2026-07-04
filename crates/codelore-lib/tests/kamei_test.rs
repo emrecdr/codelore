@@ -31,7 +31,7 @@ fn kamei_features_populated_for_tiny_repo() {
     );
 
     // LA column should be populated (not NULL) for all commits.
-    // Plan 4 stubs loc_added=0 at gix walk time (blob-diff lands in Plan 5),
+    // loc_added is stubbed to 0 at gix walk time (blob-diff is not computed),
     // so SUM(la) = 0 is expected — we verify it is at least non-NULL.
     let la_non_null: String = db
         .query_one_value("SELECT CAST(COUNT(*) AS TEXT) FROM commits WHERE la IS NOT NULL")

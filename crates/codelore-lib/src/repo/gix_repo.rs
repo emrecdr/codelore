@@ -827,7 +827,7 @@ fn process_commit_oid(
     // perf review.
     event.changes = changed_files_for_commit(&repo, &commit, &id_string)?;
 
-    // Plan 8 §2 T6 finding: pass the actual author_name (not b"") so
+    // Pass the actual author_name (not b"") so
     // `.mailmap` entries of the form `Canonical <c@x> Original <o@x>`
     // — which match by Name+Email — also resolve.
     let canonical = {

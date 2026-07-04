@@ -62,7 +62,7 @@ fn channel_capacity() -> usize {
 pub struct IngestStats {
     pub commits_ingested: usize,
     pub changes_ingested: usize,
-    /// Plan 8 §4: number of clone-family member rows inserted into the
+    /// Number of clone-family member rows inserted into the
     /// `clones` table during HEAD-time extraction. `0` if no clones found
     /// or no Tier-1 source files exist.
     pub clones_ingested: usize,
@@ -91,8 +91,7 @@ impl FactsDb {
         // consulted (extension hook was dead code).
         let bot_patterns = crate::identity::BotPatterns::from_repo(&opts.repo_path);
 
-        // Plan 1: single producer gix walker → bounded channel → Appender on calling thread.
-        // Plan 4 will fan out N producers.
+        // Single producer gix walker → bounded channel → Appender on the calling thread.
         let (tx, rx) = bounded::<CommitEvent>(channel_capacity());
 
         let stats = std::thread::scope(|s| -> Result<IngestStats> {
@@ -144,14 +143,14 @@ impl FactsDb {
         // (default trait impl returns `Ok(None)`).
         self.ingest_complexity_at_head(repo, opts, &live_paths, &head_rev)?;
 
-        // Plan 4: populate the Kamei 14-feature change vector via SQL UPDATE pass.
+        // Populate the Kamei 14-feature change vector via SQL UPDATE pass.
         // Kamei history (ndev, nuc, age) joins changes-to-changes on path;
         // without lineage, renamed files lose all their pre-rename history.
         // Routing through `changes_lineage` merges histories under the canonical
         // post-rename name.
         crate::kamei::enrich(self, opts.use_canonical_lineage)?;
 
-        // Plan 8 §4: populate the `clones` table at HEAD so the
+        // Populate the `clones` table at HEAD so the
         // `clone-coupling` analysis (§6) can JOIN against it. Honors
         // `opts.min_clone_node_count` and `opts.exclude_patterns` (set via
         // `--exclude` + `.codeloreignore`).

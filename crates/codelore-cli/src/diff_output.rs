@@ -1,4 +1,4 @@
-//! Plan 8 §7 T28 — output emitters for `codelore diff`.
+//! Output emitters for `codelore diff`.
 //!
 //! Four formats:
 //!   - `text`: human-readable terminal output (default)

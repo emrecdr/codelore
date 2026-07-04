@@ -384,7 +384,7 @@ fn write_clones_sarif_emits_well_formed_doc() {
             .len(),
         2
     );
-    // partialFingerprints uses the versioned key per Plan 8 §6 research brief
+    // partialFingerprints uses the versioned key per the research brief
     assert!(
         v["runs"][0]["results"][0]["partialFingerprints"]["cloneGroupFingerprint/v1"].is_string()
     );

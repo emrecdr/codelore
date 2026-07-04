@@ -1,6 +1,6 @@
 //! Parquet output via `DuckDB` COPY ... TO ... (FORMAT PARQUET).
 //!
-//! Plan 5 ships Parquet for: hotspots, revisions, summary. Other analyses
+//! Parquet is supported for: hotspots, revisions, summary. Other analyses
 //! can be added trivially by following the pattern.
 
 use crate::facts::FactsDb;

@@ -1,8 +1,7 @@
 //! Path → codelore-rca Language dispatch for Tier-1 languages.
 //!
-//! Returns None for unsupported file types. Plan 3 only handles
-//! files with the listed extensions; Plan 4 may add custom mapping
-//! via TOML config.
+//! Returns None for unsupported file types. Only files with the
+//! listed extensions are handled.
 
 /// Tier-1 language identifier wrapping codelore-rca's per-language parser types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

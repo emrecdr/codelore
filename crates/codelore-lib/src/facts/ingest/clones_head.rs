@@ -7,7 +7,7 @@ use super::FactsDb;
 use crate::{CodeLoreError, Options, Result};
 
 impl FactsDb {
-    /// Plan 8 §4 Task 15: walk the working tree at HEAD, fingerprint every
+    /// Walk the working tree at HEAD, fingerprint every
     /// function in every Tier-1 file, group by structural digest, and INSERT
     /// one row per clone-family member into the `clones` table. Returns the
     /// number of rows inserted (0 if no clones found or no Tier-1 sources).

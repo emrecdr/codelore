@@ -164,7 +164,7 @@ fn append_commit(app: &mut Appender<'_>, e: &CommitEvent) -> Result<()> {
         e.message,
         e.parents.len() > 1,
         i32::try_from(e.parents.len()).unwrap_or(i32::MAX),
-        // Kamei nulls — Plan 4 fills
+        // Kamei nulls, filled by the enrich_kamei stage
         Option::<i32>::None,
         Option::<i32>::None,
         Option::<i32>::None,

@@ -1,5 +1,5 @@
 //! Shell-out impl of the `Repo` trait — treats C git as ground truth.
-//! Used in Plan 6's differential-testing harness to validate that `GixRepo`'s
+//! Used in the differential-testing harness to validate that `GixRepo`'s
 //! gitoxide-based reads produce the same output as canonical C git.
 
 use std::path::{Path, PathBuf};

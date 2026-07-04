@@ -243,10 +243,10 @@ fn build_result(row: &HotspotRow, repo_root: &str) -> serde_json::Value {
 }
 
 // =============================================================================
-// CODELORE-CLONE (Plan 8 §2 Task 10)
+// CODELORE-CLONE
 //
-// Plain clone-detection findings (the live-clone variant — CODELORE-LIVE-CLONE
-// — lands in Plan 8 §6 Task 21). One SARIF result per clone family with
+// Plain clone-detection findings (the live-clone variant is
+// CODELORE-LIVE-CLONE). One SARIF result per clone family with
 // `locations[]` listing every family member (one physicalLocation per file +
 // line range). `partialFingerprints.cloneGroupFingerprint/v1` = the AST
 // digest from the clones row, so results are stable across CI runs even when
@@ -263,7 +263,7 @@ const CLONE_AUTOMATION_ID_PREFIX: &str = "codelore/clones/run";
 /// Members of the same `clone_group_id` are aggregated into a single SARIF
 /// `result` with multiple `locations[]`. Severity scales mildly with family
 /// size (more copies = more drift risk) but caps at 6 — these are noisier
-/// than hotspots, and live-clones (CODELORE-LIVE-CLONE, Plan 8 §6) carry
+/// than hotspots, and live-clones (CODELORE-LIVE-CLONE) carry
 /// the higher severity.
 pub fn write_clones_sarif<W: Write>(rows: &[ClonesRow], repo_root: &str, w: &mut W) -> Result<()> {
     let doc = build_clones_sarif(rows, repo_root);
@@ -332,7 +332,7 @@ fn build_clones_result(
 
     let family_size = members.len();
     // Severity scales mildly with family size but caps at 6.0; live-clones
-    // (Plan 8 §6 Task 21) carry the higher severity. usize → f64 cast is safe
+    // carry the higher severity. usize → f64 cast is safe
     // here because family_size is bounded by available memory and never
     // approaches 2^52.
     #[allow(clippy::cast_precision_loss)]
@@ -386,7 +386,7 @@ fn build_clones_result(
         },
         "locations": locations,
         "partialFingerprints": {
-            // Versioned key per Plan 8 §6 research brief.
+            // Versioned key per the research brief.
             "cloneGroupFingerprint/v1": fingerprint,
             "cloneGroupId/v1": format!("{group_id}")
         },
@@ -402,7 +402,7 @@ fn build_clones_result(
 }
 
 // =============================================================================
-// CODELORE-LIVE-CLONE (Plan 8 §6 Task 21)
+// CODELORE-LIVE-CLONE
 //
 // The high-severity intersection of clones × Fisher-significant change-coupling.
 // One SARIF result per (clone_group_id, file_a, file_b) — see research brief

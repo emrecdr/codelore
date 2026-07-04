@@ -17,5 +17,5 @@ pub use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 pub use arrow::error::ArrowError;
 pub use arrow::record_batch::RecordBatch;
 
-/// Version reported by the runtime (for provenance manifests in Plan 5).
+/// Version reported by the runtime (for provenance manifests).
 pub const ARROW_RUNTIME_VERSION: &str = "58.3.0";

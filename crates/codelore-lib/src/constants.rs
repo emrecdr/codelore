@@ -52,7 +52,7 @@ pub const DEFAULT_MIN_CLONE_SHARED_REVS: u32 = 3;
 
 /// Minimum AST-node similarity (0.0 - 1.0) for two functions to be
 /// considered structurally a clone. 0.70 matches the floor used by
-/// `CodeLore`'s Type-2 detection in the original Plan 7 design.
+/// `CodeLore`'s Type-2 detection in the original design.
 pub const DEFAULT_CLONE_SIMILARITY_FLOOR: f64 = 0.70;
 
 /// Skip clone pairs whose two members live in the same directory. ON by

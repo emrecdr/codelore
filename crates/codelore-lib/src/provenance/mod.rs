@@ -129,8 +129,7 @@ pub struct Manifest {
 
 impl Manifest {
     /// Capture the manifest from a fact store + options + analysis name.
-    /// `_db` is currently unused but reserved for reading provenance table values
-    /// in Plan 5.x when we wire it.
+    /// `_db` is currently unused but reserved for reading provenance table values.
     pub fn capture(db: &FactsDb, opts: &Options, analysis: &str) -> Result<Self> {
         let now = time::OffsetDateTime::now_utc();
         let run_started_at = format!(

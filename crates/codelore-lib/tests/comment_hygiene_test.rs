@@ -79,6 +79,36 @@ fn comment_has_task_id(line: &str) -> bool {
         .any(is_task_id)
 }
 
+/// True if the comment carries a phase-number marker: the capitalised word
+/// `Plan` at a word boundary, directly followed by optional spaces then an
+/// ASCII digit. These name development history (the sequence a feature shipped
+/// in), not the current contract — the same banned class as finding IDs. A
+/// whole-region scan is required because such a marker splits into two tokens,
+/// so the per-token check above cannot see it.
+fn comment_has_plan_marker(line: &str) -> bool {
+    let Some(region) = comment_region(line) else {
+        return false;
+    };
+    let bytes = region.as_bytes();
+    let mut search_from = 0;
+    while let Some(pos) = region[search_from..].find("Plan") {
+        let start = search_from + pos;
+        // Word boundary before the keyword so a longer identifier ending in
+        // "Plan" (e.g. inside a path segment) doesn't false-match.
+        let boundary_ok =
+            start == 0 || !(bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_');
+        let mut j = start + 4;
+        while j < bytes.len() && bytes[j] == b' ' {
+            j += 1;
+        }
+        if boundary_ok && j < bytes.len() && bytes[j].is_ascii_digit() {
+            return true;
+        }
+        search_from = start + 4;
+    }
+    false
+}
+
 #[test]
 fn no_task_id_references_in_code_comments() {
     let root = workspace_root();
@@ -112,6 +142,39 @@ fn no_task_id_references_in_code_comments() {
         "found {} finding/task-ID reference(s) in code comments. Drop the ID and keep \
          the rationale — audit history lives in CHANGELOG.md and the findings report, \
          not in code comments:\n{}",
+        violations.len(),
+        violations.join("\n"),
+    );
+}
+
+#[test]
+fn no_plan_phase_markers_in_code_comments() {
+    let root = workspace_root();
+    let mut files = Vec::new();
+    for rel in SCANNED {
+        collect_rs_files(&root.join(rel), &mut files);
+    }
+    assert!(
+        !files.is_empty(),
+        "scanned zero .rs files — source-path resolution is broken"
+    );
+
+    let mut violations = Vec::new();
+    for file in &files {
+        let text = std::fs::read_to_string(file).expect("read source file");
+        for (line_idx, line) in text.lines().enumerate() {
+            if comment_has_plan_marker(line) {
+                let rel = file.strip_prefix(&root).unwrap_or(file);
+                violations.push(format!("{}:{}: {}", rel.display(), line_idx + 1, line.trim()));
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "found {} phase-number marker(s) in code comments. Describe the current state \
+         and drop the marker — which release a feature shipped in is history for \
+         CHANGELOG.md, not the code comment:\n{}",
         violations.len(),
         violations.join("\n"),
     );

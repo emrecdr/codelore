@@ -1,6 +1,6 @@
 //! Clap argument definitions. CLI surface from spec §5.2.
-//! Plan 1 ships only the minimum: `analyze`. `diff`, `query`, `facts`,
-//! `explain`, `config`, `doctor`, `init` land in later plans.
+//! Subcommands: `analyze`, `diff`, `query`, `facts`,
+//! `explain`, `config`, `doctor`, `init`.
 
 use std::path::PathBuf;
 
@@ -173,7 +173,7 @@ pub struct SchemaArgs {
 #[allow(clippy::struct_excessive_bools)]
 #[derive(clap::Args, Debug)]
 pub struct AnalyzeArgs {
-    /// Analysis name (Plan 1 supports: revisions).
+    /// Analysis name.
     #[arg(short, long, default_value = "revisions")]
     pub analysis: String,
 
@@ -203,7 +203,6 @@ pub struct AnalyzeArgs {
     pub rows: Option<u32>,
 
     /// Complexity sampling strategy: head (default) | adaptive | full.
-    /// Plan 4 ships head only; adaptive and full land in Plan 5.
     #[arg(long, default_value = "head")]
     pub complexity_sample: String,
 
@@ -244,14 +243,12 @@ pub struct AnalyzeArgs {
 
     /// Skip the persistent fact-store cache and always run a fresh in-memory
     /// ingest. Useful when you suspect a stale cache or want reproducible timing.
-    /// Plan 8 §3 Task 14.
     #[arg(long, default_value_t = false)]
     pub no_cache: bool,
 
     /// Override the XDG cache root for the persistent fact-store.
     /// Defaults to `$XDG_CACHE_HOME/codelore` (or the OS equivalent).
     /// Useful in CI environments that want per-job caches on a shared runner.
-    /// Plan 8 §3 Task 14.
     #[arg(long)]
     pub cache_dir: Option<PathBuf>,
 
@@ -418,7 +415,6 @@ fn parse_date(s: &str) -> std::result::Result<time::Date, String> {
 }
 
 /// PR-mode delta analysis: run analyses at `<base>` and `<head>`, emit the diff.
-/// Plan 8 §7.
 ///
 /// Rev range accepts two forms:
 ///   - `<base>..<head>` (two-dot): straight comparison

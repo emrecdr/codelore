@@ -1,4 +1,4 @@
-//! Plan 8 §2 Task 8: --exclude + .codeloreignore for the `clones` analysis.
+//! --exclude + .codeloreignore for the `clones` analysis.
 
 use codelore_lib::Options;
 use codelore_lib::analyses::clones::run_clones;

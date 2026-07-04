@@ -617,8 +617,8 @@ fn parquet_requires_output_flag() {
 
 #[test]
 fn sarif_rejects_unsupported_analysis() {
-    // Plan 8 §2 Task 10 widened SARIF support to {hotspots, clones}.
-    // Plan 8 §6 Task 21 added clone-coupling.
+    // SARIF support covers {hotspots, clones}.
+    // clone-coupling is also covered.
     // `revisions` is still unsupported and must bail with a helpful
     // message naming the supported analyses.
     let tiny = codelore_lib::test_support::tiny_repo::build();
@@ -663,7 +663,7 @@ fn unknown_analysis_lists_supported_names() {
 }
 
 // ---------------------------------------------------------------------------
-// Plan 8 §3 Task 14 — --no-cache + --cache-dir
+// --no-cache + --cache-dir
 // ---------------------------------------------------------------------------
 
 /// `--no-cache` must succeed and produce the same CSV output as the default path.

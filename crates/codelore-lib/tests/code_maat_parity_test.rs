@@ -156,7 +156,7 @@ fn summary_matches_code_maat_on_tiny_repo() {
 
     // Compare commit count + author count. The entity count deliberately
     // diverges: code-maat is file-level (2 entities for tiny_repo); codelore
-    // is function-level (Plan 3 added function-scope extraction, so tiny_repo
+    // is function-level (function-scope extraction, so tiny_repo
     // reports 4 entities = 2 files + 2 functions). This is a methodological
     // divergence, not a bug.
     let pairs = [

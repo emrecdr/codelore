@@ -589,7 +589,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
     }
     // step-summary can stream to stdout (it's small GFM text), but typically
     // gets redirected to $GITHUB_STEP_SUMMARY by the caller's CI workflow.
-    // SARIF: hotspots (Plan 5), clones (Plan 8 §2 T10), clone-coupling (Plan 8 §6 T21).
+    // SARIF: hotspots, clones, clone-coupling.
     if format == "sarif"
         && !matches!(
             analysis,
@@ -687,7 +687,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
 
     let analysis_name = args.analysis.as_str();
 
-    // Plan 7 clones is a HEAD-only filesystem + tree-sitter walk — no git
+    // clones is a HEAD-only filesystem + tree-sitter walk — no git
     // history is needed. Short-circuit BEFORE opening the repo so shallow
     // clones, working trees with uncommitted changes, and "not a git repo"
     // directories all work for any of the 4 clone-supporting output formats

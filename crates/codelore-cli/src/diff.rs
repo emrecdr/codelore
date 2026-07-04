@@ -1,4 +1,4 @@
-//! Plan 8 §7 — `codelore diff <base>..<head>` PR-mode delta analysis.
+//! `codelore diff <base>..<head>` PR-mode delta analysis.
 //!
 //! Strategy A from the research brief: run full analyses at base + head
 //! independently, then diff the result sets. Three-dot `<base>...<head>`

@@ -55,7 +55,7 @@ pub struct CommitEvent {
     /// AI authorship classification. None means not yet classified.
     /// Values: "human" | "ai-assisted" | "ai-authored"
     pub ai_attribution: Option<String>,
-    /// Populated by the `enrich_kamei` pipeline stage (Plan 4), NOT at gix walk-time.
+    /// Populated by the `enrich_kamei` pipeline stage, NOT at gix walk-time.
     pub kamei: Option<KameiFeatures>,
 }
 
@@ -86,7 +86,7 @@ pub struct Hunk {
     pub new_lines: u32,
 }
 
-/// Kamei 14-feature JIT-SDP canonical vector. Computed by the `enrich_kamei` stage in Plan 4.
+/// Kamei 14-feature JIT-SDP canonical vector. Computed by the `enrich_kamei` stage.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct KameiFeatures {
     pub ns: u32,

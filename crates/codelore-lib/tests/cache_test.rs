@@ -1,4 +1,4 @@
-//! Integration tests for the persistent fact-store cache (Plan 8 §3 T11-T13).
+//! Integration tests for the persistent fact-store cache.
 
 use std::time::{Duration, Instant};
 

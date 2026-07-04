@@ -1,5 +1,5 @@
-//! VCS-reading abstraction. The default impl is `gix` in Plan 1;
-//! a `GitCliRepo` differential-test oracle lands in Plan 6.
+//! VCS-reading abstraction. The default impl is `gix`; a `GitCliRepo`
+//! differential-test oracle cross-checks it.
 
 use crate::{CommitEvent, FileChange, Hunk, Options, Result};
 
@@ -40,7 +40,7 @@ pub trait Repo: Send + Sync {
     fn resolve_alias(&self, name: &str, email: &str) -> String;
 
     /// Return the full SHA-1 hex string of HEAD.
-    /// Used by the persistent cache (Plan 8 §3) to build the cache key.
+    /// Used by the persistent cache to build the cache key.
     fn head_sha(&self) -> Result<String>;
 
     /// Whether the working tree carries uncommitted modifications, untracked

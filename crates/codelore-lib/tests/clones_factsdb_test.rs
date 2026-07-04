@@ -1,4 +1,4 @@
-//! Plan 8 §4 Task 15: `FactsDb::ingest` now populates the `clones` table.
+//! `FactsDb::ingest` populates the `clones` table.
 //!
 //! Validates that:
 //!   1. After ingest on a fixture with cloned functions, the `clones` table

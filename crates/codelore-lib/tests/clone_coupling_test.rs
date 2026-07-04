@@ -1,4 +1,4 @@
-//! Plan 8 §6 — clone-coupling intersection analysis tests.
+//! Clone-coupling intersection analysis tests.
 //!
 //! Validates that:
 //!

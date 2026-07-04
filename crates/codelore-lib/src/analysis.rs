@@ -22,9 +22,9 @@ pub enum AnalysisName {
     // code-maat parity (computed as side-data on hotspots, addressable standalone)
     Revisions,
     Authors,
-    // Plan 7: clone detection (T1+T2 via AST structural hashing)
+    // Clone detection (T1+T2 via AST structural hashing)
     Clones,
-    // Plan 8 §6: live-clone × Fisher-significant co-change intersection
+    // Live-clone × Fisher-significant co-change intersection
     CloneCoupling,
     // code-maat parity sprint (PAR-1+): Sum of Coupling — per-entity total
     // of (commit-size − 1) across every commit the entity appears in.
@@ -403,7 +403,7 @@ impl fmt::Display for UnknownAnalysisError {
         match self {
             Self::Unknown(name) => {
                 // Enumerate every public analysis name so the user sees what they
-                // can pick from. Plan 8 §2 Task 6 wired `Authors`, so it's no
+                // can pick from. `Authors` is wired, so it's no
                 // longer filtered out.
                 let names: Vec<&str> = AnalysisName::all().iter().map(|a| a.as_str()).collect();
                 write!(
