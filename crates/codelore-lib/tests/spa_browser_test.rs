@@ -65,12 +65,142 @@ fn rendered_spa_boots_without_console_errors() {
     let coupling = run_coupling(&db, &opts).expect("coupling");
     let knowledge_islands = run_knowledge_islands(&db, &opts).expect("knowledge-islands");
 
+    // Synthetic payloads for dark widget render-branch coverage.
+    // Values are arbitrary-but-realistic; assertions below verify each
+    // branch reached its chart-mount path, not the chart geometry.
+    // Entity paths share the src/alpha and src/beta prefixes used by
+    // write_smoke_spa so future fixtures can share synthetic helpers.
+    use codelore_lib::analyses::architecture_roles::ArchitectureRoleRow;
+    use codelore_lib::analyses::architecture_trend::ArchitectureTrendRow;
+    use codelore_lib::analyses::dashboard::{CloneSummary, ImportEdgeRow, XRayEntry};
+    use codelore_lib::analyses::entity_ownership::EntityOwnershipRow;
+    use codelore_lib::analyses::mi::MiRollup;
+    use codelore_lib::analyses::modularity_violations::ModularityViolationRow;
+    use codelore_lib::analyses::unstable_interface::UnstableInterfaceRow;
+
+    let entity_ownership = vec![
+        EntityOwnershipRow {
+            entity: "src/alpha/service.rs".to_string(),
+            author: "Alice".to_string(),
+            added: 200,
+            deleted: 40,
+        },
+        EntityOwnershipRow {
+            entity: "src/beta/handler.rs".to_string(),
+            author: "Bob".to_string(),
+            added: 150,
+            deleted: 30,
+        },
+    ];
+    let clones = vec![
+        CloneSummary { path: "src/alpha/service.rs".to_string(), groups: 2 },
+        CloneSummary { path: "src/beta/handler.rs".to_string(), groups: 1 },
+    ];
+    let modularity_violations = vec![ModularityViolationRow {
+        entity_a: "src/alpha/service.rs".to_string(),
+        entity_b: "src/beta/handler.rs".to_string(),
+        shared: 5,
+        degree: 0.55,
+        fisher_p: 0.02,
+    }];
+    let unstable_interface = vec![UnstableInterfaceRow {
+        path: "src/alpha/service.rs".to_string(),
+        fan_in: 4,
+        revisions: 12,
+        coupled_dependents: 3,
+        instability_score: 36.0,
+    }];
+    let architecture_roles = vec![
+        ArchitectureRoleRow {
+            path: "src/alpha/service.rs".to_string(),
+            role: "shared".to_string(),
+            vfi: 8,
+            vfo: 2,
+            in_cycle: false,
+            level: 1,
+            reach_pct: 25.0,
+        },
+        ArchitectureRoleRow {
+            path: "src/beta/handler.rs".to_string(),
+            role: "periphery".to_string(),
+            vfi: 1,
+            vfo: 0,
+            in_cycle: false,
+            level: 0,
+            reach_pct: 0.0,
+        },
+    ];
+    let architecture_trend = vec![
+        ArchitectureTrendRow {
+            date: "2026-01-01".to_string(),
+            rev: "abc123456789".to_string(),
+            files: 8,
+            propagation_cost: 0.12,
+            cycle_count: 0,
+            largest_cycle: 0,
+        },
+        ArchitectureTrendRow {
+            date: "2026-02-01".to_string(),
+            rev: "def234567890".to_string(),
+            files: 10,
+            propagation_cost: 0.18,
+            cycle_count: 1,
+            largest_cycle: 3,
+        },
+        ArchitectureTrendRow {
+            date: "2026-03-01".to_string(),
+            rev: "fad345678901".to_string(),
+            files: 12,
+            propagation_cost: 0.22,
+            cycle_count: 2,
+            largest_cycle: 4,
+        },
+    ];
+    let mi_rollup = Some(MiRollup { low: 2, moderate: 5, high: 3, unknown: 1 });
+    let coupling_density = Some(0.08_f64);
+    let imports = vec![
+        ImportEdgeRow {
+            src_path: "src/alpha/service.rs".to_string(),
+            target_path: "src/beta/handler.rs".to_string(),
+        },
+        ImportEdgeRow {
+            src_path: "src/beta/handler.rs".to_string(),
+            target_path: "src/alpha/mod_0.rs".to_string(),
+        },
+    ];
+    let xray = vec![
+        XRayEntry {
+            path: "src/alpha/service.rs".to_string(),
+            function: "run".to_string(),
+            cognitive: 5.0,
+            start_line: 10,
+            end_line: 40,
+        },
+        XRayEntry {
+            path: "src/beta/handler.rs".to_string(),
+            function: "handle".to_string(),
+            cognitive: 3.0,
+            start_line: 5,
+            end_line: 25,
+        },
+    ];
+
     let dash = SpaDashboard {
         hotspots,
         summary,
         code_health,
         coupling,
         knowledge_islands,
+        entity_ownership,
+        clones,
+        modularity_violations,
+        unstable_interface,
+        architecture_roles,
+        architecture_trend,
+        mi_rollup,
+        coupling_density,
+        imports,
+        xray,
         ..SpaDashboard::default()
     };
 
@@ -456,6 +586,42 @@ fn rendered_spa_boots_without_console_errors() {
         );
     }
 
+    // -- Step 13: assert the arch-trend widget charted. --------------------
+    // `renderArchTrend` calls `setChartAriaLabel` before mounting ECharts,
+    // which stamps `role="img"` on the container. A bailed-at-empty renderer
+    // leaves the attribute absent. Populated `architecture_trend` above
+    // ensures the branch reaches the chart-mount path.
+    let arch_trend_charted: bool = eval_json(
+        &tab,
+        "(function () { \
+             var el = document.getElementById('widget-arch-trend-body'); \
+             return !!el && el.getAttribute('role') === 'img'; \
+         })()",
+    );
+    assert!(
+        arch_trend_charted,
+        "arch-trend container did not receive role=img; \
+         renderArchTrend bailed at the empty-data guard despite populated payload"
+    );
+
+    // -- Step 14: assert the MI band KPI sub-tile appeared. ----------------
+    // When `mi_rollup` has at least one file with a known band,
+    // `renderKpiTiles` injects a tile whose sub-description text is
+    // "top / mid / bottom quartile". Asserting that text confirms the
+    // mi_rollup payload reached the renderer and the branch executed.
+    let mi_tile_present: bool = eval_json(
+        &tab,
+        "(function () { \
+             var kpi = document.getElementById('widget-kpi-tiles'); \
+             return !!kpi && kpi.textContent.includes('bottom quartile'); \
+         })()",
+    );
+    assert!(
+        mi_tile_present,
+        "MI band KPI sub-tile was absent from #widget-kpi-tiles; \
+         mi_rollup payload may not have reached renderKpiTiles"
+    );
+
 }
 
 /// Click a Knowledge-Islands row and assert the file-detail drawer
@@ -806,9 +972,15 @@ fn detail_drawer_has_accessible_name_and_manages_focus() {
 /// are arbitrary-but-realistic; the assertions only inspect the a11y
 /// attributes the renderers stamp, never the chart geometry.
 fn write_smoke_spa(html_path: &std::path::Path, title: &str) {
+    use codelore_lib::analyses::architecture_roles::ArchitectureRoleRow;
+    use codelore_lib::analyses::architecture_trend::ArchitectureTrendRow;
     use codelore_lib::analyses::dashboard::{
-        DailyCommit, ImportEdgeRow, KameiRiskRow, TrendPoint, XRayEntry,
+        CloneSummary, DailyCommit, ImportEdgeRow, KameiRiskRow, TrendPoint, XRayEntry,
     };
+    use codelore_lib::analyses::entity_ownership::EntityOwnershipRow;
+    use codelore_lib::analyses::mi::MiRollup;
+    use codelore_lib::analyses::modularity_violations::ModularityViolationRow;
+    use codelore_lib::analyses::unstable_interface::UnstableInterfaceRow;
 
     let fixture = differential_repo::build();
     let repo = GixRepo::open(fixture.dir.path()).expect("open fixture repo");
@@ -890,6 +1062,93 @@ fn write_smoke_spa(html_path: &std::path::Path, title: &str) {
             fix: i % 3 == 0,
         })
         .collect();
+    // Entity ownership: one (path, author) row per file.
+    let entity_ownership: Vec<EntityOwnershipRow> = [
+        ("src/alpha/service.rs", "Alice", 200u64, 40u64),
+        ("src/beta/handler.rs", "Bob", 150, 30),
+        ("src/alpha/mod_0.rs", "Alice", 80, 10),
+        ("src/beta/mod_0.rs", "Bob", 60, 5),
+    ]
+    .iter()
+    .map(|&(entity, author, added, deleted)| EntityOwnershipRow {
+        entity: entity.to_string(),
+        author: author.to_string(),
+        added,
+        deleted,
+    })
+    .collect();
+    // Clone groups: two files with clone membership.
+    let clones: Vec<CloneSummary> = vec![
+        CloneSummary { path: "src/alpha/service.rs".to_string(), groups: 2 },
+        CloneSummary { path: "src/beta/handler.rs".to_string(), groups: 1 },
+    ];
+    // Modularity violations: one co-change pair with no import edge.
+    let modularity_violations: Vec<ModularityViolationRow> = vec![ModularityViolationRow {
+        entity_a: "src/alpha/service.rs".to_string(),
+        entity_b: "src/beta/handler.rs".to_string(),
+        shared: 5,
+        degree: 0.55,
+        fisher_p: 0.02,
+    }];
+    // Unstable interface: one heavily-imported churning file.
+    let unstable_interface: Vec<UnstableInterfaceRow> = vec![UnstableInterfaceRow {
+        path: "src/alpha/service.rs".to_string(),
+        fan_in: 4,
+        revisions: 12,
+        coupled_dependents: 3,
+        instability_score: 36.0,
+    }];
+    // Architecture roles: two files classified by role.
+    let architecture_roles: Vec<ArchitectureRoleRow> = vec![
+        ArchitectureRoleRow {
+            path: "src/alpha/service.rs".to_string(),
+            role: "shared".to_string(),
+            vfi: 8,
+            vfo: 2,
+            in_cycle: false,
+            level: 1,
+            reach_pct: 25.0,
+        },
+        ArchitectureRoleRow {
+            path: "src/beta/handler.rs".to_string(),
+            role: "periphery".to_string(),
+            vfi: 1,
+            vfo: 0,
+            in_cycle: false,
+            level: 0,
+            reach_pct: 0.0,
+        },
+    ];
+    // Architecture decay trend: three sampled revisions.
+    let architecture_trend: Vec<ArchitectureTrendRow> = vec![
+        ArchitectureTrendRow {
+            date: "2026-01-01".to_string(),
+            rev: "abc123456789".to_string(),
+            files: 8,
+            propagation_cost: 0.12,
+            cycle_count: 0,
+            largest_cycle: 0,
+        },
+        ArchitectureTrendRow {
+            date: "2026-02-01".to_string(),
+            rev: "def234567890".to_string(),
+            files: 10,
+            propagation_cost: 0.18,
+            cycle_count: 1,
+            largest_cycle: 3,
+        },
+        ArchitectureTrendRow {
+            date: "2026-03-01".to_string(),
+            rev: "fad345678901".to_string(),
+            files: 12,
+            propagation_cost: 0.22,
+            cycle_count: 2,
+            largest_cycle: 4,
+        },
+    ];
+    // MI rollup: one file per band so the KPI tile renders.
+    let mi_rollup = Some(MiRollup { low: 2, moderate: 5, high: 3, unknown: 1 });
+    let coupling_density = Some(0.08_f64);
 
     let dash = SpaDashboard {
         hotspots,
@@ -902,6 +1161,14 @@ fn write_smoke_spa(html_path: &std::path::Path, title: &str) {
         xray,
         imports,
         kamei_risk,
+        entity_ownership,
+        clones,
+        modularity_violations,
+        unstable_interface,
+        architecture_roles,
+        architecture_trend,
+        mi_rollup,
+        coupling_density,
         ..SpaDashboard::default()
     };
 
