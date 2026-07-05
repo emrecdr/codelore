@@ -3195,7 +3195,8 @@ fn run_spa_dispatch(
     // Linux terminals). Single eprintln to stderr so it doesn't
     // pollute stdout when callers pipe.
     let size_bytes = std::fs::metadata(output).map_or(0, |m| m.len());
-    #[allow(clippy::cast_precision_loss)] // size_bytes is formatted to one decimal place; display-precision loss on u64→f64 is imperceptible and intentional
+    #[allow(clippy::cast_precision_loss)]
+    // size_bytes is formatted to one decimal place; display-precision loss on u64→f64 is imperceptible and intentional
     let size_human = if size_bytes >= 1_000_000 {
         format!("{:.1} MB", size_bytes as f64 / 1_000_000.0)
     } else if size_bytes >= 1_000 {

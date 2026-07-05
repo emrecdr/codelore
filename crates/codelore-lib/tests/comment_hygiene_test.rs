@@ -165,7 +165,12 @@ fn no_plan_phase_markers_in_code_comments() {
         for (line_idx, line) in text.lines().enumerate() {
             if comment_has_plan_marker(line) {
                 let rel = file.strip_prefix(&root).unwrap_or(file);
-                violations.push(format!("{}:{}: {}", rel.display(), line_idx + 1, line.trim()));
+                violations.push(format!(
+                    "{}:{}: {}",
+                    rel.display(),
+                    line_idx + 1,
+                    line.trim()
+                ));
             }
         }
     }

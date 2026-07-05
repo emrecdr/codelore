@@ -63,3 +63,6 @@ CLAUDE.md
 # semantic labels. All regenerable from source via `graphify build`;
 # no value in tracking them and each graph.json is 100k+ lines.
 graphify-out/
+
+# Generated SPA dashboard (default --format spa --output path)
+/.codelore/

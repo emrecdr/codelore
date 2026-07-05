@@ -500,7 +500,8 @@ fn gix_change_to_file_change(
             // free. If `diff` is `None` (perfect 100% rename), all counts
             // are zero and similarity is 100.
             let (similarity, loc_added, loc_deleted) = if let Some(stats) = diff {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // explicit .clamp(0.0, 100.0) guarantees the value is in [0,100] before casting to u8; truncation and sign loss are impossible
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                // explicit .clamp(0.0, 100.0) guarantees the value is in [0,100] before casting to u8; truncation and sign loss are impossible
                 let sim = (stats.similarity * 100.0).round().clamp(0.0, 100.0) as u8;
                 (sim, stats.insertions, stats.removals)
             } else {
@@ -641,9 +642,11 @@ fn count_loc_and_hunks(
 
     let input = InternedInput::new(old_bytes.as_slice(), new_bytes.as_slice());
     let diff = diff_with_slider_heuristics(Algorithm::Histogram, &input);
-    #[allow(clippy::cast_possible_truncation)] // imara-diff addition counts are well below u32::MAX (4 billion lines) for any real source file
+    #[allow(clippy::cast_possible_truncation)]
+    // imara-diff addition counts are well below u32::MAX (4 billion lines) for any real source file
     let added = diff.count_additions() as u32;
-    #[allow(clippy::cast_possible_truncation)] // imara-diff removal counts are well below u32::MAX (4 billion lines) for any real source file
+    #[allow(clippy::cast_possible_truncation)]
+    // imara-diff removal counts are well below u32::MAX (4 billion lines) for any real source file
     let removed = diff.count_removals() as u32;
     // `Diff::hunks()` is a free walk over the already-computed change
     // regions in the diff — no second diff pass. Each `imara_diff::Hunk`

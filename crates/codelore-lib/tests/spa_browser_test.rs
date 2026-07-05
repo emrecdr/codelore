@@ -40,6 +40,18 @@ use codelore_lib::test_support::{coupling_repo, differential_repo, permissive_co
 use headless_chrome::Browser;
 use headless_chrome::protocol::cdp::types::Event;
 
+// Row types used to populate otherwise-dark SpaDashboard fields so their
+// widget render branches execute under the browser gate.
+use codelore_lib::analyses::architecture_roles::ArchitectureRoleRow;
+use codelore_lib::analyses::architecture_trend::ArchitectureTrendRow;
+use codelore_lib::analyses::dashboard::{
+    CloneSummary, DailyCommit, ImportEdgeRow, KameiRiskRow, TrendPoint, XRayEntry,
+};
+use codelore_lib::analyses::entity_ownership::EntityOwnershipRow;
+use codelore_lib::analyses::mi::MiRollup;
+use codelore_lib::analyses::modularity_violations::ModularityViolationRow;
+use codelore_lib::analyses::unstable_interface::UnstableInterfaceRow;
+
 /// Render the SPA from the differential fixture and run it in a real
 /// browser. Fails on any browser-console error within a short
 /// post-boot window — which is the exact failure shape of the
@@ -70,14 +82,6 @@ fn rendered_spa_boots_without_console_errors() {
     // branch reached its chart-mount path, not the chart geometry.
     // Entity paths share the src/alpha and src/beta prefixes used by
     // write_smoke_spa so future fixtures can share synthetic helpers.
-    use codelore_lib::analyses::architecture_roles::ArchitectureRoleRow;
-    use codelore_lib::analyses::architecture_trend::ArchitectureTrendRow;
-    use codelore_lib::analyses::dashboard::{CloneSummary, ImportEdgeRow, XRayEntry};
-    use codelore_lib::analyses::entity_ownership::EntityOwnershipRow;
-    use codelore_lib::analyses::mi::MiRollup;
-    use codelore_lib::analyses::modularity_violations::ModularityViolationRow;
-    use codelore_lib::analyses::unstable_interface::UnstableInterfaceRow;
-
     let entity_ownership = vec![
         EntityOwnershipRow {
             entity: "src/alpha/service.rs".to_string(),
@@ -93,8 +97,14 @@ fn rendered_spa_boots_without_console_errors() {
         },
     ];
     let clones = vec![
-        CloneSummary { path: "src/alpha/service.rs".to_string(), groups: 2 },
-        CloneSummary { path: "src/beta/handler.rs".to_string(), groups: 1 },
+        CloneSummary {
+            path: "src/alpha/service.rs".to_string(),
+            groups: 2,
+        },
+        CloneSummary {
+            path: "src/beta/handler.rs".to_string(),
+            groups: 1,
+        },
     ];
     let modularity_violations = vec![ModularityViolationRow {
         entity_a: "src/alpha/service.rs".to_string(),
@@ -156,7 +166,12 @@ fn rendered_spa_boots_without_console_errors() {
             largest_cycle: 4,
         },
     ];
-    let mi_rollup = Some(MiRollup { low: 2, moderate: 5, high: 3, unknown: 1 });
+    let mi_rollup = Some(MiRollup {
+        low: 2,
+        moderate: 5,
+        high: 3,
+        unknown: 1,
+    });
     let coupling_density = Some(0.08_f64);
     let imports = vec![
         ImportEdgeRow {
@@ -452,8 +467,10 @@ fn rendered_spa_boots_without_console_errors() {
              })()",
         );
         std::thread::sleep(Duration::from_millis(100));
-        let captured: String =
-            eval_json(&tab, "(function(){return window.__codeloreSankeyHi || '';})()");
+        let captured: String = eval_json(
+            &tab,
+            "(function(){return window.__codeloreSankeyHi || '';})()",
+        );
         assert_eq!(
             captured, sankey_node,
             "coupling-sankey selection listener did not dispatch a 'highlight' \
@@ -504,8 +521,7 @@ fn rendered_spa_boots_without_console_errors() {
             &tab,
             &format!(
                 "(function () {{ var r = document.querySelector('#hotspot-tbody \
-                  tr[data-path=\"{}\"]'); return !!r && r.classList.contains('!bg-base-300'); }})()",
-                bridged_path
+                  tr[data-path=\"{bridged_path}\"]'); return !!r && r.classList.contains('!bg-base-300'); }})()",
             ),
         );
         assert!(
@@ -621,7 +637,6 @@ fn rendered_spa_boots_without_console_errors() {
         "MI band KPI sub-tile was absent from #widget-kpi-tiles; \
          mi_rollup payload may not have reached renderKpiTiles"
     );
-
 }
 
 /// Click a Knowledge-Islands row and assert the file-detail drawer
@@ -971,17 +986,10 @@ fn detail_drawer_has_accessible_name_and_manages_focus() {
 /// those fields so each renderer reaches its chart-mount path. The values
 /// are arbitrary-but-realistic; the assertions only inspect the a11y
 /// attributes the renderers stamp, never the chart geometry.
+// Long but linear: one synthetic-row block per dashboard field so each dark
+// widget branch renders; splitting would scatter the fixture the assertions read.
+#[allow(clippy::too_many_lines)]
 fn write_smoke_spa(html_path: &std::path::Path, title: &str) {
-    use codelore_lib::analyses::architecture_roles::ArchitectureRoleRow;
-    use codelore_lib::analyses::architecture_trend::ArchitectureTrendRow;
-    use codelore_lib::analyses::dashboard::{
-        CloneSummary, DailyCommit, ImportEdgeRow, KameiRiskRow, TrendPoint, XRayEntry,
-    };
-    use codelore_lib::analyses::entity_ownership::EntityOwnershipRow;
-    use codelore_lib::analyses::mi::MiRollup;
-    use codelore_lib::analyses::modularity_violations::ModularityViolationRow;
-    use codelore_lib::analyses::unstable_interface::UnstableInterfaceRow;
-
     let fixture = differential_repo::build();
     let repo = GixRepo::open(fixture.dir.path()).expect("open fixture repo");
     let db = FactsDb::new_in_memory().expect("in-memory facts db");
@@ -1079,8 +1087,14 @@ fn write_smoke_spa(html_path: &std::path::Path, title: &str) {
     .collect();
     // Clone groups: two files with clone membership.
     let clones: Vec<CloneSummary> = vec![
-        CloneSummary { path: "src/alpha/service.rs".to_string(), groups: 2 },
-        CloneSummary { path: "src/beta/handler.rs".to_string(), groups: 1 },
+        CloneSummary {
+            path: "src/alpha/service.rs".to_string(),
+            groups: 2,
+        },
+        CloneSummary {
+            path: "src/beta/handler.rs".to_string(),
+            groups: 1,
+        },
     ];
     // Modularity violations: one co-change pair with no import edge.
     let modularity_violations: Vec<ModularityViolationRow> = vec![ModularityViolationRow {
@@ -1147,7 +1161,12 @@ fn write_smoke_spa(html_path: &std::path::Path, title: &str) {
         },
     ];
     // MI rollup: one file per band so the KPI tile renders.
-    let mi_rollup = Some(MiRollup { low: 2, moderate: 5, high: 3, unknown: 1 });
+    let mi_rollup = Some(MiRollup {
+        low: 2,
+        moderate: 5,
+        high: 3,
+        unknown: 1,
+    });
     let coupling_density = Some(0.08_f64);
 
     let dash = SpaDashboard {
@@ -1578,14 +1597,15 @@ fn sankey_module_depth_highlights_mapped_node() {
     std::thread::sleep(Duration::from_millis(100));
 
     // -- Step 7: assert the captured highlight name == the module prefix. -----
-    let captured: String =
-        eval_json(&tab, "(function () { return window.__codeloreModHi2 || ''; })()");
+    let captured: String = eval_json(
+        &tab,
+        "(function () { return window.__codeloreModHi2 || ''; })()",
+    );
     assert_eq!(
         captured, prefix_node,
-        "in module-depth view the coupling subscriber highlighted '{}' but expected \
-         module prefix '{}' — the modulePathSeg mapping is not applied to the \
-         incoming selection path",
-        captured, prefix_node
+        "in module-depth view the coupling subscriber highlighted '{captured}' but \
+         expected module prefix '{prefix_node}' — the modulePathSeg mapping is not \
+         applied to the incoming selection path",
     );
 }
 
@@ -1606,15 +1626,24 @@ fn detail_drawer_groups_sections_into_tabs() {
     let coupling = run_coupling(&db, &opts).expect("coupling");
     let knowledge_islands = run_knowledge_islands(&db, &opts).expect("knowledge-islands");
     let dash = SpaDashboard {
-        hotspots, summary, code_health, coupling, knowledge_islands,
+        hotspots,
+        summary,
+        code_health,
+        coupling,
+        knowledge_islands,
         ..SpaDashboard::default()
     };
     let tmp = tempfile::tempdir().expect("tempdir");
     let html_path = tmp.path().join("codelore-drawer.html");
     let mut f = std::fs::File::create(&html_path).expect("create html");
-    write_spa(&dash, "CodeLore Drawer Tabs Test",
-        &fixture.dir.path().display().to_string(), "2026-06-20 00:00:00 UTC", &mut f)
-        .expect("write_spa");
+    write_spa(
+        &dash,
+        "CodeLore Drawer Tabs Test",
+        &fixture.dir.path().display().to_string(),
+        "2026-06-20 00:00:00 UTC",
+        &mut f,
+    )
+    .expect("write_spa");
     drop(f);
 
     let Some((_browser, tab)) = boot_spa_tab(&html_path) else {
@@ -1654,7 +1683,10 @@ fn detail_drawer_groups_sections_into_tabs() {
                  && cp.classList.contains('hidden'); \
          })()",
     );
-    assert!(overview_default, "Overview panel must be visible and Coupling hidden by default");
+    assert!(
+        overview_default,
+        "Overview panel must be visible and Coupling hidden by default"
+    );
 
     let switched: bool = eval_json(
         &tab,
@@ -1668,10 +1700,13 @@ fn detail_drawer_groups_sections_into_tabs() {
                  && t.getAttribute('aria-selected') === 'true'; \
          })()",
     );
-    assert!(switched, "activating the Coupling tab must show it and hide Overview");
+    assert!(
+        switched,
+        "activating the Coupling tab must show it and hide Overview"
+    );
 }
 
-/// The coupling chord assigns each module an ECharts category so clusters
+/// The coupling chord assigns each module an `ECharts` category so clusters
 /// are colour-distinct (top-level module group, or one-per-module on a
 /// single-root repo). Rendered from a fixture with real cross-module coupling.
 #[test]
@@ -1688,15 +1723,24 @@ fn module_chord_colours_clusters() {
     let coupling = run_coupling(&db, &opts).expect("coupling");
     let knowledge_islands = run_knowledge_islands(&db, &opts).expect("knowledge-islands");
     let dash = SpaDashboard {
-        hotspots, summary, code_health, coupling, knowledge_islands,
+        hotspots,
+        summary,
+        code_health,
+        coupling,
+        knowledge_islands,
         ..SpaDashboard::default()
     };
     let tmp = tempfile::tempdir().expect("tempdir");
     let html_path = tmp.path().join("codelore-chord.html");
     let mut f = std::fs::File::create(&html_path).expect("create html");
-    write_spa(&dash, "CodeLore Chord Cluster Test",
-        &fixture.dir.path().display().to_string(), "2026-06-20 00:00:00 UTC", &mut f)
-        .expect("write_spa");
+    write_spa(
+        &dash,
+        "CodeLore Chord Cluster Test",
+        &fixture.dir.path().display().to_string(),
+        "2026-06-20 00:00:00 UTC",
+        &mut f,
+    )
+    .expect("write_spa");
     drop(f);
 
     let Some((_browser, tab)) = boot_spa_tab(&html_path) else {
@@ -1734,6 +1778,12 @@ fn module_chord_colours_clusters() {
             break;
         }
     }
-    assert!(cats >= 1, "module chord should expose at least one ECharts category");
-    assert!(first_has_cat, "each chord node should carry a numeric category index");
+    assert!(
+        cats >= 1,
+        "module chord should expose at least one ECharts category"
+    );
+    assert!(
+        first_has_cat,
+        "each chord node should carry a numeric category index"
+    );
 }

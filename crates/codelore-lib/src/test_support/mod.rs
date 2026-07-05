@@ -423,6 +423,11 @@ pub mod coupling_repo {
     ///
     /// Panics if the OS cannot create a temporary directory or if any `git`
     /// command fails.
+    // Long but linear: the fixture stages ~20 explicit commits so the
+    // cross-module co-change history is legible commit-by-commit; splitting it
+    // into helpers would obscure exactly what history the module-depth test
+    // relies on.
+    #[allow(clippy::too_many_lines)]
     #[must_use]
     pub fn build() -> CouplingRepo {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -433,99 +438,219 @@ pub mod coupling_repo {
         run_git(&path, &["config", "user.name", "Coupling"]);
 
         // Seed all six files with real content so complexity ingest is non-trivial.
-        write(&path, "src/alpha/svc.rs", "pub fn alpha_svc(x: i32) -> i32 { x + 1 }\n");
-        write(&path, "src/alpha/util.rs", "pub fn alpha_util(x: i32) -> i32 { x * 2 }\n");
-        write(&path, "src/beta/svc.rs",  "pub fn beta_svc(x: i32) -> i32 { x - 1 }\n");
-        write(&path, "src/beta/util.rs", "pub fn beta_util(x: i32) -> i32 { x / 2 }\n");
-        write(&path, "src/gamma/svc.rs", "pub fn gamma_svc(x: i32) -> i32 { x * x }\n");
-        write(&path, "src/gamma/util.rs","pub fn gamma_util(x: i32) -> i32 { x + x }\n");
+        write(
+            &path,
+            "src/alpha/svc.rs",
+            "pub fn alpha_svc(x: i32) -> i32 { x + 1 }\n",
+        );
+        write(
+            &path,
+            "src/alpha/util.rs",
+            "pub fn alpha_util(x: i32) -> i32 { x * 2 }\n",
+        );
+        write(
+            &path,
+            "src/beta/svc.rs",
+            "pub fn beta_svc(x: i32) -> i32 { x - 1 }\n",
+        );
+        write(
+            &path,
+            "src/beta/util.rs",
+            "pub fn beta_util(x: i32) -> i32 { x / 2 }\n",
+        );
+        write(
+            &path,
+            "src/gamma/svc.rs",
+            "pub fn gamma_svc(x: i32) -> i32 { x * x }\n",
+        );
+        write(
+            &path,
+            "src/gamma/util.rs",
+            "pub fn gamma_util(x: i32) -> i32 { x + x }\n",
+        );
         run_git(&path, &["add", "."]);
         commit_at(&path, "2026-06-01T10:00:00Z", "seed all modules");
 
         // Co-change 1: alpha/svc + beta/svc together (→ depth-2 edge src/alpha↔src/beta).
-        write(&path, "src/alpha/svc.rs", "pub fn alpha_svc(x: i32) -> i32 { x + 2 }\n");
-        write(&path, "src/beta/svc.rs",  "pub fn beta_svc(x: i32) -> i32 { x - 2 }\n");
+        write(
+            &path,
+            "src/alpha/svc.rs",
+            "pub fn alpha_svc(x: i32) -> i32 { x + 2 }\n",
+        );
+        write(
+            &path,
+            "src/beta/svc.rs",
+            "pub fn beta_svc(x: i32) -> i32 { x - 2 }\n",
+        );
         run_git(&path, &["add", "src/alpha/svc.rs", "src/beta/svc.rs"]);
         commit_at(&path, "2026-06-02T10:00:00Z", "co-change alpha+beta 1");
 
         // Co-change 2.
-        write(&path, "src/alpha/svc.rs", "pub fn alpha_svc(x: i32) -> i32 { x + 3 }\npub fn alpha_extra() {}\n");
-        write(&path, "src/beta/svc.rs",  "pub fn beta_svc(x: i32) -> i32 { x - 3 }\npub fn beta_extra() {}\n");
+        write(
+            &path,
+            "src/alpha/svc.rs",
+            "pub fn alpha_svc(x: i32) -> i32 { x + 3 }\npub fn alpha_extra() {}\n",
+        );
+        write(
+            &path,
+            "src/beta/svc.rs",
+            "pub fn beta_svc(x: i32) -> i32 { x - 3 }\npub fn beta_extra() {}\n",
+        );
         run_git(&path, &["add", "src/alpha/svc.rs", "src/beta/svc.rs"]);
         commit_at(&path, "2026-06-03T10:00:00Z", "co-change alpha+beta 2");
 
         // Co-change 3.
-        write(&path, "src/alpha/svc.rs", "pub fn alpha_svc(x: i32) -> i32 { x + 4 }\npub fn alpha_extra() { let _ = 1; }\n");
-        write(&path, "src/beta/svc.rs",  "pub fn beta_svc(x: i32) -> i32 { x - 4 }\npub fn beta_extra() { let _ = 2; }\n");
+        write(
+            &path,
+            "src/alpha/svc.rs",
+            "pub fn alpha_svc(x: i32) -> i32 { x + 4 }\npub fn alpha_extra() { let _ = 1; }\n",
+        );
+        write(
+            &path,
+            "src/beta/svc.rs",
+            "pub fn beta_svc(x: i32) -> i32 { x - 4 }\npub fn beta_extra() { let _ = 2; }\n",
+        );
         run_git(&path, &["add", "src/alpha/svc.rs", "src/beta/svc.rs"]);
         commit_at(&path, "2026-06-04T10:00:00Z", "co-change alpha+beta 3");
 
         // Co-change 4.
-        write(&path, "src/alpha/svc.rs", "pub fn alpha_svc(x: i32) -> i32 { x + 5 }\npub fn alpha_v2(y: i32) -> i32 { y }\n");
-        write(&path, "src/beta/svc.rs",  "pub fn beta_svc(x: i32) -> i32 { x - 5 }\npub fn beta_v2(y: i32) -> i32 { y }\n");
+        write(
+            &path,
+            "src/alpha/svc.rs",
+            "pub fn alpha_svc(x: i32) -> i32 { x + 5 }\npub fn alpha_v2(y: i32) -> i32 { y }\n",
+        );
+        write(
+            &path,
+            "src/beta/svc.rs",
+            "pub fn beta_svc(x: i32) -> i32 { x - 5 }\npub fn beta_v2(y: i32) -> i32 { y }\n",
+        );
         run_git(&path, &["add", "src/alpha/svc.rs", "src/beta/svc.rs"]);
         commit_at(&path, "2026-06-05T10:00:00Z", "co-change alpha+beta 4");
 
         // Co-change 5.
-        write(&path, "src/alpha/svc.rs", "pub fn alpha_svc(x: i32) -> i32 { x + 6 }\npub fn alpha_v2(y: i32) -> i32 { y + 1 }\n");
-        write(&path, "src/beta/svc.rs",  "pub fn beta_svc(x: i32) -> i32 { x - 6 }\npub fn beta_v2(y: i32) -> i32 { y + 1 }\n");
+        write(
+            &path,
+            "src/alpha/svc.rs",
+            "pub fn alpha_svc(x: i32) -> i32 { x + 6 }\npub fn alpha_v2(y: i32) -> i32 { y + 1 }\n",
+        );
+        write(
+            &path,
+            "src/beta/svc.rs",
+            "pub fn beta_svc(x: i32) -> i32 { x - 6 }\npub fn beta_v2(y: i32) -> i32 { y + 1 }\n",
+        );
         run_git(&path, &["add", "src/alpha/svc.rs", "src/beta/svc.rs"]);
         commit_at(&path, "2026-06-06T10:00:00Z", "co-change alpha+beta 5");
 
         // Single-file commits so every file gets individual churn (hotspot rows).
-        write(&path, "src/alpha/util.rs", "pub fn alpha_util(x: i32) -> i32 { x * 3 }\n");
+        write(
+            &path,
+            "src/alpha/util.rs",
+            "pub fn alpha_util(x: i32) -> i32 { x * 3 }\n",
+        );
         run_git(&path, &["add", "src/alpha/util.rs"]);
         commit_at(&path, "2026-06-07T10:00:00Z", "touch alpha/util");
 
-        write(&path, "src/beta/util.rs", "pub fn beta_util(x: i32) -> i32 { x / 3 }\n");
+        write(
+            &path,
+            "src/beta/util.rs",
+            "pub fn beta_util(x: i32) -> i32 { x / 3 }\n",
+        );
         run_git(&path, &["add", "src/beta/util.rs"]);
         commit_at(&path, "2026-06-08T10:00:00Z", "touch beta/util");
 
-        write(&path, "src/gamma/svc.rs", "pub fn gamma_svc(x: i32) -> i32 { x * x + 1 }\n");
+        write(
+            &path,
+            "src/gamma/svc.rs",
+            "pub fn gamma_svc(x: i32) -> i32 { x * x + 1 }\n",
+        );
         run_git(&path, &["add", "src/gamma/svc.rs"]);
         commit_at(&path, "2026-06-09T10:00:00Z", "touch gamma/svc");
 
-        write(&path, "src/gamma/util.rs","pub fn gamma_util(x: i32) -> i32 { x + x + 1 }\n");
+        write(
+            &path,
+            "src/gamma/util.rs",
+            "pub fn gamma_util(x: i32) -> i32 { x + x + 1 }\n",
+        );
         run_git(&path, &["add", "src/gamma/util.rs"]);
         commit_at(&path, "2026-06-10T10:00:00Z", "touch gamma/util");
 
         // More individual churn to push rev counts above any default floor.
-        write(&path, "src/alpha/svc.rs", "pub fn alpha_svc(x: i32) -> i32 { x + 7 }\npub fn alpha_v3() -> i32 { 42 }\n");
+        write(
+            &path,
+            "src/alpha/svc.rs",
+            "pub fn alpha_svc(x: i32) -> i32 { x + 7 }\npub fn alpha_v3() -> i32 { 42 }\n",
+        );
         run_git(&path, &["add", "src/alpha/svc.rs"]);
         commit_at(&path, "2026-06-11T10:00:00Z", "alpha/svc solo");
 
-        write(&path, "src/beta/svc.rs",  "pub fn beta_svc(x: i32) -> i32 { x - 7 }\npub fn beta_v3() -> i32 { 99 }\n");
+        write(
+            &path,
+            "src/beta/svc.rs",
+            "pub fn beta_svc(x: i32) -> i32 { x - 7 }\npub fn beta_v3() -> i32 { 99 }\n",
+        );
         run_git(&path, &["add", "src/beta/svc.rs"]);
         commit_at(&path, "2026-06-12T10:00:00Z", "beta/svc solo");
 
-        write(&path, "src/alpha/util.rs", "pub fn alpha_util(x: i32) -> i32 { x * 4 }\npub fn alpha_util2() {}\n");
+        write(
+            &path,
+            "src/alpha/util.rs",
+            "pub fn alpha_util(x: i32) -> i32 { x * 4 }\npub fn alpha_util2() {}\n",
+        );
         run_git(&path, &["add", "src/alpha/util.rs"]);
         commit_at(&path, "2026-06-13T10:00:00Z", "alpha/util 2");
 
-        write(&path, "src/beta/util.rs", "pub fn beta_util(x: i32) -> i32 { x / 4 }\npub fn beta_util2() {}\n");
+        write(
+            &path,
+            "src/beta/util.rs",
+            "pub fn beta_util(x: i32) -> i32 { x / 4 }\npub fn beta_util2() {}\n",
+        );
         run_git(&path, &["add", "src/beta/util.rs"]);
         commit_at(&path, "2026-06-14T10:00:00Z", "beta/util 2");
 
-        write(&path, "src/gamma/svc.rs", "pub fn gamma_svc(x: i32) -> i32 { x * x + 2 }\npub fn gamma_v2() {}\n");
+        write(
+            &path,
+            "src/gamma/svc.rs",
+            "pub fn gamma_svc(x: i32) -> i32 { x * x + 2 }\npub fn gamma_v2() {}\n",
+        );
         run_git(&path, &["add", "src/gamma/svc.rs"]);
         commit_at(&path, "2026-06-15T10:00:00Z", "gamma/svc 2");
 
         // One more co-change for good measure (total 6 shared revisions).
-        write(&path, "src/alpha/svc.rs", "pub fn alpha_svc(x: i32) -> i32 { x + 8 }\npub fn alpha_v3() -> i32 { 43 }\n");
-        write(&path, "src/beta/svc.rs",  "pub fn beta_svc(x: i32) -> i32 { x - 8 }\npub fn beta_v3() -> i32 { 100 }\n");
+        write(
+            &path,
+            "src/alpha/svc.rs",
+            "pub fn alpha_svc(x: i32) -> i32 { x + 8 }\npub fn alpha_v3() -> i32 { 43 }\n",
+        );
+        write(
+            &path,
+            "src/beta/svc.rs",
+            "pub fn beta_svc(x: i32) -> i32 { x - 8 }\npub fn beta_v3() -> i32 { 100 }\n",
+        );
         run_git(&path, &["add", "src/alpha/svc.rs", "src/beta/svc.rs"]);
         commit_at(&path, "2026-06-16T10:00:00Z", "co-change alpha+beta 6");
 
         // Final solo touches to widen the hotspot spread.
-        write(&path, "src/gamma/util.rs","pub fn gamma_util(x: i32) -> i32 { x + x + 2 }\npub fn gamma_util2() {}\n");
+        write(
+            &path,
+            "src/gamma/util.rs",
+            "pub fn gamma_util(x: i32) -> i32 { x + x + 2 }\npub fn gamma_util2() {}\n",
+        );
         run_git(&path, &["add", "src/gamma/util.rs"]);
         commit_at(&path, "2026-06-17T10:00:00Z", "gamma/util 2");
 
-        write(&path, "src/alpha/svc.rs", "pub fn alpha_svc(x: i32) -> i32 { x + 9 }\npub fn alpha_v4() -> bool { true }\n");
+        write(
+            &path,
+            "src/alpha/svc.rs",
+            "pub fn alpha_svc(x: i32) -> i32 { x + 9 }\npub fn alpha_v4() -> bool { true }\n",
+        );
         run_git(&path, &["add", "src/alpha/svc.rs"]);
         commit_at(&path, "2026-06-18T10:00:00Z", "alpha/svc final");
 
-        write(&path, "src/beta/svc.rs",  "pub fn beta_svc(x: i32) -> i32 { x - 9 }\npub fn beta_v4() -> bool { false }\n");
+        write(
+            &path,
+            "src/beta/svc.rs",
+            "pub fn beta_svc(x: i32) -> i32 { x - 9 }\npub fn beta_v4() -> bool { false }\n",
+        );
         run_git(&path, &["add", "src/beta/svc.rs"]);
         commit_at(&path, "2026-06-19T10:00:00Z", "beta/svc final");
 

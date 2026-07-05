@@ -128,7 +128,8 @@ pub fn write_hotspots_markdown<W: Write>(rows: &[HotspotRow], w: &mut W) -> Resu
         let mi_cell = match (row.mi, row.mi_rank) {
             (Some(v), Some(rank)) if rank.is_finite() => {
                 let band = crate::analyses::mi::MiBand::from_rank(rank);
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // rank is in [0.0,1.0] and guarded is_finite(); after *100+round the value is in [0,100] — fits u32 exactly
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                // rank is in [0.0,1.0] and guarded is_finite(); after *100+round the value is in [0,100] — fits u32 exactly
                 let rank_pct = (rank * 100.0).round() as u32;
                 format!("{v:.2} ({}, {rank_pct}%)", band.as_str())
             }

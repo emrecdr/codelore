@@ -329,20 +329,13 @@ fn spa_embeds_fusion_overlay_data() {
 }
 
 /// Asserts that the bivariate health×activity color helpers are inlined
-/// into the emitted SPA bundle. The helpers are pure JS in widgets.js;
-/// this test proves they survive the include_str! embedding.
+/// into the emitted SPA bundle. The helpers are pure JS in `widgets.js`;
+/// this test proves they survive the `include_str!` embedding.
 #[test]
 fn spa_embeds_bivariate_palette() {
     let dash = SpaDashboard::default();
     let mut buf: Vec<u8> = Vec::new();
-    write_spa(
-        &dash,
-        "CodeLore Dashboard",
-        ".",
-        "now",
-        &mut buf,
-    )
-    .expect("write_spa");
+    write_spa(&dash, "CodeLore Dashboard", ".", "now", &mut buf).expect("write_spa");
     let html = String::from_utf8(buf).expect("utf8");
     assert!(
         html.contains("BIVARIATE_PALETTE"),
@@ -363,9 +356,15 @@ fn spa_bivariate_is_default_map_mode() {
     write_spa(&dash, "CodeLore Dashboard", ".", "now", &mut buf).expect("write_spa");
     let html = String::from_utf8(buf).expect("utf8");
     // The bivariate tab exists and is the active default.
-    assert!(html.contains("data-mode=\"bivariate\""), "bivariate tab must exist");
+    assert!(
+        html.contains("data-mode=\"bivariate\""),
+        "bivariate tab must exist"
+    );
     // The legend mount ships.
-    assert!(html.contains("id=\"bivariate-legend\""), "bivariate legend mount must exist");
+    assert!(
+        html.contains("id=\"bivariate-legend\""),
+        "bivariate legend mount must exist"
+    );
     // The bivariate tab carries tab-active (cognitive must not be the default).
     // Capture the whole <button ...> open tag so whitespace alignment between
     // data-mode and class does not affect the assertion.
