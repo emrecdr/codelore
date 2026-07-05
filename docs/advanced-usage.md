@@ -122,18 +122,22 @@ Every file output (except SQLite, where the provenance table lives inside the DB
 
 ### `--format spa` widget surface
 
-The dashboard composes eight widgets in one HTML file, plus a click-target file detail drawer:
+The dashboard composes fifteen widgets in one HTML file, plus a tabbed click-target file detail drawer:
 
 1. **KPI tiles** — at-a-glance summary: files analyzed, commits, distinct authors, median code health, cognitive p95, knowledge-island count, coupling pair count, coupling-graph density. Each tile has a `?` provenance tooltip linking to the formula in `docs/research-foundations.md`.
 2. **Knowledge islands** (CodeLore differentiator) — ranked table of departed-primary-author files with no substantial other owner. Auto-detected from commit history + co-change intensity. CodeScene paywalls this and requires manual ex-developer marking.
-3. **Hotspot circle-pack map** — the signature CodeScene view. Files sized by churn, nested by filesystem hierarchy, `d3.pack()` layout fed into an ECharts `custom` series. Four toggleable colour modes: **Complexity** (cognitive heatmap), **Knowledge map** (per-author palette), **AI attribution** (per-file AI-authorship %), **Clones** (per-file clone-group count overlay).
-4. **Hotspot table** — sortable, filterable drill-down. Cross-widget filter state (Alpine `$store('filter')` with `$persist`) survives reload. Click row → file detail drawer.
-5. **Change-coupling sankey** — top-N file-pair coupling flows by `combined_score`. Node click → drawer.
-6. **Monthly trends** — multi-line chart of top-10 hotspot paths' revision counts over time. Theme-aware (re-renders on theme toggle).
-7. **Calendar heatmap** — per-day commit volume, GitHub-style 52-week strip.
-8. **X-Ray function sunburst** — function-level cognitive complexity drill-down, leaf colour mapped to cognitive complexity (yellow → red ramp via the same `heatmapColor` helper the circle-pack uses).
+3. **Hotspot circle-pack map** — the signature CodeScene view. Files sized by churn, nested by filesystem hierarchy, `d3.pack()` layout fed into an ECharts `custom` series. Defaults to a **bivariate health×activity** colour mode (each glyph encodes code-health band × development activity, so the danger quadrant reads without swapping lenses); single-signal modes (Cognitive, Code Health, Friction, Author, AI attribution, Knowledge-loss, Clones) are one tab away. Selecting a file outlines its change-coupling partners in blue and names them in the tooltip. Clicking a legend cell brushes the whole quadrant.
+4. **Hotspot table + treemap** — sortable, filterable drill-down (same data, strict-area comparison). Cross-widget filter state (Alpine `$store('filter')` with `$persist`) survives reload. Click row → file detail drawer.
+5. **Change-coupling sankey** + **clustered module chord** — top-N file-pair coupling flows; the chord colours each module by its top-level group. Node click → drawer.
+6. **Architecture graph + DSM** — resolved-import force/layered graph and dependency-structure matrix, with the modularity-violation / unstable-interface fusion overlay.
+7. **Monthly trends**, **multi-metric parallel-coordinates**, **delivery-risk** (Kamei JIT-SDP), **cognitive boxplot** — behavioural distributions across the top hotspots.
+8. **Calendar heatmap** — per-day commit volume, GitHub-style 52-week strip.
+9. **X-Ray function sunburst** — function-level cognitive complexity drill-down, leaf colour mapped to cognitive complexity (yellow → red ramp via the same `heatmapColor` helper the circle-pack uses).
+10. **Architecture-trend** — propagation-cost and cycle-count decay over the sampled revisions.
 
-Stack: Tailwind v4 (utility-first layout) + DaisyUI 5 (themed components; OS `prefers-color-scheme` honoured on first paint via the plugin's `--prefersdark` config) + Alpine.js 3.15 (HTML-attribute reactivity for stores + drawer + filter) + Apache ECharts + d3-hierarchy. All four vendored at build time, SHA-pinned in `build.rs`; bundle stays fully self-contained (~1.5 MB rendered SPA, no CDN at runtime).
+**Linked brushing:** selecting a file in any of these views highlights it across all of them at once (and announces it to screen readers); the health×activity legend also supports a set-brush. The **file detail drawer** groups its sections into Overview / Coupling / People tabs (keyboard-navigable). One shared focus; highlight, not hide.
+
+Stack: Tailwind v4 (utility-first layout) + DaisyUI 5 (themed components; OS `prefers-color-scheme` honoured on first paint via the plugin's `--prefersdark` config) + Alpine.js 3.15 (HTML-attribute reactivity for stores + drawer + filter + selection/brush buses) + Apache ECharts + d3-hierarchy. All four vendored at build time, SHA-pinned in `build.rs`; bundle stays fully self-contained (~1.9 MB rendered SPA, no CDN at runtime).
 
 The emitter runs every analysis each widget needs (`hotspots`, `summary`, `code_health`, `coupling`, `knowledge_islands`, `entity_ownership`, `xray`, `daily_commits`, `trends`, plus a clone-summary helper) so a single `codelore analyze --format spa` invocation produces a fully populated dashboard. Coupling and knowledge-islands degrade gracefully on tiny fixtures where Fisher significance can't be reached.
 
