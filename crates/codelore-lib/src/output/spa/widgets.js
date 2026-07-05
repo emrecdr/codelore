@@ -1786,11 +1786,27 @@
               '<br/>directory · ' + d.leafCount + ' files';
           }
           const m = d.metrics;
+          // When hovering the selected file, list its coupling partners inline
+          // (basename + co-change %), so the coupled set is readable in one
+          // place — not just inferable from the arcs on the map.
+          let couplingLine = '';
+          if (selectedCouplingFile && d.fullPath === selectedCouplingFile && arcData.length) {
+            const partners = arcData
+              .map(function (it) {
+                const a = it._arc || {};
+                const nm = (a.peer || '').split('/').pop();
+                return escapeHtml(nm) + ' (' + Math.round(a.degree || 0) + '%)';
+              })
+              .join(', ');
+            couplingLine =
+              '<br/><span style="opacity:.75">coupled with: ' + partners + '</span>';
+          }
           return '<b>' + escapeHtml(d.fullPath) + '</b>' +
             '<br/>revisions: ' + m.revisions +
             '<br/>cognitive: ' + m.cognitive.toFixed(0) +
             '<br/>code health: ' + m.code_health.toFixed(1) +
-            '<br/>hotspot score: ' + m.hotspot_score.toFixed(2);
+            '<br/>hotspot score: ' + m.hotspot_score.toFixed(2) +
+            couplingLine;
         },
       },
       series: [{
@@ -1820,6 +1836,11 @@
           // "root" for every hover. `silent: true` lets pointer events
           // pass through to the leaf circles painted on top.
           const isDirectory = !item.metrics;
+          // When a file is selected, outline it and its coupling partners in
+          // info-blue so the coupled set is legible on the map (the selected
+          // file a touch heavier than its partners). Otherwise the leaf keeps
+          // its normal stroke.
+          const coupled = datum.couplingSelected || datum.couplingPeer;
           const innerCircle = {
             type: 'circle',
             shape: {
@@ -1829,8 +1850,8 @@
             },
             style: api.style({
               fill: datum.color,
-              stroke: datum.stroke,
-              lineWidth: 1,
+              stroke: coupled ? token('--color-info') : datum.stroke,
+              lineWidth: datum.couplingSelected ? 3 : (datum.couplingPeer ? 2 : 1),
               opacity: datum.opacity,
             }),
             silent: isDirectory,
@@ -4514,6 +4535,12 @@
         x2: peerPos.x, y2: peerPos.y,
         opacity: opacity,
         lineWidth: lineWidth,
+        // Partner identity + strength, so the map can emphasise the peer
+        // circle and name it (the arc itself stays silent — clicks fall
+        // through to the circles — so identity rides on the leaf, not the line).
+        peer: peer,
+        degree: row.degree,
+        shared: row.shared,
       });
     }
     return arcs;
@@ -4540,9 +4567,23 @@
       const a = arcs[ai];
       arcData.push({ value: [a.x1, a.y1], _arc: a });
     }
+    // Emphasise the selected file + its coupling partners as outlined circles
+    // so it is clear WHICH files are coupled, not merely that arcs exist. The
+    // partner circles keep their normal leaf tooltip (name + metrics on hover).
+    const peers = new Set();
+    for (var pi = 0; pi < arcs.length; pi++) peers.add(arcs[pi].peer);
+    if (lastCirclePackData) {
+      for (var ci = 0; ci < lastCirclePackData.length; ci++) {
+        const it = lastCirclePackData[ci];
+        if (!it || !it._raw || !it.metrics) continue;
+        it._raw.couplingSelected =
+          !!selectedCouplingFile && it.fullPath === selectedCouplingFile;
+        it._raw.couplingPeer = peers.has(it.fullPath);
+      }
+    }
     lastHotspotChart.setOption({
       series: [
-        {},
+        lastCirclePackData ? { data: lastCirclePackData } : {},
         { data: arcData },
       ],
     });

@@ -22,6 +22,8 @@ Conventional Commits format. All notable changes documented here.
 
 - **Clustered coupling chord.** The module change-coupling chord now colours each module by its top-level group (falling back to a distinct colour per module in single-root repos), so related modules read as a cluster instead of a uniform ring.
 
+- **Coupling partners are legible on the hotspot map.** Selecting a file now outlines it and its change-coupling partners in blue on the hotspot circle-pack (the file a touch heavier than its partners), and the selected file's tooltip lists those partners with their co-change percentage — so it is clear *which* files are coupled, not just that arcs exist between them.
+
 - **SPA bivariate quadrant set-brush.** Clicking a cell in the hotspot map's 3×3 health×activity legend now brushes every file in that quadrant at once — emphasising them on the circle-pack map (dimming the rest) and marking their rows in the hotspot table — so you can isolate, say, the "unhealthy × high-activity" danger group in one click. The brush is a separate layer from single-file selection: a file can be the focused selection and part of the brushed set at the same time. Click the same cell again to clear. The legend cells are keyboard-focusable and Enter/Space-activatable.
 
 - **Screen-reader announcements for cross-widget selection.** Selecting a file now updates a polite ARIA live region and marks the hotspot-table row with `aria-current`, so assistive-technology users are told which file is focused instead of only seeing the visual highlight.

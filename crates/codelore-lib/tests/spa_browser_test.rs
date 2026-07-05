@@ -1787,3 +1787,106 @@ fn module_chord_colours_clusters() {
         "each chord node should carry a numeric category index"
     );
 }
+
+/// Selecting a file on the hotspot map surfaces WHICH files it is coupled to:
+/// each coupling arc now carries its partner path (`_arc.peer`) so the map can
+/// outline + name the coupled circles. Uses a fixture with real file-level
+/// coupling so at least one selection yields a partner.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn hotspot_map_coupling_arcs_name_their_partner() {
+    let fixture = coupling_repo::build();
+    let opts = permissive_coupling_opts(fixture.dir.path().to_path_buf());
+    let repo = GixRepo::open(fixture.dir.path()).expect("open coupling fixture");
+    let db = FactsDb::new_in_memory().expect("in-memory facts db");
+    db.ingest(&repo, &opts).expect("ingest coupling fixture");
+    let hotspots = run_hotspots(&db, &opts).expect("hotspots");
+    let summary = run_summary(&db, &opts).expect("summary");
+    let code_health = run_code_health(&db, &opts).expect("code-health");
+    let coupling = run_coupling(&db, &opts).expect("coupling");
+    let knowledge_islands = run_knowledge_islands(&db, &opts).expect("knowledge-islands");
+    let dash = SpaDashboard {
+        hotspots,
+        summary,
+        code_health,
+        coupling,
+        knowledge_islands,
+        ..SpaDashboard::default()
+    };
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let html_path = tmp.path().join("codelore-coupling-partners.html");
+    let mut f = std::fs::File::create(&html_path).expect("create html");
+    write_spa(
+        &dash,
+        "CodeLore Coupling Partners Test",
+        &fixture.dir.path().display().to_string(),
+        "2026-06-20 00:00:00 UTC",
+        &mut f,
+    )
+    .expect("write_spa");
+    drop(f);
+
+    let Some((_browser, tab)) = boot_spa_tab(&html_path) else {
+        return;
+    };
+
+    /* Try each hotspot-table path as the selection, one CDP round-trip apart so
+    the async selection fan-out flushes between set and read. The first
+    coupled file yields >=1 arc whose _arc.peer names the partner. */
+    let mut peer = String::new();
+    let candidates: i64 = eval_json(
+        &tab,
+        "(function () { \
+             var tbody = document.getElementById('hotspot-tbody'); \
+             if (!tbody) return 0; \
+             var rows = tbody.querySelectorAll('tr[data-path]'); \
+             window.__codeloreCandidatePaths = []; \
+             for (var i = 0; i < rows.length; i++) { \
+                 window.__codeloreCandidatePaths.push(rows[i].getAttribute('data-path')); \
+             } \
+             return window.__codeloreCandidatePaths.length; \
+         })()",
+    );
+    assert!(
+        candidates > 0,
+        "coupling fixture should render hotspot-table rows"
+    );
+
+    for idx in 0..candidates {
+        let _: bool = eval_json(
+            &tab,
+            &format!(
+                "(function () {{ \
+                     var p = window.__codeloreCandidatePaths[{idx}]; \
+                     window.Alpine.store('selection').set(p); \
+                     return true; \
+                 }})()"
+            ),
+        );
+        std::thread::sleep(Duration::from_millis(80));
+        peer = eval_json(
+            &tab,
+            "(function () { \
+                 var el = document.getElementById('widget-hotspot-circle-pack-body'); \
+                 if (!el || !window.echarts) return ''; \
+                 var chart = window.echarts.getInstanceByDom(el); \
+                 if (!chart) return ''; \
+                 var opt = chart.getOption(); \
+                 var arcs = opt && opt.series && opt.series[1] && opt.series[1].data; \
+                 if (arcs && arcs.length && arcs[0]._arc && arcs[0]._arc.peer) { \
+                     return arcs[0]._arc.peer; \
+                 } \
+                 return ''; \
+             })()",
+        );
+        if !peer.is_empty() {
+            break;
+        }
+    }
+
+    assert!(
+        !peer.is_empty(),
+        "selecting a coupled file should draw a coupling arc whose _arc.peer names \
+         the partner file — the coupling_repo fixture has file-level coupling"
+    );
+}
