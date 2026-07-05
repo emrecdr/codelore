@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-07-05
+
 ### Added
 
 - **`refactoring-targets` analysis.** A new `--analysis refactoring-targets` ranks files by return-on-investment for refactoring: `priority = (code-health structural_risk × hotspot_score) / max(loc, 25)` — the intersection of low health and high development activity, divided by inspection effort. Each target is annotated with its `dominant_type` (highest-intensity biomarker) and a `manual_up_rank` (the ascending-size "inspect small dense files first" baseline the composite is designed to beat). Supported formats: csv, json, markdown, ndjson, html.
