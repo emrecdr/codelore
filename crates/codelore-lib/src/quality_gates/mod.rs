@@ -90,6 +90,13 @@ pub struct DiffGates {
     /// "don't let me merge a cycle" guard.
     #[serde(default)]
     pub no_new_cycles: bool,
+    /// Minimum delta-health ratio (0–100): the share of changed-function
+    /// weight ending low-risk or improved. A ratio below this fails.
+    /// Skipped entirely on `no-code-change` diffs (no ratio, no signal).
+    pub delta_health_min: Option<f64>,
+    /// When true, a `degrading` delta-health verdict fails the gate.
+    #[serde(default)]
+    pub deny_degrading_verdict: bool,
 }
 
 impl Thresholds {
@@ -150,6 +157,8 @@ impl Thresholds {
             && self.diff.delta_code_health_min.is_none()
             && self.diff.new_hotspot_max.is_none()
             && !self.diff.no_new_cycles
+            && self.diff.delta_health_min.is_none()
+            && !self.diff.deny_degrading_verdict
     }
 }
 
@@ -263,6 +272,8 @@ pub fn evaluate_diff_gate(
     delta_code_health: f64,
     base_cycles: u32,
     head_cycles: u32,
+    delta_health_ratio: Option<f64>,
+    delta_health_verdict: Option<&str>,
 ) -> Vec<GateViolation> {
     let mut out = Vec::new();
     let d = &thresholds.diff;
@@ -292,6 +303,25 @@ pub fn evaluate_diff_gate(
             path: "(diff-summary)".into(),
             actual: format!("{head_cycles} cycles (base {base_cycles})"),
             threshold: format!("≤ {base_cycles}"),
+        });
+    }
+    if let Some(min) = d.delta_health_min
+        && let Some(ratio) = delta_health_ratio
+        && ratio < min
+    {
+        out.push(GateViolation {
+            gate: "delta_health_min".into(),
+            path: "(diff-summary)".into(),
+            actual: format!("{ratio:.1}"),
+            threshold: format!("\u{2265} {min:.1}"),
+        });
+    }
+    if d.deny_degrading_verdict && delta_health_verdict == Some("degrading") {
+        out.push(GateViolation {
+            gate: "deny_degrading_verdict".into(),
+            path: "(diff-summary)".into(),
+            actual: "degrading".into(),
+            threshold: "verdict != degrading".into(),
         });
     }
     out
@@ -505,7 +535,7 @@ new_hotspot_max = 0
     #[test]
     fn diff_gate_vacuous_when_unconfigured() {
         let t = Thresholds::default();
-        let v = evaluate_diff_gate(&t, 999, -100.0, 0, 5);
+        let v = evaluate_diff_gate(&t, 999, -100.0, 0, 5, None, None);
         assert!(
             v.is_empty(),
             "no [diff] gates ⇒ no violations regardless of inputs"
@@ -516,7 +546,7 @@ new_hotspot_max = 0
     fn diff_gate_new_hotspot_max_flags_excess() {
         let mut t = Thresholds::default();
         t.diff.new_hotspot_max = Some(2);
-        let v = evaluate_diff_gate(&t, 5, 0.0, 0, 0);
+        let v = evaluate_diff_gate(&t, 5, 0.0, 0, 0, None, None);
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].gate, "new_hotspot_max");
         assert_eq!(v[0].actual, "5");
@@ -528,7 +558,7 @@ new_hotspot_max = 0
         // Equal-to-threshold is allowed (`> max`, not `>= max`).
         let mut t = Thresholds::default();
         t.diff.new_hotspot_max = Some(3);
-        let v = evaluate_diff_gate(&t, 3, 0.0, 0, 0);
+        let v = evaluate_diff_gate(&t, 3, 0.0, 0, 0, None, None);
         assert!(v.is_empty());
     }
 
@@ -539,7 +569,7 @@ new_hotspot_max = 0
         // includes the sign so the human-readable output is unambiguous.
         let mut t = Thresholds::default();
         t.diff.delta_code_health_min = Some(-5.0);
-        let v = evaluate_diff_gate(&t, 0, -10.0, 0, 0);
+        let v = evaluate_diff_gate(&t, 0, -10.0, 0, 0, None, None);
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].gate, "delta_code_health_min");
         assert_eq!(v[0].actual, "-10.00");
@@ -551,7 +581,7 @@ new_hotspot_max = 0
         // Positive delta (health improved) trivially clears any floor.
         let mut t = Thresholds::default();
         t.diff.delta_code_health_min = Some(-5.0);
-        let v = evaluate_diff_gate(&t, 0, 3.0, 0, 0);
+        let v = evaluate_diff_gate(&t, 0, 3.0, 0, 0, None, None);
         assert!(v.is_empty());
     }
 
@@ -560,7 +590,7 @@ new_hotspot_max = 0
         let mut t = Thresholds::default();
         t.diff.delta_code_health_min = Some(0.0);
         t.diff.new_hotspot_max = Some(0);
-        let v = evaluate_diff_gate(&t, 2, -1.0, 0, 0);
+        let v = evaluate_diff_gate(&t, 2, -1.0, 0, 0, None, None);
         assert_eq!(v.len(), 2);
         let gates: Vec<&str> = v.iter().map(|g| g.gate.as_str()).collect();
         assert!(gates.contains(&"new_hotspot_max"));
@@ -572,12 +602,45 @@ new_hotspot_max = 0
         let mut t = Thresholds::default();
         t.diff.no_new_cycles = true;
         // head introduces a cycle the base didn't have → violation.
-        let v = evaluate_diff_gate(&t, 0, 0.0, 1, 2);
+        let v = evaluate_diff_gate(&t, 0, 0.0, 1, 2, None, None);
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].gate, "no_new_cycles");
         // Same or fewer cycles than base → clean (refactors that remove a
         // cycle, or leave the count unchanged, never fail this gate).
-        assert!(evaluate_diff_gate(&t, 0, 0.0, 2, 2).is_empty());
-        assert!(evaluate_diff_gate(&t, 0, 0.0, 3, 1).is_empty());
+        assert!(evaluate_diff_gate(&t, 0, 0.0, 2, 2, None, None).is_empty());
+        assert!(evaluate_diff_gate(&t, 0, 0.0, 3, 1, None, None).is_empty());
+    }
+
+    #[test]
+    fn delta_health_min_gate_fires_below_floor() {
+        let t = Thresholds::from_text("[diff]\ndelta_health_min = 50.0\n").unwrap();
+        let v = evaluate_diff_gate(&t, 0, 0.0, 0, 0, Some(42.0), Some("indeterminate"));
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].gate, "delta_health_min");
+    }
+
+    #[test]
+    fn delta_health_min_gate_passes_at_floor_and_skips_no_code_change() {
+        let t = Thresholds::from_text("[diff]\ndelta_health_min = 50.0\n").unwrap();
+        assert!(evaluate_diff_gate(&t, 0, 0.0, 0, 0, Some(50.0), Some("indeterminate")).is_empty());
+        // no-code-change ⇒ ratio None ⇒ vacuous pass.
+        assert!(evaluate_diff_gate(&t, 0, 0.0, 0, 0, None, Some("no-code-change")).is_empty());
+    }
+
+    #[test]
+    fn deny_degrading_verdict_gate() {
+        let t = Thresholds::from_text("[diff]\ndeny_degrading_verdict = true\n").unwrap();
+        let v = evaluate_diff_gate(&t, 0, 0.0, 0, 0, Some(10.0), Some("degrading"));
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].gate, "deny_degrading_verdict");
+        assert!(evaluate_diff_gate(&t, 0, 0.0, 0, 0, Some(60.0), Some("indeterminate")).is_empty());
+    }
+
+    #[test]
+    fn is_empty_accounts_for_delta_health_keys() {
+        let t = Thresholds::from_text("[diff]\ndelta_health_min = 50.0\n").unwrap();
+        assert!(!t.is_empty());
+        let t = Thresholds::from_text("[diff]\ndeny_degrading_verdict = true\n").unwrap();
+        assert!(!t.is_empty());
     }
 }
