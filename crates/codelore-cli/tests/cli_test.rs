@@ -941,3 +941,340 @@ fn spa_without_output_defaults_to_dot_codelore() {
         "spa without --output should create .codelore/spa.html in the cwd"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Delta health end-to-end tests
+// ---------------------------------------------------------------------------
+
+/// Build a two-commit repo: commit 1 has a trivial function, commit 2
+/// adds a large, branchy function. Returns `(dir, base_sha, head_sha)`.
+fn delta_health_fixture() -> (tempfile::TempDir, String, String) {
+    use std::fmt::Write as _;
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    git(&["init", "-q"]);
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(
+        repo.join("src/lib.rs"),
+        "pub fn tiny() -> i32 {\n    1\n}\n",
+    )
+    .unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "base"]);
+    let base = git(&["rev-parse", "HEAD"]);
+
+    // A >70-line, CC>10 function: 12 sequential if-blocks + filler lets
+    // both the LOC and cyclomatic High thresholds trigger.
+    let mut monster = String::from("pub fn monster(x: i32) -> i32 {\n    let mut acc = 0;\n");
+    for i in 0..12 {
+        let _ = write!(monster, "    if x > {i} {{\n        acc += {i};\n    }}\n");
+    }
+    for i in 0..40 {
+        let _ = writeln!(monster, "    acc += {i};");
+    }
+    monster.push_str("    acc\n}\n");
+    std::fs::write(
+        repo.join("src/lib.rs"),
+        format!("pub fn tiny() -> i32 {{\n    1\n}}\n\n{monster}"),
+    )
+    .unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "add monster"]);
+    let head = git(&["rev-parse", "HEAD"]);
+    (dir, base, head)
+}
+
+#[test]
+fn diff_emits_degrading_delta_health_for_added_monster() {
+    let (dir, base, head) = delta_health_fixture();
+    let output = Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "diff",
+            "--repo",
+            dir.path().to_str().unwrap(),
+            "--min-revs",
+            "1",
+            "--format",
+            "json",
+            &format!("{base}..{head}"),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let dh = &json["delta_health"];
+    assert_eq!(dh["verdict"], "degrading", "delta_health: {dh}");
+    assert_eq!(dh["counts"]["added"].as_u64(), Some(1));
+    let f = &dh["functions"][0];
+    assert_eq!(f["function"], "monster");
+    assert_eq!(f["after"], "high");
+    assert_eq!(f["outcome"], "bad");
+}
+
+#[test]
+fn diff_delta_health_gate_fails_the_run() {
+    let (dir, base, head) = delta_health_fixture();
+    let thresholds = dir.path().join("gates.toml");
+    std::fs::write(&thresholds, "[diff]\ndeny_degrading_verdict = true\n").unwrap();
+    let output = Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "diff",
+            "--repo",
+            dir.path().to_str().unwrap(),
+            "--min-revs",
+            "1",
+            "--thresholds-file",
+            thresholds.to_str().unwrap(),
+            "--format",
+            "json",
+            &format!("{base}..{head}"),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "deny_degrading_verdict should fail the run"
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        json["gate_violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v["gate"] == "deny_degrading_verdict"),
+        "violations: {}",
+        json["gate_violations"]
+    );
+}
+
+#[test]
+fn diff_docs_only_change_is_no_code_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    git(&["init", "-q"]);
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(
+        repo.join("src/lib.rs"),
+        "pub fn tiny() -> i32 {\n    1\n}\n",
+    )
+    .unwrap();
+    std::fs::write(repo.join("README.md"), "hello\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "base"]);
+    let base = git(&["rev-parse", "HEAD"]);
+    std::fs::write(repo.join("README.md"), "hello world\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "docs"]);
+    let head = git(&["rev-parse", "HEAD"]);
+
+    let output = Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "diff",
+            "--repo",
+            repo.to_str().unwrap(),
+            "--min-revs",
+            "1",
+            "--format",
+            "json",
+            &format!("{base}..{head}"),
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["delta_health"]["verdict"], "no-code-change");
+    assert!(json["delta_health"]["ratio"].is_null());
+}
+
+/// Validates the clone→high-risk penalty through the real ingest pipeline.
+///
+/// Base commit: `src/lib.rs` with one named function `original`.
+/// Head commit: add `src/copy.rs` with `pasted_copy` — a structural
+/// Type-2 clone (same AST shape, different identifiers/types). The body
+/// has five if/else blocks, giving it well over 30 structural nodes so it
+/// clears the default `min_clone_node_count` filter.
+///
+/// The assertion proves that the clone extractor's function name (`pasted_copy`,
+/// from the first identifier child of `function_item`) matches the complexity
+/// name (stripped of the `@start-end` span by `run_function_metrics`) — the
+/// alignment invariant that makes the clone penalty reachable in practice.
+#[allow(clippy::too_many_lines)]
+// long but linear: git fixture + run + assertions; splitting the fixture into a helper adds indirection without reducing total lines
+#[test]
+fn diff_delta_health_flags_pasted_clone_as_high_risk() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+
+    // Base commit: one small function in src/lib.rs.  The original is also
+    // the template whose structure will be duplicated in the head commit.
+    git(&["init", "-q"]);
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    // Five if/else blocks — structurally rich enough to produce > 30
+    // fingerprint nodes (the default min_clone_node_count).
+    let original_src = "\
+pub fn original(x: i32) -> i32 {
+    let mut acc = 0;
+    if x > 0 {
+        acc += 1;
+    } else {
+        acc -= 1;
+    }
+    if x > 10 {
+        acc += 2;
+    } else {
+        acc -= 2;
+    }
+    if x > 20 {
+        acc += 3;
+    } else {
+        acc -= 3;
+    }
+    if x > 30 {
+        acc += 4;
+    } else {
+        acc -= 4;
+    }
+    if x > 40 {
+        acc += 5;
+    } else {
+        acc -= 5;
+    }
+    acc
+}
+";
+    std::fs::write(repo.join("src/lib.rs"), original_src).unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "base"]);
+    let base = git(&["rev-parse", "HEAD"]);
+
+    // Head commit: add src/copy.rs with pasted_copy — same structure,
+    // different name and types (Type-2 clone).
+    let copy_src = "\
+pub fn pasted_copy(y: i64) -> i64 {
+    let mut total = 0;
+    if y > 0 {
+        total += 1;
+    } else {
+        total -= 1;
+    }
+    if y > 10 {
+        total += 2;
+    } else {
+        total -= 2;
+    }
+    if y > 20 {
+        total += 3;
+    } else {
+        total -= 3;
+    }
+    if y > 30 {
+        total += 4;
+    } else {
+        total -= 4;
+    }
+    if y > 40 {
+        total += 5;
+    } else {
+        total -= 5;
+    }
+    total
+}
+";
+    std::fs::write(repo.join("src/copy.rs"), copy_src).unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "paste copy"]);
+    let head = git(&["rev-parse", "HEAD"]);
+
+    let output = Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "diff",
+            "--repo",
+            repo.to_str().unwrap(),
+            "--min-revs",
+            "1",
+            "--format",
+            "json",
+            &format!("{base}..{head}"),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let dh = &json["delta_health"];
+
+    // pasted_copy is added in src/copy.rs — find it in the functions list.
+    let fns = dh["functions"].as_array().expect("functions array");
+    let pasted = fns
+        .iter()
+        .find(|f| f["function"] == "pasted_copy")
+        .unwrap_or_else(|| panic!("pasted_copy not found in delta_health.functions; got: {fns:?}"));
+
+    // Clone membership forces High regardless of LOC/cyclomatic.
+    assert_eq!(
+        pasted["after"], "high",
+        "pasted_copy must be classified high-risk (clone penalty); row: {pasted}"
+    );
+
+    // reasons must mention the clone group.
+    let reasons = pasted["reasons"].as_array().expect("reasons array");
+    assert!(
+        reasons
+            .iter()
+            .any(|r| r.as_str().unwrap_or("").contains("clone")),
+        "reasons must mention clone membership; got: {reasons:?}"
+    );
+}
