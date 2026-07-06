@@ -151,6 +151,14 @@ pub struct SpaDashboard {
     /// imports resolve at any sampled rev.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub architecture_trend: Vec<ArchitectureTrendRow>,
+    /// Repo health timeline — three health scores (architectural, code,
+    /// and combined, each 0–100, higher = healthier) recomputed at
+    /// evenly-spaced historical revisions. Drives the "Repo Health
+    /// Timeline" line chart so the SPA shows whether overall health is
+    /// improving or decaying over time. Empty when the historical scan
+    /// is skipped or the repo has no commits.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub health_trend: Vec<crate::analyses::health_trend::HealthTrendRow>,
     /// Per-commit Kamei JIT-SDP feature vector for the Delivery Risk
     /// Sparkline widget. One row per commit in the last-N (capped at
     /// 30) chronological window. Surfaces the raw Kamei 14-feature

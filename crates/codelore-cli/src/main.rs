@@ -3186,6 +3186,19 @@ fn build_spa_dashboard(
             tracing::warn!("dashboard: architecture-trend failed; skipping: {e}");
             Vec::new()
         });
+    // Repo health timeline — like architecture-trend, needs the repo to
+    // re-read source at sampled historical revs. Opens its own handle
+    // and degrades gracefully on any failure.
+    let health_trend = codelore_lib::cli_api::repo::GixRepo::open(repo_path)
+        .map_err(anyhow::Error::from)
+        .and_then(|repo| {
+            codelore_lib::cli_api::analyses::health_trend::run_health_trend(db, &repo, opts)
+                .map_err(anyhow::Error::from)
+        })
+        .unwrap_or_else(|e| {
+            tracing::warn!("dashboard: health-trend failed; skipping: {e}");
+            Vec::new()
+        });
     Ok(SpaDashboard {
         hotspots,
         summary,
@@ -3205,6 +3218,7 @@ fn build_spa_dashboard(
         unstable_interface,
         architecture_roles,
         architecture_trend,
+        health_trend,
         options: codelore_lib::cli_api::output::spa::SpaOptionsSnapshot::from_options(opts),
     })
 }
