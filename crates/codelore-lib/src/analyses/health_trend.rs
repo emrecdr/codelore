@@ -117,10 +117,13 @@ mod tests {
     }
 
     #[test]
-    fn arch_risk_caps_at_one() {
-        // Over-unity raw risk must clamp so health never goes negative.
+    fn arch_risk_maxes_at_health_zero() {
+        // The worst valid graph (propagation_cost 1.0, every node cyclic, largest
+        // tangle spanning all of it) drives risk to its 1.0 ceiling and health to
+        // 0 — never negative. The `min(1.0, ...)` clamp is defensive: with valid
+        // metrics (pc <= 1, cyclic <= n, largest <= n) raw risk cannot exceed 1.0.
         let h = arch_health(&metrics(2, 1.0, 2, 2));
-        assert!(h >= 0.0, "health must not be negative, got {h}");
+        assert!(h.abs() < 1e-9, "worst-case health must be 0, got {h}");
     }
 
     #[test]
