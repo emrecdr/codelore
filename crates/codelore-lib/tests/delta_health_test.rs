@@ -100,13 +100,25 @@ fn overloaded_names_collapse_to_worst_case() {
 
     let rows = run_function_metrics(&db).expect("extract");
     let build_rows: Vec<_> = rows.iter().filter(|r| r.name == "build").collect();
-    // If codelore-rca emits both methods under the unqualified name `build`,
-    // they must aggregate to exactly one row; if it qualifies them (e.g.
-    // `A::build`), there is no collision to collapse. Either way, never more
-    // than one bare `build`.
+    // codelore-rca names a method space by its bare identifier, so both
+    // `A::build` and `B::build` are stored as `build@<span>` and genuinely
+    // collide once the span is stripped. They must aggregate to exactly one
+    // row — asserting `== 1` (not `<= 1`) gives positive evidence the
+    // GROUP BY MAX path fired, rather than passing vacuously on an empty
+    // result.
+    assert_eq!(
+        build_rows.len(),
+        1,
+        "overloaded `build` methods must aggregate to exactly one row: {:?}",
+        rows.iter().map(|r| (&r.name, r.loc)).collect::<Vec<_>>()
+    );
+    // The aggregated row carries the worst-case metrics: `B::build` (with the
+    // loop body) is larger than the one-line `A::build`, so MAX(loc) must pick
+    // it. A value this high is only reachable by the larger method — proof the
+    // aggregation kept the worst case, not an arbitrary member.
     assert!(
-        build_rows.len() <= 1,
-        "overloaded `build` did not collapse: {:?}",
-        rows.iter().map(|r| &r.name).collect::<Vec<_>>()
+        build_rows[0].loc >= 5,
+        "aggregated build must hold worst-case loc, got {}",
+        build_rows[0].loc
     );
 }
