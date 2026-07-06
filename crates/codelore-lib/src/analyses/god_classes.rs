@@ -107,7 +107,11 @@ const SQL: &str = "
 /// query / collect errors.
 #[tracing::instrument(name = "god-classes", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_god_classes(db: &FactsDb, opts: &Options) -> Result<Vec<GodClassRow>> {
-    run_god_classes_scoped(db, opts, "complexity_metrics", "imports")
+    // Route the complexity read through the grouped table when `--group-file`
+    // is active (the `grouped_complexity` contract); resolves to
+    // `complexity_metrics` otherwise, so HEAD output is unchanged.
+    let cm_src = crate::analyses::grouped_complexity::source_table(opts);
+    run_god_classes_scoped(db, opts, cm_src, "imports")
 }
 
 /// Run `god-classes` against caller-supplied source tables. Useful when
