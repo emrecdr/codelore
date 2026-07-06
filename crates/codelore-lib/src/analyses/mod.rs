@@ -25,6 +25,7 @@ pub mod entity_effort;
 pub mod entity_ownership;
 pub mod god_classes;
 pub mod grouped_complexity;
+pub mod health_trend;
 pub mod hotspot_velocity;
 pub mod hotspots;
 pub mod import_graph;
