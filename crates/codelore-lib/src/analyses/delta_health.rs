@@ -12,6 +12,9 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::facts::FactsDb;
+use crate::{CodeLoreError, Result};
+
 /// Function LOC at or above this is medium risk (SIG unit-size bands).
 pub const LOC_MEDIUM_FROM: u32 = 31;
 /// Function LOC at or above this is high risk (SIG bands / Large Method > 70).
@@ -128,6 +131,52 @@ pub fn verdict_for(ratio: f64) -> &'static str {
     } else {
         "indeterminate"
     }
+}
+
+/// One function's persisted metrics at a single rev. Serialized into the
+/// CLI's `--base-cache` JSON, so field changes need the same
+/// back-compat care as the cache struct itself.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FunctionMetricRow {
+    pub path: String,
+    pub name: String,
+    pub loc: u32,
+    pub cyclomatic: f64,
+}
+
+/// Extract per-function metric rows from an ingested fact store.
+///
+/// `complexity_metrics` also stores class- and file-level rows; the join
+/// on `entities.kind` keeps only real functions/methods so nothing
+/// file-shaped is ever classified as a changed function.
+///
+/// # Errors
+///
+/// [`CodeLoreError::Analysis`] on SQL failures.
+pub fn run_function_metrics(db: &FactsDb) -> Result<Vec<FunctionMetricRow>> {
+    const SQL: &str = "
+        SELECT DISTINCT cm.path, cm.name, cm.loc, CAST(cm.cyclomatic AS DOUBLE)
+        FROM complexity_metrics cm
+        JOIN entities e ON e.path = cm.path AND e.name = cm.name
+        WHERE e.kind IN ('function', 'method')
+        ORDER BY cm.path, cm.name";
+    let mut stmt = db
+        .conn()
+        .prepare(SQL)
+        .map_err(|e| CodeLoreError::Analysis(format!("prepare delta-health metrics: {e}")))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(FunctionMetricRow {
+                path: r.get::<_, String>(0)?,
+                name: r.get::<_, String>(1)?,
+                loc: r.get::<_, u32>(2)?,
+                cyclomatic: r.get::<_, f64>(3)?,
+            })
+        })
+        .map_err(|e| CodeLoreError::Analysis(format!("query delta-health metrics: {e}")))?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| CodeLoreError::Analysis(format!("read delta-health metrics: {e}")))?;
+    Ok(rows)
 }
 
 #[cfg(test)]
