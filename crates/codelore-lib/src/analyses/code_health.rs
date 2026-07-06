@@ -426,7 +426,16 @@ fn materialize_centrality(db: &FactsDb, opts: &Options) -> Result<()> {
 
 #[tracing::instrument(name = "code-health", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_code_health(db: &FactsDb, opts: &Options) -> Result<Vec<CodeHealthRow>> {
-    run_code_health_scoped(db, opts, &HealthScanCtx::head())
+    // Route complexity reads through the grouped table when `--group-file` is
+    // active (the `grouped_complexity` contract), so the cognitive + biomarker
+    // CTEs key on the same group names the `changes` history is rewritten to.
+    // Without grouping this resolves to `complexity_metrics`, keeping HEAD
+    // output byte-identical.
+    let cx = HealthScanCtx {
+        complexity_source: crate::analyses::grouped_complexity::source_table(opts).to_string(),
+        ..HealthScanCtx::head()
+    };
+    run_code_health_scoped(db, opts, &cx)
 }
 
 /// Code health against the sources named by `cx`. `cx = HealthScanCtx::head()`
