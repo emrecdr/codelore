@@ -18,7 +18,7 @@ use super::consumer::{append_metric_row, dedup_entities};
 /// paths absent at that revision are silently skipped.
 ///
 /// Mirrors `ingest_complexity_at_head`'s rayon-parallel + serial-drain
-/// pattern: blob reads and parsing run in parallel; the DuckDB Appender
+/// pattern: blob reads and parsing run in parallel; the `DuckDB` Appender
 /// drain runs on the connection-owning thread.
 pub fn ingest_complexity_at_rev<R: crate::repo::Repo>(
     db: &FactsDb,
@@ -138,6 +138,18 @@ pub fn ingest_complexity_at_rev<R: crate::repo::Repo>(
 /// `resolved = TRUE`, `kind = 'absolute'`, and `target = target_path`.
 /// The `rev` column is set to `"_at_rev_"` — a stable placeholder that
 /// the god-class and biomarker CTEs never filter on.
+///
+/// Consequence for callers: the live `imports` table also holds
+/// *unresolved* external edges (`resolved = FALSE`, e.g. std-lib / package
+/// imports), and the god-class `fan_out` CTE counts them via
+/// `COUNT(DISTINCT target)` without a `resolved` filter. This table omits
+/// them, so a god-class `fan_out` (and the god_score it feeds) computed
+/// against this source is resolved-only and under-counts relative to a
+/// live-`imports` HEAD scan — by however many external imports each file
+/// makes. A timeline that builds *every* sample (including the newest)
+/// through this helper stays internally consistent; do not compare its
+/// most-recent point to the standalone HEAD `code-health` number, which
+/// counts external fan-out.
 pub fn materialize_imports_at_rev(
     db: &FactsDb,
     graph: &ImportGraph,
