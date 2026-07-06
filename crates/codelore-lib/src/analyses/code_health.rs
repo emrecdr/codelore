@@ -141,7 +141,7 @@ const SQL: &str = "
                 WHEN 'dry'             THEN 0.15
                 WHEN 'shotgun-surgery' THEN 0.15
                 ELSE 0.0
-            END)) AS structural_risk
+            END){structural_scale}) AS structural_risk
         FROM code_health_biomarkers_v1
         GROUP BY path
     ),
@@ -264,7 +264,7 @@ const BIOMARKERS_INSERT: &str = "
                 WHEN 'tsx' THEN 'typescript'
                 ELSE 'other'
             END AS lang
-        FROM complexity_metrics
+        FROM {cm_src}
         WHERE cyclomatic IS NOT NULL
             AND loc IS NOT NULL
     ),
@@ -300,12 +300,13 @@ const SHOTGUN_INSERT: &str = "
     WHERE centrality > 0
 ";
 
-fn materialize_biomarkers(db: &FactsDb, opts: &Options) -> Result<()> {
+fn materialize_biomarkers(db: &FactsDb, opts: &Options, cx: &HealthScanCtx) -> Result<()> {
     db.conn()
         .execute(BIOMARKERS_DDL, [])
         .map_err(|e| CodeLoreError::Analysis(format!("create biomarker temp table: {e}")))?;
+    let biomarkers_insert = BIOMARKERS_INSERT.replace("{cm_src}", &cx.complexity_source);
     db.conn()
-        .execute(BIOMARKERS_INSERT, [])
+        .execute(&biomarkers_insert, [])
         .map_err(|e| CodeLoreError::Analysis(format!("insert complexity biomarkers: {e}")))?;
     db.conn()
         .execute(SHOTGUN_INSERT, [])
@@ -334,12 +335,12 @@ fn materialize_biomarkers(db: &FactsDb, opts: &Options) -> Result<()> {
 
     // Full file universe (files with complexity data), grouped by language —
     // the same universe the SQL-side complex/large biomarkers rank over.
+    let universe_sql = "SELECT DISTINCT path FROM {cm_src} \
+         WHERE cyclomatic IS NOT NULL AND loc IS NOT NULL"
+        .replace("{cm_src}", &cx.complexity_source);
     let universe = crate::analyses::query::query_map_collect(
         db,
-        // Exactly the filter the SQL complex/large biomarkers rank over
-        // (`lang_fn`), so god-class/dry share an identical universe.
-        "SELECT DISTINCT path FROM complexity_metrics \
-         WHERE cyclomatic IS NOT NULL AND loc IS NOT NULL",
+        &universe_sql,
         [],
         "biomarker-universe",
         |r| r.get::<_, String>(0),
@@ -425,20 +426,31 @@ fn materialize_centrality(db: &FactsDb, opts: &Options) -> Result<()> {
 
 #[tracing::instrument(name = "code-health", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_code_health(db: &FactsDb, opts: &Options) -> Result<Vec<CodeHealthRow>> {
-    // Materialize Fisher-filtered coupling centrality before the SQL runs.
-    // `materialize_centrality` -> `run_coupling` ALSO materializes
-    // `changes_lineage` when canonical lineage is on; the outer SQL below
-    // must read from the same source so the JOIN on path matches the
-    // canonical centrality entries (otherwise renamed files lose their
-    // centrality term silently).
-    materialize_centrality(db, opts)?;
-    materialize_biomarkers(db, opts)?;
+    run_code_health_scoped(db, opts, &HealthScanCtx::head())
+}
 
-    // Unified dispatch honours both --time-bucket and --use-canonical-lineage.
+/// Code health against the sources named by `cx`. `cx = HealthScanCtx::head()`
+/// reproduces the HEAD analysis byte-for-byte.
+pub fn run_code_health_scoped(
+    db: &FactsDb,
+    opts: &Options,
+    cx: &HealthScanCtx,
+) -> Result<Vec<CodeHealthRow>> {
+    materialize_centrality(db, opts)?;
+    materialize_biomarkers(db, opts, cx)?;
+
     crate::analyses::lineage::materialize_source(db, opts)?;
     let src = crate::analyses::lineage::source_table(opts);
-    let cm_src = crate::analyses::grouped_complexity::source_table(opts);
-    let sql = SQL.replace("{src}", src).replace("{cm_src}", cm_src);
+    let cm_src = &cx.complexity_source;
+    let structural_scale = if cx.include_clones {
+        ""
+    } else {
+        STRUCTURAL_SCALE_NO_DRY
+    };
+    let sql = SQL
+        .replace("{src}", src)
+        .replace("{cm_src}", cm_src)
+        .replace("{structural_scale}", structural_scale);
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
     crate::analyses::query::explain_if_requested(
         db,
