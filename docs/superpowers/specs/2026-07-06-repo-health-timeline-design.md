@@ -1,6 +1,25 @@
 # Repo Health Timeline — architectural + code + combined health over sampled history
 
-**Status:** approved design, ready for implementation planning.
+**Status:** approved design. **Depends on sub-project 1** — see
+`2026-07-06-rev-parameterizable-code-health-design.md`. This is piece 2 of 2.
+
+## Decomposition (why two specs)
+
+The design's code-health-over-time line was originally scoped as a "structural
+proxy." Investigating the internals showed `code_health` is hardwired to HEAD
+tables and cannot run at a historical rev without either a throwaway proxy metric
+(a second, divergent definition of "code health") or copy-pasting private
+biomarker SQL (drift risk). The clean, long-term choice is to fix the root cause:
+
+- **Piece 1 — rev-parameterizable `code_health`** (its own spec): teach the
+  existing `code_health` engine to run against a pluggable complexity/imports
+  source + history cutoff + clone toggle, HEAD output byte-identical. One
+  definition of code health, evaluable at any rev.
+- **Piece 2 — this timeline**: a thin `health-trend` analysis that, at each
+  sampled rev, builds the rev-scoped sources and calls the *same* engine, then
+  composes the three scores and the SPA widget.
+
+Build piece 1 first; piece 2 sits on top of it.
 
 ## Problem
 
@@ -16,7 +35,7 @@ project's history.
 
 | Fork | Decision |
 |---|---|
-| Code-health-over-time cost | **Combined, structural proxy**: add a per-rev complexity scan (reusing the trend walker's blob reads); skip the expensive per-rev clone/DRY biomarker at historical revs |
+| Code-health-over-time | Computed by the **rev-parameterizable `code_health` engine** (piece 1) at each sampled rev — the *same* definition as HEAD, not a separate proxy. Per-rev complexity scan reuses the walker's blob reads; the DRY/clone biomarker is omitted at historical revs (re-normalized), per piece 1 |
 | Complexity placement | Complexity lives in the **code-health** score only; architecture stays purely structural (dependency graph). Complexity reaches the combined score through the code-health half — the two components stay orthogonal |
 | Combined weighting | Equal blend: `0.5·arch_health + 0.5·code_health` |
 | Primary view | **Required**: one overlaid 3-line chart (combined bold) over time. **Optional**: a toggle to split into small multiples |
@@ -45,30 +64,23 @@ arch_health = 100 · (1 − min(1.0, arch_risk))
 - Propagation cost is the dominant term (the validated DSM decoupling signal,
   already `[0,1]`); cycle terms are the acute problems.
 
-### Code health (structural proxy — carries complexity)
+### Code health (the rev-parameterizable engine — carries complexity)
 
-The canonical `code-health` composite is
-`100·(1 − 0.50·structural_risk − 0.30·churn − 0.20·author_fragmentation)` where
-`structural_risk` is a capped weighted sum of five biomarkers. At each sampled
-rev we compute the **same formula with the clone/DRY biomarker dropped**:
+Computed by piece 1's `run_code_health_scoped(db, opts, cx)` — the *same*
+`code_health` engine as HEAD, not a separate metric. Per sample the timeline
+builds a `HealthScanCtx` for that rev: a rev-scoped complexity source (from the
+per-rev blob scan), a rev-scoped imports source (from `import_graph_at_rev`), a
+`history_cutoff` at the sample's date (churn / author / coupling filtered to
+`commits.date <= ts`), and `include_clones = false`. The score is the canonical
+composite `100·(1 − 0.50·structural_risk − 0.30·churn − 0.20·author_fragmentation)`
+with the DRY biomarker omitted and the remaining four biomarker weights
+re-normalized to sum to 1.0 (see piece 1).
 
-```
-structural_risk = min(1.0,
-      0.30·complex_method        (per-rev complexity scan)
-    + 0.25·god_class             (per-rev complexity scan)
-    + 0.15·large_method          (per-rev complexity scan)
-    + 0.15·shotgun_surgery)      (Fisher coupling, SQL over history ≤ rev date)
-code_health = 100·(1 − 0.50·structural_risk − 0.30·churn − 0.20·author_fragmentation)
-```
-
-- `churn` and `author_fragmentation` are SQL over `changes`/`commits` filtered to
-  commits at-or-before the sample rev's date (the same date-anchored liveness the
-  trend walker + `code-age` use).
-- **Consistency:** the HEAD (newest) sample uses this *same reduced formula*, so
-  the timeline is internally consistent. It therefore may sit slightly above
-  CodeLore's canonical HEAD `code-health` number (which includes the DRY term).
-  This is documented in the analysis output and the SPA widget.
-- Only the three complexity biomarkers require the per-rev blob parse; shotgun /
+- **Consistency:** every sample — including HEAD — uses the same
+  `include_clones = false` reduced form, so the timeline line is internally
+  consistent. It may sit slightly above CodeLore's canonical HEAD `code-health`
+  number (which includes DRY); documented in the analysis output and widget.
+- Only the complexity biomarkers require the per-rev blob parse; shotgun /
   churn / author are SQL. This is the ~2× cost over `architecture-trend`.
 
 ### Combined health
