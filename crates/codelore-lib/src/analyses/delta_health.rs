@@ -14,8 +14,8 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::Result;
 use crate::facts::FactsDb;
-use crate::{CodeLoreError, Result};
 
 /// Function LOC at or above this is medium risk (SIG unit-size bands).
 pub const LOC_MEDIUM_FROM: u32 = 31;
@@ -122,11 +122,16 @@ pub fn outcome_for(before: Option<RiskClass>, after: Option<RiskClass>) -> Outco
     }
 }
 
-/// Verdict from the ratio. The middle band is deliberately labeled
-/// `indeterminate` — the design's honest replacement for a binary cut.
+/// Verdict from the ratio and whether any weight landed in the `bad`
+/// bucket. The middle band is deliberately labeled `indeterminate` — the
+/// design's honest replacement for a binary cut. A change set with no bad
+/// weight is never `degrading`: a low ratio driven purely by neutral
+/// changes (e.g. adding one medium-sized function) is low-signal, not a
+/// regression, and must not trip the deny-degrading / min-ratio gates or
+/// mislead the human-facing verdict.
 #[must_use]
-pub fn verdict_for(ratio: f64) -> &'static str {
-    if ratio < RATIO_DEGRADING_BELOW {
+pub fn verdict_for(ratio: f64, has_bad: bool) -> &'static str {
+    if has_bad && ratio < RATIO_DEGRADING_BELOW {
         "degrading"
     } else if ratio > RATIO_IMPROVING_ABOVE {
         "improving"
@@ -176,23 +181,14 @@ pub fn run_function_metrics(db: &FactsDb) -> Result<Vec<FunctionMetricRow>> {
         WHERE e.kind IN ('function', 'method')
         GROUP BY cm.path, fn_name
         ORDER BY cm.path, fn_name";
-    let mut stmt = db
-        .conn()
-        .prepare(SQL)
-        .map_err(|e| CodeLoreError::Analysis(format!("prepare delta-health metrics: {e}")))?;
-    let rows = stmt
-        .query_map([], |r| {
-            Ok(FunctionMetricRow {
-                path: r.get::<_, String>(0)?,
-                name: r.get::<_, String>(1)?,
-                loc: r.get::<_, u32>(2)?,
-                cyclomatic: r.get::<_, f64>(3)?,
-            })
+    crate::analyses::query::query_map_collect(db, SQL, [], "delta-health metrics", |r| {
+        Ok(FunctionMetricRow {
+            path: r.get::<_, String>(0)?,
+            name: r.get::<_, String>(1)?,
+            loc: r.get::<_, u32>(2)?,
+            cyclomatic: r.get::<_, f64>(3)?,
         })
-        .map_err(|e| CodeLoreError::Analysis(format!("query delta-health metrics: {e}")))?
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|e| CodeLoreError::Analysis(format!("read delta-health metrics: {e}")))?;
-    Ok(rows)
+    })
 }
 
 /// One changed function in the scored set. `weight` is the RAW LOC
@@ -267,18 +263,21 @@ pub fn compute_delta_health(
     head_clone_members: &HashSet<(String, String), impl std::hash::BuildHasher>,
     base_red_files: &HashSet<String, impl std::hash::BuildHasher>,
 ) -> DeltaHealthSection {
-    let index = |rows: &[FunctionMetricRow]| -> HashMap<(String, String), FunctionMetricRow> {
+    // Only `(loc, cyclomatic)` are read per row — path and name are already
+    // the key — so store just those two instead of cloning the whole row.
+    let index = |rows: &[FunctionMetricRow]| -> HashMap<(String, String), (u32, f64)> {
         rows.iter()
             .filter(|r| pr_files.contains(&r.path))
-            .map(|r| ((r.path.clone(), r.name.clone()), r.clone()))
+            .map(|r| ((r.path.clone(), r.name.clone()), (r.loc, r.cyclomatic)))
             .collect()
     };
     let base_idx = index(base);
     let head_idx = index(head);
 
-    let mut keys: Vec<(String, String)> = base_idx.keys().chain(head_idx.keys()).cloned().collect();
-    keys.sort();
-    keys.dedup();
+    // A `BTreeSet` gives the deduplicated, sorted key set in one step; the
+    // sorted order makes the emitted `functions` vector deterministic.
+    let keys: std::collections::BTreeSet<(String, String)> =
+        base_idx.keys().chain(head_idx.keys()).cloned().collect();
 
     let mut counts = DeltaHealthCounts::default();
     let mut functions = Vec::new();
@@ -294,15 +293,15 @@ pub fn compute_delta_health(
             continue;
         }
         let clone_member = head_clone_members.contains(&key);
-        let before = b.map(|r| classify(r.loc, r.cyclomatic, false));
-        let after = h.map(|r| classify(r.loc, r.cyclomatic, clone_member));
+        let before = b.map(|&(loc, cyclo)| classify(loc, cyclo, false));
+        let after = h.map(|&(loc, cyclo)| classify(loc, cyclo, clone_member));
         match (b.is_some(), h.is_some()) {
             (false, true) => counts.added += 1,
             (true, false) => counts.removed += 1,
             _ => counts.modified += 1,
         }
         let outcome = outcome_for(before, after);
-        let weight = f64::from(h.or(b).map_or(0, |r| r.loc));
+        let weight = f64::from(h.or(b).map_or(0, |&(loc, _)| loc));
         let in_red_file = base_red_files.contains(&key.0);
         let mult = if in_red_file && outcome != Outcome::Neutral {
             RED_FILE_WEIGHT_MULTIPLIER
@@ -314,7 +313,9 @@ pub fn compute_delta_health(
             Outcome::Neutral => neutral_w += weight,
             Outcome::Bad => bad_w += weight * mult,
         }
-        let reasons = h.map_or_else(Vec::new, |r| reasons_for(r.loc, r.cyclomatic, clone_member));
+        let reasons = h.map_or_else(Vec::new, |&(loc, cyclo)| {
+            reasons_for(loc, cyclo, clone_member)
+        });
         functions.push(DeltaFunctionRow {
             path: key.0,
             function: key.1,
@@ -346,20 +347,9 @@ pub fn compute_delta_health(
         };
     }
     let ratio = 100.0 * good_w / total;
-    // A change set with no bad weight never reports `degrading`. A low
-    // ratio can be driven purely by neutral changes — e.g. adding one
-    // medium-sized function — which is a low-signal event, not a
-    // regression. Reporting `degrading` there would block benign,
-    // degradation-free PRs under the deny-degrading / min-ratio gates and
-    // mislead the human-facing verdict; cap it at `indeterminate` instead.
-    let verdict = if bad_w == 0.0 && ratio < RATIO_DEGRADING_BELOW {
-        "indeterminate"
-    } else {
-        verdict_for(ratio)
-    };
     DeltaHealthSection {
         ratio: Some(ratio),
-        verdict: verdict.to_string(),
+        verdict: verdict_for(ratio, bad_w > 0.0).to_string(),
         counts,
         functions,
     }
@@ -429,10 +419,13 @@ mod tests {
 
     #[test]
     fn verdict_cut_points() {
-        assert_eq!(verdict_for(39.9), "degrading");
-        assert_eq!(verdict_for(40.0), "indeterminate");
-        assert_eq!(verdict_for(70.0), "indeterminate");
-        assert_eq!(verdict_for(70.1), "improving");
+        // With bad weight present, the low band reads `degrading`.
+        assert_eq!(verdict_for(39.9, true), "degrading");
+        assert_eq!(verdict_for(40.0, true), "indeterminate");
+        assert_eq!(verdict_for(70.0, true), "indeterminate");
+        assert_eq!(verdict_for(70.1, true), "improving");
+        // With no bad weight, a low ratio is never degrading.
+        assert_eq!(verdict_for(0.0, false), "indeterminate");
     }
 
     fn row(path: &str, name: &str, loc: u32, cyclo: f64) -> FunctionMetricRow {

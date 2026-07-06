@@ -306,7 +306,17 @@ fn add_worktree(repo: &Path, sha: &str) -> Result<Worktree> {
 
 /// Run hotspot + coupling + clones analyses against the given rev. Uses
 /// a `git worktree` so the user's working tree is not disturbed.
-fn analyze_at_rev(repo: &Path, sha: &str, args: &DiffArgs) -> Result<RevAnalyses> {
+///
+/// `want_red_files` gates the code-health pass that populates `red_files`.
+/// Only the base rev's red band drives the delta-health context multiplier,
+/// so the head rev passes `false` and skips a full (coupling + clone + SQL)
+/// code-health analysis whose result would be discarded.
+fn analyze_at_rev(
+    repo: &Path,
+    sha: &str,
+    args: &DiffArgs,
+    want_red_files: bool,
+) -> Result<RevAnalyses> {
     let wt = add_worktree(repo, sha)?;
     let opts = Options {
         repo_path: wt.path.clone(),
@@ -328,12 +338,16 @@ fn analyze_at_rev(repo: &Path, sha: &str, args: &DiffArgs) -> Result<RevAnalyses
     let dependency_cycles =
         codelore_lib::cli_api::analyses::import_graph::graph_metrics(&graph).cycle_count;
     let functions = run_function_metrics(&db).context("function metrics at rev")?;
-    let red_files: Vec<String> = run_code_health(&db, &opts)
-        .context("code health at rev")?
-        .into_iter()
-        .filter(|r| r.band == "red")
-        .map(|r| r.path)
-        .collect();
+    let red_files: Vec<String> = if want_red_files {
+        run_code_health(&db, &opts)
+            .context("code health at rev")?
+            .into_iter()
+            .filter(|r| r.band == "red")
+            .map(|r| r.path)
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     Ok(RevAnalyses {
         sha: sha.to_string(),
@@ -630,7 +644,7 @@ pub fn run_diff(args: &DiffArgs) -> Result<DiffOutput> {
                     cached.sha,
                     base_sha
                 );
-                let a = analyze_at_rev(&args.repo, &base_sha, args)?;
+                let a = analyze_at_rev(&args.repo, &base_sha, args, true)?;
                 write_base_cache(cache_path, &a)?;
                 a
             }
@@ -639,22 +653,22 @@ pub fn run_diff(args: &DiffArgs) -> Result<DiffOutput> {
                     "failed to read base-cache {}: {e:#}; recomputing base analysis",
                     cache_path.display()
                 );
-                let a = analyze_at_rev(&args.repo, &base_sha, args)?;
+                let a = analyze_at_rev(&args.repo, &base_sha, args, true)?;
                 write_base_cache(cache_path, &a)?;
                 a
             }
             None => {
-                let a = analyze_at_rev(&args.repo, &base_sha, args)?;
+                let a = analyze_at_rev(&args.repo, &base_sha, args, true)?;
                 write_base_cache(cache_path, &a)?;
                 tracing::info!("wrote base analysis to {}", cache_path.display());
                 a
             }
         }
     } else {
-        analyze_at_rev(&args.repo, &base_sha, args)?
+        analyze_at_rev(&args.repo, &base_sha, args, true)?
     };
 
-    let head_analyses = analyze_at_rev(&args.repo, &head_sha, args)?;
+    let head_analyses = analyze_at_rev(&args.repo, &head_sha, args, false)?;
 
     let pr_files = list_pr_files(&args.repo, &base_sha, &head_sha)?;
 
