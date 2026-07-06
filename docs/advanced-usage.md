@@ -376,7 +376,7 @@ Clone membership forces `high` regardless of size — copy-pasted code carries t
 
 When no changed file contains an analyzable function (docs-only, config, unsupported language), the verdict is `no-code-change` and `ratio` is omitted.
 
-**Stale base-cache skip:** if `--base-cache` is provided and the cached base analysis predates function-metric collection (empty `functions` array with a non-empty `hotspots` array), delta health is skipped entirely rather than misreading every head function as newly added. Delete the cache file to recompute.
+**Stale base-cache skip:** delta health is skipped when the base analysis has an empty `functions` list, a non-empty `hotspots` list, and the head analysis has functions — the data fingerprint of a base cache written by an older binary that predates function-metric collection. This prevents misreading every head function as newly added. Delete the cache file (or omit `--base-cache`) to recompute.
 
 ### Quality gate
 

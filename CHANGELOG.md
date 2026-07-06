@@ -8,7 +8,7 @@ Conventional Commits format. All notable changes documented here.
 
 - `codelore diff` now emits a `delta_health` section: a change-level health
   verdict (`improving`/`indeterminate`/`degrading`) from a 0–100 ratio of
-  changed-function weight ending low-risk, with clone-membership as a
+  changed-function weight ending low-risk or improved, with clone-membership as a
   copy/paste penalty and heavier weighting inside red-band files. Two new
   `[diff]` gates: `delta_health_min` and `deny_degrading_verdict`.
 

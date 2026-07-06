@@ -1121,46 +1121,7 @@ fn diff_docs_only_change_is_no_code_change() {
     assert!(json["delta_health"]["ratio"].is_null());
 }
 
-/// Validates the clone→high-risk penalty through the real ingest pipeline.
-///
-/// Base commit: `src/lib.rs` with one named function `original`.
-/// Head commit: add `src/copy.rs` with `pasted_copy` — a structural
-/// Type-2 clone (same AST shape, different identifiers/types). The body
-/// has five if/else blocks, giving it well over 30 structural nodes so it
-/// clears the default `min_clone_node_count` filter.
-///
-/// The assertion proves that the clone extractor's function name (`pasted_copy`,
-/// from the first identifier child of `function_item`) matches the complexity
-/// name (stripped of the `@start-end` span by `run_function_metrics`) — the
-/// alignment invariant that makes the clone penalty reachable in practice.
-#[allow(clippy::too_many_lines)]
-// long but linear: git fixture + run + assertions; splitting the fixture into a helper adds indirection without reducing total lines
-#[test]
-fn diff_delta_health_flags_pasted_clone_as_high_risk() {
-    let dir = tempfile::tempdir().unwrap();
-    let repo = dir.path();
-    let git = |args: &[&str]| {
-        let out = std::process::Command::new("git")
-            .arg("-C")
-            .arg(repo)
-            .args(args)
-            .env("GIT_AUTHOR_NAME", "t")
-            .env("GIT_AUTHOR_EMAIL", "t@t")
-            .env("GIT_COMMITTER_NAME", "t")
-            .env("GIT_COMMITTER_EMAIL", "t@t")
-            .output()
-            .unwrap();
-        assert!(out.status.success(), "git {args:?}: {out:?}");
-        String::from_utf8_lossy(&out.stdout).trim().to_string()
-    };
-
-    // Base commit: one small function in src/lib.rs.  The original is also
-    // the template whose structure will be duplicated in the head commit.
-    git(&["init", "-q"]);
-    std::fs::create_dir_all(repo.join("src")).unwrap();
-    // Five if/else blocks — structurally rich enough to produce > 30
-    // fingerprint nodes (the default min_clone_node_count).
-    let original_src = "\
+const CLONE_ORIGINAL_SRC: &str = "\
 pub fn original(x: i32) -> i32 {
     let mut acc = 0;
     if x > 0 {
@@ -1191,14 +1152,7 @@ pub fn original(x: i32) -> i32 {
     acc
 }
 ";
-    std::fs::write(repo.join("src/lib.rs"), original_src).unwrap();
-    git(&["add", "."]);
-    git(&["commit", "-q", "-m", "base"]);
-    let base = git(&["rev-parse", "HEAD"]);
-
-    // Head commit: add src/copy.rs with pasted_copy — same structure,
-    // different name and types (Type-2 clone).
-    let copy_src = "\
+const CLONE_PASTED_COPY_SRC: &str = "\
 pub fn pasted_copy(y: i64) -> i64 {
     let mut total = 0;
     if y > 0 {
@@ -1229,7 +1183,52 @@ pub fn pasted_copy(y: i64) -> i64 {
     total
 }
 ";
-    std::fs::write(repo.join("src/copy.rs"), copy_src).unwrap();
+
+/// Validates the clone→high-risk penalty through the real ingest pipeline.
+///
+/// Base commit: `src/lib.rs` with one named function `original`.
+/// Head commit: add `src/copy.rs` with `pasted_copy` — a structural
+/// Type-2 clone (same AST shape, different identifiers/types). The body
+/// has five if/else blocks, giving it well over 30 structural nodes so it
+/// clears the default `min_clone_node_count` filter.
+///
+/// The assertion proves that the clone extractor's function name (`pasted_copy`,
+/// from the first identifier child of `function_item`) matches the complexity
+/// name (stripped of the `@start-end` span by `run_function_metrics`) — the
+/// alignment invariant that makes the clone penalty reachable in practice.
+#[test]
+fn diff_delta_health_flags_pasted_clone_as_high_risk() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+
+    // Base commit: one small function in src/lib.rs.  The original is also
+    // the template whose structure will be duplicated in the head commit.
+    git(&["init", "-q"]);
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    // Five if/else blocks — structurally rich enough to produce > 30
+    // fingerprint nodes (the default min_clone_node_count).
+    std::fs::write(repo.join("src/lib.rs"), CLONE_ORIGINAL_SRC).unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "base"]);
+    let base = git(&["rev-parse", "HEAD"]);
+
+    // Head commit: add src/copy.rs with pasted_copy — same structure,
+    // different name and types (Type-2 clone).
+    std::fs::write(repo.join("src/copy.rs"), CLONE_PASTED_COPY_SRC).unwrap();
     git(&["add", "."]);
     git(&["commit", "-q", "-m", "paste copy"]);
     let head = git(&["rev-parse", "HEAD"]);
