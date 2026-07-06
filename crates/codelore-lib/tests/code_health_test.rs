@@ -475,6 +475,32 @@ fn scoped_no_clones_excludes_dry_and_renormalizes() {
     }
 }
 
+#[test]
+fn head_wrapper_equals_scoped_head_ctx() {
+    use codelore_lib::analyses::code_health::{
+        HealthScanCtx, run_code_health, run_code_health_scoped,
+    };
+    let repo = codelore_lib::test_support::biomarker_repo::build();
+    let gix = codelore_lib::repo::GixRepo::open(&repo.dir.path()).expect("open");
+    let db = codelore_lib::facts::FactsDb::new_in_memory().expect("db");
+    let opts = codelore_lib::test_support::permissive_coupling_opts(repo.dir.path().to_path_buf());
+    db.ingest(&gix, &opts).expect("ingest");
+
+    let a = run_code_health(&db, &opts).expect("wrapper");
+    let b = run_code_health_scoped(&db, &opts, &HealthScanCtx::head()).expect("scoped-head");
+    assert_eq!(a.len(), b.len());
+    for (x, y) in a.iter().zip(b.iter()) {
+        assert_eq!(x.path, y.path);
+        assert!(
+            (x.score - y.score).abs() < 1e-12,
+            "score parity for {}",
+            x.path
+        );
+        assert!((x.structural_risk - y.structural_risk).abs() < 1e-12);
+        assert_eq!(x.band, y.band);
+    }
+}
+
 /// Locks the 0.55 / 0.28 band cut points: every row's band must equal the
 /// threshold function applied to its `structural_risk`. Catches a silent
 /// threshold change in the SQL that the range/membership tests would miss.
