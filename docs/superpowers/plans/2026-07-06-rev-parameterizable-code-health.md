@@ -162,9 +162,9 @@ In `materialize_biomarkers`, change the universe query string:
                 WHEN 'dry'             THEN 0.15
                 WHEN 'shotgun-surgery' THEN 0.15
                 ELSE 0.0
-            END){structural_scale})) AS structural_risk
+            END){structural_scale}) AS structural_risk
 ```
-(inserted `{structural_scale}` immediately after the `END`, before the two closing parens). The `dry` arm stays in the CASE — when DRY rows aren't inserted, that arm simply never matches; the divisor handles renormalization.
+Paren count: `SUM(...END)` closes SUM, `{structural_scale}` (empty at HEAD, ` / 0.85` otherwise) is the divisor, the final `)` closes `LEAST`. At HEAD this is `END)) AS structural_risk` — byte-identical to the original. The `dry` arm stays in the CASE — when DRY rows aren't inserted, that arm simply never matches; the divisor handles renormalization.
 
 - [ ] **Step 4: Thread the ctx through `materialize_biomarkers` and add `run_code_health_scoped`.** Change `materialize_biomarkers` signature and its two SQL uses:
 
