@@ -150,16 +150,30 @@ pub struct FunctionMetricRow {
 /// on `entities.kind` keeps only real functions/methods so nothing
 /// file-shaped is ever classified as a changed function.
 ///
+/// Persisted entity names embed the line span (`{fn}@{start}-{end}`), which
+/// is not stable across revisions — editing a function, or any function
+/// above it, shifts the span and would make an in-place edit read as
+/// remove+add instead of modified. The name is stripped to its bare form so
+/// base↔head pairing keys on a stable identity. Functions that share a bare
+/// name within one file (e.g. same-named methods on different types)
+/// collapse to a single worst-case row — a documented limitation, since the
+/// line span is the only thing that told them apart and it is not stable.
+///
 /// # Errors
 ///
 /// [`CodeLoreError::Analysis`] on SQL failures.
 pub fn run_function_metrics(db: &FactsDb) -> Result<Vec<FunctionMetricRow>> {
     const SQL: &str = "
-        SELECT DISTINCT cm.path, cm.name, cm.loc, CAST(cm.cyclomatic AS DOUBLE)
+        SELECT
+            cm.path,
+            regexp_replace(cm.name, '@[0-9]+-[0-9]+$', '') AS fn_name,
+            MAX(cm.loc) AS loc,
+            MAX(CAST(cm.cyclomatic AS DOUBLE)) AS cyclomatic
         FROM complexity_metrics cm
         JOIN entities e ON e.path = cm.path AND e.name = cm.name
         WHERE e.kind IN ('function', 'method')
-        ORDER BY cm.path, cm.name";
+        GROUP BY cm.path, fn_name
+        ORDER BY cm.path, fn_name";
     let mut stmt = db
         .conn()
         .prepare(SQL)
