@@ -527,6 +527,123 @@ pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
     Ok(out)
 }
 
+/// Scoped variant of [`run_coupling`]: reads change history from
+/// `changes_source` instead of the opt-derived table. Used when a caller has
+/// already materialized a date-filtered view (`changes_at_ts`) and wants
+/// coupling restricted to that window. Does NOT memoize — the custom source
+/// is not covered by the standard [`CouplingMemoKey`].
+///
+/// # Errors
+///
+/// Returns [`CodeLoreError::Analysis`] on any SQL error.
+pub fn run_coupling_scoped(
+    db: &FactsDb,
+    opts: &Options,
+    changes_source: &str,
+) -> Result<Vec<CouplingRow>> {
+    crate::analyses::lineage::materialize_source(db, opts)?;
+
+    // Denominator for Fisher's 2×2 table: good commits within the scoped
+    // source. Using `changes_source` here keeps the denominator consistent
+    // with the `filtered_changes` CTE that also reads from `changes_source`.
+    let total_sql = format!(
+        "WITH good_commits AS (
+             SELECT rev
+             FROM (SELECT rev, COUNT(*) AS files FROM {changes_source} GROUP BY rev) t
+             WHERE files <= ?
+         )
+         SELECT COUNT(*) FROM good_commits"
+    );
+    let total_commits: i64 = db
+        .conn()
+        .query_row(&total_sql, params![opts.max_changeset_size], |r| r.get(0))
+        .map_err(|e| CodeLoreError::Analysis(format!("total commits query: {e}")))?;
+    let total = u32::try_from(total_commits).unwrap_or(u32::MAX);
+
+    let coupling_sql = build_coupling_sql(
+        changes_source,
+        opts.code_maat_compat,
+        opts.time_bucket,
+        opts.use_canonical_lineage,
+    );
+    crate::analyses::query::explain_if_requested(
+        db,
+        &coupling_sql,
+        params![
+            opts.max_changeset_size,
+            opts.min_revs,
+            opts.min_shared_revs,
+            opts.min_coupling_pct,
+            opts.max_coupling_pct,
+            opts.min_revs,
+        ],
+        "coupling",
+        opts,
+    )?;
+    let mut stmt = db
+        .conn()
+        .prepare(&coupling_sql)
+        .map_err(|e| CodeLoreError::Analysis(format!("prepare coupling: {e}")))?;
+
+    let raw_rows = stmt
+        .query_map(
+            params![
+                opts.max_changeset_size,
+                opts.min_revs,
+                opts.min_shared_revs,
+                opts.min_coupling_pct,
+                opts.max_coupling_pct,
+                opts.min_revs,
+            ],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, i64>(4)?,
+                    r.get::<_, i64>(5)?,
+                    r.get::<_, f64>(6)?,
+                ))
+            },
+        )
+        .map_err(|e| CodeLoreError::Analysis(format!("query coupling: {e}")))?;
+
+    let mut out = Vec::new();
+    for raw in raw_rows {
+        let (path_a, path_b, shared_raw, count_a, count_b, avg_raw, degree) =
+            raw.map_err(|e| CodeLoreError::Analysis(format!("collect coupling row: {e}")))?;
+
+        let shared = u32::try_from(shared_raw).unwrap_or(u32::MAX);
+        let revs_a = u32::try_from(count_a).unwrap_or(u32::MAX);
+        let revs_b = u32::try_from(count_b).unwrap_or(u32::MAX);
+        let average_revs = u32::try_from(avg_raw).unwrap_or(u32::MAX);
+
+        let Some(fisher_p) = fisher_two_tail(shared, revs_a, revs_b, total) else {
+            continue; // degenerate table — skip pair
+        };
+
+        if fisher_p < opts.fisher_significance {
+            out.push(CouplingRow {
+                entity_a: path_a,
+                entity_b: path_b,
+                shared,
+                revs_a,
+                revs_b,
+                average_revs,
+                degree,
+                fisher_p,
+            });
+        }
+    }
+
+    if let Some(n) = opts.rows_limit {
+        out.truncate(n as usize);
+    }
+
+    Ok(out)
+}
+
 /// Count the number of nodes in the behavioral coupling graph universe.
 /// Returns the count of distinct files in the same `file_revs` candidate
 /// set used by [`run_coupling`] — i.e. files with `revs >= opts.min_revs`

@@ -37,7 +37,7 @@ use std::collections::HashMap;
 
 use duckdb::params;
 
-use crate::analyses::coupling::run_coupling;
+use crate::analyses::coupling::{run_coupling, run_coupling_scoped};
 use crate::facts::FactsDb;
 use crate::{CodeLoreError, Options, Result};
 
@@ -208,6 +208,15 @@ const SQL: &str = "
     FROM scored
     ORDER BY score ASC, path ASC
     LIMIT ?
+";
+
+/// A changes view limited to commits at/-before a cutoff timestamp, so
+/// history-derived terms (churn, author fragmentation, coupling) are rev-scoped.
+const CHANGES_AT_TS_DDL: &str = "
+    CREATE OR REPLACE TEMPORARY VIEW changes_at_ts AS
+    SELECT c.* FROM changes c
+    INNER JOIN commits ON commits.rev = c.rev
+    WHERE commits.date <= CAST(? AS TIMESTAMP)
 ";
 
 /// DDL for the temporary centrality table that backs the `shotgun-surgery`
@@ -393,12 +402,19 @@ fn materialize_biomarkers(db: &FactsDb, opts: &Options, cx: &HealthScanCtx) -> R
 
 /// Build the centrality temp table from Fisher-significant coupling pairs.
 /// Each path appears once with `centrality = count of pairs that include it`.
-fn materialize_centrality(db: &FactsDb, opts: &Options) -> Result<()> {
+/// When `cx.history_cutoff` is set, coupling is restricted to the already-
+/// materialized `changes_at_ts` view; at HEAD (cutoff None) the standard
+/// memoised [`run_coupling`] path is taken — output is byte-identical.
+fn materialize_centrality(db: &FactsDb, opts: &Options, cx: &HealthScanCtx) -> Result<()> {
     // `--rows N` MUST NOT propagate into the inner coupling query — the
     // centrality term needs the FULL coupled-pair graph, not the user's
     // output truncation. See `Options::with_no_row_limit` for the full
     // bug narrative.
-    let pairs = run_coupling(db, &opts.with_no_row_limit())?;
+    let pairs = if cx.history_cutoff.is_some() {
+        run_coupling_scoped(db, &opts.with_no_row_limit(), "changes_at_ts")?
+    } else {
+        run_coupling(db, &opts.with_no_row_limit())?
+    };
 
     // Count Fisher-significant partners per path. Each pair contributes to
     // both endpoints' centrality.
@@ -450,11 +466,20 @@ pub fn run_code_health_scoped(
     opts: &Options,
     cx: &HealthScanCtx,
 ) -> Result<Vec<CodeHealthRow>> {
-    materialize_centrality(db, opts)?;
+    crate::analyses::lineage::materialize_source(db, opts)?;
+    let src_owned;
+    let src: &str = if let Some(ts) = &cx.history_cutoff {
+        db.conn()
+            .execute(CHANGES_AT_TS_DDL, params![ts])
+            .map_err(|e| CodeLoreError::Analysis(format!("create changes_at_ts view: {e}")))?;
+        src_owned = "changes_at_ts".to_string();
+        &src_owned
+    } else {
+        crate::analyses::lineage::source_table(opts)
+    };
+    materialize_centrality(db, opts, cx)?;
     materialize_biomarkers(db, opts, cx)?;
 
-    crate::analyses::lineage::materialize_source(db, opts)?;
-    let src = crate::analyses::lineage::source_table(opts);
     let cm_src = &cx.complexity_source;
     let structural_scale = if cx.include_clones {
         ""
