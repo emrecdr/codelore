@@ -215,6 +215,12 @@ const SQL: &str = "
 /// The `{ts}` cutoff is inlined as a quoted literal (single quotes doubled)
 /// rather than bound as a `?` parameter: `DuckDB` rejects prepared parameters
 /// inside a `CREATE VIEW` statement ("this type of statement can't be prepared").
+///
+/// This view reads raw `changes` (not the lineage-rewritten source), so churn /
+/// author terms built on it lose rename-awareness when a cutoff is combined with
+/// `--use-canonical-lineage`. Out of scope: the timeline consumer uses a cutoff
+/// without lineage (the primary path), matching `run_coupling_scoped`'s own
+/// cutoff limitation.
 const CHANGES_AT_TS_DDL: &str = "
     CREATE OR REPLACE TEMPORARY VIEW changes_at_ts AS
     SELECT c.* FROM changes c
