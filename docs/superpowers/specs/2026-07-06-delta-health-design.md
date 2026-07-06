@@ -47,10 +47,19 @@ function-row sets on `(path, name)`:
 No `Repo` trait change and no diff-hunk parsing — the differential-test surface
 is untouched.
 
+Persisted entity names embed the line span (`{fn}@{start}-{end}`), which is
+not stable across revisions — editing a function, or any function above it in
+the file, shifts the span. The extraction strips the name to its bare form so
+the pairing key (`(path, bare_name)`) is stable and an in-place edit reads as
+**modified**, not remove+add.
+
 **Documented v1 limitations:** file renames and within-file function renames
 read as remove+add; functions whose bodies changed without moving any persisted
 metric read as untouched (acceptable: a change that moves no risk metric cannot
-change the risk class either).
+change the risk class either); functions that share a bare name within one file
+(e.g. same-named methods on different types, if the parser emits them
+unqualified) collapse to a single worst-case row — the line span was the only
+distinguisher and it is not stable.
 
 ## 2. Risk model
 

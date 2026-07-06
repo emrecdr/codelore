@@ -310,7 +310,7 @@ git commit -m "feat(delta-health): risk classes, outcome matrix, verdict cut-poi
 
 **Interfaces:**
 - Produces (used by Task 5):
-  - `pub struct FunctionMetricRow { pub path: String, pub name: String, pub loc: u32, pub cyclomatic: f64 }` — `Clone, Serialize, Deserialize` (it rides inside the CLI's base-cache JSON)
+  - `pub struct FunctionMetricRow { pub path: String, pub name: String, pub loc: u32, pub cyclomatic: f64 }` — `Clone, Serialize, Deserialize` (it rides inside the CLI's base-cache JSON). `name` is the **bare** function name: persisted entity names embed the line span (`fn@start-end`), which is unstable across revisions, so `run_function_metrics` strips the suffix (`regexp_replace(name, '@[0-9]+-[0-9]+$', '')`) and aggregates same-named functions per file to worst-case metrics (`MAX(loc)`, `MAX(cyclomatic)`). Task 3 therefore pairs base/head on this stable bare `(path, name)` key.
   - `pub fn run_function_metrics(db: &FactsDb) -> Result<Vec<FunctionMetricRow>>`
 - Consumes: `FactsDb` (existing), `complexity_metrics` + `entities` tables (existing schema).
 
