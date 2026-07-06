@@ -322,7 +322,12 @@ fn materialize_biomarkers(db: &FactsDb, opts: &Options, cx: &HealthScanCtx) -> R
     //
     // `--rows N` MUST NOT propagate into `run_god_classes`: the biomarker set
     // needs ALL god classes, not the user's output truncation.
-    let gods = crate::analyses::god_classes::run_god_classes(db, &opts.with_no_row_limit())?;
+    let gods = crate::analyses::god_classes::run_god_classes_scoped(
+        db,
+        &opts.with_no_row_limit(),
+        &cx.complexity_source,
+        &cx.imports_source,
+    )?;
     let god_by_path: HashMap<String, f64> =
         gods.iter().map(|g| (g.path.clone(), g.god_score)).collect();
 

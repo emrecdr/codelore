@@ -70,7 +70,7 @@ const SQL: &str = "
         -- One row per `target_path`; counts distinct importers.
         -- Only resolved imports contribute.
         SELECT target_path AS path, COUNT(DISTINCT src_path)::UINTEGER AS fan_in
-        FROM imports
+        FROM {imports_src}
         WHERE target_path IS NOT NULL
         GROUP BY target_path
     ),
@@ -80,7 +80,7 @@ const SQL: &str = "
         -- / std) imports count toward fan-out — reflects the full
         -- structural-dependency surface.
         SELECT src_path AS path, COUNT(DISTINCT target)::UINTEGER AS fan_out
-        FROM imports
+        FROM {imports_src}
         GROUP BY src_path
     )
     SELECT
@@ -107,9 +107,26 @@ const SQL: &str = "
 /// query / collect errors.
 #[tracing::instrument(name = "god-classes", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_god_classes(db: &FactsDb, opts: &Options) -> Result<Vec<GodClassRow>> {
+    run_god_classes_scoped(db, opts, "complexity_metrics", "imports")
+}
+
+/// Run `god-classes` against caller-supplied source tables. Useful when
+/// complexity and import data live in snapshot tables for historical scans.
+///
+/// # Errors
+///
+/// Returns [`crate::CodeLoreError::Analysis`] on `DuckDB` prepare /
+/// query / collect errors.
+pub fn run_god_classes_scoped(
+    db: &FactsDb,
+    opts: &Options,
+    complexity_source: &str,
+    imports_source: &str,
+) -> Result<Vec<GodClassRow>> {
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
-    let cm_src = crate::analyses::grouped_complexity::source_table(opts);
-    let sql = SQL.replace("{cm_src}", cm_src);
+    let sql = SQL
+        .replace("{cm_src}", complexity_source)
+        .replace("{imports_src}", imports_source);
     super::query::explain_if_requested(
         db,
         &sql,
