@@ -33,7 +33,7 @@ fn collect_metric_rows(
 }
 
 /// Returns the live-at-HEAD path set from the fact store using the same
-/// arg_max CTE as the internal `query_live_paths`.
+/// `arg_max` CTE as the internal `query_live_paths`.
 fn live_paths_from_db(db: &FactsDb) -> Vec<String> {
     let sql = "
         WITH latest_per_path AS (

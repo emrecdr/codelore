@@ -143,7 +143,7 @@ pub fn ingest_complexity_at_rev<R: crate::repo::Repo>(
 /// *unresolved* external edges (`resolved = FALSE`, e.g. std-lib / package
 /// imports), and the god-class `fan_out` CTE counts them via
 /// `COUNT(DISTINCT target)` without a `resolved` filter. This table omits
-/// them, so a god-class `fan_out` (and the god_score it feeds) computed
+/// them, so a god-class `fan_out` (and the `god_score` it feeds) computed
 /// against this source is resolved-only and under-counts relative to a
 /// live-`imports` HEAD scan — by however many external imports each file
 /// makes. A timeline that builds *every* sample (including the newest)
