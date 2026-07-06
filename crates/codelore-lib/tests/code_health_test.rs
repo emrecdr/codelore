@@ -417,7 +417,7 @@ fn scoped_no_clones_excludes_dry_and_renormalizes() {
         CodeHealthRow, HealthScanCtx, run_code_health, run_code_health_scoped,
     };
     let repo = codelore_lib::test_support::biomarker_repo::build();
-    let gix = codelore_lib::repo::GixRepo::open(&repo.dir.path()).expect("open");
+    let gix = codelore_lib::repo::GixRepo::open(repo.dir.path()).expect("open");
     let db = codelore_lib::facts::FactsDb::new_in_memory().expect("db");
     let opts = codelore_lib::test_support::permissive_coupling_opts(repo.dir.path().to_path_buf());
     db.ingest(&gix, &opts).expect("ingest");
@@ -481,13 +481,16 @@ fn head_wrapper_equals_scoped_head_ctx() {
         HealthScanCtx, run_code_health, run_code_health_scoped,
     };
     let repo = codelore_lib::test_support::biomarker_repo::build();
-    let gix = codelore_lib::repo::GixRepo::open(&repo.dir.path()).expect("open");
+    let gix = codelore_lib::repo::GixRepo::open(repo.dir.path()).expect("open");
     let db = codelore_lib::facts::FactsDb::new_in_memory().expect("db");
     let opts = codelore_lib::test_support::permissive_coupling_opts(repo.dir.path().to_path_buf());
     db.ingest(&gix, &opts).expect("ingest");
 
     let a = run_code_health(&db, &opts).expect("wrapper");
     let b = run_code_health_scoped(&db, &opts, &HealthScanCtx::head()).expect("scoped-head");
+    // Non-vacuity: a regression guard that passed on an empty result would be
+    // worthless — the fixture must yield scored rows for the parity loop to bite.
+    assert!(!a.is_empty(), "biomarker_repo must yield scored rows");
     assert_eq!(a.len(), b.len());
     for (x, y) in a.iter().zip(b.iter()) {
         assert_eq!(x.path, y.path);
