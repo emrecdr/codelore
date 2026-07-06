@@ -934,7 +934,11 @@ fn health_trend_csv_has_header_and_rows() {
         .success()
         .stdout(predicate::str::contains(
             "date,rev,files,arch-health,code-health,combined-health,arch-band,code-band,combined-band",
-        ));
+        ))
+        // Header alone would pass on empty output — require at least one data row.
+        .stdout(predicate::function(|out: &str| {
+            out.lines().filter(|l| !l.trim().is_empty()).count() >= 2
+        }));
 }
 
 #[cfg(feature = "spa")]
