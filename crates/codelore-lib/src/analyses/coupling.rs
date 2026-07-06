@@ -533,6 +533,14 @@ pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
 /// coupling restricted to that window. Does NOT memoize — the custom source
 /// is not covered by the standard [`CouplingMemoKey`].
 ///
+/// The `changes_source` overrides only the pair-source and Fisher-denominator
+/// tables; the internal `good_commits` revset is still built from the
+/// opt-derived table. That is equivalent to the primary path (no lineage, no
+/// time-bucket), where the cutoff window's revset equals the full-history
+/// revset intersected with the window. Combined with `--use-canonical-lineage`
+/// or `--time-bucket`, the two diverge (pair paths use pre-rename names /
+/// bucketing reads full history); those combinations are out of scope here.
+///
 /// # Errors
 ///
 /// Returns [`CodeLoreError::Analysis`] on any SQL error.
