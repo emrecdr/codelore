@@ -278,7 +278,7 @@ pub(super) fn dedup_entities(
 }
 
 /// Safely clamp a finite non-negative f64 to i32 range.
-fn f64_to_i32_clamped(v: f64) -> i32 {
+pub(super) fn f64_to_i32_clamped(v: f64) -> i32 {
     if v.is_finite() && v >= 0.0 {
         #[allow(clippy::cast_possible_truncation)]
         // the enclosing is_finite()+>=0.0 guard plus .min(f64::from(i32::MAX)) clamp guarantee the value fits i32 before the cast

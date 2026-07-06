@@ -99,6 +99,11 @@ pub enum AnalysisName {
     // cycle count, largest tangle) recomputed at sampled historical revs
     // to show architectural decay over time. Reads blobs at past revs.
     ArchitectureTrend,
+    // Repo health timeline — arch health, code health, and combined
+    // health (each 0–100, higher = healthier) at sampled historical revs.
+    // Reuses the architecture-trend sampler + the rev-parameterisable
+    // code-health engine. Reads blobs at past revs; on-demand, never cached.
+    HealthTrend,
     // Cycle origins — bisects history to find the commit where each HEAD
     // dependency cycle first formed. Reads blobs at past revs.
     CycleOrigins,
@@ -185,6 +190,7 @@ impl AnalysisName {
             Self::Instability => "instability",
             Self::ArchitectureMetrics => "architecture-metrics",
             Self::ArchitectureTrend => "architecture-trend",
+            Self::HealthTrend => "health-trend",
             Self::CycleOrigins => "cycle-origins",
             Self::ModularityViolations => "modularity-violations",
             Self::UnstableInterface => "unstable-interface",
@@ -262,6 +268,7 @@ impl AnalysisName {
             Instability,
             ArchitectureMetrics,
             ArchitectureTrend,
+            HealthTrend,
             CycleOrigins,
             ModularityViolations,
             UnstableInterface,

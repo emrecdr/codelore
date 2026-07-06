@@ -510,6 +510,37 @@ pub fn write_architecture_trend_markdown<W: Write>(
     Ok(())
 }
 
+/// `health-trend` markdown emitter — repo health timeline across sampled revs.
+pub fn write_health_trend_markdown<W: Write>(
+    rows: &[crate::analyses::health_trend::HealthTrendRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore health trend")?;
+    if rows.is_empty() {
+        writeln!(w, "_No commit history to sample._").map_err(CodeLoreError::Io)?;
+        return Ok(());
+    }
+    writeln!(w, "| Date | Rev | Files | Arch | Code | Combined |").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---|---:|---:|---:|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| {} | `{}` | {} | {:.1} ({}) | {:.1} ({}) | {:.1} ({}) |",
+            escape_md_cell(&row.date),
+            escape_md_cell(&row.rev),
+            row.files,
+            row.arch_health,
+            row.arch_band,
+            row.code_health,
+            row.code_band,
+            row.combined_health,
+            row.combined_band,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_architecture_metrics_markdown<W: Write>(
     rows: &[crate::analyses::architecture_metrics::ArchitectureMetricRow],
     w: &mut W,

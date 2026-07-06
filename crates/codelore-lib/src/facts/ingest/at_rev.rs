@@ -7,7 +7,7 @@ use crate::analyses::import_graph::ImportGraph;
 use crate::{CodeLoreError, Result};
 
 use super::FactsDb;
-use super::consumer::{append_metric_row, dedup_entities};
+use super::consumer::{dedup_entities, f64_to_i32_clamped};
 
 /// Scan Tier-1 source blobs at `rev`, compute complexity metrics, and write
 /// the results into a freshly-created temporary table named `dest_table`.
@@ -18,8 +18,8 @@ use super::consumer::{append_metric_row, dedup_entities};
 /// paths absent at that revision are silently skipped.
 ///
 /// Mirrors `ingest_complexity_at_head`'s rayon-parallel + serial-drain
-/// pattern: blob reads and parsing run in parallel; the `DuckDB` Appender
-/// drain runs on the connection-owning thread.
+/// pattern: blob reads and parsing run in parallel; the INSERT drain runs
+/// serially on the connection-owning thread via a prepared statement.
 pub fn ingest_complexity_at_rev<R: crate::repo::Repo>(
     db: &FactsDb,
     repo: &R,
@@ -106,25 +106,45 @@ pub fn ingest_complexity_at_rev<R: crate::repo::Repo>(
         )
         .collect();
 
-    // Phase 2 (serial drain): Appender on the connection-owning thread.
-    // `duckdb::Appender` is `!Send + !Sync` — must stay on this thread.
-    let mut metrics_app = db
+    // Phase 2 (serial drain): INSERT via prepared statement.
+    // DuckDB's Appender checks the connection access mode and rejects writes
+    // on read-only connections, even for temporary tables. Temporary tables
+    // live in an in-memory catalog separate from the file, so SQL INSERT goes
+    // through a different path and succeeds on read-only connections.
+    let mut stmt = db
         .conn()
-        .appender(dest_table)
-        .map_err(|e| CodeLoreError::Analysis(format!("appender {dest_table}: {e}")))?;
+        .prepare(&format!(
+            "INSERT INTO {dest_table} VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        ))
+        .map_err(|e| CodeLoreError::Analysis(format!("prepare insert {dest_table}: {e}")))?;
 
     for batch in batches {
         let Some((path, entities)) = batch else {
             continue;
         };
         for ent in &entities {
-            append_metric_row(&mut metrics_app, &path, ent, rev)?;
+            stmt.execute(duckdb::params![
+                path,
+                ent.name,
+                rev,
+                f64_to_i32_clamped(ent.cyclomatic),
+                f64_to_i32_clamped(ent.cognitive),
+                ent.halstead_volume,
+                ent.halstead_difficulty,
+                ent.halstead_effort,
+                ent.mi,
+                i32::try_from(ent.nom).unwrap_or(i32::MAX),
+                i32::try_from(ent.nexits).unwrap_or(i32::MAX),
+                i32::try_from(ent.loc).unwrap_or(i32::MAX),
+                i32::try_from(ent.sloc).unwrap_or(i32::MAX),
+                i32::try_from(ent.max_nesting).unwrap_or(i32::MAX),
+                ent.mean_nesting,
+                ent.sd_nesting,
+                i32::try_from(ent.total_nesting).unwrap_or(i32::MAX),
+            ])
+            .map_err(|e| CodeLoreError::Analysis(format!("insert {dest_table}: {e}")))?;
         }
     }
-
-    metrics_app
-        .flush()
-        .map_err(|e| CodeLoreError::Analysis(format!("flush {dest_table}: {e}")))?;
     Ok(())
 }
 
@@ -170,16 +190,19 @@ pub fn materialize_imports_at_rev(
         return Ok(());
     }
 
-    let mut app = db
+    // INSERT via prepared statement — same rationale as ingest_complexity_at_rev:
+    // DuckDB's Appender is blocked on read-only connections; SQL INSERT into a
+    // temporary table works because temp tables are in-memory (not file-backed).
+    let mut stmt = db
         .conn()
-        .appender(dest_table)
-        .map_err(|e| CodeLoreError::Analysis(format!("appender {dest_table}: {e}")))?;
+        .prepare(&format!("INSERT INTO {dest_table} VALUES (?,?,?,?,?,?)"))
+        .map_err(|e| CodeLoreError::Analysis(format!("prepare insert {dest_table}: {e}")))?;
 
     for (u, neighbors) in graph.adj.iter().enumerate() {
         let src_path = &graph.id_to_path[u];
         for &v in neighbors {
             let target_path = &graph.id_to_path[v];
-            app.append_row(duckdb::params![
+            stmt.execute(duckdb::params![
                 "_at_rev_",
                 src_path,
                 target_path, // resolved path used as the raw target string too
@@ -187,11 +210,8 @@ pub fn materialize_imports_at_rev(
                 target_path, // target_path
                 "absolute",  // kind
             ])
-            .map_err(|e| CodeLoreError::Analysis(format!("append {dest_table} row: {e}")))?;
+            .map_err(|e| CodeLoreError::Analysis(format!("insert {dest_table} row: {e}")))?;
         }
     }
-
-    app.flush()
-        .map_err(|e| CodeLoreError::Analysis(format!("flush {dest_table}: {e}")))?;
     Ok(())
 }
