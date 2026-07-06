@@ -441,8 +441,8 @@ fn scoped_no_clones_excludes_dry_and_renormalizes() {
     // `/0.85` renormalization applies. Its no-clones risk is therefore exactly
     // the HEAD risk divided by 0.85, proving the renormalization divisor is
     // wired. (Not a `>=` score relation — renormalization deliberately RAISES a
-    // no-duplication file's risk; the no-clones series is internally consistent,
-    // not comparable to the with-DRY HEAD score. See design §4.)
+    // no-duplication file's risk; the no-clones series is internally consistent
+    // with itself, not comparable to the with-DRY HEAD score.)
     let big_head = risk(&head, "big.rs");
     let big_nodry = risk(&no_dry, "big.rs");
     assert!(
