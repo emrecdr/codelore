@@ -3,8 +3,13 @@
 //! `architecture_trend` sampler for the rev set and piece-1's rev-parameterizable
 //! `code_health` engine for the per-rev code score. On-demand, never cached.
 
-use crate::analyses::code_health::CodeHealthRow;
-use crate::analyses::import_graph::GraphMetrics;
+use crate::analyses::architecture_trend::{import_graph_at_rev, live_paths_at, sampled_commits};
+use crate::analyses::code_health::{CodeHealthRow, HealthScanCtx, run_code_health_scoped};
+use crate::analyses::import_graph::{GraphMetrics, graph_metrics};
+use crate::facts::FactsDb;
+use crate::facts::ingest::at_rev::{ingest_complexity_at_rev, materialize_imports_at_rev};
+use crate::repo::Repo;
+use crate::{Options, Result};
 
 /// One sampled revision's three health scores + bands. Emitted oldest-first.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -69,6 +74,71 @@ pub(crate) fn repo_code_health(rows: &[CodeHealthRow]) -> f64 {
 #[must_use]
 pub(crate) fn combined_health(arch: f64, code: f64) -> f64 {
     0.5 * arch + 0.5 * code
+}
+
+/// Session-scoped temp-table names the rev-scoped `HealthScanCtx` points at.
+/// `CREATE OR REPLACE` inside the helpers means reusing them across samples is
+/// safe — each iteration replaces the prior rev's contents.
+const CM_AT_REV: &str = "cm_at_rev";
+const IMPORTS_AT_REV: &str = "imports_at_rev";
+
+/// Compute the three health scores across ≤12 evenly-spaced historical revs.
+///
+/// Per sample: build the in-memory import graph → `arch_health`; materialize
+/// rev-scoped complexity + imports temp tables and run the (DRY-excluded,
+/// date-cut) code-health engine → mean per-file score = `code_health`;
+/// `combined = mean(arch, code)`. Every sample — including the newest — is
+/// computed the same reduced way, so the series is internally consistent (it
+/// may sit slightly above the standalone HEAD `code-health` number, which
+/// includes DRY + full external fan-out).
+///
+/// # Errors
+///
+/// Returns [`crate::CodeLoreError::Analysis`] on any query / ingest failure.
+#[tracing::instrument(name = "health-trend", skip_all)]
+pub fn run_health_trend<R: Repo>(
+    db: &FactsDb,
+    repo: &R,
+    opts: &Options,
+) -> Result<Vec<HealthTrendRow>> {
+    let samples = sampled_commits(db)?;
+    // ALL files must feed the code-health mean — never the user's `--rows` cut.
+    let scan_opts = opts.with_no_row_limit();
+    let mut rows = Vec::with_capacity(samples.len());
+    for (rev, ts) in &samples {
+        // Architectural half — purely structural, from the in-memory graph.
+        let graph = import_graph_at_rev(db, repo, rev, ts)?;
+        let m = graph_metrics(&graph);
+        let files = u32::try_from(m.n).unwrap_or(u32::MAX);
+        let arch = arch_health(&m);
+
+        // Code half — rev-scoped sources into piece-1's scoped engine.
+        let live = live_paths_at(db, ts)?;
+        ingest_complexity_at_rev(db, repo, rev, &live, CM_AT_REV)?;
+        materialize_imports_at_rev(db, &graph, IMPORTS_AT_REV)?;
+        let cx = HealthScanCtx {
+            complexity_source: CM_AT_REV.to_string(),
+            imports_source: IMPORTS_AT_REV.to_string(),
+            history_cutoff: Some(ts.clone()),
+            include_clones: false,
+        };
+        let code_rows = run_code_health_scoped(db, &scan_opts, &cx)?;
+        let code = repo_code_health(&code_rows);
+
+        let combined = combined_health(arch, code);
+        rows.push(HealthTrendRow {
+            date: ts.get(..10).unwrap_or(ts).to_string(),
+            rev: rev.chars().take(12).collect(),
+            files,
+            arch_health: arch,
+            code_health: code,
+            combined_health: combined,
+            arch_band: health_band(arch).to_string(),
+            code_band: health_band(code).to_string(),
+            combined_band: health_band(combined).to_string(),
+        });
+    }
+    Ok(rows)
 }
 
 #[cfg(test)]
