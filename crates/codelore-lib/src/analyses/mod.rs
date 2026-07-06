@@ -20,6 +20,7 @@ pub mod crossing;
 pub mod cycle_origins;
 pub mod dashboard;
 pub mod delivery_friction;
+pub mod delta_health;
 pub mod dependency_cycles;
 pub mod entity_effort;
 pub mod entity_ownership;
