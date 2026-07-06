@@ -58,6 +58,28 @@ pub struct ArchitectureTrendRow {
     pub largest_cycle: u32,
 }
 
+/// The ≤`SAMPLE_POINTS` evenly-spaced `(rev, timestamp)` commit samples,
+/// oldest→newest (newest always included). Shared by `architecture-trend` and
+/// `health-trend` so the rev set is identical between the two views.
+///
+/// # Errors
+///
+/// Returns [`crate::CodeLoreError::Analysis`] on `DuckDB` query errors.
+pub(crate) fn sampled_commits(db: &FactsDb) -> Result<Vec<(String, String)>> {
+    let commits: Vec<(String, String)> = crate::analyses::query::query_map_collect(
+        db,
+        "SELECT rev, CAST(date AS TEXT) FROM commits ORDER BY date ASC, rowid ASC",
+        [],
+        "sampled-commits",
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+    )?;
+    if commits.is_empty() {
+        return Ok(Vec::new());
+    }
+    let picks = evenly_spaced_indices(commits.len(), SAMPLE_POINTS);
+    Ok(picks.into_iter().map(|i| commits[i].clone()).collect())
+}
+
 /// Run the `architecture-trend` analysis. Returns one row per sampled
 /// rev, oldest first. Needs repository access (it reads historical
 /// blobs), unlike the SQL-only analyses.
@@ -73,23 +95,9 @@ pub fn run_architecture_trend<R: Repo>(
     // Unused, but kept for signature parity with the other analyses.
     _opts: &Options,
 ) -> Result<Vec<ArchitectureTrendRow>> {
-    // All commits, oldest → newest: (rev, full timestamp). The calendar
-    // date for display is the `YYYY-MM-DD` prefix of the timestamp.
-    let commits: Vec<(String, String)> = crate::analyses::query::query_map_collect(
-        db,
-        "SELECT rev, CAST(date AS TEXT) FROM commits ORDER BY date ASC, rowid ASC",
-        [],
-        "architecture-trend commits",
-        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-    )?;
-    if commits.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let picks = evenly_spaced_indices(commits.len(), SAMPLE_POINTS);
-    let mut rows = Vec::with_capacity(picks.len());
-    for idx in picks {
-        let (rev, ts) = &commits[idx];
+    let samples = sampled_commits(db)?;
+    let mut rows = Vec::with_capacity(samples.len());
+    for (rev, ts) in &samples {
         let graph = import_graph_at_rev(db, repo, rev, ts)?;
         // Shared kernel — so `architecture-trend` and the HEAD
         // `architecture-metrics` report the same numbers by construction.
@@ -131,7 +139,7 @@ pub(crate) fn import_graph_at_rev<R: Repo>(
 
 /// Pick up to `k` evenly-spaced indices over `0..len`, always including
 /// the last (newest commit). Returns `0..len` when `len <= k`.
-fn evenly_spaced_indices(len: usize, k: usize) -> Vec<usize> {
+pub(crate) fn evenly_spaced_indices(len: usize, k: usize) -> Vec<usize> {
     if len == 0 {
         return Vec::new();
     }
@@ -151,7 +159,7 @@ fn evenly_spaced_indices(len: usize, k: usize) -> Vec<usize> {
 /// at-or-before that instant that isn't a deletion. Date-anchored
 /// liveness (mirrors `code-age`), so it approximates tree membership on
 /// mostly-linear histories without needing a tree walk at the rev.
-fn live_paths_at(db: &FactsDb, ts: &str) -> Result<Vec<String>> {
+pub(crate) fn live_paths_at(db: &FactsDb, ts: &str) -> Result<Vec<String>> {
     crate::analyses::query::query_map_collect(
         db,
         "SELECT path FROM ( \
