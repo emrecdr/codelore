@@ -32,8 +32,12 @@ from the existing `codelore diff` flow in `codelore-cli/src/diff.rs`, which
 already materializes full facts (including per-function `complexity_metrics`)
 for base and head in temporary worktrees.
 
-**Changed-function detection is table-diffing, not git-diff parsing.** Join the
-base and head `complexity_metrics` tables on `(path, name)`:
+**Changed-function detection is table-diffing, not git-diff parsing.**
+Function rows are selected by joining `complexity_metrics` with `entities` on
+`(path, name)` filtered to `kind IN ('function', 'method')` — the metrics
+table also stores class- and file-level rows that must not read as functions.
+Only files in the PR's changed-file set are considered. Join the base and head
+function-row sets on `(path, name)`:
 
 - present only at head → **added**
 - present only at base → **removed**
@@ -59,8 +63,12 @@ adds no predictive power), plus clone membership as an operation-typed penalty:
 |---|---|---|---|---|
 | Function LOC | ≤ 30 | 31–70 | > 70 | SIG unit-size bands / CodeScene Large Method > 70 |
 | Cyclomatic | ≤ 5 | 6–10 | > 10 | SIG unit-complexity bands / CodeScene CC > 9 |
-| Nesting depth | ≤ 2 | 3 | ≥ 4 | CodeScene Deep Nested Complexity ≥ 4 |
 | Clone membership (head Type-1/2 group) | — | — | forced **high** | copy/paste penalty; makes AI-pasted additions unable to score low-risk |
+
+Nesting depth was considered and dropped for v1: the complexity layer
+currently persists `max_nesting = 0` for every function (nesting is not
+extracted from the tree-sitter pass), so the property has no data. It joins
+the table when the complexity scan computes it.
 
 Function class = the worst class any property triggers. Constants live in one
 documented table in `delta_health.rs`; **not** TOML-configurable in v1, so the
@@ -119,7 +127,8 @@ Violations flow through the existing `GateViolation` → `GITHUB_OUTPUT` /
 ```
 
 Rendered by the existing JSON/markdown diff emitters. `skipped` counts
-functions in files the complexity scan does not cover — no silent omission.
+changed files with no analyzable functions at either rev (languages the
+complexity scan does not cover, config/docs files) — no silent omission.
 This JSON shape is also the future MCP `analyze_change_set` payload and the
 data source for the dashboard improvements feed.
 
