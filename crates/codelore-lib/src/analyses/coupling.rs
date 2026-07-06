@@ -453,6 +453,39 @@ pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
         .prepare(&coupling_sql)
         .map_err(|e| CodeLoreError::Analysis(format!("prepare coupling: {e}")))?;
 
+    let out = collect_fisher_filtered(&mut stmt, total, opts)?;
+
+    // Memoise the FULL (un-row-limited) result so a later identical call
+    // skips the recompute. Apply `rows_limit` to a fresh copy AFTER caching
+    // — exactly where the limit was applied before this memo existed — so
+    // the cached entry stays caller-agnostic and a `--rows N` choice never
+    // poisons it.
+    let full = std::rc::Rc::new(out);
+    db.coupling_memo_put(memo_key, std::rc::Rc::clone(&full));
+
+    let mut out = (*full).clone();
+    if let Some(n) = opts.rows_limit {
+        out.truncate(n as usize);
+    }
+
+    Ok(out)
+}
+
+/// Run a prepared coupling statement, collect every candidate pair, and keep
+/// only those passing the Fisher exact significance filter (step 7). Returns
+/// the FULL, un-truncated result — callers apply `rows_limit` (and, for
+/// [`run_coupling`], memoization) themselves. Shared by [`run_coupling`] and
+/// [`run_coupling_scoped`] so the row-mapping + Fisher filter lives in exactly
+/// one place.
+///
+/// Candidates are collected in full BEFORE truncation because the previous
+/// in-SQL `LIMIT ?` ran ahead of the Fisher filter, letting significance
+/// failures steal slots from the top-N degree ranking.
+fn collect_fisher_filtered(
+    stmt: &mut duckdb::Statement<'_>,
+    total: u32,
+    opts: &Options,
+) -> Result<Vec<CouplingRow>> {
     let raw_rows = stmt
         .query_map(
             params![
@@ -477,11 +510,6 @@ pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
         )
         .map_err(|e| CodeLoreError::Analysis(format!("query coupling: {e}")))?;
 
-    // Collect ALL candidates first, filter by Fisher exact significance, THEN
-    // truncate to `rows_limit`. The previous in-SQL `LIMIT ?` ran BEFORE the
-    // Fisher filter, so significance failures stole slots from the top-N and
-    // users requesting `--rows 100` could see 0–99 rows even when more
-    // significant pairs existed further down the degree ranking.
     let mut out = Vec::new();
     for raw in raw_rows {
         let (path_a, path_b, shared_raw, count_a, count_b, avg_raw, degree) =
@@ -492,7 +520,6 @@ pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
         let revs_b = u32::try_from(count_b).unwrap_or(u32::MAX);
         let average_revs = u32::try_from(avg_raw).unwrap_or(u32::MAX);
 
-        // Fisher exact significance filter (step 7).
         let Some(fisher_p) = fisher_two_tail(shared, revs_a, revs_b, total) else {
             continue; // degenerate table — skip pair
         };
@@ -510,20 +537,6 @@ pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
             });
         }
     }
-
-    // Memoise the FULL (un-row-limited) result so a later identical call
-    // skips the recompute. Apply `rows_limit` to a fresh copy AFTER caching
-    // — exactly where the limit was applied before this memo existed — so
-    // the cached entry stays caller-agnostic and a `--rows N` choice never
-    // poisons it.
-    let full = std::rc::Rc::new(out);
-    db.coupling_memo_put(memo_key, std::rc::Rc::clone(&full));
-
-    let mut out = (*full).clone();
-    if let Some(n) = opts.rows_limit {
-        out.truncate(n as usize);
-    }
-
     Ok(out)
 }
 
@@ -593,57 +606,7 @@ pub fn run_coupling_scoped(
         .prepare(&coupling_sql)
         .map_err(|e| CodeLoreError::Analysis(format!("prepare coupling: {e}")))?;
 
-    let raw_rows = stmt
-        .query_map(
-            params![
-                opts.max_changeset_size,
-                opts.min_revs,
-                opts.min_shared_revs,
-                opts.min_coupling_pct,
-                opts.max_coupling_pct,
-                opts.min_revs,
-            ],
-            |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, i64>(2)?,
-                    r.get::<_, i64>(3)?,
-                    r.get::<_, i64>(4)?,
-                    r.get::<_, i64>(5)?,
-                    r.get::<_, f64>(6)?,
-                ))
-            },
-        )
-        .map_err(|e| CodeLoreError::Analysis(format!("query coupling: {e}")))?;
-
-    let mut out = Vec::new();
-    for raw in raw_rows {
-        let (path_a, path_b, shared_raw, count_a, count_b, avg_raw, degree) =
-            raw.map_err(|e| CodeLoreError::Analysis(format!("collect coupling row: {e}")))?;
-
-        let shared = u32::try_from(shared_raw).unwrap_or(u32::MAX);
-        let revs_a = u32::try_from(count_a).unwrap_or(u32::MAX);
-        let revs_b = u32::try_from(count_b).unwrap_or(u32::MAX);
-        let average_revs = u32::try_from(avg_raw).unwrap_or(u32::MAX);
-
-        let Some(fisher_p) = fisher_two_tail(shared, revs_a, revs_b, total) else {
-            continue; // degenerate table — skip pair
-        };
-
-        if fisher_p < opts.fisher_significance {
-            out.push(CouplingRow {
-                entity_a: path_a,
-                entity_b: path_b,
-                shared,
-                revs_a,
-                revs_b,
-                average_revs,
-                degree,
-                fisher_p,
-            });
-        }
-    }
+    let mut out = collect_fisher_filtered(&mut stmt, total, opts)?;
 
     if let Some(n) = opts.rows_limit {
         out.truncate(n as usize);
