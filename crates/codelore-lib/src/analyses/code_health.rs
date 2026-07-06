@@ -212,11 +212,14 @@ const SQL: &str = "
 
 /// A changes view limited to commits at/-before a cutoff timestamp, so
 /// history-derived terms (churn, author fragmentation, coupling) are rev-scoped.
+/// The `{ts}` cutoff is inlined as a quoted literal (single quotes doubled)
+/// rather than bound as a `?` parameter: `DuckDB` rejects prepared parameters
+/// inside a `CREATE VIEW` statement ("this type of statement can't be prepared").
 const CHANGES_AT_TS_DDL: &str = "
     CREATE OR REPLACE TEMPORARY VIEW changes_at_ts AS
     SELECT c.* FROM changes c
     INNER JOIN commits ON commits.rev = c.rev
-    WHERE commits.date <= CAST(? AS TIMESTAMP)
+    WHERE commits.date <= CAST('{ts}' AS TIMESTAMP)
 ";
 
 /// DDL for the temporary centrality table that backs the `shotgun-surgery`
@@ -478,8 +481,11 @@ pub fn run_code_health_scoped(
     crate::analyses::lineage::materialize_source(db, opts)?;
     let src_owned;
     let src: &str = if let Some(ts) = &cx.history_cutoff {
+        // Escape single quotes (SQL-standard doubling) before inlining — the
+        // literal cannot be a bound `?` parameter inside a CREATE VIEW.
+        let cutoff_sql = CHANGES_AT_TS_DDL.replace("{ts}", &ts.replace('\'', "''"));
         db.conn()
-            .execute(CHANGES_AT_TS_DDL, params![ts])
+            .execute(&cutoff_sql, [])
             .map_err(|e| CodeLoreError::Analysis(format!("create changes_at_ts view: {e}")))?;
         src_owned = "changes_at_ts".to_string();
         &src_owned

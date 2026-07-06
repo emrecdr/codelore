@@ -504,6 +504,55 @@ fn head_wrapper_equals_scoped_head_ctx() {
     }
 }
 
+/// Exercises the `history_cutoff` scoped path end to end: with a cutoff mid-way
+/// through the fixture's history, the churn / author / coupling terms must see
+/// only commits at-or-before the cutoff date, so at least one file's score
+/// moves relative to a full-history scan. This is the only coverage of the
+/// `changes_at_ts` view + `run_coupling_scoped` SQL — without it a broken
+/// cutoff would ship silently and only surface in the timeline consumer.
+#[test]
+fn scoped_history_cutoff_limits_churn_and_coupling() {
+    use codelore_lib::analyses::code_health::{HealthScanCtx, run_code_health_scoped};
+    let repo = codelore_lib::test_support::biomarker_repo::build();
+    let gix = codelore_lib::repo::GixRepo::open(repo.dir.path()).expect("open");
+    let db = codelore_lib::facts::FactsDb::new_in_memory().expect("db");
+    let opts = codelore_lib::test_support::permissive_coupling_opts(repo.dir.path().to_path_buf());
+    db.ingest(&gix, &opts).expect("ingest");
+
+    // Full history (cutoff None) vs a cutoff after the 3rd of six commits
+    // (fixture dates run 2026-06-01 .. 2026-06-06; the dup co-changes and the
+    // final complex touch land on 06-04..06-06 and are excluded here).
+    let full = run_code_health_scoped(&db, &opts, &HealthScanCtx::head()).expect("full");
+    let mut cx = HealthScanCtx::head();
+    cx.history_cutoff = Some("2026-06-03T23:59:59Z".to_string());
+    let cut = run_code_health_scoped(&db, &opts, &cx).expect("cutoff");
+
+    // The cutoff path must execute (no SQL error above) and yield valid scores.
+    assert!(!cut.is_empty(), "cutoff scan must yield rows");
+    for r in &cut {
+        assert!(
+            (0.0..=100.0).contains(&r.score),
+            "score in [0,100] for {}: {}",
+            r.path,
+            r.score
+        );
+    }
+
+    // Excluding the later commits changes the churn/coupling inputs, so at
+    // least one file's score must differ from the full-history scan.
+    let full_by: std::collections::HashMap<_, _> =
+        full.iter().map(|r| (r.path.clone(), r.score)).collect();
+    let moved = cut.iter().any(|r| {
+        full_by
+            .get(&r.path)
+            .is_none_or(|f| (r.score - f).abs() > 1e-9)
+    });
+    assert!(
+        moved,
+        "history cutoff must change at least one file's score vs full history"
+    );
+}
+
 /// Locks the 0.55 / 0.28 band cut points: every row's band must equal the
 /// threshold function applied to its `structural_risk`. Catches a silent
 /// threshold change in the SQL that the range/membership tests would miss.
