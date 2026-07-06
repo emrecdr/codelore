@@ -1,6 +1,6 @@
 //! Repo Health Timeline: architectural, code, and combined health (each 0–100,
 //! higher = healthier) across evenly-spaced historical revisions. Reuses the
-//! `architecture_trend` sampler for the rev set and piece-1's rev-parameterizable
+//! `architecture_trend` sampler for the rev set and the rev-parameterizable
 //! `code_health` engine for the per-rev code score. On-demand, never cached.
 
 use crate::analyses::architecture_trend::{import_graph_at_rev, live_paths_at, sampled_commits};
@@ -112,7 +112,7 @@ pub fn run_health_trend<R: Repo>(
         let files = u32::try_from(m.n).unwrap_or(u32::MAX);
         let arch = arch_health(&m);
 
-        // Code half — rev-scoped sources into piece-1's scoped engine.
+        // Code half — rev-scoped sources into the scoped code-health engine.
         let live = live_paths_at(db, ts)?;
         ingest_complexity_at_rev(db, repo, rev, &live, CM_AT_REV)?;
         materialize_imports_at_rev(db, &graph, IMPORTS_AT_REV)?;
