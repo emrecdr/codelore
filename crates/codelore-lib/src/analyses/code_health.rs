@@ -41,6 +41,40 @@ use crate::analyses::coupling::run_coupling;
 use crate::facts::FactsDb;
 use crate::{CodeLoreError, Options, Result};
 
+/// What revision / sources a code-health scan runs against. `head()` resolves
+/// to today's HEAD tables so existing behaviour is byte-identical.
+#[derive(Debug, Clone)]
+pub struct HealthScanCtx {
+    /// Complexity source table (HEAD: `"complexity_metrics"`).
+    pub complexity_source: String,
+    /// Imports source table for god-class fan-in/out (HEAD: `"imports"`).
+    pub imports_source: String,
+    /// When `Some(ts)`, history terms (churn, author, coupling) are limited to
+    /// `commits.date <= ts`.
+    pub history_cutoff: Option<String>,
+    /// Include the clone/DRY biomarker (true at HEAD; false at a historical rev
+    /// where clone detection is unavailable).
+    pub include_clones: bool,
+}
+
+impl HealthScanCtx {
+    /// The HEAD scan — every source resolves to today's table, DRY included.
+    #[must_use]
+    pub fn head() -> Self {
+        Self {
+            complexity_source: "complexity_metrics".to_string(),
+            imports_source: "imports".to_string(),
+            history_cutoff: None,
+            include_clones: true,
+        }
+    }
+}
+
+/// Divisor appended to the `structural_risk` SUM when the DRY biomarker is
+/// excluded: the four remaining weights (0.30+0.25+0.15+0.15) sum to 0.85, so
+/// dividing by 0.85 renormalizes the risk scale back to 1.0. Empty at HEAD.
+const STRUCTURAL_SCALE_NO_DRY: &str = " / 0.85";
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CodeHealthRow {
     pub path: String,
@@ -431,4 +465,24 @@ pub fn run_code_health(db: &FactsDb, opts: &Options) -> Result<Vec<CodeHealthRow
         .map_err(|e| CodeLoreError::Analysis(format!("query code-health: {e}")))?;
     rows.collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|e| CodeLoreError::Analysis(format!("collect code-health: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn head_ctx_defaults_to_head_tables() {
+        let c = super::HealthScanCtx::head();
+        assert_eq!(c.complexity_source, "complexity_metrics");
+        assert_eq!(c.imports_source, "imports");
+        assert!(c.history_cutoff.is_none());
+        assert!(c.include_clones);
+    }
+
+    #[test]
+    fn no_dry_scale_renormalizes_to_one() {
+        // 0.30 + 0.25 + 0.15 + 0.15 = 0.85; dividing by 0.85 restores a 1.0 ceiling.
+        let sum = 0.30 + 0.25 + 0.15_f64 + 0.15;
+        assert!((sum - 0.85).abs() < 1e-9);
+        assert_eq!(super::STRUCTURAL_SCALE_NO_DRY, " / 0.85");
+    }
 }
