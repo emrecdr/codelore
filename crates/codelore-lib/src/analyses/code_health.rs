@@ -340,12 +340,16 @@ fn materialize_biomarkers(db: &FactsDb, opts: &Options, cx: &HealthScanCtx) -> R
     let god_by_path: HashMap<String, f64> =
         gods.iter().map(|g| (g.path.clone(), g.god_score)).collect();
 
-    // DRY: reuse clone detection (walks HEAD worktree); metric = clone count.
-    let clones = crate::analyses::clones::run_clones(opts)?;
-    let mut dry_counts: HashMap<String, u32> = HashMap::new();
-    for c in &clones {
-        *dry_counts.entry(c.entity.clone()).or_insert(0) += 1;
-    }
+    let dry_counts: HashMap<String, u32> = if cx.include_clones {
+        let clones = crate::analyses::clones::run_clones(opts)?;
+        let mut m: HashMap<String, u32> = HashMap::new();
+        for c in &clones {
+            *m.entry(c.entity.clone()).or_insert(0) += 1;
+        }
+        m
+    } else {
+        HashMap::new()
+    };
 
     // Full file universe (files with complexity data), grouped by language —
     // the same universe the SQL-side complex/large biomarkers rank over.
@@ -375,7 +379,12 @@ fn materialize_biomarkers(db: &FactsDb, opts: &Options, cx: &HealthScanCtx) -> R
             continue; // PERCENT_RANK is degenerate for a single-file language
         }
         let denom = f64::from(u32::try_from(files.len() - 1).unwrap_or(u32::MAX));
-        for smell in ["god-class", "dry"] {
+        let smells: &[&str] = if cx.include_clones {
+            &["god-class", "dry"]
+        } else {
+            &["god-class"]
+        };
+        for &smell in smells {
             let vals: Vec<f64> = files
                 .iter()
                 .map(|p| {

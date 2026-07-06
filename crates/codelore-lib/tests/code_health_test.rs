@@ -411,6 +411,70 @@ fn code_health_csv_column_contract() {
     );
 }
 
+#[test]
+fn scoped_no_clones_excludes_dry_and_renormalizes() {
+    use codelore_lib::analyses::code_health::{
+        CodeHealthRow, HealthScanCtx, run_code_health, run_code_health_scoped,
+    };
+    let repo = codelore_lib::test_support::biomarker_repo::build();
+    let gix = codelore_lib::repo::GixRepo::open(&repo.dir.path()).expect("open");
+    let db = codelore_lib::facts::FactsDb::new_in_memory().expect("db");
+    let opts = codelore_lib::test_support::permissive_coupling_opts(repo.dir.path().to_path_buf());
+    db.ingest(&gix, &opts).expect("ingest");
+
+    let head = run_code_health(&db, &opts).expect("head");
+    let mut cx = HealthScanCtx::head();
+    cx.include_clones = false;
+    let no_dry = run_code_health_scoped(&db, &opts, &cx).expect("no-dry");
+
+    assert_eq!(head.len(), no_dry.len(), "same file universe");
+
+    let risk = |rows: &[CodeHealthRow], suffix: &str| -> f64 {
+        rows.iter()
+            .find(|r| r.path.ends_with(suffix))
+            .unwrap_or_else(|| panic!("{suffix} should be scored"))
+            .structural_risk
+    };
+
+    // `big.rs` (large-method, unique — no clone) carries no DRY term, so
+    // dropping DRY leaves its weighted biomarker sum untouched: only the
+    // `/0.85` renormalization applies. Its no-clones risk is therefore exactly
+    // the HEAD risk divided by 0.85, proving the renormalization divisor is
+    // wired. (Not a `>=` score relation — renormalization deliberately RAISES a
+    // no-duplication file's risk; the no-clones series is internally consistent,
+    // not comparable to the with-DRY HEAD score. See design §4.)
+    let big_head = risk(&head, "big.rs");
+    let big_nodry = risk(&no_dry, "big.rs");
+    assert!(
+        big_head > 0.0,
+        "big.rs must carry a non-DRY smell for this check"
+    );
+    assert!(
+        (big_nodry - big_head / 0.85).abs() < 1e-6,
+        "renorm: big.rs no-clones risk {big_nodry} must equal HEAD {big_head} / 0.85"
+    );
+
+    // `dup_a.rs` is a clone of `dup_b.rs`, so at HEAD it carries a DRY term.
+    // Excluding DRY removes that term; even after the `/0.85` bump the net risk
+    // DROPS below HEAD, proving the DRY biomarker was present and is now gone.
+    let dup_head = risk(&head, "dup_a.rs");
+    let dup_nodry = risk(&no_dry, "dup_a.rs");
+    assert!(
+        dup_nodry < dup_head - 1e-6,
+        "DRY excluded: dup_a.rs no-clones risk {dup_nodry} must drop below HEAD {dup_head}"
+    );
+
+    // Renormalization keeps every risk in range.
+    for r in &no_dry {
+        assert!(
+            (0.0..=1.0).contains(&r.structural_risk),
+            "structural_risk out of range for {}: {}",
+            r.path,
+            r.structural_risk
+        );
+    }
+}
+
 /// Locks the 0.55 / 0.28 band cut points: every row's band must equal the
 /// threshold function applied to its `structural_risk`. Catches a silent
 /// threshold change in the SQL that the range/membership tests would miss.
