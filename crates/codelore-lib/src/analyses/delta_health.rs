@@ -346,9 +346,20 @@ pub fn compute_delta_health(
         };
     }
     let ratio = 100.0 * good_w / total;
+    // A change set with no bad weight never reports `degrading`. A low
+    // ratio can be driven purely by neutral changes — e.g. adding one
+    // medium-sized function — which is a low-signal event, not a
+    // regression. Reporting `degrading` there would block benign,
+    // degradation-free PRs under the deny-degrading / min-ratio gates and
+    // mislead the human-facing verdict; cap it at `indeterminate` instead.
+    let verdict = if bad_w == 0.0 && ratio < RATIO_DEGRADING_BELOW {
+        "indeterminate"
+    } else {
+        verdict_for(ratio)
+    };
     DeltaHealthSection {
         ratio: Some(ratio),
-        verdict: verdict_for(ratio).to_string(),
+        verdict: verdict.to_string(),
         counts,
         functions,
     }
@@ -498,7 +509,8 @@ mod tests {
 
     #[test]
     fn red_file_multiplier_amplifies_good_and_bad_not_neutral() {
-        // One good (10 LOC) + one bad (10 LOC) + one neutral (40 LOC) change.
+        // One good (head 10 LOC) + one bad (head 100 LOC) + one neutral
+        // (head 41 LOC) change; weights use head LOC.
         let base = vec![
             row("red.rs", "improved", 80, 1.0), // High → Low = good
             row("red.rs", "worsened", 10, 1.0), // Low → High = bad
@@ -530,5 +542,23 @@ mod tests {
         assert_eq!(s.ratio, Some(100.0));
         assert_eq!(s.verdict, "improving");
         assert!((s.functions[0].weight - 120.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn all_neutral_change_is_indeterminate_not_degrading() {
+        // Adding a single medium-risk function (LOC 31-70, cyclomatic < 11)
+        // is a Neutral outcome, so good_w = bad_w = 0 and the ratio is 0.0.
+        // With no bad weight the change degraded nothing, so it must read as
+        // `indeterminate` (low signal), never `degrading` — otherwise the
+        // deny-degrading / min-ratio gates would block a benign PR.
+        let head = vec![row("a.rs", "added_medium", 50, 1.0)];
+        let s = compute_delta_health(&[], &head, &files(&["a.rs"]), &no_clones(), &files(&[]));
+        assert_eq!(s.counts.added, 1);
+        assert_eq!(s.functions[0].outcome, Outcome::Neutral);
+        assert_eq!(s.ratio, Some(0.0));
+        assert_eq!(
+            s.verdict, "indeterminate",
+            "all-neutral change must not be labeled degrading"
+        );
     }
 }
