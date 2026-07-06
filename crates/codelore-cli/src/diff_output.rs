@@ -60,6 +60,46 @@ fn emit_text(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
         writeln!(out)?;
     }
 
+    if let Some(dh) = &output.delta_health {
+        const MAX_ROWS: usize = 20;
+        match dh.ratio {
+            Some(ratio) => writeln!(
+                out,
+                "Delta health: {ratio:.1}/100 — {} ({} added, {} modified, {} removed, {} files skipped)",
+                dh.verdict,
+                dh.counts.added,
+                dh.counts.modified,
+                dh.counts.removed,
+                dh.counts.skipped
+            )?,
+            None => writeln!(
+                out,
+                "Delta health: {} (no analyzable code changed)",
+                dh.verdict
+            )?,
+        }
+        for f in dh.functions.iter().take(MAX_ROWS) {
+            writeln!(
+                out,
+                "    [{}] {}::{} {} \u{2192} {}{}",
+                f.outcome.as_str(),
+                f.path,
+                f.function,
+                f.before.map_or("\u{2205}", |c| c.as_str()),
+                f.after.map_or("\u{2205}", |c| c.as_str()),
+                if f.in_red_file { " (red file)" } else { "" },
+            )?;
+        }
+        if dh.functions.len() > MAX_ROWS {
+            writeln!(
+                out,
+                "    \u{2026} and {} more",
+                dh.functions.len() - MAX_ROWS
+            )?;
+        }
+        writeln!(out)?;
+    }
+
     if !output.hotspots.rank_entrants.is_empty() {
         writeln!(
             out,
@@ -183,6 +223,39 @@ fn emit_markdown(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
                 codelore_lib::cli_api::output::markdown::escape_md_cell(&v.actual),
                 codelore_lib::cli_api::output::markdown::escape_md_cell(&v.threshold),
             )?;
+        }
+        writeln!(out)?;
+    }
+
+    if let Some(dh) = &output.delta_health {
+        writeln!(out, "## Delta health")?;
+        writeln!(out)?;
+        match dh.ratio {
+            Some(ratio) => writeln!(out, "**{ratio:.1}/100 — {}**", dh.verdict)?,
+            None => writeln!(out, "**{}** — no analyzable code changed", dh.verdict)?,
+        }
+        writeln!(out)?;
+        if !dh.functions.is_empty() {
+            const MAX_ROWS: usize = 20;
+            writeln!(out, "| Function | Before | After | Outcome | Reasons |")?;
+            writeln!(out, "|---|---|---|---|---|")?;
+            for f in dh.functions.iter().take(MAX_ROWS) {
+                writeln!(
+                    out,
+                    "| `{}::{}`{} | {} | {} | {} | {} |",
+                    f.path,
+                    f.function,
+                    if f.in_red_file { " \u{1F534}" } else { "" },
+                    f.before.map_or("\u{2205}", |c| c.as_str()),
+                    f.after.map_or("\u{2205}", |c| c.as_str()),
+                    f.outcome.as_str(),
+                    codelore_lib::cli_api::output::markdown::escape_md_cell(&f.reasons.join("; ")),
+                )?;
+            }
+            if dh.functions.len() > MAX_ROWS {
+                writeln!(out)?;
+                writeln!(out, "\u{2026} and {} more", dh.functions.len() - MAX_ROWS)?;
+            }
         }
         writeln!(out)?;
     }

@@ -15,7 +15,11 @@ use std::process::Command;
 use anyhow::{Context, Result, anyhow};
 use codelore_lib::cli_api::Options;
 use codelore_lib::cli_api::analyses::clones::{ClonesRow, run_clones};
+use codelore_lib::cli_api::analyses::code_health::run_code_health;
 use codelore_lib::cli_api::analyses::coupling::{CouplingRow, run_coupling};
+use codelore_lib::cli_api::analyses::delta_health::{
+    DeltaHealthSection, FunctionMetricRow, compute_delta_health, run_function_metrics,
+};
 use codelore_lib::cli_api::analyses::hotspots::{HotspotRow, run_hotspots};
 use codelore_lib::cli_api::facts::FactsDb;
 use codelore_lib::cli_api::repo::GixRepo;
@@ -55,6 +59,10 @@ pub struct DiffOutput {
     /// when both gates pass.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gate_violations: Vec<GateViolationOut>,
+    /// Change-level health verdict. `None` when the base analysis lacks
+    /// function metrics (stale `--base-cache` written by an older binary).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delta_health: Option<DeltaHealthSection>,
 }
 
 /// JSON-serialisable mirror of `quality_gates::GateViolation`.
@@ -135,6 +143,17 @@ pub struct RevAnalyses {
     /// so a base-cache written before this field deserialises to 0.
     #[serde(default)]
     pub dependency_cycles: u32,
+    /// Per-function metric rows for delta-health. `#[serde(default)]` so a
+    /// base-cache written before this field deserialises to empty; the
+    /// consumer treats empty-with-nonempty-hotspots as "stale cache" and
+    /// skips delta-health rather than misreading every head function as
+    /// added.
+    #[serde(default)]
+    pub functions: Vec<FunctionMetricRow>,
+    /// Paths whose file-level code-health band is red at this rev. Powers
+    /// the delta-health context multiplier.
+    #[serde(default)]
+    pub red_files: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -308,6 +327,13 @@ fn analyze_at_rev(repo: &Path, sha: &str, args: &DiffArgs) -> Result<RevAnalyses
         .context("import graph at rev")?;
     let dependency_cycles =
         codelore_lib::cli_api::analyses::import_graph::graph_metrics(&graph).cycle_count;
+    let functions = run_function_metrics(&db).context("function metrics at rev")?;
+    let red_files: Vec<String> = run_code_health(&db, &opts)
+        .context("code health at rev")?
+        .into_iter()
+        .filter(|r| r.band == "red")
+        .map(|r| r.path)
+        .collect();
 
     Ok(RevAnalyses {
         sha: sha.to_string(),
@@ -315,6 +341,8 @@ fn analyze_at_rev(repo: &Path, sha: &str, args: &DiffArgs) -> Result<RevAnalyses
         coupling,
         clones,
         dependency_cycles,
+        functions,
+        red_files,
     })
 }
 
@@ -630,6 +658,37 @@ pub fn run_diff(args: &DiffArgs) -> Result<DiffOutput> {
 
     let pr_files = list_pr_files(&args.repo, &base_sha, &head_sha)?;
 
+    // Delta health: always computed (not gated behind thresholds) — the
+    // section is standalone review signal. Guard against a base-cache
+    // written before function metrics existed: empty base functions with
+    // a non-empty base analysis would misread every head function as
+    // "added" and poison the verdict.
+    let delta_health = if base_analyses.functions.is_empty()
+        && !base_analyses.hotspots.is_empty()
+        && !head_analyses.functions.is_empty()
+    {
+        tracing::warn!(
+            "base analysis has no function metrics (stale --base-cache?); \
+             skipping delta-health — delete the cache file to recompute"
+        );
+        None
+    } else {
+        let clone_members: std::collections::HashSet<(String, String)> = head_analyses
+            .clones
+            .iter()
+            .map(|c| (c.entity.clone(), c.function.clone()))
+            .collect();
+        let red: std::collections::HashSet<String> =
+            base_analyses.red_files.iter().cloned().collect();
+        Some(compute_delta_health(
+            &base_analyses.functions,
+            &head_analyses.functions,
+            &pr_files,
+            &clone_members,
+            &red,
+        ))
+    };
+
     let want_hotspots = args.analysis.wants_hotspots();
     let want_coupling = args.analysis.wants_coupling();
     let want_clones = args.analysis.wants_clones();
@@ -686,7 +745,9 @@ pub fn run_diff(args: &DiffArgs) -> Result<DiffOutput> {
         thresholds_opt.as_ref()
         && (t.diff.delta_code_health_min.is_some()
             || t.diff.new_hotspot_max.is_some()
-            || t.diff.no_new_cycles)
+            || t.diff.no_new_cycles
+            || t.diff.delta_health_min.is_some()
+            || t.diff.deny_degrading_verdict)
     {
         let base_med = median_code_health(&base_analyses.hotspots);
         let head_med = median_code_health(&head_analyses.hotspots);
@@ -699,6 +760,8 @@ pub fn run_diff(args: &DiffArgs) -> Result<DiffOutput> {
                 delta,
                 base_analyses.dependency_cycles,
                 head_analyses.dependency_cycles,
+                delta_health.as_ref().and_then(|d| d.ratio),
+                delta_health.as_ref().map(|d| d.verdict.as_str()),
             )
             .into_iter()
             .map(Into::into)
@@ -718,6 +781,7 @@ pub fn run_diff(args: &DiffArgs) -> Result<DiffOutput> {
         base_median_code_health,
         head_median_code_health,
         gate_violations,
+        delta_health,
     })
 }
 
