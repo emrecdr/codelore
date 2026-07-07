@@ -372,7 +372,7 @@
         textStyle: { color: dim },
         bottom: 0,
       },
-      grid: { left: 8, right: 8, top: 24, bottom: 48, containLabel: true },
+      grid: { left: 24, right: 8, top: 24, bottom: 48, containLabel: true },
       xAxis: {
         type: 'category',
         data: dates,
@@ -383,8 +383,9 @@
           type: 'value',
           name: 'Propagation %',
           position: 'left',
+          nameGap: 10,
           axisLabel: { color: dim },
-          nameTextStyle: { color: dim },
+          nameTextStyle: { color: dim, fontSize: 10, align: 'left' },
           splitLine: { lineStyle: { color: getCssVar('--border') } },
         },
         {
@@ -392,8 +393,9 @@
           name: 'Cycles',
           position: 'right',
           minInterval: 1,
+          nameGap: 10,
           axisLabel: { color: dim },
-          nameTextStyle: { color: dim },
+          nameTextStyle: { color: dim, fontSize: 10, align: 'left' },
           splitLine: { show: false },
         },
       ],
@@ -418,7 +420,7 @@
           symbolSize: 6,
           yAxisIndex: 1,
           data: cycles,
-          lineStyle: { color: errColor, width: 2 },
+          lineStyle: { color: errColor, width: 2, type: 'dashed' },
           itemStyle: { color: errColor },
         },
       ],
@@ -473,7 +475,7 @@
 
     // Toggle button + chart host.
     container.innerHTML =
-      '<div class="widget-toolbar"><button id="ht-toggle" class="toggle">' +
+      '<div class="widget-toolbar"><button id="ht-toggle" class="wt-btn">' +
       (view === 'overlay' ? 'Split view' : 'Overlay view') +
       '</button></div><div id="ht-charts"></div>';
     const toggle = document.getElementById('ht-toggle');
@@ -562,6 +564,7 @@
     panels.forEach(function (p, i) {
       const el = document.getElementById('ht-sm-' + i);
       if (!el) return;
+      const isLast = i === panels.length - 1;
       const c = mountEcharts(el);
       c.setOption(Object.assign({}, baseAxis, {
         title: {
@@ -570,7 +573,32 @@
           top: 4,
           textStyle: { fontSize: 12, color: getCssVar('--fg') },
         },
-        grid: { left: 8, right: 8, top: 36, bottom: 24, containLabel: true },
+        grid: {
+          left: 8,
+          right: 8,
+          top: 36,
+          bottom: isLast ? 24 : 8,
+          containLabel: true,
+        },
+        xAxis: {
+          type: 'category',
+          data: dates,
+          boundaryGap: false,
+          axisLabel: {
+            show: isLast,
+            color: dim,
+            rotate: 30,
+            fontSize: 10,
+          },
+        },
+        yAxis: {
+          type: 'value',
+          min: 0,
+          max: 100,
+          interval: 50,
+          axisLabel: { color: dim, fontSize: 10 },
+          splitLine: { lineStyle: { color: getCssVar('--border') } },
+        },
         series: [
           {
             name: p.label,

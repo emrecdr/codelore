@@ -4,6 +4,39 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Health-trend toggle unreadable.** The `<button id="ht-toggle">` carried
+  `class="toggle"` which collided with DaisyUI's global `.toggle` switch
+  component, collapsing the button into an unreadable knob blob. Renamed
+  the class to `wt-btn` and updated the three matching CSS rules in the
+  template (`widget-toolbar .wt-btn`, `:hover`, `.active`).
+
+- **Health-trend overlay renders nothing.** The `#ht-charts` chart host had no
+  explicit height, so `echarts.init` operated on a 0-height container and
+  produced an empty canvas despite the parent widget having a `min-height`.
+  Fixed by adding `#ht-charts { height: 320px; }` to the template CSS.
+
+- **Health-trend split view unreadable** (y-axis labels merged, x-axis labels
+  colliding across panels, panels too short). Each panel now uses `height:
+  180px` (was 130px), y-axis is fixed to three ticks at 0 / 50 / 100
+  (`interval: 50`), x-axis labels are shown only on the last panel, and the
+  bottom grid margin is 8px for non-last panels vs 24px for the last.
+
+- **Arch-trend cycles line mistaken for propagation cost.** The Dependency
+  cycles series (genuinely 0 in most repos) is now dashed (`lineStyle.type:
+  'dashed'`), making it visually distinct from the solid propagation-cost line.
+  Both y-axis names are also no longer clipped: `nameGap: 10`, `fontSize: 10`,
+  and `grid.left: 24` ensure the full "Propagation %" label renders.
+
+- **Theme-switch stale colors on ECharts widgets.** Seven widgets
+  (`arch-trend`, `health-trend`, `arch-graph`, `arch-matrix`,
+  `kamei-risk-sparkline`, `parallel-coords`, `cognitive-boxplot`) used the
+  cached `token()` color reader but were registered without the
+  `rerender: 'theme'` flag that triggers `invalidateTokenCache()` before
+  re-render. After a theme switch, those widgets displayed colors from the
+  previous theme. All seven now carry `rerender: 'theme'`.
+
 ## [0.15.0] - 2026-07-07
 
 ### Added

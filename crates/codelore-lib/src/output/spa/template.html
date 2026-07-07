@@ -792,7 +792,7 @@
       margin-bottom: 12px;
       flex-wrap: wrap;
     }
-    .widget-toolbar .toggle {
+    .widget-toolbar .wt-btn {
       background: var(--bg-elev-2);
       color: var(--fg-dim);
       border: 1px solid var(--border);
@@ -802,8 +802,8 @@
       font-size: 12px;
       font-family: inherit;
     }
-    .widget-toolbar .toggle:hover { border-color: var(--accent); color: var(--fg); }
-    .widget-toolbar .toggle.active {
+    .widget-toolbar .wt-btn:hover { border-color: var(--accent); color: var(--fg); }
+    .widget-toolbar .wt-btn.active {
       background: rgba(46, 164, 79, 0.12);
       color: var(--accent);
       border-color: var(--accent);
@@ -867,9 +867,13 @@
       --chart-palette-14: #303f9f;
       --chart-palette-15: #ad1457;
     }
-    /* Health-trend small-multiple panels (split view). Each panel needs
-       an explicit height so ECharts doesn't render into a 0px container. */
-    .ht-sm { height: 130px; margin-bottom: 4px; }
+    /* Health-trend: the overlay chart host needs an explicit height so
+       ECharts doesn't render into a 0px container (the parent widget
+       min-height does not propagate into block children). */
+    #ht-charts { height: 320px; }
+    /* Split-view small-multiple panels. Taller than the old 130px so
+       y-axis labels and the title don't overlap the plot area. */
+    .ht-sm { height: 180px; margin-bottom: 4px; }
     footer {
       padding: 20px 28px;
       color: var(--fg-dim);
