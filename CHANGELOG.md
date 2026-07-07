@@ -12,6 +12,34 @@ Conventional Commits format. All notable changes documented here.
   copy/paste penalty and heavier weighting inside red-band files. Two new
   `[diff]` gates: `delta_health_min` and `deny_degrading_verdict`.
 
+- **`health-trend` analysis + SPA timeline.** A new `--analysis health-trend`
+  plots three 0–100 scores across up to 12 evenly-spaced historical commits:
+  **architectural** health (purely structural — propagation cost plus
+  dependency-cycle tangle), **code** health (the rev-parameterized `code-health`
+  engine run at each rev with duplication excluded, averaged over files), and
+  their equal-weighted **combined** score. Each is banded green (≥ 70) /
+  yellow (40–69) / red (< 40). Emits csv/json/markdown; on-demand, never cached
+  (roughly `2×` the `architecture-trend` cost). The dashboard gains a
+  health-trend widget — an overlaid 3-line chart (combined emphasized) over
+  faint red/yellow/green band backgrounds, with a toggle to split into three
+  stacked small multiples. The per-rev code score uses the same reduced form at
+  every sample (including the newest), so the series is internally consistent;
+  its most-recent point is not directly comparable to the standalone HEAD
+  `code-health` number, which includes duplication and full external fan-out.
+
+### Fixed
+
+- **`code-health` under `--group-file` now routes complexity through the
+  grouped table consistently.** The biomarker pipeline read the ungrouped
+  `complexity_metrics` while the composite's cognitive term read the grouped
+  table, so grouped entities silently scored `structural_risk = 0` (a join
+  miss). Grouped and biomarker reads now share one source. Non-grouped output is
+  unchanged.
+
+- **Bumped `crossbeam-epoch` to 0.9.20** to resolve RUSTSEC-2026-0204 — an
+  invalid-pointer-dereference advisory in its `fmt::Pointer` impl for `Atomic`
+  and `Shared`. A transitive dependency; no API impact.
+
 ## [0.14.0] - 2026-07-05
 
 ### Added
