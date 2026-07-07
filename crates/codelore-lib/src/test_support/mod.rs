@@ -473,13 +473,6 @@ pub mod coupling_repo {
         );
         run_git(&path, &["add", "."]);
         commit_at(&path, "2026-06-01T10:00:00Z", "seed all modules");
-        // Pack the seed's loose objects into a single packfile. The seed writes
-        // six blobs at once — the widest window for the cross-process
-        // loose-object visibility race where a later `write-tree` fails to see a
-        // just-written object under CI I/O load ("invalid object / Error
-        // building trees"). Post-repack, later commits add only one or two loose
-        // objects at a time.
-        run_git(&path, &["repack", "-d", "--quiet"]);
 
         // Co-change 1: alpha/svc + beta/svc together (→ depth-2 edge src/alpha↔src/beta).
         write(
@@ -688,6 +681,15 @@ pub mod coupling_repo {
             .status()
             .expect("git commit");
         assert!(status.success(), "commit '{msg}' at {iso_date} failed");
+        // Pack this commit's loose objects immediately. `coupling_repo` is built
+        // by FOUR browser tests in parallel (unlike `medium_repo`'s single
+        // build), so under ~4x the I/O contention a later `write-tree` can miss
+        // a recently-written loose object ("invalid object / Error building
+        // trees"). `medium_repo` keeps its loose set small by repacking every 50
+        // commits at 1x load; the parallel `coupling_repo` needs the tighter
+        // per-commit cadence. `gc.auto=0` (set in `build`) keeps a concurrent
+        // auto-gc from racing the same store.
+        run_git(path, &["repack", "-d", "--quiet"]);
     }
 
     fn run_git(path: &std::path::Path, args: &[&str]) {
