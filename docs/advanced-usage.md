@@ -346,6 +346,38 @@ Fires when a historically-strong pair (`shared >= 5 AND fisher_p < 0.05`) has **
 - **`new_families`** — clone families introduced by the PR (head fingerprints absent from base).
 - **`pr_touched_existing`** — PR modified an existing clone-family member (didn't introduce new debt but didn't fix the existing kind either).
 
+### Delta health
+
+Every `codelore diff` run includes a `delta_health` section that judges the **change**, not the snapshot. Each function added, removed, or modified between base and head is classified by risk, given an outcome, and aggregated into a 0–100 ratio.
+
+**Risk classification** (worst property wins):
+
+| Condition | Risk class |
+|---|---|
+| LOC ≥ 71, or cyclomatic ≥ 11, or member of a clone group | `high` |
+| LOC ≥ 31, or cyclomatic ≥ 6 | `medium` |
+| Otherwise | `low` |
+
+Clone membership forces `high` regardless of size — copy-pasted code carries the full structural debt of its source regardless of how small the paste is.
+
+**Outcome per function:**
+
+- `good` — ends `low`, strictly improves (before > after), or removes a `high`-risk function.
+- `bad` — ends `high` or strictly degrades.
+- `neutral` — everything else (stayed `medium`, removed a non-`high` function).
+
+**Ratio and verdicts:** `ratio = 100 × good_weight / total_weight`, where weight is the function's physical LOC. Functions in files that were `red`-band at base carry a 1.5× weight multiplier on good and bad outcomes (the most critical files amplify the signal).
+
+| Ratio | Verdict |
+|---|---|
+| < 40 | `degrading` |
+| 40 – 70 | `indeterminate` |
+| > 70 | `improving` |
+
+When no changed file contains an analyzable function (docs-only, config, unsupported language), the verdict is `no-code-change` and `ratio` is omitted.
+
+**Stale base-cache skip:** delta health is skipped when the base analysis has an empty `functions` list, a non-empty `hotspots` list, and the head analysis has functions — the data fingerprint of a base cache written by an older binary that predates function-metric collection. This prevents misreading every head function as newly added. Delete the cache file (or omit `--base-cache`) to recompute.
+
 ### Quality gate
 
 ```bash
@@ -365,9 +397,11 @@ max_propagation_cost = 0.15   # ceiling on change-reach density (0..1)
 
 [diff]
 no_new_cycles = true          # a PR may not introduce a dependency cycle the base lacked
+delta_health_min = 40.0       # ratio must be ≥ 40 (indeterminate or better)
+deny_degrading_verdict = true # a "degrading" verdict fails the PR gate
 ```
 
-`max_dependency_cycles` / `max_propagation_cost` are evaluated against HEAD by `codelore check`; `no_new_cycles` compares the base-rev and head-rev import graphs in `codelore diff` and fails the PR when head has more cycles than base.
+`max_dependency_cycles` / `max_propagation_cost` are evaluated against HEAD by `codelore check`; `no_new_cycles` compares the base-rev and head-rev import graphs in `codelore diff` and fails the PR when head has more cycles than base. `delta_health_min` and `deny_degrading_verdict` both act on the `delta_health` section: `delta_health_min` fails when `ratio < threshold` (skipped on `no-code-change` diffs where no ratio exists); `deny_degrading_verdict` fails when the verdict is exactly `"degrading"`.
 
 ## 5. Configuration: `.codeloreignore` + thresholds
 

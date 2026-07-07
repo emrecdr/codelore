@@ -436,6 +436,9 @@ pub mod coupling_repo {
         run_git(&path, &["init", "-b", "main", "--quiet"]);
         run_git(&path, &["config", "user.email", "coupling@example.com"]);
         run_git(&path, &["config", "user.name", "Coupling"]);
+        // Disable auto-gc so a mid-build `gc --auto` can't prune loose objects
+        // between an `add` and its `commit` (matches `medium_repo`).
+        run_git(&path, &["config", "gc.auto", "0"]);
 
         // Seed all six files with real content so complexity ingest is non-trivial.
         write(
@@ -678,6 +681,15 @@ pub mod coupling_repo {
             .status()
             .expect("git commit");
         assert!(status.success(), "commit '{msg}' at {iso_date} failed");
+        // Pack this commit's loose objects immediately. `coupling_repo` is built
+        // by FOUR browser tests in parallel (unlike `medium_repo`'s single
+        // build), so under ~4x the I/O contention a later `write-tree` can miss
+        // a recently-written loose object ("invalid object / Error building
+        // trees"). `medium_repo` keeps its loose set small by repacking every 50
+        // commits at 1x load; the parallel `coupling_repo` needs the tighter
+        // per-commit cadence. `gc.auto=0` (set in `build`) keeps a concurrent
+        // auto-gc from racing the same store.
+        run_git(path, &["repack", "-d", "--quiet"]);
     }
 
     fn run_git(path: &std::path::Path, args: &[&str]) {

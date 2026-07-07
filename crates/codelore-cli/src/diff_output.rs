@@ -12,7 +12,18 @@ use std::io::Write;
 
 use anyhow::{Context, Result};
 
+use codelore_lib::cli_api::analyses::delta_health::RiskClass;
+
 use crate::diff::DiffOutput;
+
+/// Max delta-health function rows any emitter prints before truncating with
+/// a "… and N more" trailer. One policy, shared by every format.
+const DELTA_HEALTH_MAX_ROWS: usize = 20;
+
+/// Render an optional risk class for a delta-health cell (`∅` when absent).
+fn risk_str(c: Option<RiskClass>) -> &'static str {
+    c.map_or("\u{2205}", RiskClass::as_str)
+}
 
 pub fn emit(out: &mut dyn Write, output: &DiffOutput, format: &str) -> Result<()> {
     match format {
@@ -55,6 +66,45 @@ fn emit_text(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
                 out,
                 "    {} actual={} threshold={}",
                 v.gate, v.actual, v.threshold
+            )?;
+        }
+        writeln!(out)?;
+    }
+
+    if let Some(dh) = &output.delta_health {
+        match dh.ratio {
+            Some(ratio) => writeln!(
+                out,
+                "Delta health: {ratio:.1}/100 — {} ({} added, {} modified, {} removed, {} files skipped)",
+                dh.verdict,
+                dh.counts.added,
+                dh.counts.modified,
+                dh.counts.removed,
+                dh.counts.skipped
+            )?,
+            None => writeln!(
+                out,
+                "Delta health: {} (no analyzable code changed)",
+                dh.verdict
+            )?,
+        }
+        for f in dh.functions.iter().take(DELTA_HEALTH_MAX_ROWS) {
+            writeln!(
+                out,
+                "    [{}] {}::{} {} \u{2192} {}{}",
+                f.outcome.as_str(),
+                f.path,
+                f.function,
+                risk_str(f.before),
+                risk_str(f.after),
+                if f.in_red_file { " (red file)" } else { "" },
+            )?;
+        }
+        if dh.functions.len() > DELTA_HEALTH_MAX_ROWS {
+            writeln!(
+                out,
+                "    \u{2026} and {} more",
+                dh.functions.len() - DELTA_HEALTH_MAX_ROWS
             )?;
         }
         writeln!(out)?;
@@ -183,6 +233,42 @@ fn emit_markdown(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
                 codelore_lib::cli_api::output::markdown::escape_md_cell(&v.actual),
                 codelore_lib::cli_api::output::markdown::escape_md_cell(&v.threshold),
             )?;
+        }
+        writeln!(out)?;
+    }
+
+    if let Some(dh) = &output.delta_health {
+        writeln!(out, "## Delta health")?;
+        writeln!(out)?;
+        match dh.ratio {
+            Some(ratio) => writeln!(out, "**{ratio:.1}/100 — {}**", dh.verdict)?,
+            None => writeln!(out, "**{}** — no analyzable code changed", dh.verdict)?,
+        }
+        writeln!(out)?;
+        if !dh.functions.is_empty() {
+            writeln!(out, "| Function | Before | After | Outcome | Reasons |")?;
+            writeln!(out, "|---|---|---|---|---|")?;
+            for f in dh.functions.iter().take(DELTA_HEALTH_MAX_ROWS) {
+                writeln!(
+                    out,
+                    "| `{}::{}`{} | {} | {} | {} | {} |",
+                    f.path,
+                    f.function,
+                    if f.in_red_file { " \u{1F534}" } else { "" },
+                    risk_str(f.before),
+                    risk_str(f.after),
+                    f.outcome.as_str(),
+                    codelore_lib::cli_api::output::markdown::escape_md_cell(&f.reasons.join("; ")),
+                )?;
+            }
+            if dh.functions.len() > DELTA_HEALTH_MAX_ROWS {
+                writeln!(out)?;
+                writeln!(
+                    out,
+                    "\u{2026} and {} more",
+                    dh.functions.len() - DELTA_HEALTH_MAX_ROWS
+                )?;
+            }
         }
         writeln!(out)?;
     }
