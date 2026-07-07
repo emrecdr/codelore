@@ -8,6 +8,7 @@
 //! spawned thread (Repo is `Send + Sync`) and the **consumer** (Appender) runs
 //! on the calling thread.
 
+pub mod at_rev;
 mod clones_head;
 mod complexity_head;
 mod consumer;
@@ -15,6 +16,7 @@ mod grouping;
 mod imports_head;
 mod lineage;
 
+pub use at_rev::{ingest_complexity_at_rev, materialize_imports_at_rev};
 pub use grouping::{apply_grouping, materialize_changes_bucketed};
 pub use lineage::{materialize_changes_lineage, materialize_path_lineage};
 
