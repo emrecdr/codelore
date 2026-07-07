@@ -52,7 +52,7 @@ pub fn arch_health(m: &GraphMetrics) -> f64 {
     if m.n == 0 {
         return 100.0;
     }
-    let n = m.n as f64;
+    let n = f64::from(u32::try_from(m.n).unwrap_or(u32::MAX));
     let arch_risk = 0.5 * m.propagation_cost
         + 0.3 * (f64::from(m.cyclic_nodes) / n)
         + 0.2 * (f64::from(m.largest_cycle) / n);
@@ -67,7 +67,8 @@ pub(crate) fn repo_code_health(rows: &[CodeHealthRow]) -> f64 {
         return 100.0;
     }
     let sum: f64 = rows.iter().map(|r| r.score).sum();
-    sum / rows.len() as f64
+    let count = f64::from(u32::try_from(rows.len()).unwrap_or(u32::MAX));
+    sum / count
 }
 
 /// Combined health: equal blend of systemic (architecture) and local (code).

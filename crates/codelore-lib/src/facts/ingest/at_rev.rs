@@ -107,10 +107,22 @@ pub fn ingest_complexity_at_rev<R: crate::repo::Repo>(
         .collect();
 
     // Phase 2 (serial drain): INSERT via prepared statement.
-    // DuckDB's Appender checks the connection access mode and rejects writes
-    // on read-only connections, even for temporary tables. Temporary tables
-    // live in an in-memory catalog separate from the file, so SQL INSERT goes
-    // through a different path and succeeds on read-only connections.
+    insert_complexity_rows(db, rev, dest_table, &batches)
+}
+
+/// Serial drain of the parsed per-file complexity entities into `dest_table`.
+///
+/// Uses a prepared `INSERT` rather than `DuckDB`'s `Appender`: the Appender
+/// checks the connection access mode and rejects writes on read-only
+/// connections, even for temporary tables. Temporary tables live in an
+/// in-memory catalog separate from the file, so SQL `INSERT` goes through a
+/// different path and succeeds on a read-only connection.
+fn insert_complexity_rows(
+    db: &FactsDb,
+    rev: &str,
+    dest_table: &str,
+    batches: &[Option<(String, Vec<crate::complexity::ComplexityEntity>)>],
+) -> Result<()> {
     let mut stmt = db
         .conn()
         .prepare(&format!(
@@ -122,7 +134,7 @@ pub fn ingest_complexity_at_rev<R: crate::repo::Repo>(
         let Some((path, entities)) = batch else {
             continue;
         };
-        for ent in &entities {
+        for ent in entities {
             stmt.execute(duckdb::params![
                 path,
                 ent.name,
