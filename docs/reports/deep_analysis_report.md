@@ -274,11 +274,10 @@ The 5-dimension fan-out logged F200–F230; 25 landed in the 2026-07-01 pass and
 #### SPA / UI / UX
 
 ##### F218 — Any single layout-selector change re-renders every widget (full-dashboard cascade)
-*   **Location**: `output/spa/template.html:2155-2191` (one `Alpine.effect` subscribing to all layout knobs → all `_codeloreRerenderers`); double-render at `:2072-2075`
-*   **Severity**: MED-HIGH · **Category**: render performance · **Status**: Deferred (perf refactor)
-*   **Description**: Bumping the Kamei window 30→60 (one sparkline) re-runs `d3.pack` over the whole hotspot tree, rebuilds every ECharts instance, and re-lays-out the arch graph + DSM. The code yields between rerenderers to stay responsive — treating the symptom. The scenario toggle also auto-clicks the knowledge-loss tab, double-rendering the circle-pack on the first pick.
-*   **Suggested improvement**: Split the monolithic effect into per-store effects that re-run only the affected widget(s); key the rerenderer registry by which store fields each entry depends on.
-*   **Deferral reason**: Reworks the Alpine reactivity graph — a render-perf polish with regression surface. Its own pass, validated by the SPA + browser tests, rather than riding this batch.
+*   **Location**: `output/spa/template.html` (one `Alpine.effect` subscribing to all layout knobs → all `_codeloreRerenderers`)
+*   **Severity**: MED-HIGH · **Category**: render performance · **Status**: Fixed (Unreleased)
+*   **Description**: Bumping the Kamei window 30→60 (one sparkline) re-ran `d3.pack` over the whole hotspot tree, rebuilt every ECharts instance, and re-laid-out the arch graph + DSM. The code yielded between rerenderers to stay responsive — treating the symptom. The scenario toggle also auto-clicked the knowledge-loss tab, double-rendering the circle-pack on the first pick.
+*   **Fix**: Split the monolithic `Alpine.effect` into (a) a pure theme effect that reads only `store.theme.isDark` and fires `_codeloreRerenderers` with cooperative yield (F135), and (b) a separate layout/offboarding effect that reads `store.layout.*` and `store.scenario.departed` — keeping those triggers isolated from the CSS-token invalidation pass. The cross-widget selection and brush effects were already separate.
 
 #### Code hygiene
 

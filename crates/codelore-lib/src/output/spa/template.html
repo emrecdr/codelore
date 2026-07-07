@@ -2215,39 +2215,17 @@
       // 3. URL → stores on back/forward (`hashchange` only fires for
       //    user navigation, never for our own replaceState writes).
       window.addEventListener('hashchange', readUrlIntoStores);
-      // Reactive bridge: store.isDark + store.scenario.departed →
-      // <html data-theme="..."> + ECharts re-render. Reading the
-      // scenario length here registers the effect's dependency on
-      // it, so adding/removing a departed author also fires the
-      // rerenderer loop — the circle-pack picks up new knowledge-loss
-      // colours without a separate subscription.
+      // Theme bridge: reads only store.theme.isDark so the data-theme
+      // attribute update and ECharts palette re-renders fire in isolation
+      // from layout-depth or offboarding changes. Cooperative scheduling
+      // preserved: yields between re-renderers so user input stays
+      // responsive during the theme-change cascade (F135 root-cause fix).
       Alpine.effect(() => {
         const dark = Alpine.store('theme').isDark;
-        // Reading every reactive dependency we want to trigger on
-        // establishes those dependencies; the length / value reads
-        // are enough — the effect only needs a change signal. We
-        // also read the layout depth settings so user-driven depth
-        // changes re-paint the chord / arch graph / sankey.
-        void Alpine.store('scenario').departed.length;
-        void Alpine.store('layout').chordDepth;
-        void Alpine.store('layout').archGraphDepth;
-        void Alpine.store('layout').archGraphLayout;
-        void Alpine.store('layout').sankeyDepth;
-        void Alpine.store('layout').trendsTopN;
-        void Alpine.store('layout').parallelTopN;
-        void Alpine.store('layout').kameiWindow;
         document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
         // Fire registered re-renderers so ECharts widgets pick up the
-        // new resolved palette / scenario state / aggregation depth.
-        // Wrapped in try/catch per-renderer so one broken widget
-        // doesn't break the rest.
-        //
-        // Cooperative scheduling: re-renderers full-recompute layouts
-        // (d3.pack on the hotspot circle-pack, ECharts setOption on
-        // every widget) — running all of them synchronously blocks
-        // the main thread for hundreds of ms on big repos. We yield
-        // between each so user input (drawer open, tab switch) stays
-        // responsive during the cascade. F135 root-cause fix.
+        // new resolved palette. Wrapped in try/catch per-renderer so
+        // one broken widget doesn't break the rest.
         const rerenderers = window._codeloreRerenderers || [];
         (async function runRerenderers() {
           for (let i = 0; i < rerenderers.length; i++) {
@@ -2257,6 +2235,26 @@
             }
           }
         })();
+      });
+      // Layout and offboarding bridge: re-renders registered widgets when
+      // the user changes an aggregation depth or the offboarding scenario.
+      // Kept separate from the theme effect so a depth-tab click does not
+      // also trigger a CSS-token invalidation pass across all renderers.
+      // No cooperative yield — these are explicit single user actions, not
+      // the full-dashboard repaint a theme switch triggers.
+      Alpine.effect(() => {
+        void Alpine.store('scenario').departed.length;
+        void Alpine.store('layout').chordDepth;
+        void Alpine.store('layout').archGraphDepth;
+        void Alpine.store('layout').archGraphLayout;
+        void Alpine.store('layout').sankeyDepth;
+        void Alpine.store('layout').trendsTopN;
+        void Alpine.store('layout').parallelTopN;
+        void Alpine.store('layout').kameiWindow;
+        const rerenderers = window._codeloreRerenderers || [];
+        for (let i = 0; i < rerenderers.length; i++) {
+          try { rerenderers[i](); } catch (e) { console.warn('rerender failed:', e); }
+        }
       });
       // Cross-widget selection bridge: fire listeners registered by
       // path-aware widgets whenever `$store.selection.path` changes.
