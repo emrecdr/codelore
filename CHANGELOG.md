@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-07-07
+
 ### Added
 
 - `codelore diff` now emits a `delta_health` section: a change-level health
