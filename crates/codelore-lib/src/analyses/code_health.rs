@@ -37,9 +37,43 @@ use std::collections::HashMap;
 
 use duckdb::params;
 
-use crate::analyses::coupling::run_coupling;
+use crate::analyses::coupling::{run_coupling, run_coupling_scoped};
 use crate::facts::FactsDb;
 use crate::{CodeLoreError, Options, Result};
+
+/// What revision / sources a code-health scan runs against. `head()` resolves
+/// to today's HEAD tables so existing behaviour is byte-identical.
+#[derive(Debug, Clone)]
+pub struct HealthScanCtx {
+    /// Complexity source table (HEAD: `"complexity_metrics"`).
+    pub complexity_source: String,
+    /// Imports source table for god-class fan-in/out (HEAD: `"imports"`).
+    pub imports_source: String,
+    /// When `Some(ts)`, history terms (churn, author, coupling) are limited to
+    /// `commits.date <= ts`.
+    pub history_cutoff: Option<String>,
+    /// Include the clone/DRY biomarker (true at HEAD; false at a historical rev
+    /// where clone detection is unavailable).
+    pub include_clones: bool,
+}
+
+impl HealthScanCtx {
+    /// The HEAD scan — every source resolves to today's table, DRY included.
+    #[must_use]
+    pub fn head() -> Self {
+        Self {
+            complexity_source: "complexity_metrics".to_string(),
+            imports_source: "imports".to_string(),
+            history_cutoff: None,
+            include_clones: true,
+        }
+    }
+}
+
+/// Divisor appended to the `structural_risk` SUM when the DRY biomarker is
+/// excluded: the four remaining weights (0.30+0.25+0.15+0.15) sum to 0.85, so
+/// dividing by 0.85 renormalizes the risk scale back to 1.0. Empty at HEAD.
+const STRUCTURAL_SCALE_NO_DRY: &str = " / 0.85";
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CodeHealthRow {
@@ -107,7 +141,7 @@ const SQL: &str = "
                 WHEN 'dry'             THEN 0.15
                 WHEN 'shotgun-surgery' THEN 0.15
                 ELSE 0.0
-            END)) AS structural_risk
+            END){structural_scale}) AS structural_risk
         FROM code_health_biomarkers_v1
         GROUP BY path
     ),
@@ -176,6 +210,24 @@ const SQL: &str = "
     LIMIT ?
 ";
 
+/// A changes view limited to commits at/-before a cutoff timestamp, so
+/// history-derived terms (churn, author fragmentation, coupling) are rev-scoped.
+/// The `{ts}` cutoff is inlined as a quoted literal (single quotes doubled)
+/// rather than bound as a `?` parameter: `DuckDB` rejects prepared parameters
+/// inside a `CREATE VIEW` statement ("this type of statement can't be prepared").
+///
+/// This view reads raw `changes` (not the lineage-rewritten source), so churn /
+/// author terms built on it lose rename-awareness when a cutoff is combined with
+/// `--use-canonical-lineage`. Out of scope: the timeline consumer uses a cutoff
+/// without lineage (the primary path), matching `run_coupling_scoped`'s own
+/// cutoff limitation.
+const CHANGES_AT_TS_DDL: &str = "
+    CREATE OR REPLACE TEMPORARY VIEW changes_at_ts AS
+    SELECT c.* FROM changes c
+    INNER JOIN commits ON commits.rev = c.rev
+    WHERE commits.date <= CAST('{ts}' AS TIMESTAMP)
+";
+
 /// DDL for the temporary centrality table that backs the `shotgun-surgery`
 /// biomarker (its intensity is the `PERCENT_RANK` of a file's Fisher-significant
 /// coupling-partner count). Computed in Rust from the Fisher-filtered output of
@@ -230,7 +282,7 @@ const BIOMARKERS_INSERT: &str = "
                 WHEN 'tsx' THEN 'typescript'
                 ELSE 'other'
             END AS lang
-        FROM complexity_metrics
+        FROM {cm_src}
         WHERE cyclomatic IS NOT NULL
             AND loc IS NOT NULL
     ),
@@ -266,12 +318,13 @@ const SHOTGUN_INSERT: &str = "
     WHERE centrality > 0
 ";
 
-fn materialize_biomarkers(db: &FactsDb, opts: &Options) -> Result<()> {
+fn materialize_biomarkers(db: &FactsDb, opts: &Options, cx: &HealthScanCtx) -> Result<()> {
     db.conn()
         .execute(BIOMARKERS_DDL, [])
         .map_err(|e| CodeLoreError::Analysis(format!("create biomarker temp table: {e}")))?;
+    let biomarkers_insert = BIOMARKERS_INSERT.replace("{cm_src}", &cx.complexity_source);
     db.conn()
-        .execute(BIOMARKERS_INSERT, [])
+        .execute(&biomarkers_insert, [])
         .map_err(|e| CodeLoreError::Analysis(format!("insert complexity biomarkers: {e}")))?;
     db.conn()
         .execute(SHOTGUN_INSERT, [])
@@ -287,25 +340,34 @@ fn materialize_biomarkers(db: &FactsDb, opts: &Options) -> Result<()> {
     //
     // `--rows N` MUST NOT propagate into `run_god_classes`: the biomarker set
     // needs ALL god classes, not the user's output truncation.
-    let gods = crate::analyses::god_classes::run_god_classes(db, &opts.with_no_row_limit())?;
+    let gods = crate::analyses::god_classes::run_god_classes_scoped(
+        db,
+        &opts.with_no_row_limit(),
+        &cx.complexity_source,
+        &cx.imports_source,
+    )?;
     let god_by_path: HashMap<String, f64> =
         gods.iter().map(|g| (g.path.clone(), g.god_score)).collect();
 
-    // DRY: reuse clone detection (walks HEAD worktree); metric = clone count.
-    let clones = crate::analyses::clones::run_clones(opts)?;
-    let mut dry_counts: HashMap<String, u32> = HashMap::new();
-    for c in &clones {
-        *dry_counts.entry(c.entity.clone()).or_insert(0) += 1;
-    }
+    let dry_counts: HashMap<String, u32> = if cx.include_clones {
+        let clones = crate::analyses::clones::run_clones(opts)?;
+        let mut m: HashMap<String, u32> = HashMap::new();
+        for c in &clones {
+            *m.entry(c.entity.clone()).or_insert(0) += 1;
+        }
+        m
+    } else {
+        HashMap::new()
+    };
 
     // Full file universe (files with complexity data), grouped by language —
     // the same universe the SQL-side complex/large biomarkers rank over.
+    let universe_sql = "SELECT DISTINCT path FROM {cm_src} \
+         WHERE cyclomatic IS NOT NULL AND loc IS NOT NULL"
+        .replace("{cm_src}", &cx.complexity_source);
     let universe = crate::analyses::query::query_map_collect(
         db,
-        // Exactly the filter the SQL complex/large biomarkers rank over
-        // (`lang_fn`), so god-class/dry share an identical universe.
-        "SELECT DISTINCT path FROM complexity_metrics \
-         WHERE cyclomatic IS NOT NULL AND loc IS NOT NULL",
+        &universe_sql,
         [],
         "biomarker-universe",
         |r| r.get::<_, String>(0),
@@ -326,7 +388,12 @@ fn materialize_biomarkers(db: &FactsDb, opts: &Options) -> Result<()> {
             continue; // PERCENT_RANK is degenerate for a single-file language
         }
         let denom = f64::from(u32::try_from(files.len() - 1).unwrap_or(u32::MAX));
-        for smell in ["god-class", "dry"] {
+        let smells: &[&str] = if cx.include_clones {
+            &["god-class", "dry"]
+        } else {
+            &["god-class"]
+        };
+        for &smell in smells {
             let vals: Vec<f64> = files
                 .iter()
                 .map(|p| {
@@ -353,12 +420,19 @@ fn materialize_biomarkers(db: &FactsDb, opts: &Options) -> Result<()> {
 
 /// Build the centrality temp table from Fisher-significant coupling pairs.
 /// Each path appears once with `centrality = count of pairs that include it`.
-fn materialize_centrality(db: &FactsDb, opts: &Options) -> Result<()> {
+/// When `cx.history_cutoff` is set, coupling is restricted to the already-
+/// materialized `changes_at_ts` view; at HEAD (cutoff None) the standard
+/// memoised [`run_coupling`] path is taken — output is byte-identical.
+fn materialize_centrality(db: &FactsDb, opts: &Options, cx: &HealthScanCtx) -> Result<()> {
     // `--rows N` MUST NOT propagate into the inner coupling query — the
     // centrality term needs the FULL coupled-pair graph, not the user's
     // output truncation. See `Options::with_no_row_limit` for the full
     // bug narrative.
-    let pairs = run_coupling(db, &opts.with_no_row_limit())?;
+    let pairs = if cx.history_cutoff.is_some() {
+        run_coupling_scoped(db, &opts.with_no_row_limit(), "changes_at_ts")?
+    } else {
+        run_coupling(db, &opts.with_no_row_limit())?
+    };
 
     // Count Fisher-significant partners per path. Each pair contributes to
     // both endpoints' centrality.
@@ -391,20 +465,52 @@ fn materialize_centrality(db: &FactsDb, opts: &Options) -> Result<()> {
 
 #[tracing::instrument(name = "code-health", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_code_health(db: &FactsDb, opts: &Options) -> Result<Vec<CodeHealthRow>> {
-    // Materialize Fisher-filtered coupling centrality before the SQL runs.
-    // `materialize_centrality` -> `run_coupling` ALSO materializes
-    // `changes_lineage` when canonical lineage is on; the outer SQL below
-    // must read from the same source so the JOIN on path matches the
-    // canonical centrality entries (otherwise renamed files lose their
-    // centrality term silently).
-    materialize_centrality(db, opts)?;
-    materialize_biomarkers(db, opts)?;
+    // Route complexity reads through the grouped table when `--group-file` is
+    // active (the `grouped_complexity` contract), so the cognitive + biomarker
+    // CTEs key on the same group names the `changes` history is rewritten to.
+    // Without grouping this resolves to `complexity_metrics`, keeping HEAD
+    // output byte-identical.
+    let cx = HealthScanCtx {
+        complexity_source: crate::analyses::grouped_complexity::source_table(opts).to_string(),
+        ..HealthScanCtx::head()
+    };
+    run_code_health_scoped(db, opts, &cx)
+}
 
-    // Unified dispatch honours both --time-bucket and --use-canonical-lineage.
+/// Code health against the sources named by `cx`. `cx = HealthScanCtx::head()`
+/// reproduces the HEAD analysis byte-for-byte.
+pub fn run_code_health_scoped(
+    db: &FactsDb,
+    opts: &Options,
+    cx: &HealthScanCtx,
+) -> Result<Vec<CodeHealthRow>> {
     crate::analyses::lineage::materialize_source(db, opts)?;
-    let src = crate::analyses::lineage::source_table(opts);
-    let cm_src = crate::analyses::grouped_complexity::source_table(opts);
-    let sql = SQL.replace("{src}", src).replace("{cm_src}", cm_src);
+    let src_owned;
+    let src: &str = if let Some(ts) = &cx.history_cutoff {
+        // Escape single quotes (SQL-standard doubling) before inlining — the
+        // literal cannot be a bound `?` parameter inside a CREATE VIEW.
+        let cutoff_sql = CHANGES_AT_TS_DDL.replace("{ts}", &ts.replace('\'', "''"));
+        db.conn()
+            .execute(&cutoff_sql, [])
+            .map_err(|e| CodeLoreError::Analysis(format!("create changes_at_ts view: {e}")))?;
+        src_owned = "changes_at_ts".to_string();
+        &src_owned
+    } else {
+        crate::analyses::lineage::source_table(opts)
+    };
+    materialize_centrality(db, opts, cx)?;
+    materialize_biomarkers(db, opts, cx)?;
+
+    let cm_src = &cx.complexity_source;
+    let structural_scale = if cx.include_clones {
+        ""
+    } else {
+        STRUCTURAL_SCALE_NO_DRY
+    };
+    let sql = SQL
+        .replace("{src}", src)
+        .replace("{cm_src}", cm_src)
+        .replace("{structural_scale}", structural_scale);
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
     crate::analyses::query::explain_if_requested(
         db,
@@ -431,4 +537,24 @@ pub fn run_code_health(db: &FactsDb, opts: &Options) -> Result<Vec<CodeHealthRow
         .map_err(|e| CodeLoreError::Analysis(format!("query code-health: {e}")))?;
     rows.collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|e| CodeLoreError::Analysis(format!("collect code-health: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn head_ctx_defaults_to_head_tables() {
+        let c = super::HealthScanCtx::head();
+        assert_eq!(c.complexity_source, "complexity_metrics");
+        assert_eq!(c.imports_source, "imports");
+        assert!(c.history_cutoff.is_none());
+        assert!(c.include_clones);
+    }
+
+    #[test]
+    fn no_dry_scale_renormalizes_to_one() {
+        // 0.30 + 0.25 + 0.15 + 0.15 = 0.85; dividing by 0.85 restores a 1.0 ceiling.
+        let sum = 0.30 + 0.25 + 0.15_f64 + 0.15;
+        assert!((sum - 0.85).abs() < 1e-9);
+        assert_eq!(super::STRUCTURAL_SCALE_NO_DRY, " / 0.85");
+    }
 }

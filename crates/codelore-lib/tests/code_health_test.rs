@@ -411,6 +411,148 @@ fn code_health_csv_column_contract() {
     );
 }
 
+#[test]
+fn scoped_no_clones_excludes_dry_and_renormalizes() {
+    use codelore_lib::analyses::code_health::{
+        CodeHealthRow, HealthScanCtx, run_code_health, run_code_health_scoped,
+    };
+    let repo = codelore_lib::test_support::biomarker_repo::build();
+    let gix = codelore_lib::repo::GixRepo::open(repo.dir.path()).expect("open");
+    let db = codelore_lib::facts::FactsDb::new_in_memory().expect("db");
+    let opts = codelore_lib::test_support::permissive_coupling_opts(repo.dir.path().to_path_buf());
+    db.ingest(&gix, &opts).expect("ingest");
+
+    let head = run_code_health(&db, &opts).expect("head");
+    let mut cx = HealthScanCtx::head();
+    cx.include_clones = false;
+    let no_dry = run_code_health_scoped(&db, &opts, &cx).expect("no-dry");
+
+    assert_eq!(head.len(), no_dry.len(), "same file universe");
+
+    let risk = |rows: &[CodeHealthRow], suffix: &str| -> f64 {
+        rows.iter()
+            .find(|r| r.path.ends_with(suffix))
+            .unwrap_or_else(|| panic!("{suffix} should be scored"))
+            .structural_risk
+    };
+
+    // `big.rs` (large-method, unique — no clone) carries no DRY term, so
+    // dropping DRY leaves its weighted biomarker sum untouched: only the
+    // `/0.85` renormalization applies. Its no-clones risk is therefore exactly
+    // the HEAD risk divided by 0.85, proving the renormalization divisor is
+    // wired. (Not a `>=` score relation — renormalization deliberately RAISES a
+    // no-duplication file's risk; the no-clones series is internally consistent
+    // with itself, not comparable to the with-DRY HEAD score.)
+    let big_head = risk(&head, "big.rs");
+    let big_nodry = risk(&no_dry, "big.rs");
+    assert!(
+        big_head > 0.0,
+        "big.rs must carry a non-DRY smell for this check"
+    );
+    assert!(
+        (big_nodry - big_head / 0.85).abs() < 1e-6,
+        "renorm: big.rs no-clones risk {big_nodry} must equal HEAD {big_head} / 0.85"
+    );
+
+    // `dup_a.rs` is a clone of `dup_b.rs`, so at HEAD it carries a DRY term.
+    // Excluding DRY removes that term; even after the `/0.85` bump the net risk
+    // DROPS below HEAD, proving the DRY biomarker was present and is now gone.
+    let dup_head = risk(&head, "dup_a.rs");
+    let dup_nodry = risk(&no_dry, "dup_a.rs");
+    assert!(
+        dup_nodry < dup_head - 1e-6,
+        "DRY excluded: dup_a.rs no-clones risk {dup_nodry} must drop below HEAD {dup_head}"
+    );
+
+    // Renormalization keeps every risk in range.
+    for r in &no_dry {
+        assert!(
+            (0.0..=1.0).contains(&r.structural_risk),
+            "structural_risk out of range for {}: {}",
+            r.path,
+            r.structural_risk
+        );
+    }
+}
+
+#[test]
+fn head_wrapper_equals_scoped_head_ctx() {
+    use codelore_lib::analyses::code_health::{
+        HealthScanCtx, run_code_health, run_code_health_scoped,
+    };
+    let repo = codelore_lib::test_support::biomarker_repo::build();
+    let gix = codelore_lib::repo::GixRepo::open(repo.dir.path()).expect("open");
+    let db = codelore_lib::facts::FactsDb::new_in_memory().expect("db");
+    let opts = codelore_lib::test_support::permissive_coupling_opts(repo.dir.path().to_path_buf());
+    db.ingest(&gix, &opts).expect("ingest");
+
+    let a = run_code_health(&db, &opts).expect("wrapper");
+    let b = run_code_health_scoped(&db, &opts, &HealthScanCtx::head()).expect("scoped-head");
+    // Non-vacuity: a regression guard that passed on an empty result would be
+    // worthless — the fixture must yield scored rows for the parity loop to bite.
+    assert!(!a.is_empty(), "biomarker_repo must yield scored rows");
+    assert_eq!(a.len(), b.len());
+    for (x, y) in a.iter().zip(b.iter()) {
+        assert_eq!(x.path, y.path);
+        assert!(
+            (x.score - y.score).abs() < 1e-12,
+            "score parity for {}",
+            x.path
+        );
+        assert!((x.structural_risk - y.structural_risk).abs() < 1e-12);
+        assert_eq!(x.band, y.band);
+    }
+}
+
+/// Exercises the `history_cutoff` scoped path end to end: with a cutoff mid-way
+/// through the fixture's history, the churn / author / coupling terms must see
+/// only commits at-or-before the cutoff date, so at least one file's score
+/// moves relative to a full-history scan. This is the only coverage of the
+/// `changes_at_ts` view + `run_coupling_scoped` SQL — without it a broken
+/// cutoff would ship silently and only surface in the timeline consumer.
+#[test]
+fn scoped_history_cutoff_limits_churn_and_coupling() {
+    use codelore_lib::analyses::code_health::{HealthScanCtx, run_code_health_scoped};
+    let repo = codelore_lib::test_support::biomarker_repo::build();
+    let gix = codelore_lib::repo::GixRepo::open(repo.dir.path()).expect("open");
+    let db = codelore_lib::facts::FactsDb::new_in_memory().expect("db");
+    let opts = codelore_lib::test_support::permissive_coupling_opts(repo.dir.path().to_path_buf());
+    db.ingest(&gix, &opts).expect("ingest");
+
+    // Full history (cutoff None) vs a cutoff after the 3rd of six commits
+    // (fixture dates run 2026-06-01 .. 2026-06-06; the dup co-changes and the
+    // final complex touch land on 06-04..06-06 and are excluded here).
+    let full = run_code_health_scoped(&db, &opts, &HealthScanCtx::head()).expect("full");
+    let mut cx = HealthScanCtx::head();
+    cx.history_cutoff = Some("2026-06-03T23:59:59Z".to_string());
+    let cut = run_code_health_scoped(&db, &opts, &cx).expect("cutoff");
+
+    // The cutoff path must execute (no SQL error above) and yield valid scores.
+    assert!(!cut.is_empty(), "cutoff scan must yield rows");
+    for r in &cut {
+        assert!(
+            (0.0..=100.0).contains(&r.score),
+            "score in [0,100] for {}: {}",
+            r.path,
+            r.score
+        );
+    }
+
+    // Excluding the later commits changes the churn/coupling inputs, so at
+    // least one file's score must differ from the full-history scan.
+    let full_by: std::collections::HashMap<_, _> =
+        full.iter().map(|r| (r.path.clone(), r.score)).collect();
+    let moved = cut.iter().any(|r| {
+        full_by
+            .get(&r.path)
+            .is_none_or(|f| (r.score - f).abs() > 1e-9)
+    });
+    assert!(
+        moved,
+        "history cutoff must change at least one file's score vs full history"
+    );
+}
+
 /// Locks the 0.55 / 0.28 band cut points: every row's band must equal the
 /// threshold function applied to its `structural_risk`. Catches a silent
 /// threshold change in the SQL that the range/membership tests would miss.

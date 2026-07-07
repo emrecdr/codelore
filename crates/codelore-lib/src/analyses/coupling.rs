@@ -453,6 +453,39 @@ pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
         .prepare(&coupling_sql)
         .map_err(|e| CodeLoreError::Analysis(format!("prepare coupling: {e}")))?;
 
+    let out = collect_fisher_filtered(&mut stmt, total, opts)?;
+
+    // Memoise the FULL (un-row-limited) result so a later identical call
+    // skips the recompute. Apply `rows_limit` to a fresh copy AFTER caching
+    // — exactly where the limit was applied before this memo existed — so
+    // the cached entry stays caller-agnostic and a `--rows N` choice never
+    // poisons it.
+    let full = std::rc::Rc::new(out);
+    db.coupling_memo_put(memo_key, std::rc::Rc::clone(&full));
+
+    let mut out = (*full).clone();
+    if let Some(n) = opts.rows_limit {
+        out.truncate(n as usize);
+    }
+
+    Ok(out)
+}
+
+/// Run a prepared coupling statement, collect every candidate pair, and keep
+/// only those passing the Fisher exact significance filter (step 7). Returns
+/// the FULL, un-truncated result — callers apply `rows_limit` (and, for
+/// [`run_coupling`], memoization) themselves. Shared by [`run_coupling`] and
+/// [`run_coupling_scoped`] so the row-mapping + Fisher filter lives in exactly
+/// one place.
+///
+/// Candidates are collected in full BEFORE truncation because the previous
+/// in-SQL `LIMIT ?` ran ahead of the Fisher filter, letting significance
+/// failures steal slots from the top-N degree ranking.
+fn collect_fisher_filtered(
+    stmt: &mut duckdb::Statement<'_>,
+    total: u32,
+    opts: &Options,
+) -> Result<Vec<CouplingRow>> {
     let raw_rows = stmt
         .query_map(
             params![
@@ -477,11 +510,6 @@ pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
         )
         .map_err(|e| CodeLoreError::Analysis(format!("query coupling: {e}")))?;
 
-    // Collect ALL candidates first, filter by Fisher exact significance, THEN
-    // truncate to `rows_limit`. The previous in-SQL `LIMIT ?` ran BEFORE the
-    // Fisher filter, so significance failures stole slots from the top-N and
-    // users requesting `--rows 100` could see 0–99 rows even when more
-    // significant pairs existed further down the degree ranking.
     let mut out = Vec::new();
     for raw in raw_rows {
         let (path_a, path_b, shared_raw, count_a, count_b, avg_raw, degree) =
@@ -492,7 +520,6 @@ pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
         let revs_b = u32::try_from(count_b).unwrap_or(u32::MAX);
         let average_revs = u32::try_from(avg_raw).unwrap_or(u32::MAX);
 
-        // Fisher exact significance filter (step 7).
         let Some(fisher_p) = fisher_two_tail(shared, revs_a, revs_b, total) else {
             continue; // degenerate table — skip pair
         };
@@ -510,16 +537,77 @@ pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
             });
         }
     }
+    Ok(out)
+}
 
-    // Memoise the FULL (un-row-limited) result so a later identical call
-    // skips the recompute. Apply `rows_limit` to a fresh copy AFTER caching
-    // — exactly where the limit was applied before this memo existed — so
-    // the cached entry stays caller-agnostic and a `--rows N` choice never
-    // poisons it.
-    let full = std::rc::Rc::new(out);
-    db.coupling_memo_put(memo_key, std::rc::Rc::clone(&full));
+/// Scoped variant of [`run_coupling`]: reads change history from
+/// `changes_source` instead of the opt-derived table. Used when a caller has
+/// already materialized a date-filtered view (`changes_at_ts`) and wants
+/// coupling restricted to that window. Does NOT memoize — the custom source
+/// is not covered by the standard [`CouplingMemoKey`].
+///
+/// The `changes_source` overrides only the pair-source and Fisher-denominator
+/// tables; the internal `good_commits` revset is still built from the
+/// opt-derived table. That is equivalent to the primary path (no lineage, no
+/// time-bucket), where the cutoff window's revset equals the full-history
+/// revset intersected with the window. Combined with `--use-canonical-lineage`
+/// or `--time-bucket`, the two diverge (pair paths use pre-rename names /
+/// bucketing reads full history); those combinations are out of scope here.
+///
+/// # Errors
+///
+/// Returns [`CodeLoreError::Analysis`] on any SQL error.
+pub fn run_coupling_scoped(
+    db: &FactsDb,
+    opts: &Options,
+    changes_source: &str,
+) -> Result<Vec<CouplingRow>> {
+    crate::analyses::lineage::materialize_source(db, opts)?;
 
-    let mut out = (*full).clone();
+    // Denominator for Fisher's 2×2 table: good commits within the scoped
+    // source. Using `changes_source` here keeps the denominator consistent
+    // with the `filtered_changes` CTE that also reads from `changes_source`.
+    let total_sql = format!(
+        "WITH good_commits AS (
+             SELECT rev
+             FROM (SELECT rev, COUNT(*) AS files FROM {changes_source} GROUP BY rev) t
+             WHERE files <= ?
+         )
+         SELECT COUNT(*) FROM good_commits"
+    );
+    let total_commits: i64 = db
+        .conn()
+        .query_row(&total_sql, params![opts.max_changeset_size], |r| r.get(0))
+        .map_err(|e| CodeLoreError::Analysis(format!("total commits query: {e}")))?;
+    let total = u32::try_from(total_commits).unwrap_or(u32::MAX);
+
+    let coupling_sql = build_coupling_sql(
+        changes_source,
+        opts.code_maat_compat,
+        opts.time_bucket,
+        opts.use_canonical_lineage,
+    );
+    crate::analyses::query::explain_if_requested(
+        db,
+        &coupling_sql,
+        params![
+            opts.max_changeset_size,
+            opts.min_revs,
+            opts.min_shared_revs,
+            opts.min_coupling_pct,
+            opts.max_coupling_pct,
+            opts.min_revs,
+        ],
+        "coupling",
+        opts,
+    )?;
+    let mut stmt = db
+        .conn()
+        .prepare(&coupling_sql)
+        .map_err(|e| CodeLoreError::Analysis(format!("prepare coupling: {e}")))?;
+
+    let mut out = collect_fisher_filtered(&mut stmt, total, opts)?;
+
     if let Some(n) = opts.rows_limit {
         out.truncate(n as usize);
     }
