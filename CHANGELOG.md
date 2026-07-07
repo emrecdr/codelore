@@ -4,6 +4,13 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **`--window-days <DAYS>`** — shared trailing-window option for activity-scoped
+  analyses. Anchored to the repo's last commit date (not wall-clock time) so
+  results are reproducible on old or archived repos. Valid range: 1–3650;
+  default: 90.
+
 ### Changed
 
 - **KPI tile health bands now match the shared health-band thresholds.** The

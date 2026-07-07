@@ -143,6 +143,12 @@ pub struct Options {
     /// recommendation; this flag exists so users with dashboards parsing
     /// code-maat CSV verbatim aren't broken on day one of migration.
     pub code_maat_compat: bool,
+
+    /// Trailing window in days for activity-scoped analyses. Anchored to the
+    /// repo's last commit date (not wall-clock time) so results are
+    /// reproducible on old or archived repos. Valid range: 1–3650.
+    /// Default: 90. Set via `--window-days`.
+    pub window_days: u32,
 }
 
 impl Options {
@@ -314,6 +320,12 @@ impl Options {
                 "--after ({after}) must be <= --before ({before})"
             )));
         }
+        if !(1..=3650).contains(&self.window_days) {
+            return Err(crate::CodeLoreError::InvalidOptions(format!(
+                "--window-days must be in [1, 3650]; got {}",
+                self.window_days
+            )));
+        }
         Ok(())
     }
 }
@@ -351,6 +363,7 @@ impl Default for Options {
             min_soc: None,
             time_bucket: None,
             code_maat_compat: false,
+            window_days: crate::constants::DEFAULT_WINDOW_DAYS,
         }
     }
 }
@@ -546,6 +559,51 @@ mod tests {
             "path leaked into canonical form: {s}"
         );
         assert!(s.contains("team_map_digest"), "digest field missing: {s}");
+    }
+
+    #[test]
+    fn window_days_default_is_90() {
+        assert_eq!(Options::default().window_days, 90);
+    }
+
+    #[test]
+    fn validate_rejects_window_days_zero() {
+        let opts = Options {
+            window_days: 0,
+            ..Options::default()
+        };
+        let err = opts.validate().expect_err("window_days=0 must fail");
+        assert!(
+            format!("{err}").contains("window-days"),
+            "error must name the offending field: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_window_days_above_3650() {
+        let opts = Options {
+            window_days: 3651,
+            ..Options::default()
+        };
+        let err = opts.validate().expect_err("window_days=3651 must fail");
+        assert!(
+            format!("{err}").contains("window-days"),
+            "error must name the offending field: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_accepts_window_days_boundary_values() {
+        for days in [1, 3650] {
+            let opts = Options {
+                window_days: days,
+                ..Options::default()
+            };
+            assert!(
+                opts.validate().is_ok(),
+                "window_days={days} must be accepted"
+            );
+        }
     }
 
     #[test]

@@ -671,6 +671,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         time_bucket: args.time_bucket.map(Into::into),
         // T8: knowledge-islands analysis "departed author" threshold.
         departed_threshold_days: args.departed_threshold_days,
+        window_days: args.window_days,
         ..Options::default()
     };
 

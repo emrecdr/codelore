@@ -92,6 +92,12 @@ pub const DEFAULT_MAX_AST_FILE_BYTES: usize = 2 * 1024 * 1024;
 /// detects automatically via commit-date falloff.
 pub const DEFAULT_DEPARTED_THRESHOLD_DAYS: u32 = 90;
 
+/// Default trailing-window length (in days) for activity-scoped analyses.
+/// Anchored to the repo's most recent commit date, not wall-clock time, so
+/// results are reproducible on archived repos. Used by any analysis that
+/// should focus on recent activity rather than full history.
+pub const DEFAULT_WINDOW_DAYS: u32 = 90;
+
 /// T8: Threshold for "substantial author" — an author who isn't the
 /// main author but owns at least this fraction of file's `LoC`. Used to
 /// count `n_substantial_others` per file in `knowledge-islands`. A
