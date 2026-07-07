@@ -278,7 +278,7 @@ pub(super) fn dedup_entities(
 }
 
 /// Safely clamp a finite non-negative f64 to i32 range.
-fn f64_to_i32_clamped(v: f64) -> i32 {
+pub(super) fn f64_to_i32_clamped(v: f64) -> i32 {
     if v.is_finite() && v >= 0.0 {
         #[allow(clippy::cast_possible_truncation)]
         // the enclosing is_finite()+>=0.0 guard plus .min(f64::from(i32::MAX)) clamp guarantee the value fits i32 before the cast
@@ -308,6 +308,11 @@ pub(super) fn append_entity_row(
     .map_err(|e| CodeLoreError::Analysis(format!("append entity: {e}")))
 }
 
+/// Append one complexity row to the HEAD-time `complexity_metrics` Appender.
+///
+/// The column order mirrors [`super::at_rev::ingest_complexity_at_rev`]'s
+/// prepared-`INSERT` path (used at historical revs on a read-only connection);
+/// keep the two in sync if `complexity_metrics` grows a column.
 pub(super) fn append_metric_row(
     app: &mut duckdb::Appender<'_>,
     path: &str,

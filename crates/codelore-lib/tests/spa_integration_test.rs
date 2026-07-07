@@ -14,6 +14,7 @@ use codelore_lib::analyses::architecture_roles::ArchitectureRoleRow;
 use codelore_lib::analyses::architecture_trend::ArchitectureTrendRow;
 use codelore_lib::analyses::code_health::run_code_health;
 use codelore_lib::analyses::coupling::run_coupling;
+use codelore_lib::analyses::health_trend::HealthTrendRow;
 use codelore_lib::analyses::hotspots::run_hotspots;
 use codelore_lib::analyses::knowledge_islands::run_knowledge_islands;
 use codelore_lib::analyses::modularity_violations::ModularityViolationRow;
@@ -242,6 +243,17 @@ fn spa_embeds_fusion_overlay_data() {
             cycle_count: 1,
             largest_cycle: 3,
         }],
+        health_trend: vec![HealthTrendRow {
+            date: "2026-01-01".into(),
+            rev: "abc123def456".into(),
+            files: 10,
+            arch_health: 85.0,
+            code_health: 72.0,
+            combined_health: 78.5,
+            arch_band: "green".into(),
+            code_band: "green".into(),
+            combined_band: "green".into(),
+        }],
         ..SpaDashboard::default()
     };
 
@@ -326,6 +338,22 @@ fn spa_embeds_fusion_overlay_data() {
             .abs()
             < 1e-9,
     );
+
+    // The health-trend timeline must round-trip into the embedded JSON.
+    let ht = data
+        .get("health_trend")
+        .and_then(|v| v.as_array())
+        .expect("health_trend array");
+    assert_eq!(ht.len(), 1, "one health-trend point expected");
+    assert_eq!(
+        ht[0].get("arch_band").and_then(serde_json::Value::as_str),
+        Some("green"),
+    );
+    let combined = ht[0]
+        .get("combined_health")
+        .and_then(serde_json::Value::as_f64)
+        .expect("combined_health f64");
+    assert!((combined - 78.5).abs() < 1e-9);
 }
 
 /// Asserts that the bivariate health×activity color helpers are inlined

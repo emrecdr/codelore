@@ -914,6 +914,33 @@ fn explain_covers_every_registered_analysis_or_allowlists_it() {
     }
 }
 
+#[test]
+fn health_trend_csv_has_header_and_rows() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "health-trend",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "csv",
+            "--min-revs",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "date,rev,files,arch-health,code-health,combined-health,arch-band,code-band,combined-band",
+        ))
+        // Header alone would pass on empty output — require at least one data row.
+        .stdout(predicate::function(|out: &str| {
+            out.lines().filter(|l| !l.trim().is_empty()).count() >= 2
+        }));
+}
+
 #[cfg(feature = "spa")]
 #[test]
 fn spa_without_output_defaults_to_dot_codelore() {

@@ -333,6 +333,18 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
             "See analyses/architecture_trend.rs.",
         ),
         (
+            "health-trend",
+            "Repo health (architectural + code + combined) over the commit sequence",
+            "Computes three 0-100 scores at up to 12 historical revs (evenly spaced): \
+             architectural health (structural — propagation cost + dependency tangle), \
+             code health (the rev-parameterized code-health engine with duplication \
+             excluded, averaged over files), and their equal blend. Bands: green >= 70, \
+             yellow 40-69, red < 40. Rebuilds the import graph + re-scans complexity per \
+             sample, so it is heavier than SQL-only analyses; computed on demand, never \
+             cached.",
+            "See analyses/health_trend.rs.",
+        ),
+        (
             "cycle-origins",
             "Commit-level archaeology for dependency cycles",
             "For each dependency cycle at HEAD, binary-searches history (reading + resolving source at past revisions) to find the earliest commit where that cycle existed — the commit that closed the loop. Reports the forming commit's SHA + date per cycle. Assumes a cycle, once formed, stays formed; traces the largest cycles first to bound cost.",
@@ -918,6 +930,10 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             // rather than the (db, opts) signature the rest share.
             AnalysisName::ArchitectureTrend => {
                 dispatch_architecture_trend(&db, &repo, &opts, format, &ctx, &mut out)?;
+            }
+            // Also reads blobs at past revs — same special-case as ArchitectureTrend.
+            AnalysisName::HealthTrend => {
+                dispatch_health_trend(&db, &repo, &opts, format, &ctx, &mut out)?;
             }
             // Also needs the Repo (reads blobs at past revs while bisecting).
             AnalysisName::CycleOrigins => {
@@ -1850,6 +1866,43 @@ fn dispatch_architecture_trend(
                 "csv|json|markdown",
                 fmt,
             ));
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_health_trend(
+    db: &FactsDb,
+    repo: &GixRepo,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows =
+                codelore_lib::cli_api::analyses::health_trend::run_health_trend(db, repo, opts)
+                    .context("run health-trend")?;
+            codelore_lib::cli_api::output::csv::write_health_trend_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows =
+                codelore_lib::cli_api::analyses::health_trend::run_health_trend(db, repo, opts)
+                    .context("run health-trend")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows =
+                codelore_lib::cli_api::analyses::health_trend::run_health_trend(db, repo, opts)
+                    .context("run health-trend")?;
+            codelore_lib::cli_api::output::markdown::write_health_trend_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format("health-trend", "csv|json|markdown", fmt));
         }
     }
     Ok(())
@@ -3133,6 +3186,19 @@ fn build_spa_dashboard(
             tracing::warn!("dashboard: architecture-trend failed; skipping: {e}");
             Vec::new()
         });
+    // Repo health timeline — like architecture-trend, needs the repo to
+    // re-read source at sampled historical revs. Opens its own handle
+    // and degrades gracefully on any failure.
+    let health_trend = codelore_lib::cli_api::repo::GixRepo::open(repo_path)
+        .map_err(anyhow::Error::from)
+        .and_then(|repo| {
+            codelore_lib::cli_api::analyses::health_trend::run_health_trend(db, &repo, opts)
+                .map_err(anyhow::Error::from)
+        })
+        .unwrap_or_else(|e| {
+            tracing::warn!("dashboard: health-trend failed; skipping: {e}");
+            Vec::new()
+        });
     Ok(SpaDashboard {
         hotspots,
         summary,
@@ -3152,6 +3218,7 @@ fn build_spa_dashboard(
         unstable_interface,
         architecture_roles,
         architecture_trend,
+        health_trend,
         options: codelore_lib::cli_api::output::spa::SpaOptionsSnapshot::from_options(opts),
     })
 }

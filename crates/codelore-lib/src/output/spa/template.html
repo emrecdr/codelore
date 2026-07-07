@@ -867,6 +867,9 @@
       --chart-palette-14: #303f9f;
       --chart-palette-15: #ad1457;
     }
+    /* Health-trend small-multiple panels (split view). Each panel needs
+       an explicit height so ECharts doesn't render into a 0px container. */
+    .ht-sm { height: 130px; margin-bottom: 4px; }
     footer {
       padding: 20px 28px;
       color: var(--fg-dim);
@@ -1503,6 +1506,25 @@
         </div>
       </details>
       <div id="widget-arch-trend-body" class="widget-body" style="height: 340px;"></div>
+    </section>
+
+    <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-health-trend">
+      <h2>Repo health timeline</h2>
+      <div class="subtitle">
+        Combined, architectural, and code health (0–100) recomputed at
+        sampled historical commits. Shows whether overall repo health is
+        improving or degrading over time.
+      </div>
+      <details class="learn-more">
+        <summary>Learn more — how to read this panel</summary>
+        <div class="learn-more-content">
+          <p><strong>What it measures.</strong> Up to 12 commits evenly spaced across history are re-analysed: the import graph and complexity metrics are rebuilt at each revision, then scored as architectural health (propagation cost + cycle penalty, 0–100), code health (mean file health score, 0–100), and combined health (their average). Higher is healthier.</p>
+          <p><strong>How to read it.</strong> The bold line is the combined score; the lighter lines are the two components. The faint background bands mark red (0–40), yellow (40–70), and green (70–100) zones. Use the toggle to switch to a split view showing each component on its own panel.</p>
+          <p><strong>What to watch for.</strong> A declining combined line means the repo is accumulating debt faster than it is being paid down. A divergence between architectural and code health — one rising while the other falls — points to where the primary debt source is. Cross-reference with the Architecture trend panel for cycle and propagation details.</p>
+          <p><strong>Suggested action.</strong> If architectural health is declining, run <code>--analysis dependency-cycles</code> to find the tangles introduced at the inflection point. If code health is declining, the Hotspot table will show which files are driving it.</p>
+        </div>
+      </details>
+      <div id="widget-health-trend-body" class="widget-body" style="min-height: 340px;"></div>
     </section>
 
     <!-- Treemap alternative view to the circle-pack. Same

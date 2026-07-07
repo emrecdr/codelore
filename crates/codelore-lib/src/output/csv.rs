@@ -580,6 +580,35 @@ pub fn write_architecture_trend_csv<W: Write>(
     Ok(())
 }
 
+/// `health-trend` CSV emitter — repo health timeline across sampled revs.
+pub fn write_health_trend_csv<W: Write>(
+    rows: &[crate::analyses::health_trend::HealthTrendRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(
+        w,
+        "date,rev,files,arch-health,code-health,combined-health,arch-band,code-band,combined-band"
+    )
+    .map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{},{:.2},{:.2},{:.2},{},{},{}",
+            quote_if_needed(&row.date),
+            quote_if_needed(&row.rev),
+            row.files,
+            row.arch_health,
+            row.code_health,
+            row.combined_health,
+            row.arch_band,
+            row.code_band,
+            row.combined_band,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_architecture_metrics_csv<W: Write>(
     rows: &[crate::analyses::architecture_metrics::ArchitectureMetricRow],
     w: &mut W,

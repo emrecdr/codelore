@@ -620,6 +620,7 @@
     { name: 'arch-graph',         render: () => renderArchGraph(data.imports || [], data.modularity_violations || [], data.unstable_interface || [], data.architecture_roles || []) },
     { name: 'arch-matrix',        render: () => renderArchMatrix(data.imports || [], data.architecture_roles || []) },
     { name: 'arch-trend',         render: () => renderArchTrend(data.architecture_trend || []) },
+    { name: 'health-trend',       render: () => renderHealthTrend(data.health_trend || []) },
     { name: 'calendar-heatmap',   rerender: 'theme', render: () => renderCalendarHeatmap(data.daily_commits || []) },
     { name: 'xray-sunburst',      render: () => renderXRaySunburst(data.xray || []) },
   ];
@@ -3949,6 +3950,169 @@
           itemStyle: { color: errColor },
         },
       ],
+    });
+  }
+
+  // ─── §11j Widget: Repo health timeline ─────────────────────────────
+  // Overlaid 3-line chart (Combined bold; Architectural + Code lighter)
+  // on a 0–100 axis with faint red/yellow/green band background, plus a
+  // vanilla toggle that re-renders as three stacked small-multiples.
+  function healthTrendBands(errColor, warnColor, okColor) {
+    // Red / yellow / green background zones (0-40 / 40-70 / 70-100). Colors are
+    // resolved once by the caller and indexed by band, rather than re-read
+    // inside the ECharts per-entry color callback.
+    var zoneColors = [errColor, warnColor, okColor];
+    return {
+      silent: true,
+      data: [
+        [{ yAxis: 0 }, { yAxis: 40 }],
+        [{ yAxis: 40 }, { yAxis: 70 }],
+        [{ yAxis: 70 }, { yAxis: 100 }],
+      ],
+      itemStyle: {
+        color: function (params) {
+          return zoneColors[params.dataIndex] || zoneColors[0];
+        },
+        opacity: 0.06,
+      },
+    };
+  }
+
+  function renderHealthTrend(rows, mode) {
+    const container = document.getElementById('widget-health-trend-body');
+    if (!container) return;
+    if (rows.length < 2) {
+      container.innerHTML =
+        '<div class="empty">Not enough history for a health timeline — need at least 2 commits.</div>';
+      return;
+    }
+    const view = mode || 'overlay';
+    const dates = rows.map(function (r) { return r.date; });
+    const arch = rows.map(function (r) { return Number((r.arch_health || 0).toFixed(2)); });
+    const code = rows.map(function (r) { return Number((r.code_health || 0).toFixed(2)); });
+    const combined = rows.map(function (r) { return Number((r.combined_health || 0).toFixed(2)); });
+
+    const okColor = token('--color-success') || '#16a34a';
+    const warnColor = token('--color-warning') || '#ca8a04';
+    const errColor = token('--color-error') || '#dc2626';
+    const fgColor = getCssVar('--fg') || '#e6edf3';
+    const dim = getCssVar('--fg-dim');
+    const bands = healthTrendBands(errColor, warnColor, okColor);
+
+    // Toggle button + chart host.
+    container.innerHTML =
+      '<div class="widget-toolbar"><button id="ht-toggle" class="toggle">' +
+      (view === 'overlay' ? 'Split view' : 'Overlay view') +
+      '</button></div><div id="ht-charts"></div>';
+    const toggle = document.getElementById('ht-toggle');
+    if (toggle) {
+      toggle.onclick = function () {
+        renderHealthTrend(rows, view === 'overlay' ? 'split' : 'overlay');
+      };
+    }
+    const host = document.getElementById('ht-charts');
+
+    const baseAxis = {
+      tooltip: { trigger: 'axis' },
+      grid: { left: 8, right: 8, top: 28, bottom: 28, containLabel: true },
+      xAxis: {
+        type: 'category',
+        data: dates,
+        boundaryGap: false,
+        axisLabel: { color: dim, rotate: 30, fontSize: 10 },
+      },
+      yAxis: {
+        type: 'value',
+        min: 0,
+        max: 100,
+        axisLabel: { color: dim },
+        splitLine: { lineStyle: { color: getCssVar('--border') } },
+      },
+    };
+
+    if (view === 'overlay') {
+      setChartAriaLabel(container,
+        'Repo health timeline over ' + rows.length +
+        ' sampled revisions: combined, architectural, and code health (0–100).');
+      const chart = mountEcharts(host);
+      chart.setOption(Object.assign({}, baseAxis, {
+        legend: {
+          data: ['Combined', 'Architectural', 'Code'],
+          textStyle: { color: dim },
+          bottom: 0,
+        },
+        series: [
+          {
+            name: 'Architectural',
+            type: 'line',
+            smooth: true,
+            symbol: 'circle',
+            symbolSize: 5,
+            data: arch,
+            lineStyle: { color: okColor, width: 1.5, opacity: 0.7 },
+            itemStyle: { color: okColor },
+          },
+          {
+            name: 'Code',
+            type: 'line',
+            smooth: true,
+            symbol: 'circle',
+            symbolSize: 5,
+            data: code,
+            lineStyle: { color: warnColor, width: 1.5, opacity: 0.7 },
+            itemStyle: { color: warnColor },
+          },
+          {
+            name: 'Combined',
+            type: 'line',
+            smooth: true,
+            symbol: 'circle',
+            symbolSize: 6,
+            data: combined,
+            lineStyle: { color: fgColor, width: 3 },
+            itemStyle: { color: fgColor },
+            markArea: bands,
+          },
+        ],
+      }));
+      return;
+    }
+
+    // Split: three stacked small-multiples, same data, no recompute.
+    const panels = [
+      { label: 'Combined',       series: combined, color: fgColor },
+      { label: 'Architectural',  series: arch,     color: okColor },
+      { label: 'Code',           series: code,     color: warnColor },
+    ];
+    host.innerHTML = panels
+      .map(function (p, i) { return '<div id="ht-sm-' + i + '" class="ht-sm"></div>'; })
+      .join('');
+    panels.forEach(function (p, i) {
+      const el = document.getElementById('ht-sm-' + i);
+      if (!el) return;
+      const c = mountEcharts(el);
+      c.setOption(Object.assign({}, baseAxis, {
+        title: {
+          text: p.label,
+          left: 8,
+          top: 4,
+          textStyle: { fontSize: 12, color: getCssVar('--fg') },
+        },
+        grid: { left: 8, right: 8, top: 36, bottom: 24, containLabel: true },
+        series: [
+          {
+            name: p.label,
+            type: 'line',
+            smooth: true,
+            symbol: 'circle',
+            symbolSize: 5,
+            data: p.series,
+            lineStyle: { color: p.color, width: 2 },
+            itemStyle: { color: p.color },
+            markArea: bands,
+          },
+        ],
+      }));
     });
   }
 
