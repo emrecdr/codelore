@@ -3982,7 +3982,7 @@
   function renderHealthTrend(rows, mode) {
     const container = document.getElementById('widget-health-trend-body');
     if (!container) return;
-    if (!rows.length) {
+    if (rows.length < 2) {
       container.innerHTML =
         '<div class="empty">Not enough history for a health timeline — need at least 2 commits.</div>';
       return;
