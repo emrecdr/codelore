@@ -207,6 +207,13 @@ pub struct SpaOptionsSnapshot {
     pub max_coupling_pct: u8,
     pub max_changeset_size: u32,
     pub fisher_significance: f64,
+    /// Minimum health score (0–100) for the green band. Matches
+    /// [`crate::bands::HEALTH_GREEN_MIN`]. Exposed so the SPA JS can
+    /// read band thresholds from `data.options` rather than hardcode them.
+    pub health_green_min: f64,
+    /// Minimum health score (0–100) for the yellow band. Matches
+    /// [`crate::bands::HEALTH_YELLOW_MIN`].
+    pub health_yellow_min: f64,
 }
 
 impl Default for SpaOptionsSnapshot {
@@ -222,6 +229,8 @@ impl Default for SpaOptionsSnapshot {
             max_coupling_pct: 100,
             max_changeset_size: 30,
             fisher_significance: 0.05,
+            health_green_min: crate::bands::HEALTH_GREEN_MIN,
+            health_yellow_min: crate::bands::HEALTH_YELLOW_MIN,
         }
     }
 }
@@ -237,6 +246,8 @@ impl SpaOptionsSnapshot {
             max_coupling_pct: opts.max_coupling_pct,
             max_changeset_size: opts.max_changeset_size,
             fisher_significance: opts.fisher_significance,
+            health_green_min: crate::bands::HEALTH_GREEN_MIN,
+            health_yellow_min: crate::bands::HEALTH_YELLOW_MIN,
         }
     }
 }

@@ -277,6 +277,20 @@
   window._codeloreYieldToMain = yieldToMain;
 
 
+  // Map a health score (0–100) to its color band ("green" / "yellow" / "red").
+  // Thresholds are read from the run's options snapshot so the JS never
+  // hardcodes them separately from the Rust constants in `bands.rs`.
+  // Fallback values (70 / 40) match HEALTH_GREEN_MIN / HEALTH_YELLOW_MIN and
+  // are applied when rendering older data payloads that pre-date this field.
+  function bandFor(score, opts) {
+    const greenMin = (opts && opts.health_green_min != null) ? opts.health_green_min : 70;
+    const yellowMin = (opts && opts.health_yellow_min != null) ? opts.health_yellow_min : 40;
+    if (score >= greenMin) return 'green';
+    if (score >= yellowMin) return 'yellow';
+    return 'red';
+  }
+
+
   // ─── §5  Detail drawer (cross-widget click target) ────────────────
 
   function initDetailDrawer() {
@@ -709,10 +723,7 @@
       if (healths.length) {
         const mid = Math.floor(healths.length / 2);
         const median = (healths.length % 2) ? healths[mid] : (healths[mid - 1] + healths[mid]) / 2;
-        const healthBand =
-          median >= 90 ? 'healthy' :
-          median >= 80 ? 'fair' :
-          median >= 70 ? 'concern' : 'critical';
+        const healthBand = bandFor(median, data.options || {});
         tiles.push({
           label: 'Median code health',
           defKey: 'median_code_health',

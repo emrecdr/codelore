@@ -4,6 +4,15 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **KPI tile health bands now match the shared health-band thresholds.** The
+  median code-health KPI tile previously used a separate 90/80/70 label scale
+  (`healthy`/`fair`/`concern`/`critical`). It now derives its band from the
+  centralized `HEALTH_GREEN_MIN` (70) and `HEALTH_YELLOW_MIN` (40) constants
+  in the new `bands` module, returning `green`/`yellow`/`red` — the same
+  labels used by the health-trend timeline and code-health analysis.
+
 ### Fixed
 
 - **Health-trend toggle unreadable.** The `<button id="ht-toggle">` carried

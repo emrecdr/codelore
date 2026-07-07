@@ -8,6 +8,7 @@ pub mod analyses;
 pub mod analysis;
 pub mod arch_rules;
 pub mod arrow_facade;
+pub mod bands;
 pub mod cache;
 pub mod cli_api;
 pub mod clones;

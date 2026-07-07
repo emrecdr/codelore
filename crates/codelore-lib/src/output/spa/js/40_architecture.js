@@ -432,16 +432,21 @@
   // on a 0–100 axis with faint red/yellow/green band background, plus a
   // vanilla toggle that re-renders as three stacked small-multiples.
   function healthTrendBands(errColor, warnColor, okColor) {
-    // Red / yellow / green background zones (0-40 / 40-70 / 70-100). Colors are
-    // resolved once by the caller and indexed by band, rather than re-read
-    // inside the ECharts per-entry color callback.
+    // Red / yellow / green background zones. Thresholds come from the run's
+    // options snapshot (data.options.health_green_min / health_yellow_min) so
+    // the chart background always matches the Rust band constants in `bands.rs`.
+    // Fallback values (70 / 40) match HEALTH_GREEN_MIN / HEALTH_YELLOW_MIN for
+    // data payloads that pre-date this field.
+    var opts = data.options || {};
+    var gMin = (opts.health_green_min != null) ? opts.health_green_min : 70;
+    var yMin = (opts.health_yellow_min != null) ? opts.health_yellow_min : 40;
     var zoneColors = [errColor, warnColor, okColor];
     return {
       silent: true,
       data: [
-        [{ yAxis: 0 }, { yAxis: 40 }],
-        [{ yAxis: 40 }, { yAxis: 70 }],
-        [{ yAxis: 70 }, { yAxis: 100 }],
+        [{ yAxis: 0 }, { yAxis: yMin }],
+        [{ yAxis: yMin }, { yAxis: gMin }],
+        [{ yAxis: gMin }, { yAxis: 100 }],
       ],
       itemStyle: {
         color: function (params) {

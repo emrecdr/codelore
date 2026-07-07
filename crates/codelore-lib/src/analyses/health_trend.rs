@@ -34,16 +34,8 @@ pub struct HealthTrendRow {
 }
 
 /// Shared band for all three scores: green ≥ 70, yellow ≥ 40, else red.
-#[must_use]
-pub fn health_band(score: f64) -> &'static str {
-    if score >= 70.0 {
-        "green"
-    } else if score >= 40.0 {
-        "yellow"
-    } else {
-        "red"
-    }
-}
+/// Re-exported from [`crate::bands`] so callers can use either path.
+pub use crate::bands::health_band;
 
 /// Architectural health from the per-rev import-graph metrics. Purely
 /// structural: propagation cost (dominant) plus the fraction of the codebase
@@ -161,16 +153,6 @@ mod tests {
             largest_cycle: largest,
             cyclic_nodes: cyclic,
         }
-    }
-
-    #[test]
-    fn band_boundaries() {
-        assert_eq!(health_band(69.9), "yellow");
-        assert_eq!(health_band(70.0), "green");
-        assert_eq!(health_band(40.0), "yellow");
-        assert_eq!(health_band(39.9), "red");
-        assert_eq!(health_band(100.0), "green");
-        assert_eq!(health_band(0.0), "red");
     }
 
     #[test]
