@@ -436,6 +436,9 @@ pub mod coupling_repo {
         run_git(&path, &["init", "-b", "main", "--quiet"]);
         run_git(&path, &["config", "user.email", "coupling@example.com"]);
         run_git(&path, &["config", "user.name", "Coupling"]);
+        // Disable auto-gc so a mid-build `gc --auto` can't prune loose objects
+        // between an `add` and its `commit` (matches `medium_repo`).
+        run_git(&path, &["config", "gc.auto", "0"]);
 
         // Seed all six files with real content so complexity ingest is non-trivial.
         write(
@@ -470,6 +473,13 @@ pub mod coupling_repo {
         );
         run_git(&path, &["add", "."]);
         commit_at(&path, "2026-06-01T10:00:00Z", "seed all modules");
+        // Pack the seed's loose objects into a single packfile. The seed writes
+        // six blobs at once — the widest window for the cross-process
+        // loose-object visibility race where a later `write-tree` fails to see a
+        // just-written object under CI I/O load ("invalid object / Error
+        // building trees"). Post-repack, later commits add only one or two loose
+        // objects at a time.
+        run_git(&path, &["repack", "-d", "--quiet"]);
 
         // Co-change 1: alpha/svc + beta/svc together (→ depth-2 edge src/alpha↔src/beta).
         write(
