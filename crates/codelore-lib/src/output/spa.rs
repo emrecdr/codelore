@@ -50,13 +50,13 @@ use crate::{CodeLoreError, Result};
 
 const TEMPLATE: &str = include_str!("spa/template.html");
 const WIDGETS_JS: &str = concat!(
-    include_str!("spa/js/00_helpers.js"),
-    include_str!("spa/js/10_summary.js"),
+    include_str!("spa/js/00_setup_boot.js"),
+    include_str!("spa/js/10_helpers_drawer.js"),
     include_str!("spa/js/20_hotspots.js"),
-    include_str!("spa/js/30_coupling.js"),
+    include_str!("spa/js/30_coupling_trends.js"),
     include_str!("spa/js/40_architecture.js"),
-    include_str!("spa/js/50_health.js"),
-    include_str!("spa/js/90_boot.js"),
+    include_str!("spa/js/50_calendar_xray.js"),
+    include_str!("spa/js/90_toggles_utils.js"),
 );
 const ECHARTS_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/echarts.min.js"));
 const D3_HIERARCHY_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/d3-hierarchy.min.js"));
