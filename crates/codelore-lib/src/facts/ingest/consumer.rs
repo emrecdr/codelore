@@ -308,6 +308,11 @@ pub(super) fn append_entity_row(
     .map_err(|e| CodeLoreError::Analysis(format!("append entity: {e}")))
 }
 
+/// Append one complexity row to the HEAD-time `complexity_metrics` Appender.
+///
+/// The column order mirrors [`super::at_rev::ingest_complexity_at_rev`]'s
+/// prepared-`INSERT` path (used at historical revs on a read-only connection);
+/// keep the two in sync if `complexity_metrics` grows a column.
 pub(super) fn append_metric_row(
     app: &mut duckdb::Appender<'_>,
     path: &str,

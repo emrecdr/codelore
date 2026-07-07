@@ -349,15 +349,11 @@ fn spa_embeds_fusion_overlay_data() {
         ht[0].get("arch_band").and_then(serde_json::Value::as_str),
         Some("green"),
     );
-    assert!(
-        (ht[0]
-            .get("combined_health")
-            .and_then(serde_json::Value::as_f64)
-            .expect("combined_health")
-            - 78.5)
-            .abs()
-            < 1e-9,
-    );
+    let combined = ht[0]
+        .get("combined_health")
+        .and_then(serde_json::Value::as_f64)
+        .expect("combined_health f64");
+    assert!((combined - 78.5).abs() < 1e-9);
 }
 
 /// Asserts that the bivariate health×activity color helpers are inlined

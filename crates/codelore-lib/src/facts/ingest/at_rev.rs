@@ -117,6 +117,11 @@ pub fn ingest_complexity_at_rev<R: crate::repo::Repo>(
 /// connections, even for temporary tables. Temporary tables live in an
 /// in-memory catalog separate from the file, so SQL `INSERT` goes through a
 /// different path and succeeds on a read-only connection.
+///
+/// The bound column list mirrors [`super::consumer::append_metric_row`]
+/// (the HEAD-time Appender path) — the two write the same
+/// `complexity_metrics` shape via different `DuckDB` APIs, so keep the two
+/// column orders in sync if the table grows a column.
 fn insert_complexity_rows(
     db: &FactsDb,
     rev: &str,

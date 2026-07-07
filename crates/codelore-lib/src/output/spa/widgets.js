@@ -3957,7 +3957,11 @@
   // Overlaid 3-line chart (Combined bold; Architectural + Code lighter)
   // on a 0–100 axis with faint red/yellow/green band background, plus a
   // vanilla toggle that re-renders as three stacked small-multiples.
-  function healthTrendBands() {
+  function healthTrendBands(errColor, warnColor, okColor) {
+    // Red / yellow / green background zones (0-40 / 40-70 / 70-100). Colors are
+    // resolved once by the caller and indexed by band, rather than re-read
+    // inside the ECharts per-entry color callback.
+    var zoneColors = [errColor, warnColor, okColor];
     return {
       silent: true,
       data: [
@@ -3967,12 +3971,7 @@
       ],
       itemStyle: {
         color: function (params) {
-          var colors = [
-            token('--color-error') || '#dc2626',
-            token('--color-warning') || '#ca8a04',
-            token('--color-success') || '#16a34a',
-          ];
-          return colors[params.dataIndex] || colors[0];
+          return zoneColors[params.dataIndex] || zoneColors[0];
         },
         opacity: 0.06,
       },
@@ -3995,8 +3994,10 @@
 
     const okColor = token('--color-success') || '#16a34a';
     const warnColor = token('--color-warning') || '#ca8a04';
+    const errColor = token('--color-error') || '#dc2626';
     const fgColor = getCssVar('--fg') || '#e6edf3';
     const dim = getCssVar('--fg-dim');
+    const bands = healthTrendBands(errColor, warnColor, okColor);
 
     // Toggle button + chart host.
     container.innerHTML =
@@ -4070,7 +4071,7 @@
             data: combined,
             lineStyle: { color: fgColor, width: 3 },
             itemStyle: { color: fgColor },
-            markArea: healthTrendBands(),
+            markArea: bands,
           },
         ],
       }));
@@ -4108,7 +4109,7 @@
             data: p.series,
             lineStyle: { color: p.color, width: 2 },
             itemStyle: { color: p.color },
-            markArea: healthTrendBands(),
+            markArea: bands,
           },
         ],
       }));

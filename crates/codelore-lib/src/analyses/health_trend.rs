@@ -3,7 +3,9 @@
 //! `architecture_trend` sampler for the rev set and the rev-parameterizable
 //! `code_health` engine for the per-rev code score. On-demand, never cached.
 
-use crate::analyses::architecture_trend::{import_graph_at_rev, live_paths_at, sampled_commits};
+use crate::analyses::architecture_trend::{
+    import_graph_from_live_paths, live_paths_at, sampled_commits,
+};
 use crate::analyses::code_health::{CodeHealthRow, HealthScanCtx, run_code_health_scoped};
 use crate::analyses::import_graph::{GraphMetrics, graph_metrics};
 use crate::facts::FactsDb;
@@ -107,14 +109,17 @@ pub fn run_health_trend<R: Repo>(
     let scan_opts = opts.with_no_row_limit();
     let mut rows = Vec::with_capacity(samples.len());
     for (rev, ts) in &samples {
+        // Resolve the live-at-`ts` path set once — both the import graph and the
+        // rev-scoped complexity scan below consume it.
+        let live = live_paths_at(db, ts)?;
+
         // Architectural half — purely structural, from the in-memory graph.
-        let graph = import_graph_at_rev(db, repo, rev, ts)?;
+        let graph = import_graph_from_live_paths(repo, rev, &live);
         let m = graph_metrics(&graph);
         let files = u32::try_from(m.n).unwrap_or(u32::MAX);
         let arch = arch_health(&m);
 
         // Code half — rev-scoped sources into the scoped code-health engine.
-        let live = live_paths_at(db, ts)?;
         ingest_complexity_at_rev(db, repo, rev, &live, CM_AT_REV)?;
         materialize_imports_at_rev(db, &graph, IMPORTS_AT_REV)?;
         let cx = HealthScanCtx {

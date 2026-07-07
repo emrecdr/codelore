@@ -133,8 +133,20 @@ pub(crate) fn import_graph_at_rev<R: Repo>(
     ts: &str,
 ) -> Result<crate::analyses::import_graph::ImportGraph> {
     let live = live_paths_at(db, ts)?;
-    let edges = resolve_imports_at_rev(repo, rev, &live);
-    Ok(build_import_graph_from_edges(&edges))
+    Ok(import_graph_from_live_paths(repo, rev, &live))
+}
+
+/// Build the resolved import graph at `rev` from an already-computed
+/// live-path set. Split out of [`import_graph_at_rev`] so a caller that also
+/// needs `live_paths_at`'s result for other work (e.g. a per-rev complexity
+/// scan) can compute the live set once and feed it to both.
+pub(crate) fn import_graph_from_live_paths<R: Repo>(
+    repo: &R,
+    rev: &str,
+    live: &[String],
+) -> crate::analyses::import_graph::ImportGraph {
+    let edges = resolve_imports_at_rev(repo, rev, live);
+    build_import_graph_from_edges(&edges)
 }
 
 /// Pick up to `k` evenly-spaced indices over `0..len`, always including
