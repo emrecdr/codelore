@@ -99,6 +99,14 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
         codelore_lib::cli_api::quality_gates::evaluate_architecture_gate(&thresholds, &db)
             .context("evaluate architecture gate")?,
     );
+    violations.extend(
+        codelore_lib::cli_api::quality_gates::evaluate_effort_exposure_gate(
+            &thresholds,
+            &db,
+            &opts,
+        )
+        .context("evaluate effort-exposure gate")?,
+    );
 
     if violations.is_empty() {
         println!(

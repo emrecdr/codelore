@@ -12,6 +12,7 @@
 //! disallow_clone_type_1 = true
 //! max_dependency_cycles = 0 # no import-graph cycles allowed
 //! max_propagation_cost = 0.15  # change-reach ceiling (0..1)
+//! max_red_effort_pct = 30.0    # red-band churn ceiling (%, [0, 100])
 //!
 //! [diff]
 //! delta_code_health_min = -5  # health may drop at most 5 pts in a PR
@@ -75,6 +76,12 @@ pub struct Gates {
     /// `[0,1]`). Exceeding fails — a ceiling on "a change to a random
     /// file reaches this fraction of the system".
     pub max_propagation_cost: Option<f64>,
+    /// Maximum share of window LOC churn (lines added + deleted) allowed
+    /// to land in the `red` code-health band, as a percentage (`[0, 100]`).
+    /// Exceeding fails — enforces "don't spend most engineering effort
+    /// fighting fires in the worst-health files." Missing red band
+    /// (zero red files) counts as 0 %, which passes any positive threshold.
+    pub max_red_effort_pct: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -154,6 +161,7 @@ impl Thresholds {
             && !self.gates.disallow_clone_type_1
             && self.gates.max_dependency_cycles.is_none()
             && self.gates.max_propagation_cost.is_none()
+            && self.gates.max_red_effort_pct.is_none()
             && self.diff.delta_code_health_min.is_none()
             && self.diff.new_hotspot_max.is_none()
             && !self.diff.no_new_cycles
@@ -390,6 +398,52 @@ pub fn evaluate_code_health_gate(
         }
     }
     out
+}
+
+/// Pure inner comparison for the `max_red_effort_pct` gate.
+///
+/// Finds the `"red"` band row in `rows`; if none, treats churn as 0 %
+/// (an all-green / all-yellow repo passes any positive threshold).
+fn evaluate_effort_exposure_rows(
+    threshold: f64,
+    rows: &[crate::analyses::effort_exposure::EffortExposureRow],
+) -> Vec<GateViolation> {
+    let actual = rows
+        .iter()
+        .find(|r| r.band == "red")
+        .map_or(0.0, |r| r.churn_share_pct);
+    if actual > threshold {
+        vec![GateViolation {
+            gate: "max_red_effort_pct".into(),
+            path: "(repo-wide)".into(),
+            actual: format!("{actual:.2}"),
+            threshold: format!("{threshold:.2}"),
+        }]
+    } else {
+        Vec::new()
+    }
+}
+
+/// Evaluate the `max_red_effort_pct` gate: fails when the `red`
+/// code-health band's window churn share exceeds the configured ceiling.
+///
+/// A noop (returns empty) when `max_red_effort_pct` is absent from the
+/// thresholds — the analysis is not run at all.
+///
+/// # Errors
+///
+/// Returns [`crate::CodeLoreError::Analysis`] if `run_effort_exposure`
+/// fails (e.g. `DuckDB` error during temp-table setup or SQL execution).
+pub fn evaluate_effort_exposure_gate(
+    thresholds: &Thresholds,
+    db: &crate::facts::FactsDb,
+    opts: &crate::Options,
+) -> crate::Result<Vec<GateViolation>> {
+    let Some(threshold) = thresholds.gates.max_red_effort_pct else {
+        return Ok(Vec::new());
+    };
+    let rows = crate::analyses::effort_exposure::run_effort_exposure(db, opts)?;
+    Ok(evaluate_effort_exposure_rows(threshold, &rows))
 }
 
 #[cfg(test)]
@@ -642,5 +696,113 @@ new_hotspot_max = 0
         assert!(!t.is_empty());
         let t = Thresholds::from_text("[diff]\ndeny_degrading_verdict = true\n").unwrap();
         assert!(!t.is_empty());
+    }
+
+    // ───────── max_red_effort_pct gate ─────────
+
+    fn make_effort_row(
+        band: &str,
+        churn_share_pct: f64,
+    ) -> crate::analyses::effort_exposure::EffortExposureRow {
+        crate::analyses::effort_exposure::EffortExposureRow {
+            band: band.to_string(),
+            files: 1,
+            loc_share_pct: 0.0,
+            commit_share_pct: 0.0,
+            churn_share_pct,
+            commit_share_ci_low: 0.0,
+            commit_share_ci_high: 0.0,
+        }
+    }
+
+    #[test]
+    fn effort_exposure_gate_vacuous_when_unconfigured() {
+        // When max_red_effort_pct is absent the gate must not fire regardless
+        // of the row content (analysis never even runs in the real evaluator).
+        let rows = vec![make_effort_row("red", 99.0)];
+        let v = evaluate_effort_exposure_rows(f64::MAX, &rows);
+        // Threshold f64::MAX means "nothing ever exceeds" — gate is vacuous.
+        assert!(v.is_empty());
+        // Also verify: is_empty() returns true when the field is None.
+        let t = Thresholds::default();
+        assert!(t.is_empty(), "default thresholds must be empty");
+        let t = Thresholds::from_text("[gates]\nmax_red_effort_pct = 30.0\n").unwrap();
+        assert!(
+            !t.is_empty(),
+            "max_red_effort_pct alone makes thresholds non-empty"
+        );
+    }
+
+    #[test]
+    fn effort_exposure_rows_fails_when_red_churn_exceeds_threshold() {
+        // Red band has 50 % churn; threshold is 30 % → violation.
+        let rows = vec![make_effort_row("red", 50.0), make_effort_row("green", 50.0)];
+        let v = evaluate_effort_exposure_rows(30.0, &rows);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].gate, "max_red_effort_pct");
+        assert_eq!(v[0].actual, "50.00");
+        assert_eq!(v[0].threshold, "30.00");
+        assert_eq!(v[0].path, "(repo-wide)");
+    }
+
+    #[test]
+    fn effort_exposure_rows_passes_at_boundary() {
+        // Exactly equal to the threshold is allowed (strictly greater fails).
+        let rows = vec![make_effort_row("red", 30.0)];
+        assert!(evaluate_effort_exposure_rows(30.0, &rows).is_empty());
+    }
+
+    #[test]
+    fn effort_exposure_rows_passes_when_no_red_band() {
+        // No red band row ⇒ 0.0 % red churn ⇒ passes any positive threshold.
+        let rows = vec![make_effort_row("green", 100.0)];
+        assert!(evaluate_effort_exposure_rows(0.001, &rows).is_empty());
+        // And trivially passes threshold = 0.0 too (0.0 is not > 0.0).
+        assert!(evaluate_effort_exposure_rows(0.0, &rows).is_empty());
+    }
+
+    #[test]
+    fn effort_exposure_rows_passes_at_threshold_100() {
+        // 100 % ceiling is the upper bound — even a 100% red-band repo passes.
+        let rows = vec![make_effort_row("red", 100.0)];
+        assert!(evaluate_effort_exposure_rows(100.0, &rows).is_empty());
+    }
+
+    #[test]
+    fn effort_exposure_unknown_key_rejected_by_deny_unknown_fields() {
+        // Typo guard: `max_red_effort_percentage` must not silently parse.
+        let raw = "[gates]\nmax_red_effort_percentage = 30.0\n";
+        let err = Thresholds::from_text(raw).expect_err("typo'd key should reject");
+        assert!(
+            err.contains("unknown field") || err.contains("max_red_effort"),
+            "expected 'unknown field' in error: {err}"
+        );
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn effort_exposure_gate_integration_passes_at_threshold_100() {
+        // Full pipeline: ingest biomarker_repo and verify the gate with a
+        // permissive threshold (100 %) passes cleanly. This proves the
+        // evaluator wiring is correct end-to-end without depending on which
+        // specific bands the fixture produces.
+        use crate::Options;
+        use crate::facts::FactsDb;
+        use crate::repo::GixRepo;
+
+        let bio = crate::test_support::biomarker_repo::build();
+        let repo = GixRepo::open(bio.dir.path()).expect("open repo");
+        let db = FactsDb::new_in_memory().expect("db");
+        let opts = Options {
+            repo_path: bio.dir.path().to_path_buf(),
+            min_revs: 1,
+            ..Options::default()
+        };
+        db.ingest(&repo, &opts).expect("ingest");
+
+        let thresholds =
+            Thresholds::from_text("[gates]\nmax_red_effort_pct = 100.0\n").expect("parse");
+        let v = evaluate_effort_exposure_gate(&thresholds, &db, &opts).expect("evaluate gate");
+        assert!(v.is_empty(), "threshold 100 must pass: {v:?}");
     }
 }

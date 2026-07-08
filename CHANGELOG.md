@@ -13,6 +13,7 @@ Conventional Commits format. All notable changes documented here.
 - **`commit_parents` table (schema v4)** — ingest now persists one row per commit parent so graph-topology analyses can query the DAG without shelling out to git. Bumps `CURRENT_SCHEMA_VERSION` to `"4"`.
 - **`effort-exposure` analysis** — reports what fraction of engineering activity (commits, LOC churn, SLOC) falls in each code-health band (red / yellow / green) over the trailing window. Answers the hero KPI question: "Are we spending most effort fighting fires or extending healthy code?" Wilson 95% CI on commit-share is included per band. Window anchors to the repo's last commit date via `--window-days`.
 - **`Repo::tags()`** — both `GixRepo` and `GitCliRepo` backends now enumerate repository tags; `TagInfo { name, target_rev, date }` sorted ascending by `(date, name)`. Annotated tags use the tagger date; lightweight tags use the target commit's committer date.
+- **`max_red_effort_pct` quality gate** — `[gates]` in `.codelore-thresholds.toml` now accepts `max_red_effort_pct = <pct>` (0–100). `codelore check` fails when the red code-health band's window LOC churn share exceeds the ceiling. Missing red band counts as 0 %, which passes any positive threshold.
 
 ### Changed
 
