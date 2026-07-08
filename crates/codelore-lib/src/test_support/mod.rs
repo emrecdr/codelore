@@ -845,3 +845,377 @@ pub mod medium_repo {
         std::fs::write(p, content).unwrap();
     }
 }
+
+#[cfg(feature = "test-support")]
+pub mod delivery_repo {
+    //! A programmatically-built fixture covering delivery-metrics edge cases:
+    //! 3 authors (Alice/Bob/Carol), annotated tags at ~day 10/50/110 plus one
+    //! non-matching tag (`nightly-1`), two `--no-ff` merges with measurable
+    //! branch durations, author-vs-committer date gaps on 2 commits, one
+    //! rework signal (file modified then partially deleted within 5 days), and
+    //! one file churned 62 days after first touch (outside the 21-day rework
+    //! window).
+    //!
+    //! Merge commits are only ingested when `Options.include_merges` is true —
+    //! the default drops them at the walker before they reach the `DuckDB`
+    //! Appender, so `is_merge` rows will not appear with `Options::default()`.
+
+    use std::path::PathBuf;
+    use std::process::Command;
+    use tempfile::TempDir;
+
+    pub struct DeliveryRepo {
+        pub dir: TempDir,
+        pub head_sha: String,
+    }
+
+    /// Build a delivery-metrics fixture spanning ~110 days.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the OS cannot create a temporary directory or if any `git`
+    /// command fails.
+    // Long but linear: each section corresponds to one named fixture event
+    // (rework, branch, tag, author-gap) so the history is legible
+    // commit-by-commit. Splitting into helpers would obscure which commits
+    // carry which signals.
+    #[allow(clippy::too_many_lines)]
+    #[must_use]
+    pub fn build() -> DeliveryRepo {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path: PathBuf = dir.path().to_path_buf();
+
+        run_git(&path, &["init", "-b", "main", "--quiet"]);
+        // A default identity so git never falls back to hostname auto-detect;
+        // individual commits override the author via --author / env vars.
+        run_git(&path, &["config", "user.email", "delivery@example.com"]);
+        run_git(&path, &["config", "user.name", "Delivery"]);
+        // Prevent auto-gc from racing the object store between add and commit.
+        run_git(&path, &["config", "gc.auto", "0"]);
+
+        // ── Day 0 (2026-01-01): Alice seeds three files ──────────────────────
+        write(&path, "src/core.rs", "pub fn core() -> u32 { 1 }\n");
+        write(&path, "src/rework.rs", "pub fn rework() -> u32 { 1 }\n");
+        write(&path, "src/stable.rs", "pub fn stable() -> u32 { 1 }\n");
+        run_git(&path, &["add", "."]);
+        commit_as(
+            &path,
+            "Alice",
+            "alice@example.com",
+            "2026-01-01T10:00:00Z",
+            "2026-01-01T10:00:00Z",
+            "seed: add initial files",
+        );
+        run_git(&path, &["repack", "-d", "--quiet"]);
+
+        // ── Day 5 (2026-01-06): Alice expands rework.rs ──────────────────────
+        write(
+            &path,
+            "src/rework.rs",
+            "pub fn rework() -> u32 { 1 }\npub fn extra() -> u32 { 2 }\npub fn more() -> u32 { 3 }\n",
+        );
+        run_git(&path, &["add", "src/rework.rs"]);
+        commit_as(
+            &path,
+            "Alice",
+            "alice@example.com",
+            "2026-01-06T10:00:00Z",
+            "2026-01-06T10:00:00Z",
+            "feat: expand rework.rs",
+        );
+        run_git(&path, &["repack", "-d", "--quiet"]);
+
+        // ── Day 8 (2026-01-09): Bob partially deletes rework.rs ──────────────
+        // Within 5 days of the previous touch → rework signal.
+        // author_date = Jan 8, committer_date = Jan 9 → lead-proxy gap (1 of 2).
+        write(&path, "src/rework.rs", "pub fn rework() -> u32 { 1 }\n");
+        run_git(&path, &["add", "src/rework.rs"]);
+        commit_as(
+            &path,
+            "Bob",
+            "bob@example.com",
+            "2026-01-08T10:00:00Z",
+            "2026-01-09T10:00:00Z",
+            "refactor: trim rework.rs",
+        );
+        run_git(&path, &["repack", "-d", "--quiet"]);
+
+        // ── Day 10 (2026-01-11): Alice updates core.rs; tag v0.1.0 ──────────
+        write(&path, "src/core.rs", "pub fn core() -> u32 { 2 }\n");
+        run_git(&path, &["add", "src/core.rs"]);
+        commit_as(
+            &path,
+            "Alice",
+            "alice@example.com",
+            "2026-01-11T10:00:00Z",
+            "2026-01-11T10:00:00Z",
+            "feat: update core",
+        );
+        run_git(&path, &["repack", "-d", "--quiet"]);
+        tag_annotated(&path, "v0.1.0", "release v0.1.0", "2026-01-11T12:00:00Z");
+
+        // ── Branch 1: 3 commits spanning 2 calendar days (Jan 16–17) ─────────
+        run_git(&path, &["checkout", "-b", "feature/branch1", "--quiet"]);
+
+        write(&path, "src/branch1.rs", "pub fn branch1_a() -> u32 { 1 }\n");
+        run_git(&path, &["add", "src/branch1.rs"]);
+        commit_as(
+            &path,
+            "Bob",
+            "bob@example.com",
+            "2026-01-16T10:00:00Z",
+            "2026-01-16T10:00:00Z",
+            "feat: add branch1 file",
+        );
+        run_git(&path, &["repack", "-d", "--quiet"]);
+
+        write(
+            &path,
+            "src/branch1.rs",
+            "pub fn branch1_a() -> u32 { 1 }\npub fn branch1_b() -> u32 { 2 }\n",
+        );
+        run_git(&path, &["add", "src/branch1.rs"]);
+        commit_as(
+            &path,
+            "Carol",
+            "carol@example.com",
+            "2026-01-17T08:00:00Z",
+            "2026-01-17T08:00:00Z",
+            "feat: expand branch1",
+        );
+        run_git(&path, &["repack", "-d", "--quiet"]);
+
+        write(
+            &path,
+            "src/branch1.rs",
+            "pub fn branch1_a() -> u32 { 10 }\npub fn branch1_b() -> u32 { 20 }\n",
+        );
+        run_git(&path, &["add", "src/branch1.rs"]);
+        commit_as(
+            &path,
+            "Bob",
+            "bob@example.com",
+            "2026-01-17T14:00:00Z",
+            "2026-01-17T14:00:00Z",
+            "fix: finalize branch1",
+        );
+        run_git(&path, &["repack", "-d", "--quiet"]);
+
+        // Merge commit 1 of 2: --no-ff merge of branch1.
+        run_git(&path, &["checkout", "main", "--quiet"]);
+        merge_no_ff(
+            &path,
+            "Alice",
+            "alice@example.com",
+            "2026-01-18T10:00:00Z",
+            "feature/branch1",
+            "Merge branch 'feature/branch1' into main",
+        );
+        run_git(&path, &["repack", "-d", "--quiet"]);
+
+        // ── Day 40 (2026-02-10): Carol updates core.rs ───────────────────────
+        write(&path, "src/core.rs", "pub fn core() -> u32 { 3 }\n");
+        run_git(&path, &["add", "src/core.rs"]);
+        commit_as(
+            &path,
+            "Carol",
+            "carol@example.com",
+            "2026-02-10T10:00:00Z",
+            "2026-02-10T10:00:00Z",
+            "feat: update core for v0.2",
+        );
+        run_git(&path, &["repack", "-d", "--quiet"]);
+
+        // ── Day 50 (2026-02-20): Alice preps v0.2.0; tag v0.2.0 ─────────────
+        write(&path, "src/core.rs", "pub fn core() -> u32 { 4 }\n");
+        run_git(&path, &["add", "src/core.rs"]);
+        commit_as(
+            &path,
+            "Alice",
+            "alice@example.com",
+            "2026-02-20T10:00:00Z",
+            "2026-02-20T10:00:00Z",
+            "release: prep v0.2.0",
+        );
+        run_git(&path, &["repack", "-d", "--quiet"]);
+        tag_annotated(&path, "v0.2.0", "release v0.2.0", "2026-02-20T12:00:00Z");
+
+        // ── Day 62 (2026-03-04): Bob churns stable.rs ────────────────────────
+        // 62 days since stable.rs was first touched (day 0) → outside the
+        // 21-day rework window; contrasts with the rework.rs signal above.
+        // author_date = Mar 3, committer_date = Mar 4 → lead-proxy gap (2 of 2).
+        write(&path, "src/stable.rs", "pub fn stable() -> u32 { 99 }\n");
+        run_git(&path, &["add", "src/stable.rs"]);
+        commit_as(
+            &path,
+            "Bob",
+            "bob@example.com",
+            "2026-03-03T10:00:00Z",
+            "2026-03-04T10:00:00Z",
+            "chore: churn stable.rs",
+        );
+        run_git(&path, &["repack", "-d", "--quiet"]);
+
+        // ── Branch 2: 1 commit, same-day merge (2026-03-07) ──────────────────
+        run_git(&path, &["checkout", "-b", "feature/branch2", "--quiet"]);
+
+        write(&path, "src/branch2.rs", "pub fn branch2() -> u32 { 1 }\n");
+        run_git(&path, &["add", "src/branch2.rs"]);
+        commit_as(
+            &path,
+            "Carol",
+            "carol@example.com",
+            "2026-03-07T10:00:00Z",
+            "2026-03-07T10:00:00Z",
+            "feat: add branch2 file",
+        );
+        run_git(&path, &["repack", "-d", "--quiet"]);
+
+        // Merge commit 2 of 2: --no-ff merge of branch2, same calendar day.
+        run_git(&path, &["checkout", "main", "--quiet"]);
+        merge_no_ff(
+            &path,
+            "Bob",
+            "bob@example.com",
+            "2026-03-07T14:00:00Z",
+            "feature/branch2",
+            "Merge branch 'feature/branch2' into main",
+        );
+        run_git(&path, &["repack", "-d", "--quiet"]);
+
+        // ── Day 80 (2026-03-22): Carol touches core.rs; non-matching tag ─────
+        write(&path, "src/core.rs", "pub fn core() -> u32 { 5 }\n");
+        run_git(&path, &["add", "src/core.rs"]);
+        commit_as(
+            &path,
+            "Carol",
+            "carol@example.com",
+            "2026-03-22T10:00:00Z",
+            "2026-03-22T10:00:00Z",
+            "chore: tweak core",
+        );
+        run_git(&path, &["repack", "-d", "--quiet"]);
+        // Non-matching tag: a later task tests glob filtering (e.g. `v*` patterns
+        // must not match this tag).
+        tag_annotated(
+            &path,
+            "nightly-1",
+            "nightly build 1",
+            "2026-03-22T12:00:00Z",
+        );
+
+        // ── Day 110 (2026-04-21): Alice preps v1.0.0; tag v1.0.0 ─────────────
+        write(&path, "src/core.rs", "pub fn core() -> u32 { 6 }\n");
+        run_git(&path, &["add", "src/core.rs"]);
+        commit_as(
+            &path,
+            "Alice",
+            "alice@example.com",
+            "2026-04-21T10:00:00Z",
+            "2026-04-21T10:00:00Z",
+            "release: prep v1.0.0",
+        );
+        run_git(&path, &["repack", "-d", "--quiet"]);
+        tag_annotated(&path, "v1.0.0", "release v1.0.0", "2026-04-21T12:00:00Z");
+        // Lightweight tag (no `-a`): exercises the tag-date fallback path in
+        // `Repo::tags()` — lightweight tags carry no tagger date, so both
+        // backends must fall back to the target commit's committer date
+        // (2026-04-21T10:00:00Z here, sorting BEFORE v1.0.0's 12:00 tagger date).
+        run_git(&path, &["tag", "light-1"]);
+
+        let head_sha = String::from_utf8(
+            Command::new("git")
+                .arg("-C")
+                .arg(&path)
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .expect("git rev-parse")
+                .stdout,
+        )
+        .expect("utf8")
+        .trim()
+        .to_string();
+
+        DeliveryRepo { dir, head_sha }
+    }
+
+    /// Commit with a specific author identity and independent author/committer
+    /// dates. The `--author` flag overrides the author; the repo default user
+    /// is used for the committer identity. When `author_date != committer_date`
+    /// the commit models a review-then-land gap.
+    fn commit_as(
+        path: &std::path::Path,
+        name: &str,
+        email: &str,
+        author_date: &str,
+        committer_date: &str,
+        msg: &str,
+    ) {
+        let author = format!("{name} <{email}>");
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(["commit", "-m", msg, "--author", &author, "--quiet"])
+            .env("GIT_AUTHOR_DATE", author_date)
+            .env("GIT_COMMITTER_DATE", committer_date)
+            .status()
+            .expect("git commit");
+        assert!(status.success(), "commit '{msg}' failed");
+    }
+
+    /// `--no-ff` merge commit pinned to a specific author/committer identity
+    /// and date. `git merge` has no `--author` flag; identity is set via env
+    /// vars.
+    fn merge_no_ff(
+        path: &std::path::Path,
+        name: &str,
+        email: &str,
+        date: &str,
+        branch: &str,
+        msg: &str,
+    ) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(["merge", "--no-ff", branch, "-m", msg, "--quiet"])
+            .env("GIT_AUTHOR_NAME", name)
+            .env("GIT_AUTHOR_EMAIL", email)
+            .env("GIT_COMMITTER_NAME", name)
+            .env("GIT_COMMITTER_EMAIL", email)
+            .env("GIT_AUTHOR_DATE", date)
+            .env("GIT_COMMITTER_DATE", date)
+            .status()
+            .expect("git merge");
+        assert!(status.success(), "merge '{branch}' into main failed");
+    }
+
+    /// Create an annotated tag at HEAD with a deterministic tagger date.
+    fn tag_annotated(path: &std::path::Path, tag: &str, msg: &str, date: &str) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(["tag", "-a", tag, "-m", msg])
+            .env("GIT_COMMITTER_DATE", date)
+            .status()
+            .expect("git tag");
+        assert!(status.success(), "tag '{tag}' failed");
+    }
+
+    fn run_git(path: &std::path::Path, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .status()
+            .expect("git");
+        assert!(status.success(), "git {args:?} failed");
+    }
+
+    fn write(root: &std::path::Path, rel: &str, content: &str) {
+        let p = root.join(rel);
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(p, content).unwrap();
+    }
+}

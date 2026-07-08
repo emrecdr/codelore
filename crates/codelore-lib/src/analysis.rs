@@ -151,6 +151,12 @@ pub enum AnalysisName {
     // effort so small, dense, churning files outrank large ones with
     // the same raw risk.
     RefactoringTargets,
+    // Effort exposure — what fraction of engineering activity (commits,
+    // churn, SLOC) falls in each code-health band (red / yellow / green)
+    // over the trailing window. Hero KPI: "Are we spending most effort
+    // fighting fires or extending healthy code?" Wilson 95% CI on
+    // commit-share is included per band.
+    EffortExposure,
 }
 
 impl AnalysisName {
@@ -201,6 +207,7 @@ impl AnalysisName {
             Self::BusFactor => "bus-factor",
             Self::DeliveryFriction => "delivery-friction",
             Self::RefactoringTargets => "refactoring-targets",
+            Self::EffortExposure => "effort-exposure",
         }
     }
 
@@ -279,6 +286,7 @@ impl AnalysisName {
             BusFactor,
             DeliveryFriction,
             RefactoringTargets,
+            EffortExposure,
         )
     }
 

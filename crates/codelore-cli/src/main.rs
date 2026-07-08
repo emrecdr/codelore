@@ -99,6 +99,14 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
         codelore_lib::cli_api::quality_gates::evaluate_architecture_gate(&thresholds, &db)
             .context("evaluate architecture gate")?,
     );
+    violations.extend(
+        codelore_lib::cli_api::quality_gates::evaluate_effort_exposure_gate(
+            &thresholds,
+            &db,
+            &opts,
+        )
+        .context("evaluate effort-exposure gate")?,
+    );
 
     if violations.is_empty() {
         println!(
@@ -343,6 +351,17 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
              sample, so it is heavier than SQL-only analyses; computed on demand, never \
              cached.",
             "See analyses/health_trend.rs.",
+        ),
+        (
+            "effort-exposure",
+            "Engineering effort distribution across code-health bands",
+            "For each code-health band (red / yellow / green) reports the percentage of \
+             files, SLOC, trailing-window commits, and LOC churn in that band. Answers \
+             the hero KPI question: are we spending most effort fighting fires in red code \
+             or extending healthy green code? Commit-share Wilson 95% CI is included per \
+             band. Window anchors to the repo's last commit date (not wall-clock) via \
+             --window-days (default 90).",
+            "See analyses/effort_exposure.rs.",
         ),
         (
             "cycle-origins",
@@ -671,6 +690,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         time_bucket: args.time_bucket.map(Into::into),
         // T8: knowledge-islands analysis "departed author" threshold.
         departed_threshold_days: args.departed_threshold_days,
+        window_days: args.window_days,
         ..Options::default()
     };
 
@@ -981,6 +1001,9 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             }
             AnalysisName::Centrality => dispatch_centrality(&db, &opts, format, &ctx, &mut out)?,
             AnalysisName::Communities => dispatch_communities(&db, &opts, format, &ctx, &mut out)?,
+            AnalysisName::EffortExposure => {
+                dispatch_effort_exposure(&db, &opts, format, &ctx, &mut out)?;
+            }
         }
     } // out is dropped here, flushing any buffered writes
 
@@ -2346,6 +2369,46 @@ fn dispatch_delivery_friction(
     Ok(())
 }
 
+fn dispatch_effort_exposure(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows =
+                codelore_lib::cli_api::analyses::effort_exposure::run_effort_exposure(db, opts)
+                    .context("run effort-exposure")?;
+            codelore_lib::cli_api::output::csv::write_effort_exposure_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows =
+                codelore_lib::cli_api::analyses::effort_exposure::run_effort_exposure(db, opts)
+                    .context("run effort-exposure")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows =
+                codelore_lib::cli_api::analyses::effort_exposure::run_effort_exposure(db, opts)
+                    .context("run effort-exposure")?;
+            codelore_lib::cli_api::output::markdown::write_effort_exposure_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format(
+                "effort-exposure",
+                "csv|json|markdown",
+                fmt,
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn dispatch_refactoring_targets(
     db: &FactsDb,
     opts: &Options,
@@ -3186,19 +3249,25 @@ fn build_spa_dashboard(
             tracing::warn!("dashboard: architecture-trend failed; skipping: {e}");
             Vec::new()
         });
-    // Repo health timeline — like architecture-trend, needs the repo to
-    // re-read source at sampled historical revs. Opens its own handle
-    // and degrades gracefully on any failure.
-    let health_trend = codelore_lib::cli_api::repo::GixRepo::open(repo_path)
-        .map_err(anyhow::Error::from)
-        .and_then(|repo| {
-            codelore_lib::cli_api::analyses::health_trend::run_health_trend(db, &repo, opts)
+    // Repo health timeline + per-file series + transitions — like
+    // architecture-trend, needs the repo to re-read source at sampled
+    // historical revs. Opens its own handle and degrades gracefully.
+    let (health_trend, file_health_series, health_transitions) =
+        codelore_lib::cli_api::repo::GixRepo::open(repo_path)
+            .map_err(anyhow::Error::from)
+            .and_then(|repo| {
+                codelore_lib::cli_api::analyses::health_trend::run_health_trend_detail(
+                    db, &repo, opts,
+                )
                 .map_err(anyhow::Error::from)
-        })
-        .unwrap_or_else(|e| {
-            tracing::warn!("dashboard: health-trend failed; skipping: {e}");
-            Vec::new()
-        });
+            })
+            .map_or_else(
+                |e| {
+                    tracing::warn!("dashboard: health-trend failed; skipping: {e}");
+                    (Vec::new(), Vec::new(), Vec::new())
+                },
+                |d| (d.trend, d.file_series, d.transitions),
+            );
     Ok(SpaDashboard {
         hotspots,
         summary,
@@ -3219,6 +3288,8 @@ fn build_spa_dashboard(
         architecture_roles,
         architecture_trend,
         health_trend,
+        file_health_series,
+        health_transitions,
         options: codelore_lib::cli_api::output::spa::SpaOptionsSnapshot::from_options(opts),
     })
 }

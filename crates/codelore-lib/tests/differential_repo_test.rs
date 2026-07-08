@@ -5,10 +5,31 @@
 
 use codelore_lib::Options;
 use codelore_lib::repo::{GitCliRepo, GixRepo, Repo};
+use codelore_lib::test_support::delivery_repo::DeliveryRepo;
 use codelore_lib::test_support::differential_repo::DifferentialRepo;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::OnceLock;
+
+// ---------------------------------------------------------------------------
+// Shared delivery_repo fixture — built once; used by the tags test only.
+// ---------------------------------------------------------------------------
+
+struct SharedDelivery {
+    _repo: DeliveryRepo,
+    path: PathBuf,
+}
+
+static DELIVERY: OnceLock<SharedDelivery> = OnceLock::new();
+
+fn delivery_path() -> &'static PathBuf {
+    let sd = DELIVERY.get_or_init(|| {
+        let repo = codelore_lib::test_support::delivery_repo::build();
+        let path = repo.dir.path().to_path_buf();
+        SharedDelivery { _repo: repo, path }
+    });
+    &sd.path
+}
 
 // ---------------------------------------------------------------------------
 // Shared fixture — built exactly once per test binary invocation.
@@ -685,6 +706,68 @@ fn diff_hunks_match_across_backends() {
             gix_hunks, cli_hunks,
             "diff_hunks divergence between gix and cli for {path} at {head}: \
              gix={gix_hunks:?} cli={cli_hunks:?}",
+        );
+    }
+}
+
+/// `Repo::tags()` must return byte-identical results from both backends.
+/// Uses the `delivery_repo` fixture which has 4 annotated tags plus one
+/// LIGHTWEIGHT tag (`light-1`, exercising the committer-date fallback path)
+/// in known chronological order: v0.1.0 (Jan), v0.2.0 (Feb), nightly-1 (Mar),
+/// light-1 (Apr 21 10:00, target commit's committer date), v1.0.0 (Apr 21
+/// 12:00, tagger date).
+#[test]
+fn tags_match_across_backends() {
+    let path = delivery_path();
+    let gix = GixRepo::open(path).expect("GixRepo::open delivery_repo");
+    let cli = GitCliRepo::open(path).expect("GitCliRepo::open delivery_repo");
+
+    let gix_tags = gix.tags().expect("GixRepo::tags");
+    let cli_tags = cli.tags().expect("GitCliRepo::tags");
+
+    assert_eq!(
+        gix_tags.len(),
+        5,
+        "expected 4 annotated + 1 lightweight tag; got {gix_tags:?}",
+    );
+    assert_eq!(
+        cli_tags.len(),
+        5,
+        "expected 4 annotated + 1 lightweight tag; got {cli_tags:?}",
+    );
+
+    // Both backends must return identical results: same order, same OIDs,
+    // same dates. A divergence here means the two backends parse tag metadata
+    // differently — a bug by design.
+    assert_eq!(
+        gix_tags, cli_tags,
+        "tags() diverged between GixRepo and GitCliRepo:\n  gix={gix_tags:#?}\n  cli={cli_tags:#?}"
+    );
+
+    // Verify sort order and names are correct (ascending by date: tagger
+    // date for annotated tags, target committer date for lightweight —
+    // which is why light-1 (commit 10:00) sorts before v1.0.0 (tag 12:00)).
+    let names: Vec<&str> = gix_tags.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(
+        names,
+        ["v0.1.0", "v0.2.0", "nightly-1", "light-1", "v1.0.0"],
+        "tags not in expected (date, name) order"
+    );
+
+    // Each target_rev must be a full 40-char hex SHA.
+    for tag in &gix_tags {
+        assert_eq!(
+            tag.target_rev.len(),
+            40,
+            "tag {} target_rev is not a 40-char SHA: {:?}",
+            tag.name,
+            tag.target_rev
+        );
+        assert!(
+            tag.target_rev.chars().all(|c| c.is_ascii_hexdigit()),
+            "tag {} target_rev contains non-hex chars: {:?}",
+            tag.name,
+            tag.target_rev
         );
     }
 }

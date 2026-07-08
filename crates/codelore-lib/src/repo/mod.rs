@@ -3,6 +3,9 @@
 
 use crate::{CommitEvent, FileChange, Hunk, Options, Result};
 
+pub mod types;
+pub use types::TagInfo;
+
 /// Read-only git operations needed by the codelore pipeline.
 /// See spec §3.3.
 pub trait Repo: Send + Sync {
@@ -92,6 +95,18 @@ pub trait Repo: Send + Sync {
     fn read_blob_at_head(&self, path: &str) -> Result<Option<Vec<u8>>> {
         self.read_blob_at("HEAD", path)
     }
+
+    /// Return all git tags in this repository, sorted ascending by
+    /// `(date, name)`.
+    ///
+    /// Date semantics:
+    /// - **Annotated tags** — the tagger timestamp (when `git tag -a` was run).
+    /// - **Lightweight tags** — the target commit's committer timestamp.
+    ///
+    /// `target_rev` is always the peeled commit SHA (40-char hex); for
+    /// annotated tags this is the commit the tag object ultimately points at,
+    /// not the tag object's own OID.
+    fn tags(&self) -> Result<Vec<TagInfo>>;
 }
 
 pub mod gix_repo;

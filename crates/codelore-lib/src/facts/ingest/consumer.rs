@@ -39,6 +39,10 @@ pub(super) fn ingest_loop(
         .conn()
         .appender("hunks")
         .map_err(|e| CodeLoreError::Analysis(format!("appender hunks: {e}")))?;
+    let mut commit_parents_app = db
+        .conn()
+        .appender("commit_parents")
+        .map_err(|e| CodeLoreError::Analysis(format!("appender commit_parents: {e}")))?;
 
     // Collect unique (raw_email, canonical, is_bot) for deferred author_aliases insert.
     let mut alias_map: HashMap<String, (String, bool)> = HashMap::new();
@@ -78,6 +82,7 @@ pub(super) fn ingest_loop(
             .or_insert((canonical, bot));
 
         append_commit(&mut commits_app, &event)?;
+        append_parents(&mut commit_parents_app, &event)?;
         for ch in &event.changes {
             // Skip paths excluded by --exclude, .gitignore (unless the
             // user passed --include-ignored), .git/info/exclude, or
@@ -105,6 +110,9 @@ pub(super) fn ingest_loop(
     hunks_app
         .flush()
         .map_err(|e| CodeLoreError::Analysis(format!("flush hunks: {e}")))?;
+    commit_parents_app
+        .flush()
+        .map_err(|e| CodeLoreError::Analysis(format!("flush commit_parents: {e}")))?;
 
     // Populate author_aliases table.
     let mut aliases_app = db
@@ -181,6 +189,16 @@ fn append_commit(app: &mut Appender<'_>, e: &CommitEvent) -> Result<()> {
         Option::<i32>::None,
     ])
     .map_err(|err| CodeLoreError::Analysis(format!("append commit: {err}")))?;
+    Ok(())
+}
+
+fn append_parents(app: &mut Appender<'_>, e: &CommitEvent) -> Result<()> {
+    use duckdb::params;
+    for (pos, parent_rev) in e.parents.iter().enumerate() {
+        let position = i32::try_from(pos).unwrap_or(i32::MAX);
+        app.append_row(params![e.rev, parent_rev, position])
+            .map_err(|err| CodeLoreError::Analysis(format!("append commit_parent: {err}")))?;
+    }
     Ok(())
 }
 

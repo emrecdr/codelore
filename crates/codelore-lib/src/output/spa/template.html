@@ -792,7 +792,7 @@
       margin-bottom: 12px;
       flex-wrap: wrap;
     }
-    .widget-toolbar .toggle {
+    .widget-toolbar .wt-btn {
       background: var(--bg-elev-2);
       color: var(--fg-dim);
       border: 1px solid var(--border);
@@ -802,8 +802,8 @@
       font-size: 12px;
       font-family: inherit;
     }
-    .widget-toolbar .toggle:hover { border-color: var(--accent); color: var(--fg); }
-    .widget-toolbar .toggle.active {
+    .widget-toolbar .wt-btn:hover { border-color: var(--accent); color: var(--fg); }
+    .widget-toolbar .wt-btn.active {
       background: rgba(46, 164, 79, 0.12);
       color: var(--accent);
       border-color: var(--accent);
@@ -867,9 +867,13 @@
       --chart-palette-14: #303f9f;
       --chart-palette-15: #ad1457;
     }
-    /* Health-trend small-multiple panels (split view). Each panel needs
-       an explicit height so ECharts doesn't render into a 0px container. */
-    .ht-sm { height: 130px; margin-bottom: 4px; }
+    /* Health-trend: the overlay chart host needs an explicit height so
+       ECharts doesn't render into a 0px container (the parent widget
+       min-height does not propagate into block children). */
+    #ht-charts { height: 320px; }
+    /* Split-view small-multiple panels. Taller than the old 130px so
+       y-axis labels and the title don't overlap the plot area. */
+    .ht-sm { height: 180px; margin-bottom: 4px; }
     footer {
       padding: 20px 28px;
       color: var(--fg-dim);
@@ -1525,6 +1529,18 @@
         </div>
       </details>
       <div id="widget-health-trend-body" class="widget-body" style="min-height: 340px;"></div>
+    </section>
+
+    <!-- Improvements feed: recent band transitions (regressions ↓ /
+         improvements ↑) surfaced from the per-file health series. Each
+         entry is a clickable path for linked-brushing into the drawer. -->
+    <section class="widget card bg-base-200 shadow-lg" id="widget-improvements-feed">
+      <h2>Health improvements &amp; regressions</h2>
+      <div class="subtitle">
+        Signal-bearing code-health band transitions detected across sampled
+        historical commits. Click any file to open its detail drawer.
+      </div>
+      <div id="widget-improvements-feed-body" class="widget-body" style="min-height: 120px;"></div>
     </section>
 
     <!-- Treemap alternative view to the circle-pack. Same
@@ -2211,39 +2227,17 @@
       // 3. URL → stores on back/forward (`hashchange` only fires for
       //    user navigation, never for our own replaceState writes).
       window.addEventListener('hashchange', readUrlIntoStores);
-      // Reactive bridge: store.isDark + store.scenario.departed →
-      // <html data-theme="..."> + ECharts re-render. Reading the
-      // scenario length here registers the effect's dependency on
-      // it, so adding/removing a departed author also fires the
-      // rerenderer loop — the circle-pack picks up new knowledge-loss
-      // colours without a separate subscription.
+      // Theme bridge: reads only store.theme.isDark so the data-theme
+      // attribute update and ECharts palette re-renders fire in isolation
+      // from layout-depth or offboarding changes. Cooperative scheduling
+      // preserved: yields between re-renderers so user input stays
+      // responsive during the theme-change cascade (F135 root-cause fix).
       Alpine.effect(() => {
         const dark = Alpine.store('theme').isDark;
-        // Reading every reactive dependency we want to trigger on
-        // establishes those dependencies; the length / value reads
-        // are enough — the effect only needs a change signal. We
-        // also read the layout depth settings so user-driven depth
-        // changes re-paint the chord / arch graph / sankey.
-        void Alpine.store('scenario').departed.length;
-        void Alpine.store('layout').chordDepth;
-        void Alpine.store('layout').archGraphDepth;
-        void Alpine.store('layout').archGraphLayout;
-        void Alpine.store('layout').sankeyDepth;
-        void Alpine.store('layout').trendsTopN;
-        void Alpine.store('layout').parallelTopN;
-        void Alpine.store('layout').kameiWindow;
         document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
         // Fire registered re-renderers so ECharts widgets pick up the
-        // new resolved palette / scenario state / aggregation depth.
-        // Wrapped in try/catch per-renderer so one broken widget
-        // doesn't break the rest.
-        //
-        // Cooperative scheduling: re-renderers full-recompute layouts
-        // (d3.pack on the hotspot circle-pack, ECharts setOption on
-        // every widget) — running all of them synchronously blocks
-        // the main thread for hundreds of ms on big repos. We yield
-        // between each so user input (drawer open, tab switch) stays
-        // responsive during the cascade. F135 root-cause fix.
+        // new resolved palette. Wrapped in try/catch per-renderer so
+        // one broken widget doesn't break the rest.
         const rerenderers = window._codeloreRerenderers || [];
         (async function runRerenderers() {
           for (let i = 0; i < rerenderers.length; i++) {
@@ -2253,6 +2247,26 @@
             }
           }
         })();
+      });
+      // Layout and offboarding bridge: re-renders registered widgets when
+      // the user changes an aggregation depth or the offboarding scenario.
+      // Kept separate from the theme effect so a depth-tab click does not
+      // also trigger a CSS-token invalidation pass across all renderers.
+      // No cooperative yield — these are explicit single user actions, not
+      // the full-dashboard repaint a theme switch triggers.
+      Alpine.effect(() => {
+        void Alpine.store('scenario').departed.length;
+        void Alpine.store('layout').chordDepth;
+        void Alpine.store('layout').archGraphDepth;
+        void Alpine.store('layout').archGraphLayout;
+        void Alpine.store('layout').sankeyDepth;
+        void Alpine.store('layout').trendsTopN;
+        void Alpine.store('layout').parallelTopN;
+        void Alpine.store('layout').kameiWindow;
+        const rerenderers = window._codeloreRerenderers || [];
+        for (let i = 0; i < rerenderers.length; i++) {
+          try { rerenderers[i](); } catch (e) { console.warn('rerender failed:', e); }
+        }
       });
       // Cross-widget selection bridge: fire listeners registered by
       // path-aware widgets whenever `$store.selection.path` changes.

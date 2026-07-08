@@ -46,12 +46,12 @@
 @plugin "./daisyui-theme.mjs";
 
 /* The standalone CLI scans `@source` paths for class usage. Both
- * `template.html` (static markup) and `widgets.js` (dynamically
- * rendered chart containers + KPI tiles + drawer body) carry class
- * names the pruner needs to see. Embedded data JSON and ECharts/d3
- * internals never produce class names of their own. */
+ * `template.html` (static markup) and the `js/` widget modules
+ * (dynamically rendered chart containers + KPI tiles + drawer body)
+ * carry class names the pruner needs to see. Embedded data JSON and
+ * ECharts/d3 internals never produce class names of their own. */
 @source "../template.html";
-@source "../widgets.js";
+@source "../js";
 
 /* CodeLore brand accent palette lives inline in `template.html` as
  * `--accent` / `--accent-warn` / `--accent-danger` CSS variables on

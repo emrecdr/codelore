@@ -43,6 +43,10 @@ pub struct FactsDb {
     /// materialise rebuilds against the grouped paths. `Cell` (not
     /// `RefCell`) — a plain `bool` on the single connection-owning thread.
     changes_lineage_built: std::cell::Cell<bool>,
+    /// Idempotence guard for [`crate::analyses::knowledge::shares::materialize_knowledge_shares`].
+    /// Mirrors `changes_lineage_built`: set on first materialise, checked at
+    /// every entry to skip redundant temp-table rebuilds within a single run.
+    knowledge_shares_built: std::cell::Cell<bool>,
     /// Process-local memo for the structural import graph
     /// ([`crate::analyses::import_graph::build_import_graph`]). The graph is
     /// a pure function of the immutable `imports` table, yet a `--format
@@ -65,6 +69,7 @@ impl FactsDb {
             conn,
             coupling_memo: std::cell::RefCell::new(std::collections::HashMap::new()),
             changes_lineage_built: std::cell::Cell::new(false),
+            knowledge_shares_built: std::cell::Cell::new(false),
             import_graph_memo: std::cell::RefCell::new(None),
         }
     }
@@ -120,6 +125,17 @@ impl FactsDb {
     /// view against the new path set.
     pub(crate) fn invalidate_changes_lineage(&self) {
         self.changes_lineage_built.set(false);
+    }
+
+    /// Returns `true` if `knowledge_shares` and `doe_scores` temp tables
+    /// have already been materialised in this run.
+    pub(crate) fn is_knowledge_shares_built(&self) -> bool {
+        self.knowledge_shares_built.get()
+    }
+
+    /// Record that the knowledge-share temp tables have been materialised.
+    pub(crate) fn mark_knowledge_shares_built(&self) {
+        self.knowledge_shares_built.set(true);
     }
 
     pub fn new_in_memory() -> Result<Self> {

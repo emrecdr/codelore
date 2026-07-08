@@ -48,6 +48,7 @@ use codelore_lib::analyses::dashboard::{
     CloneSummary, DailyCommit, ImportEdgeRow, KameiRiskRow, TrendPoint, XRayEntry,
 };
 use codelore_lib::analyses::entity_ownership::EntityOwnershipRow;
+use codelore_lib::analyses::health_trend::HealthTrendRow;
 use codelore_lib::analyses::mi::MiRollup;
 use codelore_lib::analyses::modularity_violations::ModularityViolationRow;
 use codelore_lib::analyses::unstable_interface::UnstableInterfaceRow;
@@ -1168,6 +1169,54 @@ fn write_smoke_spa(html_path: &std::path::Path, title: &str) {
         unknown: 1,
     });
     let coupling_density = Some(0.08_f64);
+    // Health timeline: four sampled revisions with realistic health scores so
+    // `renderHealthTrend` passes its `rows.length < 2` guard and mounts a chart.
+    let health_trend: Vec<HealthTrendRow> = vec![
+        HealthTrendRow {
+            date: "2026-01-01".to_string(),
+            rev: "abc123456789".to_string(),
+            files: 8,
+            arch_health: 72.0,
+            code_health: 68.0,
+            combined_health: 70.0,
+            arch_band: "green".to_string(),
+            code_band: "yellow".to_string(),
+            combined_band: "yellow".to_string(),
+        },
+        HealthTrendRow {
+            date: "2026-02-01".to_string(),
+            rev: "def234567890".to_string(),
+            files: 9,
+            arch_health: 70.0,
+            code_health: 65.0,
+            combined_health: 67.5,
+            arch_band: "green".to_string(),
+            code_band: "yellow".to_string(),
+            combined_band: "yellow".to_string(),
+        },
+        HealthTrendRow {
+            date: "2026-03-01".to_string(),
+            rev: "fad345678901".to_string(),
+            files: 10,
+            arch_health: 68.0,
+            code_health: 63.0,
+            combined_health: 65.5,
+            arch_band: "yellow".to_string(),
+            code_band: "yellow".to_string(),
+            combined_band: "yellow".to_string(),
+        },
+        HealthTrendRow {
+            date: "2026-04-01".to_string(),
+            rev: "bce456789012".to_string(),
+            files: 11,
+            arch_health: 65.0,
+            code_health: 60.0,
+            combined_health: 62.5,
+            arch_band: "yellow".to_string(),
+            code_band: "yellow".to_string(),
+            combined_band: "yellow".to_string(),
+        },
+    ];
 
     let dash = SpaDashboard {
         hotspots,
@@ -1186,6 +1235,7 @@ fn write_smoke_spa(html_path: &std::path::Path, title: &str) {
         unstable_interface,
         architecture_roles,
         architecture_trend,
+        health_trend,
         mi_rollup,
         coupling_density,
         ..SpaDashboard::default()
@@ -1888,5 +1938,127 @@ fn hotspot_map_coupling_arcs_name_their_partner() {
         !peer.is_empty(),
         "selecting a coupled file should draw a coupling arc whose _arc.peer names \
          the partner file — the coupling_repo fixture has file-level coupling"
+    );
+}
+
+/// The health-trend widget toggle must work without Bug 1 (`DaisyUI` `.toggle`
+/// collision) and without Bug 2 (`#ht-charts` zero height). Sequence:
+/// 1. Overlay view (default): `#ht-charts` canvas is visible and tall enough.
+/// 2. `#ht-toggle` is present, wide enough to click, and says "Split view".
+/// 3. After one click: three `.ht-sm` panels each with a rendered canvas.
+/// 4. After a second click: back to a single overlay canvas.
+#[test]
+fn health_trend_toggle_renders_both_views() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let html_path = tmp.path().join("codelore-health-trend.html");
+    write_smoke_spa(&html_path, "CodeLore Health-Trend Toggle Test");
+
+    let Some((_browser, tab)) = boot_spa_tab(&html_path) else {
+        return;
+    };
+
+    // Step 1: overlay canvas exists and has non-zero height (Bug 2 guard).
+    let overlay_height: i64 = eval_json(
+        &tab,
+        "(function () { \
+             var host = document.getElementById('ht-charts'); \
+             if (!host) return 0; \
+             var canvas = host.querySelector('canvas'); \
+             if (!canvas) return 0; \
+             return canvas.clientHeight; \
+         })()",
+    );
+    assert!(
+        overlay_height > 250,
+        "overlay #ht-charts canvas clientHeight was {overlay_height}px — \
+         expected >250px (CSS sets 320px); the #ht-charts container may have \
+         zero or collapsed height (Bug 2)"
+    );
+
+    // Step 2: toggle button is visible and carries the expected label (Bug 1 guard).
+    // Two separate scalar evals because headless_chrome's RemoteObject.value is
+    // only populated for primitive JS types — arrays come back as objectId refs.
+    let toggle_width: i64 = eval_json(
+        &tab,
+        "(function () { \
+             var btn = document.getElementById('ht-toggle'); \
+             return btn ? btn.offsetWidth : 0; \
+         })()",
+    );
+    assert!(
+        toggle_width > 40,
+        "ht-toggle offsetWidth was {toggle_width}px — expected >40px; \
+         the button may have collapsed to a DaisyUI toggle knob (Bug 1)"
+    );
+    let toggle_label: String = eval_json(
+        &tab,
+        "(function () { \
+             var btn = document.getElementById('ht-toggle'); \
+             return btn ? btn.textContent.trim() : ''; \
+         })()",
+    );
+    assert_eq!(
+        toggle_label, "Split view",
+        "ht-toggle label was '{toggle_label}'; expected 'Split view' (overlay is the default view)"
+    );
+
+    // Step 3: click the toggle → split view with three .ht-sm panels.
+    tab.find_element("#ht-toggle")
+        .expect("ht-toggle element")
+        .click()
+        .expect("click ht-toggle");
+    std::thread::sleep(Duration::from_millis(600));
+
+    // Return a JSON-encoded string from JS because headless_chrome.RemoteObject.value
+    // is None for arrays — only scalar primitive returns go through .value.
+    let split_json: String = eval_json(
+        &tab,
+        "(function () { \
+             var panels = document.querySelectorAll('.ht-sm'); \
+             var heights = Array.from(panels).map(function (p) { \
+                 var c = p.querySelector('canvas'); \
+                 return c ? c.clientHeight : 0; \
+             }); \
+             return JSON.stringify(heights); \
+         })()",
+    );
+    let split_heights: Vec<i64> =
+        serde_json::from_str(&split_json).expect("parse split heights JSON");
+    assert_eq!(
+        split_heights.len(),
+        3,
+        "expected 3 .ht-sm panels after toggle click, got {}",
+        split_heights.len()
+    );
+    for (i, &h) in split_heights.iter().enumerate() {
+        assert!(
+            h > 150,
+            "split panel {i} canvas clientHeight was {h}px — expected >150px \
+             (CSS sets 180px; the pre-fix 130px must fail this); panel height \
+             may have regressed to an unreadable size (Bug 3)"
+        );
+    }
+
+    // Step 4: click again → back to overlay, single canvas in #ht-charts.
+    tab.find_element("#ht-toggle")
+        .expect("ht-toggle element (second click)")
+        .click()
+        .expect("click ht-toggle second time");
+    std::thread::sleep(Duration::from_millis(600));
+
+    let overlay_back: i64 = eval_json(
+        &tab,
+        "(function () { \
+             var host = document.getElementById('ht-charts'); \
+             if (!host) return 0; \
+             var canvas = host.querySelector('canvas'); \
+             if (!canvas) return 0; \
+             return canvas.clientHeight; \
+         })()",
+    );
+    assert!(
+        overlay_back > 250,
+        "overlay canvas after toggle-back had clientHeight {overlay_back}px — \
+         expected >250px; the toggle re-render may not have restored the overlay"
     );
 }

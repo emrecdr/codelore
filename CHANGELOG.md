@@ -4,6 +4,73 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **`--window-days <DAYS>`** — shared trailing-window option for activity-scoped
+  analyses. Anchored to the repo's last commit date (not wall-clock time) so
+  results are reproducible on old or archived repos. Valid range: 1–3650;
+  default: 90.
+- **`commit_parents` table (schema v4)** — ingest now persists one row per commit parent so graph-topology analyses can query the DAG without shelling out to git. Bumps `CURRENT_SCHEMA_VERSION` to `"4"`.
+- **`effort-exposure` analysis** — reports what fraction of engineering activity (commits, LOC churn, SLOC) falls in each code-health band (red / yellow / green) over the trailing window. Answers the hero KPI question: "Are we spending most effort fighting fires or extending healthy code?" Wilson 95% CI on commit-share is included per band. Window anchors to the repo's last commit date via `--window-days`.
+- **`Repo::tags()`** — both `GixRepo` and `GitCliRepo` backends now enumerate repository tags; `TagInfo { name, target_rev, date }` sorted ascending by `(date, name)`. Annotated tags use the tagger date; lightweight tags use the target commit's committer date.
+- **`max_red_effort_pct` quality gate** — `[gates]` in `.codelore-thresholds.toml` now accepts `max_red_effort_pct = <pct>` (0–100). `codelore check` fails when the red code-health band's window LOC churn share exceeds the ceiling. Missing red band counts as 0 %, which passes any positive threshold.
+- **`code-familiarity` analysis** — decayed-knowledge familiarity score and islands percentage for the active team.
+- **Per-file health series and improvements feed** — the SPA now exposes two new data layers populated by the health-trend scan. `file_health_series` records each top-50 hotspot file's composite code-health score and band at every sampled historical revision; the drawer's new **Health** tab renders this as a sparkline for any file in the top-50. `health_transitions` records signal-bearing band changes (enter red → `"regressed"`, leave red or enter green → `"improved"`) across all paths and all sampled revisions, newest-first; the new **Health improvements & regressions** SPA widget renders them as two clickable feed lists with linked-brushing into the drawer.
+
+### Changed
+
+- **KPI tile health bands now match the shared health-band thresholds.** The
+  median code-health KPI tile previously used a separate 90/80/70 label scale
+  (`healthy`/`fair`/`concern`/`critical`). It now derives its band from the
+  centralized `HEALTH_GREEN_MIN` (70) and `HEALTH_YELLOW_MIN` (40) constants
+  in the new `bands` module, returning `green`/`yellow`/`red` — the same
+  labels used by the health-trend timeline and code-health analysis.
+
+### Fixed
+
+- **Theme toggle no longer cascades through layout and offboarding changes.** The
+  single `Alpine.effect` in the SPA previously subscribed to `store.theme.isDark`,
+  `store.scenario.departed`, and every `store.layout.*` depth setting in one block,
+  so a theme switch also chained through depth-tab and scenario subscriptions (and
+  vice versa, layout clicks triggered the theme path's CSS-token invalidation).
+  The effect is now split: the theme effect reads only `store.theme.isDark` and
+  fires registered re-renderers with cooperative yield; a separate layout/offboarding
+  effect reads depth and scenario stores without triggering the CSS-token invalidation
+  pass. (Layout and scenario changes still re-render all registered widgets; per-widget
+  routing is a separate improvement.) The cross-widget selection and brush effects were
+  already isolated.
+
+- **Health-trend toggle unreadable.** The `<button id="ht-toggle">` carried
+  `class="toggle"` which collided with DaisyUI's global `.toggle` switch
+  component, collapsing the button into an unreadable knob blob. Renamed
+  the class to `wt-btn` and updated the three matching CSS rules in the
+  template (`widget-toolbar .wt-btn`, `:hover`, `.active`).
+
+- **Health-trend overlay renders nothing.** The `#ht-charts` chart host had no
+  explicit height, so `echarts.init` operated on a 0-height container and
+  produced an empty canvas despite the parent widget having a `min-height`.
+  Fixed by adding `#ht-charts { height: 320px; }` to the template CSS.
+
+- **Health-trend split view unreadable** (y-axis labels merged, x-axis labels
+  colliding across panels, panels too short). Each panel now uses `height:
+  180px` (was 130px), y-axis is fixed to three ticks at 0 / 50 / 100
+  (`interval: 50`), x-axis labels are shown only on the last panel, and the
+  bottom grid margin is 8px for non-last panels vs 24px for the last.
+
+- **Arch-trend cycles line mistaken for propagation cost.** The Dependency
+  cycles series (genuinely 0 in most repos) is now dashed (`lineStyle.type:
+  'dashed'`), making it visually distinct from the solid propagation-cost line.
+  Both y-axis names are also no longer clipped: `nameGap: 10`, `fontSize: 10`,
+  and `grid.left: 24` ensure the full "Propagation %" label renders.
+
+- **Theme-switch stale colors on ECharts widgets.** Seven widgets
+  (`arch-trend`, `health-trend`, `arch-graph`, `arch-matrix`,
+  `kamei-risk-sparkline`, `parallel-coords`, `cognitive-boxplot`) used the
+  cached `token()` color reader but were registered without the
+  `rerender: 'theme'` flag that triggers `invalidateTokenCache()` before
+  re-render. After a theme switch, those widgets displayed colors from the
+  previous theme. All seven now carry `rerender: 'theme'`.
+
 ## [0.15.0] - 2026-07-07
 
 ### Added

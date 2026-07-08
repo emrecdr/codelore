@@ -541,6 +541,39 @@ pub fn write_health_trend_markdown<W: Write>(
     Ok(())
 }
 
+pub fn write_effort_exposure_markdown<W: Write>(
+    rows: &[crate::analyses::effort_exposure::EffortExposureRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore effort-exposure")?;
+    if rows.is_empty() {
+        writeln!(w, "_No code-health data — run with `--min-revs 1` or ensure complexity metrics are available._")
+            .map_err(CodeLoreError::Io)?;
+        return Ok(());
+    }
+    writeln!(
+        w,
+        "| Band | Files | LOC share % | Commit share % | Churn share % | CI 95% low | CI 95% high |"
+    )
+    .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---:|---:|---:|---:|---:|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| {} | {} | {:.1} | {:.1} | {:.1} | {:.3} | {:.3} |",
+            escape_md_cell(&row.band),
+            row.files,
+            row.loc_share_pct,
+            row.commit_share_pct,
+            row.churn_share_pct,
+            row.commit_share_ci_low,
+            row.commit_share_ci_high,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_architecture_metrics_markdown<W: Write>(
     rows: &[crate::analyses::architecture_metrics::ArchitectureMetricRow],
     w: &mut W,

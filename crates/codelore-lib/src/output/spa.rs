@@ -49,7 +49,15 @@ use crate::analyses::unstable_interface::UnstableInterfaceRow;
 use crate::{CodeLoreError, Result};
 
 const TEMPLATE: &str = include_str!("spa/template.html");
-const WIDGETS_JS: &str = include_str!("spa/widgets.js");
+const WIDGETS_JS: &str = concat!(
+    include_str!("spa/js/00_setup_boot.js"),
+    include_str!("spa/js/10_helpers_drawer.js"),
+    include_str!("spa/js/20_hotspots.js"),
+    include_str!("spa/js/30_coupling_trends.js"),
+    include_str!("spa/js/40_architecture.js"),
+    include_str!("spa/js/50_calendar_xray.js"),
+    include_str!("spa/js/90_toggles_utils.js"),
+);
 const ECHARTS_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/echarts.min.js"));
 const D3_HIERARCHY_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/d3-hierarchy.min.js"));
 const ALPINE_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/alpine.min.js"));
@@ -159,6 +167,17 @@ pub struct SpaDashboard {
     /// is skipped or the repo has no commits.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub health_trend: Vec<crate::analyses::health_trend::HealthTrendRow>,
+    /// Per-file health score series for the top-50 hotspot paths across
+    /// the same sampled historical revisions as `health_trend`. Drives the
+    /// per-file health sparkline in the detail drawer. Empty when no
+    /// hotspot data is available or the historical scan is skipped.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub file_health_series: Vec<crate::analyses::health_trend::FileHealthPoint>,
+    /// Signal-bearing band transitions (regressions and improvements) across
+    /// all paths at all sampled revisions. Drives the improvements feed card.
+    /// Newest-first. Empty when there are no signal-bearing transitions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub health_transitions: Vec<crate::analyses::health_trend::HealthTransitionRow>,
     /// Per-commit Kamei JIT-SDP feature vector for the Delivery Risk
     /// Sparkline widget. One row per commit in the last-N (capped at
     /// 30) chronological window. Surfaces the raw Kamei 14-feature
@@ -199,6 +218,13 @@ pub struct SpaOptionsSnapshot {
     pub max_coupling_pct: u8,
     pub max_changeset_size: u32,
     pub fisher_significance: f64,
+    /// Minimum health score (0–100) for the green band. Matches
+    /// [`crate::bands::HEALTH_GREEN_MIN`]. Exposed so the SPA JS can
+    /// read band thresholds from `data.options` rather than hardcode them.
+    pub health_green_min: f64,
+    /// Minimum health score (0–100) for the yellow band. Matches
+    /// [`crate::bands::HEALTH_YELLOW_MIN`].
+    pub health_yellow_min: f64,
 }
 
 impl Default for SpaOptionsSnapshot {
@@ -214,6 +240,8 @@ impl Default for SpaOptionsSnapshot {
             max_coupling_pct: 100,
             max_changeset_size: 30,
             fisher_significance: 0.05,
+            health_green_min: crate::bands::HEALTH_GREEN_MIN,
+            health_yellow_min: crate::bands::HEALTH_YELLOW_MIN,
         }
     }
 }
@@ -229,6 +257,8 @@ impl SpaOptionsSnapshot {
             max_coupling_pct: opts.max_coupling_pct,
             max_changeset_size: opts.max_changeset_size,
             fisher_significance: opts.fisher_significance,
+            health_green_min: crate::bands::HEALTH_GREEN_MIN,
+            health_yellow_min: crate::bands::HEALTH_YELLOW_MIN,
         }
     }
 }

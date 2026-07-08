@@ -384,6 +384,14 @@ pub struct AnalyzeArgs {
         default_value_t = codelore_lib::cli_api::constants::DEFAULT_DEPARTED_THRESHOLD_DAYS
     )]
     pub departed_threshold_days: u32,
+
+    /// Trailing window in days for activity-scoped analyses (anchored to
+    /// the repo's last commit). Valid range: 1–3650. Default: 90.
+    #[arg(
+        long = "window-days",
+        default_value_t = codelore_lib::cli_api::constants::DEFAULT_WINDOW_DAYS
+    )]
+    pub window_days: u32,
 }
 
 /// `TimeBucket` mirror on the CLI surface (clap-friendly value enum).

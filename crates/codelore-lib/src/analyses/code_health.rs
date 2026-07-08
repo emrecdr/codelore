@@ -68,6 +68,13 @@ impl HealthScanCtx {
             include_clones: true,
         }
     }
+
+    /// Convenience alias for `head()`. Named for call-site clarity in analyses
+    /// that construct their own context rather than inheriting one from a caller.
+    #[must_use]
+    pub fn head_default() -> Self {
+        Self::head()
+    }
 }
 
 /// Divisor appended to the `structural_risk` SUM when the DRY biomarker is
@@ -201,8 +208,8 @@ const SQL: &str = "
         -- corpus calibration will replace these self-relative cut points).
         -- red = high on a majority of the weighted smell mass.
         CASE
-            WHEN structural_risk >= 0.55 THEN 'red'
-            WHEN structural_risk >= 0.28 THEN 'yellow'
+            WHEN structural_risk >= {risk_red_min} THEN 'red'
+            WHEN structural_risk >= {risk_yellow_min} THEN 'yellow'
             ELSE 'green'
         END AS band
     FROM scored
@@ -510,7 +517,12 @@ pub fn run_code_health_scoped(
     let sql = SQL
         .replace("{src}", src)
         .replace("{cm_src}", cm_src)
-        .replace("{structural_scale}", structural_scale);
+        .replace("{structural_scale}", structural_scale)
+        .replace("{risk_red_min}", &crate::bands::RISK_RED_MIN.to_string())
+        .replace(
+            "{risk_yellow_min}",
+            &crate::bands::RISK_YELLOW_MIN.to_string(),
+        );
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
     crate::analyses::query::explain_if_requested(
         db,
