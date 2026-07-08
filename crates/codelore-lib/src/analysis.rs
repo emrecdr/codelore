@@ -204,6 +204,10 @@ pub enum AnalysisName {
     // is more accurate than blame (it captures the state at change time, not at
     // HEAD). Research: HistoryFinder (Gall et al. ICSM 2003).
     FunctionXray,
+    // Function-coupling — per-function-pair co-change frequency with Fisher
+    // significance for a single target file (`--target <path>`). Identifies
+    // which functions always change together. Research: Adams et al. ICSM 2006.
+    FunctionCoupling,
 }
 
 impl AnalysisName {
@@ -262,6 +266,7 @@ impl AnalysisName {
             Self::MarginalOwnerRisk => "marginal-owner-risk",
             Self::ReleaseCadence => "release-cadence",
             Self::FunctionXray => "function-xray",
+            Self::FunctionCoupling => "function-coupling",
         }
     }
 
@@ -348,6 +353,7 @@ impl AnalysisName {
             MarginalOwnerRisk,
             ReleaseCadence,
             FunctionXray,
+            FunctionCoupling,
         )
     }
 

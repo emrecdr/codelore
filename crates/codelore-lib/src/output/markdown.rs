@@ -1456,6 +1456,46 @@ pub fn write_function_xray_markdown<W: Write>(
     Ok(())
 }
 
+pub fn write_function_coupling_markdown<W: Write>(
+    rows: &[crate::analyses::function_coupling::FunctionCouplingRow],
+    target: &str,
+    w: &mut W,
+) -> Result<()> {
+    header(w, &format!("CodeLore function-coupling — {target}"))?;
+    if rows.is_empty() {
+        writeln!(
+            w,
+            "_No coupled function pairs (co-changes ≥ 2) found in `{target}`._"
+        )
+        .map_err(CodeLoreError::Io)?;
+        return Ok(());
+    }
+    writeln!(
+        w,
+        "| A | B | Co-Changes | A Changes | B Changes | Confidence | p-value |"
+    )
+    .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---|---:|---:|---:|---:|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        let p = row
+            .p_value
+            .map_or_else(|| "—".to_string(), |v| format!("{v:.4}"));
+        writeln!(
+            w,
+            "| {} | {} | {} | {} | {} | {:.4} | {} |",
+            escape_md_cell(&row.a),
+            escape_md_cell(&row.b),
+            row.co_changes,
+            row.a_changes,
+            row.b_changes,
+            row.confidence,
+            p,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod escape_tests {
     use super::escape_md_cell;

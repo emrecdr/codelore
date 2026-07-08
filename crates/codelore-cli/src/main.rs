@@ -852,6 +852,16 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
             "See analyses/function_xray.rs.",
         ),
         (
+            "function-coupling",
+            "Per-function-pair co-change frequency with Fisher significance for a single target file",
+            "Requires --target <repo-relative-path>. For each pair of HEAD-alive functions in the \
+             target file that co-changed (both touched in the same revision) in ≥2 revisions, \
+             emits the pair with co-change count, per-function change counts, confidence \
+             (co/min(a,b)), and two-tailed Fisher exact p-value. \
+             Sorted by p-value ASC. Research: Adams et al. ICSM 2006.",
+            "See analyses/function_coupling.rs.",
+        ),
+        (
             "cycle-origins",
             "Commit-level archaeology for dependency cycles",
             "For each dependency cycle at HEAD, binary-searches history (reading + resolving source at past revisions) to find the earliest commit where that cycle existed — the commit that closed the loop. Reports the forming commit's SHA + date per cycle. Assumes a cycle, once formed, stays formed; traces the largest cycles first to bound cost.",
@@ -1527,6 +1537,14 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
                     )
                 })?;
                 dispatch_function_xray(&db, &repo, &opts, target, format, &ctx, &mut out)?;
+            }
+            AnalysisName::FunctionCoupling => {
+                let target = opts.target.as_deref().ok_or_else(|| {
+                    CodeLoreError::Analysis(
+                        "--target <path> is required for function-coupling".to_string(),
+                    )
+                })?;
+                dispatch_function_coupling(&db, &repo, &opts, target, format, &ctx, &mut out)?;
             }
         }
     } // out is dropped here, flushing any buffered writes
@@ -3221,6 +3239,53 @@ fn dispatch_function_xray(
         fmt => {
             return Err(unsupported_format(
                 "function-xray",
+                "csv|json|markdown",
+                fmt,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_function_coupling(
+    db: &FactsDb,
+    repo: &GixRepo,
+    opts: &Options,
+    target: &str,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows = codelore_lib::cli_api::analyses::function_coupling::run_function_coupling(
+                db, repo, opts, target,
+            )
+            .context("run function-coupling")?;
+            codelore_lib::cli_api::output::csv::write_function_coupling_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::function_coupling::run_function_coupling(
+                db, repo, opts, target,
+            )
+            .context("run function-coupling")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows = codelore_lib::cli_api::analyses::function_coupling::run_function_coupling(
+                db, repo, opts, target,
+            )
+            .context("run function-coupling")?;
+            codelore_lib::cli_api::output::markdown::write_function_coupling_markdown(
+                &rows, target, out,
+            )
+            .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format(
+                "function-coupling",
                 "csv|json|markdown",
                 fmt,
             ));

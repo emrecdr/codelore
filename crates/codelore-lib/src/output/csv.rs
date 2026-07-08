@@ -1349,6 +1349,30 @@ pub fn write_function_xray_csv<W: Write>(
     Ok(())
 }
 
+pub fn write_function_coupling_csv<W: Write>(
+    rows: &[crate::analyses::function_coupling::FunctionCouplingRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(w, "a,b,co-changes,a-changes,b-changes,confidence,p-value")
+        .map_err(CodeLoreError::Io)?;
+    for row in rows {
+        let p = row.p_value.map_or_else(String::new, |v| format!("{v:.4}"));
+        writeln!(
+            w,
+            "{},{},{},{},{},{:.4},{}",
+            quote_if_needed(&row.a),
+            quote_if_needed(&row.b),
+            row.co_changes,
+            row.a_changes,
+            row.b_changes,
+            row.confidence,
+            p,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::quote_if_needed;

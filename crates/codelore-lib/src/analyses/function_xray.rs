@@ -199,7 +199,10 @@ pub(crate) fn hunk_overlaps(
 /// Returns `Vec<(name, start_line, end_line)>` for all "function" and "method"
 /// entities in the file. Non-function entities (class, file) are excluded
 /// because xray attribution is per-callable unit.
-fn extract_head_spans<R: Repo>(repo: &R, target: &str) -> Result<Vec<(String, u32, u32)>> {
+pub(super) fn extract_head_spans<R: Repo>(
+    repo: &R,
+    target: &str,
+) -> Result<Vec<(String, u32, u32)>> {
     let Some(lang) = Tier1Language::from_path(target) else {
         return Ok(Vec::new());
     };
@@ -245,7 +248,10 @@ fn extract_head_spans<R: Repo>(repo: &R, target: &str) -> Result<Vec<(String, u3
 /// Returns `Vec<(rev, date, new_start, new_lines)>` — one entry per hunk row,
 /// joined with the `commits` table to get the author date. The `rev` is used
 /// by the caller to deduplicate multi-hunk commits per function.
-fn fetch_hunks_for_path(db: &FactsDb, target: &str) -> Result<Vec<(String, String, u32, u32)>> {
+pub(super) fn fetch_hunks_for_path(
+    db: &FactsDb,
+    target: &str,
+) -> Result<Vec<(String, String, u32, u32)>> {
     use crate::analyses::query::query_map_collect;
 
     query_map_collect(
@@ -314,6 +320,38 @@ fn fetch_head_metrics(db: &FactsDb, target: &str) -> Result<HashMap<String, FnMe
             .or_insert((sloc, cy, cog));
     }
     Ok(map)
+}
+
+/// Build a map from rev → set of function names touched in that revision
+/// for `target`. Uses the same HEAD-span extraction and hunk-overlap logic
+/// as `run_function_xray`. Returns only revisions that touched ≥1
+/// HEAD-alive function.
+///
+/// Called by `function_coupling` to share the blob-parse + hunk-overlap
+/// logic without re-implementing it.
+pub(super) fn rev_to_function_sets<R: Repo>(
+    db: &FactsDb,
+    repo: &R,
+    target: &str,
+) -> Result<HashMap<String, HashSet<String>>> {
+    let head_spans = extract_head_spans(repo, target)?;
+    if head_spans.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let hunk_rows = fetch_hunks_for_path(db, target)?;
+    let mut rev_sets: HashMap<String, HashSet<String>> = HashMap::new();
+    for (rev, _date, new_start, new_lines) in &hunk_rows {
+        let (new_start, new_lines) = (*new_start, *new_lines);
+        for (name, start_line, end_line) in &head_spans {
+            if hunk_overlaps(*start_line, *end_line, new_start, new_lines) {
+                rev_sets
+                    .entry(rev.clone())
+                    .or_default()
+                    .insert(name.clone());
+            }
+        }
+    }
+    Ok(rev_sets)
 }
 
 // ── unit tests for the hunk-overlap predicate ─────────────────────────────

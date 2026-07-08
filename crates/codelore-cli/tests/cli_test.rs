@@ -1603,6 +1603,29 @@ fn function_xray_emits_markdown_header() {
 }
 
 #[test]
+fn function_coupling_emits_markdown_header() {
+    let repo = codelore_lib::test_support::function_xray_repo::build();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "function-coupling",
+            "--repo",
+            repo.dir.path().to_str().unwrap(),
+            "--target",
+            "src/target.rs",
+            "--format",
+            "markdown",
+            "--min-revs",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("# CodeLore function-coupling"));
+}
+
+#[test]
 fn check_quiet_violation_path_suppresses_detail_keeps_verdict() {
     // When gates are configured and violations occur, --quiet suppresses the
     // per-violation detail lines on stderr but preserves the FAIL verdict line
