@@ -609,6 +609,32 @@ pub fn write_health_trend_csv<W: Write>(
     Ok(())
 }
 
+pub fn write_effort_exposure_csv<W: Write>(
+    rows: &[crate::analyses::effort_exposure::EffortExposureRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(
+        w,
+        "band,files,loc-share-pct,commit-share-pct,churn-share-pct,commit-share-ci-low,commit-share-ci-high"
+    )
+    .map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{:.2},{:.2},{:.2},{:.4},{:.4}",
+            quote_if_needed(&row.band),
+            row.files,
+            row.loc_share_pct,
+            row.commit_share_pct,
+            row.churn_share_pct,
+            row.commit_share_ci_low,
+            row.commit_share_ci_high,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_architecture_metrics_csv<W: Write>(
     rows: &[crate::analyses::architecture_metrics::ArchitectureMetricRow],
     w: &mut W,

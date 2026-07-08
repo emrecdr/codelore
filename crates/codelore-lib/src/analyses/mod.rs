@@ -22,6 +22,7 @@ pub mod dashboard;
 pub mod delivery_friction;
 pub mod delta_health;
 pub mod dependency_cycles;
+pub mod effort_exposure;
 pub mod entity_effort;
 pub mod entity_ownership;
 pub mod god_classes;

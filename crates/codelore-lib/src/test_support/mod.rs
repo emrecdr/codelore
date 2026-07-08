@@ -857,7 +857,7 @@ pub mod delivery_repo {
     //! window).
     //!
     //! Merge commits are only ingested when `Options.include_merges` is true —
-    //! the default drops them at the walker before they reach the DuckDB
+    //! the default drops them at the walker before they reach the `DuckDB`
     //! Appender, so `is_merge` rows will not appear with `Options::default()`.
 
     use std::path::PathBuf;

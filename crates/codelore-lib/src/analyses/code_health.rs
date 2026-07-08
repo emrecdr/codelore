@@ -68,6 +68,13 @@ impl HealthScanCtx {
             include_clones: true,
         }
     }
+
+    /// Convenience alias for `head()`. Named for call-site clarity in analyses
+    /// that construct their own context rather than inheriting one from a caller.
+    #[must_use]
+    pub fn head_default() -> Self {
+        Self::head()
+    }
 }
 
 /// Divisor appended to the `structural_risk` SUM when the DRY biomarker is

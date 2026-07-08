@@ -1,0 +1,304 @@
+//! `effort-exposure` analysis — what fraction of engineering activity
+//! (commits, churn) flows into each code-health band (red / yellow / green).
+//!
+//! Answers the hero KPI question: "Are we spending most of our energy improving
+//! healthy code, or fighting fires in the red zone?" A team with ≥50% of
+//! commits in the red band is in reactive mode; a team with ≥70% in green is
+//! proactively maintaining its healthiest files.
+//!
+//! ## Algorithm
+//!
+//! 1. Compute code health for every live file at HEAD via
+//!    [`run_code_health_scoped`] with [`HealthScanCtx::head_default()`].
+//! 2. Materialise a session-local `eh_bands_v1(path, band, sloc)` temp table
+//!    from the health result, joining SLOC from `complexity_metrics`.
+//! 3. Over the trailing window (`opts.window_days` days, anchored to the
+//!    repo's last commit date — reproducible on old repos), compute per band:
+//!    - `files` — distinct files in the band (live at HEAD).
+//!    - `loc_share_pct` — percentage of total SLOC in the band.
+//!    - `commit_share_pct` — percentage of window commits touching ≥1 file in
+//!      the band. One commit touching files in multiple bands is counted once
+//!      per band (percentages across bands can therefore sum > 100%).
+//!    - `churn_share_pct` — percentage of window LOC churn (added + deleted)
+//!      in the band.
+//! 4. Wilson 95% CI on `commit_share` (k = commits touching band,
+//!    n = total window commits) is appended per row.
+
+use std::collections::HashMap;
+
+use duckdb::params;
+
+use crate::analyses::code_health::{CodeHealthRow, HealthScanCtx, run_code_health_scoped};
+use crate::analyses::lineage;
+use crate::facts::FactsDb;
+use crate::{CodeLoreError, Options, Result};
+
+/// One row per code-health band in the trailing activity window.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EffortExposureRow {
+    /// Code-health band: `"red"`, `"yellow"`, or `"green"`.
+    pub band: String,
+    /// Distinct files live at HEAD that fall in this band.
+    pub files: u32,
+    /// Percentage of total SLOC (source lines of code) in this band.
+    pub loc_share_pct: f64,
+    /// Percentage of trailing-window commits that touched ≥1 file in this
+    /// band. A commit touching files in multiple bands is counted once per
+    /// band it touches, so percentages across bands can sum > 100%.
+    pub commit_share_pct: f64,
+    /// Percentage of trailing-window churn (lines added + deleted) in this
+    /// band's files.
+    pub churn_share_pct: f64,
+    /// Wilson 95% CI lower bound for `commit_share_pct / 100`.
+    pub commit_share_ci_low: f64,
+    /// Wilson 95% CI upper bound for `commit_share_pct / 100`.
+    pub commit_share_ci_high: f64,
+}
+
+const BANDS_DDL: &str = "
+    CREATE OR REPLACE TEMPORARY TABLE eh_bands_v1 (
+        path TEXT NOT NULL,
+        band TEXT NOT NULL,
+        sloc BIGINT NOT NULL DEFAULT 0
+    );
+";
+
+/// Wilson score 95% confidence interval for a proportion `k / n`.
+///
+/// Returns `(low, high)` in `[0.0, 1.0]`. Returns `(0.0, 0.0)` when `n = 0`
+/// (undefined proportion). Edge cases `k = 0` and `k = n` are handled
+/// correctly by the formula without special-casing.
+///
+/// Standard Wilson score interval (Wilson 1927); z = 1.96 for 95% coverage.
+///
+/// Parameters are `u32` (not `u64`) to avoid precision-loss on the f64
+/// conversion — all realistic commit counts fit comfortably in 32 bits.
+pub(crate) fn wilson_ci(k: u32, n: u32) -> (f64, f64) {
+    if n == 0 {
+        return (0.0, 0.0);
+    }
+    let k = f64::from(k);
+    let n = f64::from(n);
+    let z = 1.96_f64;
+    let z2 = z * z;
+    let p_hat = k / n;
+    let denom = 1.0 + z2 / n;
+    let centre = (p_hat + z2 / (2.0 * n)) / denom;
+    let radius = (z / denom) * (p_hat * (1.0 - p_hat) / n + z2 / (4.0 * n * n)).sqrt();
+    (
+        f64::max(0.0, centre - radius),
+        f64::min(1.0, centre + radius),
+    )
+}
+
+/// Fetch per-file SLOC totals from `complexity_metrics` (HEAD snapshot).
+///
+/// `SUM` collapses multiple entity rows (functions / methods) per file into one
+/// file-level SLOC value, matching the granularity of `eh_bands_v1`.
+fn fetch_sloc_map(db: &FactsDb) -> Result<HashMap<String, i64>> {
+    let mut stmt = db
+        .conn()
+        .prepare("SELECT path, COALESCE(SUM(sloc), 0) FROM complexity_metrics GROUP BY path")
+        .map_err(|e| CodeLoreError::Analysis(format!("prepare sloc query: {e}")))?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+        .map_err(|e| CodeLoreError::Analysis(format!("query sloc: {e}")))?;
+    rows.collect::<std::result::Result<HashMap<_, _>, _>>()
+        .map_err(|e| CodeLoreError::Analysis(format!("collect sloc: {e}")))
+}
+
+/// Create (or replace) the `eh_bands_v1` session-local temp table and populate
+/// it from the code-health rows, joining SLOC values from `sloc_map`.
+fn populate_bands_table(
+    db: &FactsDb,
+    health: &[CodeHealthRow],
+    sloc_map: &HashMap<String, i64>,
+) -> Result<()> {
+    db.conn()
+        .execute(BANDS_DDL, [])
+        .map_err(|e| CodeLoreError::Analysis(format!("create eh_bands_v1: {e}")))?;
+    let mut ins = db
+        .conn()
+        .prepare("INSERT INTO eh_bands_v1 (path, band, sloc) VALUES (?, ?, ?)")
+        .map_err(|e| CodeLoreError::Analysis(format!("prepare eh_bands_v1 insert: {e}")))?;
+    for row in health {
+        let sloc = sloc_map.get(&row.path).copied().unwrap_or(0);
+        ins.execute(params![row.path, row.band, sloc])
+            .map_err(|e| CodeLoreError::Analysis(format!("insert eh_bands_v1 row: {e}")))?;
+    }
+    Ok(())
+}
+
+/// Run the effort-exposure analysis.
+///
+/// Returns one row per code-health band (only bands that have ≥1 file are
+/// included; an entirely green repo returns a single `"green"` row). Bands are
+/// ordered red → yellow → green.
+///
+/// # Errors
+///
+/// Returns [`crate::CodeLoreError::Analysis`] on SQL or row-mapping failure.
+pub fn run_effort_exposure(db: &FactsDb, opts: &Options) -> Result<Vec<EffortExposureRow>> {
+    // Step 1: compute per-file code-health bands at HEAD.
+    let health = run_code_health_scoped(
+        db,
+        &opts.with_no_row_limit(),
+        &HealthScanCtx::head_default(),
+    )?;
+    if health.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // Step 2: fetch per-file SLOC and Step 3: materialise eh_bands_v1.
+    // DDL is safe at analysis phase because TEMPORARY tables are session-local.
+    let sloc_map = fetch_sloc_map(db)?;
+    populate_bands_table(db, &health, &sloc_map)?;
+
+    // Step 4: run the band-level aggregation over the trailing window.
+    // `window_days` anchors to the repo's last commit date (not wall-clock)
+    // so results are reproducible on archived repos.
+    lineage::materialize_if_needed(db, opts)?;
+    let src = lineage::source_table(opts);
+    let wd = opts.window_days;
+
+    // Aggregation is performed in separate CTEs (band_files, band_commits,
+    // band_churn) to avoid the cross-product inflation that arises when
+    // joining eh_bands (one row per file) directly against the touch results
+    // (one row per rev×path) in the outer SELECT.
+    let sql = format!("
+        WITH win AS (
+            SELECT rev FROM commits
+            WHERE date >= (SELECT MAX(date) FROM commits) - INTERVAL '{wd} days'
+        ),
+        band_files AS (
+            SELECT band,
+                   COUNT(*)            AS files,
+                   COALESCE(SUM(sloc), 0) AS band_sloc
+            FROM eh_bands_v1
+            GROUP BY band
+        ),
+        band_commits AS (
+            SELECT b.band,
+                   COUNT(DISTINCT c.rev) AS n_commits
+            FROM {src} c
+            INNER JOIN win          USING (rev)
+            INNER JOIN eh_bands_v1 b ON b.path = c.path
+            GROUP BY b.band
+        ),
+        band_churn AS (
+            SELECT b.band,
+                   COALESCE(SUM(c.loc_added + c.loc_deleted), 0) AS churn
+            FROM {src} c
+            INNER JOIN win          USING (rev)
+            INNER JOIN eh_bands_v1 b ON b.path = c.path
+            GROUP BY b.band
+        ),
+        total_sloc    AS (SELECT COALESCE(SUM(sloc), 0) AS v FROM eh_bands_v1),
+        total_commits AS (SELECT COUNT(*)               AS v FROM win),
+        total_churn   AS (
+            SELECT COALESCE(SUM(c.loc_added + c.loc_deleted), 0) AS v
+            FROM {src} c INNER JOIN win USING (rev)
+        )
+        SELECT
+            bf.band,
+            bf.files::INTEGER                                                              AS files,
+            100.0 * bf.band_sloc           / NULLIF((SELECT v FROM total_sloc),    0)     AS loc_share_pct,
+            100.0 * COALESCE(bc.n_commits, 0) / NULLIF((SELECT v FROM total_commits), 0)  AS commit_share_pct,
+            100.0 * COALESCE(bch.churn,    0) / NULLIF((SELECT v FROM total_churn),  0)   AS churn_share_pct,
+            COALESCE(bc.n_commits, 0)                                                      AS k_commits,
+            (SELECT v FROM total_commits)                                                   AS n_commits
+        FROM band_files bf
+        LEFT JOIN band_commits bc  ON bc.band  = bf.band
+        LEFT JOIN band_churn   bch ON bch.band = bf.band
+        ORDER BY CASE bf.band WHEN 'red' THEN 1 WHEN 'yellow' THEN 2 ELSE 3 END
+    ");
+
+    let mut stmt = db
+        .conn()
+        .prepare(&sql)
+        .map_err(|e| CodeLoreError::Analysis(format!("prepare effort-exposure: {e}")))?;
+
+    let raw = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,                     // band
+                r.get::<_, u32>(1)?,                        // files
+                r.get::<_, Option<f64>>(2)?.unwrap_or(0.0), // loc_share_pct
+                r.get::<_, Option<f64>>(3)?.unwrap_or(0.0), // commit_share_pct
+                r.get::<_, Option<f64>>(4)?.unwrap_or(0.0), // churn_share_pct
+                r.get::<_, i64>(5)?,                        // k_commits
+                r.get::<_, i64>(6)?,                        // n_commits
+            ))
+        })
+        .map_err(|e| CodeLoreError::Analysis(format!("query effort-exposure: {e}")))?;
+
+    let mut out = Vec::new();
+    for r in raw {
+        let (band, files, loc_share_pct, commit_share_pct, churn_share_pct, k, n) =
+            r.map_err(|e| CodeLoreError::Analysis(format!("collect effort-exposure: {e}")))?;
+        let (commit_share_ci_low, commit_share_ci_high) =
+            wilson_ci(u32::try_from(k).unwrap_or(0), u32::try_from(n).unwrap_or(0));
+        out.push(EffortExposureRow {
+            band,
+            files,
+            loc_share_pct,
+            commit_share_pct,
+            churn_share_pct,
+            commit_share_ci_low,
+            commit_share_ci_high,
+        });
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wilson_ci;
+
+    #[test]
+    fn wilson_ci_k_zero() {
+        let (lo, hi) = wilson_ci(0, 100);
+        assert!(lo >= 0.0, "lo must be ≥ 0: {lo}");
+        assert!(
+            hi > 0.0 && hi < 0.05,
+            "hi for k=0/n=100 should be small: {hi}"
+        );
+    }
+
+    #[test]
+    fn wilson_ci_k_equals_n() {
+        let (lo, hi) = wilson_ci(100, 100);
+        assert!(lo > 0.95 && lo <= 1.0, "lo for k=n should be near 1: {lo}");
+        assert!(
+            (hi - 1.0).abs() < 1e-9,
+            "hi for k=n should be exactly 1: {hi}"
+        );
+    }
+
+    #[test]
+    fn wilson_ci_half() {
+        let (lo, hi) = wilson_ci(50, 100);
+        // p_hat = 0.5; Wilson CI for 0.5 with n=100, z=1.96 ≈ [0.401, 0.599]
+        assert!(lo > 0.39 && lo < 0.50, "lo for k=50/n=100: {lo}");
+        assert!(hi > 0.50 && hi < 0.61, "hi for k=50/n=100: {hi}");
+        assert!(lo < hi, "interval must be non-empty");
+    }
+
+    #[test]
+    fn wilson_ci_n_zero_returns_zeros() {
+        let (lo, hi) = wilson_ci(0, 0);
+        assert_eq!((lo, hi), (0.0, 0.0));
+    }
+
+    #[test]
+    fn wilson_ci_interval_contains_p_hat() {
+        let k = 30_u32;
+        let n = 100_u32;
+        let (lo, hi) = wilson_ci(k, n);
+        let p_hat = f64::from(k) / f64::from(n);
+        assert!(
+            lo <= p_hat && p_hat <= hi,
+            "interval must contain p_hat={p_hat}: [{lo}, {hi}]"
+        );
+    }
+}

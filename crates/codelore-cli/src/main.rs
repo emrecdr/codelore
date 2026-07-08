@@ -345,6 +345,17 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
             "See analyses/health_trend.rs.",
         ),
         (
+            "effort-exposure",
+            "Engineering effort distribution across code-health bands",
+            "For each code-health band (red / yellow / green) reports the percentage of \
+             files, SLOC, trailing-window commits, and LOC churn in that band. Answers \
+             the hero KPI question: are we spending most effort fighting fires in red code \
+             or extending healthy green code? Commit-share Wilson 95% CI is included per \
+             band. Window anchors to the repo's last commit date (not wall-clock) via \
+             --window-days (default 90).",
+            "See analyses/effort_exposure.rs.",
+        ),
+        (
             "cycle-origins",
             "Commit-level archaeology for dependency cycles",
             "For each dependency cycle at HEAD, binary-searches history (reading + resolving source at past revisions) to find the earliest commit where that cycle existed — the commit that closed the loop. Reports the forming commit's SHA + date per cycle. Assumes a cycle, once formed, stays formed; traces the largest cycles first to bound cost.",
@@ -982,6 +993,9 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             }
             AnalysisName::Centrality => dispatch_centrality(&db, &opts, format, &ctx, &mut out)?,
             AnalysisName::Communities => dispatch_communities(&db, &opts, format, &ctx, &mut out)?,
+            AnalysisName::EffortExposure => {
+                dispatch_effort_exposure(&db, &opts, format, &ctx, &mut out)?;
+            }
         }
     } // out is dropped here, flushing any buffered writes
 
@@ -2339,6 +2353,46 @@ fn dispatch_delivery_friction(
         fmt => {
             return Err(unsupported_format(
                 "delivery-friction",
+                "csv|json|markdown",
+                fmt,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_effort_exposure(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows =
+                codelore_lib::cli_api::analyses::effort_exposure::run_effort_exposure(db, opts)
+                    .context("run effort-exposure")?;
+            codelore_lib::cli_api::output::csv::write_effort_exposure_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows =
+                codelore_lib::cli_api::analyses::effort_exposure::run_effort_exposure(db, opts)
+                    .context("run effort-exposure")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows =
+                codelore_lib::cli_api::analyses::effort_exposure::run_effort_exposure(db, opts)
+                    .context("run effort-exposure")?;
+            codelore_lib::cli_api::output::markdown::write_effort_exposure_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format(
+                "effort-exposure",
                 "csv|json|markdown",
                 fmt,
             ));

@@ -11,6 +11,7 @@ Conventional Commits format. All notable changes documented here.
   results are reproducible on old or archived repos. Valid range: 1–3650;
   default: 90.
 - **`commit_parents` table (schema v4)** — ingest now persists one row per commit parent so graph-topology analyses can query the DAG without shelling out to git. Bumps `CURRENT_SCHEMA_VERSION` to `"4"`.
+- **`effort-exposure` analysis** — reports what fraction of engineering activity (commits, LOC churn, SLOC) falls in each code-health band (red / yellow / green) over the trailing window. Answers the hero KPI question: "Are we spending most effort fighting fires or extending healthy code?" Wilson 95% CI on commit-share is included per band. Window anchors to the repo's last commit date via `--window-days`.
 
 ### Changed
 
