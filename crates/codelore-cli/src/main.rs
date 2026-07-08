@@ -708,6 +708,17 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
             "See analyses/delivery_metrics.rs.",
         ),
         (
+            "function-xray",
+            "Per-function change frequency for a single target file (Gall et al. ICSM 2003 HistoryFinder)",
+            "Requires --target <repo-relative-path>. For each function/method alive at HEAD \
+             in the target file, counts revisions where at least one hunk overlapped the \
+             function's line span. Hunk-overlap attribution is more accurate than file-level \
+             blame: it uses the span at change time. Pure deletions (new_lines=0) are attributed \
+             to the function whose span contained the deleted anchor line. Sorted by change_freq \
+             DESC.",
+            "See analyses/function_xray.rs.",
+        ),
+        (
             "cycle-origins",
             "Commit-level archaeology for dependency cycles",
             "For each dependency cycle at HEAD, binary-searches history (reading + resolving source at past revisions) to find the earliest commit where that cycle existed — the commit that closed the loop. Reports the forming commit's SHA + date per cycle. Assumes a cycle, once formed, stays formed; traces the largest cycles first to bound cost.",
@@ -1044,6 +1055,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         knowledge_model: args.knowledge_model.clone(),
         rework_window_days: args.rework_window_days,
         release_tag_glob: args.release_tag_glob.clone(),
+        target: args.target.clone(),
         ..Options::default()
     };
 
@@ -1374,6 +1386,14 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             }
             AnalysisName::DeliveryMetrics => {
                 dispatch_delivery_metrics(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::FunctionXray => {
+                let target = opts.target.as_deref().ok_or_else(|| {
+                    CodeLoreError::Analysis(
+                        "--target <path> is required for function-xray".to_string(),
+                    )
+                })?;
+                dispatch_function_xray(&db, &repo, &opts, target, format, &ctx, &mut out)?;
             }
         }
     } // out is dropped here, flushing any buffered writes
@@ -3021,6 +3041,56 @@ fn dispatch_delivery_metrics(
         fmt => {
             return Err(unsupported_format(
                 "delivery-metrics",
+                "csv|json|markdown",
+                fmt,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_function_xray(
+    db: &FactsDb,
+    repo: &GixRepo,
+    opts: &Options,
+    target: &str,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows =
+                codelore_lib::cli_api::analyses::function_xray::run_function_xray(
+                    db, repo, opts, target,
+                )
+                .context("run function-xray")?;
+            codelore_lib::cli_api::output::csv::write_function_xray_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows =
+                codelore_lib::cli_api::analyses::function_xray::run_function_xray(
+                    db, repo, opts, target,
+                )
+                .context("run function-xray")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows =
+                codelore_lib::cli_api::analyses::function_xray::run_function_xray(
+                    db, repo, opts, target,
+                )
+                .context("run function-xray")?;
+            codelore_lib::cli_api::output::markdown::write_function_xray_markdown(
+                &rows, target, out,
+            )
+            .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format(
+                "function-xray",
                 "csv|json|markdown",
                 fmt,
             ));
