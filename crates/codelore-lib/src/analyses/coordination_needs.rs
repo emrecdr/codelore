@@ -117,8 +117,7 @@ pub fn run_coordination_needs(db: &FactsDb, opts: &Options) -> Result<Vec<Coordi
          frag AS (
              SELECT
                  ks.path,
-                 1.0 - SUM(ks.k_norm * ks.k_norm) AS fragmentation,
-                 COUNT(DISTINCT ks.author)          AS total_holders
+                 1.0 - SUM(ks.k_norm * ks.k_norm) AS fragmentation
              FROM knowledge_shares ks
              GROUP BY ks.path
          ),
@@ -244,7 +243,7 @@ pub fn run_coordination_needs(db: &FactsDb, opts: &Options) -> Result<Vec<Coordi
 
     // Step 5: code-health band per path.
     let ctx = HealthScanCtx::head_default();
-    let health_rows = run_code_health_scoped(db, opts, &ctx).unwrap_or_default();
+    let health_rows = run_code_health_scoped(db, opts, &ctx)?;
     let band_map: HashMap<String, String> =
         health_rows.into_iter().map(|r| (r.path, r.band)).collect();
 
@@ -284,12 +283,14 @@ pub fn run_coordination_needs(db: &FactsDb, opts: &Options) -> Result<Vec<Coordi
 /// Classify a coordination tier from author count, fragmentation, and interleave.
 ///
 /// Rules (evaluated top-to-bottom, first match wins):
-/// - `single`:  `authors == 1`
-/// - `low`:     `fragmentation < 0.25`
-/// - `high`:    `fragmentation ≥ 0.50 AND interleave ≥ 0.50`
-/// - `medium`:  everything else
+/// - `single`:  `authors == 1` — exactly one active-window contributor (authors=0
+///              is impossible: the fragmentation CTE only emits paths that appear in
+///              `knowledge_shares`, which requires ≥1 commit, so ≥1 author).
+/// - `low`:     `fragmentation < 0.25` — one author dominates, others are minor.
+/// - `high`:    `fragmentation ≥ 0.50 AND interleave ≥ 0.50` — strong signal.
+/// - `medium`:  everything else.
 fn classify_tier(authors: u32, fragmentation: f64, interleave: f64) -> String {
-    if authors <= 1 {
+    if authors == 1 {
         return "single".to_string();
     }
     if fragmentation < 0.25 {

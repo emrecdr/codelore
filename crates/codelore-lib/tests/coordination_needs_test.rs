@@ -122,6 +122,25 @@ fn coupling_repo_entropy_positive_for_coupled_files() {
             row.cochange_entropy,
         );
     }
+
+    // ── Hand-computed interleave for src/alpha/util.rs ───────────────────────
+    // coupling_repo has a single author "Coupling" throughout.
+    // Commits touching src/alpha/util.rs in chronological order:
+    //   1. 2026-06-01 "seed all modules"  → author: Coupling
+    //   2. 2026-06-07 "touch alpha/util"  → author: Coupling  (prev=Coupling, no switch)
+    //   3. 2026-06-13 "alpha/util 2"      → author: Coupling  (prev=Coupling, no switch)
+    //
+    // switches = 0, n_commits = 3
+    // interleave = switches / (n_commits - 1) = 0 / 2 = 0.0 exactly.
+    let alpha_util = rows
+        .iter()
+        .find(|r| r.path == "src/alpha/util.rs")
+        .expect("src/alpha/util.rs must be present");
+    assert!(
+        (alpha_util.interleave - 0.0_f64).abs() < 1e-9,
+        "src/alpha/util.rs: 3 commits by same author → 0 switches → interleave=0.0, got {}",
+        alpha_util.interleave
+    );
 }
 
 // ── 3. delivery_repo: multi-author fragmentation and non-single tiers ────────
