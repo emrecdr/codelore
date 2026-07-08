@@ -1328,8 +1328,11 @@ pub fn write_function_xray_csv<W: Write>(
     rows: &[crate::analyses::function_xray::FunctionXrayRow],
     w: &mut W,
 ) -> Result<()> {
-    writeln!(w, "function,change-freq,loc,cyclomatic,cognitive,last-changed")
-        .map_err(CodeLoreError::Io)?;
+    writeln!(
+        w,
+        "function,change-freq,loc,cyclomatic,cognitive,last-changed"
+    )
+    .map_err(CodeLoreError::Io)?;
     for row in rows {
         writeln!(
             w,

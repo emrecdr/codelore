@@ -1,8 +1,8 @@
-//! MCP server for CodeLore (`codelore mcp`).
+//! MCP server for `CodeLore` (`codelore mcp`).
 //!
-//! Exposes CodeLore analyses as MCP tools over stdio. All tools are read-only.
+//! Exposes `CodeLore` analyses as MCP tools over stdio. All tools are read-only.
 //! Each tool call opens its own [`FactsDb`] via the warm-cache path so the
-//! `!Send + !Sync` DuckDB connection never crosses thread or await boundaries.
+//! `!Send + !Sync` `DuckDB` connection never crosses thread or await boundaries.
 
 use std::path::PathBuf;
 

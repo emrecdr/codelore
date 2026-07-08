@@ -2,7 +2,8 @@
 //!
 //! Per-function change frequency for a single target file: for each function
 //! (or method) that exists at HEAD in the target file, counts the number of
-//! revisions where at least one hunk overlapped the function's line span.
+//! **distinct revisions** where at least one hunk overlapped the function's
+//! line span.
 //!
 //! **Hunk-overlap attribution**: a function at `[start_line, end_line]` is
 //! "changed" in revision R if any hunk for that path at R satisfies
@@ -10,10 +11,21 @@
 //! Pure deletions (`new_lines = 0`) are attributed to the function whose span
 //! contains `new_start`; they are skipped if `new_start` is outside every
 //! function span (e.g., a file-level deletion in the preamble).
+//! A single revision that produces multiple overlapping hunks is counted
+//! **once** per function — [`run_function_xray`] deduplicates on `(function,
+//! rev)` after the overlap test.
 //!
-//! **HEAD-alive filter**: only functions present in `complexity_metrics` at
-//! `entities.rev_last_seen = HEAD` are included. Functions that existed at
-//! some point but are gone by HEAD are excluded.
+//! **HEAD-alive filter**: only functions whose span is detected in the HEAD
+//! blob by `compute_for_file` are included. The HEAD blob is fetched via
+//! [`crate::repo::Repo::read_blob_at`]`("HEAD", target)` and re-parsed with
+//! the same tree-sitter extractor used during ingest. Functions that existed
+//! at some point but are absent from the HEAD tree are excluded.
+//!
+//! **Rename limitation**: hunk attribution uses `WHERE h.path = ?` (the
+//! current HEAD-relative path). Pre-rename history is not attributed — the
+//! function receives a new identity after a rename and prior hunk records live
+//! under the old path. `change_freq` therefore reflects activity since the
+//! most recent rename, not the full file lifetime.
 //!
 //! **Span source**: reuses `compute_for_file` (the same tree-sitter extractor
 //! used by the ingest pass) applied to the HEAD blob of the target file,
@@ -24,7 +36,7 @@
 //! ICSM 2003 "Predicting faults from cached history"; extended to hunk
 //! attribution by Skoulis et al., MSR 2014).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::complexity::{Tier1Language, compute_for_file};
 use crate::facts::FactsDb;
@@ -47,7 +59,7 @@ pub struct FunctionXrayRow {
     /// Cognitive complexity at HEAD. `None` if not recorded.
     pub cognitive: Option<i64>,
     /// Author-date of the most recent revision that overlapped this function.
-    /// Empty string if no hunk ever overlapped (change_freq = 0).
+    /// Empty string if no hunk ever overlapped (`change_freq` = 0).
     pub last_changed: String,
 }
 
@@ -61,6 +73,12 @@ pub struct FunctionXrayRow {
 ///
 /// Returns [`crate::CodeLoreError::Analysis`] on `DuckDB` errors or if the
 /// target file is not a supported Tier-1 language.
+///
+/// # Panics
+///
+/// Panics if an internal invariant is violated: every function name inserted
+/// into `freq` (from `head_spans`) must be present when looked up during
+/// overlap attribution. This cannot happen under normal operation.
 #[tracing::instrument(name = "function-xray", skip_all, fields(target = target))]
 pub fn run_function_xray<R: Repo>(
     db: &FactsDb,
@@ -81,23 +99,32 @@ pub fn run_function_xray<R: Repo>(
     // --- 3. Count hunk-overlapping revisions per function -----------------
     // Build a map from function name → (change_freq, last_changed_date).
     // A function can appear multiple times if tree-sitter finds overloads or
-    // re-uses the same name (unlikely in Rust, common in C++). We deduplicate
-    // by taking the first occurrence (dedup_entities preserves the larger span
-    // for spans with the same name — matching the HEAD complexity table).
+    // re-uses the same name (unlikely in Rust, common in C++). dedup_entities
+    // drops exact (name, start_line, end_line) duplicates in first-occurrence
+    // order and suffixes each survivor with its span — matching the identity
+    // key used by the HEAD complexity table.
     let mut freq: HashMap<String, (u32, String)> = head_spans
         .iter()
         .map(|(name, _, _)| (name.clone(), (0u32, String::new())))
         .collect();
 
-    for (rev_date, new_start, new_lines) in &hunk_rows {
-        let (date, new_start, new_lines) = (rev_date.as_str(), *new_start, *new_lines);
+    // Track (function_name, rev) pairs already counted so that a single
+    // revision with multiple overlapping hunks increments change_freq once,
+    // not once per hunk.
+    let mut counted: HashSet<(String, String)> = HashSet::new();
+
+    for (rev, date, new_start, new_lines) in &hunk_rows {
+        let (new_start, new_lines) = (*new_start, *new_lines);
         for (name, start_line, end_line) in &head_spans {
             if hunk_overlaps(*start_line, *end_line, new_start, new_lines) {
-                let entry = freq.get_mut(name).expect("name always present");
-                entry.0 += 1;
-                // Keep the lexicographically latest date (ISO 8601 sorts correctly).
-                if date > entry.1.as_str() {
-                    entry.1 = date.to_string();
+                let key = (name.clone(), rev.clone());
+                if counted.insert(key) {
+                    let entry = freq.get_mut(name).expect("name always present");
+                    entry.0 += 1;
+                    // Keep the lexicographically latest date (ISO 8601 sorts correctly).
+                    if date.as_str() > entry.1.as_str() {
+                        entry.1.clone_from(date);
+                    }
                 }
             }
         }
@@ -110,14 +137,9 @@ pub fn run_function_xray<R: Repo>(
     let mut rows: Vec<FunctionXrayRow> = head_spans
         .iter()
         .map(|(name, _, _)| {
-            let (change_freq, last_changed) = freq
-                .get(name)
-                .cloned()
-                .unwrap_or((0, String::new()));
-            let (loc, cyclomatic, cognitive) = metrics
-                .get(name)
-                .copied()
-                .unwrap_or((0, None, None));
+            let (change_freq, last_changed) = freq.get(name).cloned().unwrap_or((0, String::new()));
+            let (loc, cyclomatic, cognitive) =
+                metrics.get(name).copied().unwrap_or((0, None, None));
             FunctionXrayRow {
                 function: name.clone(),
                 change_freq,
@@ -149,13 +171,18 @@ pub fn run_function_xray<R: Repo>(
 ///
 /// Line numbers are 1-based. The hunk range is half-open `[new_start, new_start + new_lines)`.
 ///
-/// Pure-deletion edge case (`new_lines = 0`): DuckDB records the anchor line
+/// Pure-deletion edge case (`new_lines = 0`): the database records the anchor line
 /// where the block was deleted. Attribute to the function if `new_start` falls
 /// inside the span, i.e. `start_line <= new_start <= end_line`.
 ///
 /// Both `start_line` and `new_start` are 1-based; `end_line` is the last line
 /// of the function body (inclusive).
-pub(crate) fn hunk_overlaps(start_line: u32, end_line: u32, new_start: u32, new_lines: u32) -> bool {
+pub(crate) fn hunk_overlaps(
+    start_line: u32,
+    end_line: u32,
+    new_start: u32,
+    new_lines: u32,
+) -> bool {
     if new_lines == 0 {
         // Pure deletion — attribute to function if anchor is inside the span.
         new_start >= start_line && new_start <= end_line
@@ -172,13 +199,9 @@ pub(crate) fn hunk_overlaps(start_line: u32, end_line: u32, new_start: u32, new_
 /// Returns `Vec<(name, start_line, end_line)>` for all "function" and "method"
 /// entities in the file. Non-function entities (class, file) are excluded
 /// because xray attribution is per-callable unit.
-fn extract_head_spans<R: Repo>(
-    repo: &R,
-    target: &str,
-) -> Result<Vec<(String, u32, u32)>> {
-    let lang = match Tier1Language::from_path(target) {
-        Some(l) => l,
-        None => return Ok(Vec::new()),
+fn extract_head_spans<R: Repo>(repo: &R, target: &str) -> Result<Vec<(String, u32, u32)>> {
+    let Some(lang) = Tier1Language::from_path(target) else {
+        return Ok(Vec::new());
     };
 
     let source = match repo.read_blob_at("HEAD", target) {
@@ -219,14 +242,15 @@ fn extract_head_spans<R: Repo>(
 
 /// Fetch all hunks for `target` from the `hunks` table.
 ///
-/// Returns `Vec<(date, new_start, new_lines)>` — one entry per hunk row,
-/// joined with the `commits` table to get the author date.
-fn fetch_hunks_for_path(db: &FactsDb, target: &str) -> Result<Vec<(String, u32, u32)>> {
+/// Returns `Vec<(rev, date, new_start, new_lines)>` — one entry per hunk row,
+/// joined with the `commits` table to get the author date. The `rev` is used
+/// by the caller to deduplicate multi-hunk commits per function.
+fn fetch_hunks_for_path(db: &FactsDb, target: &str) -> Result<Vec<(String, String, u32, u32)>> {
     use crate::analyses::query::query_map_collect;
 
     query_map_collect(
         db,
-        "SELECT CAST(c.date AS TEXT), h.new_start, h.new_lines
+        "SELECT h.rev, CAST(c.date AS TEXT), h.new_start, h.new_lines
          FROM hunks h
          JOIN commits c ON c.rev = h.rev
          WHERE h.path = ?
@@ -236,21 +260,27 @@ fn fetch_hunks_for_path(db: &FactsDb, target: &str) -> Result<Vec<(String, u32, 
         |r| {
             Ok((
                 r.get::<_, String>(0)?,
-                r.get::<_, u32>(1)?,
+                r.get::<_, String>(1)?,
                 r.get::<_, u32>(2)?,
+                r.get::<_, u32>(3)?,
             ))
         },
     )
 }
 
+/// Complexity triple: `(sloc, cyclomatic, cognitive)` for a single function.
+type FnMetrics = (u32, Option<i64>, Option<i64>);
+
 /// Fetch HEAD complexity metrics for functions in the target file.
 ///
 /// Returns a map from `name → (sloc, cyclomatic, cognitive)`. Uses
 /// `complexity_metrics` which is populated during ingest and holds HEAD data.
-fn fetch_head_metrics(
-    db: &FactsDb,
-    target: &str,
-) -> Result<HashMap<String, (u32, Option<i64>, Option<i64>)>> {
+///
+/// When `complexity_metrics` has multiple rows for the same function name
+/// (possible with non-Rust languages that allow overloads), we keep the row
+/// with the highest `sloc` as a proxy for the "most significant" variant.
+/// This matches how the ingest pass resolves the same ambiguity.
+fn fetch_head_metrics(db: &FactsDb, target: &str) -> Result<HashMap<String, FnMetrics>> {
     use crate::analyses::query::query_map_collect;
 
     let rows: Vec<(String, u32, Option<i64>, Option<i64>)> = query_map_collect(
@@ -271,7 +301,7 @@ fn fetch_head_metrics(
         },
     )?;
 
-    let mut map: HashMap<String, (u32, Option<i64>, Option<i64>)> = HashMap::new();
+    let mut map: HashMap<String, FnMetrics> = HashMap::new();
     for (name, sloc, cy, cog) in rows {
         // Keep the entry with the higher sloc when there are duplicates
         // (can happen with overloaded names in non-Rust languages).
@@ -302,6 +332,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn overlap_predicate() {
         let cases = vec![
             Case {

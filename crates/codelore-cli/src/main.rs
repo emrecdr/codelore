@@ -60,18 +60,19 @@ fn run_mcp_cmd(args: &McpArgs) -> Result<()> {
 /// exits 0 (pass) or 1 (fail). Writes `result=pass|fail` to
 /// `$GITHUB_OUTPUT` for direct GitHub Actions step-output
 /// consumption.
+#[allow(clippy::too_many_lines)]
 fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
     use codelore_lib::cli_api::Options;
     use codelore_lib::cli_api::cache::default_cache_root;
     use codelore_lib::cli_api::facts::FactsDb;
+    use codelore_lib::cli_api::quality_gates::Thresholds;
     use codelore_lib::cli_api::quality_gates::ledger::{
         GateRunRecord, append_gate_runs, format_history, now_utc_ts, read_gate_runs,
     };
     use codelore_lib::cli_api::quality_gates::ratchet::{
-        RatchetMetrics, evaluate_ratchet, format_ratchet_outcome,
-        read_snapshot, snapshot_from_metrics, write_snapshot, RatchetOutcome,
+        RatchetMetrics, RatchetOutcome, evaluate_ratchet, format_ratchet_outcome, read_snapshot,
+        snapshot_from_metrics, write_snapshot,
     };
-    use codelore_lib::cli_api::quality_gates::Thresholds;
     use codelore_lib::cli_api::repo::GixRepo;
 
     let cache_root = default_cache_root();
@@ -115,17 +116,26 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
     // ── Ratchet ───────────────────────────────────────────────────────────────
     if args.ratchet {
         // Build ratchet metrics from already-computed gate outputs.
-        let worst_health = code_health.iter().map(|r| r.score).fold(f64::INFINITY, f64::min);
+        let worst_health = code_health
+            .iter()
+            .map(|r| r.score)
+            .fold(f64::INFINITY, f64::min);
         // red_effort_pct: read from the effort-exposure ledger record if present.
-        let red_effort_pct = ledger_records.iter()
+        let red_effort_pct = ledger_records
+            .iter()
             .find(|r| r.gate == "max_red_effort_pct")
             .map(|r| r.value);
         // dependency_cycles: read from the arch ledger record if present.
-        let dep_cycles = ledger_records.iter()
+        let dep_cycles = ledger_records
+            .iter()
             .find(|r| r.gate == "max_dependency_cycles")
             .map(|r| r.value);
         let metrics = RatchetMetrics {
-            code_health_min_observed: if worst_health.is_infinite() { None } else { Some(worst_health) },
+            code_health_min_observed: if worst_health.is_infinite() {
+                None
+            } else {
+                Some(worst_health)
+            },
             red_effort_pct_observed: red_effort_pct,
             dependency_cycles_observed: dep_cycles,
         };
@@ -136,16 +146,29 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
                 let snap = snapshot_from_metrics(&metrics);
                 write_snapshot(&args.repo, &snap).context("write ratchet snapshot")?;
                 let tracked: Vec<&str> = [
-                    metrics.code_health_min_observed.map(|_| "code_health_min_observed"),
-                    metrics.red_effort_pct_observed.map(|_| "red_effort_pct_observed"),
-                    metrics.dependency_cycles_observed.map(|_| "dependency_cycles_observed"),
-                ].into_iter().flatten().collect();
+                    metrics
+                        .code_health_min_observed
+                        .map(|_| "code_health_min_observed"),
+                    metrics
+                        .red_effort_pct_observed
+                        .map(|_| "red_effort_pct_observed"),
+                    metrics
+                        .dependency_cycles_observed
+                        .map(|_| "dependency_cycles_observed"),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
                 println!(
                     "✅ ratchet initialized — tracking {} metric(s): {}. \
                      Configure max_red_effort_pct / max_dependency_cycles gates to ratchet \
                      effort and cycles. Commit `.codelore-ratchet.toml` to enable regression detection.",
                     tracked.len(),
-                    if tracked.is_empty() { "(none)".to_owned() } else { tracked.join(", ") },
+                    if tracked.is_empty() {
+                        "(none)".to_owned()
+                    } else {
+                        tracked.join(", ")
+                    },
                 );
                 ledger_records.push(GateRunRecord {
                     ts: ts.clone(),
@@ -208,7 +231,10 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
         write_github_output("violations", "0");
         Ok(())
     } else {
-        eprintln!("❌ codelore check: FAIL — {} violation(s)", violations.len());
+        eprintln!(
+            "❌ codelore check: FAIL — {} violation(s)",
+            violations.len()
+        );
         if !args.quiet {
             for v in &violations {
                 eprintln!(
@@ -283,13 +309,33 @@ fn eval_hotspot_gates(
     let mut recs = Vec::new();
     if let Some(max) = g.cognitive_max {
         let failed = hs_violations.iter().any(|v| v.gate == "cognitive_max");
-        let value = hotspots.iter().map(|r| r.cognitive).fold(f64::NAN, f64::max);
-        recs.push(make_rec("cognitive_max", max, if value.is_nan() { 0.0 } else { value }, failed, ts, head_sha));
+        let value = hotspots
+            .iter()
+            .map(|r| r.cognitive)
+            .fold(f64::NAN, f64::max);
+        recs.push(make_rec(
+            "cognitive_max",
+            max,
+            if value.is_nan() { 0.0 } else { value },
+            failed,
+            ts,
+            head_sha,
+        ));
     }
     if let Some(max) = g.hotspot_score_max {
         let failed = hs_violations.iter().any(|v| v.gate == "hotspot_score_max");
-        let value = hotspots.iter().map(|r| r.hotspot_score).fold(f64::NAN, f64::max);
-        recs.push(make_rec("hotspot_score_max", max, if value.is_nan() { 0.0 } else { value }, failed, ts, head_sha));
+        let value = hotspots
+            .iter()
+            .map(|r| r.hotspot_score)
+            .fold(f64::NAN, f64::max);
+        recs.push(make_rec(
+            "hotspot_score_max",
+            max,
+            if value.is_nan() { 0.0 } else { value },
+            failed,
+            ts,
+            head_sha,
+        ));
     }
     Ok(((hs_violations, recs), count))
 }
@@ -303,9 +349,12 @@ fn eval_code_health_gate(
     ts: &str,
     head_sha: &str,
     quiet: bool,
-) -> Result<(GateGroupResult, Vec<codelore_lib::cli_api::analyses::code_health::CodeHealthRow>)> {
-    use codelore_lib::cli_api::quality_gates::{GateViolation, evaluate_code_health_gate};
+) -> Result<(
+    GateGroupResult,
+    Vec<codelore_lib::cli_api::analyses::code_health::CodeHealthRow>,
+)> {
     use codelore_lib::cli_api::quality_gates::ledger::GateRunRecord;
+    use codelore_lib::cli_api::quality_gates::{GateViolation, evaluate_code_health_gate};
     let code_health = codelore_lib::cli_api::analyses::code_health::run_code_health(db, opts)
         .context("run code-health")?;
     let g = &thresholds.gates;
@@ -315,16 +364,28 @@ fn eval_code_health_gate(
     let ch_violations = evaluate_code_health_gate(thresholds, &code_health);
     // Degraded: empty result when the repo has scorable files.
     let degraded = code_health.is_empty() && {
-        db.query_row("SELECT COUNT(*) FROM complexity_metrics", [], |r| r.get::<_, i64>(0))
-            .unwrap_or(0) > 0
+        db.query_row("SELECT COUNT(*) FROM complexity_metrics", [], |r| {
+            r.get::<_, i64>(0)
+        })
+        .unwrap_or(0)
+            > 0
     };
-    let worst = code_health.iter().map(|r| r.score).fold(f64::INFINITY, f64::min);
+    let worst = code_health
+        .iter()
+        .map(|r| r.score)
+        .fold(f64::INFINITY, f64::min);
     let verdict = if degraded {
         if !quiet {
-            eprintln!("  ⚠ code_health_min: degraded — health scan returned no rows on a non-empty repo");
+            eprintln!(
+                "  ⚠ code_health_min: degraded — health scan returned no rows on a non-empty repo"
+            );
         }
         "degraded"
-    } else if ch_violations.is_empty() { "passed" } else { "failed" };
+    } else if ch_violations.is_empty() {
+        "passed"
+    } else {
+        "failed"
+    };
     let rec = GateRunRecord {
         ts: ts.to_owned(),
         head_sha: head_sha.to_owned(),
@@ -361,15 +422,35 @@ fn eval_arch_gates(
     let mut recs = Vec::new();
     if let Some(max) = g.max_dependency_cycles {
         let failed = arch_v.iter().any(|v| v.gate == "max_dependency_cycles");
-        let value = arch_v.iter().find(|v| v.gate == "max_dependency_cycles")
-            .and_then(|v| v.actual.parse::<f64>().ok()).unwrap_or(0.0);
-        recs.push(make_rec("max_dependency_cycles", f64::from(max), value, failed, ts, head_sha));
+        let value = arch_v
+            .iter()
+            .find(|v| v.gate == "max_dependency_cycles")
+            .and_then(|v| v.actual.parse::<f64>().ok())
+            .unwrap_or(0.0);
+        recs.push(make_rec(
+            "max_dependency_cycles",
+            f64::from(max),
+            value,
+            failed,
+            ts,
+            head_sha,
+        ));
     }
     if let Some(max) = g.max_propagation_cost {
         let failed = arch_v.iter().any(|v| v.gate == "max_propagation_cost");
-        let value = arch_v.iter().find(|v| v.gate == "max_propagation_cost")
-            .and_then(|v| v.actual.parse::<f64>().ok()).unwrap_or(0.0);
-        recs.push(make_rec("max_propagation_cost", max, value, failed, ts, head_sha));
+        let value = arch_v
+            .iter()
+            .find(|v| v.gate == "max_propagation_cost")
+            .and_then(|v| v.actual.parse::<f64>().ok())
+            .unwrap_or(0.0);
+        recs.push(make_rec(
+            "max_propagation_cost",
+            max,
+            value,
+            failed,
+            ts,
+            head_sha,
+        ));
     }
     Ok((arch_v, recs))
 }
@@ -379,6 +460,7 @@ fn eval_arch_gates(
 /// Returns `(violations, ledger_records, hotspot_count, code_health_rows)`.
 /// `code_health_rows` is returned so callers (e.g. `--ratchet`) can extract
 /// ratchet metrics without re-running the analysis.
+#[allow(clippy::type_complexity)]
 fn evaluate_all_gates(
     thresholds: &codelore_lib::cli_api::quality_gates::Thresholds,
     db: &codelore_lib::cli_api::facts::FactsDb,
@@ -400,15 +482,26 @@ fn evaluate_all_gates(
     violations.extend(hs_v);
     recs.extend(hs_r);
 
-    let ((ch_v, ch_r), code_health) = eval_code_health_gate(thresholds, db, opts, ts, head_sha, quiet)?;
+    let ((ch_v, ch_r), code_health) =
+        eval_code_health_gate(thresholds, db, opts, ts, head_sha, quiet)?;
     violations.extend(ch_v);
     recs.extend(ch_r);
 
     if g.disallow_clone_type_1 {
         let clone_v = codelore_lib::cli_api::quality_gates::evaluate_clone_gate(thresholds, db)
             .context("evaluate clone gate")?;
-        let count = clone_v.first().and_then(|v| v.actual.parse::<f64>().ok()).unwrap_or(0.0);
-        recs.push(make_rec("disallow_clone_type_1", 0.0, count, !clone_v.is_empty(), ts, head_sha));
+        let count = clone_v
+            .first()
+            .and_then(|v| v.actual.parse::<f64>().ok())
+            .unwrap_or(0.0);
+        recs.push(make_rec(
+            "disallow_clone_type_1",
+            0.0,
+            count,
+            !clone_v.is_empty(),
+            ts,
+            head_sha,
+        ));
         violations.extend(clone_v);
     }
 
@@ -419,18 +512,39 @@ fn evaluate_all_gates(
     if let Some(max) = g.max_red_effort_pct {
         let effort_v = codelore_lib::cli_api::quality_gates::evaluate_effort_exposure_gate(
             thresholds, db, opts,
-        ).context("evaluate effort-exposure gate")?;
-        let value = effort_v.first().and_then(|v| v.actual.parse::<f64>().ok()).unwrap_or(0.0);
-        recs.push(make_rec("max_red_effort_pct", max, value, !effort_v.is_empty(), ts, head_sha));
+        )
+        .context("evaluate effort-exposure gate")?;
+        let value = effort_v
+            .first()
+            .and_then(|v| v.actual.parse::<f64>().ok())
+            .unwrap_or(0.0);
+        recs.push(make_rec(
+            "max_red_effort_pct",
+            max,
+            value,
+            !effort_v.is_empty(),
+            ts,
+            head_sha,
+        ));
         violations.extend(effort_v);
     }
 
     if let Some(min) = g.code_familiarity_min {
-        let fam_v = codelore_lib::cli_api::quality_gates::evaluate_familiarity_gate(
-            thresholds, db, opts,
-        ).context("evaluate code-familiarity gate")?;
-        let value = fam_v.first().and_then(|v| v.actual.parse::<f64>().ok()).unwrap_or(0.0);
-        recs.push(make_rec("code_familiarity_min", min, value, !fam_v.is_empty(), ts, head_sha));
+        let fam_v =
+            codelore_lib::cli_api::quality_gates::evaluate_familiarity_gate(thresholds, db, opts)
+                .context("evaluate code-familiarity gate")?;
+        let value = fam_v
+            .first()
+            .and_then(|v| v.actual.parse::<f64>().ok())
+            .unwrap_or(0.0);
+        recs.push(make_rec(
+            "code_familiarity_min",
+            min,
+            value,
+            !fam_v.is_empty(),
+            ts,
+            head_sha,
+        ));
         violations.extend(fam_v);
     }
 
@@ -3079,28 +3193,25 @@ fn dispatch_function_xray(
 ) -> Result<()> {
     match format {
         "csv" => {
-            let rows =
-                codelore_lib::cli_api::analyses::function_xray::run_function_xray(
-                    db, repo, opts, target,
-                )
-                .context("run function-xray")?;
+            let rows = codelore_lib::cli_api::analyses::function_xray::run_function_xray(
+                db, repo, opts, target,
+            )
+            .context("run function-xray")?;
             codelore_lib::cli_api::output::csv::write_function_xray_csv(&rows, out)
                 .context("write csv")?;
         }
         "json" => {
-            let rows =
-                codelore_lib::cli_api::analyses::function_xray::run_function_xray(
-                    db, repo, opts, target,
-                )
-                .context("run function-xray")?;
+            let rows = codelore_lib::cli_api::analyses::function_xray::run_function_xray(
+                db, repo, opts, target,
+            )
+            .context("run function-xray")?;
             codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
         }
         "markdown" => {
-            let rows =
-                codelore_lib::cli_api::analyses::function_xray::run_function_xray(
-                    db, repo, opts, target,
-                )
-                .context("run function-xray")?;
+            let rows = codelore_lib::cli_api::analyses::function_xray::run_function_xray(
+                db, repo, opts, target,
+            )
+            .context("run function-xray")?;
             codelore_lib::cli_api::output::markdown::write_function_xray_markdown(
                 &rows, target, out,
             )

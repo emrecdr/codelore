@@ -122,13 +122,22 @@ pub fn read_snapshot(repo_root: &Path) -> Result<Option<RatchetSnapshot>> {
     if !path.exists() {
         return Ok(None);
     }
-    let raw = fs::read_to_string(&path)
-        .map_err(|e| CodeLoreError::Analysis(format!("read ratchet file {}: {e}", path.display())))?;
+    let raw = fs::read_to_string(&path).map_err(|e| {
+        CodeLoreError::Analysis(format!("read ratchet file {}: {e}", path.display()))
+    })?;
     // Validate it parses as TOML first (catches truncated/corrupt files).
-    raw.parse::<Table>()
-        .map_err(|e| CodeLoreError::Analysis(format!("ratchet file is not valid TOML ({}): {e}", path.display())))?;
-    let snap = toml::from_str::<RatchetSnapshot>(&raw)
-        .map_err(|e| CodeLoreError::Analysis(format!("ratchet file schema error ({}): {e}", path.display())))?;
+    raw.parse::<Table>().map_err(|e| {
+        CodeLoreError::Analysis(format!(
+            "ratchet file is not valid TOML ({}): {e}",
+            path.display()
+        ))
+    })?;
+    let snap = toml::from_str::<RatchetSnapshot>(&raw).map_err(|e| {
+        CodeLoreError::Analysis(format!(
+            "ratchet file schema error ({}): {e}",
+            path.display()
+        ))
+    })?;
     Ok(Some(snap))
 }
 
@@ -160,13 +169,13 @@ pub fn evaluate_ratchet(snap: &RatchetSnapshot, metrics: &RatchetMetrics) -> Rat
     for (key, direction) in RATCHET_METRICS {
         let snap_val = match *key {
             "code_health_min_observed" => snap.ratchet.code_health_min_observed,
-            "red_effort_pct_observed"  => snap.ratchet.red_effort_pct_observed,
+            "red_effort_pct_observed" => snap.ratchet.red_effort_pct_observed,
             "dependency_cycles_observed" => snap.ratchet.dependency_cycles_observed,
             _ => None,
         };
         let obs_val = match *key {
-            "code_health_min_observed"   => metrics.code_health_min_observed,
-            "red_effort_pct_observed"    => metrics.red_effort_pct_observed,
+            "code_health_min_observed" => metrics.code_health_min_observed,
+            "red_effort_pct_observed" => metrics.red_effort_pct_observed,
             "dependency_cycles_observed" => metrics.dependency_cycles_observed,
             _ => None,
         };
@@ -301,7 +310,10 @@ mod tests {
         fs::write(dir.path().join(RATCHET_FILENAME), b"not valid toml ][[[").unwrap();
         let err = read_snapshot(dir.path()).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("not valid TOML"), "expected TOML error, got: {msg}");
+        assert!(
+            msg.contains("not valid TOML"),
+            "expected TOML error, got: {msg}"
+        );
     }
 
     // ── regression: snapshot has BETTER values than current → exit-1 scenario ─
@@ -355,8 +367,8 @@ mod tests {
         let snap = RatchetSnapshot {
             ratchet: RatchetTable {
                 code_health_min_observed: Some(80.0), // regression
-                red_effort_pct_observed: None,         // not ratcheted
-                dependency_cycles_observed: None,      // not ratcheted
+                red_effort_pct_observed: None,        // not ratcheted
+                dependency_cycles_observed: None,     // not ratcheted
             },
         };
         let outcome = evaluate_ratchet(&snap, &metrics_good());

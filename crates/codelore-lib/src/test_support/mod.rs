@@ -301,21 +301,21 @@ pub mod biomarker_repo {
     }
 }
 
-/// Minimal fixture for `function-xray` tests.
+/// Fixture for `function-xray` tests.
 ///
 /// Contains a single Rust file `src/target.rs` with two functions:
-/// - `hot` — modified inside the body in 3 commits (change_freq = 3)
-/// - `cold` — never touched after the seed (change_freq = 0)
+/// - `hot` — 8-line function touched in 4 revisions (`change_freq` = 4)
+/// - `cold` — never touched after the seed (`change_freq` = 0)
 ///
 /// Commit history:
 ///   seed      — writes both functions
-///   tweak-1   — changes `hot`'s body (line 2, inside the function)
-///   tweak-2   — changes `hot`'s body again
-///   tweak-3   — changes `hot`'s body a third time
+///   tweak-1   — single-hunk edit of `hot` (line 2)
+///   tweak-2   — single-hunk edit of `hot` (line 2)
+///   tweak-3   — single-hunk edit of `hot` (line 2)
+///   tweak-mh  — two-hunk edit of `hot` (lines 2 and 8) in ONE commit
 ///
-/// The `hot` function occupies lines 1–3 in all versions; `cold` follows
-/// from line 5 onward. Body mutations replace line 2 so the hunk always
-/// lands at `new_start = 2, new_lines = 1` — squarely inside [1, 3].
+/// `tweak-mh` verifies that a multi-hunk commit counts as exactly one
+/// revision for `change_freq`, not one per hunk.
 #[cfg(feature = "test-support")]
 pub mod function_xray_repo {
     use std::path::PathBuf;
@@ -325,12 +325,37 @@ pub mod function_xray_repo {
         pub dir: TempDir,
     }
 
-    // Version strings for `hot`'s body line so each commit produces a
-    // genuine one-line diff at line 2 (inside the function span [1, 3]).
-    const HOT_V0: &str = "pub fn hot() -> i32 {\n    0\n}\n";
-    const HOT_V1: &str = "pub fn hot() -> i32 {\n    1\n}\n";
-    const HOT_V2: &str = "pub fn hot() -> i32 {\n    2\n}\n";
-    const HOT_V3: &str = "pub fn hot() -> i32 {\n    3\n}\n";
+    // `hot` is an 8-line function so that edits on line 2 and line 8 are far
+    // enough apart to produce two separate hunks in a single commit (git's
+    // default 3-line context window cannot bridge a 4-line gap).
+    //
+    // Layout of src/target.rs:
+    //   line 1:  pub fn hot() -> i32 {
+    //   line 2:    let a = <A>;        ← edit region 1
+    //   line 3:    let b = 10;
+    //   line 4:    let c = 20;
+    //   line 5:    let d = 30;
+    //   line 6:    let e = 40;
+    //   line 7:    let f = 50;
+    //   line 8:    a + <B>              ← edit region 2
+    //   line 9:  }
+    //   line 10: (blank separator)
+    //   line 11: pub fn cold() -> i32 {
+    //   line 12:   42
+    //   line 13: }
+    //
+    // Versions v0–v3 only change line 2 (single hunk per commit → change_freq
+    // increments by 1 each time). The multi-hunk commit (tweak-mh) changes
+    // BOTH line 2 (a = 99) AND line 8 (return value) in ONE commit → two
+    // hunks but still only +1 to change_freq.
+
+    const HOT_V0: &str = "pub fn hot() -> i32 {\n    let a = 0;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    a + b + c + d + e + f\n}\n";
+    const HOT_V1: &str = "pub fn hot() -> i32 {\n    let a = 1;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    a + b + c + d + e + f\n}\n";
+    const HOT_V2: &str = "pub fn hot() -> i32 {\n    let a = 2;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    a + b + c + d + e + f\n}\n";
+    const HOT_V3: &str = "pub fn hot() -> i32 {\n    let a = 3;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    a + b + c + d + e + f\n}\n";
+    // Multi-hunk: changes line 2 (a = 99) AND line 8 (drops the sum, just returns 99).
+    // These two regions are 6 lines apart — guaranteed two separate hunks.
+    const HOT_VMH: &str = "pub fn hot() -> i32 {\n    let a = 99;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    99\n}\n";
     // `cold` is never changed after the seed.
     const COLD: &str = "pub fn cold() -> i32 {\n    42\n}\n";
 
@@ -356,6 +381,7 @@ pub mod function_xray_repo {
             "2026-06-02T10:00:00Z",
             "2026-06-03T10:00:00Z",
             "2026-06-04T10:00:00Z",
+            "2026-06-05T10:00:00Z",
         ];
 
         // Seed: write both functions.
@@ -363,17 +389,23 @@ pub mod function_xray_repo {
         run_git(&path, &["add", "."]);
         run_git_at(&path, dates[0], &["commit", "-m", "seed", "--quiet"]);
 
-        // tweak-1: mutate hot's body at line 2.
+        // tweak-1: mutate hot's body (line 2 only → single hunk).
         write(&path, "src/target.rs", &src(HOT_V1));
         run_git_at(&path, dates[1], &["commit", "-am", "tweak-1", "--quiet"]);
 
-        // tweak-2: mutate hot's body again.
+        // tweak-2: mutate hot's body again (line 2 only → single hunk).
         write(&path, "src/target.rs", &src(HOT_V2));
         run_git_at(&path, dates[2], &["commit", "-am", "tweak-2", "--quiet"]);
 
-        // tweak-3: mutate hot's body a third time.
+        // tweak-3: mutate hot's body a third time (line 2 only → single hunk).
         write(&path, "src/target.rs", &src(HOT_V3));
         run_git_at(&path, dates[3], &["commit", "-am", "tweak-3", "--quiet"]);
+
+        // tweak-mh: change BOTH line 2 (a = 99) AND line 8 (return value) in
+        // ONE commit. The 6-line gap produces two separate hunks in the diff,
+        // but change_freq for `hot` should only increment by 1, not 2.
+        write(&path, "src/target.rs", &src(HOT_VMH));
+        run_git_at(&path, dates[4], &["commit", "-am", "tweak-mh", "--quiet"]);
 
         FunctionXrayRepo { dir }
     }

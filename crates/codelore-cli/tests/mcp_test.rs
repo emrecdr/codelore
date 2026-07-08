@@ -2,7 +2,7 @@
 //!
 //! The rmcp stdio transport uses newline-delimited JSON (one JSON object per line).
 //! The test spawns the binary, exchanges the MCP initialize handshake, calls
-//! `tools/list` and `tools/call` (repo_overview), and asserts the JSON shape.
+//! `tools/list` and `tools/call` (`repo_overview`), and asserts the JSON shape.
 //! Uses the `tiny_repo` fixture so the ingest is fast.
 
 use std::io::{BufRead, BufReader, Write};

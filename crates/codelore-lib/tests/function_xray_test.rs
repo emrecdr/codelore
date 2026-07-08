@@ -2,50 +2,62 @@
 ///
 /// Uses `function_xray_repo`, a purpose-built fixture with two functions in
 /// `src/target.rs`:
-///   - `hot` — body modified in 3 commits after seed → change_freq = 3
-///   - `cold` — never changed after seed → change_freq = 0
+///   - `hot` — 8-line function; body modified in 3 single-hunk commits
+///     (tweak-1/2/3) plus 1 multi-hunk commit (tweak-mh) -> `change_freq` = 4
+///   - `cold` — never changed after seed -> `change_freq` = 0
 ///
-/// Function span is 3 lines (lines 1–3): the hunk always lands at
-/// new_start = 2, new_lines = 1, which overlaps [1, 3] correctly.
+/// The multi-hunk commit (tweak-mh) edits two regions of `hot` that are 6
+/// lines apart, producing two separate hunks in one revision. The dedup
+/// assertion verifies that `change_freq` increments by exactly 1 for that
+/// commit, not 2.
 ///
 /// The hunk-overlap unit tests (`analyses::function_xray::tests::overlap_predicate`)
 /// cover the predicate in isolation across all edge cases including pure deletions.
 #[cfg(feature = "test-support")]
 mod function_xray_integration {
+    use codelore_lib::Options;
     use codelore_lib::analyses::function_xray::run_function_xray;
     use codelore_lib::facts::FactsDb;
     use codelore_lib::repo::GixRepo;
     use codelore_lib::test_support::function_xray_repo;
-    use codelore_lib::Options;
 
-    /// `hot@1-3` must have change_freq = 3; `cold@5-7` must have change_freq = 0.
-    ///
-    /// The deduped name format is `{fn_name}@{start_line}-{end_line}` (see
-    /// `facts::ingest::consumer::dedup_entities`). `hot` spans lines 1–3;
-    /// `cold` follows a blank separator at line 4, spanning lines 5–7.
-    #[test]
-    fn hot_has_freq_3_cold_has_freq_0() {
+    fn build_db_and_rows(
+        target: &str,
+    ) -> (
+        function_xray_repo::FunctionXrayRepo,
+        Vec<codelore_lib::analyses::function_xray::FunctionXrayRow>,
+    ) {
         let repo = function_xray_repo::build();
         let gix = GixRepo::open(repo.dir.path()).expect("open repo");
-
         let opts = Options {
             repo_path: repo.dir.path().to_path_buf(),
             min_revs: 1,
             ..Options::default()
         };
-
         let db = FactsDb::new_in_memory().expect("new_in_memory");
         db.ingest(&gix, &opts).expect("ingest");
+        let rows = run_function_xray(&db, &gix, &opts, target).expect("run_function_xray");
+        (repo, rows)
+    }
 
-        let rows = run_function_xray(&db, &gix, &opts, "src/target.rs")
-            .expect("run_function_xray");
+    /// `hot@1-9` must have `change_freq` = 4; `cold@11-13` must have `change_freq` = 0.
+    ///
+    /// The deduped name format is `{fn_name}@{start_line}-{end_line}` (see
+    /// `facts::ingest::consumer::dedup_entities`). `hot` spans lines 1-9;
+    /// `cold` follows a blank separator at line 10, spanning lines 11-13.
+    ///
+    /// 4 revisions touch `hot`: tweak-1, tweak-2, tweak-3 (each single-hunk)
+    /// and tweak-mh (two hunks, but still one revision, counted once).
+    #[test]
+    fn hot_has_freq_4_cold_has_freq_0() {
+        let (_repo, rows) = build_db_and_rows("src/target.rs");
 
         assert!(
             !rows.is_empty(),
             "expected rows for src/target.rs; got empty"
         );
 
-        // Top row must be `hot` (highest change_freq = 3).
+        // Top row must be `hot` (highest change_freq = 4).
         let hot = &rows[0];
         assert!(
             hot.function.starts_with("hot@"),
@@ -53,8 +65,8 @@ mod function_xray_integration {
             hot.function
         );
         assert_eq!(
-            hot.change_freq, 3,
-            "expected hot change_freq = 3, got {}",
+            hot.change_freq, 4,
+            "expected hot change_freq = 4 (3 single-hunk + 1 multi-hunk), got {}",
             hot.change_freq
         );
 
@@ -79,24 +91,36 @@ mod function_xray_integration {
         );
     }
 
-    /// Non-existent target path returns empty — not an error.
+    /// The multi-hunk commit (tweak-mh) edits two separated regions of `hot`
+    /// in a single revision. `change_freq` must count that revision once, not
+    /// once per hunk.
+    ///
+    /// This is the direct regression guard for the rev-dedup bug: without
+    /// deduplication on `(function, rev)`, the two hunks would each increment
+    /// `change_freq`, yielding 5 instead of 4.
+    #[test]
+    fn multi_hunk_commit_counts_as_one_revision() {
+        let (_repo, rows) = build_db_and_rows("src/target.rs");
+
+        let hot = rows
+            .iter()
+            .find(|r| r.function.starts_with("hot@"))
+            .expect("expected a 'hot@...' row");
+
+        // 3 single-hunk commits + 1 multi-hunk commit = 4 distinct revisions.
+        // Without (function, rev) dedup the multi-hunk commit would add 2,
+        // yielding 5.
+        assert_eq!(
+            hot.change_freq, 4,
+            "multi-hunk commit must count as 1 revision, not 2; got change_freq = {}",
+            hot.change_freq
+        );
+    }
+
+    /// Non-existent target path returns empty, not an error.
     #[test]
     fn nonexistent_target_returns_empty() {
-        let repo = function_xray_repo::build();
-        let gix = GixRepo::open(repo.dir.path()).expect("open repo");
-
-        let opts = Options {
-            repo_path: repo.dir.path().to_path_buf(),
-            min_revs: 1,
-            ..Options::default()
-        };
-
-        let db = FactsDb::new_in_memory().expect("new_in_memory");
-        db.ingest(&gix, &opts).expect("ingest");
-
-        let rows = run_function_xray(&db, &gix, &opts, "src/does_not_exist.rs")
-            .expect("run_function_xray on nonexistent path must not error");
-
+        let (_repo, rows) = build_db_and_rows("src/does_not_exist.rs");
         assert!(
             rows.is_empty(),
             "expected empty rows for a path that never existed"
