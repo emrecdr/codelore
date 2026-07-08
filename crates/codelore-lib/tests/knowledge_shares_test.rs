@@ -349,12 +349,27 @@ fn reviewer_trailer_credits_reviewer_and_renormalizes() {
             .expect("git");
         assert!(status.success(), "git {args:?} failed");
     };
-    git(&["init", "--quiet"], "Alice", "alice@example.com", "2026-01-01T10:00:00Z");
-    git(&["config", "gc.auto", "0"], "Alice", "alice@example.com", "2026-01-01T10:00:00Z");
+    git(
+        &["init", "--quiet"],
+        "Alice",
+        "alice@example.com",
+        "2026-01-01T10:00:00Z",
+    );
+    git(
+        &["config", "gc.auto", "0"],
+        "Alice",
+        "alice@example.com",
+        "2026-01-01T10:00:00Z",
+    );
 
     // Commit 1: Alice authors her own file (puts her in author_aliases).
     std::fs::write(path.join("alice.rs"), "pub fn a() -> u32 { 1 }\n").expect("write");
-    git(&["add", "alice.rs"], "Alice", "alice@example.com", "2026-01-01T10:00:00Z");
+    git(
+        &["add", "alice.rs"],
+        "Alice",
+        "alice@example.com",
+        "2026-01-01T10:00:00Z",
+    );
     git(
         &["commit", "--quiet", "-m", "feat: alice file"],
         "Alice",
@@ -364,7 +379,12 @@ fn reviewer_trailer_credits_reviewer_and_renormalizes() {
 
     // Commit 2: Bob authors bob.rs; Alice is credited via Reviewed-by trailer.
     std::fs::write(path.join("bob.rs"), "pub fn b() -> u32 { 2 }\n").expect("write");
-    git(&["add", "bob.rs"], "Bob", "bob@example.com", "2026-01-02T10:00:00Z");
+    git(
+        &["add", "bob.rs"],
+        "Bob",
+        "bob@example.com",
+        "2026-01-02T10:00:00Z",
+    );
     git(
         &[
             "commit",
@@ -376,7 +396,12 @@ fn reviewer_trailer_credits_reviewer_and_renormalizes() {
         "bob@example.com",
         "2026-01-02T10:00:00Z",
     );
-    git(&["repack", "-d", "--quiet"], "Alice", "alice@example.com", "2026-01-02T10:00:00Z");
+    git(
+        &["repack", "-d", "--quiet"],
+        "Alice",
+        "alice@example.com",
+        "2026-01-02T10:00:00Z",
+    );
 
     let repo = GixRepo::open(path).expect("GixRepo::open");
     let db = FactsDb::new_in_memory().expect("new_in_memory");
