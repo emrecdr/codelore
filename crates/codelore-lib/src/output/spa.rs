@@ -37,6 +37,7 @@ use crate::analyses::architecture_roles::ArchitectureRoleRow;
 use crate::analyses::architecture_trend::ArchitectureTrendRow;
 use crate::analyses::code_familiarity::CodeFamiliarityRow;
 use crate::analyses::code_health::CodeHealthRow;
+use crate::analyses::function_xray::FunctionXrayRow;
 use crate::analyses::coordination_needs::CoordinationNeedsRow;
 use crate::analyses::coupling::CouplingRow;
 use crate::analyses::dashboard::{
@@ -71,6 +72,18 @@ const ALPINE_PERSIST_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/alpine-p
 // it's the precompiled output of `just spa-css-rebuild`, checked into
 // the repo. See `spa/tailwind-src/README.md` for the rebuild workflow.
 const TAILWIND_DAISY_CSS: &str = include_str!("spa/tailwind.daisyui.min.css");
+
+/// Per-file function-level X-Ray data for the SPA file-detail drawer.
+/// Carries the `run_function_xray` result for one hotspot path so the
+/// drawer can render an "X-Ray" tab with change-frequency and complexity
+/// per function without a second round-trip to the server.
+#[derive(Debug, Default, Serialize, serde::Deserialize)]
+pub struct FileFunctionXray {
+    /// Repo-relative path this entry covers (matches the hotspot `path`).
+    pub path: String,
+    /// Function-level rows sorted by `change_freq` DESC, then name ASC.
+    pub rows: Vec<FunctionXrayRow>,
+}
 
 /// Composite of all per-widget data the SPA dashboard renders.
 /// Each field carries the rows for one widget; widgets that opt out
@@ -252,6 +265,14 @@ pub struct SpaDashboard {
     /// the analysis was not run or produced no results.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub delivery_friction: Vec<crate::analyses::delivery_friction::DeliveryFrictionRow>,
+    /// Per-file function-level X-Ray data for the top-10 hotspot paths.
+    /// Each entry holds the `run_function_xray` result (change-frequency,
+    /// LOC, cyclomatic complexity per function) for one hotspot path.
+    /// Drives the "X-Ray" tab in the file-detail drawer. Empty on repos
+    /// with no Tier-1 language source files or when ingest produces no
+    /// hotspots.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub function_xray: Vec<FileFunctionXray>,
     /// Effective thresholds for THIS run, snapshotted at dispatch.
     /// Surfaced into the SPA's `data.options` block so per-metric
     /// tooltips can interpolate `${min_shared_revs}` /

@@ -4139,6 +4139,46 @@ fn build_spa_dashboard(
             .into_iter()
             .take(5)
             .collect::<Vec<_>>();
+    // Per-file function X-Ray for the top-10 hotspot paths. Each call
+    // opens the HEAD blob via the gix repo handle (cheap; tree-sitter
+    // spans only) and joins against already-ingested hunks. One failure
+    // per path degrades gracefully to an empty rows vec for that path.
+    let function_xray: Vec<codelore_lib::cli_api::output::spa::FileFunctionXray> =
+        codelore_lib::cli_api::repo::GixRepo::open(repo_path).map_or_else(
+            |e| {
+                tracing::warn!("dashboard: could not open repo for function-xray; skipping: {e}");
+                Vec::new()
+            },
+            |xray_repo| {
+                hotspots
+                    .iter()
+                    .take(10)
+                    .filter_map(|h| {
+                        match codelore_lib::cli_api::analyses::function_xray::run_function_xray(
+                            db,
+                            &xray_repo,
+                            opts,
+                            &h.path,
+                        ) {
+                            Ok(rows) if !rows.is_empty() => {
+                                Some(codelore_lib::cli_api::output::spa::FileFunctionXray {
+                                    path: h.path.clone(),
+                                    rows,
+                                })
+                            }
+                            Ok(_) => None,
+                            Err(e) => {
+                                tracing::debug!(
+                                    "dashboard: function-xray skipped for {}: {e}",
+                                    h.path
+                                );
+                                None
+                            }
+                        }
+                    })
+                    .collect()
+            },
+        );
     // Four-factor header tiles assembled from already-computed data.
     // Code + Architecture come from the health_trend series (zero extra
     // cost — the series is already in memory). Knowledge uses
@@ -4242,6 +4282,7 @@ fn build_spa_dashboard(
         delivery_metrics,
         release_cadence,
         delivery_friction,
+        function_xray,
         factors,
         options: codelore_lib::cli_api::output::spa::SpaOptionsSnapshot::from_options(opts),
     })

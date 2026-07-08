@@ -23,7 +23,8 @@ use codelore_lib::analyses::modularity_violations::ModularityViolationRow;
 use codelore_lib::analyses::summary::run_summary;
 use codelore_lib::analyses::unstable_interface::UnstableInterfaceRow;
 use codelore_lib::facts::FactsDb;
-use codelore_lib::output::spa::{SpaDashboard, write_spa};
+use codelore_lib::analyses::function_xray::FunctionXrayRow;
+use codelore_lib::output::spa::{FileFunctionXray, SpaDashboard, write_spa};
 use codelore_lib::repo::GixRepo;
 use codelore_lib::test_support::differential_repo;
 
@@ -664,6 +665,82 @@ fn spa_bivariate_is_default_map_mode() {
     assert!(
         tab_html.contains("tab-active"),
         "bivariate tab must be the default (tab-active); tag was: {tab_html}"
+    );
+}
+
+/// `function_xray` round-trips through the embedded SPA JSON with the
+/// expected shape: a `[{path, rows:[{function, change_freq, loc, …}]}]`
+/// array. Confirms that `FileFunctionXray` serialises correctly and that
+/// the SPA's `data.function_xray` key is present when the field is
+/// non-empty. The X-Ray tab JS reads this array by path lookup.
+#[test]
+fn spa_embeds_function_xray_data() {
+    let dash = SpaDashboard {
+        function_xray: vec![FileFunctionXray {
+            path: "src/hot.rs".into(),
+            rows: vec![
+                FunctionXrayRow {
+                    function: "hot".into(),
+                    change_freq: 4,
+                    loc: 9,
+                    cyclomatic: Some(1),
+                    cognitive: Some(0),
+                    last_changed: "2026-01-04".into(),
+                },
+                FunctionXrayRow {
+                    function: "cold".into(),
+                    change_freq: 0,
+                    loc: 3,
+                    cyclomatic: Some(1),
+                    cognitive: Some(0),
+                    last_changed: String::new(),
+                },
+            ],
+        }],
+        ..SpaDashboard::default()
+    };
+
+    let mut buf = Vec::new();
+    write_spa(&dash, "X-Ray Test", "/tmp/xr", "2026-01-01 00:00:00 UTC", &mut buf)
+        .expect("write_spa function_xray");
+    let html = String::from_utf8(buf).expect("utf8");
+
+    // The X-Ray tab renderer function must be present in the bundle.
+    assert!(
+        html.contains("drawer-panel-xray") || html.contains("function_xray"),
+        "function_xray wiring must be present in the emitted SPA bundle",
+    );
+
+    let data = extract_data_json(&html).expect("parse data block");
+    let fx = data
+        .get("function_xray")
+        .and_then(|v| v.as_array())
+        .expect("function_xray array present when non-empty");
+    assert_eq!(fx.len(), 1, "one FileFunctionXray entry expected");
+    assert_eq!(
+        fx[0].get("path").and_then(serde_json::Value::as_str),
+        Some("src/hot.rs"),
+    );
+    let rows = fx[0]
+        .get("rows")
+        .and_then(|v| v.as_array())
+        .expect("rows array");
+    assert_eq!(rows.len(), 2, "two FunctionXrayRow entries expected");
+    assert_eq!(
+        rows[0].get("function").and_then(serde_json::Value::as_str),
+        Some("hot"),
+    );
+    assert_eq!(
+        rows[0].get("change_freq").and_then(serde_json::Value::as_u64),
+        Some(4),
+    );
+    assert_eq!(
+        rows[0].get("loc").and_then(serde_json::Value::as_u64),
+        Some(9),
+    );
+    assert_eq!(
+        rows[0].get("cyclomatic").and_then(serde_json::Value::as_i64),
+        Some(1),
     );
 }
 

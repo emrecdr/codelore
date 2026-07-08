@@ -287,6 +287,8 @@ Transitions that move entirely within yellow (yellow → yellow re-sampling with
 
 The Health tab in the file detail drawer renders the full historical series as a sparkline for any file in the top-50 hotspots — each sampled revision is one data point, coloured by its band.
 
+The **X-Ray tab** in the file detail drawer shows a per-function change-frequency table for any of the top-10 hotspot paths for which `function-xray` data was computed during the SPA build. Each row shows the function name, a proportional inline bar for change frequency (red ≥ 80 % of max, amber ≥ 40 %, grey otherwise), LOC, and cyclomatic complexity. The tab only appears when X-Ray data exists for the selected path; the Overview "Functions" sunburst (cognitive complexity) remains visible for all paths regardless. The existing `function-xray` standalone analysis (`codelore analyze --analysis function-xray --target <path>`) provides the full sorted list with last-changed date; the drawer surface is the at-a-glance leaderboard.
+
 ### Guided tour
 
 The guided tour steps through the hero circle-pack map in a curated sequence designed to answer one coherent question per step before handing off to free-form exploration.
@@ -1022,7 +1024,7 @@ Evaluates the quality gates declared in `.codelore-thresholds.toml` at HEAD and 
 }
 ```
 
-`no_thresholds` is returned when no `.codelore-thresholds.toml` exists at the repo root. Gates covered: `cognitive_max`, `hotspot_score_max`, `code_health_min`, `disallow_clone_type_1`, and `max_red_effort_pct`. Architecture-level gates (`max_dependency_cycles`, `max_architecture_violations`) and degraded-gate semantics (`fail_on_degraded`, `--ratchet`) are only available in `codelore check` proper, not through this tool.
+`no_thresholds` is returned when no `.codelore-thresholds.toml` exists at the repo root. Gates covered: `cognitive_max`, `hotspot_score_max`, `code_health_min`, `disallow_clone_type_1`, and `max_red_effort_pct`. Architecture-level gates (`max_dependency_cycles`, `max_architecture_violations`), the familiarity gate (`code_familiarity_min`), and degraded-gate semantics (`fail_on_degraded`, `--ratchet`) are only available in `codelore check` proper, not through this tool.
 
 Parameters: none.
 

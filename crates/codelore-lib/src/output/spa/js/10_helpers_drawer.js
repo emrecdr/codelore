@@ -439,15 +439,16 @@
     });
   }
 
-  // Drawer tab bar: three DaisyUI tabs (in-bundle classes, no CSS rebuild)
-  // wired as an ARIA tablist. Overview is the default selection on every
-  // open. Panels are toggled by wireDrawerTabs below.
-  function drawerTabBar(hasHealthSeries) {
+  // Drawer tab bar: DaisyUI tabs wired as an ARIA tablist. Overview is
+  // the default selection on every open. Optional tabs (Health, X-Ray)
+  // are injected only when the data is available for the current path.
+  function drawerTabBar(hasHealthSeries, hasXray) {
     return '<div class="tabs tabs-bordered" role="tablist" aria-label="File detail sections">' +
       '<button type="button" class="tab tab-active" role="tab" id="drawer-tab-overview" aria-controls="drawer-panel-overview" aria-selected="true" tabindex="0">Overview</button>' +
       '<button type="button" class="tab" role="tab" id="drawer-tab-coupling" aria-controls="drawer-panel-coupling" aria-selected="false" tabindex="-1">Coupling</button>' +
       '<button type="button" class="tab" role="tab" id="drawer-tab-people" aria-controls="drawer-panel-people" aria-selected="false" tabindex="-1">People</button>' +
       (hasHealthSeries ? '<button type="button" class="tab" role="tab" id="drawer-tab-health" aria-controls="drawer-panel-health" aria-selected="false" tabindex="-1">Health</button>' : '') +
+      (hasXray ? '<button type="button" class="tab" role="tab" id="drawer-tab-xray" aria-controls="drawer-panel-xray" aria-selected="false" tabindex="-1">X-Ray</button>' : '') +
       '</div>';
   }
 
@@ -504,6 +505,7 @@
     var couplingHtml = '';
     var peopleHtml = '';
     var healthHtml = '';
+    var xrayHtml = '';
 
     // Build per-file health sparkline from file_health_series.
     const fileSeries = (d.file_health_series || []).filter(function (r) { return r.path === path; });
@@ -519,6 +521,50 @@
           '</td><td>' + escapeHtml(fs.band) + '</td></tr>';
       }
       healthHtml += '</tbody></table>';
+    }
+
+    // Build the X-Ray tab content from function_xray data for this path.
+    // `function_xray` is an array of {path, rows} objects where rows are
+    // FunctionXrayRow values: {function, change_freq, loc, cyclomatic, last_changed}.
+    // The tab only appears when the backend computed xray rows for this path
+    // (top-10 hotspot, Tier-1 language); otherwise the tab is omitted and
+    // the Overview "Functions" section (from d.xray cognitive data) remains.
+    var xrayEntry = (d.function_xray || []).find(function (e) { return e.path === path; });
+    if (xrayEntry && xrayEntry.rows && xrayEntry.rows.length) {
+      var xrows = xrayEntry.rows;
+      // Max change_freq for proportional inline bar widths.
+      var maxFreq = 0;
+      for (var xri = 0; xri < xrows.length; xri++) {
+        if ((xrows[xri].change_freq || 0) > maxFreq) maxFreq = xrows[xri].change_freq;
+      }
+      xrayHtml += '<table class="table table-xs" style="width:100%">' +
+        '<thead><tr>' +
+          '<th>Function</th>' +
+          '<th style="min-width:90px">Change freq</th>' +
+          '<th class="num">LOC</th>' +
+          '<th class="num">CC</th>' +
+        '</tr></thead><tbody>';
+      for (var xfi = 0; xfi < xrows.length; xfi++) {
+        var xr = xrows[xfi];
+        var freqPct = maxFreq ? Math.round(((xr.change_freq || 0) / maxFreq) * 100) : 0;
+        var barColor = freqPct >= 80 ? token('--color-error')
+                     : freqPct >= 40 ? token('--color-warning')
+                     : token('--color-base-content');
+        xrayHtml += '<tr>' +
+          '<td><code>' + escapeHtml(xr.function || '(anonymous)') + '</code></td>' +
+          '<td>' +
+            '<div style="display:flex;align-items:center;gap:4px;">' +
+              '<div style="flex:1;height:6px;background:var(--color-base-200,#e5e7eb);border-radius:3px;overflow:hidden;">' +
+                '<div style="width:' + freqPct + '%;height:100%;background:' + barColor + ';"></div>' +
+              '</div>' +
+              '<span style="min-width:22px;text-align:right;font-size:0.75em;">' + fmtInt(xr.change_freq) + '</span>' +
+            '</div>' +
+          '</td>' +
+          '<td class="num">' + (xr.loc != null ? fmtInt(xr.loc) : '—') + '</td>' +
+          '<td class="num">' + (xr.cyclomatic != null ? fmtInt(xr.cyclomatic) : '—') + '</td>' +
+          '</tr>';
+      }
+      xrayHtml += '</tbody></table>';
     }
 
     // All section lookups are wrapped so one row's malformed data can't
@@ -711,15 +757,18 @@
           : 'This row had no resolvable file path, so no metrics could be looked up.') + '</div>'));
 
     const hasHealthSeries = healthHtml.length > 0;
+    const hasXray = xrayHtml.length > 0;
     body.innerHTML =
-      drawerTabBar(hasHealthSeries) +
+      drawerTabBar(hasHealthSeries, hasXray) +
       drawerPanel('drawer-panel-overview', 'drawer-tab-overview', overviewInner, '') +
       drawerPanel('drawer-panel-coupling', 'drawer-tab-coupling', couplingHtml,
         'No change-coupling partners recorded for this file.') +
       drawerPanel('drawer-panel-people', 'drawer-tab-people', peopleHtml,
         'No ownership or contributor data for this file.') +
       (hasHealthSeries ? drawerPanel('drawer-panel-health', 'drawer-tab-health', healthHtml,
-        'No health history for this file.') : '');
+        'No health history for this file.') : '') +
+      (hasXray ? drawerPanel('drawer-panel-xray', 'drawer-tab-xray', xrayHtml,
+        'No function-level X-Ray data for this file.') : '');
     wireDrawerTabs(body);
 
     // Render the radar after body.innerHTML so the container exists.
