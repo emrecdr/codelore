@@ -1,22 +1,22 @@
+//! Marginal-owner risk: ownership concentration × code-health fusion.
+//!
+//! For each file in the yellow or red health band, reports the maximum
+//! knowledge share held by any author who committed within the trailing
+//! `window_days`. A low top-active share on an already-unhealthy file
+//! signals that the people most likely to fix regressions there have
+//! shallow familiarity — the "marginal owner" who would have to step in
+//! has little context to work with.
+//!
+//! Risk tier:
+//! - `high`     — red band AND top active share < 0.10
+//! - `elevated` — (red AND share < 0.30) OR (yellow AND share < 0.10)
+//! - rows that do not meet either threshold are excluded (green band or
+//!   sufficiently concentrated ownership)
+//!
+//! The ownership × code-quality interaction is correlational, not causal.
+//! See: Palomba et al., "On the Interplay between Structural Smells and
+//! Code Ownership" EASE 2023, arXiv 2304.11636.
 use crate::CodeLoreError;
-/// Marginal-owner risk: ownership concentration × code-health fusion.
-///
-/// For each file in the yellow or red health band, reports the maximum
-/// knowledge share held by any author who committed within the trailing
-/// `window_days`. A low top-active share on an already-unhealthy file
-/// signals that the people most likely to fix regressions there have
-/// shallow familiarity — the "marginal owner" who would have to step in
-/// has little context to work with.
-///
-/// Risk tier:
-/// - `high`     — red band AND top active share < 0.10
-/// - `elevated` — (red AND share < 0.30) OR (yellow AND share < 0.10)
-/// - rows that do not meet either threshold are excluded (green band or
-///   sufficiently concentrated ownership)
-///
-/// The ownership × code-quality interaction is correlational, not causal.
-/// See: Palomba et al., "On the Interplay between Structural Smells and
-/// Code Ownership" EASE 2023, arXiv 2304.11636.
 use crate::analyses::code_health::{HealthScanCtx, run_code_health_scoped};
 use crate::analyses::knowledge::shares::materialize_knowledge_shares;
 use crate::analyses::lineage;
@@ -142,7 +142,7 @@ pub fn run_marginal_owner_risk(
             path_escaped = path_escaped,
         );
 
-        let top_active_share: f64 = db.query_row(&sql, [], |row| row.get(0)).unwrap_or(0.0);
+        let top_active_share: f64 = db.query_row(&sql, [], |row| row.get(0))?;
 
         if let Some(risk) = classify_risk(band, top_active_share) {
             rows.push(MarginalOwnerRiskRow {

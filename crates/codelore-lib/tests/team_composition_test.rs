@@ -219,7 +219,7 @@ fn git_as_tc(path: &std::path::Path, args: &[&str], author: &str, email: &str, d
 /// median must be capped to `"experienced"` (`veteran_breadth_ok = false`).
 ///
 /// Fixture:
-/// - Alice: 2 commits spanning ~396 d, touches only `a.rs` (1 path).
+/// - Alice: 2 commits spanning ~397 d, touches only `a.rs` (1 path).
 /// - Bob:   3 commits within 30 d, touches `b.rs`, `c.rs`, `d.rs` (3 paths).
 ///
 /// Both land in the Pareto-80 core set. Median paths = median(1, 3) = 2.
@@ -307,7 +307,7 @@ fn veteran_capped_to_experienced_when_breadth_below_median() {
         "2024-01-20T10:00:00Z",
     );
 
-    // Alice commit 2: 2025-02-01 (~396 d after first) — pushes her span past 365 d.
+    // Alice commit 2: 2025-02-01 (~397 d after first) — pushes her span past 365 d.
     std::fs::write(path.join("a.rs"), "pub fn a1() -> u32 { 2 }\n").expect("write");
     git(
         &["add", "a.rs"],

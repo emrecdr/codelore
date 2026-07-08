@@ -134,8 +134,7 @@ core_set AS (
     SELECT ra.author, ap.paths_touched
     FROM ranked_authors ra
     JOIN author_paths ap ON ap.author = ra.author
-    WHERE ra.cum_commits - ra.commits < ra.total_commits * 0.8  -- rows fully before the 80% threshold
-       OR ra.cum_commits <= ra.total_commits * 0.8              -- include the row that lands exactly at 80%
+    WHERE ra.cum_commits - ra.commits < ra.total_commits * 0.8
 ),
 core_median_paths AS (
     SELECT MEDIAN(paths_touched) AS med FROM core_set

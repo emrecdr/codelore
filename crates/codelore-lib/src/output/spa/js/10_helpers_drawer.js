@@ -686,6 +686,7 @@
     const mor = (d.marginal_owner_risk || []).find(function (r) { return r.path === path; });
     if (mor) {
       var morLabel = mor.risk === 'high' ? '⚠ High owner risk' : '⚠ Elevated owner risk';
+      // Reuses ki-knowledge-loss-badge styling intentionally — same visual weight as the knowledge-loss chip.
       overviewHtml += '<div class="ki-knowledge-loss-badge" title="' + mor.note + '">' +
         morLabel + ' — top active share ' + fmtNumberFlex(mor.top_active_share, 2) +
         '</div>';
