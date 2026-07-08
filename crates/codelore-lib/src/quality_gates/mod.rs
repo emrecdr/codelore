@@ -31,6 +31,7 @@
 //! existing convention-naming pattern — same data, deeper DX.
 
 pub mod ledger;
+pub mod ratchet;
 
 use std::fs;
 use std::path::Path;

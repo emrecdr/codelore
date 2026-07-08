@@ -143,6 +143,11 @@ pub struct CheckArgs {
     /// by HEAD SHA. Does not run any gate evaluations.
     #[arg(long)]
     pub history: bool,
+    /// Run the Betterer-style quality ratchet against `.codelore-ratchet.toml`
+    /// at the repo root. First run writes the snapshot; subsequent runs fail on
+    /// any regression and tighten the file on improvement.
+    #[arg(long)]
+    pub ratchet: bool,
 }
 
 /// Shell-completion script generation.
@@ -422,6 +427,11 @@ pub struct AnalyzeArgs {
         default_value = codelore_lib::cli_api::constants::DEFAULT_RELEASE_TAG_GLOB
     )]
     pub release_tag_glob: String,
+
+    /// Target file path (repo-relative) for analyses that operate on a single
+    /// file. Required by `function-xray`; ignored by all other analyses.
+    #[arg(long)]
+    pub target: Option<String>,
 }
 
 /// `TimeBucket` mirror on the CLI surface (clap-friendly value enum).
