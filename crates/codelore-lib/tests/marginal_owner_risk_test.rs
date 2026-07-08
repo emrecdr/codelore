@@ -162,12 +162,27 @@ pub fn complex(a: i32, b: i32, c: i32) -> i32 {
         git_mor(path, args, author, email, date);
     };
 
-    git(&["init", "--quiet"], "Alice", "alice@example.com", "2024-01-01T10:00:00Z");
-    git(&["config", "gc.auto", "0"], "Alice", "alice@example.com", "2024-01-01T10:00:00Z");
+    git(
+        &["init", "--quiet"],
+        "Alice",
+        "alice@example.com",
+        "2024-01-01T10:00:00Z",
+    );
+    git(
+        &["config", "gc.auto", "0"],
+        "Alice",
+        "alice@example.com",
+        "2024-01-01T10:00:00Z",
+    );
 
     // Alice (departed): commits complex.rs on 2024-01-01.
     std::fs::write(path.join("complex.rs"), complex_src).expect("write complex.rs");
-    git(&["add", "complex.rs"], "Alice", "alice@example.com", "2024-01-01T10:00:00Z");
+    git(
+        &["add", "complex.rs"],
+        "Alice",
+        "alice@example.com",
+        "2024-01-01T10:00:00Z",
+    );
     git(
         &["commit", "-m", "feat: complex file"],
         "Alice",
@@ -179,7 +194,12 @@ pub fn complex(a: i32, b: i32, c: i32) -> i32 {
     // MAX(date) = 2024-05-01; window = 90 d → window start = 2024-01-31.
     // Alice's commit (2024-01-01) < window start → Alice is inactive.
     std::fs::write(path.join("trivial.rs"), trivial_src).expect("write trivial.rs");
-    git(&["add", "trivial.rs"], "Bob", "bob@example.com", "2024-05-01T10:00:00Z");
+    git(
+        &["add", "trivial.rs"],
+        "Bob",
+        "bob@example.com",
+        "2024-05-01T10:00:00Z",
+    );
     git(
         &["commit", "-m", "feat: trivial file"],
         "Bob",

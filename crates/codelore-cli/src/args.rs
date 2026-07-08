@@ -139,6 +139,10 @@ pub struct CheckArgs {
     /// passes vacuously.
     #[arg(long)]
     pub thresholds_file: Option<PathBuf>,
+    /// Print the last 20 gate-run records from the local ledger, grouped
+    /// by HEAD SHA. Does not run any gate evaluations.
+    #[arg(long)]
+    pub history: bool,
 }
 
 /// Shell-completion script generation.

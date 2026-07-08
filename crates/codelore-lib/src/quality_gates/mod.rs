@@ -30,6 +30,8 @@
 //! rules); ours integrates with `--group-file`, `--mailmap`, and the
 //! existing convention-naming pattern — same data, deeper DX.
 
+pub mod ledger;
+
 use std::fs;
 use std::path::Path;
 
@@ -86,6 +88,23 @@ pub struct Gates {
     /// the `code-familiarity` analysis emits a `"risky"` verdict. When
     /// absent the analysis applies a built-in default of 70.0.
     pub code_familiarity_min: Option<f64>,
+    /// When `true` (the **default**), a gate whose underlying analysis
+    /// produced no evaluable data where data was expected is recorded as
+    /// `verdict = "degraded"` and treated as a failure — a gate must not
+    /// green on blindness. Set to `false` to downgrade degraded gates from
+    /// failure to a warning (the degraded verdict is still printed and
+    /// recorded in the ledger).
+    ///
+    /// Adapted from the explicit-degradation contract in SAST tooling:
+    /// an analyzer that silently returns "no findings" on an empty scan
+    /// is indistinguishable from one that found nothing. Degraded status
+    /// makes the difference explicit.
+    #[serde(default = "default_fail_on_degraded")]
+    pub fail_on_degraded: bool,
+}
+
+fn default_fail_on_degraded() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -172,6 +191,9 @@ impl Thresholds {
             && !self.diff.no_new_cycles
             && self.diff.delta_health_min.is_none()
             && !self.diff.deny_degrading_verdict
+        // Note: fail_on_degraded=true is the default and does not make a
+        // threshold non-empty by itself — it only affects how degraded
+        // verdicts from other gates are handled.
     }
 }
 
