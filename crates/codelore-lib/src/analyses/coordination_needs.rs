@@ -283,9 +283,9 @@ pub fn run_coordination_needs(db: &FactsDb, opts: &Options) -> Result<Vec<Coordi
 /// Classify a coordination tier from author count, fragmentation, and interleave.
 ///
 /// Rules (evaluated top-to-bottom, first match wins):
-/// - `single`:  `authors == 1` — exactly one active-window contributor (authors=0
-///              is impossible: the fragmentation CTE only emits paths that appear in
-///              `knowledge_shares`, which requires ≥1 commit, so ≥1 author).
+/// - `single`:  `authors == 1` — exactly one active-window contributor.
+///   Authors=0 is impossible: the fragmentation CTE only emits paths that
+///   appear in `knowledge_shares`, which requires ≥1 commit, so ≥1 author.
 /// - `low`:     `fragmentation < 0.25` — one author dominates, others are minor.
 /// - `high`:    `fragmentation ≥ 0.50 AND interleave ≥ 0.50` — strong signal.
 /// - `medium`:  everything else.

@@ -20,9 +20,9 @@ This guide is the developer-facing reference for CodeLore. The [README](../READM
 
 ---
 
-## 1. The 43 analyses (what they tell you)
+## 1. The 47 analyses (what they tell you)
 
-The table below is split into the **17 code-maat-parity analyses** (drop-in successors to legacy code-maat), **1 modern signal** (`top-committers` — a first-class per-author leaderboard that code-maat approximated via `-a author-churn` + sort), **6 modern foundations** marked ★ (the SARIF-backed differentiators: `hotspots`, `code-health`, `clones`, `clone-coupling`, `hotspot-velocity`, and `refactoring-targets`), **3 graph-analytics analyses** marked ★ (knowledge-islands + centrality + communities), and **16 architecture-analytics analyses** marked ★★ (god-classes + architecture-violations + dependency-cycles + architecture-roles + instability + architecture-metrics + architecture-trend + cycle-origins + modularity-violations + unstable-interface + crossing + stale-code + pair-programming + lead-time + bus-factor + delivery-friction — `dependency-cycles` (Tarjan SCC), `architecture-roles` (Core/Shared/Control/Periphery), `instability` (Martin Ca/Ce/I) and `architecture-metrics` (Lakos ACD/NCCD + propagation cost) all run on a shared import-graph kernel; `architecture-trend` reruns that kernel at sampled historical revisions to show structural decay over time; `modularity-violations`, `unstable-interface` and `crossing` fuse the structural import graph with the temporal co-change graph (the DV8 hotspot-pattern trilogy); see `docs/maximum-feature-plan.md`).
+The table below is split into the **17 code-maat-parity analyses** (drop-in successors to legacy code-maat), **1 modern signal** (`top-committers` — a first-class per-author leaderboard that code-maat approximated via `-a author-churn` + sort), **6 modern foundations** marked ★ (the SARIF-backed differentiators: `hotspots`, `code-health`, `clones`, `clone-coupling`, `hotspot-velocity`, and `refactoring-targets`), **7 graph-analytics analyses** marked ★ (knowledge-islands + code-familiarity + team-composition + coordination-needs + marginal-owner-risk + centrality + communities), and **16 architecture-analytics analyses** marked ★★ (god-classes + architecture-violations + dependency-cycles + architecture-roles + instability + architecture-metrics + architecture-trend + cycle-origins + modularity-violations + unstable-interface + crossing + stale-code + pair-programming + lead-time + bus-factor + delivery-friction — `dependency-cycles` (Tarjan SCC), `architecture-roles` (Core/Shared/Control/Periphery), `instability` (Martin Ca/Ce/I) and `architecture-metrics` (Lakos ACD/NCCD + propagation cost) all run on a shared import-graph kernel; `architecture-trend` reruns that kernel at sampled historical revisions to show structural decay over time; `modularity-violations`, `unstable-interface` and `crossing` fuse the structural import graph with the temporal co-change graph (the DV8 hotspot-pattern trilogy); see `docs/maximum-feature-plan.md`).
 
 ### Code-maat parity (17) + modern signal
 
@@ -58,11 +58,15 @@ The table below is split into the **17 code-maat-parity analyses** (drop-in succ
 | `hotspot-velocity` ★ | "Which files are *accelerating* in churn?" | Recent vs baseline change rate | Early warning: a file becoming a hotspot before its all-time count shows it |
 | `refactoring-targets` ★ | "Where should I refactor first for maximum ROI?" | `priority = (structural_risk × hotspot_score) / max(loc, 25)`; rows carry `dominant_type` (highest-intensity biomarker) and `manual_up_rank` (ascending-size ManualUp baseline) | Effort-aware Popt/PofB20-style ranking — a small, dense, churning, unhealthy file outranks a large one with the same raw risk |
 
-### Graph-analytics tier (3 ★)
+### Graph-analytics tier (7 ★)
 
 | Analysis | What you ask it | Formula / source | When to reach for it |
 |---|---|---|---|
 | `knowledge-islands` ★ | "Which files are at risk because their primary author is gone?" | Bird et al. 2011 + departed-author detection | Bus-factor risk surfaced automatically (no manual ex-developer marking) |
+| `code-familiarity` ★ | "What fraction of this codebase is actively understood?" | SLOC-weighted decayed knowledge share; islands = files with no active ≥80%-owner | One-number knowledge-coverage question for the whole repo |
+| `team-composition` ★ | "How is commit activity distributed across tenure buckets?" | Contribution-span tenure classification (onboarded / experienced / veteran) with behavioral breadth gate | Onboarding throughput + veteran over-concentration at a glance |
+| `coordination-needs` ★ | "Which files generate the most coordination overhead?" | Fragmentation (HHI complement) × interleave (LAG-window author switches) × co-change entropy (Shannon, window-scoped) | Strongest predictors of merge friction and review delays |
+| `marginal-owner-risk` ★ | "Where does the most knowledgeable active author have the least context?" | Max decayed knowledge share among active authors, per yellow/red-band file | Predicts where the on-call person has the least context when a file breaks |
 | `centrality` ★ | "Which files are most central in the coupling graph?" | Degree / weighted-degree / PageRank on the Fisher-significant coupling graph | Network-centrality lens (Newman 2010 §7) |
 | `communities` ★ | "What are the actual Conway's-law clusters?" | Leiden algorithm (Traag, Waltman, van Eck 2019) on the coupling graph | Auto-detect socio-technical modules |
 
@@ -214,6 +218,55 @@ code_familiarity_min = 40.0   # fail when team familiarity drops below 40 % (sca
 ```
 
 `codelore check` evaluates this against `familiarity-pct`. The gate fails when the value falls below the threshold. A floor of 40 catches codebases where the active team has collectively lost touch with well over half of the code.
+
+### Team-composition analysis
+
+`--analysis team-composition` classifies the active author pool into three tenure buckets and shows how commit activity is distributed across them.
+
+Tenure is measured from the author's first commit in the repository to the most recent commit date (repo-wide, not just within the analysis window). Authors with at least one commit in the trailing `--window-days` window are counted as active.
+
+| Column | Meaning |
+|---|---|
+| `bucket` | Tenure tier: `onboarded` (< 6 months), `experienced` (6–18 months), `veteran` (> 18 months) |
+| `active_authors` | Count of authors in this bucket active within the window |
+| `commit_share_pct` | Share of total commits within the window authored by this bucket (0–100) |
+| `onboarding_velocity` | For the `onboarded` bucket only: commits per active day, averaged across the bucket's authors; `null` for other buckets |
+
+A healthy team shows positive throughput in the `onboarded` bucket (new contributors landing commits) without `veteran` over-concentration (> 80 % of commits from one tenure tier is a bus-factor signal). The SPA Knowledge card renders the distribution as a stacked proportional bar.
+
+### Coordination-needs analysis
+
+`--analysis coordination-needs` identifies files where co-change patterns and authorship interleaving indicate high coordination overhead. It combines three signals:
+
+- **Fragmentation** — how evenly distributed knowledge is across active authors (derived from the `knowledge_shares` materialized view). High fragmentation = many partial owners, none dominant.
+- **Interleave** — how frequently authorship switches between consecutive commits to the same file. Computed via a LAG() window function over the commit sequence; 0.0 for files touched exclusively by one author, approaching 1.0 when authorship alternates every commit.
+- **Co-change entropy** — Shannon entropy of the co-change pair distribution for the file, restricted to commits touching ≤ 30 files (removes noise from mass-refactors). High entropy = the file couples to many different files across changes.
+
+Each file is classified into a coordination tier:
+
+| Tier | Condition |
+|---|---|
+| `single` | One author holds all commits — no coordination needed |
+| `low` | Multiple authors, low fragmentation and interleave |
+| `medium` | Moderate fragmentation or interleave |
+| `high` | High fragmentation AND high interleave — strongest signal |
+
+The SPA Knowledge card shows the top 10 files sorted by tier then entropy. Clicking a row opens the file detail drawer.
+
+### Marginal-owner risk analysis
+
+`--analysis marginal-owner-risk` fuses code health with knowledge concentration to surface files where the most knowledgeable active author holds too small a share to confidently lead a regression fix.
+
+For each file in the yellow or red code-health band, the analysis queries the maximum `k_norm` knowledge share among authors active within `--window-days`. It then applies a two-tier classification:
+
+| Risk tier | Condition |
+|---|---|
+| `high` | File in red band AND top active share < 10 % |
+| `elevated` | File in red band AND share < 30 %, OR file in yellow band AND share < 10 % |
+
+Files in the green band or with sufficient concentrated ownership are excluded. The SPA file-detail drawer shows a risk chip for any file in the elevated or high tier.
+
+The ownership × code-quality interaction is correlational: a low top-active share on an unhealthy file predicts that the person most likely to fix it has little context to work with — it does not imply the file will regress.
 
 ### Health improvements & regressions feed
 

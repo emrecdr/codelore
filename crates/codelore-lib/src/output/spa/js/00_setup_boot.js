@@ -744,6 +744,7 @@
     { name: 'improvements-feed',  rerender: false,   render: () => renderImprovementsFeed(data.health_transitions || []) },
     { name: 'calendar-heatmap',   rerender: 'theme', render: () => renderCalendarHeatmap(data.daily_commits || []) },
     { name: 'xray-sunburst',      render: () => renderXRaySunburst(data.xray || []) },
+    { name: 'knowledge-surfaces', rerender: 'theme', render: () => renderKnowledgeSurfaces(data.code_familiarity || [], data.team_composition || [], data.coordination_needs || []) },
   ];
 
   // F97: boot widgets cooperatively. The synchronous `forEach` blocked

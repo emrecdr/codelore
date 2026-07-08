@@ -92,6 +92,7 @@ fn spa_emits_full_dashboard_from_differential_fixture() {
     for marker in [
         "widget-kpi-tiles",
         "widget-knowledge-islands",
+        "widget-knowledge-surfaces",
         "widget-hotspot-circle-pack",
         "widget-hotspot-table",
         "widget-coupling-sankey",
@@ -110,6 +111,7 @@ fn spa_emits_full_dashboard_from_differential_fixture() {
         "renderHotspotTable",
         "renderCouplingSankey",
         "renderKnowledgeIslands",
+        "renderKnowledgeSurfaces",
         "showFileDetailDrawer",
     ] {
         assert!(
@@ -177,6 +179,23 @@ fn spa_emits_full_dashboard_from_differential_fixture() {
         !summary_arr.is_empty(),
         "summary array should be non-empty given the differential fixture",
     );
+
+    // Knowledge surface fields — present (possibly empty) after the round-trip.
+    // The differential fixture has no complexity metrics at HEAD so these
+    // will be empty arrays; what matters is that the keys exist in the JSON
+    // (i.e. serialisation wiring is intact).
+    for key in ["code_familiarity", "team_composition", "coordination_needs"] {
+        // If the Vec is empty, serde skips the key (skip_serializing_if = "Vec::is_empty").
+        // The assertion therefore only fires when a non-empty result was produced — which
+        // is correct: we can't assert presence of an empty field that was serialised away.
+        // We assert the field is EITHER absent (Vec was empty) OR is an array.
+        if let Some(v) = data.get(key) {
+            assert!(
+                v.is_array(),
+                "dashboard JSON field `{key}` must be an array when present",
+            );
+        }
+    }
 
     // Hotspot rows should have the expected shape.
     let first_hot = &hotspots_arr[0];

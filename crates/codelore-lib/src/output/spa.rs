@@ -35,7 +35,9 @@ use serde::Serialize;
 
 use crate::analyses::architecture_roles::ArchitectureRoleRow;
 use crate::analyses::architecture_trend::ArchitectureTrendRow;
+use crate::analyses::code_familiarity::CodeFamiliarityRow;
 use crate::analyses::code_health::CodeHealthRow;
+use crate::analyses::coordination_needs::CoordinationNeedsRow;
 use crate::analyses::coupling::CouplingRow;
 use crate::analyses::dashboard::{
     CloneSummary, DailyCommit, ImportEdgeRow, KameiRiskRow, TrendPoint, XRayEntry,
@@ -44,8 +46,10 @@ use crate::analyses::effort_exposure::EffortExposureRow;
 use crate::analyses::entity_ownership::EntityOwnershipRow;
 use crate::analyses::hotspots::HotspotRow;
 use crate::analyses::knowledge_islands::KnowledgeIslandRow;
+use crate::analyses::marginal_owner_risk::MarginalOwnerRiskRow;
 use crate::analyses::modularity_violations::ModularityViolationRow;
 use crate::analyses::summary::SummaryRow;
+use crate::analyses::team_composition::TeamCompositionRow;
 use crate::analyses::unstable_interface::UnstableInterfaceRow;
 use crate::{CodeLoreError, Result};
 
@@ -204,6 +208,31 @@ pub struct SpaDashboard {
     /// dimensions).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub kamei_risk: Vec<KameiRiskRow>,
+    /// Marginal-owner risk rows — files in the yellow/red health band
+    /// where the most knowledgeable active author holds a low share.
+    /// Drives the risk chip in the file-detail drawer. Empty when no
+    /// file meets the high/elevated thresholds.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub marginal_owner_risk: Vec<MarginalOwnerRiskRow>,
+    /// Code-familiarity summary (repo-level: `familiarity_pct`,
+    /// `islands_pct`, `active_authors`, `verdict`). At most one row per run.
+    /// Drives the Knowledge card's familiarity bullet bars. Empty when
+    /// `knowledge_shares` is unavailable (e.g. no complexity metrics at HEAD).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub code_familiarity: Vec<CodeFamiliarityRow>,
+    /// Team-composition rows — one row per tenure bucket
+    /// (`onboarded` / `experienced` / `veteran`) with active-author
+    /// count, commit share, and onboarding velocity. Drives the
+    /// stacked bucket bar in the Knowledge card.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub team_composition: Vec<TeamCompositionRow>,
+    /// Top coordination-needs rows (capped at 10, sorted by tier desc
+    /// then co-change entropy desc). Each row is a file with its
+    /// fragmentation, interleave, entropy, and tier. Drives the
+    /// coordination table in the Knowledge card. Empty when no
+    /// `knowledge_shares` data is available.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub coordination_needs: Vec<CoordinationNeedsRow>,
     /// Effective thresholds for THIS run, snapshotted at dispatch.
     /// Surfaced into the SPA's `data.options` block so per-metric
     /// tooltips can interpolate `${min_shared_revs}` /

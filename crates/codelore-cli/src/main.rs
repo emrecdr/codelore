@@ -404,6 +404,17 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
             "See analyses/coordination_needs.rs.",
         ),
         (
+            "marginal-owner-risk",
+            "Ownership concentration × code-health fusion: files where active authors have shallow familiarity",
+            "For each file in the yellow or red health band, reports the maximum knowledge \
+             share held by any author who committed within window_days. Risk tiers: high \
+             (red band AND top active share <0.10); elevated ((red AND <0.30) OR (yellow \
+             AND <0.10)). Rows that do not meet either threshold are excluded. The \
+             ownership × code-quality interaction is correlational, not causal \
+             (Palomba et al., EASE 2023, arXiv 2304.11636).",
+            "See analyses/marginal_owner_risk.rs.",
+        ),
+        (
             "cycle-origins",
             "Commit-level archaeology for dependency cycles",
             "For each dependency cycle at HEAD, binary-searches history (reading + resolving source at past revisions) to find the earliest commit where that cycle existed — the commit that closed the loop. Reports the forming commit's SHA + date per cycle. Assumes a cycle, once formed, stays formed; traces the largest cycles first to bound cost.",
@@ -1059,6 +1070,9 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             }
             AnalysisName::CoordinationNeeds => {
                 dispatch_coordination_needs(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::MarginalOwnerRisk => {
+                dispatch_marginal_owner_risk(&db, &opts, format, &ctx, &mut out)?;
             }
         }
     } // out is dropped here, flushing any buffered writes
@@ -2588,6 +2602,52 @@ fn dispatch_coordination_needs(
     Ok(())
 }
 
+fn dispatch_marginal_owner_risk(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows =
+                codelore_lib::cli_api::analyses::marginal_owner_risk::run_marginal_owner_risk(
+                    db, opts,
+                )
+                .context("run marginal-owner-risk")?;
+            codelore_lib::cli_api::output::csv::write_marginal_owner_risk_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows =
+                codelore_lib::cli_api::analyses::marginal_owner_risk::run_marginal_owner_risk(
+                    db, opts,
+                )
+                .context("run marginal-owner-risk")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows =
+                codelore_lib::cli_api::analyses::marginal_owner_risk::run_marginal_owner_risk(
+                    db, opts,
+                )
+                .context("run marginal-owner-risk")?;
+            codelore_lib::cli_api::output::markdown::write_marginal_owner_risk_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format(
+                "marginal-owner-risk",
+                "csv|json|markdown",
+                fmt,
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn dispatch_refactoring_targets(
     db: &FactsDb,
     opts: &Options,
@@ -3457,6 +3517,15 @@ fn build_spa_dashboard(
                 tracing::warn!("dashboard: effort-exposure analysis failed; skipping: {e}");
                 Vec::new()
             });
+    // Marginal-owner risk: ownership concentration × code-health fusion.
+    // Degrades to empty when no file meets the high/elevated threshold,
+    // or when knowledge_shares is unavailable (e.g. tiny fixture repos).
+    let marginal_owner_risk =
+        codelore_lib::cli_api::analyses::marginal_owner_risk::run_marginal_owner_risk(db, opts)
+            .unwrap_or_else(|e| {
+                tracing::warn!("dashboard: marginal-owner-risk analysis failed; skipping: {e}");
+                Vec::new()
+            });
     // Four-factor header tiles assembled from already-computed data.
     // Code + Architecture come from the health_trend series (zero extra
     // cost — the series is already in memory). Knowledge uses
@@ -3483,6 +3552,47 @@ fn build_spa_dashboard(
     if let Some(kt) = knowledge_tile {
         factors.push(kt);
     }
+    // Knowledge card data: code-familiarity summary, team-composition
+    // buckets, top-10 coordination-needs rows. Each degrades to empty
+    // on failure so the card is simply absent when data is unavailable.
+    let code_familiarity =
+        codelore_lib::cli_api::analyses::code_familiarity::run_code_familiarity(db, opts)
+            .unwrap_or_else(|e| {
+                tracing::warn!("dashboard: code-familiarity for spa failed; skipping: {e}");
+                Vec::new()
+            });
+    let team_composition =
+        codelore_lib::cli_api::analyses::team_composition::run_team_composition(db, opts)
+            .unwrap_or_else(|e| {
+                tracing::warn!("dashboard: team-composition for spa failed; skipping: {e}");
+                Vec::new()
+            });
+    // Coordination-needs: top 10 by tier desc then co-change entropy desc.
+    // Tier order: high > medium > low > single (alphabetical inverse = correct
+    // only by accident; sort explicitly).
+    let coordination_needs = {
+        let tier_rank = |t: &str| match t {
+            "high" => 3u8,
+            "medium" => 2,
+            "low" => 1,
+            _ => 0, // "single"
+        };
+        let mut cn =
+            codelore_lib::cli_api::analyses::coordination_needs::run_coordination_needs(db, opts)
+                .unwrap_or_else(|e| {
+                    tracing::warn!("dashboard: coordination-needs for spa failed; skipping: {e}");
+                    Vec::new()
+                });
+        cn.sort_by(|a, b| {
+            tier_rank(&b.tier).cmp(&tier_rank(&a.tier)).then(
+                b.cochange_entropy
+                    .partial_cmp(&a.cochange_entropy)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+        });
+        cn.truncate(10);
+        cn
+    };
     Ok(SpaDashboard {
         hotspots,
         summary,
@@ -3506,6 +3616,10 @@ fn build_spa_dashboard(
         file_health_series,
         health_transitions,
         effort_exposure,
+        marginal_owner_risk,
+        code_familiarity,
+        team_composition,
+        coordination_needs,
         factors,
         options: codelore_lib::cli_api::output::spa::SpaOptionsSnapshot::from_options(opts),
     })

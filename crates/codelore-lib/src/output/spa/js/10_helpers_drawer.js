@@ -682,6 +682,15 @@
         '</dl>';
     }
 
+    // Section: marginal-owner risk chip (ownership × health signal)
+    const mor = (d.marginal_owner_risk || []).find(function (r) { return r.path === path; });
+    if (mor) {
+      var morLabel = mor.risk === 'high' ? '⚠ High owner risk' : '⚠ Elevated owner risk';
+      overviewHtml += '<div class="ki-knowledge-loss-badge" title="' + mor.note + '">' +
+        morLabel + ' — top active share ' + fmtNumberFlex(mor.top_active_share, 2) +
+        '</div>';
+    }
+
     } catch (e) {
       console.error('codelore: drawer section render failed for', path, e);
     }
@@ -1384,5 +1393,115 @@
         dotStrip +
         captionHtml +
       '</div>';
+  }
+
+  // ─── §18 Knowledge surfaces widget ────────────────────────────────────
+  //
+  // Renders three panels into #widget-knowledge-surfaces-body:
+  //   1. Familiarity bullet bars — team familiarity % and islands % using
+  //      bandFor() colour coding (same thresholds as code-health bands).
+  //   2. Team-composition stacked bar — onboarded / experienced / veteran
+  //      commit share as a proportional bar.
+  //   3. Coordination table — top-10 files by tier desc then entropy desc,
+  //      clickable to open the file-detail drawer.
+  function renderKnowledgeSurfaces(famRows, teamRows, coordRows) {
+    var mount = document.getElementById('widget-knowledge-surfaces-body');
+    if (!mount) return;
+
+    var html = '';
+
+    // ── 1. Familiarity bullet bars ─────────────────────────────────────
+    var fam = famRows && famRows.length ? famRows[0] : null;
+    if (fam) {
+      var famPct = typeof fam.familiarity_pct === 'number' ? fam.familiarity_pct : 0;
+      var islPct = typeof fam.islands_pct === 'number' ? fam.islands_pct : 0;
+      var activeAuthors = typeof fam.active_authors === 'number' ? fam.active_authors : '—';
+      // Familiarity: higher is better → green ≥ 70, yellow ≥ 40, red < 40
+      var famColor = bandColor(famPct >= 70 ? 'green' : famPct >= 40 ? 'yellow' : 'red');
+      // Islands: lower is better → green ≤ 20 %, yellow ≤ 40 %, red > 40 %
+      var islColor = bandColor(islPct <= 20 ? 'green' : islPct <= 40 ? 'yellow' : 'red');
+      html +=
+        '<div class="knowledge-familiarity-bars">' +
+          '<div class="share-bar-row" title="Mean team familiarity with active files (' + fmtNumberFlex(famPct, 1) + '%)">' +
+            '<span class="share-bar-axis-label">Familiarity</span>' +
+            '<div class="share-bar-track">' +
+              '<div class="share-bar-fill" style="width:' + Math.min(100, famPct) + '%;background:' + famColor + ';"></div>' +
+            '</div>' +
+            '<span class="share-bar-value">' + fmtNumberFlex(famPct, 1) + '%</span>' +
+          '</div>' +
+          '<div class="share-bar-row" title="Knowledge islands: files with no active owner (' + fmtNumberFlex(islPct, 1) + '% of files)">' +
+            '<span class="share-bar-axis-label">Islands</span>' +
+            '<div class="share-bar-track">' +
+              '<div class="share-bar-fill" style="width:' + Math.min(100, islPct) + '%;background:' + islColor + ';"></div>' +
+            '</div>' +
+            '<span class="share-bar-value">' + fmtNumberFlex(islPct, 1) + '%</span>' +
+          '</div>' +
+          '<p class="knowledge-caption">Active authors: <strong>' + activeAuthors + '</strong>' +
+            (fam.verdict ? ' — <em>' + escapeHtml(fam.verdict) + '</em>' : '') +
+          '</p>' +
+        '</div>';
+    }
+
+    // ── 2. Team-composition stacked bar ───────────────────────────────
+    if (teamRows && teamRows.length) {
+      // Collect commit share per bucket; fall back to 0 if bucket absent.
+      var bucketColors = { onboarded: '#60a5fa', experienced: '#34d399', veteran: '#a78bfa' };
+      var totalShare = 0;
+      var segments = '';
+      var legend = '';
+      for (var ti = 0; ti < teamRows.length; ti++) {
+        var tr = teamRows[ti];
+        var share = typeof tr.commit_share_pct === 'number' ? tr.commit_share_pct : 0;
+        totalShare += share;
+        var color = bucketColors[tr.bucket] || getCssVar('--p');
+        segments +=
+          '<div class="team-bar-segment" style="width:' + fmtNumberFlex(share, 1) + '%;background:' + color + ';"' +
+            ' title="' + escapeHtml(tr.bucket) + ': ' + fmtNumberFlex(share, 1) + '% of commits, ' + tr.active_authors + ' author(s)">' +
+          '</div>';
+        legend +=
+          '<span class="team-bar-key" style="color:' + color + ';">' + escapeHtml(tr.bucket) + '</span> ' +
+          fmtNumberFlex(share, 1) + '% (' + tr.active_authors + ')  ';
+      }
+      html +=
+        '<div class="team-composition-bar">' +
+          '<div class="team-bar-track" role="img" aria-label="Team tenure distribution">' + segments + '</div>' +
+          '<p class="knowledge-caption">' + legend.trim() + '</p>' +
+        '</div>';
+    }
+
+    // ── 3. Coordination table ──────────────────────────────────────────
+    if (coordRows && coordRows.length) {
+      var tierBadge = function (t) {
+        var colors = { high: 'badge-error', medium: 'badge-warning', low: 'badge-info', single: 'badge-ghost' };
+        return '<span class="badge badge-sm ' + (colors[t] || 'badge-ghost') + '">' + escapeHtml(t) + '</span>';
+      };
+      var rows = '';
+      for (var ci = 0; ci < coordRows.length; ci++) {
+        var cr = coordRows[ci];
+        var name = (cr.path || '').split('/').pop();
+        rows +=
+          '<tr class="hover" style="cursor:pointer;" onclick="window._codeloreShowDetail && window._codeloreShowDetail(' + JSON.stringify(cr.path) + ')">' +
+            '<td class="coord-path" title="' + escapeHtml(cr.path || '') + '">' + escapeHtml(name) + '</td>' +
+            '<td>' + tierBadge(cr.tier || 'single') + '</td>' +
+            '<td>' + fmtNumberFlex(cr.fragmentation, 2) + '</td>' +
+            '<td>' + fmtNumberFlex(cr.cochange_entropy, 3) + '</td>' +
+          '</tr>';
+      }
+      html +=
+        '<div class="table-container coordination-table">' +
+          '<table class="table table-xs">' +
+            '<thead><tr>' +
+              '<th>File</th><th>Tier</th><th>Fragmentation</th><th>Entropy</th>' +
+            '</tr></thead>' +
+            '<tbody>' + rows + '</tbody>' +
+          '</table>' +
+        '</div>';
+    }
+
+    if (!html) {
+      html = '<p class="muted-hint">No knowledge data — run with source files present to populate.</p>';
+    }
+
+    mount.innerHTML = html;
   }
 
