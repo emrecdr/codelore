@@ -14,6 +14,9 @@ fn delivery_repo_has_two_merges_three_authors_four_tags() {
     let opts = Options {
         repo_path: fixture.dir.path().to_path_buf(),
         min_revs: 1,
+        // Options::default() has include_merges: false, which drops merge
+        // commits at the walker before they reach ingest. Set true so
+        // is_merge rows exist.
         include_merges: true,
         ..Options::default()
     };
