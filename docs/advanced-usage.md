@@ -850,6 +850,67 @@ etc.). The default `--verbose` flag enables `info` for
 `codelore` but not `codelore::bench`, so the bench-specific
 spans stay out of normal-verbosity output.
 
+## 11.8. Using codelore as a local quality hook
+
+`codelore check` is designed to run as a git hook. It exits 0 on pass and 1 on any gate violation, with no interactive prompts, making it safe to call from any hook without modification.
+
+### `pre-push` hook (recommended)
+
+Drop this at `.git/hooks/pre-push` and make it executable (`chmod +x .git/hooks/pre-push`):
+
+```sh
+#!/usr/bin/env sh
+# Runs codelore check before every push. Blocks if any configured gate fails.
+# Warm-cache runs (after the first ingest) typically complete in under a second.
+set -e
+codelore check --repo . --quiet
+```
+
+The `--quiet` flag suppresses diagnostic noise (per-violation detail lines, inline warnings) while keeping the final verdict line (`✅ PASS`, `❌ FAIL`, `⚠ WARNING`) on stderr. Exit codes follow the standard contract: 0 = pass, 1 = gate violations, 2 = CLI/arg error, 3 = repo error, 4 = analysis error, 5 = output/I/O error.
+
+### Exit-code contract for hooks
+
+| Exit code | Meaning |
+|---|---|
+| 0 | All gates pass (or no thresholds configured — vacuous pass) |
+| 1 | One or more gate violations |
+| 2 | CLI/argument error |
+| 3 | Repository error (not a git repo, no HEAD, etc.) |
+| 4 | Analysis error |
+| 5 | Output/I/O error |
+
+### Warm-cache performance
+
+The first `codelore check` run on a repo ingests the full git history into a DuckDB cache file. Subsequent runs (same HEAD SHA, same options) read from the cache in milliseconds. The cache lives at `<XDG_CACHE_HOME>/codelore/<repo_hash>/` and is keyed on HEAD SHA + package version, so a push that changes HEAD re-ingests only when the cache entry is cold.
+
+### PR-mode in hooks
+
+For pre-push hooks that run on feature branches, `codelore diff` gives a PR-scoped delta view against the integration branch:
+
+```sh
+#!/usr/bin/env sh
+set -e
+# Gate + PR delta report in one hook
+codelore check --repo . --quiet
+codelore diff origin/main...HEAD --analysis all --format markdown --output -
+```
+
+### `--ratchet` in hooks
+
+`--ratchet` pairs naturally with pre-push: the committed `.codelore-ratchet.toml` travels with the repo, so every developer's push is checked against the same quality baseline. When a metric improves the file is rewritten tighter; when it regresses the push is blocked with a clear summary.
+
+```sh
+#!/usr/bin/env sh
+set -e
+codelore check --repo . --quiet --ratchet
+```
+
+When `fail_on_degraded = false` is set in `[gates]` and a gate produces no evaluable data, the summary prints `⚠ codelore check: WARNING — N gate(s) degraded (non-degraded gates pass)` and exits 0 — the push proceeds. With the default `fail_on_degraded = true` (the recommended setting for hooks), a degraded gate blocks the push.
+
+### Local run history
+
+`codelore check --history` prints the last 20 gate-run records grouped by HEAD SHA from the per-repo ledger, giving you a local audit trail of how each gate has trended across pushes — no server required.
+
 ## 12. Troubleshooting
 
 | Symptom | Cause | Fix |

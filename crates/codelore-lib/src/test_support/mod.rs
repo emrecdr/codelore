@@ -301,6 +301,114 @@ pub mod biomarker_repo {
     }
 }
 
+/// Minimal fixture for `function-xray` tests.
+///
+/// Contains a single Rust file `src/target.rs` with two functions:
+/// - `hot` — modified inside the body in 3 commits (change_freq = 3)
+/// - `cold` — never touched after the seed (change_freq = 0)
+///
+/// Commit history:
+///   seed      — writes both functions
+///   tweak-1   — changes `hot`'s body (line 2, inside the function)
+///   tweak-2   — changes `hot`'s body again
+///   tweak-3   — changes `hot`'s body a third time
+///
+/// The `hot` function occupies lines 1–3 in all versions; `cold` follows
+/// from line 5 onward. Body mutations replace line 2 so the hunk always
+/// lands at `new_start = 2, new_lines = 1` — squarely inside [1, 3].
+#[cfg(feature = "test-support")]
+pub mod function_xray_repo {
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    pub struct FunctionXrayRepo {
+        pub dir: TempDir,
+    }
+
+    // Version strings for `hot`'s body line so each commit produces a
+    // genuine one-line diff at line 2 (inside the function span [1, 3]).
+    const HOT_V0: &str = "pub fn hot() -> i32 {\n    0\n}\n";
+    const HOT_V1: &str = "pub fn hot() -> i32 {\n    1\n}\n";
+    const HOT_V2: &str = "pub fn hot() -> i32 {\n    2\n}\n";
+    const HOT_V3: &str = "pub fn hot() -> i32 {\n    3\n}\n";
+    // `cold` is never changed after the seed.
+    const COLD: &str = "pub fn cold() -> i32 {\n    42\n}\n";
+
+    fn src(hot: &str) -> String {
+        format!("{hot}\n{COLD}")
+    }
+
+    /// # Panics
+    ///
+    /// Panics if the OS cannot create a temp directory or any `git`
+    /// command fails.
+    #[must_use]
+    pub fn build() -> FunctionXrayRepo {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path: PathBuf = dir.path().to_path_buf();
+
+        run_git(&path, &["init", "-b", "main", "--quiet"]);
+        run_git(&path, &["config", "user.email", "xray@example.com"]);
+        run_git(&path, &["config", "user.name", "XRay"]);
+
+        let dates = [
+            "2026-06-01T10:00:00Z",
+            "2026-06-02T10:00:00Z",
+            "2026-06-03T10:00:00Z",
+            "2026-06-04T10:00:00Z",
+        ];
+
+        // Seed: write both functions.
+        write(&path, "src/target.rs", &src(HOT_V0));
+        run_git(&path, &["add", "."]);
+        run_git_at(&path, dates[0], &["commit", "-m", "seed", "--quiet"]);
+
+        // tweak-1: mutate hot's body at line 2.
+        write(&path, "src/target.rs", &src(HOT_V1));
+        run_git_at(&path, dates[1], &["commit", "-am", "tweak-1", "--quiet"]);
+
+        // tweak-2: mutate hot's body again.
+        write(&path, "src/target.rs", &src(HOT_V2));
+        run_git_at(&path, dates[2], &["commit", "-am", "tweak-2", "--quiet"]);
+
+        // tweak-3: mutate hot's body a third time.
+        write(&path, "src/target.rs", &src(HOT_V3));
+        run_git_at(&path, dates[3], &["commit", "-am", "tweak-3", "--quiet"]);
+
+        FunctionXrayRepo { dir }
+    }
+
+    fn run_git(path: &std::path::Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .status()
+            .expect("git");
+        assert!(status.success(), "git {args:?} failed");
+    }
+
+    fn run_git_at(path: &std::path::Path, iso_date: &str, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .env("GIT_AUTHOR_DATE", iso_date)
+            .env("GIT_COMMITTER_DATE", iso_date)
+            .status()
+            .expect("git");
+        assert!(status.success(), "git {args:?} (at {iso_date}) failed");
+    }
+
+    fn write(root: &std::path::Path, rel: &str, content: &str) {
+        let p = root.join(rel);
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(p, content).unwrap();
+    }
+}
+
 #[cfg(feature = "test-support")]
 pub mod differential_repo {
     //! 50-commit fixture exercising every `Repo`-trait method's edge cases:

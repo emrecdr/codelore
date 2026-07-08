@@ -1546,3 +1546,30 @@ fn delivery_metrics_markdown_exits_zero() {
         .stdout(predicate::str::contains("delivery-metrics"))
         .stdout(predicate::str::contains("branch_duration_hours"));
 }
+
+#[test]
+fn check_quiet_suppresses_vacuous_pass_noise() {
+    // Without a thresholds file the check vacuously passes and prints a
+    // diagnostic to stderr. With --quiet that diagnostic is suppressed;
+    // exit 0 is preserved.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args(["check", "--repo", tiny.dir.path().to_str().unwrap(), "--quiet"])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
+fn check_without_quiet_prints_vacuous_pass_diagnostic() {
+    // Without --quiet the vacuous-pass diagnostic appears on stderr so users
+    // know the check did nothing.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args(["check", "--repo", tiny.dir.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("vacuously passing"));
+}

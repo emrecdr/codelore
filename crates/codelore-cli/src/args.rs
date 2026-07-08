@@ -148,6 +148,12 @@ pub struct CheckArgs {
     /// any regression and tighten the file on improvement.
     #[arg(long)]
     pub ratchet: bool,
+    /// Suppress diagnostic noise (vacuous-pass messages, per-violation detail
+    /// lines, inline degraded warnings) on stderr. The final verdict line
+    /// (PASS / FAIL / WARNING) and exit code are never suppressed — they are
+    /// the machine contract used by hooks and CI scripts.
+    #[arg(long)]
+    pub quiet: bool,
 }
 
 /// Shell-completion script generation.

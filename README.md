@@ -135,7 +135,7 @@ codelore completions <shell>        # bash | zsh | fish | powershell | elvish
 codelore schema <row-type>          # JSON Schema 2020-12 emit
 ```
 
-`codelore check` writes `result=pass|fail` + `violations=N` to `$GITHUB_OUTPUT` when the env var is set — direct GitHub Actions step-output integration (F-Q4).
+`codelore check` writes `result=pass|fail` + `violations=N` to `$GITHUB_OUTPUT` when the env var is set — direct GitHub Actions step-output integration. It also works as a git hook: `codelore check --repo . --quiet` exits 0/1 and suppresses per-violation noise for hook scripts. See [§11.8 of the advanced-usage guide](docs/advanced-usage.md) for a ready-to-paste `.git/hooks/pre-push` script, exit-code contract, warm-cache performance notes, and `--ratchet` + `--history` in hook workflows.
 
 ---
 

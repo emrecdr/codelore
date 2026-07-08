@@ -1409,6 +1409,53 @@ pub fn write_delivery_metrics_markdown<W: Write>(
     Ok(())
 }
 
+pub fn write_function_xray_markdown<W: Write>(
+    rows: &[crate::analyses::function_xray::FunctionXrayRow],
+    target: &str,
+    w: &mut W,
+) -> Result<()> {
+    header(w, &format!("CodeLore function-xray — {target}"))?;
+    if rows.is_empty() {
+        writeln!(
+            w,
+            "_No HEAD-alive functions found in `{target}` or no changes recorded._"
+        )
+        .map_err(CodeLoreError::Io)?;
+        return Ok(());
+    }
+    writeln!(
+        w,
+        "| Function | Change Freq | LOC | Cyclomatic | Cognitive | Last Changed |"
+    )
+    .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---:|---:|---:|---:|---|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        let cyc = row
+            .cyclomatic
+            .map_or_else(|| "—".to_string(), |v| v.to_string());
+        let cog = row
+            .cognitive
+            .map_or_else(|| "—".to_string(), |v| v.to_string());
+        let last = if row.last_changed.is_empty() {
+            "—".to_string()
+        } else {
+            row.last_changed.clone()
+        };
+        writeln!(
+            w,
+            "| {} | {} | {} | {} | {} | {} |",
+            escape_md_cell(&row.function),
+            row.change_freq,
+            row.loc,
+            cyc,
+            cog,
+            last,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod escape_tests {
     use super::escape_md_cell;

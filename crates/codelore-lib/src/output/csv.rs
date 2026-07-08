@@ -1324,6 +1324,28 @@ pub fn write_delivery_metrics_csv<W: Write>(
     Ok(())
 }
 
+pub fn write_function_xray_csv<W: Write>(
+    rows: &[crate::analyses::function_xray::FunctionXrayRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(w, "function,change-freq,loc,cyclomatic,cognitive,last-changed")
+        .map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{},{},{},{}",
+            quote_if_needed(&row.function),
+            row.change_freq,
+            row.loc,
+            row.cyclomatic.map_or_else(String::new, |v| v.to_string()),
+            row.cognitive.map_or_else(String::new, |v| v.to_string()),
+            quote_if_needed(&row.last_changed),
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::quote_if_needed;

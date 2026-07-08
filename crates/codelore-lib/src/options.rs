@@ -166,6 +166,11 @@ pub struct Options {
     /// Only tags whose short name matches this glob are included.
     /// Must be non-empty. Default: `"v*"`. Set via `--release-tag-glob`.
     pub release_tag_glob: String,
+    /// Target file path for analyses that operate on a single file.
+    /// Currently used only by `function-xray`. Set via `--target`.
+    /// Validation that the value is present when required lives in the
+    /// dispatch arm, not `Options::validate`, to avoid cross-analysis coupling.
+    pub target: Option<String>,
 }
 
 impl Options {
@@ -401,6 +406,7 @@ impl Default for Options {
             knowledge_model: "commits".to_string(),
             rework_window_days: crate::constants::DEFAULT_REWORK_WINDOW_DAYS,
             release_tag_glob: crate::constants::DEFAULT_RELEASE_TAG_GLOB.to_string(),
+            target: None,
         }
     }
 }

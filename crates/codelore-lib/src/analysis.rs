@@ -197,6 +197,13 @@ pub enum AnalysisName {
     // carrying median gap, IQR, and trend (accelerating/stable/slowing from
     // the OLS slope of the gap series; threshold ±0.1 day/release).
     ReleaseCadence,
+    // Function-xray — per-function change frequency for a single target file
+    // (`--target <path>`). For each function/method alive at HEAD, counts the
+    // revisions where at least one hunk overlapped its line span. Reuses the
+    // tree-sitter span extractor from the ingest pass. Hunk-overlap attribution
+    // is more accurate than blame (it captures the state at change time, not at
+    // HEAD). Research: HistoryFinder (Gall et al. ICSM 2003).
+    FunctionXray,
 }
 
 impl AnalysisName {
@@ -254,6 +261,7 @@ impl AnalysisName {
             Self::CoordinationNeeds => "coordination-needs",
             Self::MarginalOwnerRisk => "marginal-owner-risk",
             Self::ReleaseCadence => "release-cadence",
+            Self::FunctionXray => "function-xray",
         }
     }
 
@@ -339,6 +347,7 @@ impl AnalysisName {
             CoordinationNeeds,
             MarginalOwnerRisk,
             ReleaseCadence,
+            FunctionXray,
         )
     }
 
