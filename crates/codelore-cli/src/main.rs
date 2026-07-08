@@ -3261,11 +3261,13 @@ fn build_spa_dashboard(
                 )
                 .map_err(anyhow::Error::from)
             })
-            .map(|d| (d.trend, d.file_series, d.transitions))
-            .unwrap_or_else(|e| {
-                tracing::warn!("dashboard: health-trend failed; skipping: {e}");
-                (Vec::new(), Vec::new(), Vec::new())
-            });
+            .map_or_else(
+                |e| {
+                    tracing::warn!("dashboard: health-trend failed; skipping: {e}");
+                    (Vec::new(), Vec::new(), Vec::new())
+                },
+                |d| (d.trend, d.file_series, d.transitions),
+            );
     Ok(SpaDashboard {
         hotspots,
         summary,

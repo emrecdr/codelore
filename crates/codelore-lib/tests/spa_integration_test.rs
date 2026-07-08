@@ -211,6 +211,7 @@ fn spa_emits_full_dashboard_from_differential_fixture() {
 #[test]
 #[allow(clippy::too_many_lines)] // one cohesive round-trip contract over many fields
 fn spa_embeds_fusion_overlay_data() {
+    use codelore_lib::analyses::health_trend::HealthTransitionRow;
     let dash = SpaDashboard {
         modularity_violations: vec![ModularityViolationRow {
             entity_a: "src/alpha.rs".into(),
@@ -359,7 +360,6 @@ fn spa_embeds_fusion_overlay_data() {
     // with the expected direction field.  The dashboard fixture above has no
     // transitions set, so the key is absent (skip_serializing_if).  Wire a
     // minimal dash with one transition and verify the round-trip.
-    use codelore_lib::analyses::health_trend::HealthTransitionRow;
     let dash_with_transitions = SpaDashboard {
         health_transitions: vec![HealthTransitionRow {
             path: "src/hot.rs".into(),
