@@ -197,3 +197,23 @@ CREATE TABLE IF NOT EXISTS imports (
 );
 CREATE INDEX IF NOT EXISTS idx_imports_src    ON imports(src_path);
 CREATE INDEX IF NOT EXISTS idx_imports_target ON imports(target_path);
+
+-- Schema v4: persist commit parent hashes so graph-topology analyses
+-- (merge-rate, branch-duration, commit-graph centrality) can query the
+-- DAG without shelling out to git.
+--
+-- One row per (commit, parent) pair. For root commits (no parents) no
+-- rows are written. For ordinary commits exactly one row (position 0).
+-- For merge commits two or more rows (position 0 = first/mainline parent,
+-- position 1 = merged-in branch tip, etc.).
+--
+-- Note: rows for merge commits are only present when the ingest walk ran
+-- with `Options::include_merges = true`; the default walk filters out
+-- merge commits before they reach the Appender.
+CREATE TABLE IF NOT EXISTS commit_parents (
+    rev        TEXT    NOT NULL,
+    parent_rev TEXT    NOT NULL,
+    position   INTEGER NOT NULL, -- 0 = first (mainline) parent
+    PRIMARY KEY (rev, position)
+);
+CREATE INDEX IF NOT EXISTS idx_commit_parents_parent ON commit_parents(parent_rev);

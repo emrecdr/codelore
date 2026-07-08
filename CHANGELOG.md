@@ -10,6 +10,7 @@ Conventional Commits format. All notable changes documented here.
   analyses. Anchored to the repo's last commit date (not wall-clock time) so
   results are reproducible on old or archived repos. Valid range: 1–3650;
   default: 90.
+- **`commit_parents` table (schema v4)** — ingest now persists one row per commit parent so graph-topology analyses can query the DAG without shelling out to git. Bumps `CURRENT_SCHEMA_VERSION` to `"4"`.
 
 ### Changed
 
