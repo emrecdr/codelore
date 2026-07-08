@@ -131,6 +131,7 @@ In addition to `codelore analyze` and `codelore diff`, the CLI exposes:
 codelore explain <metric>           # formula + citation + SQL source for any metric
 codelore check                      # quality-gate validation against .codelore-thresholds.toml
 codelore check --diff base..head    # PR-mode quality gate
+codelore mcp --repo <path>          # MCP server over stdio for AI agent integration
 codelore profile                    # operational telemetry (version, schema, deps, cache root)
 codelore docs                       # markdown analysis catalogue
 codelore notes <base>..<head>       # release-notes markdown summary
@@ -337,6 +338,41 @@ codelore diff origin/main...HEAD --fail-on any
 See [`examples/.github/workflows/codelore-pr.yml`](examples/.github/workflows/codelore-pr.yml) for the full template with the critical configuration gotchas (`fetch-depth: 0`, three-dot merge-base, SARIF upload permissions).
 
 Cache the base-rev analysis with `--base-cache PATH` to halve dual-analysis cost across PRs that share the same base SHA.
+
+---
+
+## Agent integration
+
+`codelore mcp --repo <path>` starts a Model Context Protocol server over stdio, giving AI agents (Claude, Cursor, and any MCP-compatible client) direct access to behavioral code analysis — no account, no network, fully local.
+
+**Client config** (add to your `claude_desktop_config.json` or Cursor `mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "codelore": {
+      "command": "codelore",
+      "args": ["mcp", "--repo", "/path/to/your/repo"]
+    }
+  }
+}
+```
+
+**Available tools:**
+
+| Tool | Purpose |
+|---|---|
+| `repo_overview` | Repository summary (commit count, authors, files, date range) plus active options snapshot |
+| `hotspots` | Top hotspot files ranked by revision count; optional `limit` parameter |
+| `code_health` | Per-file composite health scores (red / yellow / green band); optional `path` filter |
+| `delta_health` | Function-level health delta between two revisions (`base`, `head` — any `git rev-parse` string) |
+| `refactoring_targets` | Highest-priority refactoring candidates ranked by risk÷LOC; optional `limit` |
+| `function_xray` | Per-function change-frequency and complexity for a given file `path` |
+| `check_gates` | Evaluates `.codelore-thresholds.toml` quality gates at HEAD; returns verdict + violations |
+
+**Fully local — no account, no network, no telemetry.** The server reads the repository at the path you configure and answers tool calls using the same fact store that powers the CLI. The first call on a cold cache pays the one-time ingest cost (a few seconds to a couple of minutes depending on repo size); subsequent calls in the same session use the warm cache and return in milliseconds.
+
+See [§11.9 of the advanced-usage guide](docs/advanced-usage.md) for the full tool reference, parameter details, return shape descriptions, and troubleshooting.
 
 ---
 

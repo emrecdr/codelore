@@ -96,9 +96,8 @@ fn assert_tool_ok(resp: &Value, tool_name: &str) -> Value {
     let content = resp["result"]["content"].as_array().expect("content array");
     assert!(!content.is_empty(), "{tool_name}: content array is empty");
     let text = content[0]["text"].as_str().expect("text field");
-    serde_json::from_str(text).unwrap_or_else(|e| {
-        panic!("{tool_name}: content text is not valid JSON ({e}): {text}")
-    })
+    serde_json::from_str(text)
+        .unwrap_or_else(|e| panic!("{tool_name}: content text is not valid JSON ({e}): {text}"))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -118,7 +117,9 @@ fn mcp_tools_list_and_repo_overview() {
     stdin.flush().unwrap();
     let list_resp = read_ndjson(&mut reader);
     assert_eq!(list_resp["id"], 1);
-    let tools = list_resp["result"]["tools"].as_array().expect("tools array");
+    let tools = list_resp["result"]["tools"]
+        .as_array()
+        .expect("tools array");
 
     // Exact count — catches both missing tools and accidental extras.
     assert_eq!(
@@ -126,7 +127,10 @@ fn mcp_tools_list_and_repo_overview() {
         7,
         "expected exactly 7 tools, got {}: {:?}",
         tools.len(),
-        tools.iter().filter_map(|t| t["name"].as_str()).collect::<Vec<_>>()
+        tools
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect::<Vec<_>>()
     );
 
     let tool_names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
@@ -181,11 +185,20 @@ fn mcp_code_health_returns_scored_rows() {
 
     let rows = parsed.as_array().expect("code_health: expected JSON array");
     // delivery_repo has Rust source — at least one file should have complexity data.
-    assert!(!rows.is_empty(), "code_health returned no rows for delivery_repo");
+    assert!(
+        !rows.is_empty(),
+        "code_health returned no rows for delivery_repo"
+    );
     // Each row must have a `band` and a numeric `score`.
     let first = &rows[0];
-    assert!(first["band"].is_string(), "row missing `band` field: {first}");
-    assert!(first["score"].is_number(), "row missing numeric `score` field: {first}");
+    assert!(
+        first["band"].is_string(),
+        "row missing `band` field: {first}"
+    );
+    assert!(
+        first["score"].is_number(),
+        "row missing numeric `score` field: {first}"
+    );
 
     drop(stdin);
     let _ = child.wait();
@@ -246,11 +259,7 @@ fn mcp_check_gates_returns_verdict() {
 
     // Write a thresholds file that is guaranteed to pass on delivery_repo.
     let thresholds_path = repo.dir.path().join(".codelore-thresholds.toml");
-    std::fs::write(
-        &thresholds_path,
-        "[gates]\ncode_health_min = 0.0\n",
-    )
-    .unwrap();
+    std::fs::write(&thresholds_path, "[gates]\ncode_health_min = 0.0\n").unwrap();
 
     let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
     let resp = call_tool(&mut stdin, &mut reader, 1, "check_gates", &json!({}));
@@ -270,8 +279,7 @@ fn mcp_check_gates_returns_verdict() {
     );
     // A threshold of 0.0 means any score passes; expect no violations.
     assert_eq!(
-        parsed["verdict"],
-        "pass",
+        parsed["verdict"], "pass",
         "check_gates: expected pass verdict with permissive threshold, got: {parsed}"
     );
 

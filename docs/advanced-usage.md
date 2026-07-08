@@ -921,7 +921,126 @@ When `fail_on_degraded = false` is set in `[gates]` and a gate produces no evalu
 
 `codelore check --history` prints the last 20 gate-run records grouped by HEAD SHA from the per-repo ledger, giving you a local audit trail of how each gate has trended across pushes — no server required.
 
-## 12. Troubleshooting
+## 11.9. MCP server (`codelore mcp`)
+
+`codelore mcp --repo <path>` starts a Model Context Protocol server over stdio. AI agents connect to it and call the tools below; the server answers using the same persistent fact store the CLI uses. It is **fully local** — no account, no API key, no telemetry, no network access.
+
+### Starting the server
+
+```bash
+codelore mcp --repo /path/to/repo
+```
+
+The server blocks and reads JSON-RPC 2.0 messages on stdin (newline-delimited), writes responses to stdout. It runs until the client closes the connection.
+
+### Client configuration
+
+Add an entry to your client's MCP config (exact filename varies by client):
+
+```json
+{
+  "mcpServers": {
+    "codelore": {
+      "command": "codelore",
+      "args": ["mcp", "--repo", "/absolute/path/to/your/repo"]
+    }
+  }
+}
+```
+
+For Claude Desktop this is `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows). For Cursor it is `.cursor/mcp.json` in the project root or the global `~/.cursor/mcp.json`.
+
+### Tool reference
+
+#### `repo_overview`
+
+Returns a JSON object with `summary` (commit count, unique authors, file count, first/last commit dates) and `options` (the active analysis options used for cache-keying — useful for diagnosing why two calls return different results).
+
+Parameters: none.
+
+Cost: warm-cache call is fast (milliseconds). Cold-cache triggers full history ingest.
+
+#### `hotspots`
+
+Returns the top hotspot files ranked by revision count, with composite hotspot score and complexity.
+
+Parameters:
+- `limit` *(optional, u32)* — cap the number of rows returned. Default: 20.
+
+Cost: warm-cache fast. Cold-cache triggers ingest.
+
+#### `code_health`
+
+Returns per-file composite health scores: a `band` (`red` / `yellow` / `green`) and a numeric `score` (0–100). Files in the `red` band are the highest-priority health risks.
+
+Parameters:
+- `path` *(optional, string)* — filter to a single file path relative to the repo root. Omit to return all files with complexity data.
+
+Cost: warm-cache fast. Cold-cache triggers ingest.
+
+#### `delta_health`
+
+Returns a function-level health delta between two revisions. Shows which functions were added, removed, or changed in LOC/complexity, and whether the overall change is `improved`, `neutral`, or `degraded`.
+
+Parameters:
+- `base` *(required, string)* — base revision. Any string accepted by `git rev-parse` (branch, tag, full SHA, `HEAD~N`).
+- `head` *(required, string)* — head revision. Same format.
+
+Both revisions are validated before any work starts — an unresolvable ref returns a tool error rather than a server crash.
+
+Cost: **high** — ingests history twice (once per revision) using temporary git worktrees. Expect the same cost as two fresh `codelore analyze` calls on a cold cache. On a warm cache (both SHAs previously analysed), cost is lower but still involves two in-memory ingest passes.
+
+#### `refactoring_targets`
+
+Returns the highest-priority refactoring candidates, ranked by a risk-to-LOC ratio that combines hotspot score (frequency × recency) with code health. The files at the top of this list carry the highest maintenance burden relative to their size.
+
+Parameters:
+- `limit` *(optional, u32)* — cap the number of rows. Default: all.
+
+Cost: warm-cache fast. Cold-cache triggers ingest.
+
+#### `function_xray`
+
+Returns per-function change-frequency and complexity for a specific file. Each row identifies a function by name and reports how many revisions touched it and its current cyclomatic complexity — the intersection of "changed often" and "high complexity" is the highest-value refactoring target within the file.
+
+Parameters:
+- `path` *(required, string)* — file path relative to the repo root (e.g. `src/main.rs`).
+
+Cost: warm-cache fast. Cold-cache triggers ingest.
+
+#### `check_gates`
+
+Evaluates the quality gates declared in `.codelore-thresholds.toml` at HEAD and returns a JSON object:
+
+```json
+{
+  "verdict": "pass" | "fail" | "no_thresholds",
+  "violation_count": 3,
+  "violations": [
+    { "gate": "code_health_min", "path": "src/core.rs", "actual": "42.1", "threshold": "60.0" }
+  ]
+}
+```
+
+`no_thresholds` is returned when no `.codelore-thresholds.toml` exists at the repo root. Gates covered: `cognitive_max`, `hotspot_score_max`, `code_health_min`, `disallow_clone_type_1`, and `max_red_effort_pct`.
+
+Parameters: none.
+
+Cost: warm-cache fast. Cold-cache triggers ingest.
+
+### Architecture note
+
+Each tool call opens its own `FactsDb` connection via the warm-cache path. This is intentional: `duckdb::Connection` is `!Send + !Sync` and cannot cross thread or async boundaries, so each call runs entirely on a dedicated blocking thread (`tokio::task::spawn_blocking`) from connection open to result serialization. The connection is dropped before the future resolves. All tools are read-only; no tool modifies the repository or the fact store.
+
+### Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Server not appearing in client tool list | Client config path wrong or JSON syntax error | Check the config file location for your client; validate JSON syntax; restart the client |
+| `repo path does not exist` error on first tool call | Absolute path required; relative paths are resolved at server startup, not at call time | Use an absolute path in `args` |
+| First tool call is very slow (30 s+) | Cold-cache ingest running — normal for large repos | Wait for it to complete; subsequent calls in the same session use the warm cache |
+| `delta_health` returns a tool error for a valid branch | Branch name is valid locally but not yet fetched | Run `git fetch` in the repo, then retry |
+| Tools return stale data after commits | The cache key includes HEAD SHA; new commits produce a new cache entry automatically | No action needed — the next call after a commit will re-ingest |
 
 | Symptom | Cause | Fix |
 |---|---|---|

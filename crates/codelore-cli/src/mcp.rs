@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::Result;
-use rmcp::{handler::server::wrapper::Parameters, model::ErrorData, tool, tool_handler, tool_router};
+use rmcp::{
+    handler::server::wrapper::Parameters, model::ErrorData, tool, tool_handler, tool_router,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -18,10 +20,7 @@ use codelore_lib::cli_api::{
     analyses::{
         code_health,
         delta_health::{DeltaHealthSection, compute_delta_health, run_function_metrics},
-        function_xray,
-        hotspots,
-        refactoring_targets,
-        summary,
+        function_xray, hotspots, refactoring_targets, summary,
     },
     cache::default_cache_root,
     facts::FactsDb,
@@ -44,7 +43,12 @@ struct ViolationRecord {
 
 impl From<GateViolation> for ViolationRecord {
     fn from(v: GateViolation) -> Self {
-        Self { gate: v.gate, path: v.path, actual: v.actual, threshold: v.threshold }
+        Self {
+            gate: v.gate,
+            path: v.path,
+            actual: v.actual,
+            threshold: v.threshold,
+        }
     }
 }
 
@@ -57,7 +61,13 @@ fn internal(e: impl std::fmt::Display) -> ErrorData {
 /// Returns the full 40-char SHA, or an `ErrorData` if the rev is unknown.
 fn resolve_rev(repo: &Path, rev: &str) -> std::result::Result<String, ErrorData> {
     let out = Command::new("git")
-        .args(["-C", repo.to_str().unwrap_or("."), "rev-parse", "--verify", rev])
+        .args([
+            "-C",
+            repo.to_str().unwrap_or("."),
+            "rev-parse",
+            "--verify",
+            rev,
+        ])
         .output()
         .map_err(|e| ErrorData::internal_error(format!("git rev-parse: {e}"), None))?;
     if out.status.success() {
@@ -76,8 +86,7 @@ fn temp_worktree(
     repo: &Path,
     sha: &str,
 ) -> std::result::Result<(PathBuf, TempWorktree), ErrorData> {
-    let dir =
-        tempfile::tempdir().map_err(|e| internal(format!("create temp dir: {e}")))?;
+    let dir = tempfile::tempdir().map_err(|e| internal(format!("create temp dir: {e}")))?;
     let wt_path = dir.path().to_path_buf();
     let status = Command::new("git")
         .args([
@@ -95,7 +104,13 @@ fn temp_worktree(
     if !status.success() {
         return Err(internal(format!("git worktree add failed for {sha}")));
     }
-    Ok((wt_path, TempWorktree { repo: repo.to_path_buf(), dir }))
+    Ok((
+        wt_path,
+        TempWorktree {
+            repo: repo.to_path_buf(),
+            dir,
+        },
+    ))
 }
 
 /// RAII guard that removes a git worktree when dropped.
@@ -203,11 +218,13 @@ impl CodeLoreServer {
     ) -> Result<String, ErrorData> {
         let repo_path = self.repo.clone();
         tokio::task::spawn_blocking(move || {
-            let opts = Options { repo_path: repo_path.clone(), ..Options::default() };
+            let opts = Options {
+                repo_path: repo_path.clone(),
+                ..Options::default()
+            };
             let repo = GixRepo::open(&repo_path).map_err(internal)?;
-            let db =
-                FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
-                    .map_err(internal)?;
+            let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
+                .map_err(internal)?;
             let rows = summary::run_summary(&db, &opts).map_err(internal)?;
             let out = serde_json::json!({
                 "summary": rows,
@@ -231,12 +248,14 @@ impl CodeLoreServer {
         let repo_path = self.repo.clone();
         let limit = params.0.limit.unwrap_or(20);
         tokio::task::spawn_blocking(move || {
-            let mut opts = Options { repo_path: repo_path.clone(), ..Options::default() };
+            let mut opts = Options {
+                repo_path: repo_path.clone(),
+                ..Options::default()
+            };
             opts.rows_limit = Some(limit);
             let repo = GixRepo::open(&repo_path).map_err(internal)?;
-            let db =
-                FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
-                    .map_err(internal)?;
+            let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
+                .map_err(internal)?;
             let rows = hotspots::run_hotspots(&db, &opts).map_err(internal)?;
             serde_json::to_string(&rows).map_err(internal)
         })
@@ -252,18 +271,17 @@ impl CodeLoreServer {
             Pass `path` to filter to a single file. \
             First call on a cold cache triggers history ingest."
     )]
-    async fn code_health(
-        &self,
-        params: Parameters<CodeHealthParams>,
-    ) -> Result<String, ErrorData> {
+    async fn code_health(&self, params: Parameters<CodeHealthParams>) -> Result<String, ErrorData> {
         let repo_path = self.repo.clone();
         let filter_path = params.0.path.clone();
         tokio::task::spawn_blocking(move || {
-            let opts = Options { repo_path: repo_path.clone(), ..Options::default() };
+            let opts = Options {
+                repo_path: repo_path.clone(),
+                ..Options::default()
+            };
             let repo = GixRepo::open(&repo_path).map_err(internal)?;
-            let db =
-                FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
-                    .map_err(internal)?;
+            let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
+                .map_err(internal)?;
             let mut rows = code_health::run_code_health(&db, &opts).map_err(internal)?;
             if let Some(p) = filter_path {
                 rows.retain(|r| r.path == p);
@@ -306,8 +324,14 @@ impl CodeLoreServer {
             let (base_path, _base_wt) = temp_worktree(&repo_path, &base_sha)?;
             let (head_path, _head_wt) = temp_worktree(&repo_path, &head_sha)?;
 
-            let ingest_at = |wt: &Path| -> std::result::Result<Vec<codelore_lib::cli_api::analyses::delta_health::FunctionMetricRow>, ErrorData> {
-                let opts = Options { repo_path: wt.to_path_buf(), ..Options::default() };
+            let ingest_at = |wt: &Path| -> std::result::Result<
+                Vec<codelore_lib::cli_api::analyses::delta_health::FunctionMetricRow>,
+                ErrorData,
+            > {
+                let opts = Options {
+                    repo_path: wt.to_path_buf(),
+                    ..Options::default()
+                };
                 let repo = GixRepo::open(wt).map_err(internal)?;
                 let db = FactsDb::new_in_memory().map_err(internal)?;
                 db.ingest(&repo, &opts).map_err(internal)?;
@@ -322,13 +346,8 @@ impl CodeLoreServer {
             let clone_members: HashSet<(String, String)> = HashSet::new();
             let base_red: HashSet<String> = HashSet::new();
 
-            let section: DeltaHealthSection = compute_delta_health(
-                &base_fns,
-                &head_fns,
-                &pr_files,
-                &clone_members,
-                &base_red,
-            );
+            let section: DeltaHealthSection =
+                compute_delta_health(&base_fns, &head_fns, &pr_files, &clone_members, &base_red);
 
             serde_json::to_string(&section).map_err(internal)
         })
@@ -351,14 +370,16 @@ impl CodeLoreServer {
         let repo_path = self.repo.clone();
         let limit = params.0.limit;
         tokio::task::spawn_blocking(move || {
-            let mut opts = Options { repo_path: repo_path.clone(), ..Options::default() };
+            let mut opts = Options {
+                repo_path: repo_path.clone(),
+                ..Options::default()
+            };
             if let Some(n) = limit {
                 opts.rows_limit = Some(n);
             }
             let repo = GixRepo::open(&repo_path).map_err(internal)?;
-            let db =
-                FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
-                    .map_err(internal)?;
+            let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
+                .map_err(internal)?;
             let rows =
                 refactoring_targets::run_refactoring_targets(&db, &opts).map_err(internal)?;
             serde_json::to_string(&rows).map_err(internal)
@@ -382,11 +403,13 @@ impl CodeLoreServer {
         let repo_path = self.repo.clone();
         let target = params.0.path.clone();
         tokio::task::spawn_blocking(move || {
-            let opts = Options { repo_path: repo_path.clone(), ..Options::default() };
+            let opts = Options {
+                repo_path: repo_path.clone(),
+                ..Options::default()
+            };
             let repo = GixRepo::open(&repo_path).map_err(internal)?;
-            let db =
-                FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
-                    .map_err(internal)?;
+            let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
+                .map_err(internal)?;
             let rows =
                 function_xray::run_function_xray(&db, &repo, &opts, &target).map_err(internal)?;
             serde_json::to_string(&rows).map_err(internal)
@@ -420,11 +443,13 @@ impl CodeLoreServer {
                 return serde_json::to_string(&summary).map_err(internal);
             }
 
-            let opts = Options { repo_path: repo_path.clone(), ..Options::default() };
+            let opts = Options {
+                repo_path: repo_path.clone(),
+                ..Options::default()
+            };
             let repo = GixRepo::open(&repo_path).map_err(internal)?;
-            let db =
-                FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
-                    .map_err(internal)?;
+            let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
+                .map_err(internal)?;
 
             let mut violations: Vec<GateViolation> = Vec::new();
 
@@ -443,7 +468,11 @@ impl CodeLoreServer {
             violations
                 .extend(evaluate_effort_exposure_gate(&thresholds, &db, &opts).map_err(internal)?);
 
-            let verdict = if violations.is_empty() { "pass" } else { "fail" };
+            let verdict = if violations.is_empty() {
+                "pass"
+            } else {
+                "fail"
+            };
             let records: Vec<ViolationRecord> = violations.into_iter().map(Into::into).collect();
             let summary = GateSummary {
                 verdict: verdict.into(),
