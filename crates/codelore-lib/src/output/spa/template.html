@@ -427,6 +427,71 @@
       opacity: 0.6;
       line-height: 1.3;
     }
+    /* ── Share bars + effort dot strip (A.5) ────────────────────── */
+    .share-bars-container {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 4px 0;
+    }
+    .share-bar-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .share-bar-axis-label {
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      opacity: 0.6;
+      min-width: 2.8rem;
+      text-align: right;
+    }
+    .share-bar-track {
+      flex: 1;
+      display: flex;
+      height: 22px;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .share-bar-segment {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      transition: width 0.3s ease;
+    }
+    .share-bar-label {
+      font-size: 0.65rem;
+      font-weight: 600;
+      color: #fff;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.4);
+      white-space: nowrap;
+      padding: 0 4px;
+    }
+    .effort-dot-strip-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .effort-dot-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      padding: 4px 0;
+    }
+    .effort-dot {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+    }
+    .share-bars-caption {
+      font-size: 0.78rem;
+      opacity: 0.75;
+      margin-top: 2px;
+    }
     /* ── KPI grid ────────────────────────────────────────────────── */
     .kpi-grid {
       display: grid;
@@ -1637,6 +1702,29 @@
         historical commits. Click any file to open its detail drawer.
       </div>
       <div id="widget-improvements-feed-body" class="widget-body" style="min-height: 120px;"></div>
+    </section>
+
+    <!-- Code Health share bars + effort dot strip (A.5).
+         Two 100%-stacked horizontal bars: LOC share and churn share per
+         code-health band; plus a 20-dot effort strip (each dot = 5%
+         churn). Pure HTML/CSS — no ECharts. Driven by effort_exposure. -->
+    <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-share-bars">
+      <h2>Code Health — effort distribution</h2>
+      <div class="subtitle">
+        Where engineering effort lands across red / yellow / green health
+        bands. A team with most churn in red code is in reactive mode;
+        most churn in green means proactive maintenance.
+      </div>
+      <details class="learn-more">
+        <summary>Learn more — how to read this panel</summary>
+        <div class="learn-more-content">
+          <p><strong>What it measures.</strong> Two 100% stacked bars: the top bar shows the share of total SLOC (source lines of code) in each health band at HEAD; the bottom bar shows the share of trailing-window churn (lines added + deleted) that landed in each band. The dot strip encodes the same churn share as 20 coloured dots — each dot = 5% of window churn.</p>
+          <p><strong>How to read it.</strong> LOC bar = how your codebase is distributed today. Churn bar = where your team is actually spending its energy. If the churn bar has a large red segment while the LOC bar has a small red segment, the team is disproportionately fighting fires in its worst files.</p>
+          <p><strong>What to watch for.</strong> Red churn share consistently above 40% indicates a reactive maintenance pattern. Improving = churn shifting toward green over successive sprints.</p>
+          <p><strong>Suggested action.</strong> Prioritise the top hotspots with red health for refactoring investment to reduce the cost of future changes there.</p>
+        </div>
+      </details>
+      <div id="widget-share-bars-body" class="widget-body" style="min-height: 80px;"></div>
     </section>
 
     <!-- Treemap alternative view to the circle-pack. Same

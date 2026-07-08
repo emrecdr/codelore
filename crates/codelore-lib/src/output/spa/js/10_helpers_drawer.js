@@ -1099,5 +1099,169 @@
     }
   }
 
+  // ─── §A.5  Widget: banded share bars + effort dot strip ─────────────
+  //
+  // Renders two 100% stacked horizontal bars (LOC share and churn share
+  // per code-health band) plus a 20-dot effort strip where each dot
+  // represents 5% of trailing-window churn. All HTML/CSS — no ECharts.
+  //
+  // Band colours come from CSS custom properties set by the active
+  // DaisyUI theme (error/warning/success), resolved at render time so the
+  // widget re-colours correctly on theme toggle (rerender: 'theme').
+  // Accessibility: role="img" + aria-label on every bar and the dot strip;
+  // percentage text labels inside segments serve as non-colour redundant
+  // cues (WCAG 1.4.1 — Use of Color).
+  //
+  // Caption: "X% of the last {window} days' changes landed in red code"
+  // with Wilson 95% CI expressed as a title/tooltip attribute.
+  function renderShareBars(rows, opts) {
+    var mount = document.getElementById('widget-share-bars-body');
+    if (!mount) return;
+    if (!rows || !rows.length) {
+      mount.innerHTML =
+        '<p class="text-base-content/50 text-sm">No effort-exposure data available.</p>';
+      return;
+    }
 
+    var BAND_ORDER = ['red', 'yellow', 'green'];
+    var BAND_LABEL = { red: 'Red', yellow: 'Yellow', green: 'Green' };
+
+    // Band colours from DaisyUI theme tokens — never hardcoded hex.
+    function bandColor(band) {
+      if (band === 'red')    return 'var(--color-error,   oklch(0.637 0.237 25.331))';
+      if (band === 'yellow') return 'var(--color-warning, oklch(0.845 0.143 84.429))';
+      return                        'var(--color-success, oklch(0.753 0.152 163.216))';
+    }
+
+    // Index rows by band for O(1) lookup.
+    var byBand = {};
+    for (var i = 0; i < rows.length; i++) {
+      byBand[rows[i].band] = rows[i];
+    }
+
+    // ── Bar builder ────────────────────────────────────────────────────
+    // Builds one 100%-stacked horizontal bar using valueFn(row) → %.
+    // Segments narrower than 0.5% are hidden (invisible sliver).
+    // Text labels appear inside segments ≥8% wide (non-colour cue).
+    function buildBar(axisLabel, valueFn, ariaDesc) {
+      var total = 0;
+      for (var b = 0; b < BAND_ORDER.length; b++) {
+        var r = byBand[BAND_ORDER[b]];
+        total += r ? (valueFn(r) || 0) : 0;
+      }
+      var segments = '';
+      for (var bi = 0; bi < BAND_ORDER.length; bi++) {
+        var band = BAND_ORDER[bi];
+        var row = byBand[band];
+        var raw = row ? (valueFn(row) || 0) : 0;
+        var pct = total > 0 ? (raw / total * 100) : 0;
+        if (pct < 0.5) continue;
+        var pctStr = pct.toFixed(1);
+        segments +=
+          '<div class="share-bar-segment"' +
+              ' style="width:' + pct.toFixed(2) + '%;background:' + bandColor(band) + ';"' +
+              ' title="' + BAND_LABEL[band] + ': ' + pctStr + '%">' +
+            (pct >= 8
+              ? '<span class="share-bar-label">' + BAND_LABEL[band] + ' ' + pctStr + '%</span>'
+              : '') +
+          '</div>';
+      }
+      return (
+        '<div class="share-bar-row">' +
+          '<span class="share-bar-axis-label">' + axisLabel + '</span>' +
+          '<div class="share-bar-track" role="img" aria-label="' + ariaDesc + '">' +
+            segments +
+          '</div>' +
+        '</div>'
+      );
+    }
+
+    var locBar = buildBar(
+      'LOC',
+      function (r) { return r.loc_share_pct; },
+      'Source lines of code share per health band: ' +
+        BAND_ORDER.map(function (b) {
+          var r = byBand[b]; return BAND_LABEL[b] + ' ' + (r ? r.loc_share_pct.toFixed(1) : '0') + '%';
+        }).join(', ')
+    );
+    var churnBar = buildBar(
+      'Churn',
+      function (r) { return r.churn_share_pct; },
+      'Churn share per health band in the trailing window: ' +
+        BAND_ORDER.map(function (b) {
+          var r = byBand[b]; return BAND_LABEL[b] + ' ' + (r ? r.churn_share_pct.toFixed(1) : '0') + '%';
+        }).join(', ')
+    );
+
+    // ── Caption beneath the churn bar ─────────────────────────────────
+    var captionHtml = '';
+    var redRow = byBand['red'];
+    if (redRow) {
+      var redChurn = (redRow.churn_share_pct || 0).toFixed(1);
+      var ciLo = ((redRow.commit_share_ci_low  || 0) * 100).toFixed(1);
+      var ciHi = ((redRow.commit_share_ci_high || 0) * 100).toFixed(1);
+      var windowStr = (opts && opts.window_days)
+        ? 'the last ' + opts.window_days + ' days’'
+        : 'recent';
+      captionHtml =
+        '<p class="share-bars-caption"' +
+            ' title="Wilson 95 % CI on commit share: [' + ciLo + ' %, ' + ciHi + ' %]">' +
+          '<strong>' + redChurn + '%</strong> of ' + windowStr + ' changes landed in red code' +
+        '</p>';
+    }
+
+    // ── 20-dot effort strip ────────────────────────────────────────────
+    // Each dot represents 5% of total window churn, coloured by band.
+    // Dot counts: round(churn_share_pct / 5) per band; remainder (to
+    // reach exactly 20) goes to the band with the largest raw share.
+    var dotCounts = {};
+    var dotSum = 0;
+    var maxBand = null;
+    var maxShare = -1;
+    for (var di = 0; di < BAND_ORDER.length; di++) {
+      var db = BAND_ORDER[di];
+      var dr = byBand[db];
+      var share = dr ? (dr.churn_share_pct || 0) : 0;
+      var rounded = Math.round(share / 5);
+      dotCounts[db] = rounded;
+      dotSum += rounded;
+      if (share > maxShare) { maxShare = share; maxBand = db; }
+    }
+    var remainder = 20 - dotSum;
+    if (remainder !== 0 && maxBand !== null) {
+      dotCounts[maxBand] = (dotCounts[maxBand] || 0) + remainder;
+    }
+
+    var dots = '';
+    for (var dbi = 0; dbi < BAND_ORDER.length; dbi++) {
+      var dotBand = BAND_ORDER[dbi];
+      var count = Math.max(0, dotCounts[dotBand] || 0);
+      for (var k = 0; k < count; k++) {
+        dots +=
+          '<span class="effort-dot"' +
+              ' style="background:' + bandColor(dotBand) + ';"' +
+              ' title="' + BAND_LABEL[dotBand] + ' band (5% churn per dot)">' +
+          '</span>';
+      }
+    }
+    var dotAriaLabel =
+      (dotCounts['red'] || 0) + ' red, ' +
+      (dotCounts['yellow'] || 0) + ' yellow, ' +
+      (dotCounts['green'] || 0) + ' green — each dot = 5% of window churn';
+    var dotStrip =
+      '<div class="effort-dot-strip-wrap">' +
+        '<span class="share-bar-axis-label">Effort</span>' +
+        '<div class="effort-dot-strip" role="img" aria-label="' + dotAriaLabel + '">' +
+          dots +
+        '</div>' +
+      '</div>';
+
+    mount.innerHTML =
+      '<div class="share-bars-container">' +
+        locBar +
+        churnBar +
+        dotStrip +
+        captionHtml +
+      '</div>';
+  }
 

@@ -47,6 +47,7 @@ use codelore_lib::analyses::architecture_trend::ArchitectureTrendRow;
 use codelore_lib::analyses::dashboard::{
     CloneSummary, DailyCommit, ImportEdgeRow, KameiRiskRow, TrendPoint, XRayEntry,
 };
+use codelore_lib::analyses::effort_exposure::EffortExposureRow;
 use codelore_lib::analyses::entity_ownership::EntityOwnershipRow;
 use codelore_lib::analyses::health_trend::HealthTrendRow;
 use codelore_lib::analyses::mi::MiRollup;
@@ -201,6 +202,38 @@ fn rendered_spa_boots_without_console_errors() {
         },
     ];
 
+    // Synthetic effort-exposure rows so renderShareBars reaches its
+    // bars-render path (not the empty-state branch) under the browser gate.
+    let effort_exposure = vec![
+        EffortExposureRow {
+            band: "red".into(),
+            files: 2,
+            loc_share_pct: 18.0,
+            commit_share_pct: 35.0,
+            churn_share_pct: 30.0,
+            commit_share_ci_low: 0.22,
+            commit_share_ci_high: 0.50,
+        },
+        EffortExposureRow {
+            band: "yellow".into(),
+            files: 3,
+            loc_share_pct: 32.0,
+            commit_share_pct: 25.0,
+            churn_share_pct: 28.0,
+            commit_share_ci_low: 0.16,
+            commit_share_ci_high: 0.36,
+        },
+        EffortExposureRow {
+            band: "green".into(),
+            files: 5,
+            loc_share_pct: 50.0,
+            commit_share_pct: 40.0,
+            churn_share_pct: 42.0,
+            commit_share_ci_low: 0.28,
+            commit_share_ci_high: 0.54,
+        },
+    ];
+
     let dash = SpaDashboard {
         hotspots,
         summary,
@@ -217,6 +250,7 @@ fn rendered_spa_boots_without_console_errors() {
         coupling_density,
         imports,
         xray,
+        effort_exposure,
         ..SpaDashboard::default()
     };
 
@@ -637,6 +671,25 @@ fn rendered_spa_boots_without_console_errors() {
         mi_tile_present,
         "MI band KPI sub-tile was absent from #widget-kpi-tiles; \
          mi_rollup payload may not have reached renderKpiTiles"
+    );
+
+    // -- Step 15: assert share-bars widget mounted without console errors. --
+    // `renderShareBars` replaces the mount point's innerHTML with either the
+    // bars container or the empty-state message. An empty inner-HTML means
+    // the renderer threw before touching the DOM. The widget section must
+    // exist in the DOM (widget-share-bars-body) and its body must be
+    // non-empty after the boot window.
+    let share_bars_mounted: bool = eval_json(
+        &tab,
+        "(function () { \
+             var el = document.getElementById('widget-share-bars-body'); \
+             return !!el && el.innerHTML.trim().length > 0; \
+         })()",
+    );
+    assert!(
+        share_bars_mounted,
+        "share-bars widget body (#widget-share-bars-body) was empty after boot; \
+         renderShareBars may have thrown or the widget mount point is missing"
     );
 }
 
@@ -1238,6 +1291,26 @@ fn write_smoke_spa(html_path: &std::path::Path, title: &str) {
         health_trend,
         mi_rollup,
         coupling_density,
+        effort_exposure: vec![
+            EffortExposureRow {
+                band: "red".into(),
+                files: 2,
+                loc_share_pct: 18.0,
+                commit_share_pct: 35.0,
+                churn_share_pct: 30.0,
+                commit_share_ci_low: 0.22,
+                commit_share_ci_high: 0.50,
+            },
+            EffortExposureRow {
+                band: "green".into(),
+                files: 6,
+                loc_share_pct: 82.0,
+                commit_share_pct: 65.0,
+                churn_share_pct: 70.0,
+                commit_share_ci_low: 0.54,
+                commit_share_ci_high: 0.74,
+            },
+        ],
         ..SpaDashboard::default()
     };
 

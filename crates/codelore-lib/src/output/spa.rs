@@ -40,6 +40,7 @@ use crate::analyses::coupling::CouplingRow;
 use crate::analyses::dashboard::{
     CloneSummary, DailyCommit, ImportEdgeRow, KameiRiskRow, TrendPoint, XRayEntry,
 };
+use crate::analyses::effort_exposure::EffortExposureRow;
 use crate::analyses::entity_ownership::EntityOwnershipRow;
 use crate::analyses::hotspots::HotspotRow;
 use crate::analyses::knowledge_islands::KnowledgeIslandRow;
@@ -178,6 +179,13 @@ pub struct SpaDashboard {
     /// Newest-first. Empty when there are no signal-bearing transitions.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub health_transitions: Vec<crate::analyses::health_trend::HealthTransitionRow>,
+    /// Effort-exposure rows — LOC share, commit share, and churn share per
+    /// code-health band (red / yellow / green) in the trailing window.
+    /// Drives the stacked share bars and effort dot strip in the Code Health
+    /// section. Empty when code-health data is unavailable (e.g. no
+    /// `complexity_metrics` at HEAD).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effort_exposure: Vec<EffortExposureRow>,
     /// Four-factor dashboard header tiles: Code, Architecture, Knowledge,
     /// Delivery. Each carries a headline 0–100, a historical series for the
     /// sparkline, and an XmR-gated attention flag. Empty when no factor data
