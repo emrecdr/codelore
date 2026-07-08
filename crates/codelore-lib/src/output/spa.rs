@@ -167,6 +167,17 @@ pub struct SpaDashboard {
     /// is skipped or the repo has no commits.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub health_trend: Vec<crate::analyses::health_trend::HealthTrendRow>,
+    /// Per-file health score series for the top-50 hotspot paths across
+    /// the same sampled historical revisions as `health_trend`. Drives the
+    /// per-file health sparkline in the detail drawer. Empty when no
+    /// hotspot data is available or the historical scan is skipped.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub file_health_series: Vec<crate::analyses::health_trend::FileHealthPoint>,
+    /// Signal-bearing band transitions (regressions and improvements) across
+    /// all paths at all sampled revisions. Drives the improvements feed card.
+    /// Newest-first. Empty when there are no signal-bearing transitions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub health_transitions: Vec<crate::analyses::health_trend::HealthTransitionRow>,
     /// Per-commit Kamei JIT-SDP feature vector for the Delivery Risk
     /// Sparkline widget. One row per commit in the last-N (capped at
     /// 30) chronological window. Surfaces the raw Kamei 14-feature

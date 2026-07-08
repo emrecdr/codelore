@@ -3249,19 +3249,23 @@ fn build_spa_dashboard(
             tracing::warn!("dashboard: architecture-trend failed; skipping: {e}");
             Vec::new()
         });
-    // Repo health timeline — like architecture-trend, needs the repo to
-    // re-read source at sampled historical revs. Opens its own handle
-    // and degrades gracefully on any failure.
-    let health_trend = codelore_lib::cli_api::repo::GixRepo::open(repo_path)
-        .map_err(anyhow::Error::from)
-        .and_then(|repo| {
-            codelore_lib::cli_api::analyses::health_trend::run_health_trend(db, &repo, opts)
+    // Repo health timeline + per-file series + transitions — like
+    // architecture-trend, needs the repo to re-read source at sampled
+    // historical revs. Opens its own handle and degrades gracefully.
+    let (health_trend, file_health_series, health_transitions) =
+        codelore_lib::cli_api::repo::GixRepo::open(repo_path)
+            .map_err(anyhow::Error::from)
+            .and_then(|repo| {
+                codelore_lib::cli_api::analyses::health_trend::run_health_trend_detail(
+                    db, &repo, opts,
+                )
                 .map_err(anyhow::Error::from)
-        })
-        .unwrap_or_else(|e| {
-            tracing::warn!("dashboard: health-trend failed; skipping: {e}");
-            Vec::new()
-        });
+            })
+            .map(|d| (d.trend, d.file_series, d.transitions))
+            .unwrap_or_else(|e| {
+                tracing::warn!("dashboard: health-trend failed; skipping: {e}");
+                (Vec::new(), Vec::new(), Vec::new())
+            });
     Ok(SpaDashboard {
         hotspots,
         summary,
@@ -3282,6 +3286,8 @@ fn build_spa_dashboard(
         architecture_roles,
         architecture_trend,
         health_trend,
+        file_health_series,
+        health_transitions,
         options: codelore_lib::cli_api::output::spa::SpaOptionsSnapshot::from_options(opts),
     })
 }

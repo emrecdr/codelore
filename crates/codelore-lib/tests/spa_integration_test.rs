@@ -355,6 +355,46 @@ fn spa_embeds_fusion_overlay_data() {
         .expect("combined_health f64");
     assert!((combined - 78.5).abs() < 1e-9);
 
+    // When health_transitions is non-empty it must appear as a JSON array
+    // with the expected direction field.  The dashboard fixture above has no
+    // transitions set, so the key is absent (skip_serializing_if).  Wire a
+    // minimal dash with one transition and verify the round-trip.
+    use codelore_lib::analyses::health_trend::HealthTransitionRow;
+    let dash_with_transitions = SpaDashboard {
+        health_transitions: vec![HealthTransitionRow {
+            path: "src/hot.rs".into(),
+            date: "2026-01-01".into(),
+            from_band: "yellow".into(),
+            to_band: "red".into(),
+            direction: "regressed".into(),
+        }],
+        ..SpaDashboard::default()
+    };
+    let mut buf2 = Vec::new();
+    write_spa(
+        &dash_with_transitions,
+        "Transitions Test",
+        "/tmp/y",
+        "2026-06-26 00:00:00 UTC",
+        &mut buf2,
+    )
+    .expect("write_spa transitions");
+    let html2 = String::from_utf8(buf2).expect("utf8 html2");
+    let data2 = extract_data_json(&html2).expect("parse data2 block");
+    let tr = data2
+        .get("health_transitions")
+        .and_then(|v| v.as_array())
+        .expect("health_transitions array present when non-empty");
+    assert_eq!(tr.len(), 1, "one transition expected");
+    assert_eq!(
+        tr[0].get("direction").and_then(serde_json::Value::as_str),
+        Some("regressed"),
+    );
+    assert_eq!(
+        tr[0].get("from_band").and_then(serde_json::Value::as_str),
+        Some("yellow"),
+    );
+
     // The centralized band thresholds must appear in the options block so the
     // SPA JS can read them from data.options instead of hardcoding them.
     let opts = data.get("options").expect("options block present in JSON");

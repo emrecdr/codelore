@@ -3,6 +3,8 @@
 //! `architecture_trend` sampler for the rev set and the rev-parameterizable
 //! `code_health` engine for the per-rev code score. On-demand, never cached.
 
+use std::collections::{HashMap, HashSet};
+
 use crate::analyses::architecture_trend::{
     import_graph_from_live_paths, live_paths_at, sampled_commits,
 };
@@ -11,7 +13,7 @@ use crate::analyses::import_graph::{GraphMetrics, graph_metrics};
 use crate::facts::FactsDb;
 use crate::facts::ingest::at_rev::{ingest_complexity_at_rev, materialize_imports_at_rev};
 use crate::repo::Repo;
-use crate::{Options, Result};
+use crate::{CodeLoreError, Options, Result};
 
 /// One sampled revision's three health scores + bands. Emitted oldest-first.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -71,47 +73,191 @@ pub(crate) fn combined_health(arch: f64, code: f64) -> f64 {
     0.5 * arch + 0.5 * code
 }
 
+/// One per-file health data point captured at a sampled historical revision.
+/// Only emitted for paths that rank in the top-50 hotspots at HEAD (computed
+/// once before the loop) to keep the SPA JSON payload small.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FileHealthPoint {
+    /// Repo-relative file path.
+    pub path: String,
+    /// `YYYY-MM-DD` prefix of the sampled commit timestamp.
+    pub date: String,
+    /// Composite code-health score 0–100 (higher = healthier).
+    pub score: f64,
+    /// Health band: `"red"`, `"yellow"`, or `"green"`.
+    pub band: String,
+}
+
+/// A signal-bearing band transition for one file between two consecutive
+/// sampled revisions.
+///
+/// Only two directions are emitted:
+/// - `"regressed"` — file **entered** the red band (prev band was not red,
+///   current band is red).
+/// - `"improved"` — file **left** red or **entered** green (prev was red and
+///   current is not, OR prev was not green and current is green).
+///
+/// Transitions that stay within the same band, or move between yellow↔green
+/// without crossing a meaningful threshold, are not emitted (signal noise
+/// without actionable meaning).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct HealthTransitionRow {
+    /// Repo-relative file path.
+    pub path: String,
+    /// `YYYY-MM-DD` of the sampled commit where the transition was detected.
+    pub date: String,
+    /// Band at the previous sampled revision.
+    pub from_band: String,
+    /// Band at this sampled revision.
+    pub to_band: String,
+    /// `"improved"` or `"regressed"`.
+    pub direction: String,
+}
+
+/// Full output of the health-trend detail scan.
+///
+/// `trend` is byte-identical to [`run_health_trend`]'s output so the
+/// existing CSV/Markdown emitters remain unchanged. `file_series` and
+/// `transitions` are the new per-file layers added for the SPA.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct HealthTrendDetail {
+    /// Repo-level three-score timeline (same as [`run_health_trend`]).
+    pub trend: Vec<HealthTrendRow>,
+    /// Per-file health points for the top-50 hotspot paths across all
+    /// sampled revisions. Empty when no hotspot data is available.
+    pub file_series: Vec<FileHealthPoint>,
+    /// Signal-bearing band transitions (regressions + improvements) across
+    /// all paths at all sampled revisions. Newest first.
+    pub transitions: Vec<HealthTransitionRow>,
+}
+
 /// Session-scoped temp-table names the rev-scoped `HealthScanCtx` points at.
 /// `CREATE OR REPLACE` inside the helpers means reusing them across samples is
 /// safe — each iteration replaces the prior rev's contents.
 const CM_AT_REV: &str = "cm_at_rev";
 const IMPORTS_AT_REV: &str = "imports_at_rev";
 
-/// Compute the three health scores across ≤12 evenly-spaced historical revs.
+/// Fetch the top-N hotspot paths at HEAD (by revision count × cognitive
+/// complexity), used to cap `file_series` output size.
 ///
-/// Per sample: build the in-memory import graph → `arch_health`; materialize
-/// rev-scoped complexity + imports temp tables and run the (DRY-excluded,
-/// date-cut) code-health engine → mean per-file score = `code_health`;
-/// `combined = mean(arch, code)`. Every sample — including the newest — is
-/// computed the same reduced way, so the series is internally consistent (it
-/// may sit slightly above the standalone HEAD `code-health` number, which
-/// includes DRY + full external fan-out).
+/// Returns a [`HashSet`] so per-sample lookups are O(1). Uses a minimal
+/// inline SQL rather than the full hotspots engine (no DRY, no lineage,
+/// no `PERCENT_RANK` window functions) because we only need the path set,
+/// not scores, and we want to avoid re-running the heavy grouping step.
+fn top_hotspot_paths(db: &FactsDb, opts: &Options, cap: usize) -> Result<HashSet<String>> {
+    let cap_i64 = i64::try_from(cap).unwrap_or(i64::MAX);
+    let sql = "
+        SELECT path
+        FROM changes
+        GROUP BY path
+        HAVING COUNT(rev) >= ?
+        ORDER BY COUNT(rev) DESC, path ASC
+        LIMIT ?
+    ";
+    let mut stmt = db
+        .conn()
+        .prepare(sql)
+        .map_err(|e| CodeLoreError::Analysis(format!("prepare top-hotspot-paths: {e}")))?;
+    let rows = stmt
+        .query_map(duckdb::params![opts.min_revs, cap_i64], |r| {
+            r.get::<_, String>(0)
+        })
+        .map_err(|e| CodeLoreError::Analysis(format!("query top-hotspot-paths: {e}")))?;
+    rows.collect::<std::result::Result<HashSet<_>, _>>()
+        .map_err(|e| CodeLoreError::Analysis(format!("collect top-hotspot-paths: {e}")))
+}
+
+/// Detect signal-bearing band transitions between consecutive samples.
+///
+/// `"regressed"` — file enters red (was not red, now is red).
+/// `"improved"`  — file leaves red (was red, now is not red) OR
+///                  file enters green (was not green, now is green).
+fn detect_transitions(
+    prev_bands: &HashMap<String, String>,
+    code_rows: &[CodeHealthRow],
+    date: &str,
+) -> Vec<HealthTransitionRow> {
+    let mut out = Vec::new();
+    for row in code_rows {
+        let Some(prev) = prev_bands.get(&row.path) else {
+            continue;
+        };
+        let curr = &row.band;
+        if prev == curr {
+            continue;
+        }
+        let direction = if curr == "red" && prev != "red" {
+            "regressed"
+        } else if (prev == "red" && curr != "red") || (curr == "green" && prev != "green") {
+            "improved"
+        } else {
+            continue;
+        };
+        out.push(HealthTransitionRow {
+            path: row.path.clone(),
+            date: date.to_string(),
+            from_band: prev.clone(),
+            to_band: curr.clone(),
+            direction: direction.to_string(),
+        });
+    }
+    out
+}
+
+/// Compute the three health scores plus per-file series and band transitions
+/// across ≤12 evenly-spaced historical revs.
+///
+/// This is the full detail variant. [`run_health_trend`] is a thin wrapper
+/// that returns only `.trend` so the CSV/Markdown emitters are unchanged.
+///
+/// **Per-file series** — for every sampled rev, the per-file score from
+/// [`run_code_health_scoped`] is captured for paths in the top-50 hotspots
+/// at HEAD (computed once before the loop via [`top_hotspot_paths`]). The cap
+/// keeps the SPA JSON payload small; the hotspot ranking is revision-count
+/// ordered so the most-active files are always included.
+///
+/// **Transitions** — consecutive-sample band changes across ALL paths (not
+/// just top-50) where the change is signal-bearing: entering red
+/// (`"regressed"`) or leaving red / entering green (`"improved"`). Returned
+/// newest-first.
 ///
 /// # Errors
 ///
 /// Returns [`crate::CodeLoreError::Analysis`] on any query / ingest failure.
-#[tracing::instrument(name = "health-trend", skip_all)]
-pub fn run_health_trend<R: Repo>(
+#[tracing::instrument(name = "health-trend-detail", skip_all)]
+pub fn run_health_trend_detail<R: Repo>(
     db: &FactsDb,
     repo: &R,
     opts: &Options,
-) -> Result<Vec<HealthTrendRow>> {
+) -> Result<HealthTrendDetail> {
+    const FILE_SERIES_CAP: usize = 50;
+
     let samples = sampled_commits(db)?;
     // ALL files must feed the code-health mean — never the user's `--rows` cut.
     let scan_opts = opts.with_no_row_limit();
-    let mut rows = Vec::with_capacity(samples.len());
+
+    // Compute the top-50 hotspot path set once before the loop.
+    let top_paths = top_hotspot_paths(db, opts, FILE_SERIES_CAP)?;
+
+    let mut trend = Vec::with_capacity(samples.len());
+    let mut file_series: Vec<FileHealthPoint> = Vec::new();
+    let mut all_transitions: Vec<HealthTransitionRow> = Vec::new();
+    // Tracks the previous sample's per-file bands for transition detection.
+    let mut prev_bands: HashMap<String, String> = HashMap::new();
+
     for (rev, ts) in &samples {
-        // Resolve the live-at-`ts` path set once — both the import graph and the
-        // rev-scoped complexity scan below consume it.
+        let date = ts.get(..10).unwrap_or(ts);
+
+        // Resolve the live-at-`ts` path set once.
         let live = live_paths_at(db, ts)?;
 
-        // Architectural half — purely structural, from the in-memory graph.
+        // Architectural half.
         let graph = import_graph_from_live_paths(repo, rev, &live);
         let m = graph_metrics(&graph);
         let files = u32::try_from(m.n).unwrap_or(u32::MAX);
         let arch = arch_health(&m);
 
-        // Code half — rev-scoped sources into the scoped code-health engine.
+        // Code half — per-file rows available at zero extra scan cost.
         ingest_complexity_at_rev(db, repo, rev, &live, CM_AT_REV)?;
         materialize_imports_at_rev(db, &graph, IMPORTS_AT_REV)?;
         let cx = HealthScanCtx {
@@ -122,10 +268,10 @@ pub fn run_health_trend<R: Repo>(
         };
         let code_rows = run_code_health_scoped(db, &scan_opts, &cx)?;
         let code = repo_code_health(&code_rows);
-
         let combined = combined_health(arch, code);
-        rows.push(HealthTrendRow {
-            date: ts.get(..10).unwrap_or(ts).to_string(),
+
+        trend.push(HealthTrendRow {
+            date: date.to_string(),
             rev: rev.chars().take(12).collect(),
             files,
             arch_health: arch,
@@ -135,8 +281,58 @@ pub fn run_health_trend<R: Repo>(
             code_band: health_band(code).to_string(),
             combined_band: health_band(combined).to_string(),
         });
+
+        // Capture per-file points for the top-50 hotspot paths.
+        for row in &code_rows {
+            if top_paths.contains(&row.path) {
+                file_series.push(FileHealthPoint {
+                    path: row.path.clone(),
+                    date: date.to_string(),
+                    score: row.score,
+                    band: row.band.clone(),
+                });
+            }
+        }
+
+        // Detect signal-bearing transitions from previous sample.
+        if !prev_bands.is_empty() {
+            let transitions = detect_transitions(&prev_bands, &code_rows, date);
+            all_transitions.extend(transitions);
+        }
+
+        // Update prev_bands for the next iteration.
+        prev_bands.clear();
+        for row in &code_rows {
+            prev_bands.insert(row.path.clone(), row.band.clone());
+        }
     }
-    Ok(rows)
+
+    // Transitions are newest-first: reverse the chronological order.
+    all_transitions.reverse();
+
+    Ok(HealthTrendDetail {
+        trend,
+        file_series,
+        transitions: all_transitions,
+    })
+}
+
+/// Compute the three health scores across ≤12 evenly-spaced historical revs.
+///
+/// Thin wrapper over [`run_health_trend_detail`] that returns only the
+/// `trend` field for backward compatibility — CSV/Markdown emitters are
+/// unchanged.
+///
+/// # Errors
+///
+/// Returns [`crate::CodeLoreError::Analysis`] on any query / ingest failure.
+#[tracing::instrument(name = "health-trend", skip_all)]
+pub fn run_health_trend<R: Repo>(
+    db: &FactsDb,
+    repo: &R,
+    opts: &Options,
+) -> Result<Vec<HealthTrendRow>> {
+    run_health_trend_detail(db, repo, opts).map(|d| d.trend)
 }
 
 #[cfg(test)]

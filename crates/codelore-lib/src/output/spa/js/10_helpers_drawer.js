@@ -321,11 +321,12 @@
   // Drawer tab bar: three DaisyUI tabs (in-bundle classes, no CSS rebuild)
   // wired as an ARIA tablist. Overview is the default selection on every
   // open. Panels are toggled by wireDrawerTabs below.
-  function drawerTabBar() {
+  function drawerTabBar(hasHealthSeries) {
     return '<div class="tabs tabs-bordered" role="tablist" aria-label="File detail sections">' +
       '<button type="button" class="tab tab-active" role="tab" id="drawer-tab-overview" aria-controls="drawer-panel-overview" aria-selected="true" tabindex="0">Overview</button>' +
       '<button type="button" class="tab" role="tab" id="drawer-tab-coupling" aria-controls="drawer-panel-coupling" aria-selected="false" tabindex="-1">Coupling</button>' +
       '<button type="button" class="tab" role="tab" id="drawer-tab-people" aria-controls="drawer-panel-people" aria-selected="false" tabindex="-1">People</button>' +
+      (hasHealthSeries ? '<button type="button" class="tab" role="tab" id="drawer-tab-health" aria-controls="drawer-panel-health" aria-selected="false" tabindex="-1">Health</button>' : '') +
       '</div>';
   }
 
@@ -381,6 +382,23 @@
     var overviewHtml = '';
     var couplingHtml = '';
     var peopleHtml = '';
+    var healthHtml = '';
+
+    // Build per-file health sparkline from file_health_series.
+    const fileSeries = (d.file_health_series || []).filter(function (r) { return r.path === path; });
+    if (fileSeries.length) {
+      // Sort oldest-first for sparkline rendering order.
+      fileSeries.sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
+      healthHtml += '<h4>Health over time</h4>';
+      healthHtml += '<div id="drawer-health-sparkline" style="height: 140px; margin-bottom: 12px;"></div>';
+      healthHtml += '<table class="table table-xs"><thead><tr><th>Date</th><th>Score</th><th>Band</th></tr></thead><tbody>';
+      for (var hi = fileSeries.length - 1; hi >= 0; hi--) {
+        const fs = fileSeries[hi];
+        healthHtml += '<tr><td>' + escapeHtml(fs.date) + '</td><td>' + fmtNumberFlex(fs.score, 1) +
+          '</td><td>' + escapeHtml(fs.band) + '</td></tr>';
+      }
+      healthHtml += '</tbody></table>';
+    }
 
     // All section lookups are wrapped so one row's malformed data can't
     // blank the drawer: partial html built before any throw is still shown,
@@ -561,13 +579,16 @@
           ? 'No overview metrics for this file — it may be below the minimum-revision threshold.'
           : 'This row had no resolvable file path, so no metrics could be looked up.') + '</div>'));
 
+    const hasHealthSeries = healthHtml.length > 0;
     body.innerHTML =
-      drawerTabBar() +
+      drawerTabBar(hasHealthSeries) +
       drawerPanel('drawer-panel-overview', 'drawer-tab-overview', overviewInner, '') +
       drawerPanel('drawer-panel-coupling', 'drawer-tab-coupling', couplingHtml,
         'No change-coupling partners recorded for this file.') +
       drawerPanel('drawer-panel-people', 'drawer-tab-people', peopleHtml,
-        'No ownership or contributor data for this file.');
+        'No ownership or contributor data for this file.') +
+      (hasHealthSeries ? drawerPanel('drawer-panel-health', 'drawer-tab-health', healthHtml,
+        'No health history for this file.') : '');
     wireDrawerTabs(body);
 
     // Render the radar after body.innerHTML so the container exists.
@@ -581,6 +602,16 @@
       if (radarEl) radarEl.style.display = 'none';
     }
 
+    // Render the health sparkline after body.innerHTML so the container
+    // exists. Only fires when the Health tab was injected above.
+    if (hasHealthSeries) {
+      try {
+        renderDrawerHealthSparkline(path, d);
+      } catch (e) {
+        console.error('codelore: drawer health sparkline render failed for', path, e);
+      }
+    }
+
     // Native <dialog>. Alpine.store('detail') routes show()/hide()
     // through showModal()/close(). Fallback path for environments
     // without Alpine: call showModal() directly. Both paths
@@ -590,6 +621,59 @@
     } else if (typeof drawer.showModal === 'function' && !drawer.open) {
       drawer.showModal();
     }
+  }
+
+  // Health sparkline in the drawer Health tab. Renders a compact line chart
+  // of the file's score across sampled historical revisions using ECharts.
+  // The container `drawer-health-sparkline` is only present when
+  // `file_health_series` contains entries for this path (i.e., it's a top
+  // hotspot). Returns immediately if ECharts is unavailable.
+  function renderDrawerHealthSparkline(path, d) {
+    const container = document.getElementById('drawer-health-sparkline');
+    if (!container || typeof window.echarts === 'undefined') return;
+    const series = (d.file_health_series || [])
+      .filter(function (r) { return r.path === path; })
+      .sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
+    if (!series.length) return;
+    const greenMin = (d.options && typeof d.options.health_green_min === 'number')
+      ? d.options.health_green_min : 70;
+    const yellowMin = (d.options && typeof d.options.health_yellow_min === 'number')
+      ? d.options.health_yellow_min : 40;
+    const chart = mountEcharts(container);
+    chart.setOption({
+      animation: false,
+      grid: { top: 8, bottom: 24, left: 36, right: 8 },
+      xAxis: { type: 'category', data: series.map(function (r) { return r.date; }), axisLabel: { fontSize: 10 } },
+      yAxis: { type: 'value', min: 0, max: 100, splitLine: { show: true },
+        axisLabel: { fontSize: 10 } },
+      series: [{
+        type: 'line',
+        data: series.map(function (r) { return r.score; }),
+        smooth: true,
+        symbol: 'circle',
+        symbolSize: 5,
+        lineStyle: { width: 2, color: token('--cl-health-green') },
+        itemStyle: { color: function (p) {
+          const v = p.value;
+          return v >= greenMin ? token('--cl-health-green')
+            : v >= yellowMin ? token('--cl-health-yellow')
+            : token('--cl-health-red');
+        } },
+        markLine: {
+          silent: true,
+          symbol: 'none',
+          label: { show: false },
+          lineStyle: { type: 'dashed', opacity: 0.4 },
+          data: [
+            { yAxis: greenMin, lineStyle: { color: token('--cl-health-green') } },
+            { yAxis: yellowMin, lineStyle: { color: token('--cl-health-yellow') } },
+          ],
+        },
+      }],
+      tooltip: { trigger: 'axis', formatter: function (ps) {
+        return ps[0].axisValue + ': ' + ps[0].value.toFixed(1);
+      } },
+    });
   }
 
   // Drawer radar — six-axis behavioural profile for the file shown
@@ -873,6 +957,53 @@
       });
       trs[j].style.cursor = 'pointer';
       wireRowKbActivation(trs[j]);
+    }
+  }
+
+  // ─── Improvements feed widget ─────────────────────────────────────
+  // Renders `health_transitions` (signal-bearing band transitions) as
+  // two lists: recent improvements ↑ and regressions ↓. Each row is
+  // clickable via `_codeloreShowDetail` for linked brushing.
+  function renderImprovementsFeed(transitions) {
+    const container = document.getElementById('widget-improvements-feed-body');
+    if (!container) return;
+    if (!transitions || !transitions.length) {
+      container.innerHTML = '<div class="empty">No band transitions detected across the sampled history.</div>';
+      return;
+    }
+    // `transitions` is newest-first from the Rust emitter.
+    const improved = transitions.filter(function (r) { return r.direction === 'improved'; }).slice(0, 8);
+    const regressed = transitions.filter(function (r) { return r.direction === 'regressed'; }).slice(0, 8);
+
+    function makeList(rows, label, icon) {
+      if (!rows.length) return '';
+      var html = '<h4 class="feed-section-title">' + icon + ' ' + escapeHtml(label) + '</h4><ul class="feed-list">';
+      for (var i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        const shortPath = r.path.split('/').pop() || r.path;
+        html += '<li class="feed-row" data-path="' + escapeHtml(r.path) + '" tabindex="0" role="button">' +
+          '<code title="' + escapeHtml(r.path) + '">' + escapeHtml(shortPath) + '</code>' +
+          ' <span class="feed-band">' + escapeHtml(r.from_band) + ' → ' + escapeHtml(r.to_band) + '</span>' +
+          ' <span class="feed-date">' + escapeHtml(r.date) + '</span>' +
+          '</li>';
+      }
+      html += '</ul>';
+      return html;
+    }
+
+    container.innerHTML =
+      makeList(improved, 'Recent improvements', '↑') +
+      makeList(regressed, 'Regressions', '↓');
+
+    // Wire clicks + keyboard activation for linked brushing.
+    const rows = container.querySelectorAll('.feed-row');
+    for (var ri = 0; ri < rows.length; ri++) {
+      rows[ri].addEventListener('click', function (evt) {
+        const p = evt.currentTarget.getAttribute('data-path');
+        if (window._codeloreShowDetail) window._codeloreShowDetail(p);
+      });
+      rows[ri].style.cursor = 'pointer';
+      wireRowKbActivation(rows[ri]);
     }
   }
 

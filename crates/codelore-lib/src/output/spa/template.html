@@ -1531,6 +1531,18 @@
       <div id="widget-health-trend-body" class="widget-body" style="min-height: 340px;"></div>
     </section>
 
+    <!-- Improvements feed: recent band transitions (regressions ↓ /
+         improvements ↑) surfaced from the per-file health series. Each
+         entry is a clickable path for linked-brushing into the drawer. -->
+    <section class="widget card bg-base-200 shadow-lg" id="widget-improvements-feed">
+      <h2>Health improvements &amp; regressions</h2>
+      <div class="subtitle">
+        Signal-bearing code-health band transitions detected across sampled
+        historical commits. Click any file to open its detail drawer.
+      </div>
+      <div id="widget-improvements-feed-body" class="widget-body" style="min-height: 120px;"></div>
+    </section>
+
     <!-- Treemap alternative view to the circle-pack. Same
          `hotspots` data, rendered as nested rectangles. Strict
          area encoding (cognitive complexity × revisions); useful
