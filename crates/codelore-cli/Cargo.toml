@@ -45,9 +45,10 @@ tempfile = "3"
 time = { version = "0.3", features = ["macros", "parsing"] }
 # MCP server (`codelore mcp`). stdio transport only; tokio rt-multi-thread
 # required by rmcp's async runtime. schemars drives JSON Schema in tools/list.
-rmcp = { version = "2.2", features = ["server", "transport-io"] }
-tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros"] }
-schemars = "1"
+# Versions pinned in [workspace.dependencies]; referenced here as workspace = true.
+rmcp = { workspace = true }
+tokio = { workspace = true }
+schemars = { workspace = true }
 
 [[test]]
 name = "mcp_test"
