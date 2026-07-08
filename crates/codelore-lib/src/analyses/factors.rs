@@ -249,6 +249,15 @@ mod tests {
     }
 
     #[test]
+    fn xmr_eight_run_above_mean_signals_attention() {
+        // Mean is ~28 (first 4 points below), last 8 all above → rule 2.
+        let series = vec![
+            10.0, 12.0, 8.0, 9.0, 50.0, 51.0, 52.0, 53.0, 54.0, 55.0, 56.0, 57.0,
+        ];
+        assert!(xmr_attention(&series));
+    }
+
+    #[test]
     fn xmr_exactly_four_points_eligible() {
         // Length == 4 is the minimum for evaluation; gentle variation → false.
         let series = vec![70.0, 71.0, 70.5, 70.8];
