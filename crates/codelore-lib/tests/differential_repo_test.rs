@@ -711,8 +711,11 @@ fn diff_hunks_match_across_backends() {
 }
 
 /// `Repo::tags()` must return byte-identical results from both backends.
-/// Uses the `delivery_repo` fixture which has 4 annotated tags in known
-/// chronological order: v0.1.0 (Jan), v0.2.0 (Feb), nightly-1 (Mar), v1.0.0 (Apr).
+/// Uses the `delivery_repo` fixture which has 4 annotated tags plus one
+/// LIGHTWEIGHT tag (`light-1`, exercising the committer-date fallback path)
+/// in known chronological order: v0.1.0 (Jan), v0.2.0 (Feb), nightly-1 (Mar),
+/// light-1 (Apr 21 10:00, target commit's committer date), v1.0.0 (Apr 21
+/// 12:00, tagger date).
 #[test]
 fn tags_match_across_backends() {
     let path = delivery_path();
@@ -724,13 +727,13 @@ fn tags_match_across_backends() {
 
     assert_eq!(
         gix_tags.len(),
-        4,
-        "expected 4 annotated tags; got {gix_tags:?}",
+        5,
+        "expected 4 annotated + 1 lightweight tag; got {gix_tags:?}",
     );
     assert_eq!(
         cli_tags.len(),
-        4,
-        "expected 4 annotated tags; got {cli_tags:?}",
+        5,
+        "expected 4 annotated + 1 lightweight tag; got {cli_tags:?}",
     );
 
     // Both backends must return identical results: same order, same OIDs,
@@ -741,11 +744,13 @@ fn tags_match_across_backends() {
         "tags() diverged between GixRepo and GitCliRepo:\n  gix={gix_tags:#?}\n  cli={cli_tags:#?}"
     );
 
-    // Verify sort order and names are correct (ascending by tagger date).
+    // Verify sort order and names are correct (ascending by date: tagger
+    // date for annotated tags, target committer date for lightweight —
+    // which is why light-1 (commit 10:00) sorts before v1.0.0 (tag 12:00)).
     let names: Vec<&str> = gix_tags.iter().map(|t| t.name.as_str()).collect();
     assert_eq!(
         names,
-        ["v0.1.0", "v0.2.0", "nightly-1", "v1.0.0"],
+        ["v0.1.0", "v0.2.0", "nightly-1", "light-1", "v1.0.0"],
         "tags not in expected (date, name) order"
     );
 

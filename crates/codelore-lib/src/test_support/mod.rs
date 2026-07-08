@@ -1117,6 +1117,11 @@ pub mod delivery_repo {
         );
         run_git(&path, &["repack", "-d", "--quiet"]);
         tag_annotated(&path, "v1.0.0", "release v1.0.0", "2026-04-21T12:00:00Z");
+        // Lightweight tag (no `-a`): exercises the tag-date fallback path in
+        // `Repo::tags()` — lightweight tags carry no tagger date, so both
+        // backends must fall back to the target commit's committer date
+        // (2026-04-21T10:00:00Z here, sorting BEFORE v1.0.0's 12:00 tagger date).
+        run_git(&path, &["tag", "light-1"]);
 
         let head_sha = String::from_utf8(
             Command::new("git")

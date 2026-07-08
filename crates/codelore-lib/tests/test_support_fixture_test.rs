@@ -46,7 +46,8 @@ fn delivery_repo_has_two_merges_three_authors_four_tags() {
         "fixture must have exactly 3 distinct canonical authors on non-merge commits"
     );
 
-    // ── 3. Exactly 4 tags in the fixture repo (v0.1.0, v0.2.0, v1.0.0, nightly-1)
+    // ── 3. Exactly 5 tags: 4 annotated (v0.1.0, v0.2.0, v1.0.0, nightly-1)
+    //      + 1 lightweight (light-1, exercising the committer-date fallback)
     let tag_out = std::process::Command::new("git")
         .arg("-C")
         .arg(fixture.dir.path())
@@ -59,7 +60,7 @@ fn delivery_repo_has_two_merges_three_authors_four_tags() {
         .filter(|l| !l.is_empty())
         .count();
     assert_eq!(
-        tag_count, 4,
-        "fixture must have exactly 4 tags (v0.1.0, v0.2.0, v1.0.0, nightly-1)"
+        tag_count, 5,
+        "fixture must have exactly 5 tags (v0.1.0, v0.2.0, v1.0.0, nightly-1, light-1)"
     );
 }
