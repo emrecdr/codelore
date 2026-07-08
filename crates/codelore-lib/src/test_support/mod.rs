@@ -304,7 +304,7 @@ pub mod biomarker_repo {
 /// Fixture for `function-xray` and `function-coupling` tests.
 ///
 /// Contains a single Rust file `src/target.rs` with two functions:
-/// - `hot` — 8-line function touched in every non-seed commit
+/// - `hot` — 11-line function touched in every non-seed commit
 /// - `cold` — touched only in the three coupled commits
 ///
 /// Commit history:
@@ -312,10 +312,10 @@ pub mod biomarker_repo {
 ///   tweak-1    — single-hunk edit of `hot` (line 2)
 ///   tweak-2    — single-hunk edit of `hot` (line 2)
 ///   tweak-3    — single-hunk edit of `hot` (line 2)
-///   tweak-mh   — two-hunk edit of `hot` (lines 2 and 8) in ONE commit
-///   coupled-1  — changes BOTH `hot` (line 8) AND `cold` (line 12)
-///   coupled-2  — changes BOTH `hot` (line 8) AND `cold` (line 12)
-///   coupled-3  — changes BOTH `hot` (line 8) AND `cold` (line 12)
+///   tweak-mh   — two-hunk edit of `hot` (lines 2 and 10) in ONE commit
+///   coupled-1  — changes BOTH `hot` (line 10) AND `cold` (line 14)
+///   coupled-2  — changes BOTH `hot` (line 10) AND `cold` (line 14)
+///   coupled-3  — changes BOTH `hot` (line 10) AND `cold` (line 14)
 ///
 /// `tweak-mh` verifies that a multi-hunk commit counts as exactly one
 /// revision for `change_freq`, not one per hunk.
@@ -331,47 +331,55 @@ pub mod function_xray_repo {
         pub dir: TempDir,
     }
 
-    // `hot` is an 8-line function so that edits on line 2 and line 8 are far
-    // enough apart to produce two separate hunks in a single commit (git's
-    // default 3-line context window cannot bridge a 4-line gap).
+    // `hot` is an 11-line function so that edits on line 2 and line 10 are
+    // guaranteed to produce two SEPARATE hunks in the same commit.
+    //
+    // Hunk-split geometry:
+    //   git default context = 3 lines on each side of a change.
+    //   Two edits split into separate hunks iff gap > 2 × context = 6 lines.
+    //   Gap here = lines 3-9 = 7 unchanged lines → 7 > 6 → always two hunks.
+    //
+    //   (The original 8-line design with edits at lines 2 and 8 had a gap of
+    //   5 lines, which equals 2×3-1 = 5 < 6, so git could merge the hunks.)
     //
     // Layout of src/target.rs:
     //   line 1:  pub fn hot() -> i32 {
-    //   line 2:    let a = <A>;        ← edit region 1
+    //   line 2:    let a = <A>;        ← edit region 1 (tweak-1/2/3/mh)
     //   line 3:    let b = 10;
     //   line 4:    let c = 20;
     //   line 5:    let d = 30;
     //   line 6:    let e = 40;
     //   line 7:    let f = 50;
-    //   line 8:    a + <B>              ← edit region 2
-    //   line 9:  }
-    //   line 10: (blank separator)
-    //   line 11: pub fn cold() -> i32 {
-    //   line 12:   42                  ← edit region (coupled commits)
-    //   line 13: }
+    //   line 8:    let g = 60;         ← padding (widens the gap to 7)
+    //   line 9:    let h = 70;         ← padding (gap = lines 3-9 = 7 > 6)
+    //   line 10:   <B>                 ← edit region 2 (tweak-mh return value)
+    //   line 11: }
+    //   line 12: (blank separator)
+    //   line 13: pub fn cold() -> i32 {
+    //   line 14:   42                  ← edit region (coupled commits)
+    //   line 15: }
     //
     // Versions v0–v3 only change line 2 (single hunk per commit → change_freq
     // increments by 1 each time). The multi-hunk commit (tweak-mh) changes
-    // BOTH line 2 (a = 99) AND line 8 (return value) in ONE commit → two
-    // hunks but still only +1 to change_freq.
+    // BOTH line 2 (a = 99) AND line 10 (return value) in ONE commit → two
+    // distinct hunks (gap 7 > 2×context 6) but still only +1 to change_freq.
     //
-    // The three coupled commits change line 8 of `hot` AND line 12 of `cold`
-    // in the SAME commit. The 2-line gap between line 9 (end of hot) and line
-    // 12 (cold body) is bridged by git's 3-line context window, so these two
-    // regions may land in one hunk or two; either way both function spans are
-    // covered and the co-change attribution is the same.
+    // The three coupled commits change line 10 of `hot` AND line 14 of `cold`
+    // in the SAME commit. Both function spans are covered by the hunk-overlap
+    // attribution so (hot, cold) co_changes = 3.
 
-    const HOT_V0: &str = "pub fn hot() -> i32 {\n    let a = 0;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    a + b + c + d + e + f\n}\n";
-    const HOT_V1: &str = "pub fn hot() -> i32 {\n    let a = 1;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    a + b + c + d + e + f\n}\n";
-    const HOT_V2: &str = "pub fn hot() -> i32 {\n    let a = 2;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    a + b + c + d + e + f\n}\n";
-    const HOT_V3: &str = "pub fn hot() -> i32 {\n    let a = 3;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    a + b + c + d + e + f\n}\n";
-    // Multi-hunk: changes line 2 (a = 99) AND line 8 (drops the sum, just returns 99).
-    // These two regions are 6 lines apart — guaranteed two separate hunks.
-    const HOT_VMH: &str = "pub fn hot() -> i32 {\n    let a = 99;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    99\n}\n";
-    // Coupling versions: change line 8 (return value) in hot for each coupled commit.
-    const HOT_VCPL1: &str = "pub fn hot() -> i32 {\n    let a = 99;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    100\n}\n";
-    const HOT_VCPL2: &str = "pub fn hot() -> i32 {\n    let a = 99;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    101\n}\n";
-    const HOT_VCPL3: &str = "pub fn hot() -> i32 {\n    let a = 99;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    102\n}\n";
+    const HOT_V0: &str = "pub fn hot() -> i32 {\n    let a = 0;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    let g = 60;\n    let h = 70;\n    a + b + c + d + e + f + g + h\n}\n";
+    const HOT_V1: &str = "pub fn hot() -> i32 {\n    let a = 1;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    let g = 60;\n    let h = 70;\n    a + b + c + d + e + f + g + h\n}\n";
+    const HOT_V2: &str = "pub fn hot() -> i32 {\n    let a = 2;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    let g = 60;\n    let h = 70;\n    a + b + c + d + e + f + g + h\n}\n";
+    const HOT_V3: &str = "pub fn hot() -> i32 {\n    let a = 3;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    let g = 60;\n    let h = 70;\n    a + b + c + d + e + f + g + h\n}\n";
+    // Multi-hunk: changes line 2 (a = 99) AND line 10 (return 99 instead of sum).
+    // Gap between the two edit sites = lines 3-9 = 7 unchanged lines.
+    // 7 > 2 × 3 (default context) = 6 → git produces two distinct hunks.
+    const HOT_VMH: &str = "pub fn hot() -> i32 {\n    let a = 99;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    let g = 60;\n    let h = 70;\n    99\n}\n";
+    // Coupling versions: change line 10 (return value) for each coupled commit.
+    const HOT_VCPL1: &str = "pub fn hot() -> i32 {\n    let a = 99;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    let g = 60;\n    let h = 70;\n    100\n}\n";
+    const HOT_VCPL2: &str = "pub fn hot() -> i32 {\n    let a = 99;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    let g = 60;\n    let h = 70;\n    101\n}\n";
+    const HOT_VCPL3: &str = "pub fn hot() -> i32 {\n    let a = 99;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    let g = 60;\n    let h = 70;\n    102\n}\n";
     // `cold` versions for coupled commits — body changes on line 12.
     const COLD_V0: &str = "pub fn cold() -> i32 {\n    42\n}\n";
     const COLD_V1: &str = "pub fn cold() -> i32 {\n    43\n}\n";
@@ -423,14 +431,15 @@ pub mod function_xray_repo {
         write(&path, "src/target.rs", &src(HOT_V3, COLD_V0));
         run_git_at(&path, dates[3], &["commit", "-am", "tweak-3", "--quiet"]);
 
-        // tweak-mh: change BOTH line 2 (a = 99) AND line 8 (return value) in
-        // ONE commit. The 6-line gap produces two separate hunks in the diff,
-        // but change_freq for `hot` should only increment by 1, not 2.
+        // tweak-mh: change BOTH line 2 (a = 99) AND line 10 (return 99) in
+        // ONE commit. Gap between edit sites = lines 3-9 = 7 unchanged lines;
+        // 7 > 2×3 (context) = 6, so git produces two distinct hunks. But
+        // change_freq for `hot` must increment by exactly 1, not 2.
         write(&path, "src/target.rs", &src(HOT_VMH, COLD_V0));
         run_git_at(&path, dates[4], &["commit", "-am", "tweak-mh", "--quiet"]);
 
         // coupled-1/2/3: change BOTH hot AND cold in the same commit.
-        // hot changes at line 8 (return value); cold changes at line 12
+        // hot changes at line 10 (return value); cold changes at line 14
         // (return value). Both function spans are touched in each of these
         // revisions, so function-coupling counts (hot, cold) co_changes = 3.
         write(&path, "src/target.rs", &src(HOT_VCPL1, COLD_V1));
