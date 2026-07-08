@@ -1080,6 +1080,31 @@ fn bus_factor_csv_contains_model_column() {
         .stdout(predicate::str::contains(",doe"));
 }
 
+#[test]
+fn team_composition_csv_has_header_and_rows() {
+    // Verify CSV header columns and that delivery_repo produces author data.
+    let delivery = codelore_lib::test_support::delivery_repo::build();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "team-composition",
+            "--repo",
+            delivery.dir.path().to_str().unwrap(),
+            "--format",
+            "csv",
+            "--min-revs",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "author,tenure-days,bucket,veteran-breadth-ok,active,commits,files-touched,onboarding-weeks",
+        ))
+        .stdout(predicate::str::contains("__summary__"));
+}
+
 #[cfg(feature = "spa")]
 #[test]
 fn spa_without_output_defaults_to_dot_codelore() {
