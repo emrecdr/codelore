@@ -303,12 +303,14 @@ pub mod biomarker_repo {
 
 /// Fixture for `function-xray` and `function-coupling` tests.
 ///
-/// Contains a single Rust file `src/target.rs` with two functions:
-/// - `hot` — 11-line function touched in every non-seed commit
+/// Contains a single Rust file `src/target.rs` with three functions:
+/// - `hot`  — 11-line function touched in every non-seed non-meta commit
 /// - `cold` — touched only in the three coupled commits
+/// - `meta` — touched only in meta-tweak (provides `neither = 1` in the
+///   Fisher contingency table so the p-value is computable, not degenerate)
 ///
-/// Commit history:
-///   seed       — writes both functions
+/// Commit history (8 revisions that produce hunks, plus seed):
+///   seed       — writes all three functions
 ///   tweak-1    — single-hunk edit of `hot` (line 2)
 ///   tweak-2    — single-hunk edit of `hot` (line 2)
 ///   tweak-3    — single-hunk edit of `hot` (line 2)
@@ -316,12 +318,14 @@ pub mod biomarker_repo {
 ///   coupled-1  — changes BOTH `hot` (line 10) AND `cold` (line 14)
 ///   coupled-2  — changes BOTH `hot` (line 10) AND `cold` (line 14)
 ///   coupled-3  — changes BOTH `hot` (line 10) AND `cold` (line 14)
+///   meta-tweak — changes ONLY `meta` (line 18), leaving hot + cold untouched
 ///
 /// `tweak-mh` verifies that a multi-hunk commit counts as exactly one
 /// revision for `change_freq`, not one per hunk.
 ///
 /// `coupled-1/2/3` verify that `function-coupling` detects the `(hot, cold)`
-/// pair with `co_changes = 3` and `confidence = 1.0`.
+/// pair with `co_changes = 3`, `confidence = 1.0`, and a non-degenerate
+/// Fisher p-value (contingency [3, 4, 0, 1] — see `function_coupling_test`).
 #[cfg(feature = "test-support")]
 pub mod function_xray_repo {
     use std::path::PathBuf;
@@ -358,6 +362,10 @@ pub mod function_xray_repo {
     //   line 13: pub fn cold() -> i32 {
     //   line 14:   42                  ← edit region (coupled commits)
     //   line 15: }
+    //   line 16: (blank separator)
+    //   line 17: pub fn meta() -> i32 {
+    //   line 18:   <M>                 ← edit region (meta-tweak only)
+    //   line 19: }
     //
     // Versions v0–v3 only change line 2 (single hunk per commit → change_freq
     // increments by 1 each time). The multi-hunk commit (tweak-mh) changes
@@ -367,6 +375,12 @@ pub mod function_xray_repo {
     // The three coupled commits change line 10 of `hot` AND line 14 of `cold`
     // in the SAME commit. Both function spans are covered by the hunk-overlap
     // attribution so (hot, cold) co_changes = 3.
+    //
+    // meta-tweak changes ONLY line 18 (`meta` body), leaving `hot` and `cold`
+    // untouched. This gives the Fisher table for (hot, cold) a non-zero
+    // `neither` cell: neither = n - co - a_only - b_only = 8-3-4-0 = 1.
+    // Without meta-tweak, neither = 0 → degenerate marginal → fisher returns
+    // None. With it, the p-value is computable and < 0.05 (strong signal).
 
     const HOT_V0: &str = "pub fn hot() -> i32 {\n    let a = 0;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    let g = 60;\n    let h = 70;\n    a + b + c + d + e + f + g + h\n}\n";
     const HOT_V1: &str = "pub fn hot() -> i32 {\n    let a = 1;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    let g = 60;\n    let h = 70;\n    a + b + c + d + e + f + g + h\n}\n";
@@ -380,14 +394,18 @@ pub mod function_xray_repo {
     const HOT_VCPL1: &str = "pub fn hot() -> i32 {\n    let a = 99;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    let g = 60;\n    let h = 70;\n    100\n}\n";
     const HOT_VCPL2: &str = "pub fn hot() -> i32 {\n    let a = 99;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    let g = 60;\n    let h = 70;\n    101\n}\n";
     const HOT_VCPL3: &str = "pub fn hot() -> i32 {\n    let a = 99;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    let g = 60;\n    let h = 70;\n    102\n}\n";
-    // `cold` versions for coupled commits — body changes on line 12.
+    // `cold` versions for coupled commits — body changes on line 14.
     const COLD_V0: &str = "pub fn cold() -> i32 {\n    42\n}\n";
     const COLD_V1: &str = "pub fn cold() -> i32 {\n    43\n}\n";
     const COLD_V2: &str = "pub fn cold() -> i32 {\n    44\n}\n";
     const COLD_V3: &str = "pub fn cold() -> i32 {\n    45\n}\n";
+    // `meta` versions — only changed by meta-tweak; provides `neither = 1`
+    // in the Fisher table for (hot, cold) so the p-value is non-degenerate.
+    const META_V0: &str = "pub fn meta() -> i32 {\n    0\n}\n";
+    const META_V1: &str = "pub fn meta() -> i32 {\n    1\n}\n";
 
-    fn src(hot: &str, cold: &str) -> String {
-        format!("{hot}\n{cold}")
+    fn src(hot: &str, cold: &str, meta: &str) -> String {
+        format!("{hot}\n{cold}\n{meta}")
     }
 
     /// # Panics
@@ -412,44 +430,58 @@ pub mod function_xray_repo {
             "2026-06-06T10:00:00Z",
             "2026-06-07T10:00:00Z",
             "2026-06-08T10:00:00Z",
+            "2026-06-09T10:00:00Z",
         ];
 
-        // Seed: write both functions.
-        write(&path, "src/target.rs", &src(HOT_V0, COLD_V0));
+        // Seed: write all three functions.
+        write(&path, "src/target.rs", &src(HOT_V0, COLD_V0, META_V0));
         run_git(&path, &["add", "."]);
         run_git_at(&path, dates[0], &["commit", "-m", "seed", "--quiet"]);
 
         // tweak-1: mutate hot's body (line 2 only → single hunk).
-        write(&path, "src/target.rs", &src(HOT_V1, COLD_V0));
+        write(&path, "src/target.rs", &src(HOT_V1, COLD_V0, META_V0));
         run_git_at(&path, dates[1], &["commit", "-am", "tweak-1", "--quiet"]);
 
         // tweak-2: mutate hot's body again (line 2 only → single hunk).
-        write(&path, "src/target.rs", &src(HOT_V2, COLD_V0));
+        write(&path, "src/target.rs", &src(HOT_V2, COLD_V0, META_V0));
         run_git_at(&path, dates[2], &["commit", "-am", "tweak-2", "--quiet"]);
 
         // tweak-3: mutate hot's body a third time (line 2 only → single hunk).
-        write(&path, "src/target.rs", &src(HOT_V3, COLD_V0));
+        write(&path, "src/target.rs", &src(HOT_V3, COLD_V0, META_V0));
         run_git_at(&path, dates[3], &["commit", "-am", "tweak-3", "--quiet"]);
 
         // tweak-mh: change BOTH line 2 (a = 99) AND line 10 (return 99) in
         // ONE commit. Gap between edit sites = lines 3-9 = 7 unchanged lines;
         // 7 > 2×3 (context) = 6, so git produces two distinct hunks. But
         // change_freq for `hot` must increment by exactly 1, not 2.
-        write(&path, "src/target.rs", &src(HOT_VMH, COLD_V0));
+        write(&path, "src/target.rs", &src(HOT_VMH, COLD_V0, META_V0));
         run_git_at(&path, dates[4], &["commit", "-am", "tweak-mh", "--quiet"]);
 
         // coupled-1/2/3: change BOTH hot AND cold in the same commit.
         // hot changes at line 10 (return value); cold changes at line 14
         // (return value). Both function spans are touched in each of these
         // revisions, so function-coupling counts (hot, cold) co_changes = 3.
-        write(&path, "src/target.rs", &src(HOT_VCPL1, COLD_V1));
+        write(&path, "src/target.rs", &src(HOT_VCPL1, COLD_V1, META_V0));
         run_git_at(&path, dates[5], &["commit", "-am", "coupled-1", "--quiet"]);
 
-        write(&path, "src/target.rs", &src(HOT_VCPL2, COLD_V2));
+        write(&path, "src/target.rs", &src(HOT_VCPL2, COLD_V2, META_V0));
         run_git_at(&path, dates[6], &["commit", "-am", "coupled-2", "--quiet"]);
 
-        write(&path, "src/target.rs", &src(HOT_VCPL3, COLD_V3));
+        write(&path, "src/target.rs", &src(HOT_VCPL3, COLD_V3, META_V0));
         run_git_at(&path, dates[7], &["commit", "-am", "coupled-3", "--quiet"]);
+
+        // meta-tweak: change ONLY the `meta` function body (line 18). Neither
+        // `hot` nor `cold` is touched. This gives the Fisher table for the
+        // (hot, cold) pair a non-zero `neither` cell:
+        //   n       = 8 (total revisions in the hunks table)
+        //   co      = 3 (coupled-1/2/3 touch both hot and cold)
+        //   a_only  = 4 (tweak-1/2/3/mh touch hot only)
+        //   b_only  = 0 (no revision touches cold without also touching hot)
+        //   neither = 8 - 3 - 4 - 0 = 1 (meta-tweak touches neither)
+        // Without this commit, neither = 0 → row2 = c+d = 0 → Fisher returns
+        // None (degenerate marginal). With it, the p-value is computable.
+        write(&path, "src/target.rs", &src(HOT_VCPL3, COLD_V3, META_V1));
+        run_git_at(&path, dates[8], &["commit", "-am", "meta-tweak", "--quiet"]);
 
         FunctionXrayRepo { dir }
     }

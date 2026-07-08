@@ -1,22 +1,25 @@
 /// Integration tests for the `function-coupling` analysis.
 ///
-/// Uses `function_xray_repo` which after coupled-1/2/3 commits has `hot` and
-/// `cold` co-changing in 3 revisions. The coupling test asserts `p_value`
-/// is `None` (degenerate-marginal = perfectly coupled) and confidence = 1.0.
-///
-/// Expected values (n = 7 non-seed revisions in the hunks table):
+/// Uses `function_xray_repo` which has `hot`, `cold`, and `meta` functions.
+/// After meta-tweak, the Fisher table for (hot, cold) is non-degenerate:
 ///
 /// ```text
+/// n            = 8  (total revisions in hunks table — seed not counted)
 /// hot_changes  = 7  (tweak-1/2/3, tweak-mh, coupled-1/2/3)
 /// cold_changes = 3  (coupled-1/2/3 only)
-/// co_changes   = 3  (coupled-1/2/3 touch both)
-/// a_only       = 4  (hot_changes - co)
-/// b_only       = 0  (cold_changes - co)
-/// neither      = 0  (n - co - a_only - b_only = 7 - 3 - 4 - 0)
-/// Fisher returns None for [3, 4, 0, 0]: row2 = c+d = 0 is a degenerate
-/// marginal; None means perfectly coupled (p = 0), sorts before any Some.
+/// co_changes   = 3  (coupled-1/2/3 touch both hot and cold)
+/// a_only       = 4  (hot_changes - co = 7 - 3)
+/// b_only       = 0  (cold_changes - co = 3 - 3)
+/// neither      = 1  (n - co - a_only - b_only = 8 - 3 - 4 - 0)
+///                   ← meta-tweak touches only `meta`, leaving both untouched
 /// confidence   = 1.0  (co / min(hot_changes, cold_changes) = 3/3)
+/// Fisher p for [3, 4, 0, 1]: row1=7, row2=1, col1=3, col2=5 — computable,
+///   strongly significant (p < 0.05) given the high co-change rate.
 /// ```
+///
+/// Note: the `None`-sorts-first behavior in `run_function_coupling` is still
+/// correct for real degenerate repos where a marginal is truly zero. The
+/// fixture now avoids the degenerate case to give a concrete p-value in tests.
 #[cfg(feature = "test-support")]
 mod function_coupling_integration {
     use codelore_lib::Options;
@@ -45,9 +48,9 @@ mod function_coupling_integration {
     }
 
     /// `hot` and `cold` co-change in 3 revisions (coupled-1/2/3).
-    /// Confidence must be 1.0 (co/min(a,b) = 3/3). `p_value` is `None`
-    /// because the Fisher table [3,4,0,0] has a zero marginal (row2 = 0),
-    /// which the implementation treats as a degenerate case that sorts first.
+    /// Confidence must be 1.0 (co/min(a,b) = 3/3). `p_value` must be `Some`
+    /// and < 0.1 — the Fisher table [3, 4, 0, 1] is non-degenerate because
+    /// meta-tweak contributes `neither = 1`.
     #[test]
     fn hot_cold_pair_has_confidence_1_and_low_p() {
         let (_repo, rows) = build_db_and_rows("src/target.rs");
@@ -70,14 +73,15 @@ mod function_coupling_integration {
             "expected confidence = 1.0 (co/min(a,b)=3/3), got {}",
             pair.confidence
         );
-        // Fisher table [co=3, a_only=4, b_only=0, neither=0] has row2=c+d=0,
-        // a degenerate marginal (p → 0). The implementation returns None and
-        // sorts None first as the strongest coupling signal.
+        // Fisher table [co=3, a_only=4, b_only=0, neither=1].
+        // neither=1 comes from meta-tweak touching only `meta`.
+        // Row2 = b_only + neither = 0 + 1 = 1 → non-degenerate → Some(p).
+        let p = pair
+            .p_value
+            .expect("p_value must be Some; Fisher table [3,4,0,1] is non-degenerate");
         assert!(
-            pair.p_value.is_none(),
-            "expected p_value = None (degenerate marginal, perfectly coupled), \
-             got {:?}",
-            pair.p_value
+            p < 0.1,
+            "expected p_value < 0.1 for a strongly coupled pair, got {p}"
         );
     }
 

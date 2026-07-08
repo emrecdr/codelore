@@ -1,10 +1,11 @@
 /// Integration tests for the `function-xray` analysis.
 ///
-/// Uses `function_xray_repo`, a purpose-built fixture with two functions in
+/// Uses `function_xray_repo`, a purpose-built fixture with three functions in
 /// `src/target.rs`:
-///   - `hot` — 11-line function; body modified in tweak-1/2/3, tweak-mh, and
-///     coupled-1/2/3 → `change_freq` = 7 (all non-seed commits touch `hot`)
+///   - `hot`  — 11-line function; body modified in tweak-1/2/3, tweak-mh, and
+///     coupled-1/2/3 → `change_freq` = 7 (all non-meta commits touch `hot`)
 ///   - `cold` — touched only in coupled-1/2/3 → `change_freq` = 3
+///   - `meta` — touched only in meta-tweak → `change_freq` = 1
 ///
 /// The multi-hunk commit (tweak-mh) edits line 2 and line 10 of `hot`. The
 /// gap between the two edit sites is lines 3-9 = 7 unchanged lines; since
