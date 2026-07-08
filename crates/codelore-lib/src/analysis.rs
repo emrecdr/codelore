@@ -145,6 +145,14 @@ pub enum AnalysisName {
     // not. Counters CodeScene v7.4's Delivery Analysis surface while
     // staying SQL-driven and CLI-only.
     DeliveryFriction,
+    // Repo-level delivery flow distributions: batch_size_files,
+    // batch_size_loc (merge-unit size), branch_duration_hours
+    // (time branch stays open), rework_pct (hunk-overlap within the
+    // rework window), lead_proxy_hours (author→committer date gap
+    // over non-merge commits). Percentile-first (p50/p75/p90).
+    // Requires the commit_parents table (schema v4) and merges ingested
+    // with include_merges=true.
+    DeliveryMetrics,
     // Effort-aware refactoring ROI ranking: (structural_risk ×
     // hotspot_score) / max(loc, floor). Surfaces files where low
     // code health intersects high activity, normalised by inspection
@@ -232,6 +240,7 @@ impl AnalysisName {
             Self::LeadTime => "lead-time",
             Self::BusFactor => "bus-factor",
             Self::DeliveryFriction => "delivery-friction",
+            Self::DeliveryMetrics => "delivery-metrics",
             Self::RefactoringTargets => "refactoring-targets",
             Self::EffortExposure => "effort-exposure",
             Self::CodeFamiliarity => "code-familiarity",
@@ -315,6 +324,7 @@ impl AnalysisName {
             LeadTime,
             BusFactor,
             DeliveryFriction,
+            DeliveryMetrics,
             RefactoringTargets,
             EffortExposure,
             CodeFamiliarity,

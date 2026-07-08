@@ -1345,6 +1345,37 @@ pub fn write_marginal_owner_risk_markdown<W: Write>(
     Ok(())
 }
 
+pub fn write_delivery_metrics_markdown<W: Write>(
+    rows: &[crate::analyses::delivery_metrics::DeliveryMetricsRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore delivery-metrics")?;
+    if rows.is_empty() {
+        writeln!(
+            w,
+            "_No delivery metrics computed — no merge commits ingested._"
+        )
+        .map_err(CodeLoreError::Io)?;
+        return Ok(());
+    }
+    writeln!(w, "| Metric | p50 | p75 | p90 | n | Caveat |").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---:|---:|---:|---:|---|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| {} | {:.2} | {:.2} | {:.2} | {} | {} |",
+            escape_md_cell(&row.metric),
+            row.p50,
+            row.p75,
+            row.p90,
+            row.n,
+            escape_md_cell(&row.caveat),
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod escape_tests {
     use super::escape_md_cell;

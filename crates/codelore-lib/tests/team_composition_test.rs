@@ -9,7 +9,7 @@
 //!
 //! - **`delivery_repo`** — Alice / Bob / Carol. Project spans Jan-1 to Apr-21
 //!   (110 days). All three first commits are within the first 12 weeks
-//!   (founder cutoff = date_trunc('week', Jan-1) + 84 d = 2026-03-23) → all `onboarding_weeks = NULL`.
+//!   (founder cutoff = `date_trunc('week', Jan-1)` + 84 d = 2026-03-23) → all `onboarding_weeks = NULL`.
 //!   Alice span = 110 d → "experienced". Bob span = ~54 d → "onboarded".
 //!   Carol span = 64 d → "onboarded". Nobody reaches 365 d → no veteran.
 //!   Summary row must appear with `author = "__summary__"`.
@@ -221,10 +221,12 @@ fn git_as_tc(path: &std::path::Path, args: &[&str], author: &str, email: &str, d
 /// Fixture:
 /// - Alice: 2 commits spanning ~396 d, touches only `a.rs` (1 path).
 /// - Bob:   3 commits within 30 d, touches `b.rs`, `c.rs`, `d.rs` (3 paths).
+///
 /// Both land in the Pareto-80 core set. Median paths = median(1, 3) = 2.
-/// Alice's paths_touched (1) < 2 → breadth gate fires → bucket = "experienced".
+/// Alice's `paths_touched` (1) < 2: breadth gate fires, bucket = "experienced".
 #[test]
 #[cfg(feature = "test-support")]
+#[allow(clippy::too_many_lines)]
 fn veteran_capped_to_experienced_when_breadth_below_median() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path();

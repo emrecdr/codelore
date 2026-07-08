@@ -100,6 +100,14 @@ pub const DEFAULT_DEPARTED_THRESHOLD_DAYS: u32 = 90;
 /// and long enough to smooth vacation/release-cycle gaps.
 pub const DEFAULT_WINDOW_DAYS: u32 = 90;
 
+/// Default rework-detection window in days. Hunk pairs on the same path
+/// where the second commit's author-date is within this many days of the
+/// first are considered rework candidates. 21 days aligns with Pluralsight
+/// Flow's convention (`GitClear` uses 14; ours is configurable via
+/// `--rework-window-days`). Output is labelled "approximate" because line
+/// drift between commits is not tracked.
+pub const DEFAULT_REWORK_WINDOW_DAYS: u32 = 21;
+
 /// T8: Threshold for "substantial author" — an author who isn't the
 /// main author but owns at least this fraction of file's `LoC`. Used to
 /// count `n_substantial_others` per file in `knowledge-islands`. A

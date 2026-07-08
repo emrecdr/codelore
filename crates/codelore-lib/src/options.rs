@@ -156,6 +156,12 @@ pub struct Options {
     /// the author with the most expert files until >50% of files lack an
     /// expert). Set via `--knowledge-model`.
     pub knowledge_model: String,
+    /// Hunk-overlap window for rework detection in `delivery-metrics`.
+    /// Pairs of hunks touching the same path where the second commit's
+    /// author-date falls within this many days of the first are counted
+    /// as rework candidates. Valid range: 1–365. Default: 21.
+    /// Set via `--rework-window-days`.
+    pub rework_window_days: u32,
 }
 
 impl Options {
@@ -339,6 +345,12 @@ impl Options {
                 self.knowledge_model
             )));
         }
+        if !(1..=365).contains(&self.rework_window_days) {
+            return Err(crate::CodeLoreError::InvalidOptions(format!(
+                "--rework-window-days must be in [1, 365]; got {}",
+                self.rework_window_days
+            )));
+        }
         Ok(())
     }
 }
@@ -378,6 +390,7 @@ impl Default for Options {
             code_maat_compat: false,
             window_days: crate::constants::DEFAULT_WINDOW_DAYS,
             knowledge_model: "commits".to_string(),
+            rework_window_days: crate::constants::DEFAULT_REWORK_WINDOW_DAYS,
         }
     }
 }

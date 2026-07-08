@@ -399,6 +399,16 @@ pub struct AnalyzeArgs {
     /// most expert files until >50% of files lack an expert.
     #[arg(long = "knowledge-model", default_value = "commits", value_parser = ["commits", "doe"])]
     pub knowledge_model: String,
+
+    /// Hunk-overlap window for rework detection in `delivery-metrics`.
+    /// Hunk pairs on the same path where the second commit's author-date
+    /// falls within this many days of the first are counted as rework.
+    /// Valid range: 1–365. Default: 21.
+    #[arg(
+        long = "rework-window-days",
+        default_value_t = codelore_lib::cli_api::constants::DEFAULT_REWORK_WINDOW_DAYS
+    )]
+    pub rework_window_days: u32,
 }
 
 /// `TimeBucket` mirror on the CLI surface (clap-friendly value enum).

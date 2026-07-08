@@ -415,6 +415,19 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
             "See analyses/marginal_owner_risk.rs.",
         ),
         (
+            "delivery-metrics",
+            "Repo-level delivery flow distributions: batch size, branch duration, rework, and lead-proxy (p50/p75/p90)",
+            "Five percentile distributions over merge units and commits: batch_size_files \
+             (distinct paths per merge), batch_size_loc (LOC churn per merge), \
+             branch_duration_hours (merge date − earliest branch-side author date), \
+             rework_pct (hunk-overlap within --rework-window-days, approximate), and \
+             lead_proxy_hours (author→committer date gap, positive only, non-merge commits). \
+             Requires commit_parents table (schema v4) and merges ingested with \
+             include_merges=true. Branch metrics are unreliable on squash/rebase workflows \
+             (emits a warning when merge count < 3 and commit count > 50).",
+            "See analyses/delivery_metrics.rs.",
+        ),
+        (
             "cycle-origins",
             "Commit-level archaeology for dependency cycles",
             "For each dependency cycle at HEAD, binary-searches history (reading + resolving source at past revisions) to find the earliest commit where that cycle existed — the commit that closed the loop. Reports the forming commit's SHA + date per cycle. Assumes a cycle, once formed, stays formed; traces the largest cycles first to bound cost.",
@@ -749,6 +762,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         departed_threshold_days: args.departed_threshold_days,
         window_days: args.window_days,
         knowledge_model: args.knowledge_model.clone(),
+        rework_window_days: args.rework_window_days,
         ..Options::default()
     };
 
@@ -1073,6 +1087,9 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             }
             AnalysisName::MarginalOwnerRisk => {
                 dispatch_marginal_owner_risk(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::DeliveryMetrics => {
+                dispatch_delivery_metrics(&db, &opts, format, &ctx, &mut out)?;
             }
         }
     } // out is dropped here, flushing any buffered writes
@@ -2640,6 +2657,46 @@ fn dispatch_marginal_owner_risk(
         fmt => {
             return Err(unsupported_format(
                 "marginal-owner-risk",
+                "csv|json|markdown",
+                fmt,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_delivery_metrics(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows =
+                codelore_lib::cli_api::analyses::delivery_metrics::run_delivery_metrics(db, opts)
+                    .context("run delivery-metrics")?;
+            codelore_lib::cli_api::output::csv::write_delivery_metrics_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows =
+                codelore_lib::cli_api::analyses::delivery_metrics::run_delivery_metrics(db, opts)
+                    .context("run delivery-metrics")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows =
+                codelore_lib::cli_api::analyses::delivery_metrics::run_delivery_metrics(db, opts)
+                    .context("run delivery-metrics")?;
+            codelore_lib::cli_api::output::markdown::write_delivery_metrics_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format(
+                "delivery-metrics",
                 "csv|json|markdown",
                 fmt,
             ));

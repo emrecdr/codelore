@@ -1497,3 +1497,26 @@ fn coordination_needs_csv_has_header_and_rows() {
             out.lines().filter(|l| !l.trim().is_empty()).count() >= 2
         }));
 }
+
+#[test]
+fn delivery_metrics_markdown_exits_zero() {
+    // delivery_repo has two --no-ff merges and two author→committer gaps;
+    // run with include_merges so the commit_parents table is populated.
+    let delivery = codelore_lib::test_support::delivery_repo::build();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "delivery-metrics",
+            "--repo",
+            delivery.dir.path().to_str().unwrap(),
+            "--format",
+            "markdown",
+            "--include-merges",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("delivery-metrics"))
+        .stdout(predicate::str::contains("branch_duration_hours"));
+}

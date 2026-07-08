@@ -22,6 +22,7 @@ pub mod crossing;
 pub mod cycle_origins;
 pub mod dashboard;
 pub mod delivery_friction;
+pub mod delivery_metrics;
 pub mod delta_health;
 pub mod dependency_cycles;
 pub mod effort_exposure;

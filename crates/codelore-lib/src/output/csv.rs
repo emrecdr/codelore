@@ -1280,6 +1280,27 @@ pub fn write_marginal_owner_risk_csv<W: Write>(
     Ok(())
 }
 
+pub fn write_delivery_metrics_csv<W: Write>(
+    rows: &[crate::analyses::delivery_metrics::DeliveryMetricsRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(w, "metric,p50,p75,p90,n,caveat").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{:.2},{:.2},{:.2},{},{}",
+            quote_if_needed(&row.metric),
+            row.p50,
+            row.p75,
+            row.p90,
+            row.n,
+            quote_if_needed(&row.caveat),
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::quote_if_needed;
