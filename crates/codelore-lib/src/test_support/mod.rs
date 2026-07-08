@@ -304,28 +304,30 @@ pub mod biomarker_repo {
 /// Fixture for `function-xray` and `function-coupling` tests.
 ///
 /// Contains a single Rust file `src/target.rs` with three functions:
-/// - `hot`  — 11-line function touched in every non-seed non-meta commit
+/// - `hot` — 11-line function touched in every non-seed commit
 /// - `cold` — touched only in the three coupled commits
-/// - `meta` — touched only in meta-tweak (provides `neither = 1` in the
-///   Fisher contingency table so the p-value is computable, not degenerate)
+/// - `meta` — touched only in `meta-tweak-1..10`; provides `neither = 10` in
+///   the Fisher table for `(hot, cold)`, driving p < 0.1
 ///
-/// Commit history (8 revisions that produce hunks, plus seed):
-///   seed       — writes all three functions
-///   tweak-1    — single-hunk edit of `hot` (line 2)
-///   tweak-2    — single-hunk edit of `hot` (line 2)
-///   tweak-3    — single-hunk edit of `hot` (line 2)
-///   tweak-mh   — two-hunk edit of `hot` (lines 2 and 10) in ONE commit
-///   coupled-1  — changes BOTH `hot` (line 10) AND `cold` (line 14)
-///   coupled-2  — changes BOTH `hot` (line 10) AND `cold` (line 14)
-///   coupled-3  — changes BOTH `hot` (line 10) AND `cold` (line 14)
-///   meta-tweak — changes ONLY `meta` (line 18), leaving hot + cold untouched
+/// Commit history:
+///   seed              — writes all three functions
+///   tweak-1           — single-hunk edit of `hot` (line 2)
+///   tweak-2           — single-hunk edit of `hot` (line 2)
+///   tweak-3           — single-hunk edit of `hot` (line 2)
+///   tweak-mh          — two-hunk edit of `hot` (lines 2 and 10) in ONE commit
+///   coupled-1         — changes BOTH `hot` (line 10) AND `cold`
+///   coupled-2         — changes BOTH `hot` (line 10) AND `cold`
+///   coupled-3         — changes BOTH `hot` (line 10) AND `cold`
+///   meta-tweak-1..10  — each changes ONLY `meta`; hot and cold untouched
 ///
 /// `tweak-mh` verifies that a multi-hunk commit counts as exactly one
 /// revision for `change_freq`, not one per hunk.
 ///
 /// `coupled-1/2/3` verify that `function-coupling` detects the `(hot, cold)`
-/// pair with `co_changes = 3`, `confidence = 1.0`, and a non-degenerate
-/// Fisher p-value (contingency [3, 4, 0, 1] — see `function_coupling_test`).
+/// pair with `co_changes = 3` and `confidence = 1.0`.
+///
+/// `meta-tweak-1..10` give the Fisher `(hot, cold)` table `neither = 10`,
+/// making the table non-degenerate and driving `p ≈ 0.051 < 0.1`.
 #[cfg(feature = "test-support")]
 pub mod function_xray_repo {
     use std::path::PathBuf;
@@ -336,27 +338,22 @@ pub mod function_xray_repo {
     }
 
     // `hot` is an 11-line function so that edits on line 2 and line 10 are
-    // guaranteed to produce two SEPARATE hunks in the same commit.
-    //
-    // Hunk-split geometry:
-    //   git default context = 3 lines on each side of a change.
-    //   Two edits split into separate hunks iff gap > 2 × context = 6 lines.
-    //   Gap here = lines 3-9 = 7 unchanged lines → 7 > 6 → always two hunks.
-    //
-    //   (The original 8-line design with edits at lines 2 and 8 had a gap of
-    //   5 lines, which equals 2×3-1 = 5 < 6, so git could merge the hunks.)
+    // far enough apart to guarantee two separate hunks in a single commit.
+    // Gap = lines 3–9 = 7 lines, which exceeds 2 × 3 (git's default context
+    // window) = 6. A gap > 2×context guarantees the diff engine cannot bridge
+    // the two edit regions into one hunk.
     //
     // Layout of src/target.rs:
     //   line 1:  pub fn hot() -> i32 {
-    //   line 2:    let a = <A>;        ← edit region 1 (tweak-1/2/3/mh)
+    //   line 2:    let a = <A>;        ← edit region 1 (tweak-1/2/3 + tweak-mh)
     //   line 3:    let b = 10;
     //   line 4:    let c = 20;
-    //   line 5:    let d = 30;
+    //   line 5:    let d = 30;         ← gap: 7 lines > 2×context(3)=6
     //   line 6:    let e = 40;
     //   line 7:    let f = 50;
-    //   line 8:    let g = 60;         ← padding (widens the gap to 7)
-    //   line 9:    let h = 70;         ← padding (gap = lines 3-9 = 7 > 6)
-    //   line 10:   <B>                 ← edit region 2 (tweak-mh return value)
+    //   line 8:    let g = 60;
+    //   line 9:    let h = 70;
+    //   line 10:   <B>                 ← edit region 2 (tweak-mh + coupled)
     //   line 11: }
     //   line 12: (blank separator)
     //   line 13: pub fn cold() -> i32 {
@@ -364,33 +361,23 @@ pub mod function_xray_repo {
     //   line 15: }
     //   line 16: (blank separator)
     //   line 17: pub fn meta() -> i32 {
-    //   line 18:   <M>                 ← edit region (meta-tweak only)
+    //   line 18:   0                   ← edit region (meta-tweak only)
     //   line 19: }
     //
-    // Versions v0–v3 only change line 2 (single hunk per commit → change_freq
-    // increments by 1 each time). The multi-hunk commit (tweak-mh) changes
-    // BOTH line 2 (a = 99) AND line 10 (return value) in ONE commit → two
-    // distinct hunks (gap 7 > 2×context 6) but still only +1 to change_freq.
-    //
-    // The three coupled commits change line 10 of `hot` AND line 14 of `cold`
-    // in the SAME commit. Both function spans are covered by the hunk-overlap
-    // attribution so (hot, cold) co_changes = 3.
-    //
-    // meta-tweak changes ONLY line 18 (`meta` body), leaving `hot` and `cold`
-    // untouched. This gives the Fisher table for (hot, cold) a non-zero
-    // `neither` cell: neither = n - co - a_only - b_only = 8-3-4-0 = 1.
-    // Without meta-tweak, neither = 0 → degenerate marginal → fisher returns
-    // None. With it, the p-value is computable and < 0.05 (strong signal).
+    // Versions v0–v3 only change line 2 (single hunk per commit).
+    // tweak-mh changes BOTH line 2 (a = 99) AND line 10 (return value) in
+    // ONE commit → two hunks, but still only +1 to change_freq.
+    // coupled-1/2/3 change line 10 of `hot` AND line 14 of `cold` together.
+    // meta-tweak changes ONLY line 18 (`meta` body); hot and cold are untouched.
 
     const HOT_V0: &str = "pub fn hot() -> i32 {\n    let a = 0;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    let g = 60;\n    let h = 70;\n    a + b + c + d + e + f + g + h\n}\n";
     const HOT_V1: &str = "pub fn hot() -> i32 {\n    let a = 1;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    let g = 60;\n    let h = 70;\n    a + b + c + d + e + f + g + h\n}\n";
     const HOT_V2: &str = "pub fn hot() -> i32 {\n    let a = 2;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    let g = 60;\n    let h = 70;\n    a + b + c + d + e + f + g + h\n}\n";
     const HOT_V3: &str = "pub fn hot() -> i32 {\n    let a = 3;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    let g = 60;\n    let h = 70;\n    a + b + c + d + e + f + g + h\n}\n";
-    // Multi-hunk: changes line 2 (a = 99) AND line 10 (return 99 instead of sum).
-    // Gap between the two edit sites = lines 3-9 = 7 unchanged lines.
-    // 7 > 2 × 3 (default context) = 6 → git produces two distinct hunks.
+    // Multi-hunk: changes line 2 (a = 99) AND line 10 (return value).
+    // Gap = 7 lines (lines 3-9) > 2×context(3)=6 → guaranteed two separate hunks.
     const HOT_VMH: &str = "pub fn hot() -> i32 {\n    let a = 99;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    let g = 60;\n    let h = 70;\n    99\n}\n";
-    // Coupling versions: change line 10 (return value) for each coupled commit.
+    // Coupling versions: change line 10 (return value) in hot for each coupled commit.
     const HOT_VCPL1: &str = "pub fn hot() -> i32 {\n    let a = 99;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    let g = 60;\n    let h = 70;\n    100\n}\n";
     const HOT_VCPL2: &str = "pub fn hot() -> i32 {\n    let a = 99;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    let g = 60;\n    let h = 70;\n    101\n}\n";
     const HOT_VCPL3: &str = "pub fn hot() -> i32 {\n    let a = 99;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    let g = 60;\n    let h = 70;\n    102\n}\n";
@@ -399,8 +386,10 @@ pub mod function_xray_repo {
     const COLD_V1: &str = "pub fn cold() -> i32 {\n    43\n}\n";
     const COLD_V2: &str = "pub fn cold() -> i32 {\n    44\n}\n";
     const COLD_V3: &str = "pub fn cold() -> i32 {\n    45\n}\n";
-    // `meta` versions — only changed by meta-tweak; provides `neither = 1`
-    // in the Fisher table for (hot, cold) so the p-value is non-degenerate.
+    // `meta` versions: only the body differs; meta-tweak changes V0 → V1.
+    // Neither `hot` nor `cold` is touched in meta-tweak, so the Fisher table
+    // for the (hot, cold) pair gets `neither = 1` (this revision touches
+    // neither of them), making the table non-degenerate.
     const META_V0: &str = "pub fn meta() -> i32 {\n    0\n}\n";
     const META_V1: &str = "pub fn meta() -> i32 {\n    1\n}\n";
 
@@ -430,7 +419,6 @@ pub mod function_xray_repo {
             "2026-06-06T10:00:00Z",
             "2026-06-07T10:00:00Z",
             "2026-06-08T10:00:00Z",
-            "2026-06-09T10:00:00Z",
         ];
 
         // Seed: write all three functions.
@@ -450,17 +438,17 @@ pub mod function_xray_repo {
         write(&path, "src/target.rs", &src(HOT_V3, COLD_V0, META_V0));
         run_git_at(&path, dates[3], &["commit", "-am", "tweak-3", "--quiet"]);
 
-        // tweak-mh: change BOTH line 2 (a = 99) AND line 10 (return 99) in
-        // ONE commit. Gap between edit sites = lines 3-9 = 7 unchanged lines;
-        // 7 > 2×3 (context) = 6, so git produces two distinct hunks. But
-        // change_freq for `hot` must increment by exactly 1, not 2.
+        // tweak-mh: change BOTH line 2 (a = 99) AND line 10 (return value) in
+        // ONE commit. The 7-line gap (lines 3-9) exceeds 2×context(3)=6,
+        // guaranteeing two separate hunks. change_freq for `hot` must still
+        // increment by 1 (not 2).
         write(&path, "src/target.rs", &src(HOT_VMH, COLD_V0, META_V0));
         run_git_at(&path, dates[4], &["commit", "-am", "tweak-mh", "--quiet"]);
 
         // coupled-1/2/3: change BOTH hot AND cold in the same commit.
-        // hot changes at line 10 (return value); cold changes at line 14
-        // (return value). Both function spans are touched in each of these
-        // revisions, so function-coupling counts (hot, cold) co_changes = 3.
+        // hot changes at line 10 (return value); cold changes at line 14.
+        // Both function spans are touched → function-coupling counts
+        // (hot, cold) co_changes = 3.
         write(&path, "src/target.rs", &src(HOT_VCPL1, COLD_V1, META_V0));
         run_git_at(&path, dates[5], &["commit", "-am", "coupled-1", "--quiet"]);
 
@@ -470,18 +458,46 @@ pub mod function_xray_repo {
         write(&path, "src/target.rs", &src(HOT_VCPL3, COLD_V3, META_V0));
         run_git_at(&path, dates[7], &["commit", "-am", "coupled-3", "--quiet"]);
 
-        // meta-tweak: change ONLY the `meta` function body (line 18). Neither
-        // `hot` nor `cold` is touched. This gives the Fisher table for the
-        // (hot, cold) pair a non-zero `neither` cell:
-        //   n       = 8 (total revisions in the hunks table)
-        //   co      = 3 (coupled-1/2/3 touch both hot and cold)
-        //   a_only  = 4 (tweak-1/2/3/mh touch hot only)
-        //   b_only  = 0 (no revision touches cold without also touching hot)
-        //   neither = 8 - 3 - 4 - 0 = 1 (meta-tweak touches neither)
-        // Without this commit, neither = 0 → row2 = c+d = 0 → Fisher returns
-        // None (degenerate marginal). With it, the p-value is computable.
-        write(&path, "src/target.rs", &src(HOT_VCPL3, COLD_V3, META_V1));
-        run_git_at(&path, dates[8], &["commit", "-am", "meta-tweak", "--quiet"]);
+        // meta-tweak-1 … meta-tweak-10: change ONLY the `meta` function body,
+        // alternating between META_V0 and META_V1. Neither `hot` nor `cold` is
+        // touched in any of these commits. Ten commits give `neither = 10`,
+        // which drives the Fisher p-value for the (hot, cold) pair below 0.1:
+        //
+        //   n       = 17  (tweak-1/2/3 + tweak-mh + coupled-1/2/3 +
+        //                   meta-tweak-1..10; seed is an Add → no hunks)
+        //   co      = 3   (coupled-1/2/3)
+        //   a_only  = 4   (tweak-1/2/3 + tweak-mh)
+        //   b_only  = 0
+        //   neither = 10  (meta-tweak-1..10)
+        //   n - co - a_only - b_only = 17 - 3 - 4 - 0 = 10  ✓
+        //
+        // Fisher table [3, 4, 0, 10]:
+        //   row1=7, row2=10, col1=3, col2=14, N=17
+        //   P(k=3) = C(7,3)·C(10,0)/C(17,3) = 35/680 ≈ 0.051 < 0.1
+        //   Two-tail sums tables with P ≤ P(observed=3): only k=3 itself
+        //   (k=0: C(7,0)·C(10,3)/C(17,3)=120/680≈0.176 > 0.051, excluded).
+        //   So p ≈ 0.051 < 0.1.
+        //
+        // Note: the `None`-sorts-first behavior is still correct for genuinely
+        // degenerate tables on real repos (zero row/col marginal → p → 0).
+        let meta_dates = [
+            "2026-06-09T10:00:00Z",
+            "2026-06-10T10:00:00Z",
+            "2026-06-11T10:00:00Z",
+            "2026-06-12T10:00:00Z",
+            "2026-06-13T10:00:00Z",
+            "2026-06-14T10:00:00Z",
+            "2026-06-15T10:00:00Z",
+            "2026-06-16T10:00:00Z",
+            "2026-06-17T10:00:00Z",
+            "2026-06-18T10:00:00Z",
+        ];
+        for (i, &date) in meta_dates.iter().enumerate() {
+            let meta = if i % 2 == 0 { META_V1 } else { META_V0 };
+            let msg = format!("meta-tweak-{}", i + 1);
+            write(&path, "src/target.rs", &src(HOT_VCPL3, COLD_V3, meta));
+            run_git_at(&path, date, &["commit", "-am", msg.as_str(), "--quiet"]);
+        }
 
         FunctionXrayRepo { dir }
     }

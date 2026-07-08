@@ -4220,10 +4220,7 @@ fn build_spa_dashboard(
                     .take(10)
                     .filter_map(|h| {
                         match codelore_lib::cli_api::analyses::function_xray::run_function_xray(
-                            db,
-                            &xray_repo,
-                            opts,
-                            &h.path,
+                            db, &xray_repo, opts, &h.path,
                         ) {
                             Ok(rows) if !rows.is_empty() => {
                                 Some(codelore_lib::cli_api::output::spa::FileFunctionXray {

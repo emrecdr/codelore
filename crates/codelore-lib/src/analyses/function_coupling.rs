@@ -17,7 +17,8 @@
 //! a not         b_only      neither
 //! ```
 //!
-//! where `n = total revisions touching the file` and
+//! where `n = total distinct revisions touching the file` (from the `hunks`
+//! table, regardless of which functions they touched) and
 //! `neither = n − co − a_only − b_only`.
 //!
 //! **Rename limitation**: hunk attribution uses `WHERE h.path = ?` (current
@@ -34,7 +35,7 @@
 
 use std::collections::HashSet;
 
-use crate::analyses::function_xray::rev_to_function_sets;
+use crate::analyses::function_xray::{fetch_hunks_for_path, rev_to_function_sets};
 use crate::facts::FactsDb;
 use crate::repo::Repo;
 use crate::stats::fisher_two_tail_pvalue;
@@ -79,14 +80,26 @@ pub fn run_function_coupling<R: Repo>(
     opts: &Options,
     target: &str,
 ) -> Result<Vec<FunctionCouplingRow>> {
-    // --- 1. Build per-rev function-change sets ----------------------------
+    // --- 1. Count file-touching revisions and build per-function sets -----
+    // n = distinct revisions that touched the file in the hunks table,
+    // regardless of which functions (if any) they overlapped. This is the
+    // correct denominator for the Fisher "neither" cell: a commit that only
+    // edits file-level content (use statements, mod docs, consts) never
+    // appears in rev_sets but still belongs to n.
+    let hunk_rows = fetch_hunks_for_path(db, target)?;
+    if hunk_rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    let n_revs: HashSet<&str> = hunk_rows
+        .iter()
+        .map(|(rev, _, _, _)| rev.as_str())
+        .collect();
+    let n = u32::try_from(n_revs.len()).unwrap_or(u32::MAX);
+
     let rev_sets = rev_to_function_sets(db, repo, target)?;
     if rev_sets.is_empty() {
         return Ok(Vec::new());
     }
-
-    // n = total revisions that touched the file (regardless of which fns).
-    let n = u32::try_from(rev_sets.len()).unwrap_or(u32::MAX);
 
     // Collect all HEAD-alive function names that appear in any rev set.
     let all_fns: HashSet<&str> = rev_sets
@@ -138,11 +151,11 @@ pub fn run_function_coupling<R: Repo>(
             //       neither = n - co - a_only - b_only
             let a_only = a_ch.saturating_sub(co);
             let b_only = b_ch.saturating_sub(co);
-            let both_or_neither = n
+            let neither = n
                 .saturating_sub(co)
                 .saturating_sub(a_only)
                 .saturating_sub(b_only);
-            let p_value = fisher_two_tail_pvalue(co, a_only, b_only, both_or_neither);
+            let p_value = fisher_two_tail_pvalue(co, a_only, b_only, neither);
             let confidence = f64::from(co) / f64::from(a_ch.min(b_ch)).max(1.0);
             rows.push(FunctionCouplingRow {
                 a: all_fns[i].to_string(),
@@ -156,8 +169,9 @@ pub fn run_function_coupling<R: Repo>(
         }
     }
 
-    // Sort: p_value ASC, None first (degenerate marginal = perfectly coupled,
-    // limit p → 0), then confidence DESC for ties.
+    // Sort: p_value ASC (None first — degenerate marginal implies p → 0,
+    // i.e. perfectly coupled), then confidence DESC, then a/b ASC for
+    // byte-stable output when multiple pairs share the same p and confidence.
     rows.sort_unstable_by(|x, y| match (x.p_value, y.p_value) {
         (Some(px), Some(py)) => px
             .partial_cmp(&py)
@@ -166,10 +180,12 @@ pub fn run_function_coupling<R: Repo>(
                 y.confidence
                     .partial_cmp(&x.confidence)
                     .unwrap_or(std::cmp::Ordering::Equal)
-            }),
+            })
+            .then_with(|| x.a.cmp(&y.a))
+            .then_with(|| x.b.cmp(&y.b)),
         (None, Some(_)) => std::cmp::Ordering::Less,
         (Some(_), None) => std::cmp::Ordering::Greater,
-        (None, None) => std::cmp::Ordering::Equal,
+        (None, None) => x.a.cmp(&y.a).then_with(|| x.b.cmp(&y.b)),
     });
 
     if let Some(limit) = opts.rows_limit {

@@ -329,6 +329,15 @@ fn fetch_head_metrics(db: &FactsDb, target: &str) -> Result<HashMap<String, FnMe
 ///
 /// Called by `function_coupling` to share the blob-parse + hunk-overlap
 /// logic without re-implementing it.
+///
+/// The overlap loop here is intentionally separate from `run_function_xray`'s
+/// loop even though both walk the same hunk rows: `run_function_xray` must
+/// track the per-function last-changed date alongside the frequency count,
+/// which requires a different accumulator shape. Extracting a common inner
+/// loop would either require threading the date through this function's API
+/// or a two-pass approach — neither improves clarity. The expensive steps
+/// (`extract_head_spans` blob fetch + tree-sitter parse, `fetch_hunks_for_path`
+/// DB query) are shared; the cheap overlap scan runs twice.
 pub(super) fn rev_to_function_sets<R: Repo>(
     db: &FactsDb,
     repo: &R,

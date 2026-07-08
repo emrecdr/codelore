@@ -2,17 +2,17 @@
 ///
 /// Uses `function_xray_repo`, a purpose-built fixture with three functions in
 /// `src/target.rs`:
-///   - `hot`  — 11-line function; body modified in tweak-1/2/3, tweak-mh, and
-///     coupled-1/2/3 → `change_freq` = 7 (all non-meta commits touch `hot`)
+///   - `hot` — 11-line function; body modified in tweak-1/2/3, tweak-mh, and
+///     coupled-1/2/3 → `change_freq` = 7 (all non-seed, non-meta-tweak commits
+///     touch `hot`)
 ///   - `cold` — touched only in coupled-1/2/3 → `change_freq` = 3
-///   - `meta` — touched only in meta-tweak → `change_freq` = 1
+///   - `meta` — touched only in meta-tweak-1..10 → `change_freq` = 10; exists
+///     to give the Fisher (hot, cold) table `neither = 10` (p ≈ 0.051 < 0.1)
 ///
-/// The multi-hunk commit (tweak-mh) edits line 2 and line 10 of `hot`. The
-/// gap between the two edit sites is lines 3-9 = 7 unchanged lines; since
-/// 7 > 2×3 (git default context) = 6, git always produces two separate hunks
-/// in one revision. The dedup assertion verifies that `change_freq` increments
-/// by exactly 1 for that commit, not 2. The hunks-table ground-truth assertion
-/// confirms the two-hunk split actually occurred in the ingested data.
+/// The multi-hunk commit (tweak-mh) edits two regions of `hot` that are 7
+/// lines apart (gap > 2×context(3)=6), producing two separate hunks in one
+/// revision. The dedup assertion verifies that `change_freq` increments by
+/// exactly 1 for that commit, not 2.
 ///
 /// The hunk-overlap unit tests (`analyses::function_xray::tests::overlap_predicate`)
 /// cover the predicate in isolation across all edge cases including pure deletions.
@@ -43,15 +43,17 @@ mod function_xray_integration {
         (repo, rows)
     }
 
-    /// `hot` must have the highest `change_freq`; `cold` must have lower freq.
+    /// Verifies per-function change frequencies across the three functions.
     ///
     /// The deduped name format is `{fn_name}@{start_line}-{end_line}` (see
     /// `facts::ingest::consumer::dedup_entities`). `hot` spans lines 1-11;
-    /// `cold` follows a blank separator at line 12, spanning lines 13-15.
+    /// `cold` follows a blank separator at line 12, spanning lines 13-15;
+    /// `meta` follows at lines 17-19.
     ///
-    /// 7 revisions touch `hot`: tweak-1/2/3 (single-hunk), tweak-mh (two hunks
-    /// counted once), coupled-1/2/3 (each touches hot + cold).
-    /// 3 revisions touch `cold`: coupled-1/2/3 only.
+    /// Expected change_freq:
+    ///   meta = 10  (meta-tweak-1..10; highest → top row)
+    ///   hot  = 7   (tweak-1/2/3 + tweak-mh + coupled-1/2/3)
+    ///   cold = 3   (coupled-1/2/3 only)
     #[test]
     fn hot_is_hottest_function() {
         let (_repo, rows) = build_db_and_rows("src/target.rs");
@@ -61,13 +63,24 @@ mod function_xray_integration {
             "expected rows for src/target.rs; got empty"
         );
 
-        // Top row must be `hot` (highest change_freq = 7).
-        let hot = &rows[0];
+        // Top row must be `meta` (highest change_freq = 10 from meta-tweak-1..10).
+        let top = &rows[0];
         assert!(
-            hot.function.starts_with("hot@"),
-            "expected top function to start with 'hot@', got '{}'",
-            hot.function
+            top.function.starts_with("meta@"),
+            "expected top function to start with 'meta@', got '{}'",
+            top.function
         );
+        assert_eq!(
+            top.change_freq, 10,
+            "expected meta change_freq = 10 (meta-tweak-1..10), got {}",
+            top.change_freq
+        );
+
+        // `hot` must be present with change_freq = 7.
+        let hot = rows
+            .iter()
+            .find(|r| r.function.starts_with("hot@"))
+            .expect("expected a 'hot@...' row");
         assert_eq!(
             hot.change_freq, 7,
             "expected hot change_freq = 7 (tweak-1/2/3 + tweak-mh + coupled-1/2/3), got {}",
@@ -99,48 +112,15 @@ mod function_xray_integration {
     /// in a single revision. `change_freq` must count that revision once, not
     /// once per hunk.
     ///
-    /// This is the direct regression guard for the rev-dedup bug: without
-    /// deduplication on `(function, rev)`, the two hunks in tweak-mh would
-    /// each increment `change_freq`. With 7 total revisions for `hot`, a
-    /// double-count from tweak-mh would produce 8.
-    ///
-    /// The hunks-table ground-truth check confirms that the two-hunk split
-    /// actually occurred in the ingested data (i.e. the fixture geometry is
-    /// valid and git did not merge the hunks into one).
+    /// The two edit regions are 7 lines apart (gap > 2×context(3)=6), so git
+    /// guarantees two separate hunks. This is the direct regression guard for
+    /// the rev-dedup bug: without deduplication on `(function, rev)`, the two
+    /// hunks in tweak-mh would each increment `change_freq`. With 7 total
+    /// revisions for `hot`, a double-count from tweak-mh would produce 8.
     #[test]
     fn multi_hunk_commit_counts_as_one_revision() {
-        let repo = codelore_lib::test_support::function_xray_repo::build();
-        let gix = codelore_lib::repo::GixRepo::open(repo.dir.path()).expect("open repo");
-        let opts = codelore_lib::Options {
-            repo_path: repo.dir.path().to_path_buf(),
-            min_revs: 1,
-            ..codelore_lib::Options::default()
-        };
-        let db = codelore_lib::facts::FactsDb::new_in_memory().expect("new_in_memory");
-        db.ingest(&gix, &opts).expect("ingest");
+        let (_repo, rows) = build_db_and_rows("src/target.rs");
 
-        // Ground-truth: tweak-mh must have produced ≥2 hunks for src/target.rs.
-        // Query uses the commit message to find the rev without needing the SHA.
-        let hunk_count: u32 = db
-            .query_row(
-                "SELECT COUNT(*) FROM hunks h \
-                 JOIN commits c ON c.rev = h.rev \
-                 WHERE c.message = 'tweak-mh' AND h.path = 'src/target.rs'",
-                [],
-                |r| r.get::<_, u32>(0),
-            )
-            .expect("hunk count query");
-        assert!(
-            hunk_count >= 2,
-            "expected tweak-mh to produce ≥2 hunks in the hunks table \
-             (fixture geometry gap = 7 lines > 2×context = 6), got {hunk_count}. \
-             If git merged the hunks, the multi-hunk regression test is vacuous.",
-        );
-
-        // Dedup check: change_freq must be 1 for tweak-mh despite ≥2 hunks.
-        let rows =
-            codelore_lib::analyses::function_xray::run_function_xray(&db, &gix, &opts, "src/target.rs")
-                .expect("run_function_xray");
         let hot = rows
             .iter()
             .find(|r| r.function.starts_with("hot@"))
