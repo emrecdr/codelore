@@ -221,6 +221,13 @@ fn run_bus_factor_commits(db: &FactsDb, opts: &Options) -> Result<Vec<BusFactorR
 /// 3. Stop when >50% of the module's files have zero remaining experts.
 /// 4. `bus_factor = count of authors removed`.
 ///
+/// **Edge case — `removed_count.max(1)`**: the stop condition is checked
+/// *before* the first removal. If all files are already uncovered before
+/// any author is removed (e.g. a module where no author qualifies as
+/// DOE-expert at all), the greedy loop never fires and `removed_count = 0`.
+/// The result is clamped to `1` so that `bus_factor` is always ≥ 1,
+/// matching the semantics of "at least one key person exists."
+///
 /// `top_contributor` is the first author removed (expert on the most
 /// files before any removal). `top_contributor_share` is their share
 /// of expert-file assignments across the module.

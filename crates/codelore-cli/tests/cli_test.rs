@@ -1035,6 +1035,51 @@ fn code_familiarity_csv_has_header_and_rows() {
     );
 }
 
+#[test]
+fn bus_factor_csv_contains_model_column() {
+    // Verify the `model` column is present in both commits and doe mode output.
+    let delivery = codelore_lib::test_support::delivery_repo::build();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "bus-factor",
+            "--repo",
+            delivery.dir.path().to_str().unwrap(),
+            "--format",
+            "csv",
+            "--min-revs",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "module,total_commits,bus_factor,top_contributor,top_contributor_share,model",
+        ));
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "bus-factor",
+            "--repo",
+            delivery.dir.path().to_str().unwrap(),
+            "--format",
+            "csv",
+            "--min-revs",
+            "1",
+            "--knowledge-model",
+            "doe",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "module,total_commits,bus_factor,top_contributor,top_contributor_share,model",
+        ))
+        .stdout(predicate::str::contains(",doe"));
+}
+
 #[cfg(feature = "spa")]
 #[test]
 fn spa_without_output_defaults_to_dot_codelore() {
