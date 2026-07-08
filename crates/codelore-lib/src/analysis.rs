@@ -157,6 +157,12 @@ pub enum AnalysisName {
     // fighting fires or extending healthy code?" Wilson 95% CI on
     // commit-share is included per band.
     EffortExposure,
+    // Code familiarity — SLOC-weighted fraction of the codebase actively
+    // known by current contributors (authors with ≥1 commit in the
+    // trailing window), using exponentially-decayed knowledge shares
+    // (Jabrayilzade et al., ICSE-SEIP 2022). Also reports islands
+    // percentage (files with dominant single-author knowledge).
+    CodeFamiliarity,
 }
 
 impl AnalysisName {
@@ -208,6 +214,7 @@ impl AnalysisName {
             Self::DeliveryFriction => "delivery-friction",
             Self::RefactoringTargets => "refactoring-targets",
             Self::EffortExposure => "effort-exposure",
+            Self::CodeFamiliarity => "code-familiarity",
         }
     }
 
@@ -287,6 +294,7 @@ impl AnalysisName {
             DeliveryFriction,
             RefactoringTargets,
             EffortExposure,
+            CodeFamiliarity,
         )
     }
 

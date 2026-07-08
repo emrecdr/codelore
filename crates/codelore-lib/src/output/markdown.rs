@@ -574,6 +574,41 @@ pub fn write_effort_exposure_markdown<W: Write>(
     Ok(())
 }
 
+pub fn write_code_familiarity_markdown<W: Write>(
+    rows: &[crate::analyses::code_familiarity::CodeFamiliarityRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore code-familiarity")?;
+    if rows.is_empty() {
+        writeln!(
+            w,
+            "_No knowledge data — ensure commits exist and complexity metrics are available._"
+        )
+        .map_err(CodeLoreError::Io)?;
+        return Ok(());
+    }
+    writeln!(
+        w,
+        "| Scope | Familiarity % | Active Authors | Total Authors | Islands % | Verdict |"
+    )
+    .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---:|---:|---:|---:|---|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| {} | {:.1} | {} | {} | {:.1} | {} |",
+            escape_md_cell(&row.scope),
+            row.familiarity_pct,
+            row.active_authors,
+            row.total_authors,
+            row.islands_pct,
+            escape_md_cell(&row.verdict),
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_architecture_metrics_markdown<W: Write>(
     rows: &[crate::analyses::architecture_metrics::ArchitectureMetricRow],
     w: &mut W,

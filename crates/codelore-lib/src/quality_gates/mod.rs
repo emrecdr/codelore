@@ -82,6 +82,10 @@ pub struct Gates {
     /// fighting fires in the worst-health files." Missing red band
     /// (zero red files) counts as 0 %, which passes any positive threshold.
     pub max_red_effort_pct: Option<f64>,
+    /// Minimum code-familiarity score (`[0, 100]`). Below this threshold
+    /// the `code-familiarity` analysis emits a `"risky"` verdict. When
+    /// absent the analysis applies a built-in default of 70.0.
+    pub code_familiarity_min: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -162,6 +166,7 @@ impl Thresholds {
             && self.gates.max_dependency_cycles.is_none()
             && self.gates.max_propagation_cost.is_none()
             && self.gates.max_red_effort_pct.is_none()
+            && self.gates.code_familiarity_min.is_none()
             && self.diff.delta_code_health_min.is_none()
             && self.diff.new_hotspot_max.is_none()
             && !self.diff.no_new_cycles

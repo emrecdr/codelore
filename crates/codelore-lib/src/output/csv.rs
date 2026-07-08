@@ -635,6 +635,31 @@ pub fn write_effort_exposure_csv<W: Write>(
     Ok(())
 }
 
+pub fn write_code_familiarity_csv<W: Write>(
+    rows: &[crate::analyses::code_familiarity::CodeFamiliarityRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(
+        w,
+        "scope,familiarity-pct,active-authors,total-authors,islands-pct,verdict"
+    )
+    .map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{:.2},{},{},{:.2},{}",
+            quote_if_needed(&row.scope),
+            row.familiarity_pct,
+            row.active_authors,
+            row.total_authors,
+            row.islands_pct,
+            quote_if_needed(&row.verdict),
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_architecture_metrics_csv<W: Write>(
     rows: &[crate::analyses::architecture_metrics::ArchitectureMetricRow],
     w: &mut W,

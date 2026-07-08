@@ -35,8 +35,8 @@ pub struct HealthTrendRow {
     pub combined_band: String,
 }
 
-/// Shared band for all three scores: green ≥ 70, yellow ≥ 40, else red.
-/// Re-exported from [`crate::bands`] so callers can use either path.
+/// Re-exported from [`crate::bands`] (the single source of band
+/// thresholds) so callers can use either path.
 pub use crate::bands::health_band;
 
 /// Architectural health from the per-rev import-graph metrics. Purely

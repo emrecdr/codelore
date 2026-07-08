@@ -968,6 +968,29 @@ fn effort_exposure_csv_has_header_and_rows() {
         }));
 }
 
+#[test]
+fn code_familiarity_csv_has_header_and_rows() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "code-familiarity",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "csv",
+            "--min-revs",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "scope,familiarity-pct,active-authors,total-authors,islands-pct,verdict",
+        ));
+}
+
 #[cfg(feature = "spa")]
 #[test]
 fn spa_without_output_defaults_to_dot_codelore() {
