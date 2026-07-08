@@ -754,7 +754,7 @@ fn tags_match_across_backends() {
         "tags not in expected (date, name) order"
     );
 
-    // Each target_rev must be a full 40-char lowercase hex SHA.
+    // Each target_rev must be a full 40-char hex SHA.
     for tag in &gix_tags {
         assert_eq!(
             tag.target_rev.len(),

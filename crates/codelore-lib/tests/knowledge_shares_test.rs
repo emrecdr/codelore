@@ -23,7 +23,6 @@ use codelore_lib::repo::GixRepo;
 
 /// k_norm for any path in coupling_repo must sum to 1.0 (only one author).
 #[test]
-#[cfg(feature = "test-support")]
 fn knowledge_shares_k_norm_sums_to_one_per_path() {
     let coupling = codelore_lib::test_support::coupling_repo::build();
     let repo = GixRepo::open(coupling.dir.path()).expect("GixRepo::open");
@@ -58,7 +57,6 @@ fn knowledge_shares_k_norm_sums_to_one_per_path() {
 
 /// A single-author path must have k_norm = 1.0 for that author.
 #[test]
-#[cfg(feature = "test-support")]
 fn knowledge_shares_single_author_path_gets_full_share() {
     let coupling = codelore_lib::test_support::coupling_repo::build();
     let repo = GixRepo::open(coupling.dir.path()).expect("GixRepo::open");
@@ -95,7 +93,6 @@ fn knowledge_shares_single_author_path_gets_full_share() {
 
 /// No bot rows in knowledge_shares.
 #[test]
-#[cfg(feature = "test-support")]
 fn knowledge_shares_excludes_bot_authors() {
     let coupling = codelore_lib::test_support::coupling_repo::build();
     let repo = GixRepo::open(coupling.dir.path()).expect("GixRepo::open");
@@ -127,7 +124,6 @@ fn knowledge_shares_excludes_bot_authors() {
 
 /// Idempotence: calling materialize twice is a no-op (same row count).
 #[test]
-#[cfg(feature = "test-support")]
 fn knowledge_shares_materialize_is_idempotent() {
     let coupling = codelore_lib::test_support::coupling_repo::build();
     let repo = GixRepo::open(coupling.dir.path()).expect("GixRepo::open");
@@ -160,7 +156,6 @@ fn knowledge_shares_materialize_is_idempotent() {
 
 /// doe_scores must be populated and every row expert in a single-author repo.
 #[test]
-#[cfg(feature = "test-support")]
 fn doe_file_creator_is_expert() {
     let coupling = codelore_lib::test_support::coupling_repo::build();
     let repo = GixRepo::open(coupling.dir.path()).expect("GixRepo::open");
@@ -205,7 +200,6 @@ fn doe_file_creator_is_expert() {
 /// `src/stable.rs` is created by Alice (Jan 1) and touched by Bob (Mar 3).
 /// Bob's touch is closer to HEAD (Apr 21) so his k must exceed Alice's.
 #[test]
-#[cfg(feature = "test-support")]
 fn knowledge_shares_decay_more_recent_touch_has_higher_k() {
     let delivery = codelore_lib::test_support::delivery_repo::build();
     let repo = GixRepo::open(delivery.dir.path()).expect("GixRepo::open");
@@ -249,7 +243,6 @@ fn knowledge_shares_decay_more_recent_touch_has_higher_k() {
 
 /// `src/branch2.rs` is only touched by Carol — her k_norm must be 1.0.
 #[test]
-#[cfg(feature = "test-support")]
 fn knowledge_shares_sole_author_gets_full_share_delivery() {
     let delivery = codelore_lib::test_support::delivery_repo::build();
     let repo = GixRepo::open(delivery.dir.path()).expect("GixRepo::open");
@@ -289,7 +282,6 @@ fn knowledge_shares_sole_author_gets_full_share_delivery() {
 /// (fa = 1, large `adds`); Bob's only touch is the day-8 trim (fa = 0,
 /// `adds` ≈ 1 line). Alice's DOE must therefore be strictly higher.
 #[test]
-#[cfg(feature = "test-support")]
 fn doe_ranks_file_creator_above_late_minor_contributor() {
     let delivery = codelore_lib::test_support::delivery_repo::build();
     let repo = GixRepo::open(delivery.dir.path()).expect("GixRepo::open");
@@ -329,4 +321,102 @@ fn doe_ranks_file_creator_above_late_minor_contributor() {
         alice.1,
         bob.1
     );
+}
+
+/// Reviewer-credit path end-to-end: a commit carrying a `Reviewed-by:`
+/// trailer must (a) not fail materialization (DuckDB rejects window
+/// functions inside UPDATE — the re-normalization rebuilds the temp
+/// table instead), (b) credit the reviewer on paths they never authored,
+/// and (c) leave `k_norm` summing to ~1.0 per path after re-normalization.
+#[test]
+fn reviewer_trailer_credits_reviewer_and_renormalizes() {
+    use std::process::Command;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path();
+    let git = |args: &[&str], author: &str, email: &str, date: &str| {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", author)
+            .env("GIT_AUTHOR_EMAIL", email)
+            .env("GIT_COMMITTER_NAME", author)
+            .env("GIT_COMMITTER_EMAIL", email)
+            .env("GIT_AUTHOR_DATE", date)
+            .env("GIT_COMMITTER_DATE", date)
+            .status()
+            .expect("git");
+        assert!(status.success(), "git {args:?} failed");
+    };
+    git(&["init", "--quiet"], "Alice", "alice@example.com", "2026-01-01T10:00:00Z");
+    git(&["config", "gc.auto", "0"], "Alice", "alice@example.com", "2026-01-01T10:00:00Z");
+
+    // Commit 1: Alice authors her own file (puts her in author_aliases).
+    std::fs::write(path.join("alice.rs"), "pub fn a() -> u32 { 1 }\n").expect("write");
+    git(&["add", "alice.rs"], "Alice", "alice@example.com", "2026-01-01T10:00:00Z");
+    git(
+        &["commit", "--quiet", "-m", "feat: alice file"],
+        "Alice",
+        "alice@example.com",
+        "2026-01-01T10:00:00Z",
+    );
+
+    // Commit 2: Bob authors bob.rs; Alice is credited via Reviewed-by trailer.
+    std::fs::write(path.join("bob.rs"), "pub fn b() -> u32 { 2 }\n").expect("write");
+    git(&["add", "bob.rs"], "Bob", "bob@example.com", "2026-01-02T10:00:00Z");
+    git(
+        &[
+            "commit",
+            "--quiet",
+            "-m",
+            "feat: bob file\n\nReviewed-by: Alice <alice@example.com>",
+        ],
+        "Bob",
+        "bob@example.com",
+        "2026-01-02T10:00:00Z",
+    );
+    git(&["repack", "-d", "--quiet"], "Alice", "alice@example.com", "2026-01-02T10:00:00Z");
+
+    let repo = GixRepo::open(path).expect("GixRepo::open");
+    let db = FactsDb::new_in_memory().expect("new_in_memory");
+    let opts = Options {
+        repo_path: path.to_path_buf(),
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    // (a) The reviewer path must not error.
+    materialize_knowledge_shares(&db, &opts).expect("materialize with reviewer trailer");
+
+    // (b) Alice must hold a share of bob.rs despite never authoring it.
+    let alice_on_bob: f64 = db
+        .prepare(
+            "SELECT COALESCE(SUM(k_norm), 0) FROM knowledge_shares
+             WHERE path = 'bob.rs' AND author = 'alice@example.com'",
+        )
+        .expect("prepare")
+        .query_map([], |r| r.get::<_, f64>(0))
+        .expect("query_map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect")[0];
+    assert!(
+        alice_on_bob > 0.0,
+        "reviewer credit must give Alice a share of bob.rs; got {alice_on_bob}"
+    );
+
+    // (c) k_norm still sums to ~1.0 per path after re-normalization.
+    let totals: Vec<(String, f64)> = db
+        .prepare("SELECT path, SUM(k_norm) FROM knowledge_shares GROUP BY path")
+        .expect("prepare")
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))
+        .expect("query_map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect");
+    for (p, total) in &totals {
+        assert!(
+            (total - 1.0).abs() < 1e-9,
+            "k_norm for {p} must sum to 1.0 after reviewer re-normalization, got {total}"
+        );
+    }
 }

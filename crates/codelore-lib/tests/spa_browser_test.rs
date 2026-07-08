@@ -1969,9 +1969,10 @@ fn health_trend_toggle_renders_both_views() {
          })()",
     );
     assert!(
-        overlay_height > 100,
+        overlay_height > 250,
         "overlay #ht-charts canvas clientHeight was {overlay_height}px — \
-         expected >100px; the #ht-charts container may have zero height (Bug 2)"
+         expected >250px (CSS sets 320px); the #ht-charts container may have \
+         zero or collapsed height (Bug 2)"
     );
 
     // Step 2: toggle button is visible and carries the expected label (Bug 1 guard).
@@ -2031,9 +2032,10 @@ fn health_trend_toggle_renders_both_views() {
     );
     for (i, &h) in split_heights.iter().enumerate() {
         assert!(
-            h > 100,
-            "split panel {i} canvas clientHeight was {h}px — expected >100px; \
-             panel height may be too short for ECharts to render into (Bug 3)"
+            h > 150,
+            "split panel {i} canvas clientHeight was {h}px — expected >150px \
+             (CSS sets 180px; the pre-fix 130px must fail this); panel height \
+             may have regressed to an unreadable size (Bug 3)"
         );
     }
 
@@ -2055,8 +2057,8 @@ fn health_trend_toggle_renders_both_views() {
          })()",
     );
     assert!(
-        overlay_back > 100,
+        overlay_back > 250,
         "overlay canvas after toggle-back had clientHeight {overlay_back}px — \
-         expected >100px; the toggle re-render may not have restored the overlay"
+         expected >250px; the toggle re-render may not have restored the overlay"
     );
 }

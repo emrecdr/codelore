@@ -31,12 +31,14 @@ Conventional Commits format. All notable changes documented here.
 - **Theme toggle no longer cascades through layout and offboarding changes.** The
   single `Alpine.effect` in the SPA previously subscribed to `store.theme.isDark`,
   `store.scenario.departed`, and every `store.layout.*` depth setting in one block,
-  so a chord-depth tab click re-rendered every ECharts widget — triggering a full
-  `d3.pack` recompute, arch-graph rebuild, and DSM relayout on every depth change.
+  so a theme switch also chained through depth-tab and scenario subscriptions (and
+  vice versa, layout clicks triggered the theme path's CSS-token invalidation).
   The effect is now split: the theme effect reads only `store.theme.isDark` and
   fires registered re-renderers with cooperative yield; a separate layout/offboarding
   effect reads depth and scenario stores without triggering the CSS-token invalidation
-  pass. The cross-widget selection and brush effects were already isolated.
+  pass. (Layout and scenario changes still re-render all registered widgets; per-widget
+  routing is a separate improvement.) The cross-widget selection and brush effects were
+  already isolated.
 
 - **Health-trend toggle unreadable.** The `<button id="ht-toggle">` carried
   `class="toggle"` which collided with DaisyUI's global `.toggle` switch

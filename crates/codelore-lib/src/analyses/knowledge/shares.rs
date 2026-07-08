@@ -141,21 +141,25 @@ pub fn materialize_knowledge_shares(db: &FactsDb, opts: &Options) -> Result<()> 
     // Pull commits with nf ≤ 10 (Rigby & Bird: >10-file commits excluded from
     // reviewer credit) that have non-empty messages. Then add W_REVIEWER×k rows
     // for each trailer identity found.
-    let reviewer_rows = collect_reviewer_rows(db, opts, src)?;
+    let reviewer_rows = collect_reviewer_rows(db, src)?;
     if !reviewer_rows.is_empty() {
         insert_reviewer_rows(db, &reviewer_rows)?;
-        // Re-normalize k_norm after the reviewer rows are added.
+        // Re-normalize k_norm after the reviewer rows are added. DuckDB
+        // rejects window functions inside UPDATE ("Binder Error: window
+        // functions are not allowed in UPDATE"), so rebuild the temp table
+        // with the recomputed shares instead.
         db.execute_batch(
-            "UPDATE knowledge_shares
-             SET k_norm = k / NULLIF(
-                 SUM(k) OVER (PARTITION BY path),
-                 0
-             )",
+            "CREATE OR REPLACE TEMP TABLE knowledge_shares AS
+             SELECT path,
+                    author,
+                    k,
+                    k / NULLIF(SUM(k) OVER (PARTITION BY path), 0) AS k_norm
+             FROM knowledge_shares",
         )?;
     }
 
     // ── Step 3: DOE scores ────────────────────────────────────────────────────
-    materialize_doe_scores(db, opts, src)?;
+    materialize_doe_scores(db, src)?;
 
     db.mark_knowledge_shares_built();
     Ok(())
@@ -179,13 +183,12 @@ struct ReviewerRow {
 /// reviewer k-weight across all commits that touch that path. Trailer emails
 /// are matched against `author_aliases.raw_email` (case-insensitively); rows
 /// with no alias match are skipped — unregistered emails cannot be attributed.
-fn collect_reviewer_rows(db: &FactsDb, _opts: &Options, src: &str) -> Result<Vec<ReviewerRow>> {
+fn collect_reviewer_rows(db: &FactsDb, src: &str) -> Result<Vec<ReviewerRow>> {
     // Query returns one row per (rev, path) so no ARRAY_AGG is needed.
     // The k_weight column is per-path (loc_added × ai_weight × decay),
     // matching the granularity of the base knowledge_shares CTE.
     let query = format!(
-        "SELECT co.rev,
-                c.path,
+        "SELECT c.path,
                 co.message,
                 c.loc_added
                 * CASE co.ai_attribution
@@ -207,7 +210,7 @@ fn collect_reviewer_rows(db: &FactsDb, _opts: &Options, src: &str) -> Result<Vec
            AND co.nf <= 10",
     );
 
-    // Raw row: (rev, path, message, k_path).
+    // Raw row: (path, message, k_path).
     let mut flat_rows: Vec<(String, String, f64)> = Vec::new();
     {
         let mut stmt = db
@@ -216,9 +219,9 @@ fn collect_reviewer_rows(db: &FactsDb, _opts: &Options, src: &str) -> Result<Vec
             .map_err(|e| CodeLoreError::Analysis(format!("prepare reviewer scan: {e}")))?;
         let rows = stmt
             .query_map([], |r| {
-                let path: String = r.get(1)?;
-                let message: String = r.get(2)?;
-                let k_path: f64 = r.get(3)?;
+                let path: String = r.get(0)?;
+                let message: String = r.get(1)?;
+                let k_path: f64 = r.get(2)?;
                 Ok((path, message, k_path))
             })
             .map_err(|e| CodeLoreError::Analysis(format!("query reviewer scan: {e}")))?;
@@ -311,7 +314,7 @@ fn insert_reviewer_rows(db: &FactsDb, rows: &[ReviewerRow]) -> Result<()> {
 /// Expert threshold: doe >= 1.0 AND doe >= 0.75 × `max_doe_for_file`
 /// (Avelino DOA normalization convention; threshold unstated in DOE paper —
 /// documented here as adopted convention).
-fn materialize_doe_scores(db: &FactsDb, _opts: &Options, src: &str) -> Result<()> {
+fn materialize_doe_scores(db: &FactsDb, src: &str) -> Result<()> {
     let sql = format!(
         "CREATE OR REPLACE TEMP TABLE doe_scores AS
          WITH anchor AS (SELECT MAX(date) AS max_d FROM commits),
@@ -324,8 +327,11 @@ fn materialize_doe_scores(db: &FactsDb, _opts: &Options, src: &str) -> Result<()
            HAVING NOT BOOL_OR(is_bot)
          ),
          -- Who first added each file (fa = 1 if this author created it).
+         -- DISTINCT: a path deleted and re-added by the same author would
+         -- otherwise yield duplicate rows here, and the LEFT JOIN below
+         -- would then duplicate that author's doe_scores row.
          first_adders AS (
-           SELECT c.path,
+           SELECT DISTINCT c.path,
                   co.canonical_author AS author
            FROM {src} c
            JOIN commits co USING (rev)
