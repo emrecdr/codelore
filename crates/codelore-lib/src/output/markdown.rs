@@ -609,6 +609,42 @@ pub fn write_code_familiarity_markdown<W: Write>(
     Ok(())
 }
 
+pub fn write_coordination_needs_markdown<W: Write>(
+    rows: &[crate::analyses::coordination_needs::CoordinationNeedsRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore coordination-needs")?;
+    if rows.is_empty() {
+        writeln!(
+            w,
+            "_No coordination data — ensure knowledge shares are available._"
+        )
+        .map_err(CodeLoreError::Io)?;
+        return Ok(());
+    }
+    writeln!(
+        w,
+        "| Path | Authors | Fragmentation | Interleave | Co-change Entropy | Tier | Health Band |"
+    )
+    .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---:|---:|---:|---:|---|---|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| {} | {} | {:.2} | {:.2} | {:.4} | {} | {} |",
+            escape_md_cell(&row.path),
+            row.authors,
+            row.fragmentation,
+            row.interleave,
+            row.cochange_entropy,
+            escape_md_cell(&row.tier),
+            escape_md_cell(&row.health_band),
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_architecture_metrics_markdown<W: Write>(
     rows: &[crate::analyses::architecture_metrics::ArchitectureMetricRow],
     w: &mut W,
@@ -1241,6 +1277,43 @@ pub fn write_refactoring_targets_markdown<W: Write>(
             escape_md_cell(&row.dominant_type),
             row.band,
             row.manual_up_rank,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+/// `team-composition` markdown emitter.
+pub fn write_team_composition_markdown<W: Write>(
+    rows: &[crate::analyses::team_composition::TeamCompositionRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore team-composition")?;
+    if rows.is_empty() {
+        writeln!(w, "_No commit history found._").map_err(CodeLoreError::Io)?;
+        return Ok(());
+    }
+    writeln!(
+        w,
+        "| Author | Tenure (d) | Bucket | Breadth OK | Active | Commits | Files | Onboarding (wk) |"
+    )
+    .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---:|---|---|---|---:|---:|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        let ob = row
+            .onboarding_weeks
+            .map_or_else(|| "—".to_string(), |v| v.to_string());
+        writeln!(
+            w,
+            "| {} | {} | {} | {} | {} | {} | {} | {} |",
+            escape_md_cell(&row.author),
+            row.tenure_days,
+            escape_md_cell(&row.bucket),
+            row.veteran_breadth_ok,
+            row.active,
+            row.commits,
+            row.files_touched,
+            ob,
         )
         .map_err(CodeLoreError::Io)?;
     }

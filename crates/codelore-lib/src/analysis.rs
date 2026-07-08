@@ -163,6 +163,19 @@ pub enum AnalysisName {
     // (Jabrayilzade et al., ICSE-SEIP 2022). Also reports islands
     // percentage (files with dominant single-author knowledge).
     CodeFamiliarity,
+    // Team composition — per-author contribution-span buckets (onboarded /
+    // experienced / veteran) with a behavioral veteran-breadth gate and
+    // an onboarding-velocity metric (weeks to enter the weekly 80%-core
+    // set, per arXiv 2601.23142). Founder-period authors (first commit
+    // within the project's first 12 weeks) receive NULL onboarding_weeks.
+    TeamComposition,
+    // Coordination needs — per-file coordination overhead: knowledge
+    // fragmentation (HHI complement over decayed shares), author-switch
+    // interleave between adjacent commits, and co-change graph entropy
+    // contribution (EASE 2025, arXiv 2504.18511). Tier classification
+    // (single / low / medium / high) + code-health band join surface the
+    // worst cases: high-fragmentation, high-interleave files in the red band.
+    CoordinationNeeds,
 }
 
 impl AnalysisName {
@@ -215,6 +228,8 @@ impl AnalysisName {
             Self::RefactoringTargets => "refactoring-targets",
             Self::EffortExposure => "effort-exposure",
             Self::CodeFamiliarity => "code-familiarity",
+            Self::TeamComposition => "team-composition",
+            Self::CoordinationNeeds => "coordination-needs",
         }
     }
 
@@ -295,6 +310,8 @@ impl AnalysisName {
             RefactoringTargets,
             EffortExposure,
             CodeFamiliarity,
+            TeamComposition,
+            CoordinationNeeds,
         )
     }
 

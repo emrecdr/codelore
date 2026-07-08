@@ -660,6 +660,32 @@ pub fn write_code_familiarity_csv<W: Write>(
     Ok(())
 }
 
+pub fn write_coordination_needs_csv<W: Write>(
+    rows: &[crate::analyses::coordination_needs::CoordinationNeedsRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(
+        w,
+        "path,authors,fragmentation,interleave,cochange-entropy,tier,health-band"
+    )
+    .map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{:.4},{:.4},{:.4},{},{}",
+            quote_if_needed(&row.path),
+            row.authors,
+            row.fragmentation,
+            row.interleave,
+            row.cochange_entropy,
+            quote_if_needed(&row.tier),
+            quote_if_needed(&row.health_band),
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_architecture_metrics_csv<W: Write>(
     rows: &[crate::analyses::architecture_metrics::ArchitectureMetricRow],
     w: &mut W,
@@ -1193,6 +1219,42 @@ pub fn write_refactoring_targets_csv<W: Write>(
             quote_if_needed(&row.dominant_type),
             row.band,
             row.manual_up_rank,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+/// `team-composition` CSV emitter.
+///
+/// CSV header: `author,tenure-days,bucket,veteran-breadth-ok,active,commits,files-touched,onboarding-weeks`
+///
+/// The `onboarding-weeks` column is empty for `NULL` (founders and authors who
+/// never reached the weekly 80%-core set).
+pub fn write_team_composition_csv<W: Write>(
+    rows: &[crate::analyses::team_composition::TeamCompositionRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(
+        w,
+        "author,tenure-days,bucket,veteran-breadth-ok,active,commits,files-touched,onboarding-weeks"
+    )
+    .map_err(CodeLoreError::Io)?;
+    for row in rows {
+        let ob = row
+            .onboarding_weeks
+            .map_or_else(String::new, |v| v.to_string());
+        writeln!(
+            w,
+            "{},{},{},{},{},{},{},{}",
+            quote_if_needed(&row.author),
+            row.tenure_days,
+            quote_if_needed(&row.bucket),
+            row.veteran_breadth_ok,
+            row.active,
+            row.commits,
+            row.files_touched,
+            ob,
         )
         .map_err(CodeLoreError::Io)?;
     }

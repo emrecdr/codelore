@@ -1443,3 +1443,32 @@ fn diff_delta_health_flags_pasted_clone_as_high_risk() {
         "reasons must mention clone membership; got: {reasons:?}"
     );
 }
+
+#[test]
+fn coordination_needs_csv_has_header_and_rows() {
+    // delivery_repo has src/*.rs Rust files → complexity ingest fires →
+    // knowledge_shares materialised → coordination-needs rows produced.
+    let delivery = codelore_lib::test_support::delivery_repo::build();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "coordination-needs",
+            "--repo",
+            delivery.dir.path().to_str().unwrap(),
+            "--format",
+            "csv",
+            "--min-revs",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "path,authors,fragmentation,interleave,cochange-entropy,tier,health-band",
+        ))
+        // Header alone would pass on empty output — require at least one data row.
+        .stdout(predicate::function(|out: &str| {
+            out.lines().filter(|l| !l.trim().is_empty()).count() >= 2
+        }));
+}

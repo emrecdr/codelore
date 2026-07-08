@@ -380,6 +380,30 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
             "See analyses/code_familiarity.rs.",
         ),
         (
+            "team-composition",
+            "Contribution-span tenure buckets with behavioral veteran gate and onboarding velocity",
+            "Buckets each author by contribution span (last − first commit): onboarded \
+             (<90 d), experienced (90–364 d), veteran (≥365 d). Veterans who have not \
+             touched a breadth of files comparable to the current 80%-core set are capped \
+             at 'experienced' (veteran_breadth_ok = false). Also reports onboarding_weeks: \
+             how many weeks from an author's first commit to their first week in the weekly \
+             80%-core set. Authors whose first commit falls within the project's first 12 \
+             weeks (founders) receive NULL for onboarding_weeks.",
+            "See analyses/team_composition.rs.",
+        ),
+        (
+            "coordination-needs",
+            "Per-file coordination overhead: fragmentation, interleave, co-change entropy",
+            "For each file reports: knowledge fragmentation (1 − HHI, 0 = single owner, \
+             near 1 = evenly spread knowledge); author-switch interleave between adjacent \
+             commits (0 = always same author, 1 = always alternating); and co-change graph \
+             entropy contribution (EASE 2025, arXiv 2504.18511; window-scoped, commits \
+             touching >30 files excluded). Tier: single (1 author) | low (frag<0.25) | \
+             medium | high (frag≥0.50 AND interleave≥0.50). Joined with code-health band \
+             so high-fragmentation files in the red band surface first.",
+            "See analyses/coordination_needs.rs.",
+        ),
+        (
             "cycle-origins",
             "Commit-level archaeology for dependency cycles",
             "For each dependency cycle at HEAD, binary-searches history (reading + resolving source at past revisions) to find the earliest commit where that cycle existed — the commit that closed the loop. Reports the forming commit's SHA + date per cycle. Assumes a cycle, once formed, stays formed; traces the largest cycles first to bound cost.",
@@ -1029,6 +1053,12 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             }
             AnalysisName::CodeFamiliarity => {
                 dispatch_code_familiarity(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::TeamComposition => {
+                dispatch_team_composition(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::CoordinationNeeds => {
+                dispatch_coordination_needs(&db, &opts, format, &ctx, &mut out)?;
             }
         }
     } // out is dropped here, flushing any buffered writes
@@ -2467,6 +2497,89 @@ fn dispatch_code_familiarity(
         fmt => {
             return Err(unsupported_format(
                 "code-familiarity",
+                "csv|json|markdown",
+                fmt,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_team_composition(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows =
+                codelore_lib::cli_api::analyses::team_composition::run_team_composition(db, opts)
+                    .context("run team-composition")?;
+            codelore_lib::cli_api::output::csv::write_team_composition_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows =
+                codelore_lib::cli_api::analyses::team_composition::run_team_composition(db, opts)
+                    .context("run team-composition")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows =
+                codelore_lib::cli_api::analyses::team_composition::run_team_composition(db, opts)
+                    .context("run team-composition")?;
+            codelore_lib::cli_api::output::markdown::write_team_composition_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format(
+                "team-composition",
+                "csv|json|markdown",
+                fmt,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_coordination_needs(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows = codelore_lib::cli_api::analyses::coordination_needs::run_coordination_needs(
+                db, opts,
+            )
+            .context("run coordination-needs")?;
+            codelore_lib::cli_api::output::csv::write_coordination_needs_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::coordination_needs::run_coordination_needs(
+                db, opts,
+            )
+            .context("run coordination-needs")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows = codelore_lib::cli_api::analyses::coordination_needs::run_coordination_needs(
+                db, opts,
+            )
+            .context("run coordination-needs")?;
+            codelore_lib::cli_api::output::markdown::write_coordination_needs_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format(
+                "coordination-needs",
                 "csv|json|markdown",
                 fmt,
             ));
