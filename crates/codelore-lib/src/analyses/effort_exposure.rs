@@ -253,8 +253,9 @@ pub fn run_effort_exposure(db: &FactsDb, opts: &Options) -> Result<Vec<EffortExp
 
 #[cfg(test)]
 mod tests {
-    use super::{populate_bands_table, wilson_ci};
+    use super::{EffortExposureRow, populate_bands_table, wilson_ci};
     use crate::analyses::code_health::CodeHealthRow;
+    use crate::quality_gates::evaluate_effort_exposure_rows;
     use std::collections::HashMap;
 
     #[test]
@@ -473,6 +474,45 @@ mod tests {
         assert!(
             yellow.2.abs() < f64::EPSILON,
             "yellow has no churn in window"
+        );
+
+        // ── Gate fail-path closure ───────────────────────────────────────────
+        // Convert the SQL tuples into the typed rows the gate evaluator expects,
+        // then prove the full chain: synthetic red data → aggregation SQL →
+        // gate fail verdict.
+        let red_churn_share = red.2;
+        let ee_rows: Vec<EffortExposureRow> = rows
+            .iter()
+            .map(|(b, commit_share_pct, churn_share_pct)| EffortExposureRow {
+                band: b.clone(),
+                files: 1,
+                loc_share_pct: 0.0,
+                commit_share_pct: *commit_share_pct,
+                churn_share_pct: *churn_share_pct,
+                commit_share_ci_low: 0.0,
+                commit_share_ci_high: 1.0,
+            })
+            .collect();
+
+        // threshold = 0.0: any positive red churn share must fire exactly one
+        // violation naming the correct gate key and carrying the actual value.
+        let violations = evaluate_effort_exposure_rows(0.0, &ee_rows);
+        assert_eq!(
+            violations.len(),
+            1,
+            "threshold=0.0 must trigger one violation; got {violations:?}"
+        );
+        assert_eq!(
+            violations[0].gate, "max_red_effort_pct",
+            "gate name must match the threshold key"
+        );
+        let reported_actual: f64 = violations[0]
+            .actual
+            .parse()
+            .expect("actual field must be a parseable f64");
+        assert!(
+            (reported_actual - red_churn_share).abs() < 0.01,
+            "reported actual ({reported_actual:.2}) must match red churn share ({red_churn_share:.2})"
         );
     }
 }

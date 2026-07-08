@@ -404,7 +404,7 @@ pub fn evaluate_code_health_gate(
 ///
 /// Finds the `"red"` band row in `rows`; if none, treats churn as 0 %
 /// (an all-green / all-yellow repo passes any positive threshold).
-fn evaluate_effort_exposure_rows(
+pub(crate) fn evaluate_effort_exposure_rows(
     threshold: f64,
     rows: &[crate::analyses::effort_exposure::EffortExposureRow],
 ) -> Vec<GateViolation> {
