@@ -208,67 +208,9 @@ fn normalise_identity(raw: &str) -> String {
     raw.trim().to_lowercase()
 }
 
-/// Extract Co-Authored-By trailer values from a commit message.
-/// Returns the raw email/name strings (post-trim, lowercased) so
-/// downstream pairing is case-insensitive.
+/// Delegate to the shared trailer-extraction module so `Co-Authored-By:`
+/// parsing lives in one place and is also available to the knowledge-shares
+/// reviewer-credit step.
 fn extract_coauthors(message: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    for line in message.lines() {
-        let trimmed = line.trim();
-        // Match `Co-Authored-By: Name <email>` (case-insensitive).
-        let lower = trimmed.to_lowercase();
-        if let Some(rest) = lower.strip_prefix("co-authored-by:") {
-            // Capture just the email portion if present, else the
-            // whole trailer body. The email is more identity-stable.
-            let body = rest.trim();
-            if let (Some(lt), Some(gt)) = (body.find('<'), body.find('>'))
-                && lt < gt
-            {
-                let email = &body[(lt + 1)..gt];
-                let email = email.trim().to_string();
-                if !email.is_empty() {
-                    out.push(email);
-                    continue;
-                }
-            }
-            // Fallback to the whole trailer body (rare — trailers
-            // without `<email>` are non-conventional).
-            if !body.is_empty() {
-                out.push(body.to_string());
-            }
-        }
-    }
-    out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn extracts_single_coauthor() {
-        let msg = "feat: thing\n\nCo-authored-by: Bob <bob@example.com>";
-        let got = extract_coauthors(msg);
-        assert_eq!(got, vec!["bob@example.com"]);
-    }
-
-    #[test]
-    fn extracts_multiple_coauthors() {
-        let msg = "feat: thing\n\nCo-Authored-By: Alice <alice@example.com>\nCo-authored-by: Carol <carol@example.com>";
-        let got = extract_coauthors(msg);
-        assert_eq!(got, vec!["alice@example.com", "carol@example.com"]);
-    }
-
-    #[test]
-    fn no_coauthors_returns_empty() {
-        let msg = "feat: just one author";
-        assert!(extract_coauthors(msg).is_empty());
-    }
-
-    #[test]
-    fn malformed_trailer_falls_through_to_body() {
-        let msg = "feat: x\n\nCo-authored-by: no-email-here";
-        let got = extract_coauthors(msg);
-        assert_eq!(got, vec!["no-email-here"]);
-    }
+    super::knowledge::trailers::extract_coauthors(message)
 }

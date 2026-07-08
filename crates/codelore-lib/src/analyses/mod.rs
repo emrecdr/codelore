@@ -32,6 +32,7 @@ pub mod hotspot_velocity;
 pub mod hotspots;
 pub mod import_graph;
 pub mod instability;
+pub mod knowledge;
 pub mod knowledge_islands;
 pub mod lead_time;
 pub mod lineage;

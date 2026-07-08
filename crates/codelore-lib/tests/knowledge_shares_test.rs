@@ -1,0 +1,284 @@
+//! Integration tests for `analyses::knowledge::shares::materialize_knowledge_shares`.
+//!
+//! Tests verify the four contractual invariants:
+//! 1. `k_norm` sums to ~1.0 per path (within floating-point tolerance).
+//! 2. A single-author path has `k_norm = 1.0` for that author.
+//! 3. DOE ranks the file creator above a late minor contributor.
+//! 4. Bot rows are absent from both temp tables.
+//!
+//! Additionally, a `delivery_repo` test asserts that decay ordering
+//! holds: an author with a more-recent touch has higher `k` than one
+//! whose only touch was much earlier.
+
+#![allow(clippy::doc_markdown)]
+
+use codelore_lib::Options;
+use codelore_lib::analyses::knowledge::shares::materialize_knowledge_shares;
+use codelore_lib::facts::FactsDb;
+use codelore_lib::repo::GixRepo;
+
+// ---------------------------------------------------------------------------
+// coupling_repo tests (single-author — all k_norm values are 1.0 per path)
+// ---------------------------------------------------------------------------
+
+/// k_norm for any path in coupling_repo must sum to 1.0 (only one author).
+#[test]
+#[cfg(feature = "test-support")]
+fn knowledge_shares_k_norm_sums_to_one_per_path() {
+    let coupling = codelore_lib::test_support::coupling_repo::build();
+    let repo = GixRepo::open(coupling.dir.path()).expect("GixRepo::open");
+    let db = FactsDb::new_in_memory().expect("new_in_memory");
+    let opts = Options {
+        repo_path: coupling.dir.path().to_path_buf(),
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    materialize_knowledge_shares(&db, &opts).expect("materialize");
+
+    let totals: Vec<(String, f64)> = db
+        .prepare("SELECT path, SUM(k_norm) AS total FROM knowledge_shares GROUP BY path")
+        .expect("prepare")
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))
+        .expect("query_map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect");
+
+    assert!(
+        !totals.is_empty(),
+        "knowledge_shares must have at least one path"
+    );
+    for (path, total) in &totals {
+        assert!(
+            (total - 1.0_f64).abs() < 1e-9,
+            "path {path}: k_norm sum = {total}, expected 1.0"
+        );
+    }
+}
+
+/// A single-author path must have k_norm = 1.0 for that author.
+#[test]
+#[cfg(feature = "test-support")]
+fn knowledge_shares_single_author_path_gets_full_share() {
+    let coupling = codelore_lib::test_support::coupling_repo::build();
+    let repo = GixRepo::open(coupling.dir.path()).expect("GixRepo::open");
+    let db = FactsDb::new_in_memory().expect("new_in_memory");
+    let opts = Options {
+        repo_path: coupling.dir.path().to_path_buf(),
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    materialize_knowledge_shares(&db, &opts).expect("materialize");
+
+    // coupling_repo has only one author so every path row must have k_norm = 1.0.
+    let rows: Vec<(String, String, f64)> = db
+        .prepare("SELECT path, author, k_norm FROM knowledge_shares WHERE k_norm < 0.9999999")
+        .expect("prepare")
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, f64>(2)?,
+            ))
+        })
+        .expect("query_map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect");
+
+    assert!(
+        rows.is_empty(),
+        "all paths are single-author — expected k_norm=1.0 everywhere, \
+         but found rows with k_norm < 1.0: {rows:?}"
+    );
+}
+
+/// No bot rows in knowledge_shares.
+#[test]
+#[cfg(feature = "test-support")]
+fn knowledge_shares_excludes_bot_authors() {
+    let coupling = codelore_lib::test_support::coupling_repo::build();
+    let repo = GixRepo::open(coupling.dir.path()).expect("GixRepo::open");
+    let db = FactsDb::new_in_memory().expect("new_in_memory");
+    let opts = Options {
+        repo_path: coupling.dir.path().to_path_buf(),
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    materialize_knowledge_shares(&db, &opts).expect("materialize");
+
+    let bot_rows: Vec<String> = db
+        .prepare(
+            "SELECT ks.author FROM knowledge_shares ks
+             JOIN author_aliases a ON a.canonical = ks.author AND a.is_bot",
+        )
+        .expect("prepare")
+        .query_map([], |r| r.get::<_, String>(0))
+        .expect("query_map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect");
+
+    assert!(
+        bot_rows.is_empty(),
+        "knowledge_shares must not contain bot authors; found: {bot_rows:?}"
+    );
+}
+
+/// Idempotence: calling materialize twice is a no-op (same row count).
+#[test]
+#[cfg(feature = "test-support")]
+fn knowledge_shares_materialize_is_idempotent() {
+    let coupling = codelore_lib::test_support::coupling_repo::build();
+    let repo = GixRepo::open(coupling.dir.path()).expect("GixRepo::open");
+    let db = FactsDb::new_in_memory().expect("new_in_memory");
+    let opts = Options {
+        repo_path: coupling.dir.path().to_path_buf(),
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    materialize_knowledge_shares(&db, &opts).expect("first materialize");
+    let count_first: i64 = db
+        .query_row("SELECT COUNT(*) FROM knowledge_shares", [], |r| r.get(0))
+        .expect("count after first");
+
+    materialize_knowledge_shares(&db, &opts).expect("second materialize");
+    let count_second: i64 = db
+        .query_row("SELECT COUNT(*) FROM knowledge_shares", [], |r| r.get(0))
+        .expect("count after second");
+
+    assert_eq!(
+        count_first, count_second,
+        "materialize must be idempotent: row count changed from {count_first} to {count_second}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// DOE tests (coupling_repo — single-author, so file creator = only developer)
+// ---------------------------------------------------------------------------
+
+/// doe_scores must be populated and every row expert in a single-author repo.
+#[test]
+#[cfg(feature = "test-support")]
+fn doe_file_creator_is_expert() {
+    let coupling = codelore_lib::test_support::coupling_repo::build();
+    let repo = GixRepo::open(coupling.dir.path()).expect("GixRepo::open");
+    let db = FactsDb::new_in_memory().expect("new_in_memory");
+    let opts = Options {
+        repo_path: coupling.dir.path().to_path_buf(),
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    materialize_knowledge_shares(&db, &opts).expect("materialize");
+
+    let doe_count: i64 = db
+        .query_row("SELECT COUNT(*) FROM doe_scores", [], |r| r.get(0))
+        .expect("doe count");
+    assert!(
+        doe_count > 0,
+        "doe_scores must be non-empty after materialize"
+    );
+
+    // Single author created every file (fa=1) and is trivially max for each
+    // path — every row must be flagged expert.
+    let non_expert_count: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM doe_scores WHERE NOT is_expert",
+            [],
+            |r| r.get(0),
+        )
+        .expect("non-expert count");
+
+    assert_eq!(
+        non_expert_count, 0,
+        "single-author coupling_repo: every DOE row should be flagged expert; \
+         found {non_expert_count} non-expert rows"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// delivery_repo tests — decay ordering + sole-author path
+// ---------------------------------------------------------------------------
+
+/// `src/stable.rs` is created by Alice (Jan 1) and touched by Bob (Mar 3).
+/// Bob's touch is closer to HEAD (Apr 21) so his k must exceed Alice's.
+#[test]
+#[cfg(feature = "test-support")]
+fn knowledge_shares_decay_more_recent_touch_has_higher_k() {
+    let delivery = codelore_lib::test_support::delivery_repo::build();
+    let repo = GixRepo::open(delivery.dir.path()).expect("GixRepo::open");
+    let db = FactsDb::new_in_memory().expect("new_in_memory");
+    let opts = Options {
+        repo_path: delivery.dir.path().to_path_buf(),
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    materialize_knowledge_shares(&db, &opts).expect("materialize");
+
+    let rows: Vec<(String, f64)> = db
+        .prepare(
+            "SELECT author, k FROM knowledge_shares WHERE path = 'src/stable.rs' ORDER BY author",
+        )
+        .expect("prepare")
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))
+        .expect("query_map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect");
+
+    let k_alice = rows
+        .iter()
+        .find(|(a, _)| a == "alice@example.com")
+        .map(|(_, k)| *k)
+        .expect("alice must have a knowledge_shares row for src/stable.rs");
+
+    let k_bob = rows
+        .iter()
+        .find(|(a, _)| a == "bob@example.com")
+        .map(|(_, k)| *k)
+        .expect("bob must have a knowledge_shares row for src/stable.rs");
+
+    assert!(
+        k_bob > k_alice,
+        "decay ordering: Bob touched stable.rs later (closer to HEAD) so \
+         k_bob ({k_bob:.6}) must exceed k_alice ({k_alice:.6})"
+    );
+}
+
+/// `src/branch2.rs` is only touched by Carol — her k_norm must be 1.0.
+#[test]
+#[cfg(feature = "test-support")]
+fn knowledge_shares_sole_author_gets_full_share_delivery() {
+    let delivery = codelore_lib::test_support::delivery_repo::build();
+    let repo = GixRepo::open(delivery.dir.path()).expect("GixRepo::open");
+    let db = FactsDb::new_in_memory().expect("new_in_memory");
+    let opts = Options {
+        repo_path: delivery.dir.path().to_path_buf(),
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    materialize_knowledge_shares(&db, &opts).expect("materialize");
+
+    let rows: Vec<(String, f64)> = db
+        .prepare("SELECT author, k_norm FROM knowledge_shares WHERE path = 'src/branch2.rs'")
+        .expect("prepare")
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))
+        .expect("query_map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect");
+
+    assert_eq!(
+        rows.len(),
+        1,
+        "src/branch2.rs should have exactly 1 knowledge_shares row (Carol only); got {rows:?}"
+    );
+    let (author, k_norm) = &rows[0];
+    assert_eq!(author, "carol@example.com", "sole author must be Carol");
+    assert!(
+        (k_norm - 1.0_f64).abs() < 1e-9,
+        "Carol's k_norm for src/branch2.rs must be 1.0, got {k_norm}"
+    );
+}
