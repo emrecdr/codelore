@@ -37,7 +37,6 @@ use crate::analyses::architecture_roles::ArchitectureRoleRow;
 use crate::analyses::architecture_trend::ArchitectureTrendRow;
 use crate::analyses::code_familiarity::CodeFamiliarityRow;
 use crate::analyses::code_health::CodeHealthRow;
-use crate::analyses::function_xray::FunctionXrayRow;
 use crate::analyses::coordination_needs::CoordinationNeedsRow;
 use crate::analyses::coupling::CouplingRow;
 use crate::analyses::dashboard::{
@@ -45,6 +44,7 @@ use crate::analyses::dashboard::{
 };
 use crate::analyses::effort_exposure::EffortExposureRow;
 use crate::analyses::entity_ownership::EntityOwnershipRow;
+use crate::analyses::function_xray::FunctionXrayRow;
 use crate::analyses::hotspots::HotspotRow;
 use crate::analyses::knowledge_islands::KnowledgeIslandRow;
 use crate::analyses::marginal_owner_risk::MarginalOwnerRiskRow;

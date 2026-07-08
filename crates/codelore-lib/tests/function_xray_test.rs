@@ -50,7 +50,7 @@ mod function_xray_integration {
     /// `cold` follows a blank separator at line 12, spanning lines 13-15;
     /// `meta` follows at lines 17-19.
     ///
-    /// Expected change_freq:
+    /// Expected `change_freq`:
     ///   meta = 10  (meta-tweak-1..10; highest → top row)
     ///   hot  = 7   (tweak-1/2/3 + tweak-mh + coupled-1/2/3)
     ///   cold = 3   (coupled-1/2/3 only)
