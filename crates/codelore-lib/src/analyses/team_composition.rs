@@ -40,8 +40,8 @@
 //! A synthetic row with `author = "__summary__"` carries bucket-percentage
 //! columns (`onboarded_pct`, `experienced_pct`, `veteran_pct` packed into the
 //! `bucket` field as a JSON-like string) for downstream factor-tile and SPA
-//! consumption. The `bucket` field for the summary row is the string
-//! `"__summary__"` so callers can filter it out.
+//! consumption. The `author` field is `"__summary__"` so callers can filter
+//! it out; the `bucket` field contains the percentage string.
 
 use crate::analyses::lineage;
 use crate::facts::FactsDb;
@@ -61,7 +61,9 @@ pub struct TeamCompositionRow {
     /// single-commit authors. `0` for the summary row.
     pub tenure_days: i64,
     /// `"onboarded"` (< 90 d), `"experienced"` (90–364 d), `"veteran"`
-    /// (≥ 365 d), or `"__summary__"` for the summary row.
+    /// (≥ 365 d). For the summary row (where `author == "__summary__"`),
+    /// this field holds the percentage string (e.g.
+    /// `"onboarded=66.7% experienced=33.3% veteran=0.0%"`).
     pub bucket: String,
     /// `true` when the author's distinct lineage-path count ≥ median of the
     /// current core set. Always `false` for the summary row. A `veteran`
@@ -132,8 +134,8 @@ core_set AS (
     SELECT ra.author, ap.paths_touched
     FROM ranked_authors ra
     JOIN author_paths ap ON ap.author = ra.author
-    WHERE ra.cum_commits - ra.commits < ra.total_commits * 0.8
-       OR ra.cum_commits <= ra.total_commits * 0.8
+    WHERE ra.cum_commits - ra.commits < ra.total_commits * 0.8  -- rows fully before the 80% threshold
+       OR ra.cum_commits <= ra.total_commits * 0.8              -- include the row that lands exactly at 80%
 ),
 core_median_paths AS (
     SELECT MEDIAN(paths_touched) AS med FROM core_set

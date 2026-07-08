@@ -9,8 +9,8 @@
 //!
 //! - **`delivery_repo`** — Alice / Bob / Carol. Project spans Jan-1 to Apr-21
 //!   (110 days). All three first commits are within the first 12 weeks
-//!   (founder cutoff = Jan-1 + 84 d = Mar-26) → all `onboarding_weeks = NULL`.
-//!   Alice span = 110 d → "experienced". Bob span = 58 d → "onboarded".
+//!   (founder cutoff = date_trunc('week', Jan-1) + 84 d = 2026-03-23) → all `onboarding_weeks = NULL`.
+//!   Alice span = 110 d → "experienced". Bob span = ~54 d → "onboarded".
 //!   Carol span = 64 d → "onboarded". Nobody reaches 365 d → no veteran.
 //!   Summary row must appear with `author = "__summary__"`.
 
@@ -151,8 +151,8 @@ fn delivery_repo_no_veterans() {
 #[test]
 fn delivery_repo_all_founders_have_null_onboarding_weeks() {
     // All three authors' first commits are within the first 12 weeks of the
-    // project (project start = Jan-1, cutoff = Jan-1 + 84 d = Mar-26;
-    // alice=Jan-1, bob=Jan-8, carol=Jan-17 — all before Mar-26).
+    // project (project start = Jan-1, cutoff = date_trunc('week', Jan-1) + 84 d = 2026-03-23;
+    // alice=Jan-1, bob=Jan-8, carol=Jan-17 — all before 2026-03-23).
     let fixture = codelore_lib::test_support::delivery_repo::build();
     let db = ingest(fixture.dir.path());
     let opts = Options {
@@ -192,5 +192,161 @@ fn delivery_repo_summary_bucket_string_contains_pcts() {
         summary.bucket.contains("onboarded=") && summary.bucket.contains("experienced="),
         "summary bucket must contain onboarded and experienced keys; got {:?}",
         summary.bucket,
+    );
+}
+
+// ── 3. Veteran-breadth gate ───────────────────────────────────────────────────
+
+/// Run one git command with a fixed identity and date (no passthrough to shell).
+#[cfg(feature = "test-support")]
+fn git_as_tc(path: &std::path::Path, args: &[&str], author: &str, email: &str, date: &str) {
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(args)
+        .env("GIT_AUTHOR_NAME", author)
+        .env("GIT_AUTHOR_EMAIL", email)
+        .env("GIT_COMMITTER_NAME", author)
+        .env("GIT_COMMITTER_EMAIL", email)
+        .env("GIT_AUTHOR_DATE", date)
+        .env("GIT_COMMITTER_DATE", date)
+        .status()
+        .expect("git");
+    assert!(status.success(), "git {args:?} failed");
+}
+
+/// A veteran author (span ≥ 365 d) whose path breadth is below the core-set
+/// median must be capped to `"experienced"` (`veteran_breadth_ok = false`).
+///
+/// Fixture:
+/// - Alice: 2 commits spanning ~396 d, touches only `a.rs` (1 path).
+/// - Bob:   3 commits within 30 d, touches `b.rs`, `c.rs`, `d.rs` (3 paths).
+/// Both land in the Pareto-80 core set. Median paths = median(1, 3) = 2.
+/// Alice's paths_touched (1) < 2 → breadth gate fires → bucket = "experienced".
+#[test]
+#[cfg(feature = "test-support")]
+fn veteran_capped_to_experienced_when_breadth_below_median() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path();
+    let git = |args: &[&str], author: &str, email: &str, date: &str| {
+        git_as_tc(path, args, author, email, date);
+    };
+
+    git(
+        &["init", "--quiet"],
+        "Alice",
+        "alice@example.com",
+        "2024-01-01T10:00:00Z",
+    );
+    git(
+        &["config", "gc.auto", "0"],
+        "Alice",
+        "alice@example.com",
+        "2024-01-01T10:00:00Z",
+    );
+
+    // Alice commit 1: 2024-01-01
+    std::fs::write(path.join("a.rs"), "pub fn a1() -> u32 { 1 }\n").expect("write");
+    git(
+        &["add", "a.rs"],
+        "Alice",
+        "alice@example.com",
+        "2024-01-01T10:00:00Z",
+    );
+    git(
+        &["commit", "-m", "feat: alice init"],
+        "Alice",
+        "alice@example.com",
+        "2024-01-01T10:00:00Z",
+    );
+
+    // Bob commit 1: 2024-01-02, b.rs
+    std::fs::write(path.join("b.rs"), "pub fn b() -> u32 { 1 }\n").expect("write");
+    git(
+        &["add", "b.rs"],
+        "Bob",
+        "bob@example.com",
+        "2024-01-02T10:00:00Z",
+    );
+    git(
+        &["commit", "-m", "feat: bob b"],
+        "Bob",
+        "bob@example.com",
+        "2024-01-02T10:00:00Z",
+    );
+
+    // Bob commit 2: 2024-01-10, c.rs
+    std::fs::write(path.join("c.rs"), "pub fn c() -> u32 { 1 }\n").expect("write");
+    git(
+        &["add", "c.rs"],
+        "Bob",
+        "bob@example.com",
+        "2024-01-10T10:00:00Z",
+    );
+    git(
+        &["commit", "-m", "feat: bob c"],
+        "Bob",
+        "bob@example.com",
+        "2024-01-10T10:00:00Z",
+    );
+
+    // Bob commit 3: 2024-01-20, d.rs
+    std::fs::write(path.join("d.rs"), "pub fn d() -> u32 { 1 }\n").expect("write");
+    git(
+        &["add", "d.rs"],
+        "Bob",
+        "bob@example.com",
+        "2024-01-20T10:00:00Z",
+    );
+    git(
+        &["commit", "-m", "feat: bob d"],
+        "Bob",
+        "bob@example.com",
+        "2024-01-20T10:00:00Z",
+    );
+
+    // Alice commit 2: 2025-02-01 (~396 d after first) — pushes her span past 365 d.
+    std::fs::write(path.join("a.rs"), "pub fn a1() -> u32 { 2 }\n").expect("write");
+    git(
+        &["add", "a.rs"],
+        "Alice",
+        "alice@example.com",
+        "2025-02-01T10:00:00Z",
+    );
+    git(
+        &["commit", "-m", "chore: alice touch"],
+        "Alice",
+        "alice@example.com",
+        "2025-02-01T10:00:00Z",
+    );
+
+    let db = FactsDb::new_in_memory().expect("in-memory db");
+    let repo = GixRepo::open(path).expect("open repo");
+    let opts = Options {
+        repo_path: path.to_path_buf(),
+        min_revs: 1,
+        window_days: 500,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+    let rows = run_team_composition(&db, &opts).expect("run team-composition");
+
+    let alice = rows
+        .iter()
+        .find(|r| r.author.contains("alice"))
+        .expect("alice row must be present");
+    assert!(
+        alice.tenure_days >= 365,
+        "alice span must be ≥365 d to be veteran-eligible; got {}",
+        alice.tenure_days,
+    );
+    assert!(
+        !alice.veteran_breadth_ok,
+        "alice touches only 1 path; core-set median is 2; breadth gate must be false",
+    );
+    assert_eq!(
+        alice.bucket, "experienced",
+        "veteran capped to experienced when breadth_ok=false; got {:?}",
+        alice.bucket,
     );
 }
