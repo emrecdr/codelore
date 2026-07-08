@@ -26,7 +26,10 @@
 //! `PERCENTILE_CONT(0.50)` on `[24, 24]` = 24.0 h.
 //!
 //! Rework signal: Day 5 Alice expands `rework.rs` (+2 lines); Day 8 Bob
-//! trims it back (−2 lines) within the 21-day window → `rework_pct` > 0.
+//! trims it back (−2 lines) within a 3-day pair gap. With the default 21-day
+//! window anchored to HEAD (`2026-04-21`), this event is ~110 days before HEAD
+//! and is correctly excluded. The `rework_pct_is_positive` test uses
+//! `rework_window_days = 365` to bring the signal into scope.
 //!
 //! All tests use `include_merges: true`; without it the `commit_parents` table
 //! holds no merge rows and branch metrics would be empty.
@@ -105,7 +108,18 @@ fn rework_pct_is_positive() {
     let fixture = codelore_lib::test_support::delivery_repo::build();
     let repo = GixRepo::open(fixture.dir.path()).expect("open repo");
     let db = FactsDb::new_in_memory().expect("db");
-    let opts = base_opts(fixture.dir.path());
+    // rework_window_days=365: all 2026 fixture commits fall within 365d of HEAD
+    // (2026-04-21), so the day-5→day-8 rework signal is captured.
+    // With the default 21d window the signal is absent (rework events are
+    // ~110 days before HEAD), which is the correct behaviour: window-anchored
+    // to HEAD means old rework doesn't inflate current metrics.
+    let opts = Options {
+        repo_path: fixture.dir.path().to_path_buf(),
+        include_merges: true,
+        min_revs: 1,
+        rework_window_days: 365,
+        ..Options::default()
+    };
     db.ingest(&repo, &opts).expect("ingest");
 
     let rows = run_delivery_metrics(&db, &opts).expect("run delivery-metrics");
@@ -115,15 +129,18 @@ fn rework_pct_is_positive() {
         .find(|r| r.metric == "rework_pct")
         .expect("rework_pct row present");
 
-    // Day 5: Alice adds 2 lines to rework.rs.
-    // Day 8: Bob reverts them (deletes those 2 lines) within the 21-day window.
-    // The hunk-overlap join must surface at least this one rework pair.
+    // Day 5: Alice adds 2 lines to rework.rs (new_lines=2).
+    // Day 8: Bob deletes those 2 lines (within the 3-day pair gap ≤ 365d window).
+    // Overlap > 0 → rework_pct > 0.
+    // Exact value is not hand-computable because the denominator is the total
+    // new_lines across ALL hunks in the 365d window (many other commits add lines
+    // too), but the signal must be strictly positive.
     assert!(
         row.p50 > 0.0,
         "rework_pct must be positive due to the day-5→day-8 rework signal; got {:.4}",
         row.p50
     );
-    assert!(row.n > 0, "rework_pct n must be positive");
+    assert!(row.n > 0, "rework_pct n (pair count) must be positive");
 }
 
 #[test]

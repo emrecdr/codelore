@@ -17,9 +17,11 @@
 //!   Measures how long branches stay open before integration.
 //! - **`rework_pct`** — percentage of added lines that were subsequently
 //!   deleted or overwritten within `opts.rework_window_days` on the same
-//!   path. Computed via hunk-pair overlap (approximate — line drift between
-//!   commits is not tracked). Bounded self-join: both sides are filtered to
-//!   the rework window before the cross-join.
+//!   path. Window is anchored to `MAX(date)` across all commits so only
+//!   recent activity is examined. Computed via hunk-pair overlap (approximate
+//!   — line drift between commits is not tracked). Both sides of the self-join
+//!   are pre-filtered to the window (bounds the cross-product); the denominator
+//!   is the total lines added in the window, independent of the pair join.
 //! - **`lead_proxy_hours`** — per-commit `date_diff('hour', author_date,
 //!   committer_date)`, positive values only, over non-merge commits. Uses
 //!   the same author/committer semantics as [`crate::analyses::lead_time`]:
@@ -50,8 +52,8 @@ use crate::{CodeLoreError, Options, Result};
 ///
 /// Each row describes one metric as a percentile distribution across all
 /// observed units (merge units for batch/branch metrics; commits for
-/// `lead_proxy_hours`; all hunk pairs within the window for `rework_pct`
-/// which produces a single aggregate row with `n` = hunks compared).
+/// `lead_proxy_hours`; for `rework_pct` a single aggregate row where `n` is
+/// the number of hunk pairs examined — not the number of changed lines).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DeliveryMetricsRow {
     /// Metric name: one of `batch_size_files`, `batch_size_loc`,
@@ -69,68 +71,37 @@ pub struct DeliveryMetricsRow {
     pub caveat: String,
 }
 
-/// Run the `delivery-metrics` analysis against the already-ingested fact store.
-///
-/// Requires the `commit_parents` table (schema v4) and that merges were
-/// ingested with `opts.include_merges = true`; without merge rows the branch
-/// metrics will be empty.
-///
-/// # Errors
-///
-/// Returns [`CodeLoreError::Analysis`] on any `DuckDB` error.
-// Long function: the body is one flat sequence of 5 independent SQL blocks,
-// each building one metric row. Splitting into helpers would obscure the
-// parallel structure without reducing complexity.
-#[allow(clippy::too_many_lines)]
-#[tracing::instrument(name = "delivery-metrics", skip_all)]
-pub fn run_delivery_metrics(db: &FactsDb, opts: &Options) -> Result<Vec<DeliveryMetricsRow>> {
-    // ── Squash detection ─────────────────────────────────────────────────────
-    // Merges = commits that have a commit_parents row at position 1.
-    let squash_sql = "
+// Branch-side commit CTE.
+//
+// Branch-side commits for a merge rev M:
+//   - reachable from M's parent(position=1) (the branch tip)
+//   - NOT reachable from M's parent(position=0) (the mainline parent)
+//   - within 90 days of the merge date (date floor) to bound recursion
+//   - at most 200 hops deep
+//
+// Produces (merge_rev, merge_date, branch_commit_rev) for every branch-side
+// commit of every merge in the repo.
+// lead_proxy_hours: author-date → committer-date gap, positive values only.
+// Negative values indicate clock-skew or timezone artefacts and are excluded.
+// Merge commits are excluded — their lead-time is architecturally zero.
+const LEAD_PROXY_SQL: &str = "
+    SELECT
+        PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY lt_hours) AS p50,
+        PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY lt_hours) AS p75,
+        PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY lt_hours) AS p90,
+        COUNT(*)                                               AS n
+    FROM (
         SELECT
-            (SELECT COUNT(DISTINCT rev) FROM commit_parents WHERE position = 1) AS merge_count,
-            (SELECT COUNT(*) FROM commits WHERE is_merge = FALSE)               AS commit_count
-    ";
-    let (merge_count, commit_count): (u64, u64) = {
-        let mut stmt = db
-            .conn()
-            .prepare(squash_sql)
-            .map_err(|e| CodeLoreError::Analysis(format!("prepare squash probe: {e}")))?;
-        let mut rows = stmt
-            .query([])
-            .map_err(|e| CodeLoreError::Analysis(format!("query squash probe: {e}")))?;
-        let row = rows
-            .next()
-            .map_err(|e| CodeLoreError::Analysis(format!("fetch squash probe row: {e}")))?
-            .ok_or_else(|| CodeLoreError::Analysis("squash probe returned no rows".to_string()))?;
-        let mc: u64 = row
-            .get(0)
-            .map_err(|e| CodeLoreError::Analysis(format!("get merge_count: {e}")))?;
-        let cc: u64 = row
-            .get(1)
-            .map_err(|e| CodeLoreError::Analysis(format!("get commit_count: {e}")))?;
-        (mc, cc)
-    };
-    if merge_count < 3 && commit_count > 50 {
-        tracing::warn!(
-            merge_count,
-            commit_count,
-            "few merges found; squash/rebase workflow likely — branch metrics unreliable"
-        );
-    }
+            date_diff('hour', date, committer_date) AS lt_hours
+        FROM commits
+        WHERE is_merge = FALSE
+          AND date IS NOT NULL
+          AND committer_date IS NOT NULL
+          AND date_diff('hour', date, committer_date) > 0
+    ) sub
+";
 
-    let mut result: Vec<DeliveryMetricsRow> = Vec::new();
-
-    // ── Branch-side commit set ────────────────────────────────────────────────
-    // Branch-side commits for a merge rev M:
-    //   - reachable from M's parent(position=1) (the branch tip)
-    //   - NOT reachable from M's parent(position=0) (the mainline parent)
-    //   - within 90 days of the merge date (date floor) to bound recursion
-    //   - at most 200 hops deep
-    //
-    // The CTE produces (merge_rev, merge_date, branch_commit_rev) for
-    // every branch-side commit of every merge in the repo.
-    let branch_commits_cte = "
+const BRANCH_COMMITS_CTE: &str = "
         WITH RECURSIVE merges AS (
             -- All merge revs: those with a position=1 parent row.
             SELECT DISTINCT
@@ -183,9 +154,23 @@ pub fn run_delivery_metrics(db: &FactsDb, opts: &Options) -> Result<Vec<Delivery
         )
     ";
 
-    // ── 1. batch_size_files ───────────────────────────────────────────────────
+/// Run the `delivery-metrics` analysis against the already-ingested fact store.
+///
+/// Requires the `commit_parents` table (schema v4) and that merges were
+/// ingested with `opts.include_merges = true`; without merge rows the branch
+/// metrics will be empty.
+///
+/// # Errors
+///
+/// Returns [`CodeLoreError::Analysis`] on any `DuckDB` error.
+#[tracing::instrument(name = "delivery-metrics", skip_all)]
+pub fn run_delivery_metrics(db: &FactsDb, opts: &Options) -> Result<Vec<DeliveryMetricsRow>> {
+    check_squash_workflow(db)?;
+    let mut result: Vec<DeliveryMetricsRow> = Vec::new();
+    let merge_caveat = "merge-topology based; squash workflows undercount";
+
     let batch_files_sql = format!(
-        "{branch_commits_cte}
+        "{BRANCH_COMMITS_CTE}
         SELECT
             PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY files) AS p50,
             PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY files) AS p75,
@@ -199,20 +184,16 @@ pub fn run_delivery_metrics(db: &FactsDb, opts: &Options) -> Result<Vec<Delivery
         ) sub
         "
     );
-    if let Some(row) = query_percentiles(db, &batch_files_sql, "batch_size_files")? {
-        result.push(DeliveryMetricsRow {
-            metric: "batch_size_files".to_string(),
-            p50: row.0,
-            p75: row.1,
-            p90: row.2,
-            n: row.3,
-            caveat: "merge-topology based; squash workflows undercount".to_string(),
-        });
-    }
+    push_metric(
+        &mut result,
+        db,
+        &batch_files_sql,
+        "batch_size_files",
+        merge_caveat,
+    )?;
 
-    // ── 2. batch_size_loc ────────────────────────────────────────────────────
     let batch_loc_sql = format!(
-        "{branch_commits_cte}
+        "{BRANCH_COMMITS_CTE}
         SELECT
             PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY loc) AS p50,
             PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY loc) AS p75,
@@ -226,20 +207,16 @@ pub fn run_delivery_metrics(db: &FactsDb, opts: &Options) -> Result<Vec<Delivery
         ) sub
         "
     );
-    if let Some(row) = query_percentiles(db, &batch_loc_sql, "batch_size_loc")? {
-        result.push(DeliveryMetricsRow {
-            metric: "batch_size_loc".to_string(),
-            p50: row.0,
-            p75: row.1,
-            p90: row.2,
-            n: row.3,
-            caveat: "merge-topology based; squash workflows undercount".to_string(),
-        });
-    }
+    push_metric(
+        &mut result,
+        db,
+        &batch_loc_sql,
+        "batch_size_loc",
+        merge_caveat,
+    )?;
 
-    // ── 3. branch_duration_hours ─────────────────────────────────────────────
     let branch_dur_sql = format!(
-        "{branch_commits_cte}
+        "{BRANCH_COMMITS_CTE}
         SELECT
             PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY dur) AS p50,
             PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY dur) AS p75,
@@ -259,28 +236,117 @@ pub fn run_delivery_metrics(db: &FactsDb, opts: &Options) -> Result<Vec<Delivery
         ) sub
         "
     );
-    if let Some(row) = query_percentiles(db, &branch_dur_sql, "branch_duration_hours")? {
+    push_metric(
+        &mut result,
+        db,
+        &branch_dur_sql,
+        "branch_duration_hours",
+        merge_caveat,
+    )?;
+
+    if let Some(row) = compute_rework_pct(db, opts.rework_window_days)? {
+        result.push(row);
+    }
+
+    push_metric(
+        &mut result,
+        db,
+        LEAD_PROXY_SQL,
+        "lead_proxy_hours",
+        "author→committer date gap; proxy only — does not include waiting time before first review",
+    )?;
+
+    Ok(result)
+}
+
+/// Query `sql` for percentile rows and, if results exist, push a
+/// [`DeliveryMetricsRow`] with the given `metric` label and `caveat` onto
+/// `result`. No-op when the query returns no rows (empty sub-population).
+fn push_metric(
+    result: &mut Vec<DeliveryMetricsRow>,
+    db: &FactsDb,
+    sql: &str,
+    metric: &str,
+    caveat: &str,
+) -> Result<()> {
+    if let Some(row) = query_percentiles(db, sql, metric)? {
         result.push(DeliveryMetricsRow {
-            metric: "branch_duration_hours".to_string(),
+            metric: metric.to_string(),
             p50: row.0,
             p75: row.1,
             p90: row.2,
             n: row.3,
-            caveat: "merge-topology based; squash workflows undercount".to_string(),
+            caveat: caveat.to_string(),
         });
     }
+    Ok(())
+}
 
-    // ── 4. rework_pct ────────────────────────────────────────────────────────
-    // Self-join hunks on the same path where date2 − date1 ≤ rework_window_days.
-    // Date filter applied BEFORE the cross-join to bound cost.
-    // Overlap = GREATEST(0, LEAST(h1.new_start+h1.new_lines, h2.old_start+h2.old_lines)
-    //                      - GREATEST(h1.new_start, h2.old_start))
-    let rework_window = opts.rework_window_days;
-    let rework_sql = format!(
+/// Emit a warning when the repo looks like it uses squash/rebase merging,
+/// which means `commit_parents` has few position=1 rows and branch metrics
+/// will be empty or misleading.
+fn check_squash_workflow(db: &FactsDb) -> Result<()> {
+    let sql = "
+        SELECT
+            (SELECT COUNT(DISTINCT rev) FROM commit_parents WHERE position = 1) AS merge_count,
+            (SELECT COUNT(*) FROM commits WHERE is_merge = FALSE)               AS commit_count
+    ";
+    let mut stmt = db
+        .conn()
+        .prepare(sql)
+        .map_err(|e| CodeLoreError::Analysis(format!("prepare squash probe: {e}")))?;
+    let mut rows = stmt
+        .query([])
+        .map_err(|e| CodeLoreError::Analysis(format!("query squash probe: {e}")))?;
+    let row = rows
+        .next()
+        .map_err(|e| CodeLoreError::Analysis(format!("fetch squash probe row: {e}")))?
+        .ok_or_else(|| CodeLoreError::Analysis("squash probe returned no rows".to_string()))?;
+    let merge_count: u64 = row
+        .get(0)
+        .map_err(|e| CodeLoreError::Analysis(format!("get merge_count: {e}")))?;
+    let commit_count: u64 = row
+        .get(1)
+        .map_err(|e| CodeLoreError::Analysis(format!("get commit_count: {e}")))?;
+    if merge_count < 3 && commit_count > 50 {
+        tracing::warn!(
+            merge_count,
+            commit_count,
+            "few merges found; squash/rebase workflow likely — branch metrics unreliable"
+        );
+    }
+    Ok(())
+}
+
+/// Compute the `rework_pct` metric.
+///
+/// Identifies lines added in one commit that were subsequently deleted or
+/// overwritten by a later commit on the same path within `rework_window_days`
+/// of the first commit, AND within the trailing `rework_window_days` window
+/// anchored to HEAD (`MAX(date)` across all commits).
+///
+/// # Formula
+///
+/// ```text
+/// rework_pct = 100 × Σ overlap(h1, h2) / Σ new_lines(all windowed hunks)
+/// ```
+///
+/// The denominator is the total lines added across ALL hunks in the window
+/// (not just hunk pairs that happen to have a rework partner), so the
+/// percentage is correctly bounded by the overall churn volume. A denominator
+/// built only from `h1` sides of matched pairs would inflate the percentage by
+/// excluding unpaired added lines.
+///
+/// Returns `None` when no hunks fall inside the window (empty history or
+/// all commits predate the window floor).
+fn compute_rework_pct(db: &FactsDb, rework_window_days: u32) -> Result<Option<DeliveryMetricsRow>> {
+    // windowed_hunks: hunks whose commit author-date falls within the trailing
+    // rework_window_days of the repo's most recent commit. Both sides of the
+    // self-join are drawn from this CTE, so the pre-filter genuinely bounds
+    // the cross-product (not just the join predicate).
+    let sql = format!(
         "
         WITH windowed_hunks AS (
-            -- Pull all hunks with their commit author-date into one CTE;
-            -- filtering here before the self-join bounds the cross-product.
             SELECT
                 h.path,
                 h.rev,
@@ -292,100 +358,77 @@ pub fn run_delivery_metrics(db: &FactsDb, opts: &Options) -> Result<Vec<Delivery
             FROM hunks h
             JOIN commits co ON co.rev = h.rev
             WHERE co.date IS NOT NULL
+              AND co.date >= (SELECT MAX(date) FROM commits)
+                             - INTERVAL '{rework_window_days}' DAY
         ),
         rework_pairs AS (
+            -- h1 = the 'added' hunk, h2 = the later hunk that may overwrite it.
+            -- Overlap formula: lines of h1's added range that h2 touches.
             SELECT
                 GREATEST(0,
                     LEAST(h1.new_start + h1.new_lines, h2.old_start + h2.old_lines)
                     - GREATEST(h1.new_start, h2.old_start)
-                ) AS overlap,
-                h1.new_lines AS loc_added_h1
+                ) AS overlap
             FROM windowed_hunks h1
             JOIN windowed_hunks h2
               ON h2.path = h1.path
              AND h2.rev  <> h1.rev
              AND date_diff('day', h1.commit_date, h2.commit_date) > 0
-             AND date_diff('day', h1.commit_date, h2.commit_date) <= {rework_window}
+             AND date_diff('day', h1.commit_date, h2.commit_date) <= {rework_window_days}
         ),
-        totals AS (
-            SELECT
-                SUM(overlap)      AS total_overlap,
-                SUM(loc_added_h1) AS total_added,
-                COUNT(*)          AS pair_count
-            FROM rework_pairs
+        window_added AS (
+            -- Total lines added in the window — the correct denominator.
+            -- This is independent of the pair join so unpaired added lines
+            -- are included, keeping the percentage correctly bounded.
+            SELECT SUM(new_lines) AS total_added FROM windowed_hunks
         )
         SELECT
-            CASE WHEN total_added > 0
-                 THEN 100.0 * total_overlap / total_added
-                 ELSE 0.0 END AS rework_pct,
-            pair_count
-        FROM totals
+            CASE WHEN (SELECT total_added FROM window_added) > 0
+                 THEN 100.0 * COALESCE((SELECT SUM(overlap) FROM rework_pairs), 0)
+                              / (SELECT total_added FROM window_added)
+                 ELSE 0.0 END                    AS rework_pct,
+            (SELECT COUNT(*)    FROM rework_pairs) AS pair_count,
+            (SELECT total_added FROM window_added) AS total_added
         "
     );
-    {
-        let mut stmt = db
-            .conn()
-            .prepare(&rework_sql)
-            .map_err(|e| CodeLoreError::Analysis(format!("prepare rework_pct: {e}")))?;
-        let mut rows = stmt
-            .query([])
-            .map_err(|e| CodeLoreError::Analysis(format!("query rework_pct: {e}")))?;
-        if let Some(row) = rows
-            .next()
-            .map_err(|e| CodeLoreError::Analysis(format!("fetch rework_pct row: {e}")))?
-        {
-            let pct: f64 = row
-                .get(0)
-                .map_err(|e| CodeLoreError::Analysis(format!("get rework_pct value: {e}")))?;
-            let n: u64 = row
-                .get(1)
-                .map_err(|e| CodeLoreError::Analysis(format!("get rework_pct n: {e}")))?;
-            // rework_pct is a single aggregate, so p50=p75=p90=pct.
-            result.push(DeliveryMetricsRow {
-                metric: "rework_pct".to_string(),
-                p50: pct,
-                p75: pct,
-                p90: pct,
-                n,
-                caveat: "approximate — line drift between commits not tracked".to_string(),
-            });
-        }
+    let mut stmt = db
+        .conn()
+        .prepare(&sql)
+        .map_err(|e| CodeLoreError::Analysis(format!("prepare rework_pct: {e}")))?;
+    let mut rows = stmt
+        .query([])
+        .map_err(|e| CodeLoreError::Analysis(format!("query rework_pct: {e}")))?;
+    let Some(row) = rows
+        .next()
+        .map_err(|e| CodeLoreError::Analysis(format!("fetch rework_pct row: {e}")))?
+    else {
+        return Ok(None);
+    };
+    let pct: f64 = row
+        .get(0)
+        .map_err(|e| CodeLoreError::Analysis(format!("get rework_pct value: {e}")))?;
+    let n: u64 = row
+        .get(1)
+        .map_err(|e| CodeLoreError::Analysis(format!("get rework_pct n: {e}")))?;
+    let total_added: Option<u64> = row
+        .get(2)
+        .map_err(|e| CodeLoreError::Analysis(format!("get rework_pct total_added: {e}")))?;
+    // Return None when the window contains no hunks at all (empty history or
+    // all commits predate the window floor). A window with hunks but no rework
+    // pairs is still valid and emits pct=0.0.
+    if total_added.unwrap_or(0) == 0 {
+        return Ok(None);
     }
-
-    // ── 5. lead_proxy_hours ──────────────────────────────────────────────────
-    // Reuses the semantics of `analyses/lead_time.rs`:
-    //   commits.date          = author date (when authored)
-    //   commits.committer_date = when it entered mainline
-    // Positive values only (negative = clock skew / timezone artefact).
-    // Merge commits excluded — their lead-time is architecturally zero.
-    let lead_sql = "
-        SELECT
-            PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY lt_hours) AS p50,
-            PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY lt_hours) AS p75,
-            PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY lt_hours) AS p90,
-            COUNT(*)                                               AS n
-        FROM (
-            SELECT
-                date_diff('hour', date, committer_date) AS lt_hours
-            FROM commits
-            WHERE is_merge = FALSE
-              AND date IS NOT NULL
-              AND committer_date IS NOT NULL
-              AND date_diff('hour', date, committer_date) > 0
-        ) sub
-    ";
-    if let Some(row) = query_percentiles(db, lead_sql, "lead_proxy_hours")? {
-        result.push(DeliveryMetricsRow {
-            metric: "lead_proxy_hours".to_string(),
-            p50: row.0,
-            p75: row.1,
-            p90: row.2,
-            n: row.3,
-            caveat: "author→committer date gap; proxy only — does not include waiting time before first review".to_string(),
-        });
-    }
-
-    Ok(result)
+    Ok(Some(DeliveryMetricsRow {
+        metric: "rework_pct".to_string(),
+        // rework_pct is a single aggregate; p50=p75=p90=pct.
+        p50: pct,
+        p75: pct,
+        p90: pct,
+        n,
+        caveat: "approximate — line drift between commits not tracked; window-anchored to HEAD"
+            .to_string(),
+    }))
 }
 
 /// Execute a single-row percentile query and return `(p50, p75, p90, n)`.
