@@ -191,28 +191,29 @@ max_red_effort_pct = 30.0   # fail when > 30 % of commits touch red-band files
 
 ### Code-familiarity analysis
 
-`--analysis code-familiarity` measures how deeply the active team understands the live codebase, using a time-decayed knowledge model calibrated to a half-life of approximately 150 days (the point at which a contributor's working familiarity with a region drops to 50 % after no activity).
+`--analysis code-familiarity` measures how deeply the active team understands the live codebase, using a time-decayed knowledge model (a contribution's knowledge weight halves roughly every five months of inactivity).
 
-Each row represents one file:
+The analysis emits one repo-scope summary row:
 
 | Column | Meaning |
 |---|---|
-| `path` | File path (rename-aware via the lineage CTE) |
-| `familiarity_score` | Aggregate decayed knowledge share for all active contributors; 1.0 = full shared understanding, 0.0 = knowledge entirely lost |
-| `top_author` | The contributor holding the highest current knowledge share |
-| `top_author_share` | That contributor's individual share (0–1); a value near 1.0 with a high bus-factor risk elsewhere signals single-point ownership |
-| `is_island` | Boolean — true when `top_author_share` exceeds the knowledge-island threshold and no second substantial owner exists |
+| `scope` | Always `repo` — the analysis summarises the whole codebase |
+| `familiarity-pct` | SLOC-weighted share of the codebase actively known by current contributors, 0–100. Active = any commit within the trailing `--window-days` (default 90), anchored to the repo's newest commit |
+| `active-authors` | Contributors with activity inside the window |
+| `total-authors` | All contributors holding any decayed knowledge share |
+| `islands-pct` | Share of SLOC (0–100) living in files where one person holds ≥ 80 % of the knowledge with no substantial second owner |
+| `verdict` | `good` when `familiarity-pct` meets the configured threshold (default 70), else `risky` |
 
-The familiarity score reflects the DOE (Degree of Expertise) model: each commit a contributor makes to a file grows their share, but that share decays exponentially between commits. The SPA's **Knowledge** factor tile reports the mean familiarity score across all live files.
+Knowledge shares come from the decayed-contribution model: each commit grows an author's share of a file, the share decays exponentially with inactivity, reviewer trailers earn partial credit, and AI-attributed commits are down-weighted. The SPA's **Knowledge** factor tile blends `familiarity-pct` with the islands complement.
 
 #### `code_familiarity_min` quality gate
 
 ```toml
 [gates]
-code_familiarity_min = 0.4   # fail when mean team familiarity drops below 40 %
+code_familiarity_min = 40.0   # fail when team familiarity drops below 40 % (scale 0-100)
 ```
 
-`codelore check` evaluates this against the mean familiarity score across all files. The gate fails when the score falls below the threshold. A value of 0.4 catches codebases where the team has collectively lost substantive knowledge of nearly two-thirds of the codebase.
+`codelore check` evaluates this against `familiarity-pct`. The gate fails when the value falls below the threshold. A floor of 40 catches codebases where the active team has collectively lost touch with well over half of the code.
 
 ### Health improvements & regressions feed
 
@@ -493,7 +494,7 @@ The thresholds file (`.codelore-thresholds.toml`, auto-discovered at the repo ro
 max_dependency_cycles = 0     # forbid any import-graph cycle repo-wide
 max_propagation_cost = 0.15   # ceiling on change-reach density (0..1)
 max_red_effort_pct = 30.0     # fail when > 30 % of commits touch red-band files
-code_familiarity_min = 0.4    # fail when mean team familiarity drops below 40 %
+code_familiarity_min = 40.0   # fail when team familiarity drops below 40 % (scale 0-100)
 
 [diff]
 no_new_cycles = true          # a PR may not introduce a dependency cycle the base lacked
@@ -501,7 +502,7 @@ delta_health_min = 40.0       # ratio must be ≥ 40 (indeterminate or better)
 deny_degrading_verdict = true # a "degrading" verdict fails the PR gate
 ```
 
-`max_dependency_cycles` / `max_propagation_cost` are evaluated against HEAD by `codelore check`; `no_new_cycles` compares the base-rev and head-rev import graphs in `codelore diff` and fails the PR when head has more cycles than base. `delta_health_min` and `deny_degrading_verdict` both act on the `delta_health` section: `delta_health_min` fails when `ratio < threshold` (skipped on `no-code-change` diffs where no ratio exists); `deny_degrading_verdict` fails when the verdict is exactly `"degrading"`. `max_red_effort_pct` gates on the `effort-exposure` commit-share for the red band; `code_familiarity_min` gates on the mean familiarity score from `code-familiarity` (see the dedicated subsections in the SPA widget surface above).
+`max_dependency_cycles` / `max_propagation_cost` are evaluated against HEAD by `codelore check`; `no_new_cycles` compares the base-rev and head-rev import graphs in `codelore diff` and fails the PR when head has more cycles than base. `delta_health_min` and `deny_degrading_verdict` both act on the `delta_health` section: `delta_health_min` fails when `ratio < threshold` (skipped on `no-code-change` diffs where no ratio exists); `deny_degrading_verdict` fails when the verdict is exactly `"degrading"`. `max_red_effort_pct` gates on the `effort-exposure` commit-share for the red band; `code_familiarity_min` gates on the repo-scope `familiarity-pct` (0–100) from `code-familiarity` (see the dedicated subsections in the SPA widget surface above).
 
 ## 5. Configuration: `.codeloreignore` + thresholds
 

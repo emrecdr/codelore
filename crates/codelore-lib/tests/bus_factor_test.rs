@@ -213,12 +213,14 @@ fn bus_factor_model_field_reflects_mode() {
 ///   Round 1: alice covers 3 (core, rework, stable)
 ///            bob   covers 3 (branch1, rework, stable)
 ///            carol covers 3 (branch1, branch2, core)
-///            Three-way tie → alphabetical descending → alice wins.
+///            Three-way tie → lexicographically smallest author wins
+///            (the `.reverse()` inside `max_by` makes the earliest
+///            string compare as "greatest") → alice wins.
 ///            Remove alice. Rework & stable still covered by bob.
 ///            covered still = 5, uncovered = 0. removed = 1.
 ///   Round 2: bob covers 3 (branch1, rework, stable)
 ///            carol covers 3 (branch1, branch2, core)
-///            Tie → bob wins (b > c descending).
+///            Tie → bob wins (smallest remaining author string).
 ///            Remove bob. rework & stable now uncovered (carol ∉ experts).
 ///            covered = {branch1, branch2, core}, uncovered = 2. removed = 2.
 ///   Round 3: uncovered * 2 = 4 ≤ 5 → continue.
@@ -254,10 +256,10 @@ fn doe_bus_factor_hand_verified() {
         "hand-computed: 3 authors must be removed before >50% of 5 files are uncovered"
     );
 
-    // First removed author is alice (tie-break: highest alphabetically descending).
+    // First removed author is alice (tie-break: lexicographically smallest).
     assert_eq!(
         row.top_contributor, "alice@example.com",
-        "alice is removed first (3-way tie broken alphabetically descending)"
+        "alice is removed first (3-way tie broken to the smallest author string)"
     );
 
     // alice is expert on 3 of 5 files → share = 0.6.
