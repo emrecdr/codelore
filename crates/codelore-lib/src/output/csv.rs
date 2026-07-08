@@ -1261,6 +1261,25 @@ pub fn write_team_composition_csv<W: Write>(
     Ok(())
 }
 
+pub fn write_marginal_owner_risk_csv<W: Write>(
+    rows: &[crate::analyses::marginal_owner_risk::MarginalOwnerRiskRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(w, "path,band,top-active-share,risk").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{:.4},{}",
+            quote_if_needed(&row.path),
+            quote_if_needed(&row.band),
+            row.top_active_share,
+            quote_if_needed(&row.risk),
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::quote_if_needed;

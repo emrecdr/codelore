@@ -176,6 +176,13 @@ pub enum AnalysisName {
     // (single / low / medium / high) + code-health band join surface the
     // worst cases: high-fragmentation, high-interleave files in the red band.
     CoordinationNeeds,
+    // Marginal-owner risk — ownership concentration × code-health fusion.
+    // For each file in the yellow/red health band, reports the maximum
+    // knowledge share held by any active author (committed within window_days).
+    // Risk tiers: high (red band AND share <0.10) and elevated
+    // ((red AND share <0.30) OR (yellow AND share <0.10)).
+    // Correlational signal; see Palomba et al., EASE 2023, arXiv 2304.11636.
+    MarginalOwnerRisk,
 }
 
 impl AnalysisName {
@@ -230,6 +237,7 @@ impl AnalysisName {
             Self::CodeFamiliarity => "code-familiarity",
             Self::TeamComposition => "team-composition",
             Self::CoordinationNeeds => "coordination-needs",
+            Self::MarginalOwnerRisk => "marginal-owner-risk",
         }
     }
 
@@ -312,6 +320,7 @@ impl AnalysisName {
             CodeFamiliarity,
             TeamComposition,
             CoordinationNeeds,
+            MarginalOwnerRisk,
         )
     }
 

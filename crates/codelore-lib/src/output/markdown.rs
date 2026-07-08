@@ -1320,6 +1320,31 @@ pub fn write_team_composition_markdown<W: Write>(
     Ok(())
 }
 
+pub fn write_marginal_owner_risk_markdown<W: Write>(
+    rows: &[crate::analyses::marginal_owner_risk::MarginalOwnerRiskRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore marginal-owner-risk")?;
+    if rows.is_empty() {
+        writeln!(w, "_No marginal-owner risk detected._").map_err(CodeLoreError::Io)?;
+        return Ok(());
+    }
+    writeln!(w, "| Path | Band | Top Active Share | Risk |").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---|---:|---|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| {} | {} | {:.4} | {} |",
+            escape_md_cell(&row.path),
+            escape_md_cell(&row.band),
+            row.top_active_share,
+            escape_md_cell(&row.risk),
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod escape_tests {
     use super::escape_md_cell;

@@ -40,6 +40,7 @@ pub mod knowledge_islands;
 pub mod lead_time;
 pub mod lineage;
 pub mod main_dev;
+pub mod marginal_owner_risk;
 pub mod messages;
 pub mod mi;
 pub mod modularity_violations;
