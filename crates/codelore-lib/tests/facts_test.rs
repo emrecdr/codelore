@@ -24,7 +24,9 @@ fn provenance_records_schema_version() {
     let v: String = db
         .query_one_value("SELECT value FROM provenance WHERE key = 'schema_version'")
         .expect("query");
-    assert_eq!(v, "3");
+    // Assert against the constant, not a literal: schema bumps must not
+    // require hand-editing this test (the literal drifted twice before).
+    assert_eq!(v, codelore_lib::facts::schema::CURRENT_SCHEMA_VERSION);
 }
 
 #[test]
@@ -61,8 +63,12 @@ fn open_read_only_rejects_mismatched_schema_version() {
         Ok(_) => panic!("stale schema should fail open_read_only"),
         Err(e) => format!("{e}"),
     };
+    let expects = format!(
+        "expects {}",
+        codelore_lib::facts::schema::CURRENT_SCHEMA_VERSION
+    );
     assert!(
-        msg.contains("schema_version=999") && msg.contains("expects 3"),
+        msg.contains("schema_version=999") && msg.contains(&expects),
         "expected mismatch error, got: {msg}"
     );
 }
@@ -108,6 +114,9 @@ fn file_backed_db_persists_and_reopens() {
         let schema_version: String = db
             .query_one_value("SELECT value FROM provenance WHERE key = 'schema_version'")
             .expect("query");
-        assert_eq!(schema_version, "3");
+        assert_eq!(
+            schema_version,
+            codelore_lib::facts::schema::CURRENT_SCHEMA_VERSION
+        );
     }
 }
