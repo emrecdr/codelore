@@ -1555,7 +1555,12 @@ fn check_quiet_suppresses_vacuous_pass_noise() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
     Command::cargo_bin("codelore")
         .unwrap()
-        .args(["check", "--repo", tiny.dir.path().to_str().unwrap(), "--quiet"])
+        .args([
+            "check",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--quiet",
+        ])
         .assert()
         .success()
         .stderr(predicate::str::is_empty());
@@ -1572,4 +1577,55 @@ fn check_without_quiet_prints_vacuous_pass_diagnostic() {
         .assert()
         .success()
         .stderr(predicate::str::contains("vacuously passing"));
+}
+
+#[test]
+fn function_xray_emits_markdown_header() {
+    let repo = codelore_lib::test_support::function_xray_repo::build();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "function-xray",
+            "--repo",
+            repo.dir.path().to_str().unwrap(),
+            "--target",
+            "src/target.rs",
+            "--format",
+            "markdown",
+            "--min-revs",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("# CodeLore function-xray"));
+}
+
+#[test]
+fn check_quiet_violation_path_suppresses_detail_keeps_verdict() {
+    // When gates are configured and violations occur, --quiet suppresses the
+    // per-violation detail lines on stderr but preserves the FAIL verdict line
+    // and exits 1.
+    //
+    // code_health_min = 100.0 is set impossibly high so every file in the repo
+    // is a violation. code-health runs regardless of --min-revs so tiny_repo
+    // (whose files don't reach the default min_revs = 5 threshold used by the
+    // hotspot gate) still produces evaluable rows.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let thresholds = tiny.dir.path().join(".codelore-thresholds.toml");
+    std::fs::write(&thresholds, "[gates]\ncode_health_min = 100.0\n").unwrap();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "check",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--quiet",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("FAIL"))
+        // Per-violation detail lines name the gate; --quiet must suppress them.
+        .stderr(predicate::str::contains("code_health_min").not());
 }

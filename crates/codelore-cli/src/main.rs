@@ -230,8 +230,10 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
             codelore_lib::cli_api::output::gha::write_gate_violations_gha(&violations, &mut stdout)
                 .context("emit gate annotations")?;
         }
-        // Exit code 1 surfaces as gate failure in CI. Use anyhow::bail
-        // so the existing exit-code handler routes to spec §6.6 code 4.
+        // Plain anyhow::bail carries no CodeLoreError, so main()'s chain-walk
+        // falls through to the default exit code 1. Gate failure exits 1 by
+        // design; typed CodeLoreError variants are reserved for repo/output
+        // failures (exit codes 3, 4, 5).
         anyhow::bail!("{} gate violation(s) — see above", violations.len());
     }
 }
