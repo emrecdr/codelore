@@ -492,6 +492,65 @@
       opacity: 0.75;
       margin-top: 2px;
     }
+    /* ── Guided tour stepper ─────────────────────────────────────── */
+    .tour-nav {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .tour-chips {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+    .tour-chip {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      font-size: 0.8rem;
+      font-weight: 600;
+      border: 2px solid var(--color-base-content, currentColor);
+      background: transparent;
+      color: var(--color-base-content, currentColor);
+      opacity: 0.45;
+      cursor: pointer;
+      transition: opacity 0.15s, background 0.15s;
+    }
+    .tour-chip:hover  { opacity: 0.75; }
+    .tour-chip-active { opacity: 1; background: var(--color-primary, oklch(0.588 0.218 270)); color: var(--color-primary-content, #fff); border-color: var(--color-primary, oklch(0.588 0.218 270)); }
+    .tour-chip-done   { opacity: 0.65; background: var(--color-base-300, oklch(0.85 0 0)); }
+    .tour-buttons {
+      display: flex;
+      gap: 6px;
+      margin-left: auto;
+    }
+    .tour-btn {
+      padding: 4px 14px;
+      border-radius: 6px;
+      font-size: 0.82rem;
+      font-weight: 500;
+      border: 1px solid var(--color-base-content, currentColor);
+      background: transparent;
+      cursor: pointer;
+      opacity: 0.85;
+    }
+    .tour-btn:disabled { opacity: 0.3; cursor: default; }
+    .tour-btn-primary  { background: var(--color-primary, oklch(0.588 0.218 270)); color: var(--color-primary-content, #fff); border-color: var(--color-primary, oklch(0.588 0.218 270)); opacity: 1; }
+    .tour-btn-ghost    { border-color: transparent; opacity: 0.6; }
+    .tour-note {
+      margin-top: 8px;
+      padding: 8px 12px;
+      border-radius: 6px;
+      background: var(--color-base-300, oklch(0.85 0 0));
+      font-size: 0.82rem;
+      line-height: 1.5;
+      transition: opacity 0.2s;
+    }
+    .tour-note-title { font-weight: 600; }
     /* ── KPI grid ────────────────────────────────────────────────── */
     .kpi-grid {
       display: grid;
@@ -1160,6 +1219,21 @@
         </div>
       </details>
       <div id="widget-knowledge-islands-body" class="table-container"></div>
+    </section>
+
+    <section class="widget card bg-base-200 shadow-lg md:col-span-2 wide-widget" id="widget-guided-tour" aria-label="Guided analysis tour">
+      <h2>Guided tour</h2>
+      <div class="subtitle">
+        A 4-step walk through the hero map — from code health to refactoring targets.
+        Each step sets the circle-pack colour lens and brushes the relevant files.
+      </div>
+      <details class="learn-more">
+        <summary>Learn more</summary>
+        <p><strong>What it does.</strong> The martini-glass tour narrows focus progressively: start with the full health picture, then zoom into hotspots, then find where effort is wasted, then surface the top refactoring candidates.</p>
+        <p><strong>How to use it.</strong> Click <em>Start tour</em> to begin. Use <em>Next</em> / <em>Prev</em> or the numbered chips to navigate. The circle-pack colour mode and brush update automatically at each step. Click <em>Exit</em> or finish the last step to return to free-form exploration.</p>
+        <p><strong>Colour modes used.</strong> Steps 1 and 4 use the <em>Code health</em> lens; step 2 uses <em>Cognitive complexity</em>; step 3 uses the <em>Friction</em> heat-ramp. Step 4 additionally brushes the top-10 hotspot files across all widgets.</p>
+      </details>
+      <div id="widget-guided-tour-body" class="widget-body" style="min-height: 48px;"></div>
     </section>
 
     <section class="widget card bg-base-200 shadow-lg md:col-span-2 wide-widget" id="widget-hotspot-circle-pack">

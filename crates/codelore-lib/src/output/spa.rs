@@ -239,6 +239,10 @@ pub struct SpaOptionsSnapshot {
     /// Minimum health score (0–100) for the yellow band. Matches
     /// [`crate::bands::HEALTH_YELLOW_MIN`].
     pub health_yellow_min: f64,
+    /// Trailing-window size in days used by windowed analyses (effort
+    /// exposure, share bars, etc.). Exposed so the SPA JS can show
+    /// "last N days" in captions without hardcoding the default.
+    pub window_days: u32,
 }
 
 impl Default for SpaOptionsSnapshot {
@@ -256,6 +260,7 @@ impl Default for SpaOptionsSnapshot {
             fisher_significance: 0.05,
             health_green_min: crate::bands::HEALTH_GREEN_MIN,
             health_yellow_min: crate::bands::HEALTH_YELLOW_MIN,
+            window_days: crate::constants::DEFAULT_WINDOW_DAYS,
         }
     }
 }
@@ -273,6 +278,7 @@ impl SpaOptionsSnapshot {
             fisher_significance: opts.fisher_significance,
             health_green_min: crate::bands::HEALTH_GREEN_MIN,
             health_yellow_min: crate::bands::HEALTH_YELLOW_MIN,
+            window_days: opts.window_days,
         }
     }
 }

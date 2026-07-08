@@ -691,6 +691,24 @@ fn rendered_spa_boots_without_console_errors() {
         "share-bars widget body (#widget-share-bars-body) was empty after boot; \
          renderShareBars may have thrown or the widget mount point is missing"
     );
+
+    // -- Step 16: assert guided-tour widget mounted with Start button. --
+    // At boot the tour is inactive (tourStep = -1); renderGuidedTour writes
+    // a "Start tour" button into the mount point. An empty body means the
+    // renderer threw before touching the DOM.
+    let tour_mounted: bool = eval_json(
+        &tab,
+        "(function () { \
+             var el = document.getElementById('widget-guided-tour-body'); \
+             if (!el || el.innerHTML.trim().length === 0) return false; \
+             return el.querySelector('#tour-next') !== null; \
+         })()",
+    );
+    assert!(
+        tour_mounted,
+        "guided-tour widget body (#widget-guided-tour-body) was empty or missing \
+         the Start button after boot; renderGuidedTour may have thrown"
+    );
 }
 
 /// Click a Knowledge-Islands row and assert the file-detail drawer

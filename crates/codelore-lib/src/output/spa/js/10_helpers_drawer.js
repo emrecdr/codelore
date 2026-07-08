@@ -4,6 +4,127 @@
   // ═════════════════════════════════════════════════════════════════
 
 
+  // ─── §3d  Guided tour renderer ──────────────────────────────────
+  //
+  // Renders the stepper UI into #widget-guided-tour-body. Called at
+  // boot (inactive state → Start button only) and after every step
+  // transition (applyTourStep / exitTour in 00_setup_boot.js).
+  // Pure DOM mutation — no ECharts, no CSS variable reads — so
+  // rerender: false in the WIDGETS registry.
+  //
+  // Step transitions use CSS `transition: opacity` on the note banner;
+  // the global `prefers-reduced-motion` rule in template.html clamps
+  // all transition-durations to 0.01ms, so no animated movement occurs
+  // for users who opted out (WCAG 2.3.3 / F138 pattern).
+  function renderGuidedTour() {
+    var mount = document.getElementById('widget-guided-tour-body');
+    if (!mount) return;
+
+    var isActive = (tourStep >= 0 && tourStep < TOUR_STEPS.length);
+    var step = isActive ? TOUR_STEPS[tourStep] : null;
+
+    // ── chip strip ────────────────────────────────────────────────
+    var chipsHtml = '';
+    for (var i = 0; i < TOUR_STEPS.length; i++) {
+      var isCurrent = isActive && i === tourStep;
+      var isDone    = isActive && i < tourStep;
+      var chipClass = 'tour-chip' +
+        (isCurrent ? ' tour-chip-active' : '') +
+        (isDone    ? ' tour-chip-done'   : '');
+      chipsHtml +=
+        '<button type="button" class="' + chipClass + '"' +
+          ' aria-label="Go to step ' + (i + 1) + ': ' + TOUR_STEPS[i].title + '"' +
+          ' aria-current="' + (isCurrent ? 'step' : 'false') + '"' +
+          ' data-tour-step="' + i + '">' +
+          (i + 1) +
+        '</button>';
+    }
+
+    // ── note banner (shown only during active tour) ───────────────
+    var noteHtml = '';
+    if (isActive && step) {
+      noteHtml =
+        '<div class="tour-note" role="status" aria-live="polite">' +
+          '<span class="tour-note-title">' + escapeHtml(step.title) + '</span>' +
+          ' — ' + escapeHtml(step.note) +
+        '</div>';
+    }
+
+    // ── nav buttons ───────────────────────────────────────────────
+    var prevDisabled = !isActive || tourStep === 0;
+    var nextLabel    = (!isActive || tourStep === TOUR_STEPS.length - 1) ? 'Exit tour' : 'Next';
+    var navHtml =
+      '<div class="tour-nav">' +
+        '<div class="tour-chips" role="list" aria-label="Tour steps">' +
+          chipsHtml +
+        '</div>' +
+        '<div class="tour-buttons">' +
+          (isActive
+            ? '<button type="button" class="tour-btn" id="tour-prev"' +
+                (prevDisabled ? ' disabled' : '') +
+                ' aria-label="Previous tour step">Prev</button>'
+            : '') +
+          '<button type="button" class="tour-btn tour-btn-primary" id="tour-next">' +
+            escapeHtml(isActive ? nextLabel : 'Start tour') +
+          '</button>' +
+          (isActive
+            ? '<button type="button" class="tour-btn tour-btn-ghost" id="tour-exit">' +
+                'Exit' +
+              '</button>'
+            : '') +
+        '</div>' +
+      '</div>' +
+      noteHtml;
+
+    mount.innerHTML = navHtml;
+
+    // ── wire button handlers ──────────────────────────────────────
+    var prevBtn = document.getElementById('tour-prev');
+    var nextBtn = document.getElementById('tour-next');
+    var exitBtn = document.getElementById('tour-exit');
+
+    if (prevBtn) {
+      prevBtn.addEventListener('click', function () {
+        if (tourStep > 0) {
+          tourStep -= 1;
+          applyTourStep(tourStep);
+        }
+      });
+    }
+    if (nextBtn) {
+      nextBtn.addEventListener('click', function () {
+        if (!isActive) {
+          // Start tour at step 0.
+          tourStep = 0;
+          applyTourStep(tourStep);
+        } else if (tourStep >= TOUR_STEPS.length - 1) {
+          // Final step → exit.
+          exitTour();
+        } else {
+          tourStep += 1;
+          applyTourStep(tourStep);
+        }
+      });
+    }
+    if (exitBtn) {
+      exitBtn.addEventListener('click', function () {
+        exitTour();
+      });
+    }
+
+    // ── chip click handlers ───────────────────────────────────────
+    var chips = mount.querySelectorAll('[data-tour-step]');
+    for (var ci = 0; ci < chips.length; ci++) {
+      chips[ci].addEventListener('click', (function (idx) {
+        return function () {
+          tourStep = idx;
+          applyTourStep(tourStep);
+        };
+      }(parseInt(chips[ci].getAttribute('data-tour-step'), 10))));
+    }
+  }
+
+
   // ─── §4  Helpers ─────────────────────────────────────────────────
 
   // Bind a ResizeObserver to keep `chart` sized to `container`. Stores
