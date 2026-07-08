@@ -1445,7 +1445,11 @@
     // ── 2. Team-composition stacked bar ───────────────────────────────
     if (teamRows && teamRows.length) {
       // Collect commit share per bucket; fall back to 0 if bucket absent.
-      var bucketColors = { onboarded: '#60a5fa', experienced: '#34d399', veteran: '#a78bfa' };
+      var bucketColors = {
+        onboarded:  'var(--color-info,    oklch(0.623 0.214 259.532))',
+        experienced:'var(--color-success, oklch(0.753 0.152 163.216))',
+        veteran:    'var(--color-primary, oklch(0.491 0.270 282.717))',
+      };
       var totalShare = 0;
       var segments = '';
       var legend = '';

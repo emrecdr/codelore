@@ -1233,7 +1233,7 @@
         <div class="learn-more-content">
           <p><strong>Familiarity.</strong> Mean team familiarity across active files: the fraction of each file's weighted change history that active authors "own" — averaged over all files touched in the window. Green ≥ 70 %, yellow 40–70 %, red &lt; 40 %.</p>
           <p><strong>Islands.</strong> Fraction of active files with no active owner (primary author inactive + no successor). Lower is better. Green ≤ 20 %, yellow 20–40 %, red &gt; 40 %.</p>
-          <p><strong>Team composition.</strong> Commit share split by tenure bucket: <em>onboarded</em> (&lt; 6 months), <em>experienced</em> (6–18 months), <em>veteran</em> (&gt; 18 months). A healthy team shows some onboarding throughput without veteran over-concentration.</p>
+          <p><strong>Team composition.</strong> Commit share split by tenure bucket: <em>onboarded</em> (&lt; 90 days), <em>experienced</em> (90–364 days), <em>veteran</em> (≥ 365 days). A healthy team shows some onboarding throughput without veteran over-concentration.</p>
           <p><strong>Coordination needs.</strong> Top files by co-change coupling tier and entropy. <em>High</em>-tier files are frequently changed together by multiple authors with high authorship interleaving — the strongest coordination signal.</p>
           <p><cite>Methodology: knowledge-shares materialized view + coordination-needs entropy; see <code>analyses/code_familiarity.rs</code>, <code>analyses/coordination_needs.rs</code>.</cite></p>
         </div>

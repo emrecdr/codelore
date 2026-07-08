@@ -187,4 +187,25 @@ fn delivery_repo_fragmentation_and_nonsingle_tier() {
         non_single,
         "delivery_repo has multi-author files; at least one row must have tier != 'single'"
     );
+
+    // ── Hand-computed interleave for src/rework.rs ────────────────────────────
+    // delivery_repo commits touching src/rework.rs in chronological order:
+    //   1. 2026-01-01 "seed: add initial files"   → author: Alice
+    //   2. 2026-01-06 "feat: expand rework.rs"    → author: Alice  (prev=Alice, no switch)
+    //   3. 2026-01-09 "refactor: trim rework.rs"  → author: Bob    (prev=Alice, switch!)
+    //
+    // switches = 1, n_commits = 3
+    // interleave = switches / (n_commits - 1) = 1 / 2 = 0.5 exactly.
+    //
+    // src/rework.rs is a .rs file (Tier-1) with 3 commits and min_revs=1, so
+    // complexity_metrics → knowledge_shares → coordination-needs chain fires.
+    let rework = rows
+        .iter()
+        .find(|r| r.path == "src/rework.rs")
+        .expect("src/rework.rs must appear: 3 commits, min_revs=1, Rust tier-1");
+    assert!(
+        (rework.interleave - 0.5_f64).abs() < 1e-9,
+        "src/rework.rs: [Alice, Alice, Bob] → 1 switch / 2 intervals = 0.5, got {}",
+        rework.interleave
+    );
 }

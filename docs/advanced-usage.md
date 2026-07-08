@@ -4,7 +4,7 @@ This guide is the developer-facing reference for CodeLore. The [README](../READM
 
 ## Table of contents
 
-1. [The 43 analyses (what they tell you)](#1-the-43-analyses-what-they-tell-you)
+1. [The analyses (what they tell you)](#1-the-analyses-what-they-tell-you)
 2. [Output formats deep-dive](#2-output-formats-deep-dive)
 3. [Every CLI flag explained](#3-every-cli-flag-explained)
 4. [PR-mode: `codelore diff`](#4-pr-mode-codelore-diff)
@@ -20,7 +20,7 @@ This guide is the developer-facing reference for CodeLore. The [README](../READM
 
 ---
 
-## 1. The 47 analyses (what they tell you)
+## 1. The analyses (what they tell you)
 
 The table below is split into the **17 code-maat-parity analyses** (drop-in successors to legacy code-maat), **1 modern signal** (`top-committers` — a first-class per-author leaderboard that code-maat approximated via `-a author-churn` + sort), **6 modern foundations** marked ★ (the SARIF-backed differentiators: `hotspots`, `code-health`, `clones`, `clone-coupling`, `hotspot-velocity`, and `refactoring-targets`), **7 graph-analytics analyses** marked ★ (knowledge-islands + code-familiarity + team-composition + coordination-needs + marginal-owner-risk + centrality + communities), and **16 architecture-analytics analyses** marked ★★ (god-classes + architecture-violations + dependency-cycles + architecture-roles + instability + architecture-metrics + architecture-trend + cycle-origins + modularity-violations + unstable-interface + crossing + stale-code + pair-programming + lead-time + bus-factor + delivery-friction — `dependency-cycles` (Tarjan SCC), `architecture-roles` (Core/Shared/Control/Periphery), `instability` (Martin Ca/Ce/I) and `architecture-metrics` (Lakos ACD/NCCD + propagation cost) all run on a shared import-graph kernel; `architecture-trend` reruns that kernel at sampled historical revisions to show structural decay over time; `modularity-violations`, `unstable-interface` and `crossing` fuse the structural import graph with the temporal co-change graph (the DV8 hotspot-pattern trilogy); see `docs/maximum-feature-plan.md`).
 
@@ -227,7 +227,7 @@ Tenure is measured from the author's first commit in the repository to the most 
 
 | Column | Meaning |
 |---|---|
-| `bucket` | Tenure tier: `onboarded` (< 6 months), `experienced` (6–18 months), `veteran` (> 18 months) |
+| `bucket` | Tenure tier: `onboarded` (< 90 days), `experienced` (90–364 days), `veteran` (≥ 365 days) |
 | `active_authors` | Count of authors in this bucket active within the window |
 | `commit_share_pct` | Share of total commits within the window authored by this bucket (0–100) |
 | `onboarding_velocity` | For the `onboarded` bucket only: commits per active day, averaged across the bucket's authors; `null` for other buckets |
@@ -795,7 +795,7 @@ spans stay out of normal-verbosity output.
 |---|---|---|
 | `error: ingest commits: repository error: find_parent_commit ... could not be found` | Shallow clone (`--depth=N`) is missing parent ancestry for analyses that walk back | Use a full clone or run only HEAD-only analyses (`clones` works on shallow clones — it short-circuits the ingest) |
 | Hotspot scores are all `0.0` | Repo has only one commit, OR `fetch-depth: 0` not set in CI | Set `fetch-depth: 0` in `actions/checkout` |
-| `codelore analyze --analysis bogus` errors with help-text | Typo on analysis name | The error message lists all 43 supported analyses |
+| `codelore analyze --analysis bogus` errors with help-text | Typo on analysis name | The error message lists all supported analyses |
 | Same file appears twice in `revisions` output (e.g. `crates/bca-lib/foo.rs` AND `crates/codelore-lib/foo.rs`) | Git rename split — CodeLore doesn't follow renames yet | Known limitation; tracked in [`roadmap-v1.x-and-beyond.md`](roadmap-v1.x-and-beyond.md) (Tier 3, "Rename tracking") |
 | `clone-coupling` returns 0 rows on a small repo | Fisher exact test needs ≥ 3 shared commits AND non-degenerate contingency table | Verify with `--analysis coupling` first; if that's empty too, the repo doesn't have enough history |
 | `--format parquet` fails with "requires --output" | Binary format can't stream to stdout | Pass `--output FILE.parquet` |
@@ -817,7 +817,7 @@ codescene/
 │   ├── codelore-lib/                     # the library
 │   │   ├── src/
 │   │   │   ├── facts/                    # DuckDB fact store + ingest pipeline
-│   │   │   ├── analyses/                 # the 43 analyses (one file each)
+│   │   │   ├── analyses/                 # analyses (one file each)
 │   │   │   ├── output/                   # 6 format emitters
 │   │   │   ├── repo/                     # GixRepo + GitCliRepo + Repo trait
 │   │   │   ├── complexity/               # tree-sitter dispatch + ComplexityEntity
