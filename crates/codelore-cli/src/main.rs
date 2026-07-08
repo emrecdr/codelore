@@ -3330,6 +3330,16 @@ fn build_spa_dashboard(
                 },
                 |d| (d.trend, d.file_series, d.transitions),
             );
+    // Effort-exposure: LOC/commit/churn share per band over the trailing
+    // window. Pure SQL over already-ingested facts; runs the same
+    // code-health HEAD scan as the factor header (cheap, cached). Degrades
+    // to empty on analysis failure so no widget is shown.
+    let effort_exposure =
+        codelore_lib::cli_api::analyses::effort_exposure::run_effort_exposure(db, opts)
+            .unwrap_or_else(|e| {
+                tracing::warn!("dashboard: effort-exposure analysis failed; skipping: {e}");
+                Vec::new()
+            });
     // Four-factor header tiles assembled from already-computed data.
     // Code + Architecture come from the health_trend series (zero extra
     // cost — the series is already in memory). Knowledge uses
@@ -3378,6 +3388,7 @@ fn build_spa_dashboard(
         health_trend,
         file_health_series,
         health_transitions,
+        effort_exposure,
         factors,
         options: codelore_lib::cli_api::output::spa::SpaOptionsSnapshot::from_options(opts),
     })

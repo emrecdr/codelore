@@ -392,6 +392,13 @@ pub struct AnalyzeArgs {
         default_value_t = codelore_lib::cli_api::constants::DEFAULT_WINDOW_DAYS
     )]
     pub window_days: u32,
+
+    /// Knowledge model for `bus-factor`. `commits` (default): Filatov 2010
+    /// greedy coverage of ≥80% of commits per module. `doe`: Cury & Avelino
+    /// SBES'24 truck-factor procedure — greedy removal of the author with the
+    /// most expert files until >50% of files lack an expert.
+    #[arg(long = "knowledge-model", default_value = "commits", value_parser = ["commits", "doe"])]
+    pub knowledge_model: String,
 }
 
 /// `TimeBucket` mirror on the CLI surface (clap-friendly value enum).

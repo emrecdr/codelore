@@ -951,19 +951,20 @@ pub fn write_bus_factor_markdown<W: Write>(
     header(w, "CodeLore bus-factor")?;
     writeln!(
         w,
-        "| Module | Total commits | Bus factor | Top contributor | Top share |"
+        "| Module | Total commits | Bus factor | Top contributor | Top share | Model |"
     )
     .map_err(CodeLoreError::Io)?;
-    writeln!(w, "|---|---:|---:|---|---:|").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---:|---:|---|---:|---|").map_err(CodeLoreError::Io)?;
     for row in rows {
         writeln!(
             w,
-            "| {} | {} | {} | {} | {:.1}% |",
+            "| {} | {} | {} | {} | {:.1}% | {} |",
             escape_md_cell(&row.module),
             row.total_commits,
             row.bus_factor,
             escape_md_cell(&row.top_contributor),
             row.top_contributor_share * 100.0,
+            row.model,
         )
         .map_err(CodeLoreError::Io)?;
     }

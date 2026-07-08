@@ -15,10 +15,12 @@ Conventional Commits format. All notable changes documented here.
 - **`Repo::tags()`** — both `GixRepo` and `GitCliRepo` backends now enumerate repository tags; `TagInfo { name, target_rev, date }` sorted ascending by `(date, name)`. Annotated tags use the tagger date; lightweight tags use the target commit's committer date.
 - **`max_red_effort_pct` quality gate** — `[gates]` in `.codelore-thresholds.toml` now accepts `max_red_effort_pct = <pct>` (0–100). `codelore check` fails when the red code-health band's window LOC churn share exceeds the ceiling. Missing red band counts as 0 %, which passes any positive threshold.
 - **`code-familiarity` analysis** — decayed-knowledge familiarity score and islands percentage for the active team.
+- **`--knowledge-model {commits|doe}` flag for `bus-factor`** — selects between the default Filatov 2010 commit-coverage mode (`commits`) and the Cury & Avelino SBES'24 truck-factor procedure (`doe`). DOE mode greedily removes the author expert on the most remaining files (per `doe_scores`) until >50% of files lack an expert; `bus_factor` = count of authors removed.
 - **Per-file health series and improvements feed** — the SPA now exposes two new data layers populated by the health-trend scan. `file_health_series` records each top-50 hotspot file's composite code-health score and band at every sampled historical revision; the drawer's new **Health** tab renders this as a sparkline for any file in the top-50. `health_transitions` records signal-bearing band changes (enter red → `"regressed"`, leave red or enter green → `"improved"`) across all paths and all sampled revisions, newest-first; the new **Health improvements & regressions** SPA widget renders them as two clickable feed lists with linked-brushing into the drawer.
 
 ### Changed
 
+- **`bus-factor` CSV and markdown output now includes a `model` column** (`commits` or `doe`) indicating which knowledge model produced the row. Existing `commits`-mode output is otherwise unchanged.
 - **KPI tile health bands now match the shared health-band thresholds.** The
   median code-health KPI tile previously used a separate 90/80/70 label scale
   (`healthy`/`fair`/`concern`/`critical`). It now derives its band from the

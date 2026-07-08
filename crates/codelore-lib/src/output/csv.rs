@@ -893,18 +893,19 @@ pub fn write_bus_factor_csv<W: Write>(
 ) -> Result<()> {
     writeln!(
         w,
-        "module,total_commits,bus_factor,top_contributor,top_contributor_share"
+        "module,total_commits,bus_factor,top_contributor,top_contributor_share,model"
     )
     .map_err(CodeLoreError::Io)?;
     for row in rows {
         writeln!(
             w,
-            "{},{},{},{},{:.4}",
+            "{},{},{},{},{:.4},{}",
             quote_if_needed(&row.module),
             row.total_commits,
             row.bus_factor,
             quote_if_needed(&row.top_contributor),
             row.top_contributor_share,
+            row.model,
         )
         .map_err(CodeLoreError::Io)?;
     }

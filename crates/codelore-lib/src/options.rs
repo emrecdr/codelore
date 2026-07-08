@@ -149,6 +149,13 @@ pub struct Options {
     /// reproducible on old or archived repos. Valid range: 1–3650.
     /// Default: 90. Set via `--window-days`.
     pub window_days: u32,
+
+    /// Knowledge model for `bus-factor`. Valid values: `"commits"` (default,
+    /// Filatov 2010 — greedy coverage of ≥80% of commits) or `"doe"`
+    /// (Cury & Avelino SBES'24 truck-factor procedure — greedy removal of
+    /// the author with the most expert files until >50% of files lack an
+    /// expert). Set via `--knowledge-model`.
+    pub knowledge_model: String,
 }
 
 impl Options {
@@ -326,6 +333,12 @@ impl Options {
                 self.window_days
             )));
         }
+        if !matches!(self.knowledge_model.as_str(), "commits" | "doe") {
+            return Err(crate::CodeLoreError::InvalidOptions(format!(
+                "--knowledge-model must be 'commits' or 'doe'; got '{}'",
+                self.knowledge_model
+            )));
+        }
         Ok(())
     }
 }
@@ -364,6 +377,7 @@ impl Default for Options {
             time_bucket: None,
             code_maat_compat: false,
             window_days: crate::constants::DEFAULT_WINDOW_DAYS,
+            knowledge_model: "commits".to_string(),
         }
     }
 }

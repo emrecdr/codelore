@@ -14,6 +14,8 @@ use codelore_lib::analyses::architecture_roles::ArchitectureRoleRow;
 use codelore_lib::analyses::architecture_trend::ArchitectureTrendRow;
 use codelore_lib::analyses::code_health::run_code_health;
 use codelore_lib::analyses::coupling::run_coupling;
+use codelore_lib::analyses::effort_exposure::EffortExposureRow;
+use codelore_lib::analyses::factors::FactorTile;
 use codelore_lib::analyses::health_trend::HealthTrendRow;
 use codelore_lib::analyses::hotspots::run_hotspots;
 use codelore_lib::analyses::knowledge_islands::run_knowledge_islands;
@@ -397,7 +399,6 @@ fn spa_embeds_fusion_overlay_data() {
 
     // When factors is non-empty it must appear as a JSON array and each
     // tile must carry the required fields.
-    use codelore_lib::analyses::factors::FactorTile;
     let dash_with_factors = SpaDashboard {
         factors: vec![FactorTile {
             name: "Code".into(),
@@ -446,6 +447,66 @@ fn spa_embeds_fusion_overlay_data() {
         .and_then(|v| v.as_array())
         .expect("series array");
     assert_eq!(series.len(), 3);
+
+    // When effort_exposure is non-empty it must appear as a JSON array with
+    // the required per-row fields. Build a minimal SpaDashboard with one
+    // synthetic row and assert the round-trip carries all fields.
+    let dash_with_ee = SpaDashboard {
+        effort_exposure: vec![EffortExposureRow {
+            band: "red".into(),
+            files: 3,
+            loc_share_pct: 25.0,
+            commit_share_pct: 40.0,
+            churn_share_pct: 35.0,
+            commit_share_ci_low: 0.28,
+            commit_share_ci_high: 0.54,
+        }],
+        ..SpaDashboard::default()
+    };
+    let mut buf_ee = Vec::new();
+    write_spa(
+        &dash_with_ee,
+        "EE Test",
+        "/tmp/z",
+        "2026-06-26 00:00:00 UTC",
+        &mut buf_ee,
+    )
+    .expect("write_spa effort_exposure");
+    let html_ee = String::from_utf8(buf_ee).expect("utf8 html_ee");
+    let data_ee = extract_data_json(&html_ee).expect("parse data_ee");
+    let ee = data_ee
+        .get("effort_exposure")
+        .and_then(|v| v.as_array())
+        .expect("effort_exposure array present when non-empty");
+    assert_eq!(ee.len(), 1, "one effort_exposure row expected");
+    assert_eq!(
+        ee[0].get("band").and_then(serde_json::Value::as_str),
+        Some("red"),
+    );
+    assert!(
+        (ee[0]
+            .get("loc_share_pct")
+            .and_then(serde_json::Value::as_f64)
+            .expect("loc_share_pct f64")
+            - 25.0)
+            .abs()
+            < 1e-9,
+        "loc_share_pct round-trip",
+    );
+    assert!(
+        (ee[0]
+            .get("churn_share_pct")
+            .and_then(serde_json::Value::as_f64)
+            .expect("churn_share_pct f64")
+            - 35.0)
+            .abs()
+            < 1e-9,
+        "churn_share_pct round-trip",
+    );
+    assert_eq!(
+        ee[0].get("files").and_then(serde_json::Value::as_u64),
+        Some(3),
+    );
 
     // The centralized band thresholds must appear in the options block so the
     // SPA JS can read them from data.options instead of hardcoding them.

@@ -14,7 +14,7 @@
 //! | Knowledge | `code_familiarity` `familiarity_pct` + `islands_pct` | `knowledge_islands` departed share |
 //! | Delivery | WS-C composite (not yet implemented) | hidden (empty tile list) |
 //!
-//! ## XmR attention rule
+//! ## `XmR` attention rule
 //!
 //! Uses the Shewhart individuals chart (2.66 = 3/d₂, where d₂ = 1.128
 //! for n=2 moving ranges). Attention is signalled when either:
@@ -43,7 +43,7 @@ pub struct FactorTile {
     /// Historical series of headline values, oldest-first (may be empty →
     /// JS hides the sparkline).
     pub series: Vec<f64>,
-    /// `true` when the XmR chart signals a statistical excursion or
+    /// `true` when the `XmR` chart signals a statistical excursion or
     /// sustained run. See [`xmr_attention`].
     pub attention: bool,
     /// One-line human summary shown beneath the headline.
@@ -51,7 +51,7 @@ pub struct FactorTile {
 }
 
 /// Returns `true` when the series shows a statistically significant signal
-/// by the Shewhart individuals (XmR) chart rules.
+/// by the Shewhart individuals (`XmR`) chart rules.
 ///
 /// Two conditions are checked in order:
 /// 1. **Limit excursion** — the last value is outside
@@ -69,12 +69,15 @@ pub fn xmr_attention(series: &[f64]) -> bool {
     }
 
     let n = series.len();
+    #[allow(clippy::cast_precision_loss)]
     let mean = series.iter().sum::<f64>() / n as f64;
 
     // Moving-range mean: mean of |xᵢ − xᵢ₋₁| for i = 1..n.
     let mr_mean = {
         let sum: f64 = series.windows(2).map(|w| (w[1] - w[0]).abs()).sum();
-        sum / (n - 1) as f64
+        #[allow(clippy::cast_precision_loss)]
+        let denom = (n - 1) as f64;
+        sum / denom
     };
 
     let limit = 2.66 * mr_mean;
@@ -164,8 +167,7 @@ pub fn knowledge_factor_from_familiarity(familiarity_pct: f64, islands_pct: f64)
         series: Vec::new(),
         attention: false,
         detail: format!(
-            "Team familiarity {:.1}%, knowledge islands {:.1}% of SLOC",
-            familiarity_pct, islands_pct,
+            "Team familiarity {familiarity_pct:.1}%, knowledge islands {islands_pct:.1}% of SLOC",
         ),
     }
 }
@@ -189,12 +191,13 @@ pub fn knowledge_factor_from_islands(
     if rows.is_empty() {
         return None;
     }
-    let total = rows.len() as f64;
+    let total = rows.len();
     let departed = rows
         .iter()
         .filter(|r| r.days_since_main_active >= departed_threshold_days)
-        .count() as f64;
-    let departed_share = departed / total;
+        .count();
+    #[allow(clippy::cast_precision_loss)]
+    let departed_share = departed as f64 / total as f64;
     let headline = 100.0 * (1.0 - departed_share);
     Some(FactorTile {
         name: "Knowledge".into(),
@@ -202,10 +205,7 @@ pub fn knowledge_factor_from_islands(
         band: crate::bands::health_band(headline).to_string(),
         series: Vec::new(),
         attention: departed_share > 0.2,
-        detail: format!(
-            "{} of {} knowledge-island files have departed main authors",
-            departed as u32, total as u32,
-        ),
+        detail: format!("{departed} of {total} knowledge-island files have departed main authors"),
     })
 }
 

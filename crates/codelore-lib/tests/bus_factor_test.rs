@@ -131,6 +131,67 @@ fn bus_factor_includes_repo_root_files() {
     );
 }
 
+/// Verify that the commits-mode rows carry `model = "commits"` and that the
+/// DOE-mode rows carry `model = "doe"`. Both modes must return ≥1 row
+/// against `delivery_repo`, which has multiple authors and sufficient
+/// commit depth for the DOE formula to produce experts.
+#[test]
+fn bus_factor_model_field_reflects_mode() {
+    let delivery = codelore_lib::test_support::delivery_repo::build();
+    let repo = GixRepo::open(delivery.dir.path()).expect("open delivery_repo");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts_base = Options {
+        repo_path: delivery.dir.path().to_path_buf(),
+        min_revs: 1,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts_base).expect("ingest");
+
+    // Commits mode (default): every row must have model = "commits".
+    let commits_rows = run_bus_factor(&db, &opts_base).expect("commits mode");
+    assert!(
+        !commits_rows.is_empty(),
+        "commits mode must return ≥1 row on delivery_repo"
+    );
+    for row in &commits_rows {
+        assert_eq!(
+            row.model, "commits",
+            "commits mode row for module '{}' has wrong model field",
+            row.module
+        );
+        assert!(
+            row.bus_factor >= 1,
+            "bus_factor must be ≥1 in commits mode for module '{}'",
+            row.module
+        );
+    }
+
+    // DOE mode: every row must have model = "doe".
+    let opts_doe = Options {
+        knowledge_model: "doe".to_string(),
+        ..opts_base.clone()
+    };
+    let doe_rows = run_bus_factor(&db, &opts_doe).expect("doe mode");
+    // delivery_repo has enough complexity for DOE experts to exist, so
+    // we expect at least one row.
+    assert!(
+        !doe_rows.is_empty(),
+        "doe mode must return ≥1 row on delivery_repo"
+    );
+    for row in &doe_rows {
+        assert_eq!(
+            row.model, "doe",
+            "doe mode row for module '{}' has wrong model field",
+            row.module
+        );
+        assert!(
+            row.bus_factor >= 1,
+            "bus_factor must be ≥1 in doe mode for module '{}'",
+            row.module
+        );
+    }
+}
+
 /// Build a repo where a file is renamed across directories so its
 /// commit history spans two top-level modules.
 fn build_renamed_file_repo() -> tempfile::TempDir {
