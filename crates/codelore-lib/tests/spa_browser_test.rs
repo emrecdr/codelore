@@ -709,6 +709,114 @@ fn rendered_spa_boots_without_console_errors() {
         "guided-tour widget body (#widget-guided-tour-body) was empty or missing \
          the Start button after boot; renderGuidedTour may have thrown"
     );
+
+    // -- Step 17: click-through the full guided tour. ----------------------
+    // Drives the applyTourStep state machine: Start → step 0 (health) →
+    // step 1 (cognitive) → step 2 (friction) → step 3 (health + brush) →
+    // Exit (bivariate restored, brush cleared). After each step the color-mode
+    // tab for that lens must carry aria-selected="true"; after Exit the
+    // bivariate tab must be selected and the brush must be empty.
+    //
+    // Helper: returns the data-mode of the currently aria-selected color tab.
+    let active_mode = || -> String {
+        eval_json(
+            &tab,
+            "(function () { \
+                 var bar = document.getElementById('hotspot-color-toggles'); \
+                 if (!bar) return ''; \
+                 var btns = bar.querySelectorAll('button[role=\"tab\"],button.toggle'); \
+                 for (var i = 0; i < btns.length; i++) { \
+                     if (btns[i].getAttribute('aria-selected') === 'true') \
+                         return btns[i].getAttribute('data-mode') || ''; \
+                 } \
+                 return ''; \
+             })()",
+        )
+    };
+    // Helper: brush path count (0 = clear).
+    let brush_count = || -> i64 {
+        eval_json(
+            &tab,
+            "(function () { \
+                 var s = window.Alpine && window.Alpine.store && \
+                         window.Alpine.store('brush'); \
+                 if (!s || !s.paths) return 0; \
+                 return s.paths.length; \
+             })()",
+        )
+    };
+    // Helper: click #tour-next and wait for the DOM to settle.
+    let click_next = || {
+        let _: bool = eval_json(
+            &tab,
+            "(function () { \
+                 var btn = document.getElementById('tour-next'); \
+                 if (btn) btn.click(); \
+                 return !!btn; \
+             })()",
+        );
+        std::thread::sleep(Duration::from_millis(120));
+    };
+
+    // Before start: tour is inactive, color mode is unaffected by the tour.
+    // Click Start → step 0 (health).
+    click_next();
+    assert_eq!(
+        active_mode(),
+        "health",
+        "after Start the color-mode tab with data-mode='health' should be aria-selected; \
+         applyTourStep(0) did not sync the tab bar"
+    );
+    assert_eq!(
+        brush_count(),
+        0,
+        "step 0 should not set a brush (brushTopHotspots is false for step 0)"
+    );
+
+    // Next → step 1 (cognitive).
+    click_next();
+    assert_eq!(
+        active_mode(),
+        "cognitive",
+        "after Next to step 1 the data-mode='cognitive' tab should be aria-selected"
+    );
+
+    // Next → step 2 (friction).
+    click_next();
+    assert_eq!(
+        active_mode(),
+        "friction",
+        "after Next to step 2 the data-mode='friction' tab should be aria-selected"
+    );
+
+    // Next → step 3 (health + top-10 brush).
+    click_next();
+    assert_eq!(
+        active_mode(),
+        "health",
+        "after Next to step 3 the data-mode='health' tab should be aria-selected"
+    );
+    let brushed_on_step3 = brush_count();
+    assert!(
+        brushed_on_step3 > 0,
+        "step 3 (brushTopHotspots=true) should brush at least one path; \
+         Alpine brush store is empty — bs.set(['targets','top10'],[...]) may not have fired"
+    );
+
+    // Next on the last step → Exit tour → bivariate restored, brush cleared.
+    click_next();
+    assert_eq!(
+        active_mode(),
+        "bivariate",
+        "after Exit tour (Next on last step) the data-mode='bivariate' tab should be \
+         aria-selected; exitTour() did not restore the bivariate tab"
+    );
+    assert_eq!(
+        brush_count(),
+        0,
+        "after Exit tour the brush should be cleared; exitTour() called bs.clear() \
+         but the Alpine store still reports paths"
+    );
 }
 
 /// Click a Knowledge-Islands row and assert the file-detail drawer
