@@ -59,7 +59,17 @@ pub struct GateRunRecord {
 /// so ledger and cache entries share a directory.
 #[must_use]
 pub fn ledger_dir(cache_root: &Path, repo_path: &Path) -> PathBuf {
-    let canonical = fs::canonicalize(repo_path).unwrap_or_else(|_| repo_path.to_path_buf());
+    let canonical = match fs::canonicalize(repo_path) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::debug!(
+                "ledger_dir: fs::canonicalize fallback for repo_path={} ({}); using raw path",
+                repo_path.display(),
+                e,
+            );
+            repo_path.to_path_buf()
+        }
+    };
     let mut hasher = Sha256::new();
     hasher.update(canonical.to_string_lossy().as_bytes());
     let repo_short = hex::encode(&hasher.finalize()[..4]); // 8 hex chars

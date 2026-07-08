@@ -926,6 +926,32 @@ new_hotspot_max = 0
         );
     }
 
+    // ───────── fail_on_degraded TOML parsing ─────────
+
+    #[test]
+    fn fail_on_degraded_false_parses() {
+        let t = Thresholds::from_text("[gates]\nfail_on_degraded = false\n").unwrap();
+        assert!(!t.gates.fail_on_degraded);
+    }
+
+    #[test]
+    fn fail_on_degraded_defaults_to_true_when_omitted() {
+        let t = Thresholds::from_text("[gates]\ncode_health_min = 50.0\n").unwrap();
+        assert!(t.gates.fail_on_degraded);
+    }
+
+    #[test]
+    fn empty_code_health_rows_with_threshold_yields_no_lib_violations() {
+        // When the analysis returns no rows the lib-level evaluator emits
+        // no violations — the degraded detection and optional violation
+        // injection live in the CLI layer (eval_code_health_gate helper).
+        // This test pins that the pure-lib function is not itself the source
+        // of a false-positive violation on empty input.
+        let t = Thresholds::from_text("[gates]\ncode_health_min = 50.0\n").unwrap();
+        let v = evaluate_code_health_gate(&t, &[]);
+        assert!(v.is_empty(), "no violations from empty rows: {v:?}");
+    }
+
     #[cfg(feature = "test-support")]
     #[test]
     fn effort_exposure_gate_integration_passes_at_threshold_100() {

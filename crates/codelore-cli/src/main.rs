@@ -180,7 +180,7 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
     if violations.is_empty() {
         if degraded_count > 0 {
             println!(
-                "✅ codelore check: PASS ({hotspot_count} files evaluated, {degraded_count} gate(s) degraded)"
+                "⚠ codelore check: WARNING — {degraded_count} gate(s) degraded (non-degraded gates pass)"
             );
         } else {
             println!("✅ codelore check: PASS ({hotspot_count} files evaluated)");
