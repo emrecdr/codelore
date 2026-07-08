@@ -16,6 +16,7 @@ use codelore_lib::analyses::code_health::run_code_health;
 use codelore_lib::analyses::coupling::run_coupling;
 use codelore_lib::analyses::effort_exposure::EffortExposureRow;
 use codelore_lib::analyses::factors::FactorTile;
+use codelore_lib::analyses::function_xray::FunctionXrayRow;
 use codelore_lib::analyses::health_trend::HealthTrendRow;
 use codelore_lib::analyses::hotspots::run_hotspots;
 use codelore_lib::analyses::knowledge_islands::run_knowledge_islands;
@@ -23,7 +24,6 @@ use codelore_lib::analyses::modularity_violations::ModularityViolationRow;
 use codelore_lib::analyses::summary::run_summary;
 use codelore_lib::analyses::unstable_interface::UnstableInterfaceRow;
 use codelore_lib::facts::FactsDb;
-use codelore_lib::analyses::function_xray::FunctionXrayRow;
 use codelore_lib::output::spa::{FileFunctionXray, SpaDashboard, write_spa};
 use codelore_lib::repo::GixRepo;
 use codelore_lib::test_support::differential_repo;
@@ -701,8 +701,14 @@ fn spa_embeds_function_xray_data() {
     };
 
     let mut buf = Vec::new();
-    write_spa(&dash, "X-Ray Test", "/tmp/xr", "2026-01-01 00:00:00 UTC", &mut buf)
-        .expect("write_spa function_xray");
+    write_spa(
+        &dash,
+        "X-Ray Test",
+        "/tmp/xr",
+        "2026-01-01 00:00:00 UTC",
+        &mut buf,
+    )
+    .expect("write_spa function_xray");
     let html = String::from_utf8(buf).expect("utf8");
 
     // The X-Ray tab renderer function must be present in the bundle.
@@ -731,7 +737,9 @@ fn spa_embeds_function_xray_data() {
         Some("hot"),
     );
     assert_eq!(
-        rows[0].get("change_freq").and_then(serde_json::Value::as_u64),
+        rows[0]
+            .get("change_freq")
+            .and_then(serde_json::Value::as_u64),
         Some(4),
     );
     assert_eq!(
@@ -739,7 +747,9 @@ fn spa_embeds_function_xray_data() {
         Some(9),
     );
     assert_eq!(
-        rows[0].get("cyclomatic").and_then(serde_json::Value::as_i64),
+        rows[0]
+            .get("cyclomatic")
+            .and_then(serde_json::Value::as_i64),
         Some(1),
     );
 }
