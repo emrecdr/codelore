@@ -745,6 +745,7 @@
     { name: 'calendar-heatmap',   rerender: 'theme', render: () => renderCalendarHeatmap(data.daily_commits || []) },
     { name: 'xray-sunburst',      render: () => renderXRaySunburst(data.xray || []) },
     { name: 'knowledge-surfaces', rerender: 'theme', render: () => renderKnowledgeSurfaces(data.code_familiarity || [], data.team_composition || [], data.coordination_needs || []) },
+    { name: 'delivery-card',      rerender: false,   render: () => renderDeliveryCard(data) },
   ];
 
   // F97: boot widgets cooperatively. The synchronous `forEach` blocked

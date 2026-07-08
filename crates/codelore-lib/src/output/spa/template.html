@@ -1088,6 +1088,14 @@
       color: var(--accent);
       text-decoration: none;
     }
+    .delivery-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .delivery-table td { padding: 4px 8px; vertical-align: top; }
+    .delivery-table td:first-child { color: var(--fg-dim); white-space: nowrap; }
+    .delivery-value { font-variant-numeric: tabular-nums; text-align: right; }
+    .delivery-caveat { color: var(--fg-dim); font-size: 11px; }
+    .delivery-friction-header { margin-top: 8px; font-size: 12px; color: var(--fg-dim); }
+    .delivery-friction-list { margin: 4px 0 0 16px; font-size: 12px; }
+    .delivery-disclaimer { margin-top: 8px; font-size: 11px; color: var(--fg-dim); font-style: italic; }
   </style>
 </head>
 <body x-data>
@@ -2115,6 +2123,20 @@
         </div>
       </details>
       <div id="widget-coupling-sankey-body" class="widget-body"></div>
+    </section>
+
+    <!-- Delivery card: compact KPI card for delivery-metrics, release-cadence,
+         and delivery-friction. Degrades gracefully when data is absent (no tags,
+         no merges). Populated by renderDeliveryCard in 30_coupling_trends.js. -->
+    <section class="widget card bg-base-200 shadow-lg" id="widget-delivery-card">
+      <h2>Delivery</h2>
+      <div class="subtitle">
+        Git-only delivery proxies: rework rate, branch duration, lead-time proxy,
+        release cadence, and top friction files. Run with
+        <code>--include-merges</code> and release tags matching
+        <code>--release-tag-glob</code> to populate.
+      </div>
+      <div id="widget-delivery-card-body" class="widget-body" style="min-height: 80px;"></div>
     </section>
   </main>
 
