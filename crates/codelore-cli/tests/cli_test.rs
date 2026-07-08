@@ -969,7 +969,9 @@ fn effort_exposure_csv_has_header_and_rows() {
 }
 
 #[test]
-fn code_familiarity_csv_has_header_and_rows() {
+fn code_familiarity_csv_has_header() {
+    // tiny_repo has no recognized source files → complexity_metrics is empty
+    // → no familiarity rows. This test only verifies the CSV header is present.
     let tiny = codelore_lib::test_support::tiny_repo::build();
     Command::cargo_bin("codelore")
         .unwrap()
@@ -989,6 +991,48 @@ fn code_familiarity_csv_has_header_and_rows() {
         .stdout(predicate::str::contains(
             "scope,familiarity-pct,active-authors,total-authors,islands-pct,verdict",
         ));
+}
+
+#[test]
+fn code_familiarity_csv_has_header_and_rows() {
+    // delivery_repo has src/*.rs files (Rust, Tier-1) → complexity_metrics
+    // populated → knowledge_shares materialised → one familiarity row emitted.
+    let delivery = codelore_lib::test_support::delivery_repo::build();
+    let out = Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "code-familiarity",
+            "--repo",
+            delivery.dir.path().to_str().unwrap(),
+            "--format",
+            "csv",
+            "--min-revs",
+            "1",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(out).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert!(
+        lines.len() >= 2,
+        "expected header + at least one data row, got:\n{text}"
+    );
+    assert!(
+        lines[0].contains("scope") && lines[0].contains("familiarity-pct"),
+        "first line must be the CSV header: {}",
+        lines[0]
+    );
+    // Data row: scope=repo, verdict is good or risky, familiarity in [0,100].
+    assert!(
+        lines[1].starts_with("repo,"),
+        "data row must start with 'repo,': {}",
+        lines[1]
+    );
 }
 
 #[cfg(feature = "spa")]

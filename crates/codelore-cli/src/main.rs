@@ -107,6 +107,10 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
         )
         .context("evaluate effort-exposure gate")?,
     );
+    violations.extend(
+        codelore_lib::cli_api::quality_gates::evaluate_familiarity_gate(&thresholds, &db, &opts)
+            .context("evaluate code-familiarity gate")?,
+    );
 
     if violations.is_empty() {
         println!(

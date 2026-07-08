@@ -1,8 +1,8 @@
 //! Integration tests for the `code-familiarity` analysis.
 //!
 //! Uses `delivery_repo` (3 authors, known commit timeline) and `tiny_repo`
-//! (single author) to verify row shape, score bounds, and the single-author
-//! full-familiarity property.
+//! (single author) to verify row shape, score bounds, and the hand-computed
+//! expected familiarity value.
 //!
 //! Requires the `test-support` feature (declared in `Cargo.toml`).
 
@@ -18,8 +18,21 @@ use codelore_lib::repo::GixRepo;
 ///   Alice  — Apr 21 (active)
 ///   Bob    — Mar 3  (active, 49 days before Apr 21)
 ///   Carol  — Mar 22 (active, 30 days before Apr 21)
-/// Expected: 1 row, `active_authors` = 3, `total_authors` = 3,
-/// `familiarity_pct` in (0, 100], `islands_pct` in [0, 100].
+/// Expected: 1 row, `active_authors` = 3, `total_authors` = 3.
+///
+/// Hand-computed familiarity:
+///   The `k_norm` share per (file, author) normalises to sum = 1.0 per file
+///   (enforced by the SQL in `materialize_knowledge_shares`). Because all
+///   3 authors are in the active window, `active_k_sum` per file = sum of
+///   all `k_norm` values for that file = 1.0. The SLOC-weighted formula is:
+///
+///     familiarity = Σ_f (sloc_f × active_k_sum_f) / Σ_f sloc_f
+///                 = Σ_f (sloc_f × 1.0) / Σ_f sloc_f
+///                 = 100%
+///
+///   This holds for any SLOC distribution, so the expected value is exactly
+///   100.0 whenever the entire author set is active. We assert within ±0.5
+///   to tolerate any floating-point rounding in the accumulation.
 #[test]
 fn delivery_repo_familiarity_row_shape() {
     let fixture = codelore_lib::test_support::delivery_repo::build();
@@ -33,12 +46,6 @@ fn delivery_repo_familiarity_row_shape() {
     db.ingest(&repo, &opts).expect("ingest");
 
     let rows = run_code_familiarity(&db, &opts).expect("run_code_familiarity");
-
-    // If complexity_metrics is empty (no recognized source files), familiarity
-    // is undefined and `run_code_familiarity` correctly returns an empty vec.
-    if rows.is_empty() {
-        return;
-    }
 
     assert_eq!(rows.len(), 1, "should return exactly one repo-scope row");
     let row = &rows[0];
@@ -66,10 +73,13 @@ fn delivery_repo_familiarity_row_shape() {
     );
 }
 
-/// With 3 active authors all knowledge is held by the active team —
-/// `familiarity_pct` must be in [0, 100].
+/// All 3 authors active within the 90-day window →  familiarity = 100%.
+///
+/// Hand-computed: since `active_k_sum` = 1.0 for every file (all authors
+/// active, `k_norm` sums to 1.0 per file), the SLOC-weighted score is
+/// 100.0 regardless of per-file SLOC. Expected within ±0.5 tolerance.
 #[test]
-fn delivery_repo_familiarity_score_in_range() {
+fn delivery_repo_familiarity_is_100_pct_all_authors_active() {
     let fixture = codelore_lib::test_support::delivery_repo::build();
     let repo = GixRepo::open(fixture.dir.path()).expect("open repo");
     let db = FactsDb::new_in_memory().expect("new_in_memory");
@@ -81,13 +91,18 @@ fn delivery_repo_familiarity_score_in_range() {
     db.ingest(&repo, &opts).expect("ingest");
 
     let rows = run_code_familiarity(&db, &opts).expect("run_code_familiarity");
-    if rows.is_empty() {
-        return;
-    }
+    assert_eq!(rows.len(), 1, "should return one row");
     let row = &rows[0];
+    assert_eq!(
+        row.active_authors, 3,
+        "all 3 authors must be active within 90 days"
+    );
+    assert_eq!(row.total_authors, 3, "delivery_repo has exactly 3 authors");
+    // When all authors are active, active_k_sum per file = 1.0, so
+    // familiarity = 100.0 exactly (modulo floating-point rounding).
     assert!(
-        row.familiarity_pct >= 0.0 && row.familiarity_pct <= 100.0,
-        "familiarity_pct must be in [0,100]: {}",
+        (row.familiarity_pct - 100.0).abs() < 0.5,
+        "expected familiarity ≈ 100.0 (all authors active), got {:.4}",
         row.familiarity_pct
     );
 }
@@ -106,9 +121,7 @@ fn delivery_repo_islands_pct_in_range() {
     db.ingest(&repo, &opts).expect("ingest");
 
     let rows = run_code_familiarity(&db, &opts).expect("run_code_familiarity");
-    if rows.is_empty() {
-        return;
-    }
+    assert_eq!(rows.len(), 1, "should return one row");
     let row = &rows[0];
     assert!(
         row.islands_pct >= 0.0 && row.islands_pct <= 100.0,

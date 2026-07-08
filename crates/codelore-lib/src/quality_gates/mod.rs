@@ -451,6 +451,51 @@ pub fn evaluate_effort_exposure_gate(
     Ok(evaluate_effort_exposure_rows(threshold, &rows))
 }
 
+pub(crate) fn evaluate_familiarity_rows(
+    threshold: f64,
+    rows: &[crate::analyses::code_familiarity::CodeFamiliarityRow],
+) -> Vec<GateViolation> {
+    // Empty rows means no recognized source files — gate vacuously passes
+    // (no SLOC to measure, so no familiarity risk to enforce).
+    let Some(row) = rows.first() else {
+        return Vec::new();
+    };
+    if row.familiarity_pct < threshold {
+        vec![GateViolation {
+            gate: "code_familiarity_min".into(),
+            path: "(repo-wide)".into(),
+            actual: format!("{:.2}", row.familiarity_pct),
+            threshold: format!("{threshold:.2}"),
+        }]
+    } else {
+        Vec::new()
+    }
+}
+
+/// Evaluate the `code_familiarity_min` gate: fails when the repository's
+/// active-team familiarity score falls below the configured floor.
+///
+/// A noop (returns empty) when `code_familiarity_min` is absent from the
+/// thresholds. When the repo has no recognized source files (empty
+/// `complexity_metrics`) `run_code_familiarity` returns an empty vec, which
+/// this gate treats as vacuously passing.
+///
+/// # Errors
+///
+/// Returns [`crate::CodeLoreError::Analysis`] if `run_code_familiarity`
+/// fails (e.g. `DuckDB` error during materialization or SQL execution).
+pub fn evaluate_familiarity_gate(
+    thresholds: &Thresholds,
+    db: &crate::facts::FactsDb,
+    opts: &crate::Options,
+) -> crate::Result<Vec<GateViolation>> {
+    let Some(threshold) = thresholds.gates.code_familiarity_min else {
+        return Ok(Vec::new());
+    };
+    let rows = crate::analyses::code_familiarity::run_code_familiarity(db, opts)?;
+    Ok(evaluate_familiarity_rows(threshold, &rows))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -781,6 +826,80 @@ new_hotspot_max = 0
         assert!(
             err.contains("unknown field") || err.contains("max_red_effort"),
             "expected 'unknown field' in error: {err}"
+        );
+    }
+
+    // ───────── code_familiarity_min gate ─────────
+
+    fn make_familiarity_row(
+        familiarity_pct: f64,
+    ) -> crate::analyses::code_familiarity::CodeFamiliarityRow {
+        crate::analyses::code_familiarity::CodeFamiliarityRow {
+            scope: "repo".into(),
+            familiarity_pct,
+            active_authors: 1,
+            total_authors: 1,
+            islands_pct: 0.0,
+            verdict: (if familiarity_pct >= 70.0 {
+                "good"
+            } else {
+                "risky"
+            })
+            .into(),
+        }
+    }
+
+    #[test]
+    fn familiarity_gate_fires_when_score_below_threshold() {
+        // familiarity_pct = 60.0, threshold = 70.0 → violation.
+        let rows = vec![make_familiarity_row(60.0)];
+        let v = evaluate_familiarity_rows(70.0, &rows);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].gate, "code_familiarity_min");
+        assert_eq!(v[0].actual, "60.00");
+        assert_eq!(v[0].threshold, "70.00");
+        assert_eq!(v[0].path, "(repo-wide)");
+    }
+
+    #[test]
+    fn familiarity_gate_passes_at_boundary() {
+        // Exactly at threshold is allowed (strictly less fails).
+        let rows = vec![make_familiarity_row(70.0)];
+        assert!(evaluate_familiarity_rows(70.0, &rows).is_empty());
+    }
+
+    #[test]
+    fn familiarity_gate_vacuous_when_rows_empty() {
+        // No recognized source files → no rows → gate passes vacuously.
+        assert!(evaluate_familiarity_rows(70.0, &[]).is_empty());
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn familiarity_gate_integration_passes_at_threshold_0() {
+        // Full pipeline: ingest delivery_repo and verify the gate passes at
+        // threshold 0.0 (floor). delivery_repo has 3 active authors and all
+        // files touched within the 90-day window — familiarity_pct = 100.0.
+        use crate::Options;
+        use crate::facts::FactsDb;
+        use crate::repo::GixRepo;
+
+        let delivery = crate::test_support::delivery_repo::build();
+        let repo = GixRepo::open(delivery.dir.path()).expect("open repo");
+        let db = FactsDb::new_in_memory().expect("db");
+        let opts = Options {
+            repo_path: delivery.dir.path().to_path_buf(),
+            min_revs: 1,
+            ..Options::default()
+        };
+        db.ingest(&repo, &opts).expect("ingest");
+
+        let thresholds =
+            Thresholds::from_text("[gates]\ncode_familiarity_min = 0.0\n").expect("parse");
+        let v = evaluate_familiarity_gate(&thresholds, &db, &opts).expect("evaluate gate");
+        assert!(
+            v.is_empty(),
+            "threshold 0.0 must pass on delivery_repo: {v:?}"
         );
     }
 
