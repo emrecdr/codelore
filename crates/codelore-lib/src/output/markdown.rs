@@ -1345,6 +1345,39 @@ pub fn write_marginal_owner_risk_markdown<W: Write>(
     Ok(())
 }
 
+pub fn write_release_cadence_markdown<W: Write>(
+    rows: &[crate::analyses::release_cadence::ReleaseCadenceRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore release-cadence")?;
+    let tag_rows: Vec<_> = rows.iter().filter(|r| r.tag != "__summary__").collect();
+    if tag_rows.is_empty() {
+        writeln!(w, "_No release tags matched the glob._").map_err(CodeLoreError::Io)?;
+        return Ok(());
+    }
+    writeln!(w, "| Tag | Date | Days Since Prev |").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|-----|------|-----------------|").map_err(CodeLoreError::Io)?;
+    for row in &tag_rows {
+        let gap = match row.days_since_prev {
+            Some(d) => format!("{d:.1}"),
+            None => "—".to_string(),
+        };
+        writeln!(w, "| {} | {} | {} |", row.tag, row.date, gap).map_err(CodeLoreError::Io)?;
+    }
+    if let Some(summary) = rows.iter().find(|r| r.tag == "__summary__") {
+        writeln!(w).map_err(CodeLoreError::Io)?;
+        writeln!(
+            w,
+            "**Summary** — median gap: {:.1} d | {} | trend: {}",
+            summary.days_since_prev.unwrap_or(0.0),
+            summary.date,
+            summary.trend,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_delivery_metrics_markdown<W: Write>(
     rows: &[crate::analyses::delivery_metrics::DeliveryMetricsRow],
     w: &mut W,

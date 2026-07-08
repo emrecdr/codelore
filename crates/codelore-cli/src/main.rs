@@ -415,6 +415,19 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
             "See analyses/marginal_owner_risk.rs.",
         ),
         (
+            "release-cadence",
+            "Inter-release gap statistics from git tags (median, IQR, trend)",
+            "Filters tags by --release-tag-glob (default 'v*'), then computes the \
+             number of days between consecutive release tags. Emits one row per \
+             matched tag (date, days_since_prev) plus a synthetic '__summary__' \
+             row carrying the median gap, IQR, and a trend label: 'accelerating' \
+             (negative OLS slope < −0.1 d/release), 'slowing' (slope > +0.1), or \
+             'stable' (within ±0.1). Tags are proxies for releases, not \
+             deployments; cadence reflects tagging discipline as much as actual \
+             release velocity. First tag always has no predecessor gap.",
+            "See analyses/release_cadence.rs.",
+        ),
+        (
             "delivery-metrics",
             "Repo-level delivery flow distributions: batch size, branch duration, rework, and lead-proxy (p50/p75/p90)",
             "Five percentile distributions over merge units and commits: batch_size_files \
@@ -763,6 +776,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         window_days: args.window_days,
         knowledge_model: args.knowledge_model.clone(),
         rework_window_days: args.rework_window_days,
+        release_tag_glob: args.release_tag_glob.clone(),
         ..Options::default()
     };
 
@@ -1087,6 +1101,9 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             }
             AnalysisName::MarginalOwnerRisk => {
                 dispatch_marginal_owner_risk(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::ReleaseCadence => {
+                dispatch_release_cadence(&repo, &opts, format, &ctx, &mut out)?;
             }
             AnalysisName::DeliveryMetrics => {
                 dispatch_delivery_metrics(&db, &opts, format, &ctx, &mut out)?;
@@ -2657,6 +2674,46 @@ fn dispatch_marginal_owner_risk(
         fmt => {
             return Err(unsupported_format(
                 "marginal-owner-risk",
+                "csv|json|markdown",
+                fmt,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_release_cadence(
+    repo: &GixRepo,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows =
+                codelore_lib::cli_api::analyses::release_cadence::run_release_cadence(repo, opts)
+                    .context("run release-cadence")?;
+            codelore_lib::cli_api::output::csv::write_release_cadence_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows =
+                codelore_lib::cli_api::analyses::release_cadence::run_release_cadence(repo, opts)
+                    .context("run release-cadence")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows =
+                codelore_lib::cli_api::analyses::release_cadence::run_release_cadence(repo, opts)
+                    .context("run release-cadence")?;
+            codelore_lib::cli_api::output::markdown::write_release_cadence_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format(
+                "release-cadence",
                 "csv|json|markdown",
                 fmt,
             ));

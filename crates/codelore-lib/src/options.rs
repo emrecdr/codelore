@@ -162,6 +162,10 @@ pub struct Options {
     /// as rework candidates. Valid range: 1–365. Default: 21.
     /// Set via `--rework-window-days`.
     pub rework_window_days: u32,
+    /// Glob pattern for filtering release tags in `release-cadence`.
+    /// Only tags whose short name matches this glob are included.
+    /// Must be non-empty. Default: `"v*"`. Set via `--release-tag-glob`.
+    pub release_tag_glob: String,
 }
 
 impl Options {
@@ -351,6 +355,11 @@ impl Options {
                 self.rework_window_days
             )));
         }
+        if self.release_tag_glob.is_empty() {
+            return Err(crate::CodeLoreError::InvalidOptions(
+                "--release-tag-glob must not be empty".to_string(),
+            ));
+        }
         Ok(())
     }
 }
@@ -391,6 +400,7 @@ impl Default for Options {
             window_days: crate::constants::DEFAULT_WINDOW_DAYS,
             knowledge_model: "commits".to_string(),
             rework_window_days: crate::constants::DEFAULT_REWORK_WINDOW_DAYS,
+            release_tag_glob: crate::constants::DEFAULT_RELEASE_TAG_GLOB.to_string(),
         }
     }
 }

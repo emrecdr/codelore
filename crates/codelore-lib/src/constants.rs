@@ -108,6 +108,14 @@ pub const DEFAULT_WINDOW_DAYS: u32 = 90;
 /// drift between commits is not tracked.
 pub const DEFAULT_REWORK_WINDOW_DAYS: u32 = 21;
 
+/// Default glob pattern for selecting release tags in `release-cadence`.
+/// Only tags whose short name matches this pattern are counted as releases.
+/// Uses standard glob syntax (`*` = any sequence, `?` = single char,
+/// `[...]` = character class). Default `v*` captures conventional semver
+/// tags (`v1.0.0`, `v2.3.1`) while excluding nightly/prerelease tags
+/// that do not represent formal releases.
+pub const DEFAULT_RELEASE_TAG_GLOB: &str = "v*";
+
 /// T8: Threshold for "substantial author" — an author who isn't the
 /// main author but owns at least this fraction of file's `LoC`. Used to
 /// count `n_substantial_others` per file in `knowledge-islands`. A

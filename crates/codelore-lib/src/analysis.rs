@@ -191,6 +191,12 @@ pub enum AnalysisName {
     // ((red AND share <0.30) OR (yellow AND share <0.10)).
     // Correlational signal; see Palomba et al., EASE 2023, arXiv 2304.11636.
     MarginalOwnerRisk,
+    // Release cadence — inter-release gap statistics derived from git tags.
+    // Tags matching --release-tag-glob (default "v*") are treated as release
+    // markers. Emits per-tag rows (date, days_since_prev) plus a summary row
+    // carrying median gap, IQR, and trend (accelerating/stable/slowing from
+    // the OLS slope of the gap series; threshold ±0.1 day/release).
+    ReleaseCadence,
 }
 
 impl AnalysisName {
@@ -247,6 +253,7 @@ impl AnalysisName {
             Self::TeamComposition => "team-composition",
             Self::CoordinationNeeds => "coordination-needs",
             Self::MarginalOwnerRisk => "marginal-owner-risk",
+            Self::ReleaseCadence => "release-cadence",
         }
     }
 
@@ -331,6 +338,7 @@ impl AnalysisName {
             TeamComposition,
             CoordinationNeeds,
             MarginalOwnerRisk,
+            ReleaseCadence,
         )
     }
 

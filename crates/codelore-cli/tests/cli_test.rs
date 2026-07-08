@@ -1499,6 +1499,32 @@ fn coordination_needs_csv_has_header_and_rows() {
 }
 
 #[test]
+fn release_cadence_csv_has_header_and_rows() {
+    // delivery_repo has v0.1.0, v0.2.0, v1.0.0 tags → 3 rows + summary.
+    let delivery = codelore_lib::test_support::delivery_repo::build();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "release-cadence",
+            "--repo",
+            delivery.dir.path().to_str().unwrap(),
+            "--format",
+            "csv",
+            "--release-tag-glob",
+            "v*",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("tag,date,days-since-prev,trend"))
+        // Header + 3 tag rows + 1 summary row = ≥4 non-empty lines.
+        .stdout(predicate::function(|out: &str| {
+            out.lines().filter(|l| !l.trim().is_empty()).count() >= 4
+        }));
+}
+
+#[test]
 fn delivery_metrics_markdown_exits_zero() {
     // delivery_repo has two --no-ff merges and two author→committer gaps;
     // run with include_merges so the commit_parents table is populated.

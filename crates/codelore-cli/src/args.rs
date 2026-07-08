@@ -409,6 +409,15 @@ pub struct AnalyzeArgs {
         default_value_t = codelore_lib::cli_api::constants::DEFAULT_REWORK_WINDOW_DAYS
     )]
     pub rework_window_days: u32,
+
+    /// Glob pattern for filtering release tags in `release-cadence`.
+    /// Only tags whose short name matches this glob are included.
+    /// Must be non-empty. Default: `v*`.
+    #[arg(
+        long = "release-tag-glob",
+        default_value = codelore_lib::cli_api::constants::DEFAULT_RELEASE_TAG_GLOB
+    )]
+    pub release_tag_glob: String,
 }
 
 /// `TimeBucket` mirror on the CLI surface (clap-friendly value enum).

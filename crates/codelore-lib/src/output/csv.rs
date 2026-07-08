@@ -1280,6 +1280,29 @@ pub fn write_marginal_owner_risk_csv<W: Write>(
     Ok(())
 }
 
+pub fn write_release_cadence_csv<W: Write>(
+    rows: &[crate::analyses::release_cadence::ReleaseCadenceRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(w, "tag,date,days-since-prev,trend").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        let gap = match row.days_since_prev {
+            Some(d) => format!("{d:.2}"),
+            None => String::new(),
+        };
+        writeln!(
+            w,
+            "{},{},{},{}",
+            quote_if_needed(&row.tag),
+            quote_if_needed(&row.date),
+            gap,
+            quote_if_needed(&row.trend),
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_delivery_metrics_csv<W: Write>(
     rows: &[crate::analyses::delivery_metrics::DeliveryMetricsRow],
     w: &mut W,
