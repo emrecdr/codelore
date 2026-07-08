@@ -364,6 +364,18 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
             "See analyses/effort_exposure.rs.",
         ),
         (
+            "code-familiarity",
+            "Decayed-knowledge familiarity score for the active team",
+            "Computes what fraction of SLOC is actively known by current contributors \
+             (authors with ≥1 commit in the trailing window). Uses exponentially-decayed \
+             knowledge shares (Jabrayilzade et al., ICSE-SEIP 2022). Also reports islands \
+             percentage: SLOC in files where one person holds ≥80% of knowledge with no \
+             meaningful backup. Low familiarity or high islands percentage signals knowledge \
+             risk. Verdict threshold configurable via [gates] code_familiarity_min in \
+             .codelore-thresholds.toml (default 70.0).",
+            "See analyses/code_familiarity.rs.",
+        ),
+        (
             "cycle-origins",
             "Commit-level archaeology for dependency cycles",
             "For each dependency cycle at HEAD, binary-searches history (reading + resolving source at past revisions) to find the earliest commit where that cycle existed — the commit that closed the loop. Reports the forming commit's SHA + date per cycle. Assumes a cycle, once formed, stays formed; traces the largest cycles first to bound cost.",
@@ -1003,6 +1015,9 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             AnalysisName::Communities => dispatch_communities(&db, &opts, format, &ctx, &mut out)?,
             AnalysisName::EffortExposure => {
                 dispatch_effort_exposure(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::CodeFamiliarity => {
+                dispatch_code_familiarity(&db, &opts, format, &ctx, &mut out)?;
             }
         }
     } // out is dropped here, flushing any buffered writes
@@ -2401,6 +2416,46 @@ fn dispatch_effort_exposure(
         fmt => {
             return Err(unsupported_format(
                 "effort-exposure",
+                "csv|json|markdown",
+                fmt,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_code_familiarity(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows =
+                codelore_lib::cli_api::analyses::code_familiarity::run_code_familiarity(db, opts)
+                    .context("run code-familiarity")?;
+            codelore_lib::cli_api::output::csv::write_code_familiarity_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows =
+                codelore_lib::cli_api::analyses::code_familiarity::run_code_familiarity(db, opts)
+                    .context("run code-familiarity")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows =
+                codelore_lib::cli_api::analyses::code_familiarity::run_code_familiarity(db, opts)
+                    .context("run code-familiarity")?;
+            codelore_lib::cli_api::output::markdown::write_code_familiarity_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format(
+                "code-familiarity",
                 "csv|json|markdown",
                 fmt,
             ));

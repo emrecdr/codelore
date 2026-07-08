@@ -323,6 +323,24 @@ fn doe_ranks_file_creator_above_late_minor_contributor() {
     );
 }
 
+/// Run one git command in `path` with a fully deterministic identity
+/// (author = committer, fixed dates). Used by the trailer fixture below.
+fn git_as(path: &std::path::Path, args: &[&str], author: &str, email: &str, date: &str) {
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(args)
+        .env("GIT_AUTHOR_NAME", author)
+        .env("GIT_AUTHOR_EMAIL", email)
+        .env("GIT_COMMITTER_NAME", author)
+        .env("GIT_COMMITTER_EMAIL", email)
+        .env("GIT_AUTHOR_DATE", date)
+        .env("GIT_COMMITTER_DATE", date)
+        .status()
+        .expect("git");
+    assert!(status.success(), "git {args:?} failed");
+}
+
 /// Reviewer-credit path end-to-end: a commit carrying a `Reviewed-by:`
 /// trailer must (a) not fail materialization (DuckDB rejects window
 /// functions inside UPDATE — the re-normalization rebuilds the temp
@@ -330,24 +348,10 @@ fn doe_ranks_file_creator_above_late_minor_contributor() {
 /// and (c) leave `k_norm` summing to ~1.0 per path after re-normalization.
 #[test]
 fn reviewer_trailer_credits_reviewer_and_renormalizes() {
-    use std::process::Command;
-
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path();
     let git = |args: &[&str], author: &str, email: &str, date: &str| {
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(path)
-            .args(args)
-            .env("GIT_AUTHOR_NAME", author)
-            .env("GIT_AUTHOR_EMAIL", email)
-            .env("GIT_COMMITTER_NAME", author)
-            .env("GIT_COMMITTER_EMAIL", email)
-            .env("GIT_AUTHOR_DATE", date)
-            .env("GIT_COMMITTER_DATE", date)
-            .status()
-            .expect("git");
-        assert!(status.success(), "git {args:?} failed");
+        git_as(path, args, author, email, date);
     };
     git(
         &["init", "--quiet"],
