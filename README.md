@@ -268,6 +268,7 @@ Fifteen interactive widgets driven by a single embedded JSON blob:
 - **Function X-Ray** — function-level cognitive complexity sunburst
 - **Commit activity** — GitHub-style calendar heatmap
 - **File detail drawer** — click any file anywhere to slide in a tabbed side panel (Overview / Coupling / People) with its full profile
+- **Factor header + guided tour** — four composite KPI tiles (Code / Architecture / Knowledge / Delivery) with XmR attention badges that fire only on statistically unlikely trends; a four-step guided tour walks each lens in sequence before handing off to free-form exploration
 
 ### What you can do with it
 

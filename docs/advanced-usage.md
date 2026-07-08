@@ -134,12 +134,110 @@ The dashboard composes fifteen widgets in one HTML file, plus a tabbed click-tar
 8. **Calendar heatmap** — per-day commit volume, GitHub-style 52-week strip.
 9. **X-Ray function sunburst** — function-level cognitive complexity drill-down, leaf colour mapped to cognitive complexity (yellow → red ramp via the same `heatmapColor` helper the circle-pack uses).
 10. **Architecture-trend** — propagation-cost and cycle-count decay over the sampled revisions.
+11. **Factor header** — four headline tiles (Code, Architecture, Knowledge, Delivery) above the KPI grid. Each tile shows a 0–100 composite score; an XmR attention badge fires when the trailing signal is statistically unlikely to be noise (see [Factor header and XmR attention](#factor-header-and-xmr-attention) below).
+12. **Effort-exposure share bars** — banded commit-share and LOC-share bars plus a 20-dot effort strip showing the fraction of engineering activity that fell in each code-health band (red / yellow / green) over the trailing window (see [Effort-exposure analysis](#effort-exposure-analysis) below).
+13. **Health improvements & regressions feed** — two clickable lists of signal-bearing band transitions (entering red / leaving red / entering green) across the top hotspot files, newest-first; clicking a row brushes the file across all widgets.
+14. **Guided tour** — a four-step walkthrough over the hero circle-pack map that sets the colour lens and optional brush for each step (see [Guided tour](#guided-tour) below).
 
 **Linked brushing:** selecting a file in any of these views highlights it across all of them at once (and announces it to screen readers); the health×activity legend also supports a set-brush. The **file detail drawer** groups its sections into Overview / Coupling / People tabs (keyboard-navigable). One shared focus; highlight, not hide.
 
 Stack: Tailwind v4 (utility-first layout) + DaisyUI 5 (themed components; OS `prefers-color-scheme` honoured on first paint via the plugin's `--prefersdark` config) + Alpine.js 3.15 (HTML-attribute reactivity for stores + drawer + filter + selection/brush buses) + Apache ECharts + d3-hierarchy. All four vendored at build time, SHA-pinned in `build.rs`; bundle stays fully self-contained (~1.9 MB rendered SPA, no CDN at runtime).
 
-The emitter runs every analysis each widget needs (`hotspots`, `summary`, `code_health`, `coupling`, `knowledge_islands`, `entity_ownership`, `xray`, `daily_commits`, `trends`, plus a clone-summary helper) so a single `codelore analyze --format spa` invocation produces a fully populated dashboard. Coupling and knowledge-islands degrade gracefully on tiny fixtures where Fisher significance can't be reached.
+The emitter runs every analysis each widget needs (`hotspots`, `summary`, `code_health`, `coupling`, `knowledge_islands`, `entity_ownership`, `xray`, `daily_commits`, `trends`, `effort_exposure`, `code_familiarity`, plus a clone-summary helper and a health-trend scan that populates the file health series and improvements feed) so a single `codelore analyze --format spa` invocation produces a fully populated dashboard. Coupling and knowledge-islands degrade gracefully on tiny fixtures where Fisher significance can't be reached.
+
+### Factor header and XmR attention
+
+The four factor tiles aggregate their respective composites into a single 0–100 headline score:
+
+- **Code** — median `code_health` score across all live files.
+- **Architecture** — `100 − propagation_cost × 100`; higher propagation cost means structurally riskier coupling.
+- **Knowledge** — mean familiarity score across the team (decayed knowledge share, see [Code-familiarity analysis](#code-familiarity-analysis)).
+- **Delivery** — complement of the mean Kamei delivery-risk score across recent commits.
+
+Each tile also carries an XmR attention badge that fires when the trailing weekly series shows a statistically unlikely pattern under natural process variation. The test uses Shewhart limits: mean ± 2.66 × mean(|xᵢ − xᵢ₋₁|) (the average moving-range factor for individuals charts). A badge fires when either of two conditions holds:
+
+1. **Process limit breach** — the most recent point falls outside the upper or lower Shewhart limit.
+2. **Eight-run rule** — the last eight consecutive points all lie on the same side of the mean.
+
+No badge means "no signal yet" — it does not mean the score is healthy. A file can have a poor but stable code-health score without triggering a badge. The badge fires only when the *rate of change* crosses the statistical threshold, so small week-to-week dips that are within natural variation are intentionally suppressed. The attention criterion is evaluated over the trailing `--window-days` window (default 90 days).
+
+### Effort-exposure analysis
+
+`--analysis effort-exposure` answers: "Are we spending most of our engineering effort in healthy code or in code we know is unhealthy?"
+
+Each row covers one code-health band (red / yellow / green):
+
+| Column | Meaning |
+|---|---|
+| `band` | `red`, `yellow`, or `green` |
+| `files` | Count of distinct files in the band at HEAD |
+| `loc_share_pct` | Percentage of total SLOC that sits in this band |
+| `commit_share_pct` | Percentage of commits (over the trailing `--window-days`) that touched at least one file in this band; a commit touching files across bands is counted once per band touched |
+| `churn_share_pct` | Percentage of total lines changed (added + deleted) that landed in files in this band |
+| `commit_share_ci_low` / `commit_share_ci_high` | Wilson 95% confidence interval on `commit_share_pct` (as a fraction in [0, 1]); reflects binomial uncertainty on the commit count |
+
+The window anchors to the last commit date in the repository, not the wall clock. `--window-days` (default 90) controls how far back the commit and churn counts reach; LOC counts always reflect HEAD.
+
+The SPA renders this as a pair of horizontal share bars (LOC share and churn share, coloured by band) plus a 20-dot strip where each dot represents 5 % of the effort window, coloured by the band that received the plurality of activity in that slice.
+
+#### `max_red_effort_pct` quality gate
+
+```toml
+[gates]
+max_red_effort_pct = 30.0   # fail when > 30 % of commits touch red-band files
+```
+
+`codelore check` evaluates this against `commit_share_pct` for the red band. The gate fails when red-band commit share exceeds the threshold. Set it to a value that reflects your team's current baseline and tighten over time.
+
+### Code-familiarity analysis
+
+`--analysis code-familiarity` measures how deeply the active team understands the live codebase, using a time-decayed knowledge model calibrated to a half-life of approximately 150 days (the point at which a contributor's working familiarity with a region drops to 50 % after no activity).
+
+Each row represents one file:
+
+| Column | Meaning |
+|---|---|
+| `path` | File path (rename-aware via the lineage CTE) |
+| `familiarity_score` | Aggregate decayed knowledge share for all active contributors; 1.0 = full shared understanding, 0.0 = knowledge entirely lost |
+| `top_author` | The contributor holding the highest current knowledge share |
+| `top_author_share` | That contributor's individual share (0–1); a value near 1.0 with a high bus-factor risk elsewhere signals single-point ownership |
+| `is_island` | Boolean — true when `top_author_share` exceeds the knowledge-island threshold and no second substantial owner exists |
+
+The familiarity score reflects the DOE (Degree of Expertise) model: each commit a contributor makes to a file grows their share, but that share decays exponentially between commits. The SPA's **Knowledge** factor tile reports the mean familiarity score across all live files.
+
+#### `code_familiarity_min` quality gate
+
+```toml
+[gates]
+code_familiarity_min = 0.4   # fail when mean team familiarity drops below 40 %
+```
+
+`codelore check` evaluates this against the mean familiarity score across all files. The gate fails when the score falls below the threshold. A value of 0.4 catches codebases where the team has collectively lost substantive knowledge of nearly two-thirds of the codebase.
+
+### Health improvements & regressions feed
+
+The SPA's improvements feed is populated by the health-trend scan that runs as part of `--format spa`. It records signal-bearing band transitions across the top hotspot files at each sampled historical revision. Two transition types appear in the feed:
+
+- **Regressed** — a file crossed from yellow or green into red. Signal: the file's composite code-health crossed the red threshold (structural risk ≥ 0.55).
+- **Improved** — a file left red (entered yellow or green), or entered green from yellow. Signal: structural health crossed out of the at-risk zone.
+
+Transitions that move entirely within yellow (yellow → yellow re-sampling with no band change) are filtered out; only boundary crossings appear. The feed is ordered newest-first. Clicking a row brushes the file across all widgets and opens its drawer.
+
+The Health tab in the file detail drawer renders the full historical series as a sparkline for any file in the top-50 hotspots — each sampled revision is one data point, coloured by its band.
+
+### Guided tour
+
+The guided tour steps through the hero circle-pack map in a curated sequence designed to answer one coherent question per step before handing off to free-form exploration.
+
+**Step 1 — Code health:** sets the circle-pack colour mode to the bivariate health×activity view. Shows which files are both structurally unhealthy and actively churning. The danger quadrant (unhealthy + high activity) is the refactoring priority list.
+
+**Step 2 — Hotspots:** switches to the Cognitive complexity colour mode. Highlights the files with the highest cognitive burden per commit. Compare with Step 1: files that appear in both views are the highest-leverage refactoring candidates.
+
+**Step 3 — Effort in red:** switches to the Friction (tech-debt) colour mode. Paired with the effort-exposure share bars, this step answers: "How much of our recent activity is landing in high-friction code?"
+
+**Step 4 — Refactoring targets:** returns to the bivariate health×activity view and brushes the top-10 hotspots by `hotspot_score`. Use this as a starting list for sprint planning.
+
+After Step 4, the tour exits to free-form mode — the brush and colour mode are yours to adjust. Click any chip to jump to that step, or click Exit at any time. The tour state is not persisted across page loads.
 
 ### `--format step-summary` GitHub Actions integration
 
@@ -394,6 +492,8 @@ The thresholds file (`.codelore-thresholds.toml`, auto-discovered at the repo ro
 [gates]
 max_dependency_cycles = 0     # forbid any import-graph cycle repo-wide
 max_propagation_cost = 0.15   # ceiling on change-reach density (0..1)
+max_red_effort_pct = 30.0     # fail when > 30 % of commits touch red-band files
+code_familiarity_min = 0.4    # fail when mean team familiarity drops below 40 %
 
 [diff]
 no_new_cycles = true          # a PR may not introduce a dependency cycle the base lacked
@@ -401,7 +501,7 @@ delta_health_min = 40.0       # ratio must be ≥ 40 (indeterminate or better)
 deny_degrading_verdict = true # a "degrading" verdict fails the PR gate
 ```
 
-`max_dependency_cycles` / `max_propagation_cost` are evaluated against HEAD by `codelore check`; `no_new_cycles` compares the base-rev and head-rev import graphs in `codelore diff` and fails the PR when head has more cycles than base. `delta_health_min` and `deny_degrading_verdict` both act on the `delta_health` section: `delta_health_min` fails when `ratio < threshold` (skipped on `no-code-change` diffs where no ratio exists); `deny_degrading_verdict` fails when the verdict is exactly `"degrading"`.
+`max_dependency_cycles` / `max_propagation_cost` are evaluated against HEAD by `codelore check`; `no_new_cycles` compares the base-rev and head-rev import graphs in `codelore diff` and fails the PR when head has more cycles than base. `delta_health_min` and `deny_degrading_verdict` both act on the `delta_health` section: `delta_health_min` fails when `ratio < threshold` (skipped on `no-code-change` diffs where no ratio exists); `deny_degrading_verdict` fails when the verdict is exactly `"degrading"`. `max_red_effort_pct` gates on the `effort-exposure` commit-share for the red band; `code_familiarity_min` gates on the mean familiarity score from `code-familiarity` (see the dedicated subsections in the SPA widget surface above).
 
 ## 5. Configuration: `.codeloreignore` + thresholds
 
