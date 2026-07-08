@@ -125,6 +125,20 @@ pub enum Command {
     /// Writes `result=pass|fail` to `$GITHUB_OUTPUT` when the env var
     /// is set, for direct GitHub Actions step-output integration.
     Check(CheckArgs),
+    /// Start a Model Context Protocol (MCP) server over stdio. Exposes
+    /// CodeLore analyses as MCP tools for use by AI assistants and
+    /// agent frameworks. Read-only — no network, no account, no
+    /// telemetry. Warm-cache calls are cheap; first call on a cold
+    /// cache pays the ingest cost.
+    Mcp(McpArgs),
+}
+
+/// MCP server arguments.
+#[derive(clap::Args, Debug)]
+pub struct McpArgs {
+    /// Path to the git repo to analyse (default: cwd).
+    #[arg(short, long, default_value = ".")]
+    pub repo: std::path::PathBuf,
 }
 
 /// Quality-gate check.

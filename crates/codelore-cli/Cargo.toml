@@ -43,6 +43,15 @@ tempfile = "3"
 # `--age-time-now` flag parses YYYY-MM-DD into time::Date. Matches the
 # codelore-lib date type so we don't bring in a second date crate.
 time = { version = "0.3", features = ["macros", "parsing"] }
+# MCP server (`codelore mcp`). stdio transport only; tokio rt-multi-thread
+# required by rmcp's async runtime. schemars drives JSON Schema in tools/list.
+rmcp = { version = "2.2", features = ["server", "transport-io"] }
+tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros"] }
+schemars = "1"
+
+[[test]]
+name = "mcp_test"
+required-features = []
 
 [dev-dependencies]
 assert_cmd = "2"

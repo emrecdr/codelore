@@ -3,6 +3,7 @@
 mod args;
 mod diff;
 mod diff_output;
+mod mcp;
 
 use std::io::Write;
 use std::str::FromStr;
@@ -15,7 +16,7 @@ use codelore_lib::cli_api::{AnalysisName, CodeLoreError, Options};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 
-use crate::args::{AnalyzeArgs, Cli, Command, DiffArgs};
+use crate::args::{AnalyzeArgs, Cli, Command, DiffArgs, McpArgs};
 
 fn main() {
     if let Err(e) = run() {
@@ -46,7 +47,12 @@ fn run() -> Result<()> {
         Command::Profile => run_profile_cmd(),
         Command::Docs => run_docs_cmd(),
         Command::Check(args) => run_check_cmd(&args),
+        Command::Mcp(args) => run_mcp_cmd(&args),
     }
+}
+
+fn run_mcp_cmd(args: &McpArgs) -> Result<()> {
+    mcp::run_mcp_server(args.repo.clone())
 }
 
 /// Quality-gate check. Loads thresholds, runs the hotspots analysis
