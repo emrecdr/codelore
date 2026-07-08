@@ -184,6 +184,10 @@ pub fn evaluate_ratchet(snap: &RatchetSnapshot, metrics: &RatchetMetrics) -> Rat
             continue;
         };
 
+        // TOML's ryu float serialization is lossless, so a value written and
+        // re-read compares bit-identical. f64::EPSILON guards only true
+        // recomputation noise (e.g. slightly different code-health averages
+        // across runs on the same commit), not serialization round-trip drift.
         let worse = match direction {
             Direction::HigherBetter => ov < sv - f64::EPSILON,
             Direction::LowerBetter => ov > sv + f64::EPSILON,

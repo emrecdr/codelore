@@ -907,6 +907,8 @@ codelore check --repo . --quiet --ratchet
 
 When `fail_on_degraded = false` is set in `[gates]` and a gate produces no evaluable data, the summary prints `⚠ codelore check: WARNING — N gate(s) degraded (non-degraded gates pass)` and exits 0 — the push proceeds. With the default `fail_on_degraded = true` (the recommended setting for hooks), a degraded gate blocks the push.
 
+**Metric-sourcing coupling:** `red_effort_pct_observed` and `dependency_cycles_observed` are only populated in the ratchet when the corresponding threshold gates (`max_red_effort_pct`, `max_dependency_cycles`) are configured in `.codelore-thresholds.toml`. Without those gates, `--ratchet` tracks only `code_health_min_observed` — the initialization message names exactly which metrics are being tracked so you know what the ratchet is guarding. To ratchet effort and cycles, add the matching `[gates]` keys to your thresholds file even if you set the threshold very permissively (e.g. `max_red_effort_pct = 100.0`).
+
 ### Local run history
 
 `codelore check --history` prints the last 20 gate-run records grouped by HEAD SHA from the per-repo ledger, giving you a local audit trail of how each gate has trended across pushes — no server required.

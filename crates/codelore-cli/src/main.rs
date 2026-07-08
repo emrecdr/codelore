@@ -129,7 +129,18 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
                 // First run: initialize.
                 let snap = snapshot_from_metrics(&metrics);
                 write_snapshot(&args.repo, &snap).context("write ratchet snapshot")?;
-                println!("✅ ratchet initialized — commit `.codelore-ratchet.toml` to enable regression detection.");
+                let tracked: Vec<&str> = [
+                    metrics.code_health_min_observed.map(|_| "code_health_min_observed"),
+                    metrics.red_effort_pct_observed.map(|_| "red_effort_pct_observed"),
+                    metrics.dependency_cycles_observed.map(|_| "dependency_cycles_observed"),
+                ].into_iter().flatten().collect();
+                println!(
+                    "✅ ratchet initialized — tracking {} metric(s): {}. \
+                     Configure max_red_effort_pct / max_dependency_cycles gates to ratchet \
+                     effort and cycles. Commit `.codelore-ratchet.toml` to enable regression detection.",
+                    tracked.len(),
+                    if tracked.is_empty() { "(none)".to_owned() } else { tracked.join(", ") },
+                );
                 ledger_records.push(GateRunRecord {
                     ts: ts.clone(),
                     head_sha: head_sha.clone(),
