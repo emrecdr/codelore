@@ -38,7 +38,8 @@
 //! - `adds` = lifetime `SUM(loc_added)` by this author for this path
 //! - `fa` = 1.0 if this author created the file (`change_type = 'added'`),
 //!   0.0 otherwise
-//! - `num_days` = days between this author's first and last touch of the file
+//! - `num_days` = days since this author's last touch of the file, measured
+//!   against the repo's newest commit (recency, per the DOE definition)
 //! - `size` = HEAD `SUM(sloc)` from `complexity_metrics` (clamped ≥ 1;
 //!   the formula has `ln(size)` without a +1 guard, so clamping prevents ln(0))
 //!
@@ -101,6 +102,14 @@ pub fn materialize_knowledge_shares(db: &FactsDb, opts: &Options) -> Result<()> 
     let base_sql = format!(
         "CREATE OR REPLACE TEMP TABLE knowledge_shares AS
          WITH anchor AS (SELECT MAX(date) AS max_d FROM commits),
+         -- One row per canonical author (a canonical may own several raw
+         -- emails in author_aliases; a direct JOIN would multiply k by that
+         -- alias count). Bot canonicals are dropped here.
+         canon_authors AS (
+           SELECT canonical FROM author_aliases
+           GROUP BY canonical
+           HAVING NOT BOOL_OR(is_bot)
+         ),
          contrib AS (
            SELECT c.path,
                   co.canonical_author AS author,
@@ -116,7 +125,7 @@ pub fn materialize_knowledge_shares(db: &FactsDb, opts: &Options) -> Result<()> 
                   ) AS k
            FROM {src} c
            JOIN commits co USING (rev)
-           JOIN author_aliases a ON a.canonical = co.canonical_author AND NOT a.is_bot
+           JOIN canon_authors a ON a.canonical = co.canonical_author
            WHERE c.change_type != 'deleted'
            GROUP BY c.path, co.canonical_author
          )
@@ -190,7 +199,10 @@ fn collect_reviewer_rows(db: &FactsDb, _opts: &Options, src: &str) -> Result<Vec
                 AS k_path
          FROM {src} c
          JOIN commits co USING (rev)
-         JOIN author_aliases a ON a.canonical = co.canonical_author AND NOT a.is_bot
+         JOIN (SELECT canonical FROM author_aliases
+               GROUP BY canonical
+               HAVING NOT BOOL_OR(is_bot)) a
+           ON a.canonical = co.canonical_author
          WHERE c.change_type != 'deleted'
            AND co.nf <= 10",
     );
@@ -303,20 +315,30 @@ fn materialize_doe_scores(db: &FactsDb, _opts: &Options, src: &str) -> Result<()
     let sql = format!(
         "CREATE OR REPLACE TEMP TABLE doe_scores AS
          WITH anchor AS (SELECT MAX(date) AS max_d FROM commits),
+         -- One row per canonical author (a canonical may own several raw
+         -- emails in author_aliases; a direct JOIN would multiply k by that
+         -- alias count). Bot canonicals are dropped here.
+         canon_authors AS (
+           SELECT canonical FROM author_aliases
+           GROUP BY canonical
+           HAVING NOT BOOL_OR(is_bot)
+         ),
          -- Who first added each file (fa = 1 if this author created it).
          first_adders AS (
            SELECT c.path,
                   co.canonical_author AS author
            FROM {src} c
            JOIN commits co USING (rev)
-           JOIN author_aliases a ON a.canonical = co.canonical_author AND NOT a.is_bot
+           JOIN canon_authors a ON a.canonical = co.canonical_author
            WHERE c.change_type = 'added'
          ),
-         -- HEAD SLOC per path (sum across all complexity_metrics rows for that path).
+         -- HEAD SLOC per path. `complexity_metrics` holds only the HEAD-time
+         -- scan (its `rev` column carries the actual head SHA, never the
+         -- literal 'HEAD'), so no rev filter is needed — filtering on
+         -- rev = 'HEAD' would match zero rows and silently zero the size term.
          head_sloc AS (
            SELECT path, GREATEST(SUM(sloc), 1) AS size
            FROM complexity_metrics
-           WHERE rev = 'HEAD'
            GROUP BY path
          ),
          -- Per author×path aggregates.
@@ -325,12 +347,12 @@ fn materialize_doe_scores(db: &FactsDb, _opts: &Options, src: &str) -> Result<()
                   co.canonical_author AS author,
                   SUM(c.loc_added) AS adds,
                   date_diff('day',
-                    MIN(co.date),
-                    MAX(co.date)
+                    MAX(co.date),
+                    (SELECT max_d FROM anchor)
                   ) AS num_days
            FROM {src} c
            JOIN commits co USING (rev)
-           JOIN author_aliases a ON a.canonical = co.canonical_author AND NOT a.is_bot
+           JOIN canon_authors a ON a.canonical = co.canonical_author
            WHERE c.change_type != 'deleted'
            GROUP BY c.path, co.canonical_author
          ),

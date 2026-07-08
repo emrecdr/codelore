@@ -282,3 +282,51 @@ fn knowledge_shares_sole_author_gets_full_share_delivery() {
         "Carol's k_norm for src/branch2.rs must be 1.0, got {k_norm}"
     );
 }
+
+/// DOE ranking: the file's creator outranks a late minor contributor.
+///
+/// In `delivery_repo`, `src/rework.rs` is created and expanded by Alice
+/// (fa = 1, large `adds`); Bob's only touch is the day-8 trim (fa = 0,
+/// `adds` ≈ 1 line). Alice's DOE must therefore be strictly higher.
+#[test]
+#[cfg(feature = "test-support")]
+fn doe_ranks_file_creator_above_late_minor_contributor() {
+    let delivery = codelore_lib::test_support::delivery_repo::build();
+    let repo = GixRepo::open(delivery.dir.path()).expect("GixRepo::open");
+    let db = FactsDb::new_in_memory().expect("new_in_memory");
+    let opts = Options {
+        repo_path: delivery.dir.path().to_path_buf(),
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    materialize_knowledge_shares(&db, &opts).expect("materialize");
+
+    let rows: Vec<(String, f64)> = db
+        .prepare("SELECT author, doe FROM doe_scores WHERE path = 'src/rework.rs'")
+        .expect("prepare")
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))
+        .expect("query_map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect");
+
+    let alice = rows
+        .iter()
+        .find(|(a, _)| a == "alice@example.com")
+        .unwrap_or_else(|| {
+            panic!("Alice must have a doe_scores row for src/rework.rs; got {rows:?}")
+        });
+    let bob = rows
+        .iter()
+        .find(|(a, _)| a == "bob@example.com")
+        .unwrap_or_else(|| {
+            panic!("Bob must have a doe_scores row for src/rework.rs; got {rows:?}")
+        });
+
+    assert!(
+        alice.1 > bob.1,
+        "creator (Alice, doe={}) must outrank late minor contributor (Bob, doe={})",
+        alice.1,
+        bob.1
+    );
+}
