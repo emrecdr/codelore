@@ -87,6 +87,8 @@ The table below is split into the **17 code-maat-parity analyses** (drop-in succ
 | `pair-programming` ★★ | "Who pair-programs with whom?" | `Co-Authored-By:` trailer aggregation per author pair | Team-topology / mentoring signal |
 | `lead-time` ★★ | "How long does code sit before shipping?" | Per-commit author-date → committer-date delta (DORA Accelerate) | Cycle-time monitoring |
 | `bus-factor` ★★ | "What's our per-module bus factor?" | Filatov 2010 — minimum N authors covering ≥80% of a module's commits | Module-level Key Personnel (CodeScene shows file-level; this is the actionable view) |
+| `delivery-metrics` ★★ | "What do our batch size, rework, branch lifetime, and lead-time proxies look like?" | Percentile distributions (p50/p75/p90) of five flow metrics derived from git topology and hunk overlap; requires `--include-merges` | Git-only proxy snapshot of flow-metric distributions — run before deciding whether full DORA tooling is warranted |
+| `release-cadence` ★★ | "How often do we ship, and is the pace changing?" | Inter-release tag gaps (days), median, IQR, OLS trend; tags filtered by `--release-tag-glob` (default `v*`) | Release-velocity monitoring without a deployment system; trend direction (`accelerating` / `stable` / `slowing`) at a glance |
 
 All analyses are pure SQL views over the DuckDB fact store + thin Rust orchestrators. You can run any analysis at any output format.
 
@@ -662,6 +664,65 @@ SELECT rev, fix, entropy, la, ld, ndev FROM commits WHERE fix = 1 ORDER BY entro
 ```
 
 This surfaces the 10 highest-entropy bug-fix commits — useful for retrospective "tangled fix" detection.
+
+## 7.5. Delivery analyses: what they measure (and what they don't)
+
+Three analyses form the Delivery signal family. They are **git-only proxies** — they approximate real flow metrics from commit graph topology and text overlap, without a deployment system, a ticketing system, or a CI/CD webhook. They are useful for getting a first read on delivery patterns; they are not replacements for a full DORA pipeline.
+
+### `delivery-metrics` — flow-metric proxy distributions
+
+```bash
+codelore analyze --analysis delivery-metrics --include-merges
+```
+
+`--include-merges` is required: without merge commits there is no branch topology to measure. Outputs one row per metric, each with p50 / p75 / p90 / N and a caveat string explaining the approximation.
+
+| Metric | What it approximates | Caveat |
+|---|---|---|
+| `batch_size_files` | Files changed per merge | All merge commits; no PR-draft filtering |
+| `batch_size_loc` | Lines changed per merge | Same |
+| `branch_duration_hours` | Time from first branch commit to merge | Detects main parents via commit-parent topology; squash/rebase workflows undercount |
+| `rework_pct` | Rework: fraction of added hunks re-touched within `--rework-window-days` | Hunk-pair text overlap; line drift between commits is not tracked |
+| `lead_proxy_hours` | Author-date → committer-date gap per commit | Proxy only — does not include time waiting before first review or in CI queues |
+
+**Rework band thresholds** (from Pluralsight Flow's published benchmarks — correlational, not causal): green < 9 %, yellow 9–14 %, red ≥ 15 %.
+
+### `release-cadence` — inter-release velocity
+
+```bash
+codelore analyze --analysis release-cadence
+codelore analyze --analysis release-cadence --release-tag-glob "release/*"
+```
+
+Tags are a proxy for releases, not deployments. Outputs per-tag rows (sorted by date ascending) plus a `__summary__` row carrying: median gap in days, IQR, and a trend label.
+
+| Trend label | Meaning |
+|---|---|
+| `accelerating` | OLS slope of gap series < −0.1 d/release |
+| `stable` | OLS slope within ±0.1 d/release |
+| `slowing` | OLS slope > +0.1 d/release |
+
+Returns an empty result when no tags match the glob — add `--release-tag-glob '*'` to see all tags.
+
+### `delivery-friction` — where flow friction concentrates
+
+```bash
+codelore analyze --analysis delivery-friction
+```
+
+Ranks files by a composite of historical churn, lead-time proxy, and cognitive complexity. The top rows are the files where slow flow is most concentrated. Use alongside `delivery-metrics` to decide where to invest in automation or refactoring for flow improvement.
+
+### The Delivery factor tile in the SPA dashboard
+
+The SPA's four-factor header includes a **Delivery tile** when any delivery data is available. Unlike the Code, Architecture, and Knowledge tiles — which collapse to a single score on a 0–100 scale — the Delivery tile deliberately shows no composite score. Instead it surfaces three raw proxies:
+
+- **rework %** — `rework_pct` p50, band-colored by the Pluralsight rework benchmark
+- **branch p75 h** — `branch_duration_hours` p75 (hours branches stay open)
+- **cadence median d** — median inter-release gap in days from `release-cadence`
+
+A composite score would imply that rework %, branch duration, and cadence can be weighted against each other with known coefficients. There is no validated weighting in the literature; showing the numbers directly is more honest.
+
+The tile is absent when all three proxy inputs are unavailable (no merge commits, no matching tags, or `delivery-metrics` was not run).
 
 ## 8. Persistent cache mechanics
 

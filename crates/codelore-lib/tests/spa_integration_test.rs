@@ -426,6 +426,7 @@ fn spa_embeds_fusion_overlay_data() {
             series: vec![65.0, 68.0, 72.5],
             attention: false,
             detail: "Code health 72.5 (green)".into(),
+            numbers: Vec::new(),
         }],
         ..SpaDashboard::default()
     };
@@ -466,6 +467,72 @@ fn spa_embeds_fusion_overlay_data() {
         .and_then(|v| v.as_array())
         .expect("series array");
     assert_eq!(series.len(), 3);
+    // `numbers` is serde-skipped when empty — confirm it is absent from JSON
+    // for a normal headline tile.
+    assert!(
+        fa[0].get("numbers").is_none(),
+        "numbers absent from JSON when empty"
+    );
+
+    // Delivery tile: headline=None, numbers carries three proxy pairs.
+    // The tile must round-trip correctly: headline absent from JSON,
+    // numbers array present with the three entries.
+    let dash_delivery = SpaDashboard {
+        factors: vec![FactorTile {
+            name: "Delivery".into(),
+            headline: None,
+            band: "green".into(),
+            series: Vec::new(),
+            attention: false,
+            detail: "Git-only proxies".into(),
+            numbers: vec![
+                ("rework %".to_string(), "6.2".to_string()),
+                ("branch p75 h".to_string(), "18".to_string()),
+                ("cadence median d".to_string(), "14".to_string()),
+            ],
+        }],
+        ..SpaDashboard::default()
+    };
+    let mut buf_del = Vec::new();
+    write_spa(
+        &dash_delivery,
+        "Delivery Tile Test",
+        "/tmp/z",
+        "2026-06-26 00:00:00 UTC",
+        &mut buf_del,
+    )
+    .expect("write_spa delivery tile");
+    let html_del = String::from_utf8(buf_del).expect("utf8 html_del");
+    let data_del = extract_data_json(&html_del).expect("parse data_del");
+    let fd = data_del
+        .get("factors")
+        .and_then(|v| v.as_array())
+        .expect("factors array for delivery tile");
+    assert_eq!(fd.len(), 1, "one delivery tile expected");
+    assert_eq!(
+        fd[0].get("name").and_then(serde_json::Value::as_str),
+        Some("Delivery"),
+    );
+    // headline is None → must be absent or null in JSON
+    assert!(
+        fd[0].get("headline").is_none_or(serde_json::Value::is_null),
+        "headline must be null/absent for delivery tile"
+    );
+    assert_eq!(
+        fd[0].get("band").and_then(serde_json::Value::as_str),
+        Some("green"),
+    );
+    // numbers must be present and carry three entries
+    let nums = fd[0]
+        .get("numbers")
+        .and_then(|v| v.as_array())
+        .expect("numbers array present for delivery tile");
+    assert_eq!(nums.len(), 3, "three numbers on delivery tile");
+    assert_eq!(
+        nums[0].as_array().and_then(|p| p[0].as_str()),
+        Some("rework %"),
+    );
+    assert_eq!(nums[0].as_array().and_then(|p| p[1].as_str()), Some("6.2"),);
 
     // When effort_exposure is non-empty it must appear as a JSON array with
     // the required per-row fields. Build a minimal SpaDashboard with one

@@ -12,7 +12,7 @@
 //! | Code | `health_trend` `code_health` | — |
 //! | Architecture | `health_trend` `arch_health` | — |
 //! | Knowledge | `code_familiarity` `familiarity_pct` + `islands_pct` | `knowledge_islands` departed share |
-//! | Delivery | WS-C composite (not yet implemented) | hidden (empty tile list) |
+//! | Delivery | `delivery_metrics` `rework_pct` + `branch_duration_hours`; `release_cadence` summary | hidden (no tile) when all sources absent |
 //!
 //! ## `XmR` attention rule
 //!
@@ -26,8 +26,10 @@
 //! Series shorter than 4 points return `false` (insufficient data for
 //! reliable limit estimation).
 
+use crate::analyses::delivery_metrics::DeliveryMetricsRow;
 use crate::analyses::health_trend::HealthTrendRow;
 use crate::analyses::knowledge_islands::KnowledgeIslandRow;
+use crate::analyses::release_cadence::ReleaseCadenceRow;
 
 /// One KPI dimension in the four-factor dashboard header.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -35,7 +37,10 @@ pub struct FactorTile {
     /// Dimension name: `"Code"`, `"Knowledge"`, `"Architecture"`, or `"Delivery"`.
     pub name: String,
     /// Current headline score 0–100 (higher = healthier).
-    /// `None` for the Delivery tile when no delivery data is available.
+    ///
+    /// `None` for the Delivery tile, which instead uses [`numbers`] to surface
+    /// the three proxy values directly rather than collapsing them into a
+    /// composite that would imply DORA-level measurement precision.
     pub headline: Option<f64>,
     /// Health band of the headline: `"red"`, `"yellow"`, or `"green"`.
     /// Empty string when `headline` is `None`.
@@ -48,6 +53,12 @@ pub struct FactorTile {
     pub attention: bool,
     /// One-line human summary shown beneath the headline.
     pub detail: String,
+    /// Key–value pairs rendered in place of the bullet bar when
+    /// `headline` is `None`.  Each entry is `(label, formatted_value)`,
+    /// e.g. `("rework %", "7.2")` or `("cadence median d", "14")`.
+    /// Empty for all tiles that carry a `headline`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub numbers: Vec<(String, String)>,
 }
 
 /// Returns `true` when the series shows a statistically significant signal
@@ -131,6 +142,7 @@ pub fn health_trend_factors(rows: &[HealthTrendRow]) -> Vec<FactorTile> {
                 crate::bands::health_band(code_score),
             ),
             series: code_series,
+            numbers: Vec::new(),
         },
         FactorTile {
             name: "Architecture".into(),
@@ -143,6 +155,7 @@ pub fn health_trend_factors(rows: &[HealthTrendRow]) -> Vec<FactorTile> {
                 crate::bands::health_band(arch_score),
             ),
             series: arch_series,
+            numbers: Vec::new(),
         },
     ]
 }
@@ -169,6 +182,7 @@ pub fn knowledge_factor_from_familiarity(familiarity_pct: f64, islands_pct: f64)
         detail: format!(
             "Team familiarity {familiarity_pct:.1}%, knowledge islands {islands_pct:.1}% of SLOC",
         ),
+        numbers: Vec::new(),
     }
 }
 
@@ -206,6 +220,90 @@ pub fn knowledge_factor_from_islands(
         series: Vec::new(),
         attention: departed_share > 0.2,
         detail: format!("{departed} of {total} knowledge-island files have departed main authors"),
+        numbers: Vec::new(),
+    })
+}
+
+/// Build the Delivery factor tile from `delivery-metrics` and
+/// `release-cadence` output.
+///
+/// The Delivery tile deliberately shows NO composite score. Instead it
+/// surfaces three git-proxy numbers with their own band coloring:
+///
+/// | Number | Source | Band rule |
+/// |---|---|---|
+/// | `rework %` | `delivery-metrics` `rework_pct` p50 | green <9 %, yellow 9-14 %, red ≥15 % |
+/// | `branch p75 h` | `delivery-metrics` `branch_duration_hours` p75 | uncolored |
+/// | `cadence median d` | `release-cadence` summary `days_since_prev` | uncolored |
+///
+/// The rework band thresholds are from Pluralsight Flow's published
+/// benchmark ranges (vendor benchmark, correlational — not a causal
+/// threshold). The other numbers have no validated benchmark and are
+/// presented without coloring.
+///
+/// Returns `None` when both inputs are empty (all absent → tile omitted).
+/// When only one source is available, the other numbers are omitted and
+/// the tile still appears with whatever numbers are present.
+///
+/// **These are git-only proxies, not DORA metrics.** Rework detection
+/// uses hunk-pair overlap (approximate — line drift between commits is not
+/// tracked). Branch duration uses commit-parent topology (squash/rebase
+/// workflows undercount). Lead-time uses author→committer date gap
+/// (proxy only — does not include waiting time before first review).
+/// Cadence counts `v*` release tags (configurable via
+/// `--release-tag-glob`).
+#[must_use]
+pub fn delivery_factor_from_metrics(
+    delivery_rows: &[DeliveryMetricsRow],
+    cadence_rows: &[ReleaseCadenceRow],
+) -> Option<FactorTile> {
+    let mut numbers: Vec<(String, String)> = Vec::new();
+
+    // Rework % — band-colored (Pluralsight benchmark, correlational).
+    let rework_band = if let Some(r) = delivery_rows.iter().find(|r| r.metric == "rework_pct") {
+        let pct = r.p50;
+        let band = if pct < 9.0 {
+            "green"
+        } else if pct < 15.0 {
+            "yellow"
+        } else {
+            "red"
+        };
+        numbers.push(("rework %".to_string(), format!("{pct:.1}")));
+        band
+    } else {
+        ""
+    };
+
+    // Branch p75 hours — topology-based, uncolored.
+    if let Some(r) = delivery_rows
+        .iter()
+        .find(|r| r.metric == "branch_duration_hours")
+    {
+        numbers.push(("branch p75 h".to_string(), format!("{:.0}", r.p75)));
+    }
+
+    // Cadence median days — from release-cadence summary row.
+    if let Some(days) = cadence_rows
+        .iter()
+        .find(|r| r.tag == "__summary__")
+        .and_then(|s| s.days_since_prev)
+    {
+        numbers.push(("cadence median d".to_string(), format!("{days:.0}")));
+    }
+
+    if numbers.is_empty() {
+        return None;
+    }
+
+    Some(FactorTile {
+        name: "Delivery".into(),
+        headline: None,
+        band: rework_band.to_string(),
+        series: Vec::new(),
+        attention: false,
+        detail: "Git-only proxies — not DORA metrics. Rework band: Pluralsight benchmark (correlational).".into(),
+        numbers,
     })
 }
 
@@ -370,5 +468,87 @@ mod tests {
         assert!((tile.headline.unwrap() - 50.0).abs() < 1e-9);
         assert_eq!(tile.band, "yellow");
         assert!(tile.attention); // > 20% departed
+    }
+
+    // ── delivery_factor_from_metrics ─────────────────────────────────────
+
+    fn make_delivery_row(metric: &str, p50: f64, p75: f64) -> DeliveryMetricsRow {
+        DeliveryMetricsRow {
+            metric: metric.to_string(),
+            p50,
+            p75,
+            p90: 0.0,
+            n: 5,
+            caveat: String::new(),
+        }
+    }
+
+    fn make_cadence_summary(median_days: f64) -> ReleaseCadenceRow {
+        ReleaseCadenceRow {
+            tag: "__summary__".to_string(),
+            date: "iqr=3.0d".to_string(),
+            days_since_prev: Some(median_days),
+            trend: "stable".to_string(),
+        }
+    }
+
+    #[test]
+    fn delivery_factor_both_empty_returns_none() {
+        assert!(delivery_factor_from_metrics(&[], &[]).is_none());
+    }
+
+    #[test]
+    fn delivery_factor_rework_only_returns_tile() {
+        let delivery = vec![make_delivery_row("rework_pct", 7.0, 7.0)];
+        let tile = delivery_factor_from_metrics(&delivery, &[]).expect("tile");
+        assert_eq!(tile.name, "Delivery");
+        assert!(tile.headline.is_none());
+        assert_eq!(tile.band, "green"); // 7.0 < 9.0
+        assert_eq!(tile.numbers.len(), 1);
+        assert_eq!(tile.numbers[0].0, "rework %");
+        assert_eq!(tile.numbers[0].1, "7.0");
+    }
+
+    #[test]
+    fn delivery_factor_rework_yellow_band() {
+        // 10.0 is in [9, 15) → yellow
+        let delivery = vec![make_delivery_row("rework_pct", 10.0, 10.0)];
+        let tile = delivery_factor_from_metrics(&delivery, &[]).expect("tile");
+        assert_eq!(tile.band, "yellow");
+    }
+
+    #[test]
+    fn delivery_factor_rework_red_band() {
+        // 15.0 ≥ 15 → red
+        let delivery = vec![make_delivery_row("rework_pct", 15.0, 15.0)];
+        let tile = delivery_factor_from_metrics(&delivery, &[]).expect("tile");
+        assert_eq!(tile.band, "red");
+    }
+
+    #[test]
+    fn delivery_factor_all_three_numbers_present() {
+        let delivery = vec![
+            make_delivery_row("rework_pct", 5.0, 5.0),
+            make_delivery_row("branch_duration_hours", 12.0, 26.0),
+        ];
+        let cadence = vec![make_cadence_summary(14.0)];
+        let tile = delivery_factor_from_metrics(&delivery, &cadence).expect("tile");
+        assert_eq!(tile.numbers.len(), 3);
+        // Order: rework %, branch p75 h, cadence median d
+        assert_eq!(tile.numbers[0].0, "rework %");
+        assert_eq!(tile.numbers[1].0, "branch p75 h");
+        assert_eq!(tile.numbers[1].1, "26"); // p75 formatted as integer
+        assert_eq!(tile.numbers[2].0, "cadence median d");
+        assert_eq!(tile.numbers[2].1, "14");
+    }
+
+    #[test]
+    fn delivery_factor_no_rework_no_band() {
+        // Only cadence present — band should be empty (no rework to color)
+        let cadence = vec![make_cadence_summary(7.0)];
+        let tile = delivery_factor_from_metrics(&[], &cadence).expect("tile");
+        assert_eq!(tile.band, "");
+        assert_eq!(tile.numbers.len(), 1);
+        assert_eq!(tile.numbers[0].0, "cadence median d");
     }
 }

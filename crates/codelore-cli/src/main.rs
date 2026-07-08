@@ -57,9 +57,22 @@ fn run() -> Result<()> {
 fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
     use codelore_lib::cli_api::Options;
     use codelore_lib::cli_api::analyses::hotspots::run_hotspots;
+    use codelore_lib::cli_api::cache::default_cache_root;
     use codelore_lib::cli_api::facts::FactsDb;
+    use codelore_lib::cli_api::quality_gates::ledger::{
+        GateRunRecord, append_gate_runs, format_history, now_utc_ts, read_gate_runs,
+    };
     use codelore_lib::cli_api::quality_gates::{Thresholds, evaluate_full_tree};
     use codelore_lib::cli_api::repo::GixRepo;
+
+    let cache_root = default_cache_root();
+
+    // --history: print ledger without running any gate evaluations.
+    if args.history {
+        let records = read_gate_runs(&cache_root, &args.repo).context("read gate-run ledger")?;
+        print!("{}", format_history(&records, 20));
+        return Ok(());
+    }
 
     let thresholds = if let Some(path) = &args.thresholds_file {
         Thresholds::from_path(path).context("load thresholds file")?
@@ -80,43 +93,252 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
         ..Options::default()
     };
     let repo = GixRepo::open(&args.repo).context("open repo")?;
+    let head_sha = repo.head_sha().context("get HEAD sha")?;
     let db = FactsDb::open_or_ingest(&opts, &repo).context("ingest")?;
+    let ts = now_utc_ts();
+    let fail_on_degraded = thresholds.gates.fail_on_degraded;
 
+    // ── Evaluate all gates, collecting violations and ledger records ──────────
+    // Each gate group produces (violations, ledger_records). Ledger records
+    // carry "passed" | "failed" | "degraded" per gate name. A gate whose
+    // analysis returns no evaluable data where data was expected is "degraded".
+
+    let mut violations: Vec<codelore_lib::cli_api::quality_gates::GateViolation> = Vec::new();
+    let mut ledger_records: Vec<GateRunRecord> = Vec::new();
+
+    // hotspot-based gates (cognitive_max, hotspot_score_max)
     let hotspots = run_hotspots(&db, &opts).context("run hotspots")?;
-    let mut violations = evaluate_full_tree(&thresholds, &hotspots);
+    let hs_violations = evaluate_full_tree(&thresholds, &hotspots);
+    // Record one ledger entry per gate name configured in this group.
+    let g = &thresholds.gates;
+    if let Some(max) = g.cognitive_max {
+        let failed = hs_violations.iter().any(|v| v.gate == "cognitive_max");
+        let value = hotspots
+            .iter()
+            .map(|r| r.cognitive)
+            .fold(f64::NAN, f64::max);
+        ledger_records.push(GateRunRecord {
+            ts: ts.clone(),
+            head_sha: head_sha.clone(),
+            gate: "cognitive_max".into(),
+            threshold: max,
+            value: if value.is_nan() { 0.0 } else { value },
+            verdict: if failed { "failed" } else { "passed" }.into(),
+            mode: "check".into(),
+        });
+    }
+    if let Some(max) = g.hotspot_score_max {
+        let failed = hs_violations.iter().any(|v| v.gate == "hotspot_score_max");
+        let value = hotspots
+            .iter()
+            .map(|r| r.hotspot_score)
+            .fold(f64::NAN, f64::max);
+        ledger_records.push(GateRunRecord {
+            ts: ts.clone(),
+            head_sha: head_sha.clone(),
+            gate: "hotspot_score_max".into(),
+            threshold: max,
+            value: if value.is_nan() { 0.0 } else { value },
+            verdict: if failed { "failed" } else { "passed" }.into(),
+            mode: "check".into(),
+        });
+    }
+    violations.extend(hs_violations);
+
+    // code_health_min
     // `code_health_min` gates the COMPOSITE code-health score (the one
-    // `--analysis code-health` reports), not the hotspots inline proxy.
+    // `--analysis code-health` reports), not the hotspots inline cognitive-only proxy.
     let code_health = codelore_lib::cli_api::analyses::code_health::run_code_health(&db, &opts)
         .context("run code-health")?;
-    violations.extend(
-        codelore_lib::cli_api::quality_gates::evaluate_code_health_gate(&thresholds, &code_health),
-    );
-    violations.extend(
-        codelore_lib::cli_api::quality_gates::evaluate_clone_gate(&thresholds, &db)
-            .context("evaluate clone gate")?,
-    );
-    violations.extend(
+    if let Some(min) = g.code_health_min {
+        let ch_violations = codelore_lib::cli_api::quality_gates::evaluate_code_health_gate(
+            &thresholds,
+            &code_health,
+        );
+        // Degraded: code_health returned empty rows but complexity_metrics has data
+        // (i.e. the repo has scorable files). An empty result on a non-empty repo
+        // means the scan produced no health data where data was expected.
+        let degraded = code_health.is_empty() && {
+            db.query_row("SELECT COUNT(*) FROM complexity_metrics", [], |r| {
+                r.get::<_, i64>(0)
+            })
+            .unwrap_or(0)
+                > 0
+        };
+        let verdict = if degraded {
+            eprintln!(
+                "  ⚠ code_health_min: degraded — health scan returned no rows on a non-empty repo"
+            );
+            "degraded"
+        } else if ch_violations.is_empty() {
+            "passed"
+        } else {
+            "failed"
+        };
+        let worst = code_health
+            .iter()
+            .map(|r| r.score)
+            .fold(f64::INFINITY, f64::min);
+        ledger_records.push(GateRunRecord {
+            ts: ts.clone(),
+            head_sha: head_sha.clone(),
+            gate: "code_health_min".into(),
+            threshold: min,
+            value: if worst.is_infinite() { 0.0 } else { worst },
+            verdict: verdict.into(),
+            mode: "check".into(),
+        });
+        if degraded && fail_on_degraded {
+            violations.push(codelore_lib::cli_api::quality_gates::GateViolation {
+                gate: "code_health_min".into(),
+                path: "(degraded)".into(),
+                actual: "no-data".into(),
+                threshold: format!("{min:.1}"),
+            });
+        } else {
+            violations.extend(ch_violations);
+        }
+    }
+
+    // disallow_clone_type_1
+    if g.disallow_clone_type_1 {
+        let clone_violations =
+            codelore_lib::cli_api::quality_gates::evaluate_clone_gate(&thresholds, &db)
+                .context("evaluate clone gate")?;
+        let failed = !clone_violations.is_empty();
+        let count = clone_violations
+            .first()
+            .and_then(|v| v.actual.parse::<f64>().ok())
+            .unwrap_or(0.0);
+        ledger_records.push(GateRunRecord {
+            ts: ts.clone(),
+            head_sha: head_sha.clone(),
+            gate: "disallow_clone_type_1".into(),
+            threshold: 0.0,
+            value: count,
+            verdict: if failed { "failed" } else { "passed" }.into(),
+            mode: "check".into(),
+        });
+        violations.extend(clone_violations);
+    }
+
+    // architecture gates (max_dependency_cycles, max_propagation_cost)
+    let arch_violations =
         codelore_lib::cli_api::quality_gates::evaluate_architecture_gate(&thresholds, &db)
-            .context("evaluate architecture gate")?,
-    );
-    violations.extend(
-        codelore_lib::cli_api::quality_gates::evaluate_effort_exposure_gate(
+            .context("evaluate architecture gate")?;
+    if let Some(max) = g.max_dependency_cycles {
+        let failed = arch_violations
+            .iter()
+            .any(|v| v.gate == "max_dependency_cycles");
+        let value = arch_violations
+            .iter()
+            .find(|v| v.gate == "max_dependency_cycles")
+            .and_then(|v| v.actual.parse::<f64>().ok())
+            .unwrap_or(0.0);
+        ledger_records.push(GateRunRecord {
+            ts: ts.clone(),
+            head_sha: head_sha.clone(),
+            gate: "max_dependency_cycles".into(),
+            threshold: f64::from(max),
+            value,
+            verdict: if failed { "failed" } else { "passed" }.into(),
+            mode: "check".into(),
+        });
+    }
+    if let Some(max) = g.max_propagation_cost {
+        let failed = arch_violations
+            .iter()
+            .any(|v| v.gate == "max_propagation_cost");
+        let value = arch_violations
+            .iter()
+            .find(|v| v.gate == "max_propagation_cost")
+            .and_then(|v| v.actual.parse::<f64>().ok())
+            .unwrap_or(0.0);
+        ledger_records.push(GateRunRecord {
+            ts: ts.clone(),
+            head_sha: head_sha.clone(),
+            gate: "max_propagation_cost".into(),
+            threshold: max,
+            value,
+            verdict: if failed { "failed" } else { "passed" }.into(),
+            mode: "check".into(),
+        });
+    }
+    violations.extend(arch_violations);
+
+    // max_red_effort_pct
+    if let Some(max) = g.max_red_effort_pct {
+        let effort_violations =
+            codelore_lib::cli_api::quality_gates::evaluate_effort_exposure_gate(
+                &thresholds,
+                &db,
+                &opts,
+            )
+            .context("evaluate effort-exposure gate")?;
+        let failed = !effort_violations.is_empty();
+        let value = effort_violations
+            .first()
+            .and_then(|v| v.actual.parse::<f64>().ok())
+            .unwrap_or(0.0);
+        ledger_records.push(GateRunRecord {
+            ts: ts.clone(),
+            head_sha: head_sha.clone(),
+            gate: "max_red_effort_pct".into(),
+            threshold: max,
+            value,
+            verdict: if failed { "failed" } else { "passed" }.into(),
+            mode: "check".into(),
+        });
+        violations.extend(effort_violations);
+    }
+
+    // code_familiarity_min
+    if let Some(min) = g.code_familiarity_min {
+        let fam_violations = codelore_lib::cli_api::quality_gates::evaluate_familiarity_gate(
             &thresholds,
             &db,
             &opts,
         )
-        .context("evaluate effort-exposure gate")?,
-    );
-    violations.extend(
-        codelore_lib::cli_api::quality_gates::evaluate_familiarity_gate(&thresholds, &db, &opts)
-            .context("evaluate code-familiarity gate")?,
-    );
+        .context("evaluate code-familiarity gate")?;
+        let failed = !fam_violations.is_empty();
+        let value = fam_violations
+            .first()
+            .and_then(|v| v.actual.parse::<f64>().ok())
+            .unwrap_or(0.0);
+        ledger_records.push(GateRunRecord {
+            ts: ts.clone(),
+            head_sha: head_sha.clone(),
+            gate: "code_familiarity_min".into(),
+            threshold: min,
+            value,
+            verdict: if failed { "failed" } else { "passed" }.into(),
+            mode: "check".into(),
+        });
+        violations.extend(fam_violations);
+    }
+
+    // ── Ledger write (IO errors warn, never alter exit code) ─────────────────
+    append_gate_runs(&cache_root, &args.repo, &ledger_records);
+
+    // ── Report ────────────────────────────────────────────────────────────────
+    let degraded_count = ledger_records
+        .iter()
+        .filter(|r| r.verdict == "degraded")
+        .count();
 
     if violations.is_empty() {
-        println!(
-            "✅ codelore check: PASS ({} files evaluated)",
-            hotspots.len()
-        );
+        if degraded_count > 0 {
+            println!(
+                "✅ codelore check: PASS ({} files evaluated, {} gate(s) degraded)",
+                hotspots.len(),
+                degraded_count
+            );
+        } else {
+            println!(
+                "✅ codelore check: PASS ({} files evaluated)",
+                hotspots.len()
+            );
+        }
         write_github_output("result", "pass");
         write_github_output("violations", "0");
         Ok(())
@@ -3640,11 +3862,43 @@ fn build_spa_dashboard(
                 tracing::warn!("dashboard: marginal-owner-risk analysis failed; skipping: {e}");
                 Vec::new()
             });
+    // Delivery-metrics percentile distributions.  Requires include_merges;
+    // degrades gracefully to empty so the tile and card are omitted.
+    let delivery_metrics = {
+        let mut dm_opts = opts.clone();
+        dm_opts.include_merges = true;
+        codelore_lib::cli_api::analyses::delivery_metrics::run_delivery_metrics(db, &dm_opts)
+            .unwrap_or_else(|e| {
+                tracing::warn!("dashboard: delivery-metrics failed; skipping: {e}");
+                Vec::new()
+            })
+    };
+    // Release cadence — uses a separate Repo handle (same as architecture-trend).
+    let release_cadence = codelore_lib::cli_api::repo::GixRepo::open(repo_path)
+        .map_err(anyhow::Error::from)
+        .and_then(|repo| {
+            codelore_lib::cli_api::analyses::release_cadence::run_release_cadence(&repo, opts)
+                .map_err(anyhow::Error::from)
+        })
+        .unwrap_or_else(|e| {
+            tracing::warn!("dashboard: release-cadence failed; skipping: {e}");
+            Vec::new()
+        });
+    // Delivery-friction — top 5 rows for the "where is friction" drill line.
+    let delivery_friction =
+        codelore_lib::cli_api::analyses::delivery_friction::run_delivery_friction(db, opts)
+            .unwrap_or_else(|e| {
+                tracing::warn!("dashboard: delivery-friction failed; skipping: {e}");
+                Vec::new()
+            })
+            .into_iter()
+            .take(5)
+            .collect::<Vec<_>>();
     // Four-factor header tiles assembled from already-computed data.
     // Code + Architecture come from the health_trend series (zero extra
     // cost — the series is already in memory). Knowledge uses
     // code_familiarity when available, falling back to knowledge_islands.
-    // Delivery is not yet implemented and degrades to no tile.
+    // Delivery uses delivery_metrics + release_cadence (degrades to no tile).
     let mut factors = codelore_lib::cli_api::analyses::factors::health_trend_factors(&health_trend);
     let knowledge_tile =
         codelore_lib::cli_api::analyses::code_familiarity::run_code_familiarity(db, opts)
@@ -3665,6 +3919,12 @@ fn build_spa_dashboard(
             });
     if let Some(kt) = knowledge_tile {
         factors.push(kt);
+    }
+    if let Some(dt) = codelore_lib::cli_api::analyses::factors::delivery_factor_from_metrics(
+        &delivery_metrics,
+        &release_cadence,
+    ) {
+        factors.push(dt);
     }
     // Knowledge card data: code-familiarity summary, team-composition
     // buckets, top-10 coordination-needs rows. Each degrades to empty
@@ -3734,6 +3994,9 @@ fn build_spa_dashboard(
         code_familiarity,
         team_composition,
         coordination_needs,
+        delivery_metrics,
+        release_cadence,
+        delivery_friction,
         factors,
         options: codelore_lib::cli_api::output::spa::SpaOptionsSnapshot::from_options(opts),
     })

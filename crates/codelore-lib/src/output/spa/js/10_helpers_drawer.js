@@ -1186,17 +1186,48 @@
         '</div>';
     }
 
+    // Delivery tile (headline=null) renders a key-value numbers list.
+    // Band color on the first number (rework %) uses rework-specific thresholds
+    // — NOT the generic health band — because the Pluralsight benchmark range
+    // (green <9 %, yellow 9-14 %, red ≥15 %) differs from the health scale.
+    var REWORK_BAND_COLORS = {
+      green: 'var(--cl-health-green, oklch(70% 0.18 145))',
+      yellow: 'var(--cl-health-yellow, oklch(80% 0.16 85))',
+      red: 'var(--cl-health-red, oklch(60% 0.20 25))',
+    };
+
+    function numbersList(tile) {
+      var bandColor = REWORK_BAND_COLORS[tile.band] || '';
+      var html = '<div class="factor-numbers">';
+      var nums = tile.numbers || [];
+      for (var ni = 0; ni < nums.length; ni++) {
+        var pair = nums[ni];
+        var label = escapeHtml(pair[0] || '');
+        var value = escapeHtml(pair[1] || '');
+        // Only the first number (rework %) gets band coloring.
+        var valStyle = (ni === 0 && bandColor) ? ' style="color:' + bandColor + ';"' : '';
+        html += '<div class="factor-number-row">' +
+          '<span class="factor-number-label">' + label + '</span>' +
+          '<span class="factor-number-value"' + valStyle + '>' + value + '</span>' +
+          '</div>';
+      }
+      html += '</div>';
+      return html;
+    }
+
     var html = '<div class="factor-tiles">';
     for (var i = 0; i < factors.length; i++) {
       const t = factors[i];
-      const headlineStr = (t.headline !== null && t.headline !== undefined)
-        ? fmtNumberFlex(t.headline, 1) : '—';
+      const hasHeadline = t.headline !== null && t.headline !== undefined;
+      const headlineStr = hasHeadline ? fmtNumberFlex(t.headline, 1) : null;
+      const hasNumbers = t.numbers && t.numbers.length > 0;
       html += '<div class="factor-tile" id="factor-tile-' + i + '">' +
         '<div class="factor-name">' + escapeHtml(t.name) + '</div>' +
         (t.attention ? '<span class="factor-attention-chip">Attention</span>' : '') +
-        '<div class="factor-headline">' + headlineStr + '</div>' +
-        bulletBar(t) +
-        '<div id="factor-sparkline-' + i + '" class="factor-sparkline"></div>' +
+        (headlineStr !== null
+          ? '<div class="factor-headline">' + headlineStr + '</div>' + bulletBar(t)
+          : (hasNumbers ? numbersList(t) : '<div class="factor-headline">—</div>')) +
+        (t.series && t.series.length ? '<div id="factor-sparkline-' + i + '" class="factor-sparkline"></div>' : '') +
         '<div class="factor-detail">' + escapeHtml(t.detail || '') + '</div>' +
         '</div>';
     }
@@ -1206,6 +1237,7 @@
     // Render per-tile ECharts sparklines after DOM is set.
     for (var j = 0; j < factors.length; j++) {
       (function (idx, tile) {
+        // Delivery tile and other no-series tiles have no sparkline element.
         var el = document.getElementById('factor-sparkline-' + idx);
         if (!el || !tile.series || !tile.series.length || typeof window.echarts === 'undefined') return;
         try {

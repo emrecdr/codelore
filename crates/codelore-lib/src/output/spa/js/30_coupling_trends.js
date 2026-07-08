@@ -519,6 +519,101 @@
   }
 
 
+  // ─── §11b-2 Widget: Delivery card ───────────────────────────────
+  //
+  // Renders a "Delivery" information card below the Kamei sparkline.
+  // Data sources:
+  //   d.delivery_metrics  — percentile rows from `delivery-metrics`
+  //   d.release_cadence   — rows + __summary__ from `release-cadence`
+  //   d.delivery_friction — top-5 friction files from `delivery-friction`
+  //
+  // All three degrade gracefully: if the source array is absent or
+  // empty that number / section is simply omitted. The card itself is
+  // hidden when all three are absent.
+  //
+  // These are git-only proxies, NOT DORA metrics. The card carries a
+  // disclaimer line to prevent misreading.
+
+  function renderDeliveryCard(d) {
+    const container = document.getElementById('widget-delivery-card-body');
+    if (!container) return;
+
+    const dm = d.delivery_metrics || [];
+    const cadence = d.release_cadence || [];
+    const friction = d.delivery_friction || [];
+
+    // Check if any data at all.
+    if (!dm.length && !cadence.length && !friction.length) {
+      container.innerHTML = '<div class="empty">No delivery data — run with --include-merges and release tags matching --release-tag-glob.</div>';
+      return;
+    }
+
+    function findMetric(name) {
+      for (var i = 0; i < dm.length; i++) {
+        if (dm[i].metric === name) return dm[i];
+      }
+      return null;
+    }
+
+    var rows = '';
+
+    // Rework % (p50)
+    var rework = findMetric('rework_pct');
+    if (rework) {
+      var rPct = typeof rework.p50 === 'number' ? rework.p50.toFixed(1) : '—';
+      var rBand = rework.p50 < 9 ? 'green' : rework.p50 < 15 ? 'yellow' : 'red';
+      rows += '<tr><td>Rework</td>' +
+        '<td class="delivery-value cl-band-' + rBand + '">' + rPct + ' %</td>' +
+        '<td class="delivery-caveat">' + escapeHtml(rework.caveat || '') + '</td></tr>';
+    }
+
+    // Branch duration p75
+    var branch = findMetric('branch_duration_hours');
+    if (branch) {
+      var bVal = typeof branch.p75 === 'number' ? branch.p75.toFixed(0) + ' h' : '—';
+      rows += '<tr><td>Branch p75</td><td class="delivery-value">' + bVal + '</td>' +
+        '<td class="delivery-caveat">' + escapeHtml(branch.caveat || '') + '</td></tr>';
+    }
+
+    // Lead-time proxy p50
+    var lead = findMetric('lead_proxy_hours');
+    if (lead) {
+      var lVal = typeof lead.p50 === 'number' ? lead.p50.toFixed(0) + ' h' : '—';
+      rows += '<tr><td>Lead proxy p50</td><td class="delivery-value">' + lVal + '</td>' +
+        '<td class="delivery-caveat">' + escapeHtml(lead.caveat || '') + '</td></tr>';
+    }
+
+    // Release cadence — from __summary__ row
+    var summary = null;
+    for (var ci = 0; ci < cadence.length; ci++) {
+      if (cadence[ci].tag === '__summary__') { summary = cadence[ci]; break; }
+    }
+    if (summary && typeof summary.days_since_prev === 'number') {
+      var cVal = summary.days_since_prev.toFixed(0) + ' d';
+      var trend = summary.trend ? ' (' + escapeHtml(summary.trend) + ')' : '';
+      rows += '<tr><td>Cadence median</td><td class="delivery-value">' + cVal + trend + '</td><td></td></tr>';
+    }
+
+    // "Where is friction" — top friction files drill line.
+    var frictionHtml = '';
+    if (friction.length > 0) {
+      frictionHtml = '<div class="delivery-friction-header">Where is friction:</div>' +
+        '<ol class="delivery-friction-list">';
+      for (var fi = 0; fi < friction.length; fi++) {
+        var f = friction[fi];
+        frictionHtml += '<li>' + escapeHtml(f.path || '') + '</li>';
+      }
+      frictionHtml += '</ol>';
+    }
+
+    container.innerHTML =
+      '<table class="delivery-table">' +
+        '<tbody>' + rows + '</tbody>' +
+      '</table>' +
+      frictionHtml +
+      '<div class="delivery-disclaimer">Git-only proxies — not DORA metrics.</div>';
+  }
+
   // ─── §11c Widget: Hotspot treemap ────────────────────────────────
 
   function renderHotspotTreemap(rows) {

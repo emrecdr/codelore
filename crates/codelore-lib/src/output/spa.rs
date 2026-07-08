@@ -233,6 +233,25 @@ pub struct SpaDashboard {
     /// `knowledge_shares` data is available.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub coordination_needs: Vec<CoordinationNeedsRow>,
+    /// Delivery-metrics percentile distributions — one row per metric
+    /// (`batch_size_files`, `batch_size_loc`, `branch_duration_hours`,
+    /// `rework_pct`, `lead_proxy_hours`). Drives the Delivery factor tile
+    /// numbers and the delivery card in the SPA. Empty when
+    /// `--include-merges` was not set or the repo has no merge commits.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub delivery_metrics: Vec<crate::analyses::delivery_metrics::DeliveryMetricsRow>,
+    /// Release-cadence rows — one row per matched release tag plus a
+    /// `__summary__` row carrying the median inter-release gap in days.
+    /// Drives the cadence number in the Delivery factor tile. Empty when
+    /// no tags match `--release-tag-glob` or `Repo::tags()` is unavailable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub release_cadence: Vec<crate::analyses::release_cadence::ReleaseCadenceRow>,
+    /// Delivery-friction rows — top files ranked by composite delivery
+    /// friction score (churn × lead-time × cognitive). Used for the
+    /// "where is friction" drill line in the delivery card. Empty when
+    /// the analysis was not run or produced no results.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub delivery_friction: Vec<crate::analyses::delivery_friction::DeliveryFrictionRow>,
     /// Effective thresholds for THIS run, snapshotted at dispatch.
     /// Surfaced into the SPA's `data.options` block so per-metric
     /// tooltips can interpolate `${min_shared_revs}` /
