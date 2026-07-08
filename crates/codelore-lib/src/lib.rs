@@ -35,5 +35,5 @@ pub use analysis::{AnalysisName, UnknownAnalysisError};
 pub use error::{CodeLoreError, Result};
 pub use facts::FactsDb;
 pub use options::Options;
-pub use repo::Repo;
+pub use repo::{Repo, TagInfo};
 pub use types::{ChangeType, CommitEvent, FileChange, Hunk, KameiFeatures, SCHEMA_VERSION};

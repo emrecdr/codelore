@@ -318,6 +318,84 @@ impl Repo for GixRepo {
         // re-allocating + memcpy'ing up to MAX_DIFF_BLOB_BYTES per file.
         Ok(Some(std::mem::take(&mut obj.data)))
     }
+
+    fn tags(&self) -> Result<Vec<super::TagInfo>> {
+        use super::TagInfo;
+        use time::OffsetDateTime;
+
+        let repo = self.inner.to_thread_local();
+        let mut tags = Vec::new();
+
+        for r in repo
+            .references()
+            .map_err(|e| CodeLoreError::Repo(format!("references: {e}")))?
+            .tags()
+            .map_err(|e| CodeLoreError::Repo(format!("tags refs: {e}")))?
+        {
+            let mut r = r.map_err(|e| CodeLoreError::Repo(format!("ref iter: {e}")))?;
+
+            let name = r.name().shorten().to_string();
+
+            let direct_oid = r
+                .try_id()
+                .ok_or_else(|| CodeLoreError::Repo(format!("tag {name} is a symbolic ref")))?
+                .detach();
+
+            let obj = repo
+                .find_object(direct_oid)
+                .map_err(|e| CodeLoreError::Repo(format!("find object for tag {name}: {e}")))?;
+
+            let (target_rev, date) = if obj.kind == gix::objs::Kind::Tag {
+                // Annotated tag: use the tagger date, peel through to the commit.
+                let tag = obj
+                    .try_into_tag()
+                    .map_err(|e| CodeLoreError::Repo(format!("tag object {name}: {e}")))?;
+                let seconds = tag
+                    .tagger()
+                    .map_err(|e| CodeLoreError::Repo(format!("decode tagger {name}: {e}")))?
+                    .ok_or_else(|| {
+                        CodeLoreError::Repo(format!("annotated tag {name} has no tagger"))
+                    })?
+                    .time()
+                    .map_err(|e| CodeLoreError::Repo(format!("tagger time {name}: {e}")))?
+                    .seconds;
+                let date = OffsetDateTime::from_unix_timestamp(seconds)
+                    .map_err(|e| CodeLoreError::Repo(format!("tagger timestamp {name}: {e}")))?;
+                // peel_to_commit follows any number of nested tag objects.
+                let commit_rev = r
+                    .peel_to_commit()
+                    .map_err(|e| CodeLoreError::Repo(format!("peel to commit {name}: {e}")))?
+                    .id()
+                    .to_hex()
+                    .to_string();
+                (commit_rev, date)
+            } else {
+                // Lightweight tag: ref points directly to a commit object.
+                let commit = obj.into_commit();
+                let ts_seconds = commit
+                    .committer()
+                    .map_err(|e| CodeLoreError::Repo(format!("committer for tag {name}: {e}")))?
+                    .time()
+                    .map_err(|e| {
+                        CodeLoreError::Repo(format!("committer time for tag {name}: {e}"))
+                    })?
+                    .seconds;
+                let date = OffsetDateTime::from_unix_timestamp(ts_seconds).map_err(|e| {
+                    CodeLoreError::Repo(format!("commit timestamp for tag {name}: {e}"))
+                })?;
+                (direct_oid.to_hex().to_string(), date)
+            };
+
+            tags.push(TagInfo {
+                name,
+                target_rev,
+                date,
+            });
+        }
+
+        tags.sort_by(|a, b| a.date.cmp(&b.date).then(a.name.cmp(&b.name)));
+        Ok(tags)
+    }
 }
 
 impl GixRepo {

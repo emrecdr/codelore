@@ -260,6 +260,68 @@ impl Repo for GitCliRepo {
             Ok(None)
         }
     }
+
+    fn tags(&self) -> Result<Vec<super::TagInfo>> {
+        use super::TagInfo;
+
+        // NUL-delimited fields per ref: short-name, objectname, peeled-objectname,
+        // taggerdate (iso-strict, annotated only), committerdate (iso-strict, lightweight only).
+        // `%(*objectname)` is non-empty only for annotated tags; it holds the
+        // peeled commit OID that the tag object points at. `run_git` prepends
+        // `-c core.quotepath=false` automatically.
+        let output = self.run_git(&[
+            "for-each-ref",
+            "refs/tags",
+            "--format=%(refname:short)%00%(objectname)%00%(*objectname)%00%(taggerdate:iso-strict)%00%(committerdate:iso-strict)",
+        ])?;
+        if !output.status.success() {
+            return Err(CodeLoreError::Repo(format!(
+                "git for-each-ref refs/tags: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+        let stdout = String::from_utf8(output.stdout)
+            .map_err(|e| CodeLoreError::Repo(format!("for-each-ref output: {e}")))?;
+
+        let mut tags = Vec::new();
+        for line in stdout.lines() {
+            if line.is_empty() {
+                continue;
+            }
+            let fields: Vec<&str> = line.splitn(5, '\0').collect();
+            if fields.len() < 5 {
+                continue;
+            }
+            let name = fields[0].to_string();
+            let objectname = fields[1]; // direct tag ref OID
+            let peeled = fields[2]; // commit OID for annotated tags; "" for lightweight
+            let taggerdate = fields[3]; // non-empty for annotated tags
+            let committerdate = fields[4]; // non-empty for lightweight tags
+
+            // Non-empty `peeled` means this is an annotated tag: the tag object's
+            // tagger date is the semantically correct sort key.
+            let (target_rev, date_str) = if peeled.is_empty() {
+                // Lightweight tag: ref points directly to a commit.
+                (objectname.to_string(), committerdate)
+            } else {
+                // Annotated tag: `peeled` is the commit OID; use the tagger date.
+                (peeled.to_string(), taggerdate)
+            };
+
+            let date = parse_iso_timestamp(date_str).ok_or_else(|| {
+                CodeLoreError::Repo(format!("could not parse date {date_str:?} for tag {name}"))
+            })?;
+
+            tags.push(TagInfo {
+                name,
+                target_rev,
+                date,
+            });
+        }
+
+        tags.sort_by(|a, b| a.date.cmp(&b.date).then(a.name.cmp(&b.name)));
+        Ok(tags)
+    }
 }
 
 // ---------------------------------------------------------------------------
