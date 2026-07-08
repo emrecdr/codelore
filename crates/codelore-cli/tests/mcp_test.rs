@@ -59,7 +59,17 @@ fn spawn_mcp(
     });
     stdin.write_all(&ndjson_line(&init_req)).unwrap();
     stdin.flush().unwrap();
-    let _init_resp = read_ndjson(&mut reader);
+    let init_resp = read_ndjson(&mut reader);
+    // The initialize response must carry the server's positioning statement
+    // (local-only, read-only, no network/account/telemetry) so MCP clients
+    // can display it.
+    let instructions = init_resp["result"]["instructions"]
+        .as_str()
+        .expect("initialize response carries an instructions string");
+    assert!(
+        instructions.contains("No network"),
+        "instructions must state the local-only positioning, got: {instructions}"
+    );
 
     // initialized notification
     let notif = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
