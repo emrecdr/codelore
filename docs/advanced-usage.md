@@ -1022,7 +1022,7 @@ Evaluates the quality gates declared in `.codelore-thresholds.toml` at HEAD and 
 }
 ```
 
-`no_thresholds` is returned when no `.codelore-thresholds.toml` exists at the repo root. Gates covered: `cognitive_max`, `hotspot_score_max`, `code_health_min`, `disallow_clone_type_1`, and `max_red_effort_pct`.
+`no_thresholds` is returned when no `.codelore-thresholds.toml` exists at the repo root. Gates covered: `cognitive_max`, `hotspot_score_max`, `code_health_min`, `disallow_clone_type_1`, and `max_red_effort_pct`. Architecture-level gates (`max_dependency_cycles`, `max_architecture_violations`) and degraded-gate semantics (`fail_on_degraded`, `--ratchet`) are only available in `codelore check` proper, not through this tool.
 
 Parameters: none.
 
@@ -1041,6 +1041,8 @@ Each tool call opens its own `FactsDb` connection via the warm-cache path. This 
 | First tool call is very slow (30 s+) | Cold-cache ingest running — normal for large repos | Wait for it to complete; subsequent calls in the same session use the warm cache |
 | `delta_health` returns a tool error for a valid branch | Branch name is valid locally but not yet fetched | Run `git fetch` in the repo, then retry |
 | Tools return stale data after commits | The cache key includes HEAD SHA; new commits produce a new cache entry automatically | No action needed — the next call after a commit will re-ingest |
+
+## 12. Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
