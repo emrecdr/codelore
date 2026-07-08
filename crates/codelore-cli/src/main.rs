@@ -84,9 +84,11 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
     };
 
     if thresholds.is_empty() && !args.ratchet {
-        eprintln!(
-            "codelore check: no thresholds configured (no `.codelore-thresholds.toml` at repo root); vacuously passing."
-        );
+        if !args.quiet {
+            eprintln!(
+                "codelore check: no thresholds configured (no `.codelore-thresholds.toml` at repo root); vacuously passing."
+            );
+        }
         write_github_output("result", "pass");
         return Ok(());
     }
@@ -101,7 +103,7 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
     let ts = now_utc_ts();
 
     let (violations, mut ledger_records, hotspot_count, code_health) =
-        evaluate_all_gates(&thresholds, &db, &opts, &head_sha, &ts)
+        evaluate_all_gates(&thresholds, &db, &opts, &head_sha, &ts, args.quiet)
             .context("evaluate gates")?;
 
     // ── Ratchet ───────────────────────────────────────────────────────────────
@@ -190,14 +192,16 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
         Ok(())
     } else {
         eprintln!("❌ codelore check: FAIL — {} violation(s)", violations.len());
-        for v in &violations {
-            eprintln!(
-                "  - {gate}: {path} — actual {actual} vs threshold {threshold}",
-                gate = v.gate,
-                path = v.path,
-                actual = v.actual,
-                threshold = v.threshold,
-            );
+        if !args.quiet {
+            for v in &violations {
+                eprintln!(
+                    "  - {gate}: {path} — actual {actual} vs threshold {threshold}",
+                    gate = v.gate,
+                    path = v.path,
+                    actual = v.actual,
+                    threshold = v.threshold,
+                );
+            }
         }
         write_github_output("result", "fail");
         write_github_output("violations", &violations.len().to_string());
@@ -279,6 +283,7 @@ fn eval_code_health_gate(
     opts: &codelore_lib::cli_api::Options,
     ts: &str,
     head_sha: &str,
+    quiet: bool,
 ) -> Result<(GateGroupResult, Vec<codelore_lib::cli_api::analyses::code_health::CodeHealthRow>)> {
     use codelore_lib::cli_api::quality_gates::{GateViolation, evaluate_code_health_gate};
     use codelore_lib::cli_api::quality_gates::ledger::GateRunRecord;
@@ -296,7 +301,9 @@ fn eval_code_health_gate(
     };
     let worst = code_health.iter().map(|r| r.score).fold(f64::INFINITY, f64::min);
     let verdict = if degraded {
-        eprintln!("  ⚠ code_health_min: degraded — health scan returned no rows on a non-empty repo");
+        if !quiet {
+            eprintln!("  ⚠ code_health_min: degraded — health scan returned no rows on a non-empty repo");
+        }
         "degraded"
     } else if ch_violations.is_empty() { "passed" } else { "failed" };
     let rec = GateRunRecord {
@@ -359,6 +366,7 @@ fn evaluate_all_gates(
     opts: &codelore_lib::cli_api::Options,
     head_sha: &str,
     ts: &str,
+    quiet: bool,
 ) -> Result<(
     Vec<codelore_lib::cli_api::quality_gates::GateViolation>,
     Vec<codelore_lib::cli_api::quality_gates::ledger::GateRunRecord>,
@@ -373,7 +381,7 @@ fn evaluate_all_gates(
     violations.extend(hs_v);
     recs.extend(hs_r);
 
-    let ((ch_v, ch_r), code_health) = eval_code_health_gate(thresholds, db, opts, ts, head_sha)?;
+    let ((ch_v, ch_r), code_health) = eval_code_health_gate(thresholds, db, opts, ts, head_sha, quiet)?;
     violations.extend(ch_v);
     recs.extend(ch_r);
 
