@@ -349,6 +349,85 @@
     .table-container tr:hover td { background: var(--bg-elev-2); }
     .table-container .num { text-align: right; font-variant-numeric: tabular-nums; }
     .table-container .path { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+    /* ── Factor header ──────────────────────────────────────────── */
+    .factor-tiles {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      padding: 4px 0;
+    }
+    .factor-tile {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .factor-name {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      opacity: 0.7;
+    }
+    .factor-headline {
+      font-size: 1.75rem;
+      font-weight: 700;
+      line-height: 1;
+    }
+    .factor-attention-chip {
+      display: inline-block;
+      font-size: 0.65rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 1px 6px;
+      border-radius: 9999px;
+      background: oklch(var(--wa));
+      color: oklch(var(--wac));
+      margin-bottom: 2px;
+    }
+    .factor-bullet-wrap {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .factor-bullet-track {
+      flex: 1;
+      position: relative;
+      height: 8px;
+      background: oklch(var(--b3));
+      border-radius: 4px;
+      overflow: visible;
+    }
+    .factor-bullet-fill {
+      height: 100%;
+      border-radius: 4px;
+      transition: width 0.3s ease;
+    }
+    .factor-bullet-mean-tick {
+      position: absolute;
+      top: -2px;
+      width: 2px;
+      height: 12px;
+      background: oklch(var(--bc) / 0.4);
+      border-radius: 1px;
+      transform: translateX(-50%);
+    }
+    .factor-bullet-label {
+      font-size: 0.7rem;
+      font-weight: 600;
+      min-width: 2.5rem;
+      text-align: right;
+    }
+    .factor-sparkline {
+      height: 60px;
+      width: 100%;
+    }
+    .factor-detail {
+      font-size: 0.7rem;
+      opacity: 0.6;
+      line-height: 1.3;
+    }
+    /* ── KPI grid ────────────────────────────────────────────────── */
     .kpi-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -960,6 +1039,23 @@
        dashboard's preferred layout — `max-w-screen-2xl` (1536 px)
        would shrink the dashboard on ultra-wide displays. -->
   <main class="mx-auto grid grid-cols-1 md:grid-cols-2 gap-7 p-7 dashboard-main">
+    <!-- Four-factor header: Code / Architecture / Knowledge / Delivery.
+         Spans the full dashboard width (xl:col-span-2). Hidden via CSS
+         when empty (JS sets display:none on the container when
+         data.factors is absent or empty). -->
+    <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-factor-header">
+      <h2>Quality dimensions</h2>
+      <div class="subtitle">
+        Four headline scores (0–100, higher = healthier) summarising the
+        repo's Code, Architecture, Knowledge, and Delivery dimensions.
+        The bullet bar shows the current score against the healthy (green)
+        and warning (yellow) thresholds. The sparkline shows the sampled
+        historical trend. The "Attention" chip appears when the
+        Shewhart XmR chart signals a statistical excursion or sustained run.
+      </div>
+      <div id="widget-factor-header-body" class="widget-body" style="min-height: 80px;"></div>
+    </section>
+
     <section class="widget card bg-base-200 shadow-lg" id="widget-kpi-tiles">
       <h2>Codebase at a glance</h2>
       <div class="subtitle">

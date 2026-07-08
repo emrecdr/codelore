@@ -407,8 +407,14 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
         ),
         (
             "bus-factor",
-            "Filatov 2010",
-            "Min number of authors whose combined commits cover ≥80% of a module's commits. Smaller = more concentrated knowledge.",
+            "Filatov 2010 (commits mode) / Cury & Avelino SBES'24 (doe mode)",
+            "Min number of authors whose departure would leave a module unmaintained. \
+             Default mode (--knowledge-model commits): smallest set covering ≥80% of \
+             module commits (Filatov 2010). DOE mode (--knowledge-model doe): greedy \
+             truck-factor procedure — repeatedly remove the author expert on the most \
+             remaining files until >50% of files have no expert (Cury & Avelino, \
+             SBES'24 arXiv 2408.08733). DOE mode emits the same per-module row shape \
+             with model='doe'.",
             "See analyses/bus_factor.rs.",
         ),
         (
@@ -703,6 +709,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         // T8: knowledge-islands analysis "departed author" threshold.
         departed_threshold_days: args.departed_threshold_days,
         window_days: args.window_days,
+        knowledge_model: args.knowledge_model.clone(),
         ..Options::default()
     };
 
@@ -3323,6 +3330,32 @@ fn build_spa_dashboard(
                 },
                 |d| (d.trend, d.file_series, d.transitions),
             );
+    // Four-factor header tiles assembled from already-computed data.
+    // Code + Architecture come from the health_trend series (zero extra
+    // cost — the series is already in memory). Knowledge uses
+    // code_familiarity when available, falling back to knowledge_islands.
+    // Delivery is not yet implemented and degrades to no tile.
+    let mut factors = codelore_lib::cli_api::analyses::factors::health_trend_factors(&health_trend);
+    let knowledge_tile =
+        codelore_lib::cli_api::analyses::code_familiarity::run_code_familiarity(db, opts)
+            .ok()
+            .and_then(|rows| {
+                rows.into_iter().next().map(|r| {
+                    codelore_lib::cli_api::analyses::factors::knowledge_factor_from_familiarity(
+                        r.familiarity_pct,
+                        r.islands_pct,
+                    )
+                })
+            })
+            .or_else(|| {
+                codelore_lib::cli_api::analyses::factors::knowledge_factor_from_islands(
+                    &knowledge_islands,
+                    i32::try_from(opts.departed_threshold_days).unwrap_or(i32::MAX),
+                )
+            });
+    if let Some(kt) = knowledge_tile {
+        factors.push(kt);
+    }
     Ok(SpaDashboard {
         hotspots,
         summary,
@@ -3345,6 +3378,7 @@ fn build_spa_dashboard(
         health_trend,
         file_health_series,
         health_transitions,
+        factors,
         options: codelore_lib::cli_api::output::spa::SpaOptionsSnapshot::from_options(opts),
     })
 }

@@ -178,6 +178,12 @@ pub struct SpaDashboard {
     /// Newest-first. Empty when there are no signal-bearing transitions.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub health_transitions: Vec<crate::analyses::health_trend::HealthTransitionRow>,
+    /// Four-factor dashboard header tiles: Code, Architecture, Knowledge,
+    /// Delivery. Each carries a headline 0–100, a historical series for the
+    /// sparkline, and an XmR-gated attention flag. Empty when no factor data
+    /// is available (e.g. first run with no health-trend history).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub factors: Vec<crate::analyses::factors::FactorTile>,
     /// Per-commit Kamei JIT-SDP feature vector for the Delivery Risk
     /// Sparkline widget. One row per commit in the last-N (capped at
     /// 30) chronological window. Surfaces the raw Kamei 14-feature

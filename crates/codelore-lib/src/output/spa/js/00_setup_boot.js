@@ -606,6 +606,7 @@
   // .push(() => ...)` line duplicated per widget, which invited
   // theme-rerender drift every time a new widget landed.
   const WIDGETS = [
+    { name: 'factor-header',      rerender: 'theme', render: () => renderFactorHeader(data.factors || [], data.options || {}) },
     { name: 'kpi-tiles',          rerender: false, render: () => renderKpiTiles(data) },
     { name: 'knowledge-islands',  rerender: false, render: () => renderKnowledgeIslands(data.knowledge_islands || []) },
     { name: 'hotspot-circle-pack', rerender: 'theme', render: () => renderHotspotCirclePack(data.hotspots || [], currentHotspotColorMode) },

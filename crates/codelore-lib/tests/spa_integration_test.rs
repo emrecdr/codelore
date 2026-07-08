@@ -395,6 +395,58 @@ fn spa_embeds_fusion_overlay_data() {
         Some("yellow"),
     );
 
+    // When factors is non-empty it must appear as a JSON array and each
+    // tile must carry the required fields.
+    use codelore_lib::analyses::factors::FactorTile;
+    let dash_with_factors = SpaDashboard {
+        factors: vec![FactorTile {
+            name: "Code".into(),
+            headline: Some(72.5),
+            band: "green".into(),
+            series: vec![65.0, 68.0, 72.5],
+            attention: false,
+            detail: "Code health 72.5 (green)".into(),
+        }],
+        ..SpaDashboard::default()
+    };
+    let mut buf3 = Vec::new();
+    write_spa(
+        &dash_with_factors,
+        "Factors Test",
+        "/tmp/z",
+        "2026-06-26 00:00:00 UTC",
+        &mut buf3,
+    )
+    .expect("write_spa factors");
+    let html3 = String::from_utf8(buf3).expect("utf8 html3");
+    let data3 = extract_data_json(&html3).expect("parse data3 block");
+    let fa = data3
+        .get("factors")
+        .and_then(|v| v.as_array())
+        .expect("factors array present when non-empty");
+    assert_eq!(fa.len(), 1, "one factor tile expected");
+    assert_eq!(
+        fa[0].get("name").and_then(serde_json::Value::as_str),
+        Some("Code"),
+    );
+    assert_eq!(
+        fa[0].get("headline").and_then(serde_json::Value::as_f64),
+        Some(72.5),
+    );
+    assert_eq!(
+        fa[0].get("band").and_then(serde_json::Value::as_str),
+        Some("green"),
+    );
+    assert_eq!(
+        fa[0].get("attention").and_then(serde_json::Value::as_bool),
+        Some(false),
+    );
+    let series = fa[0]
+        .get("series")
+        .and_then(|v| v.as_array())
+        .expect("series array");
+    assert_eq!(series.len(), 3);
+
     // The centralized band thresholds must appear in the options block so the
     // SPA JS can read them from data.options instead of hardcoding them.
     let opts = data.get("options").expect("options block present in JSON");

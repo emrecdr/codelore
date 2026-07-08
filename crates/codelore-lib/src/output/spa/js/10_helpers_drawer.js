@@ -1007,4 +1007,97 @@
     }
   }
 
+  // ─── Factor header widget ────────────────────────────────────────────
+  // Renders the four-factor (Code, Architecture, Knowledge, Delivery)
+  // overview header above the KPI tiles. Each tile shows:
+  //   • A bullet bar — band-colored track (full width), a marker at the
+  //     headline value, and a baseline tick at the series mean.
+  //   • A 60px ECharts sparkline driven by `tile.series`.
+  //   • An "Attention" chip only when `tile.attention == true`.
+  //
+  // Band color is read from CSS custom properties via `token()` so the
+  // widget re-renders on theme switch (registered as `rerender: 'theme'`
+  // in WIDGETS). Thresholds are read from `data.options` — never
+  // hardcoded here.
+  function renderFactorHeader(factors, opts) {
+    const container = document.getElementById('widget-factor-header-body');
+    if (!container) return;
+    if (!factors || !factors.length) {
+      container.innerHTML = '<div class="empty">No factor data — run with health-trend enabled.</div>';
+      return;
+    }
+
+    const o = opts || {};
+    const greenMin = typeof o.health_green_min === 'number' ? o.health_green_min : 70;
+    const yellowMin = typeof o.health_yellow_min === 'number' ? o.health_yellow_min : 40;
+
+    function bandColor(score) {
+      if (score === null || score === undefined) return token('--cl-health-yellow');
+      return score >= greenMin ? token('--cl-health-green')
+           : score >= yellowMin ? token('--cl-health-yellow')
+           : token('--cl-health-red');
+    }
+
+    function bulletBar(tile) {
+      const val = tile.headline !== null && tile.headline !== undefined ? tile.headline : 0;
+      const seriesMean = tile.series && tile.series.length
+        ? tile.series.reduce(function (s, v) { return s + v; }, 0) / tile.series.length
+        : val;
+      const color = bandColor(tile.headline);
+      // Track = full-width bar; marker = filled circle at headline %;
+      // baseline tick = thin line at series mean %.
+      return '<div class="factor-bullet-wrap" aria-label="' + fmtNumberFlex(val, 1) + ' / 100">' +
+        '<div class="factor-bullet-track">' +
+          '<div class="factor-bullet-fill" style="width:' + Math.min(100, Math.max(0, val)) + '%;background:' + color + ';"></div>' +
+          '<div class="factor-bullet-mean-tick" style="left:' + Math.min(100, Math.max(0, seriesMean)) + '%;"></div>' +
+        '</div>' +
+        '<span class="factor-bullet-label" style="color:' + color + ';">' + fmtNumberFlex(val, 1) + '</span>' +
+        '</div>';
+    }
+
+    var html = '<div class="factor-tiles">';
+    for (var i = 0; i < factors.length; i++) {
+      const t = factors[i];
+      const headlineStr = (t.headline !== null && t.headline !== undefined)
+        ? fmtNumberFlex(t.headline, 1) : '—';
+      html += '<div class="factor-tile" id="factor-tile-' + i + '">' +
+        '<div class="factor-name">' + escapeHtml(t.name) + '</div>' +
+        (t.attention ? '<span class="factor-attention-chip">Attention</span>' : '') +
+        '<div class="factor-headline">' + headlineStr + '</div>' +
+        bulletBar(t) +
+        '<div id="factor-sparkline-' + i + '" class="factor-sparkline"></div>' +
+        '<div class="factor-detail">' + escapeHtml(t.detail || '') + '</div>' +
+        '</div>';
+    }
+    html += '</div>';
+    container.innerHTML = html;
+
+    // Render per-tile ECharts sparklines after DOM is set.
+    for (var j = 0; j < factors.length; j++) {
+      (function (idx, tile) {
+        var el = document.getElementById('factor-sparkline-' + idx);
+        if (!el || !tile.series || !tile.series.length || typeof window.echarts === 'undefined') return;
+        try {
+          var chart = mountEcharts(el);
+          chart.setOption({
+            animation: false,
+            grid: { top: 2, bottom: 2, left: 2, right: 2 },
+            xAxis: { type: 'category', show: false, data: tile.series.map(function (_, k) { return k; }) },
+            yAxis: { type: 'value', show: false, min: 0, max: 100 },
+            series: [{
+              type: 'line',
+              data: tile.series,
+              smooth: true,
+              symbol: 'none',
+              lineStyle: { width: 1.5, color: bandColor(tile.headline) },
+            }],
+          });
+        } catch (e) {
+          console.error('codelore: factor sparkline render failed for', tile.name, e);
+        }
+      })(j, factors[j]);
+    }
+  }
+
+
 
