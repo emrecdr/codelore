@@ -5,10 +5,14 @@
 //! partialFingerprints for stable identity across CI runs.
 
 use crate::analyses::hotspots::HotspotRow;
+use crate::quality_gates::GateViolation;
+use crate::quality_gates::evidence::EvidenceCommit;
 use crate::{CodeLoreError, Result};
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::io::Write;
+use std::path::Path;
 
 const SARIF_SCHEMA: &str = "https://json.schemastore.org/sarif-2.1.0.json";
 const RULE_ID: &str = "CODELORE-HOTSPOT";
@@ -602,4 +606,190 @@ fn build_live_clone_result(row: &CloneCouplingRow, repo_root: &str) -> serde_jso
             "tags": ["behavioral", "clone", "live-clone", "co-change", "x-ray"]
         }
     })
+}
+
+// =============================================================================
+// CODELORE CHECK — quality-gate SARIF with evidence chains
+//
+// One rule per distinct gate name; one result per GateViolation.
+// Per-file violations get relatedLocations + a codeFlow (≤5 evidence commits).
+// Repo-wide violations (path == "(repo-wide)" or "(degraded)") use uri "."
+// with no region.
+// =============================================================================
+
+const CHECK_AUTOMATION_ID_PREFIX: &str = "codelore/check/run";
+
+/// Emit a SARIF 2.1.0 document for quality-gate violations to `w`.
+///
+/// `evidence` maps a repo-relative path to its top-N [`EvidenceCommit`]s;
+/// it is only populated for per-file violated paths (never for `"(repo-wide)"`
+/// or `"(degraded)"`).  `repo_root` and `head_sha` are used for stable
+/// `partialFingerprints`.
+///
+/// # Errors
+///
+/// Returns [`CodeLoreError::Output`] when JSON serialization fails.
+pub fn write_check_sarif<W: Write, S: std::hash::BuildHasher>(
+    violations: &[GateViolation],
+    evidence: &HashMap<String, Vec<EvidenceCommit>, S>,
+    repo_root: &Path,
+    head_sha: &str,
+    w: &mut W,
+) -> Result<()> {
+    let doc = build_check_sarif(violations, evidence, repo_root, head_sha);
+    serde_json::to_writer_pretty(w, &doc)
+        .map_err(|e| CodeLoreError::Output(format!("check sarif: {e}")))?;
+    Ok(())
+}
+
+fn build_check_sarif<S: std::hash::BuildHasher>(
+    violations: &[GateViolation],
+    evidence: &HashMap<String, Vec<EvidenceCommit>, S>,
+    repo_root: &Path,
+    head_sha: &str,
+) -> serde_json::Value {
+    use serde_json::{Value, json};
+    use std::collections::BTreeSet;
+
+    // One ReportingDescriptor per distinct gate (deduped, stable order).
+    let distinct_gates: BTreeSet<&str> = violations.iter().map(|v| v.gate.as_str()).collect();
+    let rules: Vec<Value> = distinct_gates
+        .iter()
+        .map(|gate| {
+            json!({
+                "id": gate,
+                "shortDescription": {
+                    "text": format!("Quality gate: {gate}")
+                },
+                "helpUri": "https://github.com/emrecdr/codelore/blob/main/docs/advanced-usage.md#check-gates"
+            })
+        })
+        .collect();
+
+    let repo_root_str = repo_root.to_string_lossy();
+    let results: Vec<Value> = violations
+        .iter()
+        .map(|v| build_check_result(v, evidence, &repo_root_str, head_sha))
+        .collect();
+
+    json!({
+        "$schema": SARIF_SCHEMA,
+        "version": "2.1.0",
+        "runs": [{
+            "automationDetails": {
+                "id": automation_id_for(CHECK_AUTOMATION_ID_PREFIX)
+            },
+            "tool": {
+                "driver": {
+                    "name": "codelore",
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "informationUri": CODELORE_HOMEPAGE,
+                    "rules": rules
+                }
+            },
+            "results": results
+        }]
+    })
+}
+
+/// Build one SARIF result for a single [`GateViolation`].
+fn build_check_result<S: std::hash::BuildHasher>(
+    v: &GateViolation,
+    evidence: &HashMap<String, Vec<EvidenceCommit>, S>,
+    repo_root: &str,
+    head_sha: &str,
+) -> serde_json::Value {
+    use serde_json::json;
+
+    // Repo-wide gates (e.g. clone count) emit a synthetic "." uri with no
+    // region. Per-file gates emit the real path.
+    let is_repo_wide = v.path == "(repo-wide)" || v.path == "(degraded)";
+    let uri = if is_repo_wide {
+        ".".to_owned()
+    } else {
+        percent_encode_path(v.path.trim_start_matches('/'))
+    };
+
+    let location = json!({ "physicalLocation": { "artifactLocation": { "uri": uri } } });
+
+    // Stable fingerprints:
+    // 1. gateFinding/v1 — our versioned key; includes head_sha so it
+    //    differentiates the same gate breached at two different commits.
+    // 2. primaryLocationLineHash — mirrors the hotspots emitter at
+    //    sarif.rs:161-168; GitHub deduplicates on this key.
+    let gate_fp = {
+        let mut h = Sha256::new();
+        h.update(v.gate.as_bytes());
+        h.update(b"|");
+        h.update(v.path.as_bytes());
+        h.update(b"|");
+        h.update(head_sha.as_bytes());
+        format!("sha256:{}", hex::encode(h.finalize()))
+    };
+    let primary_fp = {
+        let mut h = Sha256::new();
+        h.update(repo_root.as_bytes());
+        h.update(b"|");
+        h.update(v.path.as_bytes());
+        format!("sha256:{}", hex::encode(h.finalize()))
+    };
+
+    let message_text = format!(
+        "{gate}: {actual} vs threshold {threshold}",
+        gate = v.gate,
+        actual = v.actual,
+        threshold = v.threshold,
+    );
+
+    // Evidence chain — only for per-file violations.
+    let chain: &[EvidenceCommit] = if is_repo_wide {
+        &[]
+    } else {
+        evidence.get(&v.path).map_or(&[], Vec::as_slice)
+    };
+
+    let evidence_locs: Vec<serde_json::Value> = chain
+        .iter()
+        .map(|c| {
+            json!({
+                "physicalLocation": {
+                    "artifactLocation": { "uri": percent_encode_path(v.path.trim_start_matches('/')) }
+                },
+                "message": {
+                    "text": format!(
+                        "{date} {author}: {msg} (+{churn} lines)",
+                        date = c.date,
+                        author = c.author,
+                        msg = c.message_head,
+                        churn = c.churn,
+                    )
+                }
+            })
+        })
+        .collect();
+
+    let mut result = json!({
+        "ruleId": v.gate,
+        "level": "error",
+        "message": { "text": message_text },
+        "locations": [location],
+        "partialFingerprints": {
+            "gateFinding/v1": gate_fp,
+            "primaryLocationLineHash": primary_fp
+        }
+    });
+
+    if !evidence_locs.is_empty() {
+        result["relatedLocations"] = serde_json::Value::Array(evidence_locs.clone());
+        result["codeFlows"] = json!([{
+            "threadFlows": [{
+                "locations": evidence_locs
+                    .iter()
+                    .map(|loc| json!({ "location": loc }))
+                    .collect::<Vec<_>>()
+            }]
+        }]);
+    }
+
+    result
 }

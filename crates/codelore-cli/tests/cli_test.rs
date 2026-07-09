@@ -1652,3 +1652,57 @@ fn check_quiet_violation_path_suppresses_detail_keeps_verdict() {
         // Per-violation detail lines name the gate; --quiet must suppress them.
         .stderr(predicate::str::contains("code_health_min").not());
 }
+
+#[test]
+fn check_format_sarif_emits_valid_sarif_and_exits_1() {
+    // `code_health_min = 100.0` is impossibly high so the gate always fires
+    // against biomarker_repo, producing at least one per-file violation.
+    // With --format sarif:
+    //   - exit code must still be 1 (violations are present)
+    //   - stdout must be a valid SARIF document with ≥1 result
+    //   - the FAIL verdict goes to stderr (not stdout)
+    let repo = codelore_lib::test_support::biomarker_repo::build();
+    let thresholds = repo.dir.path().join(".codelore-thresholds.toml");
+    std::fs::write(&thresholds, "[gates]\ncode_health_min = 100.0\n").unwrap();
+
+    let output = Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "check",
+            "--repo",
+            repo.dir.path().to_str().unwrap(),
+            "--format",
+            "sarif",
+        ])
+        .output()
+        .expect("run codelore check --format sarif");
+
+    // Exit code 1 — gate violation semantics unchanged by format.
+    assert!(
+        !output.status.success(),
+        "expected exit 1 for gate violation, got {}",
+        output.status
+    );
+
+    // stdout is valid SARIF with ≥1 result.
+    let stdout = String::from_utf8(output.stdout).expect("stdout is utf-8");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("stdout must be valid JSON SARIF");
+    assert_eq!(
+        parsed["version"].as_str().unwrap(),
+        "2.1.0",
+        "SARIF version must be 2.1.0"
+    );
+    let results = parsed["runs"][0]["results"].as_array().unwrap();
+    assert!(
+        !results.is_empty(),
+        "expected ≥1 SARIF result for code_health_min violation"
+    );
+
+    // The FAIL verdict line goes to stderr (stdout stays clean JSON).
+    let stderr = String::from_utf8(output.stderr).expect("stderr is utf-8");
+    assert!(
+        stderr.contains("FAIL"),
+        "FAIL verdict must appear on stderr even with --format sarif"
+    );
+}
