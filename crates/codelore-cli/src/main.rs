@@ -16,7 +16,7 @@ use codelore_lib::cli_api::{AnalysisName, CodeLoreError, Options};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 
-use crate::args::{AnalyzeArgs, Cli, Command, DiffArgs, IngestSarifArgs, McpArgs};
+use crate::args::{AnalyzeArgs, CheckFormat, Cli, Command, DiffArgs, IngestSarifArgs, McpArgs};
 
 fn main() {
     if let Err(e) = run() {
@@ -319,7 +319,7 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
     append_gate_runs(&cache_root, &args.repo, &ledger_records);
 
     // ── SARIF emission (when --format sarif) ─────────────────────────────────
-    if args.format == "sarif" {
+    if matches!(args.format, CheckFormat::Sarif) {
         use codelore_lib::cli_api::quality_gates::evidence::evidence_for_path;
         use std::collections::HashMap;
 
@@ -356,7 +356,7 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
 
     if violations.is_empty() {
         if degraded_count > 0 {
-            if args.format == "sarif" {
+            if matches!(args.format, CheckFormat::Sarif) {
                 eprintln!(
                     "⚠ codelore check: WARNING — {degraded_count} gate(s) degraded (non-degraded gates pass)"
                 );
@@ -365,7 +365,7 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
                     "⚠ codelore check: WARNING — {degraded_count} gate(s) degraded (non-degraded gates pass)"
                 );
             }
-        } else if args.format != "sarif" {
+        } else if matches!(args.format, CheckFormat::Text) {
             println!("✅ codelore check: PASS ({hotspot_count} files evaluated)");
         }
         write_github_output("result", "pass");
@@ -376,7 +376,7 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
             "❌ codelore check: FAIL — {} violation(s)",
             violations.len()
         );
-        if !args.quiet && args.format != "sarif" {
+        if !args.quiet && matches!(args.format, CheckFormat::Text) {
             for v in &violations {
                 eprintln!(
                     "  - {gate}: {path} — actual {actual} vs threshold {threshold}",
@@ -392,7 +392,7 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
         // Inside GitHub Actions, emit each violation as an inline `::error`
         // annotation so the failing gate shows up against the file in the
         // PR's Files-changed view — not just as a red check.
-        if std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true") && args.format != "sarif" {
+        if std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true") && matches!(args.format, CheckFormat::Text) {
             let mut stdout = std::io::stdout();
             codelore_lib::cli_api::output::gha::write_gate_violations_gha(&violations, &mut stdout)
                 .context("emit gate annotations")?;

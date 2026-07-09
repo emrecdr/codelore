@@ -145,6 +145,50 @@ fn findings_on_non_hotspot_path_produce_zero_scores() {
     assert_eq!(row.health_band, "unknown");
 }
 
+// ─── biomarker_repo: health band flows through ───────────────────────────────
+
+/// `src/complex.rs` in `biomarker_repo` has the highest cognitive complexity
+/// and a non-trivial revision count. The code-health pipeline must produce a
+/// real band (not `"unknown"`) for this path, proving that the health-band join
+/// arm of `run_finding_hotspot_overlap` actually fires on a repo with complex
+/// files.
+#[test]
+fn complex_file_in_biomarker_repo_has_real_health_band() {
+    let fx = codelore_lib::test_support::biomarker_repo::build();
+    let repo = codelore_lib::repo::GixRepo::open(fx.dir.path()).expect("open repo");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: fx.dir.path().to_path_buf(),
+        min_revs: 1,
+        fisher_significance: 1.0,
+        min_shared_revs: 1,
+        min_coupling_pct: 0,
+        max_coupling_pct: 100,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let store_dir = tempfile::tempdir().expect("tempdir");
+    let store = temp_store_for(store_dir.path());
+
+    // Ingest a finding for src/complex.rs — the most complex file in the fixture.
+    let f = finding_for("src/complex.rs", "semgrep", "warning");
+    store.replace_engine("semgrep", &[f]).expect("replace");
+
+    let rows = run_finding_hotspot_overlap(&db, &opts, &store).expect("run");
+
+    let row = rows
+        .iter()
+        .find(|r| r.path == "src/complex.rs")
+        .expect("src/complex.rs must appear in output");
+
+    assert!(
+        matches!(row.health_band.as_str(), "red" | "yellow" | "green"),
+        "health_band must be a real band value (not 'unknown') for complex.rs; got '{}'",
+        row.health_band
+    );
+}
+
 // ─── sort order ─────────────────────────────────────────────────────────────
 
 /// With two paths in the store (main.rs: 2 findings, lib.rs: 1 finding),

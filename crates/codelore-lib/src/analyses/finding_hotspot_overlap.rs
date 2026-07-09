@@ -42,7 +42,7 @@ pub struct FindingHotspotOverlapRow {
     /// File path (repo-relative).
     pub path: String,
     /// Total findings across all engines.
-    pub findings: usize,
+    pub findings: u32,
     /// Comma-joined sorted engine names.
     pub engines: String,
     /// Most severe level: `"error"` / `"warning"` / `"note"`.
@@ -109,29 +109,9 @@ pub fn run_finding_hotspot_overlap(
     // --- hotspots side ---
     let hotspot_rows = run_hotspots(db, opts)?;
 
-    // Build a map path → (hotspot_score, revs) for O(1) lookup.
-    // revs_percentile is PERCENT_RANK of revision count within this result
-    // set: 0.0 for fewest revisions, 1.0 for the most. Computed over the
-    // hotspot rows (already filtered by min_revs) — exact equivalent of
-    // the SQL `PERCENT_RANK() OVER (ORDER BY revs)` used internally.
-    let n = hotspot_rows.len();
-    let mut sorted_by_revs: Vec<(usize, u32)> = hotspot_rows
-        .iter()
-        .enumerate()
-        .map(|(i, r)| (i, r.revisions))
-        .collect();
-    sorted_by_revs.sort_by_key(|&(_, r)| r);
-
-    // rank[i] = PERCENT_RANK position for hotspot_rows[i] within the sorted order.
-    let mut rank_by_idx = vec![0.0f64; n];
-    if n > 1 {
-        #[allow(clippy::cast_precision_loss)]
-        // PERCENT_RANK: precision loss negligible for repo-scale revision counts
-        for (rank_pos, &(orig_idx, _)) in sorted_by_revs.iter().enumerate() {
-            rank_by_idx[orig_idx] = rank_pos as f64 / (n - 1) as f64;
-        }
-    }
-    // n == 1: single file, PERCENT_RANK = 0.0 (only rank in its own set)
+    // Build a map path → (hotspot_score, revs_percentile) for O(1) lookup.
+    let revs: Vec<u32> = hotspot_rows.iter().map(|r| r.revisions).collect();
+    let rank_by_idx = compute_percent_ranks(&revs);
 
     let mut hotspot_map: HashMap<&str, (f64, f64)> = HashMap::new();
     for (i, row) in hotspot_rows.iter().enumerate() {
@@ -163,7 +143,7 @@ pub fn run_finding_hotspot_overlap(
             let priority = priority_label(pf.count, revs_percentile, &health_band).to_owned();
             FindingHotspotOverlapRow {
                 path,
-                findings: pf.count,
+                findings: u32::try_from(pf.count).unwrap_or(u32::MAX),
                 engines: engines.join(","),
                 worst_level: pf.worst_level,
                 hotspot_score,
@@ -193,9 +173,94 @@ fn priority_rank(p: &str) -> u8 {
     }
 }
 
+/// Compute SQL-equivalent `PERCENT_RANK` for each entry in `revs`.
+///
+/// Returns a vec of the same length where `result[i]` is the `PERCENT_RANK` of
+/// `revs[i]` within the full set. Tied values receive the **minimum rank of
+/// their group**, exactly matching `PERCENT_RANK() OVER (ORDER BY revs)`:
+///
+/// ```text
+/// revs = [5, 5, 10]  →  [0.0, 0.0, 1.0]   (tied 5s both get rank 0)
+/// revs = [1, 2, 3]   →  [0.0, 0.5, 1.0]   (no ties)
+/// revs = [7]         →  [0.0]              (single entry)
+/// ```
+fn compute_percent_ranks(revs: &[u32]) -> Vec<f64> {
+    let n = revs.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    // Build (original_index, revs) pairs, sort by revs ascending.
+    let mut sorted: Vec<(usize, u32)> = revs.iter().copied().enumerate().collect();
+    sorted.sort_by_key(|&(_, r)| r);
+
+    let mut ranks = vec![0.0f64; n];
+    if n == 1 {
+        return ranks; // single entry → 0.0
+    }
+    let mut group_start = 0usize;
+    let mut i = 0usize;
+    while i < n {
+        let group_revs = sorted[i].1;
+        let mut j = i + 1;
+        while j < n && sorted[j].1 == group_revs {
+            j += 1;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        // PERCENT_RANK: precision loss negligible for repo-scale counts
+        let rank = group_start as f64 / (n - 1) as f64;
+        for &(orig_idx, _) in &sorted[i..j] {
+            ranks[orig_idx] = rank;
+        }
+        group_start += j - i;
+        i = j;
+    }
+    ranks
+}
+
 #[cfg(test)]
 mod tests {
-    use super::priority_label;
+    use super::{compute_percent_ranks, priority_label};
+
+    // --- compute_percent_ranks ---
+
+    #[test]
+    fn tied_revision_counts_get_same_percentile_rank() {
+        // SQL PERCENT_RANK semantics: tied values share the MINIMUM rank of
+        // their group. [5, 5, 10] → both 5s get rank 0/(3-1) = 0.0; 10 gets
+        // rank 2/(3-1) = 1.0.
+        let ranks = compute_percent_ranks(&[5, 5, 10]);
+        assert_eq!(ranks.len(), 3);
+        assert!((ranks[0] - 0.0).abs() < f64::EPSILON, "first 5 → 0.0");
+        assert!((ranks[1] - 0.0).abs() < f64::EPSILON, "second 5 → 0.0");
+        assert!((ranks[2] - 1.0).abs() < f64::EPSILON, "10 → 1.0");
+    }
+
+    #[test]
+    fn no_ties_produces_evenly_spaced_ranks() {
+        let ranks = compute_percent_ranks(&[1, 2, 3]);
+        assert!((ranks[0] - 0.0).abs() < f64::EPSILON);
+        assert!((ranks[1] - 0.5).abs() < f64::EPSILON);
+        assert!((ranks[2] - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn single_entry_rank_is_zero() {
+        let ranks = compute_percent_ranks(&[42]);
+        assert_eq!(ranks.len(), 1);
+        assert!((ranks[0] - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn empty_input_produces_empty_output() {
+        assert!(compute_percent_ranks(&[]).is_empty());
+    }
+
+    #[test]
+    fn all_tied_produces_all_zeros() {
+        // All three entries have the same revision count: every rank is 0.0.
+        let ranks = compute_percent_ranks(&[7, 7, 7]);
+        assert!(ranks.iter().all(|&r| r == 0.0));
+    }
 
     #[test]
     fn act_now_requires_all_three_conditions() {

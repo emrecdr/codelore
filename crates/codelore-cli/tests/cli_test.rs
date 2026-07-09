@@ -1739,6 +1739,9 @@ fn check_format_sarif_emits_valid_sarif_and_exits_1() {
     //   - exit code must still be 1 (violations are present)
     //   - stdout must be a valid SARIF document with ≥1 result
     //   - the FAIL verdict goes to stderr (not stdout)
+    // Note: a PASS produces a zero-result SARIF document on stdout (valid;
+    // stderr gets the PASS verdict). This is intentional — the caller decides
+    // whether an empty result set is interesting.
     let repo = codelore_lib::test_support::biomarker_repo::build();
     let thresholds = repo.dir.path().join(".codelore-thresholds.toml");
     std::fs::write(&thresholds, "[gates]\ncode_health_min = 100.0\n").unwrap();
@@ -1782,5 +1785,28 @@ fn check_format_sarif_emits_valid_sarif_and_exits_1() {
     assert!(
         stderr.contains("FAIL"),
         "FAIL verdict must appear on stderr even with --format sarif"
+    );
+}
+
+#[test]
+fn check_default_format_is_text_not_json() {
+    // Omitting --format must yield text output (the PASS/FAIL verdict on
+    // stdout/stderr), not a JSON/SARIF document. Verifies that the
+    // default_value_t = CheckFormat::Text contract holds end-to-end.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let output = Command::cargo_bin("codelore")
+        .unwrap()
+        .args(["check", "--repo", tiny.dir.path().to_str().unwrap()])
+        .output()
+        .expect("run codelore check without --format");
+
+    // Exit 0 — tiny_repo has no thresholds file → vacuous pass.
+    assert!(output.status.success(), "expected exit 0 for vacuous pass");
+
+    // stdout must not be JSON (text mode doesn't print SARIF to stdout).
+    let stdout = String::from_utf8(output.stdout).expect("stdout is utf-8");
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&stdout).is_err(),
+        "stdout must not be a JSON document in text mode, got: {stdout}"
     );
 }

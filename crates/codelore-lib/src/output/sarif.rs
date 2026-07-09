@@ -785,14 +785,13 @@ fn build_check_result<S: std::hash::BuildHasher>(
     });
 
     if !evidence_locs.is_empty() {
-        result["relatedLocations"] = serde_json::Value::Array(evidence_locs.clone());
+        let code_flow_locs: Vec<serde_json::Value> = evidence_locs
+            .iter()
+            .map(|loc| json!({ "location": loc }))
+            .collect();
+        result["relatedLocations"] = serde_json::Value::Array(evidence_locs);
         result["codeFlows"] = json!([{
-            "threadFlows": [{
-                "locations": evidence_locs
-                    .iter()
-                    .map(|loc| json!({ "location": loc }))
-                    .collect::<Vec<_>>()
-            }]
+            "threadFlows": [{ "locations": code_flow_locs }]
         }]);
     }
 

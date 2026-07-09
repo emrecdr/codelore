@@ -10,6 +10,16 @@ use codelore_lib::cli_api::constants::{
     DEFAULT_MIN_COUPLING_PCT, DEFAULT_MIN_REVS, DEFAULT_MIN_SHARED_REVS,
 };
 
+/// Output format for `codelore check`. Strongly typed so a typo
+/// (`--format sariff`) is caught at parse time rather than silently
+/// falling back to text.
+#[derive(ValueEnum, Clone, Debug)]
+#[clap(rename_all = "lowercase")]
+pub enum CheckFormat {
+    Text,
+    Sarif,
+}
+
 /// Output format for `codelore diff`. Strongly typed so a typo
 /// (`--format mardkown`) is caught at parse time rather than silently
 /// dispatching to a default.
@@ -177,8 +187,8 @@ pub struct CheckArgs {
     /// Output format for violations: `text` (default, human-readable stderr
     /// lines) or `sarif` (SARIF 2.1.0 with evidence chains on stdout).
     /// Exit codes and verdict lines are unchanged regardless of format.
-    #[arg(long, default_value = "text")]
-    pub format: String,
+    #[arg(long, value_enum, default_value_t = CheckFormat::Text)]
+    pub format: CheckFormat,
 }
 
 /// Shell-completion script generation.
