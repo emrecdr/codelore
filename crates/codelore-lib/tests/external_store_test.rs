@@ -7,7 +7,9 @@
 
 use std::path::Path;
 
-use codelore_lib::external::{ExternalFinding, ExternalStore, parse_sarif};
+use codelore_lib::external::{
+    ExternalFinding, ExternalStore, group_findings_by_engine, parse_sarif,
+};
 
 fn fixture(name: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -235,6 +237,41 @@ fn multi_file_same_engine_combined_count_is_sum() {
         3,
         "store must hold all findings from both files"
     );
+}
+
+// ─── group_findings_by_engine pins the real ingest code path ────────────────
+
+/// Simulates `run_ingest_sarif_cmd` passing two fixture files: parse each,
+/// extend a flat vec, call `group_findings_by_engine`, then `replace_engine`
+/// per engine. This exercises the extracted lib fn on real fixture data so
+/// the actual ingest code path is under test, not just the store contract.
+///
+/// Semgrep fixture: 2 findings (engine "semgrep").
+/// Clippy fixture:  2 findings (engine "clippy-sarif").
+/// Expected after grouping + ingesting: 4 total across 2 engine keys.
+#[test]
+fn group_findings_by_engine_combines_two_fixture_files() {
+    let (_dir, store) = temp_store();
+
+    // Parse two fixture files into a flat vec (mirrors the cmd's loop).
+    let mut all = Vec::new();
+    all.extend(parse_sarif(&fixture("semgrep.sarif.json")).expect("parse semgrep"));
+    all.extend(parse_sarif(&fixture("clippy.sarif.json")).expect("parse clippy"));
+
+    // Group and ingest — this is the extracted code path.
+    let by_engine = group_findings_by_engine(all);
+    for (engine, findings) in &by_engine {
+        store
+            .replace_engine(engine, findings)
+            .unwrap_or_else(|e| panic!("replace_engine {engine}: {e}"));
+    }
+
+    assert_eq!(
+        store.count().expect("count"),
+        4,
+        "2 semgrep + 2 clippy findings must all be stored"
+    );
+    assert_eq!(by_engine.len(), 2, "two distinct engine keys");
 }
 
 // ─── two engines coexist ─────────────────────────────────────────────────────

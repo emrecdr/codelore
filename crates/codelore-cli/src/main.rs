@@ -62,29 +62,26 @@ fn run_mcp_cmd(args: &McpArgs) -> Result<()> {
 /// calls `ExternalStore::replace_engine` per engine so re-ingest is
 /// idempotent. Prints a summary line to stdout on success.
 fn run_ingest_sarif_cmd(args: &IngestSarifArgs) -> Result<()> {
-    use std::collections::HashMap;
-
     use codelore_lib::cli_api::cache::default_cache_root;
-    use codelore_lib::external::{ExternalStore, parse_sarif};
+    use codelore_lib::external::{ExternalStore, group_findings_by_engine, parse_sarif};
 
     let cache_root = args.cache_dir.clone().unwrap_or_else(default_cache_root);
 
     let store = ExternalStore::open_or_create(&cache_root, &args.repo)
         .context("open external findings store")?;
 
-    // Accumulate findings per engine across all input files.
-    let mut by_engine: HashMap<String, Vec<codelore_lib::external::ExternalFinding>> =
-        HashMap::new();
-
+    // Parse all input files into a flat vec, then group by engine so that
+    // two SARIF files from the same engine are combined rather than
+    // overwriting each other.
+    let mut all_findings = Vec::new();
     for path in &args.file {
         let raw = std::fs::read_to_string(path)
             .with_context(|| format!("read SARIF file {}", path.display()))?;
         let findings =
             parse_sarif(&raw).with_context(|| format!("parse SARIF file {}", path.display()))?;
-        for f in findings {
-            by_engine.entry(f.engine.clone()).or_default().push(f);
-        }
+        all_findings.extend(findings);
     }
+    let by_engine = group_findings_by_engine(all_findings);
 
     let engine_count = by_engine.len();
     let mut total_ingested: usize = 0;
