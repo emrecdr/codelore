@@ -16,6 +16,15 @@
 //! [`ExternalStore::replace_engine`] removes all existing rows for the given
 //! engine before inserting the new batch. Re-ingesting the same SARIF file
 //! produces an identical row count — findings are idempotent per engine.
+//!
+//! ## Absolute paths
+//!
+//! `CodeQL` and similar tools emit `file://` URIs with absolute host paths
+//! (e.g. `file:///home/runner/work/repo/src/Foo.java`). After scheme
+//! stripping the `path` column stores the absolute form
+//! (`/home/runner/work/repo/src/Foo.java`). The B3 overlap join on
+//! repo-relative hotspot paths will simply not match these rows, which is
+//! the honest outcome — no silent rewriting that could produce false matches.
 
 use std::fs;
 use std::path::{Path, PathBuf};

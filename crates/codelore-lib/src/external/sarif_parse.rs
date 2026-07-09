@@ -178,14 +178,17 @@ fn resolve_location(
 }
 
 /// Strip `file://` scheme (including any authority) and leading `./`.
-/// The rest is treated as a repo-relative path.
+/// The rest is left as-is — callers receive the path exactly as the
+/// scanner encoded it after scheme removal.
 ///
 /// Examples:
-/// - `"file:///home/runner/work/repo/src/main.rs"` → `"src/main.rs"` (caller
-///   is expected to strip the repo root prefix; here we strip only the scheme)
-/// - `"./src/db.py"` → `"src/db.py"`
+/// - `"file:///home/runner/work/repo/src/main.rs"` →
+///   `"/home/runner/work/repo/src/main.rs"` (absolute path; scheme stripped,
+///   leading `/` kept — `CodeQL` emits absolute URIs and the absolute form
+///   is stored as-is in the sidecar)
+/// - `"./src/db.py"` → `"src/db.py"` (leading `./` stripped)
 /// - `"src/db.py"` → `"src/db.py"` (unchanged)
-/// - `"file://src/db.py"` → `"src/db.py"`
+/// - `"file://src/db.py"` → `"src/db.py"` (relative after scheme)
 fn normalize_path(uri: &str) -> String {
     // Strip file:// scheme — may be followed by an absolute host+path
     // (file:///abs) or a relative path (file://rel).
