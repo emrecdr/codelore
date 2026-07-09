@@ -90,6 +90,16 @@ pub struct Gates {
     /// the `code-familiarity` analysis emits a `"risky"` verdict. When
     /// absent the analysis applies a built-in default of 70.0.
     pub code_familiarity_min: Option<f64>,
+    /// Maximum number of `"act-now"` rows in the `finding-hotspot-overlap`
+    /// analysis. Fails the gate when the count exceeds the threshold.
+    ///
+    /// The gate is **skipped** (not failed, not passed) when the external
+    /// findings sidecar is absent or empty — a missing sidecar means
+    /// `codelore ingest-sarif` has not been run, not that there are zero
+    /// findings. The skip is recorded in the ledger with
+    /// `verdict = "skipped"` and printed as a distinct warning line; it
+    /// does not affect the exit code.
+    pub max_findings_in_hot_files: Option<u32>,
     /// When `true` (the **default**), a gate whose underlying analysis
     /// produced no evaluable data where data was expected is recorded as
     /// `verdict = "degraded"` and treated as a failure — a gate must not
@@ -188,6 +198,7 @@ impl Thresholds {
             && self.gates.max_propagation_cost.is_none()
             && self.gates.max_red_effort_pct.is_none()
             && self.gates.code_familiarity_min.is_none()
+            && self.gates.max_findings_in_hot_files.is_none()
             && self.diff.delta_code_health_min.is_none()
             && self.diff.new_hotspot_max.is_none()
             && !self.diff.no_new_cycles
@@ -559,6 +570,34 @@ pub fn evaluate_familiarity_gate(
     };
     let rows = crate::analyses::code_familiarity::run_code_familiarity(db, opts)?;
     Ok(evaluate_familiarity_rows(threshold, &rows))
+}
+
+/// Pure inner comparison for the `max_findings_in_hot_files` gate.
+///
+/// Counts `"act-now"` rows in `rows`; returns a single repo-wide violation
+/// when that count exceeds `threshold`. `actual` is the act-now count;
+/// `path` is `"(repo-wide)"`.
+///
+/// Called from the CLI layer after opening the external store and running
+/// `run_finding_hotspot_overlap`. The gate is **skipped** (not evaluated at
+/// all) when the store is absent or empty — that skip path lives in the CLI
+/// layer and does not go through this function.
+#[must_use]
+pub fn evaluate_finding_overlap_rows(
+    threshold: u32,
+    rows: &[crate::analyses::finding_hotspot_overlap::FindingHotspotOverlapRow],
+) -> Vec<GateViolation> {
+    let act_now_count = rows.iter().filter(|r| r.priority == "act-now").count();
+    if act_now_count as u64 > u64::from(threshold) {
+        vec![GateViolation {
+            gate: "max_findings_in_hot_files".into(),
+            path: "(repo-wide)".into(),
+            actual: act_now_count.to_string(),
+            threshold: threshold.to_string(),
+        }]
+    } else {
+        Vec::new()
+    }
 }
 
 #[cfg(test)]
@@ -965,6 +1004,89 @@ new_hotspot_max = 0
         assert!(
             v.is_empty(),
             "threshold 0.0 must pass on delivery_repo: {v:?}"
+        );
+    }
+
+    // ───────── max_findings_in_hot_files gate ─────────
+
+    fn make_overlap_row(
+        path: &str,
+        priority: &str,
+    ) -> crate::analyses::finding_hotspot_overlap::FindingHotspotOverlapRow {
+        crate::analyses::finding_hotspot_overlap::FindingHotspotOverlapRow {
+            path: path.to_string(),
+            findings: 1,
+            engines: "semgrep".to_string(),
+            worst_level: "warning".to_string(),
+            hotspot_score: 5.0,
+            revs_percentile: 0.9,
+            health_band: "red".to_string(),
+            priority: priority.to_string(),
+        }
+    }
+
+    #[test]
+    fn finding_overlap_gate_fires_when_act_now_count_exceeds_threshold() {
+        // threshold = 0, one act-now row → violation.
+        let rows = vec![make_overlap_row("src/main.rs", "act-now")];
+        let v = evaluate_finding_overlap_rows(0, &rows);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].gate, "max_findings_in_hot_files");
+        assert_eq!(v[0].path, "(repo-wide)");
+        assert_eq!(v[0].actual, "1");
+        assert_eq!(v[0].threshold, "0");
+    }
+
+    #[test]
+    fn finding_overlap_gate_passes_when_act_now_count_at_threshold() {
+        // Exactly at threshold is allowed (strictly greater fails).
+        let rows = vec![
+            make_overlap_row("src/main.rs", "act-now"),
+            make_overlap_row("src/lib.rs", "act-now"),
+        ];
+        // threshold = 2, count = 2 → passes (2 is not > 2).
+        assert!(evaluate_finding_overlap_rows(2, &rows).is_empty());
+    }
+
+    #[test]
+    fn finding_overlap_gate_ignores_non_act_now_rows() {
+        // "plan" and "note" rows do not count towards the threshold.
+        let rows = vec![
+            make_overlap_row("src/main.rs", "plan"),
+            make_overlap_row("src/lib.rs", "note"),
+        ];
+        let v = evaluate_finding_overlap_rows(0, &rows);
+        assert!(v.is_empty(), "plan/note rows must not trigger the gate");
+    }
+
+    #[test]
+    fn finding_overlap_gate_measured_value_is_act_now_count() {
+        // The `actual` field records the raw act-now count for the ledger.
+        let rows = vec![
+            make_overlap_row("a.rs", "act-now"),
+            make_overlap_row("b.rs", "act-now"),
+            make_overlap_row("c.rs", "plan"),
+        ];
+        let v = evaluate_finding_overlap_rows(0, &rows);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].actual, "2", "actual must reflect only act-now count");
+    }
+
+    #[test]
+    fn finding_overlap_gate_toml_key_parses() {
+        let t = Thresholds::from_text("[gates]\nmax_findings_in_hot_files = 3\n").unwrap();
+        assert_eq!(t.gates.max_findings_in_hot_files, Some(3));
+        assert!(!t.is_empty());
+    }
+
+    #[test]
+    fn finding_overlap_gate_unknown_key_rejected() {
+        // Typo guard: deny_unknown_fields must catch bad spellings.
+        let raw = "[gates]\nmax_findings_in_hot_file = 3\n";
+        let err = Thresholds::from_text(raw).expect_err("typo'd key should reject");
+        assert!(
+            err.contains("unknown field") || err.contains("max_findings_in_hot_file"),
+            "expected 'unknown field' in error: {err}"
         );
     }
 

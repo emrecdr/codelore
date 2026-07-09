@@ -45,7 +45,7 @@ pub struct GateRunRecord {
     /// Measured value. For repo-wide gates without a scalar, the violation
     /// count is used.
     pub value: f64,
-    /// Outcome: `"passed"` | `"failed"` | `"degraded"`.
+    /// Outcome: `"passed"` | `"failed"` | `"degraded"` | `"skipped"`.
     pub verdict: String,
     /// Invocation mode: always `"check"` for now; reserved for `"diff"`.
     pub mode: String,

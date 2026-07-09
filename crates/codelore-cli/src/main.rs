@@ -165,10 +165,8 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
 
     // ── max_findings_in_hot_files gate ───────────────────────────────────────
     if let Some(threshold) = thresholds.gates.max_findings_in_hot_files {
-        let store_result = codelore_lib::cli_api::external::ExternalStore::open_or_create(
-            &cache_root,
-            &args.repo,
-        );
+        let store_result =
+            codelore_lib::cli_api::external::ExternalStore::open_or_create(&cache_root, &args.repo);
         let skip = match &store_result {
             Ok(store) => store.count().unwrap_or(0) == 0,
             Err(_) => true,
@@ -194,17 +192,23 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
                     &db, &opts, &store,
                 )
                 .context("run finding-hotspot-overlap for gate")?;
-            let act_now_count = overlap_rows.iter().filter(|r| r.priority == "act-now").count();
+            let act_now_count = overlap_rows
+                .iter()
+                .filter(|r| r.priority == "act-now")
+                .count();
             let overlap_v = codelore_lib::cli_api::quality_gates::evaluate_finding_overlap_rows(
                 threshold,
                 &overlap_rows,
             );
+            #[allow(clippy::cast_precision_loss)]
+            // act_now_count is a repo-scale count; precision loss negligible
+            let act_now_f64 = act_now_count as f64;
             ledger_records.push(GateRunRecord {
                 ts: ts.clone(),
                 head_sha: head_sha.clone(),
                 gate: "max_findings_in_hot_files".into(),
                 threshold: f64::from(threshold),
-                value: act_now_count as f64,
+                value: act_now_f64,
                 verdict: if overlap_v.is_empty() {
                     "passed"
                 } else {

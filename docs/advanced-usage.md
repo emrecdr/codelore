@@ -961,6 +961,10 @@ When `fail_on_degraded = false` is set in `[gates]` and a gate produces no evalu
 
 `codelore check --history` prints the last 20 gate-run records grouped by HEAD SHA from the per-repo ledger, giving you a local audit trail of how each gate has trended across pushes — no server required.
 
+### Behavioral×static overlap gate
+
+The `max_findings_in_hot_files` gate in `[gates]` fails when the number of `"act-now"` rows from `finding-hotspot-overlap` (external findings that sit in a high-percentile hotspot with a red code-health band) exceeds the threshold. The gate is **skipped** — not failed — when the external findings sidecar is absent or empty; run `codelore ingest-sarif --repo . <file.sarif>` to populate it first.
+
 ## 11.9. MCP server (`codelore mcp`)
 
 `codelore mcp --repo <path>` starts a Model Context Protocol server over stdio. AI agents connect to it and call the tools below; the server answers using the same persistent fact store the CLI uses. It is **fully local** — no account, no API key, no telemetry, no network access.
