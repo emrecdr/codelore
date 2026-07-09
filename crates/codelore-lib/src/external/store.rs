@@ -93,18 +93,26 @@ impl ExternalStore {
 
     /// Replace all findings for `engine` with `findings`.
     ///
-    /// Deletes all existing rows where `engine = ?`, then inserts each
-    /// finding in `findings`. The operation is idempotent: re-ingesting the
-    /// same file produces an identical row count.
+    /// Wraps the DELETE + INSERT loop in a single transaction so a mid-loop
+    /// process kill never leaves the engine's rows deleted without replacement.
+    /// The operation is idempotent: re-ingesting the same file produces an
+    /// identical row count.
     ///
     /// Returns the count of inserted rows.
     ///
     /// # Errors
     ///
-    /// Returns [`CodeLoreError::Analysis`] on any `DuckDB` error.
+    /// Returns [`CodeLoreError::Analysis`] on any `DuckDB` error. On error the
+    /// transaction is rolled back automatically when it is dropped.
     pub fn replace_engine(&self, engine: &str, findings: &[ExternalFinding]) -> Result<usize> {
-        self.conn
-            .execute("DELETE FROM external_findings WHERE engine = ?", [engine])
+        let tx = self.conn.unchecked_transaction().map_err(|e| {
+            CodeLoreError::Analysis(format!(
+                "external store: begin transaction in {}: {e}",
+                self.path.display()
+            ))
+        })?;
+
+        tx.execute("DELETE FROM external_findings WHERE engine = ?", [engine])
             .map_err(|e| {
                 CodeLoreError::Analysis(format!(
                     "external store: delete engine {engine} in {}: {e}",
@@ -113,12 +121,17 @@ impl ExternalStore {
             })?;
 
         if findings.is_empty() {
+            tx.commit().map_err(|e| {
+                CodeLoreError::Analysis(format!(
+                    "external store: commit in {}: {e}",
+                    self.path.display()
+                ))
+            })?;
             return Ok(0);
         }
 
         let ingested_at = now_utc_ts();
-        let mut stmt = self
-            .conn
+        let mut stmt = tx
             .prepare(
                 "INSERT INTO external_findings
                  (engine, engine_version, rule_id, path, start_line, end_line,
@@ -162,6 +175,14 @@ impl ExternalStore {
                 ))
             })?;
         }
+
+        drop(stmt);
+        tx.commit().map_err(|e| {
+            CodeLoreError::Analysis(format!(
+                "external store: commit in {}: {e}",
+                self.path.display()
+            ))
+        })?;
 
         Ok(findings.len())
     }

@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use codelore_lib::external::{ExternalStore, parse_sarif};
+use codelore_lib::external::{ExternalFinding, ExternalStore, parse_sarif};
 
 fn fixture(name: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -168,6 +168,73 @@ fn multi_run_sarif_produces_findings_from_both_engines() {
 
     // All 3 findings must be in the store under their respective engines.
     assert_eq!(store.count().expect("count"), 3);
+}
+
+// ─── multi-file same-engine grouping ────────────────────────────────────────
+
+/// When two SARIF files share the same engine name (e.g. two semgrep runs on
+/// different parts of a monorepo), the caller groups findings by engine before
+/// calling `replace_engine` once per engine. The combined count must equal the
+/// sum of both files — not just the second file's count.
+///
+/// This is the core correctness property of the per-engine replace design.
+#[test]
+fn multi_file_same_engine_combined_count_is_sum() {
+    let (_dir, store) = temp_store();
+
+    // Two synthetic batches both labelled "semgrep" (as if from two files).
+    let batch_a: Vec<ExternalFinding> = vec![ExternalFinding {
+        engine: "semgrep".to_string(),
+        engine_version: "1.0.0".to_string(),
+        rule_id: "rule/a1".to_string(),
+        path: "src/alpha.rs".to_string(),
+        start_line: Some(1),
+        end_line: None,
+        level: "warning".to_string(),
+        fingerprint: "semgrep/v1/a1/alpha".to_string(),
+        message: "finding a1".to_string(),
+    }];
+
+    let batch_b: Vec<ExternalFinding> = vec![
+        ExternalFinding {
+            engine: "semgrep".to_string(),
+            engine_version: "1.0.0".to_string(),
+            rule_id: "rule/b1".to_string(),
+            path: "src/beta.rs".to_string(),
+            start_line: Some(2),
+            end_line: None,
+            level: "error".to_string(),
+            fingerprint: "semgrep/v1/b1/beta".to_string(),
+            message: "finding b1".to_string(),
+        },
+        ExternalFinding {
+            engine: "semgrep".to_string(),
+            engine_version: "1.0.0".to_string(),
+            rule_id: "rule/b2".to_string(),
+            path: "src/gamma.rs".to_string(),
+            start_line: Some(3),
+            end_line: None,
+            level: "note".to_string(),
+            fingerprint: "semgrep/v1/b2/gamma".to_string(),
+            message: "finding b2".to_string(),
+        },
+    ];
+
+    // Caller groups both batches into one combined batch (mirrors run_ingest_sarif_cmd).
+    let mut combined = batch_a;
+    combined.extend(batch_b);
+
+    let n = store
+        .replace_engine("semgrep", &combined)
+        .expect("replace_engine combined");
+
+    // 1 from batch_a + 2 from batch_b = 3 total — not just 2 (file2-overwrites-file1).
+    assert_eq!(n, 3, "replace_engine must return count of inserted rows");
+    assert_eq!(
+        store.count().expect("count"),
+        3,
+        "store must hold all findings from both files"
+    );
 }
 
 // ─── two engines coexist ─────────────────────────────────────────────────────
