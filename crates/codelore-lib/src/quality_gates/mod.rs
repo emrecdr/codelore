@@ -199,7 +199,7 @@ impl Thresholds {
 }
 
 /// One detected gate violation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct GateViolation {
     pub gate: String,
     pub path: String,

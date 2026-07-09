@@ -19,7 +19,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use toml::Table;
 
 use crate::{CodeLoreError, Result};
 
@@ -50,6 +49,10 @@ pub const RATCHET_METRICS: &[(&str, Direction)] = &[
 /// `None` means the corresponding analysis produced no data (e.g. the repo
 /// has no scorable files for `code_health_min_observed`). A `None` metric is
 /// skipped in both comparison and snapshot writes.
+///
+/// `code_familiarity_min` deliberately has no ratchet slot: familiarity moves
+/// with team activity rather than code changes, so ratcheting it would flag
+/// regressions on quiet weeks. Configure it as a plain gate instead.
 #[derive(Debug, Clone, Default)]
 pub struct RatchetMetrics {
     /// Worst per-file composite code-health score observed (0–100, higher=better).
@@ -125,16 +128,11 @@ pub fn read_snapshot(repo_root: &Path) -> Result<Option<RatchetSnapshot>> {
     let raw = fs::read_to_string(&path).map_err(|e| {
         CodeLoreError::Analysis(format!("read ratchet file {}: {e}", path.display()))
     })?;
-    // Validate it parses as TOML first (catches truncated/corrupt files).
-    raw.parse::<Table>().map_err(|e| {
-        CodeLoreError::Analysis(format!(
-            "ratchet file is not valid TOML ({}): {e}",
-            path.display()
-        ))
-    })?;
+    // The typed parse rejects truncated/corrupt TOML and schema mismatches
+    // alike — no separate untyped pre-parse is needed.
     let snap = toml::from_str::<RatchetSnapshot>(&raw).map_err(|e| {
         CodeLoreError::Analysis(format!(
-            "ratchet file schema error ({}): {e}",
+            "ratchet file is not valid TOML ({}): {e}",
             path.display()
         ))
     })?;

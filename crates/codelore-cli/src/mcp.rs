@@ -31,27 +31,6 @@ use codelore_lib::cli_api::{
     repo::GixRepo,
 };
 
-/// Serializable mirror of [`GateViolation`] for JSON output.
-/// `GateViolation` itself does not derive `Serialize`; we map at the boundary.
-#[derive(Debug, Serialize)]
-struct ViolationRecord {
-    gate: String,
-    path: String,
-    actual: String,
-    threshold: String,
-}
-
-impl From<GateViolation> for ViolationRecord {
-    fn from(v: GateViolation) -> Self {
-        Self {
-            gate: v.gate,
-            path: v.path,
-            actual: v.actual,
-            threshold: v.threshold,
-        }
-    }
-}
-
 /// Convert any displayable error to an MCP `ErrorData` internal error.
 fn internal(e: impl std::fmt::Display) -> ErrorData {
     ErrorData::internal_error(e.to_string(), None)
@@ -199,7 +178,7 @@ struct GateSummary {
     /// Number of violations found.
     violation_count: usize,
     /// Individual gate violations, if any.
-    violations: Vec<ViolationRecord>,
+    violations: Vec<GateViolation>,
 }
 
 #[tool_router]
@@ -438,7 +417,7 @@ impl CodeLoreServer {
                 let summary = GateSummary {
                     verdict: "no_thresholds".into(),
                     violation_count: 0,
-                    violations: Vec::<ViolationRecord>::new(),
+                    violations: Vec::<GateViolation>::new(),
                 };
                 return serde_json::to_string(&summary).map_err(internal);
             }
@@ -479,16 +458,32 @@ impl CodeLoreServer {
                 );
             }
 
+            // architecture + familiarity gates — kept in lockstep with
+            // `codelore check` so the tool's verdict never contradicts a CI
+            // run over the same thresholds file. Degraded-gate semantics
+            // remain check-only.
+            violations.extend(
+                codelore_lib::cli_api::quality_gates::evaluate_architecture_gate(&thresholds, &db)
+                    .map_err(internal)?,
+            );
+            violations.extend(
+                codelore_lib::cli_api::quality_gates::evaluate_familiarity_gate(
+                    &thresholds,
+                    &db,
+                    &opts,
+                )
+                .map_err(internal)?,
+            );
+
             let verdict = if violations.is_empty() {
                 "pass"
             } else {
                 "fail"
             };
-            let records: Vec<ViolationRecord> = violations.into_iter().map(Into::into).collect();
             let summary = GateSummary {
                 verdict: verdict.into(),
-                violation_count: records.len(),
-                violations: records,
+                violation_count: violations.len(),
+                violations,
             };
             serde_json::to_string(&summary).map_err(internal)
         })

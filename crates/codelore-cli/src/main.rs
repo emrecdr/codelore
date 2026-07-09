@@ -535,6 +535,9 @@ fn evaluate_all_gates(
                 .context("run code-familiarity for gate")?;
         // Measured familiarity is recorded pass or fail; an empty row set
         // (no recognized source files) records 0.0 with a vacuous pass.
+        // Unlike `code_health_min` this gate has no degraded sentinel: an
+        // empty result IS the documented no-source-files contract, not a
+        // scan failure.
         let value = rows.first().map_or(0.0, |r| r.familiarity_pct);
         let fam_v = codelore_lib::cli_api::quality_gates::evaluate_familiarity_rows(min, &rows);
         recs.push(make_rec(
@@ -4247,23 +4250,29 @@ fn build_spa_dashboard(
     // code_familiarity when available, falling back to knowledge_islands.
     // Delivery uses delivery_metrics + release_cadence (degrades to no tile).
     let mut factors = codelore_lib::cli_api::analyses::factors::health_trend_factors(&health_trend);
-    let knowledge_tile =
+    // Knowledge card data — computed once, feeding both the factor tile and
+    // the SPA payload. Degrades to empty on failure so the card is simply
+    // absent when data is unavailable.
+    let code_familiarity =
         codelore_lib::cli_api::analyses::code_familiarity::run_code_familiarity(db, opts)
-            .ok()
-            .and_then(|rows| {
-                rows.into_iter().next().map(|r| {
-                    codelore_lib::cli_api::analyses::factors::knowledge_factor_from_familiarity(
-                        r.familiarity_pct,
-                        r.islands_pct,
-                    )
-                })
-            })
-            .or_else(|| {
-                codelore_lib::cli_api::analyses::factors::knowledge_factor_from_islands(
-                    &knowledge_islands,
-                    i32::try_from(opts.departed_threshold_days).unwrap_or(i32::MAX),
-                )
+            .unwrap_or_else(|e| {
+                tracing::warn!("dashboard: code-familiarity for spa failed; skipping: {e}");
+                Vec::new()
             });
+    let knowledge_tile = code_familiarity
+        .first()
+        .map(|r| {
+            codelore_lib::cli_api::analyses::factors::knowledge_factor_from_familiarity(
+                r.familiarity_pct,
+                r.islands_pct,
+            )
+        })
+        .or_else(|| {
+            codelore_lib::cli_api::analyses::factors::knowledge_factor_from_islands(
+                &knowledge_islands,
+                i32::try_from(opts.departed_threshold_days).unwrap_or(i32::MAX),
+            )
+        });
     if let Some(kt) = knowledge_tile {
         factors.push(kt);
     }
@@ -4273,15 +4282,23 @@ fn build_spa_dashboard(
     ) {
         factors.push(dt);
     }
-    // Knowledge card data: code-familiarity summary, team-composition
-    // buckets, top-10 coordination-needs rows. Each degrades to empty
-    // on failure so the card is simply absent when data is unavailable.
-    let code_familiarity =
-        codelore_lib::cli_api::analyses::code_familiarity::run_code_familiarity(db, opts)
-            .unwrap_or_else(|e| {
-                tracing::warn!("dashboard: code-familiarity for spa failed; skipping: {e}");
-                Vec::new()
-            });
+    // Trim the SPA payload to what its consumers read: the delivery card
+    // renders three of the five metrics, and only the cadence summary row
+    // is consumed (per-tag rows are standalone-CLI output). The factor
+    // tile above already read the full row sets.
+    let delivery_metrics: Vec<_> = delivery_metrics
+        .into_iter()
+        .filter(|r| {
+            matches!(
+                r.metric.as_str(),
+                "rework_pct" | "branch_duration_hours" | "lead_proxy_hours"
+            )
+        })
+        .collect();
+    let release_cadence: Vec<_> = release_cadence
+        .into_iter()
+        .filter(|r| r.tag == "__summary__")
+        .collect();
     let team_composition =
         codelore_lib::cli_api::analyses::team_composition::run_team_composition(db, opts)
             .unwrap_or_else(|e| {

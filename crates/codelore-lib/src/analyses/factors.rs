@@ -47,6 +47,7 @@ pub struct FactorTile {
     pub band: String,
     /// Historical series of headline values, oldest-first (may be empty →
     /// JS hides the sparkline).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub series: Vec<f64>,
     /// `true` when the `XmR` chart signals a statistical excursion or
     /// sustained run. See [`xmr_attention`].

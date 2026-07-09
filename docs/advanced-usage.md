@@ -1062,7 +1062,7 @@ Evaluates the quality gates declared in `.codelore-thresholds.toml` at HEAD and 
 }
 ```
 
-`no_thresholds` is returned when no `.codelore-thresholds.toml` exists at the repo root. Gates covered: `cognitive_max`, `hotspot_score_max`, `code_health_min`, `disallow_clone_type_1`, and `max_red_effort_pct`. Architecture-level gates (`max_dependency_cycles`, `max_propagation_cost`), the familiarity gate (`code_familiarity_min`), and degraded-gate semantics (`fail_on_degraded`, `--ratchet`) are only available in `codelore check` proper, not through this tool.
+`no_thresholds` is returned when no `.codelore-thresholds.toml` exists at the repo root. Gates covered: `cognitive_max`, `hotspot_score_max`, `code_health_min`, `disallow_clone_type_1`, `max_red_effort_pct`, `max_dependency_cycles`, `max_propagation_cost`, and `code_familiarity_min` — the same threshold set `codelore check` evaluates, so the tool's verdict never contradicts a CI run over the same file. Degraded-gate semantics (`fail_on_degraded`) and `--ratchet` are only available in `codelore check` proper.
 
 Parameters: none.
 
