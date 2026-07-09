@@ -195,8 +195,7 @@ pub fn knowledge_factor_from_familiarity(familiarity_pct: f64, islands_pct: f64)
 ///
 /// This is a conservative proxy: it only penalises for *departed* knowledge
 /// concentration, not for active-but-siloed experts. The `code_familiarity`
-/// source is preferred when available — this fallback will be swapped out
-/// once Task B.2 lands on the branch.
+/// source is preferred when available.
 #[must_use]
 pub fn knowledge_factor_from_islands(
     rows: &[KnowledgeIslandRow],

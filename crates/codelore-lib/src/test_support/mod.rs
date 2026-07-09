@@ -388,8 +388,8 @@ pub mod function_xray_repo {
     const COLD_V3: &str = "pub fn cold() -> i32 {\n    45\n}\n";
     // `meta` versions: only the body differs; meta-tweak changes V0 → V1.
     // Neither `hot` nor `cold` is touched in meta-tweak, so the Fisher table
-    // for the (hot, cold) pair gets `neither = 1` (this revision touches
-    // neither of them), making the table non-degenerate.
+    // for the (hot, cold) pair gets `neither = 10` (10 revisions touch
+    // neither of them), making the table non-degenerate with p ≈ 0.051 < 0.1.
     const META_V0: &str = "pub fn meta() -> i32 {\n    0\n}\n";
     const META_V1: &str = "pub fn meta() -> i32 {\n    1\n}\n";
 

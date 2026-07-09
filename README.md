@@ -95,7 +95,7 @@ Use `codelore analyze --analysis NAME` for any of these. Code-maat parity is **c
 | `clone-coupling` ★ | clones intersected with Fisher-significant co-change | **The strategic differentiator** — separates live debt from dead noise |
 | `knowledge-islands` ★ | per-file bus-factor risk from departed primary authors | Auto-detects knowledge loss vs CodeScene's required manual Ex-Developer marking |
 | `code-familiarity` ★ | SLOC-weighted mean team familiarity + knowledge-islands ratio | One-number coverage question: "What fraction of this codebase is actively understood?" |
-| `team-composition` ★ | active-author count and commit share per tenure bucket (onboarded / experienced / veteran) | Onboarding throughput + veteran over-concentration at a glance |
+| `team-composition` ★ | per-author tenure bucket (onboarded / experienced / veteran) with `veteran_breadth_ok` gate, `active` flag, commit count, `files_touched`, and `onboarding_weeks`; a `__summary__` row carries bucket-percentage breakdown | Onboarding throughput + veteran over-concentration at a glance |
 | `coordination-needs` ★ | per-file authorship fragmentation × interleave × co-change entropy, tiered single→high | Strongest predictors of merge friction and review delays |
 | `marginal-owner-risk` ★ | ownership concentration × code-health: files where the most knowledgeable active author holds a low share | Predicts where the on-call person has the least context when a red-band file breaks |
 | `centrality` ★ | per-file degree / PageRank on the Fisher-significant coupling graph | Network-centrality lens on behavioural coupling (Newman 2010 §7) |
@@ -121,6 +121,7 @@ Use `codelore analyze --analysis NAME` for any of these. Code-maat parity is **c
 | `effort-exposure` ★ | per-band (red/yellow/green) breakdown of commit share and LOC share over the trailing window | Answers whether engineering effort is concentrated in healthy or unhealthy code; drives the effort-exposure share bars on the SPA dashboard |
 | `health-trend` ★ | code-health score series per file at sampled historical revisions; feeds the health-trend sparklines and improvements feed on the SPA dashboard | Distinguishes files that are genuinely improving from those that briefly recovered before deteriorating again |
 | `function-xray` ★ | per-function hunk-overlap attribution: counts revisions where at least one diff hunk overlaps the function's line span at `--target <path>`; requires `--target` | Gall et al. ICSM 2003 HistoryFinder — per-function change-frequency leaderboard with LOC, cyclomatic, and cognitive complexity; more precise than file-level churn |
+| `function-coupling` ★ | per-function-pair co-change frequency with two-tailed Fisher exact significance at `--target <path>`; emits pairs with co-change count ≥ 2, sorted by p-value ascending | Adams et al. ICSM 2006 — function-level logical coupling within a file; low-p pairs are candidates for extract-and-share refactoring |
 | `refactoring-targets` ★ | files ranked by refactoring ROI: `priority = (structural_risk × hotspot_score) / max(loc, 25)`; each row annotated with `dominant_type` (highest-intensity biomarker) and `manual_up_rank` (ascending-size ManualUp baseline) | Effort-aware Popt/PofB20-style ranking — a small, dense, churning, unhealthy file outranks a large one with the same raw risk |
 
 ### CLI subcommands
@@ -130,7 +131,7 @@ In addition to `codelore analyze` and `codelore diff`, the CLI exposes:
 ```bash
 codelore explain <metric>           # formula + citation + SQL source for any metric
 codelore check                      # quality-gate validation against .codelore-thresholds.toml
-codelore check --diff base..head    # PR-mode quality gate
+codelore diff base..head            # PR-mode diff and quality gate
 codelore mcp --repo <path>          # MCP server over stdio for AI agent integration
 codelore profile                    # operational telemetry (version, schema, deps, cache root)
 codelore docs                       # markdown analysis catalogue

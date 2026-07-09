@@ -95,6 +95,7 @@ The table below is split into the **17 code-maat-parity analyses** (drop-in succ
 | `effort-exposure` ★★ | "Are we spending engineering effort in healthy or unhealthy code?" | Per-band (red/yellow/green) breakdown of commit share and LOC share over the trailing window; drives the effort-exposure share bars on the SPA dashboard | Answers whether refactoring investment or technical-debt paydown is needed — the fraction of effort in red-band code is the key leading indicator |
 | `health-trend` ★★ | "How has file-level code health changed over sampled commits?" | Code-health score series per file at sampled historical revisions; feeds the health-trend sparklines and improvements feed on the SPA dashboard | Distinguishes files that are genuinely improving from those that briefly recovered before deteriorating again |
 | `function-xray` ★★ | "Which functions in a file change most often?" | Per-function hunk-overlap attribution: counts revisions where at least one diff hunk overlaps the function's line span; requires `--target <path>` | Gall et al. ICSM 2003 HistoryFinder — per-function change-frequency leaderboard with LOC, cyclomatic, and cognitive complexity; more precise than file-level churn |
+| `function-coupling` ★★ | "Which function pairs in a file always change together?" | Per-function-pair co-change frequency with two-tailed Fisher exact significance; requires `--target <path>`; emits pairs with co-change count ≥ 2, sorted by p-value ascending | Adams et al. ICSM 2006 — function-level logical coupling within a file; pairs with low p-value are candidates for extract-and-share refactoring |
 
 All analyses are pure SQL views over the DuckDB fact store + thin Rust orchestrators. You can run any analysis at any output format.
 
@@ -196,10 +197,10 @@ The SPA renders this as a pair of horizontal share bars (LOC share and churn sha
 
 ```toml
 [gates]
-max_red_effort_pct = 30.0   # fail when > 30 % of commits touch red-band files
+max_red_effort_pct = 30.0   # fail when > 30 % of churn (changed lines) is in red-band files
 ```
 
-`codelore check` evaluates this against `commit_share_pct` for the red band. The gate fails when red-band commit share exceeds the threshold. Set it to a value that reflects your team's current baseline and tighten over time.
+`codelore check` evaluates this against `churn_share_pct` for the red band — the share of changed lines (added + deleted) that landed in red-band files over the trailing window. The gate fails when red-band churn share exceeds the threshold. Set it to a value that reflects your team's current baseline and tighten over time.
 
 ### Code-familiarity analysis
 
@@ -235,12 +236,16 @@ Tenure is measured from the author's first commit in the repository to the most 
 
 | Column | Meaning |
 |---|---|
+| `author` | Canonical author name (post-mailmap); `__summary__` row carries bucket-percentage breakdown |
+| `tenure_days` | Days from the author's first commit in the repo to the most recent repo-wide commit date |
 | `bucket` | Tenure tier: `onboarded` (< 90 days), `experienced` (90–364 days), `veteran` (≥ 365 days) |
-| `active_authors` | Count of authors in this bucket active within the window |
-| `commit_share_pct` | Share of total commits within the window authored by this bucket (0–100) |
-| `onboarding_velocity` | For the `onboarded` bucket only: commits per active day, averaged across the bucket's authors; `null` for other buckets |
+| `veteran_breadth_ok` | Boolean; `true` when a veteran has touched a breadth of files comparable to the current 80%-core set — veterans who haven't are capped at `experienced` |
+| `active` | Boolean; `true` when the author has at least one commit within the trailing `--window-days` window |
+| `commits` | Total commits by this author in the repo (all time) |
+| `files_touched` | Distinct files this author has ever committed to |
+| `onboarding_weeks` | Weeks from first commit to entering the weekly 80%-core set; `null` for veterans, non-active authors, and founder-period authors (first commit within the project's first 12 weeks) |
 
-A healthy team shows positive throughput in the `onboarded` bucket (new contributors landing commits) without `veteran` over-concentration (> 80 % of commits from one tenure tier is a bus-factor signal). The SPA Knowledge card renders the distribution as a stacked proportional bar.
+The `__summary__` row carries bucket-percentage breakdowns (share of active authors and commit share per tier) rather than per-author metrics. A healthy team shows positive throughput in the `onboarded` bucket (new contributors landing commits) without `veteran` over-concentration (> 80 % of commits from one tenure tier is a bus-factor signal). The SPA Knowledge card renders the distribution as a stacked proportional bar.
 
 ### Coordination-needs analysis
 
@@ -288,6 +293,28 @@ Transitions that move entirely within yellow (yellow → yellow re-sampling with
 The Health tab in the file detail drawer renders the full historical series as a sparkline for any file in the top-50 hotspots — each sampled revision is one data point, coloured by its band.
 
 The **X-Ray tab** in the file detail drawer shows a per-function change-frequency table for any of the top-10 hotspot paths for which `function-xray` data was computed during the SPA build. Each row shows the function name, a proportional inline bar for change frequency (red ≥ 80 % of max, amber ≥ 40 %, grey otherwise), LOC, and cyclomatic complexity. The tab only appears when X-Ray data exists for the selected path; the Overview "Functions" sunburst (cognitive complexity) remains visible for all paths regardless. The existing `function-xray` standalone analysis (`codelore analyze --analysis function-xray --target <path>`) provides the full sorted list with last-changed date; the drawer surface is the at-a-glance leaderboard.
+
+### Function-coupling analysis
+
+`--analysis function-coupling --target <repo-relative-path>` reports which pairs of functions within a single file co-change statistically more often than chance. Both `--target` and `--analysis function-coupling` are required; omitting `--target` returns an error.
+
+For each pair of functions alive at HEAD that co-changed (both touched in the same revision via hunk-overlap attribution) in ≥ 2 revisions, the analysis emits:
+
+| Column | Meaning |
+|---|---|
+| `a` | First function name, deduped as `name@start-end` to handle overloads and recycled names |
+| `b` | Second function name, same format |
+| `co_changes` | Count of revisions where both `a` and `b` were touched |
+| `a_changes` | Revisions touching `a` (regardless of `b`) |
+| `b_changes` | Revisions touching `b` (regardless of `a`) |
+| `confidence` | `co_changes / min(a_changes, b_changes)` — fraction of the less-changed function's history that overlaps the other |
+| `p_value` | Two-tailed Fisher exact p-value; `null` when the table is degenerate (no revisions touch neither function) — `null` sorts first as the strongest coupling signal |
+
+Rows are sorted by `p_value` ascending (`null` first), then `confidence` descending, then `a` / `b` alphabetically. Population `n` is the count of distinct revisions that touched the target file at all, so pairs that both changed in commit 1 but where commit 2 touched only one function correctly count commit 2 as a `neither` cell in the Fisher table.
+
+Pairs with a low p-value and high confidence are the highest-priority candidates for extract-and-share refactoring — they suggest the two functions are implicitly coupled and would benefit from a shared abstraction. Research baseline: Adams et al. ICSM 2006.
+
+Supports `csv`, `json`, and `markdown` output.
 
 ### Guided tour
 
@@ -368,7 +395,7 @@ All four use versioned `partialFingerprints` so cross-run identity stays stable.
 ```
 codelore analyze [OPTIONS]
   -a, --analysis NAME           Which analysis [default: revisions]
-                                (any of the 43 above; passing an unknown
+                                (any of the 44 above; passing an unknown
                                 name prints the full valid list)
   -r, --repo PATH               Git repo path [default: .]
   -f, --format FORMAT           Output format [default: csv]
@@ -379,6 +406,17 @@ codelore analyze [OPTIONS]
       --complexity-sample STRATEGY
                                 head (default) | adaptive | full
                                 (only `head` is wired up today; the other two parse but warn)
+      --window-days N           Trailing-window length in days for activity-scoped
+                                analyses (effort-exposure, team-composition, etc.)
+                                [default: 90]; anchored to the repo's last commit date
+      --rework-window-days N    Rework-detection window in days for `delivery-metrics`
+                                [default: 21]
+      --release-tag-glob GLOB   Tag-name glob for `release-cadence` [default: v*]
+      --target PATH             Target file path (repo-relative) for single-file
+                                analyses; required by `function-xray` and
+                                `function-coupling`
+      --knowledge-model MODEL   Knowledge model for `bus-factor`:
+                                commits (default) | doe
 
   # ── Coupling-family thresholds (PAR-6) ────────────────────────────
       --min-shared-revs N       Per-pair shared-commit floor [default: 2]
@@ -556,7 +594,7 @@ The thresholds file (`.codelore-thresholds.toml`, auto-discovered at the repo ro
 [gates]
 max_dependency_cycles = 0     # forbid any import-graph cycle repo-wide
 max_propagation_cost = 0.15   # ceiling on change-reach density (0..1)
-max_red_effort_pct = 30.0     # fail when > 30 % of commits touch red-band files
+max_red_effort_pct = 30.0     # fail when > 30 % of churn (changed lines) is in red-band files
 code_familiarity_min = 40.0   # fail when team familiarity drops below 40 % (scale 0-100)
 
 [diff]
@@ -565,7 +603,7 @@ delta_health_min = 40.0       # ratio must be ≥ 40 (indeterminate or better)
 deny_degrading_verdict = true # a "degrading" verdict fails the PR gate
 ```
 
-`max_dependency_cycles` / `max_propagation_cost` are evaluated against HEAD by `codelore check`; `no_new_cycles` compares the base-rev and head-rev import graphs in `codelore diff` and fails the PR when head has more cycles than base. `delta_health_min` and `deny_degrading_verdict` both act on the `delta_health` section: `delta_health_min` fails when `ratio < threshold` (skipped on `no-code-change` diffs where no ratio exists); `deny_degrading_verdict` fails when the verdict is exactly `"degrading"`. `max_red_effort_pct` gates on the `effort-exposure` commit-share for the red band; `code_familiarity_min` gates on the repo-scope `familiarity-pct` (0–100) from `code-familiarity` (see the dedicated subsections in the SPA widget surface above).
+`max_dependency_cycles` / `max_propagation_cost` are evaluated against HEAD by `codelore check`; `no_new_cycles` compares the base-rev and head-rev import graphs in `codelore diff` and fails the PR when head has more cycles than base. `delta_health_min` and `deny_degrading_verdict` both act on the `delta_health` section: `delta_health_min` fails when `ratio < threshold` (skipped on `no-code-change` diffs where no ratio exists); `deny_degrading_verdict` fails when the verdict is exactly `"degrading"`. `max_red_effort_pct` gates on the `effort-exposure` churn share (share of changed lines, added + deleted) for the red band; `code_familiarity_min` gates on the repo-scope `familiarity-pct` (0–100) from `code-familiarity` (see the dedicated subsections in the SPA widget surface above).
 
 ## 5. Configuration: `.codeloreignore` + thresholds
 
@@ -1024,7 +1062,7 @@ Evaluates the quality gates declared in `.codelore-thresholds.toml` at HEAD and 
 }
 ```
 
-`no_thresholds` is returned when no `.codelore-thresholds.toml` exists at the repo root. Gates covered: `cognitive_max`, `hotspot_score_max`, `code_health_min`, `disallow_clone_type_1`, and `max_red_effort_pct`. Architecture-level gates (`max_dependency_cycles`, `max_architecture_violations`), the familiarity gate (`code_familiarity_min`), and degraded-gate semantics (`fail_on_degraded`, `--ratchet`) are only available in `codelore check` proper, not through this tool.
+`no_thresholds` is returned when no `.codelore-thresholds.toml` exists at the repo root. Gates covered: `cognitive_max`, `hotspot_score_max`, `code_health_min`, `disallow_clone_type_1`, and `max_red_effort_pct`. Architecture-level gates (`max_dependency_cycles`, `max_propagation_cost`), the familiarity gate (`code_familiarity_min`), and degraded-gate semantics (`fail_on_degraded`, `--ratchet`) are only available in `codelore check` proper, not through this tool.
 
 Parameters: none.
 

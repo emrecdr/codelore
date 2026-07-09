@@ -84,7 +84,7 @@ mod function_coupling_integration {
         // P(k=3) = C(7,3)·C(10,0)/C(17,3) = 35/680 ≈ 0.051 < 0.1.
         let p = pair
             .p_value
-            .expect("p_value must be Some; Fisher table [3,4,0,1] is non-degenerate");
+            .expect("p_value must be Some; Fisher table [3,4,0,10] is non-degenerate");
         assert!(
             p < 0.1,
             "expected p_value < 0.1 for a strongly coupled pair, got {p}"

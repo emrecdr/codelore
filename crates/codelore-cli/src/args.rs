@@ -449,7 +449,8 @@ pub struct AnalyzeArgs {
     pub release_tag_glob: String,
 
     /// Target file path (repo-relative) for analyses that operate on a single
-    /// file. Required by `function-xray`; ignored by all other analyses.
+    /// file. Required by `function-xray` and `function-coupling`; ignored by
+    /// all other analyses.
     #[arg(long)]
     pub target: Option<String>,
 }
