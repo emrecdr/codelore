@@ -190,9 +190,103 @@ impl ExternalStore {
         Ok(count)
     }
 
+    /// Read all findings grouped by file path.
+    ///
+    /// Returns a map from `path` → `(engines, finding_count, worst_level)` where:
+    /// - `engines` is the sorted, deduplicated list of engine names that flagged
+    ///   the path
+    /// - `finding_count` is the total number of findings across all engines
+    /// - `worst_level` is the most severe level present (`"error"` > `"warning"` >
+    ///   `"note"`)
+    ///
+    /// The caller uses this map for a Rust-side join against the behavioral
+    /// analyses (hotspots, code-health) — keeping the two `!Send + !Sync`
+    /// `DuckDB` connections separate, per R7.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CodeLoreError::Analysis`] on `DuckDB` error.
+    pub fn findings_by_path(&self) -> Result<std::collections::HashMap<String, PathFindings>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT path, engine, level
+                 FROM external_findings
+                 ORDER BY path, engine",
+            )
+            .map_err(|e| {
+                CodeLoreError::Analysis(format!(
+                    "external store: prepare findings_by_path in {}: {e}",
+                    self.path.display()
+                ))
+            })?;
+
+        let mut map: std::collections::HashMap<String, PathFindings> =
+            std::collections::HashMap::new();
+
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|e| {
+                CodeLoreError::Analysis(format!(
+                    "external store: query findings_by_path in {}: {e}",
+                    self.path.display()
+                ))
+            })?;
+
+        for row in rows {
+            let (path, engine, level) = row.map_err(|e| {
+                CodeLoreError::Analysis(format!(
+                    "external store: read row in findings_by_path: {e}"
+                ))
+            })?;
+            let entry = map.entry(path).or_default();
+            entry.count += 1;
+            if !entry.engines.contains(&engine) {
+                entry.engines.push(engine);
+            }
+            entry.worst_level = worse_level(&entry.worst_level, &level);
+        }
+
+        Ok(map)
+    }
+
     /// Path to the sidecar store file (for printing in diagnostics).
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
+    }
+}
+
+/// Per-path aggregation produced by [`ExternalStore::findings_by_path`].
+#[derive(Debug, Default, Clone)]
+pub struct PathFindings {
+    /// All engine names that flagged this path (deduplicated, insertion order).
+    pub engines: Vec<String>,
+    /// Total findings across all engines.
+    pub count: usize,
+    /// Most severe level: `"error"` > `"warning"` > `"note"`.
+    pub worst_level: String,
+}
+
+/// Returns the more severe of two level strings.
+/// Severity order: `"error"` > `"warning"` > anything else (treated as `"note"`).
+fn worse_level(a: &str, b: &str) -> String {
+    fn rank(s: &str) -> u8 {
+        match s {
+            "error" => 2,
+            "warning" => 1,
+            _ => 0,
+        }
+    }
+    if rank(b) > rank(a) || a.is_empty() {
+        b.to_owned()
+    } else {
+        a.to_owned()
     }
 }

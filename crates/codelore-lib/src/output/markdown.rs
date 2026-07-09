@@ -1496,6 +1496,34 @@ pub fn write_function_coupling_markdown<W: Write>(
     Ok(())
 }
 
+pub fn write_finding_hotspot_overlap_markdown<W: Write>(
+    rows: &[crate::analyses::finding_hotspot_overlap::FindingHotspotOverlapRow],
+    w: &mut W,
+) -> crate::Result<()> {
+    writeln!(
+        w,
+        "| Path | Findings | Engines | Worst Level | Hotspot Score | Revs Percentile | Health Band | Priority |"
+    )
+    .map_err(crate::CodeLoreError::Io)?;
+    writeln!(w, "|---|---:|---|---|---:|---:|---|---|").map_err(crate::CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| {} | {} | {} | {} | {:.4} | {:.4} | {} | {} |",
+            escape_md_cell(&row.path),
+            row.findings,
+            escape_md_cell(&row.engines),
+            escape_md_cell(&row.worst_level),
+            row.hotspot_score,
+            row.revs_percentile,
+            escape_md_cell(&row.health_band),
+            escape_md_cell(&row.priority),
+        )
+        .map_err(crate::CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod escape_tests {
     use super::escape_md_cell;

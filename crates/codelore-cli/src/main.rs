@@ -1635,6 +1635,15 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
                 })?;
                 dispatch_function_coupling(&db, &repo, &opts, target, format, &ctx, &mut out)?;
             }
+            AnalysisName::FindingHotspotOverlap => {
+                // Requires the external sidecar: open it read-only from the cache dir.
+                let cache_root = codelore_lib::cli_api::cache::default_cache_root();
+                let store = codelore_lib::cli_api::external::ExternalStore::open_or_create(
+                    &cache_root,
+                    &args.repo,
+                )?;
+                dispatch_finding_hotspot_overlap(&db, &opts, &store, format, &ctx, &mut out)?;
+            }
         }
     } // out is dropped here, flushing any buffered writes
 
@@ -3201,6 +3210,55 @@ fn dispatch_marginal_owner_risk(
         fmt => {
             return Err(unsupported_format(
                 "marginal-owner-risk",
+                "csv|json|markdown",
+                fmt,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_finding_hotspot_overlap(
+    db: &FactsDb,
+    opts: &Options,
+    store: &codelore_lib::cli_api::external::ExternalStore,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows =
+                codelore_lib::cli_api::analyses::finding_hotspot_overlap::run_finding_hotspot_overlap(
+                    db, opts, store,
+                )
+                .context("run finding-hotspot-overlap")?;
+            codelore_lib::cli_api::output::csv::write_finding_hotspot_overlap_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows =
+                codelore_lib::cli_api::analyses::finding_hotspot_overlap::run_finding_hotspot_overlap(
+                    db, opts, store,
+                )
+                .context("run finding-hotspot-overlap")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows =
+                codelore_lib::cli_api::analyses::finding_hotspot_overlap::run_finding_hotspot_overlap(
+                    db, opts, store,
+                )
+                .context("run finding-hotspot-overlap")?;
+            codelore_lib::cli_api::output::markdown::write_finding_hotspot_overlap_markdown(
+                &rows, out,
+            )
+            .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format(
+                "finding-hotspot-overlap",
                 "csv|json|markdown",
                 fmt,
             ));
