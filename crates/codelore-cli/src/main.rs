@@ -392,7 +392,9 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
         // Inside GitHub Actions, emit each violation as an inline `::error`
         // annotation so the failing gate shows up against the file in the
         // PR's Files-changed view — not just as a red check.
-        if std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true") && matches!(args.format, CheckFormat::Text) {
+        if std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true")
+            && matches!(args.format, CheckFormat::Text)
+        {
             let mut stdout = std::io::stdout();
             codelore_lib::cli_api::output::gha::write_gate_violations_gha(&violations, &mut stdout)
                 .context("emit gate annotations")?;
