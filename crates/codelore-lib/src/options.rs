@@ -200,10 +200,14 @@ impl Options {
 
         let mut snapshot = self.clone();
         snapshot.exclude_patterns.sort();
-        // Cosmetic knobs — exclude from canonical form so the cache hits
-        // when they change.
+        // Cosmetic knobs and per-invocation modifiers — excluded from the
+        // canonical form so the cache hits when they change.
         snapshot.rows_limit = None;
         snapshot.explain = false;
+        // `target` selects which file function-xray analyses, but ingest
+        // never reads it — caching per-target would produce a full-size
+        // duplicate DB file for every distinct `--target` path.
+        snapshot.target = None;
         let mut canon = serde_json::to_value(&snapshot)
             .expect("Options derives Serialize and all fields are Serialize");
 
