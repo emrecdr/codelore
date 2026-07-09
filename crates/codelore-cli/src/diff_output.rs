@@ -12,7 +12,10 @@ use std::io::Write;
 
 use anyhow::{Context, Result};
 
+use codelore_lib::cli_api::Options;
 use codelore_lib::cli_api::analyses::delta_health::RiskClass;
+use codelore_lib::cli_api::facts::FactsDb;
+use codelore_lib::output::sarif::{SARIF_SCHEMA_URL, TOOL_INFO_URI};
 
 use crate::diff::DiffOutput;
 
@@ -20,17 +23,29 @@ use crate::diff::DiffOutput;
 /// a "… and N more" trailer. One policy, shared by every format.
 const DELTA_HEALTH_MAX_ROWS: usize = 20;
 
+/// Number of evidence commits to include per finding in diff SARIF output.
+const DIFF_EVIDENCE_N: u32 = 3;
+
 /// Render an optional risk class for a delta-health cell (`∅` when absent).
 fn risk_str(c: Option<RiskClass>) -> &'static str {
     c.map_or("\u{2205}", RiskClass::as_str)
 }
 
-pub fn emit(out: &mut dyn Write, output: &DiffOutput, format: &str) -> Result<()> {
+/// Emit the diff output in `format`.
+///
+/// `db_opts` must be `Some` when `format == "sarif"` to populate evidence
+/// chains; pass `None` for non-SARIF formats (ignored there).
+pub fn emit(
+    out: &mut dyn Write,
+    output: &DiffOutput,
+    format: &str,
+    db_opts: Option<(&FactsDb, &Options)>,
+) -> Result<()> {
     match format {
         "text" => emit_text(out, output),
         "json" => emit_json(out, output),
         "markdown" => emit_markdown(out, output),
-        "sarif" => emit_sarif(out, output),
+        "sarif" => emit_sarif(out, output, db_opts),
         other => {
             anyhow::bail!("unknown --format {other:?} for diff; valid: text, json, markdown, sarif")
         }
@@ -391,16 +406,56 @@ fn emit_markdown(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
 }
 
 #[allow(clippy::too_many_lines)] // long but linear: constructs a complete SARIF document (rules + results for hotspot/coupling/clone) in one pass; splitting would fragment the schema structure
-fn emit_sarif(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
+fn emit_sarif(
+    out: &mut dyn Write,
+    output: &DiffOutput,
+    db_opts: Option<(&FactsDb, &Options)>,
+) -> Result<()> {
     // Build a SARIF document that mixes rank-entrant + score-increase
     // findings into CODELORE-HOTSPOT results with a `diff-classification`
     // property tagging each. This way the existing GitHub Code Scanning
     // hotspot rule renders the diff findings inline on the PR.
+    use codelore_lib::cli_api::quality_gates::evidence::evidence_for_path;
     use serde_json::json;
+
+    // Build a codeFlow from evidence commits for a given path.
+    // Returns serde_json::Value::Null when no db is available or no evidence
+    // was found, so callers can skip adding the key on null.
+    let code_flow_for = |path: &str| -> serde_json::Value {
+        let Some((db, opts)) = db_opts else {
+            return serde_json::Value::Null;
+        };
+        let commits = evidence_for_path(db, opts, path, DIFF_EVIDENCE_N).unwrap_or_default();
+        if commits.is_empty() {
+            return serde_json::Value::Null;
+        }
+        let locs: Vec<serde_json::Value> = commits
+            .iter()
+            .map(|ev| {
+                json!({
+                    "location": {
+                        "physicalLocation": {
+                            "artifactLocation": { "uri": path },
+                            "region": { "startLine": 1 }
+                        },
+                        "message": {
+                            "text": format!(
+                                "{} {} {} (churn={})",
+                                ev.date, ev.rev, ev.author, ev.churn
+                            )
+                        }
+                    },
+                    "module": ev.message_head
+                })
+            })
+            .collect();
+        json!([{ "threadFlows": [{ "locations": locs }] }])
+    };
 
     let mut hotspot_results: Vec<serde_json::Value> = Vec::new();
     for h in &output.hotspots.rank_entrants {
-        hotspot_results.push(json!({
+        let code_flows = code_flow_for(&h.path);
+        let mut result = json!({
             "ruleId": "CODELORE-HOTSPOT",
             "level": "warning",
             "message": {
@@ -421,10 +476,15 @@ fn emit_sarif(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
                 "codelore/score": h.hotspot_score,
                 "tags": ["behavioral", "hotspot", "pr-diff"]
             }
-        }));
+        });
+        if !code_flows.is_null() {
+            result["codeFlows"] = code_flows;
+        }
+        hotspot_results.push(result);
     }
     for s in &output.hotspots.score_increased {
-        hotspot_results.push(json!({
+        let code_flows = code_flow_for(&s.path);
+        let mut result = json!({
             "ruleId": "CODELORE-HOTSPOT",
             "level": "warning",
             "message": {
@@ -446,10 +506,15 @@ fn emit_sarif(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
                 "codelore/score-delta": s.delta,
                 "tags": ["behavioral", "hotspot", "pr-diff"]
             }
-        }));
+        });
+        if !code_flows.is_null() {
+            result["codeFlows"] = code_flows;
+        }
+        hotspot_results.push(result);
     }
     for c in &output.clones.new_families {
-        hotspot_results.push(json!({
+        let code_flows = code_flow_for(&c.entity);
+        let mut result = json!({
             "ruleId": "CODELORE-CLONE",
             "level": "note",
             "message": {
@@ -469,7 +534,57 @@ fn emit_sarif(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
                 "codelore/clone-group-id": c.clone_group_id,
                 "tags": ["behavioral", "clone", "pr-diff"]
             }
-        }));
+        });
+        if !code_flows.is_null() {
+            result["codeFlows"] = code_flows;
+        }
+        hotspot_results.push(result);
+    }
+
+    // delta_health degrading results: one CODELORE-DELTA-HEALTH result per
+    // unique degrading path (deduplicated; evidence_for_path is file-scoped).
+    if let Some(dh) = output.delta_health.as_ref() {
+        use codelore_lib::cli_api::analyses::delta_health::Outcome;
+        use std::collections::HashSet;
+        let mut seen: HashSet<&str> = HashSet::new();
+        for f in &dh.functions {
+            if f.outcome != Outcome::Bad {
+                continue;
+            }
+            if seen.contains(f.path.as_str()) {
+                continue;
+            }
+            seen.insert(&f.path);
+            let code_flows = code_flow_for(&f.path);
+            let mut result = json!({
+                "ruleId": "CODELORE-DELTA-HEALTH",
+                "level": "warning",
+                "message": {
+                    "text": format!(
+                        "Function health degraded in PR: '{}' in '{}' \
+                         (risk {} → {})",
+                        f.function, f.path,
+                        f.before.map_or("none", RiskClass::as_str),
+                        f.after.map_or("none", RiskClass::as_str),
+                    )
+                },
+                "locations": [{
+                    "physicalLocation": {
+                        "artifactLocation": { "uri": f.path },
+                        "region": { "startLine": 1 }
+                    }
+                }],
+                "properties": {
+                    "codelore/diff-classification": "delta-health-degraded",
+                    "codelore/function": f.function.clone(),
+                    "tags": ["behavioral", "health", "pr-diff"]
+                }
+            });
+            if !code_flows.is_null() {
+                result["codeFlows"] = code_flows;
+            }
+            hotspot_results.push(result);
+        }
     }
 
     // CodeScene-signature "absent change pattern": a file historically and
@@ -519,8 +634,38 @@ fn emit_sarif(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
         }));
     }
 
+    // CODELORE-DELTA-HEALTH rule is only included in the driver when the
+    // delta_health section is present (avoids declaring a rule with zero results).
+    let mut rules = vec![
+        json!({
+            "id": "CODELORE-HOTSPOT",
+            "shortDescription": { "text": "Behavioral hotspot diff" },
+            "properties": { "tags": ["behavioral", "hotspot", "pr-diff"] }
+        }),
+        json!({
+            "id": "CODELORE-CLONE",
+            "shortDescription": { "text": "New clone family in PR" },
+            "properties": { "tags": ["behavioral", "clone", "pr-diff"] }
+        }),
+        json!({
+            "id": "CODELORE-MISSING-COCHANGE",
+            "name": "MissingCoChange",
+            "shortDescription": { "text": "Coupled file omitted from PR" },
+            "fullDescription": { "text": "A file historically and significantly coupled (Fisher-significant) with the file modified in this PR was NOT modified. The 'absent change pattern' often indicates a forgotten test, migration script, or documentation update." },
+            "defaultConfiguration": { "level": "note" },
+            "properties": { "tags": ["behavioral", "coupling", "absent-change-pattern", "pr-diff"] }
+        }),
+    ];
+    if output.delta_health.is_some() {
+        rules.push(json!({
+            "id": "CODELORE-DELTA-HEALTH",
+            "shortDescription": { "text": "Function health degraded in PR" },
+            "properties": { "tags": ["behavioral", "health", "pr-diff"] }
+        }));
+    }
+
     let doc = json!({
-        "$schema": "https://schemastore.azurewebsites.net/schemas/json/sarif-2.1.0.json",
+        "$schema": SARIF_SCHEMA_URL,
         "version": "2.1.0",
         "runs": [{
             "automationDetails": { "id": "codelore/diff/run" },
@@ -528,27 +673,8 @@ fn emit_sarif(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
                 "driver": {
                     "name": "codelore",
                     "version": env!("CARGO_PKG_VERSION"),
-                    "informationUri": "https://github.com/emre/codescene",
-                    "rules": [
-                        {
-                            "id": "CODELORE-HOTSPOT",
-                            "shortDescription": { "text": "Behavioral hotspot diff" },
-                            "properties": { "tags": ["behavioral", "hotspot", "pr-diff"] }
-                        },
-                        {
-                            "id": "CODELORE-CLONE",
-                            "shortDescription": { "text": "New clone family in PR" },
-                            "properties": { "tags": ["behavioral", "clone", "pr-diff"] }
-                        },
-                        {
-                            "id": "CODELORE-MISSING-COCHANGE",
-                            "name": "MissingCoChange",
-                            "shortDescription": { "text": "Coupled file omitted from PR" },
-                            "fullDescription": { "text": "A file historically and significantly coupled (Fisher-significant) with the file modified in this PR was NOT modified. The 'absent change pattern' often indicates a forgotten test, migration script, or documentation update." },
-                            "defaultConfiguration": { "level": "note" },
-                            "properties": { "tags": ["behavioral", "coupling", "absent-change-pattern", "pr-diff"] }
-                        }
-                    ]
+                    "informationUri": TOOL_INFO_URI,
+                    "rules": rules
                 }
             },
             "results": hotspot_results
@@ -581,7 +707,7 @@ mod tests {
         };
 
         let mut buf = Vec::new();
-        emit_sarif(&mut buf, &output).expect("emit_sarif");
+        emit_sarif(&mut buf, &output, None).expect("emit_sarif");
         let sarif: serde_json::Value = serde_json::from_slice(&buf).expect("valid SARIF JSON");
 
         // Rule must be declared in the tool driver registry.
@@ -645,7 +771,7 @@ mod tests {
         // results section is empty for that rule).
         let output = DiffOutput::default();
         let mut buf = Vec::new();
-        emit_sarif(&mut buf, &output).expect("emit_sarif");
+        emit_sarif(&mut buf, &output, None).expect("emit_sarif");
         let sarif: serde_json::Value = serde_json::from_slice(&buf).unwrap();
         let results = sarif["runs"][0]["results"].as_array().unwrap();
         assert_eq!(

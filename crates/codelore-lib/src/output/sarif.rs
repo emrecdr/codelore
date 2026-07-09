@@ -14,14 +14,19 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
 
-const SARIF_SCHEMA: &str = "https://json.schemastore.org/sarif-2.1.0.json";
-const RULE_ID: &str = "CODELORE-HOTSPOT";
-const AUTOMATION_ID_PREFIX: &str = "codelore/hotspots/run";
+/// SARIF 2.1.0 JSON schema URL. All emitters (including the diff emitter
+/// in `codelore-cli`) reference this constant so that a future URL change
+/// only needs to be made in one place.
+pub const SARIF_SCHEMA_URL: &str = "https://json.schemastore.org/sarif-2.1.0.json";
 
 /// Canonical project homepage. Surfaces in every SARIF report's
 /// `tool.driver.informationUri` — GitHub Code Scanning links the
-/// driver name in the tool-details panel here.
-const CODELORE_HOMEPAGE: &str = "https://github.com/emrecdr/codelore";
+/// driver name in the tool-details panel here. Shared with the diff
+/// SARIF emitter via `codelore_lib::output::sarif::TOOL_INFO_URI`.
+pub const TOOL_INFO_URI: &str = "https://github.com/emrecdr/codelore";
+
+const RULE_ID: &str = "CODELORE-HOTSPOT";
+const AUTOMATION_ID_PREFIX: &str = "codelore/hotspots/run";
 
 /// `helpUri` for `CODELORE-CLONE` / `CODELORE-LIVE-CLONE` rules.
 /// `docs/research-foundations.md` carries the publishable rationale
@@ -121,7 +126,7 @@ fn build_sarif(rows: &[HotspotRow], repo_root: &str) -> serde_json::Value {
         .collect();
 
     json!({
-        "$schema": SARIF_SCHEMA,
+        "$schema": SARIF_SCHEMA_URL,
         "version": "2.1.0",
         "runs": [{
             "automationDetails": {
@@ -131,7 +136,7 @@ fn build_sarif(rows: &[HotspotRow], repo_root: &str) -> serde_json::Value {
                 "driver": {
                     "name": "codelore",
                     "version": env!("CARGO_PKG_VERSION"),
-                    "informationUri": CODELORE_HOMEPAGE,
+                    "informationUri": TOOL_INFO_URI,
                     "rules": [rule]
                 }
             },
@@ -310,7 +315,7 @@ fn build_clones_sarif(rows: &[ClonesRow], repo_root: &str) -> serde_json::Value 
         .collect();
 
     json!({
-        "$schema": SARIF_SCHEMA,
+        "$schema": SARIF_SCHEMA_URL,
         "version": "2.1.0",
         "runs": [{
             "automationDetails": { "id": automation_id_for(CLONE_AUTOMATION_ID_PREFIX) },
@@ -318,7 +323,7 @@ fn build_clones_sarif(rows: &[ClonesRow], repo_root: &str) -> serde_json::Value 
                 "driver": {
                     "name": "codelore",
                     "version": env!("CARGO_PKG_VERSION"),
-                    "informationUri": CODELORE_HOMEPAGE,
+                    "informationUri": TOOL_INFO_URI,
                     "rules": [rule]
                 }
             },
@@ -472,7 +477,7 @@ fn build_clone_coupling_sarif(rows: &[CloneCouplingRow], repo_root: &str) -> ser
         .collect();
 
     json!({
-        "$schema": SARIF_SCHEMA,
+        "$schema": SARIF_SCHEMA_URL,
         "version": "2.1.0",
         "runs": [{
             "automationDetails": { "id": automation_id_for(LIVE_CLONE_AUTOMATION_ID_PREFIX) },
@@ -480,7 +485,7 @@ fn build_clone_coupling_sarif(rows: &[CloneCouplingRow], repo_root: &str) -> ser
                 "driver": {
                     "name": "codelore",
                     "version": env!("CARGO_PKG_VERSION"),
-                    "informationUri": CODELORE_HOMEPAGE,
+                    "informationUri": TOOL_INFO_URI,
                     "rules": [rule]
                 }
             },
@@ -673,7 +678,7 @@ fn build_check_sarif<S: std::hash::BuildHasher>(
         .collect();
 
     json!({
-        "$schema": SARIF_SCHEMA,
+        "$schema": SARIF_SCHEMA_URL,
         "version": "2.1.0",
         "runs": [{
             "automationDetails": {
@@ -683,7 +688,7 @@ fn build_check_sarif<S: std::hash::BuildHasher>(
                 "driver": {
                     "name": "codelore",
                     "version": env!("CARGO_PKG_VERSION"),
-                    "informationUri": CODELORE_HOMEPAGE,
+                    "informationUri": TOOL_INFO_URI,
                     "rules": rules
                 }
             },

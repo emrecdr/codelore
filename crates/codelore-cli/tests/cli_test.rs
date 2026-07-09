@@ -1314,6 +1314,82 @@ fn diff_docs_only_change_is_no_code_change() {
     assert!(json["delta_health"]["ratio"].is_null());
 }
 
+#[test]
+fn diff_sarif_schema_url_and_info_uri_use_canonical_constants() {
+    // Verifies A3: schema URL and informationUri use the constants from
+    // codelore_lib::output::sarif, and degrading delta-health results carry
+    // codeFlows evidence chains (the monster function has one head commit).
+    let (dir, base, head) = delta_health_fixture();
+    let output = Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "diff",
+            "--repo",
+            dir.path().to_str().unwrap(),
+            "--min-revs",
+            "1",
+            "--format",
+            "sarif",
+            &format!("{base}..{head}"),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let sarif: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid SARIF");
+
+    // (a) schema URL must match the canonical constant from sarif.rs
+    assert_eq!(
+        sarif["$schema"], "https://json.schemastore.org/sarif-2.1.0.json",
+        "wrong $schema"
+    );
+
+    // (b) informationUri must match the canonical constant from sarif.rs
+    assert_eq!(
+        sarif["runs"][0]["tool"]["driver"]["informationUri"], "https://github.com/emrecdr/codelore",
+        "wrong informationUri"
+    );
+
+    // (c) The degrading delta-health result for src/lib.rs (monster function)
+    // must carry at least one codeFlow with a threadFlow containing locations.
+    let results = sarif["runs"][0]["results"]
+        .as_array()
+        .expect("results array");
+    let degrading: Vec<_> = results
+        .iter()
+        .filter(|r| r["ruleId"] == "CODELORE-DELTA-HEALTH")
+        .collect();
+    assert!(
+        !degrading.is_empty(),
+        "expected at least one CODELORE-DELTA-HEALTH result (monster function)"
+    );
+    let r = degrading[0];
+    let code_flows = r["codeFlows"]
+        .as_array()
+        .expect("codeFlows array on degrading result");
+    assert!(
+        !code_flows.is_empty(),
+        "degrading result must carry at least one codeFlow"
+    );
+    let thread_flows = code_flows[0]["threadFlows"]
+        .as_array()
+        .expect("threadFlows array");
+    assert!(
+        !thread_flows.is_empty(),
+        "codeFlow must have at least one threadFlow"
+    );
+    let locations = thread_flows[0]["locations"]
+        .as_array()
+        .expect("locations array");
+    assert!(
+        !locations.is_empty(),
+        "threadFlow must have at least one location (evidence commit)"
+    );
+}
+
 const CLONE_ORIGINAL_SRC: &str = "\
 pub fn original(x: i32) -> i32 {
     let mut acc = 0;

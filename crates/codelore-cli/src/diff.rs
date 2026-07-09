@@ -360,6 +360,50 @@ fn analyze_at_rev(
     })
 }
 
+/// Like [`analyze_at_rev`] but also returns the ingested [`FactsDb`] and
+/// [`Options`] for the caller's subsequent use (e.g. evidence queries in the
+/// SARIF emitter). The worktree is removed at the end of this function — the
+/// returned `FactsDb` is in-memory and does not depend on the worktree path.
+fn analyze_head_at_rev(
+    repo: &Path,
+    sha: &str,
+    args: &DiffArgs,
+) -> Result<(RevAnalyses, FactsDb, Options)> {
+    let wt = add_worktree(repo, sha)?;
+    let opts = Options {
+        repo_path: wt.path.clone(),
+        min_revs: args.min_revs,
+        exclude_patterns: args.exclude.clone(),
+        ..Options::default()
+    };
+    let gix = GixRepo::open(&wt.path).context("open gix repo in worktree")?;
+    let db = FactsDb::new_in_memory().context("open in-memory fact store")?;
+    db.ingest(&gix, &opts).context("ingest in worktree")?;
+
+    let hotspots = run_hotspots(&db, &opts).context("hotspots at rev")?;
+    let coupling = run_coupling(&db, &opts).context("coupling at rev")?;
+    let clones = run_clones(&opts).context("clones at rev")?;
+    let graph = codelore_lib::cli_api::analyses::import_graph::build_import_graph(&db)
+        .context("import graph at rev")?;
+    let dependency_cycles =
+        codelore_lib::cli_api::analyses::import_graph::graph_metrics(&graph).cycle_count;
+    let functions = run_function_metrics(&db).context("function metrics at rev")?;
+
+    // wt drops here, cleaning up the worktree on disk; db is in-memory and lives on.
+    drop(wt);
+
+    let analyses = RevAnalyses {
+        sha: sha.to_string(),
+        hotspots,
+        coupling,
+        clones,
+        dependency_cycles,
+        functions,
+        red_files: Vec::new(),
+    };
+    Ok((analyses, db, opts))
+}
+
 fn load_base_cache(path: &Path) -> Result<RevAnalyses> {
     let body = std::fs::read_to_string(path)
         .with_context(|| format!("read --base-cache {}", path.display()))?;
@@ -600,7 +644,7 @@ fn prune_stale_worktrees(repo_root: &Path) {
 }
 
 #[allow(clippy::too_many_lines)] // long but linear: worktree setup → two independent ingests → delta computation → gate evaluation; splitting would break the sequential worktree-lifecycle flow
-pub fn run_diff(args: &DiffArgs) -> Result<DiffOutput> {
+pub fn run_diff(args: &DiffArgs) -> Result<(DiffOutput, FactsDb, Options)> {
     // Best-effort cleanup of orphans from prior aborted runs before we add
     // a new worktree. Idempotent; errors logged only.
     prune_stale_worktrees(&args.repo);
@@ -668,7 +712,7 @@ pub fn run_diff(args: &DiffArgs) -> Result<DiffOutput> {
         analyze_at_rev(&args.repo, &base_sha, args, true)?
     };
 
-    let head_analyses = analyze_at_rev(&args.repo, &head_sha, args, false)?;
+    let (head_analyses, head_db, head_opts) = analyze_head_at_rev(&args.repo, &head_sha, args)?;
 
     let pr_files = list_pr_files(&args.repo, &base_sha, &head_sha)?;
 
@@ -785,18 +829,22 @@ pub fn run_diff(args: &DiffArgs) -> Result<DiffOutput> {
         (None, None, Vec::new())
     };
 
-    Ok(DiffOutput {
-        base_sha,
-        head_sha,
-        merge_base_used,
-        hotspots,
-        coupling_absences,
-        clones,
-        base_median_code_health,
-        head_median_code_health,
-        gate_violations,
-        delta_health,
-    })
+    Ok((
+        DiffOutput {
+            base_sha,
+            head_sha,
+            merge_base_used,
+            hotspots,
+            coupling_absences,
+            clones,
+            base_median_code_health,
+            head_median_code_health,
+            gate_violations,
+            delta_health,
+        },
+        head_db,
+        head_opts,
+    ))
 }
 
 /// Median of `code_health` across a hotspots row vector. Returns 0.0

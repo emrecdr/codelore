@@ -159,9 +159,63 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
     let db = FactsDb::open_or_ingest(&opts, &repo).context("ingest")?;
     let ts = now_utc_ts();
 
-    let (violations, mut ledger_records, hotspot_count, code_health) =
+    let (mut violations, mut ledger_records, hotspot_count, code_health) =
         evaluate_all_gates(&thresholds, &db, &opts, &head_sha, &ts, args.quiet)
             .context("evaluate gates")?;
+
+    // ── max_findings_in_hot_files gate ───────────────────────────────────────
+    if let Some(threshold) = thresholds.gates.max_findings_in_hot_files {
+        let store_result = codelore_lib::cli_api::external::ExternalStore::open_or_create(
+            &cache_root,
+            &args.repo,
+        );
+        let skip = match &store_result {
+            Ok(store) => store.count().unwrap_or(0) == 0,
+            Err(_) => true,
+        };
+        if skip {
+            if !args.quiet {
+                println!(
+                    "⚠ max_findings_in_hot_files: skipped — run `codelore ingest-sarif` first"
+                );
+            }
+            ledger_records.push(GateRunRecord {
+                ts: ts.clone(),
+                head_sha: head_sha.clone(),
+                gate: "max_findings_in_hot_files".into(),
+                threshold: f64::from(threshold),
+                value: 0.0,
+                verdict: "skipped".into(),
+                mode: "check".into(),
+            });
+        } else if let Ok(store) = store_result {
+            let overlap_rows =
+                codelore_lib::cli_api::analyses::finding_hotspot_overlap::run_finding_hotspot_overlap(
+                    &db, &opts, &store,
+                )
+                .context("run finding-hotspot-overlap for gate")?;
+            let act_now_count = overlap_rows.iter().filter(|r| r.priority == "act-now").count();
+            let overlap_v = codelore_lib::cli_api::quality_gates::evaluate_finding_overlap_rows(
+                threshold,
+                &overlap_rows,
+            );
+            ledger_records.push(GateRunRecord {
+                ts: ts.clone(),
+                head_sha: head_sha.clone(),
+                gate: "max_findings_in_hot_files".into(),
+                threshold: f64::from(threshold),
+                value: act_now_count as f64,
+                verdict: if overlap_v.is_empty() {
+                    "passed"
+                } else {
+                    "failed"
+                }
+                .into(),
+                mode: "check".into(),
+            });
+            violations.extend(overlap_v);
+        }
+    }
 
     // ── Ratchet ───────────────────────────────────────────────────────────────
     if args.ratchet {
@@ -1143,13 +1197,18 @@ fn run_schema_cmd(args: &args::SchemaArgs) -> Result<()> {
 }
 
 fn run_diff_cmd(args: &DiffArgs) -> Result<()> {
-    let output = diff::run_diff(args).context("codelore diff")?;
+    let (output, head_db, head_opts) = diff::run_diff(args).context("codelore diff")?;
 
     let mut out: Box<dyn Write> = match args.output.as_ref() {
         Some(path) => Box::new(std::fs::File::create(path)?),
         None => Box::new(std::io::stdout().lock()),
     };
-    diff_output::emit(&mut out, &output, args.format.as_str())?;
+    diff_output::emit(
+        &mut out,
+        &output,
+        args.format.as_str(),
+        Some((&head_db, &head_opts)),
+    )?;
     drop(out);
 
     if diff::should_fail(args, &output) {
