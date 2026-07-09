@@ -411,6 +411,14 @@
     return 'red';
   }
 
+  // Map a band name to its DaisyUI theme token — never hardcoded hex.
+  // Shared by the share bars, effort dot strip, and knowledge surfaces.
+  function bandColor(band) {
+    if (band === 'red')    return 'var(--color-error,   oklch(0.637 0.237 25.331))';
+    if (band === 'yellow') return 'var(--color-warning, oklch(0.845 0.143 84.429))';
+    return                        'var(--color-success, oklch(0.753 0.152 163.216))';
+  }
+
 
   // ─── §5  Detail drawer (cross-widget click target) ────────────────
 
@@ -1211,7 +1219,7 @@
     const greenMin = typeof o.health_green_min === 'number' ? o.health_green_min : 70;
     const yellowMin = typeof o.health_yellow_min === 'number' ? o.health_yellow_min : 40;
 
-    function bandColor(score) {
+    function scoreColor(score) {
       if (score === null || score === undefined) return token('--cl-health-yellow');
       return score >= greenMin ? token('--cl-health-green')
            : score >= yellowMin ? token('--cl-health-yellow')
@@ -1223,7 +1231,7 @@
       const seriesMean = tile.series && tile.series.length
         ? tile.series.reduce(function (s, v) { return s + v; }, 0) / tile.series.length
         : val;
-      const color = bandColor(tile.headline);
+      const color = scoreColor(tile.headline);
       // Track = full-width bar; marker = filled circle at headline %;
       // baseline tick = thin line at series mean %.
       return '<div class="factor-bullet-wrap" aria-label="' + fmtNumberFlex(val, 1) + ' / 100">' +
@@ -1246,7 +1254,7 @@
     };
 
     function numbersList(tile) {
-      var bandColor = REWORK_BAND_COLORS[tile.band] || '';
+      var reworkColor = REWORK_BAND_COLORS[tile.band] || '';
       var html = '<div class="factor-numbers">';
       var nums = tile.numbers || [];
       for (var ni = 0; ni < nums.length; ni++) {
@@ -1254,7 +1262,7 @@
         var label = escapeHtml(pair[0] || '');
         var value = escapeHtml(pair[1] || '');
         // Only the first number (rework %) gets band coloring.
-        var valStyle = (ni === 0 && bandColor) ? ' style="color:' + bandColor + ';"' : '';
+        var valStyle = (ni === 0 && reworkColor) ? ' style="color:' + reworkColor + ';"' : '';
         html += '<div class="factor-number-row">' +
           '<span class="factor-number-label">' + label + '</span>' +
           '<span class="factor-number-value"' + valStyle + '>' + value + '</span>' +
@@ -1301,7 +1309,7 @@
               data: tile.series,
               smooth: true,
               symbol: 'none',
-              lineStyle: { width: 1.5, color: bandColor(tile.headline) },
+              lineStyle: { width: 1.5, color: scoreColor(tile.headline) },
             }],
           });
         } catch (e) {
@@ -1317,9 +1325,9 @@
   // per code-health band) plus a 20-dot effort strip where each dot
   // represents 5% of trailing-window churn. All HTML/CSS — no ECharts.
   //
-  // Band colours come from CSS custom properties set by the active
-  // DaisyUI theme (error/warning/success), resolved at render time so the
-  // widget re-colours correctly on theme toggle (rerender: 'theme').
+  // Band colours are emitted as `var(--color-*)` references in inline
+  // styles, so the browser re-resolves them on theme swap without any
+  // JS rerender (the widget registers rerender: false).
   // Accessibility: role="img" + aria-label on every bar and the dot strip;
   // percentage text labels inside segments serve as non-colour redundant
   // cues (WCAG 1.4.1 — Use of Color).
@@ -1337,13 +1345,6 @@
 
     var BAND_ORDER = ['red', 'yellow', 'green'];
     var BAND_LABEL = { red: 'Red', yellow: 'Yellow', green: 'Green' };
-
-    // Band colours from DaisyUI theme tokens — never hardcoded hex.
-    function bandColor(band) {
-      if (band === 'red')    return 'var(--color-error,   oklch(0.637 0.237 25.331))';
-      if (band === 'yellow') return 'var(--color-warning, oklch(0.845 0.143 84.429))';
-      return                        'var(--color-success, oklch(0.753 0.152 163.216))';
-    }
 
     // Index rows by band for O(1) lookup.
     var byBand = {};

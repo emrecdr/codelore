@@ -562,8 +562,10 @@
     if (rework) {
       var rPct = typeof rework.p50 === 'number' ? rework.p50.toFixed(1) : '—';
       var rBand = rework.p50 < 9 ? 'green' : rework.p50 < 15 ? 'yellow' : 'red';
+      // Band colour via the shared theme-token helper — CSS variables
+      // re-resolve on theme swap, so no rerender is needed.
       rows += '<tr><td>Rework</td>' +
-        '<td class="delivery-value cl-band-' + rBand + '">' + rPct + ' %</td>' +
+        '<td class="delivery-value" style="color:' + bandColor(rBand) + ';">' + rPct + ' %</td>' +
         '<td class="delivery-caveat">' + escapeHtml(rework.caveat || '') + '</td></tr>';
     }
 
