@@ -635,6 +635,57 @@ pub fn write_effort_exposure_csv<W: Write>(
     Ok(())
 }
 
+pub fn write_code_familiarity_csv<W: Write>(
+    rows: &[crate::analyses::code_familiarity::CodeFamiliarityRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(
+        w,
+        "scope,familiarity-pct,active-authors,total-authors,islands-pct,verdict"
+    )
+    .map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{:.2},{},{},{:.2},{}",
+            quote_if_needed(&row.scope),
+            row.familiarity_pct,
+            row.active_authors,
+            row.total_authors,
+            row.islands_pct,
+            quote_if_needed(&row.verdict),
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+pub fn write_coordination_needs_csv<W: Write>(
+    rows: &[crate::analyses::coordination_needs::CoordinationNeedsRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(
+        w,
+        "path,authors,fragmentation,interleave,cochange-entropy,tier,health-band"
+    )
+    .map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{:.4},{:.4},{:.4},{},{}",
+            quote_if_needed(&row.path),
+            row.authors,
+            row.fragmentation,
+            row.interleave,
+            row.cochange_entropy,
+            quote_if_needed(&row.tier),
+            quote_if_needed(&row.health_band),
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_architecture_metrics_csv<W: Write>(
     rows: &[crate::analyses::architecture_metrics::ArchitectureMetricRow],
     w: &mut W,
@@ -868,18 +919,19 @@ pub fn write_bus_factor_csv<W: Write>(
 ) -> Result<()> {
     writeln!(
         w,
-        "module,total_commits,bus_factor,top_contributor,top_contributor_share"
+        "module,total_commits,bus_factor,top_contributor,top_contributor_share,model"
     )
     .map_err(CodeLoreError::Io)?;
     for row in rows {
         writeln!(
             w,
-            "{},{},{},{},{:.4}",
+            "{},{},{},{},{:.4},{}",
             quote_if_needed(&row.module),
             row.total_commits,
             row.bus_factor,
             quote_if_needed(&row.top_contributor),
             row.top_contributor_share,
+            row.model,
         )
         .map_err(CodeLoreError::Io)?;
     }
@@ -1167,6 +1219,154 @@ pub fn write_refactoring_targets_csv<W: Write>(
             quote_if_needed(&row.dominant_type),
             row.band,
             row.manual_up_rank,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+/// `team-composition` CSV emitter.
+///
+/// CSV header: `author,tenure-days,bucket,veteran-breadth-ok,active,commits,files-touched,onboarding-weeks`
+///
+/// The `onboarding-weeks` column is empty for `NULL` (founders and authors who
+/// never reached the weekly 80%-core set).
+pub fn write_team_composition_csv<W: Write>(
+    rows: &[crate::analyses::team_composition::TeamCompositionRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(
+        w,
+        "author,tenure-days,bucket,veteran-breadth-ok,active,commits,files-touched,onboarding-weeks"
+    )
+    .map_err(CodeLoreError::Io)?;
+    for row in rows {
+        let ob = row
+            .onboarding_weeks
+            .map_or_else(String::new, |v| v.to_string());
+        writeln!(
+            w,
+            "{},{},{},{},{},{},{},{}",
+            quote_if_needed(&row.author),
+            row.tenure_days,
+            quote_if_needed(&row.bucket),
+            row.veteran_breadth_ok,
+            row.active,
+            row.commits,
+            row.files_touched,
+            ob,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+pub fn write_marginal_owner_risk_csv<W: Write>(
+    rows: &[crate::analyses::marginal_owner_risk::MarginalOwnerRiskRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(w, "path,band,top-active-share,risk").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{:.4},{}",
+            quote_if_needed(&row.path),
+            quote_if_needed(&row.band),
+            row.top_active_share,
+            quote_if_needed(&row.risk),
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+pub fn write_release_cadence_csv<W: Write>(
+    rows: &[crate::analyses::release_cadence::ReleaseCadenceRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(w, "tag,date,days-since-prev,trend").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        let gap = match row.days_since_prev {
+            Some(d) => format!("{d:.2}"),
+            None => String::new(),
+        };
+        writeln!(
+            w,
+            "{},{},{},{}",
+            quote_if_needed(&row.tag),
+            quote_if_needed(&row.date),
+            gap,
+            quote_if_needed(&row.trend),
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+pub fn write_delivery_metrics_csv<W: Write>(
+    rows: &[crate::analyses::delivery_metrics::DeliveryMetricsRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(w, "metric,p50,p75,p90,n,caveat").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{:.2},{:.2},{:.2},{},{}",
+            quote_if_needed(&row.metric),
+            row.p50,
+            row.p75,
+            row.p90,
+            row.n,
+            quote_if_needed(&row.caveat),
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+pub fn write_function_xray_csv<W: Write>(
+    rows: &[crate::analyses::function_xray::FunctionXrayRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(
+        w,
+        "function,change-freq,loc,cyclomatic,cognitive,last-changed"
+    )
+    .map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{},{},{},{}",
+            quote_if_needed(&row.function),
+            row.change_freq,
+            row.loc,
+            row.cyclomatic.map_or_else(String::new, |v| v.to_string()),
+            row.cognitive.map_or_else(String::new, |v| v.to_string()),
+            quote_if_needed(&row.last_changed),
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+pub fn write_function_coupling_csv<W: Write>(
+    rows: &[crate::analyses::function_coupling::FunctionCouplingRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(w, "a,b,co-changes,a-changes,b-changes,confidence,p-value")
+        .map_err(CodeLoreError::Io)?;
+    for row in rows {
+        let p = row.p_value.map_or_else(String::new, |v| format!("{v:.4}"));
+        writeln!(
+            w,
+            "{},{},{},{},{},{:.4},{}",
+            quote_if_needed(&row.a),
+            quote_if_needed(&row.b),
+            row.co_changes,
+            row.a_changes,
+            row.b_changes,
+            row.confidence,
+            p,
         )
         .map_err(CodeLoreError::Io)?;
     }

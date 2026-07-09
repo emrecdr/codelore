@@ -47,6 +47,7 @@ use codelore_lib::analyses::architecture_trend::ArchitectureTrendRow;
 use codelore_lib::analyses::dashboard::{
     CloneSummary, DailyCommit, ImportEdgeRow, KameiRiskRow, TrendPoint, XRayEntry,
 };
+use codelore_lib::analyses::effort_exposure::EffortExposureRow;
 use codelore_lib::analyses::entity_ownership::EntityOwnershipRow;
 use codelore_lib::analyses::health_trend::HealthTrendRow;
 use codelore_lib::analyses::mi::MiRollup;
@@ -201,6 +202,38 @@ fn rendered_spa_boots_without_console_errors() {
         },
     ];
 
+    // Synthetic effort-exposure rows so renderShareBars reaches its
+    // bars-render path (not the empty-state branch) under the browser gate.
+    let effort_exposure = vec![
+        EffortExposureRow {
+            band: "red".into(),
+            files: 2,
+            loc_share_pct: 18.0,
+            commit_share_pct: 35.0,
+            churn_share_pct: 30.0,
+            commit_share_ci_low: 0.22,
+            commit_share_ci_high: 0.50,
+        },
+        EffortExposureRow {
+            band: "yellow".into(),
+            files: 3,
+            loc_share_pct: 32.0,
+            commit_share_pct: 25.0,
+            churn_share_pct: 28.0,
+            commit_share_ci_low: 0.16,
+            commit_share_ci_high: 0.36,
+        },
+        EffortExposureRow {
+            band: "green".into(),
+            files: 5,
+            loc_share_pct: 50.0,
+            commit_share_pct: 40.0,
+            churn_share_pct: 42.0,
+            commit_share_ci_low: 0.28,
+            commit_share_ci_high: 0.54,
+        },
+    ];
+
     let dash = SpaDashboard {
         hotspots,
         summary,
@@ -217,6 +250,7 @@ fn rendered_spa_boots_without_console_errors() {
         coupling_density,
         imports,
         xray,
+        effort_exposure,
         ..SpaDashboard::default()
     };
 
@@ -637,6 +671,151 @@ fn rendered_spa_boots_without_console_errors() {
         mi_tile_present,
         "MI band KPI sub-tile was absent from #widget-kpi-tiles; \
          mi_rollup payload may not have reached renderKpiTiles"
+    );
+
+    // -- Step 15: assert share-bars widget mounted without console errors. --
+    // `renderShareBars` replaces the mount point's innerHTML with either the
+    // bars container or the empty-state message. An empty inner-HTML means
+    // the renderer threw before touching the DOM. The widget section must
+    // exist in the DOM (widget-share-bars-body) and its body must be
+    // non-empty after the boot window.
+    let share_bars_mounted: bool = eval_json(
+        &tab,
+        "(function () { \
+             var el = document.getElementById('widget-share-bars-body'); \
+             return !!el && el.innerHTML.trim().length > 0; \
+         })()",
+    );
+    assert!(
+        share_bars_mounted,
+        "share-bars widget body (#widget-share-bars-body) was empty after boot; \
+         renderShareBars may have thrown or the widget mount point is missing"
+    );
+
+    // -- Step 16: assert guided-tour widget mounted with Start button. --
+    // At boot the tour is inactive (tourStep = -1); renderGuidedTour writes
+    // a "Start tour" button into the mount point. An empty body means the
+    // renderer threw before touching the DOM.
+    let tour_mounted: bool = eval_json(
+        &tab,
+        "(function () { \
+             var el = document.getElementById('widget-guided-tour-body'); \
+             if (!el || el.innerHTML.trim().length === 0) return false; \
+             return el.querySelector('#tour-next') !== null; \
+         })()",
+    );
+    assert!(
+        tour_mounted,
+        "guided-tour widget body (#widget-guided-tour-body) was empty or missing \
+         the Start button after boot; renderGuidedTour may have thrown"
+    );
+
+    // -- Step 17: click-through the full guided tour. ----------------------
+    // Drives the applyTourStep state machine: Start → step 0 (health) →
+    // step 1 (cognitive) → step 2 (friction) → step 3 (health + brush) →
+    // Exit (bivariate restored, brush cleared). After each step the color-mode
+    // tab for that lens must carry aria-selected="true"; after Exit the
+    // bivariate tab must be selected and the brush must be empty.
+    //
+    // Helper: returns the data-mode of the currently aria-selected color tab.
+    let active_mode = || -> String {
+        eval_json(
+            &tab,
+            "(function () { \
+                 var bar = document.getElementById('hotspot-color-toggles'); \
+                 if (!bar) return ''; \
+                 var btns = bar.querySelectorAll('button[role=\"tab\"],button.toggle'); \
+                 for (var i = 0; i < btns.length; i++) { \
+                     if (btns[i].getAttribute('aria-selected') === 'true') \
+                         return btns[i].getAttribute('data-mode') || ''; \
+                 } \
+                 return ''; \
+             })()",
+        )
+    };
+    // Helper: brush path count (0 = clear).
+    let brush_count = || -> i64 {
+        eval_json(
+            &tab,
+            "(function () { \
+                 var s = window.Alpine && window.Alpine.store && \
+                         window.Alpine.store('brush'); \
+                 if (!s || !s.paths) return 0; \
+                 return s.paths.length; \
+             })()",
+        )
+    };
+    // Helper: click #tour-next and wait for the DOM to settle.
+    let click_next = || {
+        let _: bool = eval_json(
+            &tab,
+            "(function () { \
+                 var btn = document.getElementById('tour-next'); \
+                 if (btn) btn.click(); \
+                 return !!btn; \
+             })()",
+        );
+        std::thread::sleep(Duration::from_millis(120));
+    };
+
+    // Before start: tour is inactive, color mode is unaffected by the tour.
+    // Click Start → step 0 (health).
+    click_next();
+    assert_eq!(
+        active_mode(),
+        "health",
+        "after Start the color-mode tab with data-mode='health' should be aria-selected; \
+         applyTourStep(0) did not sync the tab bar"
+    );
+    assert_eq!(
+        brush_count(),
+        0,
+        "step 0 should not set a brush (brushTopHotspots is false for step 0)"
+    );
+
+    // Next → step 1 (cognitive).
+    click_next();
+    assert_eq!(
+        active_mode(),
+        "cognitive",
+        "after Next to step 1 the data-mode='cognitive' tab should be aria-selected"
+    );
+
+    // Next → step 2 (friction).
+    click_next();
+    assert_eq!(
+        active_mode(),
+        "friction",
+        "after Next to step 2 the data-mode='friction' tab should be aria-selected"
+    );
+
+    // Next → step 3 (health + top-10 brush).
+    click_next();
+    assert_eq!(
+        active_mode(),
+        "health",
+        "after Next to step 3 the data-mode='health' tab should be aria-selected"
+    );
+    let brushed_on_step3 = brush_count();
+    assert!(
+        brushed_on_step3 > 0,
+        "step 3 (brushTopHotspots=true) should brush at least one path; \
+         Alpine brush store is empty — bs.set(['targets','top10'],[...]) may not have fired"
+    );
+
+    // Next on the last step → Exit tour → bivariate restored, brush cleared.
+    click_next();
+    assert_eq!(
+        active_mode(),
+        "bivariate",
+        "after Exit tour (Next on last step) the data-mode='bivariate' tab should be \
+         aria-selected; exitTour() did not restore the bivariate tab"
+    );
+    assert_eq!(
+        brush_count(),
+        0,
+        "after Exit tour the brush should be cleared; exitTour() called bs.clear() \
+         but the Alpine store still reports paths"
     );
 }
 
@@ -1238,6 +1417,26 @@ fn write_smoke_spa(html_path: &std::path::Path, title: &str) {
         health_trend,
         mi_rollup,
         coupling_density,
+        effort_exposure: vec![
+            EffortExposureRow {
+                band: "red".into(),
+                files: 2,
+                loc_share_pct: 18.0,
+                commit_share_pct: 35.0,
+                churn_share_pct: 30.0,
+                commit_share_ci_low: 0.22,
+                commit_share_ci_high: 0.50,
+            },
+            EffortExposureRow {
+                band: "green".into(),
+                files: 6,
+                loc_share_pct: 82.0,
+                commit_share_pct: 65.0,
+                churn_share_pct: 70.0,
+                commit_share_ci_low: 0.54,
+                commit_share_ci_high: 0.74,
+            },
+        ],
         ..SpaDashboard::default()
     };
 

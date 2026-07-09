@@ -30,6 +30,9 @@
 //! rules); ours integrates with `--group-file`, `--mailmap`, and the
 //! existing convention-naming pattern — same data, deeper DX.
 
+pub mod ledger;
+pub mod ratchet;
+
 use std::fs;
 use std::path::Path;
 
@@ -82,6 +85,27 @@ pub struct Gates {
     /// fighting fires in the worst-health files." Missing red band
     /// (zero red files) counts as 0 %, which passes any positive threshold.
     pub max_red_effort_pct: Option<f64>,
+    /// Minimum code-familiarity score (`[0, 100]`). Below this threshold
+    /// the `code-familiarity` analysis emits a `"risky"` verdict. When
+    /// absent the analysis applies a built-in default of 70.0.
+    pub code_familiarity_min: Option<f64>,
+    /// When `true` (the **default**), a gate whose underlying analysis
+    /// produced no evaluable data where data was expected is recorded as
+    /// `verdict = "degraded"` and treated as a failure — a gate must not
+    /// green on blindness. Set to `false` to downgrade degraded gates from
+    /// failure to a warning (the degraded verdict is still printed and
+    /// recorded in the ledger).
+    ///
+    /// Adapted from the explicit-degradation contract in SAST tooling:
+    /// an analyzer that silently returns "no findings" on an empty scan
+    /// is indistinguishable from one that found nothing. Degraded status
+    /// makes the difference explicit.
+    #[serde(default = "default_fail_on_degraded")]
+    pub fail_on_degraded: bool,
+}
+
+fn default_fail_on_degraded() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -162,16 +186,20 @@ impl Thresholds {
             && self.gates.max_dependency_cycles.is_none()
             && self.gates.max_propagation_cost.is_none()
             && self.gates.max_red_effort_pct.is_none()
+            && self.gates.code_familiarity_min.is_none()
             && self.diff.delta_code_health_min.is_none()
             && self.diff.new_hotspot_max.is_none()
             && !self.diff.no_new_cycles
             && self.diff.delta_health_min.is_none()
             && !self.diff.deny_degrading_verdict
+        // Note: fail_on_degraded=true is the default and does not make a
+        // threshold non-empty by itself — it only affects how degraded
+        // verdicts from other gates are handled.
     }
 }
 
 /// One detected gate violation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct GateViolation {
     pub gate: String,
     pub path: String,
@@ -228,9 +256,34 @@ pub fn evaluate_architecture_gate(
     thresholds: &Thresholds,
     db: &crate::facts::FactsDb,
 ) -> crate::Result<Vec<GateViolation>> {
+    Ok(evaluate_architecture_gate_measured(thresholds, db)?.0)
+}
+
+/// Architecture metrics measured for gate evaluation, returned so callers
+/// can record the observed values (ledger, ratchet) on passing runs too.
+#[derive(Debug, Clone, Copy)]
+pub struct ArchMeasured {
+    /// Import-graph strongly-connected-component count.
+    pub cycle_count: u32,
+    /// Propagation cost (0..1 reach density).
+    pub propagation_cost: f64,
+}
+
+/// [`evaluate_architecture_gate`] returning the measured metrics alongside
+/// the violations. `None` when neither architecture gate is configured (the
+/// import graph is not built at all).
+///
+/// # Errors
+///
+/// Returns [`crate::CodeLoreError::Analysis`] on `DuckDB` errors
+/// (propagated from the import-graph build).
+pub fn evaluate_architecture_gate_measured(
+    thresholds: &Thresholds,
+    db: &crate::facts::FactsDb,
+) -> crate::Result<(Vec<GateViolation>, Option<ArchMeasured>)> {
     let g = &thresholds.gates;
     if g.max_dependency_cycles.is_none() && g.max_propagation_cost.is_none() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), None));
     }
     let graph = crate::analyses::import_graph::build_import_graph(db)?;
     let m = crate::analyses::import_graph::graph_metrics(&graph);
@@ -256,7 +309,13 @@ pub fn evaluate_architecture_gate(
             threshold: format!("{max:.4}"),
         });
     }
-    Ok(out)
+    Ok((
+        out,
+        Some(ArchMeasured {
+            cycle_count: m.cycle_count,
+            propagation_cost: m.propagation_cost,
+        }),
+    ))
 }
 
 /// Evaluate the `[diff]` section against a base→head delta.
@@ -404,7 +463,11 @@ pub fn evaluate_code_health_gate(
 ///
 /// Finds the `"red"` band row in `rows`; if none, treats churn as 0 %
 /// (an all-green / all-yellow repo passes any positive threshold).
-pub(crate) fn evaluate_effort_exposure_rows(
+/// Public so callers that already hold the effort-exposure rows (the
+/// `check` command computes them once for the gate, its ledger record,
+/// and the ratchet) can evaluate without re-running the analysis.
+#[must_use]
+pub fn evaluate_effort_exposure_rows(
     threshold: f64,
     rows: &[crate::analyses::effort_exposure::EffortExposureRow],
 ) -> Vec<GateViolation> {
@@ -444,6 +507,57 @@ pub fn evaluate_effort_exposure_gate(
     };
     let rows = crate::analyses::effort_exposure::run_effort_exposure(db, opts)?;
     Ok(evaluate_effort_exposure_rows(threshold, &rows))
+}
+
+/// Pure inner comparison for the `code_familiarity_min` gate.
+///
+/// Public so callers that already hold the familiarity rows (the `check`
+/// command reads the measured percentage for its ledger record from the
+/// same rows) can evaluate without re-running the analysis.
+#[must_use]
+pub fn evaluate_familiarity_rows(
+    threshold: f64,
+    rows: &[crate::analyses::code_familiarity::CodeFamiliarityRow],
+) -> Vec<GateViolation> {
+    // Empty rows means no recognized source files — gate vacuously passes
+    // (no SLOC to measure, so no familiarity risk to enforce).
+    let Some(row) = rows.first() else {
+        return Vec::new();
+    };
+    if row.familiarity_pct < threshold {
+        vec![GateViolation {
+            gate: "code_familiarity_min".into(),
+            path: "(repo-wide)".into(),
+            actual: format!("{:.2}", row.familiarity_pct),
+            threshold: format!("{threshold:.2}"),
+        }]
+    } else {
+        Vec::new()
+    }
+}
+
+/// Evaluate the `code_familiarity_min` gate: fails when the repository's
+/// active-team familiarity score falls below the configured floor.
+///
+/// A noop (returns empty) when `code_familiarity_min` is absent from the
+/// thresholds. When the repo has no recognized source files (empty
+/// `complexity_metrics`) `run_code_familiarity` returns an empty vec, which
+/// this gate treats as vacuously passing.
+///
+/// # Errors
+///
+/// Returns [`crate::CodeLoreError::Analysis`] if `run_code_familiarity`
+/// fails (e.g. `DuckDB` error during materialization or SQL execution).
+pub fn evaluate_familiarity_gate(
+    thresholds: &Thresholds,
+    db: &crate::facts::FactsDb,
+    opts: &crate::Options,
+) -> crate::Result<Vec<GateViolation>> {
+    let Some(threshold) = thresholds.gates.code_familiarity_min else {
+        return Ok(Vec::new());
+    };
+    let rows = crate::analyses::code_familiarity::run_code_familiarity(db, opts)?;
+    Ok(evaluate_familiarity_rows(threshold, &rows))
 }
 
 #[cfg(test)]
@@ -777,6 +891,106 @@ new_hotspot_max = 0
             err.contains("unknown field") || err.contains("max_red_effort"),
             "expected 'unknown field' in error: {err}"
         );
+    }
+
+    // ───────── code_familiarity_min gate ─────────
+
+    fn make_familiarity_row(
+        familiarity_pct: f64,
+    ) -> crate::analyses::code_familiarity::CodeFamiliarityRow {
+        crate::analyses::code_familiarity::CodeFamiliarityRow {
+            scope: "repo".into(),
+            familiarity_pct,
+            active_authors: 1,
+            total_authors: 1,
+            islands_pct: 0.0,
+            verdict: (if familiarity_pct >= 70.0 {
+                "good"
+            } else {
+                "risky"
+            })
+            .into(),
+        }
+    }
+
+    #[test]
+    fn familiarity_gate_fires_when_score_below_threshold() {
+        // familiarity_pct = 60.0, threshold = 70.0 → violation.
+        let rows = vec![make_familiarity_row(60.0)];
+        let v = evaluate_familiarity_rows(70.0, &rows);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].gate, "code_familiarity_min");
+        assert_eq!(v[0].actual, "60.00");
+        assert_eq!(v[0].threshold, "70.00");
+        assert_eq!(v[0].path, "(repo-wide)");
+    }
+
+    #[test]
+    fn familiarity_gate_passes_at_boundary() {
+        // Exactly at threshold is allowed (strictly less fails).
+        let rows = vec![make_familiarity_row(70.0)];
+        assert!(evaluate_familiarity_rows(70.0, &rows).is_empty());
+    }
+
+    #[test]
+    fn familiarity_gate_vacuous_when_rows_empty() {
+        // No recognized source files → no rows → gate passes vacuously.
+        assert!(evaluate_familiarity_rows(70.0, &[]).is_empty());
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn familiarity_gate_integration_passes_at_threshold_0() {
+        // Full pipeline: ingest delivery_repo and verify the gate passes at
+        // threshold 0.0 (floor). delivery_repo has 3 active authors and all
+        // files touched within the 90-day window — familiarity_pct = 100.0.
+        use crate::Options;
+        use crate::facts::FactsDb;
+        use crate::repo::GixRepo;
+
+        let delivery = crate::test_support::delivery_repo::build();
+        let repo = GixRepo::open(delivery.dir.path()).expect("open repo");
+        let db = FactsDb::new_in_memory().expect("db");
+        let opts = Options {
+            repo_path: delivery.dir.path().to_path_buf(),
+            min_revs: 1,
+            ..Options::default()
+        };
+        db.ingest(&repo, &opts).expect("ingest");
+
+        let thresholds =
+            Thresholds::from_text("[gates]\ncode_familiarity_min = 0.0\n").expect("parse");
+        let v = evaluate_familiarity_gate(&thresholds, &db, &opts).expect("evaluate gate");
+        assert!(
+            v.is_empty(),
+            "threshold 0.0 must pass on delivery_repo: {v:?}"
+        );
+    }
+
+    // ───────── fail_on_degraded TOML parsing ─────────
+
+    #[test]
+    fn fail_on_degraded_false_parses() {
+        let t = Thresholds::from_text("[gates]\nfail_on_degraded = false\n").unwrap();
+        assert!(!t.gates.fail_on_degraded);
+    }
+
+    #[test]
+    fn fail_on_degraded_defaults_to_true_when_omitted() {
+        let t = Thresholds::from_text("[gates]\ncode_health_min = 50.0\n").unwrap();
+        assert!(t.gates.fail_on_degraded);
+    }
+
+    #[test]
+    fn empty_code_health_rows_with_threshold_yields_no_lib_violations() {
+        // When the analysis returns no rows the lib-level evaluator emits
+        // no violations — the degraded detection and optional violation
+        // injection live in the CLI layer (eval_code_health_gate helper).
+        // This test pins that the pure-lib function is not itself the source
+        // of a false-positive violation on empty input.
+        let t = Thresholds::from_text("[gates]\ncode_health_min = 50.0\n").unwrap();
+        let v = evaluate_code_health_gate(&t, &[]);
+        assert!(v.is_empty(), "no violations from empty rows: {v:?}");
     }
 
     #[cfg(feature = "test-support")]

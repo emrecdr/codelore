@@ -349,6 +349,209 @@
     .table-container tr:hover td { background: var(--bg-elev-2); }
     .table-container .num { text-align: right; font-variant-numeric: tabular-nums; }
     .table-container .path { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+    /* ── Factor header ──────────────────────────────────────────── */
+    .factor-tiles {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      padding: 4px 0;
+    }
+    .factor-tile {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .factor-name {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      opacity: 0.7;
+    }
+    .factor-headline {
+      font-size: 1.75rem;
+      font-weight: 700;
+      line-height: 1;
+    }
+    .factor-attention-chip {
+      display: inline-block;
+      font-size: 0.65rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 1px 6px;
+      border-radius: 9999px;
+      background: oklch(var(--wa));
+      color: oklch(var(--wac));
+      margin-bottom: 2px;
+    }
+    .factor-bullet-wrap {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .factor-bullet-track {
+      flex: 1;
+      position: relative;
+      height: 8px;
+      background: oklch(var(--b3));
+      border-radius: 4px;
+      overflow: visible;
+    }
+    .factor-bullet-fill {
+      height: 100%;
+      border-radius: 4px;
+      transition: width 0.3s ease;
+    }
+    .factor-bullet-mean-tick {
+      position: absolute;
+      top: -2px;
+      width: 2px;
+      height: 12px;
+      background: oklch(var(--bc) / 0.4);
+      border-radius: 1px;
+      transform: translateX(-50%);
+    }
+    .factor-bullet-label {
+      font-size: 0.7rem;
+      font-weight: 600;
+      min-width: 2.5rem;
+      text-align: right;
+    }
+    .factor-sparkline {
+      height: 60px;
+      width: 100%;
+    }
+    .factor-detail {
+      font-size: 0.7rem;
+      opacity: 0.6;
+      line-height: 1.3;
+    }
+    /* ── Share bars + effort dot strip (A.5) ────────────────────── */
+    .share-bars-container {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 4px 0;
+    }
+    .share-bar-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .share-bar-axis-label {
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      opacity: 0.6;
+      min-width: 2.8rem;
+      text-align: right;
+    }
+    .share-bar-track {
+      flex: 1;
+      display: flex;
+      height: 22px;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .share-bar-segment {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      transition: width 0.3s ease;
+    }
+    .share-bar-label {
+      font-size: 0.65rem;
+      font-weight: 600;
+      color: #fff;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.4);
+      white-space: nowrap;
+      padding: 0 4px;
+    }
+    .effort-dot-strip-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .effort-dot-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      padding: 4px 0;
+    }
+    .effort-dot {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+    }
+    .share-bars-caption {
+      font-size: 0.78rem;
+      opacity: 0.75;
+      margin-top: 2px;
+    }
+    /* ── Guided tour stepper ─────────────────────────────────────── */
+    .tour-nav {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .tour-chips {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+    .tour-chip {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      font-size: 0.8rem;
+      font-weight: 600;
+      border: 2px solid var(--color-base-content, currentColor);
+      background: transparent;
+      color: var(--color-base-content, currentColor);
+      opacity: 0.45;
+      cursor: pointer;
+      transition: opacity 0.15s, background 0.15s;
+    }
+    .tour-chip:hover  { opacity: 0.75; }
+    .tour-chip-active { opacity: 1; background: var(--color-primary, oklch(0.588 0.218 270)); color: var(--color-primary-content, #fff); border-color: var(--color-primary, oklch(0.588 0.218 270)); }
+    .tour-chip-done   { opacity: 0.65; background: var(--color-base-300, oklch(0.85 0 0)); }
+    .tour-buttons {
+      display: flex;
+      gap: 6px;
+      margin-left: auto;
+    }
+    .tour-btn {
+      padding: 4px 14px;
+      border-radius: 6px;
+      font-size: 0.82rem;
+      font-weight: 500;
+      border: 1px solid var(--color-base-content, currentColor);
+      background: transparent;
+      cursor: pointer;
+      opacity: 0.85;
+    }
+    .tour-btn:disabled { opacity: 0.3; cursor: default; }
+    .tour-btn-primary  { background: var(--color-primary, oklch(0.588 0.218 270)); color: var(--color-primary-content, #fff); border-color: var(--color-primary, oklch(0.588 0.218 270)); opacity: 1; }
+    .tour-btn-ghost    { border-color: transparent; opacity: 0.6; }
+    .tour-note {
+      margin-top: 8px;
+      padding: 8px 12px;
+      border-radius: 6px;
+      background: var(--color-base-300, oklch(0.85 0 0));
+      font-size: 0.82rem;
+      line-height: 1.5;
+      transition: opacity 0.2s;
+    }
+    .tour-note-title { font-weight: 600; }
+    /* ── KPI grid ────────────────────────────────────────────────── */
     .kpi-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -885,6 +1088,14 @@
       color: var(--accent);
       text-decoration: none;
     }
+    .delivery-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .delivery-table td { padding: 4px 8px; vertical-align: top; }
+    .delivery-table td:first-child { color: var(--fg-dim); white-space: nowrap; }
+    .delivery-value { font-variant-numeric: tabular-nums; text-align: right; }
+    .delivery-caveat { color: var(--fg-dim); font-size: 11px; }
+    .delivery-friction-header { margin-top: 8px; font-size: 12px; color: var(--fg-dim); }
+    .delivery-friction-list { margin: 4px 0 0 16px; font-size: 12px; }
+    .delivery-disclaimer { margin-top: 8px; font-size: 11px; color: var(--fg-dim); font-style: italic; }
   </style>
 </head>
 <body x-data>
@@ -960,6 +1171,23 @@
        dashboard's preferred layout — `max-w-screen-2xl` (1536 px)
        would shrink the dashboard on ultra-wide displays. -->
   <main class="mx-auto grid grid-cols-1 md:grid-cols-2 gap-7 p-7 dashboard-main">
+    <!-- Four-factor header: Code / Architecture / Knowledge / Delivery.
+         Spans the full dashboard width (xl:col-span-2). Hidden via CSS
+         when empty (JS sets display:none on the container when
+         data.factors is absent or empty). -->
+    <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-factor-header">
+      <h2>Quality dimensions</h2>
+      <div class="subtitle">
+        Four headline scores (0–100, higher = healthier) summarising the
+        repo's Code, Architecture, Knowledge, and Delivery dimensions.
+        The bullet bar shows the current score against the healthy (green)
+        and warning (yellow) thresholds. The sparkline shows the sampled
+        historical trend. The "Attention" chip appears when the
+        Shewhart XmR chart signals a statistical excursion or sustained run.
+      </div>
+      <div id="widget-factor-header-body" class="widget-body" style="min-height: 80px;"></div>
+    </section>
+
     <section class="widget card bg-base-200 shadow-lg" id="widget-kpi-tiles">
       <h2>Codebase at a glance</h2>
       <div class="subtitle">
@@ -999,6 +1227,41 @@
         </div>
       </details>
       <div id="widget-knowledge-islands-body" class="table-container"></div>
+    </section>
+
+    <section class="widget card bg-base-200 shadow-lg" id="widget-knowledge-surfaces">
+      <h2>Knowledge surfaces</h2>
+      <div class="subtitle">
+        Team familiarity, knowledge islands ratio, tenure mix, and the
+        files with the highest coordination overhead — from one
+        behavioural scan, no manual tagging.
+      </div>
+      <details class="learn-more">
+        <summary>Learn more — how to read this panel</summary>
+        <div class="learn-more-content">
+          <p><strong>Familiarity.</strong> Mean team familiarity across active files: the fraction of each file's weighted change history that active authors "own" — averaged over all files touched in the window. Green ≥ 70 %, yellow 40–70 %, red &lt; 40 %.</p>
+          <p><strong>Islands.</strong> Fraction of active files with no active owner (primary author inactive + no successor). Lower is better. Green ≤ 20 %, yellow 20–40 %, red &gt; 40 %.</p>
+          <p><strong>Team composition.</strong> Commit share split by tenure bucket: <em>onboarded</em> (&lt; 90 days), <em>experienced</em> (90–364 days), <em>veteran</em> (≥ 365 days). A healthy team shows some onboarding throughput without veteran over-concentration.</p>
+          <p><strong>Coordination needs.</strong> Top files by co-change coupling tier and entropy. <em>High</em>-tier files are frequently changed together by multiple authors with high authorship interleaving — the strongest coordination signal.</p>
+          <p><cite>Methodology: knowledge-shares materialized view + coordination-needs entropy; see <code>analyses/code_familiarity.rs</code>, <code>analyses/coordination_needs.rs</code>.</cite></p>
+        </div>
+      </details>
+      <div id="widget-knowledge-surfaces-body"></div>
+    </section>
+
+    <section class="widget card bg-base-200 shadow-lg md:col-span-2 wide-widget" id="widget-guided-tour" aria-label="Guided analysis tour">
+      <h2>Guided tour</h2>
+      <div class="subtitle">
+        A 4-step walk through the hero map — from code health to refactoring targets.
+        Each step sets the circle-pack colour lens and brushes the relevant files.
+      </div>
+      <details class="learn-more">
+        <summary>Learn more</summary>
+        <p><strong>What it does.</strong> The martini-glass tour narrows focus progressively: start with the full health picture, then zoom into hotspots, then find where effort is wasted, then surface the top refactoring candidates.</p>
+        <p><strong>How to use it.</strong> Click <em>Start tour</em> to begin. Use <em>Next</em> / <em>Prev</em> or the numbered chips to navigate. The circle-pack colour mode and brush update automatically at each step (entering the tour clears any active brush). Click <em>Exit</em> or finish the last step to return to free-form exploration.</p>
+        <p><strong>Colour modes used.</strong> Steps 1 and 4 use the <em>Code health</em> lens; step 2 uses <em>Cognitive complexity</em>; step 3 uses the <em>Friction</em> heat-ramp. Step 4 additionally brushes the top-10 hotspot files across all widgets.</p>
+      </details>
+      <div id="widget-guided-tour-body" class="widget-body" style="min-height: 48px;"></div>
     </section>
 
     <section class="widget card bg-base-200 shadow-lg md:col-span-2 wide-widget" id="widget-hotspot-circle-pack">
@@ -1543,6 +1806,29 @@
       <div id="widget-improvements-feed-body" class="widget-body" style="min-height: 120px;"></div>
     </section>
 
+    <!-- Code Health share bars + effort dot strip (A.5).
+         Two 100%-stacked horizontal bars: LOC share and churn share per
+         code-health band; plus a 20-dot effort strip (each dot = 5%
+         churn). Pure HTML/CSS — no ECharts. Driven by effort_exposure. -->
+    <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-share-bars">
+      <h2>Code Health — effort distribution</h2>
+      <div class="subtitle">
+        Where engineering effort lands across red / yellow / green health
+        bands. A team with most churn in red code is in reactive mode;
+        most churn in green means proactive maintenance.
+      </div>
+      <details class="learn-more">
+        <summary>Learn more — how to read this panel</summary>
+        <div class="learn-more-content">
+          <p><strong>What it measures.</strong> Two 100% stacked bars: the top bar shows the share of total SLOC (source lines of code) in each health band at HEAD; the bottom bar shows the share of trailing-window churn (lines added + deleted) that landed in each band. The dot strip encodes the same churn share as 20 coloured dots — each dot = 5% of window churn.</p>
+          <p><strong>How to read it.</strong> LOC bar = how your codebase is distributed today. Churn bar = where your team is actually spending its energy. If the churn bar has a large red segment while the LOC bar has a small red segment, the team is disproportionately fighting fires in its worst files.</p>
+          <p><strong>What to watch for.</strong> Red churn share consistently above 40% indicates a reactive maintenance pattern. Improving = churn shifting toward green over successive sprints.</p>
+          <p><strong>Suggested action.</strong> Prioritise the top hotspots with red health for refactoring investment to reduce the cost of future changes there.</p>
+        </div>
+      </details>
+      <div id="widget-share-bars-body" class="widget-body" style="min-height: 80px;"></div>
+    </section>
+
     <!-- Treemap alternative view to the circle-pack. Same
          `hotspots` data, rendered as nested rectangles. Strict
          area encoding (cognitive complexity × revisions); useful
@@ -1837,6 +2123,20 @@
         </div>
       </details>
       <div id="widget-coupling-sankey-body" class="widget-body"></div>
+    </section>
+
+    <!-- Delivery card: compact KPI card for delivery-metrics, release-cadence,
+         and delivery-friction. Degrades gracefully when data is absent (no tags,
+         no merges). Populated by renderDeliveryCard in 30_coupling_trends.js. -->
+    <section class="widget card bg-base-200 shadow-lg" id="widget-delivery-card">
+      <h2>Delivery</h2>
+      <div class="subtitle">
+        Git-only delivery proxies: rework rate, branch duration, lead-time proxy,
+        release cadence, and top friction files. Run with
+        <code>--include-merges</code> and release tags matching
+        <code>--release-tag-glob</code> to populate.
+      </div>
+      <div id="widget-delivery-card-body" class="widget-body" style="min-height: 80px;"></div>
     </section>
   </main>
 

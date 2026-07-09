@@ -1,0 +1,356 @@
+//! Integration tests for `codelore mcp` — newline-delimited JSON-RPC 2.0 over stdio.
+//!
+//! The rmcp stdio transport uses newline-delimited JSON (one JSON object per line).
+//! The test spawns the binary, exchanges the MCP initialize handshake, calls
+//! `tools/list` and `tools/call`, and asserts the JSON shape.
+//! The `tiny_repo` fixture is used for the initial tools/list + `repo_overview` smoke test;
+//! `delivery_repo` (which has enough history for all analyses) is used for the 5 new tools.
+
+use std::io::{BufRead, BufReader, Write};
+use std::process::{Command, Stdio};
+
+use codelore_lib::test_support::{delivery_repo, tiny_repo};
+use serde_json::{Value, json};
+
+/// Serialize a JSON-RPC message as a newline-terminated line.
+fn ndjson_line(msg: &Value) -> Vec<u8> {
+    let mut bytes = serde_json::to_vec(msg).unwrap();
+    bytes.push(b'\n');
+    bytes
+}
+
+/// Read one newline-delimited JSON message from the reader.
+fn read_ndjson(reader: &mut BufReader<impl std::io::Read>) -> Value {
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("read JSON-RPC line");
+    serde_json::from_str(line.trim()).expect("parse JSON-RPC line")
+}
+
+/// Spawn `codelore mcp`, complete the MCP handshake, and return (child, stdin, reader).
+/// The caller owns stdin (write requests) and the reader (read responses).
+fn spawn_mcp(
+    repo_path: &str,
+) -> (
+    std::process::Child,
+    std::process::ChildStdin,
+    BufReader<std::process::ChildStdout>,
+) {
+    let bin = assert_cmd::cargo::cargo_bin("codelore");
+    let mut child = Command::new(&bin)
+        .args(["mcp", "--repo", repo_path])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn codelore mcp");
+
+    let mut stdin = child.stdin.take().expect("stdin");
+    let stdout = child.stdout.take().expect("stdout");
+    let mut reader = BufReader::new(stdout);
+
+    // initialize handshake
+    let init_req = json!({
+        "jsonrpc": "2.0", "id": 0, "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": { "name": "test-client", "version": "0.0.1" }
+        }
+    });
+    stdin.write_all(&ndjson_line(&init_req)).unwrap();
+    stdin.flush().unwrap();
+    let init_resp = read_ndjson(&mut reader);
+    // The initialize response must carry the server's positioning statement
+    // (local-only, read-only, no network/account/telemetry) so MCP clients
+    // can display it.
+    let instructions = init_resp["result"]["instructions"]
+        .as_str()
+        .expect("initialize response carries an instructions string");
+    assert!(
+        instructions.contains("No network"),
+        "instructions must state the local-only positioning, got: {instructions}"
+    );
+
+    // initialized notification
+    let notif = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
+    stdin.write_all(&ndjson_line(&notif)).unwrap();
+    stdin.flush().unwrap();
+
+    (child, stdin, reader)
+}
+
+/// Call a single tool and return the response Value.
+fn call_tool(
+    stdin: &mut std::process::ChildStdin,
+    reader: &mut BufReader<std::process::ChildStdout>,
+    id: u64,
+    name: &str,
+    arguments: &Value,
+) -> Value {
+    let req = json!({
+        "jsonrpc": "2.0", "id": id, "method": "tools/call",
+        "params": { "name": name, "arguments": arguments }
+    });
+    stdin.write_all(&ndjson_line(&req)).unwrap();
+    stdin.flush().unwrap();
+    read_ndjson(reader)
+}
+
+/// Assert a tool response is not an error and return the first content text as a parsed JSON Value.
+fn assert_tool_ok(resp: &Value, tool_name: &str) -> Value {
+    assert_eq!(resp["jsonrpc"], "2.0", "{tool_name}: bad jsonrpc field");
+    assert!(
+        !resp["result"]["isError"].as_bool().unwrap_or(false),
+        "{tool_name} returned MCP error: {resp}"
+    );
+    let content = resp["result"]["content"].as_array().expect("content array");
+    assert!(!content.is_empty(), "{tool_name}: content array is empty");
+    let text = content[0]["text"].as_str().expect("text field");
+    serde_json::from_str(text)
+        .unwrap_or_else(|e| panic!("{tool_name}: content text is not valid JSON ({e}): {text}"))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mcp_tools_list_and_repo_overview() {
+    let repo = tiny_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
+
+    // tools/list
+    let list_req = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {} });
+    stdin.write_all(&ndjson_line(&list_req)).unwrap();
+    stdin.flush().unwrap();
+    let list_resp = read_ndjson(&mut reader);
+    assert_eq!(list_resp["id"], 1);
+    let tools = list_resp["result"]["tools"]
+        .as_array()
+        .expect("tools array");
+
+    // Exact count — catches both missing tools and accidental extras.
+    assert_eq!(
+        tools.len(),
+        7,
+        "expected exactly 7 tools, got {}: {:?}",
+        tools.len(),
+        tools
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect::<Vec<_>>()
+    );
+
+    let tool_names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
+    for expected in &[
+        "repo_overview",
+        "hotspots",
+        "code_health",
+        "delta_health",
+        "refactoring_targets",
+        "function_xray",
+        "check_gates",
+    ] {
+        assert!(
+            tool_names.contains(expected),
+            "{expected} missing from tools/list: {tool_names:?}"
+        );
+    }
+
+    // Every tool must carry an inputSchema object (MCP spec requirement).
+    for tool in tools {
+        assert!(
+            tool["inputSchema"].is_object(),
+            "tool {:?} missing inputSchema: {tool}",
+            tool["name"]
+        );
+    }
+
+    // tools/call repo_overview — now returns {summary: [...], options: {...}}
+    let resp = call_tool(&mut stdin, &mut reader, 2, "repo_overview", &json!({}));
+    let parsed = assert_tool_ok(&resp, "repo_overview");
+    assert!(
+        parsed["summary"].is_array(),
+        "expected `summary` array in repo_overview response: {parsed}"
+    );
+    assert!(
+        parsed["options"].is_object(),
+        "expected `options` object in repo_overview response: {parsed}"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn mcp_code_health_returns_scored_rows() {
+    let repo = delivery_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
+    let resp = call_tool(&mut stdin, &mut reader, 1, "code_health", &json!({}));
+    let parsed = assert_tool_ok(&resp, "code_health");
+
+    let rows = parsed.as_array().expect("code_health: expected JSON array");
+    // delivery_repo has Rust source — at least one file should have complexity data.
+    assert!(
+        !rows.is_empty(),
+        "code_health returned no rows for delivery_repo"
+    );
+    // Each row must have a `band` and a numeric `score`.
+    let first = &rows[0];
+    assert!(
+        first["band"].is_string(),
+        "row missing `band` field: {first}"
+    );
+    assert!(
+        first["score"].is_number(),
+        "row missing numeric `score` field: {first}"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn mcp_refactoring_targets_returns_array() {
+    let repo = delivery_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
+    let resp = call_tool(
+        &mut stdin,
+        &mut reader,
+        1,
+        "refactoring_targets",
+        &json!({ "limit": 5 }),
+    );
+    let parsed = assert_tool_ok(&resp, "refactoring_targets");
+    assert!(
+        parsed.is_array(),
+        "refactoring_targets: expected JSON array, got: {parsed}"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn mcp_function_xray_returns_rows_for_valid_path() {
+    let repo = delivery_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
+    // delivery_repo seeds src/core.rs with a `core()` function.
+    let resp = call_tool(
+        &mut stdin,
+        &mut reader,
+        1,
+        "function_xray",
+        &json!({ "path": "src/core.rs" }),
+    );
+    let parsed = assert_tool_ok(&resp, "function_xray");
+    // Returns an array (possibly empty if tree-sitter doesn't parse the minimal fixture).
+    assert!(
+        parsed.is_array(),
+        "function_xray: expected JSON array, got: {parsed}"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn mcp_check_gates_returns_verdict() {
+    let repo = delivery_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+
+    // Write a thresholds file that is guaranteed to pass on delivery_repo.
+    let thresholds_path = repo.dir.path().join(".codelore-thresholds.toml");
+    std::fs::write(&thresholds_path, "[gates]\ncode_health_min = 0.0\n").unwrap();
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
+    let resp = call_tool(&mut stdin, &mut reader, 1, "check_gates", &json!({}));
+    let parsed = assert_tool_ok(&resp, "check_gates");
+
+    assert!(
+        parsed["verdict"].is_string(),
+        "check_gates: expected `verdict` string: {parsed}"
+    );
+    assert!(
+        parsed["violation_count"].is_number(),
+        "check_gates: expected `violation_count` number: {parsed}"
+    );
+    assert!(
+        parsed["violations"].is_array(),
+        "check_gates: expected `violations` array: {parsed}"
+    );
+    // A threshold of 0.0 means any score passes; expect no violations.
+    assert_eq!(
+        parsed["verdict"], "pass",
+        "check_gates: expected pass verdict with permissive threshold, got: {parsed}"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn mcp_delta_health_rejects_bad_rev() {
+    let repo = delivery_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
+    let resp = call_tool(
+        &mut stdin,
+        &mut reader,
+        1,
+        "delta_health",
+        &json!({ "base": "nonexistent-branch-xyz", "head": "HEAD" }),
+    );
+    // An invalid rev must return either a JSON-RPC error or isError=true at the tool level.
+    // In practice, resolve_rev returns ErrorData::invalid_params which rmcp surfaces as a
+    // JSON-RPC -32602 error rather than a tool-call result.
+    assert_eq!(resp["jsonrpc"], "2.0");
+    let is_rpc_error = resp["error"].is_object();
+    let is_tool_error = resp["result"]["isError"].as_bool().unwrap_or(false);
+    assert!(
+        is_rpc_error || is_tool_error,
+        "delta_health with bad rev should return an error, got: {resp}"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn mcp_delta_health_returns_section_for_valid_revs() {
+    let repo = delivery_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+
+    // Use HEAD~1..HEAD as base..head — delivery_repo has multiple commits.
+    let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
+    let resp = call_tool(
+        &mut stdin,
+        &mut reader,
+        1,
+        "delta_health",
+        &json!({ "base": "HEAD~1", "head": "HEAD" }),
+    );
+    let parsed = assert_tool_ok(&resp, "delta_health");
+
+    // DeltaHealthSection fields: verdict, ratio (nullable), counts, functions.
+    assert!(
+        parsed["verdict"].is_string(),
+        "delta_health: expected `verdict` string: {parsed}"
+    );
+    assert!(
+        parsed["counts"].is_object(),
+        "delta_health: expected `counts` object: {parsed}"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}

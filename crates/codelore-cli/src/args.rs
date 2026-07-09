@@ -125,6 +125,20 @@ pub enum Command {
     /// Writes `result=pass|fail` to `$GITHUB_OUTPUT` when the env var
     /// is set, for direct GitHub Actions step-output integration.
     Check(CheckArgs),
+    /// Start a Model Context Protocol (MCP) server over stdio. Exposes
+    /// `CodeLore` analyses as MCP tools for use by AI assistants and
+    /// agent frameworks. Read-only — no network, no account, no
+    /// telemetry. Warm-cache calls are cheap; first call on a cold
+    /// cache pays the ingest cost.
+    Mcp(McpArgs),
+}
+
+/// MCP server arguments.
+#[derive(clap::Args, Debug)]
+pub struct McpArgs {
+    /// Path to the git repo to analyse (default: cwd).
+    #[arg(short, long, default_value = ".")]
+    pub repo: std::path::PathBuf,
 }
 
 /// Quality-gate check.
@@ -139,6 +153,21 @@ pub struct CheckArgs {
     /// passes vacuously.
     #[arg(long)]
     pub thresholds_file: Option<PathBuf>,
+    /// Print the last 20 gate-run records from the local ledger, grouped
+    /// by HEAD SHA. Does not run any gate evaluations.
+    #[arg(long)]
+    pub history: bool,
+    /// Run the Betterer-style quality ratchet against `.codelore-ratchet.toml`
+    /// at the repo root. First run writes the snapshot; subsequent runs fail on
+    /// any regression and tighten the file on improvement.
+    #[arg(long)]
+    pub ratchet: bool,
+    /// Suppress diagnostic noise (vacuous-pass messages, per-violation detail
+    /// lines, inline degraded warnings) on stderr. The final verdict line
+    /// (PASS / FAIL / WARNING) and exit code are never suppressed — they are
+    /// the machine contract used by hooks and CI scripts.
+    #[arg(long)]
+    pub quiet: bool,
 }
 
 /// Shell-completion script generation.
@@ -392,6 +421,38 @@ pub struct AnalyzeArgs {
         default_value_t = codelore_lib::cli_api::constants::DEFAULT_WINDOW_DAYS
     )]
     pub window_days: u32,
+
+    /// Knowledge model for `bus-factor`. `commits` (default): Filatov 2010
+    /// greedy coverage of ≥80% of commits per module. `doe`: Cury & Avelino
+    /// SBES'24 truck-factor procedure — greedy removal of the author with the
+    /// most expert files until >50% of files lack an expert.
+    #[arg(long = "knowledge-model", default_value = "commits", value_parser = ["commits", "doe"])]
+    pub knowledge_model: String,
+
+    /// Hunk-overlap window for rework detection in `delivery-metrics`.
+    /// Hunk pairs on the same path where the second commit's author-date
+    /// falls within this many days of the first are counted as rework.
+    /// Valid range: 1–365. Default: 21.
+    #[arg(
+        long = "rework-window-days",
+        default_value_t = codelore_lib::cli_api::constants::DEFAULT_REWORK_WINDOW_DAYS
+    )]
+    pub rework_window_days: u32,
+
+    /// Glob pattern for filtering release tags in `release-cadence`.
+    /// Only tags whose short name matches this glob are included.
+    /// Must be non-empty. Default: `v*`.
+    #[arg(
+        long = "release-tag-glob",
+        default_value = codelore_lib::cli_api::constants::DEFAULT_RELEASE_TAG_GLOB
+    )]
+    pub release_tag_glob: String,
+
+    /// Target file path (repo-relative) for analyses that operate on a single
+    /// file. Required by `function-xray` and `function-coupling`; ignored by
+    /// all other analyses.
+    #[arg(long)]
+    pub target: Option<String>,
 }
 
 /// `TimeBucket` mirror on the CLI surface (clap-friendly value enum).

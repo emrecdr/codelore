@@ -145,6 +145,14 @@ pub enum AnalysisName {
     // not. Counters CodeScene v7.4's Delivery Analysis surface while
     // staying SQL-driven and CLI-only.
     DeliveryFriction,
+    // Repo-level delivery flow distributions: batch_size_files,
+    // batch_size_loc (merge-unit size), branch_duration_hours
+    // (time branch stays open), rework_pct (hunk-overlap within the
+    // rework window), lead_proxy_hours (author→committer date gap
+    // over non-merge commits). Percentile-first (p50/p75/p90).
+    // Requires the commit_parents table (schema v4) and merges ingested
+    // with include_merges=true.
+    DeliveryMetrics,
     // Effort-aware refactoring ROI ranking: (structural_risk ×
     // hotspot_score) / max(loc, floor). Surfaces files where low
     // code health intersects high activity, normalised by inspection
@@ -157,6 +165,49 @@ pub enum AnalysisName {
     // fighting fires or extending healthy code?" Wilson 95% CI on
     // commit-share is included per band.
     EffortExposure,
+    // Code familiarity — SLOC-weighted fraction of the codebase actively
+    // known by current contributors (authors with ≥1 commit in the
+    // trailing window), using exponentially-decayed knowledge shares
+    // (Jabrayilzade et al., ICSE-SEIP 2022). Also reports islands
+    // percentage (files with dominant single-author knowledge).
+    CodeFamiliarity,
+    // Team composition — per-author contribution-span buckets (onboarded /
+    // experienced / veteran) with a behavioral veteran-breadth gate and
+    // an onboarding-velocity metric (weeks to enter the weekly 80%-core
+    // set, per arXiv 2601.23142). Founder-period authors (first commit
+    // within the project's first 12 weeks) receive NULL onboarding_weeks.
+    TeamComposition,
+    // Coordination needs — per-file coordination overhead: knowledge
+    // fragmentation (HHI complement over decayed shares), author-switch
+    // interleave between adjacent commits, and co-change graph entropy
+    // contribution (EASE 2025, arXiv 2504.18511). Tier classification
+    // (single / low / medium / high) + code-health band join surface the
+    // worst cases: high-fragmentation, high-interleave files in the red band.
+    CoordinationNeeds,
+    // Marginal-owner risk — ownership concentration × code-health fusion.
+    // For each file in the yellow/red health band, reports the maximum
+    // knowledge share held by any active author (committed within window_days).
+    // Risk tiers: high (red band AND share <0.10) and elevated
+    // ((red AND share <0.30) OR (yellow AND share <0.10)).
+    // Correlational signal; see Palomba et al., EASE 2023, arXiv 2304.11636.
+    MarginalOwnerRisk,
+    // Release cadence — inter-release gap statistics derived from git tags.
+    // Tags matching --release-tag-glob (default "v*") are treated as release
+    // markers. Emits per-tag rows (date, days_since_prev) plus a summary row
+    // carrying median gap, IQR, and trend (accelerating/stable/slowing from
+    // the OLS slope of the gap series; threshold ±0.1 day/release).
+    ReleaseCadence,
+    // Function-xray — per-function change frequency for a single target file
+    // (`--target <path>`). For each function/method alive at HEAD, counts the
+    // revisions where at least one hunk overlapped its line span. Reuses the
+    // tree-sitter span extractor from the ingest pass. Hunk-overlap attribution
+    // is more accurate than blame (it captures the state at change time, not at
+    // HEAD). Research: HistoryFinder (Gall et al. ICSM 2003).
+    FunctionXray,
+    // Function-coupling — per-function-pair co-change frequency with Fisher
+    // significance for a single target file (`--target <path>`). Identifies
+    // which functions always change together. Research: Adams et al. ICSM 2006.
+    FunctionCoupling,
 }
 
 impl AnalysisName {
@@ -206,8 +257,16 @@ impl AnalysisName {
             Self::LeadTime => "lead-time",
             Self::BusFactor => "bus-factor",
             Self::DeliveryFriction => "delivery-friction",
+            Self::DeliveryMetrics => "delivery-metrics",
             Self::RefactoringTargets => "refactoring-targets",
             Self::EffortExposure => "effort-exposure",
+            Self::CodeFamiliarity => "code-familiarity",
+            Self::TeamComposition => "team-composition",
+            Self::CoordinationNeeds => "coordination-needs",
+            Self::MarginalOwnerRisk => "marginal-owner-risk",
+            Self::ReleaseCadence => "release-cadence",
+            Self::FunctionXray => "function-xray",
+            Self::FunctionCoupling => "function-coupling",
         }
     }
 
@@ -285,8 +344,16 @@ impl AnalysisName {
             LeadTime,
             BusFactor,
             DeliveryFriction,
+            DeliveryMetrics,
             RefactoringTargets,
             EffortExposure,
+            CodeFamiliarity,
+            TeamComposition,
+            CoordinationNeeds,
+            MarginalOwnerRisk,
+            ReleaseCadence,
+            FunctionXray,
+            FunctionCoupling,
         )
     }
 

@@ -574,6 +574,77 @@ pub fn write_effort_exposure_markdown<W: Write>(
     Ok(())
 }
 
+pub fn write_code_familiarity_markdown<W: Write>(
+    rows: &[crate::analyses::code_familiarity::CodeFamiliarityRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore code-familiarity")?;
+    if rows.is_empty() {
+        writeln!(
+            w,
+            "_No knowledge data — ensure commits exist and complexity metrics are available._"
+        )
+        .map_err(CodeLoreError::Io)?;
+        return Ok(());
+    }
+    writeln!(
+        w,
+        "| Scope | Familiarity % | Active Authors | Total Authors | Islands % | Verdict |"
+    )
+    .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---:|---:|---:|---:|---|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| {} | {:.1} | {} | {} | {:.1} | {} |",
+            escape_md_cell(&row.scope),
+            row.familiarity_pct,
+            row.active_authors,
+            row.total_authors,
+            row.islands_pct,
+            escape_md_cell(&row.verdict),
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+pub fn write_coordination_needs_markdown<W: Write>(
+    rows: &[crate::analyses::coordination_needs::CoordinationNeedsRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore coordination-needs")?;
+    if rows.is_empty() {
+        writeln!(
+            w,
+            "_No coordination data — ensure knowledge shares are available._"
+        )
+        .map_err(CodeLoreError::Io)?;
+        return Ok(());
+    }
+    writeln!(
+        w,
+        "| Path | Authors | Fragmentation | Interleave | Co-change Entropy | Tier | Health Band |"
+    )
+    .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---:|---:|---:|---:|---|---|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| {} | {} | {:.2} | {:.2} | {:.4} | {} | {} |",
+            escape_md_cell(&row.path),
+            row.authors,
+            row.fragmentation,
+            row.interleave,
+            row.cochange_entropy,
+            escape_md_cell(&row.tier),
+            escape_md_cell(&row.health_band),
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_architecture_metrics_markdown<W: Write>(
     rows: &[crate::analyses::architecture_metrics::ArchitectureMetricRow],
     w: &mut W,
@@ -916,19 +987,20 @@ pub fn write_bus_factor_markdown<W: Write>(
     header(w, "CodeLore bus-factor")?;
     writeln!(
         w,
-        "| Module | Total commits | Bus factor | Top contributor | Top share |"
+        "| Module | Total commits | Bus factor | Top contributor | Top share | Model |"
     )
     .map_err(CodeLoreError::Io)?;
-    writeln!(w, "|---|---:|---:|---|---:|").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---:|---:|---|---:|---|").map_err(CodeLoreError::Io)?;
     for row in rows {
         writeln!(
             w,
-            "| {} | {} | {} | {} | {:.1}% |",
+            "| {} | {} | {} | {} | {:.1}% | {} |",
             escape_md_cell(&row.module),
             row.total_commits,
             row.bus_factor,
             escape_md_cell(&row.top_contributor),
             row.top_contributor_share * 100.0,
+            row.model,
         )
         .map_err(CodeLoreError::Io)?;
     }
@@ -1205,6 +1277,219 @@ pub fn write_refactoring_targets_markdown<W: Write>(
             escape_md_cell(&row.dominant_type),
             row.band,
             row.manual_up_rank,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+/// `team-composition` markdown emitter.
+pub fn write_team_composition_markdown<W: Write>(
+    rows: &[crate::analyses::team_composition::TeamCompositionRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore team-composition")?;
+    if rows.is_empty() {
+        writeln!(w, "_No commit history found._").map_err(CodeLoreError::Io)?;
+        return Ok(());
+    }
+    writeln!(
+        w,
+        "| Author | Tenure (d) | Bucket | Breadth OK | Active | Commits | Files | Onboarding (wk) |"
+    )
+    .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---:|---|---|---|---:|---:|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        let ob = row
+            .onboarding_weeks
+            .map_or_else(|| "—".to_string(), |v| v.to_string());
+        writeln!(
+            w,
+            "| {} | {} | {} | {} | {} | {} | {} | {} |",
+            escape_md_cell(&row.author),
+            row.tenure_days,
+            escape_md_cell(&row.bucket),
+            row.veteran_breadth_ok,
+            row.active,
+            row.commits,
+            row.files_touched,
+            ob,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+pub fn write_marginal_owner_risk_markdown<W: Write>(
+    rows: &[crate::analyses::marginal_owner_risk::MarginalOwnerRiskRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore marginal-owner-risk")?;
+    if rows.is_empty() {
+        writeln!(w, "_No marginal-owner risk detected._").map_err(CodeLoreError::Io)?;
+        return Ok(());
+    }
+    writeln!(w, "| Path | Band | Top Active Share | Risk |").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---|---:|---|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| {} | {} | {:.4} | {} |",
+            escape_md_cell(&row.path),
+            escape_md_cell(&row.band),
+            row.top_active_share,
+            escape_md_cell(&row.risk),
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+pub fn write_release_cadence_markdown<W: Write>(
+    rows: &[crate::analyses::release_cadence::ReleaseCadenceRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore release-cadence")?;
+    let tag_rows: Vec<_> = rows.iter().filter(|r| r.tag != "__summary__").collect();
+    if tag_rows.is_empty() {
+        writeln!(w, "_No release tags matched the glob._").map_err(CodeLoreError::Io)?;
+        return Ok(());
+    }
+    writeln!(w, "| Tag | Date | Days Since Prev |").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|-----|------|-----------------|").map_err(CodeLoreError::Io)?;
+    for row in &tag_rows {
+        let gap = match row.days_since_prev {
+            Some(d) => format!("{d:.1}"),
+            None => "—".to_string(),
+        };
+        writeln!(w, "| {} | {} | {} |", row.tag, row.date, gap).map_err(CodeLoreError::Io)?;
+    }
+    if let Some(summary) = rows.iter().find(|r| r.tag == "__summary__") {
+        writeln!(w).map_err(CodeLoreError::Io)?;
+        writeln!(
+            w,
+            "**Summary** — median gap: {:.1} d | {} | trend: {}",
+            summary.days_since_prev.unwrap_or(0.0),
+            summary.date,
+            summary.trend,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+pub fn write_delivery_metrics_markdown<W: Write>(
+    rows: &[crate::analyses::delivery_metrics::DeliveryMetricsRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore delivery-metrics")?;
+    if rows.is_empty() {
+        writeln!(
+            w,
+            "_No delivery metrics computed — no merge commits ingested._"
+        )
+        .map_err(CodeLoreError::Io)?;
+        return Ok(());
+    }
+    writeln!(w, "| Metric | p50 | p75 | p90 | n | Caveat |").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---:|---:|---:|---:|---|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| {} | {:.2} | {:.2} | {:.2} | {} | {} |",
+            escape_md_cell(&row.metric),
+            row.p50,
+            row.p75,
+            row.p90,
+            row.n,
+            escape_md_cell(&row.caveat),
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+pub fn write_function_xray_markdown<W: Write>(
+    rows: &[crate::analyses::function_xray::FunctionXrayRow],
+    target: &str,
+    w: &mut W,
+) -> Result<()> {
+    header(w, &format!("CodeLore function-xray — {target}"))?;
+    if rows.is_empty() {
+        writeln!(
+            w,
+            "_No HEAD-alive functions found in `{target}` or no changes recorded._"
+        )
+        .map_err(CodeLoreError::Io)?;
+        return Ok(());
+    }
+    writeln!(
+        w,
+        "| Function | Change Freq | LOC | Cyclomatic | Cognitive | Last Changed |"
+    )
+    .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---:|---:|---:|---:|---|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        let cyc = row
+            .cyclomatic
+            .map_or_else(|| "—".to_string(), |v| v.to_string());
+        let cog = row
+            .cognitive
+            .map_or_else(|| "—".to_string(), |v| v.to_string());
+        let last = if row.last_changed.is_empty() {
+            "—".to_string()
+        } else {
+            row.last_changed.clone()
+        };
+        writeln!(
+            w,
+            "| {} | {} | {} | {} | {} | {} |",
+            escape_md_cell(&row.function),
+            row.change_freq,
+            row.loc,
+            cyc,
+            cog,
+            last,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
+pub fn write_function_coupling_markdown<W: Write>(
+    rows: &[crate::analyses::function_coupling::FunctionCouplingRow],
+    target: &str,
+    w: &mut W,
+) -> Result<()> {
+    header(w, &format!("CodeLore function-coupling — {target}"))?;
+    if rows.is_empty() {
+        writeln!(
+            w,
+            "_No coupled function pairs (co-changes ≥ 2) found in `{target}`._"
+        )
+        .map_err(CodeLoreError::Io)?;
+        return Ok(());
+    }
+    writeln!(
+        w,
+        "| A | B | Co-Changes | A Changes | B Changes | Confidence | p-value |"
+    )
+    .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---|---:|---:|---:|---:|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        let p = row
+            .p_value
+            .map_or_else(|| "—".to_string(), |v| format!("{v:.4}"));
+        writeln!(
+            w,
+            "| {} | {} | {} | {} | {} | {:.4} | {} |",
+            escape_md_cell(&row.a),
+            escape_md_cell(&row.b),
+            row.co_changes,
+            row.a_changes,
+            row.b_changes,
+            row.confidence,
+            p,
         )
         .map_err(CodeLoreError::Io)?;
     }

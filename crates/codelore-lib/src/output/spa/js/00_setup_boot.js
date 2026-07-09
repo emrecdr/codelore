@@ -582,6 +582,123 @@
   // so the closure has a binding to capture.
   let currentHotspotColorMode = 'bivariate';
 
+  // ─── §3c  Guided tour state ──────────────────────────────────────
+  //
+  // A 4-step martini-glass walk over the hero circle-pack. Each step
+  // sets a color mode and publishes a brush so other widgets highlight
+  // the same paths. Tour state is ephemeral (not persisted across
+  // reloads); `tourStep = -1` means the tour is inactive (free-form).
+  //
+  // Color-mode mapping (browser tab data-mode values):
+  //   health    → 'health'    (code-health band view)
+  //   activity  → 'cognitive' (complexity/churn; closest to "hotspot activity")
+  //   effort    → 'friction'  (friction heat-ramp; effort-weighted churn)
+  //   targets   → 'health'    (re-use health lens; top-10 hotspot paths brushed)
+  //
+  // The 'effort' and 'targets' modes are not distinct circle-pack color
+  // modes today — they re-use the closest existing mode and distinguish
+  // themselves via the brush set and the step note.
+  var tourStep = -1; // -1 = inactive
+
+  var TOUR_STEPS = [
+    {
+      title: 'Code health',
+      lens: 'health',
+      note: 'Circle color shows the code-health band (green/yellow/red). ' +
+            'Large red circles combine high churn with poor health — prime refactoring candidates.',
+    },
+    {
+      title: 'Hotspots',
+      lens: 'cognitive',
+      note: 'Color shifts to cognitive complexity. Files that are both large (circle size = revisions) ' +
+            'and cognitively complex (dark red) accumulate the most defect risk.',
+    },
+    {
+      title: 'Effort in red',
+      lens: 'friction',
+      note: 'Friction heat-ramp: the warmest circles absorb the most churn relative to their health. ' +
+            'These are the files where effort is being wasted on unhealthy code.',
+    },
+    {
+      title: 'Refactoring targets',
+      lens: 'health',
+      // Top-10 hotspot paths by score — refactoring-targets data is not yet
+      // in SpaDashboard; brushing the top-10 hotspots by hotspot_score is the
+      // equivalent until the dedicated analysis is wired into the SPA payload.
+      note: 'Top-10 hotspots by score are brushed across all widgets. ' +
+            'These are the highest-priority refactoring candidates: high churn, poor health, complex code.',
+      brushTopHotspots: true,
+    },
+  ];
+
+  // Apply one tour step: switch color mode, publish brush, show/hide banner.
+  function applyTourStep(idx) {
+    var step = TOUR_STEPS[idx];
+    if (!step) return;
+
+    // 1. Switch the circle-pack color mode. Re-uses the same path as
+    //    the manual color-toggle tabs (§14): update module state + re-render.
+    //    Also update the tab UI so it stays in sync with the tour.
+    var bar = document.getElementById('hotspot-color-toggles');
+    if (bar) {
+      var buttons = bar.querySelectorAll('button[role="tab"], button.toggle');
+      for (var i = 0; i < buttons.length; i++) {
+        var isCurrent = (buttons[i].getAttribute('data-mode') === step.lens);
+        buttons[i].classList.toggle('tab-active', isCurrent);
+        buttons[i].classList.toggle('active', isCurrent);
+        buttons[i].setAttribute('aria-selected', isCurrent ? 'true' : 'false');
+      }
+    }
+    currentHotspotColorMode = step.lens;
+    renderHotspotCirclePack(data.hotspots || [], step.lens);
+
+    // 2. Publish brush — top-10 hotspots for the "targets" step, empty otherwise.
+    if (window.Alpine && window.Alpine.store) {
+      var bs = window.Alpine.store('brush');
+      if (bs) {
+        if (step.brushTopHotspots) {
+          var top10 = (data.hotspots || [])
+            .slice()
+            .sort(function (a, b) {
+              return ((b.hotspot_score || 0) - (a.hotspot_score || 0));
+            })
+            .slice(0, 10)
+            .map(function (r) { return r.path; });
+          // Publish as a synthetic brush cell so all brush listeners fire.
+          bs.set(['targets', 'top10'], top10);
+        } else {
+          bs.clear();
+        }
+      }
+    }
+
+    // 3. Update the tour stepper UI.
+    renderGuidedTour();
+  }
+
+  // Exit the tour: clear brush, restore bivariate mode, hide the banner.
+  function exitTour() {
+    tourStep = -1;
+    if (window.Alpine && window.Alpine.store) {
+      var bs = window.Alpine.store('brush');
+      if (bs) bs.clear();
+    }
+    currentHotspotColorMode = 'bivariate';
+    renderHotspotCirclePack(data.hotspots || [], 'bivariate');
+    // Restore bivariate tab as active.
+    var bar = document.getElementById('hotspot-color-toggles');
+    if (bar) {
+      var buttons = bar.querySelectorAll('button[role="tab"], button.toggle');
+      for (var i = 0; i < buttons.length; i++) {
+        var isCurrent = (buttons[i].getAttribute('data-mode') === 'bivariate');
+        buttons[i].classList.toggle('tab-active', isCurrent);
+        buttons[i].classList.toggle('active', isCurrent);
+        buttons[i].setAttribute('aria-selected', isCurrent ? 'true' : 'false');
+      }
+    }
+    renderGuidedTour();
+  }
+
   // ─── Widget registry ────────────────────────────────────────────
   // Single source of truth for the boot sequence. Each entry is a
   // `{ name, render, rerender }` triple:
@@ -606,8 +723,11 @@
   // .push(() => ...)` line duplicated per widget, which invited
   // theme-rerender drift every time a new widget landed.
   const WIDGETS = [
+    { name: 'factor-header',      rerender: 'theme', render: () => renderFactorHeader(data.factors || [], data.options || {}) },
+    { name: 'share-bars',         rerender: false, render: () => renderShareBars(data.effort_exposure || [], data.options || {}) },
     { name: 'kpi-tiles',          rerender: false, render: () => renderKpiTiles(data) },
     { name: 'knowledge-islands',  rerender: false, render: () => renderKnowledgeIslands(data.knowledge_islands || []) },
+    { name: 'guided-tour',        rerender: false, render: () => renderGuidedTour() },
     { name: 'hotspot-circle-pack', rerender: 'theme', render: () => renderHotspotCirclePack(data.hotspots || [], currentHotspotColorMode) },
     { name: 'hotspot-table',      rerender: false, render: () => renderHotspotTable(data.hotspots || []) },
     { name: 'coupling-sankey',    rerender: 'theme', render: () => renderCouplingSankey(data.coupling || []) },
@@ -624,6 +744,8 @@
     { name: 'improvements-feed',  rerender: false,   render: () => renderImprovementsFeed(data.health_transitions || []) },
     { name: 'calendar-heatmap',   rerender: 'theme', render: () => renderCalendarHeatmap(data.daily_commits || []) },
     { name: 'xray-sunburst',      render: () => renderXRaySunburst(data.xray || []) },
+    { name: 'knowledge-surfaces', rerender: false, render: () => renderKnowledgeSurfaces(data.code_familiarity || [], data.team_composition || [], data.coordination_needs || []) },
+    { name: 'delivery-card',      rerender: false,   render: () => renderDeliveryCard(data) },
   ];
 
   // F97: boot widgets cooperatively. The synchronous `forEach` blocked

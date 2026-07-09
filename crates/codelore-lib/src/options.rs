@@ -149,6 +149,28 @@ pub struct Options {
     /// reproducible on old or archived repos. Valid range: 1–3650.
     /// Default: 90. Set via `--window-days`.
     pub window_days: u32,
+
+    /// Knowledge model for `bus-factor`. Valid values: `"commits"` (default,
+    /// Filatov 2010 — greedy coverage of ≥80% of commits) or `"doe"`
+    /// (Cury & Avelino SBES'24 truck-factor procedure — greedy removal of
+    /// the author with the most expert files until >50% of files lack an
+    /// expert). Set via `--knowledge-model`.
+    pub knowledge_model: String,
+    /// Hunk-overlap window for rework detection in `delivery-metrics`.
+    /// Pairs of hunks touching the same path where the second commit's
+    /// author-date falls within this many days of the first are counted
+    /// as rework candidates. Valid range: 1–365. Default: 21.
+    /// Set via `--rework-window-days`.
+    pub rework_window_days: u32,
+    /// Glob pattern for filtering release tags in `release-cadence`.
+    /// Only tags whose short name matches this glob are included.
+    /// Must be non-empty. Default: `"v*"`. Set via `--release-tag-glob`.
+    pub release_tag_glob: String,
+    /// Target file path for analyses that operate on a single file.
+    /// Currently used only by `function-xray`. Set via `--target`.
+    /// Validation that the value is present when required lives in the
+    /// dispatch arm, not `Options::validate`, to avoid cross-analysis coupling.
+    pub target: Option<String>,
 }
 
 impl Options {
@@ -178,10 +200,18 @@ impl Options {
 
         let mut snapshot = self.clone();
         snapshot.exclude_patterns.sort();
-        // Cosmetic knobs — exclude from canonical form so the cache hits
-        // when they change.
-        snapshot.rows_limit = None;
-        snapshot.explain = false;
+        // Two exclusion categories, both keyed on "ingest never reads it":
+        // cosmetic knobs (affect only output shaping) and per-invocation
+        // selectors (pick what to analyse from already-ingested facts). A
+        // future field belongs here iff changing it cannot change any row
+        // the ingest writes.
+        snapshot.rows_limit = None; // cosmetic — output truncation
+        snapshot.explain = false; // cosmetic — help text
+        // `target` is a per-invocation selector: it picks which file the
+        // function analyses read, but ingest never sees it — caching
+        // per-target would produce a full-size duplicate DB file for every
+        // distinct `--target` path.
+        snapshot.target = None;
         let mut canon = serde_json::to_value(&snapshot)
             .expect("Options derives Serialize and all fields are Serialize");
 
@@ -326,6 +356,23 @@ impl Options {
                 self.window_days
             )));
         }
+        if !matches!(self.knowledge_model.as_str(), "commits" | "doe") {
+            return Err(crate::CodeLoreError::InvalidOptions(format!(
+                "--knowledge-model must be 'commits' or 'doe'; got '{}'",
+                self.knowledge_model
+            )));
+        }
+        if !(1..=365).contains(&self.rework_window_days) {
+            return Err(crate::CodeLoreError::InvalidOptions(format!(
+                "--rework-window-days must be in [1, 365]; got {}",
+                self.rework_window_days
+            )));
+        }
+        if self.release_tag_glob.is_empty() {
+            return Err(crate::CodeLoreError::InvalidOptions(
+                "--release-tag-glob must not be empty".to_string(),
+            ));
+        }
         Ok(())
     }
 }
@@ -364,6 +411,10 @@ impl Default for Options {
             time_bucket: None,
             code_maat_compat: false,
             window_days: crate::constants::DEFAULT_WINDOW_DAYS,
+            knowledge_model: "commits".to_string(),
+            rework_window_days: crate::constants::DEFAULT_REWORK_WINDOW_DAYS,
+            release_tag_glob: crate::constants::DEFAULT_RELEASE_TAG_GLOB.to_string(),
+            target: None,
         }
     }
 }

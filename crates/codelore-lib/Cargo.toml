@@ -104,7 +104,7 @@ fancy-regex = "0.18"
 # `quality_gates::Thresholds::parse` and `arch_rules::LayerRules::parse`
 # call. (In 0.8.x `parse` implied `serde`; that bundling went away in
 # the 1.0 release.)
-toml = { version = "1", default-features = false, features = ["parse", "serde"] }
+toml = { version = "1", default-features = false, features = ["parse", "serde", "display"] }
 
 [features]
 default = []
@@ -308,4 +308,16 @@ required-features = ["test-support"]
 
 [[test]]
 name = "knowledge_shares_test"
+required-features = ["test-support"]
+
+[[test]]
+name = "code_familiarity_test"
+required-features = ["test-support"]
+
+[[test]]
+name = "function_xray_test"
+required-features = ["test-support"]
+
+[[test]]
+name = "function_coupling_test"
 required-features = ["test-support"]

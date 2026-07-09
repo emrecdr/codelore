@@ -968,6 +968,143 @@ fn effort_exposure_csv_has_header_and_rows() {
         }));
 }
 
+#[test]
+fn code_familiarity_csv_has_header() {
+    // tiny_repo has no recognized source files → complexity_metrics is empty
+    // → no familiarity rows. This test only verifies the CSV header is present.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "code-familiarity",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "csv",
+            "--min-revs",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "scope,familiarity-pct,active-authors,total-authors,islands-pct,verdict",
+        ));
+}
+
+#[test]
+fn code_familiarity_csv_has_header_and_rows() {
+    // delivery_repo has src/*.rs files (Rust, Tier-1) → complexity_metrics
+    // populated → knowledge_shares materialised → one familiarity row emitted.
+    let delivery = codelore_lib::test_support::delivery_repo::build();
+    let out = Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "code-familiarity",
+            "--repo",
+            delivery.dir.path().to_str().unwrap(),
+            "--format",
+            "csv",
+            "--min-revs",
+            "1",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(out).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert!(
+        lines.len() >= 2,
+        "expected header + at least one data row, got:\n{text}"
+    );
+    assert!(
+        lines[0].contains("scope") && lines[0].contains("familiarity-pct"),
+        "first line must be the CSV header: {}",
+        lines[0]
+    );
+    // Data row: scope=repo, verdict is good or risky, familiarity in [0,100].
+    assert!(
+        lines[1].starts_with("repo,"),
+        "data row must start with 'repo,': {}",
+        lines[1]
+    );
+}
+
+#[test]
+fn bus_factor_csv_contains_model_column() {
+    // Verify the `model` column is present in both commits and doe mode output.
+    let delivery = codelore_lib::test_support::delivery_repo::build();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "bus-factor",
+            "--repo",
+            delivery.dir.path().to_str().unwrap(),
+            "--format",
+            "csv",
+            "--min-revs",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "module,total_commits,bus_factor,top_contributor,top_contributor_share,model",
+        ));
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "bus-factor",
+            "--repo",
+            delivery.dir.path().to_str().unwrap(),
+            "--format",
+            "csv",
+            "--min-revs",
+            "1",
+            "--knowledge-model",
+            "doe",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "module,total_commits,bus_factor,top_contributor,top_contributor_share,model",
+        ))
+        .stdout(predicate::str::contains(",doe"));
+}
+
+#[test]
+fn team_composition_csv_has_header_and_rows() {
+    // Verify CSV header columns and that delivery_repo produces author data.
+    let delivery = codelore_lib::test_support::delivery_repo::build();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "team-composition",
+            "--repo",
+            delivery.dir.path().to_str().unwrap(),
+            "--format",
+            "csv",
+            "--min-revs",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "author,tenure-days,bucket,veteran-breadth-ok,active,commits,files-touched,onboarding-weeks",
+        ))
+        .stdout(predicate::str::contains("__summary__"));
+}
+
 #[cfg(feature = "spa")]
 #[test]
 fn spa_without_output_defaults_to_dot_codelore() {
@@ -1330,4 +1467,188 @@ fn diff_delta_health_flags_pasted_clone_as_high_risk() {
             .any(|r| r.as_str().unwrap_or("").contains("clone")),
         "reasons must mention clone membership; got: {reasons:?}"
     );
+}
+
+#[test]
+fn coordination_needs_csv_has_header_and_rows() {
+    // delivery_repo has src/*.rs Rust files → complexity ingest fires →
+    // knowledge_shares materialised → coordination-needs rows produced.
+    let delivery = codelore_lib::test_support::delivery_repo::build();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "coordination-needs",
+            "--repo",
+            delivery.dir.path().to_str().unwrap(),
+            "--format",
+            "csv",
+            "--min-revs",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "path,authors,fragmentation,interleave,cochange-entropy,tier,health-band",
+        ))
+        // Header alone would pass on empty output — require at least one data row.
+        .stdout(predicate::function(|out: &str| {
+            out.lines().filter(|l| !l.trim().is_empty()).count() >= 2
+        }));
+}
+
+#[test]
+fn release_cadence_csv_has_header_and_rows() {
+    // delivery_repo has v0.1.0, v0.2.0, v1.0.0 tags → 3 rows + summary.
+    let delivery = codelore_lib::test_support::delivery_repo::build();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "release-cadence",
+            "--repo",
+            delivery.dir.path().to_str().unwrap(),
+            "--format",
+            "csv",
+            "--release-tag-glob",
+            "v*",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("tag,date,days-since-prev,trend"))
+        // Header + 3 tag rows + 1 summary row = ≥4 non-empty lines.
+        .stdout(predicate::function(|out: &str| {
+            out.lines().filter(|l| !l.trim().is_empty()).count() >= 4
+        }));
+}
+
+#[test]
+fn delivery_metrics_markdown_exits_zero() {
+    // delivery_repo has two --no-ff merges and two author→committer gaps;
+    // run with include_merges so the commit_parents table is populated.
+    let delivery = codelore_lib::test_support::delivery_repo::build();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "delivery-metrics",
+            "--repo",
+            delivery.dir.path().to_str().unwrap(),
+            "--format",
+            "markdown",
+            "--include-merges",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("delivery-metrics"))
+        .stdout(predicate::str::contains("branch_duration_hours"));
+}
+
+#[test]
+fn check_quiet_suppresses_vacuous_pass_noise() {
+    // Without a thresholds file the check vacuously passes and prints a
+    // diagnostic to stderr. With --quiet that diagnostic is suppressed;
+    // exit 0 is preserved.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "check",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--quiet",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
+fn check_without_quiet_prints_vacuous_pass_diagnostic() {
+    // Without --quiet the vacuous-pass diagnostic appears on stderr so users
+    // know the check did nothing.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args(["check", "--repo", tiny.dir.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("vacuously passing"));
+}
+
+#[test]
+fn function_xray_emits_markdown_header() {
+    let repo = codelore_lib::test_support::function_xray_repo::build();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "function-xray",
+            "--repo",
+            repo.dir.path().to_str().unwrap(),
+            "--target",
+            "src/target.rs",
+            "--format",
+            "markdown",
+            "--min-revs",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("# CodeLore function-xray"));
+}
+
+#[test]
+fn function_coupling_emits_markdown_header() {
+    let repo = codelore_lib::test_support::function_xray_repo::build();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "function-coupling",
+            "--repo",
+            repo.dir.path().to_str().unwrap(),
+            "--target",
+            "src/target.rs",
+            "--format",
+            "markdown",
+            "--min-revs",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("# CodeLore function-coupling"));
+}
+
+#[test]
+fn check_quiet_violation_path_suppresses_detail_keeps_verdict() {
+    // When gates are configured and violations occur, --quiet suppresses the
+    // per-violation detail lines on stderr but preserves the FAIL verdict line
+    // and exits 1.
+    //
+    // code_health_min = 100.0 is set impossibly high so every file in the repo
+    // is a violation. code-health runs regardless of --min-revs so tiny_repo
+    // (whose files don't reach the default min_revs = 5 threshold used by the
+    // hotspot gate) still produces evaluable rows.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let thresholds = tiny.dir.path().join(".codelore-thresholds.toml");
+    std::fs::write(&thresholds, "[gates]\ncode_health_min = 100.0\n").unwrap();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "check",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--quiet",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("FAIL"))
+        // Per-violation detail lines name the gate; --quiet must suppress them.
+        .stderr(predicate::str::contains("code_health_min").not());
 }

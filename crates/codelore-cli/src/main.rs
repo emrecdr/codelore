@@ -3,6 +3,7 @@
 mod args;
 mod diff;
 mod diff_output;
+mod mcp;
 
 use std::io::Write;
 use std::str::FromStr;
@@ -15,7 +16,7 @@ use codelore_lib::cli_api::{AnalysisName, CodeLoreError, Options};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 
-use crate::args::{AnalyzeArgs, Cli, Command, DiffArgs};
+use crate::args::{AnalyzeArgs, Cli, Command, DiffArgs, McpArgs};
 
 fn main() {
     if let Err(e) = run() {
@@ -46,7 +47,12 @@ fn run() -> Result<()> {
         Command::Profile => run_profile_cmd(),
         Command::Docs => run_docs_cmd(),
         Command::Check(args) => run_check_cmd(&args),
+        Command::Mcp(args) => run_mcp_cmd(&args),
     }
+}
+
+fn run_mcp_cmd(args: &McpArgs) -> Result<()> {
+    mcp::run_mcp_server(args.repo.clone())
 }
 
 /// Quality-gate check. Loads thresholds, runs the hotspots analysis
@@ -54,12 +60,29 @@ fn run() -> Result<()> {
 /// exits 0 (pass) or 1 (fail). Writes `result=pass|fail` to
 /// `$GITHUB_OUTPUT` for direct GitHub Actions step-output
 /// consumption.
+#[allow(clippy::too_many_lines)]
 fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
     use codelore_lib::cli_api::Options;
-    use codelore_lib::cli_api::analyses::hotspots::run_hotspots;
+    use codelore_lib::cli_api::cache::default_cache_root;
     use codelore_lib::cli_api::facts::FactsDb;
-    use codelore_lib::cli_api::quality_gates::{Thresholds, evaluate_full_tree};
+    use codelore_lib::cli_api::quality_gates::Thresholds;
+    use codelore_lib::cli_api::quality_gates::ledger::{
+        GateRunRecord, append_gate_runs, format_history, now_utc_ts, read_gate_runs,
+    };
+    use codelore_lib::cli_api::quality_gates::ratchet::{
+        RatchetMetrics, RatchetOutcome, evaluate_ratchet, format_ratchet_outcome, read_snapshot,
+        snapshot_from_metrics, write_snapshot,
+    };
     use codelore_lib::cli_api::repo::GixRepo;
+
+    let cache_root = default_cache_root();
+
+    // --history: print ledger without running any gate evaluations.
+    if args.history {
+        let records = read_gate_runs(&cache_root, &args.repo).context("read gate-run ledger")?;
+        print!("{}", format_history(&records, 20));
+        return Ok(());
+    }
 
     let thresholds = if let Some(path) = &args.thresholds_file {
         Thresholds::from_path(path).context("load thresholds file")?
@@ -67,10 +90,12 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
         Thresholds::discover(&args.repo).context("discover thresholds file")?
     };
 
-    if thresholds.is_empty() {
-        eprintln!(
-            "codelore check: no thresholds configured (no `.codelore-thresholds.toml` at repo root); vacuously passing."
-        );
+    if thresholds.is_empty() && !args.ratchet {
+        if !args.quiet {
+            eprintln!(
+                "codelore check: no thresholds configured (no `.codelore-thresholds.toml` at repo root); vacuously passing."
+            );
+        }
         write_github_output("result", "pass");
         return Ok(());
     }
@@ -80,39 +105,128 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
         ..Options::default()
     };
     let repo = GixRepo::open(&args.repo).context("open repo")?;
+    let head_sha = repo.head_sha().context("get HEAD sha")?;
     let db = FactsDb::open_or_ingest(&opts, &repo).context("ingest")?;
+    let ts = now_utc_ts();
 
-    let hotspots = run_hotspots(&db, &opts).context("run hotspots")?;
-    let mut violations = evaluate_full_tree(&thresholds, &hotspots);
-    // `code_health_min` gates the COMPOSITE code-health score (the one
-    // `--analysis code-health` reports), not the hotspots inline proxy.
-    let code_health = codelore_lib::cli_api::analyses::code_health::run_code_health(&db, &opts)
-        .context("run code-health")?;
-    violations.extend(
-        codelore_lib::cli_api::quality_gates::evaluate_code_health_gate(&thresholds, &code_health),
-    );
-    violations.extend(
-        codelore_lib::cli_api::quality_gates::evaluate_clone_gate(&thresholds, &db)
-            .context("evaluate clone gate")?,
-    );
-    violations.extend(
-        codelore_lib::cli_api::quality_gates::evaluate_architecture_gate(&thresholds, &db)
-            .context("evaluate architecture gate")?,
-    );
-    violations.extend(
-        codelore_lib::cli_api::quality_gates::evaluate_effort_exposure_gate(
-            &thresholds,
-            &db,
-            &opts,
-        )
-        .context("evaluate effort-exposure gate")?,
-    );
+    let (violations, mut ledger_records, hotspot_count, code_health) =
+        evaluate_all_gates(&thresholds, &db, &opts, &head_sha, &ts, args.quiet)
+            .context("evaluate gates")?;
+
+    // ── Ratchet ───────────────────────────────────────────────────────────────
+    if args.ratchet {
+        // Build ratchet metrics from already-computed gate outputs.
+        let worst_health = code_health
+            .iter()
+            .map(|r| r.score)
+            .fold(f64::INFINITY, f64::min);
+        // red_effort_pct: read from the effort-exposure ledger record if present.
+        let red_effort_pct = ledger_records
+            .iter()
+            .find(|r| r.gate == "max_red_effort_pct")
+            .map(|r| r.value);
+        // dependency_cycles: read from the arch ledger record if present.
+        let dep_cycles = ledger_records
+            .iter()
+            .find(|r| r.gate == "max_dependency_cycles")
+            .map(|r| r.value);
+        let metrics = RatchetMetrics {
+            code_health_min_observed: if worst_health.is_infinite() {
+                None
+            } else {
+                Some(worst_health)
+            },
+            red_effort_pct_observed: red_effort_pct,
+            dependency_cycles_observed: dep_cycles,
+        };
+
+        match read_snapshot(&args.repo).context("read ratchet snapshot")? {
+            None => {
+                // First run: initialize.
+                let snap = snapshot_from_metrics(&metrics);
+                write_snapshot(&args.repo, &snap).context("write ratchet snapshot")?;
+                let tracked: Vec<&str> = [
+                    metrics
+                        .code_health_min_observed
+                        .map(|_| "code_health_min_observed"),
+                    metrics
+                        .red_effort_pct_observed
+                        .map(|_| "red_effort_pct_observed"),
+                    metrics
+                        .dependency_cycles_observed
+                        .map(|_| "dependency_cycles_observed"),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
+                println!(
+                    "✅ ratchet initialized — tracking {} metric(s): {}. \
+                     Configure max_red_effort_pct / max_dependency_cycles gates to ratchet \
+                     effort and cycles. Commit `.codelore-ratchet.toml` to enable regression detection.",
+                    tracked.len(),
+                    if tracked.is_empty() {
+                        "(none)".to_owned()
+                    } else {
+                        tracked.join(", ")
+                    },
+                );
+                ledger_records.push(GateRunRecord {
+                    ts: ts.clone(),
+                    head_sha: head_sha.clone(),
+                    gate: "ratchet".into(),
+                    threshold: 0.0,
+                    value: 0.0,
+                    verdict: "initialized".into(),
+                    mode: "ratchet".into(),
+                });
+                append_gate_runs(&cache_root, &args.repo, &ledger_records);
+                return Ok(());
+            }
+            Some(snap) => {
+                let outcome = evaluate_ratchet(&snap, &metrics);
+                print!("{}", format_ratchet_outcome(&outcome));
+                let (verdict, ratchet_failed) = match &outcome {
+                    RatchetOutcome::Improved { .. } => ("improved", false),
+                    RatchetOutcome::Regressed { .. } => ("regressed", true),
+                };
+                ledger_records.push(GateRunRecord {
+                    ts: ts.clone(),
+                    head_sha: head_sha.clone(),
+                    gate: "ratchet".into(),
+                    threshold: 0.0,
+                    value: 0.0,
+                    verdict: verdict.into(),
+                    mode: "ratchet".into(),
+                });
+                append_gate_runs(&cache_root, &args.repo, &ledger_records);
+                if ratchet_failed {
+                    anyhow::bail!("ratchet: regression detected — see above");
+                }
+                // Tighten: rewrite snapshot with improved values.
+                let tightened = snapshot_from_metrics(&metrics);
+                write_snapshot(&args.repo, &tightened).context("tighten ratchet snapshot")?;
+                return Ok(());
+            }
+        }
+    }
+
+    // ── Ledger write (IO errors warn, never alter exit code) ─────────────────
+    append_gate_runs(&cache_root, &args.repo, &ledger_records);
+
+    // ── Report ────────────────────────────────────────────────────────────────
+    let degraded_count = ledger_records
+        .iter()
+        .filter(|r| r.verdict == "degraded")
+        .count();
 
     if violations.is_empty() {
-        println!(
-            "✅ codelore check: PASS ({} files evaluated)",
-            hotspots.len()
-        );
+        if degraded_count > 0 {
+            println!(
+                "⚠ codelore check: WARNING — {degraded_count} gate(s) degraded (non-degraded gates pass)"
+            );
+        } else {
+            println!("✅ codelore check: PASS ({hotspot_count} files evaluated)");
+        }
         write_github_output("result", "pass");
         write_github_output("violations", "0");
         Ok(())
@@ -121,30 +235,323 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
             "❌ codelore check: FAIL — {} violation(s)",
             violations.len()
         );
-        for v in &violations {
-            eprintln!(
-                "  - {gate}: {path} — actual {actual} vs threshold {threshold}",
-                gate = v.gate,
-                path = v.path,
-                actual = v.actual,
-                threshold = v.threshold,
-            );
+        if !args.quiet {
+            for v in &violations {
+                eprintln!(
+                    "  - {gate}: {path} — actual {actual} vs threshold {threshold}",
+                    gate = v.gate,
+                    path = v.path,
+                    actual = v.actual,
+                    threshold = v.threshold,
+                );
+            }
         }
         write_github_output("result", "fail");
         write_github_output("violations", &violations.len().to_string());
-        // Inside GitHub Actions, also emit each violation as an inline
-        // `::error` annotation (on stdout, where the runner parses
-        // workflow commands) so the failing gate shows up against the
-        // file in the PR's Files-changed view — not just as a red check.
+        // Inside GitHub Actions, emit each violation as an inline `::error`
+        // annotation so the failing gate shows up against the file in the
+        // PR's Files-changed view — not just as a red check.
         if std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true") {
             let mut stdout = std::io::stdout();
             codelore_lib::cli_api::output::gha::write_gate_violations_gha(&violations, &mut stdout)
                 .context("emit gate annotations")?;
         }
-        // Exit code 1 surfaces as gate failure in CI. Use anyhow::bail
-        // so the existing exit-code handler routes to spec §6.6 code 4.
+        // Plain anyhow::bail carries no CodeLoreError, so main()'s chain-walk
+        // falls through to the default exit code 1. Gate failure exits 1 by
+        // design; typed CodeLoreError variants are reserved for repo/output
+        // failures (exit codes 3, 4, 5).
         anyhow::bail!("{} gate violation(s) — see above", violations.len());
     }
+}
+
+/// Gate result bundle: violations + ledger records from one gate group.
+type GateGroupResult = (
+    Vec<codelore_lib::cli_api::quality_gates::GateViolation>,
+    Vec<codelore_lib::cli_api::quality_gates::ledger::GateRunRecord>,
+);
+
+/// Build one ledger record for a simple scalar gate.
+fn make_rec(
+    gate: &str,
+    threshold: f64,
+    value: f64,
+    failed: bool,
+    ts: &str,
+    head_sha: &str,
+) -> codelore_lib::cli_api::quality_gates::ledger::GateRunRecord {
+    use codelore_lib::cli_api::quality_gates::ledger::GateRunRecord;
+    GateRunRecord {
+        ts: ts.to_owned(),
+        head_sha: head_sha.to_owned(),
+        gate: gate.to_owned(),
+        threshold,
+        value,
+        verdict: if failed { "failed" } else { "passed" }.to_owned(),
+        mode: "check".to_owned(),
+    }
+}
+
+/// Evaluate hotspot-based gates (`cognitive_max`, `hotspot_score_max`).
+/// Returns the gate result bundle and the hotspot row count.
+fn eval_hotspot_gates(
+    thresholds: &codelore_lib::cli_api::quality_gates::Thresholds,
+    db: &codelore_lib::cli_api::facts::FactsDb,
+    opts: &codelore_lib::cli_api::Options,
+    ts: &str,
+    head_sha: &str,
+) -> Result<(GateGroupResult, usize)> {
+    use codelore_lib::cli_api::analyses::hotspots::run_hotspots;
+    use codelore_lib::cli_api::quality_gates::evaluate_full_tree;
+    let hotspots = run_hotspots(db, opts).context("run hotspots")?;
+    let hs_violations = evaluate_full_tree(thresholds, &hotspots);
+    let count = hotspots.len();
+    let g = &thresholds.gates;
+    let mut recs = Vec::new();
+    if let Some(max) = g.cognitive_max {
+        let failed = hs_violations.iter().any(|v| v.gate == "cognitive_max");
+        let value = hotspots
+            .iter()
+            .map(|r| r.cognitive)
+            .fold(f64::NAN, f64::max);
+        recs.push(make_rec(
+            "cognitive_max",
+            max,
+            if value.is_nan() { 0.0 } else { value },
+            failed,
+            ts,
+            head_sha,
+        ));
+    }
+    if let Some(max) = g.hotspot_score_max {
+        let failed = hs_violations.iter().any(|v| v.gate == "hotspot_score_max");
+        let value = hotspots
+            .iter()
+            .map(|r| r.hotspot_score)
+            .fold(f64::NAN, f64::max);
+        recs.push(make_rec(
+            "hotspot_score_max",
+            max,
+            if value.is_nan() { 0.0 } else { value },
+            failed,
+            ts,
+            head_sha,
+        ));
+    }
+    Ok(((hs_violations, recs), count))
+}
+
+/// Evaluate `code_health_min` gate with degraded-detection.
+/// Returns the gate result bundle + the raw `CodeHealthRow` vec (reused by ratchet).
+fn eval_code_health_gate(
+    thresholds: &codelore_lib::cli_api::quality_gates::Thresholds,
+    db: &codelore_lib::cli_api::facts::FactsDb,
+    opts: &codelore_lib::cli_api::Options,
+    ts: &str,
+    head_sha: &str,
+    quiet: bool,
+) -> Result<(
+    GateGroupResult,
+    Vec<codelore_lib::cli_api::analyses::code_health::CodeHealthRow>,
+)> {
+    use codelore_lib::cli_api::quality_gates::ledger::GateRunRecord;
+    use codelore_lib::cli_api::quality_gates::{GateViolation, evaluate_code_health_gate};
+    let code_health = codelore_lib::cli_api::analyses::code_health::run_code_health(db, opts)
+        .context("run code-health")?;
+    let g = &thresholds.gates;
+    let Some(min) = g.code_health_min else {
+        return Ok(((Vec::new(), Vec::new()), code_health));
+    };
+    let ch_violations = evaluate_code_health_gate(thresholds, &code_health);
+    // Degraded: empty result when the repo has scorable files.
+    let degraded = code_health.is_empty() && {
+        db.query_row("SELECT COUNT(*) FROM complexity_metrics", [], |r| {
+            r.get::<_, i64>(0)
+        })
+        .unwrap_or(0)
+            > 0
+    };
+    let worst = code_health
+        .iter()
+        .map(|r| r.score)
+        .fold(f64::INFINITY, f64::min);
+    let verdict = if degraded {
+        if !quiet {
+            eprintln!(
+                "  ⚠ code_health_min: degraded — health scan returned no rows on a non-empty repo"
+            );
+        }
+        "degraded"
+    } else if ch_violations.is_empty() {
+        "passed"
+    } else {
+        "failed"
+    };
+    let rec = GateRunRecord {
+        ts: ts.to_owned(),
+        head_sha: head_sha.to_owned(),
+        gate: "code_health_min".into(),
+        threshold: min,
+        value: if worst.is_infinite() { 0.0 } else { worst },
+        verdict: verdict.to_owned(),
+        mode: "check".into(),
+    };
+    let mut violations = Vec::new();
+    if degraded && g.fail_on_degraded {
+        violations.push(GateViolation {
+            gate: "code_health_min".into(),
+            path: "(degraded)".into(),
+            actual: "no-data".into(),
+            threshold: format!("{min:.1}"),
+        });
+    } else {
+        violations.extend(ch_violations);
+    }
+    Ok(((violations, vec![rec]), code_health))
+}
+
+/// Evaluate architecture gates (`max_dependency_cycles`, `max_propagation_cost`).
+fn eval_arch_gates(
+    thresholds: &codelore_lib::cli_api::quality_gates::Thresholds,
+    db: &codelore_lib::cli_api::facts::FactsDb,
+    ts: &str,
+    head_sha: &str,
+) -> Result<GateGroupResult> {
+    let (arch_v, measured) =
+        codelore_lib::cli_api::quality_gates::evaluate_architecture_gate_measured(thresholds, db)
+            .context("evaluate architecture gate")?;
+    let g = &thresholds.gates;
+    let mut recs = Vec::new();
+    if let (Some(max), Some(m)) = (g.max_dependency_cycles, measured) {
+        let failed = arch_v.iter().any(|v| v.gate == "max_dependency_cycles");
+        recs.push(make_rec(
+            "max_dependency_cycles",
+            f64::from(max),
+            f64::from(m.cycle_count),
+            failed,
+            ts,
+            head_sha,
+        ));
+    }
+    if let (Some(max), Some(m)) = (g.max_propagation_cost, measured) {
+        let failed = arch_v.iter().any(|v| v.gate == "max_propagation_cost");
+        recs.push(make_rec(
+            "max_propagation_cost",
+            max,
+            m.propagation_cost,
+            failed,
+            ts,
+            head_sha,
+        ));
+    }
+    Ok((arch_v, recs))
+}
+
+/// Evaluate all configured gates and build ledger records for this run.
+///
+/// Returns `(violations, ledger_records, hotspot_count, code_health_rows)`.
+/// `code_health_rows` is returned so callers (e.g. `--ratchet`) can extract
+/// ratchet metrics without re-running the analysis.
+#[allow(clippy::type_complexity)]
+fn evaluate_all_gates(
+    thresholds: &codelore_lib::cli_api::quality_gates::Thresholds,
+    db: &codelore_lib::cli_api::facts::FactsDb,
+    opts: &codelore_lib::cli_api::Options,
+    head_sha: &str,
+    ts: &str,
+    quiet: bool,
+) -> Result<(
+    Vec<codelore_lib::cli_api::quality_gates::GateViolation>,
+    Vec<codelore_lib::cli_api::quality_gates::ledger::GateRunRecord>,
+    usize,
+    Vec<codelore_lib::cli_api::analyses::code_health::CodeHealthRow>,
+)> {
+    let mut violations = Vec::new();
+    let mut recs = Vec::new();
+    let g = &thresholds.gates;
+
+    let ((hs_v, hs_r), hotspot_count) = eval_hotspot_gates(thresholds, db, opts, ts, head_sha)?;
+    violations.extend(hs_v);
+    recs.extend(hs_r);
+
+    let ((ch_v, ch_r), code_health) =
+        eval_code_health_gate(thresholds, db, opts, ts, head_sha, quiet)?;
+    violations.extend(ch_v);
+    recs.extend(ch_r);
+
+    if g.disallow_clone_type_1 {
+        let clone_v = codelore_lib::cli_api::quality_gates::evaluate_clone_gate(thresholds, db)
+            .context("evaluate clone gate")?;
+        let count = clone_v
+            .first()
+            .and_then(|v| v.actual.parse::<f64>().ok())
+            .unwrap_or(0.0);
+        recs.push(make_rec(
+            "disallow_clone_type_1",
+            0.0,
+            count,
+            !clone_v.is_empty(),
+            ts,
+            head_sha,
+        ));
+        violations.extend(clone_v);
+    }
+
+    let (arch_v, arch_r) = eval_arch_gates(thresholds, db, ts, head_sha)?;
+    violations.extend(arch_v);
+    recs.extend(arch_r);
+
+    if let Some(max) = g.max_red_effort_pct {
+        // Reuse the code-health rows already computed for `code_health_min` —
+        // effort-exposure's band table derives from the same HEAD scan, and
+        // the measured red-band churn share must be recorded on passing runs
+        // too (the ratchet and `--history` read it from the ledger).
+        let rows =
+            codelore_lib::cli_api::analyses::effort_exposure::run_effort_exposure_with_health(
+                db,
+                &opts.with_no_row_limit(),
+                &code_health,
+            )
+            .context("run effort-exposure for gate")?;
+        let value = rows
+            .iter()
+            .find(|r| r.band == "red")
+            .map_or(0.0, |r| r.churn_share_pct);
+        let effort_v =
+            codelore_lib::cli_api::quality_gates::evaluate_effort_exposure_rows(max, &rows);
+        recs.push(make_rec(
+            "max_red_effort_pct",
+            max,
+            value,
+            !effort_v.is_empty(),
+            ts,
+            head_sha,
+        ));
+        violations.extend(effort_v);
+    }
+
+    if let Some(min) = g.code_familiarity_min {
+        let rows =
+            codelore_lib::cli_api::analyses::code_familiarity::run_code_familiarity(db, opts)
+                .context("run code-familiarity for gate")?;
+        // Measured familiarity is recorded pass or fail; an empty row set
+        // (no recognized source files) records 0.0 with a vacuous pass.
+        // Unlike `code_health_min` this gate has no degraded sentinel: an
+        // empty result IS the documented no-source-files contract, not a
+        // scan failure.
+        let value = rows.first().map_or(0.0, |r| r.familiarity_pct);
+        let fam_v = codelore_lib::cli_api::quality_gates::evaluate_familiarity_rows(min, &rows);
+        recs.push(make_rec(
+            "code_familiarity_min",
+            min,
+            value,
+            !fam_v.is_empty(),
+            ts,
+            head_sha,
+        ));
+        violations.extend(fam_v);
+    }
+
+    Ok((violations, recs, hotspot_count, code_health))
 }
 
 /// Write a single `key=value` line to `$GITHUB_OUTPUT` when the env
@@ -364,6 +771,100 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
             "See analyses/effort_exposure.rs.",
         ),
         (
+            "code-familiarity",
+            "Decayed-knowledge familiarity score for the active team",
+            "Computes what fraction of SLOC is actively known by current contributors \
+             (authors with ≥1 commit in the trailing window). Uses exponentially-decayed \
+             knowledge shares (Jabrayilzade et al., ICSE-SEIP 2022). Also reports islands \
+             percentage: SLOC in files where one person holds ≥80% of knowledge with no \
+             meaningful backup. Low familiarity or high islands percentage signals knowledge \
+             risk. Verdict threshold configurable via [gates] code_familiarity_min in \
+             .codelore-thresholds.toml (default 70.0).",
+            "See analyses/code_familiarity.rs.",
+        ),
+        (
+            "team-composition",
+            "Contribution-span tenure buckets with behavioral veteran gate and onboarding velocity",
+            "Buckets each author by contribution span (last − first commit): onboarded \
+             (<90 d), experienced (90–364 d), veteran (≥365 d). Veterans who have not \
+             touched a breadth of files comparable to the current 80%-core set are capped \
+             at 'experienced' (veteran_breadth_ok = false). Also reports onboarding_weeks: \
+             how many weeks from an author's first commit to their first week in the weekly \
+             80%-core set. Authors whose first commit falls within the project's first 12 \
+             weeks (founders) receive NULL for onboarding_weeks.",
+            "See analyses/team_composition.rs.",
+        ),
+        (
+            "coordination-needs",
+            "Per-file coordination overhead: fragmentation, interleave, co-change entropy",
+            "For each file reports: knowledge fragmentation (1 − HHI, 0 = single owner, \
+             near 1 = evenly spread knowledge); author-switch interleave between adjacent \
+             commits (0 = always same author, 1 = always alternating); and co-change graph \
+             entropy contribution (EASE 2025, arXiv 2504.18511; window-scoped, commits \
+             touching >30 files excluded). Tier: single (1 author) | low (frag<0.25) | \
+             medium | high (frag≥0.50 AND interleave≥0.50). Joined with code-health band \
+             so high-fragmentation files in the red band surface first.",
+            "See analyses/coordination_needs.rs.",
+        ),
+        (
+            "marginal-owner-risk",
+            "Ownership concentration × code-health fusion: files where active authors have shallow familiarity",
+            "For each file in the yellow or red health band, reports the maximum knowledge \
+             share held by any author who committed within window_days. Risk tiers: high \
+             (red band AND top active share <0.10); elevated ((red AND <0.30) OR (yellow \
+             AND <0.10)). Rows that do not meet either threshold are excluded. The \
+             ownership × code-quality interaction is correlational, not causal \
+             (Palomba et al., EASE 2023, arXiv 2304.11636).",
+            "See analyses/marginal_owner_risk.rs.",
+        ),
+        (
+            "release-cadence",
+            "Inter-release gap statistics from git tags (median, IQR, trend)",
+            "Filters tags by --release-tag-glob (default 'v*'), then computes the \
+             number of days between consecutive release tags. Emits one row per \
+             matched tag (date, days_since_prev) plus a synthetic '__summary__' \
+             row carrying the median gap, IQR, and a trend label: 'accelerating' \
+             (negative OLS slope < −0.1 d/release), 'slowing' (slope > +0.1), or \
+             'stable' (within ±0.1). Tags are proxies for releases, not \
+             deployments; cadence reflects tagging discipline as much as actual \
+             release velocity. First tag always has no predecessor gap.",
+            "See analyses/release_cadence.rs.",
+        ),
+        (
+            "delivery-metrics",
+            "Repo-level delivery flow distributions: batch size, branch duration, rework, and lead-proxy (p50/p75/p90)",
+            "Five percentile distributions over merge units and commits: batch_size_files \
+             (distinct paths per merge), batch_size_loc (LOC churn per merge), \
+             branch_duration_hours (merge date − earliest branch-side author date), \
+             rework_pct (hunk-overlap within --rework-window-days, approximate), and \
+             lead_proxy_hours (author→committer date gap, positive only, non-merge commits). \
+             Requires commit_parents table (schema v4) and merges ingested with \
+             include_merges=true. Branch metrics are unreliable on squash/rebase workflows \
+             (emits a warning when merge count < 3 and commit count > 50).",
+            "See analyses/delivery_metrics.rs.",
+        ),
+        (
+            "function-xray",
+            "Per-function change frequency for a single target file (Gall et al. ICSM 2003 HistoryFinder)",
+            "Requires --target <repo-relative-path>. For each function/method alive at HEAD \
+             in the target file, counts revisions where at least one hunk overlapped the \
+             function's line span. Hunk-overlap attribution is more accurate than file-level \
+             blame: it uses the span at change time. Pure deletions (new_lines=0) are attributed \
+             to the function whose span contained the deleted anchor line. Sorted by change_freq \
+             DESC.",
+            "See analyses/function_xray.rs.",
+        ),
+        (
+            "function-coupling",
+            "Per-function-pair co-change frequency with Fisher significance for a single target file",
+            "Requires --target <repo-relative-path>. For each pair of HEAD-alive functions in the \
+             target file that co-changed (both touched in the same revision) in ≥2 revisions, \
+             emits the pair with co-change count, per-function change counts, confidence \
+             (co/min(a,b)), and two-tailed Fisher exact p-value. \
+             Sorted by p-value ASC. Research: Adams et al. ICSM 2006.",
+            "See analyses/function_coupling.rs.",
+        ),
+        (
             "cycle-origins",
             "Commit-level archaeology for dependency cycles",
             "For each dependency cycle at HEAD, binary-searches history (reading + resolving source at past revisions) to find the earliest commit where that cycle existed — the commit that closed the loop. Reports the forming commit's SHA + date per cycle. Assumes a cycle, once formed, stays formed; traces the largest cycles first to bound cost.",
@@ -395,8 +896,14 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
         ),
         (
             "bus-factor",
-            "Filatov 2010",
-            "Min number of authors whose combined commits cover ≥80% of a module's commits. Smaller = more concentrated knowledge.",
+            "Filatov 2010 (commits mode) / Cury & Avelino SBES'24 (doe mode)",
+            "Min number of authors whose departure would leave a module unmaintained. \
+             Default mode (--knowledge-model commits): smallest set covering ≥80% of \
+             module commits (Filatov 2010). DOE mode (--knowledge-model doe): greedy \
+             truck-factor procedure — repeatedly remove the author expert on the most \
+             remaining files until >50% of files have no expert (Cury & Avelino, \
+             SBES'24 arXiv 2408.08733). DOE mode emits the same per-module row shape \
+             with model='doe'.",
             "See analyses/bus_factor.rs.",
         ),
         (
@@ -691,6 +1198,10 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         // T8: knowledge-islands analysis "departed author" threshold.
         departed_threshold_days: args.departed_threshold_days,
         window_days: args.window_days,
+        knowledge_model: args.knowledge_model.clone(),
+        rework_window_days: args.rework_window_days,
+        release_tag_glob: args.release_tag_glob.clone(),
+        target: args.target.clone(),
         ..Options::default()
     };
 
@@ -1003,6 +1514,40 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             AnalysisName::Communities => dispatch_communities(&db, &opts, format, &ctx, &mut out)?,
             AnalysisName::EffortExposure => {
                 dispatch_effort_exposure(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::CodeFamiliarity => {
+                dispatch_code_familiarity(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::TeamComposition => {
+                dispatch_team_composition(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::CoordinationNeeds => {
+                dispatch_coordination_needs(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::MarginalOwnerRisk => {
+                dispatch_marginal_owner_risk(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::ReleaseCadence => {
+                dispatch_release_cadence(&repo, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::DeliveryMetrics => {
+                dispatch_delivery_metrics(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::FunctionXray => {
+                let target = opts.target.as_deref().ok_or_else(|| {
+                    CodeLoreError::Analysis(
+                        "--target <path> is required for function-xray".to_string(),
+                    )
+                })?;
+                dispatch_function_xray(&db, &repo, &opts, target, format, &ctx, &mut out)?;
+            }
+            AnalysisName::FunctionCoupling => {
+                let target = opts.target.as_deref().ok_or_else(|| {
+                    CodeLoreError::Analysis(
+                        "--target <path> is required for function-coupling".to_string(),
+                    )
+                })?;
+                dispatch_function_coupling(&db, &repo, &opts, target, format, &ctx, &mut out)?;
             }
         }
     } // out is dropped here, flushing any buffered writes
@@ -2409,6 +2954,349 @@ fn dispatch_effort_exposure(
     Ok(())
 }
 
+fn dispatch_code_familiarity(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows =
+                codelore_lib::cli_api::analyses::code_familiarity::run_code_familiarity(db, opts)
+                    .context("run code-familiarity")?;
+            codelore_lib::cli_api::output::csv::write_code_familiarity_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows =
+                codelore_lib::cli_api::analyses::code_familiarity::run_code_familiarity(db, opts)
+                    .context("run code-familiarity")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows =
+                codelore_lib::cli_api::analyses::code_familiarity::run_code_familiarity(db, opts)
+                    .context("run code-familiarity")?;
+            codelore_lib::cli_api::output::markdown::write_code_familiarity_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format(
+                "code-familiarity",
+                "csv|json|markdown",
+                fmt,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_team_composition(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows =
+                codelore_lib::cli_api::analyses::team_composition::run_team_composition(db, opts)
+                    .context("run team-composition")?;
+            codelore_lib::cli_api::output::csv::write_team_composition_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows =
+                codelore_lib::cli_api::analyses::team_composition::run_team_composition(db, opts)
+                    .context("run team-composition")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows =
+                codelore_lib::cli_api::analyses::team_composition::run_team_composition(db, opts)
+                    .context("run team-composition")?;
+            codelore_lib::cli_api::output::markdown::write_team_composition_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format(
+                "team-composition",
+                "csv|json|markdown",
+                fmt,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_coordination_needs(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows = codelore_lib::cli_api::analyses::coordination_needs::run_coordination_needs(
+                db, opts,
+            )
+            .context("run coordination-needs")?;
+            codelore_lib::cli_api::output::csv::write_coordination_needs_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::coordination_needs::run_coordination_needs(
+                db, opts,
+            )
+            .context("run coordination-needs")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows = codelore_lib::cli_api::analyses::coordination_needs::run_coordination_needs(
+                db, opts,
+            )
+            .context("run coordination-needs")?;
+            codelore_lib::cli_api::output::markdown::write_coordination_needs_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format(
+                "coordination-needs",
+                "csv|json|markdown",
+                fmt,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_marginal_owner_risk(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows =
+                codelore_lib::cli_api::analyses::marginal_owner_risk::run_marginal_owner_risk(
+                    db, opts,
+                )
+                .context("run marginal-owner-risk")?;
+            codelore_lib::cli_api::output::csv::write_marginal_owner_risk_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows =
+                codelore_lib::cli_api::analyses::marginal_owner_risk::run_marginal_owner_risk(
+                    db, opts,
+                )
+                .context("run marginal-owner-risk")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows =
+                codelore_lib::cli_api::analyses::marginal_owner_risk::run_marginal_owner_risk(
+                    db, opts,
+                )
+                .context("run marginal-owner-risk")?;
+            codelore_lib::cli_api::output::markdown::write_marginal_owner_risk_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format(
+                "marginal-owner-risk",
+                "csv|json|markdown",
+                fmt,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_release_cadence(
+    repo: &GixRepo,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows =
+                codelore_lib::cli_api::analyses::release_cadence::run_release_cadence(repo, opts)
+                    .context("run release-cadence")?;
+            codelore_lib::cli_api::output::csv::write_release_cadence_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows =
+                codelore_lib::cli_api::analyses::release_cadence::run_release_cadence(repo, opts)
+                    .context("run release-cadence")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows =
+                codelore_lib::cli_api::analyses::release_cadence::run_release_cadence(repo, opts)
+                    .context("run release-cadence")?;
+            codelore_lib::cli_api::output::markdown::write_release_cadence_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format(
+                "release-cadence",
+                "csv|json|markdown",
+                fmt,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_delivery_metrics(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows =
+                codelore_lib::cli_api::analyses::delivery_metrics::run_delivery_metrics(db, opts)
+                    .context("run delivery-metrics")?;
+            codelore_lib::cli_api::output::csv::write_delivery_metrics_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows =
+                codelore_lib::cli_api::analyses::delivery_metrics::run_delivery_metrics(db, opts)
+                    .context("run delivery-metrics")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows =
+                codelore_lib::cli_api::analyses::delivery_metrics::run_delivery_metrics(db, opts)
+                    .context("run delivery-metrics")?;
+            codelore_lib::cli_api::output::markdown::write_delivery_metrics_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format(
+                "delivery-metrics",
+                "csv|json|markdown",
+                fmt,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_function_xray(
+    db: &FactsDb,
+    repo: &GixRepo,
+    opts: &Options,
+    target: &str,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows = codelore_lib::cli_api::analyses::function_xray::run_function_xray(
+                db, repo, opts, target,
+            )
+            .context("run function-xray")?;
+            codelore_lib::cli_api::output::csv::write_function_xray_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::function_xray::run_function_xray(
+                db, repo, opts, target,
+            )
+            .context("run function-xray")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows = codelore_lib::cli_api::analyses::function_xray::run_function_xray(
+                db, repo, opts, target,
+            )
+            .context("run function-xray")?;
+            codelore_lib::cli_api::output::markdown::write_function_xray_markdown(
+                &rows, target, out,
+            )
+            .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format(
+                "function-xray",
+                "csv|json|markdown",
+                fmt,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_function_coupling(
+    db: &FactsDb,
+    repo: &GixRepo,
+    opts: &Options,
+    target: &str,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows = codelore_lib::cli_api::analyses::function_coupling::run_function_coupling(
+                db, repo, opts, target,
+            )
+            .context("run function-coupling")?;
+            codelore_lib::cli_api::output::csv::write_function_coupling_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::function_coupling::run_function_coupling(
+                db, repo, opts, target,
+            )
+            .context("run function-coupling")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows = codelore_lib::cli_api::analyses::function_coupling::run_function_coupling(
+                db, repo, opts, target,
+            )
+            .context("run function-coupling")?;
+            codelore_lib::cli_api::output::markdown::write_function_coupling_markdown(
+                &rows, target, out,
+            )
+            .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format(
+                "function-coupling",
+                "csv|json|markdown",
+                fmt,
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn dispatch_refactoring_targets(
     db: &FactsDb,
     opts: &Options,
@@ -3268,6 +4156,181 @@ fn build_spa_dashboard(
                 },
                 |d| (d.trend, d.file_series, d.transitions),
             );
+    // Effort-exposure: LOC/commit/churn share per band over the trailing
+    // window. Pure SQL over already-ingested facts; runs the same
+    // code-health HEAD scan as the factor header (cheap, cached). Degrades
+    // to empty on analysis failure so no widget is shown.
+    let effort_exposure =
+        codelore_lib::cli_api::analyses::effort_exposure::run_effort_exposure(db, opts)
+            .unwrap_or_else(|e| {
+                tracing::warn!("dashboard: effort-exposure analysis failed; skipping: {e}");
+                Vec::new()
+            });
+    // Marginal-owner risk: ownership concentration × code-health fusion.
+    // Degrades to empty when no file meets the high/elevated threshold,
+    // or when knowledge_shares is unavailable (e.g. tiny fixture repos).
+    let marginal_owner_risk =
+        codelore_lib::cli_api::analyses::marginal_owner_risk::run_marginal_owner_risk(db, opts)
+            .unwrap_or_else(|e| {
+                tracing::warn!("dashboard: marginal-owner-risk analysis failed; skipping: {e}");
+                Vec::new()
+            });
+    // Delivery-metrics percentile distributions.  Requires include_merges;
+    // degrades gracefully to empty so the tile and card are omitted.
+    let delivery_metrics = {
+        let mut dm_opts = opts.clone();
+        dm_opts.include_merges = true;
+        codelore_lib::cli_api::analyses::delivery_metrics::run_delivery_metrics(db, &dm_opts)
+            .unwrap_or_else(|e| {
+                tracing::warn!("dashboard: delivery-metrics failed; skipping: {e}");
+                Vec::new()
+            })
+    };
+    // Release cadence — uses a separate Repo handle (same as architecture-trend).
+    let release_cadence = codelore_lib::cli_api::repo::GixRepo::open(repo_path)
+        .map_err(anyhow::Error::from)
+        .and_then(|repo| {
+            codelore_lib::cli_api::analyses::release_cadence::run_release_cadence(&repo, opts)
+                .map_err(anyhow::Error::from)
+        })
+        .unwrap_or_else(|e| {
+            tracing::warn!("dashboard: release-cadence failed; skipping: {e}");
+            Vec::new()
+        });
+    // Delivery-friction — top 5 rows for the "where is friction" drill line.
+    let delivery_friction =
+        codelore_lib::cli_api::analyses::delivery_friction::run_delivery_friction(db, opts)
+            .unwrap_or_else(|e| {
+                tracing::warn!("dashboard: delivery-friction failed; skipping: {e}");
+                Vec::new()
+            })
+            .into_iter()
+            .take(5)
+            .collect::<Vec<_>>();
+    // Per-file function X-Ray for the top-10 hotspot paths. Each call
+    // opens the HEAD blob via the gix repo handle (cheap; tree-sitter
+    // spans only) and joins against already-ingested hunks. One failure
+    // per path degrades gracefully to an empty rows vec for that path.
+    let function_xray: Vec<codelore_lib::cli_api::output::spa::FileFunctionXray> =
+        codelore_lib::cli_api::repo::GixRepo::open(repo_path).map_or_else(
+            |e| {
+                tracing::warn!("dashboard: could not open repo for function-xray; skipping: {e}");
+                Vec::new()
+            },
+            |xray_repo| {
+                hotspots
+                    .iter()
+                    .take(10)
+                    .filter_map(|h| {
+                        match codelore_lib::cli_api::analyses::function_xray::run_function_xray(
+                            db, &xray_repo, opts, &h.path,
+                        ) {
+                            Ok(rows) if !rows.is_empty() => {
+                                Some(codelore_lib::cli_api::output::spa::FileFunctionXray {
+                                    path: h.path.clone(),
+                                    rows,
+                                })
+                            }
+                            Ok(_) => None,
+                            Err(e) => {
+                                tracing::debug!(
+                                    "dashboard: function-xray skipped for {}: {e}",
+                                    h.path
+                                );
+                                None
+                            }
+                        }
+                    })
+                    .collect()
+            },
+        );
+    // Four-factor header tiles assembled from already-computed data.
+    // Code + Architecture come from the health_trend series (zero extra
+    // cost — the series is already in memory). Knowledge uses
+    // code_familiarity when available, falling back to knowledge_islands.
+    // Delivery uses delivery_metrics + release_cadence (degrades to no tile).
+    let mut factors = codelore_lib::cli_api::analyses::factors::health_trend_factors(&health_trend);
+    // Knowledge card data — computed once, feeding both the factor tile and
+    // the SPA payload. Degrades to empty on failure so the card is simply
+    // absent when data is unavailable.
+    let code_familiarity =
+        codelore_lib::cli_api::analyses::code_familiarity::run_code_familiarity(db, opts)
+            .unwrap_or_else(|e| {
+                tracing::warn!("dashboard: code-familiarity for spa failed; skipping: {e}");
+                Vec::new()
+            });
+    let knowledge_tile = code_familiarity
+        .first()
+        .map(|r| {
+            codelore_lib::cli_api::analyses::factors::knowledge_factor_from_familiarity(
+                r.familiarity_pct,
+                r.islands_pct,
+            )
+        })
+        .or_else(|| {
+            codelore_lib::cli_api::analyses::factors::knowledge_factor_from_islands(
+                &knowledge_islands,
+                i32::try_from(opts.departed_threshold_days).unwrap_or(i32::MAX),
+            )
+        });
+    if let Some(kt) = knowledge_tile {
+        factors.push(kt);
+    }
+    if let Some(dt) = codelore_lib::cli_api::analyses::factors::delivery_factor_from_metrics(
+        &delivery_metrics,
+        &release_cadence,
+    ) {
+        factors.push(dt);
+    }
+    // Trim the SPA payload to what its consumers read: the delivery card
+    // renders three of the five metrics, and only the cadence summary row
+    // is consumed (per-tag rows are standalone-CLI output). The factor
+    // tile above already read the full row sets.
+    let delivery_metrics: Vec<_> = delivery_metrics
+        .into_iter()
+        .filter(|r| {
+            matches!(
+                r.metric.as_str(),
+                "rework_pct" | "branch_duration_hours" | "lead_proxy_hours"
+            )
+        })
+        .collect();
+    let release_cadence: Vec<_> = release_cadence
+        .into_iter()
+        .filter(|r| r.tag == "__summary__")
+        .collect();
+    let team_composition =
+        codelore_lib::cli_api::analyses::team_composition::run_team_composition(db, opts)
+            .unwrap_or_else(|e| {
+                tracing::warn!("dashboard: team-composition for spa failed; skipping: {e}");
+                Vec::new()
+            });
+    // Coordination-needs: top 10 by tier desc then co-change entropy desc.
+    // Tier order: high > medium > low > single (alphabetical inverse = correct
+    // only by accident; sort explicitly).
+    let coordination_needs = {
+        let tier_rank = |t: &str| match t {
+            "high" => 3u8,
+            "medium" => 2,
+            "low" => 1,
+            _ => 0, // "single"
+        };
+        let mut cn =
+            codelore_lib::cli_api::analyses::coordination_needs::run_coordination_needs(db, opts)
+                .unwrap_or_else(|e| {
+                    tracing::warn!("dashboard: coordination-needs for spa failed; skipping: {e}");
+                    Vec::new()
+                });
+        cn.sort_by(|a, b| {
+            tier_rank(&b.tier).cmp(&tier_rank(&a.tier)).then(
+                b.cochange_entropy
+                    .partial_cmp(&a.cochange_entropy)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+        });
+        cn.truncate(10);
+        cn
+    };
     Ok(SpaDashboard {
         hotspots,
         summary,
@@ -3290,6 +4353,16 @@ fn build_spa_dashboard(
         health_trend,
         file_health_series,
         health_transitions,
+        effort_exposure,
+        marginal_owner_risk,
+        code_familiarity,
+        team_composition,
+        coordination_needs,
+        delivery_metrics,
+        release_cadence,
+        delivery_friction,
+        function_xray,
+        factors,
         options: codelore_lib::cli_api::output::spa::SpaOptionsSnapshot::from_options(opts),
     })
 }

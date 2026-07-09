@@ -14,6 +14,9 @@ use codelore_lib::analyses::architecture_roles::ArchitectureRoleRow;
 use codelore_lib::analyses::architecture_trend::ArchitectureTrendRow;
 use codelore_lib::analyses::code_health::run_code_health;
 use codelore_lib::analyses::coupling::run_coupling;
+use codelore_lib::analyses::effort_exposure::EffortExposureRow;
+use codelore_lib::analyses::factors::FactorTile;
+use codelore_lib::analyses::function_xray::FunctionXrayRow;
 use codelore_lib::analyses::health_trend::HealthTrendRow;
 use codelore_lib::analyses::hotspots::run_hotspots;
 use codelore_lib::analyses::knowledge_islands::run_knowledge_islands;
@@ -21,7 +24,7 @@ use codelore_lib::analyses::modularity_violations::ModularityViolationRow;
 use codelore_lib::analyses::summary::run_summary;
 use codelore_lib::analyses::unstable_interface::UnstableInterfaceRow;
 use codelore_lib::facts::FactsDb;
-use codelore_lib::output::spa::{SpaDashboard, write_spa};
+use codelore_lib::output::spa::{FileFunctionXray, SpaDashboard, write_spa};
 use codelore_lib::repo::GixRepo;
 use codelore_lib::test_support::differential_repo;
 
@@ -90,6 +93,7 @@ fn spa_emits_full_dashboard_from_differential_fixture() {
     for marker in [
         "widget-kpi-tiles",
         "widget-knowledge-islands",
+        "widget-knowledge-surfaces",
         "widget-hotspot-circle-pack",
         "widget-hotspot-table",
         "widget-coupling-sankey",
@@ -108,6 +112,7 @@ fn spa_emits_full_dashboard_from_differential_fixture() {
         "renderHotspotTable",
         "renderCouplingSankey",
         "renderKnowledgeIslands",
+        "renderKnowledgeSurfaces",
         "showFileDetailDrawer",
     ] {
         assert!(
@@ -175,6 +180,23 @@ fn spa_emits_full_dashboard_from_differential_fixture() {
         !summary_arr.is_empty(),
         "summary array should be non-empty given the differential fixture",
     );
+
+    // Knowledge surface fields — present (possibly empty) after the round-trip.
+    // The differential fixture has no complexity metrics at HEAD so these
+    // will be empty arrays; what matters is that the keys exist in the JSON
+    // (i.e. serialisation wiring is intact).
+    for key in ["code_familiarity", "team_composition", "coordination_needs"] {
+        // If the Vec is empty, serde skips the key (skip_serializing_if = "Vec::is_empty").
+        // The assertion therefore only fires when a non-empty result was produced — which
+        // is correct: we can't assert presence of an empty field that was serialised away.
+        // We assert the field is EITHER absent (Vec was empty) OR is an array.
+        if let Some(v) = data.get(key) {
+            assert!(
+                v.is_array(),
+                "dashboard JSON field `{key}` must be an array when present",
+            );
+        }
+    }
 
     // Hotspot rows should have the expected shape.
     let first_hot = &hotspots_arr[0];
@@ -395,6 +417,184 @@ fn spa_embeds_fusion_overlay_data() {
         Some("yellow"),
     );
 
+    // When factors is non-empty it must appear as a JSON array and each
+    // tile must carry the required fields.
+    let dash_with_factors = SpaDashboard {
+        factors: vec![FactorTile {
+            name: "Code".into(),
+            headline: Some(72.5),
+            band: "green".into(),
+            series: vec![65.0, 68.0, 72.5],
+            attention: false,
+            detail: "Code health 72.5 (green)".into(),
+            numbers: Vec::new(),
+        }],
+        ..SpaDashboard::default()
+    };
+    let mut buf3 = Vec::new();
+    write_spa(
+        &dash_with_factors,
+        "Factors Test",
+        "/tmp/z",
+        "2026-06-26 00:00:00 UTC",
+        &mut buf3,
+    )
+    .expect("write_spa factors");
+    let html3 = String::from_utf8(buf3).expect("utf8 html3");
+    let data3 = extract_data_json(&html3).expect("parse data3 block");
+    let fa = data3
+        .get("factors")
+        .and_then(|v| v.as_array())
+        .expect("factors array present when non-empty");
+    assert_eq!(fa.len(), 1, "one factor tile expected");
+    assert_eq!(
+        fa[0].get("name").and_then(serde_json::Value::as_str),
+        Some("Code"),
+    );
+    assert_eq!(
+        fa[0].get("headline").and_then(serde_json::Value::as_f64),
+        Some(72.5),
+    );
+    assert_eq!(
+        fa[0].get("band").and_then(serde_json::Value::as_str),
+        Some("green"),
+    );
+    assert_eq!(
+        fa[0].get("attention").and_then(serde_json::Value::as_bool),
+        Some(false),
+    );
+    let series = fa[0]
+        .get("series")
+        .and_then(|v| v.as_array())
+        .expect("series array");
+    assert_eq!(series.len(), 3);
+    // `numbers` is serde-skipped when empty — confirm it is absent from JSON
+    // for a normal headline tile.
+    assert!(
+        fa[0].get("numbers").is_none(),
+        "numbers absent from JSON when empty"
+    );
+
+    // Delivery tile: headline=None, numbers carries three proxy pairs.
+    // The tile must round-trip correctly: headline absent from JSON,
+    // numbers array present with the three entries.
+    let dash_delivery = SpaDashboard {
+        factors: vec![FactorTile {
+            name: "Delivery".into(),
+            headline: None,
+            band: "green".into(),
+            series: Vec::new(),
+            attention: false,
+            detail: "Git-only proxies".into(),
+            numbers: vec![
+                ("rework %".to_string(), "6.2".to_string()),
+                ("branch p75 h".to_string(), "18".to_string()),
+                ("cadence median d".to_string(), "14".to_string()),
+            ],
+        }],
+        ..SpaDashboard::default()
+    };
+    let mut buf_del = Vec::new();
+    write_spa(
+        &dash_delivery,
+        "Delivery Tile Test",
+        "/tmp/z",
+        "2026-06-26 00:00:00 UTC",
+        &mut buf_del,
+    )
+    .expect("write_spa delivery tile");
+    let html_del = String::from_utf8(buf_del).expect("utf8 html_del");
+    let data_del = extract_data_json(&html_del).expect("parse data_del");
+    let fd = data_del
+        .get("factors")
+        .and_then(|v| v.as_array())
+        .expect("factors array for delivery tile");
+    assert_eq!(fd.len(), 1, "one delivery tile expected");
+    assert_eq!(
+        fd[0].get("name").and_then(serde_json::Value::as_str),
+        Some("Delivery"),
+    );
+    // headline is None → must be absent or null in JSON
+    assert!(
+        fd[0].get("headline").is_none_or(serde_json::Value::is_null),
+        "headline must be null/absent for delivery tile"
+    );
+    assert_eq!(
+        fd[0].get("band").and_then(serde_json::Value::as_str),
+        Some("green"),
+    );
+    // numbers must be present and carry three entries
+    let nums = fd[0]
+        .get("numbers")
+        .and_then(|v| v.as_array())
+        .expect("numbers array present for delivery tile");
+    assert_eq!(nums.len(), 3, "three numbers on delivery tile");
+    assert_eq!(
+        nums[0].as_array().and_then(|p| p[0].as_str()),
+        Some("rework %"),
+    );
+    assert_eq!(nums[0].as_array().and_then(|p| p[1].as_str()), Some("6.2"),);
+
+    // When effort_exposure is non-empty it must appear as a JSON array with
+    // the required per-row fields. Build a minimal SpaDashboard with one
+    // synthetic row and assert the round-trip carries all fields.
+    let dash_with_ee = SpaDashboard {
+        effort_exposure: vec![EffortExposureRow {
+            band: "red".into(),
+            files: 3,
+            loc_share_pct: 25.0,
+            commit_share_pct: 40.0,
+            churn_share_pct: 35.0,
+            commit_share_ci_low: 0.28,
+            commit_share_ci_high: 0.54,
+        }],
+        ..SpaDashboard::default()
+    };
+    let mut buf_ee = Vec::new();
+    write_spa(
+        &dash_with_ee,
+        "EE Test",
+        "/tmp/z",
+        "2026-06-26 00:00:00 UTC",
+        &mut buf_ee,
+    )
+    .expect("write_spa effort_exposure");
+    let html_ee = String::from_utf8(buf_ee).expect("utf8 html_ee");
+    let data_ee = extract_data_json(&html_ee).expect("parse data_ee");
+    let ee = data_ee
+        .get("effort_exposure")
+        .and_then(|v| v.as_array())
+        .expect("effort_exposure array present when non-empty");
+    assert_eq!(ee.len(), 1, "one effort_exposure row expected");
+    assert_eq!(
+        ee[0].get("band").and_then(serde_json::Value::as_str),
+        Some("red"),
+    );
+    assert!(
+        (ee[0]
+            .get("loc_share_pct")
+            .and_then(serde_json::Value::as_f64)
+            .expect("loc_share_pct f64")
+            - 25.0)
+            .abs()
+            < 1e-9,
+        "loc_share_pct round-trip",
+    );
+    assert!(
+        (ee[0]
+            .get("churn_share_pct")
+            .and_then(serde_json::Value::as_f64)
+            .expect("churn_share_pct f64")
+            - 35.0)
+            .abs()
+            < 1e-9,
+        "churn_share_pct round-trip",
+    );
+    assert_eq!(
+        ee[0].get("files").and_then(serde_json::Value::as_u64),
+        Some(3),
+    );
+
     // The centralized band thresholds must appear in the options block so the
     // SPA JS can read them from data.options instead of hardcoding them.
     let opts = data.get("options").expect("options block present in JSON");
@@ -465,6 +665,92 @@ fn spa_bivariate_is_default_map_mode() {
     assert!(
         tab_html.contains("tab-active"),
         "bivariate tab must be the default (tab-active); tag was: {tab_html}"
+    );
+}
+
+/// `function_xray` round-trips through the embedded SPA JSON with the
+/// expected shape: a `[{path, rows:[{function, change_freq, loc, …}]}]`
+/// array. Confirms that `FileFunctionXray` serialises correctly and that
+/// the SPA's `data.function_xray` key is present when the field is
+/// non-empty. The X-Ray tab JS reads this array by path lookup.
+#[test]
+fn spa_embeds_function_xray_data() {
+    let dash = SpaDashboard {
+        function_xray: vec![FileFunctionXray {
+            path: "src/hot.rs".into(),
+            rows: vec![
+                FunctionXrayRow {
+                    function: "hot".into(),
+                    change_freq: 4,
+                    loc: 9,
+                    cyclomatic: Some(1),
+                    cognitive: Some(0),
+                    last_changed: "2026-01-04".into(),
+                },
+                FunctionXrayRow {
+                    function: "cold".into(),
+                    change_freq: 0,
+                    loc: 3,
+                    cyclomatic: Some(1),
+                    cognitive: Some(0),
+                    last_changed: String::new(),
+                },
+            ],
+        }],
+        ..SpaDashboard::default()
+    };
+
+    let mut buf = Vec::new();
+    write_spa(
+        &dash,
+        "X-Ray Test",
+        "/tmp/xr",
+        "2026-01-01 00:00:00 UTC",
+        &mut buf,
+    )
+    .expect("write_spa function_xray");
+    let html = String::from_utf8(buf).expect("utf8");
+
+    // The X-Ray tab renderer function must be present in the bundle.
+    assert!(
+        html.contains("drawer-panel-xray") || html.contains("function_xray"),
+        "function_xray wiring must be present in the emitted SPA bundle",
+    );
+
+    let data = extract_data_json(&html).expect("parse data block");
+    let fx = data
+        .get("function_xray")
+        .and_then(|v| v.as_array())
+        .expect("function_xray array present when non-empty");
+    assert_eq!(fx.len(), 1, "one FileFunctionXray entry expected");
+    assert_eq!(
+        fx[0].get("path").and_then(serde_json::Value::as_str),
+        Some("src/hot.rs"),
+    );
+    let rows = fx[0]
+        .get("rows")
+        .and_then(|v| v.as_array())
+        .expect("rows array");
+    assert_eq!(rows.len(), 2, "two FunctionXrayRow entries expected");
+    assert_eq!(
+        rows[0].get("function").and_then(serde_json::Value::as_str),
+        Some("hot"),
+    );
+    assert_eq!(
+        rows[0]
+            .get("change_freq")
+            .and_then(serde_json::Value::as_u64),
+        Some(4),
+    );
+    assert_eq!(
+        rows[0].get("loc").and_then(serde_json::Value::as_u64),
+        Some(9),
+    );
+    assert_eq!(
+        rows[0]
+            .get("cyclomatic")
+            .and_then(serde_json::Value::as_i64),
+        Some(1),
     );
 }
 

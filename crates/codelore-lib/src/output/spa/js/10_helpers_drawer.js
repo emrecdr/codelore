@@ -4,6 +4,127 @@
   // ═════════════════════════════════════════════════════════════════
 
 
+  // ─── §3d  Guided tour renderer ──────────────────────────────────
+  //
+  // Renders the stepper UI into #widget-guided-tour-body. Called at
+  // boot (inactive state → Start button only) and after every step
+  // transition (applyTourStep / exitTour in 00_setup_boot.js).
+  // Pure DOM mutation — no ECharts, no CSS variable reads — so
+  // rerender: false in the WIDGETS registry.
+  //
+  // Step transitions use CSS `transition: opacity` on the note banner;
+  // the global `prefers-reduced-motion` rule in template.html clamps
+  // all transition-durations to 0.01ms, so no animated movement occurs
+  // for users who opted out (WCAG 2.3.3 / F138 pattern).
+  function renderGuidedTour() {
+    var mount = document.getElementById('widget-guided-tour-body');
+    if (!mount) return;
+
+    var isActive = (tourStep >= 0 && tourStep < TOUR_STEPS.length);
+    var step = isActive ? TOUR_STEPS[tourStep] : null;
+
+    // ── chip strip ────────────────────────────────────────────────
+    var chipsHtml = '';
+    for (var i = 0; i < TOUR_STEPS.length; i++) {
+      var isCurrent = isActive && i === tourStep;
+      var isDone    = isActive && i < tourStep;
+      var chipClass = 'tour-chip' +
+        (isCurrent ? ' tour-chip-active' : '') +
+        (isDone    ? ' tour-chip-done'   : '');
+      chipsHtml +=
+        '<button type="button" class="' + chipClass + '"' +
+          ' aria-label="Go to step ' + (i + 1) + ': ' + TOUR_STEPS[i].title + '"' +
+          ' aria-current="' + (isCurrent ? 'step' : 'false') + '"' +
+          ' data-tour-step="' + i + '">' +
+          (i + 1) +
+        '</button>';
+    }
+
+    // ── note banner (shown only during active tour) ───────────────
+    var noteHtml = '';
+    if (isActive && step) {
+      noteHtml =
+        '<div class="tour-note" role="status" aria-live="polite">' +
+          '<span class="tour-note-title">' + escapeHtml(step.title) + '</span>' +
+          ' — ' + escapeHtml(step.note) +
+        '</div>';
+    }
+
+    // ── nav buttons ───────────────────────────────────────────────
+    var prevDisabled = !isActive || tourStep === 0;
+    var nextLabel    = (!isActive || tourStep === TOUR_STEPS.length - 1) ? 'Exit tour' : 'Next';
+    var navHtml =
+      '<div class="tour-nav">' +
+        '<div class="tour-chips" role="list" aria-label="Tour steps">' +
+          chipsHtml +
+        '</div>' +
+        '<div class="tour-buttons">' +
+          (isActive
+            ? '<button type="button" class="tour-btn" id="tour-prev"' +
+                (prevDisabled ? ' disabled' : '') +
+                ' aria-label="Previous tour step">Prev</button>'
+            : '') +
+          '<button type="button" class="tour-btn tour-btn-primary" id="tour-next">' +
+            escapeHtml(isActive ? nextLabel : 'Start tour') +
+          '</button>' +
+          (isActive
+            ? '<button type="button" class="tour-btn tour-btn-ghost" id="tour-exit">' +
+                'Exit' +
+              '</button>'
+            : '') +
+        '</div>' +
+      '</div>' +
+      noteHtml;
+
+    mount.innerHTML = navHtml;
+
+    // ── wire button handlers ──────────────────────────────────────
+    var prevBtn = document.getElementById('tour-prev');
+    var nextBtn = document.getElementById('tour-next');
+    var exitBtn = document.getElementById('tour-exit');
+
+    if (prevBtn) {
+      prevBtn.addEventListener('click', function () {
+        if (tourStep > 0) {
+          tourStep -= 1;
+          applyTourStep(tourStep);
+        }
+      });
+    }
+    if (nextBtn) {
+      nextBtn.addEventListener('click', function () {
+        if (!isActive) {
+          // Start tour at step 0.
+          tourStep = 0;
+          applyTourStep(tourStep);
+        } else if (tourStep >= TOUR_STEPS.length - 1) {
+          // Final step → exit.
+          exitTour();
+        } else {
+          tourStep += 1;
+          applyTourStep(tourStep);
+        }
+      });
+    }
+    if (exitBtn) {
+      exitBtn.addEventListener('click', function () {
+        exitTour();
+      });
+    }
+
+    // ── chip click handlers ───────────────────────────────────────
+    var chips = mount.querySelectorAll('[data-tour-step]');
+    for (var ci = 0; ci < chips.length; ci++) {
+      chips[ci].addEventListener('click', (function (idx) {
+        return function () {
+          tourStep = idx;
+          applyTourStep(tourStep);
+        };
+      }(parseInt(chips[ci].getAttribute('data-tour-step'), 10))));
+    }
+  }
+
+
   // ─── §4  Helpers ─────────────────────────────────────────────────
 
   // Bind a ResizeObserver to keep `chart` sized to `container`. Stores
@@ -290,6 +411,14 @@
     return 'red';
   }
 
+  // Map a band name to its DaisyUI theme token — never hardcoded hex.
+  // Shared by the share bars, effort dot strip, and knowledge surfaces.
+  function bandColor(band) {
+    if (band === 'red')    return 'var(--color-error,   oklch(0.637 0.237 25.331))';
+    if (band === 'yellow') return 'var(--color-warning, oklch(0.845 0.143 84.429))';
+    return                        'var(--color-success, oklch(0.753 0.152 163.216))';
+  }
+
 
   // ─── §5  Detail drawer (cross-widget click target) ────────────────
 
@@ -318,15 +447,16 @@
     });
   }
 
-  // Drawer tab bar: three DaisyUI tabs (in-bundle classes, no CSS rebuild)
-  // wired as an ARIA tablist. Overview is the default selection on every
-  // open. Panels are toggled by wireDrawerTabs below.
-  function drawerTabBar(hasHealthSeries) {
+  // Drawer tab bar: DaisyUI tabs wired as an ARIA tablist. Overview is
+  // the default selection on every open. Optional tabs (Health, X-Ray)
+  // are injected only when the data is available for the current path.
+  function drawerTabBar(hasHealthSeries, hasXray) {
     return '<div class="tabs tabs-bordered" role="tablist" aria-label="File detail sections">' +
       '<button type="button" class="tab tab-active" role="tab" id="drawer-tab-overview" aria-controls="drawer-panel-overview" aria-selected="true" tabindex="0">Overview</button>' +
       '<button type="button" class="tab" role="tab" id="drawer-tab-coupling" aria-controls="drawer-panel-coupling" aria-selected="false" tabindex="-1">Coupling</button>' +
       '<button type="button" class="tab" role="tab" id="drawer-tab-people" aria-controls="drawer-panel-people" aria-selected="false" tabindex="-1">People</button>' +
       (hasHealthSeries ? '<button type="button" class="tab" role="tab" id="drawer-tab-health" aria-controls="drawer-panel-health" aria-selected="false" tabindex="-1">Health</button>' : '') +
+      (hasXray ? '<button type="button" class="tab" role="tab" id="drawer-tab-xray" aria-controls="drawer-panel-xray" aria-selected="false" tabindex="-1">X-Ray</button>' : '') +
       '</div>';
   }
 
@@ -383,6 +513,7 @@
     var couplingHtml = '';
     var peopleHtml = '';
     var healthHtml = '';
+    var xrayHtml = '';
 
     // Build per-file health sparkline from file_health_series.
     const fileSeries = (d.file_health_series || []).filter(function (r) { return r.path === path; });
@@ -398,6 +529,50 @@
           '</td><td>' + escapeHtml(fs.band) + '</td></tr>';
       }
       healthHtml += '</tbody></table>';
+    }
+
+    // Build the X-Ray tab content from function_xray data for this path.
+    // `function_xray` is an array of {path, rows} objects where rows are
+    // FunctionXrayRow values: {function, change_freq, loc, cyclomatic, last_changed}.
+    // The tab only appears when the backend computed xray rows for this path
+    // (top-10 hotspot, Tier-1 language); otherwise the tab is omitted and
+    // the Overview "Functions" section (from d.xray cognitive data) remains.
+    var xrayEntry = (d.function_xray || []).find(function (e) { return e.path === path; });
+    if (xrayEntry && xrayEntry.rows && xrayEntry.rows.length) {
+      var xrows = xrayEntry.rows;
+      // Max change_freq for proportional inline bar widths.
+      var maxFreq = 0;
+      for (var xri = 0; xri < xrows.length; xri++) {
+        if ((xrows[xri].change_freq || 0) > maxFreq) maxFreq = xrows[xri].change_freq;
+      }
+      xrayHtml += '<table class="table table-xs" style="width:100%">' +
+        '<thead><tr>' +
+          '<th>Function</th>' +
+          '<th style="min-width:90px">Change freq</th>' +
+          '<th class="num">LOC</th>' +
+          '<th class="num">CC</th>' +
+        '</tr></thead><tbody>';
+      for (var xfi = 0; xfi < xrows.length; xfi++) {
+        var xr = xrows[xfi];
+        var freqPct = maxFreq ? Math.round(((xr.change_freq || 0) / maxFreq) * 100) : 0;
+        var barColor = freqPct >= 80 ? token('--color-error')
+                     : freqPct >= 40 ? token('--color-warning')
+                     : token('--color-base-content');
+        xrayHtml += '<tr>' +
+          '<td><code>' + escapeHtml(xr.function || '(anonymous)') + '</code></td>' +
+          '<td>' +
+            '<div style="display:flex;align-items:center;gap:4px;">' +
+              '<div style="flex:1;height:6px;background:var(--color-base-200,#e5e7eb);border-radius:3px;overflow:hidden;">' +
+                '<div style="width:' + freqPct + '%;height:100%;background:' + barColor + ';"></div>' +
+              '</div>' +
+              '<span style="min-width:22px;text-align:right;font-size:0.75em;">' + fmtInt(xr.change_freq) + '</span>' +
+            '</div>' +
+          '</td>' +
+          '<td class="num">' + (xr.loc != null ? fmtInt(xr.loc) : '—') + '</td>' +
+          '<td class="num">' + (xr.cyclomatic != null ? fmtInt(xr.cyclomatic) : '—') + '</td>' +
+          '</tr>';
+      }
+      xrayHtml += '</tbody></table>';
     }
 
     // All section lookups are wrapped so one row's malformed data can't
@@ -561,6 +736,16 @@
         '</dl>';
     }
 
+    // Section: marginal-owner risk chip (ownership × health signal)
+    const mor = (d.marginal_owner_risk || []).find(function (r) { return r.path === path; });
+    if (mor) {
+      var morLabel = mor.risk === 'high' ? '⚠ High owner risk' : '⚠ Elevated owner risk';
+      // Reuses ki-knowledge-loss-badge styling intentionally — same visual weight as the knowledge-loss chip.
+      overviewHtml += '<div class="ki-knowledge-loss-badge" title="' + mor.note + '">' +
+        morLabel + ' — top active share ' + fmtNumberFlex(mor.top_active_share, 2) +
+        '</div>';
+    }
+
     } catch (e) {
       console.error('codelore: drawer section render failed for', path, e);
     }
@@ -580,15 +765,18 @@
           : 'This row had no resolvable file path, so no metrics could be looked up.') + '</div>'));
 
     const hasHealthSeries = healthHtml.length > 0;
+    const hasXray = xrayHtml.length > 0;
     body.innerHTML =
-      drawerTabBar(hasHealthSeries) +
+      drawerTabBar(hasHealthSeries, hasXray) +
       drawerPanel('drawer-panel-overview', 'drawer-tab-overview', overviewInner, '') +
       drawerPanel('drawer-panel-coupling', 'drawer-tab-coupling', couplingHtml,
         'No change-coupling partners recorded for this file.') +
       drawerPanel('drawer-panel-people', 'drawer-tab-people', peopleHtml,
         'No ownership or contributor data for this file.') +
       (hasHealthSeries ? drawerPanel('drawer-panel-health', 'drawer-tab-health', healthHtml,
-        'No health history for this file.') : '');
+        'No health history for this file.') : '') +
+      (hasXray ? drawerPanel('drawer-panel-xray', 'drawer-tab-xray', xrayHtml,
+        'No function-level X-Ray data for this file.') : '');
     wireDrawerTabs(body);
 
     // Render the radar after body.innerHTML so the container exists.
@@ -1007,4 +1195,400 @@
     }
   }
 
+  // ─── Factor header widget ────────────────────────────────────────────
+  // Renders the four-factor (Code, Architecture, Knowledge, Delivery)
+  // overview header above the KPI tiles. Each tile shows:
+  //   • A bullet bar — band-colored track (full width), a marker at the
+  //     headline value, and a baseline tick at the series mean.
+  //   • A 60px ECharts sparkline driven by `tile.series`.
+  //   • An "Attention" chip only when `tile.attention == true`.
+  //
+  // Band color is read from CSS custom properties via `token()` so the
+  // widget re-renders on theme switch (registered as `rerender: 'theme'`
+  // in WIDGETS). Thresholds are read from `data.options` — never
+  // hardcoded here.
+  function renderFactorHeader(factors, opts) {
+    const container = document.getElementById('widget-factor-header-body');
+    if (!container) return;
+    if (!factors || !factors.length) {
+      container.innerHTML = '<div class="empty">No factor data — run with health-trend enabled.</div>';
+      return;
+    }
+
+    const o = opts || {};
+    const greenMin = typeof o.health_green_min === 'number' ? o.health_green_min : 70;
+    const yellowMin = typeof o.health_yellow_min === 'number' ? o.health_yellow_min : 40;
+
+    function scoreColor(score) {
+      if (score === null || score === undefined) return token('--cl-health-yellow');
+      return score >= greenMin ? token('--cl-health-green')
+           : score >= yellowMin ? token('--cl-health-yellow')
+           : token('--cl-health-red');
+    }
+
+    function bulletBar(tile) {
+      const val = tile.headline !== null && tile.headline !== undefined ? tile.headline : 0;
+      const seriesMean = tile.series && tile.series.length
+        ? tile.series.reduce(function (s, v) { return s + v; }, 0) / tile.series.length
+        : val;
+      const color = scoreColor(tile.headline);
+      // Track = full-width bar; marker = filled circle at headline %;
+      // baseline tick = thin line at series mean %.
+      return '<div class="factor-bullet-wrap" aria-label="' + fmtNumberFlex(val, 1) + ' / 100">' +
+        '<div class="factor-bullet-track">' +
+          '<div class="factor-bullet-fill" style="width:' + Math.min(100, Math.max(0, val)) + '%;background:' + color + ';"></div>' +
+          '<div class="factor-bullet-mean-tick" style="left:' + Math.min(100, Math.max(0, seriesMean)) + '%;"></div>' +
+        '</div>' +
+        '<span class="factor-bullet-label" style="color:' + color + ';">' + fmtNumberFlex(val, 1) + '</span>' +
+        '</div>';
+    }
+
+    // Delivery tile (headline=null) renders a key-value numbers list.
+    // Band color on the first number (rework %) uses rework-specific thresholds
+    // — NOT the generic health band — because the Pluralsight benchmark range
+    // (green <9 %, yellow 9-14 %, red ≥15 %) differs from the health scale.
+    var REWORK_BAND_COLORS = {
+      green: 'var(--cl-health-green, oklch(70% 0.18 145))',
+      yellow: 'var(--cl-health-yellow, oklch(80% 0.16 85))',
+      red: 'var(--cl-health-red, oklch(60% 0.20 25))',
+    };
+
+    function numbersList(tile) {
+      var reworkColor = REWORK_BAND_COLORS[tile.band] || '';
+      var html = '<div class="factor-numbers">';
+      var nums = tile.numbers || [];
+      for (var ni = 0; ni < nums.length; ni++) {
+        var pair = nums[ni];
+        var label = escapeHtml(pair[0] || '');
+        var value = escapeHtml(pair[1] || '');
+        // Only the first number (rework %) gets band coloring.
+        var valStyle = (ni === 0 && reworkColor) ? ' style="color:' + reworkColor + ';"' : '';
+        html += '<div class="factor-number-row">' +
+          '<span class="factor-number-label">' + label + '</span>' +
+          '<span class="factor-number-value"' + valStyle + '>' + value + '</span>' +
+          '</div>';
+      }
+      html += '</div>';
+      return html;
+    }
+
+    var html = '<div class="factor-tiles">';
+    for (var i = 0; i < factors.length; i++) {
+      const t = factors[i];
+      const hasHeadline = t.headline !== null && t.headline !== undefined;
+      const headlineStr = hasHeadline ? fmtNumberFlex(t.headline, 1) : null;
+      const hasNumbers = t.numbers && t.numbers.length > 0;
+      html += '<div class="factor-tile" id="factor-tile-' + i + '">' +
+        '<div class="factor-name">' + escapeHtml(t.name) + '</div>' +
+        (t.attention ? '<span class="factor-attention-chip">Attention</span>' : '') +
+        (headlineStr !== null
+          ? '<div class="factor-headline">' + headlineStr + '</div>' + bulletBar(t)
+          : (hasNumbers ? numbersList(t) : '<div class="factor-headline">—</div>')) +
+        (t.series && t.series.length ? '<div id="factor-sparkline-' + i + '" class="factor-sparkline"></div>' : '') +
+        '<div class="factor-detail">' + escapeHtml(t.detail || '') + '</div>' +
+        '</div>';
+    }
+    html += '</div>';
+    container.innerHTML = html;
+
+    // Render per-tile ECharts sparklines after DOM is set.
+    for (var j = 0; j < factors.length; j++) {
+      (function (idx, tile) {
+        // Delivery tile and other no-series tiles have no sparkline element.
+        var el = document.getElementById('factor-sparkline-' + idx);
+        if (!el || !tile.series || !tile.series.length || typeof window.echarts === 'undefined') return;
+        try {
+          var chart = mountEcharts(el);
+          chart.setOption({
+            animation: false,
+            grid: { top: 2, bottom: 2, left: 2, right: 2 },
+            xAxis: { type: 'category', show: false, data: tile.series.map(function (_, k) { return k; }) },
+            yAxis: { type: 'value', show: false, min: 0, max: 100 },
+            series: [{
+              type: 'line',
+              data: tile.series,
+              smooth: true,
+              symbol: 'none',
+              lineStyle: { width: 1.5, color: scoreColor(tile.headline) },
+            }],
+          });
+        } catch (e) {
+          console.error('codelore: factor sparkline render failed for', tile.name, e);
+        }
+      })(j, factors[j]);
+    }
+  }
+
+  // ─── §A.5  Widget: banded share bars + effort dot strip ─────────────
+  //
+  // Renders two 100% stacked horizontal bars (LOC share and churn share
+  // per code-health band) plus a 20-dot effort strip where each dot
+  // represents 5% of trailing-window churn. All HTML/CSS — no ECharts.
+  //
+  // Band colours are emitted as `var(--color-*)` references in inline
+  // styles, so the browser re-resolves them on theme swap without any
+  // JS rerender (the widget registers rerender: false).
+  // Accessibility: role="img" + aria-label on every bar and the dot strip;
+  // percentage text labels inside segments serve as non-colour redundant
+  // cues (WCAG 1.4.1 — Use of Color).
+  //
+  // Caption: "X% of the last {window} days' changes landed in red code"
+  // with Wilson 95% CI expressed as a title/tooltip attribute.
+  function renderShareBars(rows, opts) {
+    var mount = document.getElementById('widget-share-bars-body');
+    if (!mount) return;
+    if (!rows || !rows.length) {
+      mount.innerHTML =
+        '<p class="text-base-content/50 text-sm">No effort-exposure data available.</p>';
+      return;
+    }
+
+    var BAND_ORDER = ['red', 'yellow', 'green'];
+    var BAND_LABEL = { red: 'Red', yellow: 'Yellow', green: 'Green' };
+
+    // Index rows by band for O(1) lookup.
+    var byBand = {};
+    for (var i = 0; i < rows.length; i++) {
+      byBand[rows[i].band] = rows[i];
+    }
+
+    // ── Bar builder ────────────────────────────────────────────────────
+    // Builds one 100%-stacked horizontal bar using valueFn(row) → %.
+    // Segments narrower than 0.5% are hidden (invisible sliver).
+    // Text labels appear inside segments ≥8% wide (non-colour cue).
+    function buildBar(axisLabel, valueFn, ariaDesc) {
+      var total = 0;
+      for (var b = 0; b < BAND_ORDER.length; b++) {
+        var r = byBand[BAND_ORDER[b]];
+        total += r ? (valueFn(r) || 0) : 0;
+      }
+      var segments = '';
+      for (var bi = 0; bi < BAND_ORDER.length; bi++) {
+        var band = BAND_ORDER[bi];
+        var row = byBand[band];
+        var raw = row ? (valueFn(row) || 0) : 0;
+        var pct = total > 0 ? (raw / total * 100) : 0;
+        if (pct < 0.5) continue;
+        var pctStr = pct.toFixed(1);
+        segments +=
+          '<div class="share-bar-segment"' +
+              ' style="width:' + pct.toFixed(2) + '%;background:' + bandColor(band) + ';"' +
+              ' title="' + BAND_LABEL[band] + ': ' + pctStr + '%">' +
+            (pct >= 8
+              ? '<span class="share-bar-label">' + BAND_LABEL[band] + ' ' + pctStr + '%</span>'
+              : '') +
+          '</div>';
+      }
+      return (
+        '<div class="share-bar-row">' +
+          '<span class="share-bar-axis-label">' + axisLabel + '</span>' +
+          '<div class="share-bar-track" role="img" aria-label="' + ariaDesc + '">' +
+            segments +
+          '</div>' +
+        '</div>'
+      );
+    }
+
+    var locBar = buildBar(
+      'LOC',
+      function (r) { return r.loc_share_pct; },
+      'Source lines of code share per health band: ' +
+        BAND_ORDER.map(function (b) {
+          var r = byBand[b]; return BAND_LABEL[b] + ' ' + (r ? r.loc_share_pct.toFixed(1) : '0') + '%';
+        }).join(', ')
+    );
+    var churnBar = buildBar(
+      'Churn',
+      function (r) { return r.churn_share_pct; },
+      'Churn share per health band in the trailing window: ' +
+        BAND_ORDER.map(function (b) {
+          var r = byBand[b]; return BAND_LABEL[b] + ' ' + (r ? r.churn_share_pct.toFixed(1) : '0') + '%';
+        }).join(', ')
+    );
+
+    // ── Caption beneath the churn bar ─────────────────────────────────
+    var captionHtml = '';
+    var redRow = byBand['red'];
+    if (redRow) {
+      var redChurn = (redRow.churn_share_pct || 0).toFixed(1);
+      var ciLo = ((redRow.commit_share_ci_low  || 0) * 100).toFixed(1);
+      var ciHi = ((redRow.commit_share_ci_high || 0) * 100).toFixed(1);
+      var windowStr = (opts && opts.window_days)
+        ? 'the last ' + opts.window_days + ' days’'
+        : 'recent';
+      captionHtml =
+        '<p class="share-bars-caption"' +
+            ' title="Wilson 95 % CI on commit share: [' + ciLo + ' %, ' + ciHi + ' %]">' +
+          '<strong>' + redChurn + '%</strong> of ' + windowStr + ' changes landed in red code' +
+        '</p>';
+    }
+
+    // ── 20-dot effort strip ────────────────────────────────────────────
+    // Each dot represents 5% of total window churn, coloured by band.
+    // Dot counts: round(churn_share_pct / 5) per band; remainder (to
+    // reach exactly 20) goes to the band with the largest raw share.
+    var dotCounts = {};
+    var dotSum = 0;
+    var maxBand = null;
+    var maxShare = -1;
+    for (var di = 0; di < BAND_ORDER.length; di++) {
+      var db = BAND_ORDER[di];
+      var dr = byBand[db];
+      var share = dr ? (dr.churn_share_pct || 0) : 0;
+      var rounded = Math.round(share / 5);
+      dotCounts[db] = rounded;
+      dotSum += rounded;
+      if (share > maxShare) { maxShare = share; maxBand = db; }
+    }
+    var remainder = 20 - dotSum;
+    if (remainder !== 0 && maxBand !== null) {
+      dotCounts[maxBand] = (dotCounts[maxBand] || 0) + remainder;
+    }
+
+    var dots = '';
+    for (var dbi = 0; dbi < BAND_ORDER.length; dbi++) {
+      var dotBand = BAND_ORDER[dbi];
+      var count = Math.max(0, dotCounts[dotBand] || 0);
+      for (var k = 0; k < count; k++) {
+        dots +=
+          '<span class="effort-dot"' +
+              ' style="background:' + bandColor(dotBand) + ';"' +
+              ' title="' + BAND_LABEL[dotBand] + ' band (5% churn per dot)">' +
+          '</span>';
+      }
+    }
+    var dotAriaLabel =
+      (dotCounts['red'] || 0) + ' red, ' +
+      (dotCounts['yellow'] || 0) + ' yellow, ' +
+      (dotCounts['green'] || 0) + ' green — each dot = 5% of window churn';
+    var dotStrip =
+      '<div class="effort-dot-strip-wrap">' +
+        '<span class="share-bar-axis-label">Effort</span>' +
+        '<div class="effort-dot-strip" role="img" aria-label="' + dotAriaLabel + '">' +
+          dots +
+        '</div>' +
+      '</div>';
+
+    mount.innerHTML =
+      '<div class="share-bars-container">' +
+        locBar +
+        churnBar +
+        dotStrip +
+        captionHtml +
+      '</div>';
+  }
+
+  // ─── §18 Knowledge surfaces widget ────────────────────────────────────
+  //
+  // Renders three panels into #widget-knowledge-surfaces-body:
+  //   1. Familiarity bullet bars — team familiarity % and islands % using
+  //      bandFor() colour coding (same thresholds as code-health bands).
+  //   2. Team-composition stacked bar — onboarded / experienced / veteran
+  //      commit share as a proportional bar.
+  //   3. Coordination table — top-10 files by tier desc then entropy desc,
+  //      clickable to open the file-detail drawer.
+  function renderKnowledgeSurfaces(famRows, teamRows, coordRows) {
+    var mount = document.getElementById('widget-knowledge-surfaces-body');
+    if (!mount) return;
+
+    var html = '';
+
+    // ── 1. Familiarity bullet bars ─────────────────────────────────────
+    var fam = famRows && famRows.length ? famRows[0] : null;
+    if (fam) {
+      var famPct = typeof fam.familiarity_pct === 'number' ? fam.familiarity_pct : 0;
+      var islPct = typeof fam.islands_pct === 'number' ? fam.islands_pct : 0;
+      var activeAuthors = typeof fam.active_authors === 'number' ? fam.active_authors : '—';
+      // Familiarity: higher is better → green ≥ 70, yellow ≥ 40, red < 40
+      var famColor = bandColor(famPct >= 70 ? 'green' : famPct >= 40 ? 'yellow' : 'red');
+      // Islands: lower is better → green ≤ 20 %, yellow ≤ 40 %, red > 40 %
+      var islColor = bandColor(islPct <= 20 ? 'green' : islPct <= 40 ? 'yellow' : 'red');
+      html +=
+        '<div class="knowledge-familiarity-bars">' +
+          '<div class="share-bar-row" title="Mean team familiarity with active files (' + fmtNumberFlex(famPct, 1) + '%)">' +
+            '<span class="share-bar-axis-label">Familiarity</span>' +
+            '<div class="share-bar-track">' +
+              '<div class="share-bar-fill" style="width:' + Math.min(100, famPct) + '%;background:' + famColor + ';"></div>' +
+            '</div>' +
+            '<span class="share-bar-value">' + fmtNumberFlex(famPct, 1) + '%</span>' +
+          '</div>' +
+          '<div class="share-bar-row" title="Knowledge islands: files with no active owner (' + fmtNumberFlex(islPct, 1) + '% of files)">' +
+            '<span class="share-bar-axis-label">Islands</span>' +
+            '<div class="share-bar-track">' +
+              '<div class="share-bar-fill" style="width:' + Math.min(100, islPct) + '%;background:' + islColor + ';"></div>' +
+            '</div>' +
+            '<span class="share-bar-value">' + fmtNumberFlex(islPct, 1) + '%</span>' +
+          '</div>' +
+          '<p class="knowledge-caption">Active authors: <strong>' + activeAuthors + '</strong>' +
+            (fam.verdict ? ' — <em>' + escapeHtml(fam.verdict) + '</em>' : '') +
+          '</p>' +
+        '</div>';
+    }
+
+    // ── 2. Team-composition stacked bar ───────────────────────────────
+    if (teamRows && teamRows.length) {
+      // Collect commit share per bucket; fall back to 0 if bucket absent.
+      var bucketColors = {
+        onboarded:  'var(--color-info,    oklch(0.623 0.214 259.532))',
+        experienced:'var(--color-success, oklch(0.753 0.152 163.216))',
+        veteran:    'var(--color-primary, oklch(0.491 0.270 282.717))',
+      };
+      var totalShare = 0;
+      var segments = '';
+      var legend = '';
+      for (var ti = 0; ti < teamRows.length; ti++) {
+        var tr = teamRows[ti];
+        var share = typeof tr.commit_share_pct === 'number' ? tr.commit_share_pct : 0;
+        totalShare += share;
+        var color = bucketColors[tr.bucket] || getCssVar('--p');
+        segments +=
+          '<div class="team-bar-segment" style="width:' + fmtNumberFlex(share, 1) + '%;background:' + color + ';"' +
+            ' title="' + escapeHtml(tr.bucket) + ': ' + fmtNumberFlex(share, 1) + '% of commits, ' + tr.active_authors + ' author(s)">' +
+          '</div>';
+        legend +=
+          '<span class="team-bar-key" style="color:' + color + ';">' + escapeHtml(tr.bucket) + '</span> ' +
+          fmtNumberFlex(share, 1) + '% (' + tr.active_authors + ')  ';
+      }
+      html +=
+        '<div class="team-composition-bar">' +
+          '<div class="team-bar-track" role="img" aria-label="Team tenure distribution">' + segments + '</div>' +
+          '<p class="knowledge-caption">' + legend.trim() + '</p>' +
+        '</div>';
+    }
+
+    // ── 3. Coordination table ──────────────────────────────────────────
+    if (coordRows && coordRows.length) {
+      var tierBadge = function (t) {
+        var colors = { high: 'badge-error', medium: 'badge-warning', low: 'badge-info', single: 'badge-ghost' };
+        return '<span class="badge badge-sm ' + (colors[t] || 'badge-ghost') + '">' + escapeHtml(t) + '</span>';
+      };
+      var rows = '';
+      for (var ci = 0; ci < coordRows.length; ci++) {
+        var cr = coordRows[ci];
+        var name = (cr.path || '').split('/').pop();
+        rows +=
+          '<tr class="hover" style="cursor:pointer;" onclick="window._codeloreShowDetail && window._codeloreShowDetail(' + JSON.stringify(cr.path) + ')">' +
+            '<td class="coord-path" title="' + escapeHtml(cr.path || '') + '">' + escapeHtml(name) + '</td>' +
+            '<td>' + tierBadge(cr.tier || 'single') + '</td>' +
+            '<td>' + fmtNumberFlex(cr.fragmentation, 2) + '</td>' +
+            '<td>' + fmtNumberFlex(cr.cochange_entropy, 3) + '</td>' +
+          '</tr>';
+      }
+      html +=
+        '<div class="table-container coordination-table">' +
+          '<table class="table table-xs">' +
+            '<thead><tr>' +
+              '<th>File</th><th>Tier</th><th>Fragmentation</th><th>Entropy</th>' +
+            '</tr></thead>' +
+            '<tbody>' + rows + '</tbody>' +
+          '</table>' +
+        '</div>';
+    }
+
+    if (!html) {
+      html = '<p class="muted-hint">No knowledge data — run with source files present to populate.</p>';
+    }
+
+    mount.innerHTML = html;
+  }
 

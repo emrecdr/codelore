@@ -275,7 +275,7 @@ fn append_change(
 /// `"<anonymous>@{start_line}-{end_line}"` for unnamed entities). The
 /// line range is the stable identity for unnamed entities and the
 /// unique key the PK needs without a schema migration.
-pub(super) fn dedup_entities(
+pub(crate) fn dedup_entities(
     entities: Vec<crate::complexity::ComplexityEntity>,
 ) -> Vec<crate::complexity::ComplexityEntity> {
     let mut seen: std::collections::HashSet<(String, u32, u32)> = std::collections::HashSet::new();

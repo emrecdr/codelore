@@ -35,16 +35,22 @@ use serde::Serialize;
 
 use crate::analyses::architecture_roles::ArchitectureRoleRow;
 use crate::analyses::architecture_trend::ArchitectureTrendRow;
+use crate::analyses::code_familiarity::CodeFamiliarityRow;
 use crate::analyses::code_health::CodeHealthRow;
+use crate::analyses::coordination_needs::CoordinationNeedsRow;
 use crate::analyses::coupling::CouplingRow;
 use crate::analyses::dashboard::{
     CloneSummary, DailyCommit, ImportEdgeRow, KameiRiskRow, TrendPoint, XRayEntry,
 };
+use crate::analyses::effort_exposure::EffortExposureRow;
 use crate::analyses::entity_ownership::EntityOwnershipRow;
+use crate::analyses::function_xray::FunctionXrayRow;
 use crate::analyses::hotspots::HotspotRow;
 use crate::analyses::knowledge_islands::KnowledgeIslandRow;
+use crate::analyses::marginal_owner_risk::MarginalOwnerRiskRow;
 use crate::analyses::modularity_violations::ModularityViolationRow;
 use crate::analyses::summary::SummaryRow;
+use crate::analyses::team_composition::TeamCompositionRow;
 use crate::analyses::unstable_interface::UnstableInterfaceRow;
 use crate::{CodeLoreError, Result};
 
@@ -66,6 +72,18 @@ const ALPINE_PERSIST_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/alpine-p
 // it's the precompiled output of `just spa-css-rebuild`, checked into
 // the repo. See `spa/tailwind-src/README.md` for the rebuild workflow.
 const TAILWIND_DAISY_CSS: &str = include_str!("spa/tailwind.daisyui.min.css");
+
+/// Per-file function-level X-Ray data for the SPA file-detail drawer.
+/// Carries the `run_function_xray` result for one hotspot path so the
+/// drawer can render an "X-Ray" tab with change-frequency and complexity
+/// per function without a second round-trip to the server.
+#[derive(Debug, Default, Serialize, serde::Deserialize)]
+pub struct FileFunctionXray {
+    /// Repo-relative path this entry covers (matches the hotspot `path`).
+    pub path: String,
+    /// Function-level rows sorted by `change_freq` DESC, then name ASC.
+    pub rows: Vec<FunctionXrayRow>,
+}
 
 /// Composite of all per-widget data the SPA dashboard renders.
 /// Each field carries the rows for one widget; widgets that opt out
@@ -178,6 +196,19 @@ pub struct SpaDashboard {
     /// Newest-first. Empty when there are no signal-bearing transitions.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub health_transitions: Vec<crate::analyses::health_trend::HealthTransitionRow>,
+    /// Effort-exposure rows — LOC share, commit share, and churn share per
+    /// code-health band (red / yellow / green) in the trailing window.
+    /// Drives the stacked share bars and effort dot strip in the Code Health
+    /// section. Empty when code-health data is unavailable (e.g. no
+    /// `complexity_metrics` at HEAD).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effort_exposure: Vec<EffortExposureRow>,
+    /// Four-factor dashboard header tiles: Code, Architecture, Knowledge,
+    /// Delivery. Each carries a headline 0–100, a historical series for the
+    /// sparkline, and an XmR-gated attention flag. Empty when no factor data
+    /// is available (e.g. first run with no health-trend history).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub factors: Vec<crate::analyses::factors::FactorTile>,
     /// Per-commit Kamei JIT-SDP feature vector for the Delivery Risk
     /// Sparkline widget. One row per commit in the last-N (capped at
     /// 30) chronological window. Surfaces the raw Kamei 14-feature
@@ -190,6 +221,58 @@ pub struct SpaDashboard {
     /// dimensions).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub kamei_risk: Vec<KameiRiskRow>,
+    /// Marginal-owner risk rows — files in the yellow/red health band
+    /// where the most knowledgeable active author holds a low share.
+    /// Drives the risk chip in the file-detail drawer. Empty when no
+    /// file meets the high/elevated thresholds.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub marginal_owner_risk: Vec<MarginalOwnerRiskRow>,
+    /// Code-familiarity summary (repo-level: `familiarity_pct`,
+    /// `islands_pct`, `active_authors`, `verdict`). At most one row per run.
+    /// Drives the Knowledge card's familiarity bullet bars. Empty when
+    /// `knowledge_shares` is unavailable (e.g. no complexity metrics at HEAD).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub code_familiarity: Vec<CodeFamiliarityRow>,
+    /// Team-composition rows — one row per tenure bucket
+    /// (`onboarded` / `experienced` / `veteran`) with active-author
+    /// count, commit share, and onboarding velocity. Drives the
+    /// stacked bucket bar in the Knowledge card.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub team_composition: Vec<TeamCompositionRow>,
+    /// Top coordination-needs rows (capped at 10, sorted by tier desc
+    /// then co-change entropy desc). Each row is a file with its
+    /// fragmentation, interleave, entropy, and tier. Drives the
+    /// coordination table in the Knowledge card. Empty when no
+    /// `knowledge_shares` data is available.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub coordination_needs: Vec<CoordinationNeedsRow>,
+    /// Delivery-metrics percentile distributions — one row per metric
+    /// (`batch_size_files`, `batch_size_loc`, `branch_duration_hours`,
+    /// `rework_pct`, `lead_proxy_hours`). Drives the Delivery factor tile
+    /// numbers and the delivery card in the SPA. Empty when
+    /// `--include-merges` was not set or the repo has no merge commits.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub delivery_metrics: Vec<crate::analyses::delivery_metrics::DeliveryMetricsRow>,
+    /// Release-cadence rows — one row per matched release tag plus a
+    /// `__summary__` row carrying the median inter-release gap in days.
+    /// Drives the cadence number in the Delivery factor tile. Empty when
+    /// no tags match `--release-tag-glob` or `Repo::tags()` is unavailable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub release_cadence: Vec<crate::analyses::release_cadence::ReleaseCadenceRow>,
+    /// Delivery-friction rows — top files ranked by composite delivery
+    /// friction score (churn × lead-time × cognitive). Used for the
+    /// "where is friction" drill line in the delivery card. Empty when
+    /// the analysis was not run or produced no results.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub delivery_friction: Vec<crate::analyses::delivery_friction::DeliveryFrictionRow>,
+    /// Per-file function-level X-Ray data for the top-10 hotspot paths.
+    /// Each entry holds the `run_function_xray` result (change-frequency,
+    /// LOC, cyclomatic complexity per function) for one hotspot path.
+    /// Drives the "X-Ray" tab in the file-detail drawer. Empty on repos
+    /// with no Tier-1 language source files or when ingest produces no
+    /// hotspots.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub function_xray: Vec<FileFunctionXray>,
     /// Effective thresholds for THIS run, snapshotted at dispatch.
     /// Surfaced into the SPA's `data.options` block so per-metric
     /// tooltips can interpolate `${min_shared_revs}` /
@@ -225,6 +308,10 @@ pub struct SpaOptionsSnapshot {
     /// Minimum health score (0–100) for the yellow band. Matches
     /// [`crate::bands::HEALTH_YELLOW_MIN`].
     pub health_yellow_min: f64,
+    /// Trailing-window size in days used by windowed analyses (effort
+    /// exposure, share bars, etc.). Exposed so the SPA JS can show
+    /// "last N days" in captions without hardcoding the default.
+    pub window_days: u32,
 }
 
 impl Default for SpaOptionsSnapshot {
@@ -242,6 +329,7 @@ impl Default for SpaOptionsSnapshot {
             fisher_significance: 0.05,
             health_green_min: crate::bands::HEALTH_GREEN_MIN,
             health_yellow_min: crate::bands::HEALTH_YELLOW_MIN,
+            window_days: crate::constants::DEFAULT_WINDOW_DAYS,
         }
     }
 }
@@ -259,6 +347,7 @@ impl SpaOptionsSnapshot {
             fisher_significance: opts.fisher_significance,
             health_green_min: crate::bands::HEALTH_GREEN_MIN,
             health_yellow_min: crate::bands::HEALTH_YELLOW_MIN,
+            window_days: opts.window_days,
         }
     }
 }

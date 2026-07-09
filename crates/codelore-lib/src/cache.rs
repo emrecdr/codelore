@@ -434,6 +434,35 @@ mod tests {
     }
 
     #[test]
+    fn cache_key_unchanged_when_target_changes() {
+        // `target` is a per-invocation selector (function-xray path) that
+        // ingest never reads. Two runs differing only in `--target` must hit
+        // the same cache entry; different `window_days` must still differ.
+        let opts_no_target = Options {
+            window_days: 30,
+            ..base_opts()
+        };
+        let opts_with_target = Options {
+            target: Some("src/lib.rs".into()),
+            window_days: 30,
+            ..base_opts()
+        };
+        let opts_different_window = Options {
+            target: Some("src/lib.rs".into()),
+            window_days: 60,
+            ..base_opts()
+        };
+        let k_no = cache_key(Path::new("/tmp/test-repo"), "sha", &opts_no_target);
+        let k_with = cache_key(Path::new("/tmp/test-repo"), "sha", &opts_with_target);
+        let k_diff = cache_key(Path::new("/tmp/test-repo"), "sha", &opts_different_window);
+        assert_eq!(k_no, k_with, "target must not affect the cache key");
+        assert_ne!(
+            k_with, k_diff,
+            "window_days still differentiates the key when target differs"
+        );
+    }
+
+    #[test]
     fn cache_key_does_not_change_when_rows_limit_changes() {
         let opts_a = Options {
             rows_limit: None,
