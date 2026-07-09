@@ -26,7 +26,7 @@ use codelore_lib::cli_api::{
     facts::FactsDb,
     quality_gates::{
         GateViolation, Thresholds, evaluate_clone_gate, evaluate_code_health_gate,
-        evaluate_effort_exposure_gate, evaluate_full_tree,
+        evaluate_full_tree,
     },
     repo::GixRepo,
 };
@@ -464,9 +464,20 @@ impl CodeLoreServer {
             // clone gate
             violations.extend(evaluate_clone_gate(&thresholds, &db).map_err(internal)?);
 
-            // effort-exposure gate
-            violations
-                .extend(evaluate_effort_exposure_gate(&thresholds, &db, &opts).map_err(internal)?);
+            // effort-exposure gate — reuses the code-health rows computed for
+            // code_health_min so the heaviest analysis runs once per call.
+            if let Some(max) = thresholds.gates.max_red_effort_pct {
+                let rows =
+                    codelore_lib::cli_api::analyses::effort_exposure::run_effort_exposure_with_health(
+                        &db,
+                        &opts.with_no_row_limit(),
+                        &ch,
+                    )
+                    .map_err(internal)?;
+                violations.extend(
+                    codelore_lib::cli_api::quality_gates::evaluate_effort_exposure_rows(max, &rows),
+                );
+            }
 
             let verdict = if violations.is_empty() {
                 "pass"

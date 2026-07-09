@@ -145,6 +145,25 @@ pub fn run_effort_exposure(db: &FactsDb, opts: &Options) -> Result<Vec<EffortExp
         &opts.with_no_row_limit(),
         &HealthScanCtx::head_default(),
     )?;
+    run_effort_exposure_with_health(db, opts, &health)
+}
+
+/// [`run_effort_exposure`] with the code-health rows supplied by the caller.
+///
+/// `health` must be the HEAD-scope, unlimited-row health result
+/// ([`run_code_health_scoped`] with [`HealthScanCtx::head_default()`] and
+/// `with_no_row_limit()`); callers that already hold those rows — the
+/// quality-gate path computes them for `code_health_min` — avoid re-running
+/// the heaviest analysis in the pipeline.
+///
+/// # Errors
+///
+/// Returns [`crate::CodeLoreError::Analysis`] on SQL or row-mapping failure.
+pub fn run_effort_exposure_with_health(
+    db: &FactsDb,
+    opts: &Options,
+    health: &[CodeHealthRow],
+) -> Result<Vec<EffortExposureRow>> {
     if health.is_empty() {
         return Ok(vec![]);
     }
@@ -152,7 +171,7 @@ pub fn run_effort_exposure(db: &FactsDb, opts: &Options) -> Result<Vec<EffortExp
     // Step 2: fetch per-file SLOC and Step 3: materialise eh_bands_v1.
     // DDL is safe at analysis phase because TEMPORARY tables are session-local.
     let sloc_map = fetch_sloc_map(db)?;
-    populate_bands_table(db, &health, &sloc_map)?;
+    populate_bands_table(db, health, &sloc_map)?;
 
     // Step 4: run the band-level aggregation over the trailing window.
     // `window_days` anchors to the repo's last commit date (not wall-clock)

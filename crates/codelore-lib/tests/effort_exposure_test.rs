@@ -100,3 +100,39 @@ fn effort_exposure_files_count_matches_code_health() {
     let total_files: u32 = rows.iter().map(|r| r.files).sum();
     assert!(total_files >= 1, "expected ≥1 total files across all bands");
 }
+
+/// The gate path pre-computes code-health rows once and feeds them into
+/// [`run_effort_exposure_with_health`]; the result must be identical to the
+/// self-contained [`run_effort_exposure`], or the check command's dedup of
+/// the health scan would silently change gate values.
+#[test]
+fn effort_exposure_with_precomputed_health_matches_self_contained() {
+    use codelore_lib::analyses::code_health::{HealthScanCtx, run_code_health_scoped};
+    use codelore_lib::analyses::effort_exposure::run_effort_exposure_with_health;
+
+    let bio = codelore_lib::test_support::biomarker_repo::build();
+    let repo = GixRepo::open(bio.dir.path()).expect("open repo");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: bio.dir.path().to_path_buf(),
+        min_revs: 1,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let self_contained = run_effort_exposure(&db, &opts).expect("self-contained run");
+    let health = run_code_health_scoped(
+        &db,
+        &opts.with_no_row_limit(),
+        &HealthScanCtx::head_default(),
+    )
+    .expect("health scan");
+    let with_health =
+        run_effort_exposure_with_health(&db, &opts, &health).expect("precomputed-health run");
+
+    assert_eq!(
+        format!("{self_contained:?}"),
+        format!("{with_health:?}"),
+        "precomputed-health variant must reproduce the self-contained result exactly"
+    );
+}

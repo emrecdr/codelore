@@ -97,3 +97,33 @@ fn architecture_gate_passes_when_budget_covers_the_cycle() {
             .is_empty()
     );
 }
+
+/// A passing run must still surface the measured metrics — the check
+/// command's ledger and ratchet read observed values from passing runs,
+/// which previously recorded 0.0 because only violation rows carried them.
+#[test]
+fn architecture_gate_measured_reports_metrics_on_a_passing_run() {
+    use codelore_lib::quality_gates::evaluate_architecture_gate_measured;
+
+    let (_dir, db, _opts) = ingested_cyclic_repo();
+
+    // Budget of 1 admits the single a↔b cycle: no violations, but the
+    // measured cycle count must still be reported.
+    let mut t = Thresholds::default();
+    t.gates.max_dependency_cycles = Some(1);
+    let (v, measured) = evaluate_architecture_gate_measured(&t, &db).expect("evaluate gate");
+    assert!(v.is_empty(), "one cycle within a budget of 1 must pass");
+    let m = measured.expect("configured gate must yield measures");
+    assert_eq!(m.cycle_count, 1, "the a↔b cycle is measured even on pass");
+    assert!(
+        (0.0..=1.0).contains(&m.propagation_cost),
+        "propagation cost is a 0..1 density: {}",
+        m.propagation_cost
+    );
+
+    // No architecture gate configured → no graph build, no measures.
+    let empty = Thresholds::default();
+    let (v, measured) = evaluate_architecture_gate_measured(&empty, &db).expect("evaluate gate");
+    assert!(v.is_empty());
+    assert!(measured.is_none(), "unconfigured gates must not measure");
+}

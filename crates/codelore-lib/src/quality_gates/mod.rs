@@ -256,9 +256,34 @@ pub fn evaluate_architecture_gate(
     thresholds: &Thresholds,
     db: &crate::facts::FactsDb,
 ) -> crate::Result<Vec<GateViolation>> {
+    Ok(evaluate_architecture_gate_measured(thresholds, db)?.0)
+}
+
+/// Architecture metrics measured for gate evaluation, returned so callers
+/// can record the observed values (ledger, ratchet) on passing runs too.
+#[derive(Debug, Clone, Copy)]
+pub struct ArchMeasured {
+    /// Import-graph strongly-connected-component count.
+    pub cycle_count: u32,
+    /// Propagation cost (0..1 reach density).
+    pub propagation_cost: f64,
+}
+
+/// [`evaluate_architecture_gate`] returning the measured metrics alongside
+/// the violations. `None` when neither architecture gate is configured (the
+/// import graph is not built at all).
+///
+/// # Errors
+///
+/// Returns [`crate::CodeLoreError::Analysis`] on `DuckDB` errors
+/// (propagated from the import-graph build).
+pub fn evaluate_architecture_gate_measured(
+    thresholds: &Thresholds,
+    db: &crate::facts::FactsDb,
+) -> crate::Result<(Vec<GateViolation>, Option<ArchMeasured>)> {
     let g = &thresholds.gates;
     if g.max_dependency_cycles.is_none() && g.max_propagation_cost.is_none() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), None));
     }
     let graph = crate::analyses::import_graph::build_import_graph(db)?;
     let m = crate::analyses::import_graph::graph_metrics(&graph);
@@ -284,7 +309,13 @@ pub fn evaluate_architecture_gate(
             threshold: format!("{max:.4}"),
         });
     }
-    Ok(out)
+    Ok((
+        out,
+        Some(ArchMeasured {
+            cycle_count: m.cycle_count,
+            propagation_cost: m.propagation_cost,
+        }),
+    ))
 }
 
 /// Evaluate the `[diff]` section against a base→head delta.
@@ -432,7 +463,11 @@ pub fn evaluate_code_health_gate(
 ///
 /// Finds the `"red"` band row in `rows`; if none, treats churn as 0 %
 /// (an all-green / all-yellow repo passes any positive threshold).
-pub(crate) fn evaluate_effort_exposure_rows(
+/// Public so callers that already hold the effort-exposure rows (the
+/// `check` command computes them once for the gate, its ledger record,
+/// and the ratchet) can evaluate without re-running the analysis.
+#[must_use]
+pub fn evaluate_effort_exposure_rows(
     threshold: f64,
     rows: &[crate::analyses::effort_exposure::EffortExposureRow],
 ) -> Vec<GateViolation> {
@@ -474,7 +509,13 @@ pub fn evaluate_effort_exposure_gate(
     Ok(evaluate_effort_exposure_rows(threshold, &rows))
 }
 
-pub(crate) fn evaluate_familiarity_rows(
+/// Pure inner comparison for the `code_familiarity_min` gate.
+///
+/// Public so callers that already hold the familiarity rows (the `check`
+/// command reads the measured percentage for its ledger record from the
+/// same rows) can evaluate without re-running the analysis.
+#[must_use]
+pub fn evaluate_familiarity_rows(
     threshold: f64,
     rows: &[crate::analyses::code_familiarity::CodeFamiliarityRow],
 ) -> Vec<GateViolation> {

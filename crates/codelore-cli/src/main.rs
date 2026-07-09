@@ -416,37 +416,28 @@ fn eval_arch_gates(
     ts: &str,
     head_sha: &str,
 ) -> Result<GateGroupResult> {
-    let arch_v = codelore_lib::cli_api::quality_gates::evaluate_architecture_gate(thresholds, db)
-        .context("evaluate architecture gate")?;
+    let (arch_v, measured) =
+        codelore_lib::cli_api::quality_gates::evaluate_architecture_gate_measured(thresholds, db)
+            .context("evaluate architecture gate")?;
     let g = &thresholds.gates;
     let mut recs = Vec::new();
-    if let Some(max) = g.max_dependency_cycles {
+    if let (Some(max), Some(m)) = (g.max_dependency_cycles, measured) {
         let failed = arch_v.iter().any(|v| v.gate == "max_dependency_cycles");
-        let value = arch_v
-            .iter()
-            .find(|v| v.gate == "max_dependency_cycles")
-            .and_then(|v| v.actual.parse::<f64>().ok())
-            .unwrap_or(0.0);
         recs.push(make_rec(
             "max_dependency_cycles",
             f64::from(max),
-            value,
+            f64::from(m.cycle_count),
             failed,
             ts,
             head_sha,
         ));
     }
-    if let Some(max) = g.max_propagation_cost {
+    if let (Some(max), Some(m)) = (g.max_propagation_cost, measured) {
         let failed = arch_v.iter().any(|v| v.gate == "max_propagation_cost");
-        let value = arch_v
-            .iter()
-            .find(|v| v.gate == "max_propagation_cost")
-            .and_then(|v| v.actual.parse::<f64>().ok())
-            .unwrap_or(0.0);
         recs.push(make_rec(
             "max_propagation_cost",
             max,
-            value,
+            m.propagation_cost,
             failed,
             ts,
             head_sha,
@@ -510,14 +501,23 @@ fn evaluate_all_gates(
     recs.extend(arch_r);
 
     if let Some(max) = g.max_red_effort_pct {
-        let effort_v = codelore_lib::cli_api::quality_gates::evaluate_effort_exposure_gate(
-            thresholds, db, opts,
-        )
-        .context("evaluate effort-exposure gate")?;
-        let value = effort_v
-            .first()
-            .and_then(|v| v.actual.parse::<f64>().ok())
-            .unwrap_or(0.0);
+        // Reuse the code-health rows already computed for `code_health_min` —
+        // effort-exposure's band table derives from the same HEAD scan, and
+        // the measured red-band churn share must be recorded on passing runs
+        // too (the ratchet and `--history` read it from the ledger).
+        let rows =
+            codelore_lib::cli_api::analyses::effort_exposure::run_effort_exposure_with_health(
+                db,
+                &opts.with_no_row_limit(),
+                &code_health,
+            )
+            .context("run effort-exposure for gate")?;
+        let value = rows
+            .iter()
+            .find(|r| r.band == "red")
+            .map_or(0.0, |r| r.churn_share_pct);
+        let effort_v =
+            codelore_lib::cli_api::quality_gates::evaluate_effort_exposure_rows(max, &rows);
         recs.push(make_rec(
             "max_red_effort_pct",
             max,
@@ -530,13 +530,13 @@ fn evaluate_all_gates(
     }
 
     if let Some(min) = g.code_familiarity_min {
-        let fam_v =
-            codelore_lib::cli_api::quality_gates::evaluate_familiarity_gate(thresholds, db, opts)
-                .context("evaluate code-familiarity gate")?;
-        let value = fam_v
-            .first()
-            .and_then(|v| v.actual.parse::<f64>().ok())
-            .unwrap_or(0.0);
+        let rows =
+            codelore_lib::cli_api::analyses::code_familiarity::run_code_familiarity(db, opts)
+                .context("run code-familiarity for gate")?;
+        // Measured familiarity is recorded pass or fail; an empty row set
+        // (no recognized source files) records 0.0 with a vacuous pass.
+        let value = rows.first().map_or(0.0, |r| r.familiarity_pct);
+        let fam_v = codelore_lib::cli_api::quality_gates::evaluate_familiarity_rows(min, &rows);
         recs.push(make_rec(
             "code_familiarity_min",
             min,
