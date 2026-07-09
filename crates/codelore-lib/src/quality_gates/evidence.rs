@@ -199,4 +199,112 @@ mod tests {
             "evidence ordering must be deterministic across identical calls"
         );
     }
+
+    /// Build a minimal one-commit repo with the given message, ingest it, and
+    /// return `(db, opts, _dir)`.  `_dir` must be kept alive while db is used.
+    #[cfg(feature = "test-support")]
+    fn repo_with_message(msg: &str) -> (FactsDb, Options, tempfile::TempDir) {
+        use std::process::Command;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path();
+        let git = |args: &[&str]| {
+            let ok = Command::new("git")
+                .arg("-C")
+                .arg(p)
+                .args(args)
+                .status()
+                .expect("git")
+                .success();
+            assert!(ok, "git {args:?} failed");
+        };
+        git(&["init", "-b", "main", "--quiet"]);
+        git(&["config", "user.email", "t@test.com"]);
+        git(&["config", "user.name", "T"]);
+        std::fs::write(p.join("f.rs"), "fn x() {}").unwrap();
+        git(&["add", "f.rs"]);
+        // Pass the message via GIT_EDITOR=-less + --allow-empty-message workaround:
+        // use -m with the raw message string (git handles arbitrary content via -m).
+        let ok = Command::new("git")
+            .arg("-C")
+            .arg(p)
+            .args(["commit", "--quiet", "-m"])
+            .arg(msg)
+            .status()
+            .expect("git commit")
+            .success();
+        assert!(ok, "git commit with long message failed");
+
+        let opts = Options {
+            repo_path: p.to_path_buf(),
+            min_revs: 1,
+            ..Options::default()
+        };
+        let gix = GixRepo::open(p).expect("open gix repo");
+        let db = FactsDb::open_or_ingest(&opts, &gix).expect("ingest");
+        (db, opts, dir)
+    }
+
+    /// A commit message longer than 90 ASCII characters must be truncated to
+    /// exactly 80 characters in `message_head`.
+    ///
+    /// `DuckDB`'s `substr(split_part(message, chr(10), 1), 1, 80)` counts Unicode
+    /// code points, not bytes.  For ASCII this equals the character count.
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn evidence_message_head_truncated_to_80_ascii() {
+        // 95-char ASCII first line (no newline), so split_part returns the whole
+        // thing and substr caps it at 80.
+        let long_msg = "a".repeat(95);
+        let (db, opts, _dir) = repo_with_message(&long_msg);
+        let rows = evidence_for_path(&db, &opts, "f.rs", 5).expect("evidence_for_path");
+        assert!(
+            !rows.is_empty(),
+            "expected at least one evidence row for f.rs"
+        );
+        let head = &rows[0].message_head;
+        assert_eq!(
+            head.chars().count(),
+            80,
+            "message_head must be exactly 80 chars for a 95-char input, got {:?} (len {})",
+            head,
+            head.chars().count(),
+        );
+    }
+
+    /// A commit message whose 80th code-point boundary falls inside a multibyte
+    /// character (e.g. a CJK character spanning 3 UTF-8 bytes) must not panic
+    /// and must return ≤ 80 Unicode code points — never a partial byte sequence.
+    ///
+    /// `DuckDB`'s `substr` is code-point-aware (UTF-8 safe), so this is enforced
+    /// in SQL without any Rust slicing.
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn evidence_message_head_multibyte_safe() {
+        // 79 ASCII chars + 5 CJK ideographs (each 3 UTF-8 bytes).
+        // The boundary at position 80 falls mid-ideograph in a byte-naive slicer
+        // but DuckDB substr counts code points, so position 80 = the 80th
+        // ideograph character — no partial byte sequence is possible.
+        let msg = format!("{}{}", "x".repeat(79), "字".repeat(5));
+        assert!(msg.chars().count() == 84, "sanity: 84 code points total");
+
+        let (db, opts, _dir) = repo_with_message(&msg);
+        let rows = evidence_for_path(&db, &opts, "f.rs", 5).expect("evidence_for_path");
+        assert!(
+            !rows.is_empty(),
+            "expected at least one evidence row for f.rs"
+        );
+        let head = &rows[0].message_head;
+        // Must be at most 80 code points and must be valid UTF-8 (no panic on
+        // chars().count() means no partial byte sequence).
+        let char_count = head.chars().count();
+        assert!(
+            char_count <= 80,
+            "message_head must be ≤ 80 code points, got {char_count}: {head:?}"
+        );
+        // Must contain the first 79 ASCII chars.
+        assert!(
+            head.starts_with(&"x".repeat(79)),
+            "first 79 chars must be ASCII 'x', got: {head:?}"
+        );
+    }
 }
