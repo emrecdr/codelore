@@ -30,6 +30,7 @@
 //! rules); ours integrates with `--group-file`, `--mailmap`, and the
 //! existing convention-naming pattern — same data, deeper DX.
 
+pub mod evidence;
 pub mod ledger;
 pub mod ratchet;
 
