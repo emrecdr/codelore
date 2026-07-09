@@ -10,5 +10,7 @@
 //! §VALIDATED dialect-variance spec).
 
 pub mod sarif_parse;
+pub mod store;
 
 pub use sarif_parse::{ExternalFinding, parse_sarif};
+pub use store::ExternalStore;

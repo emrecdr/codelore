@@ -16,7 +16,7 @@ use codelore_lib::cli_api::{AnalysisName, CodeLoreError, Options};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 
-use crate::args::{AnalyzeArgs, Cli, Command, DiffArgs, McpArgs};
+use crate::args::{AnalyzeArgs, Cli, Command, DiffArgs, IngestSarifArgs, McpArgs};
 
 fn main() {
     if let Err(e) = run() {
@@ -48,11 +48,61 @@ fn run() -> Result<()> {
         Command::Docs => run_docs_cmd(),
         Command::Check(args) => run_check_cmd(&args),
         Command::Mcp(args) => run_mcp_cmd(&args),
+        Command::IngestSarif(args) => run_ingest_sarif_cmd(&args),
     }
 }
 
 fn run_mcp_cmd(args: &McpArgs) -> Result<()> {
     mcp::run_mcp_server(args.repo.clone())
+}
+
+/// Ingest one or more SARIF files into the per-repo external-findings sidecar.
+///
+/// For each file, parses all SARIF runs, groups findings by engine, and
+/// calls `ExternalStore::replace_engine` per engine so re-ingest is
+/// idempotent. Prints a summary line to stdout on success.
+fn run_ingest_sarif_cmd(args: &IngestSarifArgs) -> Result<()> {
+    use std::collections::HashMap;
+
+    use codelore_lib::cli_api::cache::default_cache_root;
+    use codelore_lib::external::{ExternalStore, parse_sarif};
+
+    let cache_root = args.cache_dir.clone().unwrap_or_else(default_cache_root);
+
+    let store = ExternalStore::open_or_create(&cache_root, &args.repo)
+        .context("open external findings store")?;
+
+    // Accumulate findings per engine across all input files.
+    let mut by_engine: HashMap<String, Vec<codelore_lib::external::ExternalFinding>> =
+        HashMap::new();
+
+    for path in &args.file {
+        let raw = std::fs::read_to_string(path)
+            .with_context(|| format!("read SARIF file {}", path.display()))?;
+        let findings =
+            parse_sarif(&raw).with_context(|| format!("parse SARIF file {}", path.display()))?;
+        for f in findings {
+            by_engine.entry(f.engine.clone()).or_default().push(f);
+        }
+    }
+
+    let engine_count = by_engine.len();
+    let mut total_ingested: usize = 0;
+    for (engine, findings) in &by_engine {
+        let n = store
+            .replace_engine(engine, findings)
+            .with_context(|| format!("ingest findings for engine {engine}"))?;
+        total_ingested += n;
+    }
+
+    println!(
+        "ingested {} finding(s) from {} engine(s) → {}",
+        total_ingested,
+        engine_count,
+        store.path().display(),
+    );
+
+    Ok(())
 }
 
 /// Quality-gate check. Loads thresholds, runs the hotspots analysis
@@ -213,6 +263,36 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
     // ── Ledger write (IO errors warn, never alter exit code) ─────────────────
     append_gate_runs(&cache_root, &args.repo, &ledger_records);
 
+    // ── SARIF emission (when --format sarif) ─────────────────────────────────
+    if args.format == "sarif" {
+        use codelore_lib::cli_api::quality_gates::evidence::evidence_for_path;
+        use std::collections::HashMap;
+
+        // Collect evidence only for violated per-file paths (not repo-wide).
+        let mut evidence_map: HashMap<String, Vec<_>> = HashMap::new();
+        for v in &violations {
+            if v.path != "(repo-wide)" && v.path != "(degraded)" {
+                evidence_map.entry(v.path.clone()).or_insert_with(|| {
+                    evidence_for_path(&db, &opts, &v.path, 5).unwrap_or_default()
+                });
+            }
+        }
+
+        let repo_root = args
+            .repo
+            .canonicalize()
+            .unwrap_or_else(|_| args.repo.clone());
+        let mut stdout = std::io::stdout();
+        codelore_lib::cli_api::output::sarif::write_check_sarif(
+            &violations,
+            &evidence_map,
+            &repo_root,
+            &head_sha,
+            &mut stdout,
+        )
+        .context("emit check SARIF")?;
+    }
+
     // ── Report ────────────────────────────────────────────────────────────────
     let degraded_count = ledger_records
         .iter()
@@ -221,10 +301,16 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
 
     if violations.is_empty() {
         if degraded_count > 0 {
-            println!(
-                "⚠ codelore check: WARNING — {degraded_count} gate(s) degraded (non-degraded gates pass)"
-            );
-        } else {
+            if args.format == "sarif" {
+                eprintln!(
+                    "⚠ codelore check: WARNING — {degraded_count} gate(s) degraded (non-degraded gates pass)"
+                );
+            } else {
+                println!(
+                    "⚠ codelore check: WARNING — {degraded_count} gate(s) degraded (non-degraded gates pass)"
+                );
+            }
+        } else if args.format != "sarif" {
             println!("✅ codelore check: PASS ({hotspot_count} files evaluated)");
         }
         write_github_output("result", "pass");
@@ -235,7 +321,7 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
             "❌ codelore check: FAIL — {} violation(s)",
             violations.len()
         );
-        if !args.quiet {
+        if !args.quiet && args.format != "sarif" {
             for v in &violations {
                 eprintln!(
                     "  - {gate}: {path} — actual {actual} vs threshold {threshold}",
@@ -251,7 +337,7 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
         // Inside GitHub Actions, emit each violation as an inline `::error`
         // annotation so the failing gate shows up against the file in the
         // PR's Files-changed view — not just as a red check.
-        if std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true") {
+        if std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true") && args.format != "sarif" {
             let mut stdout = std::io::stdout();
             codelore_lib::cli_api::output::gha::write_gate_violations_gha(&violations, &mut stdout)
                 .context("emit gate annotations")?;

@@ -131,6 +131,12 @@ pub enum Command {
     /// telemetry. Warm-cache calls are cheap; first call on a cold
     /// cache pays the ingest cost.
     Mcp(McpArgs),
+    /// Ingest one or more SARIF 2.1.0 files produced by external scanners
+    /// (Semgrep, Clippy, `CodeQL`, etc.) into the per-repo external-findings
+    /// sidecar store. Re-ingesting the same file is idempotent — findings
+    /// are replaced per engine so the stored count is always the current
+    /// scanner run, never an accumulation of duplicates.
+    IngestSarif(IngestSarifArgs),
 }
 
 /// MCP server arguments.
@@ -168,6 +174,11 @@ pub struct CheckArgs {
     /// the machine contract used by hooks and CI scripts.
     #[arg(long)]
     pub quiet: bool,
+    /// Output format for violations: `text` (default, human-readable stderr
+    /// lines) or `sarif` (SARIF 2.1.0 with evidence chains on stdout).
+    /// Exit codes and verdict lines are unchanged regardless of format.
+    #[arg(long, default_value = "text")]
+    pub format: String,
 }
 
 /// Shell-completion script generation.
@@ -473,6 +484,26 @@ impl From<TimeBucketArg> for codelore_lib::cli_api::options::TimeBucket {
             TimeBucketArg::Month => Self::Month,
         }
     }
+}
+
+/// Ingest SARIF files into the external-findings sidecar.
+#[derive(clap::Args, Debug)]
+pub struct IngestSarifArgs {
+    /// Path to the git repo (default: cwd). Determines which per-repo
+    /// sidecar store receives the findings.
+    #[arg(short, long, default_value = ".")]
+    pub repo: PathBuf,
+
+    /// One or more SARIF 2.1.0 files to ingest. Each file may contain
+    /// multiple runs and engines; findings are grouped by engine and
+    /// replace the previous batch for that engine atomically.
+    #[arg(required = true)]
+    pub file: Vec<PathBuf>,
+
+    /// Override the XDG cache root. Defaults to the same root used by
+    /// `analyze` and `check`.
+    #[arg(long)]
+    pub cache_dir: Option<PathBuf>,
 }
 
 /// Parse a YYYY-MM-DD date for the date-valued flags (`--age-time-now`,
