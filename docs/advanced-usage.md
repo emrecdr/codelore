@@ -22,7 +22,7 @@ This guide is the developer-facing reference for CodeLore. The [README](../READM
 
 ## 1. The analyses (what they tell you)
 
-The table below is split into the **17 code-maat-parity analyses** (drop-in successors to legacy code-maat), **1 modern signal** (`top-committers` — a first-class per-author leaderboard that code-maat approximated via `-a author-churn` + sort), **11 modern foundations** marked ★ (the SARIF-backed differentiators: `hotspots`, `code-health`, `clones`, `clone-coupling`, `hotspot-velocity`, `refactoring-targets`, `delivery-metrics`, `release-cadence`, `effort-exposure`, `health-trend`, and `function-xray`), **7 graph-analytics analyses** marked ★ (knowledge-islands + code-familiarity + team-composition + coordination-needs + marginal-owner-risk + centrality + communities), and **16 architecture-analytics analyses** marked ★★ (god-classes + architecture-violations + dependency-cycles + architecture-roles + instability + architecture-metrics + architecture-trend + cycle-origins + modularity-violations + unstable-interface + crossing + stale-code + pair-programming + lead-time + bus-factor + delivery-friction — `dependency-cycles` (Tarjan SCC), `architecture-roles` (Core/Shared/Control/Periphery), `instability` (Martin Ca/Ce/I) and `architecture-metrics` (Lakos ACD/NCCD + propagation cost) all run on a shared import-graph kernel; `architecture-trend` reruns that kernel at sampled historical revisions to show structural decay over time; `modularity-violations`, `unstable-interface` and `crossing` fuse the structural import graph with the temporal co-change graph (the DV8 hotspot-pattern trilogy); see `docs/maximum-feature-plan.md`).
+CodeLore ships **54 behavioral analyses** across four tiers. The table below is split into the code-maat-parity analyses (drop-in successors to legacy code-maat), a modern signal (`top-committers` — a first-class per-author leaderboard that code-maat approximated via `-a author-churn` + sort), modern additions marked ★ (the SARIF-backed differentiators including `hotspots`, `code-health`, `clones`, `clone-coupling`, `hotspot-velocity`, `refactoring-targets`, and `finding-hotspot-overlap`), graph-analytics analyses marked ★ (knowledge-islands + code-familiarity + team-composition + coordination-needs + marginal-owner-risk + centrality + communities), and architecture-analytics analyses marked ★★ (god-classes + architecture-violations + dependency-cycles + architecture-roles + instability + architecture-metrics + architecture-trend + cycle-origins + modularity-violations + unstable-interface + crossing + stale-code + pair-programming + lead-time + bus-factor + delivery-friction — `dependency-cycles` (Tarjan SCC), `architecture-roles` (Core/Shared/Control/Periphery), `instability` (Martin Ca/Ce/I) and `architecture-metrics` (Lakos ACD/NCCD + propagation cost) all run on a shared import-graph kernel; `architecture-trend` reruns that kernel at sampled historical revisions to show structural decay over time; `modularity-violations`, `unstable-interface` and `crossing` fuse the structural import graph with the temporal co-change graph (the DV8 hotspot-pattern trilogy); see `docs/maximum-feature-plan.md`).
 
 ### Code-maat parity (17) + modern signal
 
@@ -70,7 +70,7 @@ The table below is split into the **17 code-maat-parity analyses** (drop-in succ
 | `centrality` ★ | "Which files are most central in the coupling graph?" | Degree / weighted-degree / PageRank on the Fisher-significant coupling graph | Network-centrality lens (Newman 2010 §7) |
 | `communities` ★ | "What are the actual Conway's-law clusters?" | Leiden algorithm (Traag, Waltman, van Eck 2019) on the coupling graph | Auto-detect socio-technical modules |
 
-### Architecture-analytics tier (16 ★★)
+### Architecture-analytics tier (★★)
 
 | Analysis | What you ask it | Formula / source | When to reach for it |
 |---|---|---|---|
@@ -525,7 +525,7 @@ codelore diff <RANGE> [OPTIONS]
       --exclude PATTERN     Same as analyze (repeatable)
 ```
 
-The diff subcommand emits four SARIF rule types: CODELORE-HOTSPOT (newly-entering or score-rising hotspots), CODELORE-CLONE (PR-introduced clone families), CODELORE-LIVE-CLONE (PR-introduced live-clones), and CODELORE-MISSING-COCHANGE (historically-coupled partner files this PR didn't touch).
+The diff subcommand emits five SARIF rule types: CODELORE-HOTSPOT (newly-entering or score-rising hotspots), CODELORE-CLONE (PR-introduced clone families), CODELORE-LIVE-CLONE (PR-introduced live-clones), CODELORE-MISSING-COCHANGE (historically-coupled partner files this PR didn't touch), and CODELORE-DELTA-HEALTH (degrading delta-health functions, one result per degrading file).
 
 ## 4. PR-mode: `codelore diff`
 
