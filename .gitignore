@@ -66,3 +66,6 @@ graphify-out/
 
 # Generated SPA dashboard (default --format spa --output path)
 /.codelore/
+
+# Subagent-execution scratch (ledgers, task reports) — session artifacts, never shipped
+.superpowers/
