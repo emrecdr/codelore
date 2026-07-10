@@ -969,13 +969,12 @@ On a pass, the document contains zero results (valid SARIF; the GitHub Code Scan
 
 #### What the evidence chain contains
 
-For each per-file gate violation (paths that are not `(repo-wide)` or `(degraded)`), the SARIF result carries a **commit evidence chain**: the top-5 commits that most recently and most heavily touched that file, newest-first. Each entry shows:
+For each per-file gate violation (paths that are not `(repo-wide)` or `(degraded)`), the SARIF result carries a **commit evidence chain**: the top-5 commits that most recently touched that file, newest-first (ordered by commit date, then revision, for deterministic ties). Each entry's message reads `{date} {author}: {message} (+{churn} lines)`, combining:
 
-- The commit SHA (full)
 - The ISO date
-- The canonical author
+- The canonical (mailmap-resolved) author
+- The first line of the commit message, capped at 80 characters
 - The churn for that path in that commit (lines added + deleted)
-- The first 80 characters of the commit message
 
 The chain is populated from the same lineage-aware fact store that powers the `hotspots` and `code-health` analyses, so renamed and moved files are traced through their history correctly.
 
@@ -1173,7 +1172,7 @@ Evaluates the quality gates declared in `.codelore-thresholds.toml` at HEAD and 
 }
 ```
 
-`no_thresholds` is returned when no `.codelore-thresholds.toml` exists at the repo root. Gates covered: `cognitive_max`, `hotspot_score_max`, `code_health_min`, `disallow_clone_type_1`, `max_red_effort_pct`, `max_dependency_cycles`, `max_propagation_cost`, and `code_familiarity_min` — the same threshold set `codelore check` evaluates, so the tool's verdict never contradicts a CI run over the same file. Degraded-gate semantics (`fail_on_degraded`) and `--ratchet` are only available in `codelore check` proper.
+`no_thresholds` is returned when no `.codelore-thresholds.toml` exists at the repo root. Gates covered: `cognitive_max`, `hotspot_score_max`, `code_health_min`, `disallow_clone_type_1`, `max_red_effort_pct`, `max_dependency_cycles`, `max_propagation_cost`, and `code_familiarity_min`. This is a subset of what `codelore check` evaluates: the `max_findings_in_hot_files` gate (external SARIF findings × hotspots), degraded-gate semantics (`fail_on_degraded`), and `--ratchet` are only available in `codelore check` proper. When a config file configures `max_findings_in_hot_files`, this tool's verdict can therefore differ from a CI run of `codelore check` — treat `codelore check` as the authoritative gate; use `check_gates` for a fast interactive read of the shared subset.
 
 Parameters: none.
 

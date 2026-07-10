@@ -1,7 +1,7 @@
 //! Integration tests for `external::store::ExternalStore`.
 //!
 //! Covers:
-//! - Ingest the three B1 SARIF fixtures → row counts match
+//! - Ingest the three dialect SARIF fixtures → row counts match
 //! - Re-ingest the same file → count unchanged (replace semantics)
 //! - Two engines coexist independently
 

@@ -8,6 +8,8 @@ Conventional Commits format. All notable changes documented here.
 
 - **`codelore check --format sarif`** — emits a SARIF 2.1.0 document to stdout while keeping verdict lines on stderr and exit codes unchanged. A pass produces a valid zero-result document. Each per-file gate violation carries a commit evidence chain (up to 5 contributing commits, newest-first, lineage-aware) in both `relatedLocations` and `codeFlows → threadFlows → locations`, consumable by GitHub Code Scanning and any SARIF-aware CI tool. Results carry two `partialFingerprints` keys: `gateFinding/v1` (stable finding identity across runs) and `primaryLocationLineHash` (used by GitHub for cross-upload alert deduplication). See docs/advanced-usage.md §11.8 for the GitHub Actions upload snippet.
 
+- **`codelore check --cache-dir <PATH>`** — overrides the XDG cache root for the persistent fact-store, gate-run ledger, and external-findings sidecar, matching the existing `analyze --cache-dir` flag. Useful in CI environments that keep per-job caches on a shared runner.
+
 - **SARIF evidence chains in `codelore diff --format sarif`** — CODELORE-HOTSPOT, CODELORE-CLONE, and CODELORE-DELTA-HEALTH results now each carry a commit evidence chain (up to 3 contributing commits per file, lineage-aware) in `relatedLocations` and `codeFlows`, giving PR reviewers direct commit lineage for every finding.
 
 - **`codelore ingest-sarif --repo . <file.sarif> …`** — ingests findings from one or more SARIF 2.1.0 documents into a per-repo sidecar store (`external-findings.duckdb-ext` alongside the fact-store cache, immune to the LRU prune). Re-ingesting the same file is idempotent (replace semantics per engine). Supported dialects: CodeQL, Semgrep, clippy-sarif, and any SARIF 2.1.0 producer.

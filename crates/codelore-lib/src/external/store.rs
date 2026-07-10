@@ -22,7 +22,7 @@
 //! `CodeQL` and similar tools emit `file://` URIs with absolute host paths
 //! (e.g. `file:///home/runner/work/repo/src/Foo.java`). After scheme
 //! stripping the `path` column stores the absolute form
-//! (`/home/runner/work/repo/src/Foo.java`). The B3 overlap join on
+//! (`/home/runner/work/repo/src/Foo.java`). The overlap join on
 //! repo-relative hotspot paths will simply not match these rows, which is
 //! the honest outcome — no silent rewriting that could produce false matches.
 
@@ -248,8 +248,9 @@ impl ExternalStore {
     ///   `"note"`)
     ///
     /// The caller uses this map for a Rust-side join against the behavioral
-    /// analyses (hotspots, code-health) — keeping the two `!Send + !Sync`
-    /// `DuckDB` connections separate, per R7.
+    /// analyses (hotspots, code-health): the sidecar and fact-store each own a
+    /// `!Send + !Sync` `DuckDB` connection, so the two are never joined across a
+    /// single connection — the join happens in Rust instead.
     ///
     /// # Errors
     ///
