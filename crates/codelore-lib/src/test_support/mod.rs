@@ -1115,7 +1115,7 @@ pub mod delivery_repo {
     //!
     //! To regenerate the bundle (e.g. when the fixture's commit shape needs to
     //! change), revive the pre-bundle programmatic builder from git history at
-    //! commit `9df7a42` (it shells out to git for each commit and lives in this
+    //! commit `8cfb373` (it shells out to git for each commit and lives in this
     //! module), run it to produce a fresh repo, then capture as:
     //!
     //! ```text
