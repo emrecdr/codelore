@@ -72,9 +72,14 @@ jobs:
     name: test
     runs-on: ${{ matrix.os }}
     # The windows runner needs headroom for a cold-cache build: the MCP
-    # server's dependency tree (tokio + rmcp) pushes a from-scratch
-    # compile past 45 minutes there. Warm runs finish far sooner.
-    timeout-minutes: 70
+    # server's dependency tree (tokio + rmcp) plus the bundled DuckDB
+    # C++ build push a from-scratch MSVC compile past 70 minutes. The
+    # ceiling must let a cold build COMPLETE, because the cargo cache
+    # only saves on a finished job — a job killed by its own timeout is
+    # cancelled, and cancellation does not leave enough grace time for
+    # the multi-gigabyte cache upload, restarting the cold loop. Linux
+    # and macOS keep the tight ceiling; warm runs finish far sooner.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 120 || 45 }}
     env:
       RUSTC_WRAPPER: sccache
     strategy:
@@ -97,10 +102,11 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.10
       - uses: Swatinem/rust-cache@v2
         with:
-          # Save the cargo cache even when the job fails or times out.
-          # Without this, a timed-out job skips the cache save, so the
-          # next run starts cold again and times out too — a permanent
-          # cold-start loop that only a completed run can break.
+          # Save the cargo cache when the job FAILS (test failures still
+          # warm the next run). Note this does not cover timeout
+          # cancellation — a cancelled job's post-step window is too
+          # short for the multi-gigabyte upload — which is why the
+          # windows timeout above must fit a complete cold build.
           cache-on-failure: true
       # cargo-nextest: ~20-30% faster than `cargo test` on this workspace
       # (smarter parallelism, faster process spawning, better failure
