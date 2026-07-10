@@ -61,12 +61,12 @@ jobs:
   build:
     needs: plan
     timeout-minutes: 45
-    # Reuse CI's compilation cache. sccache's GitHub Actions backend is shared
-    # across workflows by content key, so release `--release` objects can land
-    # on warm artifacts already produced by ci.yml (and across retag re-runs).
-    # Additive to the actions/cache below, which still warms ~/.cargo + target.
-    env:
-      RUSTC_WRAPPER: sccache
+    # Compile caching relies on the actions/cache step below (warms
+    # ~/.cargo + target). No sccache: its GitHub-cache backend shares
+    # the repo's 10 GB Actions-cache quota and, once the quota is
+    # exceeded, rejected writes turn the wrapper into a pure per-unit
+    # network tax — slowest exactly where release builds hurt most,
+    # the cold windows target.
     strategy:
       fail-fast: false
       matrix:
@@ -96,9 +96,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.96.0
         with:
           targets: ${{ matrix.target }}
-
-      - name: Set up sccache
-        uses: mozilla-actions/sccache-action@v0.0.10
 
       - name: Cache cargo
         uses: actions/cache@v6
@@ -152,10 +149,6 @@ jobs:
         with:
           name: codelore-${{ matrix.target }}
           path: dist/
-
-      - name: sccache stats
-        if: always()
-        run: sccache --show-stats
 
   release:
     needs: [plan, build]
