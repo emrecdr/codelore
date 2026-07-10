@@ -1436,11 +1436,7 @@ fn diff_sarif_hotspot_rank_entrant_carries_code_flows_and_related_locations() {
 
     // head: src/hot.rs added and then changed — 2 revisions, enters hotspot list
     std::fs::create_dir_all(repo.join("src")).unwrap();
-    std::fs::write(
-        repo.join("src/hot.rs"),
-        "pub fn first() -> u32 { 1 }\n",
-    )
-    .unwrap();
+    std::fs::write(repo.join("src/hot.rs"), "pub fn first() -> u32 { 1 }\n").unwrap();
     git(&["add", "."]);
     git(&["commit", "-q", "-m", "feat: add hot file"]);
 
@@ -1473,8 +1469,7 @@ fn diff_sarif_hotspot_rank_entrant_carries_code_flows_and_related_locations() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let sarif: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("valid SARIF");
+    let sarif: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid SARIF");
     let results = sarif["runs"][0]["results"]
         .as_array()
         .expect("results array");

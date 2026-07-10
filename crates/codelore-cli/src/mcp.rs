@@ -20,9 +20,10 @@ use codelore_lib::cli_api::{
     analyses::{
         code_health,
         delta_health::{DeltaHealthSection, compute_delta_health, run_function_metrics},
-        function_xray, hotspots, refactoring_targets, summary,
+        finding_hotspot_overlap, function_xray, hotspots, refactoring_targets, summary,
     },
-    cache::default_cache_root,
+    cache::{default_cache_root, repo_cache_dir},
+    external::ExternalStore,
     facts::FactsDb,
     quality_gates::{
         GateViolation, Thresholds, evaluate_clone_gate, evaluate_code_health_gate,
@@ -167,6 +168,10 @@ pub struct FunctionXrayParams {
 /// Parameters for the `check_gates` tool (none required).
 #[derive(Debug, Deserialize, JsonSchema, Default)]
 pub struct CheckGatesParams {}
+
+/// Parameters for the `finding_hotspot_overlap` tool (none required).
+#[derive(Debug, Deserialize, JsonSchema, Default)]
+pub struct FindingHotspotOverlapParams {}
 
 // ── Output type for check_gates ───────────────────────────────────────────────
 
@@ -486,6 +491,64 @@ impl CodeLoreServer {
                 violations,
             };
             serde_json::to_string(&summary).map_err(internal)
+        })
+        .await
+        .map_err(internal)?
+    }
+
+    // ── finding_hotspot_overlap ───────────────────────────────────────────────
+
+    #[tool(
+        name = "finding_hotspot_overlap",
+        description = "Return the behavioral×static fusion table: external scanner findings \
+            joined with hotspot rank and code-health band, producing an `act-now` / `plan` / `note` \
+            priority for each flagged file. Requires a prior `codelore ingest-sarif` run to populate \
+            the external findings sidecar; returns a structured note when the sidecar is absent or empty. \
+            Cost: warm-cache fast after ingest; does not trigger history re-ingest."
+    )]
+    async fn finding_hotspot_overlap(
+        &self,
+        _params: Parameters<FindingHotspotOverlapParams>,
+    ) -> Result<String, ErrorData> {
+        let repo_path = self.repo.clone();
+        tokio::task::spawn_blocking(move || {
+            let cache_root = default_cache_root();
+
+            // Check if the sidecar exists before attempting to open it.
+            // The MCP tool never creates the sidecar — that is ingest-sarif's job.
+            let sidecar_path =
+                repo_cache_dir(&cache_root, &repo_path).join("external-findings.duckdb-ext");
+            if !sidecar_path.exists() {
+                let note = serde_json::json!({
+                    "findings": [],
+                    "note": "run codelore ingest-sarif first"
+                });
+                return serde_json::to_string(&note).map_err(internal);
+            }
+
+            let store = ExternalStore::open_or_create(&cache_root, &repo_path).map_err(internal)?;
+
+            // Empty store (file exists but no rows yet) → same structured note.
+            let count = store.count().map_err(internal)?;
+            if count == 0 {
+                let note = serde_json::json!({
+                    "findings": [],
+                    "note": "run codelore ingest-sarif first"
+                });
+                return serde_json::to_string(&note).map_err(internal);
+            }
+
+            let opts = Options {
+                repo_path: repo_path.clone(),
+                ..Options::default()
+            };
+            let repo = GixRepo::open(&repo_path).map_err(internal)?;
+            let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &cache_root)
+                .map_err(internal)?;
+
+            let rows = finding_hotspot_overlap::run_finding_hotspot_overlap(&db, &opts, &store)
+                .map_err(internal)?;
+            serde_json::to_string(&rows).map_err(internal)
         })
         .await
         .map_err(internal)?
