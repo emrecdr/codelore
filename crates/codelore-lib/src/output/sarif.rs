@@ -697,6 +697,27 @@ fn build_check_sarif<S: std::hash::BuildHasher>(
     })
 }
 
+/// Wrap pre-built evidence location objects into the two SARIF attachment
+/// shapes GitHub reads: `codeFlows` (each location wrapped in `{"location":
+/// …}` inside a single threadFlow) and `relatedLocations` (the plain location
+/// array). Returns `(codeFlows, relatedLocations)`.
+///
+/// Callers build their own location objects — each emitter owns its message
+/// format and uri handling; this helper only supplies the shared structural
+/// wrapping so the check and diff emitters stay in sync. `codeFlows`:
+/// SARIF §3.36; `relatedLocations`: SARIF §3.27.22.
+#[must_use]
+pub fn evidence_attachments(
+    locs: Vec<serde_json::Value>,
+) -> (serde_json::Value, serde_json::Value) {
+    use serde_json::json;
+
+    let thread_flow_locs: Vec<serde_json::Value> =
+        locs.iter().map(|loc| json!({ "location": loc })).collect();
+    let code_flows = json!([{ "threadFlows": [{ "locations": thread_flow_locs }] }]);
+    (code_flows, serde_json::Value::Array(locs))
+}
+
 /// Build one SARIF result for a single [`GateViolation`].
 fn build_check_result<S: std::hash::BuildHasher>(
     v: &GateViolation,
@@ -785,14 +806,9 @@ fn build_check_result<S: std::hash::BuildHasher>(
     });
 
     if !evidence_locs.is_empty() {
-        let code_flow_locs: Vec<serde_json::Value> = evidence_locs
-            .iter()
-            .map(|loc| json!({ "location": loc }))
-            .collect();
-        result["relatedLocations"] = serde_json::Value::Array(evidence_locs);
-        result["codeFlows"] = json!([{
-            "threadFlows": [{ "locations": code_flow_locs }]
-        }]);
+        let (code_flows, related_locations) = evidence_attachments(evidence_locs);
+        result["relatedLocations"] = related_locations;
+        result["codeFlows"] = code_flows;
     }
 
     result

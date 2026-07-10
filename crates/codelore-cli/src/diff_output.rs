@@ -430,7 +430,8 @@ fn emit_sarif(
         if commits.is_empty() {
             return None;
         }
-        // relatedLocations: plain location objects (no wrapper).
+        // Plain location objects — each emitter owns its message format and
+        // uri handling; the shared helper only supplies the structural wrapping.
         let related: Vec<serde_json::Value> = commits
             .iter()
             .map(|ev| {
@@ -448,13 +449,9 @@ fn emit_sarif(
                 })
             })
             .collect();
-        // codeFlows: same locations, each wrapped in {"location": …}.
-        let tfl: Vec<serde_json::Value> = related
-            .iter()
-            .map(|loc| json!({ "location": loc }))
-            .collect();
-        let code_flows = json!([{ "threadFlows": [{ "locations": tfl }] }]);
-        Some((code_flows, serde_json::Value::Array(related)))
+        let (code_flows, related_locations) =
+            codelore_lib::cli_api::output::sarif::evidence_attachments(related);
+        Some((code_flows, related_locations))
     };
 
     let mut hotspot_results: Vec<serde_json::Value> = Vec::new();
