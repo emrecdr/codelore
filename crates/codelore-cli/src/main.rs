@@ -63,7 +63,9 @@ fn run_mcp_cmd(args: &McpArgs) -> Result<()> {
 /// idempotent. Prints a summary line to stdout on success.
 fn run_ingest_sarif_cmd(args: &IngestSarifArgs) -> Result<()> {
     use codelore_lib::cli_api::cache::default_cache_root;
-    use codelore_lib::external::{ExternalStore, group_findings_by_engine, parse_sarif};
+    use codelore_lib::external::{
+        ExternalStore, group_findings_by_engine, parse_sarif, parse_sarif_engines,
+    };
 
     let cache_root = args.cache_dir.clone().unwrap_or_else(default_cache_root);
 
@@ -72,16 +74,32 @@ fn run_ingest_sarif_cmd(args: &IngestSarifArgs) -> Result<()> {
 
     // Parse all input files into a flat vec, then group by engine so that
     // two SARIF files from the same engine are combined rather than
-    // overwriting each other.
+    // overwriting each other. Track every engine name present across all
+    // inputs — including runs that produced zero results — so a clean re-scan
+    // clears the engine's stale rows instead of leaving them behind.
     let mut all_findings = Vec::new();
+    let mut all_engines: Vec<String> = Vec::new();
     for path in &args.file {
         let raw = std::fs::read_to_string(path)
             .with_context(|| format!("read SARIF file {}", path.display()))?;
         let findings =
             parse_sarif(&raw).with_context(|| format!("parse SARIF file {}", path.display()))?;
         all_findings.extend(findings);
+        for engine in parse_sarif_engines(&raw)
+            .with_context(|| format!("read SARIF engines from {}", path.display()))?
+        {
+            if !all_engines.contains(&engine) {
+                all_engines.push(engine);
+            }
+        }
     }
-    let by_engine = group_findings_by_engine(all_findings);
+    let mut by_engine = group_findings_by_engine(all_findings);
+    // Seed empty batches for engines that ran but flagged nothing this pass.
+    // `replace_engine` with an empty slice deletes that engine's prior rows,
+    // keeping the stored count aligned with the current scanner run.
+    for engine in all_engines {
+        by_engine.entry(engine).or_default();
+    }
 
     let engine_count = by_engine.len();
     let mut total_ingested: usize = 0;
@@ -144,6 +162,32 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
             );
         }
         write_github_output("result", "pass");
+        // A vacuous pass under `--format sarif` must still emit a valid
+        // zero-result SARIF document to stdout — the documented upload-sarif
+        // pipeline (docs/advanced-usage.md §11.8) breaks if a run prints
+        // nothing. Reuse the check emitter with an empty violation set.
+        if matches!(args.format, CheckFormat::Sarif) {
+            use std::collections::HashMap;
+            let repo = GixRepo::open(&args.repo).context("open repo")?;
+            let head_sha = repo.head_sha().context("get HEAD sha")?;
+            let repo_root = args
+                .repo
+                .canonicalize()
+                .unwrap_or_else(|_| args.repo.clone());
+            let empty_evidence: HashMap<
+                String,
+                Vec<codelore_lib::cli_api::quality_gates::evidence::EvidenceCommit>,
+            > = HashMap::new();
+            let mut stdout = std::io::stdout();
+            codelore_lib::cli_api::output::sarif::write_check_sarif(
+                &[],
+                &empty_evidence,
+                &repo_root,
+                &head_sha,
+                &mut stdout,
+            )
+            .context("emit vacuous check SARIF")?;
+        }
         return Ok(());
     }
 
@@ -666,9 +710,18 @@ fn evaluate_all_gates(
 
     // ── max_findings_in_hot_files gate ───────────────────────────────────────
     if let Some(threshold) = g.max_findings_in_hot_files {
-        match external_store {
+        // The gate is skipped (not failed) when the sidecar is absent OR present
+        // but empty — both mean "no external findings to evaluate yet". Query the
+        // row count up front so the empty-store case joins the absent case on the
+        // same skip path, mirroring the MCP overlap tool.
+        let store_with_rows = match external_store {
+            Some(store) if store.count().context("count external findings")? > 0 => Some(store),
+            _ => None,
+        };
+        match store_with_rows {
             None => {
-                // Sidecar absent — skip gracefully without creating the file.
+                // Sidecar absent or empty — skip gracefully without creating or
+                // populating the file.
                 if !quiet {
                     eprintln!(
                         "  ⚠ max_findings_in_hot_files: skipped — run `codelore ingest-sarif` first"
@@ -1733,7 +1786,10 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
                 // in that case run_finding_hotspot_overlap reports the pre-condition
                 // error to the user. We surface the None case here so we never create
                 // an empty sidecar as a side-effect of an analysis read.
-                let cache_root = codelore_lib::cli_api::cache::default_cache_root();
+                let cache_root = args
+                    .cache_dir
+                    .clone()
+                    .unwrap_or_else(codelore_lib::cli_api::cache::default_cache_root);
                 let store = codelore_lib::cli_api::external::ExternalStore::open_existing(
                     &cache_root,
                     &args.repo,

@@ -1,11 +1,11 @@
 //! Table-driven tests for the SARIF 2.1.0 subset parser.
 //!
-//! Each dialect fixture exercises the §VALIDATED fallback chains:
+//! Each dialect fixture exercises the SARIF 2.1.0 fallback chains:
 //! - semgrep:  fingerprints.matchBasedId/v1 + uriBaseId %SRCROOT% + rule-default level
 //! - clippy:   no fingerprints (self-hash) + relative uri + result-level
 //! - `CodeQL`:   `partialFingerprints.primaryLocationLineHash` + `ruleIndex` + `file://` uri
 
-use codelore_lib::external::sarif_parse::{ExternalFinding, parse_sarif};
+use codelore_lib::external::sarif_parse::{ExternalFinding, parse_sarif, parse_sarif_engines};
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -250,4 +250,40 @@ fn finding_with_no_region_is_valid() {
     assert_eq!(findings[0].start_line, None);
     assert_eq!(findings[0].end_line, None);
     assert_eq!(findings[0].level, "note");
+}
+
+/// `parse_sarif_engines` surfaces an engine even when its run flagged nothing —
+/// the signal ingest needs to clear that engine's stale rows on a clean re-scan.
+#[test]
+fn parse_sarif_engines_includes_zero_result_runs() {
+    let raw = r#"{
+        "version": "2.1.0",
+        "runs": [{
+            "tool": { "driver": { "name": "semgrep", "version": "1.0" } },
+            "results": []
+        }]
+    }"#;
+
+    // No findings, but the engine name is still surfaced.
+    assert!(parse_sarif(raw).expect("parse").is_empty());
+    assert_eq!(parse_sarif_engines(raw).expect("engines"), vec!["semgrep"]);
+}
+
+/// Engines are deduplicated and non-SARIF input errors, matching `parse_sarif`.
+#[test]
+fn parse_sarif_engines_dedupes_and_rejects_non_sarif() {
+    let two_runs_same_engine = r#"{
+        "version": "2.1.0",
+        "runs": [
+            { "tool": { "driver": { "name": "clippy" } }, "results": [] },
+            { "tool": { "driver": { "name": "clippy" } }, "results": [] }
+        ]
+    }"#;
+    assert_eq!(
+        parse_sarif_engines(two_runs_same_engine).expect("engines"),
+        vec!["clippy"]
+    );
+
+    // Missing `runs` is not a SARIF document.
+    assert!(parse_sarif_engines(r#"{"version":"2.1.0"}"#).is_err());
 }

@@ -1316,8 +1316,8 @@ fn diff_docs_only_change_is_no_code_change() {
 
 #[test]
 fn diff_sarif_schema_url_and_info_uri_use_canonical_constants() {
-    // Verifies A3: schema URL and informationUri use the constants from
-    // codelore_lib::output::sarif, and degrading delta-health results carry
+    // The diff SARIF schema URL and informationUri must use the constants from
+    // codelore_lib::output::sarif, and degrading delta-health results must carry
     // codeFlows evidence chains (the monster function has one head commit).
     let (dir, base, head) = delta_health_fixture();
     let output = Command::cargo_bin("codelore")
@@ -1988,5 +1988,272 @@ fn check_max_findings_gate_skips_gracefully_when_no_sidecar() {
     assert_eq!(
         overlap_rec.verdict, "skipped",
         "overlap gate must record verdict=skipped when sidecar is absent"
+    );
+}
+
+/// SARIF 2.1.0 document that reports one finding for `engine` on `path`.
+fn sarif_one_finding(engine: &str, path: &str) -> String {
+    format!(
+        r#"{{
+            "version": "2.1.0",
+            "runs": [{{
+                "tool": {{ "driver": {{ "name": "{engine}", "version": "1.0" }} }},
+                "results": [{{
+                    "ruleId": "rule/one",
+                    "level": "warning",
+                    "message": {{ "text": "a finding" }},
+                    "locations": [{{
+                        "physicalLocation": {{
+                            "artifactLocation": {{ "uri": "{path}" }},
+                            "region": {{ "startLine": 1 }}
+                        }}
+                    }}]
+                }}]
+            }}]
+        }}"#
+    )
+}
+
+/// SARIF 2.1.0 document from `engine` that reports zero findings (a clean run).
+fn sarif_zero_findings(engine: &str) -> String {
+    format!(
+        r#"{{
+            "version": "2.1.0",
+            "runs": [{{
+                "tool": {{ "driver": {{ "name": "{engine}", "version": "1.0" }} }},
+                "results": []
+            }}]
+        }}"#
+    )
+}
+
+/// Ingest a zero-finding SARIF so the sidecar exists but holds no rows, then run
+/// `check` with the overlap gate configured. The empty sidecar must take the
+/// same skip path as an absent one: exit 0 and a ledger verdict of `skipped`.
+#[test]
+fn check_max_findings_gate_skips_when_sidecar_present_but_empty() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let repo_path = tiny.dir.path();
+    let cache_dir = tempfile::tempdir().expect("tempdir");
+    let cache_root = cache_dir.path();
+
+    let thresholds = repo_path.join(".codelore-thresholds.toml");
+    std::fs::write(&thresholds, "[gates]\nmax_findings_in_hot_files = 0\n").unwrap();
+
+    // Create an EMPTY sidecar via ingest-sarif with a zero-finding SARIF.
+    let empty_sarif = cache_dir.path().join("empty.sarif.json");
+    std::fs::write(&empty_sarif, sarif_zero_findings("semgrep")).unwrap();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "ingest-sarif",
+            "--repo",
+            repo_path.to_str().unwrap(),
+            "--cache-dir",
+            cache_root.to_str().unwrap(),
+            empty_sarif.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // The sidecar file now exists but holds zero rows.
+    let store =
+        codelore_lib::cli_api::external::ExternalStore::open_existing(cache_root, repo_path)
+            .expect("open_existing")
+            .expect("sidecar must exist after ingest-sarif");
+    assert_eq!(store.count().expect("count"), 0, "sidecar must be empty");
+    drop(store);
+
+    // check must exit 0 — the empty sidecar is skipped, not an error.
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "check",
+            "--repo",
+            repo_path.to_str().unwrap(),
+            "--cache-dir",
+            cache_root.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // The ledger must record a skipped verdict for the overlap gate.
+    let records =
+        codelore_lib::cli_api::quality_gates::ledger::read_gate_runs(cache_root, repo_path)
+            .expect("read ledger");
+    let overlap_rec = records
+        .iter()
+        .rev()
+        .find(|r| r.gate == "max_findings_in_hot_files")
+        .expect("ledger must contain a max_findings_in_hot_files record");
+    assert_eq!(
+        overlap_rec.verdict, "skipped",
+        "overlap gate must record verdict=skipped when sidecar is present but empty"
+    );
+}
+
+/// `analyze --analysis finding-hotspot-overlap --cache-dir X` must read the
+/// sidecar under the SAME custom cache root that `ingest-sarif --cache-dir X`
+/// wrote it to — not the default XDG root.
+#[test]
+fn analyze_finding_overlap_respects_cache_dir() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let repo_path = tiny.dir.path();
+    let cache_dir = tempfile::tempdir().expect("tempdir");
+    let cache_root = cache_dir.path();
+
+    // Ingest one finding into the sidecar under the custom cache root.
+    let sarif = cache_dir.path().join("one.sarif.json");
+    std::fs::write(&sarif, sarif_one_finding("semgrep", "src/lib.rs")).unwrap();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "ingest-sarif",
+            "--repo",
+            repo_path.to_str().unwrap(),
+            "--cache-dir",
+            cache_root.to_str().unwrap(),
+            sarif.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // The overlap analysis under the same cache-dir must FIND the ingested
+    // finding (emit ≥1 row), not report the missing-sidecar pre-condition error.
+    let output = Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "finding-hotspot-overlap",
+            "--repo",
+            repo_path.to_str().unwrap(),
+            "--cache-dir",
+            cache_root.to_str().unwrap(),
+            "--format",
+            "json",
+            "--min-revs",
+            "1",
+        ])
+        .output()
+        .expect("run finding-hotspot-overlap");
+    assert!(
+        output.status.success(),
+        "overlap analysis must succeed when the sidecar lives under --cache-dir; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf-8");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("overlap output must be valid JSON");
+    let rows = parsed.as_array().expect("overlap JSON is an array");
+    assert!(
+        rows.iter().any(|r| r["path"] == "src/lib.rs"),
+        "overlap must include the ingested finding's path, got: {stdout}"
+    );
+}
+
+/// Re-ingesting a clean (zero-result) scan for an engine must clear that
+/// engine's stale rows. The stored count must reflect the current scanner run,
+/// never an accumulation of a prior run's findings.
+#[test]
+fn ingest_sarif_clean_rescan_clears_stale_engine_rows() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let repo_path = tiny.dir.path();
+    let cache_dir = tempfile::tempdir().expect("tempdir");
+    let cache_root = cache_dir.path();
+
+    // First scan: one finding for engine "semgrep".
+    let with_finding = cache_dir.path().join("with_finding.sarif.json");
+    std::fs::write(&with_finding, sarif_one_finding("semgrep", "src/lib.rs")).unwrap();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "ingest-sarif",
+            "--repo",
+            repo_path.to_str().unwrap(),
+            "--cache-dir",
+            cache_root.to_str().unwrap(),
+            with_finding.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let store =
+        codelore_lib::cli_api::external::ExternalStore::open_existing(cache_root, repo_path)
+            .expect("open_existing")
+            .expect("sidecar must exist");
+    assert_eq!(
+        store.count().expect("count"),
+        1,
+        "first scan must store one finding"
+    );
+    drop(store);
+
+    // Second scan for the SAME engine reports zero findings (issue fixed).
+    let clean = cache_dir.path().join("clean.sarif.json");
+    std::fs::write(&clean, sarif_zero_findings("semgrep")).unwrap();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "ingest-sarif",
+            "--repo",
+            repo_path.to_str().unwrap(),
+            "--cache-dir",
+            cache_root.to_str().unwrap(),
+            clean.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // The stale finding must be gone — the clean re-scan cleared the engine.
+    let store =
+        codelore_lib::cli_api::external::ExternalStore::open_existing(cache_root, repo_path)
+            .expect("open_existing")
+            .expect("sidecar must still exist");
+    assert_eq!(
+        store.count().expect("count"),
+        0,
+        "clean re-scan must clear the engine's stale rows"
+    );
+}
+
+/// `check --format sarif` on a repo with no thresholds file must still emit a
+/// valid zero-result SARIF document to stdout — the documented upload-sarif
+/// pipeline breaks if a vacuous pass prints nothing.
+#[test]
+fn check_format_sarif_vacuous_pass_emits_zero_result_document() {
+    // tiny_repo has no `.codelore-thresholds.toml` → vacuous pass.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let output = Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "check",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "sarif",
+        ])
+        .output()
+        .expect("run codelore check --format sarif with no thresholds");
+
+    // Exit 0 — vacuous pass.
+    assert!(
+        output.status.success(),
+        "vacuous pass must exit 0, got {}",
+        output.status
+    );
+
+    // stdout must be a valid SARIF document with an empty results array.
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf-8");
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("vacuous pass stdout must be valid SARIF JSON: {e}; got: {stdout}")
+    });
+    assert_eq!(parsed["version"].as_str().unwrap(), "2.1.0");
+    let results = parsed["runs"][0]["results"]
+        .as_array()
+        .expect("runs[0].results must be an array");
+    assert!(
+        results.is_empty(),
+        "vacuous pass must emit runs[0].results == [], got: {results:?}"
     );
 }
