@@ -71,7 +71,10 @@ jobs:
   test:
     name: test
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    # The windows runner needs headroom for a cold-cache build: the MCP
+    # server's dependency tree (tokio + rmcp) pushes a from-scratch
+    # compile past 45 minutes there. Warm runs finish far sooner.
+    timeout-minutes: 70
     env:
       RUSTC_WRAPPER: sccache
     strategy:
@@ -93,6 +96,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.96.0
       - uses: mozilla-actions/sccache-action@v0.0.10
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Save the cargo cache even when the job fails or times out.
+          # Without this, a timed-out job skips the cache save, so the
+          # next run starts cold again and times out too — a permanent
+          # cold-start loop that only a completed run can break.
+          cache-on-failure: true
       # cargo-nextest: ~20-30% faster than `cargo test` on this workspace
       # (smarter parallelism, faster process spawning, better failure
       # aggregation). Doesn't run doc tests — those still need `cargo test
