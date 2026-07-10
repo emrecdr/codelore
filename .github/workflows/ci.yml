@@ -37,6 +37,14 @@ env:
   # is to disable it explicitly for CI runs. Saves ~30-60s per cold
   # job AND improves cache hit rate.
   CARGO_INCREMENTAL: "0"
+  # CI never attaches a debugger, so debuginfo is pure cost here. On
+  # MSVC it is the dominant cost: debug codegen plus PDB emission slow
+  # both compilation and the per-test-binary links (every integration
+  # test binary statically links the bundled DuckDB), which is what
+  # pushed the windows job past its timeout. Backtraces in CI logs get
+  # coarser (function-level, no line numbers) — an acceptable trade.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
 
 jobs:
   fmt:
@@ -79,7 +87,7 @@ jobs:
     # cancelled, and cancellation does not leave enough grace time for
     # the multi-gigabyte cache upload, restarting the cold loop. Linux
     # and macOS keep the tight ceiling; warm runs finish far sooner.
-    timeout-minutes: ${{ matrix.os == 'windows-latest' && 120 || 45 }}
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 150 || 45 }}
     env:
       RUSTC_WRAPPER: sccache
     strategy:
