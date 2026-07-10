@@ -361,7 +361,14 @@ fn mcp_finding_hotspot_overlap_returns_note_when_sidecar_absent() {
     // On a fresh tiny_repo the sidecar is never created, so the tool must
     // return the structured note JSON (not a tool error).
     let repo = tiny_repo::build();
-    let repo_path = repo.dir.path().to_str().unwrap();
+    let repo_path_buf = repo.dir.path().to_path_buf();
+    let repo_path = repo_path_buf.to_str().unwrap();
+
+    // Compute the sidecar path the MCP tool would use — same derivation as
+    // open_existing in mcp.rs (default_cache_root + repo_cache_dir).
+    let cache_root = codelore_lib::cli_api::cache::default_cache_root();
+    let sidecar_path = codelore_lib::cli_api::cache::repo_cache_dir(&cache_root, &repo_path_buf)
+        .join("external-findings.duckdb-ext");
 
     let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
     let resp = call_tool(
@@ -394,4 +401,11 @@ fn mcp_finding_hotspot_overlap_returns_note_when_sidecar_absent() {
 
     drop(stdin);
     let _ = child.wait();
+
+    // The MCP read path must never create the sidecar as a side-effect.
+    assert!(
+        !sidecar_path.exists(),
+        "MCP read must not create the sidecar: {}",
+        sidecar_path.display()
+    );
 }
