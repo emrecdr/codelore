@@ -389,3 +389,200 @@ fn write_clones_sarif_emits_well_formed_doc() {
         v["runs"][0]["results"][0]["partialFingerprints"]["cloneGroupFingerprint/v1"].is_string()
     );
 }
+
+// =============================================================================
+// write_check_sarif
+// =============================================================================
+
+use codelore_lib::output::sarif::write_check_sarif;
+use codelore_lib::quality_gates::GateViolation;
+use codelore_lib::quality_gates::evidence::EvidenceCommit;
+use std::collections::HashMap;
+use std::path::Path;
+
+fn make_violation(gate: &str, path: &str, actual: &str, threshold: &str) -> GateViolation {
+    GateViolation {
+        gate: gate.into(),
+        path: path.into(),
+        actual: actual.into(),
+        threshold: threshold.into(),
+    }
+}
+
+fn make_evidence(date: &str, author: &str, msg: &str, churn: i64) -> EvidenceCommit {
+    EvidenceCommit {
+        rev: "abc123".into(),
+        date: date.into(),
+        author: author.into(),
+        churn,
+        message_head: msg.into(),
+    }
+}
+
+/// Emit check SARIF with two violations (one per-file, one repo-wide) and one
+/// evidence commit, then parse and verify the structural invariants:
+/// - SARIF version 2.1.0 + schema
+/// - rules deduped (2 distinct gates → 2 rules)
+/// - per-file result carries both partialFingerprint keys
+/// - codeFlows nesting: [codeFlow] → [threadFlow] → [locations] of length 1
+/// - repo-wide result has no codeFlows
+#[test]
+fn check_sarif_structure_and_fingerprints() {
+    let violations = vec![
+        make_violation("code_health_min", "src/complex.rs", "55.0", "80.0"),
+        make_violation("max_dependency_cycles", "(repo-wide)", "3", "0"),
+    ];
+    let mut evidence: HashMap<String, Vec<EvidenceCommit>> = HashMap::new();
+    evidence.insert(
+        "src/complex.rs".into(),
+        vec![make_evidence(
+            "2026-01-15",
+            "Alice",
+            "refactor: simplify parser",
+            42,
+        )],
+    );
+
+    let mut buf = Vec::new();
+    write_check_sarif(
+        &violations,
+        &evidence,
+        Path::new("/repo/root"),
+        "deadbeef1234",
+        &mut Cursor::new(&mut buf),
+    )
+    .expect("write_check_sarif");
+
+    let v: serde_json::Value = serde_json::from_slice(&buf).expect("parse SARIF JSON");
+
+    // SARIF 2.1.0 envelope
+    assert_eq!(v["version"], "2.1.0");
+    assert!(v["$schema"].as_str().unwrap().contains("sarif-2.1.0"));
+
+    let run = &v["runs"][0];
+    assert_eq!(run["tool"]["driver"]["name"], "codelore");
+
+    // Rules deduped: 2 distinct gates → 2 rules, stable BTreeSet order
+    let rules = run["tool"]["driver"]["rules"].as_array().unwrap();
+    assert_eq!(rules.len(), 2, "expected 2 distinct gate rules");
+    let rule_ids: Vec<&str> = rules.iter().map(|r| r["id"].as_str().unwrap()).collect();
+    assert!(
+        rule_ids.contains(&"code_health_min"),
+        "missing code_health_min rule"
+    );
+    assert!(
+        rule_ids.contains(&"max_dependency_cycles"),
+        "missing max_dependency_cycles rule"
+    );
+
+    let results = run["results"].as_array().unwrap();
+    assert_eq!(results.len(), 2);
+
+    // Per-file result (index 0)
+    let r0 = &results[0];
+    assert_eq!(r0["ruleId"], "code_health_min");
+    assert_eq!(r0["level"], "error");
+    assert!(
+        r0["message"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("code_health_min"),
+        "message must name the gate"
+    );
+    // Both fingerprint keys must be present
+    let fp = &r0["partialFingerprints"];
+    assert!(
+        fp["gateFinding/v1"].is_string(),
+        "gateFinding/v1 must be present"
+    );
+    assert!(
+        fp["primaryLocationLineHash"].is_string(),
+        "primaryLocationLineHash must be present"
+    );
+    // codeFlows: one codeFlow → one threadFlow → one location (our evidence)
+    let code_flows = r0["codeFlows"].as_array().unwrap();
+    assert_eq!(code_flows.len(), 1, "expected exactly one codeFlow");
+    let thread_flows = code_flows[0]["threadFlows"].as_array().unwrap();
+    assert_eq!(thread_flows.len(), 1, "expected exactly one threadFlow");
+    let tfl_locs = thread_flows[0]["locations"].as_array().unwrap();
+    assert_eq!(tfl_locs.len(), 1, "expected one threadFlowLocation");
+    // The evidence message should carry the date and author
+    let ev_msg = tfl_locs[0]["location"]["message"]["text"].as_str().unwrap();
+    assert!(
+        ev_msg.contains("Alice"),
+        "evidence message must contain author"
+    );
+    assert!(
+        ev_msg.contains("+42 lines"),
+        "evidence message must contain churn"
+    );
+
+    // Repo-wide result (index 1): no codeFlows, uri = "."
+    let r1 = &results[1];
+    assert_eq!(r1["ruleId"], "max_dependency_cycles");
+    // codeFlows absent is fine; present-but-empty is also acceptable for
+    // repo-wide violations since the filter skips them. We just assert no chain.
+    assert!(
+        r1["codeFlows"].as_array().is_none_or(Vec::is_empty),
+        "repo-wide result must not carry a codeFlow"
+    );
+    let r1_uri = r1["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
+        .as_str()
+        .unwrap();
+    assert_eq!(r1_uri, ".", "repo-wide violation must use uri \".\"");
+}
+
+/// Fingerprint stability regression guard.
+///
+/// The `gateFinding/v1` hash is `sha256(gate|path|head_sha)`.
+/// Expected value derived once from that formula and pinned here.
+/// If the hash inputs ever change (separator, order, extra fields),
+/// this test fails loudly — preventing silent fingerprint drift.
+#[test]
+fn check_sarif_fingerprint_stability() {
+    use sha2::{Digest, Sha256};
+
+    let gate = "code_health_min";
+    let path = "src/lib.rs";
+    let head_sha = "cafebabe0000";
+
+    // Derive the expected hash using the same formula as the emitter.
+    let expected_gate_fp = {
+        let mut h = Sha256::new();
+        h.update(gate.as_bytes());
+        h.update(b"|");
+        h.update(path.as_bytes());
+        h.update(b"|");
+        h.update(head_sha.as_bytes());
+        format!("sha256:{}", hex::encode(h.finalize()))
+    };
+    // Pinned value — change this comment if you change the hash inputs,
+    // then re-derive and update the assert.
+    // sha256("code_health_min|src/lib.rs|cafebabe0000")
+    assert_eq!(
+        expected_gate_fp,
+        "sha256:88a397f9502c73ea613a9cabc2d9d20fb6ecfa80c1acd93e00438669156a1d0b"
+    );
+
+    let violations = vec![make_violation(gate, path, "60.0", "80.0")];
+    let evidence: HashMap<String, Vec<EvidenceCommit>> = HashMap::new();
+
+    let mut buf = Vec::new();
+    write_check_sarif(
+        &violations,
+        &evidence,
+        Path::new("/root"),
+        head_sha,
+        &mut Cursor::new(&mut buf),
+    )
+    .expect("write");
+
+    let v: serde_json::Value = serde_json::from_slice(&buf).unwrap();
+    let actual_fp = v["runs"][0]["results"][0]["partialFingerprints"]["gateFinding/v1"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        actual_fp, expected_gate_fp,
+        "gateFinding/v1 fingerprint must match the pinned value — if changed, re-derive from sha256(gate|path|head_sha)"
+    );
+}

@@ -68,14 +68,37 @@ pub fn cache_path(key: &[u8; 32], repo_path: &Path) -> PathBuf {
 /// user alternated invocation styles.
 #[must_use]
 pub fn cache_path_with_root(key: &[u8; 32], repo_path: &Path, root: &Path) -> PathBuf {
-    let canonical = canonicalize_with_fallback_log(repo_path, "cache_path_with_root");
-    let mut repo_hash = Sha256::new();
-    repo_hash.update(canonical.to_string_lossy().as_bytes());
-    let repo_short = hex::encode(&repo_hash.finalize()[..4]); // 8 hex chars
+    let repo_short = repo_hash_short(repo_path);
     let key_short = hex::encode(&key[..8]); // 16 hex chars
     root.join("codelore")
         .join(repo_short)
         .join(format!("{key_short}.duckdb"))
+}
+
+/// Compute the per-repo cache subdirectory:
+/// `<cache_root>/codelore/<repo_hash_8>/`
+///
+/// All per-repo sidecar files (gate ledger, external findings) share this
+/// directory with the `.duckdb` cache entries. The 8-hex-char directory
+/// name is `sha256(canonical_repo_path)[0..4]` encoded as lowercase hex.
+///
+/// This is the canonical implementation — `cache_path_with_root` and
+/// `quality_gates::ledger::ledger_dir` both delegate here so the derivation
+/// is defined in exactly one place.
+#[must_use]
+pub fn repo_cache_dir(cache_root: &Path, repo_path: &Path) -> PathBuf {
+    cache_root.join("codelore").join(repo_hash_short(repo_path))
+}
+
+/// Compute the 8-hex-char repo directory component from `repo_path`.
+///
+/// Canonicalises the path before hashing so `codelore analyze .` and
+/// `codelore analyze $(pwd)` resolve to the same directory.
+fn repo_hash_short(repo_path: &Path) -> String {
+    let canonical = canonicalize_with_fallback_log(repo_path, "repo_hash_short");
+    let mut hasher = Sha256::new();
+    hasher.update(canonical.to_string_lossy().as_bytes());
+    hex::encode(&hasher.finalize()[..4]) // 8 hex chars
 }
 
 /// Return [`dirs::cache_dir()`] or fall back to a user-namespaced subdir of

@@ -28,7 +28,6 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::Result;
 
@@ -46,7 +45,7 @@ pub struct GateRunRecord {
     /// Measured value. For repo-wide gates without a scalar, the violation
     /// count is used.
     pub value: f64,
-    /// Outcome: `"passed"` | `"failed"` | `"degraded"`.
+    /// Outcome: `"passed"` | `"failed"` | `"degraded"` | `"skipped"`.
     pub verdict: String,
     /// Invocation mode: always `"check"` for now; reserved for `"diff"`.
     pub mode: String,
@@ -55,25 +54,12 @@ pub struct GateRunRecord {
 /// Compute the per-repo ledger directory:
 /// `<cache_root>/codelore/<repo_hash_8>/`
 ///
-/// Uses the same SHA-256 + first-4-bytes scheme as `cache::cache_path_with_root`
-/// so ledger and cache entries share a directory.
+/// Delegates to [`crate::cache::repo_cache_dir`] so the derivation is
+/// defined in exactly one place (shared with the cache `.duckdb` path and
+/// the external-findings sidecar).
 #[must_use]
 pub fn ledger_dir(cache_root: &Path, repo_path: &Path) -> PathBuf {
-    let canonical = match fs::canonicalize(repo_path) {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::debug!(
-                "ledger_dir: fs::canonicalize fallback for repo_path={} ({}); using raw path",
-                repo_path.display(),
-                e,
-            );
-            repo_path.to_path_buf()
-        }
-    };
-    let mut hasher = Sha256::new();
-    hasher.update(canonical.to_string_lossy().as_bytes());
-    let repo_short = hex::encode(&hasher.finalize()[..4]); // 8 hex chars
-    cache_root.join("codelore").join(repo_short)
+    crate::cache::repo_cache_dir(cache_root, repo_path)
 }
 
 /// Path to the gate-runs JSONL file for `repo_path`.

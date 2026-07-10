@@ -208,6 +208,11 @@ pub enum AnalysisName {
     // significance for a single target file (`--target <path>`). Identifies
     // which functions always change together. Research: Adams et al. ICSM 2006.
     FunctionCoupling,
+    // External-findings × behavioral hotspot fusion. Joins the external
+    // scanner sidecar (populated by `codelore ingest-sarif`) with hotspot
+    // and code-health signal to surface where static findings overlap with
+    // the most churned, least healthy files. Requires prior `ingest-sarif`.
+    FindingHotspotOverlap,
 }
 
 impl AnalysisName {
@@ -267,6 +272,7 @@ impl AnalysisName {
             Self::ReleaseCadence => "release-cadence",
             Self::FunctionXray => "function-xray",
             Self::FunctionCoupling => "function-coupling",
+            Self::FindingHotspotOverlap => "finding-hotspot-overlap",
         }
     }
 
@@ -354,6 +360,7 @@ impl AnalysisName {
             ReleaseCadence,
             FunctionXray,
             FunctionCoupling,
+            FindingHotspotOverlap,
         )
     }
 

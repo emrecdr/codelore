@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "semgrep",
+          "version": "1.70.0",
+          "rules": [
+            {
+              "id": "python.flask.security.injection.tainted-sql-string",
+              "defaultConfiguration": {
+                "level": "error"
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "python.flask.security.injection.tainted-sql-string",
+          "message": {
+            "text": "User-controlled data in a SQL statement"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/db.py",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 42,
+                  "endLine": 44
+                }
+              }
+            }
+          ],
+          "fingerprints": {
+            "matchBasedId/v1": "abc123def456"
+          }
+        },
+        {
+          "ruleId": "python.flask.security.injection.tainted-sql-string",
+          "message": {
+            "text": "Another tainted SQL string"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "./src/api.py",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 17
+                }
+              }
+            }
+          ],
+          "fingerprints": {
+            "matchBasedId/v1": "deadbeef0011"
+          }
+        }
+      ]
+    }
+  ]
+}

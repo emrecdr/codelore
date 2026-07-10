@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "clippy",
+          "version": "0.1.80",
+          "rules": [
+            {
+              "id": "clippy::unwrap_used"
+            },
+            {
+              "id": "clippy::cognitive_complexity"
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "clippy::unwrap_used",
+          "level": "warning",
+          "message": {
+            "text": "used `unwrap()` on a `Result` value"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/main.rs"
+                },
+                "region": {
+                  "startLine": 88,
+                  "endLine": 88
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "clippy::cognitive_complexity",
+          "level": "warning",
+          "message": {
+            "text": "the function has a cognitive complexity of 30"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/parser.rs"
+                },
+                "region": {
+                  "startLine": 120
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

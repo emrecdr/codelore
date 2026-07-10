@@ -321,3 +321,14 @@ required-features = ["test-support"]
 [[test]]
 name = "function_coupling_test"
 required-features = ["test-support"]
+
+[[test]]
+name = "sarif_parse_test"
+
+[[test]]
+name = "external_store_test"
+required-features = ["test-support"]
+
+[[test]]
+name = "finding_hotspot_overlap_test"
+required-features = ["test-support"]

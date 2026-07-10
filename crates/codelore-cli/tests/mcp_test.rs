@@ -134,8 +134,8 @@ fn mcp_tools_list_and_repo_overview() {
     // Exact count — catches both missing tools and accidental extras.
     assert_eq!(
         tools.len(),
-        7,
-        "expected exactly 7 tools, got {}: {:?}",
+        8,
+        "expected exactly 8 tools, got {}: {:?}",
         tools.len(),
         tools
             .iter()
@@ -152,6 +152,7 @@ fn mcp_tools_list_and_repo_overview() {
         "refactoring_targets",
         "function_xray",
         "check_gates",
+        "finding_hotspot_overlap",
     ] {
         assert!(
             tool_names.contains(expected),
@@ -353,4 +354,58 @@ fn mcp_delta_health_returns_section_for_valid_revs() {
 
     drop(stdin);
     let _ = child.wait();
+}
+
+#[test]
+fn mcp_finding_hotspot_overlap_returns_note_when_sidecar_absent() {
+    // On a fresh tiny_repo the sidecar is never created, so the tool must
+    // return the structured note JSON (not a tool error).
+    let repo = tiny_repo::build();
+    let repo_path_buf = repo.dir.path().to_path_buf();
+    let repo_path = repo_path_buf.to_str().unwrap();
+
+    // Compute the sidecar path the MCP tool would use — same derivation as
+    // open_existing in mcp.rs (default_cache_root + repo_cache_dir).
+    let cache_root = codelore_lib::cli_api::cache::default_cache_root();
+    let sidecar_path = codelore_lib::cli_api::cache::repo_cache_dir(&cache_root, &repo_path_buf)
+        .join("external-findings.duckdb-ext");
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
+    let resp = call_tool(
+        &mut stdin,
+        &mut reader,
+        1,
+        "finding_hotspot_overlap",
+        &json!({}),
+    );
+    let parsed = assert_tool_ok(&resp, "finding_hotspot_overlap");
+
+    // The sidecar is absent → structured note, not an error result.
+    assert!(
+        parsed["findings"].is_array(),
+        "finding_hotspot_overlap: expected `findings` array in note response: {parsed}"
+    );
+    assert_eq!(
+        parsed["findings"].as_array().unwrap().len(),
+        0,
+        "finding_hotspot_overlap: note response `findings` must be empty: {parsed}"
+    );
+    assert!(
+        parsed["note"].is_string(),
+        "finding_hotspot_overlap: expected `note` string in response: {parsed}"
+    );
+    assert!(
+        parsed["note"].as_str().unwrap().contains("ingest-sarif"),
+        "finding_hotspot_overlap: note must mention ingest-sarif: {parsed}"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+
+    // The MCP read path must never create the sidecar as a side-effect.
+    assert!(
+        !sidecar_path.exists(),
+        "MCP read must not create the sidecar: {}",
+        sidecar_path.display()
+    );
 }

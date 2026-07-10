@@ -15,6 +15,7 @@ pub mod clones;
 pub mod complexity;
 pub mod constants;
 pub mod error;
+pub mod external;
 pub mod facts;
 pub mod identity;
 pub mod imports;

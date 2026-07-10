@@ -16,7 +16,7 @@ use codelore_lib::cli_api::{AnalysisName, CodeLoreError, Options};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 
-use crate::args::{AnalyzeArgs, Cli, Command, DiffArgs, McpArgs};
+use crate::args::{AnalyzeArgs, CheckFormat, Cli, Command, DiffArgs, IngestSarifArgs, McpArgs};
 
 fn main() {
     if let Err(e) = run() {
@@ -48,11 +48,74 @@ fn run() -> Result<()> {
         Command::Docs => run_docs_cmd(),
         Command::Check(args) => run_check_cmd(&args),
         Command::Mcp(args) => run_mcp_cmd(&args),
+        Command::IngestSarif(args) => run_ingest_sarif_cmd(&args),
     }
 }
 
 fn run_mcp_cmd(args: &McpArgs) -> Result<()> {
     mcp::run_mcp_server(args.repo.clone())
+}
+
+/// Ingest one or more SARIF files into the per-repo external-findings sidecar.
+///
+/// For each file, parses all SARIF runs, groups findings by engine, and
+/// calls `ExternalStore::replace_engine` per engine so re-ingest is
+/// idempotent. Prints a summary line to stdout on success.
+fn run_ingest_sarif_cmd(args: &IngestSarifArgs) -> Result<()> {
+    use codelore_lib::cli_api::cache::default_cache_root;
+    use codelore_lib::external::{
+        ExternalStore, group_findings_by_engine, parse_sarif_with_engines,
+    };
+
+    let cache_root = args.cache_dir.clone().unwrap_or_else(default_cache_root);
+
+    let store = ExternalStore::open_or_create(&cache_root, &args.repo)
+        .context("open external findings store")?;
+
+    // Parse all input files into a flat vec, then group by engine so that
+    // two SARIF files from the same engine are combined rather than
+    // overwriting each other. Track every engine name present across all
+    // inputs — including runs that produced zero results — so a clean re-scan
+    // clears the engine's stale rows instead of leaving them behind.
+    let mut all_findings = Vec::new();
+    let mut all_engines: Vec<String> = Vec::new();
+    for path in &args.file {
+        let raw = std::fs::read_to_string(path)
+            .with_context(|| format!("read SARIF file {}", path.display()))?;
+        let (findings, engines) = parse_sarif_with_engines(&raw)
+            .with_context(|| format!("parse SARIF file {}", path.display()))?;
+        all_findings.extend(findings);
+        for engine in engines {
+            if !all_engines.contains(&engine) {
+                all_engines.push(engine);
+            }
+        }
+    }
+    let mut by_engine = group_findings_by_engine(all_findings);
+    // Seed empty batches for engines that ran but flagged nothing this pass.
+    // `replace_engine` with an empty slice deletes that engine's prior rows,
+    // keeping the stored count aligned with the current scanner run.
+    for engine in all_engines {
+        by_engine.entry(engine).or_default();
+    }
+
+    let engine_count = by_engine.len();
+    let mut total_ingested: usize = 0;
+    for (engine, findings) in &by_engine {
+        let n = store
+            .replace_engine(engine, findings)
+            .with_context(|| format!("ingest findings for engine {engine}"))?;
+        total_ingested += n;
+    }
+
+    println!(
+        "ingested {} finding(s) from {} engine(s) → {}",
+        total_ingested,
+        engine_count,
+        store.path().display(),
+    );
+
+    Ok(())
 }
 
 /// Quality-gate check. Loads thresholds, runs the hotspots analysis
@@ -75,7 +138,7 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
     };
     use codelore_lib::cli_api::repo::GixRepo;
 
-    let cache_root = default_cache_root();
+    let cache_root = args.cache_dir.clone().unwrap_or_else(default_cache_root);
 
     // --history: print ledger without running any gate evaluations.
     if args.history {
@@ -97,6 +160,28 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
             );
         }
         write_github_output("result", "pass");
+        // A vacuous pass under `--format sarif` must still emit a valid
+        // zero-result SARIF document to stdout — the documented upload-sarif
+        // pipeline (docs/advanced-usage.md §11.8) breaks if a run prints
+        // nothing. Reuse the check emitter with an empty violation set.
+        if matches!(args.format, CheckFormat::Sarif) {
+            use std::collections::HashMap;
+            let repo = GixRepo::open(&args.repo).context("open repo")?;
+            let head_sha = repo.head_sha().context("get HEAD sha")?;
+            let repo_root = args
+                .repo
+                .canonicalize()
+                .unwrap_or_else(|_| args.repo.clone());
+            let mut stdout = std::io::stdout();
+            codelore_lib::cli_api::output::sarif::write_check_sarif(
+                &[],
+                &HashMap::new(),
+                &repo_root,
+                &head_sha,
+                &mut stdout,
+            )
+            .context("emit vacuous check SARIF")?;
+        }
         return Ok(());
     }
 
@@ -106,12 +191,29 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
     };
     let repo = GixRepo::open(&args.repo).context("open repo")?;
     let head_sha = repo.head_sha().context("get HEAD sha")?;
-    let db = FactsDb::open_or_ingest(&opts, &repo).context("ingest")?;
+    let db =
+        FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &cache_root).context("ingest")?;
     let ts = now_utc_ts();
 
-    let (violations, mut ledger_records, hotspot_count, code_health) =
-        evaluate_all_gates(&thresholds, &db, &opts, &head_sha, &ts, args.quiet)
-            .context("evaluate gates")?;
+    // Open the external-findings sidecar without creating it. `None` when
+    // absent (gate is skipped gracefully inside evaluate_all_gates).
+    let external_store = if thresholds.gates.max_findings_in_hot_files.is_some() {
+        codelore_lib::cli_api::external::ExternalStore::open_existing(&cache_root, &args.repo)
+            .context("open external store")?
+    } else {
+        None
+    };
+
+    let (violations, mut ledger_records, hotspot_count, code_health) = evaluate_all_gates(
+        &thresholds,
+        &db,
+        &opts,
+        &head_sha,
+        &ts,
+        args.quiet,
+        external_store.as_ref(),
+    )
+    .context("evaluate gates")?;
 
     // ── Ratchet ───────────────────────────────────────────────────────────────
     if args.ratchet {
@@ -213,6 +315,36 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
     // ── Ledger write (IO errors warn, never alter exit code) ─────────────────
     append_gate_runs(&cache_root, &args.repo, &ledger_records);
 
+    // ── SARIF emission (when --format sarif) ─────────────────────────────────
+    if matches!(args.format, CheckFormat::Sarif) {
+        use codelore_lib::cli_api::quality_gates::evidence::evidence_for_path;
+        use std::collections::HashMap;
+
+        // Collect evidence only for violated per-file paths (not repo-wide).
+        let mut evidence_map: HashMap<String, Vec<_>> = HashMap::new();
+        for v in &violations {
+            if v.path != "(repo-wide)" && v.path != "(degraded)" {
+                evidence_map.entry(v.path.clone()).or_insert_with(|| {
+                    evidence_for_path(&db, &opts, &v.path, 5).unwrap_or_default()
+                });
+            }
+        }
+
+        let repo_root = args
+            .repo
+            .canonicalize()
+            .unwrap_or_else(|_| args.repo.clone());
+        let mut stdout = std::io::stdout();
+        codelore_lib::cli_api::output::sarif::write_check_sarif(
+            &violations,
+            &evidence_map,
+            &repo_root,
+            &head_sha,
+            &mut stdout,
+        )
+        .context("emit check SARIF")?;
+    }
+
     // ── Report ────────────────────────────────────────────────────────────────
     let degraded_count = ledger_records
         .iter()
@@ -221,10 +353,17 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
 
     if violations.is_empty() {
         if degraded_count > 0 {
-            println!(
+            let warning = format!(
                 "⚠ codelore check: WARNING — {degraded_count} gate(s) degraded (non-degraded gates pass)"
             );
-        } else {
+            // SARIF mode keeps stdout a clean SARIF document, so the warning
+            // goes to stderr; text mode prints it to stdout with the report.
+            if matches!(args.format, CheckFormat::Sarif) {
+                eprintln!("{warning}");
+            } else {
+                println!("{warning}");
+            }
+        } else if matches!(args.format, CheckFormat::Text) {
             println!("✅ codelore check: PASS ({hotspot_count} files evaluated)");
         }
         write_github_output("result", "pass");
@@ -235,7 +374,7 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
             "❌ codelore check: FAIL — {} violation(s)",
             violations.len()
         );
-        if !args.quiet {
+        if !args.quiet && matches!(args.format, CheckFormat::Text) {
             for v in &violations {
                 eprintln!(
                     "  - {gate}: {path} — actual {actual} vs threshold {threshold}",
@@ -251,7 +390,9 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
         // Inside GitHub Actions, emit each violation as an inline `::error`
         // annotation so the failing gate shows up against the file in the
         // PR's Files-changed view — not just as a red check.
-        if std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true") {
+        if std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true")
+            && matches!(args.format, CheckFormat::Text)
+        {
             let mut stdout = std::io::stdout();
             codelore_lib::cli_api::output::gha::write_gate_violations_gha(&violations, &mut stdout)
                 .context("emit gate annotations")?;
@@ -292,19 +433,22 @@ fn make_rec(
 }
 
 /// Evaluate hotspot-based gates (`cognitive_max`, `hotspot_score_max`).
-/// Returns the gate result bundle and the hotspot row count.
+/// Returns the gate result bundle and the hotspot rows (reused by
+/// `run_finding_hotspot_overlap_with` to avoid a second hotspot query).
 fn eval_hotspot_gates(
     thresholds: &codelore_lib::cli_api::quality_gates::Thresholds,
     db: &codelore_lib::cli_api::facts::FactsDb,
     opts: &codelore_lib::cli_api::Options,
     ts: &str,
     head_sha: &str,
-) -> Result<(GateGroupResult, usize)> {
+) -> Result<(
+    GateGroupResult,
+    Vec<codelore_lib::cli_api::analyses::hotspots::HotspotRow>,
+)> {
     use codelore_lib::cli_api::analyses::hotspots::run_hotspots;
     use codelore_lib::cli_api::quality_gates::evaluate_full_tree;
     let hotspots = run_hotspots(db, opts).context("run hotspots")?;
     let hs_violations = evaluate_full_tree(thresholds, &hotspots);
-    let count = hotspots.len();
     let g = &thresholds.gates;
     let mut recs = Vec::new();
     if let Some(max) = g.cognitive_max {
@@ -337,7 +481,7 @@ fn eval_hotspot_gates(
             head_sha,
         ));
     }
-    Ok(((hs_violations, recs), count))
+    Ok(((hs_violations, recs), hotspots))
 }
 
 /// Evaluate `code_health_min` gate with degraded-detection.
@@ -451,7 +595,11 @@ fn eval_arch_gates(
 /// Returns `(violations, ledger_records, hotspot_count, code_health_rows)`.
 /// `code_health_rows` is returned so callers (e.g. `--ratchet`) can extract
 /// ratchet metrics without re-running the analysis.
-#[allow(clippy::type_complexity)]
+///
+/// `external_findings` is the pre-read sidecar contents for the
+/// `max_findings_in_hot_files` gate. Pass `Some(store)` when the sidecar
+/// exists on disk; `None` when absent (gate skipped, no sidecar created).
+#[allow(clippy::type_complexity, clippy::too_many_lines)]
 fn evaluate_all_gates(
     thresholds: &codelore_lib::cli_api::quality_gates::Thresholds,
     db: &codelore_lib::cli_api::facts::FactsDb,
@@ -459,17 +607,21 @@ fn evaluate_all_gates(
     head_sha: &str,
     ts: &str,
     quiet: bool,
+    external_store: Option<&codelore_lib::cli_api::external::ExternalStore>,
 ) -> Result<(
     Vec<codelore_lib::cli_api::quality_gates::GateViolation>,
     Vec<codelore_lib::cli_api::quality_gates::ledger::GateRunRecord>,
     usize,
     Vec<codelore_lib::cli_api::analyses::code_health::CodeHealthRow>,
 )> {
+    use codelore_lib::cli_api::quality_gates::ledger::GateRunRecord;
+
     let mut violations = Vec::new();
     let mut recs = Vec::new();
     let g = &thresholds.gates;
 
-    let ((hs_v, hs_r), hotspot_count) = eval_hotspot_gates(thresholds, db, opts, ts, head_sha)?;
+    let ((hs_v, hs_r), hotspot_rows) = eval_hotspot_gates(thresholds, db, opts, ts, head_sha)?;
+    let hotspot_count = hotspot_rows.len();
     violations.extend(hs_v);
     recs.extend(hs_r);
 
@@ -549,6 +701,75 @@ fn evaluate_all_gates(
             head_sha,
         ));
         violations.extend(fam_v);
+    }
+
+    // ── max_findings_in_hot_files gate ───────────────────────────────────────
+    if let Some(threshold) = g.max_findings_in_hot_files {
+        // The gate is skipped (not failed) when the sidecar is absent OR present
+        // but empty — both mean "no external findings to evaluate yet". Query the
+        // row count up front so the empty-store case joins the absent case on the
+        // same skip path, mirroring the MCP overlap tool.
+        let store_with_rows = match external_store {
+            Some(store) if store.count().context("count external findings")? > 0 => Some(store),
+            _ => None,
+        };
+        match store_with_rows {
+            None => {
+                // Sidecar absent or empty — skip gracefully without creating or
+                // populating the file.
+                if !quiet {
+                    eprintln!(
+                        "  ⚠ max_findings_in_hot_files: skipped — run `codelore ingest-sarif` first"
+                    );
+                }
+                recs.push(GateRunRecord {
+                    ts: ts.to_owned(),
+                    head_sha: head_sha.to_owned(),
+                    gate: "max_findings_in_hot_files".into(),
+                    threshold: f64::from(threshold),
+                    value: 0.0,
+                    verdict: "skipped".into(),
+                    mode: "check".into(),
+                });
+            }
+            Some(store) => {
+                // Reuse already-computed hotspot and code-health rows so we
+                // don't re-run those analyses a second time (mirrors how
+                // max_red_effort_pct reuses code_health above).
+                let overlap_rows = codelore_lib::cli_api::analyses::finding_hotspot_overlap::run_finding_hotspot_overlap_with(
+                    store,
+                    &hotspot_rows,
+                    &code_health,
+                )
+                .context("run finding-hotspot-overlap for gate")?;
+                let act_now_count = overlap_rows
+                    .iter()
+                    .filter(|r| r.priority == "act-now")
+                    .count();
+                let overlap_v = codelore_lib::cli_api::quality_gates::evaluate_finding_overlap_rows(
+                    threshold,
+                    &overlap_rows,
+                );
+                #[allow(clippy::cast_precision_loss)]
+                // act_now_count is a repo-scale count; precision loss negligible
+                let act_now_f64 = act_now_count as f64;
+                recs.push(GateRunRecord {
+                    ts: ts.to_owned(),
+                    head_sha: head_sha.to_owned(),
+                    gate: "max_findings_in_hot_files".into(),
+                    threshold: f64::from(threshold),
+                    value: act_now_f64,
+                    verdict: if overlap_v.is_empty() {
+                        "passed"
+                    } else {
+                        "failed"
+                    }
+                    .into(),
+                    mode: "check".into(),
+                });
+                violations.extend(overlap_v);
+            }
+        }
     }
 
     Ok((violations, recs, hotspot_count, code_health))
@@ -1057,13 +1278,18 @@ fn run_schema_cmd(args: &args::SchemaArgs) -> Result<()> {
 }
 
 fn run_diff_cmd(args: &DiffArgs) -> Result<()> {
-    let output = diff::run_diff(args).context("codelore diff")?;
+    let (output, head_db, head_opts) = diff::run_diff(args).context("codelore diff")?;
 
     let mut out: Box<dyn Write> = match args.output.as_ref() {
         Some(path) => Box::new(std::fs::File::create(path)?),
         None => Box::new(std::io::stdout().lock()),
     };
-    diff_output::emit(&mut out, &output, args.format.as_str())?;
+    diff_output::emit(
+        &mut out,
+        &output,
+        args.format.as_str(),
+        Some((&head_db, &head_opts)),
+    )?;
     drop(out);
 
     if diff::should_fail(args, &output) {
@@ -1548,6 +1774,30 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
                     )
                 })?;
                 dispatch_function_coupling(&db, &repo, &opts, target, format, &ctx, &mut out)?;
+            }
+            AnalysisName::FindingHotspotOverlap => {
+                // Requires the external sidecar: open it read-only from the cache dir.
+                // open_existing returns None when the sidecar has not been created yet;
+                // in that case run_finding_hotspot_overlap reports the pre-condition
+                // error to the user. We surface the None case here so we never create
+                // an empty sidecar as a side-effect of an analysis read.
+                let cache_root = args
+                    .cache_dir
+                    .clone()
+                    .unwrap_or_else(codelore_lib::cli_api::cache::default_cache_root);
+                let store = codelore_lib::cli_api::external::ExternalStore::open_existing(
+                    &cache_root,
+                    &args.repo,
+                )
+                .context("open external findings store")?
+                .ok_or_else(|| {
+                    codelore_lib::cli_api::CodeLoreError::Analysis(
+                        "finding-hotspot-overlap requires prior `codelore ingest-sarif` \
+                         (no external findings found)"
+                            .to_string(),
+                    )
+                })?;
+                dispatch_finding_hotspot_overlap(&db, &opts, &store, format, &ctx, &mut out)?;
             }
         }
     } // out is dropped here, flushing any buffered writes
@@ -3121,6 +3371,45 @@ fn dispatch_marginal_owner_risk(
         }
     }
     Ok(())
+}
+
+fn dispatch_finding_hotspot_overlap(
+    db: &FactsDb,
+    opts: &Options,
+    store: &codelore_lib::cli_api::external::ExternalStore,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    // Reject unsupported formats before running the (non-trivial) analysis, so
+    // a bad format still surfaces the format error rather than an analysis error.
+    match format {
+        "csv" | "json" | "markdown" => {}
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format(
+                "finding-hotspot-overlap",
+                "csv|json|markdown",
+                fmt,
+            ));
+        }
+    }
+
+    let rows =
+        codelore_lib::cli_api::analyses::finding_hotspot_overlap::run_finding_hotspot_overlap(
+            db, opts, store,
+        )
+        .context("run finding-hotspot-overlap")?;
+    match format {
+        "csv" => codelore_lib::cli_api::output::csv::write_finding_hotspot_overlap_csv(&rows, out)
+            .context("write csv"),
+        "json" => codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json"),
+        // The format was validated above; only the three writer formats remain.
+        _ => codelore_lib::cli_api::output::markdown::write_finding_hotspot_overlap_markdown(
+            &rows, out,
+        )
+        .context("write markdown"),
+    }
 }
 
 fn dispatch_release_cadence(

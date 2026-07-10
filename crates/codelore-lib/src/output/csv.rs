@@ -1349,6 +1349,33 @@ pub fn write_function_xray_csv<W: Write>(
     Ok(())
 }
 
+pub fn write_finding_hotspot_overlap_csv<W: Write>(
+    rows: &[crate::analyses::finding_hotspot_overlap::FindingHotspotOverlapRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(
+        w,
+        "path,findings,engines,worst-level,hotspot-score,revs-percentile,health-band,priority"
+    )
+    .map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{},{},{:.4},{:.4},{},{}",
+            quote_if_needed(&row.path),
+            row.findings,
+            quote_if_needed(&row.engines),
+            quote_if_needed(&row.worst_level),
+            row.hotspot_score,
+            row.revs_percentile,
+            quote_if_needed(&row.health_band),
+            quote_if_needed(&row.priority),
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_function_coupling_csv<W: Write>(
     rows: &[crate::analyses::function_coupling::FunctionCouplingRow],
     w: &mut W,

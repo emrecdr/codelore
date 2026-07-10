@@ -20,9 +20,10 @@ use codelore_lib::cli_api::{
     analyses::{
         code_health,
         delta_health::{DeltaHealthSection, compute_delta_health, run_function_metrics},
-        function_xray, hotspots, refactoring_targets, summary,
+        finding_hotspot_overlap, function_xray, hotspots, refactoring_targets, summary,
     },
     cache::default_cache_root,
+    external::ExternalStore,
     facts::FactsDb,
     quality_gates::{
         GateViolation, Thresholds, evaluate_clone_gate, evaluate_code_health_gate,
@@ -167,6 +168,10 @@ pub struct FunctionXrayParams {
 /// Parameters for the `check_gates` tool (none required).
 #[derive(Debug, Deserialize, JsonSchema, Default)]
 pub struct CheckGatesParams {}
+
+/// Parameters for the `finding_hotspot_overlap` tool (none required).
+#[derive(Debug, Deserialize, JsonSchema, Default)]
+pub struct FindingHotspotOverlapParams {}
 
 // ── Output type for check_gates ───────────────────────────────────────────────
 
@@ -458,10 +463,11 @@ impl CodeLoreServer {
                 );
             }
 
-            // architecture + familiarity gates — kept in lockstep with
-            // `codelore check` so the tool's verdict never contradicts a CI
-            // run over the same thresholds file. Degraded-gate semantics
-            // remain check-only.
+            // architecture + familiarity gates. This tool evaluates a subset
+            // of `codelore check`: the `max_findings_in_hot_files` gate,
+            // degraded-gate semantics, and `--ratchet` remain check-only, so a
+            // config using those gates can make this verdict diverge from a CI
+            // run — `codelore check` is authoritative.
             violations.extend(
                 codelore_lib::cli_api::quality_gates::evaluate_architecture_gate(&thresholds, &db)
                     .map_err(internal)?,
@@ -486,6 +492,59 @@ impl CodeLoreServer {
                 violations,
             };
             serde_json::to_string(&summary).map_err(internal)
+        })
+        .await
+        .map_err(internal)?
+    }
+
+    // ── finding_hotspot_overlap ───────────────────────────────────────────────
+
+    #[tool(
+        name = "finding_hotspot_overlap",
+        description = "Return the behavioral×static fusion table: external scanner findings \
+            joined with hotspot rank and code-health band, producing an `act-now` / `plan` / `note` \
+            priority for each flagged file. Requires a prior `codelore ingest-sarif` run to populate \
+            the external findings sidecar; returns a structured note when the sidecar is absent or empty. \
+            Cost: warm-cache fast after ingest; does not trigger history re-ingest."
+    )]
+    async fn finding_hotspot_overlap(
+        &self,
+        _params: Parameters<FindingHotspotOverlapParams>,
+    ) -> Result<String, ErrorData> {
+        let repo_path = self.repo.clone();
+        tokio::task::spawn_blocking(move || {
+            let cache_root = default_cache_root();
+
+            // open_existing returns None when the sidecar has not been created
+            // yet — the MCP tool never creates it; that is ingest-sarif's job.
+            // An existing-but-empty store (file present, no rows yet) is treated
+            // the same way. Either case returns the structured "run ingest-sarif
+            // first" note.
+            let store_opt =
+                ExternalStore::open_existing(&cache_root, &repo_path).map_err(internal)?;
+            let has_findings = match &store_opt {
+                Some(store) => store.count().map_err(internal)? > 0,
+                None => false,
+            };
+            let Some(store) = store_opt.filter(|_| has_findings) else {
+                let note = serde_json::json!({
+                    "findings": [],
+                    "note": "run codelore ingest-sarif first"
+                });
+                return serde_json::to_string(&note).map_err(internal);
+            };
+
+            let opts = Options {
+                repo_path: repo_path.clone(),
+                ..Options::default()
+            };
+            let repo = GixRepo::open(&repo_path).map_err(internal)?;
+            let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &cache_root)
+                .map_err(internal)?;
+
+            let rows = finding_hotspot_overlap::run_finding_hotspot_overlap(&db, &opts, &store)
+                .map_err(internal)?;
+            serde_json::to_string(&rows).map_err(internal)
         })
         .await
         .map_err(internal)?

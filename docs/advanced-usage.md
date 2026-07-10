@@ -961,6 +961,116 @@ When `fail_on_degraded = false` is set in `[gates]` and a gate produces no evalu
 
 `codelore check --history` prints the last 20 gate-run records grouped by HEAD SHA from the per-repo ledger, giving you a local audit trail of how each gate has trended across pushes — no server required.
 
+### SARIF output with evidence chains
+
+`codelore check --format sarif` emits a SARIF 2.1.0 document to **stdout** while keeping the verdict lines (`✅ PASS`, `❌ FAIL`) and per-violation detail on **stderr**. Exit codes are unchanged — a gate failure is still exit 1 regardless of format.
+
+On a pass, the document contains zero results (valid SARIF; the GitHub Code Scanning upload action handles an empty result set without error). The caller decides whether an empty result set is interesting.
+
+#### What the evidence chain contains
+
+For each per-file gate violation (paths that are not `(repo-wide)` or `(degraded)`), the SARIF result carries a **commit evidence chain**: the top-5 commits that most recently touched that file, newest-first (ordered by commit date, then revision, for deterministic ties). Each entry's message reads `{date} {author}: {message} (+{churn} lines)`, combining:
+
+- The ISO date
+- The canonical (mailmap-resolved) author
+- The first line of the commit message, capped at 80 characters
+- The churn for that path in that commit (lines added + deleted)
+
+The chain is populated from the same lineage-aware fact store that powers the `hotspots` and `code-health` analyses, so renamed and moved files are traced through their history correctly.
+
+`codelore diff --format sarif` carries a tighter chain of up to 3 commits per affected file — enough to identify the source of a change without overwhelming a PR review comment.
+
+#### GitHub rendering
+
+GitHub Code Scanning consumes both structures that carry the chain:
+
+- **`codeFlows → threadFlows → locations`** — rendered as a "Show paths" thread in the finding detail view, letting reviewers step through the commit history that led to the violation.
+- **`relatedLocations`** — shown in the "Show more" context panel of the finding.
+
+Each result also carries two `partialFingerprints` keys:
+
+| Key | Purpose |
+|---|---|
+| `gateFinding/v1` | Stable identity of this finding across check runs (SHA-256 of gate name, file path, and HEAD SHA). Changes when the HEAD SHA changes — expected. |
+| `primaryLocationLineHash` | The key GitHub uses to deduplicate alerts across SARIF uploads (SHA-256 of repo root + path). Stable across HEADs as long as the violation stays on the same file. |
+
+Both keys are versioned (`/v1`) as required by the SARIF 2.1.0 spec (§3.5.4.2).
+
+#### GitHub Actions upload
+
+```yaml
+- name: Run quality gates
+  run: codelore check --repo . --format sarif > codelore-check.sarif
+  continue-on-error: true       # let the upload step always run
+
+- name: Upload to Code Scanning
+  uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: codelore-check.sarif
+    category: codelore-check
+```
+
+The `continue-on-error: true` is required because `codelore check` exits 1 on violations — without it, a failing gate would skip the upload step and the SARIF document would never reach Code Scanning.
+
+### Behavioral×static fusion (`ingest-sarif` + `finding-hotspot-overlap`)
+
+External scanner results can be fused with CodeLore's behavioral signal to answer the question *"which external findings sit in the files we touch most often and that already carry a red code-health band?"* — the intersection of static and behavioral evidence.
+
+#### Step 1 — ingest external findings
+
+```bash
+codelore ingest-sarif --repo . scan.sarif
+codelore ingest-sarif --repo . clippy.sarif semgrep.sarif  # multiple files in one call
+```
+
+Findings are stored in a per-repo sidecar at `<cache_root>/codelore/<repo_hash>/external-findings.duckdb-ext`. The `.duckdb-ext` extension is intentional — the LRU pruner skips it, so the sidecar survives fact-store eviction.
+
+Re-ingesting a file is **idempotent**: findings are replaced per engine, so two passes with the same file produce the same row count as one pass.
+
+**Supported SARIF dialects:**
+
+- **Semgrep** — fingerprints in `fingerprints.matchBasedId/v1` (not `partialFingerprints`); `%SRCROOT%` base URI without `originalUriBaseIds`; level on rule defaults, not on individual results.
+- **clippy-sarif** — no fingerprints (self-hash fallback used); relative URIs without a `file://` scheme.
+- **CodeQL** — `partialFingerprints.primaryLocationLineHash` guaranteed; `ruleIndex` indirection into the `rules` array; absolute `file://` URIs (stored as-is; join on repo-relative paths will not match these — pass a post-processed SARIF or strip the host prefix before ingesting).
+
+Any other SARIF 2.1.0 producer is accepted; unparseable individual results are skipped with a warning, not a hard error.
+
+#### Step 2 — run the overlap analysis
+
+```bash
+codelore analyze --analysis finding-hotspot-overlap --repo .
+```
+
+For each path in the sidecar the row carries:
+
+| Column | Meaning |
+|---|---|
+| `findings` | Total finding count (all engines) |
+| `engines` | Comma-joined engine names |
+| `worst_level` | Most severe level (`error` > `warning` > `note`) |
+| `hotspot_score` | From the hotspots analysis; 0.0 when absent |
+| `revs_percentile` | SQL-equivalent `PERCENT_RANK` of revision count within the hotspot set; 0.0 when absent |
+| `health_band` | `red` / `yellow` / `green` from code-health; `unknown` when absent |
+| `priority` | `act-now` / `plan` / `note` (see below) |
+
+**Priority rules** (first match wins):
+
+- `act-now` — findings > 0 AND revs_percentile ≥ 0.9 AND health_band = `red`
+- `plan` — revs_percentile ≥ 0.7 OR health_band = `red`
+- `note` — everything else
+
+Paths absent from the hotspot result set (new files, below `min_revs`, unsupported language) appear with `hotspot_score = 0.0` and `revs_percentile = 0.0` — the honest left-join contract.
+
+#### Step 3 — gate on `act-now` count
+
+```toml
+# .codelore-thresholds.toml
+[gates]
+max_findings_in_hot_files = 0   # fail when any act-now file exists
+```
+
+The `max_findings_in_hot_files` gate fails when the number of `act-now` rows exceeds the threshold. The gate is **skipped** — not failed — when the sidecar is absent or empty, so adding the gate to an existing thresholds file is safe before running `ingest-sarif`.
+
 ## 11.9. MCP server (`codelore mcp`)
 
 `codelore mcp --repo <path>` starts a Model Context Protocol server over stdio. AI agents connect to it and call the tools below; the server answers using the same persistent fact store the CLI uses. It is **fully local** — no account, no API key, no telemetry, no network access.
@@ -1062,11 +1172,25 @@ Evaluates the quality gates declared in `.codelore-thresholds.toml` at HEAD and 
 }
 ```
 
-`no_thresholds` is returned when no `.codelore-thresholds.toml` exists at the repo root. Gates covered: `cognitive_max`, `hotspot_score_max`, `code_health_min`, `disallow_clone_type_1`, `max_red_effort_pct`, `max_dependency_cycles`, `max_propagation_cost`, and `code_familiarity_min` — the same threshold set `codelore check` evaluates, so the tool's verdict never contradicts a CI run over the same file. Degraded-gate semantics (`fail_on_degraded`) and `--ratchet` are only available in `codelore check` proper.
+`no_thresholds` is returned when no `.codelore-thresholds.toml` exists at the repo root. Gates covered: `cognitive_max`, `hotspot_score_max`, `code_health_min`, `disallow_clone_type_1`, `max_red_effort_pct`, `max_dependency_cycles`, `max_propagation_cost`, and `code_familiarity_min`. This is a subset of what `codelore check` evaluates: the `max_findings_in_hot_files` gate (external SARIF findings × hotspots), degraded-gate semantics (`fail_on_degraded`), and `--ratchet` are only available in `codelore check` proper. When a config file configures `max_findings_in_hot_files`, this tool's verdict can therefore differ from a CI run of `codelore check` — treat `codelore check` as the authoritative gate; use `check_gates` for a fast interactive read of the shared subset.
 
 Parameters: none.
 
 Cost: warm-cache fast. Cold-cache triggers ingest.
+
+#### `finding_hotspot_overlap`
+
+Returns the behavioral×static fusion table: external scanner findings joined with hotspot rank and code-health band. Each row carries a `priority` label (`act-now` / `plan` / `note`) derived from the three signals.
+
+When the external findings sidecar is absent or empty (no prior `codelore ingest-sarif` run for this repo), the tool returns a structured note instead of an error:
+
+```json
+{ "findings": [], "note": "run codelore ingest-sarif first" }
+```
+
+Parameters: none.
+
+Cost: warm-cache fast after `ingest-sarif`; does not trigger history re-ingest.
 
 ### Architecture note
 
