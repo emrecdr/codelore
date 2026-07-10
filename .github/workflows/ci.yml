@@ -90,7 +90,7 @@ jobs:
     # cancelled, and cancellation does not leave enough grace time for
     # the multi-gigabyte cache upload, restarting the cold loop. Linux
     # and macOS keep the tight ceiling; warm runs finish far sooner.
-    timeout-minutes: ${{ matrix.os == 'windows-latest' && 150 || 45 }}
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 240 || 45 }}
     strategy:
       # Don't let one OS failure cancel the other two — we want full
       # cross-platform signal on every run.
@@ -107,6 +107,20 @@ jobs:
           # commit's parent. This is the exact gotcha we document for our
           # users in advanced-usage §10 troubleshooting.
           fetch-depth: 0
+      - name: Exclude build/test paths from Windows Defender
+        # The suite builds hundreds of throwaway git-repo fixtures,
+        # each via dozens of short-lived `git` processes writing many
+        # small object files. Defender's real-time scan hooks every
+        # process launch and file write, multiplying exactly that
+        # workload — the dominant reason the same tests that finish in
+        # minutes on linux run for hours here.
+        if: matrix.os == 'windows-latest'
+        shell: powershell
+        run: |
+          Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE"
+          Add-MpPreference -ExclusionPath "$env:RUNNER_TEMP"
+          Add-MpPreference -ExclusionPath "$env:USERPROFILE\.cargo"
+          Add-MpPreference -ExclusionProcess "cargo.exe","rustc.exe","git.exe","link.exe"
       - uses: dtolnay/rust-toolchain@1.96.0
       - uses: Swatinem/rust-cache@v2
         with:
