@@ -140,7 +140,7 @@ codelore completions <shell>        # bash | zsh | fish | powershell | elvish
 codelore schema <row-type>          # JSON Schema 2020-12 emit
 ```
 
-`codelore check` writes `result=pass|fail` + `violations=N` to `$GITHUB_OUTPUT` when the env var is set — direct GitHub Actions step-output integration. It also works as a git hook: `codelore check --repo . --quiet` exits 0/1 and suppresses per-violation noise for hook scripts. See [§11.8 of the advanced-usage guide](docs/advanced-usage.md) for a ready-to-paste `.git/hooks/pre-push` script, exit-code contract, warm-cache performance notes, and `--ratchet` + `--history` in hook workflows.
+`codelore check` writes `result=pass|fail` + `violations=N` to `$GITHUB_OUTPUT` when the env var is set — direct GitHub Actions step-output integration. It also works as a git hook: `codelore check --repo . --quiet` exits 0/1 and suppresses per-violation noise for hook scripts. `codelore check --format sarif` emits SARIF 2.1.0 with a commit evidence chain (top-5 contributing commits per violated file) to stdout — pipe it into the `github/codeql-action/upload-sarif` step and findings appear inline on PRs with reviewer-facing commit lineage. See [§11.8 of the advanced-usage guide](docs/advanced-usage.md) for a ready-to-paste `.git/hooks/pre-push` script, exit-code contract, warm-cache performance notes, `--ratchet` + `--history` in hook workflows, and the full GitHub Actions upload snippet.
 
 ---
 

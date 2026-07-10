@@ -961,6 +961,58 @@ When `fail_on_degraded = false` is set in `[gates]` and a gate produces no evalu
 
 `codelore check --history` prints the last 20 gate-run records grouped by HEAD SHA from the per-repo ledger, giving you a local audit trail of how each gate has trended across pushes — no server required.
 
+### SARIF output with evidence chains
+
+`codelore check --format sarif` emits a SARIF 2.1.0 document to **stdout** while keeping the verdict lines (`✅ PASS`, `❌ FAIL`) and per-violation detail on **stderr**. Exit codes are unchanged — a gate failure is still exit 1 regardless of format.
+
+On a pass, the document contains zero results (valid SARIF; the GitHub Code Scanning upload action handles an empty result set without error). The caller decides whether an empty result set is interesting.
+
+#### What the evidence chain contains
+
+For each per-file gate violation (paths that are not `(repo-wide)` or `(degraded)`), the SARIF result carries a **commit evidence chain**: the top-5 commits that most recently and most heavily touched that file, newest-first. Each entry shows:
+
+- The commit SHA (full)
+- The ISO date
+- The canonical author
+- The churn for that path in that commit (lines added + deleted)
+- The first 80 characters of the commit message
+
+The chain is populated from the same lineage-aware fact store that powers the `hotspots` and `code-health` analyses, so renamed and moved files are traced through their history correctly.
+
+`codelore diff --format sarif` carries a tighter chain of up to 3 commits per affected file — enough to identify the source of a change without overwhelming a PR review comment.
+
+#### GitHub rendering
+
+GitHub Code Scanning consumes both structures that carry the chain:
+
+- **`codeFlows → threadFlows → locations`** — rendered as a "Show paths" thread in the finding detail view, letting reviewers step through the commit history that led to the violation.
+- **`relatedLocations`** — shown in the "Show more" context panel of the finding.
+
+Each result also carries two `partialFingerprints` keys:
+
+| Key | Purpose |
+|---|---|
+| `gateFinding/v1` | Stable identity of this finding across check runs (SHA-256 of gate name, file path, and HEAD SHA). Changes when the HEAD SHA changes — expected. |
+| `primaryLocationLineHash` | The key GitHub uses to deduplicate alerts across SARIF uploads (SHA-256 of repo root + path). Stable across HEADs as long as the violation stays on the same file. |
+
+Both keys are versioned (`/v1`) as required by the SARIF 2.1.0 spec (§3.5.4.2).
+
+#### GitHub Actions upload
+
+```yaml
+- name: Run quality gates
+  run: codelore check --repo . --format sarif > codelore-check.sarif
+  continue-on-error: true       # let the upload step always run
+
+- name: Upload to Code Scanning
+  uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: codelore-check.sarif
+    category: codelore-check
+```
+
+The `continue-on-error: true` is required because `codelore check` exits 1 on violations — without it, a failing gate would skip the upload step and the SARIF document would never reach Code Scanning.
+
 ### Behavioral×static overlap gate
 
 The `max_findings_in_hot_files` gate in `[gates]` fails when the number of `"act-now"` rows from `finding-hotspot-overlap` (external findings that sit in a high-percentile hotspot with a red code-health band) exceeds the threshold. The gate is **skipped** — not failed — when the external findings sidecar is absent or empty; run `codelore ingest-sarif --repo . <file.sarif>` to populate it first.

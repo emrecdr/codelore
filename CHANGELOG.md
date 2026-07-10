@@ -6,6 +6,16 @@ Conventional Commits format. All notable changes documented here.
 
 ### Added
 
+- **`codelore check --format sarif`** — emits a SARIF 2.1.0 document to stdout while keeping verdict lines on stderr and exit codes unchanged. A pass produces a valid zero-result document. Each per-file gate violation carries a commit evidence chain (up to 5 contributing commits, newest-first, lineage-aware) in both `relatedLocations` and `codeFlows → threadFlows → locations`, consumable by GitHub Code Scanning and any SARIF-aware CI tool. Results carry two `partialFingerprints` keys: `gateFinding/v1` (stable finding identity across runs) and `primaryLocationLineHash` (used by GitHub for cross-upload alert deduplication). See docs/advanced-usage.md §11.8 for the GitHub Actions upload snippet.
+
+- **SARIF evidence chains in `codelore diff --format sarif`** — CODELORE-HOTSPOT, CODELORE-CLONE, and CODELORE-DELTA-HEALTH results now each carry a commit evidence chain (up to 3 contributing commits per file, lineage-aware) in `relatedLocations` and `codeFlows`, giving PR reviewers direct commit lineage for every finding.
+
+- **`codelore ingest-sarif --repo . <file.sarif> …`** — ingests findings from one or more SARIF 2.1.0 documents into a per-repo sidecar store (`external-findings.duckdb-ext` alongside the fact-store cache, immune to the LRU prune). Re-ingesting the same file is idempotent (replace semantics per engine). Supported dialects: CodeQL, Semgrep, clippy-sarif, and any SARIF 2.1.0 producer.
+
+- **`finding-hotspot-overlap` analysis** — behavioral × static fusion: for each file in the external findings sidecar, reports the total finding count, contributing engines, worst severity level, hotspot score, revision-count percentile (SQL-equivalent `PERCENT_RANK`), code-health band, and a priority label (`act-now` / `plan` / `note`). `act-now` fires when a file has findings, sits in the top-10 % of the revision distribution, and carries a red health band — the intersection of scanner signal and behavioral evidence.
+
+- **`max_findings_in_hot_files` quality gate** — `[gates]` in `.codelore-thresholds.toml` now accepts `max_findings_in_hot_files = <count>`. `codelore check` fails when the number of `act-now` rows from `finding-hotspot-overlap` exceeds the ceiling. Skipped (not failed) when the external findings sidecar is absent or empty.
+
 - **`--window-days <DAYS>`** — shared trailing-window option for activity-scoped
   analyses. Anchored to the repo's last commit date (not wall-clock time) so
   results are reproducible on old or archived repos. Valid range: 1–3650;
@@ -92,6 +102,8 @@ Conventional Commits format. All notable changes documented here.
   `rerender: 'theme'` flag that triggers `invalidateTokenCache()` before
   re-render. After a theme switch, those widgets displayed colors from the
   previous theme. All seven now carry `rerender: 'theme'`.
+
+- **Stale SARIF `$schema` URL and `informationUri` in `codelore diff --format sarif`** — the diff SARIF emitter used an `azurewebsites.net` schema URL (a stale mirror) and a placeholder `informationUri`. Both are now sourced from the shared constants in the lib emitter: schema URL `https://json.schemastore.org/sarif-2.1.0.json` (the canonical SchemaStore location), `informationUri` `https://github.com/emrecdr/codelore`.
 
 ## [0.15.0] - 2026-07-07
 
