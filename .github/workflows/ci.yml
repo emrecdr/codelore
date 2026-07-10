@@ -45,6 +45,15 @@ env:
   # coarser (function-level, no line numbers) — an acceptable trade.
   CARGO_PROFILE_DEV_DEBUG: "0"
   CARGO_PROFILE_TEST_DEBUG: "0"
+  # Compile caching is rust-cache's job alone. sccache's GitHub-cache
+  # backend shares the repo's 10 GB Actions-cache quota with the
+  # rust-cache entries; once the quota is exceeded its writes are
+  # rejected and every compilation unit pays a wasted network
+  # round-trip — worst on a cold runner that compiles everything,
+  # which is how the windows job regressed from ~20 minutes to
+  # blowing multi-hour timeouts. rust-cache caching of target/ is
+  # what makes warm runs fast; a second cache layer fighting it for
+  # the same quota made things slower, not faster.
 
 jobs:
   fmt:
@@ -62,19 +71,13 @@ jobs:
     name: clippy
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    env:
-      RUSTC_WRAPPER: sccache
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.96.0
         with:
           components: clippy
-      - uses: mozilla-actions/sccache-action@v0.0.10
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - name: sccache stats
-        if: always()
-        run: sccache --show-stats
 
   test:
     name: test
@@ -88,8 +91,6 @@ jobs:
     # the multi-gigabyte cache upload, restarting the cold loop. Linux
     # and macOS keep the tight ceiling; warm runs finish far sooner.
     timeout-minutes: ${{ matrix.os == 'windows-latest' && 150 || 45 }}
-    env:
-      RUSTC_WRAPPER: sccache
     strategy:
       # Don't let one OS failure cancel the other two — we want full
       # cross-platform signal on every run.
@@ -107,7 +108,6 @@ jobs:
           # users in advanced-usage §10 troubleshooting.
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@1.96.0
-      - uses: mozilla-actions/sccache-action@v0.0.10
       - uses: Swatinem/rust-cache@v2
         with:
           # Save the cargo cache when the job FAILS (test failures still
@@ -142,9 +142,6 @@ jobs:
         # don't compile. Excluded here so our doctests still gate without
         # forcing edits into the upstream-tracked vendored sources.
         run: cargo test --workspace --exclude codelore-rca --all-features --doc
-      - name: sccache stats
-        if: always()
-        run: sccache --show-stats
 
   spa-browser:
     # Headless-browser smoke test for the SPA emitter. Closes the
@@ -165,14 +162,11 @@ jobs:
     name: spa-browser
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      RUSTC_WRAPPER: sccache
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@1.96.0
-      - uses: mozilla-actions/sccache-action@v0.0.10
       - uses: Swatinem/rust-cache@v2
       - name: Run SPA browser smoke test
         # `--features browser-tests,spa,test-support` opts into all three:
@@ -181,9 +175,6 @@ jobs:
         # default features automatically; spelling each one keeps the
         # invocation reproducible across `cargo` upgrades.
         run: cargo test --features browser-tests,spa,test-support -p codelore-lib --test spa_browser_test
-      - name: sccache stats
-        if: always()
-        run: sccache --show-stats
 
   deny:
     name: cargo-deny
@@ -210,8 +201,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     continue-on-error: true
-    env:
-      RUSTC_WRAPPER: sccache
     steps:
       - uses: actions/checkout@v7
         with:
@@ -219,7 +208,6 @@ jobs:
           # own history, so the gix walker needs parent ancestry.
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@1.96.0
-      - uses: mozilla-actions/sccache-action@v0.0.10
       - uses: Swatinem/rust-cache@v2
         with:
           # Stable, release-profile-scoped cache slot. Dogfood is the only
@@ -227,9 +215,7 @@ jobs:
           # target caches of clippy/test — a shared-key keeps its own cache
           # deterministic across PR runs (and lets a future release-profile job
           # share it). Deliberately NOT shared with the debug jobs: mixing
-          # debug+release artifacts under one key would thrash both. The heavy
-          # release dep objects are additionally reused cross-workflow via
-          # sccache (release.yml builds --release with the same backend).
+          # debug+release artifacts under one key would thrash both.
           shared-key: release-dogfood
       - name: Build release codelore
         run: cargo build --release -p codelore-cli --features spa
@@ -266,6 +252,3 @@ jobs:
             echo "### PR change summary"
             ./target/release/codelore diff "origin/${{ github.base_ref }}...HEAD" --format markdown
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: sccache stats
-        if: always()
-        run: sccache --show-stats
