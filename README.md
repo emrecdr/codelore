@@ -14,10 +14,11 @@
 [![Topic: hotspot-analysis](https://img.shields.io/badge/topic-hotspot--analysis-7048e8?style=flat-square&logo=github)](https://github.com/topics/hotspot-analysis)
 [![Topic: developer-tools](https://img.shields.io/badge/topic-developer--tools-7048e8?style=flat-square&logo=github)](https://github.com/topics/developer-tools)
 
-<!-- Release + license meta -->
+<!-- Live status + release + license meta -->
+[![CI](https://img.shields.io/github/actions/workflow/status/emrecdr/codelore/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/emrecdr/codelore/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/emrecdr/codelore?style=flat-square)](https://github.com/emrecdr/codelore/releases/latest)
 [![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue?style=flat-square)](LICENSE)
 [![Rust 1.96+](https://img.shields.io/badge/rust-1.96%2B-dea584?style=flat-square&logo=rust)](https://www.rust-lang.org/)
-[![Clippy: clean](https://img.shields.io/badge/clippy-clean-2ea44f?style=flat-square&logo=rust)](#status)
 
 > **Read the lore of your codebase.**
 
