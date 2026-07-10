@@ -1388,6 +1388,140 @@ fn diff_sarif_schema_url_and_info_uri_use_canonical_constants() {
         !locations.is_empty(),
         "threadFlow must have at least one location (evidence commit)"
     );
+
+    // (d) The degrading result must also carry relatedLocations (plain location
+    // array — the GitHub inline annotation panel source, distinct from codeFlows).
+    let related = r["relatedLocations"]
+        .as_array()
+        .expect("relatedLocations array on degrading result");
+    assert!(
+        !related.is_empty(),
+        "degrading result must carry at least one relatedLocation"
+    );
+    // relatedLocations entries are plain location objects (no "location" wrapper).
+    assert!(
+        related[0].get("physicalLocation").is_some(),
+        "relatedLocations entry must have physicalLocation directly (no wrapper)"
+    );
+}
+
+#[test]
+fn diff_sarif_hotspot_rank_entrant_carries_code_flows_and_related_locations() {
+    // Build a fixture where the base has no Rust files (no hotspots at base)
+    // and the head introduces a Rust file that was changed twice — guaranteeing
+    // it enters the hotspot list as a rank_entrant with ≥1 evidence commit.
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+
+    // base: no Rust files → no hotspots at base revision
+    git(&["init", "-q"]);
+    std::fs::write(repo.join("README.md"), "hello\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "base: no rust"]);
+    let base = git(&["rev-parse", "HEAD"]);
+
+    // head: src/hot.rs added and then changed — 2 revisions, enters hotspot list
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(
+        repo.join("src/hot.rs"),
+        "pub fn first() -> u32 { 1 }\n",
+    )
+    .unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "feat: add hot file"]);
+
+    std::fs::write(
+        repo.join("src/hot.rs"),
+        "pub fn first() -> u32 { 2 }\npub fn second() -> u32 { 3 }\n",
+    )
+    .unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "feat: extend hot file"]);
+    let head = git(&["rev-parse", "HEAD"]);
+
+    let output = Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "diff",
+            "--repo",
+            repo.to_str().unwrap(),
+            "--min-revs",
+            "1",
+            "--format",
+            "sarif",
+            &format!("{base}..{head}"),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let sarif: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("valid SARIF");
+    let results = sarif["runs"][0]["results"]
+        .as_array()
+        .expect("results array");
+
+    // There must be at least one CODELORE-HOTSPOT rank-entrant result.
+    let hotspot_results: Vec<_> = results
+        .iter()
+        .filter(|r| r["ruleId"] == "CODELORE-HOTSPOT")
+        .collect();
+    assert!(
+        !hotspot_results.is_empty(),
+        "expected ≥1 CODELORE-HOTSPOT rank-entrant result for src/hot.rs"
+    );
+
+    let r = hotspot_results[0];
+
+    // Must carry codeFlows with at least one evidence location.
+    let code_flows = r["codeFlows"]
+        .as_array()
+        .expect("codeFlows must be present on hotspot rank-entrant");
+    assert!(!code_flows.is_empty(), "codeFlows must be non-empty");
+    let tfl = code_flows[0]["threadFlows"][0]["locations"]
+        .as_array()
+        .expect("threadFlows[0].locations");
+    assert!(
+        !tfl.is_empty(),
+        "hotspot result must carry at least one evidence commit in codeFlows"
+    );
+
+    // Must carry relatedLocations — plain location objects, no "location" wrapper.
+    let related = r["relatedLocations"]
+        .as_array()
+        .expect("relatedLocations must be present on hotspot rank-entrant");
+    assert!(
+        !related.is_empty(),
+        "hotspot result must carry at least one relatedLocation"
+    );
+    assert!(
+        related[0].get("physicalLocation").is_some(),
+        "relatedLocations entry must have physicalLocation directly (no wrapper)"
+    );
+
+    // Sanity: no stray "module" key on threadFlowLocations (was a spec error).
+    assert!(
+        tfl[0].get("module").is_none(),
+        "threadFlowLocation must not carry 'module' (message_head goes in location.message.text)"
+    );
 }
 
 const CLONE_ORIGINAL_SRC: &str = "\

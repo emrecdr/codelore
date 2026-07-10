@@ -418,43 +418,48 @@ fn emit_sarif(
     use codelore_lib::cli_api::quality_gates::evidence::evidence_for_path;
     use serde_json::json;
 
-    // Build a codeFlow from evidence commits for a given path.
-    // Returns serde_json::Value::Null when no db is available or no evidence
-    // was found, so callers can skip adding the key on null.
-    let code_flow_for = |path: &str| -> serde_json::Value {
-        let Some((db, opts)) = db_opts else {
-            return serde_json::Value::Null;
-        };
-        let commits = evidence_for_path(db, opts, path, DIFF_EVIDENCE_N).unwrap_or_default();
+    // Build codeFlows + relatedLocations from evidence commits for a given path.
+    // Returns None when no db is available or no evidence was found.
+    // codeFlows: SARIF §3.36 — threadFlowLocations wrap the location in
+    //   {"location": …}; relatedLocations: SARIF §3.27.22 — plain location array.
+    // Both point to the same commits; GitHub reads relatedLocations for the
+    // inline annotation panel and codeFlows for the "Show paths" flows tab.
+    let evidence_for = |path: &str| -> Option<(serde_json::Value, serde_json::Value)> {
+        let (db, opts) = db_opts?;
+        let commits = evidence_for_path(db, opts, path, DIFF_EVIDENCE_N).ok()?;
         if commits.is_empty() {
-            return serde_json::Value::Null;
+            return None;
         }
-        let locs: Vec<serde_json::Value> = commits
+        // relatedLocations: plain location objects (no wrapper).
+        let related: Vec<serde_json::Value> = commits
             .iter()
             .map(|ev| {
                 json!({
-                    "location": {
-                        "physicalLocation": {
-                            "artifactLocation": { "uri": path },
-                            "region": { "startLine": 1 }
-                        },
-                        "message": {
-                            "text": format!(
-                                "{} {} {} (churn={})",
-                                ev.date, ev.rev, ev.author, ev.churn
-                            )
-                        }
+                    "physicalLocation": {
+                        "artifactLocation": { "uri": path },
+                        "region": { "startLine": 1 }
                     },
-                    "module": ev.message_head
+                    "message": {
+                        "text": format!(
+                            "{} {} {} (churn={})",
+                            ev.date, ev.rev, ev.author, ev.churn
+                        )
+                    }
                 })
             })
             .collect();
-        json!([{ "threadFlows": [{ "locations": locs }] }])
+        // codeFlows: same locations, each wrapped in {"location": …}.
+        let tfl: Vec<serde_json::Value> = related
+            .iter()
+            .map(|loc| json!({ "location": loc }))
+            .collect();
+        let code_flows = json!([{ "threadFlows": [{ "locations": tfl }] }]);
+        Some((code_flows, serde_json::Value::Array(related)))
     };
 
     let mut hotspot_results: Vec<serde_json::Value> = Vec::new();
     for h in &output.hotspots.rank_entrants {
-        let code_flows = code_flow_for(&h.path);
+        let evidence = evidence_for(&h.path);
         let mut result = json!({
             "ruleId": "CODELORE-HOTSPOT",
             "level": "warning",
@@ -477,13 +482,14 @@ fn emit_sarif(
                 "tags": ["behavioral", "hotspot", "pr-diff"]
             }
         });
-        if !code_flows.is_null() {
+        if let Some((code_flows, related_locs)) = evidence {
             result["codeFlows"] = code_flows;
+            result["relatedLocations"] = related_locs;
         }
         hotspot_results.push(result);
     }
     for s in &output.hotspots.score_increased {
-        let code_flows = code_flow_for(&s.path);
+        let evidence = evidence_for(&s.path);
         let mut result = json!({
             "ruleId": "CODELORE-HOTSPOT",
             "level": "warning",
@@ -507,13 +513,14 @@ fn emit_sarif(
                 "tags": ["behavioral", "hotspot", "pr-diff"]
             }
         });
-        if !code_flows.is_null() {
+        if let Some((code_flows, related_locs)) = evidence {
             result["codeFlows"] = code_flows;
+            result["relatedLocations"] = related_locs;
         }
         hotspot_results.push(result);
     }
     for c in &output.clones.new_families {
-        let code_flows = code_flow_for(&c.entity);
+        let evidence = evidence_for(&c.entity);
         let mut result = json!({
             "ruleId": "CODELORE-CLONE",
             "level": "note",
@@ -535,8 +542,9 @@ fn emit_sarif(
                 "tags": ["behavioral", "clone", "pr-diff"]
             }
         });
-        if !code_flows.is_null() {
+        if let Some((code_flows, related_locs)) = evidence {
             result["codeFlows"] = code_flows;
+            result["relatedLocations"] = related_locs;
         }
         hotspot_results.push(result);
     }
@@ -555,7 +563,7 @@ fn emit_sarif(
                 continue;
             }
             seen.insert(&f.path);
-            let code_flows = code_flow_for(&f.path);
+            let evidence = evidence_for(&f.path);
             let mut result = json!({
                 "ruleId": "CODELORE-DELTA-HEALTH",
                 "level": "warning",
@@ -580,8 +588,9 @@ fn emit_sarif(
                     "tags": ["behavioral", "health", "pr-diff"]
                 }
             });
-            if !code_flows.is_null() {
+            if let Some((code_flows, related_locs)) = evidence {
                 result["codeFlows"] = code_flows;
+                result["relatedLocations"] = related_locs;
             }
             hotspot_results.push(result);
         }
