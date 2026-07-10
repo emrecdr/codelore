@@ -41,7 +41,20 @@ pub struct ExternalFinding {
     pub message: String,
 }
 
-/// Parse a SARIF 2.1.0 document (all runs) into normalized findings.
+/// Parse a SARIF 2.1.0 document once, returning both the normalized findings
+/// and every scanner engine name present across all runs.
+///
+/// This is the primary parse: it walks the `runs` array a single time,
+/// collecting findings and engine names together. Callers that need only one
+/// half use the [`parse_sarif`] / [`parse_sarif_engines`] wrappers.
+///
+/// Engine names are returned in document order with duplicates removed, and
+/// include runs that produced zero results — [`parse_sarif`]'s findings only
+/// surface engines that flagged something, so a clean re-scan (a run with an
+/// empty `results` array) is invisible there. Ingest uses the engine list to
+/// seed empty batches for those engines and clear their stale rows: a
+/// re-ingested clean scan must drop the previous run's findings, not leave
+/// them behind.
 ///
 /// Unparseable individual results are skipped with a [`tracing::warn`]; a
 /// document that is not SARIF at all is an [`Err`].
@@ -50,7 +63,7 @@ pub struct ExternalFinding {
 ///
 /// Returns [`CodeLoreError::Analysis`] when the input is not a SARIF document
 /// (missing `version` field or `runs` array).
-pub fn parse_sarif(raw: &str) -> Result<Vec<ExternalFinding>> {
+pub fn parse_sarif_with_engines(raw: &str) -> Result<(Vec<ExternalFinding>, Vec<String>)> {
     let doc: Value = serde_json::from_str(raw)
         .map_err(|e| CodeLoreError::Analysis(format!("SARIF parse: not valid JSON: {e}")))?;
 
@@ -68,11 +81,16 @@ pub fn parse_sarif(raw: &str) -> Result<Vec<ExternalFinding>> {
     };
 
     let mut findings = Vec::new();
+    let mut engines: Vec<String> = Vec::new();
 
     for run in runs {
         let driver = &run["tool"]["driver"];
         let engine = driver["name"].as_str().unwrap_or("unknown").to_owned();
         let engine_version = driver["version"].as_str().unwrap_or("").to_owned();
+
+        if !engines.contains(&engine) {
+            engines.push(engine.clone());
+        }
 
         // Build a rule-id lookup table for ruleIndex indirection (CodeQL dialect).
         let rules: Vec<&Value> = driver["rules"]
@@ -94,7 +112,20 @@ pub fn parse_sarif(raw: &str) -> Result<Vec<ExternalFinding>> {
         }
     }
 
-    Ok(findings)
+    Ok((findings, engines))
+}
+
+/// Parse a SARIF 2.1.0 document (all runs) into normalized findings.
+///
+/// Unparseable individual results are skipped with a [`tracing::warn`]; a
+/// document that is not SARIF at all is an [`Err`].
+///
+/// # Errors
+///
+/// Returns [`CodeLoreError::Analysis`] when the input is not a SARIF document
+/// (missing `version` field or `runs` array).
+pub fn parse_sarif(raw: &str) -> Result<Vec<ExternalFinding>> {
+    parse_sarif_with_engines(raw).map(|(findings, _engines)| findings)
 }
 
 /// Collect every scanner engine name present in a SARIF document, including
@@ -113,32 +144,7 @@ pub fn parse_sarif(raw: &str) -> Result<Vec<ExternalFinding>> {
 /// Returns [`CodeLoreError::Analysis`] when the input is not a SARIF document
 /// (missing `version` field or `runs` array), matching [`parse_sarif`].
 pub fn parse_sarif_engines(raw: &str) -> Result<Vec<String>> {
-    let doc: Value = serde_json::from_str(raw)
-        .map_err(|e| CodeLoreError::Analysis(format!("SARIF parse: not valid JSON: {e}")))?;
-
-    if doc.get("version").is_none() || doc.get("runs").is_none() {
-        return Err(CodeLoreError::Analysis(
-            "not a SARIF document: missing `version` or `runs`".into(),
-        ));
-    }
-
-    let Some(runs) = doc["runs"].as_array() else {
-        return Err(CodeLoreError::Analysis(
-            "SARIF `runs` is not an array".into(),
-        ));
-    };
-
-    let mut engines: Vec<String> = Vec::new();
-    for run in runs {
-        let engine = run["tool"]["driver"]["name"]
-            .as_str()
-            .unwrap_or("unknown")
-            .to_owned();
-        if !engines.contains(&engine) {
-            engines.push(engine);
-        }
-    }
-    Ok(engines)
+    parse_sarif_with_engines(raw).map(|(_findings, engines)| engines)
 }
 
 /// Parse one SARIF result object into an [`ExternalFinding`].

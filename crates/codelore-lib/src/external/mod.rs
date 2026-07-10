@@ -12,7 +12,9 @@
 pub mod sarif_parse;
 pub mod store;
 
-pub use sarif_parse::{ExternalFinding, parse_sarif, parse_sarif_engines};
+pub use sarif_parse::{
+    ExternalFinding, parse_sarif, parse_sarif_engines, parse_sarif_with_engines,
+};
 pub use store::{ExternalStore, PathFindings};
 
 /// Group a flat list of findings by engine name.

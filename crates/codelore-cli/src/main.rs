@@ -64,7 +64,7 @@ fn run_mcp_cmd(args: &McpArgs) -> Result<()> {
 fn run_ingest_sarif_cmd(args: &IngestSarifArgs) -> Result<()> {
     use codelore_lib::cli_api::cache::default_cache_root;
     use codelore_lib::external::{
-        ExternalStore, group_findings_by_engine, parse_sarif, parse_sarif_engines,
+        ExternalStore, group_findings_by_engine, parse_sarif_with_engines,
     };
 
     let cache_root = args.cache_dir.clone().unwrap_or_else(default_cache_root);
@@ -82,12 +82,10 @@ fn run_ingest_sarif_cmd(args: &IngestSarifArgs) -> Result<()> {
     for path in &args.file {
         let raw = std::fs::read_to_string(path)
             .with_context(|| format!("read SARIF file {}", path.display()))?;
-        let findings =
-            parse_sarif(&raw).with_context(|| format!("parse SARIF file {}", path.display()))?;
+        let (findings, engines) = parse_sarif_with_engines(&raw)
+            .with_context(|| format!("parse SARIF file {}", path.display()))?;
         all_findings.extend(findings);
-        for engine in parse_sarif_engines(&raw)
-            .with_context(|| format!("read SARIF engines from {}", path.display()))?
-        {
+        for engine in engines {
             if !all_engines.contains(&engine) {
                 all_engines.push(engine);
             }
