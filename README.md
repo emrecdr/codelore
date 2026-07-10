@@ -59,71 +59,103 @@ What separates CodeLore from code-maat, CodeScene, and jscpd:
 
 ## The analyses
 
-Use `codelore analyze --analysis NAME` for any of these. Code-maat parity is **complete**; modern additions are marked **★**.
+Run `codelore analyze --analysis NAME` for any of the 54 analyses below. They are grouped by the question you bring, not by how each one is built.
 
-### Core behavioral signals (code-maat parity)
+### Hotspots & change coupling
 
-| Analysis | Output | Use case |
+*Where is the risk concentrated, and what changes together?*
+
+| Analysis | Output | Why it matters |
 |---|---|---|
+| `summary` | one-page repo overview | First slide of any review |
 | `revisions` | per-file commit count | First-look hotspot proxy |
+| `hotspots` | files ranked by `percentile_rank(revs) × percentile_rank(cognitive) × (100 − code_health) / 4` | Published formula transparency; CodeScene-equivalent signal |
+| `hotspot-velocity` | files *accelerating* in churn — recent vs baseline change rate | Early warning: a file becoming a hotspot before its all-time count shows it |
 | `coupling` | file pairs with Fisher-significant co-change | Hidden architectural debt |
 | `soc` | sum of coupling per file (centrality measure) | Network-level coupling outliers |
-| `code-age` | months since last modification per file | Find dead code + recently-volatile areas |
+| `centrality` | per-file degree / PageRank on the Fisher-significant coupling graph | Network-centrality lens on behavioural coupling (Newman 2010 §7) |
+| `communities` | Leiden algorithm partitions on the coupling graph | Conway's-law cluster auto-detection (Traag, Waltman, van Eck 2019) |
 | `abs-churn` | LOC added/deleted per date | Trend dashboards |
 | `author-churn` | LOC added/deleted per author | Effort distribution |
 | `entity-churn` | LOC added/deleted per file | Refactor-target ranking |
-| `communication` | author pairs by shared-file work | Conway's law signals |
+| `code-age` | months since last modification per file | Find dead code + recently-volatile areas |
+
+### Knowledge & team
+
+*Who knows this code, and where is the staffing risk?*
+
+| Analysis | Output | Why it matters |
+|---|---|---|
 | `authors` | per-file count of distinct authors (humans / bots / AI broken out) | Bird et al. 2011 defect-risk indicator |
 | `top-committers` | per-author leaderboard (commits, LoC, first/last commit, bot flag) | Release notes / contributor recognition |
-| `summary` | one-page repo overview | First slide of any review |
 | `ownership` | Fractal Value (1-HHI) per file + main-author | Bus-factor / knowledge-loss risk |
 | `entity-effort` | per-(file, author) revision counts | "Who's doing the work on this file?" |
 | `entity-ownership` | per-(file, author) added/deleted breakdown | Fine-grained ownership view |
 | `main-dev` | top author per file by lines added | Onboarding / handoff |
 | `main-dev-by-revs` | top author per file by revision count | Stewardship view |
 | `main-dev-by-deletions` (alias: `refactoring-main-dev`) | top author per file by lines removed | Refactoring authorship |
+| `communication` | author pairs by shared-file work | Conway's law signals |
+| `knowledge-islands` | per-file bus-factor risk from departed primary authors | Auto-detects knowledge loss vs CodeScene's required manual Ex-Developer marking |
+| `code-familiarity` | SLOC-weighted mean team familiarity + knowledge-islands ratio | One-number coverage question: "What fraction of this codebase is actively understood?" |
+| `team-composition` | per-author tenure bucket (onboarded / experienced / veteran) with `veteran_breadth_ok` gate, `active` flag, commit count, `files_touched`, and `onboarding_weeks`; a `__summary__` row carries bucket-percentage breakdown | Onboarding throughput + veteran over-concentration at a glance |
+| `coordination-needs` | per-file authorship fragmentation × interleave × co-change entropy, tiered single→high | Strongest predictors of merge friction and review delays |
+| `marginal-owner-risk` | ownership concentration × code-health: files where the most knowledgeable active author holds a low share | Predicts where the on-call person has the least context when a red-band file breaks |
+| `bus-factor` | per-module Filatov 2010 bus factor | Lifts CodeScene's file-level "Key Personnel" to actionable module-level granularity |
+| `pair-programming` | per-pair commit count from `Co-Authored-By:` trailers | Surfaces who pair-programs with whom across the project |
+
+### Architecture & dependencies
+
+*How is the system structured, and where is it tangling?*
+
+| Analysis | Output | Why it matters |
+|---|---|---|
+| `architecture-violations` | imports crossing forbidden layer boundaries per `.codelore-arch-rules.toml` | Layered-architecture enforcement at CI time |
+| `dependency-cycles` | strongly-connected components (tangles) of the import graph | Tarjan SCC — the cyclic-dependency smell a DSM shows as a red diagonal block (Fontana et al. 2017) |
+| `architecture-roles` | per-file Core / Shared / Control / Periphery from import-graph reachability | Baldwin & MacCormack "hidden structure" — maps the architecture + per-file blast radius (propagation cost) |
+| `instability` | per-file afferent/efferent coupling + Instability `I = Ce/(Ca+Ce)` | Robert C. Martin's package metrics — find unstable files that too much depends on |
+| `architecture-metrics` | repo-level propagation cost, Lakos ACD/NCCD, cycle count, architecture type | One trendable structural-health summary (Lakos 1996; MacCormack/Baldwin) |
+| `architecture-trend` | propagation cost / cycles / largest tangle recomputed at sampled historical revs | Is the architecture decaying, and when did it start? Structure × history over *time* |
+| `cycle-origins` | bisects history to find the commit each HEAD dependency cycle first formed | Commit-level archaeology: "this tangle started here" — actionable blame for cycles |
+| `modularity-violations` | co-change pairs (Fisher-significant) with **no** import edge between them | The structure×history fusion — implicit cross-module dependencies (Mo, Cai & Kazman 2015 *Hotspot Patterns*) no import-only graph can see |
+| `unstable-interface` | widely-imported files that change often AND drag their dependents | DV8 "Unstable Interface" — instability that propagates through the dependency graph |
+| `crossing` | structural "X" files (high fan-in AND fan-out) that co-change in both directions | DV8 "Crossing" — couples upstream and downstream through itself; hardest shape to change safely |
+| `god-classes` | files combining high cognitive × fan-in × fan-out | Brown et al. 1998 AntiPatterns §3.1 — surfaces files where every dimension pulls up |
+
+### Code health & quality
+
+*Which files are unhealthy, and where should refactoring go first?*
+
+| Analysis | Output | Why it matters |
+|---|---|---|
+| `code-health` | biomarker composite score 0..100 per file: `100 × (1 − 0.50·structural_risk − 0.30·churn − 0.20·ownership_fv)`; `structural_risk` is a weighted sum of five biomarkers (Complex Method 0.30, God Class 0.25, Large Method 0.15, DRY 0.15, Shotgun Surgery 0.15); each row carries a `band` (red ≥ 0.55 / yellow ≥ 0.28 / green) and per-language `percentile` of structural risk | Multi-dimensional file-quality score with explicit biomarker breakdown |
+| `health-trend` | code-health score series per file at sampled historical revisions; feeds the health-trend sparklines and improvements feed on the SPA dashboard | Distinguishes files that are genuinely improving from those that briefly recovered before deteriorating again |
+| `clones` | Type 1 + Type 2 clone families via AST structural hashing | Function-level copy-paste detection across Rust/Python/Java/JS/TS |
+| `clone-coupling` | clones intersected with Fisher-significant co-change | **The strategic differentiator** — separates live debt from dead noise |
+| `stale-code` | files alive at HEAD untouched ≥12 months AND low cognitive | The intersection minimises false-positive deletion candidates |
+| `refactoring-targets` | files ranked by refactoring ROI: `priority = (structural_risk × hotspot_score) / max(loc, 25)`; each row annotated with `dominant_type` (highest-intensity biomarker) and `manual_up_rank` (ascending-size ManualUp baseline) | Effort-aware Popt/PofB20-style ranking — a small, dense, churning, unhealthy file outranks a large one with the same raw risk |
+| `function-xray` | per-function hunk-overlap attribution: counts revisions where at least one diff hunk overlaps the function's line span at `--target <path>`; requires `--target` | Gall et al. ICSM 2003 HistoryFinder — per-function change-frequency leaderboard with LOC, cyclomatic, and cognitive complexity; more precise than file-level churn |
+| `function-coupling` | per-function-pair co-change frequency with two-tailed Fisher exact significance at `--target <path>`; emits pairs with co-change count ≥ 2, sorted by p-value ascending | Adams et al. ICSM 2006 — function-level logical coupling within a file; low-p pairs are candidates for extract-and-share refactoring |
 | `messages` | per-file count of commits matching `--expression-to-match` regex | Bug/refactor archaeology |
 
-### Modern additions ★
+### Delivery & process
 
-| Analysis | Output | What it adds beyond code-maat |
+*How is work flowing from commit to release?*
+
+| Analysis | Output | Why it matters |
 |---|---|---|
-| `hotspots` ★ | files ranked by `percentile_rank(revs) × percentile_rank(cognitive) × (100 − code_health) / 4` | Published formula transparency; CodeScene-equivalent signal |
-| `hotspot-velocity` ★ | files *accelerating* in churn — recent vs baseline change rate | Early warning: a file becoming a hotspot before its all-time count shows it |
-| `code-health` ★ | biomarker composite score 0..100 per file: `100 × (1 − 0.50·structural_risk − 0.30·churn − 0.20·ownership_fv)`; `structural_risk` is a weighted sum of five biomarkers (Complex Method 0.30, God Class 0.25, Large Method 0.15, DRY 0.15, Shotgun Surgery 0.15); each row carries a `band` (red ≥ 0.55 / yellow ≥ 0.28 / green) and per-language `percentile` of structural risk | Multi-dimensional file-quality score with explicit biomarker breakdown |
-| `clones` ★ | Type 1 + Type 2 clone families via AST structural hashing | Function-level copy-paste detection across Rust/Python/Java/JS/TS |
-| `clone-coupling` ★ | clones intersected with Fisher-significant co-change | **The strategic differentiator** — separates live debt from dead noise |
-| `knowledge-islands` ★ | per-file bus-factor risk from departed primary authors | Auto-detects knowledge loss vs CodeScene's required manual Ex-Developer marking |
-| `code-familiarity` ★ | SLOC-weighted mean team familiarity + knowledge-islands ratio | One-number coverage question: "What fraction of this codebase is actively understood?" |
-| `team-composition` ★ | per-author tenure bucket (onboarded / experienced / veteran) with `veteran_breadth_ok` gate, `active` flag, commit count, `files_touched`, and `onboarding_weeks`; a `__summary__` row carries bucket-percentage breakdown | Onboarding throughput + veteran over-concentration at a glance |
-| `coordination-needs` ★ | per-file authorship fragmentation × interleave × co-change entropy, tiered single→high | Strongest predictors of merge friction and review delays |
-| `marginal-owner-risk` ★ | ownership concentration × code-health: files where the most knowledgeable active author holds a low share | Predicts where the on-call person has the least context when a red-band file breaks |
-| `centrality` ★ | per-file degree / PageRank on the Fisher-significant coupling graph | Network-centrality lens on behavioural coupling (Newman 2010 §7) |
-| `communities` ★ | Leiden algorithm partitions on the coupling graph | Conway's-law cluster auto-detection (Traag, Waltman, van Eck 2019) |
-| `god-classes` ★ | files combining high cognitive × fan-in × fan-out | Brown et al. 1998 AntiPatterns §3.1 — surfaces files where every dimension pulls up |
-| `architecture-violations` ★ | imports crossing forbidden layer boundaries per `.codelore-arch-rules.toml` | Layered-architecture enforcement at CI time |
-| `dependency-cycles` ★ | strongly-connected components (tangles) of the import graph | Tarjan SCC — the cyclic-dependency smell a DSM shows as a red diagonal block (Fontana et al. 2017) |
-| `architecture-roles` ★ | per-file Core / Shared / Control / Periphery from import-graph reachability | Baldwin & MacCormack "hidden structure" — maps the architecture + per-file blast radius (propagation cost) |
-| `instability` ★ | per-file afferent/efferent coupling + Instability `I = Ce/(Ca+Ce)` | Robert C. Martin's package metrics — find unstable files that too much depends on |
-| `architecture-metrics` ★ | repo-level propagation cost, Lakos ACD/NCCD, cycle count, architecture type | One trendable structural-health summary (Lakos 1996; MacCormack/Baldwin) |
-| `architecture-trend` ★ | propagation cost / cycles / largest tangle recomputed at sampled historical revs | Is the architecture decaying, and when did it start? Structure × history over *time* |
-| `cycle-origins` ★ | bisects history to find the commit each HEAD dependency cycle first formed | Commit-level archaeology: "this tangle started here" — actionable blame for cycles |
-| `modularity-violations` ★ | co-change pairs (Fisher-significant) with **no** import edge between them | The structure×history fusion — implicit cross-module dependencies (Mo, Cai & Kazman 2015 *Hotspot Patterns*) no import-only graph can see |
-| `unstable-interface` ★ | widely-imported files that change often AND drag their dependents | DV8 "Unstable Interface" — instability that propagates through the dependency graph |
-| `crossing` ★ | structural "X" files (high fan-in AND fan-out) that co-change in both directions | DV8 "Crossing" — couples upstream and downstream through itself; hardest shape to change safely |
-| `stale-code` ★ | files alive at HEAD untouched ≥12 months AND low cognitive | The intersection minimises false-positive deletion candidates |
-| `pair-programming` ★ | per-pair commit count from `Co-Authored-By:` trailers | Surfaces who pair-programs with whom across the project |
-| `lead-time` ★ | per-commit author-date → committer-date delta (DORA metric) | In-flight review time without GitHub PR metadata |
-| `bus-factor` ★ | per-module Filatov 2010 bus factor | Lifts CodeScene's file-level "Key Personnel" to actionable module-level granularity |
-| `delivery-friction` ★ | composite of `percent_rank(revs) × percent_rank(median lead-time) × percent_rank(cognitive)` per file | Counters CodeScene v7.4's Delivery Analysis surface; lights up only files elevated on all three axes (churn × review-time × complexity), with p95 lead-time + WIP-age side columns |
-| `delivery-metrics` ★ | p50/p75/p90 distributions of five flow-metric proxies (batch size, branch duration, rework %, lead-time proxy); requires `--include-merges`; each row carries a plain-text caveat | Git-only flow-metric sampling; drives the Delivery factor tile on the SPA dashboard. Not a DORA replacement |
-| `release-cadence` ★ | per-release-tag inter-release gap (days) plus a `__summary__` row with median, IQR, OLS trend (`accelerating` / `stable` / `slowing`); tags filtered by `--release-tag-glob` (default `v*`) | Release-velocity monitoring without a deployment system; drives the cadence number on the Delivery factor tile |
-| `effort-exposure` ★ | per-band (red/yellow/green) breakdown of commit share and LOC share over the trailing window | Answers whether engineering effort is concentrated in healthy or unhealthy code; drives the effort-exposure share bars on the SPA dashboard |
-| `health-trend` ★ | code-health score series per file at sampled historical revisions; feeds the health-trend sparklines and improvements feed on the SPA dashboard | Distinguishes files that are genuinely improving from those that briefly recovered before deteriorating again |
-| `function-xray` ★ | per-function hunk-overlap attribution: counts revisions where at least one diff hunk overlaps the function's line span at `--target <path>`; requires `--target` | Gall et al. ICSM 2003 HistoryFinder — per-function change-frequency leaderboard with LOC, cyclomatic, and cognitive complexity; more precise than file-level churn |
-| `function-coupling` ★ | per-function-pair co-change frequency with two-tailed Fisher exact significance at `--target <path>`; emits pairs with co-change count ≥ 2, sorted by p-value ascending | Adams et al. ICSM 2006 — function-level logical coupling within a file; low-p pairs are candidates for extract-and-share refactoring |
-| `refactoring-targets` ★ | files ranked by refactoring ROI: `priority = (structural_risk × hotspot_score) / max(loc, 25)`; each row annotated with `dominant_type` (highest-intensity biomarker) and `manual_up_rank` (ascending-size ManualUp baseline) | Effort-aware Popt/PofB20-style ranking — a small, dense, churning, unhealthy file outranks a large one with the same raw risk |
-| `finding-hotspot-overlap` ★ | files where external scanner findings (via `ingest-sarif`) overlap the most-churned, least-healthy code — reports finding count, engines, worst level, hotspot score, revision percentile, health band, and an `act-now` / `plan` / `note` priority | Behavioral×static fusion: surfaces the intersection of scanner signal and behavioral evidence; drives the `max_findings_in_hot_files` gate and the `finding_hotspot_overlap` MCP tool |
+| `lead-time` | per-commit author-date → committer-date delta (DORA metric) | In-flight review time without GitHub PR metadata |
+| `delivery-friction` | composite of `percent_rank(revs) × percent_rank(median lead-time) × percent_rank(cognitive)` per file | Counters CodeScene v7.4's Delivery Analysis surface; lights up only files elevated on all three axes (churn × review-time × complexity), with p95 lead-time + WIP-age side columns |
+| `delivery-metrics` | p50/p75/p90 distributions of five flow-metric proxies (batch size, branch duration, rework %, lead-time proxy); requires `--include-merges`; each row carries a plain-text caveat | Git-only flow-metric sampling; drives the Delivery factor tile on the SPA dashboard. Not a DORA replacement |
+| `release-cadence` | per-release-tag inter-release gap (days) plus a `__summary__` row with median, IQR, OLS trend (`accelerating` / `stable` / `slowing`); tags filtered by `--release-tag-glob` (default `v*`) | Release-velocity monitoring without a deployment system; drives the cadence number on the Delivery factor tile |
+| `effort-exposure` | per-band (red/yellow/green) breakdown of commit share and LOC share over the trailing window | Answers whether engineering effort is concentrated in healthy or unhealthy code; drives the effort-exposure share bars on the SPA dashboard |
+
+### External-signal fusion
+
+*Where does outside scanner signal land on your riskiest code?*
+
+| Analysis | Output | Why it matters |
+|---|---|---|
+| `finding-hotspot-overlap` | files where external scanner findings (via `ingest-sarif`) overlap the most-churned, least-healthy code — reports finding count, engines, worst level, hotspot score, revision percentile, health band, and an `act-now` / `plan` / `note` priority | Behavioral×static fusion: surfaces the intersection of scanner signal and behavioral evidence; drives the `max_findings_in_hot_files` gate and the `finding_hotspot_overlap` MCP tool |
 
 ### CLI subcommands
 
