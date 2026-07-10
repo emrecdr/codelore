@@ -517,25 +517,22 @@ impl CodeLoreServer {
 
             // open_existing returns None when the sidecar has not been created
             // yet — the MCP tool never creates it; that is ingest-sarif's job.
+            // An existing-but-empty store (file present, no rows yet) is treated
+            // the same way. Either case returns the structured "run ingest-sarif
+            // first" note.
             let store_opt =
                 ExternalStore::open_existing(&cache_root, &repo_path).map_err(internal)?;
-            let Some(store) = store_opt else {
+            let has_findings = match &store_opt {
+                Some(store) => store.count().map_err(internal)? > 0,
+                None => false,
+            };
+            let Some(store) = store_opt.filter(|_| has_findings) else {
                 let note = serde_json::json!({
                     "findings": [],
                     "note": "run codelore ingest-sarif first"
                 });
                 return serde_json::to_string(&note).map_err(internal);
             };
-
-            // Empty store (file exists but no rows yet) → same structured note.
-            let count = store.count().map_err(internal)?;
-            if count == 0 {
-                let note = serde_json::json!({
-                    "findings": [],
-                    "note": "run codelore ingest-sarif first"
-                });
-                return serde_json::to_string(&note).map_err(internal);
-            }
 
             let opts = Options {
                 repo_path: repo_path.clone(),

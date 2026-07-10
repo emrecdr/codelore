@@ -172,14 +172,10 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
                 .repo
                 .canonicalize()
                 .unwrap_or_else(|_| args.repo.clone());
-            let empty_evidence: HashMap<
-                String,
-                Vec<codelore_lib::cli_api::quality_gates::evidence::EvidenceCommit>,
-            > = HashMap::new();
             let mut stdout = std::io::stdout();
             codelore_lib::cli_api::output::sarif::write_check_sarif(
                 &[],
-                &empty_evidence,
+                &HashMap::new(),
                 &repo_root,
                 &head_sha,
                 &mut stdout,
@@ -357,14 +353,15 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
 
     if violations.is_empty() {
         if degraded_count > 0 {
+            let warning = format!(
+                "⚠ codelore check: WARNING — {degraded_count} gate(s) degraded (non-degraded gates pass)"
+            );
+            // SARIF mode keeps stdout a clean SARIF document, so the warning
+            // goes to stderr; text mode prints it to stdout with the report.
             if matches!(args.format, CheckFormat::Sarif) {
-                eprintln!(
-                    "⚠ codelore check: WARNING — {degraded_count} gate(s) degraded (non-degraded gates pass)"
-                );
+                eprintln!("{warning}");
             } else {
-                println!(
-                    "⚠ codelore check: WARNING — {degraded_count} gate(s) degraded (non-degraded gates pass)"
-                );
+                println!("{warning}");
             }
         } else if matches!(args.format, CheckFormat::Text) {
             println!("✅ codelore check: PASS ({hotspot_count} files evaluated)");
@@ -3384,35 +3381,10 @@ fn dispatch_finding_hotspot_overlap(
     ctx: &EmitCtx,
     out: &mut Box<dyn Write>,
 ) -> Result<()> {
+    // Reject unsupported formats before running the (non-trivial) analysis, so
+    // a bad format still surfaces the format error rather than an analysis error.
     match format {
-        "csv" => {
-            let rows =
-                codelore_lib::cli_api::analyses::finding_hotspot_overlap::run_finding_hotspot_overlap(
-                    db, opts, store,
-                )
-                .context("run finding-hotspot-overlap")?;
-            codelore_lib::cli_api::output::csv::write_finding_hotspot_overlap_csv(&rows, out)
-                .context("write csv")?;
-        }
-        "json" => {
-            let rows =
-                codelore_lib::cli_api::analyses::finding_hotspot_overlap::run_finding_hotspot_overlap(
-                    db, opts, store,
-                )
-                .context("run finding-hotspot-overlap")?;
-            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
-        }
-        "markdown" => {
-            let rows =
-                codelore_lib::cli_api::analyses::finding_hotspot_overlap::run_finding_hotspot_overlap(
-                    db, opts, store,
-                )
-                .context("run finding-hotspot-overlap")?;
-            codelore_lib::cli_api::output::markdown::write_finding_hotspot_overlap_markdown(
-                &rows, out,
-            )
-            .context("write markdown")?;
-        }
+        "csv" | "json" | "markdown" => {}
         "html" => return Err(html_not_wired(ctx.analysis_name)),
         fmt => {
             return Err(unsupported_format(
@@ -3422,7 +3394,22 @@ fn dispatch_finding_hotspot_overlap(
             ));
         }
     }
-    Ok(())
+
+    let rows =
+        codelore_lib::cli_api::analyses::finding_hotspot_overlap::run_finding_hotspot_overlap(
+            db, opts, store,
+        )
+        .context("run finding-hotspot-overlap")?;
+    match format {
+        "csv" => codelore_lib::cli_api::output::csv::write_finding_hotspot_overlap_csv(&rows, out)
+            .context("write csv"),
+        "json" => codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json"),
+        // The format was validated above; only the three writer formats remain.
+        _ => codelore_lib::cli_api::output::markdown::write_finding_hotspot_overlap_markdown(
+            &rows, out,
+        )
+        .context("write markdown"),
+    }
 }
 
 fn dispatch_release_cadence(

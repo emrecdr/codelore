@@ -158,12 +158,9 @@ fn multi_run_sarif_produces_findings_from_both_engines() {
         2
     );
 
-    // Group by engine (mirrors what run_ingest_sarif_cmd does).
+    // Group by engine (the real ingest path uses group_findings_by_engine).
     let (_dir, store) = temp_store();
-    let mut by_engine: std::collections::HashMap<String, Vec<_>> = std::collections::HashMap::new();
-    for f in findings {
-        by_engine.entry(f.engine.clone()).or_default().push(f);
-    }
+    let by_engine = group_findings_by_engine(findings);
     for (engine, batch) in &by_engine {
         store.replace_engine(engine, batch).expect("replace_engine");
     }

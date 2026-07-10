@@ -218,7 +218,9 @@ fn compute_percent_ranks(revs: &[u32]) -> Vec<f64> {
     if n == 1 {
         return ranks; // single entry → 0.0
     }
-    let mut group_start = 0usize;
+    // Each group spans sorted[i..j]; because groups are contiguous and i
+    // advances to j every iteration, i is the count of already-ranked entries —
+    // i.e. the group's minimum rank position, matching PERCENT_RANK semantics.
     let mut i = 0usize;
     while i < n {
         let group_revs = sorted[i].1;
@@ -228,11 +230,10 @@ fn compute_percent_ranks(revs: &[u32]) -> Vec<f64> {
         }
         #[allow(clippy::cast_precision_loss)]
         // PERCENT_RANK: precision loss negligible for repo-scale counts
-        let rank = group_start as f64 / (n - 1) as f64;
+        let rank = i as f64 / (n - 1) as f64;
         for &(orig_idx, _) in &sorted[i..j] {
             ranks[orig_idx] = rank;
         }
-        group_start += j - i;
         i = j;
     }
     ranks

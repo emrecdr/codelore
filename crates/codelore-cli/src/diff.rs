@@ -307,6 +307,12 @@ fn add_worktree(repo: &Path, sha: &str) -> Result<Worktree> {
 /// Run hotspot + coupling + clones analyses against the given rev. Uses
 /// a `git worktree` so the user's working tree is not disturbed.
 ///
+/// Also returns the ingested [`FactsDb`] and [`Options`] for the caller's
+/// subsequent use (e.g. evidence queries in the SARIF emitter). The worktree
+/// is removed at the end of this function — the returned `FactsDb` is
+/// in-memory and does not depend on the worktree path. Base-rev callers drop
+/// the extra returns.
+///
 /// `want_red_files` gates the code-health pass that populates `red_files`.
 /// Only the base rev's red band drives the delta-health context multiplier,
 /// so the head rev passes `false` and skips a full (coupling + clone + SQL)
@@ -316,7 +322,7 @@ fn analyze_at_rev(
     sha: &str,
     args: &DiffArgs,
     want_red_files: bool,
-) -> Result<RevAnalyses> {
+) -> Result<(RevAnalyses, FactsDb, Options)> {
     let wt = add_worktree(repo, sha)?;
     let opts = Options {
         repo_path: wt.path.clone(),
@@ -349,46 +355,6 @@ fn analyze_at_rev(
         Vec::new()
     };
 
-    Ok(RevAnalyses {
-        sha: sha.to_string(),
-        hotspots,
-        coupling,
-        clones,
-        dependency_cycles,
-        functions,
-        red_files,
-    })
-}
-
-/// Like [`analyze_at_rev`] but also returns the ingested [`FactsDb`] and
-/// [`Options`] for the caller's subsequent use (e.g. evidence queries in the
-/// SARIF emitter). The worktree is removed at the end of this function — the
-/// returned `FactsDb` is in-memory and does not depend on the worktree path.
-fn analyze_head_at_rev(
-    repo: &Path,
-    sha: &str,
-    args: &DiffArgs,
-) -> Result<(RevAnalyses, FactsDb, Options)> {
-    let wt = add_worktree(repo, sha)?;
-    let opts = Options {
-        repo_path: wt.path.clone(),
-        min_revs: args.min_revs,
-        exclude_patterns: args.exclude.clone(),
-        ..Options::default()
-    };
-    let gix = GixRepo::open(&wt.path).context("open gix repo in worktree")?;
-    let db = FactsDb::new_in_memory().context("open in-memory fact store")?;
-    db.ingest(&gix, &opts).context("ingest in worktree")?;
-
-    let hotspots = run_hotspots(&db, &opts).context("hotspots at rev")?;
-    let coupling = run_coupling(&db, &opts).context("coupling at rev")?;
-    let clones = run_clones(&opts).context("clones at rev")?;
-    let graph = codelore_lib::cli_api::analyses::import_graph::build_import_graph(&db)
-        .context("import graph at rev")?;
-    let dependency_cycles =
-        codelore_lib::cli_api::analyses::import_graph::graph_metrics(&graph).cycle_count;
-    let functions = run_function_metrics(&db).context("function metrics at rev")?;
-
     // wt drops here, cleaning up the worktree on disk; db is in-memory and lives on.
     drop(wt);
 
@@ -399,7 +365,7 @@ fn analyze_head_at_rev(
         clones,
         dependency_cycles,
         functions,
-        red_files: Vec::new(),
+        red_files,
     };
     Ok((analyses, db, opts))
 }
@@ -688,7 +654,8 @@ pub fn run_diff(args: &DiffArgs) -> Result<(DiffOutput, FactsDb, Options)> {
                     cached.sha,
                     base_sha
                 );
-                let a = analyze_at_rev(&args.repo, &base_sha, args, true)?;
+                // Base rev only needs the analyses; drop the db + opts.
+                let (a, _db, _opts) = analyze_at_rev(&args.repo, &base_sha, args, true)?;
                 write_base_cache(cache_path, &a)?;
                 a
             }
@@ -697,22 +664,25 @@ pub fn run_diff(args: &DiffArgs) -> Result<(DiffOutput, FactsDb, Options)> {
                     "failed to read base-cache {}: {e:#}; recomputing base analysis",
                     cache_path.display()
                 );
-                let a = analyze_at_rev(&args.repo, &base_sha, args, true)?;
+                let (a, _db, _opts) = analyze_at_rev(&args.repo, &base_sha, args, true)?;
                 write_base_cache(cache_path, &a)?;
                 a
             }
             None => {
-                let a = analyze_at_rev(&args.repo, &base_sha, args, true)?;
+                let (a, _db, _opts) = analyze_at_rev(&args.repo, &base_sha, args, true)?;
                 write_base_cache(cache_path, &a)?;
                 tracing::info!("wrote base analysis to {}", cache_path.display());
                 a
             }
         }
     } else {
-        analyze_at_rev(&args.repo, &base_sha, args, true)?
+        let (a, _db, _opts) = analyze_at_rev(&args.repo, &base_sha, args, true)?;
+        a
     };
 
-    let (head_analyses, head_db, head_opts) = analyze_head_at_rev(&args.repo, &head_sha, args)?;
+    // Head rev keeps the db + opts for downstream evidence queries; its red-band
+    // code-health pass is skipped (only the base rev's red band feeds delta-health).
+    let (head_analyses, head_db, head_opts) = analyze_at_rev(&args.repo, &head_sha, args, false)?;
 
     let pr_files = list_pr_files(&args.repo, &base_sha, &head_sha)?;
 
