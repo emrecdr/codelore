@@ -5,11 +5,16 @@
 //! - Findings on a path NOT in hotspots → row with 0.0 score + 0.0 percentile
 //! - Empty store → error with the expected message
 //! - Priority pure-function branch coverage (see unit tests in the source module)
+//! - `_with` variant and wrapper agree on identical inputs
 
 use std::path::Path;
 
 use codelore_lib::Options;
-use codelore_lib::analyses::finding_hotspot_overlap::run_finding_hotspot_overlap;
+use codelore_lib::analyses::code_health::run_code_health;
+use codelore_lib::analyses::finding_hotspot_overlap::{
+    run_finding_hotspot_overlap, run_finding_hotspot_overlap_with,
+};
+use codelore_lib::analyses::hotspots::run_hotspots;
 use codelore_lib::external::{ExternalFinding, ExternalStore};
 use codelore_lib::facts::FactsDb;
 use codelore_lib::repo::GixRepo;
@@ -246,4 +251,61 @@ fn rows_sorted_priority_then_findings_then_path() {
     assert_eq!(rows[0].findings, 2);
     assert_eq!(rows[1].path, "src/lib.rs");
     assert_eq!(rows[1].findings, 1);
+}
+
+// ─── _with variant agrees with wrapper on identical inputs ───────────────────
+
+/// `run_finding_hotspot_overlap_with` must produce byte-identical output to
+/// the convenience wrapper `run_finding_hotspot_overlap` when called with
+/// the same pre-computed rows. Guards against the two diverging over time.
+#[test]
+fn with_variant_and_wrapper_agree_on_identical_inputs() {
+    let store_dir = tempfile::tempdir().expect("tempdir");
+    let store = temp_store_for(store_dir.path());
+
+    let f = finding_for("src/main.rs", "semgrep", "warning");
+    store.replace_engine("semgrep", &[f]).expect("replace");
+
+    let (_tiny_dir, db, opts) = ingest_tiny();
+
+    // Run the wrapper (it runs hotspots + code_health internally).
+    let via_wrapper = run_finding_hotspot_overlap(&db, &opts, &store).expect("wrapper");
+
+    // Run _with using the same row sets derived independently.
+    let hotspot_rows = run_hotspots(&db, &opts).expect("hotspots");
+    let health_rows = run_code_health(&db, &opts).expect("code_health");
+    let via_with =
+        run_finding_hotspot_overlap_with(&store, &hotspot_rows, &health_rows).expect("_with");
+
+    assert_eq!(via_wrapper.len(), via_with.len(), "row count must match");
+    for (w, ww) in via_wrapper.iter().zip(via_with.iter()) {
+        assert_eq!(w.path, ww.path, "path mismatch");
+        assert_eq!(w.findings, ww.findings, "findings mismatch for {}", w.path);
+        assert_eq!(w.engines, ww.engines, "engines mismatch for {}", w.path);
+        assert_eq!(
+            w.worst_level, ww.worst_level,
+            "worst_level mismatch for {}",
+            w.path
+        );
+        assert_eq!(
+            w.health_band, ww.health_band,
+            "health_band mismatch for {}",
+            w.path
+        );
+        assert_eq!(w.priority, ww.priority, "priority mismatch for {}", w.path);
+        assert!(
+            (w.hotspot_score - ww.hotspot_score).abs() < 1e-9,
+            "hotspot_score mismatch for {}: {} vs {}",
+            w.path,
+            w.hotspot_score,
+            ww.hotspot_score
+        );
+        assert!(
+            (w.revs_percentile - ww.revs_percentile).abs() < 1e-9,
+            "revs_percentile mismatch for {}: {} vs {}",
+            w.path,
+            w.revs_percentile,
+            ww.revs_percentile
+        );
+    }
 }

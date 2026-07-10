@@ -65,6 +65,33 @@ pub struct ExternalStore {
 }
 
 impl ExternalStore {
+    /// Open the sidecar store if it already exists on disk.
+    ///
+    /// Returns `None` when the sidecar file is absent — no directory is created
+    /// and no file is written. Use this in read-only paths (e.g. gate
+    /// evaluation) where creating the sidecar as a side-effect would be wrong.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CodeLoreError::Analysis`] only if the file exists but cannot
+    /// be opened or its schema cannot be read.
+    pub fn open_existing(cache_root: &Path, repo_path: &Path) -> Result<Option<Self>> {
+        let path = repo_cache_dir(cache_root, repo_path).join(STORE_FILENAME);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let conn = Connection::open(&path).map_err(|e| {
+            CodeLoreError::Analysis(format!("external store: open {}: {e}", path.display()))
+        })?;
+        conn.execute_batch(CREATE_TABLE).map_err(|e| {
+            CodeLoreError::Analysis(format!(
+                "external store: create table in {}: {e}",
+                path.display()
+            ))
+        })?;
+        Ok(Some(Self { conn, path }))
+    }
+
     /// Open or create the sidecar store for `repo_path` under `cache_root`.
     ///
     /// Creates the parent directory and the table schema on first call.

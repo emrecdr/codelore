@@ -189,6 +189,11 @@ pub struct CheckArgs {
     /// Exit codes and verdict lines are unchanged regardless of format.
     #[arg(long, value_enum, default_value_t = CheckFormat::Text)]
     pub format: CheckFormat,
+    /// Override the XDG cache root for the persistent fact-store and gate-run
+    /// ledger. Defaults to `$XDG_CACHE_HOME/codelore` (or the OS equivalent).
+    /// Useful in CI environments that want per-job caches on a shared runner.
+    #[arg(long)]
+    pub cache_dir: Option<PathBuf>,
 }
 
 /// Shell-completion script generation.

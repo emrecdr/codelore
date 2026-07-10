@@ -22,7 +22,7 @@ use codelore_lib::cli_api::{
         delta_health::{DeltaHealthSection, compute_delta_health, run_function_metrics},
         finding_hotspot_overlap, function_xray, hotspots, refactoring_targets, summary,
     },
-    cache::{default_cache_root, repo_cache_dir},
+    cache::default_cache_root,
     external::ExternalStore,
     facts::FactsDb,
     quality_gates::{
@@ -514,19 +514,17 @@ impl CodeLoreServer {
         tokio::task::spawn_blocking(move || {
             let cache_root = default_cache_root();
 
-            // Check if the sidecar exists before attempting to open it.
-            // The MCP tool never creates the sidecar — that is ingest-sarif's job.
-            let sidecar_path =
-                repo_cache_dir(&cache_root, &repo_path).join("external-findings.duckdb-ext");
-            if !sidecar_path.exists() {
+            // open_existing returns None when the sidecar has not been created
+            // yet — the MCP tool never creates it; that is ingest-sarif's job.
+            let store_opt =
+                ExternalStore::open_existing(&cache_root, &repo_path).map_err(internal)?;
+            let Some(store) = store_opt else {
                 let note = serde_json::json!({
                     "findings": [],
                     "note": "run codelore ingest-sarif first"
                 });
                 return serde_json::to_string(&note).map_err(internal);
-            }
-
-            let store = ExternalStore::open_or_create(&cache_root, &repo_path).map_err(internal)?;
+            };
 
             // Empty store (file exists but no rows yet) → same structured note.
             let count = store.count().map_err(internal)?;

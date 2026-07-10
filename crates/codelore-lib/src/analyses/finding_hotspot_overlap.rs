@@ -30,8 +30,8 @@
 
 use std::collections::HashMap;
 
-use crate::analyses::code_health::run_code_health;
-use crate::analyses::hotspots::run_hotspots;
+use crate::analyses::code_health::{CodeHealthRow, run_code_health};
+use crate::analyses::hotspots::{HotspotRow, run_hotspots};
 use crate::external::{ExternalStore, PathFindings};
 use crate::facts::FactsDb;
 use crate::{CodeLoreError, Options, Result};
@@ -76,22 +76,25 @@ pub fn priority_label(findings: usize, revs_percentile: f64, health_band: &str) 
     }
 }
 
-/// Run the `finding-hotspot-overlap` analysis.
+/// Run the `finding-hotspot-overlap` analysis with pre-computed behavioral rows.
 ///
-/// Reads all findings from `store`, runs [`run_hotspots`] and
-/// [`run_code_health`], then joins in Rust. Emits one row per path that has
-/// at least one finding, sorted by priority (act-now first), then findings
-/// descending, then path ascending.
+/// This is the primary implementation. Accepts already-computed `hotspot_rows`
+/// and `health_rows` so callers that already hold those results (e.g.
+/// `evaluate_all_gates`) can avoid running the analyses a second time.
+///
+/// Reads all findings from `store`, joins against the supplied rows in Rust,
+/// and emits one row per path that has at least one finding, sorted by
+/// priority (act-now first), then findings descending, then path ascending.
 ///
 /// # Errors
 ///
 /// Returns [`CodeLoreError::Analysis`] with a user-facing message when `store`
 /// contains no findings (required pre-condition: the user must run
 /// `codelore ingest-sarif` first).
-pub fn run_finding_hotspot_overlap(
-    db: &FactsDb,
-    opts: &Options,
+pub fn run_finding_hotspot_overlap_with(
     store: &ExternalStore,
+    hotspot_rows: &[HotspotRow],
+    health_rows: &[CodeHealthRow],
 ) -> Result<Vec<FindingHotspotOverlapRow>> {
     // --- read from store ---
     let by_path: HashMap<String, PathFindings> = store.findings_by_path().map_err(|e| {
@@ -107,9 +110,6 @@ pub fn run_finding_hotspot_overlap(
     }
 
     // --- hotspots side ---
-    let hotspot_rows = run_hotspots(db, opts)?;
-
-    // Build a map path → (hotspot_score, revs_percentile) for O(1) lookup.
     let revs: Vec<u32> = hotspot_rows.iter().map(|r| r.revisions).collect();
     let rank_by_idx = compute_percent_ranks(&revs);
 
@@ -119,7 +119,6 @@ pub fn run_finding_hotspot_overlap(
     }
 
     // --- code_health side ---
-    let health_rows = run_code_health(db, opts)?;
     let health_band_map: HashMap<&str, &str> = health_rows
         .iter()
         .map(|r| (r.path.as_str(), r.band.as_str()))
@@ -163,6 +162,28 @@ pub fn run_finding_hotspot_overlap(
     });
 
     Ok(rows)
+}
+
+/// Run the `finding-hotspot-overlap` analysis.
+///
+/// Thin wrapper over [`run_finding_hotspot_overlap_with`] that runs
+/// [`run_hotspots`] and [`run_code_health`] internally. Use the `_with`
+/// variant when those analyses have already been computed to avoid
+/// double-running them.
+///
+/// # Errors
+///
+/// Returns [`CodeLoreError::Analysis`] with a user-facing message when `store`
+/// contains no findings (required pre-condition: the user must run
+/// `codelore ingest-sarif` first).
+pub fn run_finding_hotspot_overlap(
+    db: &FactsDb,
+    opts: &Options,
+    store: &ExternalStore,
+) -> Result<Vec<FindingHotspotOverlapRow>> {
+    let hotspot_rows = run_hotspots(db, opts)?;
+    let health_rows = run_code_health(db, opts)?;
+    run_finding_hotspot_overlap_with(store, &hotspot_rows, &health_rows)
 }
 
 fn priority_rank(p: &str) -> u8 {

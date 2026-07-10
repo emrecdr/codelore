@@ -1939,3 +1939,54 @@ fn check_default_format_is_text_not_json() {
         "stdout must not be a JSON document in text mode, got: {stdout}"
     );
 }
+
+#[test]
+fn check_max_findings_gate_skips_gracefully_when_no_sidecar() {
+    // Gate configured, but no prior `ingest-sarif` run → sidecar absent.
+    // Expected contract:
+    //   - exit code unaffected (0 — only the overlap gate is configured here)
+    //   - ledger records a `verdict="skipped"` entry for max_findings_in_hot_files
+    //   - the sidecar file is NOT created as a side-effect of the check
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let repo_path = tiny.dir.path();
+    let thresholds = repo_path.join(".codelore-thresholds.toml");
+    std::fs::write(&thresholds, "[gates]\nmax_findings_in_hot_files = 0\n").unwrap();
+
+    // Compute the sidecar path the binary would use — same logic as the CLI.
+    let cache_root = codelore_lib::cli_api::cache::default_cache_root();
+    let sidecar_path = codelore_lib::cli_api::cache::repo_cache_dir(&cache_root, repo_path)
+        .join("external-findings.duckdb-ext");
+
+    // Pre-condition: sidecar must not exist before the run.
+    assert!(
+        !sidecar_path.exists(),
+        "pre-condition: sidecar must not exist before check"
+    );
+
+    // Run check — should pass (no other gates configured) and skip the overlap gate.
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args(["check", "--repo", repo_path.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Post-condition: sidecar must NOT have been created by the check run.
+    assert!(
+        !sidecar_path.exists(),
+        "check must not create the sidecar as a side-effect when ingest-sarif was never run"
+    );
+
+    // The ledger must record a skipped verdict for this gate.
+    let records =
+        codelore_lib::cli_api::quality_gates::ledger::read_gate_runs(&cache_root, repo_path)
+            .expect("read ledger");
+    let overlap_rec = records
+        .iter()
+        .rev()
+        .find(|r| r.gate == "max_findings_in_hot_files")
+        .expect("ledger must contain a max_findings_in_hot_files record");
+    assert_eq!(
+        overlap_rec.verdict, "skipped",
+        "overlap gate must record verdict=skipped when sidecar is absent"
+    );
+}
