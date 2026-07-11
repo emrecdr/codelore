@@ -263,16 +263,19 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
                 .into_iter()
                 .flatten()
                 .collect();
-                println!(
-                    "✅ ratchet initialized — tracking {} metric(s): {}. \
-                     Configure max_red_effort_pct / max_dependency_cycles gates to ratchet \
-                     effort and cycles. Commit `.codelore-ratchet.toml` to enable regression detection.",
-                    tracked.len(),
-                    if tracked.is_empty() {
-                        "(none)".to_owned()
-                    } else {
-                        tracked.join(", ")
-                    },
+                emit_ratchet_message(
+                    args,
+                    &format!(
+                        "✅ ratchet initialized — tracking {} metric(s): {}. \
+                         Configure max_red_effort_pct / max_dependency_cycles gates to ratchet \
+                         effort and cycles. Commit `.codelore-ratchet.toml` to enable regression detection.\n",
+                        tracked.len(),
+                        if tracked.is_empty() {
+                            "(none)".to_owned()
+                        } else {
+                            tracked.join(", ")
+                        },
+                    ),
                 );
                 ledger_records.push(GateRunRecord {
                     ts: ts.clone(),
@@ -284,11 +287,15 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
                     mode: "ratchet".into(),
                 });
                 append_gate_runs(&cache_root, &args.repo, &ledger_records);
+                // `--format sarif` must still yield a valid document on the
+                // ratchet exit paths, exactly like the non-ratchet path — the
+                // gates already ran, so emit their violations before returning.
+                emit_check_sarif_when_requested(args, &db, &opts, &head_sha, &violations)?;
                 return Ok(());
             }
             Some(snap) => {
                 let outcome = evaluate_ratchet(&snap, &metrics);
-                print!("{}", format_ratchet_outcome(&outcome));
+                emit_ratchet_message(args, &format_ratchet_outcome(&outcome));
                 let (verdict, ratchet_failed) = match &outcome {
                     RatchetOutcome::Improved { .. } => ("improved", false),
                     RatchetOutcome::Regressed { .. } => ("regressed", true),
@@ -303,6 +310,10 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
                     mode: "ratchet".into(),
                 });
                 append_gate_runs(&cache_root, &args.repo, &ledger_records);
+                // Emit the standard check SARIF on both ratchet outcomes before
+                // returning/bailing, so `--format sarif` always yields a valid
+                // document. Exit code is unchanged: a regression still bails.
+                emit_check_sarif_when_requested(args, &db, &opts, &head_sha, &violations)?;
                 if ratchet_failed {
                     anyhow::bail!("ratchet: regression detected — see above");
                 }
@@ -318,22 +329,7 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
     append_gate_runs(&cache_root, &args.repo, &ledger_records);
 
     // ── SARIF emission (when --format sarif) ─────────────────────────────────
-    if matches!(args.format, CheckFormat::Sarif) {
-        use codelore_lib::cli_api::quality_gates::evidence::{EvidenceCommit, evidence_for_path};
-        use std::collections::HashMap;
-
-        // Collect evidence only for violated per-file paths (not repo-wide).
-        let mut evidence_map: HashMap<String, Vec<EvidenceCommit>> = HashMap::new();
-        for v in &violations {
-            if v.path != "(repo-wide)" && v.path != "(degraded)" {
-                evidence_map.entry(v.path.clone()).or_insert_with(|| {
-                    evidence_for_path(&db, &opts, &v.path, 5).unwrap_or_default()
-                });
-            }
-        }
-
-        emit_check_sarif(&args.repo, &head_sha, &violations, &evidence_map)?;
-    }
+    emit_check_sarif_when_requested(args, &db, &opts, &head_sha, &violations)?;
 
     // ── Report ────────────────────────────────────────────────────────────────
     let degraded_count = ledger_records
@@ -777,6 +773,55 @@ fn evaluate_all_gates(
 /// the path as-given when canonicalization fails (e.g. the path does not exist
 /// on disk). Shared by the vacuous-pass path (empty violations + evidence) and
 /// the violation path so the canonicalize + stdout + writer wiring lives once.
+/// Write a ratchet status message to the right stream for the output format.
+///
+/// Under `--format sarif` the message goes to stderr so stdout stays a clean
+/// SARIF document (mirroring the report path, which routes verdict lines to
+/// stderr in SARIF mode); in text mode it goes to stdout with the rest of the
+/// report. `msg` is written verbatim, so the caller supplies any trailing
+/// newline.
+fn emit_ratchet_message(args: &args::CheckArgs, msg: &str) {
+    if matches!(args.format, CheckFormat::Sarif) {
+        eprint!("{msg}");
+    } else {
+        print!("{msg}");
+    }
+}
+
+/// Emit the check SARIF document to stdout when `--format sarif` is set;
+/// no-op otherwise.
+///
+/// Collects a commit evidence chain for each violated per-file path and hands
+/// the violations + evidence to [`emit_check_sarif`]. Shared by the normal
+/// check path and every `--ratchet` exit path so the flag combination always
+/// yields a valid document rather than silently emitting nothing.
+fn emit_check_sarif_when_requested(
+    args: &args::CheckArgs,
+    db: &codelore_lib::cli_api::facts::FactsDb,
+    opts: &codelore_lib::cli_api::Options,
+    head_sha: &str,
+    violations: &[codelore_lib::cli_api::quality_gates::GateViolation],
+) -> Result<()> {
+    use codelore_lib::cli_api::quality_gates::evidence::{EvidenceCommit, evidence_for_path};
+    use std::collections::HashMap;
+
+    if !matches!(args.format, CheckFormat::Sarif) {
+        return Ok(());
+    }
+
+    // Collect evidence only for violated per-file paths (not repo-wide).
+    let mut evidence_map: HashMap<String, Vec<EvidenceCommit>> = HashMap::new();
+    for v in violations {
+        if v.path != "(repo-wide)" && v.path != "(degraded)" {
+            evidence_map
+                .entry(v.path.clone())
+                .or_insert_with(|| evidence_for_path(db, opts, &v.path, 5).unwrap_or_default());
+        }
+    }
+
+    emit_check_sarif(&args.repo, head_sha, violations, &evidence_map)
+}
+
 fn emit_check_sarif(
     repo: &std::path::Path,
     head_sha: &str,

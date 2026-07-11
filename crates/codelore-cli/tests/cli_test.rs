@@ -2321,3 +2321,45 @@ fn check_format_sarif_vacuous_pass_emits_zero_result_document() {
         "vacuous pass must emit runs[0].results == [], got: {results:?}"
     );
 }
+
+/// `check --ratchet --format sarif` on a first run (no snapshot yet → the
+/// ratchet-init exit path) must still emit a valid SARIF document to stdout,
+/// exactly like every non-ratchet check path. Before the fix the init path
+/// returned before the SARIF emission, so the flag combination silently emitted
+/// nothing.
+#[test]
+fn check_ratchet_format_sarif_init_emits_valid_document() {
+    // Fresh clone → no `.codelore-ratchet.toml`, so --ratchet takes the init
+    // path. No thresholds file, but --ratchet bypasses the vacuous-pass guard.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let output = Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "check",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--ratchet",
+            "--format",
+            "sarif",
+        ])
+        .output()
+        .expect("run codelore check --ratchet --format sarif");
+
+    // Exit 0 — ratchet initialization is not a failure.
+    assert!(
+        output.status.success(),
+        "ratchet init must exit 0, got {}; stderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // stdout must parse as a SARIF 2.1.0 document — not be empty.
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf-8");
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("ratchet+sarif stdout must be valid SARIF JSON: {e}; got: {stdout:?}")
+    });
+    assert_eq!(parsed["version"].as_str().unwrap(), "2.1.0");
+    parsed["runs"][0]["results"]
+        .as_array()
+        .expect("runs[0].results must be an array");
+}

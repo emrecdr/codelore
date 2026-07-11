@@ -957,6 +957,8 @@ When `fail_on_degraded = false` is set in `[gates]` and a gate produces no evalu
 
 **`--quiet` with `--ratchet`:** when a ratchet regression is detected, the detail table (which metrics regressed and by how much) still prints even under `--quiet` — it is the only actionable diagnostic and is intentionally preserved.
 
+**`--format sarif` with `--ratchet`:** `--ratchet` composes with `--format sarif`. The gate SARIF document is written to stdout on every ratchet outcome (initialize, tighten, regression), identical to a non-ratchet `check --format sarif` run; the human-readable ratchet summary is routed to stderr so stdout stays a clean SARIF document. Exit codes are unchanged — a ratchet regression still exits non-zero while emitting a valid document.
+
 ### Local run history
 
 `codelore check --history` prints the last 20 gate-run records grouped by HEAD SHA from the per-repo ledger, giving you a local audit trail of how each gate has trended across pushes — no server required.

@@ -6,6 +6,8 @@ Conventional Commits format. All notable changes documented here.
 
 ### Fixed
 
+- **`codelore check --ratchet --format sarif` now emits a SARIF document.** Previously every `--ratchet` code path (initialize, tighten, regression) returned before the SARIF emission, so combining `--ratchet` with `--format sarif` silently printed nothing on stdout — breaking the documented upload-sarif pipeline. All three ratchet outcomes now emit the standard check SARIF document to stdout, identical to a non-ratchet run, with the human-readable ratchet summary routed to stderr. Exit codes are unchanged: a regression still exits non-zero while emitting a valid document.
+
 - **Concurrent readers on the external-findings sidecar no longer fail to open.** The read paths (`check` gate evaluation, the `finding-hotspot-overlap` MCP tool, and any reader) now open the `external-findings.duckdb-ext` sidecar read-only, taking a shared lock instead of DuckDB's exclusive write lock. Running `check`, an MCP call, and `analyze` against the same repo at once no longer contends on that lock. Readers also no longer run schema DDL: a truncated or corrupt sidecar (one missing its findings table) is treated as "nothing to read" — the same as an absent or empty sidecar — instead of being silently re-created as a side effect of reading. Healing the schema remains exclusive to `ingest-sarif`.
 
 ## [0.16.0] - 2026-07-11
