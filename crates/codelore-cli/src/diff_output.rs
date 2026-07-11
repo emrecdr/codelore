@@ -430,23 +430,15 @@ fn emit_sarif(
         if commits.is_empty() {
             return None;
         }
-        // Plain location objects — each emitter owns its message format and
-        // uri handling; the shared helper only supplies the structural wrapping.
+        // Each emitter owns its message wording; the shared helper builds the
+        // location object shape (percent-encoded uri + region) so the check and
+        // diff evidence encodings stay aligned. Diff anchors evidence at line 1
+        // (with_region = true) — it has no per-commit line span.
         let related: Vec<serde_json::Value> = commits
             .iter()
             .map(|ev| {
-                json!({
-                    "physicalLocation": {
-                        "artifactLocation": { "uri": path },
-                        "region": { "startLine": 1 }
-                    },
-                    "message": {
-                        "text": format!(
-                            "{} {} {} (churn={})",
-                            ev.date, ev.rev, ev.author, ev.churn
-                        )
-                    }
-                })
+                let message = format!("{} {} {} (churn={})", ev.date, ev.rev, ev.author, ev.churn);
+                codelore_lib::cli_api::output::sarif::evidence_location(path, &message, true)
             })
             .collect();
         let (code_flows, related_locations) =
