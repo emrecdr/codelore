@@ -17,6 +17,7 @@ pub mod constants;
 pub mod error;
 pub mod external;
 pub mod facts;
+pub mod hashing;
 pub mod identity;
 pub mod imports;
 pub mod kamei;

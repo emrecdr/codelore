@@ -16,9 +16,9 @@
 //! [`Err`].
 
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use tracing::warn;
 
+use crate::hashing::sha256_prefixed;
 use crate::{CodeLoreError, Result};
 
 /// A single normalized external finding extracted from a SARIF document.
@@ -44,14 +44,13 @@ pub struct ExternalFinding {
 /// Parse a SARIF 2.1.0 document once, returning both the normalized findings
 /// and every scanner engine name present across all runs.
 ///
-/// This is the primary parse: it walks the `runs` array a single time,
-/// collecting findings and engine names together. Callers that need only one
-/// half use the [`parse_sarif`] / [`parse_sarif_engines`] wrappers.
+/// It walks the `runs` array a single time, collecting findings and engine
+/// names together.
 ///
 /// Engine names are returned in document order with duplicates removed, and
-/// include runs that produced zero results — [`parse_sarif`]'s findings only
-/// surface engines that flagged something, so a clean re-scan (a run with an
-/// empty `results` array) is invisible there. Ingest uses the engine list to
+/// include runs that produced zero results — the findings only surface engines
+/// that flagged something, so a clean re-scan (a run with an empty `results`
+/// array) is invisible in the findings alone. Ingest uses the engine list to
 /// seed empty batches for those engines and clear their stale rows: a
 /// re-ingested clean scan must drop the previous run's findings, not leave
 /// them behind.
@@ -113,38 +112,6 @@ pub fn parse_sarif_with_engines(raw: &str) -> Result<(Vec<ExternalFinding>, Vec<
     }
 
     Ok((findings, engines))
-}
-
-/// Parse a SARIF 2.1.0 document (all runs) into normalized findings.
-///
-/// Unparseable individual results are skipped with a [`tracing::warn`]; a
-/// document that is not SARIF at all is an [`Err`].
-///
-/// # Errors
-///
-/// Returns [`CodeLoreError::Analysis`] when the input is not a SARIF document
-/// (missing `version` field or `runs` array).
-pub fn parse_sarif(raw: &str) -> Result<Vec<ExternalFinding>> {
-    parse_sarif_with_engines(raw).map(|(findings, _engines)| findings)
-}
-
-/// Collect every scanner engine name present in a SARIF document, including
-/// runs that produced zero results.
-///
-/// [`parse_sarif`] only surfaces engines that flagged at least one finding, so
-/// a clean re-scan (a run with an empty `results` array) is invisible to the
-/// grouping step. Ingest uses this list to seed empty batches for those engines
-/// and clear their stale rows — a re-ingested clean scan must drop the previous
-/// run's findings, not leave them behind.
-///
-/// Returns the engine names in document order with duplicates removed.
-///
-/// # Errors
-///
-/// Returns [`CodeLoreError::Analysis`] when the input is not a SARIF document
-/// (missing `version` field or `runs` array), matching [`parse_sarif`].
-pub fn parse_sarif_engines(raw: &str) -> Result<Vec<String>> {
-    parse_sarif_with_engines(raw).map(|(_findings, engines)| engines)
 }
 
 /// Parse one SARIF result object into an [`ExternalFinding`].
@@ -325,14 +292,23 @@ fn resolve_fingerprint(
     }
 
     // 4. self-hash: sha256(engine|rule_id|path|start_line)
-    let mut hasher = Sha256::new();
-    hasher.update(engine.as_bytes());
-    hasher.update(b"|");
-    hasher.update(rule_id.as_bytes());
-    hasher.update(b"|");
-    hasher.update(path.as_bytes());
-    hasher.update(b"|");
-    let sl = start_line.map(|n| n.to_string()).unwrap_or_default();
-    hasher.update(sl.as_bytes());
-    format!("sha256:{}", hex::encode(hasher.finalize()))
+    self_hash_fingerprint(engine, rule_id, path, start_line)
+}
+
+/// Compute the self-hash fingerprint fallback: `sha256(engine|rule_id|path|
+/// start_line)`, prefixed `sha256:`. An absent `start_line` contributes an
+/// empty final part.
+///
+/// This is the fingerprint the parser assigns when a SARIF result carries no
+/// producer-supplied fingerprint. It is public so tests can assert against the
+/// real algorithm rather than a hand-mirrored copy.
+#[must_use]
+pub fn self_hash_fingerprint(
+    engine: &str,
+    rule_id: &str,
+    path: &str,
+    start_line: Option<u32>,
+) -> String {
+    let start_line_str = start_line.map(|n| n.to_string()).unwrap_or_default();
+    sha256_prefixed(&[engine, rule_id, path, &start_line_str])
 }

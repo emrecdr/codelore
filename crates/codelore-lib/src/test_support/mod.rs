@@ -29,6 +29,64 @@ pub fn permissive_coupling_opts(repo_path: std::path::PathBuf) -> crate::Options
     }
 }
 
+/// Read a checked-in SARIF dialect fixture from `tests/fixtures/sarif/<name>`.
+///
+/// The path resolves against this crate's `CARGO_MANIFEST_DIR`, so the same
+/// call works from lib unit tests and from the `codelore-lib` integration-test
+/// crate.
+///
+/// # Panics
+///
+/// Panics if the fixture cannot be read (a missing fixture is a test-setup
+/// error, not a runtime condition).
+#[cfg(feature = "test-support")]
+#[must_use]
+pub fn sarif_fixture(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/sarif")
+        .join(name);
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("could not read fixture {name}: {e}"))
+}
+
+/// Open a fresh [`ExternalStore`](crate::external::ExternalStore) under
+/// `cache_dir` for a fixed synthetic repo path.
+///
+/// The caller owns `cache_dir` (typically a [`tempfile::TempDir`]) and keeps it
+/// alive for the store's lifetime. The synthetic repo path only feeds the
+/// per-repo cache-key hash — no real repo is opened.
+///
+/// # Panics
+///
+/// Panics if the store cannot be created under `cache_dir`.
+#[cfg(feature = "test-support")]
+#[must_use]
+pub fn temp_external_store(cache_dir: &std::path::Path) -> crate::external::ExternalStore {
+    crate::external::ExternalStore::open_or_create(cache_dir, std::path::Path::new("/test/repo"))
+        .expect("open_or_create external store")
+}
+
+/// Build an [`ExternalFinding`](crate::external::ExternalFinding) with the
+/// common test defaults (version `0.0.0`, rule `test/rule`, `start_line = 1`,
+/// no `end_line`, a deterministic `test/v1/<engine>/<path>` fingerprint, and a
+/// placeholder message). Only the fields that tests actually vary — `path`,
+/// `engine`, `level` — are parameters; adjust the rest with struct-update
+/// syntax off the returned value when a test needs a specific override.
+#[cfg(feature = "test-support")]
+#[must_use]
+pub fn finding_for(path: &str, engine: &str, level: &str) -> crate::external::ExternalFinding {
+    crate::external::ExternalFinding {
+        engine: engine.to_string(),
+        engine_version: "0.0.0".to_string(),
+        rule_id: "test/rule".to_string(),
+        path: path.to_string(),
+        start_line: Some(1),
+        end_line: None,
+        level: level.to_string(),
+        fingerprint: format!("test/v1/{engine}/{path}"),
+        message: "test finding".to_string(),
+    }
+}
+
 /// Write `BUNDLE` to an OS-temp file outside `target`, `git clone` it into
 /// `target`, and return the clone's HEAD SHA. Shared by the bundle-backed
 /// fixtures below.

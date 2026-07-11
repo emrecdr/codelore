@@ -137,7 +137,7 @@ pub fn run_finding_hotspot_overlap_with(
                 .copied()
                 .unwrap_or("unknown")
                 .to_owned();
-            let mut engines = pf.engines.clone();
+            let mut engines = pf.engines;
             engines.sort_unstable();
             let priority = priority_label(pf.count, revs_percentile, &health_band).to_owned();
             FindingHotspotOverlapRow {
