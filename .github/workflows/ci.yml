@@ -144,14 +144,16 @@ jobs:
         # the non-browser feature set here keeps the matrix
         # cost-predictable.
         #
-        # Windows is build-only for now: the suite's git-fixture layer
-        # spawns dozens of short-lived `git` processes per test, and
-        # windows process-spawn overhead puts the full run beyond
-        # hosted-runner throughput (hours for what linux does in
-        # minutes). The MSVC target stays compile-and-link-verified on
-        # every push; the full windows test run returns once the
-        # fixture layer is restructured onto checked-in git bundles
-        # (the delivery_repo pattern).
+        # Windows is build-only for now: the suite that linux runs in
+        # ~8 minutes exceeds 75 minutes of pure test execution on a
+        # windows runner even with the shared fixtures served from
+        # checked-in bundles (which cut it roughly 3x). The residual
+        # cost is per-test process overhead across ~1000 test
+        # processes plus the remaining bespoke per-test git builders.
+        # The MSVC target stays compile-and-link-verified on every
+        # push; restoring the full windows run needs a further pass
+        # (bespoke-builder consolidation and/or a curated windows
+        # test subset).
         if: matrix.os != 'windows-latest'
         run: cargo nextest run --workspace --features test-support,spa --no-fail-fast
       - name: Run doc tests

@@ -5,12 +5,19 @@ use codelore_lib::repo::GixRepo;
 
 #[test]
 fn code_age_for_tiny_repo() {
+    use time::macros::date;
     let tiny = codelore_lib::test_support::tiny_repo::build();
     let repo = GixRepo::open(tiny.dir.path()).expect("open");
     let db = FactsDb::new_in_memory().expect("db");
     let opts = Options {
         repo_path: tiny.dir.path().to_path_buf(),
         min_revs: 1,
+        // Pin the age anchor a few days after tiny_repo's last commit
+        // (2026-06-05) so `age_months` is computed against the fixture's
+        // fixed dates, not the wall clock. Without this the assertion below
+        // silently drifts and starts failing once real time moves a couple
+        // of months past the fixture window.
+        age_time_now: Some(date!(2026 - 06 - 09)),
         ..Options::default()
     };
     db.ingest(&repo, &opts).expect("ingest");
@@ -28,14 +35,16 @@ fn code_age_for_tiny_repo() {
         );
     }
 
-    // tiny_repo commits happen "now" → age in months should be 0
+    // All of tiny_repo's commits land within the same calendar month as the
+    // pinned anchor (2026-06-09), so every file's age is 0 whole months. This
+    // holds no matter what the system clock reads at test time.
     let main_row = rows
         .iter()
         .find(|r| r.path == "src/main.rs")
         .expect("main.rs");
-    assert!(
-        main_row.age_months <= 1,
-        "tiny_repo just built; main.rs age should be ≤1 month, got {}",
+    assert_eq!(
+        main_row.age_months, 0,
+        "main.rs last changed 2026-06-05, anchor 2026-06-09 → 0 months, got {}",
         main_row.age_months
     );
 }
@@ -55,8 +64,8 @@ fn code_age_back_test_excludes_post_anchor_commits() {
     let opts = Options {
         repo_path: tiny.dir.path().to_path_buf(),
         min_revs: 1,
-        // tiny_repo commits land at "now" (2026-06-09+); a back-test
-        // anchored before any commit must drop everything.
+        // tiny_repo's commits are fixed at 2026-06-01..05; a back-test
+        // anchored before any of them (2020-01-01) must drop everything.
         age_time_now: Some(date!(2020 - 01 - 01)),
         ..Options::default()
     };
