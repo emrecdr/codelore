@@ -809,13 +809,25 @@ fn emit_check_sarif_when_requested(
         return Ok(());
     }
 
-    // Collect evidence only for violated per-file paths (not repo-wide).
+    // Collect evidence only for violated per-file paths (not repo-wide). A
+    // failed lookup degrades that result to chainless (empty evidence) rather
+    // than failing the SARIF emission; the failure is systemic and repeats per
+    // path, so warn at most once per run via the ⚠-prefixed stderr convention.
     let mut evidence_map: HashMap<String, Vec<EvidenceCommit>> = HashMap::new();
+    let mut evidence_warned = false;
     for v in violations {
         if v.path != "(repo-wide)" && v.path != "(degraded)" {
-            evidence_map
-                .entry(v.path.clone())
-                .or_insert_with(|| evidence_for_path(db, opts, &v.path, 5).unwrap_or_default());
+            evidence_map.entry(v.path.clone()).or_insert_with(|| {
+                evidence_for_path(db, opts, &v.path, 5).unwrap_or_else(|e| {
+                    if !evidence_warned {
+                        evidence_warned = true;
+                        eprintln!(
+                            "  ⚠ check: evidence lookup failed ({e}); SARIF results will be emitted without commit chains"
+                        );
+                    }
+                    Vec::new()
+                })
+            });
         }
     }
 

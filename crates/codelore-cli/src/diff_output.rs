@@ -418,15 +418,31 @@ fn emit_sarif(
     use codelore_lib::cli_api::quality_gates::evidence::evidence_for_path;
     use serde_json::json;
 
+    // A failed evidence query degrades a result to chainless (no codeFlows /
+    // relatedLocations) rather than failing the whole diff. Such a failure is
+    // systemic — it repeats for every path — so warn at most once per run,
+    // matching the ⚠-prefixed stderr convention used by `check`.
+    let evidence_warned = std::cell::Cell::new(false);
+
     // Build codeFlows + relatedLocations from evidence commits for a given path.
-    // Returns None when no db is available or no evidence was found.
-    // codeFlows: SARIF §3.36 — threadFlowLocations wrap the location in
+    // Returns None when no db is available, the query fails, or no evidence was
+    // found. codeFlows: SARIF §3.36 — threadFlowLocations wrap the location in
     //   {"location": …}; relatedLocations: SARIF §3.27.22 — plain location array.
     // Both point to the same commits; GitHub reads relatedLocations for the
     // inline annotation panel and codeFlows for the "Show paths" flows tab.
     let evidence_for = |path: &str| -> Option<(serde_json::Value, serde_json::Value)> {
         let (db, opts) = db_opts?;
-        let commits = evidence_for_path(db, opts, path, DIFF_EVIDENCE_N).ok()?;
+        let commits = match evidence_for_path(db, opts, path, DIFF_EVIDENCE_N) {
+            Ok(commits) => commits,
+            Err(e) => {
+                if !evidence_warned.replace(true) {
+                    eprintln!(
+                        "  ⚠ diff: evidence lookup failed ({e}); results will be emitted without commit chains"
+                    );
+                }
+                return None;
+            }
+        };
         if commits.is_empty() {
             return None;
         }
