@@ -1368,6 +1368,7 @@ fn run_diff_cmd(args: &DiffArgs) -> Result<()> {
         &mut out,
         &output,
         args.format.as_str(),
+        &args.repo,
         Some((&head_db, &head_opts)),
     )?;
     drop(out);

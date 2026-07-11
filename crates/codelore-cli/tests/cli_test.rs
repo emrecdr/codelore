@@ -1517,6 +1517,44 @@ fn diff_sarif_hotspot_rank_entrant_carries_code_flows_and_related_locations() {
         tfl[0].get("module").is_none(),
         "threadFlowLocation must not carry 'module' (message_head goes in location.message.text)"
     );
+
+    // partialFingerprints: both dedup keys must match the shared recipes.
+    // primaryLocationLineHash must equal the check recipe for the same path.
+    assert_diff_fingerprints(r, repo, "CODELORE-HOTSPOT", "src/hot.rs", "rank-entrant");
+}
+
+/// Assert a diff SARIF `result` carries both dedup fingerprint keys and that
+/// each matches its shared recipe: `primaryLocationLineHash` = the check recipe
+/// `sha256(canonical_repo_root|path)`, `diffFinding/v1` =
+/// `sha256(rule|path|discriminant)`.
+fn assert_diff_fingerprints(
+    result: &serde_json::Value,
+    repo: &std::path::Path,
+    rule: &str,
+    path: &str,
+    discriminant: &str,
+) {
+    let fps = result["partialFingerprints"]
+        .as_object()
+        .expect("diff result must carry partialFingerprints");
+
+    let canonical_root = repo.canonicalize().unwrap();
+    let expected_primary = codelore_lib::output::sarif::primary_location_line_hash(
+        &canonical_root.to_string_lossy(),
+        path,
+    );
+    assert_eq!(
+        fps.get("primaryLocationLineHash").and_then(|v| v.as_str()),
+        Some(expected_primary.as_str()),
+        "diff primaryLocationLineHash must match the check recipe sha256(repo_root|path)"
+    );
+
+    let expected_diff = codelore_lib::output::sarif::diff_finding_hash(rule, path, discriminant);
+    assert_eq!(
+        fps.get("diffFinding/v1").and_then(|v| v.as_str()),
+        Some(expected_diff.as_str()),
+        "diffFinding/v1 must be sha256(rule|path|discriminant)"
+    );
 }
 
 const CLONE_ORIGINAL_SRC: &str = "\

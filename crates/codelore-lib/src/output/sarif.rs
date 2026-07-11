@@ -65,6 +65,36 @@ pub(super) fn percent_encode_path(p: &str) -> String {
     utf8_percent_encode(p, URI_PATH_ENCODE).to_string()
 }
 
+/// The `partialFingerprints.primaryLocationLineHash` value for a finding at
+/// `path` under `repo_root`: `sha256("<repo_root>|<path>")`.
+///
+/// GitHub Code Scanning deduplicates alerts across uploads on this key, so
+/// every emitter must compute it identically. Sharing one function keeps the
+/// check emitter and the `codelore diff` emitter aligned: the same `repo_root`
+/// and repo-relative `path` produce the same hash, so a file flagged by both
+/// `check` and `diff` collapses to one alert. `path` is used raw (not
+/// percent-encoded) — the URI encoding is a display concern, kept out of the
+/// identity key so it stays stable if the encode set ever changes.
+#[must_use]
+pub fn primary_location_line_hash(repo_root: &str, path: &str) -> String {
+    sha256_prefixed(&[repo_root, path])
+}
+
+/// The `partialFingerprints.diffFinding/v1` value for a `codelore diff`
+/// result: `sha256("<rule>|<path>|<discriminant>")`.
+///
+/// The diff-domain identity key. Its parts are all stable across re-runs of the
+/// same diff — the rule id, the repo-relative path, and a per-finding
+/// discriminant (the diff classification, or the specific function/clone that
+/// makes two results on one path distinct). It deliberately omits base/head
+/// SHAs and numeric scores so the same finding keeps its identity as a PR's
+/// commits and metrics move, letting GitHub coalesce re-uploads of an unchanged
+/// finding.
+#[must_use]
+pub fn diff_finding_hash(rule: &str, path: &str, discriminant: &str) -> String {
+    sha256_prefixed(&[rule, path, discriminant])
+}
+
 /// Per-run correlation suffix for SARIF `automationDetails.id`. SARIF
 /// 2.1.0 §3.17.3 wants `<runGroupName>/<runName>/<correlationGuid>`;
 /// without a per-run suffix, GitHub Code Scanning collapses every run
@@ -764,7 +794,7 @@ fn build_check_result<S: std::hash::BuildHasher>(
     // 2. primaryLocationLineHash — the same repo_root|path shape the hotspots
     //    emitter uses; GitHub deduplicates on this key.
     let gate_fp = sha256_prefixed(&[&v.gate, &v.path, head_sha]);
-    let primary_fp = sha256_prefixed(&[repo_root, &v.path]);
+    let primary_fp = primary_location_line_hash(repo_root, &v.path);
 
     let message_text = format!(
         "{gate}: {actual} vs threshold {threshold}",

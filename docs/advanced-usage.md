@@ -386,7 +386,13 @@ The step summary appears at the bottom of the workflow run page in the GitHub Ac
 | `CODELORE-LIVE-CLONE` | `behavioral`, `clone`, `live-clone`, `co-change`, `x-ray` | One result per `(clone_group_id, file_a, file_b)`; `security-severity = combined_score × 10` |
 | `CODELORE-MISSING-COCHANGE` | `behavioral`, `coupling`, `diff` | One result per absence: a historically-Fisher-significant coupling pair where this PR touched only one side. Surfaces missing partner-file edits |
 
-All four use versioned `partialFingerprints` so cross-run identity stays stable.
+Every `codelore diff --format sarif` result carries these versioned `partialFingerprints` keys so cross-run identity stays stable and GitHub Code Scanning deduplicates alerts:
+
+| Key | Purpose |
+|---|---|
+| `primaryLocationLineHash` | The key GitHub uses to deduplicate alerts across SARIF uploads (SHA-256 of repo root + path). Computed with the identical recipe `codelore check` uses, so a file flagged by both `check` and `diff` collapses to one alert. |
+| `diffFinding/v1` | Stable diff-domain identity (SHA-256 of rule id, file path, and a per-finding discriminant — the diff classification, the clone's AST fingerprint, or the canonical coupling pair). Deliberately omits base/head SHAs and numeric scores so the same finding keeps its identity as the PR's commits and metrics move. |
+| `couplingPair/v1` | `CODELORE-MISSING-COCHANGE` only: the alphabetically-canonical `<file_a>::<file_b>` pair, stable regardless of which side the PR touched. |
 
 ## 3. Every CLI flag explained
 

@@ -34,18 +34,24 @@ fn risk_str(c: Option<RiskClass>) -> &'static str {
 /// Emit the diff output in `format`.
 ///
 /// `db_opts` must be `Some` when `format == "sarif"` to populate evidence
-/// chains; pass `None` for non-SARIF formats (ignored there).
+/// chains; pass `None` for non-SARIF formats (ignored there). `repo_root` is
+/// the user's real repository path (the `--repo` argument) — used for the
+/// SARIF `primaryLocationLineHash` dedup key so it stays stable across runs and
+/// matches the `check` recipe. It must NOT be the worktree path that
+/// `db_opts`'s `Options` carries: that is a per-run tempdir already removed by
+/// the time this runs.
 pub fn emit(
     out: &mut dyn Write,
     output: &DiffOutput,
     format: &str,
+    repo_root: &std::path::Path,
     db_opts: Option<(&FactsDb, &Options)>,
 ) -> Result<()> {
     match format {
         "text" => emit_text(out, output),
         "json" => emit_json(out, output),
         "markdown" => emit_markdown(out, output),
-        "sarif" => emit_sarif(out, output, db_opts),
+        "sarif" => emit_sarif(out, output, repo_root, db_opts),
         other => {
             anyhow::bail!("unknown --format {other:?} for diff; valid: text, json, markdown, sarif")
         }
@@ -409,6 +415,7 @@ fn emit_markdown(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
 fn emit_sarif(
     out: &mut dyn Write,
     output: &DiffOutput,
+    repo_root: &std::path::Path,
     db_opts: Option<(&FactsDb, &Options)>,
 ) -> Result<()> {
     // Build a SARIF document that mixes rank-entrant + score-increase
@@ -462,6 +469,42 @@ fn emit_sarif(
         Some((code_flows, related_locations))
     };
 
+    // Canonicalized repo root for the `primaryLocationLineHash` key. Derived
+    // from the user's real repo path exactly as the check emitter derives it
+    // (canonicalize, fall back to the raw path) so a file flagged by both
+    // `check` and `diff` produces the same hash and GitHub coalesces the two
+    // alerts. Must not use the worktree path in `db_opts` — that is a per-run
+    // tempdir, already removed, so it would be neither stable nor check-aligned.
+    let repo_root: String = repo_root
+        .canonicalize()
+        .unwrap_or_else(|_| repo_root.to_path_buf())
+        .to_string_lossy()
+        .into_owned();
+
+    // Attach the shared dedup fingerprints to a result, merging into any
+    // `partialFingerprints` already present (e.g. the coupling-pair key).
+    // `primaryLocationLineHash` mirrors the check recipe (repo_root|path);
+    // `diffFinding/v1` is the stable diff-domain identity (rule|path|discriminant).
+    let add_fingerprints = |result: &mut serde_json::Value, rule: &str, path: &str, disc: &str| {
+        use codelore_lib::cli_api::output::sarif::{diff_finding_hash, primary_location_line_hash};
+        let fps = result
+            .as_object_mut()
+            .expect("result is a JSON object")
+            .entry("partialFingerprints")
+            .or_insert_with(|| json!({}));
+        let fps = fps
+            .as_object_mut()
+            .expect("partialFingerprints is an object");
+        fps.insert(
+            "diffFinding/v1".into(),
+            json!(diff_finding_hash(rule, path, disc)),
+        );
+        fps.insert(
+            "primaryLocationLineHash".into(),
+            json!(primary_location_line_hash(&repo_root, path)),
+        );
+    };
+
     let mut hotspot_results: Vec<serde_json::Value> = Vec::new();
     for h in &output.hotspots.rank_entrants {
         let evidence = evidence_for(&h.path);
@@ -487,6 +530,7 @@ fn emit_sarif(
                 "tags": ["behavioral", "hotspot", "pr-diff"]
             }
         });
+        add_fingerprints(&mut result, "CODELORE-HOTSPOT", &h.path, "rank-entrant");
         if let Some((code_flows, related_locs)) = evidence {
             result["codeFlows"] = code_flows;
             result["relatedLocations"] = related_locs;
@@ -518,6 +562,7 @@ fn emit_sarif(
                 "tags": ["behavioral", "hotspot", "pr-diff"]
             }
         });
+        add_fingerprints(&mut result, "CODELORE-HOTSPOT", &s.path, "score-increase");
         if let Some((code_flows, related_locs)) = evidence {
             result["codeFlows"] = code_flows;
             result["relatedLocations"] = related_locs;
@@ -547,6 +592,9 @@ fn emit_sarif(
                 "tags": ["behavioral", "clone", "pr-diff"]
             }
         });
+        // The clone AST fingerprint is the stable discriminant — clone_group_id
+        // is positional and can be reassigned across runs.
+        add_fingerprints(&mut result, "CODELORE-CLONE", &c.entity, &c.fingerprint);
         if let Some((code_flows, related_locs)) = evidence {
             result["codeFlows"] = code_flows;
             result["relatedLocations"] = related_locs;
@@ -593,6 +641,12 @@ fn emit_sarif(
                     "tags": ["behavioral", "health", "pr-diff"]
                 }
             });
+            add_fingerprints(
+                &mut result,
+                "CODELORE-DELTA-HEALTH",
+                &f.path,
+                "delta-health-degraded",
+            );
             if let Some((code_flows, related_locs)) = evidence {
                 result["codeFlows"] = code_flows;
                 result["relatedLocations"] = related_locs;
@@ -613,7 +667,7 @@ fn emit_sarif(
         } else {
             (&a.expected_partner, &a.touched_file)
         };
-        hotspot_results.push(json!({
+        let mut result = json!({
             "ruleId": "CODELORE-MISSING-COCHANGE",
             "level": "note",
             "message": {
@@ -645,7 +699,16 @@ fn emit_sarif(
                 "codelore/fisher-p": a.fisher_p,
                 "tags": ["behavioral", "coupling", "absent-change-pattern", "pr-diff"]
             }
-        }));
+        });
+        // The canonical pair is the stable discriminant; merges alongside the
+        // existing couplingPair/v1 key.
+        add_fingerprints(
+            &mut result,
+            "CODELORE-MISSING-COCHANGE",
+            &a.touched_file,
+            &format!("{lo}::{hi}"),
+        );
+        hotspot_results.push(result);
     }
 
     // CODELORE-DELTA-HEALTH rule is only included in the driver when the
@@ -721,7 +784,8 @@ mod tests {
         };
 
         let mut buf = Vec::new();
-        emit_sarif(&mut buf, &output, None).expect("emit_sarif");
+        let repo_root = std::path::Path::new("/repo");
+        emit_sarif(&mut buf, &output, repo_root, None).expect("emit_sarif");
         let sarif: serde_json::Value = serde_json::from_slice(&buf).expect("valid SARIF JSON");
 
         // Rule must be declared in the tool driver registry.
@@ -766,6 +830,31 @@ mod tests {
             .expect("fp present");
         assert_eq!(fp, "src/auth/login.rs::src/auth/session.rs");
 
+        // The shared dedup keys are added alongside couplingPair/v1.
+        let diff_fp = r["partialFingerprints"]["diffFinding/v1"]
+            .as_str()
+            .expect("diffFinding/v1 present");
+        assert_eq!(
+            diff_fp,
+            codelore_lib::cli_api::output::sarif::diff_finding_hash(
+                "CODELORE-MISSING-COCHANGE",
+                "src/auth/login.rs",
+                "src/auth/login.rs::src/auth/session.rs",
+            )
+        );
+        // primaryLocationLineHash mirrors the check recipe sha256(repo_root|path)
+        // for the touched file, using the repo_root passed to emit_sarif.
+        let primary_fp = r["partialFingerprints"]["primaryLocationLineHash"]
+            .as_str()
+            .expect("primaryLocationLineHash present");
+        assert_eq!(
+            primary_fp,
+            codelore_lib::cli_api::output::sarif::primary_location_line_hash(
+                "/repo",
+                "src/auth/login.rs",
+            )
+        );
+
         // Properties expose the missing partner + numeric thresholds for CI consumers
         assert_eq!(
             r["properties"]["codelore/diff-classification"],
@@ -785,7 +874,7 @@ mod tests {
         // results section is empty for that rule).
         let output = DiffOutput::default();
         let mut buf = Vec::new();
-        emit_sarif(&mut buf, &output, None).expect("emit_sarif");
+        emit_sarif(&mut buf, &output, std::path::Path::new("/repo"), None).expect("emit_sarif");
         let sarif: serde_json::Value = serde_json::from_slice(&buf).unwrap();
         let results = sarif["runs"][0]["results"].as_array().unwrap();
         assert_eq!(

@@ -4,6 +4,10 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **`partialFingerprints` on every `codelore diff --format sarif` result.** Diff results now carry `primaryLocationLineHash` (SHA-256 of repo root + path, computed with the exact recipe `codelore check` uses, so a file flagged by both tools collapses to one GitHub Code Scanning alert) and `diffFinding/v1` (SHA-256 of rule id + path + a per-finding discriminant, stable across re-runs of the same diff). Previously diff results carried no dedup fingerprints, causing asymmetric alert deduplication versus check. The primary key is derived from the real `--repo` path, not the internal per-run worktree, so it stays stable across runs. See docs/advanced-usage.md for the key table.
+
 ### Fixed
 
 - **Failed evidence lookups during SARIF emission now warn instead of degrading silently.** When the per-finding commit-evidence query fails (a fact-store error), `codelore check --format sarif` and `codelore diff --format sarif` still emit their results — now without the commit chain — but print a single `⚠` warning to stderr per run so the missing chains are explained rather than silent. Previously the error was swallowed and results lost their chains with no signal.
