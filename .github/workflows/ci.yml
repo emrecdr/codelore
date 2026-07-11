@@ -82,15 +82,7 @@ jobs:
   test:
     name: test
     runs-on: ${{ matrix.os }}
-    # The windows runner needs headroom for a cold-cache build: the MCP
-    # server's dependency tree (tokio + rmcp) plus the bundled DuckDB
-    # C++ build push a from-scratch MSVC compile past 70 minutes. The
-    # ceiling must let a cold build COMPLETE, because the cargo cache
-    # only saves on a finished job — a job killed by its own timeout is
-    # cancelled, and cancellation does not leave enough grace time for
-    # the multi-gigabyte cache upload, restarting the cold loop. Linux
-    # and macOS keep the tight ceiling; warm runs finish far sooner.
-    timeout-minutes: ${{ matrix.os == 'windows-latest' && 240 || 45 }}
+    timeout-minutes: 45
     strategy:
       # Don't let one OS failure cancel the other two — we want full
       # cross-platform signal on every run.
@@ -124,29 +116,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.96.0
       - uses: Swatinem/rust-cache@v2
         with:
-          # Save the cargo cache when the job FAILS (test failures still
-          # warm the next run). Note this does not cover timeout
-          # cancellation — a cancelled job's post-step window is too
-          # short for the multi-gigabyte upload — hence the explicit
-          # mid-job save below for the windows recovery path.
+          # Save the cargo cache even when the job fails — a red test
+          # run still warms the next attempt's compile.
           cache-on-failure: true
-      # Recovery ratchet for the timeout-cancelled windows attempts:
-      # restore whatever compile progress the LAST attempt banked (see
-      # the matching explicit save after the build step). rust-cache's
-      # normal save only runs on a finished job, so consecutive
-      # timeouts otherwise restart from zero forever. Remove this
-      # restore/save pair once a windows run completes inside its
-      # ceiling and rust-cache's own save takes over.
-      - name: Restore banked windows build progress
-        if: matrix.os == 'windows-latest'
-        uses: actions/cache/restore@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: winbank-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}-${{ github.run_id }}
-          restore-keys: winbank-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}-
       # cargo-nextest: ~20-30% faster than `cargo test` on this workspace
       # (smarter parallelism, faster process spawning, better failure
       # aggregation). Doesn't run doc tests — those still need `cargo test
@@ -155,20 +127,7 @@ jobs:
         with:
           tool: cargo-nextest
       - name: Build test binaries
-        # Split from the run step so (a) the step timings separate
-        # compile cost from test-execution cost, and (b) the explicit
-        # save below can bank the compiled target/ the moment the build
-        # finishes, timeout-proof.
         run: cargo nextest run --workspace --features test-support,spa --no-run
-      - name: Bank windows build progress
-        if: matrix.os == 'windows-latest' && always()
-        uses: actions/cache/save@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: winbank-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}-${{ github.run_id }}
       - name: Run tests (nextest)
         # `--all-features` would also activate `browser-tests`, which
         # requires a Chrome binary on the runner. The matrix test job
@@ -178,6 +137,16 @@ jobs:
         # ubuntu-latest where Chrome is pre-installed. Spelling out
         # the non-browser feature set here keeps the matrix
         # cost-predictable.
+        #
+        # Windows is build-only for now: the suite's git-fixture layer
+        # spawns dozens of short-lived `git` processes per test, and
+        # windows process-spawn overhead puts the full run beyond
+        # hosted-runner throughput (hours for what linux does in
+        # minutes). The MSVC target stays compile-and-link-verified on
+        # every push; the full windows test run returns once the
+        # fixture layer is restructured onto checked-in git bundles
+        # (the delivery_repo pattern).
+        if: matrix.os != 'windows-latest'
         run: cargo nextest run --workspace --features test-support,spa --no-fail-fast
       - name: Run doc tests
         # `cargo test --doc --workspace` does NOT honour per-package
