@@ -4,6 +4,10 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Concurrent readers on the external-findings sidecar no longer fail to open.** The read paths (`check` gate evaluation, the `finding-hotspot-overlap` MCP tool, and any reader) now open the `external-findings.duckdb-ext` sidecar read-only, taking a shared lock instead of DuckDB's exclusive write lock. Running `check`, an MCP call, and `analyze` against the same repo at once no longer contends on that lock. Readers also no longer run schema DDL: a truncated or corrupt sidecar (one missing its findings table) is treated as "nothing to read" — the same as an absent or empty sidecar — instead of being silently re-created as a side effect of reading. Healing the schema remains exclusive to `ingest-sarif`.
+
 ## [0.16.0] - 2026-07-11
 
 ### Added
