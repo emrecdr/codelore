@@ -88,7 +88,11 @@ jobs:
   test:
     name: test
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    # Windows needs the wider ceiling: the same suite that linux runs
+    # in minutes pays windows process-spawn and filesystem overhead on
+    # every remaining git shell-out and tempdir, and the job also
+    # spends ~15 minutes on setup + build before tests start.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 90 || 45 }}
     strategy:
       # Don't let one OS failure cancel the other two — we want full
       # cross-platform signal on every run.
