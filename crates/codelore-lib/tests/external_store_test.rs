@@ -5,34 +5,24 @@
 //! - Re-ingest the same file → count unchanged (replace semantics)
 //! - Two engines coexist independently
 
-use std::path::Path;
+use codelore_lib::external::{ExternalFinding, group_findings_by_engine, parse_sarif_with_engines};
+use codelore_lib::test_support::{finding_for, sarif_fixture, temp_external_store};
 
-use codelore_lib::external::{
-    ExternalFinding, ExternalStore, group_findings_by_engine, parse_sarif,
-};
-
-fn fixture(name: &str) -> String {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/sarif")
-        .join(name);
-    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("could not read fixture {name}: {e}"))
-}
-
-/// Open a fresh store in a tempdir.
-fn temp_store() -> (tempfile::TempDir, ExternalStore) {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let store =
-        ExternalStore::open_or_create(dir.path(), Path::new("/test/repo")).expect("open_or_create");
-    (dir, store)
+/// Parse a fixture/document and keep only the findings half.
+fn parse_findings(raw: &str) -> Vec<ExternalFinding> {
+    parse_sarif_with_engines(raw)
+        .expect("SARIF document should parse")
+        .0
 }
 
 // ─── count after ingesting each fixture ─────────────────────────────────────
 
 #[test]
 fn semgrep_fixture_ingests_two_findings() {
-    let (_dir, store) = temp_store();
-    let raw = fixture("semgrep.sarif.json");
-    let findings = parse_sarif(&raw).expect("parse semgrep fixture");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = temp_external_store(dir.path());
+    let raw = sarif_fixture("semgrep.sarif.json");
+    let findings = parse_findings(&raw);
     // Two findings in the semgrep fixture.
     assert_eq!(findings.len(), 2);
     let n = store
@@ -44,9 +34,10 @@ fn semgrep_fixture_ingests_two_findings() {
 
 #[test]
 fn clippy_fixture_ingests_two_findings() {
-    let (_dir, store) = temp_store();
-    let raw = fixture("clippy.sarif.json");
-    let findings = parse_sarif(&raw).expect("parse clippy fixture");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = temp_external_store(dir.path());
+    let raw = sarif_fixture("clippy.sarif.json");
+    let findings = parse_findings(&raw);
     assert_eq!(findings.len(), 2);
     let n = store
         .replace_engine("clippy", &findings)
@@ -57,9 +48,10 @@ fn clippy_fixture_ingests_two_findings() {
 
 #[test]
 fn codeql_fixture_ingests_two_findings() {
-    let (_dir, store) = temp_store();
-    let raw = fixture("codeql.sarif.json");
-    let findings = parse_sarif(&raw).expect("parse codeql fixture");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = temp_external_store(dir.path());
+    let raw = sarif_fixture("codeql.sarif.json");
+    let findings = parse_findings(&raw);
     assert_eq!(findings.len(), 2);
     let n = store
         .replace_engine("CodeQL", &findings)
@@ -73,9 +65,10 @@ fn codeql_fixture_ingests_two_findings() {
 /// Re-ingesting the same file must leave the count unchanged.
 #[test]
 fn reingest_same_engine_is_idempotent() {
-    let (_dir, store) = temp_store();
-    let raw = fixture("semgrep.sarif.json");
-    let findings = parse_sarif(&raw).expect("parse");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = temp_external_store(dir.path());
+    let raw = sarif_fixture("semgrep.sarif.json");
+    let findings = parse_findings(&raw);
 
     store
         .replace_engine("semgrep", &findings)
@@ -92,7 +85,7 @@ fn reingest_same_engine_is_idempotent() {
 // ─── multi-run SARIF document ────────────────────────────────────────────────
 
 /// A single SARIF document may contain multiple runs from different engines.
-/// `parse_sarif` iterates all runs; findings from each run are keyed by that
+/// The parser iterates all runs; findings from each run are keyed by that
 /// run's `tool.driver.name`. Ingesting the result groups them by engine so
 /// `replace_engine` applies the correct per-engine replace semantics.
 #[test]
@@ -146,7 +139,7 @@ fn multi_run_sarif_produces_findings_from_both_engines() {
         ]
     }"#;
 
-    let findings = parse_sarif(multi_run).expect("parse multi-run SARIF");
+    let findings = parse_findings(multi_run);
     // 1 from engine-a + 2 from engine-b = 3 total.
     assert_eq!(findings.len(), 3);
     assert_eq!(
@@ -159,7 +152,8 @@ fn multi_run_sarif_produces_findings_from_both_engines() {
     );
 
     // Group by engine (the real ingest path uses group_findings_by_engine).
-    let (_dir, store) = temp_store();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = temp_external_store(dir.path());
     let by_engine = group_findings_by_engine(findings);
     for (engine, batch) in &by_engine {
         store.replace_engine(engine, batch).expect("replace_engine");
@@ -179,44 +173,16 @@ fn multi_run_sarif_produces_findings_from_both_engines() {
 /// This is the core correctness property of the per-engine replace design.
 #[test]
 fn multi_file_same_engine_combined_count_is_sum() {
-    let (_dir, store) = temp_store();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = temp_external_store(dir.path());
 
     // Two synthetic batches both labelled "semgrep" (as if from two files).
-    let batch_a: Vec<ExternalFinding> = vec![ExternalFinding {
-        engine: "semgrep".to_string(),
-        engine_version: "1.0.0".to_string(),
-        rule_id: "rule/a1".to_string(),
-        path: "src/alpha.rs".to_string(),
-        start_line: Some(1),
-        end_line: None,
-        level: "warning".to_string(),
-        fingerprint: "semgrep/v1/a1/alpha".to_string(),
-        message: "finding a1".to_string(),
-    }];
-
-    let batch_b: Vec<ExternalFinding> = vec![
-        ExternalFinding {
-            engine: "semgrep".to_string(),
-            engine_version: "1.0.0".to_string(),
-            rule_id: "rule/b1".to_string(),
-            path: "src/beta.rs".to_string(),
-            start_line: Some(2),
-            end_line: None,
-            level: "error".to_string(),
-            fingerprint: "semgrep/v1/b1/beta".to_string(),
-            message: "finding b1".to_string(),
-        },
-        ExternalFinding {
-            engine: "semgrep".to_string(),
-            engine_version: "1.0.0".to_string(),
-            rule_id: "rule/b2".to_string(),
-            path: "src/gamma.rs".to_string(),
-            start_line: Some(3),
-            end_line: None,
-            level: "note".to_string(),
-            fingerprint: "semgrep/v1/b2/gamma".to_string(),
-            message: "finding b2".to_string(),
-        },
+    // Distinct paths give distinct (engine, fingerprint) keys, so all three
+    // rows coexist rather than colliding on the primary key.
+    let batch_a = vec![finding_for("src/alpha.rs", "semgrep", "warning")];
+    let batch_b = vec![
+        finding_for("src/beta.rs", "semgrep", "error"),
+        finding_for("src/gamma.rs", "semgrep", "note"),
     ];
 
     // Caller groups both batches into one combined batch (mirrors run_ingest_sarif_cmd).
@@ -248,12 +214,13 @@ fn multi_file_same_engine_combined_count_is_sum() {
 /// Expected after grouping + ingesting: 4 total across 2 engine keys.
 #[test]
 fn group_findings_by_engine_combines_two_fixture_files() {
-    let (_dir, store) = temp_store();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = temp_external_store(dir.path());
 
     // Parse two fixture files into a flat vec (mirrors the cmd's loop).
     let mut all = Vec::new();
-    all.extend(parse_sarif(&fixture("semgrep.sarif.json")).expect("parse semgrep"));
-    all.extend(parse_sarif(&fixture("clippy.sarif.json")).expect("parse clippy"));
+    all.extend(parse_findings(&sarif_fixture("semgrep.sarif.json")));
+    all.extend(parse_findings(&sarif_fixture("clippy.sarif.json")));
 
     // Group and ingest — this is the extracted code path.
     let by_engine = group_findings_by_engine(all);
@@ -276,16 +243,17 @@ fn group_findings_by_engine_combines_two_fixture_files() {
 /// Ingesting two different engines must accumulate findings (not replace each other).
 #[test]
 fn two_engines_coexist() {
-    let (_dir, store) = temp_store();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = temp_external_store(dir.path());
 
-    let semgrep_raw = fixture("semgrep.sarif.json");
-    let semgrep = parse_sarif(&semgrep_raw).expect("parse semgrep");
+    let semgrep_raw = sarif_fixture("semgrep.sarif.json");
+    let semgrep = parse_findings(&semgrep_raw);
     store
         .replace_engine("semgrep", &semgrep)
         .expect("ingest semgrep");
 
-    let clippy_raw = fixture("clippy.sarif.json");
-    let clippy = parse_sarif(&clippy_raw).expect("parse clippy");
+    let clippy_raw = sarif_fixture("clippy.sarif.json");
+    let clippy = parse_findings(&clippy_raw);
     store
         .replace_engine("clippy", &clippy)
         .expect("ingest clippy");

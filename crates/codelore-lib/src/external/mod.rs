@@ -3,18 +3,17 @@
 //!
 //! # Entry point
 //!
-//! [`sarif_parse::parse_sarif`] converts a raw SARIF 2.1.0 JSON string into
-//! a `Vec<ExternalFinding>`.  Each finding is normalized to a repo-relative
-//! path and carries a stable fingerprint derived from the dialect-appropriate
-//! source (partialFingerprints → fingerprints → self-hash fallback), which
-//! absorbs the fingerprint-field variance across SARIF 2.1.0 producers.
+//! [`sarif_parse::parse_sarif_with_engines`] converts a raw SARIF 2.1.0 JSON
+//! string into a `Vec<ExternalFinding>` plus the list of scanner engine names
+//! present across all runs. Each finding is normalized to a repo-relative path
+//! and carries a stable fingerprint derived from the dialect-appropriate source
+//! (partialFingerprints → fingerprints → self-hash fallback), which absorbs the
+//! fingerprint-field variance across SARIF 2.1.0 producers.
 
 pub mod sarif_parse;
 pub mod store;
 
-pub use sarif_parse::{
-    ExternalFinding, parse_sarif, parse_sarif_engines, parse_sarif_with_engines,
-};
+pub use sarif_parse::{ExternalFinding, parse_sarif_with_engines};
 pub use store::{ExternalStore, PathFindings};
 
 /// Group a flat list of findings by engine name.

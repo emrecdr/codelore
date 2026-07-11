@@ -92,6 +92,26 @@ impl ExternalStore {
         Ok(Some(Self { conn, path }))
     }
 
+    /// Open the sidecar store only when it exists **and** holds at least one
+    /// finding.
+    ///
+    /// Returns `None` when the sidecar is absent *or* present-but-empty — for a
+    /// reader, an empty sidecar carries no more information than a missing one,
+    /// so this collapses the two "nothing to read yet" states into a single
+    /// `None`. The "absent and empty are equivalent" policy lives here; call
+    /// sites keep their own presentation (skip notice, precondition error).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CodeLoreError::Analysis`] if the file exists but cannot be
+    /// opened, its schema cannot be read, or the row count query fails.
+    pub fn open_nonempty(cache_root: &Path, repo_path: &Path) -> Result<Option<Self>> {
+        match Self::open_existing(cache_root, repo_path)? {
+            Some(store) if store.count()? > 0 => Ok(Some(store)),
+            _ => Ok(None),
+        }
+    }
+
     /// Open or create the sidecar store for `repo_path` under `cache_root`.
     ///
     /// Creates the parent directory and the table schema on first call.

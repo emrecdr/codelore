@@ -2152,6 +2152,70 @@ fn analyze_finding_overlap_respects_cache_dir() {
     );
 }
 
+/// `analyze --analysis finding-hotspot-overlap` against an existing-but-EMPTY
+/// sidecar must surface the same "requires prior ingest-sarif" pre-condition
+/// error as an absent sidecar — an empty sidecar carries no findings to read.
+#[test]
+fn analyze_finding_overlap_empty_sidecar_reports_precondition_error() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let repo_path = tiny.dir.path();
+    let cache_dir = tempfile::tempdir().expect("tempdir");
+    let cache_root = cache_dir.path();
+
+    // Create an EMPTY sidecar via ingest-sarif with a zero-finding SARIF.
+    let empty_sarif = cache_dir.path().join("empty.sarif.json");
+    std::fs::write(&empty_sarif, sarif_zero_findings("semgrep")).unwrap();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "ingest-sarif",
+            "--repo",
+            repo_path.to_str().unwrap(),
+            "--cache-dir",
+            cache_root.to_str().unwrap(),
+            empty_sarif.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // The sidecar file now exists but holds zero rows.
+    let store =
+        codelore_lib::cli_api::external::ExternalStore::open_existing(cache_root, repo_path)
+            .expect("open_existing")
+            .expect("sidecar must exist after ingest-sarif");
+    assert_eq!(store.count().expect("count"), 0, "sidecar must be empty");
+    drop(store);
+
+    // The overlap analysis must FAIL with the pre-condition error, not succeed
+    // with an empty table.
+    let output = Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "finding-hotspot-overlap",
+            "--repo",
+            repo_path.to_str().unwrap(),
+            "--cache-dir",
+            cache_root.to_str().unwrap(),
+            "--format",
+            "json",
+            "--min-revs",
+            "1",
+        ])
+        .output()
+        .expect("run finding-hotspot-overlap");
+    assert!(
+        !output.status.success(),
+        "overlap analysis must fail on an empty sidecar"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("ingest-sarif"),
+        "error must mention the ingest-sarif pre-condition; got: {stderr}"
+    );
+}
+
 /// Re-ingesting a clean (zero-result) scan for an engine must clear that
 /// engine's stale rows. The stored count must reflect the current scanner run,
 /// never an accumulation of a prior run's findings.

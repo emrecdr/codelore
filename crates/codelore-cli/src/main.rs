@@ -165,22 +165,14 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
         // pipeline (docs/advanced-usage.md §11.8) breaks if a run prints
         // nothing. Reuse the check emitter with an empty violation set.
         if matches!(args.format, CheckFormat::Sarif) {
-            use std::collections::HashMap;
             let repo = GixRepo::open(&args.repo).context("open repo")?;
             let head_sha = repo.head_sha().context("get HEAD sha")?;
-            let repo_root = args
-                .repo
-                .canonicalize()
-                .unwrap_or_else(|_| args.repo.clone());
-            let mut stdout = std::io::stdout();
-            codelore_lib::cli_api::output::sarif::write_check_sarif(
-                &[],
-                &HashMap::new(),
-                &repo_root,
+            emit_check_sarif(
+                &args.repo,
                 &head_sha,
-                &mut stdout,
-            )
-            .context("emit vacuous check SARIF")?;
+                &[],
+                &std::collections::HashMap::new(),
+            )?;
         }
         return Ok(());
     }
@@ -195,10 +187,12 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
         FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &cache_root).context("ingest")?;
     let ts = now_utc_ts();
 
-    // Open the external-findings sidecar without creating it. `None` when
-    // absent (gate is skipped gracefully inside evaluate_all_gates).
+    // Open the external-findings sidecar without creating it, only when it
+    // holds findings. `None` when absent OR present-but-empty — both mean "no
+    // external findings to evaluate", and the gate is skipped gracefully inside
+    // evaluate_all_gates.
     let external_store = if thresholds.gates.max_findings_in_hot_files.is_some() {
-        codelore_lib::cli_api::external::ExternalStore::open_existing(&cache_root, &args.repo)
+        codelore_lib::cli_api::external::ExternalStore::open_nonempty(&cache_root, &args.repo)
             .context("open external store")?
     } else {
         None
@@ -210,10 +204,18 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
         &opts,
         &head_sha,
         &ts,
-        args.quiet,
         external_store.as_ref(),
     )
     .context("evaluate gates")?;
+
+    // ── Per-gate notices (stderr) ────────────────────────────────────────────
+    // Rendered from the ledger records the evaluator already produced, so the
+    // compute layer prints nothing itself. Emitted before the ratchet/report
+    // branches so both paths surface them; stderr keeps stdout a clean SARIF
+    // document in --format sarif; suppressed under --quiet.
+    if !args.quiet {
+        emit_gate_notices(&ledger_records);
+    }
 
     // ── Ratchet ───────────────────────────────────────────────────────────────
     if args.ratchet {
@@ -317,11 +319,11 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
 
     // ── SARIF emission (when --format sarif) ─────────────────────────────────
     if matches!(args.format, CheckFormat::Sarif) {
-        use codelore_lib::cli_api::quality_gates::evidence::evidence_for_path;
+        use codelore_lib::cli_api::quality_gates::evidence::{EvidenceCommit, evidence_for_path};
         use std::collections::HashMap;
 
         // Collect evidence only for violated per-file paths (not repo-wide).
-        let mut evidence_map: HashMap<String, Vec<_>> = HashMap::new();
+        let mut evidence_map: HashMap<String, Vec<EvidenceCommit>> = HashMap::new();
         for v in &violations {
             if v.path != "(repo-wide)" && v.path != "(degraded)" {
                 evidence_map.entry(v.path.clone()).or_insert_with(|| {
@@ -330,19 +332,7 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
             }
         }
 
-        let repo_root = args
-            .repo
-            .canonicalize()
-            .unwrap_or_else(|_| args.repo.clone());
-        let mut stdout = std::io::stdout();
-        codelore_lib::cli_api::output::sarif::write_check_sarif(
-            &violations,
-            &evidence_map,
-            &repo_root,
-            &head_sha,
-            &mut stdout,
-        )
-        .context("emit check SARIF")?;
+        emit_check_sarif(&args.repo, &head_sha, &violations, &evidence_map)?;
     }
 
     // ── Report ────────────────────────────────────────────────────────────────
@@ -402,6 +392,26 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
         // design; typed CodeLoreError variants are reserved for repo/output
         // failures (exit codes 3, 4, 5).
         anyhow::bail!("{} gate violation(s) — see above", violations.len());
+    }
+}
+
+/// Emit the per-gate skip / degraded notices to stderr, derived from the
+/// ledger records the evaluator produced. Keeping this out of the compute layer
+/// means `evaluate_all_gates` stays print-free and the notice wording lives
+/// beside the rest of `run_check_cmd`'s reporting.
+fn emit_gate_notices(
+    ledger_records: &[codelore_lib::cli_api::quality_gates::ledger::GateRunRecord],
+) {
+    for r in ledger_records {
+        match (r.gate.as_str(), r.verdict.as_str()) {
+            ("max_findings_in_hot_files", "skipped") => eprintln!(
+                "  ⚠ max_findings_in_hot_files: skipped — run `codelore ingest-sarif` first"
+            ),
+            ("code_health_min", "degraded") => eprintln!(
+                "  ⚠ code_health_min: degraded — health scan returned no rows on a non-empty repo"
+            ),
+            _ => {}
+        }
     }
 }
 
@@ -492,7 +502,6 @@ fn eval_code_health_gate(
     opts: &codelore_lib::cli_api::Options,
     ts: &str,
     head_sha: &str,
-    quiet: bool,
 ) -> Result<(
     GateGroupResult,
     Vec<codelore_lib::cli_api::analyses::code_health::CodeHealthRow>,
@@ -519,11 +528,6 @@ fn eval_code_health_gate(
         .map(|r| r.score)
         .fold(f64::INFINITY, f64::min);
     let verdict = if degraded {
-        if !quiet {
-            eprintln!(
-                "  ⚠ code_health_min: degraded — health scan returned no rows on a non-empty repo"
-            );
-        }
         "degraded"
     } else if ch_violations.is_empty() {
         "passed"
@@ -596,9 +600,14 @@ fn eval_arch_gates(
 /// `code_health_rows` is returned so callers (e.g. `--ratchet`) can extract
 /// ratchet metrics without re-running the analysis.
 ///
-/// `external_findings` is the pre-read sidecar contents for the
-/// `max_findings_in_hot_files` gate. Pass `Some(store)` when the sidecar
-/// exists on disk; `None` when absent (gate skipped, no sidecar created).
+/// `external_store` is the pre-opened sidecar for the
+/// `max_findings_in_hot_files` gate. Pass `Some(store)` when the sidecar exists
+/// and holds findings; `None` when absent or empty (gate skipped, no sidecar
+/// created).
+///
+/// This is a pure compute layer: it records each gate's verdict in the returned
+/// ledger records (including `"skipped"` and `"degraded"`) and prints nothing.
+/// `run_check_cmd` renders the skip/degraded notices from those records.
 #[allow(clippy::type_complexity, clippy::too_many_lines)]
 fn evaluate_all_gates(
     thresholds: &codelore_lib::cli_api::quality_gates::Thresholds,
@@ -606,7 +615,6 @@ fn evaluate_all_gates(
     opts: &codelore_lib::cli_api::Options,
     head_sha: &str,
     ts: &str,
-    quiet: bool,
     external_store: Option<&codelore_lib::cli_api::external::ExternalStore>,
 ) -> Result<(
     Vec<codelore_lib::cli_api::quality_gates::GateViolation>,
@@ -625,8 +633,7 @@ fn evaluate_all_gates(
     violations.extend(hs_v);
     recs.extend(hs_r);
 
-    let ((ch_v, ch_r), code_health) =
-        eval_code_health_gate(thresholds, db, opts, ts, head_sha, quiet)?;
+    let ((ch_v, ch_r), code_health) = eval_code_health_gate(thresholds, db, opts, ts, head_sha)?;
     violations.extend(ch_v);
     recs.extend(ch_r);
 
@@ -706,22 +713,12 @@ fn evaluate_all_gates(
     // ── max_findings_in_hot_files gate ───────────────────────────────────────
     if let Some(threshold) = g.max_findings_in_hot_files {
         // The gate is skipped (not failed) when the sidecar is absent OR present
-        // but empty — both mean "no external findings to evaluate yet". Query the
-        // row count up front so the empty-store case joins the absent case on the
-        // same skip path, mirroring the MCP overlap tool.
-        let store_with_rows = match external_store {
-            Some(store) if store.count().context("count external findings")? > 0 => Some(store),
-            _ => None,
-        };
-        match store_with_rows {
+        // but empty — both mean "no external findings to evaluate yet".
+        // `external_store` already collapses those two states to `None` (via
+        // `open_nonempty`), mirroring the MCP overlap tool. The `"skipped"`
+        // verdict recorded here is what run_check_cmd renders the notice from.
+        match external_store {
             None => {
-                // Sidecar absent or empty — skip gracefully without creating or
-                // populating the file.
-                if !quiet {
-                    eprintln!(
-                        "  ⚠ max_findings_in_hot_files: skipped — run `codelore ingest-sarif` first"
-                    );
-                }
                 recs.push(GateRunRecord {
                     ts: ts.to_owned(),
                     head_sha: head_sha.to_owned(),
@@ -773,6 +770,32 @@ fn evaluate_all_gates(
     }
 
     Ok((violations, recs, hotspot_count, code_health))
+}
+
+/// Emit a check SARIF document for `violations` (with their `evidence` chains)
+/// to stdout. Canonicalizes `repo` for the artifact-URI prefix, falling back to
+/// the path as-given when canonicalization fails (e.g. the path does not exist
+/// on disk). Shared by the vacuous-pass path (empty violations + evidence) and
+/// the violation path so the canonicalize + stdout + writer wiring lives once.
+fn emit_check_sarif(
+    repo: &std::path::Path,
+    head_sha: &str,
+    violations: &[codelore_lib::cli_api::quality_gates::GateViolation],
+    evidence: &std::collections::HashMap<
+        String,
+        Vec<codelore_lib::cli_api::quality_gates::evidence::EvidenceCommit>,
+    >,
+) -> Result<()> {
+    let repo_root = repo.canonicalize().unwrap_or_else(|_| repo.to_path_buf());
+    let mut stdout = std::io::stdout();
+    codelore_lib::cli_api::output::sarif::write_check_sarif(
+        violations,
+        evidence,
+        &repo_root,
+        head_sha,
+        &mut stdout,
+    )
+    .context("emit check SARIF")
 }
 
 /// Write a single `key=value` line to `$GITHUB_OUTPUT` when the env
@@ -1776,16 +1799,17 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
                 dispatch_function_coupling(&db, &repo, &opts, target, format, &ctx, &mut out)?;
             }
             AnalysisName::FindingHotspotOverlap => {
-                // Requires the external sidecar: open it read-only from the cache dir.
-                // open_existing returns None when the sidecar has not been created yet;
-                // in that case run_finding_hotspot_overlap reports the pre-condition
-                // error to the user. We surface the None case here so we never create
-                // an empty sidecar as a side-effect of an analysis read.
+                // Requires the external sidecar: open it read-only from the cache
+                // dir. open_nonempty returns None when the sidecar is absent OR
+                // present-but-empty — both mean "no findings ingested yet", and
+                // both surface the same pre-condition error here. We handle the
+                // None case at this layer so we never create an empty sidecar as
+                // a side-effect of an analysis read.
                 let cache_root = args
                     .cache_dir
                     .clone()
                     .unwrap_or_else(codelore_lib::cli_api::cache::default_cache_root);
-                let store = codelore_lib::cli_api::external::ExternalStore::open_existing(
+                let store = codelore_lib::cli_api::external::ExternalStore::open_nonempty(
                     &cache_root,
                     &args.repo,
                 )

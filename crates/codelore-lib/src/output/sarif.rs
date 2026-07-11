@@ -5,6 +5,7 @@
 //! partialFingerprints for stable identity across CI runs.
 
 use crate::analyses::hotspots::HotspotRow;
+use crate::hashing::sha256_prefixed;
 use crate::quality_gates::GateViolation;
 use crate::quality_gates::evidence::EvidenceCommit;
 use crate::{CodeLoreError, Result};
@@ -168,13 +169,7 @@ fn build_result(row: &HotspotRow, repo_root: &str) -> serde_json::Value {
     };
 
     // Stable fingerprint: sha256 of "<repo_root>|<path>"
-    let fp = {
-        let mut hasher = Sha256::new();
-        hasher.update(repo_root.as_bytes());
-        hasher.update(b"|");
-        hasher.update(row.path.as_bytes());
-        format!("sha256:{}", hex::encode(hasher.finalize()))
-    };
+    let fp = sha256_prefixed(&[repo_root, &row.path]);
 
     // Artifact URI: repo_root + "/" + percent-encoded path. The path
     // half is percent-encoded per RFC 3986 §4.1; GitHub Code Scanning
@@ -553,13 +548,9 @@ fn build_live_clone_result(row: &CloneCouplingRow, repo_root: &str) -> serde_jso
 
     // partialFingerprints — versioned keys per research brief for stable
     // cross-run identity even when family sizes fluctuate.
-    let mut file_pair_hasher = Sha256::new();
     let mut pair = [row.file_a.as_str(), row.file_b.as_str()];
     pair.sort_unstable();
-    file_pair_hasher.update(pair[0].as_bytes());
-    file_pair_hasher.update(b"|");
-    file_pair_hasher.update(pair[1].as_bytes());
-    let file_pair_hash = format!("sha256:{}", hex::encode(file_pair_hasher.finalize()));
+    let file_pair_hash = sha256_prefixed(&pair);
 
     json!({
         "ruleId": LIVE_CLONE_RULE_ID,
@@ -718,6 +709,35 @@ pub fn evidence_attachments(
     (code_flows, serde_json::Value::Array(locs))
 }
 
+/// Build one evidence-commit location object: a `physicalLocation` whose
+/// `artifactLocation.uri` is the percent-encoded `path` (leading `/` trimmed,
+/// per RFC 3986 §4.1 so Code Scanning accepts the URI), plus the caller's
+/// `message`. When `with_region` is set the location carries `region.startLine
+/// = 1` — the diff emitter anchors evidence at line 1 because it has no
+/// per-commit line span; the check emitter omits the region entirely.
+///
+/// Both the check and diff SARIF emitters own their (deliberately different)
+/// message wording and call this helper only for the shared object shape, so
+/// the two evidence encodings can never silently drift apart.
+#[must_use]
+pub fn evidence_location(path: &str, message: &str, with_region: bool) -> serde_json::Value {
+    use serde_json::json;
+
+    let uri = percent_encode_path(path.trim_start_matches('/'));
+    let physical = if with_region {
+        json!({
+            "artifactLocation": { "uri": uri },
+            "region": { "startLine": 1 }
+        })
+    } else {
+        json!({ "artifactLocation": { "uri": uri } })
+    };
+    json!({
+        "physicalLocation": physical,
+        "message": { "text": message }
+    })
+}
+
 /// Build one SARIF result for a single [`GateViolation`].
 fn build_check_result<S: std::hash::BuildHasher>(
     v: &GateViolation,
@@ -741,24 +761,10 @@ fn build_check_result<S: std::hash::BuildHasher>(
     // Stable fingerprints:
     // 1. gateFinding/v1 — our versioned key; includes head_sha so it
     //    differentiates the same gate breached at two different commits.
-    // 2. primaryLocationLineHash — mirrors the hotspots emitter at
-    //    sarif.rs:161-168; GitHub deduplicates on this key.
-    let gate_fp = {
-        let mut h = Sha256::new();
-        h.update(v.gate.as_bytes());
-        h.update(b"|");
-        h.update(v.path.as_bytes());
-        h.update(b"|");
-        h.update(head_sha.as_bytes());
-        format!("sha256:{}", hex::encode(h.finalize()))
-    };
-    let primary_fp = {
-        let mut h = Sha256::new();
-        h.update(repo_root.as_bytes());
-        h.update(b"|");
-        h.update(v.path.as_bytes());
-        format!("sha256:{}", hex::encode(h.finalize()))
-    };
+    // 2. primaryLocationLineHash — the same repo_root|path shape the hotspots
+    //    emitter uses; GitHub deduplicates on this key.
+    let gate_fp = sha256_prefixed(&[&v.gate, &v.path, head_sha]);
+    let primary_fp = sha256_prefixed(&[repo_root, &v.path]);
 
     let message_text = format!(
         "{gate}: {actual} vs threshold {threshold}",
@@ -777,20 +783,16 @@ fn build_check_result<S: std::hash::BuildHasher>(
     let evidence_locs: Vec<serde_json::Value> = chain
         .iter()
         .map(|c| {
-            json!({
-                "physicalLocation": {
-                    "artifactLocation": { "uri": percent_encode_path(v.path.trim_start_matches('/')) }
-                },
-                "message": {
-                    "text": format!(
-                        "{date} {author}: {msg} (+{churn} lines)",
-                        date = c.date,
-                        author = c.author,
-                        msg = c.message_head,
-                        churn = c.churn,
-                    )
-                }
-            })
+            let message = format!(
+                "{date} {author}: {msg} (+{churn} lines)",
+                date = c.date,
+                author = c.author,
+                msg = c.message_head,
+                churn = c.churn,
+            );
+            // Check evidence carries no region — a file-level anchor is all the
+            // gate has; the diff emitter passes `true` to anchor at line 1.
+            evidence_location(&v.path, &message, false)
         })
         .collect();
 

@@ -515,18 +515,13 @@ impl CodeLoreServer {
         tokio::task::spawn_blocking(move || {
             let cache_root = default_cache_root();
 
-            // open_existing returns None when the sidecar has not been created
-            // yet — the MCP tool never creates it; that is ingest-sarif's job.
-            // An existing-but-empty store (file present, no rows yet) is treated
-            // the same way. Either case returns the structured "run ingest-sarif
-            // first" note.
-            let store_opt =
-                ExternalStore::open_existing(&cache_root, &repo_path).map_err(internal)?;
-            let has_findings = match &store_opt {
-                Some(store) => store.count().map_err(internal)? > 0,
-                None => false,
-            };
-            let Some(store) = store_opt.filter(|_| has_findings) else {
+            // open_nonempty returns None when the sidecar is absent OR
+            // present-but-empty — the MCP tool never creates it; that is
+            // ingest-sarif's job. Both cases return the structured "run
+            // ingest-sarif first" note.
+            let Some(store) =
+                ExternalStore::open_nonempty(&cache_root, &repo_path).map_err(internal)?
+            else {
                 let note = serde_json::json!({
                     "findings": [],
                     "note": "run codelore ingest-sarif first"

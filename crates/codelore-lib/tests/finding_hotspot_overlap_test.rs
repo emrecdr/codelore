@@ -7,35 +7,16 @@
 //! - Priority pure-function branch coverage (see unit tests in the source module)
 //! - `_with` variant and wrapper agree on identical inputs
 
-use std::path::Path;
-
 use codelore_lib::Options;
 use codelore_lib::analyses::code_health::run_code_health;
 use codelore_lib::analyses::finding_hotspot_overlap::{
     run_finding_hotspot_overlap, run_finding_hotspot_overlap_with,
 };
 use codelore_lib::analyses::hotspots::run_hotspots;
-use codelore_lib::external::{ExternalFinding, ExternalStore};
+use codelore_lib::external::ExternalFinding;
 use codelore_lib::facts::FactsDb;
 use codelore_lib::repo::GixRepo;
-
-fn temp_store_for(dir: &Path) -> ExternalStore {
-    ExternalStore::open_or_create(dir, Path::new("/test/fake-repo")).expect("open_or_create")
-}
-
-fn finding_for(path: &str, engine: &str, level: &str) -> ExternalFinding {
-    ExternalFinding {
-        engine: engine.to_string(),
-        engine_version: "0.0.0".to_string(),
-        rule_id: "test/rule".to_string(),
-        path: path.to_string(),
-        start_line: Some(1),
-        end_line: None,
-        level: level.to_string(),
-        fingerprint: format!("test/v1/{engine}/{path}"),
-        message: "test finding".to_string(),
-    }
-}
+use codelore_lib::test_support::{finding_for, temp_external_store};
 
 /// Helper: ingest the `tiny_repo` fixture and return (db, opts).
 fn ingest_tiny() -> (tempfile::TempDir, FactsDb, Options) {
@@ -57,7 +38,7 @@ fn ingest_tiny() -> (tempfile::TempDir, FactsDb, Options) {
 #[test]
 fn empty_store_returns_error() {
     let store_dir = tempfile::tempdir().expect("tempdir");
-    let store = temp_store_for(store_dir.path());
+    let store = temp_external_store(store_dir.path());
     let (_tiny_dir, db, opts) = ingest_tiny();
 
     let err = run_finding_hotspot_overlap(&db, &opts, &store)
@@ -77,7 +58,7 @@ fn empty_store_returns_error() {
 #[test]
 fn findings_on_hotspot_path_produce_correct_row() {
     let store_dir = tempfile::tempdir().expect("tempdir");
-    let store = temp_store_for(store_dir.path());
+    let store = temp_external_store(store_dir.path());
 
     // Ingest two findings for src/main.rs from two different engines.
     let findings = [
@@ -126,7 +107,7 @@ fn findings_on_hotspot_path_produce_correct_row() {
 #[test]
 fn findings_on_non_hotspot_path_produce_zero_scores() {
     let store_dir = tempfile::tempdir().expect("tempdir");
-    let store = temp_store_for(store_dir.path());
+    let store = temp_external_store(store_dir.path());
 
     let f = finding_for("src/does-not-exist.rs", "semgrep", "note");
     store.replace_engine("semgrep", &[f]).expect("replace");
@@ -174,7 +155,7 @@ fn complex_file_in_biomarker_repo_has_real_health_band() {
     db.ingest(&repo, &opts).expect("ingest");
 
     let store_dir = tempfile::tempdir().expect("tempdir");
-    let store = temp_store_for(store_dir.path());
+    let store = temp_external_store(store_dir.path());
 
     // Ingest a finding for src/complex.rs — the most complex file in the fixture.
     let f = finding_for("src/complex.rs", "semgrep", "warning");
@@ -202,7 +183,7 @@ fn complex_file_in_biomarker_repo_has_real_health_band() {
 #[test]
 fn rows_sorted_priority_then_findings_then_path() {
     let store_dir = tempfile::tempdir().expect("tempdir");
-    let store = temp_store_for(store_dir.path());
+    let store = temp_external_store(store_dir.path());
 
     // 2 findings for main.rs and 1 for lib.rs, all from the same engine.
     let all = [
@@ -261,7 +242,7 @@ fn rows_sorted_priority_then_findings_then_path() {
 #[test]
 fn with_variant_and_wrapper_agree_on_identical_inputs() {
     let store_dir = tempfile::tempdir().expect("tempdir");
-    let store = temp_store_for(store_dir.path());
+    let store = temp_external_store(store_dir.path());
 
     let f = finding_for("src/main.rs", "semgrep", "warning");
     store.replace_engine("semgrep", &[f]).expect("replace");
