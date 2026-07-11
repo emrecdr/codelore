@@ -299,7 +299,7 @@ pub mod differential_repo {
     //!
     //! Commit the updated bundle. A proper non-shell-out regenerator
     //! (e.g. via `git fast-import` or `gix-object` write APIs) is a
-    //! reasonable `0.1.x` follow-up — see roadmap Tier 2.
+    //! reasonable follow-up.
 
     use tempfile::TempDir;
 

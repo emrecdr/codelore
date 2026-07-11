@@ -34,7 +34,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-Dwarnings"
-  # T10: disable incremental compilation in CI. Incremental compile
+  # Disable incremental compilation in CI. Incremental compile
   # artifacts are problematic in cached environments — they get written
   # to disk + cached but invalidated on the next run (because hashes
   # change), wasting cache hit rate AND build time recomputing what
@@ -51,15 +51,11 @@ env:
   # coarser (function-level, no line numbers) — an acceptable trade.
   CARGO_PROFILE_DEV_DEBUG: "0"
   CARGO_PROFILE_TEST_DEBUG: "0"
-  # Compile caching is rust-cache's job alone. sccache's GitHub-cache
-  # backend shares the repo's 10 GB Actions-cache quota with the
-  # rust-cache entries; once the quota is exceeded its writes are
-  # rejected and every compilation unit pays a wasted network
-  # round-trip — worst on a cold runner that compiles everything,
-  # which is how the windows job regressed from ~20 minutes to
-  # blowing multi-hour timeouts. rust-cache caching of target/ is
-  # what makes warm runs fast; a second cache layer fighting it for
-  # the same quota made things slower, not faster.
+  # Deliberately no RUSTC_WRAPPER/sccache anywhere in this workflow: its
+  # GitHub-cache backend competes with rust-cache for the repo's 10 GB
+  # Actions-cache quota, and once over quota every compilation unit pays
+  # a failed network round-trip. rust-cache's target/ caching is what
+  # makes warm runs fast.
 
 jobs:
   fmt:
@@ -94,7 +90,25 @@ jobs:
       # cross-platform signal on every run.
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # Per-OS policy lives here, in one place. `run_tests` gates the
+        # nextest install, the test run, and the doc tests below.
+        #
+        # Windows is compile-and-link verification only: the suite that
+        # linux runs in ~8 minutes exceeds 75 minutes of pure test
+        # execution on a windows runner even with the shared fixtures
+        # served from checked-in bundles (which cut it roughly 3x). The
+        # residual cost is per-test process overhead across ~1000 test
+        # processes plus the remaining bespoke per-test git builders.
+        # Restoring the full windows run needs a further pass — a
+        # curated windows test subset and/or bespoke-builder
+        # consolidation.
+        include:
+          - os: ubuntu-latest
+            run_tests: true
+          - os: macos-latest
+            run_tests: true
+          - os: windows-latest
+            run_tests: false
     steps:
       - uses: actions/checkout@v7
         with:
@@ -105,20 +119,6 @@ jobs:
           # commit's parent. This is the exact gotcha we document for our
           # users in advanced-usage §10 troubleshooting.
           fetch-depth: 0
-      - name: Exclude build/test paths from Windows Defender
-        # The suite builds hundreds of throwaway git-repo fixtures,
-        # each via dozens of short-lived `git` processes writing many
-        # small object files. Defender's real-time scan hooks every
-        # process launch and file write, multiplying exactly that
-        # workload — the dominant reason the same tests that finish in
-        # minutes on linux run for hours here.
-        if: matrix.os == 'windows-latest'
-        shell: powershell
-        run: |
-          Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE"
-          Add-MpPreference -ExclusionPath "$env:RUNNER_TEMP"
-          Add-MpPreference -ExclusionPath "$env:USERPROFILE\.cargo"
-          Add-MpPreference -ExclusionProcess "cargo.exe","rustc.exe","git.exe","link.exe"
       - uses: dtolnay/rust-toolchain@1.96.0
       - uses: Swatinem/rust-cache@v2
         with:
@@ -130,10 +130,15 @@ jobs:
       # aggregation). Doesn't run doc tests — those still need `cargo test
       # --doc` separately.
       - uses: taiki-e/install-action@v2
+        if: matrix.run_tests
         with:
           tool: cargo-nextest
       - name: Build test binaries
-        run: cargo nextest run --workspace --features test-support,spa --no-run
+        # On the no-test legs this step IS the deliverable: it proves
+        # the whole workspace (tests included) compiles and links on
+        # that target. nextest reuses these artifacts on the legs that
+        # go on to run.
+        run: cargo build --workspace --tests --features test-support,spa
       - name: Run tests (nextest)
         # `--all-features` would also activate `browser-tests`, which
         # requires a Chrome binary on the runner. The matrix test job
@@ -143,18 +148,7 @@ jobs:
         # ubuntu-latest where Chrome is pre-installed. Spelling out
         # the non-browser feature set here keeps the matrix
         # cost-predictable.
-        #
-        # Windows is build-only for now: the suite that linux runs in
-        # ~8 minutes exceeds 75 minutes of pure test execution on a
-        # windows runner even with the shared fixtures served from
-        # checked-in bundles (which cut it roughly 3x). The residual
-        # cost is per-test process overhead across ~1000 test
-        # processes plus the remaining bespoke per-test git builders.
-        # The MSVC target stays compile-and-link-verified on every
-        # push; restoring the full windows run needs a further pass
-        # (bespoke-builder consolidation and/or a curated windows
-        # test subset).
-        if: matrix.os != 'windows-latest'
+        if: matrix.run_tests
         run: cargo nextest run --workspace --features test-support,spa --no-fail-fast
       - name: Run doc tests
         # `cargo test --doc --workspace` does NOT honour per-package
@@ -164,6 +158,7 @@ jobs:
         # that import `rust_code_analysis::*` (the pre-fork name) and so
         # don't compile. Excluded here so our doctests still gate without
         # forcing edits into the upstream-tracked vendored sources.
+        if: matrix.run_tests
         run: cargo test --workspace --exclude codelore-rca --all-features --doc
 
   spa-browser:
