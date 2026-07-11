@@ -290,6 +290,8 @@ Once you've run those four, you have enough signal to triage. From here, [the ad
 
 ## Interactive dashboard (`--format spa`)
 
+**[Live demo →](https://emrecdr.github.io/codelore/demo/)** — codelore analyzing its own repository, regenerated on every push to main.
+
 Emit a single self-contained HTML file you can open in any browser,
 share via Slack, attach to a CI run, or install as a PWA. Runs
 fully offline — no server, no CDN, no JavaScript bundles to host.

@@ -25,6 +25,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Read-only by default for the whole workflow. Only the `dogfood` job
+# widens this (to `contents: write`) via a job-level override, so it is
+# the sole job that can push the generated demo to `gh-pages`.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-Dwarnings"
@@ -216,6 +222,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     continue-on-error: true
+    # Scoped to this job so only dogfood can push the generated demo to the
+    # gh-pages branch. Every other job inherits the workflow's read-only
+    # default — nothing else gains write access to the repo.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -267,3 +278,29 @@ jobs:
             echo "### PR change summary"
             ./target/release/codelore diff "origin/${{ github.base_ref }}...HEAD" --format markdown
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish self-analysis dashboard demo to gh-pages
+        # Regenerate the interactive SPA of codelore analysing its own
+        # repository and publish it to `gh-pages` under `demo/`, so
+        # https://emrecdr.github.io/codelore/demo/ is always current. The
+        # `spa` format is orthogonal to `--analysis`: it bundles the full
+        # multi-widget dashboard on its own. Runs on main pushes only —
+        # PRs must never publish, and the job-level `contents: write`
+        # above is what authorises the push.
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          ./target/release/codelore analyze --format spa --output demo-index.html --repo .
+          git fetch origin gh-pages
+          git worktree add ../ghp gh-pages
+          mkdir -p ../ghp/demo
+          cp demo-index.html ../ghp/demo/index.html
+          git -C ../ghp add demo/index.html
+          if git -C ../ghp diff --cached --quiet; then
+            echo "Demo unchanged; nothing to publish."
+          else
+            git -C ../ghp -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit -m 'Publish self-analysis dashboard demo'
+            git -C ../ghp push origin gh-pages
+          fi
+          git worktree remove --force ../ghp
