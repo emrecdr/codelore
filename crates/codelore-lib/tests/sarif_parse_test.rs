@@ -5,30 +5,19 @@
 //! - clippy:   no fingerprints (self-hash) + relative uri + result-level
 //! - `CodeQL`:   `partialFingerprints.primaryLocationLineHash` + `ruleIndex` + `file://` uri
 
-use codelore_lib::external::sarif_parse::{ExternalFinding, parse_sarif, parse_sarif_engines};
+use codelore_lib::external::sarif_parse::{
+    ExternalFinding, parse_sarif_with_engines, self_hash_fingerprint,
+};
+use codelore_lib::test_support::sarif_fixture;
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-fn fixture(name: &str) -> String {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/sarif")
-        .join(name);
-    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("could not read fixture {name}: {e}"))
-}
-
-/// Compute the self-hash the way `sarif_parse.rs` does.
-fn self_hash(engine: &str, rule_id: &str, path: &str, start_line: Option<u32>) -> String {
-    use sha2::{Digest, Sha256};
-    let mut h = Sha256::new();
-    h.update(engine.as_bytes());
-    h.update(b"|");
-    h.update(rule_id.as_bytes());
-    h.update(b"|");
-    h.update(path.as_bytes());
-    h.update(b"|");
-    let sl = start_line.map(|n| n.to_string()).unwrap_or_default();
-    h.update(sl.as_bytes());
-    format!("sha256:{}", hex::encode(h.finalize()))
+/// Parse a document and keep only the findings half (engine list asserted
+/// separately in the engine-specific tests).
+fn parse_findings(raw: &str) -> Vec<ExternalFinding> {
+    parse_sarif_with_engines(raw)
+        .expect("SARIF document should parse")
+        .0
 }
 
 // ─── semgrep dialect ────────────────────────────────────────────────────────
@@ -40,8 +29,8 @@ fn self_hash(engine: &str, rule_id: &str, path: &str, start_line: Option<u32>) -
 /// - level from rule `defaultConfiguration.level` (results have no `level` field)
 #[test]
 fn semgrep_dialect_parses_correctly() {
-    let raw = fixture("semgrep.sarif.json");
-    let findings = parse_sarif(&raw).expect("semgrep fixture should parse");
+    let raw = sarif_fixture("semgrep.sarif.json");
+    let findings = parse_findings(&raw);
 
     // Hand-derived expected findings:
     // Result 1: src/db.py, lines 42-44, fingerprint from fingerprints.matchBasedId/v1
@@ -83,8 +72,8 @@ fn semgrep_dialect_parses_correctly() {
 /// - `endLine` present on first result, absent on second
 #[test]
 fn clippy_dialect_uses_self_hash_fingerprint() {
-    let raw = fixture("clippy.sarif.json");
-    let findings = parse_sarif(&raw).expect("clippy fixture should parse");
+    let raw = sarif_fixture("clippy.sarif.json");
+    let findings = parse_findings(&raw);
 
     assert_eq!(findings.len(), 2, "expected 2 clippy findings");
 
@@ -97,7 +86,8 @@ fn clippy_dialect_uses_self_hash_fingerprint() {
     assert_eq!(f1.end_line, Some(88));
     assert_eq!(f1.level, "warning");
     // Self-hash: sha256(clippy|clippy::unwrap_used|src/main.rs|88)
-    let expected_fp1 = self_hash("clippy", "clippy::unwrap_used", "src/main.rs", Some(88));
+    let expected_fp1 =
+        self_hash_fingerprint("clippy", "clippy::unwrap_used", "src/main.rs", Some(88));
     assert_eq!(
         f1.fingerprint, expected_fp1,
         "result 1 fingerprint should be self-hash"
@@ -108,7 +98,7 @@ fn clippy_dialect_uses_self_hash_fingerprint() {
     assert_eq!(f2.path, "src/parser.rs");
     assert_eq!(f2.start_line, Some(120));
     assert_eq!(f2.end_line, None);
-    let expected_fp2 = self_hash(
+    let expected_fp2 = self_hash_fingerprint(
         "clippy",
         "clippy::cognitive_complexity",
         "src/parser.rs",
@@ -130,8 +120,8 @@ fn clippy_dialect_uses_self_hash_fingerprint() {
 ///   result.level and the rule has no defaultConfiguration → falls back to "warning"
 #[test]
 fn codeql_dialect_resolves_rule_index_and_strips_file_uri() {
-    let raw = fixture("codeql.sarif.json");
-    let findings = parse_sarif(&raw).expect("codeql fixture should parse");
+    let raw = sarif_fixture("codeql.sarif.json");
+    let findings = parse_findings(&raw);
 
     assert_eq!(findings.len(), 2, "expected 2 codeql findings");
 
@@ -170,14 +160,14 @@ fn codeql_dialect_resolves_rule_index_and_strips_file_uri() {
 #[test]
 fn non_sarif_json_returns_err() {
     let not_sarif = r#"{"kind": "SomeOtherTool", "results": []}"#;
-    let err = parse_sarif(not_sarif);
+    let err = parse_sarif_with_engines(not_sarif);
     assert!(err.is_err(), "non-SARIF JSON should return Err");
 }
 
 /// Completely invalid JSON should return Err.
 #[test]
 fn invalid_json_returns_err() {
-    let err = parse_sarif("not json at all {{{");
+    let err = parse_sarif_with_engines("not json at all {{{");
     assert!(err.is_err(), "invalid JSON should return Err");
 }
 
@@ -210,7 +200,7 @@ fn malformed_result_inside_valid_doc_is_skipped() {
         }]
     }"#;
 
-    let findings = parse_sarif(raw).expect("valid SARIF doc should not return Err");
+    let findings = parse_findings(raw);
     // The malformed result (no locations) is skipped; only the valid one survives.
     assert_eq!(
         findings.len(),
@@ -221,7 +211,7 @@ fn malformed_result_inside_valid_doc_is_skipped() {
     assert_eq!(findings[0].path, "src/good.rs");
     assert_eq!(findings[0].start_line, Some(10));
     // No fingerprints → self-hash
-    let expected_fp = self_hash("test-scanner", "test/good", "src/good.rs", Some(10));
+    let expected_fp = self_hash_fingerprint("test-scanner", "test/good", "src/good.rs", Some(10));
     assert_eq!(findings[0].fingerprint, expected_fp);
 }
 
@@ -245,15 +235,15 @@ fn finding_with_no_region_is_valid() {
         }]
     }"#;
 
-    let findings = parse_sarif(raw).expect("should parse");
+    let findings = parse_findings(raw);
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0].start_line, None);
     assert_eq!(findings[0].end_line, None);
     assert_eq!(findings[0].level, "note");
 }
 
-/// `parse_sarif_engines` surfaces an engine even when its run flagged nothing —
-/// the signal ingest needs to clear that engine's stale rows on a clean re-scan.
+/// The engine list surfaces an engine even when its run flagged nothing — the
+/// signal ingest needs to clear that engine's stale rows on a clean re-scan.
 #[test]
 fn parse_sarif_engines_includes_zero_result_runs() {
     let raw = r#"{
@@ -265,11 +255,13 @@ fn parse_sarif_engines_includes_zero_result_runs() {
     }"#;
 
     // No findings, but the engine name is still surfaced.
-    assert!(parse_sarif(raw).expect("parse").is_empty());
-    assert_eq!(parse_sarif_engines(raw).expect("engines"), vec!["semgrep"]);
+    let (findings, engines) = parse_sarif_with_engines(raw).expect("parse");
+    assert!(findings.is_empty());
+    assert_eq!(engines, vec!["semgrep"]);
 }
 
-/// Engines are deduplicated and non-SARIF input errors, matching `parse_sarif`.
+/// Engines are deduplicated and non-SARIF input errors, matching the findings
+/// side of the same parse.
 #[test]
 fn parse_sarif_engines_dedupes_and_rejects_non_sarif() {
     let two_runs_same_engine = r#"{
@@ -279,11 +271,9 @@ fn parse_sarif_engines_dedupes_and_rejects_non_sarif() {
             { "tool": { "driver": { "name": "clippy" } }, "results": [] }
         ]
     }"#;
-    assert_eq!(
-        parse_sarif_engines(two_runs_same_engine).expect("engines"),
-        vec!["clippy"]
-    );
+    let (_findings, engines) = parse_sarif_with_engines(two_runs_same_engine).expect("engines");
+    assert_eq!(engines, vec!["clippy"]);
 
     // Missing `runs` is not a SARIF document.
-    assert!(parse_sarif_engines(r#"{"version":"2.1.0"}"#).is_err());
+    assert!(parse_sarif_with_engines(r#"{"version":"2.1.0"}"#).is_err());
 }
