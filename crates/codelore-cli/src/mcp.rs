@@ -39,6 +39,13 @@ fn internal(e: impl std::fmt::Display) -> ErrorData {
 
 /// Resolve a revision string against `repo` via `git rev-parse`.
 /// Returns the full 40-char SHA, or an `ErrorData` if the rev is unknown.
+///
+/// INVARIANT for every child process this server spawns: it must never
+/// inherit the server's stdio. Stdout IS the JSON-RPC channel — a child
+/// that writes to an inherited handle corrupts the protocol stream, and
+/// if the client isn't draining it the child blocks on a full pipe and
+/// deadlocks the tool call (deterministic on windows, whose pipe
+/// buffers are small enough for git's checkout chatter to fill).
 fn resolve_rev(repo: &Path, rev: &str) -> std::result::Result<String, ErrorData> {
     let out = Command::new("git")
         .args([
@@ -48,6 +55,7 @@ fn resolve_rev(repo: &Path, rev: &str) -> std::result::Result<String, ErrorData>
             "--verify",
             rev,
         ])
+        .stdin(std::process::Stdio::null())
         .output()
         .map_err(|e| ErrorData::internal_error(format!("git rev-parse: {e}"), None))?;
     if out.status.success() {
@@ -68,7 +76,9 @@ fn temp_worktree(
 ) -> std::result::Result<(PathBuf, TempWorktree), ErrorData> {
     let dir = tempfile::tempdir().map_err(|e| internal(format!("create temp dir: {e}")))?;
     let wt_path = dir.path().to_path_buf();
-    let status = Command::new("git")
+    // Detached stdio per the module invariant (see `resolve_rev`);
+    // stderr is captured so a failure carries git's own diagnosis.
+    let out = Command::new("git")
         .args([
             "-C",
             repo.to_str().unwrap_or("."),
@@ -79,10 +89,14 @@ fn temp_worktree(
             wt_path.to_str().unwrap(),
             sha,
         ])
-        .status()
+        .stdin(std::process::Stdio::null())
+        .output()
         .map_err(|e| internal(format!("git worktree add: {e}")))?;
-    if !status.success() {
-        return Err(internal(format!("git worktree add failed for {sha}")));
+    if !out.status.success() {
+        return Err(internal(format!(
+            "git worktree add failed for {sha}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
     }
     Ok((
         wt_path,
@@ -102,6 +116,8 @@ struct TempWorktree {
 impl Drop for TempWorktree {
     fn drop(&mut self) {
         let path = self.dir.path().to_str().unwrap_or("").to_string();
+        // Best-effort cleanup; detached stdio per the module invariant
+        // (see `resolve_rev`).
         let _ = Command::new("git")
             .args([
                 "-C",
@@ -111,7 +127,8 @@ impl Drop for TempWorktree {
                 "--force",
                 &path,
             ])
-            .status();
+            .stdin(std::process::Stdio::null())
+            .output();
     }
 }
 
