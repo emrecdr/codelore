@@ -307,4 +307,99 @@ mod tests {
             "first 79 chars must be ASCII 'x', got: {head:?}"
         );
     }
+
+    /// Build a repo where a seed commit adds `foo.rs` and two later commits
+    /// modify it at the **same second**, so the two edits tie on `date` and the
+    /// `rev DESC` tie-break decides their order. Returns `(db, opts, _dir)`.
+    #[cfg(feature = "test-support")]
+    fn repo_with_same_second_edits() -> (FactsDb, Options, tempfile::TempDir) {
+        use std::process::Command;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path();
+        let git = |args: &[&str]| {
+            let ok = Command::new("git")
+                .arg("-C")
+                .arg(p)
+                .args(args)
+                .status()
+                .expect("git")
+                .success();
+            assert!(ok, "git {args:?} failed");
+        };
+        let commit_at = |msg: &str, date: &str| {
+            let ok = Command::new("git")
+                .arg("-C")
+                .arg(p)
+                .args(["commit", "--quiet", "-m", msg])
+                .env("GIT_AUTHOR_DATE", date)
+                .env("GIT_COMMITTER_DATE", date)
+                .status()
+                .expect("git commit")
+                .success();
+            assert!(ok, "git commit failed: {msg}");
+        };
+
+        git(&["init", "-b", "main", "--quiet"]);
+        git(&["config", "user.email", "t@test.com"]);
+        git(&["config", "user.name", "T"]);
+
+        // Seed at an earlier second so the two edits are the two newest rows.
+        std::fs::write(p.join("foo.rs"), "fn a() {}\n").unwrap();
+        git(&["add", "foo.rs"]);
+        commit_at("seed foo", "2026-04-01T10:00:00Z");
+
+        // Two edits sharing the exact same second — both register churn on
+        // foo.rs, so both appear in evidence and tie on `date`.
+        let same_second = "2026-04-01T11:00:00Z";
+        std::fs::write(p.join("foo.rs"), "fn a() {}\nfn b() {}\n").unwrap();
+        git(&["add", "foo.rs"]);
+        commit_at("edit foo once", same_second);
+
+        std::fs::write(p.join("foo.rs"), "fn a() {}\nfn b() {}\nfn c() {}\n").unwrap();
+        git(&["add", "foo.rs"]);
+        commit_at("edit foo twice", same_second);
+
+        let opts = Options {
+            repo_path: p.to_path_buf(),
+            min_revs: 1,
+            ..Options::default()
+        };
+        let gix = GixRepo::open(p).expect("open gix repo");
+        let db = FactsDb::open_or_ingest(&opts, &gix).expect("ingest");
+        (db, opts, dir)
+    }
+
+    /// Two commits touching one path at the same second must be ordered by
+    /// `rev DESC` — the lexicographically-greater commit SHA first. This pins
+    /// the `date DESC, rev DESC` tie-break that the distinct-timestamp fixtures
+    /// never exercise.
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn evidence_same_second_tie_breaks_by_rev_desc() {
+        let (db, opts, _dir) = repo_with_same_second_edits();
+        let rows = evidence_for_path(&db, &opts, "foo.rs", 5).expect("evidence_for_path");
+
+        // The two same-second edits share the newest date; find that date and
+        // the revs stamped with it.
+        let newest_date = &rows.first().expect("at least one evidence row").date;
+        let tied: Vec<&str> = rows
+            .iter()
+            .filter(|r| &r.date == newest_date)
+            .map(|r| r.rev.as_str())
+            .collect();
+        assert_eq!(
+            tied.len(),
+            2,
+            "expected exactly two commits tied on the newest second, got {tied:?} from rows {rows:?}"
+        );
+
+        // The tie-break is `rev DESC`: the lexicographically-greater SHA first.
+        assert!(
+            tied[0] > tied[1],
+            "same-second commits must be ordered rev DESC (higher SHA first), got {tied:?}"
+        );
+
+        // Sanity: the two revs are distinct SHAs (a real tie, not a duplicate).
+        assert_ne!(tied[0], tied[1], "the two tied revs must be distinct SHAs");
+    }
 }
