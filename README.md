@@ -28,6 +28,10 @@ Behind every codebase is a human narrative your linter cannot see: who wrote thi
 
 A Rust **drop-in successor** to Adam Tornhill's [code-maat](https://github.com/adamtornhill/code-maat) — every published code-maat analysis is supported under the same `--analysis NAME` flag, with modern improvements: deterministic tiebreaks, Fisher exact significance gates, SARIF output, persistent cache, PR-mode diffing, and a SQL-queryable fact store. Built on [gix](https://github.com/GitoxideLabs/gitoxide) (pure-Rust git), [DuckDB](https://duckdb.org) (embedded analytics), [fancy-regex](https://github.com/fancy-regex/fancy-regex) (lookaround support for architectural grouping), and a vendored fork of Mozilla's [rust-code-analysis](https://github.com/mozilla/rust-code-analysis) (tree-sitter complexity).
 
+[![The interactive dashboard's bivariate hotspot map — file size = churn, colour = health × activity, with switchable behavioural lenses and an off-boarding simulation](docs/assets/dashboard-hotspots.png)](https://emrecdr.github.io/codelore/demo/)
+
+<p align="center"><strong><a href="https://emrecdr.github.io/codelore/demo/">Live demo →</a></strong> codelore analyzing its own repository, regenerated on every push to main.</p>
+
 ---
 
 ## Why you need this
