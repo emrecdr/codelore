@@ -82,7 +82,13 @@ jobs:
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   test:
-    name: test
+    # Explicit display name so the matrix `include` flags (run_tests) don't
+    # leak into the rendered check name. Without this, GitHub appends every
+    # matrix dimension — e.g. "test (windows-latest, false)". Naming the job
+    # with only ${{ matrix.os }} renders exactly "test (ubuntu-latest)" etc.,
+    # which is what the protect-release-tags ruleset requires as its
+    # required_status_checks contexts (see scripts/cut-release.sh).
+    name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:

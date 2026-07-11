@@ -13,6 +13,13 @@ jobs:
   bench:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    # The regression tracker below pushes the benchmark timeline to the
+    # gh-pages branch (auto-push: true). That write needs an explicit
+    # grant: bench.yml declares no workflow-level permissions block, so
+    # the job would otherwise inherit the read-only default token and the
+    # push would 403. Scoped to this job only.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
 
@@ -95,12 +102,23 @@ jobs:
           name: bench-output
           path: bench-output.txt
 
-      # Regression trend tracker (advisory). This workflow has NO
-      # `pull_request` trigger — it runs post-merge only (weekly schedule +
-      # manual dispatch, see the `on:` block above), so it never gates a PR.
-      # `fail-on-alert: false` reports a >10% regression on the baseline
-      # benches (tiny + medium) as a commit comment rather than failing.
-      # The kernel bench is informational only — too noisy on shared CI
+      # Regression trend tracker + published timeline. This workflow has
+      # NO `pull_request` trigger — it runs post-merge only (weekly
+      # schedule + manual dispatch, see the `on:` block above), so it
+      # never gates a PR.
+      #
+      # Publishing: `auto-push: true` commits each run's results to the
+      # `gh-pages` branch under `dev/bench/`, so the interactive trend
+      # charts render at https://emrecdr.github.io/codelore/dev/bench/.
+      # The push needs the job-level `contents: write` grant declared
+      # above. (`gh-pages-branch` and `benchmark-data-dir-path` are set
+      # to their defaults explicitly so the publish target is legible
+      # here rather than implied.)
+      #
+      # Alerting stays comment-only and never a gate: `fail-on-alert:
+      # false` reports a >10% regression on the baseline benches (tiny +
+      # medium) as a commit comment rather than failing the job. The
+      # kernel bench is informational only — too noisy on shared CI
       # runners to gate on.
       # (To gate PRs later, add a cheap baseline-only subset under a
       # `pull_request` trigger; do NOT run the full suite on every PR.)
@@ -112,5 +130,7 @@ jobs:
           alert-threshold: '110%'
           fail-on-alert: false  # advisory only — post-merge trend tracker, never a PR gate
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          auto-push: false
+          auto-push: true
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: dev/bench
           comment-on-alert: true

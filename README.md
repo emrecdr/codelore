@@ -32,6 +32,8 @@ A Rust **drop-in successor** to Adam Tornhill's [code-maat](https://github.com/a
 
 <p align="center"><strong><a href="https://emrecdr.github.io/codelore/demo/">Live demo →</a></strong> codelore analyzing its own repository, regenerated on every push to main.</p>
 
+<p align="center"><a href="#quick-start">Quick start</a> · <a href="#the-analyses">The analyses</a> · <a href="#interactive-dashboard---format-spa">Interactive dashboard</a> · <a href="#agent-integration">MCP / agent integration</a> · <a href="#migrating-from-code-maat">Migrating from code-maat</a> · <a href="https://emrecdr.github.io/codelore/">Project site</a></p>
+
 ---
 
 ## Why you need this
