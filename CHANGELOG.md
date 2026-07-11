@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-07-11
+
 ### Added
 
 - **`codelore check --format sarif`** — emits a SARIF 2.1.0 document to stdout while keeping verdict lines on stderr and exit codes unchanged. A pass produces a valid zero-result document. Each per-file gate violation carries a commit evidence chain (up to 5 contributing commits, newest-first, lineage-aware) in both `relatedLocations` and `codeFlows → threadFlows → locations`, consumable by GitHub Code Scanning and any SARIF-aware CI tool. Results carry two `partialFingerprints` keys: `gateFinding/v1` (stable finding identity across runs) and `primaryLocationLineHash` (used by GitHub for cross-upload alert deduplication). See docs/advanced-usage.md §11.8 for the GitHub Actions upload snippet.
