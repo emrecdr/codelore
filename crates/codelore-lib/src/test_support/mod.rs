@@ -1,12 +1,13 @@
 //! Test fixtures. Public so CLI integration tests can reuse.
 //!
-//! `tiny_repo::build()` programmatically constructs a 5-commit repo via
-//! shell-out to `git` so behavior is exactly reproducible. We use git CLI
-//! (not gix-write) because gix-write is still maturing for trivial init in 0.84,
-//! and shell-out is fast + predictable for tests.
+//! Every fixture extracts its repo from a checked-in git bundle via a single
+//! atomic `git clone` into a fresh tempdir. Capturing the fixture once as a
+//! bundle (rather than rebuilding it per test via a chain of `git` shell-outs)
+//! removes the multi-process construction race that intermittently corrupted
+//! the object store on loaded CI runners, and collapses hundreds of `git`
+//! invocations per build down to one `clone`.
 //!
-//! `differential_repo::build()` extracts a 50-commit repo from a checked-in
-//! git bundle via a single atomic `git clone`. Used to assert
+//! `differential_repo::build()` extracts a 50-commit repo; used to assert
 //! `GixRepo` ≡ `GitCliRepo`.
 
 /// Coupling-permissive `Options` so a small fixture's co-change pairs
@@ -28,116 +29,98 @@ pub fn permissive_coupling_opts(repo_path: std::path::PathBuf) -> crate::Options
     }
 }
 
+/// Write `BUNDLE` to an OS-temp file outside `target`, `git clone` it into
+/// `target`, and return the clone's HEAD SHA. Shared by the bundle-backed
+/// fixtures below.
+///
+/// The bundle bytes land in a `NamedTempFile` in the OS temp dir (not inside
+/// `target`) so `git clone` sees an empty destination; that file auto-deletes
+/// when it drops at the end of this function — the clone no longer needs it.
+///
+/// # Panics
+///
+/// Panics if the scratch tempfile cannot be created/written or if `git clone`
+/// from the bundle fails (either indicates a broken local git install, not a
+/// fixture issue).
+#[cfg(feature = "test-support")]
+fn clone_bundle(bundle: &[u8], target: &std::path::Path) -> String {
+    let bundle_file = tempfile::NamedTempFile::new().expect("bundle scratch tempfile");
+    std::fs::write(bundle_file.path(), bundle).expect("write bundle bytes");
+
+    let status = std::process::Command::new("git")
+        .args(["clone", "--quiet"])
+        .arg(bundle_file.path())
+        .arg(target)
+        .status()
+        .expect("spawn git clone");
+    assert!(status.success(), "git clone from embedded bundle failed");
+    drop(bundle_file);
+
+    String::from_utf8(
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(target)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .expect("spawn git rev-parse")
+            .stdout,
+    )
+    .expect("utf8")
+    .trim()
+    .to_string()
+}
+
 #[cfg(feature = "test-support")]
 pub mod tiny_repo {
-    use std::path::PathBuf;
+    //! A tiny 5-commit repo with distinct per-commit timestamps.
+    //!
+    //! Timestamps matter: Kamei `enrich_history` / `enrich_experience` / SEXP
+    //! all use **strict** `prev.date < c.date` semantics, so same-second peers
+    //! don't count as priors. The fixture's commits land on
+    //! 2026-06-01..2026-06-05 (one per day) so every Kamei history / experience
+    //! metric reads non-zero.
+    //!
+    //! ## Regenerating the bundle
+    //!
+    //! The fixture is captured once into a checked-in git bundle
+    //! (`src/test_support/data/tiny-repo.bundle`; HEAD
+    //! `38e219d9d448be9da489d96cc59dcb0bb1d37824`, deterministic across
+    //! regenerations because every author / date / file content is fixed). To
+    //! regenerate (e.g. when the commit shape must change), revive the
+    //! pre-bundle programmatic builder from git history at commit `b412e6d`
+    //! (it shells out to `git` for each commit and lived in this module), run
+    //! it to produce a fresh repo, then capture:
+    //!
+    //! ```text
+    //! git -C <fresh-repo> bundle create \
+    //!     crates/codelore-lib/src/test_support/data/tiny-repo.bundle --all
+    //! ```
+    //!
+    //! Commit the updated bundle.
+
     use tempfile::TempDir;
+
+    /// The fixture's git bundle, captured once and embedded at compile time.
+    static BUNDLE: &[u8] = include_bytes!("data/tiny-repo.bundle");
 
     pub struct TinyRepo {
         pub dir: TempDir,
         pub head_sha: String,
     }
 
-    /// Build a tiny 5-commit repository for testing.
+    /// Extract the tiny 5-commit fixture from the embedded bundle into a fresh
+    /// tempdir. Single atomic `git clone` — no multi-process race surface.
     ///
     /// # Panics
     ///
-    /// Panics if the OS cannot create a temporary directory or if any `git` command fails.
+    /// Panics if `tempfile::tempdir` fails or if `git clone` from the bundle
+    /// fails (either case indicates a broken local git install, not a fixture
+    /// issue).
     #[must_use]
     pub fn build() -> TinyRepo {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path: PathBuf = dir.path().to_path_buf();
-
-        run_git(&path, &["init", "-b", "main", "--quiet"]);
-        run_git(&path, &["config", "user.email", "tiny@example.com"]);
-        run_git(&path, &["config", "user.name", "Tiny"]);
-
-        // Distinct per-commit timestamps. Kamei `enrich_history` /
-        // `enrich_experience` / SEXP all use **strict** `prev.date <
-        // c.date` semantics; same-second peers don't count as priors.
-        // Without explicit dates, all 5 commits land at the wall-clock
-        // second of fixture construction and every Kamei history /
-        // experience metric reads 0 — masking real-world behaviour.
-        let dates = [
-            "2026-06-01T10:00:00Z",
-            "2026-06-02T10:00:00Z",
-            "2026-06-03T10:00:00Z",
-            "2026-06-04T10:00:00Z",
-            "2026-06-05T10:00:00Z",
-        ];
-
-        write(&path, "src/main.rs", "fn main() {}\n");
-        run_git(&path, &["add", "."]);
-        run_git_at(&path, dates[0], &["commit", "-m", "init", "--quiet"]);
-
-        write(&path, "src/main.rs", "fn main() { println!(\"hi\"); }\n");
-        run_git_at(&path, dates[1], &["commit", "-am", "say hi", "--quiet"]);
-
-        write(&path, "src/lib.rs", "pub fn greet() {}\n");
-        run_git(&path, &["add", "."]);
-        run_git_at(&path, dates[2], &["commit", "-m", "add lib", "--quiet"]);
-
-        write(&path, "src/main.rs", "fn main() { println!(\"hello\"); }\n");
-        run_git_at(&path, dates[3], &["commit", "-am", "fix typo", "--quiet"]);
-
-        write(
-            &path,
-            "src/main.rs",
-            "fn main() { println!(\"hello, world\"); }\n",
-        );
-        run_git_at(
-            &path,
-            dates[4],
-            &["commit", "-am", "expand greeting", "--quiet"],
-        );
-
-        let head_sha = String::from_utf8(
-            std::process::Command::new("git")
-                .args(["-C", path.to_str().unwrap(), "rev-parse", "HEAD"])
-                .output()
-                .expect("git rev-parse")
-                .stdout,
-        )
-        .expect("utf8")
-        .trim()
-        .to_string();
-
+        let head_sha = super::clone_bundle(BUNDLE, dir.path());
         TinyRepo { dir, head_sha }
-    }
-
-    fn run_git(path: &std::path::Path, args: &[&str]) {
-        let status = std::process::Command::new("git")
-            .arg("-C")
-            .arg(path)
-            .args(args)
-            .status()
-            .expect("git");
-        assert!(status.success(), "git {args:?} failed");
-    }
-
-    /// `run_git` variant that pins `GIT_AUTHOR_DATE` /
-    /// `GIT_COMMITTER_DATE` so the commit lands at a deterministic
-    /// timestamp. Required for Kamei history / experience metrics
-    /// (which use strict `prev.date < c.date` semantics) to be
-    /// non-zero on a manufactured fixture.
-    fn run_git_at(path: &std::path::Path, iso_date: &str, args: &[&str]) {
-        let status = std::process::Command::new("git")
-            .arg("-C")
-            .arg(path)
-            .args(args)
-            .env("GIT_AUTHOR_DATE", iso_date)
-            .env("GIT_COMMITTER_DATE", iso_date)
-            .status()
-            .expect("git");
-        assert!(status.success(), "git {args:?} (at {iso_date}) failed");
-    }
-
-    fn write(root: &std::path::Path, rel: &str, content: &str) {
-        let p = root.join(rel);
-        if let Some(parent) = p.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
-        std::fs::write(p, content).unwrap();
     }
 }
 
@@ -149,155 +132,51 @@ pub mod biomarker_repo {
     //! (complex-method, large-method, dry, and — via co-change — shotgun).
     //! Small fixtures like `tiny_repo` are too homogeneous to exercise the
     //! metric's distribution; this one is purpose-built for that.
-    use std::path::PathBuf;
+    //!
+    //! Six commits (2026-06-01..2026-06-06): a seed writing the whole
+    //! complexity gradient, then co-changing pairs (complex+moderate, then the
+    //! duplicated `dup_a`/`dup_b` pair) to create temporal coupling.
+    //!
+    //! ## Regenerating the bundle
+    //!
+    //! The fixture is captured once into a checked-in git bundle
+    //! (`src/test_support/data/biomarker-repo.bundle`; HEAD
+    //! `fc3edfb3435c690a87750c8fe0050a2497d75b60`, deterministic across
+    //! regenerations because every author / date / file content is fixed). To
+    //! regenerate, revive the pre-bundle programmatic builder from git history
+    //! at commit `b412e6d` (it shells out to `git` for each commit and lived in
+    //! this module), run it to produce a fresh repo, then capture:
+    //!
+    //! ```text
+    //! git -C <fresh-repo> bundle create \
+    //!     crates/codelore-lib/src/test_support/data/biomarker-repo.bundle --all
+    //! ```
+    //!
+    //! Commit the updated bundle.
+
     use tempfile::TempDir;
+
+    /// The fixture's git bundle, captured once and embedded at compile time.
+    static BUNDLE: &[u8] = include_bytes!("data/biomarker-repo.bundle");
 
     pub struct BiomarkerRepo {
         pub dir: TempDir,
         pub head_sha: String,
     }
 
-    // A trivial function: cyclomatic 1, cognitive 0, few lines.
-    const TRIVIAL: &str = "pub fn trivial() -> i32 {\n    1\n}\n";
-
-    // A moderately-branchy function.
-    const MODERATE: &str = "pub fn moderate(x: i32, y: i32) -> i32 {\n    let mut r = 0;\n    for i in 0..x {\n        if i % 2 == 0 {\n            r += i;\n        } else {\n            r -= i;\n        }\n    }\n    if y > 0 {\n        r += y;\n    }\n    r\n}\n";
-
-    // A deeply-nested, high-cyclomatic function.
-    const COMPLEX: &str = "pub fn complex(a: i32, b: i32, c: i32) -> i32 {\n    let mut total = 0;\n    for i in 0..a {\n        if i % 2 == 0 {\n            for j in 0..b {\n                if j > c {\n                    if j % 3 == 0 {\n                        total += j;\n                    } else if j % 5 == 0 {\n                        total -= j;\n                    } else {\n                        total += 1;\n                    }\n                } else if j < 0 {\n                    total -= 1;\n                }\n            }\n        } else {\n            match i % 4 {\n                0 => total += 1,\n                1 => total -= 1,\n                2 => total *= 2,\n                _ => total = 0,\n            }\n        }\n    }\n    total\n}\n";
-
-    // A large but flat function (many statements, little branching): high LOC.
-    fn big_source() -> String {
-        let mut s = String::from("pub fn big() -> i64 {\n    let mut acc: i64 = 0;\n");
-        for i in 0..60 {
-            s.push_str("    acc += ");
-            s.push_str(&i.to_string());
-            s.push_str(";\n");
-        }
-        s.push_str("    acc\n}\n");
-        s
-    }
-
-    // An identical non-trivial function, written into two files → clone (DRY).
-    const DUPLICATED: &str = "pub fn shared_logic(items: &[i32]) -> i32 {\n    let mut sum = 0;\n    for it in items {\n        if *it > 0 {\n            sum += it;\n        } else {\n            sum -= it;\n        }\n    }\n    sum\n}\n";
-
-    /// Build the biomarker fixture.
+    /// Extract the biomarker fixture from the embedded bundle into a fresh
+    /// tempdir. Single atomic `git clone` — no multi-process race surface.
     ///
     /// # Panics
     ///
-    /// Panics if the OS cannot create a temporary directory or any `git`
-    /// command fails.
+    /// Panics if `tempfile::tempdir` fails or if `git clone` from the bundle
+    /// fails (either case indicates a broken local git install, not a fixture
+    /// issue).
     #[must_use]
     pub fn build() -> BiomarkerRepo {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path: PathBuf = dir.path().to_path_buf();
-
-        run_git(&path, &["init", "-b", "main", "--quiet"]);
-        run_git(&path, &["config", "user.email", "bio@example.com"]);
-        run_git(&path, &["config", "user.name", "Bio"]);
-
-        let dates = [
-            "2026-06-01T10:00:00Z",
-            "2026-06-02T10:00:00Z",
-            "2026-06-03T10:00:00Z",
-            "2026-06-04T10:00:00Z",
-            "2026-06-05T10:00:00Z",
-            "2026-06-06T10:00:00Z",
-        ];
-
-        // Seed the complexity gradient.
-        write(&path, "src/trivial.rs", TRIVIAL);
-        write(&path, "src/moderate.rs", MODERATE);
-        write(&path, "src/complex.rs", COMPLEX);
-        write(&path, "src/big.rs", &big_source());
-        write(&path, "src/dup_a.rs", DUPLICATED);
-        write(&path, "src/dup_b.rs", DUPLICATED);
-        run_git(&path, &["add", "."]);
-        run_git_at(&path, dates[0], &["commit", "-m", "seed", "--quiet"]);
-
-        // Several edit commits, co-changing pairs to create temporal coupling
-        // (complex+moderate change together; the dup pair changes together).
-        write(&path, "src/complex.rs", &format!("{COMPLEX}// tweak 1\n"));
-        write(&path, "src/moderate.rs", &format!("{MODERATE}// tweak 1\n"));
-        run_git_at(
-            &path,
-            dates[1],
-            &["commit", "-am", "co-change 1", "--quiet"],
-        );
-
-        write(&path, "src/complex.rs", &format!("{COMPLEX}// tweak 2\n"));
-        write(&path, "src/moderate.rs", &format!("{MODERATE}// tweak 2\n"));
-        run_git_at(
-            &path,
-            dates[2],
-            &["commit", "-am", "co-change 2", "--quiet"],
-        );
-
-        write(&path, "src/dup_a.rs", &format!("{DUPLICATED}// da\n"));
-        write(&path, "src/dup_b.rs", &format!("{DUPLICATED}// db\n"));
-        run_git_at(
-            &path,
-            dates[3],
-            &["commit", "-am", "dup co-change 1", "--quiet"],
-        );
-
-        write(&path, "src/dup_a.rs", &format!("{DUPLICATED}// da2\n"));
-        write(&path, "src/dup_b.rs", &format!("{DUPLICATED}// db2\n"));
-        run_git_at(
-            &path,
-            dates[4],
-            &["commit", "-am", "dup co-change 2", "--quiet"],
-        );
-
-        write(&path, "src/complex.rs", &format!("{COMPLEX}// tweak 3\n"));
-        run_git_at(
-            &path,
-            dates[5],
-            &["commit", "-am", "touch complex", "--quiet"],
-        );
-
-        let head_sha = String::from_utf8(
-            std::process::Command::new("git")
-                .args(["-C", path.to_str().unwrap(), "rev-parse", "HEAD"])
-                .output()
-                .expect("git rev-parse")
-                .stdout,
-        )
-        .expect("utf8")
-        .trim()
-        .to_string();
-
+        let head_sha = super::clone_bundle(BUNDLE, dir.path());
         BiomarkerRepo { dir, head_sha }
-    }
-
-    fn run_git(path: &std::path::Path, args: &[&str]) {
-        let status = std::process::Command::new("git")
-            .arg("-C")
-            .arg(path)
-            .args(args)
-            .status()
-            .expect("git");
-        assert!(status.success(), "git {args:?} failed");
-    }
-
-    fn run_git_at(path: &std::path::Path, iso_date: &str, args: &[&str]) {
-        let status = std::process::Command::new("git")
-            .arg("-C")
-            .arg(path)
-            .args(args)
-            .env("GIT_AUTHOR_DATE", iso_date)
-            .env("GIT_COMMITTER_DATE", iso_date)
-            .status()
-            .expect("git");
-        assert!(status.success(), "git {args:?} (at {iso_date}) failed");
-    }
-
-    fn write(root: &std::path::Path, rel: &str, content: &str) {
-        let p = root.join(rel);
-        if let Some(parent) = p.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
-        std::fs::write(p, content).unwrap();
     }
 }
 
@@ -328,208 +207,57 @@ pub mod biomarker_repo {
 ///
 /// `meta-tweak-1..10` give the Fisher `(hot, cold)` table `neither = 10`,
 /// making the table non-degenerate and driving `p ≈ 0.051 < 0.1`.
+///
+/// `hot` is an 11-line function so that edits on line 2 and line 10 are far
+/// enough apart to guarantee two separate hunks in a single commit. The gap
+/// (lines 3–9 = 7 lines) exceeds 2× git's default context window (2×3 = 6),
+/// so the diff engine cannot bridge the two edit regions into one hunk. The
+/// `n = 17` accounting (seed is an Add → no hunks; tweak-1/2/3 + tweak-mh give
+/// `a_only = 4`; coupled-1/2/3 give `co = 3`; meta-tweak-1..10 give
+/// `neither = 10`) yields Fisher table `[3, 4, 0, 10]` with `p ≈ 0.051 < 0.1`.
+///
+/// ## Regenerating the bundle
+///
+/// The fixture is captured once into a checked-in git bundle
+/// (`src/test_support/data/function-xray-repo.bundle`; HEAD
+/// `c84e622ba6f7687ac051003fa3fc4ebffeb0a7ee`, deterministic across
+/// regenerations because every author / date / file content is fixed). To
+/// regenerate (e.g. when the commit shape or the Fisher accounting must
+/// change), revive the pre-bundle programmatic builder from git history at
+/// commit `b412e6d` (it shells out to `git` for each commit, encodes the
+/// `HOT_*` / `COLD_*` / `META_*` source versions, and lived in this
+/// module), run it to produce a fresh repo, then capture:
+///
+/// ```text
+/// git -C <fresh-repo> bundle create \
+///     crates/codelore-lib/src/test_support/data/function-xray-repo.bundle --all
+/// ```
+///
+/// Commit the updated bundle.
 #[cfg(feature = "test-support")]
 pub mod function_xray_repo {
-    use std::path::PathBuf;
     use tempfile::TempDir;
+
+    /// The fixture's git bundle, captured once and embedded at compile time.
+    static BUNDLE: &[u8] = include_bytes!("data/function-xray-repo.bundle");
 
     pub struct FunctionXrayRepo {
         pub dir: TempDir,
     }
 
-    // `hot` is an 11-line function so that edits on line 2 and line 10 are
-    // far enough apart to guarantee two separate hunks in a single commit.
-    // Gap = lines 3–9 = 7 lines, which exceeds 2 × 3 (git's default context
-    // window) = 6. A gap > 2×context guarantees the diff engine cannot bridge
-    // the two edit regions into one hunk.
-    //
-    // Layout of src/target.rs:
-    //   line 1:  pub fn hot() -> i32 {
-    //   line 2:    let a = <A>;        ← edit region 1 (tweak-1/2/3 + tweak-mh)
-    //   line 3:    let b = 10;
-    //   line 4:    let c = 20;
-    //   line 5:    let d = 30;         ← gap: 7 lines > 2×context(3)=6
-    //   line 6:    let e = 40;
-    //   line 7:    let f = 50;
-    //   line 8:    let g = 60;
-    //   line 9:    let h = 70;
-    //   line 10:   <B>                 ← edit region 2 (tweak-mh + coupled)
-    //   line 11: }
-    //   line 12: (blank separator)
-    //   line 13: pub fn cold() -> i32 {
-    //   line 14:   42                  ← edit region (coupled commits)
-    //   line 15: }
-    //   line 16: (blank separator)
-    //   line 17: pub fn meta() -> i32 {
-    //   line 18:   0                   ← edit region (meta-tweak only)
-    //   line 19: }
-    //
-    // Versions v0–v3 only change line 2 (single hunk per commit).
-    // tweak-mh changes BOTH line 2 (a = 99) AND line 10 (return value) in
-    // ONE commit → two hunks, but still only +1 to change_freq.
-    // coupled-1/2/3 change line 10 of `hot` AND line 14 of `cold` together.
-    // meta-tweak changes ONLY line 18 (`meta` body); hot and cold are untouched.
-
-    const HOT_V0: &str = "pub fn hot() -> i32 {\n    let a = 0;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    let g = 60;\n    let h = 70;\n    a + b + c + d + e + f + g + h\n}\n";
-    const HOT_V1: &str = "pub fn hot() -> i32 {\n    let a = 1;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    let g = 60;\n    let h = 70;\n    a + b + c + d + e + f + g + h\n}\n";
-    const HOT_V2: &str = "pub fn hot() -> i32 {\n    let a = 2;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    let g = 60;\n    let h = 70;\n    a + b + c + d + e + f + g + h\n}\n";
-    const HOT_V3: &str = "pub fn hot() -> i32 {\n    let a = 3;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    let g = 60;\n    let h = 70;\n    a + b + c + d + e + f + g + h\n}\n";
-    // Multi-hunk: changes line 2 (a = 99) AND line 10 (return value).
-    // Gap = 7 lines (lines 3-9) > 2×context(3)=6 → guaranteed two separate hunks.
-    const HOT_VMH: &str = "pub fn hot() -> i32 {\n    let a = 99;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    let g = 60;\n    let h = 70;\n    99\n}\n";
-    // Coupling versions: change line 10 (return value) in hot for each coupled commit.
-    const HOT_VCPL1: &str = "pub fn hot() -> i32 {\n    let a = 99;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    let g = 60;\n    let h = 70;\n    100\n}\n";
-    const HOT_VCPL2: &str = "pub fn hot() -> i32 {\n    let a = 99;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    let g = 60;\n    let h = 70;\n    101\n}\n";
-    const HOT_VCPL3: &str = "pub fn hot() -> i32 {\n    let a = 99;\n    let b = 10;\n    let c = 20;\n    let d = 30;\n    let e = 40;\n    let f = 50;\n    let g = 60;\n    let h = 70;\n    102\n}\n";
-    // `cold` versions for coupled commits — body changes on line 14.
-    const COLD_V0: &str = "pub fn cold() -> i32 {\n    42\n}\n";
-    const COLD_V1: &str = "pub fn cold() -> i32 {\n    43\n}\n";
-    const COLD_V2: &str = "pub fn cold() -> i32 {\n    44\n}\n";
-    const COLD_V3: &str = "pub fn cold() -> i32 {\n    45\n}\n";
-    // `meta` versions: only the body differs; meta-tweak changes V0 → V1.
-    // Neither `hot` nor `cold` is touched in meta-tweak, so the Fisher table
-    // for the (hot, cold) pair gets `neither = 10` (10 revisions touch
-    // neither of them), making the table non-degenerate with p ≈ 0.051 < 0.1.
-    const META_V0: &str = "pub fn meta() -> i32 {\n    0\n}\n";
-    const META_V1: &str = "pub fn meta() -> i32 {\n    1\n}\n";
-
-    fn src(hot: &str, cold: &str, meta: &str) -> String {
-        format!("{hot}\n{cold}\n{meta}")
-    }
-
+    /// Extract the function-xray fixture from the embedded bundle into a fresh
+    /// tempdir. Single atomic `git clone` — no multi-process race surface.
+    ///
     /// # Panics
     ///
-    /// Panics if the OS cannot create a temp directory or any `git`
-    /// command fails.
+    /// Panics if `tempfile::tempdir` fails or if `git clone` from the bundle
+    /// fails (either case indicates a broken local git install, not a fixture
+    /// issue).
     #[must_use]
     pub fn build() -> FunctionXrayRepo {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path: PathBuf = dir.path().to_path_buf();
-
-        run_git(&path, &["init", "-b", "main", "--quiet"]);
-        run_git(&path, &["config", "user.email", "xray@example.com"]);
-        run_git(&path, &["config", "user.name", "XRay"]);
-
-        let dates = [
-            "2026-06-01T10:00:00Z",
-            "2026-06-02T10:00:00Z",
-            "2026-06-03T10:00:00Z",
-            "2026-06-04T10:00:00Z",
-            "2026-06-05T10:00:00Z",
-            "2026-06-06T10:00:00Z",
-            "2026-06-07T10:00:00Z",
-            "2026-06-08T10:00:00Z",
-        ];
-
-        // Seed: write all three functions.
-        write(&path, "src/target.rs", &src(HOT_V0, COLD_V0, META_V0));
-        run_git(&path, &["add", "."]);
-        run_git_at(&path, dates[0], &["commit", "-m", "seed", "--quiet"]);
-
-        // tweak-1: mutate hot's body (line 2 only → single hunk).
-        write(&path, "src/target.rs", &src(HOT_V1, COLD_V0, META_V0));
-        run_git_at(&path, dates[1], &["commit", "-am", "tweak-1", "--quiet"]);
-
-        // tweak-2: mutate hot's body again (line 2 only → single hunk).
-        write(&path, "src/target.rs", &src(HOT_V2, COLD_V0, META_V0));
-        run_git_at(&path, dates[2], &["commit", "-am", "tweak-2", "--quiet"]);
-
-        // tweak-3: mutate hot's body a third time (line 2 only → single hunk).
-        write(&path, "src/target.rs", &src(HOT_V3, COLD_V0, META_V0));
-        run_git_at(&path, dates[3], &["commit", "-am", "tweak-3", "--quiet"]);
-
-        // tweak-mh: change BOTH line 2 (a = 99) AND line 10 (return value) in
-        // ONE commit. The 7-line gap (lines 3-9) exceeds 2×context(3)=6,
-        // guaranteeing two separate hunks. change_freq for `hot` must still
-        // increment by 1 (not 2).
-        write(&path, "src/target.rs", &src(HOT_VMH, COLD_V0, META_V0));
-        run_git_at(&path, dates[4], &["commit", "-am", "tweak-mh", "--quiet"]);
-
-        // coupled-1/2/3: change BOTH hot AND cold in the same commit.
-        // hot changes at line 10 (return value); cold changes at line 14.
-        // Both function spans are touched → function-coupling counts
-        // (hot, cold) co_changes = 3.
-        write(&path, "src/target.rs", &src(HOT_VCPL1, COLD_V1, META_V0));
-        run_git_at(&path, dates[5], &["commit", "-am", "coupled-1", "--quiet"]);
-
-        write(&path, "src/target.rs", &src(HOT_VCPL2, COLD_V2, META_V0));
-        run_git_at(&path, dates[6], &["commit", "-am", "coupled-2", "--quiet"]);
-
-        write(&path, "src/target.rs", &src(HOT_VCPL3, COLD_V3, META_V0));
-        run_git_at(&path, dates[7], &["commit", "-am", "coupled-3", "--quiet"]);
-
-        // meta-tweak-1 … meta-tweak-10: change ONLY the `meta` function body,
-        // alternating between META_V0 and META_V1. Neither `hot` nor `cold` is
-        // touched in any of these commits. Ten commits give `neither = 10`,
-        // which drives the Fisher p-value for the (hot, cold) pair below 0.1:
-        //
-        //   n       = 17  (tweak-1/2/3 + tweak-mh + coupled-1/2/3 +
-        //                   meta-tweak-1..10; seed is an Add → no hunks)
-        //   co      = 3   (coupled-1/2/3)
-        //   a_only  = 4   (tweak-1/2/3 + tweak-mh)
-        //   b_only  = 0
-        //   neither = 10  (meta-tweak-1..10)
-        //   n - co - a_only - b_only = 17 - 3 - 4 - 0 = 10  ✓
-        //
-        // Fisher table [3, 4, 0, 10]:
-        //   row1=7, row2=10, col1=3, col2=14, N=17
-        //   P(k=3) = C(7,3)·C(10,0)/C(17,3) = 35/680 ≈ 0.051 < 0.1
-        //   Two-tail sums tables with P ≤ P(observed=3): only k=3 itself
-        //   (k=0: C(7,0)·C(10,3)/C(17,3)=120/680≈0.176 > 0.051, excluded).
-        //   So p ≈ 0.051 < 0.1.
-        //
-        // Note: the `None`-sorts-first behavior is still correct for genuinely
-        // degenerate tables on real repos (zero row/col marginal → p → 0).
-        let meta_dates = [
-            "2026-06-09T10:00:00Z",
-            "2026-06-10T10:00:00Z",
-            "2026-06-11T10:00:00Z",
-            "2026-06-12T10:00:00Z",
-            "2026-06-13T10:00:00Z",
-            "2026-06-14T10:00:00Z",
-            "2026-06-15T10:00:00Z",
-            "2026-06-16T10:00:00Z",
-            "2026-06-17T10:00:00Z",
-            "2026-06-18T10:00:00Z",
-        ];
-        for (i, &date) in meta_dates.iter().enumerate() {
-            let meta = if i % 2 == 0 { META_V1 } else { META_V0 };
-            let msg = format!("meta-tweak-{}", i + 1);
-            write(&path, "src/target.rs", &src(HOT_VCPL3, COLD_V3, meta));
-            run_git_at(&path, date, &["commit", "-am", msg.as_str(), "--quiet"]);
-        }
-
+        let _head_sha = super::clone_bundle(BUNDLE, dir.path());
         FunctionXrayRepo { dir }
-    }
-
-    fn run_git(path: &std::path::Path, args: &[&str]) {
-        let status = std::process::Command::new("git")
-            .arg("-C")
-            .arg(path)
-            .args(args)
-            .status()
-            .expect("git");
-        assert!(status.success(), "git {args:?} failed");
-    }
-
-    fn run_git_at(path: &std::path::Path, iso_date: &str, args: &[&str]) {
-        let status = std::process::Command::new("git")
-            .arg("-C")
-            .arg(path)
-            .args(args)
-            .env("GIT_AUTHOR_DATE", iso_date)
-            .env("GIT_COMMITTER_DATE", iso_date)
-            .status()
-            .expect("git");
-        assert!(status.success(), "git {args:?} (at {iso_date}) failed");
-    }
-
-    fn write(root: &std::path::Path, rel: &str, content: &str) {
-        let p = root.join(rel);
-        if let Some(parent) = p.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
-        std::fs::write(p, content).unwrap();
     }
 }
 
@@ -573,7 +301,6 @@ pub mod differential_repo {
     //! (e.g. via `git fast-import` or `gix-object` write APIs) is a
     //! reasonable `0.1.x` follow-up — see roadmap Tier 2.
 
-    use std::process::Command;
     use tempfile::TempDir;
 
     /// The fixture's git bundle, captured once and embedded at compile time.
@@ -596,350 +323,65 @@ pub mod differential_repo {
     #[must_use]
     pub fn build() -> DifferentialRepo {
         let dir = tempfile::tempdir().expect("tempdir");
-
-        // Write the bundle to an OS-temp file outside the fixture's tempdir
-        // so `git clone` sees an empty target. The NamedTempFile auto-deletes
-        // on drop at end of this function — we don't need it after the clone.
-        let bundle_file = tempfile::NamedTempFile::new().expect("bundle scratch tempfile");
-        std::fs::write(bundle_file.path(), BUNDLE).expect("write bundle bytes");
-
-        let status = Command::new("git")
-            .args(["clone", "--quiet"])
-            .arg(bundle_file.path())
-            .arg(dir.path())
-            .status()
-            .expect("spawn git clone");
-        assert!(status.success(), "git clone from embedded bundle failed");
-        drop(bundle_file);
-
-        let head_sha = String::from_utf8(
-            Command::new("git")
-                .arg("-C")
-                .arg(dir.path())
-                .args(["rev-parse", "HEAD"])
-                .output()
-                .expect("spawn git rev-parse")
-                .stdout,
-        )
-        .expect("utf8")
-        .trim()
-        .to_string();
-
+        let head_sha = super::clone_bundle(BUNDLE, dir.path());
         DifferentialRepo { dir, head_sha }
     }
 }
 
 #[cfg(feature = "test-support")]
 pub mod coupling_repo {
-    //! A programmatically-built fixture with deliberate cross-module co-changes
-    //! so the depth-2 coupling sankey produces visible edges.
+    //! A fixture with deliberate cross-module co-changes so the depth-2
+    //! coupling sankey produces visible edges.
     //!
     //! Structure: 3 modules (`src/alpha`, `src/beta`, `src/gamma`), each with two
     //! files. `alpha/svc.rs` and `beta/svc.rs` co-change together in ≥5 commits,
     //! guaranteeing a `src/alpha`↔`src/beta` edge at depth 2 even under the most
     //! conservative coupling thresholds. Additional single-file commits ensure
-    //! every file accrues enough churn to appear in the hotspot table.
+    //! every file accrues enough churn to appear in the hotspot table. 19
+    //! commits total, one per day 2026-06-01..2026-06-19.
+    //!
+    //! ## Regenerating the bundle
+    //!
+    //! The fixture is captured once into a checked-in git bundle
+    //! (`src/test_support/data/coupling-repo.bundle`; HEAD
+    //! `751dc3a192917070782946dabbc8317f196b9cbf`, deterministic across
+    //! regenerations because every author / date / file content is fixed). To
+    //! regenerate (e.g. when the co-change history the module-depth test relies
+    //! on must change), revive the pre-bundle programmatic builder from git
+    //! history at commit `b412e6d` (it shells out to `git` for each commit and
+    //! lived in this module), run it to produce a fresh repo, then capture:
+    //!
+    //! ```text
+    //! git -C <fresh-repo> bundle create \
+    //!     crates/codelore-lib/src/test_support/data/coupling-repo.bundle --all
+    //! ```
+    //!
+    //! Commit the updated bundle.
 
-    use std::path::PathBuf;
-    use std::process::Command;
     use tempfile::TempDir;
+
+    /// The fixture's git bundle, captured once and embedded at compile time.
+    static BUNDLE: &[u8] = include_bytes!("data/coupling-repo.bundle");
 
     pub struct CouplingRepo {
         pub dir: TempDir,
         pub head_sha: String,
     }
 
-    /// Build a ~20-commit fixture with guaranteed cross-module co-change pairs.
+    /// Extract the cross-module co-change fixture from the embedded bundle into
+    /// a fresh tempdir. Single atomic `git clone` — no multi-process race
+    /// surface.
     ///
     /// # Panics
     ///
-    /// Panics if the OS cannot create a temporary directory or if any `git`
-    /// command fails.
-    // Long but linear: the fixture stages ~20 explicit commits so the
-    // cross-module co-change history is legible commit-by-commit; splitting it
-    // into helpers would obscure exactly what history the module-depth test
-    // relies on.
-    #[allow(clippy::too_many_lines)]
+    /// Panics if `tempfile::tempdir` fails or if `git clone` from the bundle
+    /// fails (either case indicates a broken local git install, not a fixture
+    /// issue).
     #[must_use]
     pub fn build() -> CouplingRepo {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path: PathBuf = dir.path().to_path_buf();
-
-        run_git(&path, &["init", "-b", "main", "--quiet"]);
-        run_git(&path, &["config", "user.email", "coupling@example.com"]);
-        run_git(&path, &["config", "user.name", "Coupling"]);
-        // Disable auto-gc so a mid-build `gc --auto` can't prune loose objects
-        // between an `add` and its `commit` (matches `medium_repo`).
-        run_git(&path, &["config", "gc.auto", "0"]);
-
-        // Seed all six files with real content so complexity ingest is non-trivial.
-        write(
-            &path,
-            "src/alpha/svc.rs",
-            "pub fn alpha_svc(x: i32) -> i32 { x + 1 }\n",
-        );
-        write(
-            &path,
-            "src/alpha/util.rs",
-            "pub fn alpha_util(x: i32) -> i32 { x * 2 }\n",
-        );
-        write(
-            &path,
-            "src/beta/svc.rs",
-            "pub fn beta_svc(x: i32) -> i32 { x - 1 }\n",
-        );
-        write(
-            &path,
-            "src/beta/util.rs",
-            "pub fn beta_util(x: i32) -> i32 { x / 2 }\n",
-        );
-        write(
-            &path,
-            "src/gamma/svc.rs",
-            "pub fn gamma_svc(x: i32) -> i32 { x * x }\n",
-        );
-        write(
-            &path,
-            "src/gamma/util.rs",
-            "pub fn gamma_util(x: i32) -> i32 { x + x }\n",
-        );
-        run_git(&path, &["add", "."]);
-        commit_at(&path, "2026-06-01T10:00:00Z", "seed all modules");
-
-        // Co-change 1: alpha/svc + beta/svc together (→ depth-2 edge src/alpha↔src/beta).
-        write(
-            &path,
-            "src/alpha/svc.rs",
-            "pub fn alpha_svc(x: i32) -> i32 { x + 2 }\n",
-        );
-        write(
-            &path,
-            "src/beta/svc.rs",
-            "pub fn beta_svc(x: i32) -> i32 { x - 2 }\n",
-        );
-        run_git(&path, &["add", "src/alpha/svc.rs", "src/beta/svc.rs"]);
-        commit_at(&path, "2026-06-02T10:00:00Z", "co-change alpha+beta 1");
-
-        // Co-change 2.
-        write(
-            &path,
-            "src/alpha/svc.rs",
-            "pub fn alpha_svc(x: i32) -> i32 { x + 3 }\npub fn alpha_extra() {}\n",
-        );
-        write(
-            &path,
-            "src/beta/svc.rs",
-            "pub fn beta_svc(x: i32) -> i32 { x - 3 }\npub fn beta_extra() {}\n",
-        );
-        run_git(&path, &["add", "src/alpha/svc.rs", "src/beta/svc.rs"]);
-        commit_at(&path, "2026-06-03T10:00:00Z", "co-change alpha+beta 2");
-
-        // Co-change 3.
-        write(
-            &path,
-            "src/alpha/svc.rs",
-            "pub fn alpha_svc(x: i32) -> i32 { x + 4 }\npub fn alpha_extra() { let _ = 1; }\n",
-        );
-        write(
-            &path,
-            "src/beta/svc.rs",
-            "pub fn beta_svc(x: i32) -> i32 { x - 4 }\npub fn beta_extra() { let _ = 2; }\n",
-        );
-        run_git(&path, &["add", "src/alpha/svc.rs", "src/beta/svc.rs"]);
-        commit_at(&path, "2026-06-04T10:00:00Z", "co-change alpha+beta 3");
-
-        // Co-change 4.
-        write(
-            &path,
-            "src/alpha/svc.rs",
-            "pub fn alpha_svc(x: i32) -> i32 { x + 5 }\npub fn alpha_v2(y: i32) -> i32 { y }\n",
-        );
-        write(
-            &path,
-            "src/beta/svc.rs",
-            "pub fn beta_svc(x: i32) -> i32 { x - 5 }\npub fn beta_v2(y: i32) -> i32 { y }\n",
-        );
-        run_git(&path, &["add", "src/alpha/svc.rs", "src/beta/svc.rs"]);
-        commit_at(&path, "2026-06-05T10:00:00Z", "co-change alpha+beta 4");
-
-        // Co-change 5.
-        write(
-            &path,
-            "src/alpha/svc.rs",
-            "pub fn alpha_svc(x: i32) -> i32 { x + 6 }\npub fn alpha_v2(y: i32) -> i32 { y + 1 }\n",
-        );
-        write(
-            &path,
-            "src/beta/svc.rs",
-            "pub fn beta_svc(x: i32) -> i32 { x - 6 }\npub fn beta_v2(y: i32) -> i32 { y + 1 }\n",
-        );
-        run_git(&path, &["add", "src/alpha/svc.rs", "src/beta/svc.rs"]);
-        commit_at(&path, "2026-06-06T10:00:00Z", "co-change alpha+beta 5");
-
-        // Single-file commits so every file gets individual churn (hotspot rows).
-        write(
-            &path,
-            "src/alpha/util.rs",
-            "pub fn alpha_util(x: i32) -> i32 { x * 3 }\n",
-        );
-        run_git(&path, &["add", "src/alpha/util.rs"]);
-        commit_at(&path, "2026-06-07T10:00:00Z", "touch alpha/util");
-
-        write(
-            &path,
-            "src/beta/util.rs",
-            "pub fn beta_util(x: i32) -> i32 { x / 3 }\n",
-        );
-        run_git(&path, &["add", "src/beta/util.rs"]);
-        commit_at(&path, "2026-06-08T10:00:00Z", "touch beta/util");
-
-        write(
-            &path,
-            "src/gamma/svc.rs",
-            "pub fn gamma_svc(x: i32) -> i32 { x * x + 1 }\n",
-        );
-        run_git(&path, &["add", "src/gamma/svc.rs"]);
-        commit_at(&path, "2026-06-09T10:00:00Z", "touch gamma/svc");
-
-        write(
-            &path,
-            "src/gamma/util.rs",
-            "pub fn gamma_util(x: i32) -> i32 { x + x + 1 }\n",
-        );
-        run_git(&path, &["add", "src/gamma/util.rs"]);
-        commit_at(&path, "2026-06-10T10:00:00Z", "touch gamma/util");
-
-        // More individual churn to push rev counts above any default floor.
-        write(
-            &path,
-            "src/alpha/svc.rs",
-            "pub fn alpha_svc(x: i32) -> i32 { x + 7 }\npub fn alpha_v3() -> i32 { 42 }\n",
-        );
-        run_git(&path, &["add", "src/alpha/svc.rs"]);
-        commit_at(&path, "2026-06-11T10:00:00Z", "alpha/svc solo");
-
-        write(
-            &path,
-            "src/beta/svc.rs",
-            "pub fn beta_svc(x: i32) -> i32 { x - 7 }\npub fn beta_v3() -> i32 { 99 }\n",
-        );
-        run_git(&path, &["add", "src/beta/svc.rs"]);
-        commit_at(&path, "2026-06-12T10:00:00Z", "beta/svc solo");
-
-        write(
-            &path,
-            "src/alpha/util.rs",
-            "pub fn alpha_util(x: i32) -> i32 { x * 4 }\npub fn alpha_util2() {}\n",
-        );
-        run_git(&path, &["add", "src/alpha/util.rs"]);
-        commit_at(&path, "2026-06-13T10:00:00Z", "alpha/util 2");
-
-        write(
-            &path,
-            "src/beta/util.rs",
-            "pub fn beta_util(x: i32) -> i32 { x / 4 }\npub fn beta_util2() {}\n",
-        );
-        run_git(&path, &["add", "src/beta/util.rs"]);
-        commit_at(&path, "2026-06-14T10:00:00Z", "beta/util 2");
-
-        write(
-            &path,
-            "src/gamma/svc.rs",
-            "pub fn gamma_svc(x: i32) -> i32 { x * x + 2 }\npub fn gamma_v2() {}\n",
-        );
-        run_git(&path, &["add", "src/gamma/svc.rs"]);
-        commit_at(&path, "2026-06-15T10:00:00Z", "gamma/svc 2");
-
-        // One more co-change for good measure (total 6 shared revisions).
-        write(
-            &path,
-            "src/alpha/svc.rs",
-            "pub fn alpha_svc(x: i32) -> i32 { x + 8 }\npub fn alpha_v3() -> i32 { 43 }\n",
-        );
-        write(
-            &path,
-            "src/beta/svc.rs",
-            "pub fn beta_svc(x: i32) -> i32 { x - 8 }\npub fn beta_v3() -> i32 { 100 }\n",
-        );
-        run_git(&path, &["add", "src/alpha/svc.rs", "src/beta/svc.rs"]);
-        commit_at(&path, "2026-06-16T10:00:00Z", "co-change alpha+beta 6");
-
-        // Final solo touches to widen the hotspot spread.
-        write(
-            &path,
-            "src/gamma/util.rs",
-            "pub fn gamma_util(x: i32) -> i32 { x + x + 2 }\npub fn gamma_util2() {}\n",
-        );
-        run_git(&path, &["add", "src/gamma/util.rs"]);
-        commit_at(&path, "2026-06-17T10:00:00Z", "gamma/util 2");
-
-        write(
-            &path,
-            "src/alpha/svc.rs",
-            "pub fn alpha_svc(x: i32) -> i32 { x + 9 }\npub fn alpha_v4() -> bool { true }\n",
-        );
-        run_git(&path, &["add", "src/alpha/svc.rs"]);
-        commit_at(&path, "2026-06-18T10:00:00Z", "alpha/svc final");
-
-        write(
-            &path,
-            "src/beta/svc.rs",
-            "pub fn beta_svc(x: i32) -> i32 { x - 9 }\npub fn beta_v4() -> bool { false }\n",
-        );
-        run_git(&path, &["add", "src/beta/svc.rs"]);
-        commit_at(&path, "2026-06-19T10:00:00Z", "beta/svc final");
-
-        let head_sha = String::from_utf8(
-            Command::new("git")
-                .args(["-C", path.to_str().unwrap(), "rev-parse", "HEAD"])
-                .output()
-                .expect("git rev-parse")
-                .stdout,
-        )
-        .expect("utf8")
-        .trim()
-        .to_string();
-
+        let head_sha = super::clone_bundle(BUNDLE, dir.path());
         CouplingRepo { dir, head_sha }
-    }
-
-    fn commit_at(path: &std::path::Path, iso_date: &str, msg: &str) {
-        let status = std::process::Command::new("git")
-            .arg("-C")
-            .arg(path)
-            .args(["commit", "-m", msg, "--quiet"])
-            .env("GIT_AUTHOR_DATE", iso_date)
-            .env("GIT_COMMITTER_DATE", iso_date)
-            .status()
-            .expect("git commit");
-        assert!(status.success(), "commit '{msg}' at {iso_date} failed");
-        // Pack this commit's loose objects immediately. `coupling_repo` is built
-        // by FOUR browser tests in parallel (unlike `medium_repo`'s single
-        // build), so under ~4x the I/O contention a later `write-tree` can miss
-        // a recently-written loose object ("invalid object / Error building
-        // trees"). `medium_repo` keeps its loose set small by repacking every 50
-        // commits at 1x load; the parallel `coupling_repo` needs the tighter
-        // per-commit cadence. `gc.auto=0` (set in `build`) keeps a concurrent
-        // auto-gc from racing the same store.
-        run_git(path, &["repack", "-d", "--quiet"]);
-    }
-
-    fn run_git(path: &std::path::Path, args: &[&str]) {
-        let status = std::process::Command::new("git")
-            .arg("-C")
-            .arg(path)
-            .args(args)
-            .status()
-            .expect("git");
-        assert!(status.success(), "git {args:?} failed");
-    }
-
-    fn write(root: &std::path::Path, rel: &str, content: &str) {
-        let p = root.join(rel);
-        if let Some(parent) = p.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
-        std::fs::write(p, content).unwrap();
     }
 }
 
@@ -947,134 +389,55 @@ pub mod coupling_repo {
 pub mod medium_repo {
     //! 500-commit fixture for criterion benchmarks. Heavier than `differential_repo`
     //! (which is 50 commits, optimized for differential-test edge-case coverage) but
-    //! still small enough for a CI bench to iterate on in under ~10 seconds.
+    //! still small enough for a CI bench to iterate on quickly.
     //!
     //! Structure: 500 commits, 3 authors, 25 files, round-robin author×file, no
     //! merges, no renames, deterministic dates. Intended use: measure ingest+walk
     //! throughput without any of the edge cases `differential_repo` exercises.
+    //!
+    //! ## Regenerating the bundle
+    //!
+    //! The fixture is captured once into a checked-in git bundle
+    //! (`src/test_support/data/medium-repo.bundle`, ~197 KB; HEAD
+    //! `40c13e73bdb6c397a17dda5e2bbb9f1a332e0fd1`, deterministic across
+    //! regenerations because every author / date / file content is fixed). To
+    //! regenerate (e.g. when the commit / file count must change), revive the
+    //! pre-bundle programmatic builder from git history at commit `b412e6d`
+    //! (it shells out to `git` for each of the 500 commits and lived in this
+    //! module), run it to produce a fresh repo, then capture:
+    //!
+    //! ```text
+    //! git -C <fresh-repo> bundle create \
+    //!     crates/codelore-lib/src/test_support/data/medium-repo.bundle --all
+    //! ```
+    //!
+    //! Commit the updated bundle.
 
-    use std::path::PathBuf;
-    use std::process::Command;
     use tempfile::TempDir;
+
+    /// The fixture's git bundle, captured once and embedded at compile time.
+    /// 500 commits, deterministic SHAs (HEAD ≈ `40c13e73…` at last regen).
+    static BUNDLE: &[u8] = include_bytes!("data/medium-repo.bundle");
 
     pub struct MediumRepo {
         pub dir: TempDir,
         pub head_sha: String,
     }
 
-    /// Build a 500-commit fixture for criterion benches.
+    /// Extract the 500-commit bench fixture from the embedded bundle into a
+    /// fresh tempdir. Single atomic `git clone` — no multi-process race
+    /// surface.
     ///
     /// # Panics
     ///
-    /// Panics if any git command fails.
+    /// Panics if `tempfile::tempdir` fails or if `git clone` from the bundle
+    /// fails (either case indicates a broken local git install, not a fixture
+    /// issue).
     #[must_use]
     pub fn build() -> MediumRepo {
-        const COMMIT_COUNT: usize = 500;
-        const FILE_COUNT: usize = 25;
-
         let dir = tempfile::tempdir().expect("tempdir");
-        let path: PathBuf = dir.path().to_path_buf();
-        run_git(&path, &["init", "-b", "main", "--quiet"]);
-        run_git(&path, &["config", "user.email", "bench@example.com"]);
-        run_git(&path, &["config", "user.name", "Bench"]);
-        // Disable auto-gc: 500 rapid commits can trigger gc and prune loose
-        // blobs between `git add` and the next `git commit`, producing
-        // "invalid object" errors. Disable upfront for the bench fixture.
-        run_git(&path, &["config", "gc.auto", "0"]);
-
-        let authors = [
-            ("Alice", "alice@example.com"),
-            ("Bob", "bob@example.com"),
-            ("Carol", "carol@example.com"),
-        ];
-
-        for i in 0..COMMIT_COUNT {
-            let file_idx = i % FILE_COUNT;
-            let rel = format!("src/mod_{file_idx:02}.rs");
-            let content = format!(
-                "// commit {i}\npub fn fn_{i}() -> u32 {{ {i} }}\n\n\
-                 #[cfg(test)]\nmod tests {{\n    use super::*;\n    \
-                 #[test] fn t_{i}() {{ assert_eq!(fn_{i}(), {i}); }}\n}}\n"
-            );
-            write(&path, &rel, &content);
-            let (name, email) = authors[i % 3];
-            commit_at(&path, name, email, i, &format!("touch {rel}"), &[&rel]);
-
-            // Pack loose objects every 50 commits to prevent "invalid object"
-            // errors on macOS/APFS where the OS may delay flushing loose blob
-            // writes to the object store. `git repack -d` packs all loose
-            // objects into a single packfile and prunes the loose originals,
-            // eliminating the race between `git add` (write loose object) and
-            // `git commit` (write-tree reads that same object). We use
-            // `repack -d` instead of `gc --quiet` because `gc` has additional
-            // phases (expire, reflog) that can fail when packfiles are created
-            // concurrently on macOS/APFS.
-            if i > 0 && i % 50 == 49 {
-                run_git(&path, &["repack", "-d", "--quiet"]);
-            }
-        }
-
-        let head_sha = String::from_utf8(
-            Command::new("git")
-                .arg("-C")
-                .arg(&path)
-                .args(["rev-parse", "HEAD"])
-                .output()
-                .expect("git rev-parse")
-                .stdout,
-        )
-        .expect("utf8")
-        .trim()
-        .to_string();
-
+        let head_sha = super::clone_bundle(BUNDLE, dir.path());
         MediumRepo { dir, head_sha }
-    }
-
-    fn commit_at(
-        path: &std::path::Path,
-        name: &str,
-        email: &str,
-        sequence: usize,
-        msg: &str,
-        files: &[&str],
-    ) {
-        for f in files {
-            run_git(path, &["add", f]);
-        }
-        let date = format!(
-            "2026-01-{:02}T{:02}:{:02}:00Z",
-            1 + (sequence / (24 * 60)),
-            (sequence / 60) % 24,
-            sequence % 60
-        );
-        let author = format!("{name} <{email}>");
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(path)
-            .args(["commit", "-m", msg, "--author", &author, "--quiet"])
-            .env("GIT_AUTHOR_DATE", &date)
-            .env("GIT_COMMITTER_DATE", &date)
-            .status()
-            .expect("git commit");
-        assert!(status.success(), "commit failed: {msg}");
-    }
-
-    fn run_git(path: &std::path::Path, args: &[&str]) {
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(path)
-            .args(args)
-            .status()
-            .expect("git");
-        assert!(status.success(), "git {args:?} failed");
-    }
-
-    fn write(root: &std::path::Path, rel: &str, content: &str) {
-        let p = root.join(rel);
-        if let Some(parent) = p.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
-        std::fs::write(p, content).unwrap();
     }
 }
 
@@ -1126,7 +489,6 @@ pub mod delivery_repo {
     //! The `--all` flag captures every branch and tag the tests rely on. Commit
     //! the updated bundle.
 
-    use std::process::Command;
     use tempfile::TempDir;
 
     /// The fixture's git bundle, captured once and embedded at compile time.
@@ -1151,35 +513,7 @@ pub mod delivery_repo {
     #[must_use]
     pub fn build() -> DeliveryRepo {
         let dir = tempfile::tempdir().expect("tempdir");
-
-        // Write the bundle to an OS-temp file outside the fixture's tempdir so
-        // `git clone` sees an empty target. The NamedTempFile auto-deletes on
-        // drop at end of this function — we don't need it after the clone.
-        let bundle_file = tempfile::NamedTempFile::new().expect("bundle scratch tempfile");
-        std::fs::write(bundle_file.path(), BUNDLE).expect("write bundle bytes");
-
-        let status = Command::new("git")
-            .args(["clone", "--quiet"])
-            .arg(bundle_file.path())
-            .arg(dir.path())
-            .status()
-            .expect("spawn git clone");
-        assert!(status.success(), "git clone from embedded bundle failed");
-        drop(bundle_file);
-
-        let head_sha = String::from_utf8(
-            Command::new("git")
-                .arg("-C")
-                .arg(dir.path())
-                .args(["rev-parse", "HEAD"])
-                .output()
-                .expect("spawn git rev-parse")
-                .stdout,
-        )
-        .expect("utf8")
-        .trim()
-        .to_string();
-
+        let head_sha = super::clone_bundle(BUNDLE, dir.path());
         DeliveryRepo { dir, head_sha }
     }
 }
