@@ -96,25 +96,48 @@ jobs:
       # cross-platform signal on every run.
       fail-fast: false
       matrix:
-        # Per-OS policy lives here, in one place. `run_tests` gates the
-        # nextest install, the test run, and the doc tests below.
+        # Per-OS policy lives here, in one place. `nextest_filter` selects
+        # which tests run per OS; `run_tests` gates the nextest install,
+        # the test run, and the doc tests below.
         #
-        # Windows is compile-and-link verification only: the suite that
-        # linux runs in ~8 minutes exceeds 75 minutes of pure test
-        # execution on a windows runner even with the shared fixtures
-        # served from checked-in bundles (which cut it roughly 3x). The
-        # residual cost is per-test process overhead across ~1000 test
-        # processes plus the remaining bespoke per-test git builders.
-        # Restoring the full windows run needs a further pass — a
-        # curated windows test subset and/or bespoke-builder
-        # consolidation.
+        # ubuntu / macos run the full suite (empty filter). Windows runs a
+        # curated platform-sensitive SUBSET — the tests that exercise
+        # behavior which can genuinely diverge on windows: path handling
+        # (external-store/sidecar paths, SARIF uri normalization incl.
+        # `file://`, canonical-lineage/rename path merging, cache + DB file
+        # paths), process spawning and git-backend parity (GixRepo ≡
+        # GitCliRepo, git-cli/gix/mailmap, the MCP server over stdio, the
+        # end-to-end CLI), and filesystem/line-ending/timestamp semantics
+        # (hunk + loc ingestion, code-age/stale timestamp handling). The
+        # full suite stays impractical on hosted windows runners — its
+        # per-test process overhead pushes total execution far past the
+        # linux runtime even with every shared fixture served from checked-in
+        # git bundles — so the subset targets where windows can actually
+        # break rather than re-running platform-agnostic logic.
         include:
           - os: ubuntu-latest
             run_tests: true
+            nextest_filter: ""
           - os: macos-latest
             run_tests: true
+            nextest_filter: ""
           - os: windows-latest
-            run_tests: false
+            run_tests: true
+            # Selection principle: include a test BINARY when its behavior
+            # can differ on windows (see the lenses in the matrix comment
+            # above). nextest selects at binary granularity, so the
+            # end-to-end `cli_test` is narrowed with a `test(...)` predicate
+            # to a handful of flows (sarif ingest, gate checks incl. the
+            # sidecar-skip path, an analyze-csv/sarif emit, provenance
+            # sidecar + cache-dir path handling) instead of its full set.
+            nextest_filter: >-
+              binary(external_store_test) | binary(sarif_parse_test) |
+              binary(canonical_lineage_test) | binary(same_second_rename_test) |
+              binary(groups_test) | binary(cache_test) | binary(facts_test) |
+              binary(differential_repo_test) | binary(git_cli_repo_test) |
+              binary(gix_repo_test) | binary(mailmap_test) | binary(ingest_test) |
+              binary(code_age_test) | binary(stale_code_test) | binary(mcp_test) |
+              (binary(cli_test) & test(/sarif|check_|ingest_sarif|analyze_hotspots_emits_csv|cache_dir|provenance_sidecar|skips_sidecar/))
     steps:
       - uses: actions/checkout@v7
         with:
@@ -154,8 +177,24 @@ jobs:
         # ubuntu-latest where Chrome is pre-installed. Spelling out
         # the non-browser feature set here keeps the matrix
         # cost-predictable.
+        #
+        # `matrix.nextest_filter` selects the per-OS set: empty on
+        # linux/macos (full suite) and the curated platform-sensitive
+        # expression on windows. It arrives via `env:` (not string-
+        # interpolated into the command) so the `-E` expression's shell
+        # metacharacters — `|`, `&`, `()`, `/` — are never re-parsed by the
+        # shell. `shell: bash` is set explicitly so the same empty-check
+        # runs on all three runners (windows defaults to pwsh otherwise).
         if: matrix.run_tests
-        run: cargo nextest run --workspace --features test-support,spa --no-fail-fast
+        shell: bash
+        env:
+          NEXTEST_FILTER: ${{ matrix.nextest_filter }}
+        run: |
+          if [ -n "$NEXTEST_FILTER" ]; then
+            cargo nextest run --workspace --features test-support,spa --no-fail-fast -E "$NEXTEST_FILTER"
+          else
+            cargo nextest run --workspace --features test-support,spa --no-fail-fast
+          fi
       - name: Run doc tests
         # `cargo test --doc --workspace` does NOT honour per-package
         # `doctest = false` (long-standing cargo behaviour: the flag opts in
@@ -164,7 +203,12 @@ jobs:
         # that import `rust_code_analysis::*` (the pre-fork name) and so
         # don't compile. Excluded here so our doctests still gate without
         # forcing edits into the upstream-tracked vendored sources.
-        if: matrix.run_tests
+        #
+        # Skipped on windows: doctests are platform-agnostic prose examples,
+        # so running them on windows only adds per-binary link + run cost
+        # without new signal. The windows leg is scoped to the curated
+        # platform-sensitive subset above.
+        if: matrix.run_tests && matrix.os != 'windows-latest'
         run: cargo test --workspace --exclude codelore-rca --all-features --doc
 
   spa-browser:

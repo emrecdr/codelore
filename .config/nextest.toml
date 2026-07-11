@@ -1,0 +1,9 @@
+[profile.default]
+# A test that stops making progress must fail loudly with captured
+# output instead of eating the CI job: after `period` nextest marks it
+# SLOW; after `terminate-after` periods it is killed and reported as a
+# timeout failure. Four minutes is far beyond any legitimate test in
+# this suite, while turning a genuine hang — e.g. a child process
+# holding a stdio pipe open so a reader never sees EOF — into a
+# diagnosable red test instead of a cancelled job.
+slow-timeout = { period = "60s", terminate-after = 4 }
