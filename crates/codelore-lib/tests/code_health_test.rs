@@ -377,12 +377,99 @@ fn code_health_biomarkers_fire_distinct_smells() {
         .expect("smells")
         .into_iter()
         .collect();
-    for expected in ["complex-method", "large-method", "dry", "shotgun-surgery"] {
+    for expected in [
+        "complex-method",
+        "large-method",
+        "dry",
+        "shotgun-surgery",
+        "deep-nesting",
+        "many-args",
+        "complex-conditional",
+    ] {
         assert!(
             smells.contains(expected),
             "expected smell {expected} to fire on the fixture, got {smells:?}"
         );
     }
+}
+
+/// The intensity a given smell carries for a file in the biomarker table.
+/// Returns `None` when the file has no row for that smell. Used by the
+/// per-smell firing tests below.
+fn smell_intensity(db: &FactsDb, path: &str, smell: &str) -> Option<f64> {
+    codelore_lib::analyses::query::query_map_collect(
+        db,
+        "SELECT intensity FROM code_health_biomarkers_v1 WHERE path = ? AND smell = ?",
+        duckdb::params![path, smell],
+        "smell-intensity",
+        |r| r.get::<_, f64>(0),
+    )
+    .expect("query smell intensity")
+    .into_iter()
+    .next()
+}
+
+/// `deep-nesting` fires on `src/nested.rs` — its `deeply_nested` function
+/// reaches `max_nesting == 5`, the top of the Rust file distribution, so the
+/// per-language `PERCENT_RANK` of its per-file MAX nesting is a positive
+/// intensity.
+#[test]
+fn deep_nesting_biomarker_fires_on_nested_file() {
+    let fx = codelore_lib::test_support::biomarker_repo::build();
+    let repo = GixRepo::open(fx.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = biomarker_opts(fx.dir.path());
+    db.ingest(&repo, &opts).expect("ingest");
+    let _ = run_code_health(&db, &opts).expect("run");
+
+    let intensity = smell_intensity(&db, "src/nested.rs", "deep-nesting")
+        .expect("nested.rs should carry a deep-nesting biomarker row");
+    assert!(
+        intensity > 0.0,
+        "deep-nesting intensity for src/nested.rs must be > 0, got {intensity}"
+    );
+}
+
+/// `many-args` fires on `src/many_args.rs` — its `many_args` function takes
+/// `nargs == 7`, the maximum in the Rust file distribution, so its per-file MAX
+/// nargs ranks at the top of the per-language `PERCENT_RANK`.
+#[test]
+fn many_args_biomarker_fires_on_many_args_file() {
+    let fx = codelore_lib::test_support::biomarker_repo::build();
+    let repo = GixRepo::open(fx.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = biomarker_opts(fx.dir.path());
+    db.ingest(&repo, &opts).expect("ingest");
+    let _ = run_code_health(&db, &opts).expect("run");
+
+    let intensity = smell_intensity(&db, "src/many_args.rs", "many-args")
+        .expect("many_args.rs should carry a many-args biomarker row");
+    assert!(
+        intensity > 0.0,
+        "many-args intensity for src/many_args.rs must be > 0, got {intensity}"
+    );
+}
+
+/// `complex-conditional` fires on `src/conditional.rs` — its `gate` function's
+/// single `if` chains four boolean operators (`bool_ops == 3`), the only file
+/// with a non-zero boolean-operator count, so it ranks at the top of the
+/// per-language `PERCENT_RANK` over per-file MAX `bool_ops`. This also exercises
+/// the `bool_ops` metric flowing end to end through the composite.
+#[test]
+fn complex_conditional_biomarker_fires_on_conditional_file() {
+    let fx = codelore_lib::test_support::biomarker_repo::build();
+    let repo = GixRepo::open(fx.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = biomarker_opts(fx.dir.path());
+    db.ingest(&repo, &opts).expect("ingest");
+    let _ = run_code_health(&db, &opts).expect("run");
+
+    let intensity = smell_intensity(&db, "src/conditional.rs", "complex-conditional")
+        .expect("conditional.rs should carry a complex-conditional biomarker row");
+    assert!(
+        intensity > 0.0,
+        "complex-conditional intensity for src/conditional.rs must be > 0, got {intensity}"
+    );
 }
 
 /// Locks the code-health CSV column contract (order + names). refactoring-targets
@@ -438,8 +525,8 @@ fn scoped_no_clones_excludes_dry_and_renormalizes() {
 
     // `big.rs` (large-method, unique — no clone) carries no DRY term, so
     // dropping DRY leaves its weighted biomarker sum untouched: only the
-    // `/0.85` renormalization applies. Its no-clones risk is therefore exactly
-    // the HEAD risk divided by 0.85, proving the renormalization divisor is
+    // `/0.88` renormalization applies. Its no-clones risk is therefore exactly
+    // the HEAD risk divided by 0.88, proving the renormalization divisor is
     // wired. (Not a `>=` score relation — renormalization deliberately RAISES a
     // no-duplication file's risk; the no-clones series is internally consistent
     // with itself, not comparable to the with-DRY HEAD score.)
@@ -450,12 +537,12 @@ fn scoped_no_clones_excludes_dry_and_renormalizes() {
         "big.rs must carry a non-DRY smell for this check"
     );
     assert!(
-        (big_nodry - big_head / 0.85).abs() < 1e-6,
-        "renorm: big.rs no-clones risk {big_nodry} must equal HEAD {big_head} / 0.85"
+        (big_nodry - big_head / 0.88).abs() < 1e-6,
+        "renorm: big.rs no-clones risk {big_nodry} must equal HEAD {big_head} / 0.88"
     );
 
     // `dup_a.rs` is a clone of `dup_b.rs`, so at HEAD it carries a DRY term.
-    // Excluding DRY removes that term; even after the `/0.85` bump the net risk
+    // Excluding DRY removes that term; even after the `/0.88` bump the net risk
     // DROPS below HEAD, proving the DRY biomarker was present and is now gone.
     let dup_head = risk(&head, "dup_a.rs");
     let dup_nodry = risk(&no_dry, "dup_a.rs");

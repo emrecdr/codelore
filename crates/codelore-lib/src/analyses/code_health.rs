@@ -10,16 +10,27 @@
 //! defaults: w_sr = 0.50, w_cn = 0.30, w_au = 0.20
 //! ```
 //!
-//! `structural_risk` is a weighted sum over the per-file biomarker table
-//! (complex-method, large-method, shotgun-surgery, god-class, dry). Each
-//! biomarker carries an intensity ∈ [0,1]. Four of them (complex-method,
-//! large-method, god-class, dry) are a per-language `PERCENT_RANK` of the
-//! file's worst value over the full file set; shotgun-surgery is a
-//! `PERCENT_RANK` over the coupled-file set only (no language partition). The
-//! per-smell weights sum to 1.0, so `structural_risk` stays in [0,1] and
-//! spreads across the file distribution. Smells absent for a file contribute
-//! 0, so co-occurrence is implicit — a file flagged by more smells accumulates
-//! more weighted terms.
+//! `structural_risk` is a weighted sum over the per-file biomarker table of
+//! eight smells (weights in `SMELL_WEIGHTS`, ordered by defect-correlation
+//! strength):
+//!
+//! - complex-method (0.22) — per-file MAX cyclomatic
+//! - god-class (0.18) — cognitive × (fan-in + fan-out)
+//! - large-method (0.12) — per-file MAX LOC
+//! - dry (0.12) — clone count
+//! - shotgun-surgery (0.12) — Fisher-significant coupling-partner count
+//! - deep-nesting (0.10) — per-file MAX nesting depth
+//! - many-args (0.07) — per-file MAX argument count
+//! - complex-conditional (0.07) — per-file MAX boolean-operator count
+//!
+//! Each biomarker carries an intensity ∈ [0,1]. The complexity-driven ones
+//! (complex-method, large-method, god-class, dry, deep-nesting, many-args,
+//! complex-conditional) are a per-language `PERCENT_RANK` of the file's worst
+//! value over the full file set; shotgun-surgery is a `PERCENT_RANK` over the
+//! coupled-file set only (no language partition). The per-smell weights sum to
+//! 1.0, so `structural_risk` stays in [0,1] and spreads across the file
+//! distribution. Smells absent for a file contribute 0, so co-occurrence is
+//! implicit — a file flagged by more smells accumulates more weighted terms.
 //! Coupling centrality (Fisher-significant pairs from `coupling::run_coupling`)
 //! enters once, as the shotgun-surgery biomarker; it is deliberately not also a
 //! separate behavioral term. Score range: [0, 100]; higher = healthier. Band
@@ -77,10 +88,44 @@ impl HealthScanCtx {
     }
 }
 
+/// The structural-risk smell weights, ordered by empirical defect-correlation
+/// strength. The single source of truth for the `file_structural` CASE (which
+/// is generated from this table by [`smell_weights_case`]) and the no-DRY
+/// renormalization divisor. Weights sum to exactly 1.0 so `structural_risk`
+/// stays in [0,1].
+const SMELL_WEIGHTS: &[(&str, f64)] = &[
+    ("complex-method", 0.22),
+    ("god-class", 0.18),
+    ("large-method", 0.12),
+    ("dry", 0.12),
+    ("shotgun-surgery", 0.12),
+    ("deep-nesting", 0.10),
+    ("many-args", 0.07),
+    ("complex-conditional", 0.07),
+];
+
 /// Divisor appended to the `structural_risk` SUM when the DRY biomarker is
-/// excluded: the four remaining weights (0.30+0.25+0.15+0.15) sum to 0.85, so
-/// dividing by 0.85 renormalizes the risk scale back to 1.0. Empty at HEAD.
-const STRUCTURAL_SCALE_NO_DRY: &str = " / 0.85";
+/// excluded: the seven remaining weights sum to 0.88, so dividing by 0.88
+/// renormalizes the risk scale back to 1.0. Empty at HEAD.
+const STRUCTURAL_SCALE_NO_DRY: &str = " / 0.88";
+
+/// Build the `SUM(intensity * CASE smell … END)` weight expression from
+/// [`SMELL_WEIGHTS`], keeping the weights a single source of truth shared with
+/// the sum-to-1.0 unit test. Smells absent for a file contribute 0, so
+/// co-occurrence is implicit — a file flagged by more smells accumulates more
+/// weighted terms.
+fn smell_weights_case() -> String {
+    use std::fmt::Write as _;
+    let mut case = String::from("CASE smell");
+    for (smell, weight) in SMELL_WEIGHTS {
+        // Weights are compile-time literals from SMELL_WEIGHTS, never user
+        // input, so direct interpolation carries no injection surface.
+        // Writing to a String is infallible, so the fmt Result is discarded.
+        let _ = write!(case, "\n                WHEN '{smell}' THEN {weight}");
+    }
+    case.push_str("\n                ELSE 0.0\n            END");
+    case
+}
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CodeHealthRow {
@@ -141,14 +186,7 @@ const SQL: &str = "
     file_structural AS (
         SELECT
             path,
-            LEAST(1.0, SUM(intensity * CASE smell
-                WHEN 'complex-method'  THEN 0.30
-                WHEN 'god-class'       THEN 0.25
-                WHEN 'large-method'    THEN 0.15
-                WHEN 'dry'             THEN 0.15
-                WHEN 'shotgun-surgery' THEN 0.15
-                ELSE 0.0
-            END){structural_scale}) AS structural_risk
+            LEAST(1.0, SUM(intensity * {smell_weights_case}){structural_scale}) AS structural_risk
         FROM code_health_biomarkers_v1
         GROUP BY path
     ),
@@ -263,7 +301,9 @@ const BIOMARKERS_DDL: &str = "
 ";
 
 /// Populate function-level structural biomarkers from the raw
-/// `complexity_metrics` snapshot. Intensity is the per-language
+/// `complexity_metrics` snapshot: complex-method (cyclomatic), large-method
+/// (LOC), deep-nesting (nesting depth), many-args (argument count), and
+/// complex-conditional (boolean-operator count). Intensity is the per-language
 /// `PERCENT_RANK` of the function metric, rolled up to the file by `MAX`.
 /// Language is derived from the file extension; no stored language column
 /// exists in `complexity_metrics` so the CASE expression mirrors the one
@@ -276,6 +316,9 @@ const BIOMARKERS_INSERT: &str = "
             name,
             cyclomatic,
             loc,
+            max_nesting,
+            nargs,
+            bool_ops,
             CASE lower(split_part(path, '.', -1))
                 WHEN 'rs'  THEN 'rust'
                 WHEN 'py'  THEN 'python'
@@ -298,7 +341,14 @@ const BIOMARKERS_INSERT: &str = "
     -- enough functions has one in the top percentile, so nearly every file
     -- scored ~1.0. Ranking files against files spreads the intensity uniformly.
     file_metric AS (
-        SELECT path, lang, MAX(cyclomatic) AS file_cx, MAX(loc) AS file_loc
+        SELECT
+            path,
+            lang,
+            MAX(cyclomatic) AS file_cx,
+            MAX(loc) AS file_loc,
+            MAX(max_nesting) AS file_nesting,
+            MAX(nargs) AS file_nargs,
+            MAX(bool_ops) AS file_bool_ops
         FROM lang_fn
         GROUP BY path, lang
     ),
@@ -306,12 +356,21 @@ const BIOMARKERS_INSERT: &str = "
         SELECT
             path,
             PERCENT_RANK() OVER (PARTITION BY lang ORDER BY file_cx) AS cx_i,
-            PERCENT_RANK() OVER (PARTITION BY lang ORDER BY file_loc) AS loc_i
+            PERCENT_RANK() OVER (PARTITION BY lang ORDER BY file_loc) AS loc_i,
+            PERCENT_RANK() OVER (PARTITION BY lang ORDER BY file_nesting) AS nesting_i,
+            PERCENT_RANK() OVER (PARTITION BY lang ORDER BY file_nargs) AS nargs_i,
+            PERCENT_RANK() OVER (PARTITION BY lang ORDER BY file_bool_ops) AS bool_ops_i
         FROM file_metric
     )
     SELECT path, 'complex-method' AS smell, cx_i AS intensity FROM ranked
     UNION ALL
     SELECT path, 'large-method' AS smell, loc_i AS intensity FROM ranked
+    UNION ALL
+    SELECT path, 'deep-nesting' AS smell, nesting_i AS intensity FROM ranked
+    UNION ALL
+    SELECT path, 'many-args' AS smell, nargs_i AS intensity FROM ranked
+    UNION ALL
+    SELECT path, 'complex-conditional' AS smell, bool_ops_i AS intensity FROM ranked
 ";
 
 /// Shotgun Surgery / Divergent Change: a file that co-changes with many
@@ -515,6 +574,7 @@ pub fn run_code_health_scoped(
         STRUCTURAL_SCALE_NO_DRY
     };
     let sql = SQL
+        .replace("{smell_weights_case}", &smell_weights_case())
         .replace("{src}", src)
         .replace("{cm_src}", cm_src)
         .replace("{structural_scale}", structural_scale)
@@ -563,10 +623,32 @@ mod tests {
     }
 
     #[test]
-    fn no_dry_scale_renormalizes_to_one() {
-        // 0.30 + 0.25 + 0.15 + 0.15 = 0.85; dividing by 0.85 restores a 1.0 ceiling.
-        let sum = 0.30 + 0.25 + 0.15_f64 + 0.15;
-        assert!((sum - 0.85).abs() < 1e-9);
-        assert_eq!(super::STRUCTURAL_SCALE_NO_DRY, " / 0.85");
+    fn smell_weights_sum_to_one() {
+        // The composite normalizes on the invariant that the smell weights sum
+        // to exactly 1.0, so structural_risk stays in [0,1]. Guards against a
+        // future weight edit that silently breaks the scale.
+        let sum: f64 = super::SMELL_WEIGHTS.iter().map(|(_, w)| w).sum();
+        assert!(
+            (sum - 1.0).abs() < 1e-9,
+            "SMELL_WEIGHTS must sum to 1.0, got {sum}"
+        );
+    }
+
+    #[test]
+    fn no_dry_scale_renormalizes_the_remaining_weights() {
+        // Dropping the DRY weight leaves the other seven smells; the no-DRY
+        // divisor renormalizes their sum back to a 1.0 ceiling. It must equal
+        // (1.0 − dry_weight) so the scale stays exact.
+        let dry_weight = super::SMELL_WEIGHTS
+            .iter()
+            .find(|(s, _)| *s == "dry")
+            .map(|(_, w)| *w)
+            .expect("dry weight present");
+        let no_dry_sum: f64 = 1.0 - dry_weight;
+        assert_eq!(
+            super::STRUCTURAL_SCALE_NO_DRY,
+            format!(" / {no_dry_sum}"),
+            "no-DRY divisor must renormalize the remaining weights"
+        );
     }
 }
