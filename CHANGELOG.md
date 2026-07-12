@@ -6,7 +6,19 @@ Conventional Commits format. All notable changes documented here.
 
 ### Added
 
+- **Corpus-relative percentile lens on `code-health`.** Every `code-health` row now carries an optional `corpus_percentile` — where the file's *worst raw complexity dimension* (`cyclomatic`, `cognitive`, `sloc`, `nargs`, `max_nesting`) sits versus a per-language reference corpus, read as a CDF: `P(X ≤ value)`. A `beyond_corpus` flag marks values past the corpus maximum. The lens is additive: a run with no active calibration data leaves every pre-existing field byte-identical. An embedded **world corpus** (vintage `world-2026-07`, built from ~60 permissive-license OSS repos across the five Tier-1 languages) ships in the binary and activates the lens by default; `--calibration <artifact>` on `analyze`/`check` overrides it. The percentile surfaces in the CLI (`corpus-pct` column), the SPA file drawer, and the `code_health` MCP tool.
+
+- **`codelore calibrate` subcommand.** Builds a corpus-calibration artifact by ingesting a TOML manifest of pinned repos (`--repos`), pooling per-function raw metrics per language, and reducing each pool to a quantile-breakpoint vector (`--output`). `--vintage` labels the artifact (defaults to `corpus-YYYY-MM`); `--merge <existing>` folds a build into an existing artifact via sample-count-weighted quantile blending (an approximation — exact pooling requires re-running over the union manifest); `--cache-dir` overrides the per-repo ingest cache root. Enables organization-specific corpora ("compare against our own codebases").
+
+- **`corpus_percentile_max` quality gate.** `codelore check` fails when any file's `corpus_percentile` exceeds a configured ceiling. When no row resolves a corpus percentile — no calibration artifact is active, *or* one is active but no covered language clears the sample floor and no file's metrics resolve — the gate records a `skipped` verdict (not pass, not fail), mirroring the sidecar-absent skip.
+
+- **Corpus vintage in provenance.** The provenance manifest stamps `corpus_vintage` — the vintage of whichever calibration artifact the lens actually applied (the `--calibration` file when passed, else the embedded world corpus) — so a report records which reference corpus its percentiles were measured against. Absent from the manifest JSON when no artifact is active.
+
 - **`partialFingerprints` on every `codelore diff --format sarif` result.** Diff results now carry `primaryLocationLineHash` (SHA-256 of repo root + path, computed with the exact recipe `codelore check` uses, so a file flagged by both tools collapses to one GitHub Code Scanning alert) and `diffFinding/v1` (SHA-256 of rule id + path + a per-finding discriminant, stable across re-runs of the same diff). Previously diff results carried no dedup fingerprints, causing asymmetric alert deduplication versus check. The primary key is derived from the real `--repo` path, not the internal per-run worktree, so it stays stable across runs. See docs/advanced-usage.md for the key table.
+
+### Changed
+
+- **Three new biomarkers expand the `structural_risk` composite (schema v5).** `code-health` now scores eight structural smells instead of five, adding **Deep Nesting** (per-file max nesting depth), **Many Args** (per-file max argument count), and **Complex Conditional** (per-file max boolean-operator count). The weight table is rebalanced to sum to 1.0 (Complex Method 0.22, God Class 0.18, Large Method 0.12, DRY 0.12, Shotgun Surgery 0.12, Deep Nesting 0.10, Many Args 0.07, Complex Conditional 0.07). This deliberately shifts `structural_risk`, `score`, and `band` values for files exercising the new smells. The fact-store schema bumps from `4` to `5` to persist the new `nargs`, `bool_ops`, and real `max_nesting` complexity metrics; opening a v4 cache triggers a re-ingest.
 
 ### Fixed
 
