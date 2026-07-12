@@ -2029,6 +2029,41 @@ fn check_max_findings_gate_skips_gracefully_when_no_sidecar() {
     );
 }
 
+#[test]
+fn check_corpus_percentile_gate_skips_when_no_calibration_active() {
+    // Gate configured, but no `--calibration` artifact and the embedded world
+    // corpus is a placeholder → code-health rows carry no `corpus_percentile`.
+    // Expected contract:
+    //   - exit code unaffected (0 — only the corpus gate is configured here)
+    //   - ledger records a `verdict="skipped"` entry for corpus_percentile_max
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let repo_path = tiny.dir.path();
+    let thresholds = repo_path.join(".codelore-thresholds.toml");
+    std::fs::write(&thresholds, "[gates]\ncorpus_percentile_max = 0.9\n").unwrap();
+
+    // Run check — should pass (no calibration → gate skipped, no other gates).
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args(["check", "--repo", repo_path.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // The ledger must record a skipped verdict for this gate.
+    let cache_root = codelore_lib::cli_api::cache::default_cache_root();
+    let records =
+        codelore_lib::cli_api::quality_gates::ledger::read_gate_runs(&cache_root, repo_path)
+            .expect("read ledger");
+    let corpus_rec = records
+        .iter()
+        .rev()
+        .find(|r| r.gate == "corpus_percentile_max")
+        .expect("ledger must contain a corpus_percentile_max record");
+    assert_eq!(
+        corpus_rec.verdict, "skipped",
+        "corpus gate must record verdict=skipped when no calibration is active"
+    );
+}
+
 /// SARIF 2.1.0 document that reports one finding for `engine` on `path`.
 fn sarif_one_finding(engine: &str, path: &str) -> String {
     format!(

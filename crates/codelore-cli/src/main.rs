@@ -707,6 +707,9 @@ fn emit_gate_notices(
             ("max_findings_in_hot_files", "skipped") => eprintln!(
                 "  ⚠ max_findings_in_hot_files: skipped — run `codelore ingest-sarif` first"
             ),
+            ("corpus_percentile_max", "skipped") => eprintln!(
+                "  ⚠ corpus_percentile_max: skipped — no calibration artifact (embed one or pass --calibration)"
+            ),
             ("code_health_min", "degraded") => eprintln!(
                 "  ⚠ code_health_min: degraded — health scan returned no rows on a non-empty repo"
             ),
@@ -1085,6 +1088,45 @@ fn evaluate_all_gates(
                 });
                 violations.extend(overlap_v);
             }
+        }
+    }
+
+    // ── corpus_percentile_max gate ───────────────────────────────────────────
+    if let Some(max) = g.corpus_percentile_max {
+        // Reuse the already-computed code-health rows. The lens is active only
+        // when a calibration artifact is (`--calibration` or an embedded world
+        // corpus); without one every row carries `corpus_percentile = None`.
+        // That is a SKIP (not a pass, not a fail) — there is no reference corpus
+        // to compare against — mirroring the max_findings sidecar-absent skip.
+        let has_calibration = code_health.iter().any(|r| r.corpus_percentile.is_some());
+        if has_calibration {
+            let corpus_v = codelore_lib::cli_api::quality_gates::evaluate_corpus_percentile_rows(
+                max,
+                &code_health,
+            );
+            let value = code_health
+                .iter()
+                .filter_map(|r| r.corpus_percentile)
+                .fold(0.0, f64::max);
+            recs.push(make_rec(
+                "corpus_percentile_max",
+                max,
+                value,
+                !corpus_v.is_empty(),
+                ts,
+                head_sha,
+            ));
+            violations.extend(corpus_v);
+        } else {
+            recs.push(GateRunRecord {
+                ts: ts.to_owned(),
+                head_sha: head_sha.to_owned(),
+                gate: "corpus_percentile_max".into(),
+                threshold: max,
+                value: 0.0,
+                verdict: "skipped".into(),
+                mode: "check".into(),
+            });
         }
     }
 

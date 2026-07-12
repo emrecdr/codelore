@@ -100,6 +100,18 @@ pub struct Gates {
     /// `verdict = "skipped"` and printed as a distinct warning line; it
     /// does not affect the exit code.
     pub max_findings_in_hot_files: Option<u32>,
+    /// Maximum corpus-relative percentile (`[0,1]`) any file may reach. A
+    /// file whose worst raw metric sits above this fraction of a reference
+    /// corpus fails the gate — a ceiling on "how extreme is this file versus
+    /// the world (or your org)".
+    ///
+    /// The gate is **skipped** (not failed, not passed) when no calibration
+    /// artifact is active — no embedded world corpus and no `--calibration`
+    /// override means code-health rows carry no `corpus_percentile`, so there
+    /// is nothing to compare against. The skip is recorded in the ledger with
+    /// `verdict = "skipped"` and printed as a distinct warning line; it does
+    /// not affect the exit code.
+    pub corpus_percentile_max: Option<f64>,
     /// When `true` (the **default**), a gate whose underlying analysis
     /// produced no evaluable data where data was expected is recorded as
     /// `verdict = "degraded"` and treated as a failure — a gate must not
@@ -199,6 +211,7 @@ impl Thresholds {
             && self.gates.max_red_effort_pct.is_none()
             && self.gates.code_familiarity_min.is_none()
             && self.gates.max_findings_in_hot_files.is_none()
+            && self.gates.corpus_percentile_max.is_none()
             && self.diff.delta_code_health_min.is_none()
             && self.diff.new_hotspot_max.is_none()
             && !self.diff.no_new_cycles
@@ -471,6 +484,38 @@ pub fn evaluate_code_health_gate(
     out
 }
 
+/// Pure inner comparison for the `corpus_percentile_max` gate.
+///
+/// One violation per file whose `corpus_percentile` exceeds `max` (strictly
+/// greater — equal-to-ceiling passes, mirroring the other `_max` gates). Rows
+/// with no `corpus_percentile` (uncovered language, or no calibration active)
+/// carry no comparison and never violate.
+///
+/// Public so the CLI layer can evaluate the corpus gate over the code-health
+/// rows it already holds, without re-running the analysis. The **skip** path
+/// (no calibration active ⇒ every row is `None`) lives in the CLI layer; this
+/// function's all-`None` result is simply an empty violation set.
+#[must_use]
+pub fn evaluate_corpus_percentile_rows(
+    max: f64,
+    rows: &[crate::analyses::code_health::CodeHealthRow],
+) -> Vec<GateViolation> {
+    let mut out = Vec::new();
+    for row in rows {
+        if let Some(pct) = row.corpus_percentile
+            && pct > max
+        {
+            out.push(GateViolation {
+                gate: "corpus_percentile_max".into(),
+                path: row.path.clone(),
+                actual: format!("{pct:.2}"),
+                threshold: format!("{max:.2}"),
+            });
+        }
+    }
+    out
+}
+
 /// Pure inner comparison for the `max_red_effort_pct` gate.
 ///
 /// Finds the `"red"` band row in `rows`; if none, treats churn as 0 %
@@ -730,6 +775,73 @@ new_hotspot_max = 0
         let t = Thresholds::default();
         let rows = vec![make_ch_row("a.rs", 0.0)];
         assert!(evaluate_code_health_gate(&t, &rows).is_empty());
+    }
+
+    fn make_corpus_row(
+        path: &str,
+        corpus_percentile: Option<f64>,
+    ) -> crate::analyses::code_health::CodeHealthRow {
+        crate::analyses::code_health::CodeHealthRow {
+            path: path.to_string(),
+            cognitive: 0.0,
+            score: 100.0,
+            structural_risk: 0.0,
+            percentile: 0.0,
+            band: "green".to_string(),
+            corpus_percentile,
+            beyond_corpus: false,
+        }
+    }
+
+    #[test]
+    fn corpus_percentile_max_flags_file_above_ceiling() {
+        // One file sits above the ceiling, one at it, one below, one absent.
+        let rows = vec![
+            make_corpus_row("hot.rs", Some(0.95)),
+            make_corpus_row("edge.rs", Some(0.90)),
+            make_corpus_row("cool.rs", Some(0.10)),
+            make_corpus_row("unknown.rs", None),
+        ];
+        let v = evaluate_corpus_percentile_rows(0.90, &rows);
+        assert_eq!(v.len(), 1, "only the strictly-above file violates: {v:?}");
+        assert_eq!(v[0].path, "hot.rs");
+        assert_eq!(v[0].gate, "corpus_percentile_max");
+        assert_eq!(v[0].actual, "0.95");
+        assert_eq!(v[0].threshold, "0.90");
+    }
+
+    #[test]
+    fn corpus_percentile_max_boundary_is_strictly_greater() {
+        // Equal-to-ceiling passes (`> max`, not `>= max`).
+        let rows = vec![make_corpus_row("edge.rs", Some(0.90))];
+        assert!(evaluate_corpus_percentile_rows(0.90, &rows).is_empty());
+    }
+
+    #[test]
+    fn corpus_percentile_max_ignores_none_rows() {
+        // A file with no corpus percentile (uncovered language / no calibration)
+        // never violates, no matter how low the ceiling.
+        let rows = vec![make_corpus_row("unknown.rs", None)];
+        assert!(evaluate_corpus_percentile_rows(0.0, &rows).is_empty());
+    }
+
+    #[test]
+    fn parses_corpus_percentile_max_gate() {
+        let raw = "[gates]\ncorpus_percentile_max = 0.9\n";
+        let t = Thresholds::from_text(raw).unwrap();
+        assert_eq!(t.gates.corpus_percentile_max, Some(0.9));
+        assert!(!t.is_empty());
+    }
+
+    #[test]
+    fn unknown_corpus_gate_key_is_rejected() {
+        // A near-miss of the new key must reject, not silently disable the gate.
+        let raw = "[gates]\ncorpus_percentile_maximum = 0.9\n";
+        let err = Thresholds::from_text(raw).expect_err("typo'd corpus gate key should reject");
+        assert!(
+            err.contains("unknown field") || err.contains("corpus_percentile_maximum"),
+            "expected 'unknown field' in error, got: {err}"
+        );
     }
 
     #[test]
