@@ -225,7 +225,7 @@ Computation (Rust-side, after the existing SQL): for each file, per-language cor
 
 ## Task 13 — Docs + CHANGELOG
 
-**Files:** Modify `docs/advanced-usage.md` (new section: corpus percentiles — what the number means, artifact format/vintage, `calibrate` usage incl. org-corpus + `--merge` approximation note, the gate; biomarker section updated to nine smells + new weight table + LCOM4 absence stated plainly as current contract), `README.md` (one line in the analyses/health blurb: "corpus-relative percentiles — how your code compares to a reference corpus, or to your own organization's"), `CHANGELOG.md` `[Unreleased]` (entries: corpus percentile lens + calibrate subcommand + three biomarkers/schema v5 + gate + provenance stamp).
+**Files:** Modify `docs/advanced-usage.md` (new section: corpus percentiles — what the number means, artifact format/vintage, `calibrate` usage incl. org-corpus + `--merge` approximation note, the gate; biomarker section updated to the eight-smell weight table + LCOM4 absence stated plainly as current contract), `README.md` (one line in the analyses/health blurb: "corpus-relative percentiles — how your code compares to a reference corpus, or to your own organization's"), `CHANGELOG.md` `[Unreleased]` (entries: corpus percentile lens + calibrate subcommand + three biomarkers/schema v5 + gate + provenance stamp).
 
 - [ ] Docs truthful against final behavior (write AFTER all code tasks; verify claims against the shipped code) → commit `docs: corpus-relative percentiles and the expanded biomarker set`.
 
