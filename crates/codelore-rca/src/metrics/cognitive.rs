@@ -175,7 +175,12 @@ fn compute_booleans<T: std::cmp::PartialEq + std::convert::From<u16>>(
             stats.structural = stats
                 .boolean_seq
                 .eval_based_on_prev(child.kind_id(), stats.structural);
-            // A new boolean sequence is one the cognitive counter charged for.
+            // `bool_ops` rides the cognitive counter's sequence detection: the
+            // delta is exactly 1 when `eval_based_on_prev` counted a new boolean
+            // sequence (first operator, or a switch to a different operator) and
+            // 0 when it extended the current run. This coupling is deliberate —
+            // if `eval_based_on_prev`'s return semantics ever change, this line
+            // must change with it.
             stats.bool_ops += stats.structural - prev_structural;
         }
     }
