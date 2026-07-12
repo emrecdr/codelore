@@ -191,6 +191,15 @@ pub mod biomarker_repo {
     //! Small fixtures like `tiny_repo` are too homogeneous to exercise the
     //! metric's distribution; this one is purpose-built for that.
     //!
+    //! Three single-function files carry the raw drivers for the nesting,
+    //! argument-count, and boolean-conditional biomarkers so the composite
+    //! fires `deep-nesting`, `many-args`, and `complex-conditional` too:
+    //! `src/nested.rs::deeply_nested` reaches `max_nesting == 5`,
+    //! `src/many_args.rs::many_args` takes `nargs == 7`, and
+    //! `src/conditional.rs::gate` has `bool_ops == 3` (a single `if`
+    //! chaining `&&`/`||`). They ride the seed commit, so every existing
+    //! commit's date / author / message is unchanged.
+    //!
     //! Six commits (2026-06-01..2026-06-06): a seed writing the whole
     //! complexity gradient, then co-changing pairs (complex+moderate, then the
     //! duplicated `dup_a`/`dup_b` pair) to create temporal coupling.
@@ -199,11 +208,24 @@ pub mod biomarker_repo {
     //!
     //! The fixture is captured once into a checked-in git bundle
     //! (`src/test_support/data/biomarker-repo.bundle`; HEAD
-    //! `fc3edfb3435c690a87750c8fe0050a2497d75b60`, deterministic across
+    //! `b00f4b4346f7b920f9e3051d3671617ab9d2173c`, deterministic across
     //! regenerations because every author / date / file content is fixed). To
     //! regenerate, revive the pre-bundle programmatic builder from git history
     //! at commit `b412e6d` (it shells out to `git` for each commit and lived in
-    //! this module), run it to produce a fresh repo, then capture:
+    //! this module), then EXTEND its seed commit — before the seed `git add .`
+    //! — with three single-function Rust files so the seed tree carries them
+    //! without touching any existing commit:
+    //!
+    //! - `src/nested.rs`: one function nested five scopes deep
+    //!   (`for` → `if` → `while` → `if` → `match`) so `max_nesting == 5`.
+    //! - `src/many_args.rs`: one function with seven parameters so `nargs == 7`.
+    //! - `src/conditional.rs`: one function whose single `if` condition chains
+    //!   four boolean operators (`a && b || c && d || e`) so `bool_ops > 2`.
+    //!
+    //! Keep every existing file's content, the six fixed dates, the `Bio
+    //! <bio@example.com>` author, and the commit messages exactly as the
+    //! original builder had them. Run the extended builder to produce a fresh
+    //! repo, then capture:
     //!
     //! ```text
     //! git -C <fresh-repo> bundle create \
