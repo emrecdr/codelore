@@ -220,7 +220,9 @@ pub mod biomarker_repo {
     //!   (`for` → `if` → `while` → `if` → `match`) so `max_nesting == 5`.
     //! - `src/many_args.rs`: one function with seven parameters so `nargs == 7`.
     //! - `src/conditional.rs`: one function whose single `if` condition chains
-    //!   four boolean operators (`a && b || c && d || e`) so `bool_ops > 2`.
+    //!   four boolean operators (`a && b || c && d || e`), which the metrics
+    //!   layer scores as `bool_ops == 3` — it counts boolean *sequences*
+    //!   (each operator alternation starts one), not raw operators.
     //!
     //! Keep every existing file's content, the six fixed dates, the `Bio
     //! <bio@example.com>` author, and the commit messages exactly as the
