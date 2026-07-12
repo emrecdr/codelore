@@ -31,13 +31,22 @@ pub struct ComplexityEntity {
     pub mi: Option<f64>,
     pub nom: u32,
     pub nexits: u32,
+    /// Number of arguments of this function/closure (0 for non-callable spaces).
+    pub nargs: u32,
     pub loc: u32,
     pub sloc: u32,
-    /// Nesting metrics are not directly exposed by codelore-rca; set to 0.
+    /// Deepest control-flow nesting reached in this space (three nested `if`s
+    /// yield 3; 0 when the space has no branching/looping construct).
     pub max_nesting: u32,
+    /// Per-construct nesting distribution is not retained by codelore-rca, so
+    /// mean/sd nesting are left at 0.0 (honest-absence).
     pub mean_nesting: f64,
     pub sd_nesting: f64,
+    /// Sum of the nesting depth of every branching/looping construct.
     pub total_nesting: u32,
+    /// Count of boolean-operator sequences in conditions (`a && b || c` is 2;
+    /// `a && b && c` is 1) — the complex-conditional driver.
+    pub bool_ops: u32,
 }
 
 fn space_kind_str(kind: SpaceKind) -> &'static str {
@@ -110,6 +119,10 @@ fn collect_entities(space: &FuncSpace, path: &str, out: &mut Vec<ComplexityEntit
         mi: mi_val,
         nom: f_to_u32(m.nom.total()),
         nexits: f_to_u32(m.nexits.exit_sum()),
+        // A leaf function/closure space carries its own argument count in
+        // `fn_args`/`closure_args`; non-callable spaces (file unit, impl,
+        // class) report 0 here.
+        nargs: f_to_u32(m.nargs.fn_args() + m.nargs.closure_args()),
         // `loc` = physical lines of code (including comments + blanks).
         // `sloc` = source lines of code (the "code-only" subset).
         // Before this fix both columns received `sloc()`, silently
@@ -119,11 +132,14 @@ fn collect_entities(space: &FuncSpace, path: &str, out: &mut Vec<ComplexityEntit
         // `crates/codelore-rca/src/metrics/loc.rs`) — just never called.
         loc: f_to_u32(m.loc.ploc()),
         sloc: f_to_u32(m.loc.sloc()),
-        // Nesting is not exposed as a standalone stat in codelore-rca; left as 0.
-        max_nesting: 0,
+        // Nesting/bool-ops are derived from the cognitive pass, which walks the
+        // AST once and already tracks nesting depth and boolean sequences.
+        // Per-construct nesting distribution is not retained, so mean/sd stay 0.
+        max_nesting: f_to_u32(m.cognitive.max_nesting()),
         mean_nesting: 0.0,
         sd_nesting: 0.0,
-        total_nesting: 0,
+        total_nesting: f_to_u32(m.cognitive.total_nesting()),
+        bool_ops: f_to_u32(m.cognitive.bool_ops()),
     };
     out.push(entity);
 

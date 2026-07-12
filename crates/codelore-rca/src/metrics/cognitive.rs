@@ -25,6 +25,9 @@ pub struct Stats {
     structural_min: usize,
     structural_max: usize,
     nesting: usize,
+    max_nesting: usize,
+    total_nesting: usize,
+    bool_ops: usize,
     total_space_functions: usize,
     boolean_seq: BoolSequence,
 }
@@ -37,6 +40,9 @@ impl Default for Stats {
             structural_min: usize::MAX,
             structural_max: 0,
             nesting: 0,
+            max_nesting: 0,
+            total_nesting: 0,
+            bool_ops: 0,
             total_space_functions: 1,
             boolean_seq: BoolSequence::default(),
         }
@@ -105,6 +111,31 @@ impl Stats {
     pub fn cognitive_average(&self) -> f64 {
         self.cognitive_sum() / self.total_space_functions as f64
     }
+
+    /// Returns the maximum control-flow nesting depth reached in this space.
+    ///
+    /// Counted as the deepest level of nested branching/looping constructs
+    /// (e.g. three nested `if`s yield `3`); `0` when the space contains no
+    /// such construct. Derived from the same nesting the cognitive pass
+    /// already tracks.
+    pub fn max_nesting(&self) -> f64 {
+        self.max_nesting as f64
+    }
+
+    /// Returns the sum of the nesting depth of every branching/looping
+    /// construct in this space.
+    pub fn total_nesting(&self) -> f64 {
+        self.total_nesting as f64
+    }
+
+    /// Returns the number of boolean-operator sequences in this space.
+    ///
+    /// A run of the same operator (`a && b && c`) counts once; switching
+    /// operators (`a && b || c`) starts a new sequence. This is the same
+    /// boolean-sequence accounting the cognitive metric folds into its score.
+    pub fn bool_ops(&self) -> f64 {
+        self.bool_ops as f64
+    }
     #[inline(always)]
     pub(crate) fn compute_sum(&mut self) {
         self.structural_sum += self.structural;
@@ -140,9 +171,12 @@ fn compute_booleans<T: std::cmp::PartialEq + std::convert::From<u16>>(
 ) {
     for child in node.children() {
         if typs1 == child.kind_id().into() || typs2 == child.kind_id().into() {
+            let prev_structural = stats.structural;
             stats.structural = stats
                 .boolean_seq
-                .eval_based_on_prev(child.kind_id(), stats.structural)
+                .eval_based_on_prev(child.kind_id(), stats.structural);
+            // A new boolean sequence is one the cognitive counter charged for.
+            stats.bool_ops += stats.structural - prev_structural;
         }
     }
 }
@@ -225,6 +259,11 @@ fn increment_function_depth<T: std::cmp::PartialEq + std::convert::From<u16>>(
 #[inline(always)]
 fn increase_nesting(stats: &mut Stats, nesting: &mut usize, depth: usize, lambda: usize) {
     stats.nesting = *nesting + depth + lambda;
+    // Track nesting depth as a 1-based count: an outermost construct
+    // (`stats.nesting == 0`) sits at depth 1.
+    let depth_count = stats.nesting + 1;
+    stats.max_nesting = stats.max_nesting.max(depth_count);
+    stats.total_nesting += depth_count;
     increment(stats);
     *nesting += 1;
     stats.boolean_seq.reset();
