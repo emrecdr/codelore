@@ -109,6 +109,7 @@ CREATE TABLE IF NOT EXISTS complexity_metrics (
     loc INTEGER, sloc INTEGER,
     max_nesting INTEGER, mean_nesting DOUBLE,
     sd_nesting DOUBLE, total_nesting INTEGER,
+    nargs INTEGER, bool_ops INTEGER,
     PRIMARY KEY (path, name, rev)
 );
 

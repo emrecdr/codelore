@@ -152,6 +152,51 @@ fn ingest_populates_complexity_for_tier1_files() {
     );
 }
 
+/// Ingest the biomarker fixture and assert that the `complex` function row
+/// carries real `nargs` and `max_nesting` values (both were wired as constant
+/// zeros before schema v5). The `complex` function takes three named
+/// parameters, and its body contains several layers of nested control flow.
+#[cfg(feature = "test-support")]
+#[test]
+fn ingest_biomarker_repo_persists_nargs_and_nesting() {
+    let biomarker = codelore_lib::test_support::biomarker_repo::build();
+    let repo = GixRepo::open(biomarker.dir.path()).expect("open biomarker repo");
+    let db = FactsDb::new_in_memory().expect("db");
+
+    let opts = Options {
+        repo_path: biomarker.dir.path().to_path_buf(),
+        min_revs: 1,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    // Entity names are stored with a `@{start}-{end}` suffix by dedup_entities.
+    // Use LIKE to match the function by its base name.
+    let nargs: String = db
+        .query_one_value(
+            "SELECT CAST(nargs AS TEXT) FROM complexity_metrics \
+             WHERE path = 'src/complex.rs' AND name LIKE 'complex@%'",
+        )
+        .expect("nargs query");
+    let nargs: u32 = nargs.parse().expect("nargs parse");
+    assert!(
+        nargs > 0,
+        "complex() takes 3 args — nargs should be > 0, got {nargs}"
+    );
+
+    let max_nesting: String = db
+        .query_one_value(
+            "SELECT CAST(max_nesting AS TEXT) FROM complexity_metrics \
+             WHERE path = 'src/complex.rs' AND name LIKE 'complex@%'",
+        )
+        .expect("max_nesting query");
+    let max_nesting: u32 = max_nesting.parse().expect("max_nesting parse");
+    assert!(
+        max_nesting > 0,
+        "complex() has nested loops and ifs — max_nesting should be > 0, got {max_nesting}"
+    );
+}
+
 /// Regression test: previously the `hunks` table existed in
 /// schema but `append_change` never wrote to it — `Repo::diff_hunks`
 /// parsed the headers, attached them to `FileChange.hunks`, and the

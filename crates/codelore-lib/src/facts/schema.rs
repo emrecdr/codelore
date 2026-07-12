@@ -7,7 +7,7 @@ pub const SCHEMA_V1: &str = include_str!("schema_v1.sql");
 /// operator who hands a stale `.duckdb` to `--cache-dir` directly gets a
 /// typed parse-time error instead of cryptic SQL failures at analysis
 /// time. Bump whenever a `CREATE TABLE` shape changes.
-pub const CURRENT_SCHEMA_VERSION: &str = "4";
+pub const CURRENT_SCHEMA_VERSION: &str = "5";
 
 pub const INITIAL_PROVENANCE: &[(&str, &str)] = &[
     ("schema_version", CURRENT_SCHEMA_VERSION),

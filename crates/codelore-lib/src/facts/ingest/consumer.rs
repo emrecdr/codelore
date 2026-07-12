@@ -356,6 +356,8 @@ pub(super) fn append_metric_row(
         ent.mean_nesting,
         ent.sd_nesting,
         i32::try_from(ent.total_nesting).unwrap_or(i32::MAX),
+        i32::try_from(ent.nargs).unwrap_or(i32::MAX),
+        i32::try_from(ent.bool_ops).unwrap_or(i32::MAX),
     ])
     .map_err(|e| CodeLoreError::Analysis(format!("append metric: {e}")))
 }

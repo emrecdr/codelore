@@ -51,7 +51,9 @@ pub fn ingest_complexity_at_rev<R: crate::repo::Repo>(
             max_nesting         INTEGER,
             mean_nesting        DOUBLE,
             sd_nesting          DOUBLE,
-            total_nesting       INTEGER
+            total_nesting       INTEGER,
+            nargs               INTEGER,
+            bool_ops            INTEGER
         )"
     ))?;
 
@@ -131,7 +133,7 @@ fn insert_complexity_rows(
     let mut stmt = db
         .conn()
         .prepare(&format!(
-            "INSERT INTO {dest_table} VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+            "INSERT INTO {dest_table} VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
         ))
         .map_err(|e| CodeLoreError::Analysis(format!("prepare insert {dest_table}: {e}")))?;
 
@@ -158,6 +160,8 @@ fn insert_complexity_rows(
                 ent.mean_nesting,
                 ent.sd_nesting,
                 i32::try_from(ent.total_nesting).unwrap_or(i32::MAX),
+                i32::try_from(ent.nargs).unwrap_or(i32::MAX),
+                i32::try_from(ent.bool_ops).unwrap_or(i32::MAX),
             ])
             .map_err(|e| CodeLoreError::Analysis(format!("insert {dest_table}: {e}")))?;
         }

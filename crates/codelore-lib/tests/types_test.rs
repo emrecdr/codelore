@@ -4,14 +4,13 @@ use codelore_lib::types::{ChangeType, CommitEvent, FileChange, Hunk, SCHEMA_VERS
 use time::macros::datetime;
 
 #[test]
-fn schema_version_is_four() {
-    // Schema v4: wires `Hunk` rows from `FileChange.hunks` through to
-    // the `hunks` table (pre-v4 the table was created in schema and
-    // never written to) and tightens the schema with NOT NULL on all
-    // four offsets, composite PK `(rev, path, old_start, new_start)`,
-    // and the `(rev, path)` index for FK clean-up. Cache key
-    // includes this sentinel so v3 caches are naturally invalidated.
-    assert_eq!(SCHEMA_VERSION, 4);
+fn schema_version_is_five() {
+    // Schema v5: adds `nargs INTEGER` and `bool_ops INTEGER` to
+    // `complexity_metrics` and wires the nesting, argument-count, and
+    // boolean-conditional metrics through to the persisted table.
+    // Cache key includes this sentinel so v4 caches are naturally
+    // invalidated on next open.
+    assert_eq!(SCHEMA_VERSION, 5);
 }
 
 #[test]
