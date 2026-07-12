@@ -134,18 +134,26 @@ pub fn write_hotspots_csv<W: Write>(rows: &[HotspotRow], w: &mut W) -> Result<()
 }
 
 pub fn write_code_health_csv<W: Write>(rows: &[CodeHealthRow], w: &mut W) -> Result<()> {
-    writeln!(w, "entity,cognitive,score,structural_risk,percentile,band")
-        .map_err(CodeLoreError::Io)?;
+    writeln!(
+        w,
+        "entity,cognitive,score,structural_risk,percentile,band,corpus-pct"
+    )
+    .map_err(CodeLoreError::Io)?;
     for row in rows {
+        let corpus_pct = match row.corpus_percentile {
+            Some(v) => format!("{v:.2}"),
+            None => String::new(),
+        };
         writeln!(
             w,
-            "{},{:.2},{:.2},{:.4},{:.4},{}",
+            "{},{:.2},{:.2},{:.4},{:.4},{},{}",
             quote_if_needed(&row.path),
             row.cognitive,
             row.score,
             row.structural_risk,
             row.percentile,
-            row.band
+            row.band,
+            corpus_pct
         )
         .map_err(CodeLoreError::Io)?;
     }

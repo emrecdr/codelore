@@ -210,6 +210,19 @@ fn mcp_code_health_returns_scored_rows() {
         first["score"].is_number(),
         "row missing numeric `score` field: {first}"
     );
+    // On an uncalibrated run (no --calibration artifact), `corpus_percentile`
+    // must be absent from every row (serde skip_serializing_if = Option::is_none).
+    // The field must not corrupt the JSON or cause a parse error — absent is correct.
+    for row in rows {
+        assert!(
+            row.get("corpus_percentile").is_none(),
+            "corpus_percentile must be absent on uncalibrated run: {row}"
+        );
+        assert!(
+            row.get("beyond_corpus").is_none(),
+            "beyond_corpus must be absent (falsy-skip) on uncalibrated run: {row}"
+        );
+    }
 
     drop(stdin);
     let _ = child.wait();

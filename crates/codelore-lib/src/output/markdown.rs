@@ -160,20 +160,34 @@ pub fn write_code_health_markdown<W: Write>(rows: &[CodeHealthRow], w: &mut W) -
     header(w, "CodeLore code-health")?;
     writeln!(
         w,
-        "| Entity | Cognitive | Score | Structural risk | Percentile | Band |"
+        "| Entity | Cognitive | Score | Structural risk | Percentile | Band | Corpus percentile |"
     )
     .map_err(CodeLoreError::Io)?;
-    writeln!(w, "|---|---|---|---|---|---|").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---|---|---|---|---|---|").map_err(CodeLoreError::Io)?;
     for row in rows {
+        let corpus_cell = match row.corpus_percentile {
+            Some(v) => {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                // v is in [0.0, 1.0] after saturation; *100+round fits u32.
+                let pct = (v * 100.0).round() as u32;
+                if row.beyond_corpus {
+                    format!("{pct}%+")
+                } else {
+                    format!("{pct}%")
+                }
+            }
+            None => "—".to_owned(),
+        };
         writeln!(
             w,
-            "| `{}` | {:.2} | {:.2} | {:.4} | {:.4} | {} |",
+            "| `{}` | {:.2} | {:.2} | {:.4} | {:.4} | {} | {} |",
             escape_md_cell(&row.path),
             row.cognitive,
             row.score,
             row.structural_risk,
             row.percentile,
-            row.band
+            row.band,
+            corpus_cell
         )
         .map_err(CodeLoreError::Io)?;
     }

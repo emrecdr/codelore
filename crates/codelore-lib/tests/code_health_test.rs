@@ -498,11 +498,105 @@ fn code_health_csv_column_contract() {
     let out = String::from_utf8(buf).expect("utf8");
     assert_eq!(
         out.lines().next().unwrap(),
-        "entity,cognitive,score,structural_risk,percentile,band"
+        "entity,cognitive,score,structural_risk,percentile,band,corpus-pct"
     );
     assert!(
         out.lines().nth(1).unwrap().starts_with("src/x.rs,"),
         "data row should carry the path"
+    );
+}
+
+/// `corpus-pct` column: populated when `corpus_percentile` is `Some`,
+/// empty when `None`, and `beyond_corpus` does not affect the rendered value.
+#[test]
+fn code_health_csv_corpus_pct_populated_and_none() {
+    use codelore_lib::analyses::code_health::CodeHealthRow;
+    let make = |cp: Option<f64>, bc: bool| CodeHealthRow {
+        path: "f.rs".into(),
+        cognitive: 1.0,
+        score: 50.0,
+        structural_risk: 0.1,
+        percentile: 0.2,
+        band: "green".into(),
+        corpus_percentile: cp,
+        beyond_corpus: bc,
+    };
+    let rows = vec![
+        make(Some(0.75), false),
+        make(Some(1.0), true),
+        make(None, false),
+    ];
+    let mut buf: Vec<u8> = Vec::new();
+    codelore_lib::output::csv::write_code_health_csv(&rows, &mut buf).expect("csv");
+    let csv = String::from_utf8(buf).expect("utf8");
+    let lines: Vec<&str> = csv.lines().collect();
+    // header
+    assert!(
+        lines[0].ends_with(",corpus-pct"),
+        "header must end with corpus-pct"
+    );
+    // row 0: populated, beyond_corpus false → raw value
+    assert!(
+        lines[1].ends_with(",0.75"),
+        "populated row must carry the corpus-pct value: {}",
+        lines[1]
+    );
+    // row 1: populated, beyond_corpus true → raw value (beyond_corpus doesn't change cell)
+    assert!(
+        lines[2].ends_with(",1.00"),
+        "beyond-corpus row must carry 1.00: {}",
+        lines[2]
+    );
+    // row 2: None → empty cell (trailing comma, no value)
+    assert!(
+        lines[3].ends_with(','),
+        "None row must emit empty corpus-pct cell: {}",
+        lines[3]
+    );
+}
+
+/// `Corpus percentile` column in the markdown emitter: populated when
+/// `corpus_percentile` is `Some`, em-dash when `None`.
+#[test]
+fn code_health_markdown_corpus_pct_column() {
+    use codelore_lib::analyses::code_health::CodeHealthRow;
+    let make = |cp: Option<f64>, bc: bool| CodeHealthRow {
+        path: "f.rs".into(),
+        cognitive: 1.0,
+        score: 50.0,
+        structural_risk: 0.1,
+        percentile: 0.2,
+        band: "green".into(),
+        corpus_percentile: cp,
+        beyond_corpus: bc,
+    };
+    let rows = vec![
+        make(Some(0.74), false),
+        make(Some(1.0), true),
+        make(None, false),
+    ];
+    let mut buf: Vec<u8> = Vec::new();
+    codelore_lib::output::markdown::write_code_health_markdown(&rows, &mut buf).expect("md");
+    let md = String::from_utf8(buf).expect("utf8");
+    // Header must include the new column
+    assert!(
+        md.contains("Corpus percentile"),
+        "markdown header must contain 'Corpus percentile'"
+    );
+    // Populated row: rendered as integer percent
+    assert!(
+        md.contains("74%"),
+        "populated corpus_percentile 0.74 must render as 74%: {md}"
+    );
+    // beyond_corpus row: rendered with '+' suffix
+    assert!(
+        md.contains("100%+"),
+        "beyond_corpus row must render as 100%+: {md}"
+    );
+    // None row: em-dash
+    assert!(
+        md.contains("—"),
+        "None corpus_percentile must render as em-dash"
     );
 }
 
