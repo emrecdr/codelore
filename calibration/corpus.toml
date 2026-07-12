@@ -1,0 +1,559 @@
+# World corpus manifest for corpus-calibration artifact generation.
+#
+# Each [[repos]] entry is a permissive-license, active, real-world project.
+# SHA pins the default-branch HEAD at time of manifest authorship; update by
+# re-running: gh api repos/OWNER/REPO/commits/HEAD --jq .sha
+#
+# To regenerate the embedded calibration artifact from this manifest:
+#
+#   codelore calibrate \
+#     --repos calibration/corpus.toml \
+#     --vintage world-2026-07 \
+#     --output crates/codelore-lib/src/calibration/world.calib.json
+#
+# The resulting artifact contains only quantile breakpoints — no source code,
+# no user data. Permissive licensing is a courtesy posture: only aggregated
+# numeric distributions are retained, so license exposure is minimal, but we
+# still prefer repos whose authors have clearly granted broad reuse rights.
+#
+# Tier-1 languages: rust, python, java, javascript, typescript.
+# A repo that is genuinely polyglot may list multiple languages; single-language
+# anchors are preferred for cleaner signal.
+
+# ── Rust ─────────────────────────────────────────────────────────────────────
+
+# small: ripgrep (~5.6 MB), serde (~8.7 MB), rayon (~3.6 MB), fd (~2.4 MB)
+[[repos]]
+source = "https://github.com/BurntSushi/ripgrep"
+sha    = "d5b85d44057ff729a89be9c6549958c45d95aa99"
+languages = ["rust"]
+
+[[repos]]
+source = "https://github.com/serde-rs/serde"
+sha    = "cfe669241065984177ff63af8b45058e6e9b499d"
+languages = ["rust"]
+
+[[repos]]
+source = "https://github.com/rayon-rs/rayon"
+sha    = "6d9e94bf6cf72fe73012524e1461a93dc58ff265"
+languages = ["rust"]
+
+[[repos]]
+source = "https://github.com/sharkdp/fd"
+sha    = "5a5852e15b44d4917a6098b1c01d3bb535b7717f"
+languages = ["rust"]
+
+[[repos]]
+source = "https://github.com/sharkdp/bat"
+sha    = "78951393e29bfd2f2a45f4326b9d2bb5e737dd2a"
+languages = ["rust"]
+
+[[repos]]
+source = "https://github.com/crossbeam-rs/crossbeam"
+sha    = "c8153dbec95fcc5dbafad971c21071dc6a8a64c0"
+languages = ["rust"]
+
+[[repos]]
+source = "https://github.com/nickel-lang/nickel"
+sha    = "5cd3f709d8880df4e639ede64b1ca1e32c710255"
+languages = ["rust"]
+
+# medium: tokio (~17 MB), clap (~20 MB), hyper (~15 MB), actix-web (~18 MB),
+#         rustfmt (~16 MB), wasm-bindgen (~42 MB), futures-rs (~11 MB),
+#         tokenizers (~20 MB)
+[[repos]]
+source = "https://github.com/tokio-rs/tokio"
+sha    = "33f46a5395cc25b8bf53bca71e972df1c9aa962a"
+languages = ["rust"]
+
+[[repos]]
+source = "https://github.com/clap-rs/clap"
+sha    = "4a35e3bcabf7b6326e646f88ef9cf312ac0fa2da"
+languages = ["rust"]
+
+[[repos]]
+source = "https://github.com/hyperium/hyper"
+sha    = "ccc1e850dc0cda3e71b0acd11f60ca3d48d09034"
+languages = ["rust"]
+
+[[repos]]
+source = "https://github.com/actix/actix-web"
+sha    = "9822f5e1201c372eef11df5f4933c30a48cc68b4"
+languages = ["rust"]
+
+[[repos]]
+source = "https://github.com/rust-lang/rustfmt"
+sha    = "76376aa8b0f599d4811a683ae4661141718913fc"
+languages = ["rust"]
+
+[[repos]]
+source = "https://github.com/rustwasm/wasm-bindgen"
+sha    = "1a2860ea1c2d730150bb71b37969165f8c68ed2f"
+languages = ["rust"]
+
+[[repos]]
+source = "https://github.com/rust-lang/futures-rs"
+sha    = "b28a6adfa9d30e709d931e7a085d552f8d9b87a4"
+languages = ["rust"]
+
+[[repos]]
+source = "https://github.com/huggingface/tokenizers"
+sha    = "05741122105911e14dbe307c8f640c757fa97779"
+languages = ["rust"]
+
+# large: rust-analyzer (~121 MB), cargo (~71 MB), diesel (~147 MB),
+#        alacritty (~15 MB, medium-large), starship (~47 MB),
+#        tauri (~106 MB), bevy (~170 MB), deno (~243 MB)
+[[repos]]
+source = "https://github.com/rust-lang/rust-analyzer"
+sha    = "afdf9295257f4de1ada10704c9c306c357329c58"
+languages = ["rust"]
+
+[[repos]]
+source = "https://github.com/rust-lang/cargo"
+sha    = "24e0f7dc0d5adeffb21929740c2b43664230e185"
+languages = ["rust"]
+
+[[repos]]
+source = "https://github.com/diesel-rs/diesel"
+sha    = "d4378b5012ff44d870f6f75bd50c1e44779203a0"
+languages = ["rust"]
+
+[[repos]]
+source = "https://github.com/alacritty/alacritty"
+sha    = "bdb72b32eeb074e3a0b8559d8ccac458237474a3"
+languages = ["rust"]
+
+[[repos]]
+source = "https://github.com/starship/starship"
+sha    = "9140ca5d6a6d7e3f7362baf428b50b4f94811991"
+languages = ["rust"]
+
+[[repos]]
+source = "https://github.com/tauri-apps/tauri"
+sha    = "aebf38c845b57bc5653eca677e2e2e044528ea73"
+languages = ["rust"]
+
+[[repos]]
+source = "https://github.com/bevyengine/bevy"
+sha    = "422283941ea6423d59893dcf3fac71846bd67a4c"
+languages = ["rust"]
+
+[[repos]]
+source = "https://github.com/denoland/deno"
+sha    = "786457cc2be7930be73690c2abea5c2da2ca0739"
+languages = ["rust"]
+
+# ── Python ───────────────────────────────────────────────────────────────────
+
+# small: requests (~14 MB), flask (~12 MB), attrs (~5.4 MB),
+#        starlette (~7.8 MB), werkzeug (~17 MB), httpx (~8.6 MB)
+[[repos]]
+source = "https://github.com/psf/requests"
+sha    = "f361ead047be5cb873174218582f7d8b9fcd9f49"
+languages = ["python"]
+
+[[repos]]
+source = "https://github.com/pallets/flask"
+sha    = "36e4a824f340fdee7ed50937ba8e7f6bc7d17f81"
+languages = ["python"]
+
+[[repos]]
+source = "https://github.com/python-attrs/attrs"
+sha    = "d544dd2dacb4cbd660891e323ad92751ba65b4e0"
+languages = ["python"]
+
+[[repos]]
+source = "https://github.com/encode/starlette"
+sha    = "5174d4c8358a6f06aa8056bafd14c2272dab8dd1"
+languages = ["python"]
+
+[[repos]]
+source = "https://github.com/pallets/werkzeug"
+sha    = "1b00618e787f40dfb21eba29caf8f8be7c8e1d93"
+languages = ["python"]
+
+[[repos]]
+source = "https://github.com/encode/httpx"
+sha    = "b5addb64f0161ff6bfe94c124ef76f6a1fba5254"
+languages = ["python"]
+
+# medium: fastapi (~54 MB), pytest (~41 MB), aiohttp (~42 MB),
+#         poetry (~25 MB), tortoise-orm (~7.9 MB), pip (~75 MB)
+[[repos]]
+source = "https://github.com/fastapi/fastapi"
+sha    = "7cb06f360dd44efac059848df1a9beee7643b018"
+languages = ["python"]
+
+[[repos]]
+source = "https://github.com/pytest-dev/pytest"
+sha    = "efc013416e45d9162dc00dca9e4a83e1ef1c4089"
+languages = ["python"]
+
+[[repos]]
+source = "https://github.com/aio-libs/aiohttp"
+sha    = "706ecdcc10f9598c280a0af537437324a3e993fa"
+languages = ["python"]
+
+[[repos]]
+source = "https://github.com/python-poetry/poetry"
+sha    = "f46702336862f30050d5c641d5ed6f7568ded793"
+languages = ["python"]
+
+[[repos]]
+source = "https://github.com/tortoise/tortoise-orm"
+sha    = "8c12adc46c534a16cd9abf589b94e77d52ecf919"
+languages = ["python"]
+
+[[repos]]
+source = "https://github.com/pypa/pip"
+sha    = "a951a1fda5ff87a1cec4ccaa68122dc5f22d0cc6"
+languages = ["python"]
+
+# large: django (~281 MB), numpy (~180 MB), scikit-learn (~186 MB),
+#        sqlalchemy (~100 MB), mypy (~85 MB), pydantic (~416 MB),
+#        ruff (~174 MB), pandas (~401 MB)
+[[repos]]
+source = "https://github.com/django/django"
+sha    = "65a9f14196c338d70889bd54753370606b3fb4eb"
+languages = ["python"]
+
+[[repos]]
+source = "https://github.com/numpy/numpy"
+sha    = "71d523a529c873cde8a11af2d4935a4082d4a60e"
+languages = ["python"]
+
+[[repos]]
+source = "https://github.com/scikit-learn/scikit-learn"
+sha    = "0885712e436b07cd04d60e955101aaf6a8cbb709"
+languages = ["python"]
+
+[[repos]]
+source = "https://github.com/sqlalchemy/sqlalchemy"
+sha    = "07e2c9f4e97b120787d2c6cafc9ffe1a021479a9"
+languages = ["python"]
+
+[[repos]]
+source = "https://github.com/python/mypy"
+sha    = "519ef6dff27753db043617257c03ae9e5daba02d"
+languages = ["python"]
+
+[[repos]]
+source = "https://github.com/pydantic/pydantic"
+sha    = "f59e929c999e8b2efc7b12fd0bc1685c1a186be3"
+languages = ["python"]
+
+[[repos]]
+source = "https://github.com/astral-sh/ruff"
+sha    = "04ff791a198844b1a897b765713b30e9cd78f003"
+languages = ["python"]
+
+[[repos]]
+source = "https://github.com/pandas-dev/pandas"
+sha    = "c954f48f611299b96913bc98fdce2388cd29eda5"
+languages = ["python"]
+
+# ── Java ─────────────────────────────────────────────────────────────────────
+
+# small: retrofit (~7.4 MB), gson (~14 MB), commons-lang (~32 MB)
+[[repos]]
+source = "https://github.com/square/retrofit"
+sha    = "8e83a242eac1afc22a13c52098eddb27421353ff"
+languages = ["java"]
+
+[[repos]]
+source = "https://github.com/google/gson"
+sha    = "c9f3fd55854a743b66f857ace3c7b268ea3e2ef7"
+languages = ["java"]
+
+[[repos]]
+source = "https://github.com/apache/commons-lang"
+sha    = "27e195c7f665160e0c61607ac2caa56f89cb45fe"
+languages = ["java"]
+
+[[repos]]
+source = "https://github.com/apache/shiro"
+sha    = "cde5990d5e98e3518fe02cf9b42245c30b8cde87"
+languages = ["java"]
+
+[[repos]]
+source = "https://github.com/square/okhttp"
+sha    = "63e3caa7c7248fa38af7ba3375470446e2fb5574"
+languages = ["java"]
+
+[[repos]]
+source = "https://github.com/mockito/mockito"
+sha    = "d8638e1a8b67b4acea63c80dc85d62eda4ef57f5"
+languages = ["java"]
+
+[[repos]]
+source = "https://github.com/apache/dubbo"
+sha    = "c91027de3de04090f60af2cc77e962f2a98d78cb"
+languages = ["java"]
+
+# medium: reactor-core (~66 MB), maven (~94 MB), spring-boot (~216 MB),
+#         netty (~112 MB), spring-framework (~243 MB), flink (~548 MB)
+[[repos]]
+source = "https://github.com/reactor/reactor-core"
+sha    = "95957bd8deb36234d8f76bd382207693c75218e7"
+languages = ["java"]
+
+[[repos]]
+source = "https://github.com/apache/maven"
+sha    = "09b2dfc9151030e026a993f234c8e9c507c2d198"
+languages = ["java"]
+
+[[repos]]
+source = "https://github.com/spring-projects/spring-boot"
+sha    = "4c346884f379af3032d45041d8f620cc147b1a79"
+languages = ["java"]
+
+[[repos]]
+source = "https://github.com/netty/netty"
+sha    = "01c93eb988d56035e011fb795de5780f3b2e49ae"
+languages = ["java"]
+
+[[repos]]
+source = "https://github.com/spring-projects/spring-framework"
+sha    = "9024d5ffbd47172826d3257b492e9192467e98e6"
+languages = ["java"]
+
+[[repos]]
+source = "https://github.com/micronaut-projects/micronaut-core"
+sha    = "c801d57c34473c0cee44a3560d2a3354cffc4aab"
+languages = ["java"]
+
+# large: kafka (~300 MB), guava (~1.4 GB), quarkus (~508 MB),
+#        tomcat (~204 MB), flink (~548 MB)
+[[repos]]
+source = "https://github.com/apache/kafka"
+sha    = "ac0d7e245b213c20ab66bcea211d1cbd5ed2c95a"
+languages = ["java"]
+
+[[repos]]
+source = "https://github.com/google/guava"
+sha    = "486837d756e6d48864620e91b0761467e2abe744"
+languages = ["java"]
+
+[[repos]]
+source = "https://github.com/quarkusio/quarkus"
+sha    = "db19d2283a50a53502afe9ba2be217d464af54f6"
+languages = ["java"]
+
+[[repos]]
+source = "https://github.com/apache/tomcat"
+sha    = "96d43408a551902287776d3241b1e7888a0b2fd2"
+languages = ["java"]
+
+[[repos]]
+source = "https://github.com/apache/flink"
+sha    = "bfad2e8e4e96b8c4a2a955fb88bb67bbc807cda2"
+languages = ["java"]
+
+# ── JavaScript ───────────────────────────────────────────────────────────────
+
+# small: express (~9.8 MB), axios (~27 MB), mocha (~32 MB),
+#        jquery (~36 MB), d3 (~59 MB), socket.io (~33 MB)
+[[repos]]
+source = "https://github.com/expressjs/express"
+sha    = "ae6dd37680e3a00618d6c8a3e522f0ee4eeba1a4"
+languages = ["javascript"]
+
+[[repos]]
+source = "https://github.com/axios/axios"
+sha    = "7a6615e421578081743161eab032d009dc6583a4"
+languages = ["javascript"]
+
+[[repos]]
+source = "https://github.com/mochajs/mocha"
+sha    = "7ad398ebf14e4a9255984338619907bf485d6a17"
+languages = ["javascript"]
+
+[[repos]]
+source = "https://github.com/jquery/jquery"
+sha    = "d6fb53bce28d597ac309ec81efe761bd410bdf41"
+languages = ["javascript"]
+
+[[repos]]
+source = "https://github.com/d3/d3"
+sha    = "ca958d45217b4c15332d971b935451a6d4c978f4"
+languages = ["javascript"]
+
+[[repos]]
+source = "https://github.com/socketio/socket.io"
+sha    = "d2d753fed4435015c2d83fe62e676b44e07fa3f7"
+languages = ["javascript"]
+
+# medium: lodash (~50 MB), parcel (~65 MB), eslint (~54 MB),
+#         nuxt (~142 MB), prettier (~177 MB)
+[[repos]]
+source = "https://github.com/lodash/lodash"
+sha    = "a666ba591064c8011988275790ad7d625279f09c"
+languages = ["javascript"]
+
+[[repos]]
+source = "https://github.com/parcel-bundler/parcel"
+sha    = "59484858a1a0bcbb71f74088956bb437a2db6505"
+languages = ["javascript"]
+
+[[repos]]
+source = "https://github.com/eslint/eslint"
+sha    = "c5963f74bfa82a5b7ccc0607dcdcc695b8c97a31"
+languages = ["javascript"]
+
+[[repos]]
+source = "https://github.com/nuxt/nuxt"
+sha    = "33f0fdb9d208355c5f76e4d56211d90b6a77c3bd"
+languages = ["javascript"]
+
+[[repos]]
+source = "https://github.com/prettier/prettier"
+sha    = "41a8b99bb8d7d68c00d90d5b8fbaed20511d4cfd"
+languages = ["javascript"]
+
+# large: webpack (~90 MB), babel (~146 MB), jest (~321 MB),
+#        react (~1 GB), angular (~647 MB), vitejs/vite (~72 MB)
+[[repos]]
+source = "https://github.com/webpack/webpack"
+sha    = "0034b8ac8d6b235e6d51820215a20605a6098fd3"
+languages = ["javascript"]
+
+[[repos]]
+source = "https://github.com/babel/babel"
+sha    = "c86e9e4b272be7a8b9242bb310b26719393d700a"
+languages = ["javascript"]
+
+[[repos]]
+source = "https://github.com/jestjs/jest"
+sha    = "f49721c78e195558b40913977c9230f5b7f559d8"
+languages = ["javascript"]
+
+[[repos]]
+source = "https://github.com/facebook/react"
+sha    = "c0c39a6b3907eaab35f43074949e2957a2a734c1"
+languages = ["javascript"]
+
+[[repos]]
+source = "https://github.com/angular/angular"
+sha    = "f48d2769db37bfcd438487919cabb0a1bc36189a"
+languages = ["javascript"]
+
+[[repos]]
+source = "https://github.com/vitejs/vite"
+sha    = "5d95f1631bfde08ee2613a53517dd5ea5d388cda"
+languages = ["javascript"]
+
+# ── TypeScript ───────────────────────────────────────────────────────────────
+
+# small: got (~3.9 MB), solid (~18 MB), zod (~24 MB),
+#        graphql-js (~34 MB), typeorm (~42 MB), trpc (~70 MB)
+[[repos]]
+source = "https://github.com/sindresorhus/got"
+sha    = "e3924aa1e53a6ca3eb93a43618ce532442a89b40"
+languages = ["typescript"]
+
+[[repos]]
+source = "https://github.com/solidjs/solid"
+sha    = "d2f81d546d5dff37aa25e4fa224e2192efec8c1a"
+languages = ["typescript"]
+
+[[repos]]
+source = "https://github.com/colinhacks/zod"
+sha    = "912f0f51b0ced654d0069741e7160834dca742ee"
+languages = ["typescript"]
+
+[[repos]]
+source = "https://github.com/graphql/graphql-js"
+sha    = "71606d736c79b77588a15b32b9c9497e397adae0"
+languages = ["typescript"]
+
+[[repos]]
+source = "https://github.com/typeorm/typeorm"
+sha    = "44d8052ba4d226364c26e722826340d4ceb1419b"
+languages = ["typescript"]
+
+[[repos]]
+source = "https://github.com/trpc/trpc"
+sha    = "340811ba5320637fbaf48fccf3dbfdd258bd34db"
+languages = ["typescript"]
+
+# medium: nest (~486 MB due to monorepo), prisma (~172 MB),
+#         apollo-server (~140 MB), astro (~230 MB), remix (~90 MB),
+#         svelte (~122 MB), tanstack/query (~112 MB)
+[[repos]]
+source = "https://github.com/nestjs/nest"
+sha    = "926e3a4dc8b3bf9a96b275fe348b71246c303929"
+languages = ["typescript"]
+
+[[repos]]
+source = "https://github.com/prisma/prisma"
+sha    = "cda80a4488b7b551c36bf09ca2e8303ef9509da4"
+languages = ["typescript"]
+
+[[repos]]
+source = "https://github.com/apollographql/apollo-server"
+sha    = "53ac3c13fcf36dd22fb0dbb757a270ae58e89227"
+languages = ["typescript"]
+
+[[repos]]
+source = "https://github.com/withastro/astro"
+sha    = "79a41e06add3cbb144809f88a0b5ac88d2f8e7d1"
+languages = ["typescript"]
+
+[[repos]]
+source = "https://github.com/remix-run/remix"
+sha    = "b2ef0fc1696e8ab55ba305e435eb8bf6210a99c1"
+languages = ["typescript"]
+
+[[repos]]
+source = "https://github.com/sveltejs/svelte"
+sha    = "b4d1583ae20f3869a88a731d9a265c546c099f66"
+languages = ["typescript"]
+
+[[repos]]
+source = "https://github.com/tanstack/query"
+sha    = "f6cf12002abacbb6c3515cd32de0f4baa4919ced"
+languages = ["typescript"]
+
+# large: TypeScript (~2.96 GB), vscode (~1.32 GB), next.js (~2.5 GB),
+#        ant-design (~273 MB), storybook (~1.06 GB), playwright (~238 MB),
+#        biome (~266 MB), redwood (~460 MB)
+[[repos]]
+source = "https://github.com/microsoft/TypeScript"
+sha    = "637d5746b70257028fb95aad32ddec6b26ab0a14"
+languages = ["typescript"]
+
+[[repos]]
+source = "https://github.com/microsoft/vscode"
+sha    = "1034bf7d3f02faedb7dc0c083fcb43079b3c71e7"
+languages = ["typescript"]
+
+[[repos]]
+source = "https://github.com/vercel/next.js"
+sha    = "31541356c21bc389150b958379acb26aa7e97b22"
+languages = ["typescript"]
+
+[[repos]]
+source = "https://github.com/ant-design/ant-design"
+sha    = "e02f4c9f65e3cb424550c39d16b97c744a3ed455"
+languages = ["typescript"]
+
+[[repos]]
+source = "https://github.com/storybookjs/storybook"
+sha    = "5e07a71e4debfa06666dd2543ba7e5bdc01c5e9e"
+languages = ["typescript"]
+
+[[repos]]
+source = "https://github.com/microsoft/playwright"
+sha    = "b635709153e72aeacc5cb6f13a6546b5c8dd2bb6"
+languages = ["typescript"]
+
+[[repos]]
+source = "https://github.com/biomejs/biome"
+sha    = "01bba129afefced1c04aa69592b1b7f337a7b609"
+languages = ["typescript"]
+
+[[repos]]
+source = "https://github.com/redwoodjs/redwood"
+sha    = "a7852fb92d0e4ac2bcce1d9a755717ba6cf53ffd"
+languages = ["typescript"]
