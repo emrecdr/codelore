@@ -487,14 +487,19 @@ fn emit_sarif(
     // `diffFinding/v1` is the stable diff-domain identity (rule|path|discriminant).
     let add_fingerprints = |result: &mut serde_json::Value, rule: &str, path: &str, disc: &str| {
         use codelore_lib::cli_api::output::sarif::{diff_finding_hash, primary_location_line_hash};
-        let fps = result
+        // Every result in this file is built as a JSON object and any
+        // pre-existing `partialFingerprints` is one too, but degrade to a
+        // fingerprint-less result rather than panicking if that ever drifts.
+        let Some(fps) = result
             .as_object_mut()
-            .expect("result is a JSON object")
-            .entry("partialFingerprints")
-            .or_insert_with(|| json!({}));
-        let fps = fps
-            .as_object_mut()
-            .expect("partialFingerprints is an object");
+            .map(|obj| {
+                obj.entry("partialFingerprints")
+                    .or_insert_with(|| json!({}))
+            })
+            .and_then(serde_json::Value::as_object_mut)
+        else {
+            return;
+        };
         fps.insert(
             "diffFinding/v1".into(),
             json!(diff_finding_hash(rule, path, disc)),
