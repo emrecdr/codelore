@@ -106,8 +106,10 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Run an analysis and emit results.
-    Analyze(AnalyzeArgs),
+    /// Run an analysis and emit results. Boxed because `AnalyzeArgs` carries the
+    /// widest flag surface of any subcommand — inlining it would bloat every
+    /// `Command` value to its size.
+    Analyze(Box<AnalyzeArgs>),
     /// Run analyses at two revisions and emit the delta.
     Diff(DiffArgs),
     /// Emit shell-completion script to stdout. Supported shells:
@@ -201,6 +203,12 @@ pub struct CheckArgs {
     /// Useful in CI environments that want per-job caches on a shared runner.
     #[arg(long)]
     pub cache_dir: Option<PathBuf>,
+
+    /// Corpus-calibration artifact for the `code-health` corpus-percentile lens.
+    /// Overrides the embedded world corpus; when omitted the embedded artifact
+    /// is used if present.
+    #[arg(long)]
+    pub calibration: Option<PathBuf>,
 }
 
 /// Shell-completion script generation.
@@ -486,6 +494,14 @@ pub struct AnalyzeArgs {
     /// all other analyses.
     #[arg(long)]
     pub target: Option<String>,
+
+    /// Corpus-calibration artifact for the `code-health` corpus-percentile lens.
+    /// Overrides the embedded world corpus with a hand-built or org-specific
+    /// artifact (build one with `codelore calibrate`). When omitted, the
+    /// embedded artifact is used if present; otherwise the corpus lens is absent
+    /// and a one-time notice is printed.
+    #[arg(long)]
+    pub calibration: Option<PathBuf>,
 }
 
 /// `TimeBucket` mirror on the CLI surface (clap-friendly value enum).

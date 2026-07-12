@@ -478,6 +478,7 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
 
     let opts = Options {
         repo_path: args.repo.clone(),
+        calibration: args.calibration.clone(),
         ..Options::default()
     };
     let repo = GixRepo::open(&args.repo).context("open repo")?;
@@ -515,6 +516,10 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
     if !args.quiet {
         emit_gate_notices(&ledger_records);
     }
+    // One-per-run hint when the corpus lens is inactive — the check path always
+    // computes code-health rows, which carry no corpus_percentile without an
+    // artifact. Suppressed under --quiet (handled inside).
+    notice_corpus_lens_absent(&opts, args.quiet);
 
     // ── Ratchet ───────────────────────────────────────────────────────────────
     if args.ratchet {
@@ -707,6 +712,25 @@ fn emit_gate_notices(
             ),
             _ => {}
         }
+    }
+}
+
+/// Print the one-per-run notice that the corpus-percentile lens is inactive:
+/// no `--calibration` artifact was passed and no world corpus is embedded, so
+/// code-health rows carry no `corpus_percentile`. Called exactly once on each
+/// code-health-producing path, so the "deduped per run" contract is structural.
+/// Suppressed under `quiet` and when stderr is not a TTY (so redirected /
+/// CI output stays clean), mirroring the pre-flight banner's print policy.
+fn notice_corpus_lens_absent(opts: &Options, quiet: bool) {
+    use std::io::IsTerminal as _;
+    if quiet || !std::io::stderr().is_terminal() {
+        return;
+    }
+    let embedded_absent = codelore_lib::cli_api::calibration::embedded_world().is_none();
+    if opts.calibration.is_none() && embedded_absent {
+        eprintln!(
+            "note: corpus-percentile lens inactive — no calibration artifact (pass --calibration <path> or build one with `codelore calibrate`)."
+        );
     }
 }
 
@@ -1808,6 +1832,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         rework_window_days: args.rework_window_days,
         release_tag_glob: args.release_tag_glob.clone(),
         target: args.target.clone(),
+        calibration: args.calibration.clone(),
         ..Options::default()
     };
 
@@ -2401,6 +2426,8 @@ fn dispatch_code_health(
     ctx: &EmitCtx,
     out: &mut Box<dyn Write>,
 ) -> Result<()> {
+    // Analyze has no --quiet; the notice self-suppresses off a TTY.
+    notice_corpus_lens_absent(opts, false);
     match format {
         "csv" => {
             let rows = codelore_lib::cli_api::analyses::code_health::run_code_health(db, opts)

@@ -707,6 +707,8 @@ new_hotspot_max = 0
             structural_risk: 0.0,
             percentile: 0.0,
             band: "green".to_string(),
+            corpus_percentile: None,
+            beyond_corpus: false,
         }
     }
 

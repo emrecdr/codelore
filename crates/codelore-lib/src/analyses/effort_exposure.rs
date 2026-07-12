@@ -382,6 +382,8 @@ mod tests {
                 score: 20.0,
                 structural_risk: 0.9,
                 percentile: 0.95,
+                corpus_percentile: None,
+                beyond_corpus: false,
             },
             CodeHealthRow {
                 path: "src/ok.rs".into(),
@@ -390,6 +392,8 @@ mod tests {
                 score: 55.0,
                 structural_risk: 0.4,
                 percentile: 0.50,
+                corpus_percentile: None,
+                beyond_corpus: false,
             },
             CodeHealthRow {
                 path: "src/good.rs".into(),
@@ -398,6 +402,8 @@ mod tests {
                 score: 85.0,
                 structural_risk: 0.1,
                 percentile: 0.10,
+                corpus_percentile: None,
+                beyond_corpus: false,
             },
         ];
 

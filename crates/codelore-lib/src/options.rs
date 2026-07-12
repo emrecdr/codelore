@@ -171,6 +171,15 @@ pub struct Options {
     /// Validation that the value is present when required lives in the
     /// dispatch arm, not `Options::validate`, to avoid cross-analysis coupling.
     pub target: Option<String>,
+
+    /// Corpus-calibration artifact for the code-health corpus-percentile lens.
+    /// `Some(path)` overrides the embedded world artifact with a hand-built or
+    /// org-specific one; `None` falls back to the embedded artifact (or no lens
+    /// when that is a placeholder). A per-invocation selector that never affects
+    /// ingest, so `canonical_json` drops it from the cache key and instead hashes
+    /// its content into `calibration_digest` for provenance. Set via
+    /// `--calibration`.
+    pub calibration: Option<PathBuf>,
 }
 
 impl Options {
@@ -212,6 +221,12 @@ impl Options {
         // per-target would produce a full-size duplicate DB file for every
         // distinct `--target` path.
         snapshot.target = None;
+        // `calibration` is a per-invocation selector for the code-health corpus
+        // lens: it changes an additive output column, never any row ingest
+        // writes. Drop the path here; its CONTENT is hashed into
+        // `calibration_digest` below so provenance still captures which artifact
+        // shaped the run.
+        snapshot.calibration = None;
         let mut canon = serde_json::to_value(&snapshot)
             .expect("Options derives Serialize and all fields are Serialize");
 
@@ -239,6 +254,10 @@ impl Options {
             .and_then(digest_of)
             .or_else(|| digest_of(&self.repo_path.join(".codelore-teams")));
         let group_file_digest = self.group_file.as_deref().and_then(digest_of);
+        // Hash the calibration artifact's content, not its path, so two runs
+        // pointing at byte-identical artifacts from different locations share a
+        // provenance stamp — and editing the artifact in place is visible.
+        let calibration_digest = self.calibration.as_deref().and_then(digest_of);
         let bots_digest = digest_of(&self.repo_path.join(".codelorebots"));
         // `.mailmap` is read at walk time by gix to canonicalize author
         // identities; edits change every author-bearing analysis but were
@@ -255,8 +274,10 @@ impl Options {
             // same cache entry.
             map.remove("team_map_file");
             map.remove("group_file");
+            map.remove("calibration");
             map.insert("team_map_digest".to_string(), json!(team_map_digest));
             map.insert("group_file_digest".to_string(), json!(group_file_digest));
+            map.insert("calibration_digest".to_string(), json!(calibration_digest));
             map.insert("codelorebots_digest".to_string(), json!(bots_digest));
             map.insert("mailmap_digest".to_string(), json!(mailmap_digest));
             map.insert(
@@ -415,6 +436,7 @@ impl Default for Options {
             rework_window_days: crate::constants::DEFAULT_REWORK_WINDOW_DAYS,
             release_tag_glob: crate::constants::DEFAULT_RELEASE_TAG_GLOB.to_string(),
             target: None,
+            calibration: None,
         }
     }
 }
@@ -655,6 +677,66 @@ mod tests {
                 "window_days={days} must be accepted"
             );
         }
+    }
+
+    #[test]
+    fn canonical_json_invalidates_when_calibration_content_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("world.calib.json");
+        std::fs::write(&path, br#"{"format_version":1}"#).unwrap();
+        let base = Options {
+            calibration: Some(path.clone()),
+            ..Options::default()
+        };
+        let v1 = base.canonical_json();
+        // Edit the artifact in place — path unchanged, content changes.
+        std::fs::write(&path, br#"{"format_version":1,"x":2}"#).unwrap();
+        let v2 = base.canonical_json();
+        assert_ne!(
+            v1, v2,
+            "calibration artifact edit must invalidate the provenance stamp"
+        );
+    }
+
+    #[test]
+    fn canonical_json_strips_calibration_path_keeps_only_digest() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("world.calib.json");
+        std::fs::write(&path, b"{}").unwrap();
+        let opts = Options {
+            calibration: Some(path),
+            ..Options::default()
+        };
+        let s = opts.canonical_json().to_string();
+        assert!(
+            !s.contains("world.calib.json"),
+            "calibration path leaked into canonical form: {s}"
+        );
+        assert!(
+            s.contains("calibration_digest"),
+            "calibration_digest field missing: {s}"
+        );
+    }
+
+    #[test]
+    fn canonical_json_ignores_calibration_when_content_matches() {
+        // The corpus lens is additive output only — it must never split the
+        // ingest cache. Two runs pointing at byte-identical artifacts in
+        // different locations must produce the same canonical form.
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.calib.json");
+        let b = dir.path().join("b.calib.json");
+        std::fs::write(&a, b"{}").unwrap();
+        std::fs::write(&b, b"{}").unwrap();
+        let opts_a = Options {
+            calibration: Some(a),
+            ..Options::default()
+        };
+        let opts_b = Options {
+            calibration: Some(b),
+            ..Options::default()
+        };
+        assert_eq!(opts_a.canonical_json(), opts_b.canonical_json());
     }
 
     #[test]

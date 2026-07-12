@@ -135,6 +135,18 @@ pub struct CodeHealthRow {
     pub structural_risk: f64, // 0..=1; higher = worse
     pub percentile: f64, // 0..=1; per-language self-relative rank of structural_risk (1 = riskiest)
     pub band: String,    // "red" | "yellow" | "green"
+    /// Corpus-relative percentile: the file's WORST raw dimension
+    /// (`cyclomatic`, `cognitive`, `sloc`, `nargs`, `max_nesting`) versus a
+    /// reference corpus, in `0..=1`. `None` when no calibration artifact is
+    /// active or the file's language / metrics aren't covered — an additive
+    /// lens that never perturbs the shipped self-relative fields above.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub corpus_percentile: Option<f64>,
+    /// At least one of the file's raw metrics exceeded the corpus maximum
+    /// breakpoint (its `corpus_percentile` saturated at `1.0`). Serialized only
+    /// when true.
+    #[serde(skip_serializing_if = "std::ops::Not::not", default)]
+    pub beyond_corpus: bool,
 }
 
 const SQL: &str = "
@@ -529,6 +541,138 @@ fn materialize_centrality(db: &FactsDb, opts: &Options, cx: &HealthScanCtx) -> R
     Ok(())
 }
 
+/// The raw per-metric corpus names, paired with the `complexity_metrics` column
+/// each rolls up from via `MAX`. Order is the `SELECT` order in
+/// [`FILE_AGGREGATES_SQL`]; index 0 is `path`.
+const CORPUS_METRICS: &[&str] = &["cyclomatic", "cognitive", "sloc", "nargs", "max_nesting"];
+
+/// Widen a raw metric aggregate to `f64` for corpus lookup. These are
+/// `MAX(INTEGER)` complexity counts (cyclomatic, sloc, nargs, …) — thousands at
+/// most, orders of magnitude below `2^53` — so the conversion is exact and the
+/// `cast_precision_loss` lint is a false positive.
+#[allow(clippy::cast_precision_loss)]
+fn metric_to_f64(n: i64) -> f64 {
+    n as f64
+}
+
+/// Per-file MAX of each raw driver the corpus lens compares. Grouped by path so
+/// each output row joins to exactly one aggregate. Columns follow
+/// [`CORPUS_METRICS`] order after `path`. Read as nullable — a metric absent for
+/// every function of a file (e.g. a NULL column on a legacy row) yields NULL and
+/// is skipped in the lookup rather than treated as zero.
+const FILE_AGGREGATES_SQL: &str = "
+    SELECT
+        path,
+        MAX(cyclomatic)  AS cyclomatic,
+        MAX(cognitive)   AS cognitive,
+        MAX(sloc)        AS sloc,
+        MAX(nargs)       AS nargs,
+        MAX(max_nesting) AS max_nesting
+    FROM {cm_src}
+    GROUP BY path
+";
+
+/// One file's worst-dimension corpus percentile against `art`.
+///
+/// For each raw metric the file has a value for, look up its corpus percentile
+/// and keep the MAX — the file's worst standing versus the corpus. `beyond` is
+/// the OR of the per-metric beyond-corpus flags. Returns `None` (no lens) when
+/// the language is unknown to the artifact, is pooled below the sample floor, or
+/// none of the file's metrics resolve — the additive-absence contract.
+fn file_corpus_lens(
+    art: &crate::calibration::CalibrationArtifact,
+    language: &str,
+    metrics: &[(&str, Option<f64>)],
+) -> Option<(f64, bool)> {
+    let mut worst: Option<f64> = None;
+    let mut beyond = false;
+    for &(metric, value) in metrics {
+        let Some(value) = value else { continue };
+        if let Some(cp) = crate::calibration::percentile(art, language, metric, value) {
+            worst = Some(worst.map_or(cp.p, |w: f64| w.max(cp.p)));
+            beyond |= cp.beyond_corpus;
+        }
+    }
+    worst.map(|p| (p, beyond))
+}
+
+/// Resolve the calibration artifact the corpus lens should use: an explicit
+/// `--calibration` file (loaded + validated) wins; otherwise the embedded world
+/// artifact (which is `None` until a maintainer runs the real corpus build).
+///
+/// A bad `--calibration` file is a hard error (matching `calibration::load`'s
+/// exit-3/4 contract); the "no artifact active" case is silent here — the ONE
+/// deduped notice lives at the CLI layer.
+fn resolve_calibration(
+    opts: &Options,
+) -> Result<Option<std::borrow::Cow<'static, crate::calibration::CalibrationArtifact>>> {
+    use std::borrow::Cow;
+    if let Some(path) = &opts.calibration {
+        return Ok(Some(Cow::Owned(crate::calibration::load(path)?)));
+    }
+    Ok(crate::calibration::embedded_world().map(Cow::Borrowed))
+}
+
+/// Additive corpus-percentile pass: after the shipped SQL builds `rows`, join a
+/// per-language, per-file corpus percentile onto each. A pure post-pass — it
+/// reads only the raw complexity aggregates and never touches the score /
+/// band / percentile the SQL already computed, so a run without an active
+/// artifact leaves every row byte-identical to today.
+fn apply_corpus_lens(
+    db: &FactsDb,
+    opts: &Options,
+    cx: &HealthScanCtx,
+    rows: &mut [CodeHealthRow],
+) -> Result<()> {
+    let Some(art) = resolve_calibration(opts)? else {
+        return Ok(()); // No artifact active → every row keeps its absent lens.
+    };
+
+    // Per-file MAX of each raw driver, keyed by path. NULL metrics stay `None`
+    // and are skipped in the lookup.
+    let aggregates_sql = FILE_AGGREGATES_SQL.replace("{cm_src}", &cx.complexity_source);
+    let mut stmt = db
+        .conn()
+        .prepare(&aggregates_sql)
+        .map_err(|e| CodeLoreError::Analysis(format!("prepare corpus aggregates: {e}")))?;
+    let mut by_path: HashMap<String, [Option<f64>; 5]> = HashMap::new();
+    let aggregate_rows = stmt
+        .query_map([], |r| {
+            let path = r.get::<_, String>(0)?;
+            let mut vals = [None; 5];
+            for (i, slot) in vals.iter_mut().enumerate() {
+                // Columns are INTEGER (or NULL); read as optional i64 then widen.
+                *slot = r.get::<_, Option<i64>>(i + 1)?.map(metric_to_f64);
+            }
+            Ok((path, vals))
+        })
+        .map_err(|e| CodeLoreError::Analysis(format!("query corpus aggregates: {e}")))?;
+    for row in aggregate_rows {
+        let (path, vals) =
+            row.map_err(|e| CodeLoreError::Analysis(format!("collect corpus aggregates: {e}")))?;
+        by_path.insert(path, vals);
+    }
+
+    for row in rows.iter_mut() {
+        let Some(language) = crate::complexity::Tier1Language::from_path(&row.path) else {
+            continue; // Not a Tier-1 language → no corpus comparison.
+        };
+        let Some(vals) = by_path.get(&row.path) else {
+            continue; // No complexity aggregate for this path.
+        };
+        let metrics: Vec<(&str, Option<f64>)> = CORPUS_METRICS
+            .iter()
+            .zip(vals.iter())
+            .map(|(&m, &v)| (m, v))
+            .collect();
+        if let Some((p, beyond)) = file_corpus_lens(&art, language.as_str(), &metrics) {
+            row.corpus_percentile = Some(p);
+            row.beyond_corpus = beyond;
+        }
+    }
+    Ok(())
+}
+
 #[tracing::instrument(name = "code-health", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_code_health(db: &FactsDb, opts: &Options) -> Result<Vec<CodeHealthRow>> {
     // Route complexity reads through the grouped table when `--group-file` is
@@ -604,11 +748,18 @@ pub fn run_code_health_scoped(
                 structural_risk: r.get::<_, f64>(3)?,
                 percentile: r.get::<_, f64>(4)?,
                 band: r.get::<_, String>(5)?,
+                // Populated by the additive corpus pass below (or left absent).
+                corpus_percentile: None,
+                beyond_corpus: false,
             })
         })
         .map_err(|e| CodeLoreError::Analysis(format!("query code-health: {e}")))?;
-    rows.collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|e| CodeLoreError::Analysis(format!("collect code-health: {e}")))
+    let mut rows = rows
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| CodeLoreError::Analysis(format!("collect code-health: {e}")))?;
+
+    apply_corpus_lens(db, opts, cx, &mut rows)?;
+    Ok(rows)
 }
 
 #[cfg(test)]
@@ -631,6 +782,115 @@ mod tests {
         assert!(
             (sum - 1.0).abs() < 1e-9,
             "SMELL_WEIGHTS must sum to 1.0, got {sum}"
+        );
+    }
+
+    use crate::calibration::{
+        CALIBRATION_FORMAT_VERSION, CalibrationArtifact, LanguageTable, MetricQuantiles,
+        QUANTILE_POINTS, Stratum,
+    };
+
+    /// A `QUANTILE_POINTS`-long ramp where `q[i] == i`, so a metric value `v`
+    /// resolves to corpus percentile `v / (QUANTILE_POINTS - 1)`. With
+    /// `QUANTILE_POINTS == 1001` the last index is 1000, so value 750 → 0.750.
+    #[allow(clippy::cast_precision_loss)]
+    fn index_ramp() -> Vec<f64> {
+        (0..QUANTILE_POINTS).map(|i| i as f64).collect()
+    }
+
+    /// One-language artifact whose `cyclomatic` metric is the index ramp and is
+    /// pooled above the sample floor.
+    fn ramp_artifact(language: &str) -> CalibrationArtifact {
+        CalibrationArtifact {
+            format_version: CALIBRATION_FORMAT_VERSION,
+            corpus_vintage: "test-ramp".to_string(),
+            generated_at: "2026-07-12T00:00:00Z".to_string(),
+            repos_included: 1,
+            repos_attempted: 1,
+            languages: vec![LanguageTable {
+                language: language.to_string(),
+                sample_functions: 4_000,
+                strata: vec![Stratum {
+                    sloc_min: 0,
+                    sloc_max: u64::MAX,
+                    metrics: vec![MetricQuantiles {
+                        metric: "cyclomatic".to_string(),
+                        quantiles: index_ramp(),
+                    }],
+                }],
+            }],
+        }
+    }
+
+    #[test]
+    fn corpus_lens_resolves_q750_breakpoint() {
+        // A file whose only covered metric (cyclomatic) sits exactly at the
+        // corpus q750 breakpoint (value 750 on the index ramp) → 0.75, not
+        // beyond-corpus.
+        let art = ramp_artifact("rust");
+        let metrics = [("cyclomatic", Some(750.0)), ("cognitive", None)];
+        let (p, beyond) = super::file_corpus_lens(&art, "rust", &metrics)
+            .expect("covered metric must yield a percentile");
+        assert!((p - 0.75).abs() < 1e-9, "expected 0.75 at q750, got {p}");
+        assert!(!beyond, "a value inside the corpus is not beyond-corpus");
+    }
+
+    #[test]
+    fn corpus_lens_is_none_for_unknown_language() {
+        // The artifact covers rust only; a python file falls outside → None.
+        let art = ramp_artifact("rust");
+        let metrics = [("cyclomatic", Some(750.0))];
+        assert!(
+            super::file_corpus_lens(&art, "python", &metrics).is_none(),
+            "an uncovered language must yield no corpus lens"
+        );
+    }
+
+    #[test]
+    fn corpus_lens_saturates_and_flags_beyond_max() {
+        // A value past the corpus maximum breakpoint (ramp tops out at 1000)
+        // saturates to 1.0 AND sets beyond_corpus — never silently clamped.
+        let art = ramp_artifact("rust");
+        let metrics = [("cyclomatic", Some(5_000.0))];
+        let (p, beyond) = super::file_corpus_lens(&art, "rust", &metrics)
+            .expect("a covered metric beyond the max still resolves");
+        assert!(
+            (p - 1.0).abs() < 1e-9,
+            "beyond-max must saturate to 1.0, got {p}"
+        );
+        assert!(
+            beyond,
+            "a value past the corpus maximum must flag beyond_corpus"
+        );
+    }
+
+    #[test]
+    fn corpus_lens_keeps_the_worst_dimension() {
+        // corpus_percentile is the MAX over the file's per-metric percentiles:
+        // a low cyclomatic (250 → 0.25) and a high one via a second covered
+        // metric must surface the worst. Here only cyclomatic is covered, so add
+        // a second file value to prove the MAX picks the larger.
+        let art = ramp_artifact("rust");
+        // Two cyclomatic readings can't co-exist for one file, so exercise MAX
+        // by passing the same metric twice with different values — the helper
+        // folds them with max().
+        let metrics = [("cyclomatic", Some(250.0)), ("cyclomatic", Some(900.0))];
+        let (p, _) = super::file_corpus_lens(&art, "rust", &metrics).expect("covered");
+        assert!(
+            (p - 0.90).abs() < 1e-9,
+            "MAX must keep the worst (0.90), got {p}"
+        );
+    }
+
+    #[test]
+    fn corpus_lens_is_none_below_sample_floor() {
+        // A language pooled below MIN_LANG_SAMPLE is treated as absent.
+        let mut art = ramp_artifact("rust");
+        art.languages[0].sample_functions = 10; // below the 500 floor
+        let metrics = [("cyclomatic", Some(750.0))];
+        assert!(
+            super::file_corpus_lens(&art, "rust", &metrics).is_none(),
+            "an under-sampled language must yield no corpus lens"
         );
     }
 

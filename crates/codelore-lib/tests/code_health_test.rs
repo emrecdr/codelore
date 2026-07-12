@@ -1,5 +1,11 @@
+use std::io::Write as _;
+
 use codelore_lib::Options;
 use codelore_lib::analyses::code_health::run_code_health;
+use codelore_lib::calibration::{
+    CALIBRATION_FORMAT_VERSION, CalibrationArtifact, LanguageTable, MetricQuantiles,
+    QUANTILE_POINTS, Stratum,
+};
 use codelore_lib::facts::FactsDb;
 use codelore_lib::repo::GixRepo;
 
@@ -484,6 +490,8 @@ fn code_health_csv_column_contract() {
         structural_risk: 0.3,
         percentile: 0.5,
         band: "yellow".to_string(),
+        corpus_percentile: None,
+        beyond_corpus: false,
     }];
     let mut buf: Vec<u8> = Vec::new();
     codelore_lib::output::csv::write_code_health_csv(&rows, &mut buf).expect("csv");
@@ -664,6 +672,184 @@ fn code_health_band_matches_thresholds() {
             r.band, expected,
             "band {} != expected {} for structural_risk {}",
             r.band, expected, r.structural_risk
+        );
+    }
+}
+
+// ─── corpus-percentile lens (additive) ───────────────────────────────────────
+
+/// A `QUANTILE_POINTS`-long breakpoint vector rising linearly from `min` to
+/// `max`, so `q[i] == min + (max - min) * i / (QUANTILE_POINTS - 1)`. With
+/// `min = 0`, `max = 1000` the breakpoint index equals the value, so a metric
+/// value of `v` resolves to corpus percentile `v / 1000`.
+#[allow(clippy::cast_precision_loss)]
+fn linear_quantiles(min: f64, max: f64) -> Vec<f64> {
+    let last = (QUANTILE_POINTS - 1) as f64;
+    (0..QUANTILE_POINTS)
+        .map(|i| min + (max - min) * (i as f64) / last)
+        .collect()
+}
+
+/// Every corpus metric for `language` carries the same `0..=1000` linear ramp
+/// and a sample count above the floor, so any file's per-metric percentile is
+/// its raw value / 1000. Covers only the named language(s) — a file in any
+/// other language falls outside the artifact and gets `corpus_percentile: None`.
+fn ramp_artifact(languages: &[&str]) -> CalibrationArtifact {
+    let metrics = ["cyclomatic", "cognitive", "sloc", "nargs", "max_nesting"];
+    CalibrationArtifact {
+        format_version: CALIBRATION_FORMAT_VERSION,
+        corpus_vintage: "test-ramp".to_string(),
+        generated_at: "2026-07-12T00:00:00Z".to_string(),
+        repos_included: 2,
+        repos_attempted: 2,
+        languages: languages
+            .iter()
+            .map(|lang| LanguageTable {
+                language: (*lang).to_string(),
+                sample_functions: 4_000,
+                strata: vec![Stratum {
+                    sloc_min: 0,
+                    sloc_max: u64::MAX,
+                    metrics: metrics
+                        .iter()
+                        .map(|m| MetricQuantiles {
+                            metric: (*m).to_string(),
+                            quantiles: linear_quantiles(0.0, 1000.0),
+                        })
+                        .collect(),
+                }],
+            })
+            .collect(),
+    }
+}
+
+fn write_calibration(art: &CalibrationArtifact) -> tempfile::TempPath {
+    let mut f = tempfile::Builder::new()
+        .prefix("code-health-calib")
+        .suffix(".calib.json")
+        .tempfile()
+        .expect("create temp artifact");
+    f.write_all(&serde_json::to_vec(art).expect("serialize"))
+        .expect("write artifact");
+    f.into_temp_path()
+}
+
+/// THE ADDITIVITY CONTRACT (the plan's non-negotiable). Running code-health with
+/// a calibration artifact must not perturb ANY pre-existing field: the corpus
+/// lens is a pure additive post-pass join. We run twice on `biomarker_repo` —
+/// once without calibration, once with a covering rust ramp artifact — and
+/// assert every shipped field (`path`, `cognitive`, `score`, `structural_risk`,
+/// `percentile`, `band`) is byte-identical between the two runs. Since the new
+/// fields carry `skip_serializing_if`, stripping them is equivalent to matching
+/// the shipped serialized form.
+#[test]
+fn corpus_lens_is_additive_over_shipped_fields() {
+    let fx = codelore_lib::test_support::biomarker_repo::build();
+    let repo = GixRepo::open(fx.dir.path()).expect("open");
+
+    let run = |calibration: Option<std::path::PathBuf>| {
+        let db = FactsDb::new_in_memory().expect("db");
+        db.ingest(&repo, &biomarker_opts(fx.dir.path()))
+            .expect("ingest");
+        let opts = Options {
+            calibration,
+            ..biomarker_opts(fx.dir.path())
+        };
+        run_code_health(&db, &opts).expect("run")
+    };
+
+    let calib = write_calibration(&ramp_artifact(&["rust"]));
+    let without = run(None);
+    let with = run(Some(calib.to_path_buf()));
+
+    assert!(!without.is_empty(), "fixture must yield scored rows");
+    assert_eq!(
+        without.len(),
+        with.len(),
+        "the corpus pass must not add or drop rows"
+    );
+
+    // The shipped fields, serialized. Reuse the row's own serde but drop the two
+    // additive keys — that is exactly the "strip the new fields" the plan asks.
+    let shipped = |row: &codelore_lib::analyses::code_health::CodeHealthRow| -> serde_json::Value {
+        let mut v = serde_json::to_value(row).expect("serialize row");
+        let obj = v.as_object_mut().expect("row is an object");
+        obj.remove("corpus_percentile");
+        obj.remove("beyond_corpus");
+        v
+    };
+
+    for (a, b) in without.iter().zip(with.iter()) {
+        assert_eq!(
+            shipped(a),
+            shipped(b),
+            "corpus calibration perturbed a shipped field for {}",
+            a.path
+        );
+    }
+
+    // Non-vacuity: at least one row must actually carry a corpus percentile in
+    // the calibrated run, or the additivity check would pass trivially.
+    assert!(
+        with.iter().any(|r| r.corpus_percentile.is_some()),
+        "the covering rust artifact must populate corpus_percentile on ≥1 rust file"
+    );
+}
+
+/// With a covering artifact, every rust file's `corpus_percentile` is populated
+/// and in range; when the artifact covers only a language the repo lacks, every
+/// row stays `None` (unknown-language contract) and no shipped field moves.
+#[test]
+fn corpus_lens_populates_covered_language_and_skips_others() {
+    let fx = codelore_lib::test_support::biomarker_repo::build();
+    let repo = GixRepo::open(fx.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    db.ingest(&repo, &biomarker_opts(fx.dir.path()))
+        .expect("ingest");
+
+    // Covering artifact (rust): rust files get a percentile in [0,1].
+    let rust_calib = write_calibration(&ramp_artifact(&["rust"]));
+    let covered = {
+        let opts = Options {
+            calibration: Some(rust_calib.to_path_buf()),
+            ..biomarker_opts(fx.dir.path())
+        };
+        run_code_health(&db, &opts).expect("run covered")
+    };
+    let rust_rows: Vec<_> = covered
+        .iter()
+        .filter(|r| {
+            codelore_lib::complexity::Tier1Language::from_path(&r.path)
+                == Some(codelore_lib::complexity::Tier1Language::Rust)
+        })
+        .collect();
+    assert!(!rust_rows.is_empty(), "fixture is rust");
+    for r in &rust_rows {
+        let p = r
+            .corpus_percentile
+            .unwrap_or_else(|| panic!("rust file {} must carry a corpus percentile", r.path));
+        assert!(
+            (0.0..=1.0).contains(&p),
+            "corpus percentile in [0,1] for {}: {p}",
+            r.path
+        );
+    }
+
+    // Non-covering artifact (python only): rust files fall outside → all None.
+    let py_calib = write_calibration(&ramp_artifact(&["python"]));
+    let uncovered = {
+        let opts = Options {
+            calibration: Some(py_calib.to_path_buf()),
+            ..biomarker_opts(fx.dir.path())
+        };
+        run_code_health(&db, &opts).expect("run uncovered")
+    };
+    for r in &uncovered {
+        assert!(
+            r.corpus_percentile.is_none() && !r.beyond_corpus,
+            "a rust file must get None from a python-only artifact, got {:?} for {}",
+            r.corpus_percentile,
+            r.path
         );
     }
 }
