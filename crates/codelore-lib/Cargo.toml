@@ -165,6 +165,10 @@ name = "code_health_test"
 required-features = ["test-support"]
 
 [[test]]
+name = "calibration_test"
+required-features = ["test-support"]
+
+[[test]]
 name = "mailmap_test"
 required-features = ["test-support"]
 
