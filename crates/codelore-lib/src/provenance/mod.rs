@@ -125,6 +125,12 @@ pub struct Manifest {
     /// fields propagate without per-field maintenance. The flat fields above
     /// remain for human readability and grep-ability.
     pub options: serde_json::Value,
+    /// Vintage string of the corpus-calibration artifact active for this run
+    /// (e.g. `"world-2026-07"`). Absent (`None`, omitted from JSON) when no
+    /// calibration artifact was active — no `--calibration` file was passed
+    /// and the embedded world artifact is still the placeholder.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub corpus_vintage: Option<String>,
 }
 
 impl Manifest {
@@ -166,6 +172,7 @@ impl Manifest {
         let cache_key_bytes = crate::cache::cache_key(&opts.repo_path, &head_sha, opts);
         let cache_key_hash = hex::encode(cache_key_bytes);
 
+        let corpus_vintage = crate::calibration::active_vintage(opts)?;
         Ok(Self {
             schema_version: MANIFEST_SCHEMA_VERSION,
             codelore_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -197,6 +204,7 @@ impl Manifest {
             target_triple: TARGET_TRIPLE.to_string(),
             grammars: grammar_pins(),
             options: opts.canonical_json(),
+            corpus_vintage,
         })
     }
 

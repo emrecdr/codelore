@@ -255,6 +255,23 @@ pub fn embedded_world() -> Option<&'static CalibrationArtifact> {
         .as_ref()
 }
 
+/// Vintage string of the calibration artifact active for `opts`, following the
+/// same resolution precedence as the corpus-percentile lens:
+///
+/// 1. `opts.calibration` path (loaded + validated) → its `corpus_vintage`.
+/// 2. [`embedded_world`] artifact (if a real — non-placeholder — one is present)
+///    → its `corpus_vintage`.
+/// 3. `None` (no artifact active).
+///
+/// A bad `--calibration` file is a hard error; "no artifact active" returns
+/// `None` silently (the one deduped notice lives at the CLI layer).
+pub fn active_vintage(opts: &crate::Options) -> Result<Option<String>> {
+    if let Some(path) = &opts.calibration {
+        return Ok(Some(load(path)?.corpus_vintage));
+    }
+    Ok(embedded_world().map(|art| art.corpus_vintage.clone()))
+}
+
 // ─── percentile lookup ───────────────────────────────────────────────────────
 
 /// Corpus-relative percentile of `value` for `(language, metric)`.

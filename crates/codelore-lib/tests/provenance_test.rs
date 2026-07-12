@@ -1,7 +1,55 @@
+use std::io::Write;
+
 use codelore_lib::Options;
+use codelore_lib::calibration::{
+    CALIBRATION_FORMAT_VERSION, CalibrationArtifact, LanguageTable, MetricQuantiles,
+    QUANTILE_POINTS, Stratum,
+};
 use codelore_lib::facts::FactsDb;
 use codelore_lib::provenance::Manifest;
 use codelore_lib::repo::GixRepo;
+
+// ─── calibration fixture helpers ─────────────────────────────────────────────
+
+/// A minimal valid quantile vector (all zeros) to satisfy length + monotonicity.
+fn zero_quantiles() -> Vec<f64> {
+    vec![0.0; QUANTILE_POINTS]
+}
+
+/// One-language artifact with `corpus_vintage = "test-vintage-2026-07"` and
+/// enough sample functions to be above the floor.
+fn test_calib_artifact() -> CalibrationArtifact {
+    CalibrationArtifact {
+        format_version: CALIBRATION_FORMAT_VERSION,
+        corpus_vintage: "test-vintage-2026-07".to_string(),
+        generated_at: "2026-07-12T00:00:00Z".to_string(),
+        repos_included: 1,
+        repos_attempted: 1,
+        languages: vec![LanguageTable {
+            language: "rust".to_string(),
+            sample_functions: 4_000,
+            strata: vec![Stratum {
+                sloc_min: 0,
+                sloc_max: u64::MAX,
+                metrics: vec![MetricQuantiles {
+                    metric: "cyclomatic".to_string(),
+                    quantiles: zero_quantiles(),
+                }],
+            }],
+        }],
+    }
+}
+
+fn write_temp_artifact(art: &CalibrationArtifact) -> tempfile::TempPath {
+    let mut f = tempfile::Builder::new()
+        .prefix("provenance_test_calib")
+        .suffix(".calib.json")
+        .tempfile()
+        .expect("create temp artifact");
+    let bytes = serde_json::to_vec(art).expect("serialize artifact");
+    f.write_all(&bytes).expect("write artifact");
+    f.into_temp_path()
+}
 
 #[test]
 fn manifest_captures_basic_fields() {
@@ -123,4 +171,68 @@ fn manifest_captures_reproducibility_fields() {
             "serialized manifest missing field {field}",
         );
     }
+}
+
+// ─── corpus_vintage stamp ─────────────────────────────────────────────────────
+
+/// No calibration configured → `corpus_vintage` is `None` and absent from JSON.
+#[test]
+fn manifest_corpus_vintage_absent_without_calibration() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let repo = GixRepo::open(tiny.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: tiny.dir.path().to_path_buf(),
+        min_revs: 1,
+        calibration: None,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let m = Manifest::capture(&db, &opts, "code-health").expect("capture");
+    assert!(
+        m.corpus_vintage.is_none(),
+        "corpus_vintage must be None when no calibration artifact is active"
+    );
+
+    let json = m.to_json().expect("json");
+    assert!(
+        !json.contains("corpus_vintage"),
+        "corpus_vintage must be absent from JSON when None (serde skip_serializing_if)"
+    );
+}
+
+/// Explicit `--calibration` path → `corpus_vintage` matches the artifact's own vintage.
+#[test]
+fn manifest_corpus_vintage_present_with_calibration_file() {
+    let art = test_calib_artifact();
+    let artifact_path = write_temp_artifact(&art);
+
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let repo = GixRepo::open(tiny.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: tiny.dir.path().to_path_buf(),
+        min_revs: 1,
+        calibration: Some(artifact_path.to_path_buf()),
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let m = Manifest::capture(&db, &opts, "code-health").expect("capture");
+    assert_eq!(
+        m.corpus_vintage.as_deref(),
+        Some("test-vintage-2026-07"),
+        "corpus_vintage must match the artifact's corpus_vintage field"
+    );
+
+    let json = m.to_json().expect("json");
+    assert!(
+        json.contains("\"corpus_vintage\""),
+        "corpus_vintage must be present in JSON when Some"
+    );
+    assert!(
+        json.contains("test-vintage-2026-07"),
+        "JSON must carry the vintage string"
+    );
 }
