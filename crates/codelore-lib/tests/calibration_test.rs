@@ -52,6 +52,30 @@ fn ramp_artifact() -> CalibrationArtifact {
     }
 }
 
+/// Wrap a hand-built `nargs` quantile vector (an integer-style metric, prone to
+/// plateaus) into a one-language, above-floor artifact for plateau tests.
+fn nargs_artifact(quantiles: Vec<f64>) -> CalibrationArtifact {
+    CalibrationArtifact {
+        format_version: CALIBRATION_FORMAT_VERSION,
+        corpus_vintage: "test-plateau".to_string(),
+        generated_at: "2026-07-12T00:00:00Z".to_string(),
+        repos_included: 1,
+        repos_attempted: 1,
+        languages: vec![LanguageTable {
+            language: "rust".to_string(),
+            sample_functions: 4_000,
+            strata: vec![Stratum {
+                sloc_min: 0,
+                sloc_max: u64::MAX,
+                metrics: vec![MetricQuantiles {
+                    metric: "nargs".to_string(),
+                    quantiles,
+                }],
+            }],
+        }],
+    }
+}
+
 fn write_temp_json(name: &str, art: &CalibrationArtifact) -> tempfile::TempPath {
     let mut f = tempfile::Builder::new()
         .prefix(name)
@@ -155,6 +179,55 @@ fn percentile_at_the_maximum_breakpoint_is_one_without_beyond_flag() {
     let art = ramp_artifact();
     let cp = calibration::percentile(&art, "rust", "cyclomatic", 1000.0).expect("in-corpus lookup");
     assert!((cp.p - 1.0).abs() < 1e-9, "expected p≈1.0, got {}", cp.p);
+    assert!(!cp.beyond_corpus);
+}
+
+// Plateau-vector indices are bounded by `QUANTILE_POINTS` (~1e3), far below
+// `2^53`, so the `usize` → `f64` casts building the fixture are exact.
+#[test]
+#[allow(clippy::cast_precision_loss)]
+fn percentile_on_an_interior_plateau_returns_the_upper_edge() {
+    // Integer-style metric: q[200..=700] all equal 3.0 (a plateau), rising on
+    // either side. Looking up 3.0 must resolve to the run's UPPER edge, index
+    // 700 → p = 0.700 — the P(X ≤ value) CDF reading, not the lower edge.
+    let mut q = vec![0.0; QUANTILE_POINTS];
+    for (i, slot) in q.iter_mut().enumerate() {
+        *slot = if i <= 200 {
+            3.0 * (i as f64) / 200.0
+        } else if i <= 700 {
+            3.0
+        } else {
+            3.0 + 7.0 * ((i - 700) as f64) / ((QUANTILE_POINTS - 1 - 700) as f64)
+        };
+    }
+    let art = nargs_artifact(q);
+    let cp = calibration::percentile(&art, "rust", "nargs", 3.0).expect("in-corpus lookup");
+    assert!(
+        (cp.p - 0.700).abs() < 1e-9,
+        "interior plateau must resolve to its upper edge (p≈0.700), got {}",
+        cp.p
+    );
+    assert!(!cp.beyond_corpus);
+}
+
+#[test]
+#[allow(clippy::cast_precision_loss)]
+fn percentile_on_a_minimum_plateau_is_zero() {
+    // q[0..=300] all equal 5.0 (a plateau touching the minimum), rising after.
+    // A lookup of 5.0 hits the `value <= q[0]` short-circuit → p = 0.0.
+    let mut q = vec![5.0; QUANTILE_POINTS];
+    for (i, slot) in q.iter_mut().enumerate() {
+        if i > 300 {
+            *slot = 5.0 + 5.0 * ((i - 300) as f64) / ((QUANTILE_POINTS - 1 - 300) as f64);
+        }
+    }
+    let art = nargs_artifact(q);
+    let cp = calibration::percentile(&art, "rust", "nargs", 5.0).expect("in-corpus lookup");
+    assert!(
+        cp.p.abs() < 1e-9,
+        "a plateau at the minimum floors to p≈0.0, got {}",
+        cp.p
+    );
     assert!(!cp.beyond_corpus);
 }
 

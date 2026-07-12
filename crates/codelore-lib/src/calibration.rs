@@ -220,6 +220,13 @@ pub fn embedded_world() -> Option<&'static CalibrationArtifact> {
 /// - `value >= q[last]` → `p = 1.0`; beyond-corpus iff `value > q[last]`.
 /// - unknown language / unknown metric / language pooled below
 ///   [`MIN_LANG_SAMPLE`] → `None`.
+///
+/// **Plateaus (repeated breakpoints).** Integer metrics like `nargs` and
+/// `max_nesting` produce long runs of equal breakpoints. A `value` landing on an
+/// *interior* plateau resolves to the run's UPPER edge — a `P(X <= value)` (CDF)
+/// reading: every function whose metric equals `value` counts as at-or-below it.
+/// A `value` on a plateau that touches the *minimum* (`value <= q[0]`) instead
+/// returns `0.0` via the short-circuit above. Both are deliberate.
 #[must_use]
 pub fn percentile(
     art: &CalibrationArtifact,
@@ -256,6 +263,11 @@ fn count_to_f64(n: usize) -> f64 {
 ///
 /// Assumes `q.len() == QUANTILE_POINTS` (guaranteed by validation). The
 /// percentile of breakpoint index `i` is `i / (len - 1)`.
+///
+/// On a plateau of equal breakpoints, `partition_point(|b| b <= value)` counts
+/// the whole run, so `value` resolves to the plateau's UPPER edge (the CDF /
+/// `P(X <= value)` reading described on [`percentile`]). A plateau touching the
+/// minimum is handled by the `value <= q[0]` short-circuit → `0.0`.
 fn interpolate_percentile(q: &[f64], value: f64) -> CorpusPercentile {
     let last = q.len() - 1;
     let denom = count_to_f64(last);
