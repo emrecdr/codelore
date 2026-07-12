@@ -1,7 +1,8 @@
 //! Unit tests for the corpus-calibration artifact: serde round-trip, the
 //! quantile-breakpoint interpolation contract of `percentile`, `load`
-//! validation (format version + quantile monotonicity), and the
-//! sample-count-weighted `merge` approximation.
+//! validation (format version + quantile monotonicity), the
+//! sample-count-weighted `merge` approximation, and the golden fixture
+//! artifact byte-determinism guard.
 
 use std::io::Write;
 use std::path::Path;
@@ -399,4 +400,199 @@ fn sample_observations() -> calibration::LangObservations {
         obs.observe("rust", "cyclomatic", f64::from(v));
     }
     obs
+}
+
+// ─── golden fixture artifact + byte-determinism guard ────────────────────────
+
+/// Fixed RFC 3339 timestamp injected into the golden artifact so the build is
+/// byte-reproducible regardless of wall clock. The value is arbitrary.
+const GOLDEN_GENERATED_AT: &str = "2026-07-12T00:00:00Z";
+
+/// Fixed vintage for the golden test artifact. The `golden-` prefix is
+/// distinct from `placeholder-` (suppressed) and `world-` (real corpus) so
+/// `embedded_world()` correctly returns `None` for this artifact, which is
+/// committed under `tests/` not `src/`.
+const GOLDEN_VINTAGE: &str = "golden-fixtures";
+
+/// The committed golden artifact path, relative to the crate root.
+const GOLDEN_ARTIFACT_PATH: &str = "tests/fixtures/calibration/test.calib.json";
+
+/// Pool per-function raw metrics from `tiny_repo`, `biomarker_repo`, and
+/// `coupling_repo` into a single `LangObservations`.
+///
+/// Each fixture is materialized from its embedded bundle into a fresh tempdir,
+/// ingested into an in-memory `FactsDb`, and its `complexity_metrics` rows are
+/// pooled. The fixture repos are all Rust-only, so the returned observations
+/// carry only the `rust` language.
+///
+/// # Panics
+///
+/// Panics on any fixture-build, ingest, or query error — all indicate a
+/// broken test environment.
+fn build_fixture_observations() -> calibration::LangObservations {
+    use codelore_lib::Options;
+    use codelore_lib::complexity::Tier1Language;
+    use codelore_lib::facts::FactsDb;
+    use codelore_lib::repo::GixRepo;
+
+    // Hold all three TempDirs alive for the duration of the function so the
+    // fixture paths remain valid. Each fixture is named for error messages only.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let biomarker = codelore_lib::test_support::biomarker_repo::build();
+    let coupling = codelore_lib::test_support::coupling_repo::build();
+
+    let fixture_paths: [(&str, &std::path::Path); 3] = [
+        ("tiny", tiny.dir.path()),
+        ("biomarker", biomarker.dir.path()),
+        ("coupling", coupling.dir.path()),
+    ];
+
+    let mut obs = calibration::LangObservations::new();
+
+    for (name, repo_path) in &fixture_paths {
+        let repo = GixRepo::open(repo_path).unwrap_or_else(|e| panic!("open {name} repo: {e}"));
+        let opts = Options {
+            repo_path: repo_path.to_path_buf(),
+            min_revs: 1,
+            ..Options::default()
+        };
+        let db = FactsDb::new_in_memory().expect("new_in_memory");
+        db.ingest(&repo, &opts)
+            .unwrap_or_else(|e| panic!("ingest {name}: {e}"));
+        let mut stmt = db
+            .prepare(
+                "SELECT path, cyclomatic, cognitive, sloc, nargs, max_nesting \
+                 FROM complexity_metrics",
+            )
+            .unwrap_or_else(|e| panic!("prepare complexity query for {name}: {e}"));
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<i64>>(1)?,
+                    r.get::<_, Option<i64>>(2)?,
+                    r.get::<_, Option<i64>>(3)?,
+                    r.get::<_, Option<i64>>(4)?,
+                    r.get::<_, Option<i64>>(5)?,
+                ))
+            })
+            .unwrap_or_else(|e| panic!("query complexity for {name}: {e}"));
+
+        for row in rows {
+            let (path, cyclomatic, cognitive, sloc, nargs, max_nesting) =
+                row.unwrap_or_else(|e| panic!("read row from {name}: {e}"));
+            let Some(lang) = Tier1Language::from_path(&path) else {
+                continue;
+            };
+            let lang = lang.as_str();
+            for (metric, value) in [
+                ("cyclomatic", cyclomatic),
+                ("cognitive", cognitive),
+                ("sloc", sloc),
+                ("nargs", nargs),
+                ("max_nesting", max_nesting),
+            ] {
+                if let Some(v) = value {
+                    // Lossless i64 → f64: per-function metric values are bounded
+                    // small integers far below 2^53.
+                    #[allow(clippy::cast_precision_loss)]
+                    obs.observe(lang, metric, v as f64);
+                }
+            }
+        }
+    }
+
+    obs
+}
+
+/// Build the golden calibration artifact from the bundled fixture repos with a
+/// constant timestamp and the `golden-fixtures` vintage.
+///
+/// `repos_attempted` and `repos_included` are set to 3 (tiny + biomarker +
+/// coupling); they are metadata fields not used in quantile computation.
+///
+/// # Regenerating the committed artifact
+///
+/// If the fixture bundles or the metrics extraction change, regenerate via:
+///
+/// ```text
+/// cargo test --features test-support \
+///     -p codelore-lib --test calibration_test \
+///     -- --nocapture generate_golden_fixture_artifact
+/// ```
+///
+/// The test will print the updated JSON to stdout. Pipe or copy it to:
+/// `crates/codelore-lib/tests/fixtures/calibration/test.calib.json` and commit.
+fn build_golden_artifact() -> (Vec<u8>, codelore_lib::calibration::CalibrationArtifact) {
+    let obs = build_fixture_observations();
+    let mut art = calibration::build_from_observations(GOLDEN_VINTAGE, GOLDEN_GENERATED_AT, &obs);
+    art.repos_attempted = 3;
+    art.repos_included = 3;
+    let bytes = serde_json::to_vec(&art).expect("serialize golden artifact");
+    (bytes, art)
+}
+
+/// Byte-determinism guard: building the artifact twice from identical fixture
+/// repos and an identical fixed timestamp must produce byte-identical JSON.
+///
+/// This guards against any source of non-determinism in
+/// `build_from_observations` (floating-point sort stability, map iteration
+/// order, etc.).
+#[test]
+fn golden_artifact_is_byte_deterministic() {
+    let (a, _) = build_golden_artifact();
+    let (b, _) = build_golden_artifact();
+    assert_eq!(
+        a, b,
+        "golden artifact must be byte-identical across two builds with identical inputs"
+    );
+}
+
+/// Drift guard: the freshly-built golden artifact must match the committed
+/// `tests/fixtures/calibration/test.calib.json`.
+///
+/// If this test fails the fixtures or metrics layer changed and the committed
+/// artifact is stale. Regenerate it (see the `build_golden_artifact` doc
+/// comment for the exact command) and commit the updated file.
+#[test]
+fn golden_artifact_matches_committed_file() {
+    let committed_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(GOLDEN_ARTIFACT_PATH);
+    let committed = std::fs::read(&committed_path).unwrap_or_else(|e| {
+        panic!(
+            "could not read committed artifact {}: {e}\n\
+             Run `cargo test ... -- --nocapture generate_golden_fixture_artifact` to regenerate.",
+            committed_path.display()
+        )
+    });
+    let (fresh, _) = build_golden_artifact();
+    assert_eq!(
+        fresh, committed,
+        "committed artifact is stale — fixtures or metrics changed; \
+         regenerate via `cargo test --features test-support -p codelore-lib \
+         --test calibration_test -- --nocapture generate_golden_fixture_artifact`"
+    );
+}
+
+/// Helper test that prints the freshly-built golden artifact JSON to stdout.
+///
+/// Run explicitly with `--nocapture` to regenerate the committed artifact:
+///
+/// ```text
+/// cargo test --features test-support -p codelore-lib --test calibration_test \
+///     -- --nocapture generate_golden_fixture_artifact
+/// ```
+///
+/// Pipe/copy the output to `tests/fixtures/calibration/test.calib.json`.
+#[test]
+fn generate_golden_fixture_artifact() {
+    let (bytes, art) = build_golden_artifact();
+    println!("{}", String::from_utf8(bytes).expect("valid UTF-8 JSON"));
+    // Structural sanity: the artifact must have at least one language and be
+    // loadable via the normal validation path.
+    assert!(
+        !art.languages.is_empty(),
+        "golden artifact has no languages"
+    );
+    assert_eq!(art.corpus_vintage, GOLDEN_VINTAGE);
+    assert_eq!(art.generated_at, GOLDEN_GENERATED_AT);
 }
