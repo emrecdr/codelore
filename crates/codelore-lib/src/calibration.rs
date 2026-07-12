@@ -58,10 +58,11 @@ pub const QUANTILE_POINTS: usize = 1001;
 /// stays absent-but-wired until a maintainer runs the real corpus build.
 const PLACEHOLDER_VINTAGE_PREFIX: &str = "placeholder-";
 
-/// The committed embedded world artifact. Until a maintainer runs the full
-/// corpus build (see `calibration/README.md`) this is a placeholder whose
-/// vintage begins with [`PLACEHOLDER_VINTAGE_PREFIX`], so [`embedded_world`]
-/// yields `None`.
+/// The committed embedded world artifact, produced by the corpus build over
+/// `calibration/corpus.toml` (see `calibration/README.md` to regenerate). Its
+/// real vintage activates the corpus lens through [`embedded_world`]. A
+/// placeholder whose vintage begins with [`PLACEHOLDER_VINTAGE_PREFIX`] would
+/// instead resolve to `None`, keeping the lens absent-but-wired.
 const EMBEDDED_WORLD_BYTES: &[u8] = include_bytes!("calibration/world.calib.json");
 
 // ─── artifact model ──────────────────────────────────────────────────────────
@@ -630,26 +631,38 @@ fn weight_to_f64(n: u64) -> f64 {
 mod tests {
     use super::*;
 
-    /// The committed embedded artifact is the placeholder shipped before a real
-    /// corpus build (its vintage carries [`PLACEHOLDER_VINTAGE_PREFIX`]), so the
-    /// corpus lens is absent-but-wired: `embedded_world` yields `None`.
+    /// The committed embedded artifact is a real world-corpus build (a
+    /// non-[`PLACEHOLDER_VINTAGE_PREFIX`] vintage), so the corpus lens is active:
+    /// `embedded_world` yields `Some` with a real vintage.
     #[test]
-    fn embedded_world_is_absent_for_the_placeholder() {
+    fn embedded_world_is_present_and_real() {
+        let art =
+            embedded_world().expect("the embedded world corpus must resolve to Some once built");
         assert!(
-            embedded_world().is_none(),
-            "the shipped placeholder must resolve to None until a maintainer \
-             runs the real corpus build"
+            !art.corpus_vintage.starts_with(PLACEHOLDER_VINTAGE_PREFIX),
+            "the embedded corpus vintage must be a real build, not a placeholder"
         );
     }
 
-    /// The embedded bytes must still be a structurally valid, monotonic v1
-    /// artifact — the placeholder is filtered by vintage, not by being junk.
+    /// The embedded bytes are a structurally valid, monotonic v1 artifact whose
+    /// per-language pools clear the trust floor — the real world corpus, not a
+    /// placeholder.
     #[test]
-    fn embedded_placeholder_bytes_parse_and_validate() {
+    fn embedded_world_bytes_parse_and_validate() {
         let art = CalibrationArtifact::from_slice(EMBEDDED_WORLD_BYTES)
-            .expect("embedded placeholder must be a valid artifact");
-        assert!(art.corpus_vintage.starts_with(PLACEHOLDER_VINTAGE_PREFIX));
+            .expect("embedded world corpus must be a valid artifact");
+        assert!(!art.corpus_vintage.starts_with(PLACEHOLDER_VINTAGE_PREFIX));
         assert_eq!(art.format_version, CALIBRATION_FORMAT_VERSION);
+        // Every embedded language must clear the trust floor, or the lens would
+        // silently return `None` for it at lookup time.
+        for lang in &art.languages {
+            assert!(
+                lang.sample_functions >= MIN_LANG_SAMPLE,
+                "embedded language {:?} pooled {} functions, below the {MIN_LANG_SAMPLE} floor",
+                lang.language,
+                lang.sample_functions,
+            );
+        }
     }
 
     /// A manifest with two `[[repos]]` blocks round-trips: sources, pinned

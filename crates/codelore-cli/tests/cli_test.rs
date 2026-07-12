@@ -2030,10 +2030,12 @@ fn check_max_findings_gate_skips_gracefully_when_no_sidecar() {
 }
 
 #[test]
-fn check_corpus_percentile_gate_skips_when_no_calibration_active() {
-    // Gate configured, but no `--calibration` artifact and the embedded world
-    // corpus is a placeholder → code-health rows carry no `corpus_percentile`.
-    // Expected contract:
+fn check_corpus_percentile_gate_skips_when_no_health_rows() {
+    // Gate configured, but the tiny repo's files fall below the code-health churn
+    // floor (`min_revs`), so the health scan yields no rows — there is nothing for
+    // the corpus lens to populate, so no row carries `corpus_percentile` and the
+    // gate skips (not pass, not fail). This holds regardless of whether a
+    // calibration artifact is active. Expected contract:
     //   - exit code unaffected (0 — only the corpus gate is configured here)
     //   - ledger records a `verdict="skipped"` entry for corpus_percentile_max
     let tiny = codelore_lib::test_support::tiny_repo::build();
@@ -2041,7 +2043,7 @@ fn check_corpus_percentile_gate_skips_when_no_calibration_active() {
     let thresholds = repo_path.join(".codelore-thresholds.toml");
     std::fs::write(&thresholds, "[gates]\ncorpus_percentile_max = 0.9\n").unwrap();
 
-    // Run check — should pass (no calibration → gate skipped, no other gates).
+    // Run check — should pass (no rows → gate skipped, no other gates).
     Command::cargo_bin("codelore")
         .unwrap()
         .args(["check", "--repo", repo_path.to_str().unwrap()])
@@ -2060,7 +2062,7 @@ fn check_corpus_percentile_gate_skips_when_no_calibration_active() {
         .expect("ledger must contain a corpus_percentile_max record");
     assert_eq!(
         corpus_rec.verdict, "skipped",
-        "corpus gate must record verdict=skipped when no calibration is active"
+        "corpus gate must record verdict=skipped when the health scan yields no rows"
     );
 }
 
