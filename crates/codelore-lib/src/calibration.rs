@@ -118,6 +118,52 @@ pub struct CorpusPercentile {
     pub beyond_corpus: bool,
 }
 
+// ─── corpus manifest ─────────────────────────────────────────────────────────
+
+/// A corpus build manifest: the set of pinned repos the `calibrate` command
+/// ingests and pools per-function metrics from.
+///
+/// Parsed from TOML. Each `[[repos]]` entry names a `source` (an HTTPS/SSH clone
+/// URL or a local filesystem path), a pinned `sha`, and the `languages` the repo
+/// contributes to the corpus (advisory: which Tier-1 languages the curator
+/// expects; the command pools whatever the ingest actually finds).
+#[derive(Debug, Clone, Deserialize)]
+pub struct CorpusManifest {
+    #[serde(default)]
+    pub repos: Vec<CorpusRepo>,
+}
+
+/// One pinned repo in a [`CorpusManifest`].
+#[derive(Debug, Clone, Deserialize)]
+pub struct CorpusRepo {
+    /// Clone URL (contains `://` or `git@…`) or a local filesystem path.
+    pub source: String,
+    /// Commit SHA the corpus is pinned to, checked out before ingest so the
+    /// artifact is reproducible against a fixed tree.
+    pub sha: String,
+    /// Tier-1 language names the curator expects this repo to contribute.
+    #[serde(default)]
+    pub languages: Vec<String>,
+}
+
+/// Parse and return a [`CorpusManifest`] from a TOML file.
+///
+/// # Errors
+///
+/// [`CodeLoreError::RepoIo`] (read-side input, exit 3) when the file cannot be
+/// read; [`CodeLoreError::Analysis`] (exit 4) when the TOML is malformed.
+pub fn load_manifest(path: &Path) -> Result<CorpusManifest> {
+    let raw = std::fs::read_to_string(path).map_err(|e| {
+        CodeLoreError::RepoIo(std::io::Error::new(
+            e.kind(),
+            format!("read corpus manifest {}: {e}", path.display()),
+        ))
+    })?;
+    toml::from_str(&raw).map_err(|e| {
+        CodeLoreError::Analysis(format!("parse corpus manifest {}: {e}", path.display()))
+    })
+}
+
 // ─── load + validation ───────────────────────────────────────────────────────
 
 impl CalibrationArtifact {
@@ -574,6 +620,39 @@ mod tests {
             .expect("embedded placeholder must be a valid artifact");
         assert!(art.corpus_vintage.starts_with(PLACEHOLDER_VINTAGE_PREFIX));
         assert_eq!(art.format_version, CALIBRATION_FORMAT_VERSION);
+    }
+
+    /// A manifest with two `[[repos]]` blocks round-trips: sources, pinned
+    /// SHAs, and advisory languages all parse into the typed model.
+    #[test]
+    fn manifest_parses_repos_and_pins() {
+        let toml = r#"
+            [[repos]]
+            source = "https://github.com/example/one"
+            sha = "abc123"
+            languages = ["rust", "python"]
+
+            [[repos]]
+            source = "/local/path/to/two"
+            sha = "def456"
+        "#;
+        let manifest: CorpusManifest = toml::from_str(toml).expect("parse manifest");
+        assert_eq!(manifest.repos.len(), 2);
+        assert_eq!(manifest.repos[0].source, "https://github.com/example/one");
+        assert_eq!(manifest.repos[0].sha, "abc123");
+        assert_eq!(manifest.repos[0].languages, ["rust", "python"]);
+        // The second repo omits `languages`; it defaults to empty rather than
+        // failing to parse.
+        assert_eq!(manifest.repos[1].source, "/local/path/to/two");
+        assert!(manifest.repos[1].languages.is_empty());
+    }
+
+    /// An empty manifest (no `[[repos]]`) parses to an empty repo list rather
+    /// than erroring — the command then attempts zero repos.
+    #[test]
+    fn manifest_without_repos_is_empty() {
+        let manifest: CorpusManifest = toml::from_str("").expect("parse empty manifest");
+        assert!(manifest.repos.is_empty());
     }
 
     /// A non-placeholder vintage is surfaced (the Task-12 "real artifact → Some"

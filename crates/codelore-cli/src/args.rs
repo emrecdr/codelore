@@ -147,6 +147,13 @@ pub enum Command {
     /// are replaced per engine so the stored count is always the current
     /// scanner run, never an accumulation of duplicates.
     IngestSarif(IngestSarifArgs),
+    /// Build a corpus-calibration artifact from a manifest of pinned repos.
+    /// Each repo is ingested at its pinned SHA, its per-function raw metrics
+    /// pooled per language, and the pooled distributions reduced to quantile
+    /// breakpoints. The artifact powers the corpus-relative percentile lens
+    /// (`--calibration`). Use `--merge` to fold the build into an existing
+    /// artifact (e.g. your org's repos into the world corpus).
+    Calibrate(CalibrateArgs),
 }
 
 /// MCP server arguments.
@@ -517,6 +524,36 @@ pub struct IngestSarifArgs {
 
     /// Override the XDG cache root. Defaults to the same root used by
     /// `analyze` and `check`.
+    #[arg(long)]
+    pub cache_dir: Option<PathBuf>,
+}
+
+/// Build a corpus-calibration artifact from a manifest of pinned repos.
+#[derive(clap::Args, Debug)]
+pub struct CalibrateArgs {
+    /// Path to the corpus manifest (TOML). Each `[[repos]]` entry names a
+    /// `source` (clone URL or local path), a pinned `sha`, and the advisory
+    /// `languages` it contributes.
+    #[arg(long, required = true)]
+    pub repos: PathBuf,
+
+    /// Where to write the built artifact (compact JSON).
+    #[arg(long, required = true)]
+    pub output: PathBuf,
+
+    /// Optional existing artifact to fold this build into via sample-count-
+    /// weighted quantile blending (an approximation — see the artifact docs).
+    /// Repos and sample counts from both are summed.
+    #[arg(long)]
+    pub merge: Option<PathBuf>,
+
+    /// Corpus vintage label stamped into the artifact. Defaults to a
+    /// date-derived `corpus-YYYY-MM`.
+    #[arg(long)]
+    pub vintage: Option<String>,
+
+    /// Override the XDG cache root used by the per-repo ingest. Defaults to
+    /// the same root used by `analyze` and `check`.
     #[arg(long)]
     pub cache_dir: Option<PathBuf>,
 }

@@ -16,7 +16,9 @@ use codelore_lib::cli_api::{AnalysisName, CodeLoreError, Options};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 
-use crate::args::{AnalyzeArgs, CheckFormat, Cli, Command, DiffArgs, IngestSarifArgs, McpArgs};
+use crate::args::{
+    AnalyzeArgs, CalibrateArgs, CheckFormat, Cli, Command, DiffArgs, IngestSarifArgs, McpArgs,
+};
 
 fn main() {
     if let Err(e) = run() {
@@ -49,6 +51,7 @@ fn run() -> Result<()> {
         Command::Check(args) => run_check_cmd(&args),
         Command::Mcp(args) => run_mcp_cmd(&args),
         Command::IngestSarif(args) => run_ingest_sarif_cmd(&args),
+        Command::Calibrate(args) => run_calibrate_cmd(&args),
     }
 }
 
@@ -116,6 +119,302 @@ fn run_ingest_sarif_cmd(args: &IngestSarifArgs) -> Result<()> {
     );
 
     Ok(())
+}
+
+/// Build a corpus-calibration artifact from a manifest of pinned repos.
+///
+/// For each `[[repos]]` entry the repo is checked out at its pinned SHA in a
+/// throwaway location, ingested through the standard pipeline, and its
+/// per-function raw metrics (`cyclomatic`, `cognitive`, `sloc`, `nargs`,
+/// `max_nesting`) pooled per language (derived from each file's extension). The
+/// pooled distributions are reduced to quantile breakpoints by the calibration
+/// builder. A repo that fails to check out or ingest is warned about and
+/// skipped; the run still succeeds and the artifact's `repos_attempted` /
+/// `repos_included` counts record the tally. With `--merge`, the build is folded
+/// into an existing artifact via the library's weighted-blend merge.
+fn run_calibrate_cmd(args: &CalibrateArgs) -> Result<()> {
+    use codelore_lib::calibration::{self, LangObservations};
+    use codelore_lib::cli_api::cache::default_cache_root;
+    use codelore_lib::cli_api::quality_gates::ledger::now_utc_ts;
+
+    let cache_root = args.cache_dir.clone().unwrap_or_else(default_cache_root);
+    let generated_at = now_utc_ts();
+    // Default vintage is `corpus-YYYY-MM`, sliced from the RFC 3339 timestamp
+    // (`YYYY-MM-DDT…`) so we reuse the one timestamp helper rather than pull in
+    // date formatting.
+    let vintage = args
+        .vintage
+        .clone()
+        .unwrap_or_else(|| format!("corpus-{}", &generated_at[..7]));
+
+    let manifest = calibration::load_manifest(&args.repos).context("load corpus manifest")?;
+
+    let mut obs = LangObservations::new();
+    let mut attempted: u32 = 0;
+    let mut included: u32 = 0;
+
+    for repo in &manifest.repos {
+        attempted += 1;
+        eprintln!("calibrate: {} @ {}", repo.source, repo.sha);
+        match calibrate_one_repo(&repo.source, &repo.sha, &cache_root, &mut obs) {
+            Ok(()) => included += 1,
+            Err(e) => eprintln!("calibrate: skip {} @ {}: {e:#}", repo.source, repo.sha),
+        }
+    }
+
+    let mut artifact = calibration::build_from_observations(&vintage, &generated_at, &obs);
+    artifact.repos_attempted = attempted;
+    artifact.repos_included = included;
+
+    if let Some(merge_path) = &args.merge {
+        let base = calibration::load(merge_path)
+            .with_context(|| format!("load --merge artifact {}", merge_path.display()))?;
+        artifact = calibration::merge(base, artifact);
+    }
+
+    let json = serde_json::to_vec(&artifact).context("serialize calibration artifact")?;
+    if let Some(parent) = args.output.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create output dir {}", parent.display()))?;
+    }
+    std::fs::write(&args.output, &json)
+        .with_context(|| format!("write artifact {}", args.output.display()))?;
+
+    eprintln!(
+        "calibrate: {included}/{attempted} repo(s) → {} ({} language(s))",
+        args.output.display(),
+        artifact.languages.len(),
+    );
+    Ok(())
+}
+
+/// Check out one manifest repo at its pinned SHA, ingest it, and pool its
+/// per-function raw metrics into `obs`.
+///
+/// A `source` containing `://` or starting with `git@` is a clone URL; anything
+/// else is a local filesystem path. Both converge on a throwaway checkout of
+/// the pinned SHA — a clone+checkout tempdir for URLs, a detached `git worktree`
+/// for local paths — so the user's own checkout is never mutated and the tree
+/// matches the pin regardless of where HEAD points. The ingest reads complexity
+/// from that checkout's HEAD (`complexity_metrics` holds one rev's rows), which
+/// is exactly the pinned tree.
+fn calibrate_one_repo(
+    source: &str,
+    sha: &str,
+    cache_root: &std::path::Path,
+    obs: &mut codelore_lib::calibration::LangObservations,
+) -> Result<()> {
+    // The tempdir / worktree guard is held for the duration of the ingest.
+    let checkout = checkout_pinned(source, sha)?;
+    let repo = GixRepo::open(checkout.path()).context("open pinned checkout")?;
+    let opts = Options {
+        repo_path: checkout.path().to_path_buf(),
+        ..Options::default()
+    };
+    let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, cache_root).context("ingest")?;
+    pool_complexity(&db, obs).context("pool complexity metrics")?;
+    Ok(())
+}
+
+/// A checked-out pinned tree plus its cleanup guard. Dropping it removes the
+/// clone tempdir or the git worktree.
+enum PinnedCheckout {
+    /// A fresh clone in an owned tempdir; dropping the dir removes it.
+    Clone(tempfile::TempDir),
+    /// A detached worktree of a local repo; the guard removes it on drop.
+    Worktree {
+        origin: std::path::PathBuf,
+        dir: tempfile::TempDir,
+    },
+}
+
+impl PinnedCheckout {
+    fn path(&self) -> &std::path::Path {
+        match self {
+            Self::Clone(dir) | Self::Worktree { dir, .. } => dir.path(),
+        }
+    }
+}
+
+impl Drop for PinnedCheckout {
+    fn drop(&mut self) {
+        // Only the worktree variant needs an explicit `git` cleanup so the
+        // origin repo forgets the worktree registration; the clone variant is
+        // just a tempdir. Detached stdio per the git-child-process invariant.
+        if let Self::Worktree { origin, dir } = self
+            && let Some(path) = dir.path().to_str()
+        {
+            let _ = std::process::Command::new("git")
+                .args([
+                    "-C",
+                    origin.to_str().unwrap_or("."),
+                    "worktree",
+                    "remove",
+                    "--force",
+                    path,
+                ])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+    }
+}
+
+/// Materialize `source` at `sha` into a throwaway location.
+///
+/// Every spawned `git` child runs with detached stdio (`stdin` nulled, stdout
+/// nulled, stderr captured for diagnosis) — the same invariant the MCP server
+/// documents for its git children.
+fn checkout_pinned(source: &str, sha: &str) -> Result<PinnedCheckout> {
+    let is_url = source.contains("://") || source.starts_with("git@");
+    if is_url {
+        let dir = tempfile::tempdir().context("create clone tempdir")?;
+        run_git(
+            &["clone", "--quiet", source, path_str(dir.path())?],
+            "clone",
+        )?;
+        run_git(
+            &[
+                "-C",
+                path_str(dir.path())?,
+                "checkout",
+                "--quiet",
+                "--detach",
+                sha,
+            ],
+            "checkout",
+        )?;
+        Ok(PinnedCheckout::Clone(dir))
+    } else {
+        let origin = std::fs::canonicalize(source)
+            .with_context(|| format!("resolve local repo path {source}"))?;
+        // Confirm the pin is reachable before spending a worktree on it, so an
+        // unknown SHA fails with a clear message rather than a git-internal one.
+        run_git(
+            &[
+                "-C",
+                path_str(&origin)?,
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                sha,
+            ],
+            "rev-parse",
+        )?;
+        let dir = tempfile::tempdir().context("create worktree tempdir")?;
+        run_git(
+            &[
+                "-C",
+                path_str(&origin)?,
+                "worktree",
+                "add",
+                "--detach",
+                "--quiet",
+                path_str(dir.path())?,
+                sha,
+            ],
+            "worktree add",
+        )?;
+        Ok(PinnedCheckout::Worktree { origin, dir })
+    }
+}
+
+/// Run a `git` subcommand with detached stdio, returning an error carrying
+/// git's own stderr on failure.
+fn run_git(git_args: &[&str], what: &str) -> Result<()> {
+    let out = std::process::Command::new("git")
+        .args(git_args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .output()
+        .with_context(|| format!("spawn git {what}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "git {what} failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))
+    }
+}
+
+/// `Path` → `&str`, erroring on non-UTF-8 rather than silently defaulting.
+fn path_str(p: &std::path::Path) -> Result<&str> {
+    p.to_str()
+        .with_context(|| format!("non-UTF-8 path {}", p.display()))
+}
+
+/// Pool one repo's per-function raw metrics into `obs`, keyed by the language
+/// derived from each file's extension. Rows for non-Tier-1 files are ignored.
+/// Each metric is observed only when present (a NULL column is skipped) so a
+/// language's pool reflects the functions that actually have that metric.
+fn pool_complexity(
+    db: &FactsDb,
+    obs: &mut codelore_lib::calibration::LangObservations,
+) -> Result<()> {
+    use codelore_lib::complexity::Tier1Language;
+
+    // (path, cyclomatic, cognitive, sloc, nargs, max_nesting). Each metric is
+    // nullable in `complexity_metrics`, so read them as `Option<i64>` and pool
+    // only the present values.
+    type Row = (
+        String,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+    );
+
+    let mut stmt = db
+        .prepare(
+            "SELECT path, cyclomatic, cognitive, sloc, nargs, max_nesting \
+             FROM complexity_metrics",
+        )
+        .context("prepare complexity query")?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<i64>>(1)?,
+                r.get::<_, Option<i64>>(2)?,
+                r.get::<_, Option<i64>>(3)?,
+                r.get::<_, Option<i64>>(4)?,
+                r.get::<_, Option<i64>>(5)?,
+            ))
+        })
+        .context("run complexity query")?;
+
+    for row in rows {
+        let (path, cyclomatic, cognitive, sloc, nargs, max_nesting): Row =
+            row.context("read complexity row")?;
+        let Some(lang) = Tier1Language::from_path(&path) else {
+            continue;
+        };
+        let lang = lang.as_str();
+        for (metric, value) in [
+            ("cyclomatic", cyclomatic),
+            ("cognitive", cognitive),
+            ("sloc", sloc),
+            ("nargs", nargs),
+            ("max_nesting", max_nesting),
+        ] {
+            if let Some(value) = value {
+                obs.observe(lang, metric, value_to_f64(value));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Lossless `i64` → `f64` for the small, bounded per-function metric values
+/// (complexity counts, SLOC, argument counts) — all far below `2^53`.
+#[allow(clippy::cast_precision_loss)]
+fn value_to_f64(n: i64) -> f64 {
+    n as f64
 }
 
 /// Quality-gate check. Loads thresholds, runs the hotspots analysis
