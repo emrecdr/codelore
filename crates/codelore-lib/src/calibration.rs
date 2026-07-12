@@ -255,21 +255,34 @@ pub fn embedded_world() -> Option<&'static CalibrationArtifact> {
         .as_ref()
 }
 
-/// Vintage string of the calibration artifact active for `opts`, following the
-/// same resolution precedence as the corpus-percentile lens:
+/// The single home for the active-artifact resolution precedence, shared by the
+/// corpus-percentile lens and the provenance vintage stamp:
 ///
-/// 1. `opts.calibration` path (loaded + validated) → its `corpus_vintage`.
-/// 2. [`embedded_world`] artifact (if a real — non-placeholder — one is present)
-///    → its `corpus_vintage`.
-/// 3. `None` (no artifact active).
+/// 1. `opts.calibration` path set → [`load`] it (validated), owned.
+/// 2. else the [`embedded_world`] artifact (a real, non-placeholder one), borrowed.
+/// 3. else `None` — no artifact active.
 ///
-/// A bad `--calibration` file is a hard error; "no artifact active" returns
-/// `None` silently (the one deduped notice lives at the CLI layer).
-pub fn active_vintage(opts: &crate::Options) -> Result<Option<String>> {
+/// Returns a [`Cow`] so the embedded branch is zero-copy while a `--calibration`
+/// file is owned. A bad `--calibration` file is a hard error (matching [`load`]'s
+/// exit-3/4 contract); "no artifact active" returns `None` silently — the one
+/// deduped notice lives at the CLI layer.
+///
+/// [`Cow`]: std::borrow::Cow
+pub fn load_active_artifact(
+    opts: &crate::Options,
+) -> Result<Option<std::borrow::Cow<'static, CalibrationArtifact>>> {
+    use std::borrow::Cow;
     if let Some(path) = &opts.calibration {
-        return Ok(Some(load(path)?.corpus_vintage));
+        return Ok(Some(Cow::Owned(load(path)?)));
     }
-    Ok(embedded_world().map(|art| art.corpus_vintage.clone()))
+    Ok(embedded_world().map(Cow::Borrowed))
+}
+
+/// Vintage string of the calibration artifact active for `opts`. A thin wrapper
+/// over [`load_active_artifact`] — the one place the resolution precedence lives
+/// — so the provenance stamp and the corpus lens never drift apart.
+pub fn active_vintage(opts: &crate::Options) -> Result<Option<String>> {
+    Ok(load_active_artifact(opts)?.map(|art| art.corpus_vintage.clone()))
 }
 
 // ─── percentile lookup ───────────────────────────────────────────────────────

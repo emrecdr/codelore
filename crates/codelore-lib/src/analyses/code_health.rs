@@ -596,23 +596,6 @@ fn file_corpus_lens(
     worst.map(|p| (p, beyond))
 }
 
-/// Resolve the calibration artifact the corpus lens should use: an explicit
-/// `--calibration` file (loaded + validated) wins; otherwise the embedded world
-/// artifact (which is `None` until a maintainer runs the real corpus build).
-///
-/// A bad `--calibration` file is a hard error (matching `calibration::load`'s
-/// exit-3/4 contract); the "no artifact active" case is silent here — the ONE
-/// deduped notice lives at the CLI layer.
-fn resolve_calibration(
-    opts: &Options,
-) -> Result<Option<std::borrow::Cow<'static, crate::calibration::CalibrationArtifact>>> {
-    use std::borrow::Cow;
-    if let Some(path) = &opts.calibration {
-        return Ok(Some(Cow::Owned(crate::calibration::load(path)?)));
-    }
-    Ok(crate::calibration::embedded_world().map(Cow::Borrowed))
-}
-
 /// Additive corpus-percentile pass: after the shipped SQL builds `rows`, join a
 /// per-language, per-file corpus percentile onto each. A pure post-pass — it
 /// reads only the raw complexity aggregates and never touches the score /
@@ -624,7 +607,7 @@ fn apply_corpus_lens(
     cx: &HealthScanCtx,
     rows: &mut [CodeHealthRow],
 ) -> Result<()> {
-    let Some(art) = resolve_calibration(opts)? else {
+    let Some(art) = crate::calibration::load_active_artifact(opts)? else {
         return Ok(()); // No artifact active → every row keeps its absent lens.
     };
 

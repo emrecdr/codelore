@@ -236,3 +236,60 @@ fn manifest_corpus_vintage_present_with_calibration_file() {
         "JSON must carry the vintage string"
     );
 }
+
+/// Precedence branch 2 (embedded world) and the shared-seam guarantee.
+///
+/// `active_vintage` and the corpus-percentile lens both resolve through the one
+/// `load_active_artifact` home, so the vintage stamped into provenance is always
+/// the vintage of the artifact the lens actually applied. This asserts that
+/// invariant on the seam directly: for a real-vintage `--calibration` file both
+/// entry points agree, and with no override both fall through to the embedded
+/// world (branch 2).
+///
+/// CONSTRAINT: branch 2's *non-placeholder* case (embedded world → `Some`) cannot
+/// be exercised in a test — the embedded bytes are `include_bytes!`-compiled and
+/// the shipped artifact is the placeholder, so `embedded_world()` is `None` here.
+/// We therefore pin branch 2's observable behavior in this build (embedded absent
+/// → both entry points yield `None`) and pin the `Some` path through the file
+/// seam, which shares the identical resolution code.
+#[test]
+fn active_vintage_and_lens_share_one_resolution_seam() {
+    // File override present: load_active_artifact yields the artifact the lens
+    // consumes, and active_vintage yields exactly that artifact's vintage.
+    let art = test_calib_artifact();
+    let artifact_path = write_temp_artifact(&art);
+    let with_file = Options {
+        calibration: Some(artifact_path.to_path_buf()),
+        ..Options::default()
+    };
+    let resolved = codelore_lib::calibration::load_active_artifact(&with_file)
+        .expect("resolve")
+        .expect("a --calibration file must resolve to an artifact");
+    assert_eq!(
+        resolved.corpus_vintage, "test-vintage-2026-07",
+        "the lens resolves the artifact whose vintage the stamp records"
+    );
+    assert_eq!(
+        codelore_lib::calibration::active_vintage(&with_file).expect("vintage"),
+        Some("test-vintage-2026-07".to_string()),
+        "active_vintage must be the same artifact's vintage, via the shared seam"
+    );
+
+    // No override: both entry points fall through to the embedded world. In this
+    // build that is the placeholder (embedded_world() == None), so both are None.
+    // This is the only observable form of branch 2 until a maintainer embeds a
+    // real corpus.
+    let no_override = Options::default();
+    assert!(
+        codelore_lib::calibration::load_active_artifact(&no_override)
+            .expect("resolve")
+            .is_none(),
+        "with no --calibration and a placeholder embed, the seam resolves to None"
+    );
+    assert!(
+        codelore_lib::calibration::active_vintage(&no_override)
+            .expect("vintage")
+            .is_none(),
+        "active_vintage agrees with the seam when the embedded world is absent"
+    );
+}
