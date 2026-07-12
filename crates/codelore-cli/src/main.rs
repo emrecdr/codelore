@@ -708,7 +708,7 @@ fn emit_gate_notices(
                 "  ⚠ max_findings_in_hot_files: skipped — run `codelore ingest-sarif` first"
             ),
             ("corpus_percentile_max", "skipped") => eprintln!(
-                "  ⚠ corpus_percentile_max: skipped — no calibration artifact (embed one or pass --calibration)"
+                "  ⚠ corpus_percentile_max: skipped — no corpus percentile data (no calibration artifact active, or no analyzed file resolved a percentile)"
             ),
             ("code_health_min", "degraded") => eprintln!(
                 "  ⚠ code_health_min: degraded — health scan returned no rows on a non-empty repo"
@@ -1349,8 +1349,8 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
         ),
         (
             "code-health",
-            "code-health composite: biomarker structural risk (Complex/Large Method, God Class, DRY, Shotgun Surgery) fused with behavioral signal (Nagappan & Ball 2005 churn + Mockus & Herbsleb 2002 ownership); coupling centrality enters once via the Shotgun Surgery biomarker (Tornhill 2018); self-relative percentile banding (Alves/Ypma/Visser 2010)",
-            "100 × (1 − 0.50·structural_risk − 0.30·churn − 0.20·ownership_fv), where structural_risk is a weighted sum of biomarker intensities (complex-method 0.30, god-class 0.25, large-method 0.15, dry 0.15, shotgun-surgery 0.15); band from structural_risk thresholds (≥0.55 red, ≥0.28 yellow, else green); percentile = per-language PERCENT_RANK of structural_risk.",
+            "code-health composite: biomarker structural risk (Complex/Large Method, God Class, DRY, Shotgun Surgery, Deep Nesting, Many Args, Complex Conditional) fused with behavioral signal (Nagappan & Ball 2005 churn + Mockus & Herbsleb 2002 ownership); coupling centrality enters once via the Shotgun Surgery biomarker (Tornhill 2018); self-relative percentile banding (Alves/Ypma/Visser 2010) plus an additive corpus-relative percentile when a calibration artifact is active",
+            "100 × (1 − 0.50·structural_risk − 0.30·churn − 0.20·ownership_fv), where structural_risk is a weighted sum of biomarker intensities (complex-method 0.22, god-class 0.18, large-method 0.12, dry 0.12, shotgun-surgery 0.12, deep-nesting 0.10, many-args 0.07, complex-conditional 0.07); band from structural_risk thresholds (≥0.55 red, ≥0.28 yellow, else green); percentile = per-language PERCENT_RANK of structural_risk.",
             "See analyses/code_health.rs.",
         ),
         (

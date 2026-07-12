@@ -254,9 +254,10 @@ const SQL: &str = "
         score,
         structural_risk,
         PERCENT_RANK() OVER (PARTITION BY lang ORDER BY structural_risk) AS percentile,
-        -- Absolute structural_risk thresholds (tunable; Phase-2 cross-repo
-        -- corpus calibration will replace these self-relative cut points).
-        -- red = high on a majority of the weighted smell mass.
+        -- Absolute structural_risk thresholds. Deliberately self-relative:
+        -- the corpus-relative lens is an ADDITIVE second reading and never
+        -- moves these bands. red = high on a majority of the weighted
+        -- smell mass.
         CASE
             WHEN structural_risk >= {risk_red_min} THEN 'red'
             WHEN structural_risk >= {risk_yellow_min} THEN 'yellow'

@@ -831,7 +831,8 @@ fn write_calibration(art: &CalibrationArtifact) -> tempfile::TempPath {
 /// THE ADDITIVITY CONTRACT (the plan's non-negotiable). Running code-health with
 /// a calibration artifact must not perturb ANY pre-existing field: the corpus
 /// lens is a pure additive post-pass join. We run twice on `biomarker_repo` —
-/// once without calibration, once with a covering rust ramp artifact — and
+/// once with the default artifact resolution (the embedded world corpus),
+/// once with an explicit covering rust ramp artifact — and
 /// assert every shipped field (`path`, `cognitive`, `score`, `structural_risk`,
 /// `percentile`, `band`) is byte-identical between the two runs. Since the new
 /// fields carry `skip_serializing_if`, stripping them is equivalent to matching

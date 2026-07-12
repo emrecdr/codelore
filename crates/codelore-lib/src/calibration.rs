@@ -41,7 +41,8 @@ use serde::{Deserialize, Serialize};
 use crate::{CodeLoreError, Result};
 
 /// Artifact schema version. A `load`ed artifact whose `format_version` differs
-/// is rejected; the CLI caller warns once and proceeds without the corpus lens.
+/// is rejected with a hard error — an explicitly passed `--calibration` file
+/// that cannot be used is a configuration mistake, not a degradable state.
 pub const CALIBRATION_FORMAT_VERSION: u32 = 1;
 
 /// Minimum pooled function count for a language to be trusted. Below this the
@@ -222,8 +223,9 @@ impl CalibrationArtifact {
 /// [`CodeLoreError::RepoIo`] (read-side input, exit 3) when the file cannot be
 /// read; [`CodeLoreError::Analysis`] (exit 4) when the JSON is malformed or the
 /// artifact fails validation — an unknown `format_version`, a wrong-length
-/// quantile vector, or non-monotonic breakpoints. The CLI caller warns once on
-/// this error and proceeds without the corpus lens.
+/// quantile vector, or non-monotonic breakpoints. Callers propagate this as a
+/// hard error: an explicitly passed calibration file that cannot be used is a
+/// configuration mistake, not a degradable state.
 pub fn load(path: &Path) -> Result<CalibrationArtifact> {
     let bytes = std::fs::read(path).map_err(|e| {
         // Read-side input failure (unreadable `--calibration`) → exit 3,
