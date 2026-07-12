@@ -210,6 +210,42 @@ fn mcp_code_health_returns_scored_rows() {
         first["score"].is_number(),
         "row missing numeric `score` field: {first}"
     );
+    // The embedded world corpus covers Rust, so `delivery_repo`'s Rust rows
+    // carry `corpus_percentile` — this exercises the serde propagation of the
+    // corpus lens through MCP. At least one row must be populated, and every
+    // present value must be a well-formed float in `0..=1` (with `beyond_corpus`
+    // a bool when present). A row whose files fall outside the corpus stays
+    // absent (serde skip_serializing_if = Option::is_none) — also valid.
+    let mut any_corpus = false;
+    for row in rows {
+        if let Some(cp) = row.get("corpus_percentile") {
+            let p = cp
+                .as_f64()
+                .unwrap_or_else(|| panic!("corpus_percentile must be a number: {row}"));
+            assert!(
+                (0.0..=1.0).contains(&p),
+                "corpus_percentile must be in 0..=1: {row}"
+            );
+            any_corpus = true;
+            if let Some(beyond) = row.get("beyond_corpus") {
+                assert!(
+                    beyond.is_boolean(),
+                    "beyond_corpus must be a bool when present: {row}"
+                );
+            }
+        } else {
+            // Absent percentile → beyond_corpus must also be absent (falsy-skip).
+            assert!(
+                row.get("beyond_corpus").is_none(),
+                "beyond_corpus must be absent when corpus_percentile is: {row}"
+            );
+        }
+    }
+    assert!(
+        any_corpus,
+        "the embedded world corpus covers Rust, so at least one delivery_repo row \
+         must carry corpus_percentile"
+    );
 
     drop(stdin);
     let _ = child.wait();

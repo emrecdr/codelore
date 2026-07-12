@@ -729,10 +729,18 @@
     // Section: code health
     const ch = (d.code_health || []).find(function (r) { return r.path === path; });
     if (ch) {
+      var corpusPctCell;
+      if (ch.corpus_percentile != null) {
+        var pct = Math.round(ch.corpus_percentile * 100);
+        corpusPctCell = pct + '%' + (ch.beyond_corpus ? '+' : '');
+      } else {
+        corpusPctCell = '—';
+      }
       overviewHtml += '<h4>Code health</h4><dl>' +
         '<dt>Score</dt><dd>' + fmtNumberFlex(ch.score, 1) + '</dd>' +
         '<dt>Cognitive</dt><dd>' + fmtNumberFlex(ch.cognitive, 0) + '</dd>' +
         '<dt>Health band</dt><dd>' + (ch.band || '—') + '</dd>' +
+        '<dt>Corpus percentile</dt><dd>' + corpusPctCell + '</dd>' +
         '</dl>';
     }
 

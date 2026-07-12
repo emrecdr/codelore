@@ -2029,6 +2029,43 @@ fn check_max_findings_gate_skips_gracefully_when_no_sidecar() {
     );
 }
 
+#[test]
+fn check_corpus_percentile_gate_skips_when_no_health_rows() {
+    // Gate configured, but the tiny repo's files fall below the code-health churn
+    // floor (`min_revs`), so the health scan yields no rows — there is nothing for
+    // the corpus lens to populate, so no row carries `corpus_percentile` and the
+    // gate skips (not pass, not fail). This holds regardless of whether a
+    // calibration artifact is active. Expected contract:
+    //   - exit code unaffected (0 — only the corpus gate is configured here)
+    //   - ledger records a `verdict="skipped"` entry for corpus_percentile_max
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let repo_path = tiny.dir.path();
+    let thresholds = repo_path.join(".codelore-thresholds.toml");
+    std::fs::write(&thresholds, "[gates]\ncorpus_percentile_max = 0.9\n").unwrap();
+
+    // Run check — should pass (no rows → gate skipped, no other gates).
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args(["check", "--repo", repo_path.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // The ledger must record a skipped verdict for this gate.
+    let cache_root = codelore_lib::cli_api::cache::default_cache_root();
+    let records =
+        codelore_lib::cli_api::quality_gates::ledger::read_gate_runs(&cache_root, repo_path)
+            .expect("read ledger");
+    let corpus_rec = records
+        .iter()
+        .rev()
+        .find(|r| r.gate == "corpus_percentile_max")
+        .expect("ledger must contain a corpus_percentile_max record");
+    assert_eq!(
+        corpus_rec.verdict, "skipped",
+        "corpus gate must record verdict=skipped when the health scan yields no rows"
+    );
+}
+
 /// SARIF 2.1.0 document that reports one finding for `engine` on `path`.
 fn sarif_one_finding(engine: &str, path: &str) -> String {
     format!(
@@ -2400,4 +2437,189 @@ fn check_ratchet_format_sarif_init_emits_valid_document() {
     parsed["runs"][0]["results"]
         .as_array()
         .expect("runs[0].results must be an array");
+}
+
+// ── codelore calibrate ───────────────────────────────────────────────────────
+
+/// Write a corpus manifest pointing at one or more local `(path, sha)` repos and
+/// return the manifest path (kept alive by the caller-owned `dir`).
+fn write_calibrate_manifest(dir: &std::path::Path, repos: &[(&str, &str)]) -> std::path::PathBuf {
+    use std::fmt::Write as _;
+    let mut toml = String::new();
+    for (source, sha) in repos {
+        let _ = write!(
+            toml,
+            "[[repos]]\nsource = {source:?}\nsha = {sha:?}\nlanguages = [\"rust\"]\n\n"
+        );
+    }
+    let path = dir.join("corpus.toml");
+    std::fs::write(&path, toml).expect("write manifest");
+    path
+}
+
+/// A manifest of two local fixture repos builds an artifact that parses through
+/// the library's own load/validate path, with a non-empty, monotone rust table.
+#[test]
+fn calibrate_builds_artifact_from_local_fixtures() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let bio = codelore_lib::test_support::biomarker_repo::build();
+    let work = tempfile::tempdir().expect("tempdir");
+    let cache = tempfile::tempdir().expect("cache tempdir");
+
+    let manifest = write_calibrate_manifest(
+        work.path(),
+        &[
+            (tiny.dir.path().to_str().unwrap(), &tiny.head_sha),
+            (bio.dir.path().to_str().unwrap(), &bio.head_sha),
+        ],
+    );
+    let out = work.path().join("world.calib.json");
+
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "calibrate",
+            "--repos",
+            manifest.to_str().unwrap(),
+            "--output",
+            out.to_str().unwrap(),
+            "--cache-dir",
+            cache.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    assert!(out.exists(), "artifact file must be written");
+    let art = codelore_lib::calibration::load(&out).expect("artifact parses + validates");
+    assert_eq!(art.repos_attempted, 2);
+    assert_eq!(art.repos_included, 2);
+
+    let rust = art
+        .languages
+        .iter()
+        .find(|l| l.language == "rust")
+        .expect("rust table present");
+    assert!(
+        rust.sample_functions > 0,
+        "rust must have pooled at least one function"
+    );
+    // Every metric's breakpoint vector is full-length and non-decreasing — the
+    // same invariant `load` already enforced, re-asserted here as the test's
+    // own contract on the built artifact.
+    for stratum in &rust.strata {
+        for metric in &stratum.metrics {
+            assert_eq!(
+                metric.quantiles.len(),
+                codelore_lib::calibration::QUANTILE_POINTS
+            );
+            assert!(
+                metric.quantiles.windows(2).all(|w| w[1] >= w[0]),
+                "metric {:?} quantiles must be monotone",
+                metric.metric
+            );
+        }
+    }
+}
+
+/// A manifest with one good repo and one nonexistent path: the bad repo is
+/// warned about and skipped, the run still exits 0, and the artifact records
+/// `attempted == 2`, `included == 1`.
+#[test]
+fn calibrate_skips_unreachable_repo_and_exits_zero() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let work = tempfile::tempdir().expect("tempdir");
+    let cache = tempfile::tempdir().expect("cache tempdir");
+
+    let missing = work.path().join("does-not-exist");
+    let manifest = write_calibrate_manifest(
+        work.path(),
+        &[
+            (tiny.dir.path().to_str().unwrap(), &tiny.head_sha),
+            (missing.to_str().unwrap(), "deadbeef"),
+        ],
+    );
+    let out = work.path().join("world.calib.json");
+
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "calibrate",
+            "--repos",
+            manifest.to_str().unwrap(),
+            "--output",
+            out.to_str().unwrap(),
+            "--cache-dir",
+            cache.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("skip"));
+
+    let art = codelore_lib::calibration::load(&out).expect("artifact parses");
+    assert_eq!(art.repos_attempted, 2);
+    assert_eq!(art.repos_included, 1);
+}
+
+/// `--merge` folds a prior artifact into a fresh build over the same repo, so
+/// the pooled rust sample count doubles versus the standalone build.
+#[test]
+fn calibrate_merge_doubles_sample_counts() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let work = tempfile::tempdir().expect("tempdir");
+    let cache = tempfile::tempdir().expect("cache tempdir");
+
+    let manifest = write_calibrate_manifest(
+        work.path(),
+        &[(tiny.dir.path().to_str().unwrap(), &tiny.head_sha)],
+    );
+
+    // Base build.
+    let base = work.path().join("base.calib.json");
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "calibrate",
+            "--repos",
+            manifest.to_str().unwrap(),
+            "--output",
+            base.to_str().unwrap(),
+            "--cache-dir",
+            cache.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let base_art = codelore_lib::calibration::load(&base).expect("base parses");
+    let base_rust = base_art
+        .languages
+        .iter()
+        .find(|l| l.language == "rust")
+        .expect("rust in base")
+        .sample_functions;
+
+    // Merge the base artifact into a rebuild over the same repo.
+    let merged = work.path().join("merged.calib.json");
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "calibrate",
+            "--repos",
+            manifest.to_str().unwrap(),
+            "--output",
+            merged.to_str().unwrap(),
+            "--merge",
+            base.to_str().unwrap(),
+            "--cache-dir",
+            cache.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let merged_art = codelore_lib::calibration::load(&merged).expect("merged parses");
+    let merged_rust = merged_art
+        .languages
+        .iter()
+        .find(|l| l.language == "rust")
+        .expect("rust in merged")
+        .sample_functions;
+    assert_eq!(merged_rust, base_rust * 2, "merge must sum sample counts");
+    assert_eq!(merged_art.repos_included, 2, "merge sums repos_included");
 }

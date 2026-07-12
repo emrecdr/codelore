@@ -561,15 +561,18 @@ score = 100 × (1 − 0.50 · structural_risk
                − 0.20 · ownership_fv)
 ```
 
-`structural_risk` is a bounded weighted sum of five biomarkers:
+`structural_risk` is a bounded weighted sum of eight biomarkers:
 
 | Biomarker | Weight | Intensity source |
 |---|---|---|
-| Complex Method | 0.30 | per-language `PERCENT_RANK` of file's max cyclomatic |
-| God Class | 0.25 | per-language `PERCENT_RANK` of god_score |
-| Large Method | 0.15 | per-language `PERCENT_RANK` of file's max LOC |
-| DRY (clone density) | 0.15 | per-language `PERCENT_RANK` of clone count |
-| Shotgun Surgery | 0.15 | `PERCENT_RANK` of Fisher-significant coupling-partner count |
+| Complex Method | 0.22 | per-language `PERCENT_RANK` of file's max cyclomatic |
+| God Class | 0.18 | per-language `PERCENT_RANK` of god_score |
+| Large Method | 0.12 | per-language `PERCENT_RANK` of file's max LOC |
+| DRY (clone density) | 0.12 | per-language `PERCENT_RANK` of clone count |
+| Shotgun Surgery | 0.12 | `PERCENT_RANK` of Fisher-significant coupling-partner count |
+| Deep Nesting | 0.10 | per-language `PERCENT_RANK` of file's max nesting depth |
+| Many Args | 0.07 | per-language `PERCENT_RANK` of file's max argument count |
+| Complex Conditional | 0.07 | per-language `PERCENT_RANK` of file's max boolean-operator count |
 
 Weights sum to 1.0 so `structural_risk ∈ [0, 1]`. Each row also
 carries a `band` (`red` when `structural_risk ≥ 0.55`, `yellow` ≥

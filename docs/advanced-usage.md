@@ -52,7 +52,7 @@ CodeLore ships **54 behavioral analyses** across four tiers. The table below is 
 | Analysis | What you ask it | Formula / source | When to reach for it |
 |---|---|---|---|
 | `hotspots` ★ | "Which files are both complex AND change a lot?" | `percentile_rank(revs) × percentile_rank(cognitive) × (100 − code_health) / 4` — `code_health` here is the inline cognitive-only proxy `100 × (1 − 0.40 · normalize(cognitive))` ∈ [60, 100], so the unscaled product caps at 40; dividing by 4 maps output to [0, 10] ([see design spec](superpowers/specs/2026-06-06-codelore-design.md)) | The headline ranking signal — refactor priorities |
-| `code-health` ★ | "How healthy is each file's structure?" | Biomarker composite: `100 × (1 − 0.50·structural_risk − 0.30·churn − 0.20·ownership_fv)`; `structural_risk` = weighted sum of five biomarkers — Complex Method (0.30), God Class (0.25), Large Method (0.15), DRY (0.15), Shotgun Surgery (0.15); each intensity is a per-language `PERCENT_RANK`; score ∈ [0, 100] (higher = healthier); each row carries a `band` (red ≥ 0.55 / yellow ≥ 0.28 / green) and per-language `percentile` of `structural_risk` | Multi-dimensional file-quality score with explicit biomarker breakdown; used as the composite gate in `codelore check code_health_min` |
+| `code-health` ★ | "How healthy is each file's structure?" | Biomarker composite: `100 × (1 − 0.50·structural_risk − 0.30·churn − 0.20·ownership_fv)`; `structural_risk` = weighted sum of eight biomarkers — Complex Method (0.22), God Class (0.18), Large Method (0.12), DRY (0.12), Shotgun Surgery (0.12), Deep Nesting (0.10), Many Args (0.07), Complex Conditional (0.07); each intensity is a per-language `PERCENT_RANK`; score ∈ [0, 100] (higher = healthier); each row carries a `band` (red ≥ 0.55 / yellow ≥ 0.28 / green) and per-language `percentile` of `structural_risk` | Multi-dimensional file-quality score with explicit biomarker breakdown; used as the composite gate in `codelore check code_health_min` |
 | `clones` ★ | "Where is code copy-pasted?" | Type 1 + Type 2 via AST structural hashing on tree-sitter | Refactoring candidates |
 | `clone-coupling` ★ | "Which copy-pasted blocks ALSO change together?" (the strategic differentiator) | Clones JOIN coupling, Fisher-significant only | Live debt that hurts you on every change |
 | `hotspot-velocity` ★ | "Which files are *accelerating* in churn?" | Recent vs baseline change rate | Early warning: a file becoming a hotspot before its all-time count shows it |
@@ -315,6 +315,78 @@ Rows are sorted by `p_value` ascending (`null` first), then `confidence` descend
 Pairs with a low p-value and high confidence are the highest-priority candidates for extract-and-share refactoring — they suggest the two functions are implicitly coupled and would benefit from a shared abstraction. Research baseline: Adams et al. ICSM 2006.
 
 Supports `csv`, `json`, and `markdown` output.
+
+### The biomarker composite (`structural_risk`)
+
+`code-health` scores each file's structure by combining eight structural smells into a single `structural_risk ∈ [0, 1]`, which drives the composite score `100 × (1 − 0.50·structural_risk − 0.30·churn − 0.20·ownership_fv)`. Each smell contributes a per-file **intensity** ∈ [0, 1] weighted as follows (weights sum to 1.0, ordered by defect-correlation strength):
+
+| Smell | Weight | Driver |
+|---|---|---|
+| complex-method | 0.22 | per-file MAX cyclomatic |
+| god-class | 0.18 | cognitive × (fan-in + fan-out) |
+| large-method | 0.12 | per-file MAX LOC |
+| dry | 0.12 | clone count |
+| shotgun-surgery | 0.12 | Fisher-significant coupling-partner count |
+| deep-nesting | 0.10 | per-file MAX nesting depth |
+| many-args | 0.07 | per-file MAX argument count |
+| complex-conditional | 0.07 | per-file MAX boolean-operator count |
+
+The complexity-driven intensities (complex-method, large-method, god-class, dry, deep-nesting, many-args, complex-conditional) are each a per-language `PERCENT_RANK` of the file's worst value across the analyzed file set, so a smell's intensity is *relative to the rest of this repository*. When clones are excluded from a run, the DRY term drops and the remaining weights are renormalized by `/ 0.88`.
+
+**LCOM4 (lack-of-cohesion) is not among the smells** — this is the current contract, not an oversight. CodeLore does not extract field↔method membership for any language, so no cohesion metric is computed; the composite ships the eight smells above and no cohesion term.
+
+### Corpus-relative percentiles
+
+The eight-smell composite above answers "how does this file rank *within this repository*." Corpus-relative percentiles answer a different question: **"how does this file's raw complexity compare to the wider world?"** Each `code-health` row carries an optional `corpus_percentile ∈ [0, 1]`.
+
+**What the number means.** For each file, CodeLore takes the file's worst per-metric value across five raw dimensions — `cyclomatic`, `cognitive`, `sloc`, `nargs`, `max_nesting` — and looks each up in a **per-language** reference distribution, then keeps the **maximum** of the resolved per-metric percentiles. So `corpus_percentile` is *the file's worst standing on any single raw dimension versus the corpus*, not an average. The reading is a CDF: a value of `0.74` means `P(X ≤ value) = 0.74` — roughly 74% of the corpus's functions in that language sit at or below this file's worst dimension. A companion `beyond_corpus` boolean is set when the file's value exceeds the corpus maximum for a metric (percentile pins to `1.0`). Percentiles are **additive**: a run with no active reference corpus leaves every pre-existing field (`path`, `cognitive`, `score`, `structural_risk`, `percentile`, `band`) byte-identical to a run without the lens.
+
+The percentile is `None` (absent from output) for a file when its language is unknown to the reference corpus, when that language was pooled below the trust floor (500 sampled functions), or when none of the file's metrics resolve.
+
+**The artifact and its vintage.** The reference distribution is a *calibration artifact*: compact JSON holding, per language, a 1001-point quantile-breakpoint vector for each metric — aggregated numeric distributions only, no source code. Each artifact carries a `corpus_vintage` label recording which corpus and era it represents. CodeLore ships an **embedded world corpus** (vintage `world-2026-07`, pooled from permissive-license open-source projects across the five Tier-1 languages: rust, python, java, javascript, typescript) that activates the lens by default — no configuration required. Pass `--calibration <artifact.json>` on `analyze` or `check` to override the embedded corpus with a hand-built or organization-specific one. Whichever artifact the lens actually applies is stamped into the provenance manifest as `corpus_vintage`, so a report records exactly which reference it was measured against.
+
+**Building your own corpus with `codelore calibrate`.** To compare against your own organization's code rather than the public world, build a private artifact:
+
+```sh
+codelore calibrate \
+  --repos org-corpus.toml \
+  --vintage acme-2026-07 \
+  --output acme.calib.json
+```
+
+The manifest is TOML; each `[[repos]]` entry names a `source` (clone URL or local path), a pinned `sha`, and the advisory `languages` it contributes:
+
+```toml
+[[repos]]
+source = "https://github.com/acme/service-a"
+sha = "a1b2c3d4e5f6..."
+languages = ["rust"]
+
+[[repos]]
+source = "/abs/path/to/local/checkout"
+sha = "0f1e2d3c4b5a..."
+languages = ["typescript"]
+```
+
+`calibrate` ingests each repo at its pinned SHA, pools per-function raw metrics per language (by file extension — the `languages` field is advisory, not a filter), and reduces each pool to quantile vectors. A repo that fails to clone, check out, or ingest is skipped with a logged reason; the artifact's `repos_included` / `repos_attempted` record the tally. Point analysis at the result with `--calibration acme.calib.json`, and use a distinct vintage label (e.g. `acme-2026-07`) so provenance stamps stay unambiguous. Use `--cache-dir` to redirect the per-repo ingest cache to scratch storage.
+
+`--merge <existing.json>` folds a new build into an existing artifact via sample-count-weighted quantile blending. This is an **approximation** — exact pooled re-quantiling requires retaining the raw per-function observations, which the quantile-only artifact does not. For an exact combined corpus, re-run `calibrate` over the union of both manifests instead of merging.
+
+### The `corpus_percentile_max` gate
+
+`codelore check` supports a `corpus_percentile_max` gate: it fails when any file's `corpus_percentile` exceeds the configured ceiling.
+
+```toml
+[gates]
+corpus_percentile_max = 0.9
+```
+
+**When the gate skips (read this carefully).** The gate records a `skipped` verdict — neither pass nor fail — whenever **no code-health row resolves a corpus percentile**. That happens in more than one situation, and the honest description is: *there is no percentile data to gate on.* Concretely, the skip fires when
+
+- no calibration artifact is active (no `--calibration` file and the embedded corpus is a not-yet-built placeholder), **or**
+- an artifact *is* active, but none of the analyzed files produce a percentile — e.g. every covered language was pooled below the 500-function trust floor, every file is in a language the corpus doesn't cover, or the health scan produced no rows at all.
+
+The stderr notice printed on skip mentions passing `--calibration`, but the underlying condition is broader than "no artifact": it is "no row carried a percentile." If you see a skip while an artifact is embedded, check that your repository's languages are covered *and* cleared the sample floor in that artifact.
 
 ### Guided tour
 

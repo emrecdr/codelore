@@ -24,7 +24,12 @@ use time::OffsetDateTime;
 /// schema to NOT NULL on all four offsets, composite PRIMARY KEY
 /// `(rev, path, old_start, new_start)`, and a `(rev, path)` index
 /// for the `apply_grouping` FK clean-up.
-pub const SCHEMA_VERSION: u8 = 4;
+///
+/// Schema 5 added `nargs INTEGER` and `bool_ops INTEGER` to
+/// `complexity_metrics` and wired the previously-extracted nesting,
+/// argument-count, and boolean-conditional metrics through to the
+/// persisted table.
+pub const SCHEMA_VERSION: u8 = 5;
 
 /// One commit, as observed by the parser stage. Immutable event.
 // Eq removed: CommitEvent contains Option<KameiFeatures> which has f64 fields (not Eq).

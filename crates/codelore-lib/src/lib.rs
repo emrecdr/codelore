@@ -10,6 +10,7 @@ pub mod arch_rules;
 pub mod arrow_facade;
 pub mod bands;
 pub mod cache;
+pub mod calibration;
 pub mod cli_api;
 pub mod clones;
 pub mod complexity;

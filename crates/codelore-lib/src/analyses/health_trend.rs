@@ -400,6 +400,8 @@ mod tests {
                 structural_risk: 0.0,
                 percentile: 0.0,
                 band: "green".into(),
+                corpus_percentile: None,
+                beyond_corpus: false,
             },
             CodeHealthRow {
                 path: "b".into(),
@@ -408,6 +410,8 @@ mod tests {
                 structural_risk: 0.0,
                 percentile: 0.0,
                 band: "yellow".into(),
+                corpus_percentile: None,
+                beyond_corpus: false,
             },
         ];
         assert!((repo_code_health(&rows) - 70.0).abs() < 1e-9);

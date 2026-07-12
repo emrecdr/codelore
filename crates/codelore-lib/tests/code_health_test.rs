@@ -1,5 +1,11 @@
+use std::io::Write as _;
+
 use codelore_lib::Options;
 use codelore_lib::analyses::code_health::run_code_health;
+use codelore_lib::calibration::{
+    CALIBRATION_FORMAT_VERSION, CalibrationArtifact, LanguageTable, MetricQuantiles,
+    QUANTILE_POINTS, Stratum,
+};
 use codelore_lib::facts::FactsDb;
 use codelore_lib::repo::GixRepo;
 
@@ -377,12 +383,99 @@ fn code_health_biomarkers_fire_distinct_smells() {
         .expect("smells")
         .into_iter()
         .collect();
-    for expected in ["complex-method", "large-method", "dry", "shotgun-surgery"] {
+    for expected in [
+        "complex-method",
+        "large-method",
+        "dry",
+        "shotgun-surgery",
+        "deep-nesting",
+        "many-args",
+        "complex-conditional",
+    ] {
         assert!(
             smells.contains(expected),
             "expected smell {expected} to fire on the fixture, got {smells:?}"
         );
     }
+}
+
+/// The intensity a given smell carries for a file in the biomarker table.
+/// Returns `None` when the file has no row for that smell. Used by the
+/// per-smell firing tests below.
+fn smell_intensity(db: &FactsDb, path: &str, smell: &str) -> Option<f64> {
+    codelore_lib::analyses::query::query_map_collect(
+        db,
+        "SELECT intensity FROM code_health_biomarkers_v1 WHERE path = ? AND smell = ?",
+        duckdb::params![path, smell],
+        "smell-intensity",
+        |r| r.get::<_, f64>(0),
+    )
+    .expect("query smell intensity")
+    .into_iter()
+    .next()
+}
+
+/// `deep-nesting` fires on `src/nested.rs` — its `deeply_nested` function
+/// reaches `max_nesting == 5`, the top of the Rust file distribution, so the
+/// per-language `PERCENT_RANK` of its per-file MAX nesting is a positive
+/// intensity.
+#[test]
+fn deep_nesting_biomarker_fires_on_nested_file() {
+    let fx = codelore_lib::test_support::biomarker_repo::build();
+    let repo = GixRepo::open(fx.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = biomarker_opts(fx.dir.path());
+    db.ingest(&repo, &opts).expect("ingest");
+    let _ = run_code_health(&db, &opts).expect("run");
+
+    let intensity = smell_intensity(&db, "src/nested.rs", "deep-nesting")
+        .expect("nested.rs should carry a deep-nesting biomarker row");
+    assert!(
+        intensity > 0.0,
+        "deep-nesting intensity for src/nested.rs must be > 0, got {intensity}"
+    );
+}
+
+/// `many-args` fires on `src/many_args.rs` — its `many_args` function takes
+/// `nargs == 7`, the maximum in the Rust file distribution, so its per-file MAX
+/// nargs ranks at the top of the per-language `PERCENT_RANK`.
+#[test]
+fn many_args_biomarker_fires_on_many_args_file() {
+    let fx = codelore_lib::test_support::biomarker_repo::build();
+    let repo = GixRepo::open(fx.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = biomarker_opts(fx.dir.path());
+    db.ingest(&repo, &opts).expect("ingest");
+    let _ = run_code_health(&db, &opts).expect("run");
+
+    let intensity = smell_intensity(&db, "src/many_args.rs", "many-args")
+        .expect("many_args.rs should carry a many-args biomarker row");
+    assert!(
+        intensity > 0.0,
+        "many-args intensity for src/many_args.rs must be > 0, got {intensity}"
+    );
+}
+
+/// `complex-conditional` fires on `src/conditional.rs` — its `gate` function's
+/// single `if` chains four boolean operators (`bool_ops == 3`), the only file
+/// with a non-zero boolean-operator count, so it ranks at the top of the
+/// per-language `PERCENT_RANK` over per-file MAX `bool_ops`. This also exercises
+/// the `bool_ops` metric flowing end to end through the composite.
+#[test]
+fn complex_conditional_biomarker_fires_on_conditional_file() {
+    let fx = codelore_lib::test_support::biomarker_repo::build();
+    let repo = GixRepo::open(fx.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = biomarker_opts(fx.dir.path());
+    db.ingest(&repo, &opts).expect("ingest");
+    let _ = run_code_health(&db, &opts).expect("run");
+
+    let intensity = smell_intensity(&db, "src/conditional.rs", "complex-conditional")
+        .expect("conditional.rs should carry a complex-conditional biomarker row");
+    assert!(
+        intensity > 0.0,
+        "complex-conditional intensity for src/conditional.rs must be > 0, got {intensity}"
+    );
 }
 
 /// Locks the code-health CSV column contract (order + names). refactoring-targets
@@ -397,17 +490,113 @@ fn code_health_csv_column_contract() {
         structural_risk: 0.3,
         percentile: 0.5,
         band: "yellow".to_string(),
+        corpus_percentile: None,
+        beyond_corpus: false,
     }];
     let mut buf: Vec<u8> = Vec::new();
     codelore_lib::output::csv::write_code_health_csv(&rows, &mut buf).expect("csv");
     let out = String::from_utf8(buf).expect("utf8");
     assert_eq!(
         out.lines().next().unwrap(),
-        "entity,cognitive,score,structural_risk,percentile,band"
+        "entity,cognitive,score,structural_risk,percentile,band,corpus-pct"
     );
     assert!(
         out.lines().nth(1).unwrap().starts_with("src/x.rs,"),
         "data row should carry the path"
+    );
+}
+
+/// `corpus-pct` column: populated when `corpus_percentile` is `Some`,
+/// empty when `None`, and `beyond_corpus` does not affect the rendered value.
+#[test]
+fn code_health_csv_corpus_pct_populated_and_none() {
+    use codelore_lib::analyses::code_health::CodeHealthRow;
+    let make = |cp: Option<f64>, bc: bool| CodeHealthRow {
+        path: "f.rs".into(),
+        cognitive: 1.0,
+        score: 50.0,
+        structural_risk: 0.1,
+        percentile: 0.2,
+        band: "green".into(),
+        corpus_percentile: cp,
+        beyond_corpus: bc,
+    };
+    let rows = vec![
+        make(Some(0.75), false),
+        make(Some(1.0), true),
+        make(None, false),
+    ];
+    let mut buf: Vec<u8> = Vec::new();
+    codelore_lib::output::csv::write_code_health_csv(&rows, &mut buf).expect("csv");
+    let csv = String::from_utf8(buf).expect("utf8");
+    let lines: Vec<&str> = csv.lines().collect();
+    // header
+    assert!(
+        lines[0].ends_with(",corpus-pct"),
+        "header must end with corpus-pct"
+    );
+    // row 0: populated, beyond_corpus false → raw value
+    assert!(
+        lines[1].ends_with(",0.75"),
+        "populated row must carry the corpus-pct value: {}",
+        lines[1]
+    );
+    // row 1: populated, beyond_corpus true → raw value (beyond_corpus doesn't change cell)
+    assert!(
+        lines[2].ends_with(",1.00"),
+        "beyond-corpus row must carry 1.00: {}",
+        lines[2]
+    );
+    // row 2: None → empty cell (trailing comma, no value)
+    assert!(
+        lines[3].ends_with(','),
+        "None row must emit empty corpus-pct cell: {}",
+        lines[3]
+    );
+}
+
+/// `Corpus percentile` column in the markdown emitter: populated when
+/// `corpus_percentile` is `Some`, em-dash when `None`.
+#[test]
+fn code_health_markdown_corpus_pct_column() {
+    use codelore_lib::analyses::code_health::CodeHealthRow;
+    let make = |cp: Option<f64>, bc: bool| CodeHealthRow {
+        path: "f.rs".into(),
+        cognitive: 1.0,
+        score: 50.0,
+        structural_risk: 0.1,
+        percentile: 0.2,
+        band: "green".into(),
+        corpus_percentile: cp,
+        beyond_corpus: bc,
+    };
+    let rows = vec![
+        make(Some(0.74), false),
+        make(Some(1.0), true),
+        make(None, false),
+    ];
+    let mut buf: Vec<u8> = Vec::new();
+    codelore_lib::output::markdown::write_code_health_markdown(&rows, &mut buf).expect("md");
+    let md = String::from_utf8(buf).expect("utf8");
+    // Header must include the new column
+    assert!(
+        md.contains("Corpus percentile"),
+        "markdown header must contain 'Corpus percentile'"
+    );
+    // Populated row: rendered as integer percent
+    assert!(
+        md.contains("74%"),
+        "populated corpus_percentile 0.74 must render as 74%: {md}"
+    );
+    // beyond_corpus row: rendered with '+' suffix
+    assert!(
+        md.contains("100%+"),
+        "beyond_corpus row must render as 100%+: {md}"
+    );
+    // None row: em-dash
+    assert!(
+        md.contains("—"),
+        "None corpus_percentile must render as em-dash"
     );
 }
 
@@ -438,8 +627,8 @@ fn scoped_no_clones_excludes_dry_and_renormalizes() {
 
     // `big.rs` (large-method, unique — no clone) carries no DRY term, so
     // dropping DRY leaves its weighted biomarker sum untouched: only the
-    // `/0.85` renormalization applies. Its no-clones risk is therefore exactly
-    // the HEAD risk divided by 0.85, proving the renormalization divisor is
+    // `/0.88` renormalization applies. Its no-clones risk is therefore exactly
+    // the HEAD risk divided by 0.88, proving the renormalization divisor is
     // wired. (Not a `>=` score relation — renormalization deliberately RAISES a
     // no-duplication file's risk; the no-clones series is internally consistent
     // with itself, not comparable to the with-DRY HEAD score.)
@@ -450,12 +639,12 @@ fn scoped_no_clones_excludes_dry_and_renormalizes() {
         "big.rs must carry a non-DRY smell for this check"
     );
     assert!(
-        (big_nodry - big_head / 0.85).abs() < 1e-6,
-        "renorm: big.rs no-clones risk {big_nodry} must equal HEAD {big_head} / 0.85"
+        (big_nodry - big_head / 0.88).abs() < 1e-6,
+        "renorm: big.rs no-clones risk {big_nodry} must equal HEAD {big_head} / 0.88"
     );
 
     // `dup_a.rs` is a clone of `dup_b.rs`, so at HEAD it carries a DRY term.
-    // Excluding DRY removes that term; even after the `/0.85` bump the net risk
+    // Excluding DRY removes that term; even after the `/0.88` bump the net risk
     // DROPS below HEAD, proving the DRY biomarker was present and is now gone.
     let dup_head = risk(&head, "dup_a.rs");
     let dup_nodry = risk(&no_dry, "dup_a.rs");
@@ -577,6 +766,185 @@ fn code_health_band_matches_thresholds() {
             r.band, expected,
             "band {} != expected {} for structural_risk {}",
             r.band, expected, r.structural_risk
+        );
+    }
+}
+
+// ─── corpus-percentile lens (additive) ───────────────────────────────────────
+
+/// A `QUANTILE_POINTS`-long breakpoint vector rising linearly from `min` to
+/// `max`, so `q[i] == min + (max - min) * i / (QUANTILE_POINTS - 1)`. With
+/// `min = 0`, `max = 1000` the breakpoint index equals the value, so a metric
+/// value of `v` resolves to corpus percentile `v / 1000`.
+#[allow(clippy::cast_precision_loss)]
+fn linear_quantiles(min: f64, max: f64) -> Vec<f64> {
+    let last = (QUANTILE_POINTS - 1) as f64;
+    (0..QUANTILE_POINTS)
+        .map(|i| min + (max - min) * (i as f64) / last)
+        .collect()
+}
+
+/// Every corpus metric for `language` carries the same `0..=1000` linear ramp
+/// and a sample count above the floor, so any file's per-metric percentile is
+/// its raw value / 1000. Covers only the named language(s) — a file in any
+/// other language falls outside the artifact and gets `corpus_percentile: None`.
+fn ramp_artifact(languages: &[&str]) -> CalibrationArtifact {
+    let metrics = ["cyclomatic", "cognitive", "sloc", "nargs", "max_nesting"];
+    CalibrationArtifact {
+        format_version: CALIBRATION_FORMAT_VERSION,
+        corpus_vintage: "test-ramp".to_string(),
+        generated_at: "2026-07-12T00:00:00Z".to_string(),
+        repos_included: 2,
+        repos_attempted: 2,
+        languages: languages
+            .iter()
+            .map(|lang| LanguageTable {
+                language: (*lang).to_string(),
+                sample_functions: 4_000,
+                strata: vec![Stratum {
+                    sloc_min: 0,
+                    sloc_max: u64::MAX,
+                    metrics: metrics
+                        .iter()
+                        .map(|m| MetricQuantiles {
+                            metric: (*m).to_string(),
+                            quantiles: linear_quantiles(0.0, 1000.0),
+                        })
+                        .collect(),
+                }],
+            })
+            .collect(),
+    }
+}
+
+fn write_calibration(art: &CalibrationArtifact) -> tempfile::TempPath {
+    let mut f = tempfile::Builder::new()
+        .prefix("code-health-calib")
+        .suffix(".calib.json")
+        .tempfile()
+        .expect("create temp artifact");
+    f.write_all(&serde_json::to_vec(art).expect("serialize"))
+        .expect("write artifact");
+    f.into_temp_path()
+}
+
+/// THE ADDITIVITY CONTRACT (the plan's non-negotiable). Running code-health with
+/// a calibration artifact must not perturb ANY pre-existing field: the corpus
+/// lens is a pure additive post-pass join. We run twice on `biomarker_repo` —
+/// once with the default artifact resolution (the embedded world corpus),
+/// once with an explicit covering rust ramp artifact — and
+/// assert every shipped field (`path`, `cognitive`, `score`, `structural_risk`,
+/// `percentile`, `band`) is byte-identical between the two runs. Since the new
+/// fields carry `skip_serializing_if`, stripping them is equivalent to matching
+/// the shipped serialized form.
+#[test]
+fn corpus_lens_is_additive_over_shipped_fields() {
+    let fx = codelore_lib::test_support::biomarker_repo::build();
+    let repo = GixRepo::open(fx.dir.path()).expect("open");
+
+    let run = |calibration: Option<std::path::PathBuf>| {
+        let db = FactsDb::new_in_memory().expect("db");
+        db.ingest(&repo, &biomarker_opts(fx.dir.path()))
+            .expect("ingest");
+        let opts = Options {
+            calibration,
+            ..biomarker_opts(fx.dir.path())
+        };
+        run_code_health(&db, &opts).expect("run")
+    };
+
+    let calib = write_calibration(&ramp_artifact(&["rust"]));
+    let without = run(None);
+    let with = run(Some(calib.to_path_buf()));
+
+    assert!(!without.is_empty(), "fixture must yield scored rows");
+    assert_eq!(
+        without.len(),
+        with.len(),
+        "the corpus pass must not add or drop rows"
+    );
+
+    // The shipped fields, serialized. Reuse the row's own serde but drop the two
+    // additive keys — that is exactly the "strip the new fields" the plan asks.
+    let shipped = |row: &codelore_lib::analyses::code_health::CodeHealthRow| -> serde_json::Value {
+        let mut v = serde_json::to_value(row).expect("serialize row");
+        let obj = v.as_object_mut().expect("row is an object");
+        obj.remove("corpus_percentile");
+        obj.remove("beyond_corpus");
+        v
+    };
+
+    for (a, b) in without.iter().zip(with.iter()) {
+        assert_eq!(
+            shipped(a),
+            shipped(b),
+            "corpus calibration perturbed a shipped field for {}",
+            a.path
+        );
+    }
+
+    // Non-vacuity: at least one row must actually carry a corpus percentile in
+    // the calibrated run, or the additivity check would pass trivially.
+    assert!(
+        with.iter().any(|r| r.corpus_percentile.is_some()),
+        "the covering rust artifact must populate corpus_percentile on ≥1 rust file"
+    );
+}
+
+/// With a covering artifact, every rust file's `corpus_percentile` is populated
+/// and in range; when the artifact covers only a language the repo lacks, every
+/// row stays `None` (unknown-language contract) and no shipped field moves.
+#[test]
+fn corpus_lens_populates_covered_language_and_skips_others() {
+    let fx = codelore_lib::test_support::biomarker_repo::build();
+    let repo = GixRepo::open(fx.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    db.ingest(&repo, &biomarker_opts(fx.dir.path()))
+        .expect("ingest");
+
+    // Covering artifact (rust): rust files get a percentile in [0,1].
+    let rust_calib = write_calibration(&ramp_artifact(&["rust"]));
+    let covered = {
+        let opts = Options {
+            calibration: Some(rust_calib.to_path_buf()),
+            ..biomarker_opts(fx.dir.path())
+        };
+        run_code_health(&db, &opts).expect("run covered")
+    };
+    let rust_rows: Vec<_> = covered
+        .iter()
+        .filter(|r| {
+            codelore_lib::complexity::Tier1Language::from_path(&r.path)
+                == Some(codelore_lib::complexity::Tier1Language::Rust)
+        })
+        .collect();
+    assert!(!rust_rows.is_empty(), "fixture is rust");
+    for r in &rust_rows {
+        let p = r
+            .corpus_percentile
+            .unwrap_or_else(|| panic!("rust file {} must carry a corpus percentile", r.path));
+        assert!(
+            (0.0..=1.0).contains(&p),
+            "corpus percentile in [0,1] for {}: {p}",
+            r.path
+        );
+    }
+
+    // Non-covering artifact (python only): rust files fall outside → all None.
+    let py_calib = write_calibration(&ramp_artifact(&["python"]));
+    let uncovered = {
+        let opts = Options {
+            calibration: Some(py_calib.to_path_buf()),
+            ..biomarker_opts(fx.dir.path())
+        };
+        run_code_health(&db, &opts).expect("run uncovered")
+    };
+    for r in &uncovered {
+        assert!(
+            r.corpus_percentile.is_none() && !r.beyond_corpus,
+            "a rust file must get None from a python-only artifact, got {:?} for {}",
+            r.corpus_percentile,
+            r.path
         );
     }
 }

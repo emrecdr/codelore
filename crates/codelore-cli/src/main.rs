@@ -16,7 +16,9 @@ use codelore_lib::cli_api::{AnalysisName, CodeLoreError, Options};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 
-use crate::args::{AnalyzeArgs, CheckFormat, Cli, Command, DiffArgs, IngestSarifArgs, McpArgs};
+use crate::args::{
+    AnalyzeArgs, CalibrateArgs, CheckFormat, Cli, Command, DiffArgs, IngestSarifArgs, McpArgs,
+};
 
 fn main() {
     if let Err(e) = run() {
@@ -49,6 +51,7 @@ fn run() -> Result<()> {
         Command::Check(args) => run_check_cmd(&args),
         Command::Mcp(args) => run_mcp_cmd(&args),
         Command::IngestSarif(args) => run_ingest_sarif_cmd(&args),
+        Command::Calibrate(args) => run_calibrate_cmd(&args),
     }
 }
 
@@ -118,6 +121,302 @@ fn run_ingest_sarif_cmd(args: &IngestSarifArgs) -> Result<()> {
     Ok(())
 }
 
+/// Build a corpus-calibration artifact from a manifest of pinned repos.
+///
+/// For each `[[repos]]` entry the repo is checked out at its pinned SHA in a
+/// throwaway location, ingested through the standard pipeline, and its
+/// per-function raw metrics (`cyclomatic`, `cognitive`, `sloc`, `nargs`,
+/// `max_nesting`) pooled per language (derived from each file's extension). The
+/// pooled distributions are reduced to quantile breakpoints by the calibration
+/// builder. A repo that fails to check out or ingest is warned about and
+/// skipped; the run still succeeds and the artifact's `repos_attempted` /
+/// `repos_included` counts record the tally. With `--merge`, the build is folded
+/// into an existing artifact via the library's weighted-blend merge.
+fn run_calibrate_cmd(args: &CalibrateArgs) -> Result<()> {
+    use codelore_lib::calibration::{self, LangObservations};
+    use codelore_lib::cli_api::cache::default_cache_root;
+    use codelore_lib::cli_api::quality_gates::ledger::now_utc_ts;
+
+    let cache_root = args.cache_dir.clone().unwrap_or_else(default_cache_root);
+    let generated_at = now_utc_ts();
+    // Default vintage is `corpus-YYYY-MM`, sliced from the RFC 3339 timestamp
+    // (`YYYY-MM-DDT…`) so we reuse the one timestamp helper rather than pull in
+    // date formatting.
+    let vintage = args
+        .vintage
+        .clone()
+        .unwrap_or_else(|| format!("corpus-{}", &generated_at[..7]));
+
+    let manifest = calibration::load_manifest(&args.repos).context("load corpus manifest")?;
+
+    let mut obs = LangObservations::new();
+    let mut attempted: u32 = 0;
+    let mut included: u32 = 0;
+
+    for repo in &manifest.repos {
+        attempted += 1;
+        eprintln!("calibrate: {} @ {}", repo.source, repo.sha);
+        match calibrate_one_repo(&repo.source, &repo.sha, &cache_root, &mut obs) {
+            Ok(()) => included += 1,
+            Err(e) => eprintln!("calibrate: skip {} @ {}: {e:#}", repo.source, repo.sha),
+        }
+    }
+
+    let mut artifact = calibration::build_from_observations(&vintage, &generated_at, &obs);
+    artifact.repos_attempted = attempted;
+    artifact.repos_included = included;
+
+    if let Some(merge_path) = &args.merge {
+        let base = calibration::load(merge_path)
+            .with_context(|| format!("load --merge artifact {}", merge_path.display()))?;
+        artifact = calibration::merge(base, artifact);
+    }
+
+    let json = serde_json::to_vec(&artifact).context("serialize calibration artifact")?;
+    if let Some(parent) = args.output.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create output dir {}", parent.display()))?;
+    }
+    std::fs::write(&args.output, &json)
+        .with_context(|| format!("write artifact {}", args.output.display()))?;
+
+    eprintln!(
+        "calibrate: {included}/{attempted} repo(s) → {} ({} language(s))",
+        args.output.display(),
+        artifact.languages.len(),
+    );
+    Ok(())
+}
+
+/// Check out one manifest repo at its pinned SHA, ingest it, and pool its
+/// per-function raw metrics into `obs`.
+///
+/// A `source` containing `://` or starting with `git@` is a clone URL; anything
+/// else is a local filesystem path. Both converge on a throwaway checkout of
+/// the pinned SHA — a clone+checkout tempdir for URLs, a detached `git worktree`
+/// for local paths — so the user's own checkout is never mutated and the tree
+/// matches the pin regardless of where HEAD points. The ingest reads complexity
+/// from that checkout's HEAD (`complexity_metrics` holds one rev's rows), which
+/// is exactly the pinned tree.
+fn calibrate_one_repo(
+    source: &str,
+    sha: &str,
+    cache_root: &std::path::Path,
+    obs: &mut codelore_lib::calibration::LangObservations,
+) -> Result<()> {
+    // The tempdir / worktree guard is held for the duration of the ingest.
+    let checkout = checkout_pinned(source, sha)?;
+    let repo = GixRepo::open(checkout.path()).context("open pinned checkout")?;
+    let opts = Options {
+        repo_path: checkout.path().to_path_buf(),
+        ..Options::default()
+    };
+    let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, cache_root).context("ingest")?;
+    pool_complexity(&db, obs).context("pool complexity metrics")?;
+    Ok(())
+}
+
+/// A checked-out pinned tree plus its cleanup guard. Dropping it removes the
+/// clone tempdir or the git worktree.
+enum PinnedCheckout {
+    /// A fresh clone in an owned tempdir; dropping the dir removes it.
+    Clone(tempfile::TempDir),
+    /// A detached worktree of a local repo; the guard removes it on drop.
+    Worktree {
+        origin: std::path::PathBuf,
+        dir: tempfile::TempDir,
+    },
+}
+
+impl PinnedCheckout {
+    fn path(&self) -> &std::path::Path {
+        match self {
+            Self::Clone(dir) | Self::Worktree { dir, .. } => dir.path(),
+        }
+    }
+}
+
+impl Drop for PinnedCheckout {
+    fn drop(&mut self) {
+        // Only the worktree variant needs an explicit `git` cleanup so the
+        // origin repo forgets the worktree registration; the clone variant is
+        // just a tempdir. Detached stdio per the git-child-process invariant.
+        if let Self::Worktree { origin, dir } = self
+            && let Some(path) = dir.path().to_str()
+        {
+            let _ = std::process::Command::new("git")
+                .args([
+                    "-C",
+                    origin.to_str().unwrap_or("."),
+                    "worktree",
+                    "remove",
+                    "--force",
+                    path,
+                ])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+    }
+}
+
+/// Materialize `source` at `sha` into a throwaway location.
+///
+/// Every spawned `git` child runs with detached stdio (`stdin` nulled, stdout
+/// nulled, stderr captured for diagnosis) — the same invariant the MCP server
+/// documents for its git children.
+fn checkout_pinned(source: &str, sha: &str) -> Result<PinnedCheckout> {
+    let is_url = source.contains("://") || source.starts_with("git@");
+    if is_url {
+        let dir = tempfile::tempdir().context("create clone tempdir")?;
+        run_git(
+            &["clone", "--quiet", source, path_str(dir.path())?],
+            "clone",
+        )?;
+        run_git(
+            &[
+                "-C",
+                path_str(dir.path())?,
+                "checkout",
+                "--quiet",
+                "--detach",
+                sha,
+            ],
+            "checkout",
+        )?;
+        Ok(PinnedCheckout::Clone(dir))
+    } else {
+        let origin = std::fs::canonicalize(source)
+            .with_context(|| format!("resolve local repo path {source}"))?;
+        // Confirm the pin is reachable before spending a worktree on it, so an
+        // unknown SHA fails with a clear message rather than a git-internal one.
+        run_git(
+            &[
+                "-C",
+                path_str(&origin)?,
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                sha,
+            ],
+            "rev-parse",
+        )?;
+        let dir = tempfile::tempdir().context("create worktree tempdir")?;
+        run_git(
+            &[
+                "-C",
+                path_str(&origin)?,
+                "worktree",
+                "add",
+                "--detach",
+                "--quiet",
+                path_str(dir.path())?,
+                sha,
+            ],
+            "worktree add",
+        )?;
+        Ok(PinnedCheckout::Worktree { origin, dir })
+    }
+}
+
+/// Run a `git` subcommand with detached stdio, returning an error carrying
+/// git's own stderr on failure.
+fn run_git(git_args: &[&str], what: &str) -> Result<()> {
+    let out = std::process::Command::new("git")
+        .args(git_args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .output()
+        .with_context(|| format!("spawn git {what}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "git {what} failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))
+    }
+}
+
+/// `Path` → `&str`, erroring on non-UTF-8 rather than silently defaulting.
+fn path_str(p: &std::path::Path) -> Result<&str> {
+    p.to_str()
+        .with_context(|| format!("non-UTF-8 path {}", p.display()))
+}
+
+/// Pool one repo's per-function raw metrics into `obs`, keyed by the language
+/// derived from each file's extension. Rows for non-Tier-1 files are ignored.
+/// Each metric is observed only when present (a NULL column is skipped) so a
+/// language's pool reflects the functions that actually have that metric.
+fn pool_complexity(
+    db: &FactsDb,
+    obs: &mut codelore_lib::calibration::LangObservations,
+) -> Result<()> {
+    use codelore_lib::complexity::Tier1Language;
+
+    // (path, cyclomatic, cognitive, sloc, nargs, max_nesting). Each metric is
+    // nullable in `complexity_metrics`, so read them as `Option<i64>` and pool
+    // only the present values.
+    type Row = (
+        String,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+    );
+
+    let mut stmt = db
+        .prepare(
+            "SELECT path, cyclomatic, cognitive, sloc, nargs, max_nesting \
+             FROM complexity_metrics",
+        )
+        .context("prepare complexity query")?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<i64>>(1)?,
+                r.get::<_, Option<i64>>(2)?,
+                r.get::<_, Option<i64>>(3)?,
+                r.get::<_, Option<i64>>(4)?,
+                r.get::<_, Option<i64>>(5)?,
+            ))
+        })
+        .context("run complexity query")?;
+
+    for row in rows {
+        let (path, cyclomatic, cognitive, sloc, nargs, max_nesting): Row =
+            row.context("read complexity row")?;
+        let Some(lang) = Tier1Language::from_path(&path) else {
+            continue;
+        };
+        let lang = lang.as_str();
+        for (metric, value) in [
+            ("cyclomatic", cyclomatic),
+            ("cognitive", cognitive),
+            ("sloc", sloc),
+            ("nargs", nargs),
+            ("max_nesting", max_nesting),
+        ] {
+            if let Some(value) = value {
+                obs.observe(lang, metric, value_to_f64(value));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Lossless `i64` → `f64` for the small, bounded per-function metric values
+/// (complexity counts, SLOC, argument counts) — all far below `2^53`.
+#[allow(clippy::cast_precision_loss)]
+fn value_to_f64(n: i64) -> f64 {
+    n as f64
+}
+
 /// Quality-gate check. Loads thresholds, runs the hotspots analysis
 /// against the repo, evaluates each row against the gates, and
 /// exits 0 (pass) or 1 (fail). Writes `result=pass|fail` to
@@ -179,6 +478,7 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
 
     let opts = Options {
         repo_path: args.repo.clone(),
+        calibration: args.calibration.clone(),
         ..Options::default()
     };
     let repo = GixRepo::open(&args.repo).context("open repo")?;
@@ -216,6 +516,10 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
     if !args.quiet {
         emit_gate_notices(&ledger_records);
     }
+    // One-per-run hint when the corpus lens is inactive — the check path always
+    // computes code-health rows, which carry no corpus_percentile without an
+    // artifact. Suppressed under --quiet (handled inside).
+    notice_corpus_lens_absent(&opts, args.quiet);
 
     // ── Ratchet ───────────────────────────────────────────────────────────────
     if args.ratchet {
@@ -403,11 +707,33 @@ fn emit_gate_notices(
             ("max_findings_in_hot_files", "skipped") => eprintln!(
                 "  ⚠ max_findings_in_hot_files: skipped — run `codelore ingest-sarif` first"
             ),
+            ("corpus_percentile_max", "skipped") => eprintln!(
+                "  ⚠ corpus_percentile_max: skipped — no corpus percentile data (no calibration artifact active, or no analyzed file resolved a percentile)"
+            ),
             ("code_health_min", "degraded") => eprintln!(
                 "  ⚠ code_health_min: degraded — health scan returned no rows on a non-empty repo"
             ),
             _ => {}
         }
+    }
+}
+
+/// Print the one-per-run notice that the corpus-percentile lens is inactive:
+/// no `--calibration` artifact was passed and no world corpus is embedded, so
+/// code-health rows carry no `corpus_percentile`. Called exactly once on each
+/// code-health-producing path, so the "deduped per run" contract is structural.
+/// Suppressed under `quiet` and when stderr is not a TTY (so redirected /
+/// CI output stays clean), mirroring the pre-flight banner's print policy.
+fn notice_corpus_lens_absent(opts: &Options, quiet: bool) {
+    use std::io::IsTerminal as _;
+    if quiet || !std::io::stderr().is_terminal() {
+        return;
+    }
+    let embedded_absent = codelore_lib::cli_api::calibration::embedded_world().is_none();
+    if opts.calibration.is_none() && embedded_absent {
+        eprintln!(
+            "note: corpus-percentile lens inactive — no calibration artifact (pass --calibration <path> or build one with `codelore calibrate`)."
+        );
     }
 }
 
@@ -765,6 +1091,45 @@ fn evaluate_all_gates(
         }
     }
 
+    // ── corpus_percentile_max gate ───────────────────────────────────────────
+    if let Some(max) = g.corpus_percentile_max {
+        // Reuse the already-computed code-health rows. The lens is active only
+        // when a calibration artifact is (`--calibration` or an embedded world
+        // corpus); without one every row carries `corpus_percentile = None`.
+        // That is a SKIP (not a pass, not a fail) — there is no reference corpus
+        // to compare against — mirroring the max_findings sidecar-absent skip.
+        let has_calibration = code_health.iter().any(|r| r.corpus_percentile.is_some());
+        if has_calibration {
+            let corpus_v = codelore_lib::cli_api::quality_gates::evaluate_corpus_percentile_rows(
+                max,
+                &code_health,
+            );
+            let value = code_health
+                .iter()
+                .filter_map(|r| r.corpus_percentile)
+                .fold(0.0, f64::max);
+            recs.push(make_rec(
+                "corpus_percentile_max",
+                max,
+                value,
+                !corpus_v.is_empty(),
+                ts,
+                head_sha,
+            ));
+            violations.extend(corpus_v);
+        } else {
+            recs.push(GateRunRecord {
+                ts: ts.to_owned(),
+                head_sha: head_sha.to_owned(),
+                gate: "corpus_percentile_max".into(),
+                threshold: max,
+                value: 0.0,
+                verdict: "skipped".into(),
+                mode: "check".into(),
+            });
+        }
+    }
+
     Ok((violations, recs, hotspot_count, code_health))
 }
 
@@ -984,8 +1349,8 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
         ),
         (
             "code-health",
-            "code-health composite: biomarker structural risk (Complex/Large Method, God Class, DRY, Shotgun Surgery) fused with behavioral signal (Nagappan & Ball 2005 churn + Mockus & Herbsleb 2002 ownership); coupling centrality enters once via the Shotgun Surgery biomarker (Tornhill 2018); self-relative percentile banding (Alves/Ypma/Visser 2010)",
-            "100 × (1 − 0.50·structural_risk − 0.30·churn − 0.20·ownership_fv), where structural_risk is a weighted sum of biomarker intensities (complex-method 0.30, god-class 0.25, large-method 0.15, dry 0.15, shotgun-surgery 0.15); band from structural_risk thresholds (≥0.55 red, ≥0.28 yellow, else green); percentile = per-language PERCENT_RANK of structural_risk.",
+            "code-health composite: biomarker structural risk (Complex/Large Method, God Class, DRY, Shotgun Surgery, Deep Nesting, Many Args, Complex Conditional) fused with behavioral signal (Nagappan & Ball 2005 churn + Mockus & Herbsleb 2002 ownership); coupling centrality enters once via the Shotgun Surgery biomarker (Tornhill 2018); self-relative percentile banding (Alves/Ypma/Visser 2010) plus an additive corpus-relative percentile when a calibration artifact is active",
+            "100 × (1 − 0.50·structural_risk − 0.30·churn − 0.20·ownership_fv), where structural_risk is a weighted sum of biomarker intensities (complex-method 0.22, god-class 0.18, large-method 0.12, dry 0.12, shotgun-surgery 0.12, deep-nesting 0.10, many-args 0.07, complex-conditional 0.07); band from structural_risk thresholds (≥0.55 red, ≥0.28 yellow, else green); percentile = per-language PERCENT_RANK of structural_risk.",
             "See analyses/code_health.rs.",
         ),
         (
@@ -1509,6 +1874,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         rework_window_days: args.rework_window_days,
         release_tag_glob: args.release_tag_glob.clone(),
         target: args.target.clone(),
+        calibration: args.calibration.clone(),
         ..Options::default()
     };
 
@@ -2102,6 +2468,8 @@ fn dispatch_code_health(
     ctx: &EmitCtx,
     out: &mut Box<dyn Write>,
 ) -> Result<()> {
+    // Analyze has no --quiet; the notice self-suppresses off a TTY.
+    notice_corpus_lens_absent(opts, false);
     match format {
         "csv" => {
             let rows = codelore_lib::cli_api::analyses::code_health::run_code_health(db, opts)
