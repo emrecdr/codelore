@@ -272,7 +272,9 @@ fn ingest_writes_hunk_rows_to_hunks_table() {
 
 /// Run `git commit` with author and committer dates pinned to a fixed
 /// instant, so the fixture this test builds is byte-deterministic across
-/// runs and machines (no reliance on wall-clock time).
+/// runs and machines (no reliance on wall-clock time). Gated with its only
+/// caller, the volume regression test below.
+#[cfg(not(target_os = "windows"))]
 fn commit_at(path: &Path, message: &str, date: &str) {
     let status = std::process::Command::new("git")
         .arg("-C")
