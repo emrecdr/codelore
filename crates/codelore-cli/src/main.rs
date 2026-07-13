@@ -124,7 +124,8 @@ fn run_ingest_sarif_cmd(args: &IngestSarifArgs) -> Result<()> {
 /// Build a corpus-calibration artifact from a manifest of pinned repos.
 ///
 /// For each `[[repos]]` entry the repo is checked out at its pinned SHA in a
-/// throwaway location, ingested through the standard pipeline, and its
+/// throwaway location, ingested HEAD-only (only the complexity facts the
+/// pooling below reads — no history walk), and its
 /// per-function raw metrics (`cyclomatic`, `cognitive`, `sloc`, `nargs`,
 /// `max_nesting`) pooled per language (derived from each file's extension). The
 /// pooled distributions are reduced to quantile breakpoints by the calibration
@@ -155,7 +156,8 @@ fn run_calibrate_cmd(args: &CalibrateArgs) -> Result<()> {
 
     for repo in &manifest.repos {
         attempted += 1;
-        eprintln!("calibrate: {} @ {}", repo.source, repo.sha);
+        // The per-repo progress line prints from inside `calibrate_one_repo`
+        // once the checkout mode (shallow / full / worktree) is known.
         match calibrate_one_repo(&repo.source, &repo.sha, &cache_root, &mut obs) {
             Ok(()) => included += 1,
             Err(e) => eprintln!("calibrate: skip {} @ {}: {e:#}", repo.source, repo.sha),
@@ -190,16 +192,17 @@ fn run_calibrate_cmd(args: &CalibrateArgs) -> Result<()> {
     Ok(())
 }
 
-/// Check out one manifest repo at its pinned SHA, ingest it, and pool its
-/// per-function raw metrics into `obs`.
+/// Check out one manifest repo at its pinned SHA, ingest it HEAD-only, and
+/// pool its per-function raw metrics into `obs`.
 ///
 /// A `source` containing `://` or starting with `git@` is a clone URL; anything
 /// else is a local filesystem path. Both converge on a throwaway checkout of
-/// the pinned SHA — a clone+checkout tempdir for URLs, a detached `git worktree`
-/// for local paths — so the user's own checkout is never mutated and the tree
-/// matches the pin regardless of where HEAD points. The ingest reads complexity
-/// from that checkout's HEAD (`complexity_metrics` holds one rev's rows), which
-/// is exactly the pinned tree.
+/// the pinned SHA — a depth-1 fetch (full clone fallback) tempdir for URLs, a
+/// detached `git worktree` for local paths — so the user's own checkout is
+/// never mutated and the tree matches the pin regardless of where HEAD points.
+/// The ingest runs in head-only mode: only the pinned tree's complexity facts
+/// are extracted (`pool_complexity` reads nothing else), which is what makes
+/// history-less shallow checkouts ingestible in the first place.
 fn calibrate_one_repo(
     source: &str,
     sha: &str,
@@ -207,10 +210,12 @@ fn calibrate_one_repo(
     obs: &mut codelore_lib::calibration::LangObservations,
 ) -> Result<()> {
     // The tempdir / worktree guard is held for the duration of the ingest.
-    let checkout = checkout_pinned(source, sha)?;
+    let (checkout, mode) = checkout_pinned(source, sha)?;
+    eprintln!("calibrate: {source} @ {sha} ({})", mode.label());
     let repo = GixRepo::open(checkout.path()).context("open pinned checkout")?;
     let opts = Options {
         repo_path: checkout.path().to_path_buf(),
+        head_only_ingest: true,
         ..Options::default()
     };
     let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, cache_root).context("ingest")?;
@@ -218,10 +223,33 @@ fn calibrate_one_repo(
     Ok(())
 }
 
+/// How a pinned tree was materialized. Feeds the per-repo progress line so
+/// an operator can see which repos got the cheap path.
+#[derive(Clone, Copy)]
+enum CheckoutMode {
+    /// Depth-1 fetch of exactly the pinned SHA — no history transferred.
+    Shallow,
+    /// Full clone fallback (the server refused the shallow SHA fetch).
+    Full,
+    /// Detached `git worktree` of a local repo.
+    Worktree,
+}
+
+impl CheckoutMode {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Shallow => "shallow",
+            Self::Full => "full",
+            Self::Worktree => "worktree",
+        }
+    }
+}
+
 /// A checked-out pinned tree plus its cleanup guard. Dropping it removes the
 /// clone tempdir or the git worktree.
 enum PinnedCheckout {
-    /// A fresh clone in an owned tempdir; dropping the dir removes it.
+    /// A fresh (shallow or full) clone in an owned tempdir; dropping the
+    /// dir removes it.
     Clone(tempfile::TempDir),
     /// A detached worktree of a local repo; the guard removes it on drop.
     Worktree {
@@ -263,14 +291,26 @@ impl Drop for PinnedCheckout {
     }
 }
 
-/// Materialize `source` at `sha` into a throwaway location.
+/// Materialize `source` at `sha` into a throwaway location, reporting how
+/// (shallow fetch / full clone / local worktree).
 ///
 /// Every spawned `git` child runs with detached stdio (`stdin` nulled, stdout
 /// nulled, stderr captured for diagnosis) — the same invariant the MCP server
 /// documents for its git children.
-fn checkout_pinned(source: &str, sha: &str) -> Result<PinnedCheckout> {
+fn checkout_pinned(source: &str, sha: &str) -> Result<(PinnedCheckout, CheckoutMode)> {
     let is_url = source.contains("://") || source.starts_with("git@");
     if is_url {
+        // Shallow first: a depth-1 fetch of exactly the pinned SHA moves a
+        // single tree instead of the whole history. Requires the server to
+        // allow arbitrary-SHA fetches (`uploadpack.allowAnySHA1InWant` —
+        // GitHub does); when any step fails, warn once and fall back to
+        // the full clone + detached checkout.
+        match shallow_pinned_clone(source, sha) {
+            Ok(dir) => return Ok((PinnedCheckout::Clone(dir), CheckoutMode::Shallow)),
+            Err(e) => tracing::warn!(
+                "calibrate: shallow fetch failed for {source} ({e:#}); falling back to full clone"
+            ),
+        }
         let dir = tempfile::tempdir().context("create clone tempdir")?;
         run_git(
             &["clone", "--quiet", source, path_str(dir.path())?],
@@ -287,7 +327,7 @@ fn checkout_pinned(source: &str, sha: &str) -> Result<PinnedCheckout> {
             ],
             "checkout",
         )?;
-        Ok(PinnedCheckout::Clone(dir))
+        Ok((PinnedCheckout::Clone(dir), CheckoutMode::Full))
     } else {
         let origin = std::fs::canonicalize(source)
             .with_context(|| format!("resolve local repo path {source}"))?;
@@ -318,8 +358,45 @@ fn checkout_pinned(source: &str, sha: &str) -> Result<PinnedCheckout> {
             ],
             "worktree add",
         )?;
-        Ok(PinnedCheckout::Worktree { origin, dir })
+        Ok((
+            PinnedCheckout::Worktree { origin, dir },
+            CheckoutMode::Worktree,
+        ))
     }
+}
+
+/// Depth-1 materialization of exactly `sha` from a remote `source`: empty
+/// `git init`, `remote add origin`, `fetch --depth 1 origin <sha>`,
+/// `checkout --detach FETCH_HEAD`. Any failing step surfaces as `Err` so
+/// the caller can fall back to a full clone; the half-initialized tempdir
+/// drops with the error. All git children go through `run_git` (detached
+/// stdio).
+fn shallow_pinned_clone(source: &str, sha: &str) -> Result<tempfile::TempDir> {
+    let dir = tempfile::tempdir().context("create shallow clone tempdir")?;
+    let dir_str = path_str(dir.path())?;
+    run_git(&["init", "--quiet", dir_str], "init")?;
+    run_git(
+        &["-C", dir_str, "remote", "add", "origin", source],
+        "remote add",
+    )?;
+    run_git(
+        &[
+            "-C", dir_str, "fetch", "--quiet", "--depth", "1", "origin", sha,
+        ],
+        "fetch --depth 1",
+    )?;
+    run_git(
+        &[
+            "-C",
+            dir_str,
+            "checkout",
+            "--quiet",
+            "--detach",
+            "FETCH_HEAD",
+        ],
+        "checkout FETCH_HEAD",
+    )?;
+    Ok(dir)
 }
 
 /// Run a `git` subcommand with detached stdio, returning an error carrying
