@@ -1294,7 +1294,7 @@ Evaluates the quality gates declared in `.codelore-thresholds.toml` at HEAD and 
 }
 ```
 
-`no_thresholds` is returned when no `.codelore-thresholds.toml` exists at the repo root. Gates covered: `cognitive_max`, `hotspot_score_max`, `code_health_min`, `disallow_clone_type_1`, `max_red_effort_pct`, `max_dependency_cycles`, `max_propagation_cost`, `code_familiarity_min`, and `corpus_percentile_max`. This is a subset of what `codelore check` evaluates: the `max_findings_in_hot_files` gate (external SARIF findings × hotspots), degraded-gate semantics (`fail_on_degraded`), and `--ratchet` are only available in `codelore check` proper. When a config file configures `max_findings_in_hot_files`, this tool's verdict can therefore differ from a CI run of `codelore check` — treat `codelore check` as the authoritative gate; use `check_gates` for a fast interactive read of the shared subset.
+`no_thresholds` is returned when no `.codelore-thresholds.toml` exists at the repo root. Gates covered: `cognitive_max`, `hotspot_score_max`, `code_health_min`, `disallow_clone_type_1`, `max_red_effort_pct`, `max_dependency_cycles`, `max_propagation_cost`, and `code_familiarity_min`. This is a subset of what `codelore check` evaluates: the `max_findings_in_hot_files` gate (external SARIF findings × hotspots), the `corpus_percentile_max` gate, degraded-gate semantics (`fail_on_degraded`), and `--ratchet` are only available in `codelore check` proper. When a config file configures any of those, this tool's verdict can therefore differ from a CI run of `codelore check` — treat `codelore check` as the authoritative gate; use `check_gates` for a fast interactive read of the shared subset.
 
 Parameters: none.
 

@@ -51,7 +51,7 @@ The current state of the codebase. For per-release history see `CHANGELOG.md`.
 
 ### CLI surface
 
-- 1 primary subcommand (`codelore analyze`) plus 9 ancillary subcommands: `codelore diff <base>..<head>` (PR-mode, 4 output formats, `--fail-on` quality gate), `codelore check` (quality-gate validation against `.codelore-thresholds.toml`, `$GITHUB_OUTPUT`-integrated), `codelore explain` (formula + citation for 15 metrics), `codelore profile` (operational telemetry), `codelore docs` (markdown analysis catalogue), `codelore calibrate` (build org-specific reference corpus), `codelore completions <shell>` (bash | zsh | fish | powershell | elvish), `codelore schema <row-type>` (JSON Schema 2020-12), `codelore mcp` (MCP server over stdio)
+- 1 primary subcommand (`codelore analyze`) plus 10 ancillary subcommands: `codelore diff <base>..<head>` (PR-mode, 4 output formats, `--fail-on` quality gate), `codelore check` (quality-gate validation against `.codelore-thresholds.toml`, `$GITHUB_OUTPUT`-integrated), `codelore explain` (formula + citation for 15 metrics), `codelore profile` (operational telemetry), `codelore docs` (markdown analysis catalogue), `codelore ingest-sarif` (external-findings sidecar from SARIF documents), `codelore calibrate` (build org-specific reference corpus), `codelore completions <shell>` (bash | zsh | fish | powershell | elvish), `codelore schema <row-type>` (JSON Schema 2020-12), `codelore mcp` (MCP server over stdio)
 - Cross-field validation at the CLI boundary via `Options::validate()` — rejects the four pathological combinations (`min_coupling_pct > max_coupling_pct`, `clone_similarity_floor ∉ [0, 1]`, `fisher_significance ∉ [0, 1]`, `after > before`)
 
 ### SPA dashboard (`--format spa`)
