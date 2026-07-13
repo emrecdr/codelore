@@ -1,16 +1,19 @@
 //! Shared helper for routing complexity-metric reads through
 //! `complexity_metrics_grouped` when `opts.group_file` is set.
 //!
-//! `apply_grouping` rewrites `changes` + `hunks` to use group names, but
-//! `complexity_metrics` is populated at HEAD-time keyed on raw file
-//! paths. Without an analogous rewrite, the `MAX(cognitive) GROUP BY
-//! path` reads in `hotspots`, `code_health`, `god_classes`, and
-//! `stale_code` silently produced `0` cognitive for grouped entities
-//! because `changes.path` (group name) never matched
-//! `complexity_metrics.path` (raw path). `apply_grouping` now also
-//! materialises `complexity_metrics_grouped` with per-group `MAX`
-//! cognitive + `MAX` `kind='unit'` MI rolled up; analyses opt in by
-//! reading from the table named here.
+//! `apply_grouping` rewrites `changes.path` to group names (hunks are
+//! never path-rewritten — hunks of grouped-away paths are dropped,
+//! identity-mapped paths keep theirs), but `complexity_metrics` is
+//! populated at HEAD-time keyed on raw file paths. Without an analogous
+//! rewrite, the `MAX(cognitive) GROUP BY path` reads in `hotspots`,
+//! `code_health`, `god_classes`, and `stale_code` silently produced `0`
+//! cognitive for grouped entities because `changes.path` (group name)
+//! never matched `complexity_metrics.path` (raw path). `apply_grouping`
+//! therefore also materialises `complexity_metrics_grouped`: one row per
+//! group carrying the per-group `MAX` of every complexity column the
+//! `{cm_src}` consumers read (cognitive, cyclomatic, loc, sloc, nargs,
+//! max_nesting, bool_ops) plus `MAX` `kind='unit'` MI; analyses opt in
+//! by reading from the table named here.
 //!
 //! Centralised so the four affected analyses share one dispatch. This
 //! solves the same class of problem as `analyses::lineage` (swap an
