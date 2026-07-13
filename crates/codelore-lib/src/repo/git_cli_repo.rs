@@ -262,10 +262,11 @@ impl Repo for GitCliRepo {
     }
 
     fn tracked_paths_at_head(&self) -> Result<Vec<String>> {
-        // `ls-tree -r -z` walks HEAD's tree recursively; `-z` NUL-terminates
-        // records so paths containing spaces or newlines survive intact
-        // (`run_git`'s injected `core.quotepath=false` keeps non-ASCII
-        // bytes raw instead of octal-escaped). Record shape:
+        // `ls-tree -r -z` walks HEAD's tree recursively; with `-z`, git
+        // emits paths verbatim (no quoting), so spaces and newlines
+        // survive intact regardless of `core.quotepath` — `run_git`'s
+        // injected `core.quotepath=false` is belt-and-suspenders for the
+        // non-`-z` invocations it also serves. Record shape:
         // `<mode> <type> <oid>\t<path>`.
         let output = self.run_git(&["ls-tree", "-r", "-z", "HEAD"])?;
         if !output.status.success() {
@@ -355,15 +356,18 @@ impl Repo for GitCliRepo {
 
 /// Parse one NUL-terminated `git ls-tree -r -z` record
 /// (`<mode> <type> <oid>\t<path>`) into its path when the mode is a
-/// regular-file blob (`100644`/`100755`). Symlinks (`120000`) and
-/// submodule gitlinks (`160000`) return `None`, matching `GixRepo`'s
-/// `is_blob` mode filter. The path bytes are decoded lossily, mirroring
-/// how `GixRepo` renders its `BString` paths — both backends therefore
-/// produce identical strings for any valid-UTF-8 path.
+/// regular-file blob — the `0o100xxx` mode class, matched by prefix so
+/// legacy non-canonical modes (e.g. group-writable `100664` trees
+/// predating git's normalization) are kept, exactly as `GixRepo`'s
+/// class-based `is_blob` filter keeps them. Symlinks (`120000`) and
+/// submodule gitlinks (`160000`) return `None`. The path bytes are
+/// decoded lossily, mirroring how `GixRepo` renders its `BString`
+/// paths — both backends therefore produce identical strings for any
+/// valid-UTF-8 path.
 fn parse_ls_tree_record(record: &[u8]) -> Option<String> {
     let tab = record.iter().position(|b| *b == b'\t')?;
     let mode = record[..tab].split(|b| *b == b' ').next()?;
-    if mode != b"100644" && mode != b"100755" {
+    if !mode.starts_with(b"100") {
         return None;
     }
     Some(String::from_utf8_lossy(&record[tab + 1..]).into_owned())
@@ -843,6 +847,14 @@ mod tests {
                 b"100755 blob d00491fd7e5bb6fa28c517a0bb32b8b506539d4d\tscripts/run.sh"
             ),
             Some("scripts/run.sh".to_string()),
+        );
+        // Legacy non-canonical blob mode (pre-normalization trees) stays a
+        // regular file — the class prefix matches, mirroring gix `is_blob`.
+        assert_eq!(
+            parse_ls_tree_record(
+                b"100664 blob d00491fd7e5bb6fa28c517a0bb32b8b506539d4d\tlegacy.rs"
+            ),
+            Some("legacy.rs".to_string()),
         );
     }
 

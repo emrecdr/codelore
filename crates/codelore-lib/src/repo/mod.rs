@@ -96,10 +96,11 @@ pub trait Repo: Send + Sync {
         self.read_blob_at("HEAD", path)
     }
 
-    /// Every regular-file blob path (modes `100644`/`100755`) in the HEAD
-    /// commit's tree, repo-relative with `/` separators, sorted ascending.
-    /// Symlinks (`120000`) and submodule gitlinks (`160000`) are excluded —
-    /// neither carries source bytes the HEAD-time scans can parse.
+    /// Every regular-file blob path (the `0o100xxx` mode class — canonical
+    /// `100644`/`100755` plus legacy non-canonical variants like `100664`)
+    /// in the HEAD commit's tree, repo-relative with `/` separators, sorted
+    /// ascending. Symlinks (`120000`) and submodule gitlinks (`160000`) are
+    /// excluded — neither carries source bytes the HEAD-time scans can parse.
     ///
     /// Unlike the walk-derived live-path reconstruction (most recent
     /// change per path is not a deletion), this reads the tree directly,
