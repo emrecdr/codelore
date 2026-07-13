@@ -80,9 +80,17 @@ pub fn materialize_changes_bucketed(
 ///      mapping, replaces the path with the group name (or keeps raw under
 ///      non-strict mode for unmapped paths), and aggregates `loc_added` /
 ///      `loc_deleted` per `(rev, new_path)`.
-///   4. Replace `changes` content with the aggregated rows.
-///   5. Remove `hunks` rows whose `(rev, path)` no longer exists in
-///      `changes` (strict mode + dropped paths produces orphans otherwise).
+///   4. Snapshot the `hunks` rows whose path survives under its own name
+///      (identity-mapped / non-strict unmapped paths); hunks of collapsed
+///      or dropped paths are discarded (line-range semantics don't
+///      translate to group level).
+///   5. Swap by rebuild: DROP `hunks` (child first) and `changes`,
+///      re-run the idempotent schema script to recreate them, then
+///      insert the aggregated rows and restore the snapshotted hunks.
+///      DELETE-based swaps can't work here — `DuckDB` checks the
+///      `hunks → changes` FK immediately per statement AND verifies it
+///      against index entries that persist for already-deleted rows, so
+///      both delete orders trip the FK machinery.
 ///
 /// Strict vs non-strict:
 /// - Strict (`opts.strict_grouping = true` / code-maat default): rows whose
@@ -166,10 +174,9 @@ pub fn apply_grouping(db: &FactsDb, group_map: &GroupMap) -> Result<()> {
             .map_err(|e| CodeLoreError::Analysis(format!("flush _grouping_v1 appender: {e}")))?;
     }
 
-    // Step 3+4: rewrite `changes` in place. CREATE OR REPLACE TEMPORARY
-    // TABLE _changes_grouped + DELETE+INSERT pattern keeps the FK from
-    // hunks happy in step 5 (no period where changes is empty AND the
-    // grouped data isn't yet ready to INSERT).
+    // Step 3: build the grouped replacement content in a temporary table
+    // so the swap below is a pair of short statements against fully
+    // pre-aggregated rows.
     conn.execute(
         "CREATE OR REPLACE TEMPORARY TABLE _changes_grouped AS \
          SELECT \
@@ -188,46 +195,9 @@ pub fn apply_grouping(db: &FactsDb, group_map: &GroupMap) -> Result<()> {
     )
     .map_err(|e| CodeLoreError::Analysis(format!("build _changes_grouped: {e}")))?;
 
-    // Step 5: clean hunks for paths that won't survive the swap. Do BEFORE
-    // the changes-swap so the FK from hunks → changes never sees a missing
-    // referent. Hunks aren't path-rewritten (line-range semantics don't
-    // translate to group level), so they get dropped for any path that
-    // collapsed or got removed.
-    //
-    // The previous `NOT IN (SELECT … )` form on a composite key
-    // forces some `DuckDB` planner paths into a per-row subquery scan
-    // rather than the index-friendly hash anti-join. `NOT EXISTS` with
-    // a correlated `h.rev = c.rev AND h.path = c.path` predicate is the
-    // textbook planner-friendly form: same semantics (both projected
-    // columns are `NOT NULL` per `schema_v1.sql`, so `NOT IN`'s NULL
-    // pitfall doesn't apply, but `NOT EXISTS` is uniformly preferred
-    // across `DuckDB` versions). The existing
-    // `apply_grouping_*` integration tests cover the semantic
-    // equivalence — both forms must drop the same hunks for the same
-    // group-map input.
-    conn.execute(
-        "DELETE FROM hunks h \
-         WHERE NOT EXISTS ( \
-             SELECT 1 FROM changes c \
-             INNER JOIN _grouping_v1 g ON g.raw_path = c.path \
-             WHERE g.group_name = c.path \
-               AND c.rev = h.rev \
-               AND c.path = h.path \
-         )",
-        [],
-    )
-    .map_err(|e| CodeLoreError::Analysis(format!("clean hunks: {e}")))?;
-
-    // Swap the data in changes
-    conn.execute("DELETE FROM changes", [])
-        .map_err(|e| CodeLoreError::Analysis(format!("clear changes: {e}")))?;
-    conn.execute(
-        "INSERT INTO changes (rev, path, change_type, rename_from, similarity, loc_added, loc_deleted) \
-         SELECT rev, path, change_type, rename_from, similarity, loc_added, loc_deleted \
-         FROM _changes_grouped",
-        [],
-    )
-    .map_err(|e| CodeLoreError::Analysis(format!("swap changes: {e}")))?;
+    // Steps 4+5: snapshot surviving hunks, then rebuild-and-repopulate
+    // `changes` + `hunks` with the grouped content.
+    swap_grouped_tables(conn)?;
 
     // `changes.path` was just rewritten in place; any `changes_lineage`
     // built earlier (e.g. by kamei during ingest) now reflects the
@@ -254,6 +224,69 @@ pub fn apply_grouping(db: &FactsDb, group_map: &GroupMap) -> Result<()> {
         group_map.strict
     );
 
+    Ok(())
+}
+
+/// Swap the `changes` content for the pre-aggregated `_changes_grouped`
+/// rows while preserving the hunks of paths that survive under their own
+/// name.
+///
+/// A hunk survives iff its path maps to itself (`g.group_name = c.path`
+/// — identity-mapped rules and, in non-strict mode, unmapped paths kept
+/// under their raw name). Hunks aren't path-rewritten (line-range
+/// semantics don't translate to group level), so hunks of collapsed or
+/// dropped paths are discarded. The snapshot runs BEFORE either table is
+/// touched.
+///
+/// The swap itself rebuilds rather than deletes: `DuckDB` checks the
+/// `hunks → changes` FK immediately per statement — there is no
+/// deferred-check window — so any surviving hunk row would make
+/// `DELETE FROM changes` fail. Nor is child-first DELETE enough:
+/// `DuckDB` verifies the FK against index entries that persist for
+/// already-deleted rows (its documented foreign-key limitation), so
+/// clearing `hunks` and then `changes` still trips the FK machinery on
+/// real-scale ingests. DROP both tables (child first) and re-run the
+/// idempotent schema script instead — every statement in it is
+/// `IF NOT EXISTS`, so only the two dropped tables (and their indexes)
+/// are rebuilt, pristine. The hunks restore cannot violate the FK by
+/// construction: every surviving hunk's path maps to itself, so
+/// `_changes_grouped` carries a `(rev, path)` row for it under the same
+/// name.
+fn swap_grouped_tables(conn: &duckdb::Connection) -> Result<()> {
+    conn.execute(
+        "CREATE OR REPLACE TEMPORARY TABLE _hunks_surviving AS \
+         SELECT h.* FROM hunks h \
+         WHERE EXISTS ( \
+             SELECT 1 FROM changes c \
+             INNER JOIN _grouping_v1 g ON g.raw_path = c.path \
+             WHERE g.group_name = c.path \
+               AND c.rev = h.rev \
+               AND c.path = h.path \
+         )",
+        [],
+    )
+    .map_err(|e| CodeLoreError::Analysis(format!("snapshot surviving hunks: {e}")))?;
+
+    conn.execute("DROP TABLE hunks", [])
+        .map_err(|e| CodeLoreError::Analysis(format!("drop hunks for swap: {e}")))?;
+    conn.execute("DROP TABLE changes", [])
+        .map_err(|e| CodeLoreError::Analysis(format!("drop changes for swap: {e}")))?;
+    conn.execute_batch(crate::facts::schema::SCHEMA_V1)
+        .map_err(|e| CodeLoreError::Analysis(format!("recreate swapped tables: {e}")))?;
+
+    conn.execute(
+        "INSERT INTO changes (rev, path, change_type, rename_from, similarity, loc_added, loc_deleted) \
+         SELECT rev, path, change_type, rename_from, similarity, loc_added, loc_deleted \
+         FROM _changes_grouped",
+        [],
+    )
+    .map_err(|e| CodeLoreError::Analysis(format!("swap changes: {e}")))?;
+    // `_hunks_surviving` mirrors the `hunks` column order (`SELECT h.*`
+    // above), so the positional INSERT stays aligned with the schema.
+    // Left in place afterwards, like `_grouping_v1` — TEMPORARY tables
+    // are connection-scoped and vanish with the ingest session.
+    conn.execute("INSERT INTO hunks SELECT * FROM _hunks_surviving", [])
+        .map_err(|e| CodeLoreError::Analysis(format!("restore surviving hunks: {e}")))?;
     Ok(())
 }
 

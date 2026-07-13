@@ -314,3 +314,132 @@ pub fn nested(a: bool, b: bool, c: bool, d: bool, e: bool) -> u32 {
     // source.
     let _gods = run_god_classes(&db, &opts).expect("god-classes must run against grouped paths");
 }
+
+/// Grouping on a fixture with MODIFIED files, non-strict. Only the gix
+/// walker's Modification arm emits `hunks` rows, so a fixture that only
+/// ADDS files leaves `hunks` empty and never exercises the
+/// `hunks → changes` FK during the grouping swap — the shape every real
+/// repository hits. The unmapped `notes.md` keeps its raw path in
+/// non-strict mode, so its hunk rows must SURVIVE the swap (they still
+/// reference a live `changes` row), while the grouped-away
+/// `src/auth/login.rs` hunks must be dropped (line-range semantics
+/// don't translate to group level).
+#[test]
+fn grouping_survives_hunks_from_modified_files_non_strict() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path();
+
+    run_git(path, &["init", "-b", "main", "--quiet"]);
+    run_git(path, &["config", "user.email", "t@e.com"]);
+    run_git(path, &["config", "user.name", "T"]);
+
+    // Group file covers only src/auth — notes.md stays unmapped.
+    write(path.join("groups.txt"), "src/auth => Auth\n");
+
+    write(path.join("src/auth/login.rs"), "v1\n");
+    write(path.join("notes.md"), "a\n");
+    run_git(path, &["add", "."]);
+    run_git(path, &["commit", "-m", "c1", "--quiet"]);
+
+    // Modify BOTH files so the walker emits hunks for each.
+    write(path.join("src/auth/login.rs"), "v1\nv2\n");
+    write(path.join("notes.md"), "a\nb\n");
+    run_git(path, &["add", "."]);
+    run_git(path, &["commit", "-m", "c2", "--quiet"]);
+
+    let repo = GixRepo::open(path).expect("gix open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: path.to_path_buf(),
+        min_revs: 0,
+        group_file: Some(path.join("groups.txt")),
+        strict_grouping: false,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts)
+        .expect("ingest with grouping over modified files must not trip the hunks FK");
+
+    // The grouped name and the raw unmapped path both live in `changes`.
+    let auth_changes = db
+        .query_one_value("SELECT CAST(COUNT(*) AS TEXT) FROM changes WHERE path = 'Auth'")
+        .expect("Auth changes count");
+    assert_ne!(auth_changes, "0", "Auth group must appear in changes");
+    let notes_changes = db
+        .query_one_value("SELECT CAST(COUNT(*) AS TEXT) FROM changes WHERE path = 'notes.md'")
+        .expect("notes.md changes count");
+    assert_ne!(
+        notes_changes, "0",
+        "unmapped notes.md must keep its raw path in changes"
+    );
+
+    // The unmapped file's hunks survived the swap...
+    let notes_hunks = db
+        .query_one_value("SELECT CAST(COUNT(*) AS TEXT) FROM hunks WHERE path = 'notes.md'")
+        .expect("notes.md hunks count");
+    assert_ne!(
+        notes_hunks, "0",
+        "hunks of the unmapped modified file must survive the grouping swap"
+    );
+    // ...and no hunk remains for any grouped-away path (neither the raw
+    // name nor the group name — hunks are never path-rewritten).
+    let other_hunks = db
+        .query_one_value("SELECT CAST(COUNT(*) AS TEXT) FROM hunks WHERE path <> 'notes.md'")
+        .expect("non-surviving hunks count");
+    assert_eq!(
+        other_hunks, "0",
+        "grouped-away paths must have no hunk rows after the swap"
+    );
+}
+
+/// Same modified-files fixture, strict mode: unmapped paths are dropped
+/// entirely, so BOTH files' hunks vanish — `src/auth/login.rs` because it
+/// collapsed into a group, `notes.md` because strict mode drops unmapped
+/// rows. The swap must still complete without tripping the FK.
+#[test]
+fn grouping_strict_mode_with_modified_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path();
+
+    run_git(path, &["init", "-b", "main", "--quiet"]);
+    run_git(path, &["config", "user.email", "t@e.com"]);
+    run_git(path, &["config", "user.name", "T"]);
+
+    write(path.join("groups.txt"), "src/auth => Auth\n");
+
+    write(path.join("src/auth/login.rs"), "v1\n");
+    write(path.join("notes.md"), "a\n");
+    run_git(path, &["add", "."]);
+    run_git(path, &["commit", "-m", "c1", "--quiet"]);
+
+    write(path.join("src/auth/login.rs"), "v1\nv2\n");
+    write(path.join("notes.md"), "a\nb\n");
+    run_git(path, &["add", "."]);
+    run_git(path, &["commit", "-m", "c2", "--quiet"]);
+
+    let repo = GixRepo::open(path).expect("gix open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: path.to_path_buf(),
+        min_revs: 0,
+        group_file: Some(path.join("groups.txt")),
+        strict_grouping: true,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts)
+        .expect("strict grouping over modified files must not trip the hunks FK");
+
+    let notes_changes = db
+        .query_one_value("SELECT CAST(COUNT(*) AS TEXT) FROM changes WHERE path = 'notes.md'")
+        .expect("notes.md changes count");
+    assert_eq!(
+        notes_changes, "0",
+        "strict mode must drop the unmapped notes.md from changes"
+    );
+    let hunks_total = db
+        .query_one_value("SELECT CAST(COUNT(*) AS TEXT) FROM hunks")
+        .expect("hunks count");
+    assert_eq!(
+        hunks_total, "0",
+        "strict mode leaves no surviving paths, so hunks must be empty"
+    );
+}

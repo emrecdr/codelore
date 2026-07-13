@@ -74,15 +74,13 @@ CREATE TABLE IF NOT EXISTS changes (
 -- PRIMARY KEY (rev, path, old_start, new_start) — a hunk inside a
 -- single (rev, path) is uniquely identified by its two start
 -- offsets; a single commit cannot apply two hunks to the same file
--- starting at the same old AND new line. This also gives DuckDB a
--- physical index for the FK clean-up DELETE in `apply_grouping`,
--- replacing the unindexed table-scan that the audit flagged as
--- expensive on diff-heavy repos.
+-- starting at the same old AND new line.
 --
--- `idx_hunks_rev_path` accelerates the `apply_grouping` FK cleanup
--- (`DELETE FROM hunks h WHERE NOT EXISTS ... AND c.rev = h.rev AND
--- c.path = h.path`) on diff-heavy repos. The PK above is the
--- physical order; this secondary index is the lookup path.
+-- `idx_hunks_rev_path` accelerates (rev, path)-correlated probes on
+-- diff-heavy repos — e.g. the surviving-hunk snapshot in
+-- `apply_grouping` (`WHERE EXISTS (... c.rev = h.rev AND c.path =
+-- h.path)`). The PK above is the physical order; this secondary
+-- index is the lookup path.
 CREATE TABLE IF NOT EXISTS hunks (
     rev TEXT NOT NULL,
     path TEXT NOT NULL,
