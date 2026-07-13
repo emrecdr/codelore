@@ -313,9 +313,14 @@ fn commit_at(path: &Path, message: &str, date: &str) {
 /// (checked-in bundles, chosen because multi-process git builders flaked on
 /// loaded CI runners), this is a single test-local builder — no shared fixture
 /// has the high-volume shape the threshold needs. It shells out to `git` per
-/// commit within one test process, uses fixed author/committer dates so the
-/// built repo is deterministic, and stays in the linux-run suite (the windows
-/// CI subset is a fixed binary list that does not include it).
+/// commit within one test process and uses fixed author/committer dates so the
+/// built repo is deterministic.
+///
+/// Not run on windows: this test is volume coverage, not platform coverage,
+/// and its per-commit git spawns are exactly the workload whose process-spawn
+/// overhead priced the full suite off hosted windows runners. The flush-order
+/// mechanism it guards is platform-independent.
+#[cfg(not(target_os = "windows"))]
 #[test]
 fn ingest_large_repo_crosses_fk_flush_threshold() {
     // 50 files * 20 hunks * 215 modify commits ≈ 215_000 hunk rows, past the
