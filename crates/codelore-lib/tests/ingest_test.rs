@@ -269,3 +269,166 @@ fn ingest_writes_hunk_rows_to_hunks_table() {
         .expect("null offsets query");
     assert_eq!(nulls, "0", "no hunk row may have NULL offset columns");
 }
+
+/// Run `git commit` with author and committer dates pinned to a fixed
+/// instant, so the fixture this test builds is byte-deterministic across
+/// runs and machines (no reliance on wall-clock time). Gated with its only
+/// caller, the volume regression test below.
+#[cfg(not(target_os = "windows"))]
+fn commit_at(path: &Path, message: &str, date: &str) {
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["commit", "-q", "-m", message, "--date", date])
+        .env("GIT_COMMITTER_DATE", date)
+        .status()
+        .expect("git commit");
+    assert!(status.success(), "git commit '{message}' failed");
+}
+
+/// Regression test for the FK-flush ordering hazard on large-repo ingest.
+///
+/// The `commits` → `changes` → `hunks` tables are written through three
+/// independent `DuckDB` Appenders. An Appender buffers rows and only performs
+/// its foreign-key-checked physical write when the buffer reaches a large
+/// internal threshold (observed reproducibly at `204_800` rows on a file-backed
+/// connection — 100 standard vectors). At that write `DuckDB` validates every
+/// buffered row's FK. The three buffers reach the threshold at uncorrelated
+/// points, so before the fix the `hunks` (or `changes`) buffer performed its
+/// checked write while the referenced `changes` (or `commits`) rows were still
+/// buffered unwritten — the referent was absent and ingest aborted with
+/// `append hunk: Failed to append: Violates foreign key constraint`.
+///
+/// Reproducing it requires two things the existing ingest tests lack:
+///   1. A **file-backed** `FactsDb` (`FactsDb::open`). Every other ingest test
+///      uses `FactsDb::new_in_memory()`, whose Appenders never trip this
+///      check — which is exactly why the bug shipped invisibly.
+///   2. Enough hunk volume to cross the `204_800`-row threshold. This builds a
+///      repo whose modify commits churn 50 files with 20 non-adjacent hunks
+///      each, so `hunks` passes `204_800` rows (`~215_000` total) well inside
+///      the drain, while early commits/changes are still buffered.
+///
+/// On unfixed main this panics at `db.ingest(...)` with the FK violation; with
+/// the flush-ordering guard it completes and every child row's parent exists.
+///
+/// Fixture trade-off: unlike the shared bundle-backed fixtures in `test_support`
+/// (checked-in bundles, chosen because multi-process git builders flaked on
+/// loaded CI runners), this is a single test-local builder — no shared fixture
+/// has the high-volume shape the threshold needs. It shells out to `git` per
+/// commit within one test process and uses fixed author/committer dates so the
+/// built repo is deterministic.
+///
+/// Not run on windows: this test is volume coverage, not platform coverage,
+/// and its per-commit git spawns are exactly the workload whose process-spawn
+/// overhead priced the full suite off hosted windows runners. The flush-order
+/// mechanism it guards is platform-independent.
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn ingest_large_repo_crosses_fk_flush_threshold() {
+    // 50 files * 20 hunks * 215 modify commits ≈ 215_000 hunk rows, past the
+    // 204_800-row FK-check threshold. Files, edits, and commit count are the
+    // three knobs on total hunk volume; keep their product above the threshold.
+    const FILE_COUNT: usize = 50;
+    const EDITS_PER_FILE: usize = 20;
+    const MODIFY_COMMITS: usize = 215;
+    // Lines between successive edit anchors. Git coalesces edits within
+    // 2 * context (2 * 3 = 6) lines into one hunk, so an 8-line gap guarantees
+    // each of the EDITS_PER_FILE anchors surfaces as its own `@@ … @@` hunk.
+    const ANCHOR_GAP: usize = 8;
+    const BODY_LINES: usize = EDITS_PER_FILE * ANCHOR_GAP + 4;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path();
+    run_git(path, &["init", "-b", "main", "--quiet"]);
+    run_git(path, &["config", "user.email", "flush@example.com"]);
+    run_git(path, &["config", "user.name", "Flush Tester"]);
+
+    // A file body where line `1 + e*ANCHOR_GAP` (for e in 0..EDITS_PER_FILE)
+    // carries a per-commit marker; the gaps between anchors keep the edits in
+    // separate hunks.
+    let body = |marker: usize| -> String {
+        let mut lines: Vec<String> = (0..BODY_LINES).map(|n| format!("line {n}")).collect();
+        for e in 0..EDITS_PER_FILE {
+            lines[1 + e * ANCHOR_GAP] = format!("edit {e} v{marker}");
+        }
+        lines.join("\n") + "\n"
+    };
+
+    // Fixed epoch base for deterministic, strictly-increasing commit dates.
+    // git accepts `@<unix-seconds> <tz>`; a fixed stride per commit keeps
+    // chronology monotonic without calendar-overflow arithmetic.
+    // 2026-01-01T00:00:00Z = 1_767_225_600; one hour (3600s) per commit.
+    let commit_date = |seq: u64| -> String { format!("@{} +0000", 1_767_225_600 + seq * 3600) };
+
+    // Seed: add all files. These Added change rows carry no hunks (adds have
+    // empty hunk lists) but establish the files the modify commits churn.
+    for f in 0..FILE_COUNT {
+        write_file(path, &format!("src/f{f}.rs"), &body(0));
+    }
+    run_git(path, &["add", "."]);
+    commit_at(path, "seed", &commit_date(0));
+
+    // Each modify commit rewrites every file's anchors, producing
+    // EDITS_PER_FILE non-adjacent hunks per file. FILE_COUNT change rows and
+    // FILE_COUNT * EDITS_PER_FILE hunk rows accrue per commit, pushing `hunks`
+    // past the 204_800-row FK-check threshold before the drain ends.
+    for c in 0..MODIFY_COMMITS {
+        for f in 0..FILE_COUNT {
+            write_file(path, &format!("src/f{f}.rs"), &body(c + 1));
+        }
+        run_git(path, &["add", "."]);
+        commit_at(path, &format!("modify {c}"), &commit_date(c as u64 + 1));
+    }
+
+    let repo = GixRepo::open(path).expect("open");
+    // File-backed store — the in-memory store does not exhibit the FK-check
+    // behaviour, so this test must not use `FactsDb::new_in_memory()`.
+    let db = FactsDb::open(dir.path().join("facts.duckdb")).expect("db");
+    let opts = Options::default();
+    // On unfixed main this aborts with a foreign-key violation once the `hunks`
+    // buffer performs its FK-checked write ahead of the parent buffers.
+    db.ingest(&repo, &opts)
+        .expect("ingest must not abort on FK-flush ordering");
+
+    // Confirm we actually crossed the FK-check threshold — otherwise the test
+    // would pass on unfixed main and prove nothing.
+    let hunk_rows: u64 = db
+        .query_one_value("SELECT CAST(COUNT(*) AS TEXT) FROM hunks")
+        .expect("hunk count query")
+        .parse()
+        .expect("parse hunk count");
+    assert!(
+        hunk_rows > 204_800,
+        "test must push `hunks` past the 204_800-row FK-check threshold; got {hunk_rows}"
+    );
+
+    // Every child row's FK referent must be present (the constraint DuckDB
+    // enforces at flush). A clean ingest already guarantees this, but assert it
+    // directly so a future regression that silently drops rows is caught.
+    let orphan_changes: u64 = db
+        .query_one_value(
+            "SELECT CAST(COUNT(*) AS TEXT) FROM changes c \
+             WHERE NOT EXISTS (SELECT 1 FROM commits m WHERE m.rev = c.rev)",
+        )
+        .expect("orphan changes query")
+        .parse()
+        .expect("parse orphan changes");
+    assert_eq!(
+        orphan_changes, 0,
+        "no change row may reference a missing commit"
+    );
+    let orphan_hunks: u64 = db
+        .query_one_value(
+            "SELECT CAST(COUNT(*) AS TEXT) FROM hunks h \
+             WHERE NOT EXISTS ( \
+                 SELECT 1 FROM changes c WHERE c.rev = h.rev AND c.path = h.path \
+             )",
+        )
+        .expect("orphan hunks query")
+        .parse()
+        .expect("parse orphan hunks");
+    assert_eq!(
+        orphan_hunks, 0,
+        "no hunk row may reference a missing change"
+    );
+}
