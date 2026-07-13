@@ -561,6 +561,24 @@ mod tests {
     }
 
     #[test]
+    fn cache_key_changes_when_head_only_ingest_changes() {
+        // A head-only fact store carries empty history tables — serving it
+        // to a full-ingest caller (or vice versa) would be silent data
+        // loss, so the two modes must never share a cache entry.
+        let full = base_opts();
+        let head_only = Options {
+            head_only_ingest: true,
+            ..base_opts()
+        };
+        let k_full = cache_key(Path::new("/tmp/test-repo"), "sha", &full);
+        let k_head = cache_key(Path::new("/tmp/test-repo"), "sha", &head_only);
+        assert_ne!(
+            k_full, k_head,
+            "head_only_ingest must key head-only stores apart from full stores"
+        );
+    }
+
+    #[test]
     fn cache_path_has_correct_structure() {
         let opts = base_opts();
         let key = cache_key(Path::new("/tmp/test-repo"), "abc123", &opts);

@@ -180,6 +180,17 @@ pub struct Options {
     /// its content into `calibration_digest` for provenance. Set via
     /// `--calibration`.
     pub calibration: Option<PathBuf>,
+
+    /// Internal ingest mode used by `codelore calibrate`: populate only the
+    /// HEAD-time complexity facts (`entities` + `complexity_metrics`) and
+    /// leave every history table (`commits`, `changes`, `hunks`, …) empty.
+    /// The calibration path reads nothing but `complexity_metrics`, so the
+    /// full history walk — and the kamei/clones/imports passes it feeds —
+    /// is skipped entirely; this also lets calibrate ingest shallow
+    /// (depth-1) checkouts, which the commit walker cannot traverse.
+    /// Not exposed as a CLI flag. Serialized like every other field, so
+    /// `canonical_json` keys head-only cache entries apart from full ones.
+    pub head_only_ingest: bool,
 }
 
 impl Options {
@@ -394,6 +405,16 @@ impl Options {
                 "--release-tag-glob must not be empty".to_string(),
             ));
         }
+        if self.head_only_ingest && self.group_file.is_some() {
+            // Grouping rewrites the history tables (`changes` swap), which a
+            // head-only ingest leaves empty — the group map would silently
+            // apply to nothing. Reject loudly instead.
+            return Err(crate::CodeLoreError::InvalidOptions(
+                "--group-file is unsupported with the head-only ingest mode \
+                 (grouping rewrites history tables, which head-only ingest leaves empty)"
+                    .to_string(),
+            ));
+        }
         Ok(())
     }
 }
@@ -437,6 +458,7 @@ impl Default for Options {
             release_tag_glob: crate::constants::DEFAULT_RELEASE_TAG_GLOB.to_string(),
             target: None,
             calibration: None,
+            head_only_ingest: false,
         }
     }
 }
@@ -677,6 +699,32 @@ mod tests {
                 "window_days={days} must be accepted"
             );
         }
+    }
+
+    #[test]
+    fn validate_rejects_head_only_ingest_with_group_file() {
+        let opts = Options {
+            head_only_ingest: true,
+            group_file: Some(std::path::PathBuf::from("groups.toml")),
+            ..Options::default()
+        };
+        let err = opts
+            .validate()
+            .expect_err("head-only + group-file must fail");
+        assert!(
+            matches!(err, crate::CodeLoreError::InvalidOptions(_)),
+            "must be InvalidOptions, got: {err:?}"
+        );
+        assert!(
+            format!("{err}").contains("group-file"),
+            "error must name the offending field: {err}"
+        );
+        // head-only alone stays valid.
+        let head_only = Options {
+            head_only_ingest: true,
+            ..Options::default()
+        };
+        assert!(head_only.validate().is_ok());
     }
 
     #[test]

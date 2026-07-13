@@ -432,3 +432,97 @@ fn ingest_large_repo_crosses_fk_flush_threshold() {
         "no hunk row may reference a missing change"
     );
 }
+
+/// Head-only ingest must (a) leave every history table empty with
+/// truthfully-zero stats, and (b) extract the IDENTICAL per-function
+/// complexity fact set a full ingest of the same fixture produces — the
+/// HEAD tree is ground truth for both modes, so any divergence means one
+/// of them scans the wrong file set.
+#[test]
+fn head_only_ingest_matches_full_ingest_complexity_and_leaves_history_empty() {
+    let bio = codelore_lib::test_support::biomarker_repo::build();
+    let repo = GixRepo::open(bio.dir.path()).expect("open");
+
+    let full_opts = Options {
+        repo_path: bio.dir.path().to_path_buf(),
+        ..Options::default()
+    };
+    let head_only_opts = Options {
+        head_only_ingest: true,
+        ..full_opts.clone()
+    };
+
+    let full_db = FactsDb::new_in_memory().expect("full db");
+    full_db.ingest(&repo, &full_opts).expect("full ingest");
+
+    let head_db = FactsDb::new_in_memory().expect("head-only db");
+    let stats = head_db
+        .ingest(&repo, &head_only_opts)
+        .expect("head-only ingest");
+
+    // Truthful stats: nothing was walked.
+    assert_eq!(stats.commits_ingested, 0, "no commits walked in head-only");
+    assert_eq!(stats.changes_ingested, 0, "no changes walked in head-only");
+    assert_eq!(stats.clones_ingested, 0, "clones pass skipped in head-only");
+
+    let count = |db: &FactsDb, table: &str| -> u64 {
+        db.query_one_value(&format!("SELECT CAST(COUNT(*) AS TEXT) FROM {table}"))
+            .expect("count query")
+            .parse()
+            .expect("parse count")
+    };
+    assert_eq!(count(&head_db, "commits"), 0, "commits must stay empty");
+    assert_eq!(count(&head_db, "changes"), 0, "changes must stay empty");
+    assert!(
+        count(&head_db, "complexity_metrics") > 0,
+        "complexity_metrics must be populated by head-only ingest"
+    );
+
+    // Head-only rows are stamped with the real HEAD SHA (there is no
+    // commits table to derive a rev from).
+    let head_rev = head_db
+        .query_one_value("SELECT DISTINCT rev FROM complexity_metrics")
+        .expect("distinct rev");
+    assert_eq!(
+        head_rev, bio.head_sha,
+        "head-only rows must carry the fixture's HEAD SHA"
+    );
+
+    // Identical multiset of per-function complexity facts. ORDER BY over
+    // every compared column turns the row set into a canonical sequence,
+    // so Vec equality is multiset equality.
+    let rows = |db: &FactsDb| -> Vec<String> {
+        let mut stmt = db
+            .prepare(
+                "SELECT path, name, cyclomatic, cognitive, sloc, nargs, max_nesting, bool_ops \
+                 FROM complexity_metrics \
+                 ORDER BY path, name, cyclomatic, cognitive, sloc, nargs, max_nesting, bool_ops",
+            )
+            .expect("prepare complexity rows");
+        let mapped = stmt
+            .query_map([], |r| {
+                Ok(format!(
+                    "{}|{}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<i64>>(2)?,
+                    r.get::<_, Option<i64>>(3)?,
+                    r.get::<_, Option<i64>>(4)?,
+                    r.get::<_, Option<i64>>(5)?,
+                    r.get::<_, Option<i64>>(6)?,
+                    r.get::<_, Option<i64>>(7)?,
+                ))
+            })
+            .expect("query complexity rows");
+        mapped
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect complexity rows")
+    };
+    let head_rows = rows(&head_db);
+    let full_rows = rows(&full_db);
+    assert!(!head_rows.is_empty(), "fixture must yield complexity rows");
+    assert_eq!(
+        head_rows, full_rows,
+        "head-only and full ingest must extract the same complexity facts from the same tree"
+    );
+}

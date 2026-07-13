@@ -75,6 +75,9 @@ impl FactsDb {
     ///
     /// Panics if the producer thread panics (internal logic error, not expected in normal use).
     pub fn ingest<R: Repo>(&self, repo: &R, opts: &Options) -> Result<IngestStats> {
+        if opts.head_only_ingest {
+            return self.ingest_head_only(repo, opts);
+        }
         // Load the team-map ONCE before walk starts. Auto-discover
         // `.codelore-teams` in the repo root if `--team-map-file` wasn't
         // passed. Empty map means the projection is a no-op (the apply
@@ -197,6 +200,34 @@ impl FactsDb {
         let mut stats = stats;
         stats.clones_ingested = clones_n;
         Ok(stats)
+    }
+
+    /// Head-only ingest (`opts.head_only_ingest`): populate only the
+    /// HEAD-time complexity facts. No commit walk runs, so the two
+    /// walk-derived inputs of the complexity pass are replaced by direct
+    /// tree reads: `current_head_rev` → [`Repo::head_sha`] and
+    /// `query_live_paths` → [`Repo::tracked_paths_at_head`], filtered
+    /// through the same [`crate::paths_filter::PathsFilter`] +
+    /// git-metadata predicate the commit-walk consumer applies to
+    /// `changes` rows — both modes must scan the identical file set on
+    /// the same tree. History tables stay empty and the kamei / clones /
+    /// imports / grouping passes are skipped (each reads or joins commit
+    /// history). The returned stats are truthfully zero — nothing was
+    /// walked.
+    fn ingest_head_only<R: Repo>(&self, repo: &R, opts: &Options) -> Result<IngestStats> {
+        let head_rev = repo.head_sha()?;
+        let paths_filter = crate::paths_filter::PathsFilter::from_opts(opts)?;
+        let live_paths: Vec<String> = repo
+            .tracked_paths_at_head()?
+            .into_iter()
+            .filter(|p| {
+                let rel_path = std::path::Path::new(p);
+                !crate::paths_filter::is_git_metadata(rel_path)
+                    && !paths_filter.is_excluded(rel_path, false)
+            })
+            .collect();
+        self.ingest_complexity_at_head(repo, opts, &live_paths, &head_rev)?;
+        Ok(IngestStats::default())
     }
 }
 
