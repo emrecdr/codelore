@@ -292,13 +292,31 @@ fn swap_grouped_tables(conn: &duckdb::Connection) -> Result<()> {
 
 /// Build `complexity_metrics_grouped` from the raw `complexity_metrics`
 /// and `entities` tables joined through `_grouping_v1`. One permanent
-/// row per group, with `MAX` cognitive across all entities of all
-/// files in the group and `MAX` MI restricted to `kind='unit'` rows
-/// (the file-level Maintainability Index per the
-/// `rust-code-analysis` convention). `MAX` is the right rollup because
-/// each consuming analysis treats cognitive as a "worst function" risk
-/// signal; `MAX(MAX) = MAX` composes to "worst function anywhere in
-/// this group".
+/// row per group.
+///
+/// The table's contract: it must carry every column ANY `{cm_src}`
+/// consumer binds (see `crate::analyses::grouped_complexity`), with
+/// "worst function anywhere in this group" rollup semantics. The widest
+/// consumer is `code_health` — its biomarker INSERT binds `path`,
+/// `name`, `cyclomatic`, `loc`, `max_nesting`, `nargs`, `bool_ops`, and
+/// its corpus-aggregate pass binds `cyclomatic`, `cognitive`, `sloc`,
+/// `nargs`, `max_nesting`; `hotspots`, `god_classes`, and `stale_code`
+/// read only `cognitive` (plus `mi` on the grouped hotspots path).
+/// `MAX` is the right rollup because each consumer treats the metric as
+/// a per-file "worst function" risk signal, and `MAX(MAX) = MAX`
+/// composes to "worst function anywhere in this group"; `MAX` skips
+/// NULLs per column, so a metric absent on some functions still rolls
+/// up from the rest. `name` is `NULL` — the biomarker INSERT binds the
+/// column but never uses it past the binder, and a rolled-up group row
+/// has no single function name. `mi` keeps the `kind='unit'`-restricted
+/// `MAX` through the `entities` join (the file-level Maintainability
+/// Index per the `rust-code-analysis` convention).
+///
+/// Group names carry no file extension, so `code_health`'s language
+/// CASE buckets every group as `other`: biomarker `PERCENT_RANK`s rank
+/// groups against groups (self-consistent), and the corpus lens
+/// resolves no percentile for groups (honest absence — corpus tables
+/// are keyed by real languages).
 ///
 /// Stored as a permanent (not TEMPORARY) table so it survives cache
 /// replay — on cache hit, `FactsDb::open_read_only` opens a fresh
@@ -311,11 +329,19 @@ fn materialize_complexity_grouped(conn: &duckdb::Connection) -> Result<()> {
 
     conn.execute(
         "CREATE TABLE complexity_metrics_grouped AS \
-         WITH cog AS ( \
-             SELECT g.group_name AS path, MAX(cm.cognitive)::INTEGER AS cognitive \
+         WITH fn_metrics AS ( \
+             SELECT \
+                 g.group_name AS path, \
+                 MAX(cm.cognitive)::INTEGER AS cognitive, \
+                 MAX(cm.cyclomatic)::INTEGER AS cyclomatic, \
+                 MAX(cm.loc)::INTEGER AS loc, \
+                 MAX(cm.sloc)::INTEGER AS sloc, \
+                 MAX(cm.nargs)::INTEGER AS nargs, \
+                 MAX(cm.max_nesting)::INTEGER AS max_nesting, \
+                 MAX(cm.bool_ops)::INTEGER AS bool_ops \
              FROM complexity_metrics cm \
              INNER JOIN _grouping_v1 g ON g.raw_path = cm.path \
-             WHERE g.group_name IS NOT NULL AND cm.cognitive IS NOT NULL \
+             WHERE g.group_name IS NOT NULL \
              GROUP BY g.group_name \
          ), \
          mi AS ( \
@@ -327,8 +353,13 @@ fn materialize_complexity_grouped(conn: &duckdb::Connection) -> Result<()> {
              WHERE g.group_name IS NOT NULL AND e.kind = 'unit' AND cm.mi IS NOT NULL \
              GROUP BY g.group_name \
          ) \
-         SELECT COALESCE(cog.path, mi.path) AS path, cog.cognitive, mi.mi \
-         FROM cog FULL OUTER JOIN mi ON cog.path = mi.path",
+         SELECT \
+             COALESCE(f.path, mi.path) AS path, \
+             NULL::TEXT AS name, \
+             f.cognitive, f.cyclomatic, f.loc, f.sloc, \
+             f.nargs, f.max_nesting, f.bool_ops, \
+             mi.mi \
+         FROM fn_metrics f FULL OUTER JOIN mi ON f.path = mi.path",
         [],
     )
     .map_err(|e| CodeLoreError::Analysis(format!("materialize complexity_metrics_grouped: {e}")))?;

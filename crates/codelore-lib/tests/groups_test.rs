@@ -4,6 +4,7 @@
 //! analyses see rewritten (grouped) paths.
 
 use codelore_lib::Options;
+use codelore_lib::analyses::code_health::run_code_health;
 use codelore_lib::analyses::god_classes::run_god_classes;
 use codelore_lib::analyses::hotspots::run_hotspots;
 use codelore_lib::analyses::revisions::run_revisions;
@@ -441,5 +442,86 @@ fn grouping_strict_mode_with_modified_files() {
     assert_eq!(
         hunks_total, "0",
         "strict mode leaves no surviving paths, so hunks must be empty"
+    );
+}
+
+/// Code-health under `--group-file`, on a fixture with MODIFIED files so
+/// the gix walker emits `hunks` rows — the shape every real repository
+/// has (fixtures that only ADD files leave `hunks` empty and skip the
+/// FK path entirely). Covers the two grouped-run contracts at once:
+///
+/// - the changes-swap in `apply_grouping` must tolerate a SURVIVING
+///   hunk (the unmapped `notes.md` keeps its raw path in non-strict
+///   mode, so its hunk rows still reference `changes`), and
+/// - `complexity_metrics_grouped` must carry every complexity column
+///   code-health binds — it is the widest `{cm_src}` consumer (the
+///   biomarker INSERT and the corpus-aggregate pass read `name`,
+///   `cyclomatic`, `loc`, `sloc`, `nargs`, `max_nesting`, `bool_ops`
+///   on top of the `cognitive` the other analyses need).
+#[test]
+fn code_health_works_with_grouping() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path();
+
+    run_git(path, &["init", "-b", "main", "--quiet"]);
+    run_git(path, &["config", "user.email", "t@e.com"]);
+    run_git(path, &["config", "user.name", "T"]);
+
+    // Group file: collapse src/core/** into "Core". notes.md stays
+    // unmapped — non-strict mode keeps it under its raw path.
+    write(path.join("groups.txt"), "src/core => Core\n");
+
+    // Same gnarly source as the rollup test above: two functions, the
+    // second with double-digit cognitive complexity, so the grouped
+    // `MAX(cognitive)` lands well above 0.
+    let gnarly = "
+pub fn trivial() -> u32 { 1 }
+
+pub fn nested(a: bool, b: bool, c: bool, d: bool, e: bool) -> u32 {
+    if a {
+        if b {
+            if c {
+                if d {
+                    if e { 5 } else { 4 }
+                } else if c && b { 3 } else { 2 }
+            } else if b || a { 1 } else { 0 }
+        } else if a && b && c { 9 } else { 8 }
+    } else if a || b || c || d || e { 7 } else { 6 }
+}
+";
+    write(path.join("src/core/nested.rs"), gnarly);
+    write(path.join("notes.md"), "a\n");
+    run_git(path, &["add", "."]);
+    run_git(path, &["commit", "-m", "c1", "--quiet"]);
+
+    // Modify BOTH files. The mapped file's hunks are dropped by the
+    // grouping swap (line ranges don't translate to group level); the
+    // unmapped file's hunks survive under its raw path.
+    let gnarly_v2 = format!("{gnarly}\npub fn added_later() -> u32 {{ 3 }}\n");
+    write(path.join("src/core/nested.rs"), &gnarly_v2);
+    write(path.join("notes.md"), "a\nb\n");
+    run_git(path, &["add", "."]);
+    run_git(path, &["commit", "-m", "c2", "--quiet"]);
+
+    let repo = GixRepo::open(path).expect("gix open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: path.to_path_buf(),
+        min_revs: 0,
+        group_file: Some(path.join("groups.txt")),
+        strict_grouping: false,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts)
+        .expect("ingest with grouping over modified files");
+
+    let rows = run_code_health(&db, &opts).expect("code-health must run against grouped paths");
+    let core = rows
+        .iter()
+        .find(|r| r.path == "Core")
+        .expect("Core group must appear in code-health output");
+    assert!(
+        core.cognitive > 0.0,
+        "grouped Core row must report non-zero cognitive after rollup; got {core:?}"
     );
 }
