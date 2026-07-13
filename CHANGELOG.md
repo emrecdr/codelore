@@ -4,6 +4,10 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **`codelore calibrate` builds corpora shallow and HEAD-only.** Each pinned corpus repo is now fetched with a depth-1 fetch of exactly its pinned SHA (with an automatic full-clone fallback when the server disallows shallow SHA fetches — GitHub allows them) and ingested HEAD-only: only the pinned tree's per-function complexity facts are extracted, with no commit-history walk and no kamei/clones/imports passes. Corpus builds need a fraction of the previous disk and wall-time; artifacts are unaffected — the pooled per-function metrics are identical on the same pinned trees. The per-repo progress line now reports the checkout mode (`shallow` / `full` / `worktree`).
+
 ### Fixed
 
 - **`--group-file` works again on real repositories.** Any analysis under `--group-file` failed at ingest with `Violates foreign key constraint … is still referenced` on any repository containing modified files — i.e. nearly all real repositories: the grouping swap cleared `changes` while surviving diff-hunk rows (paths kept under their own name) still referenced it, and DuckDB checks the `hunks → changes` foreign key immediately per statement. The swap now snapshots surviving hunks, rebuilds the `changes` and `hunks` tables from the schema (child-first DELETE is not enough — DuckDB also verifies the constraint against index entries of already-deleted rows), and restores the survivors after the grouped rows are in place. Additionally, `code-health` under `--group-file` read complexity columns (`name`, `cyclomatic`, `loc`, `sloc`, `nargs`, `max_nesting`, `bool_ops`) that the grouped complexity rollup did not provide, failing with a binder error; the rollup now carries every column the grouped-source consumers bind, each as the per-group worst-function `MAX`. Group names carry no file extension, so `code-health` ranks groups against groups in the `other` language bucket and reports no corpus percentile for groups. The cache epoch is bumped so previously written grouped caches are re-ingested with the widened rollup.

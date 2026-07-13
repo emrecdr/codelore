@@ -319,6 +319,41 @@ impl Repo for GixRepo {
         Ok(Some(std::mem::take(&mut obj.data)))
     }
 
+    fn tracked_paths_at_head(&self) -> Result<Vec<String>> {
+        let repo = self.inner.to_thread_local();
+        let head_id = repo
+            .head_id()
+            .map_err(|e| CodeLoreError::Repo(format!("tracked_paths_at_head head_id: {e}")))?;
+        let commit = repo
+            .find_commit(head_id)
+            .map_err(|e| CodeLoreError::Repo(format!("tracked_paths_at_head find_commit: {e}")))?;
+        let tree = commit
+            .tree()
+            .map_err(|e| CodeLoreError::Repo(format!("tracked_paths_at_head tree: {e}")))?;
+        // The breadth-first `files()` preset records EVERY reachable entry
+        // (tree entries included) with its full repo-relative,
+        // `/`-separated path. `is_blob()` keeps regular-file blobs
+        // (100644/100755) only — symlinks (120000) and submodule gitlinks
+        // (160000) fall outside the blob mode class, matching the trait
+        // contract and `read_blob_at`'s `is_blob` guard.
+        let entries = tree
+            .traverse()
+            .breadthfirst
+            .files()
+            .map_err(|e| CodeLoreError::Repo(format!("tracked_paths_at_head traverse: {e}")))?;
+        let mut paths: Vec<String> = entries
+            .into_iter()
+            .filter(|entry| entry.mode.is_blob())
+            .map(|entry| entry.filepath.to_string())
+            .collect();
+        // Tree traversal yields git tree order (directories sort with a
+        // virtual trailing `/`), which differs from plain byte order of
+        // full paths. Sort explicitly so both backends return the same
+        // deterministic ascending order.
+        paths.sort_unstable();
+        Ok(paths)
+    }
+
     fn tags(&self) -> Result<Vec<super::TagInfo>> {
         use super::TagInfo;
         use time::OffsetDateTime;

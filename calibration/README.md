@@ -78,17 +78,31 @@ Update the `sha` in `corpus.toml`, then regenerate the artifact as above.
 
 ## Disk and time expectations
 
-The build clones each repo in full into a throwaway tempdir (auto-removed once
-that repo's metrics are pooled) and ingests it into the cache root
-(`--cache-dir` overrides the default XDG cache). Expect:
+The build materializes each pinned SHA into a throwaway tempdir (auto-removed
+once that repo's metrics are pooled) via a **depth-1 fetch** of exactly the
+pinned SHA where the server allows fetching arbitrary SHAs
+(`uploadpack.allowAnySHA1InWant` — GitHub does); when the server refuses, it
+falls back to a full clone with a warning. Local-path sources use a detached
+`git worktree` instead. The per-repo progress line reports which path was
+taken (`shallow` / `full` / `worktree`).
 
-- **Time:** up to a few hours for the full ~100-repo manifest, dominated by
-  sequential `git clone`s over the network.
-- **Disk:** the per-repo cache accumulates in the cache root (order ~1–2 GB for
-  the full manifest). Each repo's cache is only read during its own ingest, so a
-  constrained environment can point `--cache-dir` at scratch storage and clear
-  it between builds. Transient clone tempdirs are the peak; a very large repo can
-  briefly need hundreds of MB before its tempdir is dropped.
+The ingest is **HEAD-only**: only the pinned tree's per-function complexity
+facts are extracted — no commit history is walked, and the history tables in
+the per-repo cache (under the cache root; `--cache-dir` overrides the default
+XDG cache) stay empty. That is both why shallow checkouts are ingestible
+(there is no history to traverse) and why the cache entries stay small.
+Expect:
 
-A repo that fails to clone, check out, or ingest is skipped with a logged
+- **Time:** dominated by sequential network fetches; a depth-1 fetch moves a
+  single tree instead of the whole history, so most repos take seconds and
+  the full-clone fallback is the slow path.
+- **Disk:** the per-repo cache accumulates in the cache root, holding only
+  complexity facts per repo. Each repo's cache is only read during its own
+  ingest, so a constrained environment can point `--cache-dir` at scratch
+  storage and clear it between builds. Transient checkout tempdirs are the
+  peak: a shallow checkout needs roughly one working tree's worth of space,
+  while a full-clone fallback of a very large repo can briefly need more
+  before its tempdir is dropped.
+
+A repo that fails to fetch, check out, or ingest is skipped with a logged
 reason; `repos_included` / `repos_attempted` in the artifact record the tally.

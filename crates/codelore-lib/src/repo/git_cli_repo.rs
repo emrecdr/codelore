@@ -261,6 +261,32 @@ impl Repo for GitCliRepo {
         }
     }
 
+    fn tracked_paths_at_head(&self) -> Result<Vec<String>> {
+        // `ls-tree -r -z` walks HEAD's tree recursively; with `-z`, git
+        // emits paths verbatim (no quoting), so spaces and newlines
+        // survive intact regardless of `core.quotepath` — `run_git`'s
+        // injected `core.quotepath=false` is belt-and-suspenders for the
+        // non-`-z` invocations it also serves. Record shape:
+        // `<mode> <type> <oid>\t<path>`.
+        let output = self.run_git(&["ls-tree", "-r", "-z", "HEAD"])?;
+        if !output.status.success() {
+            return Err(CodeLoreError::Repo(format!(
+                "git ls-tree: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+        let mut paths: Vec<String> = output
+            .stdout
+            .split(|b| *b == 0)
+            .filter_map(parse_ls_tree_record)
+            .collect();
+        // ls-tree emits git tree order (directories sort with a virtual
+        // trailing `/`); sort explicitly to match GixRepo's deterministic
+        // ascending order over full paths.
+        paths.sort_unstable();
+        Ok(paths)
+    }
+
     fn tags(&self) -> Result<Vec<super::TagInfo>> {
         use super::TagInfo;
 
@@ -327,6 +353,25 @@ impl Repo for GitCliRepo {
 // ---------------------------------------------------------------------------
 // Parser helpers
 // ---------------------------------------------------------------------------
+
+/// Parse one NUL-terminated `git ls-tree -r -z` record
+/// (`<mode> <type> <oid>\t<path>`) into its path when the mode is a
+/// regular-file blob — the `0o100xxx` mode class, matched by prefix so
+/// legacy non-canonical modes (e.g. group-writable `100664` trees
+/// predating git's normalization) are kept, exactly as `GixRepo`'s
+/// class-based `is_blob` filter keeps them. Symlinks (`120000`) and
+/// submodule gitlinks (`160000`) return `None`. The path bytes are
+/// decoded lossily, mirroring how `GixRepo` renders its `BString`
+/// paths — both backends therefore produce identical strings for any
+/// valid-UTF-8 path.
+fn parse_ls_tree_record(record: &[u8]) -> Option<String> {
+    let tab = record.iter().position(|b| *b == b'\t')?;
+    let mode = record[..tab].split(|b| *b == b' ').next()?;
+    if !mode.starts_with(b"100") {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&record[tab + 1..]).into_owned())
+}
 
 fn parse_email_from_mailmap_line(line: &str) -> Option<String> {
     let (_, after) = line.rsplit_once('<')?;
@@ -785,6 +830,51 @@ fn parse_iso_timestamp(s: &str) -> Option<time::OffsetDateTime> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `parse_ls_tree_record` keeps regular-file blobs (100644/100755)
+    /// and preserves paths with spaces (the `-z` NUL framing means the
+    /// tab is the only in-record separator before the path).
+    #[test]
+    fn ls_tree_record_keeps_regular_file_blobs() {
+        assert_eq!(
+            parse_ls_tree_record(
+                b"100644 blob d00491fd7e5bb6fa28c517a0bb32b8b506539d4d\tsrc/main file.rs"
+            ),
+            Some("src/main file.rs".to_string()),
+        );
+        assert_eq!(
+            parse_ls_tree_record(
+                b"100755 blob d00491fd7e5bb6fa28c517a0bb32b8b506539d4d\tscripts/run.sh"
+            ),
+            Some("scripts/run.sh".to_string()),
+        );
+        // Legacy non-canonical blob mode (pre-normalization trees) stays a
+        // regular file — the class prefix matches, mirroring gix `is_blob`.
+        assert_eq!(
+            parse_ls_tree_record(
+                b"100664 blob d00491fd7e5bb6fa28c517a0bb32b8b506539d4d\tlegacy.rs"
+            ),
+            Some("legacy.rs".to_string()),
+        );
+    }
+
+    /// Symlinks (120000) and submodule gitlinks (160000) must be dropped
+    /// — mirrors `GixRepo`'s `is_blob` mode filter. Empty trailing
+    /// records (from the final NUL) parse to `None` too.
+    #[test]
+    fn ls_tree_record_drops_symlinks_gitlinks_and_empty() {
+        assert_eq!(
+            parse_ls_tree_record(b"120000 blob d00491fd7e5bb6fa28c517a0bb32b8b506539d4d\tlink.rs"),
+            None,
+        );
+        assert_eq!(
+            parse_ls_tree_record(
+                b"160000 commit d00491fd7e5bb6fa28c517a0bb32b8b506539d4d\tvendor/dep"
+            ),
+            None,
+        );
+        assert_eq!(parse_ls_tree_record(b""), None);
+    }
 
     /// Brace-collapsed renames at various positions in the path must
     /// expand to the destination so the numstat key joins correctly
