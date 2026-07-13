@@ -11,8 +11,9 @@
 //! never matched `complexity_metrics.path` (raw path). `apply_grouping`
 //! therefore also materialises `complexity_metrics_grouped`: one row per
 //! group carrying the per-group `MAX` of every complexity column the
-//! `{cm_src}` consumers read (cognitive, cyclomatic, loc, sloc, nargs,
-//! max_nesting, bool_ops) plus `MAX` `kind='unit'` MI; analyses opt in
+//! `{cm_src}` consumers read (`cognitive`, `cyclomatic`, `loc`, `sloc`,
+//! `nargs`, `max_nesting`, `bool_ops`) plus `MAX` `kind='unit'` MI —
+//! analyses opt in
 //! by reading from the table named here.
 //!
 //! Centralised so the four affected analyses share one dispatch. This
