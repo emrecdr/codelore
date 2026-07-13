@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-07-13
+
 ### Added
 
 - **Corpus-relative percentile lens on `code-health`.** Every `code-health` row now carries an optional `corpus_percentile` — where the file's *worst raw complexity dimension* (`cyclomatic`, `cognitive`, `sloc`, `nargs`, `max_nesting`) sits versus a per-language reference corpus, read as a CDF: `P(X ≤ value)`. A `beyond_corpus` flag marks values past the corpus maximum. The lens is additive: a run with no active calibration data leaves every pre-existing field byte-identical. An embedded **world corpus** (vintage `world-2026-07-13`, built from 99 permissive-license OSS repos across the five Tier-1 languages) ships in the binary and activates the lens by default; `--calibration <artifact>` on `analyze`/`check` overrides it. The percentile surfaces in the CLI (`corpus-pct` column), the SPA file drawer, and the `code_health` MCP tool.
