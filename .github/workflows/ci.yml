@@ -250,7 +250,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      # Pinned to v2.0.20: the v2.1.0 container fails on repos with a
+      # rust-toolchain.toml override (toolchain not installed in its image).
+      - uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe
 
   dogfood:
     # Run the release `codelore` binary against this repo's own history
