@@ -58,7 +58,9 @@ code-health test suites, and commit the regenerated `world.calib.json`.
 ### Vintage naming
 
 Use `world-YYYY-MM` for a full world-corpus build (the month the manifest SHAs
-were pinned / the build was run). The `placeholder-` prefix is reserved for the
+were pinned / the build was run), appending `-DD` when a rebuild lands within
+the same month (e.g. `world-2026-07-13`) so the two vintages stay
+distinguishable. The `placeholder-` prefix is reserved for the
 not-yet-built stand-in. Organization-specific corpora built from a private
 manifest should use a distinct label (e.g. `acme-2026-07`) so provenance stamps
 stay unambiguous.
