@@ -679,6 +679,44 @@ fn read_blob_at_returns_none_for_a_directory_path() {
     assert_eq!(g, c, "backends must agree a directory is not a blob");
 }
 
+/// `tracked_paths_at_head()` must return the identical path list from
+/// both backends: every regular-file blob at HEAD, repo-relative,
+/// `/`-separated, sorted ascending with no duplicates. The head-only
+/// ingest mode substitutes this for the walk-derived live-path
+/// reconstruction, so cross-backend divergence here would silently
+/// change which files the calibration complexity scan reads.
+#[test]
+fn tracked_paths_at_head_matches() {
+    let (gix, cli) = open_both();
+
+    let gix_paths = gix
+        .tracked_paths_at_head()
+        .expect("gix tracked_paths_at_head");
+    let cli_paths = cli
+        .tracked_paths_at_head()
+        .expect("cli tracked_paths_at_head");
+
+    assert!(
+        !gix_paths.is_empty(),
+        "fixture must have tracked files at HEAD"
+    );
+    assert!(
+        gix_paths.windows(2).all(|w| w[0] < w[1]),
+        "paths must be strictly ascending (sorted, no duplicates): {gix_paths:?}"
+    );
+    assert_eq!(
+        gix_paths, cli_paths,
+        "GixRepo and GitCliRepo disagree on tracked paths at HEAD"
+    );
+    // README.md is known-tracked at HEAD (the read_blob_at_head test
+    // relies on it) — anchor the list to a concrete fixture file so an
+    // accidentally-empty-but-equal regression can't pass.
+    assert!(
+        gix_paths.iter().any(|p| p == "README.md"),
+        "README.md must be enumerated at HEAD; got {gix_paths:?}"
+    );
+}
+
 /// `diff_hunks(rev, path)` must agree byte-for-byte across the two
 /// backends: gix-imara-diff's `Diff::hunks()` iterator converted to
 /// git's 1-indexed `@@ -old_start,old_lines +new_start,new_lines @@`

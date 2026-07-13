@@ -96,6 +96,17 @@ pub trait Repo: Send + Sync {
         self.read_blob_at("HEAD", path)
     }
 
+    /// Every regular-file blob path (modes `100644`/`100755`) in the HEAD
+    /// commit's tree, repo-relative with `/` separators, sorted ascending.
+    /// Symlinks (`120000`) and submodule gitlinks (`160000`) are excluded —
+    /// neither carries source bytes the HEAD-time scans can parse.
+    ///
+    /// Unlike the walk-derived live-path reconstruction (most recent
+    /// change per path is not a deletion), this reads the tree directly,
+    /// so it works without any commit history in the fact store — the
+    /// head-only ingest mode depends on that.
+    fn tracked_paths_at_head(&self) -> Result<Vec<String>>;
+
     /// Return all git tags in this repository, sorted ascending by
     /// `(date, name)`.
     ///
