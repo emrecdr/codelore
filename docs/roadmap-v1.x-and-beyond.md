@@ -43,7 +43,7 @@ The current state of the codebase. For per-release history see `CHANGELOG.md`.
 
 ### Analysis surface
 
-- **43 analyses** including hotspots, change-coupling, ownership, code-health, clones, live-clones, Kamei JIT-SDP features, knowledge-islands, centrality, behavioural communities (Leiden), god-classes, architecture-violations, stale-code, pair-programming, lead-time, bus-factor, and refactoring-targets
+- **54 analyses** including hotspots, change-coupling, ownership, code-health, clones, live-clones, Kamei JIT-SDP features, knowledge-islands, centrality, behavioural communities (Leiden), god-classes, architecture-violations, stale-code, pair-programming, lead-time, bus-factor, and refactoring-targets
 - **MI (Maintainability Index) surfacing** — `mi_sei()` per-function values from `codelore-rca` joined onto hotspots and code-health, banded into Low/Moderate/High via SQL `CASE WHEN` and rolled up on the KPI tiles (Coleman 1994 + SEI variant; polyglot across the languages `codelore-rca` parses)
 - **Behavioural-graph centrality** as a first-class analysis (degree / in / out on the Fisher-significant co-change graph) — previously an internal TEMP TABLE, now a queryable output row type
 - **Behavioural communities (Leiden)** over the Fisher-significant coupling graph — different signal vs static-import modularity tools (we cluster on git co-change). Output: per-file community ID + global Q score, surfaced on a KPI tile, in the sankey node coloring, and in the drawer's "behavioural module" section
@@ -51,7 +51,7 @@ The current state of the codebase. For per-release history see `CHANGELOG.md`.
 
 ### CLI surface
 
-- 1 primary subcommand (`codelore analyze`) plus 8 ancillary subcommands: `codelore diff <base>..<head>` (PR-mode, 4 output formats, `--fail-on` quality gate), `codelore check` (quality-gate validation against `.codelore-thresholds.toml`, `$GITHUB_OUTPUT`-integrated), `codelore explain` (formula + citation for 15 metrics), `codelore profile` (operational telemetry), `codelore docs` (markdown analysis catalogue), `codelore notes <range>` (release-notes markdown), `codelore completions <shell>` (bash | zsh | fish | powershell | elvish), `codelore schema <row-type>` (JSON Schema 2020-12)
+- 1 primary subcommand (`codelore analyze`) plus 10 ancillary subcommands: `codelore diff <base>..<head>` (PR-mode, 4 output formats, `--fail-on` quality gate), `codelore check` (quality-gate validation against `.codelore-thresholds.toml`, `$GITHUB_OUTPUT`-integrated), `codelore explain` (formula + citation for 15 metrics), `codelore profile` (operational telemetry), `codelore docs` (markdown analysis catalogue), `codelore ingest-sarif` (external-findings sidecar from SARIF documents), `codelore calibrate` (build org-specific reference corpus), `codelore completions <shell>` (bash | zsh | fish | powershell | elvish), `codelore schema <row-type>` (JSON Schema 2020-12), `codelore mcp` (MCP server over stdio)
 - Cross-field validation at the CLI boundary via `Options::validate()` — rejects the four pathological combinations (`min_coupling_pct > max_coupling_pct`, `clone_similarity_floor ∉ [0, 1]`, `fisher_significance ∉ [0, 1]`, `after > before`)
 
 ### SPA dashboard (`--format spa`)

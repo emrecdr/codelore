@@ -26,12 +26,12 @@ pub enum AnalysisName {
     Clones,
     // Live-clone × Fisher-significant co-change intersection
     CloneCoupling,
-    // code-maat parity sprint (PAR-1+): Sum of Coupling — per-entity total
-    // of (commit-size − 1) across every commit the entity appears in.
+    // Sum of Coupling — per-entity total of (commit-size − 1) across every
+    // commit the entity appears in.
     Soc,
-    // PAR-2: commit-message regex matcher.
+    // Commit-message regex matcher.
     Messages,
-    // PAR-3: top-author-per-file analyses (three variants of the same
+    // Top-author-per-file analyses (three variants of the same
     // metric-swap pattern). `refactoring-main-dev` is an alias for
     // `MainDevByDeletions` — the analysis is just main-dev with metric
     // = deleted-lines; the "refactoring" name is code-maat's heuristic
@@ -39,11 +39,11 @@ pub enum AnalysisName {
     MainDev,
     MainDevByRevs,
     MainDevByDeletions,
-    // PAR-4 + PAR-5: per-(entity, author) row analyses.
+    // Per-(entity, author) row analyses.
     EntityEffort,
     EntityOwnership,
-    // PAR-1 (modernise-don't-migrate): codelore's previous per-author
-    // commit leaderboard. The `authors` name now resolves to the
+    // codelore's previous per-author commit leaderboard. The `authors`
+    // name now resolves to the
     // per-entity Bird et al. risk-indicator query; `top-committers`
     // is the "who commits the most overall" view, enriched with
     // LoC totals and first/last commit dates.
@@ -379,7 +379,7 @@ impl AnalysisName {
     /// the `commits` JOIN for `rev` equality. These four are the only
     /// analyses that semantically MAKE SENSE under bucketing (they're
     /// all about co-change, which `--time-bucket` is designed to
-    /// smooth). The other 18 are either per-file or per-author
+    /// smooth). The other 50 are either per-file or per-author
     /// aggregations where bucketing is semantically a no-op or
     /// outright invalid.
     ///

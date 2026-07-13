@@ -10,7 +10,7 @@
 //! - `path` — the entity identifier
 //! - `age_months` — whole calendar months between the latest qualifying
 //!   commit and the anchor date (interval-month semantics: Mar 15 →
-//!   Apr 1 = 0 months, not 1 — see PAR-4 SQL doc below)
+//!   Apr 1 = 0 months, not 1 — see inline SQL comment below)
 //! - `age_days` — whole days between the latest qualifying commit and
 //!   the anchor — finer-grained precision than code-maat's months-only
 //!   output, useful for sort tie-breaking and recency triage
@@ -23,7 +23,7 @@
 //! questions ("how recently?", "is this a stale stale or a fresh stale?")
 //! without re-running the analysis.
 //!
-//! ## Anchor-date filter (PAR-2 fix)
+//! ## Anchor-date filter
 //!
 //! `--age-time-now` lets the operator anchor the "now" used by the age
 //! calculation. To make the back-test pattern (`--age-time-now <past>`)
@@ -58,7 +58,7 @@ pub struct CodeAgeRow {
 // including the current second. Code-maat used a strict `<` operator
 // because their day-precision dates never encountered the equality case
 // in real repos; codelore stores TIMESTAMP and so must be explicit.
-// PAR-4: `age_months` uses interval-month semantics (whole calendar
+// `age_months` uses interval-month semantics (whole calendar
 // months elapsed between MAX(commit) and anchor), NOT `DATE_DIFF`'s
 // month-boundary-crossing count. Concretely:
 //
@@ -80,7 +80,7 @@ pub struct CodeAgeRow {
 // Code-age filters to files that are LIVE AS OF THE ANCHOR
 // MOMENT (not just live at HEAD — back-test pattern needs the historical
 // view). The `live_paths_at_anchor` CTE takes the same anchor parameter
-// as the existing PAR-2 filter and selects paths whose latest change
+// as the anchor-date filter and selects paths whose latest change
 // at-or-before anchor is not a deletion. This drops 2-year-old deleted
 // files from current-anchor reports AND correctly resurrects files in
 // back-test mode that were deleted later.

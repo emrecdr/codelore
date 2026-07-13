@@ -1,4 +1,4 @@
-//! Architectural grouping for `--group-file` — code-maat parity (PAR-7).
+//! Architectural grouping for `--group-file`.
 //!
 //! Reads a text file where each non-blank line maps a path-prefix or regex
 //! to a logical group name:

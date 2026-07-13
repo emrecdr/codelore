@@ -23,7 +23,7 @@
         // sees them (otherwise dynamic suffixes drop out of the bundle).
         // `aria-selected` mirrors the visual state for the WAI-ARIA
         // tabs pattern — without it screen readers see every tab as
-        // equally focusable but none as "selected" (F136).
+        // equally focusable but none as "selected".
         for (var j = 0; j < buttons.length; j++) {
           const isCurrent = (buttons[j] === evt.currentTarget);
           buttons[j].classList.toggle('tab-active', isCurrent);
@@ -259,7 +259,7 @@
   // palette tuned for dark-background readability; cycles if there are
   // more authors than colors.
   function makeAuthorPalette(authors) {
-    // F132: palette read from CSS custom properties so light theme
+    // Palette read from CSS custom properties so light theme
     // gets a deeper-saturation set that's readable on white cards.
     // The 15-token chain mirrors the previous hard-coded array;
     // `token()` is theme-aware and cache-invalidated on rerender.

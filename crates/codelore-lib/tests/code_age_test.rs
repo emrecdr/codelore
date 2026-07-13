@@ -49,12 +49,12 @@ fn code_age_for_tiny_repo() {
     );
 }
 
-/// PAR-2 regression: `--age-time-now <past-date>` must drop commits that
-/// occurred AFTER the anchor. Before this fix, `code-age` returned
-/// negative `age_months` values for files whose latest commit was past
-/// the anchor; code-maat's `changes-within-time-span` correctly drops
-/// them. With the WHERE filter in place, files whose only commits are
-/// after the anchor disappear from the output entirely.
+/// Regression: `--age-time-now <past-date>` must drop commits that
+/// occurred AFTER the anchor. Without the anchor filter, `code-age`
+/// returned negative `age_months` values for files whose latest commit
+/// was past the anchor; code-maat's `changes-within-time-span` correctly
+/// drops them. With the WHERE filter in place, files whose only commits
+/// are after the anchor disappear from the output entirely.
 #[test]
 fn code_age_back_test_excludes_post_anchor_commits() {
     use time::macros::date;
@@ -79,9 +79,9 @@ fn code_age_back_test_excludes_post_anchor_commits() {
     );
 }
 
-/// PAR-4 regression: `age_months` uses interval-month (whole calendar
-/// months elapsed) semantics, NOT month-boundary-crossing. Three table
-/// cases drawn from the doc-comment in `code_age.rs`:
+/// Regression: `age_months` uses interval-month (whole calendar months
+/// elapsed) semantics, NOT month-boundary-crossing. Three table cases
+/// drawn from the doc-comment in `code_age.rs`:
 ///
 ///   anchor 2026-04-01, last 2026-03-15  → interval 0 (boundary-cross 1)
 ///   anchor 2026-04-16, last 2026-03-15  → interval 1 (boundary-cross 1)
@@ -166,17 +166,17 @@ fn code_age_uses_interval_month_semantics_not_boundary_crossing() {
     }
 }
 
-/// PAR-2 regression: when the anchor is RECENT and commits straddle
-/// the anchor, files with only post-anchor commits drop while files
-/// with at least one pre-anchor commit retain the pre-anchor max as
-/// their reference and never produce a negative `age_months`.
+/// Regression: when the anchor is RECENT and commits straddle the
+/// anchor, files with only post-anchor commits drop while files with
+/// at least one pre-anchor commit retain the pre-anchor max as their
+/// reference and never produce a negative `age_months`.
 #[test]
 fn code_age_never_returns_negative_age() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
     let repo = GixRepo::open(tiny.dir.path()).expect("open");
     let db = FactsDb::new_in_memory().expect("db");
-    // Anchor = today (default). Without the PAR-2 filter this would still
-    // be fine; but anchor a few days in the past relative to test runs
+    // Anchor = today (default). Without the anchor-date filter this would
+    // still be fine; but anchor a few days in the past relative to test runs
     // and the negative-age bug would re-surface without the filter.
     let anchor = (time::OffsetDateTime::now_utc() - time::Duration::days(30)).date();
     let opts = Options {

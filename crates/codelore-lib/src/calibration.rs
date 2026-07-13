@@ -700,7 +700,7 @@ mod tests {
         assert!(manifest.repos.is_empty());
     }
 
-    /// A non-placeholder vintage is surfaced (the Task-12 "real artifact → Some"
+    /// A non-placeholder vintage is surfaced (the "real artifact → Some"
     /// path), proving the filter keys on the vintage prefix alone.
     #[test]
     fn from_slice_accepts_a_real_vintage() {

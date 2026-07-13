@@ -104,10 +104,9 @@ All analyses are pure SQL views over the DuckDB fact store + thin Rust orchestra
 ```bash
 codelore explain <metric>           # formula + citation + SQL source for any metric
 codelore check                      # quality-gate validation against .codelore-thresholds.toml
-codelore check --diff base..head    # PR-mode quality gate
+codelore diff <base>..<head>        # PR-mode quality gate
 codelore profile                    # operational telemetry
 codelore docs                       # markdown analysis catalogue
-codelore notes <base>..<head>       # release-notes markdown summary
 codelore completions <shell>        # bash | zsh | fish | powershell | elvish
 codelore schema <row-type>          # JSON Schema 2020-12 emit
 ```
@@ -122,12 +121,12 @@ codelore analyze --analysis <NAME> --format <FORMAT>
 
 | Format | Use case | Notes |
 |---|---|---|
-| `csv` (default) | Code-maat compatibility; pipe into other tools | Headers match code-maat exactly |
+| `csv` (default) | Code-maat compatibility; pipe into other tools | snake_case headers by default; code-maat-exact hyphenated headers only under `--code-maat-compat` |
 | `json` | Programmatic consumption | Pretty-printed; serde-derived |
 | `markdown` | `$GITHUB_STEP_SUMMARY` in CI | GFM tables; one analysis per `# CodeLore <name>` header |
 | `sarif` | GitHub Code Scanning / GitLab security / Defectdojo | SARIF 2.1.0; supported for `hotspots`, `clones`, `clone-coupling`, and `codelore diff` (CODELORE-MISSING-COCHANGE) today |
 | `parquet` | DuckDB / Polars / pandas / Spark | `--output PATH` required; binary format |
-| `sqlite` | Ad-hoc SQL exploration of the full fact store | `--output PATH` required; dumps all 9 tables (`commits`, `changes`, `hunks`, `entities`, `complexity_metrics`, `clones`, `imports`, `author_aliases`, `provenance`). Strict superset of code-maat's `--analysis identity` raw-dataset dump. |
+| `sqlite` | Ad-hoc SQL exploration of the full fact store | `--output PATH` required; dumps 8 tables: `commits`, `changes`, `hunks`, `entities`, `complexity_metrics`, `author_aliases`, `provenance`, `clones`. |
 | `spa` | Single-HTML interactive dashboard (CodeScene-equivalent surface). Opens in any browser, runs offline, fits in a CI artefact. | `--output PATH` optional (defaults to `.codelore/spa.html`); ~1.5 MB self-contained HTML. Embeds Apache ECharts + d3-hierarchy SHA-pinned at build time. Composite (multi-analysis) emitter — bypasses `--analysis`. **Opt-in `spa` Cargo feature**: default `cargo install codelore` builds offline-clean without this. Released binaries / Homebrew / ghcr ship with `spa` enabled. |
 | `step-summary` | GitHub Actions `$GITHUB_STEP_SUMMARY`. Single GFM Markdown summary with KPI table, top-10 hotspots (MI band emoji), MI band breakdown (unicode bars), behavioral coupling density, knowledge islands `<details>` collapsible. | Streams to stdout by default; redirect with `>> $GITHUB_STEP_SUMMARY` in CI. Typical 2–10 KB; well under GitHub's 1 MB step-summary cap. Same composite-dashboard inputs as `--format spa` so a single ingest run can emit BOTH (run `--format step-summary` first to stdout, then `--format spa` to file). Requires the same `spa` Cargo feature as `--format spa`. |
 
@@ -473,11 +472,11 @@ Every `codelore diff --format sarif` result carries these versioned `partialFing
 ```
 codelore analyze [OPTIONS]
   -a, --analysis NAME           Which analysis [default: revisions]
-                                (any of the 44 above; passing an unknown
+                                (any of the 54 above; passing an unknown
                                 name prints the full valid list)
   -r, --repo PATH               Git repo path [default: .]
   -f, --format FORMAT           Output format [default: csv]
-                                csv | json | ndjson | sarif | markdown | gha | html | parquet | sqlite | spa
+                                csv | json | ndjson | sarif | markdown | gha | html | parquet | sqlite | spa | step-summary
   -o, --output PATH             Write to file instead of stdout
       --min-revs N              Min revisions per entity [default: 5]
       --rows N                  Cap output to N rows
@@ -496,26 +495,26 @@ codelore analyze [OPTIONS]
       --knowledge-model MODEL   Knowledge model for `bus-factor`:
                                 commits (default) | doe
 
-  # ── Coupling-family thresholds (PAR-6) ────────────────────────────
-      --min-shared-revs N       Per-pair shared-commit floor [default: 2]
+  # ── Coupling-family thresholds ────────────────────────────────────
+      --min-shared-revs N       Per-pair shared-commit floor [default: 5]
       --min-coupling N          Min coupling degree percentage [default: 30]
       --max-coupling N          Max coupling degree percentage [default: 100]
       --max-changeset-size N    Drop commits touching more than N files
                                 (refactor-sweep filter) [default: 30]
 
-  # ── SoC threshold (PAR-1 + PAR-9) ─────────────────────────────────
+  # ── SoC threshold ─────────────────────────────────────────────────
       --min-soc N               Minimum Sum-of-Coupling per entity for `soc`
                                 analysis [default: 1]. Under
                                 --code-maat-compat, --min-revs falls back to
                                 the legacy "minimum SoC sum" semantic.
 
-  # ── Messages analysis (PAR-2) ─────────────────────────────────────
+  # ── Messages analysis ─────────────────────────────────────────────
   -e, --expression-to-match REGEX
                                 Required for `--analysis messages`.
                                 Server-side `regexp_matches(message, REGEX)`
                                 (RE2 flavor) joined with `changes`.
 
-  # ── Time-bucket coupling (PAR-8) ──────────────────────────────────
+  # ── Time-bucket coupling ──────────────────────────────────────────
       --time-bucket UNIT        day | week | month
                                 Modern replacement for code-maat's
                                 sliding-window --temporal-period. Materializes
@@ -525,12 +524,12 @@ codelore analyze [OPTIONS]
                                 Non-overlapping buckets — no commit-duplication
                                 artifact.
 
-  # ── Code-age cutoff (PAR-6) ───────────────────────────────────────
+  # ── Code-age cutoff ───────────────────────────────────────────────
       --age-time-now YYYY-MM-DD Override "now" for the `code-age` analysis
                                 (defaults to system clock UTC; useful for
                                 reproducible historical reports).
 
-  # ── Commit walk filters (R2 / R3 / R4) ────────────────────────────
+  # ── Commit walk filters ────────────────────────────────────────────
       --after YYYY-MM-DD        Only include commits authored on or after
                                 this date. Applied at repo-walk time so
                                 the filter survives across every analysis.
@@ -543,7 +542,7 @@ codelore analyze [OPTIONS]
                                 code-maat semantics: merges duplicate
                                 authorship and inflate co-change pairs).
 
-  # ── Architectural grouping (PAR-7) ────────────────────────────────
+  # ── Architectural grouping ────────────────────────────────────────
   -g, --group-file PATH         Architectural grouping definition file with
                                 full lookaround regex support (powered by
                                 fancy-regex 0.14). Rewrites file paths at
@@ -558,7 +557,7 @@ codelore analyze [OPTIONS]
                                 kept under their original filename).
                                 Auto-implied by --code-maat-compat.
 
-  # ── Code-maat compatibility (PAR-9) ───────────────────────────────
+  # ── Code-maat compatibility ───────────────────────────────────────
       --code-maat-compat        Migration helper for code-maat scripts. Flips:
                                   • --strict-grouping ON
                                   • `main-dev-by-revs` CSV emits legacy
@@ -571,6 +570,49 @@ codelore analyze [OPTIONS]
       --no-cache                Skip the persistent cache; always fresh ingest
       --cache-dir PATH          Override XDG cache root
   -v, --verbose                 Verbose logging (info,codelore=debug)
+
+  # ── Corpus calibration ────────────────────────────────────────────
+      --calibration <FILE>      Corpus-calibration artifact for the code-health
+                                corpus-percentile lens. Overrides the embedded
+                                world corpus with a hand-built or org-specific
+                                artifact (build one with `codelore calibrate`).
+                                When omitted, the embedded artifact is used if
+                                present; otherwise the corpus lens is absent and
+                                a one-time notice is printed. Applies to both
+                                `analyze` and `check`.
+
+  # ── Team mapping ──────────────────────────────────────────────────
+  -p, --team-map-file <FILE>    Optional CSV `author,team` mapping that aliases
+                                author identities to logical teams in every
+                                author-bearing analysis. Mirrors code-maat's
+                                `-p / --team-map-file` flag; applied after
+                                mailmap normalization and bot filtering. If not
+                                passed, `<repo>/.codelore-teams` is auto-loaded
+                                when present. Unmatched authors pass through
+                                unchanged.
+
+  # ── Ignore / lineage ──────────────────────────────────────────────
+      --include-ignored         Analyse files normally excluded by `.gitignore`
+                                and `.codeloreignore`. Default: respect them so
+                                vendored deps, build outputs, and lockfiles don't
+                                dominate hotspots. Use when analysing a vendored
+                                fork or when the lockfile IS the signal.
+      --no-canonical-lineage    Disable rename-aware aggregation. By default a
+                                file's pre-rename history is merged onto its
+                                current canonical path. Set this flag to fall back
+                                to code-maat's literal-path behaviour. Implied by
+                                `--code-maat-compat`.
+
+  # ── SQL planner / debug ───────────────────────────────────────────
+      --explain                 Print the DuckDB optimizer plan for the analysis's
+                                underlying SQL to stderr before running the query.
+                                Useful for debugging performance or verifying that
+                                an index is being used.
+
+  # ── Global ────────────────────────────────────────────────────────
+      --no-banner               Suppress the pre-flight banner printed to stderr
+                                at the start of every analyze run. Also
+                                auto-suppressed when stderr is not a TTY.
 ```
 
 ### `codelore diff` (PR-mode)
@@ -596,7 +638,7 @@ codelore diff <RANGE> [OPTIONS]
                             none (default) | rank-entrant | score-increase | any
       --absence-min-shared N
                             Min historical shared-revs for a coupling-absence
-                            finding to be reportable [default: 3]
+                            finding to be reportable [default: 5]
       --absence-fisher-p F  Max Fisher p-value for coupling-absence finding
                             [default: 0.05]
       --min-revs N          Same as analyze [default: 5]
@@ -1252,7 +1294,7 @@ Evaluates the quality gates declared in `.codelore-thresholds.toml` at HEAD and 
 }
 ```
 
-`no_thresholds` is returned when no `.codelore-thresholds.toml` exists at the repo root. Gates covered: `cognitive_max`, `hotspot_score_max`, `code_health_min`, `disallow_clone_type_1`, `max_red_effort_pct`, `max_dependency_cycles`, `max_propagation_cost`, and `code_familiarity_min`. This is a subset of what `codelore check` evaluates: the `max_findings_in_hot_files` gate (external SARIF findings × hotspots), degraded-gate semantics (`fail_on_degraded`), and `--ratchet` are only available in `codelore check` proper. When a config file configures `max_findings_in_hot_files`, this tool's verdict can therefore differ from a CI run of `codelore check` — treat `codelore check` as the authoritative gate; use `check_gates` for a fast interactive read of the shared subset.
+`no_thresholds` is returned when no `.codelore-thresholds.toml` exists at the repo root. Gates covered: `cognitive_max`, `hotspot_score_max`, `code_health_min`, `disallow_clone_type_1`, `max_red_effort_pct`, `max_dependency_cycles`, `max_propagation_cost`, and `code_familiarity_min`. This is a subset of what `codelore check` evaluates: the `max_findings_in_hot_files` gate (external SARIF findings × hotspots), the `corpus_percentile_max` gate, degraded-gate semantics (`fail_on_degraded`), and `--ratchet` are only available in `codelore check` proper. When a config file configures any of those, this tool's verdict can therefore differ from a CI run of `codelore check` — treat `codelore check` as the authoritative gate; use `check_gates` for a fast interactive read of the shared subset.
 
 Parameters: none.
 
@@ -1303,7 +1345,7 @@ Each tool call opens its own `FactsDb` connection via the warm-cache path. This 
 ## 13. Workspace layout
 
 ```
-codescene/
+codelore/
 ├── Cargo.toml                            # workspace manifest
 ├── README.md                             # the 5-min pitch
 ├── CHANGELOG.md                          # all releases
@@ -1315,7 +1357,7 @@ codescene/
 │   │   ├── src/
 │   │   │   ├── facts/                    # DuckDB fact store + ingest pipeline
 │   │   │   ├── analyses/                 # analyses (one file each)
-│   │   │   ├── output/                   # 6 format emitters
+│   │   │   ├── output/                   # 11 format emitters
 │   │   │   ├── repo/                     # GixRepo + GitCliRepo + Repo trait
 │   │   │   ├── complexity/               # tree-sitter dispatch + ComplexityEntity
 │   │   │   ├── clones/                   # Type 1+2 fingerprinting
@@ -1331,7 +1373,8 @@ codescene/
 │   │       ├── main.rs                   # analyze dispatch
 │   │       ├── args.rs                   # CLI surface
 │   │       ├── diff.rs                   # codelore diff implementation
-│   │       └── diff_output.rs            # diff output emitters
+│   │       ├── diff_output.rs            # diff output emitters
+│   │       └── mcp.rs                    # MCP server implementation
 │   └── codelore-rca/                     # vendored Mozilla rust-code-analysis (MPL-2.0)
 ├── docs/
 │   ├── advanced-usage.md                 # ← you are here

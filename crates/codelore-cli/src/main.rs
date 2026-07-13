@@ -1846,7 +1846,6 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         use_canonical_lineage: !args.no_canonical_lineage && !args.code_maat_compat,
         exclude_patterns: args.exclude.clone(),
         include_ignored: args.include_ignored,
-        // PAR-6: code-maat parity flag wiring
         min_shared_revs: args.min_shared_revs,
         min_coupling_pct: args.min_coupling_pct,
         max_coupling_pct: args.max_coupling_pct,
@@ -1860,12 +1859,12 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         include_merges: args.include_merges,
         message_regex: args.message_regex.clone(),
         min_soc: args.min_soc,
-        // PAR-9: --code-maat-compat. Implies --strict-grouping (code-maat
+        // --code-maat-compat. Implies --strict-grouping (code-maat
         // is always-strict). Other compat behaviors are gated at the
         // analysis / emitter layer.
         code_maat_compat: args.code_maat_compat,
         strict_grouping: args.strict_grouping || args.code_maat_compat,
-        // PAR-8: --time-bucket. Maps from the CLI's enum to the lib's enum.
+        // --time-bucket. Maps from the CLI's enum to the lib's enum.
         time_bucket: args.time_bucket.map(Into::into),
         // T8: knowledge-islands analysis "departed author" threshold.
         departed_threshold_days: args.departed_threshold_days,

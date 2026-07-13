@@ -37,7 +37,7 @@
 //!
 //! Under `--code-maat-compat`, only `entity, n_authors, n_revs` are
 //! emitted by the CSV writer so existing tooling that parses code-maat's
-//! CSV continues to work — see PAR-5 in the deep-analysis report.
+//! CSV continues to work under `--code-maat-compat`.
 //!
 //! ## Where the per-author leaderboard went
 //!
@@ -46,7 +46,7 @@
 //! analysis with additional columns (`LoC` added/deleted, first/last commit
 //! dates). That's a different question — "who commits the most overall"
 //! — and conflating it with code-maat's `authors` was a silent migration
-//! trap (PAR-1 in the deep-analysis report).
+//! trap.
 //!
 //! Research basis: see `docs/research-foundations.md` entry "authors".
 

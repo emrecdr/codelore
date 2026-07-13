@@ -165,8 +165,8 @@ pub fn write_code_age_csv<W: Write>(
     w: &mut W,
     code_maat_compat: bool,
 ) -> Result<()> {
-    // PAR-5: code-maat emits `entity,age-months` (hyphenated, single
-    // metric column); CodeLore's modern default surfaces second-level
+    // Under `--code-maat-compat`, emit `entity,age-months` (hyphenated,
+    // single metric column). CodeLore's modern default surfaces second-level
     // precision (`age_days`) and a triage context column (`last_modified`).
     if code_maat_compat {
         writeln!(w, "entity,age-months").map_err(CodeLoreError::Io)?;
@@ -239,10 +239,10 @@ pub fn write_entity_churn_csv<W: Write>(rows: &[EntityChurnRow], w: &mut W) -> R
     Ok(())
 }
 
-/// PAR-5: under `--code-maat-compat` the header uses code-maat's
-/// `author,peer` column names (matching `communication.clj`'s output);
-/// `CodeLore`'s modern default uses the symmetric `author-a,author-b`
-/// pair which is clearer about the equality of roles.
+/// Under `--code-maat-compat` the header uses code-maat's `author,peer`
+/// column names (matching `communication.clj`'s output); `CodeLore`'s
+/// modern default uses the symmetric `author-a,author-b` pair which is
+/// clearer about the equality of roles.
 pub fn write_communication_csv<W: Write>(
     rows: &[CommunicationRow],
     w: &mut W,
@@ -269,7 +269,7 @@ pub fn write_communication_csv<W: Write>(
     Ok(())
 }
 
-/// PAR-5: under `--code-maat-compat`, emit code-maat's exact 3-column
+/// Under `--code-maat-compat`, emit code-maat's exact 3-column
 /// fragmentation output (`entity,fractal-value,total-revs` — note the
 /// column order; code-maat sorts the columns differently from `CodeLore`'s
 /// natural `path / main_author / total_revs / fractal_value` shape).
@@ -379,10 +379,10 @@ pub fn write_coupling_csv<W: Write>(
     Ok(())
 }
 
-/// PAR-5: code-maat's `summary` emits `statistic,value`; `CodeLore` uses
-/// the slightly clearer `metric,value`. Under `--code-maat-compat`,
-/// emit the legacy header so downstream tooling (`code-maat`-targeted
-/// dashboards) keeps parsing.
+/// code-maat's `summary` emits `statistic,value`; `CodeLore` uses the
+/// slightly clearer `metric,value`. Under `--code-maat-compat`, emit the
+/// legacy header so downstream tooling (code-maat-targeted dashboards)
+/// keeps parsing.
 pub fn write_summary_csv<W: Write>(
     rows: &[SummaryRow],
     w: &mut W,
