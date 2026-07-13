@@ -11,6 +11,40 @@ use super::{FactsDb, IngestStats};
 use crate::identity;
 use crate::{ChangeType, CodeLoreError, CommitEvent, Result};
 
+/// `DuckDB`'s standard vector size — the row count of one internal data chunk.
+///
+/// The `commits` → `changes` → `hunks` tables are written through three
+/// independent Appenders. An Appender buffers appended rows and only performs
+/// the foreign-key-checked *physical* write when its buffer reaches a large
+/// internal threshold (on a file-backed connection this is many chunks' worth
+/// of rows, not a single 2048-row chunk); at that write `DuckDB` validates every
+/// buffered row's FK against the referenced table. The three buffers reach that
+/// threshold at uncorrelated points, so a child buffer can perform its checked
+/// write while the parent buffer still holds the referenced rows unwritten — the
+/// referent is absent and ingest aborts with a foreign-key violation. The hazard
+/// is invisible below the threshold, so only high-volume repos hit it.
+///
+/// The guard below removes the hazard by flushing the parent chain parent-first
+/// once every `STANDARD_VECTOR_SIZE` child appends. That cadence is far more
+/// frequent than the child's own checked write, so whenever a child buffer does
+/// perform its checked write, every parent row it references has already been
+/// flushed and is physically present. `STANDARD_VECTOR_SIZE` is used as the
+/// cadence because it is a known divisor of the internal threshold and keeps the
+/// flush count low (one flush per 2048 child rows, not per row), preserving the
+/// Appender's bulk-insert throughput.
+const STANDARD_VECTOR_SIZE: u64 = 2048;
+
+/// Return `true` when the append that takes a per-table running total from
+/// `prev_total` to `prev_total + 1` lands on a `STANDARD_VECTOR_SIZE` boundary —
+/// the point at which the guard flushes the parent chain.
+///
+/// One `Appender::append_row` call adds exactly one row (see the `duckdb`
+/// crate's `append_parameter_row`: a single `begin_row` / `end_row` pair per
+/// call), so counting our own calls tracks the appender's row count exactly.
+fn crosses_chunk_boundary(prev_total: u64) -> bool {
+    (prev_total + 1).is_multiple_of(STANDARD_VECTOR_SIZE)
+}
+
 pub(super) fn ingest_loop(
     db: &FactsDb,
     rx: crossbeam_channel::Receiver<CommitEvent>,
@@ -43,6 +77,13 @@ pub(super) fn ingest_loop(
         .conn()
         .appender("commit_parents")
         .map_err(|e| CodeLoreError::Analysis(format!("appender commit_parents: {e}")))?;
+
+    // Running counts of `append_row` calls on the two FK-child appenders, used
+    // by the flush-ordering guard to flush the parent chain once every
+    // `STANDARD_VECTOR_SIZE` child rows — well ahead of the child buffer's own
+    // FK-checked write. See `crosses_chunk_boundary` / `STANDARD_VECTOR_SIZE`.
+    let mut change_appends: u64 = 0;
+    let mut hunk_appends: u64 = 0;
 
     // Collect unique (raw_email, canonical, is_bot) for deferred author_aliases insert.
     let mut alias_map: HashMap<String, (String, bool)> = HashMap::new();
@@ -96,7 +137,15 @@ pub(super) fn ingest_loop(
             {
                 continue;
             }
-            append_change(&mut changes_app, &mut hunks_app, &event.rev, ch)?;
+            append_change(
+                &mut commits_app,
+                &mut changes_app,
+                &mut hunks_app,
+                &mut change_appends,
+                &mut hunk_appends,
+                &event.rev,
+                ch,
+            )?;
             stats.changes_ingested += 1;
         }
         stats.commits_ingested += 1;
@@ -202,9 +251,17 @@ fn append_parents(app: &mut Appender<'_>, e: &CommitEvent) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+// The flush-ordering guard has to reach the whole FK parent chain (commits,
+// changes) plus the per-appender running counts, so it threads six borrows
+// through one call. Splitting them into a struct would only move the same
+// state behind a level of indirection for no readability gain.
 fn append_change(
+    commits_app: &mut Appender<'_>,
     changes_app: &mut Appender<'_>,
     hunks_app: &mut Appender<'_>,
+    change_appends: &mut u64,
+    hunk_appends: &mut u64,
     rev: &str,
     ch: &crate::FileChange,
 ) -> Result<()> {
@@ -221,6 +278,18 @@ fn append_change(
         }
         ChangeType::BinaryOrUnknown => ("binary", None, None),
     };
+    // FK-flush guard for `changes.rev` → `commits(rev)`. Every
+    // `STANDARD_VECTOR_SIZE` change appends, flush `commits` so its buffered
+    // rows are physical. The referenced commit was appended earlier in the
+    // stream (`append_commit` runs before this commit's change rows), so the
+    // flush makes it — and every prior commit — physical, guaranteeing the
+    // `changes` appender's own FK-checked write never references an unwritten
+    // commit. See `STANDARD_VECTOR_SIZE`.
+    if crosses_chunk_boundary(*change_appends) {
+        commits_app
+            .flush()
+            .map_err(|e| CodeLoreError::Analysis(format!("flush commits (fk order): {e}")))?;
+    }
     changes_app
         .append_row(params![
             rev,
@@ -232,6 +301,7 @@ fn append_change(
             i32::try_from(ch.loc_deleted).unwrap_or(i32::MAX),
         ])
         .map_err(|err| CodeLoreError::Analysis(format!("append change: {err}")))?;
+    *change_appends += 1;
     // Hunks — one row per `@@ -old_start,old_lines +new_start,new_lines @@`
     // header. The schema requires the composite key (rev, path,
     // old_start, new_start) to be unique within a single ingest; the
@@ -240,6 +310,21 @@ fn append_change(
     // four u32 fields can never be NULL in Rust, so the new NOT NULL
     // columns in schema_v1.sql match the producer side.
     for hunk in &ch.hunks {
+        // FK-flush guard for `hunks(rev, path)` → `changes(rev, path)`. Every
+        // `STANDARD_VECTOR_SIZE` hunk appends, flush the parent chain in FK
+        // order (commits, then changes) so every change row appended so far —
+        // including the one this hunk references, appended just above — is
+        // physical before the `hunks` appender's own FK-checked write. `commits`
+        // is flushed first because those change rows carry their own FK to
+        // `commits`, and flushing a child before its parent would itself fail.
+        if crosses_chunk_boundary(*hunk_appends) {
+            commits_app
+                .flush()
+                .map_err(|e| CodeLoreError::Analysis(format!("flush commits (fk order): {e}")))?;
+            changes_app
+                .flush()
+                .map_err(|e| CodeLoreError::Analysis(format!("flush changes (fk order): {e}")))?;
+        }
         hunks_app
             .append_row(params![
                 rev,
@@ -250,6 +335,7 @@ fn append_change(
                 i32::try_from(hunk.new_lines).unwrap_or(i32::MAX),
             ])
             .map_err(|err| CodeLoreError::Analysis(format!("append hunk: {err}")))?;
+        *hunk_appends += 1;
     }
     Ok(())
 }
