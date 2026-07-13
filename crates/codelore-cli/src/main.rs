@@ -1479,6 +1479,22 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
             "See analyses/instability.rs.",
         ),
         (
+            "cycle-health",
+            "behavioral heat + extraction candidate per import cycle",
+            "Per non-trivial SCC of the resolved import graph: heat_pct = the cycle \
+             members' share of repo LOC churn over the trailing --window-days window \
+             (same anchoring as effort-exposure); verdict = live when at least one \
+             member appears in a window commit (a zero-LOC touch still counts), fossil \
+             otherwise; extract_candidate = the member whose trial removal minimises \
+             the largest surviving SCC of the induced subgraph (Tarjan per member, ties \
+             by fewest surviving cyclic nodes then lexicographic path); \
+             predicted_pc_drop = whole-graph MacCormack propagation-cost delta if the \
+             candidate were extracted. Trial removal and the prediction run only for \
+             cycles of ≤ 64 members; above that bound the prediction is absent and the \
+             candidate falls back to the highest in-cycle degree.",
+            "See analyses/cycle_health.rs.",
+        ),
+        (
             "architecture-metrics",
             "Lakos 1996 (CCD/ACD/NCCD) + MacCormack/Rusnak/Baldwin 2006/2014",
             "Repo-level (metric, value) rows: propagation_cost = density of the transitive-closure matrix; acd = mean transitive dependency set size; nccd = CCD / balanced-binary-tree CCD (<1 flat, >1 layered, >2 likely cyclic); dependency_cycles, largest_cycle; architecture_type = hierarchical / core-periphery / multi-core.",
@@ -2201,6 +2217,9 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             }
             AnalysisName::Instability => {
                 dispatch_instability(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::CycleHealth => {
+                dispatch_cycle_health(&db, &opts, format, &ctx, &mut out)?;
             }
             AnalysisName::ArchitectureMetrics => {
                 dispatch_architecture_metrics(&db, &opts, format, &ctx, &mut out)?;
@@ -3247,6 +3266,39 @@ fn dispatch_health_trend(
         "html" => return Err(html_not_wired(ctx.analysis_name)),
         fmt => {
             return Err(unsupported_format("health-trend", "csv|json|markdown", fmt));
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_cycle_health(
+    db: &FactsDb,
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows = codelore_lib::cli_api::analyses::cycle_health::run_cycle_health(db, opts)
+                .context("run cycle-health")?;
+            codelore_lib::cli_api::output::csv::write_cycle_health_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows = codelore_lib::cli_api::analyses::cycle_health::run_cycle_health(db, opts)
+                .context("run cycle-health")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows = codelore_lib::cli_api::analyses::cycle_health::run_cycle_health(db, opts)
+                .context("run cycle-health")?;
+            codelore_lib::cli_api::output::markdown::write_cycle_health_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format("cycle-health", "csv|json|markdown", fmt));
         }
     }
     Ok(())

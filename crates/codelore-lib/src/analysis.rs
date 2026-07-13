@@ -213,6 +213,13 @@ pub enum AnalysisName {
     // and code-health signal to surface where static findings overlap with
     // the most churned, least healthy files. Requires prior `ingest-sarif`.
     FindingHotspotOverlap,
+    // Cycle health — per-SCC behavioral heat, live/fossil verdict, and the
+    // cheapest cut point for each import tangle. Ranks non-trivial SCCs by
+    // their share of repo LOC churn (structure×history fusion of Baldwin /
+    // MacCormack & Mo et al.). Reports the extraction candidate whose
+    // removal minimises the largest surviving SCC (trial-removal Tarjan)
+    // and the predicted propagation-cost drop, for cycles of ≤ 64 members.
+    CycleHealth,
 }
 
 impl AnalysisName {
@@ -273,6 +280,7 @@ impl AnalysisName {
             Self::FunctionXray => "function-xray",
             Self::FunctionCoupling => "function-coupling",
             Self::FindingHotspotOverlap => "finding-hotspot-overlap",
+            Self::CycleHealth => "cycle-health",
         }
     }
 
@@ -361,6 +369,7 @@ impl AnalysisName {
             FunctionXray,
             FunctionCoupling,
             FindingHotspotOverlap,
+            CycleHealth,
         )
     }
 

@@ -659,6 +659,44 @@ pub fn write_coordination_needs_markdown<W: Write>(
     Ok(())
 }
 
+/// `cycle-health` markdown emitter — per-SCC heat, verdict, extraction
+/// candidate, and predicted propagation-cost drop.
+pub fn write_cycle_health_markdown<W: Write>(
+    rows: &[crate::analyses::cycle_health::CycleHealthRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore cycle-health")?;
+    if rows.is_empty() {
+        writeln!(w, "_No import cycles detected._").map_err(CodeLoreError::Io)?;
+        return Ok(());
+    }
+    writeln!(
+        w,
+        "| Cycle | Size | Members | Heat % | Verdict | Extract candidate | Predicted PC drop |"
+    )
+    .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---:|---:|---|---:|---|---|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        let drop_cell = match row.predicted_pc_drop {
+            Some(d) => Cow::Owned(format!("{d:.2}")),
+            None => Cow::Borrowed("—"),
+        };
+        writeln!(
+            w,
+            "| {} | {} | {} | {:.2} | {} | {} | {} |",
+            row.cycle_id,
+            row.size,
+            escape_md_cell(&row.members_preview),
+            row.heat_pct,
+            row.verdict,
+            escape_md_cell(&row.extract_candidate),
+            drop_cell,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_architecture_metrics_markdown<W: Write>(
     rows: &[crate::analyses::architecture_metrics::ArchitectureMetricRow],
     w: &mut W,

@@ -2623,3 +2623,67 @@ fn calibrate_merge_doubles_sample_counts() {
     assert_eq!(merged_rust, base_rust * 2, "merge must sum sample counts");
     assert_eq!(merged_art.repos_included, 2, "merge sums repos_included");
 }
+
+#[test]
+fn cycle_health_csv_has_header() {
+    // Build a minimal inline repo with an `a ↔ b` import cycle so
+    // `cycle-health` has something to report. The smoke test only checks
+    // the CSV header and exit 0; correctness is covered by the lib-level
+    // cycle_health_test integration tests.
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .env("GIT_AUTHOR_DATE", "2026-06-01T10:00:00Z")
+            .env("GIT_COMMITTER_DATE", "2026-06-01T10:00:00Z")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    };
+    git(&["init", "-q", "-b", "main"]);
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(
+        repo.join("Cargo.toml"),
+        "[package]\nname=\"cyc\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
+    )
+    .unwrap();
+    std::fs::write(repo.join("src/lib.rs"), "pub mod a;\npub mod b;\n").unwrap();
+    std::fs::write(
+        repo.join("src/a.rs"),
+        "use crate::b;\npub fn a() { b::b(); }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        repo.join("src/b.rs"),
+        "use crate::a;\npub fn b() { a::a(); }\n",
+    )
+    .unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "init"]);
+
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "cycle-health",
+            "--repo",
+            repo.to_str().unwrap(),
+            "--format",
+            "csv",
+            "--min-revs",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with(
+            "cycle-id,size,members,heat-pct,verdict,extract-candidate,predicted-pc-drop",
+        ));
+}

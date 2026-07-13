@@ -4,6 +4,10 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **`cycle-health` analysis.** New analysis (`--analysis cycle-health`) ranking every non-trivial import cycle (SCC size ≥ 2) by behavioral urgency. Each row reports `heat_pct` — the cycle members' share of repo LOC churn over the trailing `--window-days` window — and a `live`/`fossil` verdict based on whether any member was touched in that window. `extract_candidate` identifies the member whose removal best dismantles the tangle (trial-removal Tarjan minimising the largest surviving SCC; ties by fewest surviving cyclic nodes then lexicographic path). `predicted_pc_drop` gives the whole-graph MacCormack propagation-cost drop if that candidate were extracted, computed for cycles of ≤ 64 members; above that bound the drop is absent (honest absence) and the candidate falls back to the highest in-cycle degree. Outputs: csv, json, markdown.
+
 ### Changed
 
 - **`codelore calibrate` builds corpora shallow and HEAD-only.** Each pinned corpus repo is now fetched with a depth-1 fetch of exactly its pinned SHA (with an automatic full-clone fallback when the server disallows shallow SHA fetches — GitHub allows them) and ingested HEAD-only: only the pinned tree's per-function complexity facts are extracted, with no commit-history walk and no kamei/clones/imports passes. Corpus builds need a fraction of the previous disk and wall-time; artifacts are unaffected — the pooled per-function metrics are identical on the same pinned trees. The per-repo progress line now reports the checkout mode (`shallow` / `full` / `worktree`).
