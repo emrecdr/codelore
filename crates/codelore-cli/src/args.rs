@@ -251,12 +251,13 @@ pub struct AnalyzeArgs {
     #[arg(short, long, default_value = ".")]
     pub repo: PathBuf,
 
-    /// Output format: csv | json | ndjson | sarif | markdown | gha | html | parquet | sqlite | spa.
+    /// Output format: csv | json | ndjson | sarif | markdown | gha | html | parquet | sqlite | spa | step-summary.
     /// Most analyses emit csv/json/markdown. ndjson: hotspots, code-health, coupling, lead-time.
     /// sarif: hotspots, clones, clone-coupling. gha: hotspots. html: hotspots, code-health,
     /// knowledge-islands, clone-coupling, summary, revisions, authors, top-committers.
     /// parquet: hotspots, revisions, summary; requires --output. sqlite: full fact-store dump;
     /// requires --output. spa: interactive dashboard; --output optional (defaults to .codelore/spa.html).
+    /// step-summary: GFM summary for `$GITHUB_STEP_SUMMARY`; streams to stdout.
     #[arg(short, long, default_value = "csv")]
     pub format: String,
 
@@ -339,7 +340,7 @@ pub struct AnalyzeArgs {
     pub no_canonical_lineage: bool,
 
     // ------------------------------------------------------------------
-    // code-maat parity CLI flags (PAR-6). All target Options fields that
+    // code-maat parity CLI flags. All target Options fields that
     // existed but weren't surfaced on the CLI.
     // ------------------------------------------------------------------
     /// Minimum shared revisions for a coupling pair (code-maat parity).

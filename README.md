@@ -60,6 +60,7 @@ What separates CodeLore from code-maat, CodeScene, and jscpd:
 - **🧾 Provenance manifest.** Every run emits a `.provenance.json` sidecar recording every config knob (auto-derived via canonical Options serialization — adding a new field auto-propagates), version pin, and timestamp. Reproducibility receipt for the run; eliminates the "we got different numbers because we silently used different thresholds" failure mode.
 - **💾 SQL-queryable fact store.** No proprietary format lock-in. Export the full DuckDB store as Parquet or SQLite and query your git history as a database from the command line.
 - **⚡ Persistent cache.** Second invocation on the same `(repo, HEAD, options)` opens read-only in ~10 ms instead of re-walking history — typically a 10-100× speedup on the dev inner loop depending on repo size, and the foundation of the `codelore diff` PR-mode subcommand.
+- **📊 Corpus-relative code-health percentiles.** The `code-health` analysis answers not just "how does this file rank within this repo?" but also "is this complex for the ecosystem?" An embedded reference corpus — built from permissive-license OSS projects across five languages — provides per-language percentile breakpoints, fully offline and shipped in the binary. `codelore calibrate` builds a private org corpus so you can compare against your own codebase portfolio instead of the public world.
 - **🔗 Drop-in code-maat compatibility.** Every published code-maat analysis is supported under the same `--analysis NAME`. The `--code-maat-compat` flag flips internal defaults (`min-revs` pivot, CSV column headers for `summary` / `code-age` / `communication` / `ownership` / `authors`, `--min-soc` overload) back to legacy semantics for users with dashboards that parse code-maat CSV verbatim — see the [migration table](#migrating-from-code-maat) below.
 
 ---
@@ -175,7 +176,7 @@ codelore diff base..head            # PR-mode diff and quality gate
 codelore mcp --repo <path>          # MCP server over stdio for AI agent integration
 codelore profile                    # operational telemetry (version, schema, deps, cache root)
 codelore docs                       # markdown analysis catalogue
-codelore notes <base>..<head>       # release-notes markdown summary
+codelore calibrate --repos corpus.toml --output org.calib.json   # build an org-specific reference corpus
 codelore completions <shell>        # bash | zsh | fish | powershell | elvish
 codelore schema <row-type>          # JSON Schema 2020-12 emit
 ```
@@ -360,12 +361,13 @@ codelore diff origin/main...HEAD \
   --output - >> "$GITHUB_STEP_SUMMARY"
 ```
 
-Four signals per PR, surfaced via SARIF or human-readable Markdown:
+Five signals per PR, surfaced via SARIF or human-readable Markdown:
 
 - **Hotspot deltas** — files newly entering the top-N or worsening their score (`CODELORE-HOTSPOT` SARIF rule)
 - **Missing co-changes** — "you changed `auth/login.rs` but historically `auth/session.rs` always changes with it — did you forget?" (`CODELORE-MISSING-COCHANGE` SARIF rule, the CodeScene-signature signal)
 - **New clone families** — copy-paste debt introduced by the PR (`CODELORE-CLONE` SARIF rule)
 - **Live clones** — clones whose copies co-change at Fisher-significant rates (`CODELORE-LIVE-CLONE` SARIF rule)
+- **Delta health** — per-function health verdict on every function added, modified, or removed by the PR (`CODELORE-DELTA-HEALTH` SARIF rule)
 
 Quality-gate options:
 
@@ -469,9 +471,9 @@ Default: **non-strict** (unmapped paths keep their raw names; safer than silent 
             │ SQL queries (bind-parameterized) + Rust orchestrators
             ▼
    ┌─────────────────────┐
-   │  Analyses            │  → 10 output formats (CSV/JSON/NDJSON/
+   │  Analyses            │  → 11 output formats (CSV/JSON/NDJSON/
    │                     │     SARIF/Markdown/GHA/HTML/Parquet/
-   │                     │     SQLite/SPA)
+   │                     │     SQLite/SPA/Step-Summary)
    │                     │  → persistent cache (10-100× speedup)
    │                     │  → provenance.json sidecar
    │                     │
@@ -480,7 +482,7 @@ Default: **non-strict** (unmapped paths keep their raw names; safer than silent 
    └─────────────────────┘
 ```
 
-Every commit becomes a `CommitEvent` projected onto a DuckDB fact store. Each analysis is a SQL query over that store plus a thin Rust orchestrator (the historical `architecture-trend` additionally re-reads source at sampled past revisions). Outputs flow through ten format emitters. Every run is cached and audit-trail-stamped with a provenance sidecar.
+Every commit becomes a `CommitEvent` projected onto a DuckDB fact store. Each analysis is a SQL query over that store plus a thin Rust orchestrator (the historical `architecture-trend` additionally re-reads source at sampled past revisions). Outputs flow through eleven format emitters. Every run is cached and audit-trail-stamped with a provenance sidecar.
 
 For deeper architecture, see the [design specification](docs/superpowers/specs/2026-06-06-codelore-design.md) (~1100 lines, covers every threshold and identity rule).
 
@@ -503,16 +505,7 @@ What we deliberately don't ship: no async runtime, no libgit2 binding, no LLM-ba
 
 ## Status
 
-Release-ready alpha. **Multiple analyses × 10 output formats × `codelore diff` PR-mode × `codelore check` quality gate × 5 SARIF rules.** Full test suite (`codelore-lib` unit + integration, `codelore-cli` integration, differential `GixRepo` vs `GitCliRepo` cross-walker parity, headless-browser SPA smoke) passes on Rust 1.96.0 on Linux and macOS in CI, and the Windows MSVC target runs a curated platform-sensitive test subset (path handling, process spawning, git-backend parity, filesystem semantics) plus full compile-and-link verification on every push (hosted Windows runners cannot fit the full suite's per-test process overhead inside a practical CI ceiling, so the subset targets where Windows can actually diverge); `clippy -D warnings`, `rustfmt --check`, and `cargo deny check` all gate every push. Each tagged release ships prebuilt binaries for five targets (macOS arm64/x86_64, Linux arm64/x86_64-gnu, Windows x86_64-msvc), each with SLSA L3 build provenance attached, a distroless OCI container at `ghcr.io/emrecdr/codelore`, an auto-regenerated formula in the `emrecdr/codelore` Homebrew tap, and a `cargo binstall`-compatible asset layout — all produced by `.github/workflows/release.yml` on every `v*` tag push, gated by the `protect-release-tags` ruleset that requires green CI on the target commit before the tag is accepted.
-
-**This session's deliverables** (3 sprints + GitHub tags + versioning):
-
-| Sprint | Tasks | Commits | Net analyses / flags added |
-|---|---|---|---|
-| **Bugfix** | 7 / 7 | 7 atomic | Fixed clone-coupling p-value=0, dropped empty `name` column, SARIF CODELORE-MISSING-COCHANGE rule, canonical Options serialization (cache + provenance), AI-attribution for 2024-2026 coders, worktree prune on diff startup, deterministic tertiary sorts |
-| **Modernization** | 10 / 11 (E.3 deferred) | 9 atomic | Hot-path indexes, severity-band SARIF level, `main-dev` → `main-author` header, diff CLI typed enums, absence-threshold knobs, `.codelorebots` extension hook, 11 analyses migrated to bind parameters, change_type CHECK constraint, code_health Fisher-filtered centrality |
-| **Code-maat parity** | **11 / 11 — feature complete** | 12 atomic | 7 new analyses + 9 wired CLI flags + architectural grouping with lookaround + `--time-bucket DAY/WEEK/MONTH` + `--code-maat-compat` migration helper + `--strict-grouping` |
-| **Docs + tags + versioning** | misc | 4 atomic | Topic badges (18 tags), SemVer policy + release procedure, RELEASING.md, github-topics.md |
+Release-ready alpha. **Multiple analyses × 11 output formats × `codelore diff` PR-mode × `codelore check` quality gate × 5 SARIF rules.** Full test suite (`codelore-lib` unit + integration, `codelore-cli` integration, differential `GixRepo` vs `GitCliRepo` cross-walker parity, headless-browser SPA smoke) passes on Rust 1.96.0 on Linux and macOS in CI, and the Windows MSVC target runs a curated platform-sensitive test subset (path handling, process spawning, git-backend parity, filesystem semantics) plus full compile-and-link verification on every push (hosted Windows runners cannot fit the full suite's per-test process overhead inside a practical CI ceiling, so the subset targets where Windows can actually diverge); `clippy -D warnings`, `rustfmt --check`, and `cargo deny check` all gate every push. Each tagged release ships prebuilt binaries for five targets (macOS arm64/x86_64, Linux arm64/x86_64-gnu, Windows x86_64-msvc), each with SLSA L3 build provenance attached, a distroless OCI container at `ghcr.io/emrecdr/codelore`, an auto-regenerated formula in the `emrecdr/codelore` Homebrew tap, and a `cargo binstall`-compatible asset layout — all produced by `.github/workflows/release.yml` on every `v*` tag push, gated by the `protect-release-tags` ruleset that requires green CI on the target commit before the tag is accepted.
 
 Known limitations (the honest list, validated against the current codebase):
 
@@ -560,7 +553,7 @@ cargo run --release -p codelore-cli --features spa -- \
 | If you want… | Read |
 |---|---|
 | All analyses + every flag + CI patterns + troubleshooting | [`docs/advanced-usage.md`](docs/advanced-usage.md) |
-| The full 27-feature v0.6.x implementation plan + validation | [`docs/maximum-feature-plan.md`](docs/maximum-feature-plan.md) |
+| The full 27-feature implementation plan + validation | [`docs/maximum-feature-plan.md`](docs/maximum-feature-plan.md) |
 | CodeScene visual parity strategy + design decisions | [`docs/codescene-parity-plan.md`](docs/codescene-parity-plan.md) |
 | The architecture overview (workspace shape, pipeline data flow, threading model) | [`docs/codebase_analysis.md`](docs/codebase_analysis.md) |
 | The full design specification (~1100 lines) | [`docs/superpowers/specs/2026-06-06-codelore-design.md`](docs/superpowers/specs/2026-06-06-codelore-design.md) |
@@ -615,7 +608,7 @@ Modern CLI design favours long flags; CodeLore does not restore code-maat's 2013
 | `-x N` | `--max-coupling N` |
 | `-s N` | `--max-changeset-size N` |
 | `-d <date>` | `--age-time-now <date>` |
-| `-t N` | `--time-bucket DAY|WEEK|MONTH` (cleaner non-overlapping buckets; code-maat's sliding window is not propagated — see deep-analysis report PAR-3) |
+| `-t N` | `--time-bucket DAY|WEEK|MONTH` (cleaner non-overlapping buckets; code-maat's sliding window is not propagated — see the deep-analysis report in `docs/reports/`) |
 
 ---
 

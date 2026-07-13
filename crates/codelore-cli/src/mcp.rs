@@ -480,11 +480,12 @@ impl CodeLoreServer {
                 );
             }
 
-            // architecture + familiarity gates. This tool evaluates a subset
-            // of `codelore check`: the `max_findings_in_hot_files` gate,
-            // degraded-gate semantics, and `--ratchet` remain check-only, so a
-            // config using those gates can make this verdict diverge from a CI
-            // run — `codelore check` is authoritative.
+            // architecture + familiarity + corpus-percentile gates. This tool
+            // evaluates a subset of `codelore check`: the
+            // `max_findings_in_hot_files` gate, degraded-gate semantics, and
+            // `--ratchet` remain check-only, so a config using those gates can
+            // make this verdict diverge from a CI run — `codelore check` is
+            // authoritative. Gates evaluated here include `corpus_percentile_max`.
             violations.extend(
                 codelore_lib::cli_api::quality_gates::evaluate_architecture_gate(&thresholds, &db)
                     .map_err(internal)?,

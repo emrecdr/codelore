@@ -10,7 +10,7 @@ what "good" looks like in practice, and where the implementation lives.
 > cross-referencing. CodeLore consolidates them here so contributors and
 > users discover the academic provenance in one place. Each
 > `analyses/*.rs` rustdoc header carries a single line linking back to its
-> entry here (see PAR-9 in `docs/reports/deep_analysis_report.md`).
+> entry here.
 
 ---
 
