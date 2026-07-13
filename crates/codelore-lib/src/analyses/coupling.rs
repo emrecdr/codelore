@@ -185,7 +185,7 @@ fn source_table(opts: &Options) -> &'static str {
 /// Raw coupling candidates SQL builder. Bind values (in order):
 ///  1. `max_changeset_size` — `good_commits` filter
 ///  2. `min_revs` — revs floor (semantic depends on `code_maat_compat`,
-///     see PAR-6 doc below)
+///     see `build_coupling_sql` doc below)
 ///  3. `min_shared_revs` — per-pair shared floor
 ///  4. `min_coupling_pct` — lower degree threshold
 ///  5. `max_coupling_pct` — upper degree threshold (pairs above are usually file splits or copy/rename pairs)
@@ -200,7 +200,7 @@ fn source_table(opts: &Options) -> &'static str {
 /// The `src` parameter is one of `"changes"` or `"changes_bucketed"` —
 /// closed-enum-derived, never user input.
 ///
-/// PAR-6: `code_maat_compat` flips the `min_revs` pivot point:
+/// `code_maat_compat` flips the `min_revs` pivot point:
 ///
 /// - **Default (`CodeLore`)**: per-file filter in `file_revs` CTE
 ///   (`HAVING revs >= ?`). A pair where one file has 4 revs and the
@@ -425,9 +425,9 @@ pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
         .map_err(|e| CodeLoreError::Analysis(format!("total commits query: {e}")))?;
     let total = u32::try_from(total_commits).unwrap_or(u32::MAX);
 
-    // PAR-6: `build_coupling_sql` now takes `code_maat_compat` and the
-    // bind list has 6 entries (min_revs bound twice — only one branch's
-    // gate is live, the other is a tautology). See builder's doc.
+    // `build_coupling_sql` takes `code_maat_compat` and the bind list has
+    // 6 entries (min_revs bound twice — only one branch's gate is live,
+    // the other is a tautology). See builder's doc.
     let coupling_sql = build_coupling_sql(
         src,
         opts.code_maat_compat,

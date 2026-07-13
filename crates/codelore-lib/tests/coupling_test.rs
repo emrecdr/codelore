@@ -337,8 +337,8 @@ fn coupling_fisher_significance_filter() {
     );
 }
 
-/// PAR-6 regression: the `min_revs` filter applies at different
-/// pivot points depending on `--code-maat-compat`.
+/// Regression: the `min_revs` filter applies at different pivot points
+/// depending on `--code-maat-compat`.
 ///
 /// Fixture: a fresh repo with four files. Asymmetry between `a` and
 /// `b`/`c` is required so Fisher's exact test produces interpretable

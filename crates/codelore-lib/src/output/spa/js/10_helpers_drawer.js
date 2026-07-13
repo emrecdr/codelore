@@ -15,7 +15,7 @@
   // Step transitions use CSS `transition: opacity` on the note banner;
   // the global `prefers-reduced-motion` rule in template.html clamps
   // all transition-durations to 0.01ms, so no animated movement occurs
-  // for users who opted out (WCAG 2.3.3 / F138 pattern).
+  // for users who opted out (WCAG 2.3.3 / prefers-reduced-motion).
   function renderGuidedTour() {
     var mount = document.getElementById('widget-guided-tour-body');
     if (!mount) return;
@@ -394,7 +394,7 @@
   }
   // Expose on `window` so the template's Alpine.effect (which lives
   // in a different lexical scope) can yield between rerenderers
-  // without duplicating the feature-detection logic. F135 fix.
+  // without duplicating the feature-detection logic.
   window._codeloreYieldToMain = yieldToMain;
 
 

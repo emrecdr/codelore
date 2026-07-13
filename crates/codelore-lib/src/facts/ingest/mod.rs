@@ -175,7 +175,7 @@ impl FactsDb {
             "imports: {resolved_n} of {imports_n} import edges resolved to tracked paths"
         );
 
-        // PAR-7: architectural grouping. After ingest, rewrite the
+        // Architectural grouping: after ingest, rewrite the
         // `changes.path` column to logical group names per --group-file.
         // Runs last so the rewrite sees all change rows from every commit.
         if let Some(group_file) = opts.group_file.as_ref() {

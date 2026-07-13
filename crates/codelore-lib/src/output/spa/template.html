@@ -80,7 +80,7 @@
       --xray-ring-2: #2c5d3a;
       --xray-ring-label: #ffffff;
       --xray-leaf-label: #1a1a1a;
-      /* F132: per-widget chart palette tokens. Previously these hex
+      /* Per-widget chart palette tokens. Previously these hex
          literals were inlined in `widgets.js` (sankey label color,
          treemap label-on-saturated, friction calendar 5-band ramp,
          15-color author palette), so light-theme rendering used the
@@ -97,7 +97,7 @@
       --heatmap-4: #f59e0b;
       --heatmap-5: #e0584e;
       /* 15-color categorical palette for the author / knowledge-map
-         widget. Same hex set the JS used pre-F132. */
+         widget. Same hex set previously inlined in JS. */
       --chart-palette-1:  #5fa472;
       --chart-palette-2:  #2ea44f;
       --chart-palette-3:  #7dd87a;
@@ -160,14 +160,14 @@
          theme toggles, layout swaps, and 'Show all' expansions
          crossfade per-widget instead of as one document-wide
          repaint. Falls through harmlessly on older browsers — the
-         transition still runs document-scoped. F135 finish. */
+         transition still runs document-scoped. */
       view-transition-name: match-element;
     }
     /* Per-row transitions on hotspot table — `match-element` assigns a
        stable identity so sort, filter, and 'Show all' expansion animate
        row-by-row rather than as one full-table crossfade. CSS Containment
        caps the cost: each row's transition is independent of its siblings.
-       F134 finish. */
+       */
     .hotspot-row {
       view-transition-name: match-element;
       contain: layout style;
@@ -1150,7 +1150,7 @@
     </label>
   </header>
 
-  <!-- Responsive widget grid (F133):
+  <!-- Responsive widget grid:
        - mobile (< 768 px):     1 column (`grid-cols-1`) — every widget
                                 gets full width, charts can pan but
                                 don't squeeze.
@@ -2531,7 +2531,7 @@
       // attribute update and ECharts palette re-renders fire in isolation
       // from layout-depth or offboarding changes. Cooperative scheduling
       // preserved: yields between re-renderers so user input stays
-      // responsive during the theme-change cascade (F135 root-cause fix).
+      // responsive during the theme-change cascade.
       Alpine.effect(() => {
         const dark = Alpine.store('theme').isDark;
         document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');

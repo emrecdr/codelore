@@ -1,7 +1,7 @@
 //! `top-committers` analysis tests. This analysis is the per-author
 //! global leaderboard (previously the behaviour of the `authors`
-//! analysis before PAR-1 separated the per-entity Bird et al. risk
-//! signal into its own analysis with the canonical `authors` name).
+//! analysis; the per-entity Bird et al. risk signal was separated into
+//! its own analysis with the canonical `authors` name).
 
 use codelore_lib::Options;
 use codelore_lib::analyses::top_committers::run_top_committers;

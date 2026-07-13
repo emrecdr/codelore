@@ -694,8 +694,7 @@
       // call, one querySelectorAll over the full table for click
       // wiring). Walk in CHUNK_SIZE batches and `await yieldToMain()`
       // between each so user input (drawer open, tab switch,
-      // scrolling) stays responsive during the expansion. F134 root-
-      // cause fix.
+      // scrolling) stays responsive during the expansion.
       //
       // Small expansions render synchronously — the per-yield cost
       // (~0.5-2 ms message-channel round-trip + an extra paint cycle)

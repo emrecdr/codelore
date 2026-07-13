@@ -73,7 +73,7 @@ use std::path::{Path, PathBuf};
 /// (DNS outage, regional block, rate-limit) doesn't break every
 /// downstream `codelore-lib --features spa` build. npm packages are
 /// immutable across CDNs (both pull from the same registry), so the
-/// same SHA validates whichever mirror responds. F114.
+/// same SHA validates whichever mirror responds.
 struct AssetPin {
     /// Filename under `OUT_DIR`. Matches the `include_str!` target.
     name: &'static str,

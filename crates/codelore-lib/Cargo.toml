@@ -19,7 +19,7 @@ workspace = true
 # the SPA's vendored JS deps (ECharts, d3-hierarchy, Alpine.js, persist
 # plugin). Default features (`rustls`, `gzip`, `json`) cover what we
 # need — TLS via rustls' aws-lc-rs backend, and decompression for
-# CDN responses. Bumped from `2` to `3` in F105 closeout: the v2 branch
+# CDN responses. Bumped from `2` to `3`: the v2 branch
 # is maintenance-only with no new features going forward; v3 unifies
 # the TLS story on rustls (was a separate feature-flag concern in v2),
 # moves per-request config under `.config().build()`, and replaces the
@@ -335,4 +335,8 @@ required-features = ["test-support"]
 
 [[test]]
 name = "finding_hotspot_overlap_test"
+required-features = ["test-support"]
+
+[[test]]
+name = "code_maat_csv_compat_test"
 required-features = ["test-support"]

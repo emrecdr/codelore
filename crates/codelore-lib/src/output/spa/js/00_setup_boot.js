@@ -755,8 +755,8 @@
   // synchronously so the user sees SOMETHING immediately, then yield
   // between each subsequent widget so the browser can paint progress.
   // The theme/regular rerender registration is unchanged (those
-  // rerenderers still fire as a single batch on theme toggle — F135
-  // already yields between them via _codeloreYieldToMain).
+  // rerenderers still fire as a single batch on theme toggle, yielding
+  // between them via _codeloreYieldToMain).
   //
   // `yieldToMain` prefers `scheduler.yield()` on Chrome 129+ and falls
   // back to MessageChannel-postMessage (sub-millisecond, no 4 ms

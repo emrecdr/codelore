@@ -1,4 +1,4 @@
-//! PAR-5: CSV column-name compatibility under `--code-maat-compat`.
+//! CSV column-name compatibility under `--code-maat-compat`.
 //!
 //! These tests lock the EXACT header line each parity-affected writer
 //! emits in each of the two modes. Any future change to a writer that
