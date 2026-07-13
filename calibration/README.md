@@ -31,7 +31,7 @@ activation:
 - a vintage beginning with `placeholder-` resolves to `None` — the corpus lens
   stays absent-but-wired (no calibration applied) until a maintainer runs the
   real build;
-- any other vintage (e.g. `world-2026-07`) resolves to `Some`, activating the
+- any other vintage (e.g. `world-2026-07-13`) resolves to `Some`, activating the
   lens for every `code-health` run that does not pass an explicit
   `--calibration` file.
 
@@ -48,7 +48,7 @@ cargo build --release -p codelore-cli
 
 ./target/release/codelore calibrate \
   --repos calibration/corpus.toml \
-  --vintage world-2026-07 \
+  --vintage world-2026-07-13 \
   --output crates/codelore-lib/src/calibration/world.calib.json
 ```
 
