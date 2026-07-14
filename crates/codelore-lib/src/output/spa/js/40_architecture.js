@@ -900,6 +900,13 @@
     const cw = container.clientWidth || 900;
     const gridLeft = Math.max(padLeft, Math.round((cw - span) / 2));
     container.style.height = (padTop + span + 10) + 'px';
+    // The chart mounts on the nested `#wam-chart-host`; size the widget
+    // BODY (`outer`) to its content so the card grows with the matrix at
+    // any module count instead of staying pinned to the template's fallback
+    // height and letting a tall matrix bleed out of its card. Fullscreen's
+    // `!important` body height still wins over this inline value, so
+    // entering fullscreen re-fills to the viewport as before.
+    outer.style.height = 'auto';
 
     const chart = mountEcharts(container);
     chart.setOption({

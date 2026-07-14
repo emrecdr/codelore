@@ -223,7 +223,13 @@
   }
   function resizeAllEchartsIn(root) {
     if (!root || !window.echarts) return;
-    const bodies = root.querySelectorAll('.widget-body, [id$="-body"]');
+    // `[id$="-chart-host"]` also reaches a chart mounted on a nested host
+    // inside a widget body (the DSM matrix's `#wam-chart-host`), which the
+    // `-body` selectors alone miss. `getInstanceByDom` returns null for the
+    // wrapping `-body` in that case, so there is no double-resize.
+    const bodies = root.querySelectorAll(
+      '.widget-body, [id$="-body"], [id$="-chart-host"]',
+    );
     for (let i = 0; i < bodies.length; i++) {
       const inst = window.echarts.getInstanceByDom(bodies[i]);
       if (inst) inst.resize();
