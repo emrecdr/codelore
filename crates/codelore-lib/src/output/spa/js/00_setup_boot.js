@@ -244,6 +244,91 @@
     installWidgetResetZoomButtons();
   }
 
+  // ─── §3b  Sticky section nav: scrollspy + jump links + back-to-top ──
+  // `#dash-nav`'s chips (template.html, sibling of `<header>`) and the
+  // four factor tiles (`renderFactorHeader`, 10_helpers_drawer.js) both
+  // jump to a `.dash-group` section through this one function.
+  function dashPrefersReducedMotion() {
+    return typeof window.matchMedia === 'function'
+      && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  }
+
+  // NEVER reads or writes `location.hash` — the SPA owns the hash as its
+  // state serializer (`readUrlIntoStores`/`writeStoresToUrl`, further
+  // down in template.html) and anchor-style navigation would corrupt
+  // it. The sticky nav's height offset is handled by `scroll-margin-top`
+  // on `.dash-group` (hand-written CSS in the inline `<style>` block),
+  // not JS math.
+  function scrollToDashSection(targetId) {
+    const el = document.getElementById(targetId);
+    if (!el) return;
+    el.scrollIntoView({
+      behavior: dashPrefersReducedMotion() ? 'auto' : 'smooth',
+      block: 'start',
+    });
+  }
+
+  // Wires the nav chips (click + scrollspy highlight) and the
+  // back-to-top button. Called once at boot end — the markup it binds
+  // to (`#dash-nav`, `.dash-group`, `#dash-top-btn`) is static template
+  // HTML, present regardless of dashboard data.
+  function initDashNav() {
+    const nav = document.getElementById('dash-nav');
+    if (!nav) return;
+    const chips = nav.querySelectorAll('.dash-nav-chip');
+
+    function setActiveChip(targetId) {
+      for (let i = 0; i < chips.length; i++) {
+        const isMatch = chips[i].getAttribute('data-target') === targetId;
+        chips[i].classList.toggle('dash-active', isMatch);
+      }
+    }
+
+    // Click: highlight immediately — deterministic feedback that
+    // doesn't wait on the scroll animation to settle — then scroll.
+    // The IntersectionObserver below keeps the highlight in sync during
+    // ordinary free-scrolling.
+    for (let i = 0; i < chips.length; i++) {
+      const target = chips[i].getAttribute('data-target');
+      chips[i].addEventListener('click', function () {
+        setActiveChip(target);
+        scrollToDashSection(target);
+      });
+    }
+
+    // Scrollspy: one observer over all six sections. The `-40% / -55%`
+    // margins shrink the intersection root to a thin horizontal band
+    // roughly at reading height, so a section is only "active" once
+    // it's the one the user is actually looking at — not merely
+    // partially visible at the very top or bottom of the viewport.
+    const groups = [];
+    for (let i = 0; i < chips.length; i++) {
+      const el = document.getElementById(chips[i].getAttribute('data-target'));
+      if (el) groups.push(el);
+    }
+    if (groups.length && typeof IntersectionObserver === 'function') {
+      const observer = new IntersectionObserver(function (entries) {
+        for (let i = 0; i < entries.length; i++) {
+          if (entries[i].isIntersecting) setActiveChip(entries[i].target.id);
+        }
+      }, { rootMargin: '-40% 0px -55% 0px' });
+      for (let i = 0; i < groups.length; i++) observer.observe(groups[i]);
+    }
+
+    // Back-to-top: appears once the user has scrolled past 600px;
+    // click scrolls to the document top (no `.dash-group` involved, so
+    // no `scroll-margin-top` offset applies here).
+    const topBtn = document.getElementById('dash-top-btn');
+    if (topBtn) {
+      topBtn.addEventListener('click', function () {
+        window.scrollTo({ top: 0, behavior: dashPrefersReducedMotion() ? 'auto' : 'smooth' });
+      });
+      window.addEventListener('scroll', function () {
+        topBtn.classList.toggle('dash-visible', window.scrollY > 600);
+      }, { passive: true });
+    }
+  }
+
   // Promote a `<tr>` (or any container that already has a click handler
   // wired to drill into the detail drawer) into a keyboard-activable
   // control. WCAG 2.1.1 — every operation reachable by mouse must also
@@ -883,4 +968,9 @@
       dashboardStore.hotspots = sorted;
     }
   }
+
+  // Static markup (`#dash-nav` chips, `.dash-group` sections,
+  // `#dash-top-btn`) is unconditional template HTML, so the sticky nav
+  // can wire up regardless of whether any widget data loaded above.
+  initDashNav();
 

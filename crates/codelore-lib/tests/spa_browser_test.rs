@@ -49,6 +49,7 @@ use codelore_lib::analyses::dashboard::{
 };
 use codelore_lib::analyses::effort_exposure::EffortExposureRow;
 use codelore_lib::analyses::entity_ownership::EntityOwnershipRow;
+use codelore_lib::analyses::factors::health_trend_factors;
 use codelore_lib::analyses::health_trend::HealthTrendRow;
 use codelore_lib::analyses::mi::MiRollup;
 use codelore_lib::analyses::modularity_violations::ModularityViolationRow;
@@ -1397,6 +1398,12 @@ fn write_smoke_spa(html_path: &std::path::Path, title: &str) {
         },
     ];
 
+    // Factor-header tiles: derived from the same `health_trend` sample
+    // above via the real production function, so the Code/Architecture
+    // tiles (and their jump-link `data-target`s) render exactly as they
+    // would from a real CLI run rather than from hand-authored literals.
+    let factors = health_trend_factors(&health_trend);
+
     let dash = SpaDashboard {
         hotspots,
         summary,
@@ -1417,6 +1424,7 @@ fn write_smoke_spa(html_path: &std::path::Path, title: &str) {
         health_trend,
         mi_rollup,
         coupling_density,
+        factors,
         effort_exposure: vec![
             EffortExposureRow {
                 band: "red".into(),
@@ -1659,6 +1667,157 @@ fn tablist_arrow_keys_move_focus_and_selection() {
         selection_moved,
         "ArrowRight moved focus but not the aria-selected / roving-tabindex \
          state to the next tab"
+    );
+}
+
+/// Clicking a sticky-nav chip scrolls its section into view via
+/// `scrollIntoView` — never by mutating `location.hash` (the SPA owns the
+/// hash as its state serializer; anchor-style navigation would corrupt
+/// it). Also proves the scrollspy highlight moves off the overview chip
+/// and onto the clicked one, with zero uncaught console exceptions.
+#[test]
+fn nav_chip_scrolls_section_into_view_without_hash() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let html_path = tmp.path().join("codelore-nav-chip.html");
+    write_smoke_spa(&html_path, "CodeLore Nav Chip Test");
+
+    let Some((_browser, tab)) = boot_spa_tab(&html_path) else {
+        return;
+    };
+    let console_errors = attach_exception_sink(&tab);
+
+    let hash_before: String = eval_json(&tab, "location.hash");
+
+    tab.evaluate(
+        "document.querySelector('.dash-nav-chip[data-target=\"group-architecture\"]').click()",
+        false,
+    )
+    .expect("click architecture chip");
+
+    // Smooth `scrollIntoView` duration scales with distance; poll until
+    // the section has actually settled into view instead of a fixed sleep.
+    let mut rect_top = f64::MAX;
+    let mut viewport_h = 0.0f64;
+    for _ in 0..40 {
+        std::thread::sleep(Duration::from_millis(100));
+        rect_top = eval_json(
+            &tab,
+            "document.getElementById('group-architecture').getBoundingClientRect().top",
+        );
+        viewport_h = eval_json(&tab, "window.innerHeight");
+        if rect_top >= 0.0 && rect_top < viewport_h {
+            break;
+        }
+    }
+    assert!(
+        rect_top >= 0.0 && rect_top < viewport_h,
+        "group-architecture's top ({rect_top}) never settled within the \
+         viewport (height {viewport_h})"
+    );
+
+    let scroll_y: f64 = eval_json(&tab, "window.scrollY");
+    assert!(scroll_y > 0.0, "clicking the chip did not scroll the page");
+
+    let hash_after: String = eval_json(&tab, "location.hash");
+    assert_eq!(
+        hash_before, hash_after,
+        "chip click must never mutate location.hash — the SPA owns it as \
+         its state serializer"
+    );
+
+    let arch_active: bool = eval_json(
+        &tab,
+        "document.querySelector('.dash-nav-chip[data-target=\"group-architecture\"]')\
+             .classList.contains('dash-active')",
+    );
+    let overview_active: bool = eval_json(
+        &tab,
+        "document.querySelector('.dash-nav-chip[data-target=\"group-overview\"]')\
+             .classList.contains('dash-active')",
+    );
+    assert!(arch_active, "clicked chip did not gain the active class");
+    assert!(!overview_active, "overview chip is still marked active");
+
+    let errors = console_errors.lock().expect("console mutex").clone();
+    assert!(
+        errors.is_empty(),
+        "nav chip click produced {} browser-console error(s):\n{}",
+        errors.len(),
+        errors.join("\n  "),
+    );
+}
+
+/// The four factor tiles double as jump links to their sections, using
+/// the same `scrollIntoView` path as the nav chips. This drives the
+/// Architecture tile (rendered by `write_smoke_spa`'s real
+/// `health_trend_factors` output) via the keyboard — Enter must activate
+/// it exactly like a click, scrolling `group-architecture` into view
+/// without ever touching `location.hash`.
+#[test]
+fn factor_tile_is_a_keyboard_activatable_jump_link() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let html_path = tmp.path().join("codelore-factor-tile.html");
+    write_smoke_spa(&html_path, "CodeLore Factor Tile Jump Test");
+
+    let Some((_browser, tab)) = boot_spa_tab(&html_path) else {
+        return;
+    };
+    let console_errors = attach_exception_sink(&tab);
+
+    let tile_selector =
+        "document.querySelector('.factor-tile[data-target=\"group-architecture\"]')";
+
+    let tile_role: String = eval_json(
+        &tab,
+        &format!("({tile_selector}).getAttribute('role') || ''"),
+    );
+    assert_eq!(tile_role, "link", "factor tile must carry role=\"link\"");
+
+    let cursor: String = eval_json(&tab, &format!("getComputedStyle({tile_selector}).cursor"));
+    assert_eq!(cursor, "pointer", "factor tile must show a pointer cursor");
+
+    let hash_before: String = eval_json(&tab, "location.hash");
+    tab.evaluate(
+        &format!(
+            "(() => {{ const t = {tile_selector}; t.focus(); \
+                 t.dispatchEvent(new KeyboardEvent('keydown', {{ key: 'Enter', bubbles: true }})); \
+             }})()"
+        ),
+        false,
+    )
+    .expect("dispatch Enter on the factor tile");
+
+    let mut rect_top = f64::MAX;
+    let mut viewport_h = 0.0f64;
+    for _ in 0..40 {
+        std::thread::sleep(Duration::from_millis(100));
+        rect_top = eval_json(
+            &tab,
+            "document.getElementById('group-architecture').getBoundingClientRect().top",
+        );
+        viewport_h = eval_json(&tab, "window.innerHeight");
+        if rect_top >= 0.0 && rect_top < viewport_h {
+            break;
+        }
+    }
+    assert!(
+        rect_top >= 0.0 && rect_top < viewport_h,
+        "Enter on the Architecture factor tile never scrolled group-architecture \
+         into view (top {rect_top}, viewport {viewport_h})"
+    );
+
+    let hash_after: String = eval_json(&tab, "location.hash");
+    assert_eq!(
+        hash_before, hash_after,
+        "factor-tile Enter activation must never mutate location.hash"
+    );
+
+    let errors = console_errors.lock().expect("console mutex").clone();
+    assert!(
+        errors.is_empty(),
+        "factor tile keyboard activation produced {} browser-console error(s):\n{}",
+        errors.len(),
+        errors.join("\n  "),
     );
 }
 

@@ -917,6 +917,32 @@ fn widget_titles_are_h3_under_h2_groups() {
     );
 }
 
+/// The sticky nav (`#dash-nav`, sibling of the header) carries one chip
+/// per `.dash-group` section, in the same order as the sections
+/// themselves — pure template structure, unaffected by dashboard data.
+#[test]
+fn dash_nav_has_six_chips_in_section_order() {
+    let html = build_dashboard_html();
+    let nav_start = html.find("id=\"dash-nav\"").expect("dash-nav present");
+    let order = [
+        "group-overview",
+        "group-hotspots",
+        "group-code-health",
+        "group-architecture",
+        "group-knowledge",
+        "group-delivery",
+    ];
+    let mut last = nav_start;
+    for id in order {
+        let needle = format!("data-target=\"{id}\"");
+        let pos = html.find(&needle).unwrap_or_else(|| panic!("{needle}"));
+        assert!(pos > last, "{id} chip out of order");
+        last = pos;
+    }
+    let chip_count = html.matches("class=\"dash-nav-chip").count();
+    assert_eq!(chip_count, 6, "expected exactly six nav chips");
+}
+
 /// Build the dashboard HTML from an empty (all-default) `SpaDashboard`.
 /// The `<main>` structure — group sections, widget mount points, and
 /// titles — is static template markup independent of any analysis

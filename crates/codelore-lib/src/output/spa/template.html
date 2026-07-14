@@ -361,6 +361,18 @@
       flex-direction: column;
       gap: 4px;
     }
+    /* Jump-link tiles (Code / Architecture / Knowledge / Delivery — see
+       FACTOR_TILE_TARGETS in the widget-render script) share the sticky
+       nav's scroll path. `:focus-visible` mirrors the existing
+       keyboard-focus convention for other custom `role`-carrying rows
+       (`tr.hotspot-row:focus-visible` above). WCAG 2.4.7. */
+    .factor-tile[data-target] {
+      cursor: pointer;
+    }
+    .factor-tile[data-target]:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
     .factor-name {
       font-size: 0.75rem;
       font-weight: 600;
@@ -887,12 +899,58 @@
       max-width: 2400px;
     }
     /* Section grouping. Hand-written (the pre-built utility bundle is frozen);
-       single column below 1280px, two columns above — wide cards span both. */
-    .dash-group { margin-bottom: 2.5rem; }
+       single column below 1280px, two columns above — wide cards span both.
+       `scroll-margin-top` offsets `scrollIntoView` targets by the sticky
+       nav's height so a jumped-to section's heading isn't hidden under the
+       bar — `scrollToDashSection` (00_setup_boot.js) does no offset math
+       of its own. */
+    .dash-group { margin-bottom: 2.5rem; scroll-margin-top: 3.25rem; }
     .dash-group-title { font-size: 1.35rem; font-weight: 700; margin: 0 0 1rem 0.25rem; }
     .dash-group-grid { display: grid; grid-template-columns: 1fr; gap: 1.75rem; }
     @media (min-width: 1280px) {
       .dash-group-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    /* Sticky section nav. `btn btn-xs btn-ghost` (DaisyUI, confirmed
+       present in the frozen bundle) style the chip buttons themselves;
+       only the bar chrome and the active-chip highlight are hand-written
+       here, since `top-*` / `z-*` utilities are NOT in the bundle. */
+    #dash-nav {
+      position: sticky;
+      top: 0;
+      z-index: 30;
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      padding: 0.5rem 1.75rem;
+      backdrop-filter: blur(6px);
+      background: color-mix(in oklab, var(--bg-elev) 88%, transparent);
+      border-bottom: 1px solid var(--border);
+    }
+    .dash-nav-chip.dash-active {
+      background: var(--color-primary, oklch(0.588 0.218 270));
+      color: var(--color-primary-content, #fff);
+      border-color: var(--color-primary, oklch(0.588 0.218 270));
+    }
+    /* Back-to-top. `btn btn-sm btn-ghost` supplies hover/focus chrome;
+       `btn-circle` is NOT in the frozen bundle, so the round shape is
+       hand-written (fixed size + full radius + zeroed padding override
+       the DaisyUI rectangular defaults). Hidden until `initDashNav`'s
+       scroll listener adds `.dash-visible` past 600px of scroll. */
+    #dash-top-btn {
+      position: fixed;
+      right: 1.25rem;
+      bottom: 1.25rem;
+      z-index: 30;
+      display: none;
+      width: 2.5rem;
+      height: 2.5rem;
+      padding: 0;
+      border-radius: 50%;
+    }
+    #dash-top-btn.dash-visible {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
     }
     .badge {
       display: inline-block;
@@ -1156,6 +1214,25 @@
       </svg>
     </label>
   </header>
+
+  <!-- Sticky section nav. One chip per `.dash-group` below; a click
+       scrolls its target into view (`scrollToDashSection`,
+       00_setup_boot.js) honoring `prefers-reduced-motion`, and NEVER
+       touches `location.hash` — the SPA owns the hash as its state
+       serializer (see `readUrlIntoStores`/`writeStoresToUrl` further
+       down). `initDashNav` (called once at boot end) wires the clicks
+       and runs a single `IntersectionObserver` over the six sections to
+       highlight the chip of whichever one is currently in view. Sits as
+       a sibling of `<header>`, not inside `<main>`, so it stays
+       full-width and independent of the dashboard grid. -->
+  <nav id="dash-nav" aria-label="Dashboard sections">
+    <button type="button" class="dash-nav-chip btn btn-xs btn-ghost dash-active" data-target="group-overview">Overview</button>
+    <button type="button" class="dash-nav-chip btn btn-xs btn-ghost" data-target="group-hotspots">Hotspots &amp; Risk</button>
+    <button type="button" class="dash-nav-chip btn btn-xs btn-ghost" data-target="group-code-health">Code Health</button>
+    <button type="button" class="dash-nav-chip btn btn-xs btn-ghost" data-target="group-architecture">Architecture</button>
+    <button type="button" class="dash-nav-chip btn btn-xs btn-ghost" data-target="group-knowledge">Knowledge</button>
+    <button type="button" class="dash-nav-chip btn btn-xs btn-ghost" data-target="group-delivery">Delivery</button>
+  </nav>
 
   <!-- Dashboard layout: six titled sections (`.dash-group`), each
        with its own grid (`.dash-group-grid`), replacing the old flat
@@ -2153,6 +2230,13 @@
       </div>
     </section>
   </main>
+
+  <!-- Back-to-top. Fixed-position singleton, independent of any widget.
+       `initDashNav` (00_setup_boot.js) toggles the `.dash-visible` class
+       once the user has scrolled past 600px and wires the click to
+       scroll to the document top — no `location.hash` involved. -->
+  <button type="button" id="dash-top-btn" class="btn btn-sm btn-ghost"
+          aria-label="Back to top" title="Back to top">↑</button>
 
   <!-- Detail drawer: open/close state driven by Alpine `$store.detail`
        (declared in the inline script below the persist plugin load).
