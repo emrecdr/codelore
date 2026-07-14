@@ -152,9 +152,17 @@
          we `appendTo` the section (Kamei delivery-risk widget) —
          without it, `top: 4; right: 4` would fall through to the
          viewport instead of pinning to the panel's top-right
-         corner. */
+         corner. `min-width: 0` overrides the grid item's default
+         automatic minimum size (its content's min-content width) —
+         without it, a repo with a wide hotspot/DSM table blows the
+         widget past its column and past `<main>` itself, making the
+         whole page scroll sideways. With it, that intrinsic-width
+         content is contained by its own `.table-container` / chart
+         host, which scrolls internally (`overflow-x: auto`) as the
+         responsive rules require. */
       padding: 20px;
       position: relative;
+      min-width: 0;
       /* `view-transition-name: match-element` (Chrome 147+) auto-
          assigns a stable transition identity to every `.widget` so
          theme toggles, layout swaps, and 'Show all' expansions

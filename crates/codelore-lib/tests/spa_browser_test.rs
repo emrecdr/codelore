@@ -38,6 +38,7 @@ use codelore_lib::output::spa::{SpaDashboard, write_spa};
 use codelore_lib::repo::GixRepo;
 use codelore_lib::test_support::{coupling_repo, differential_repo, permissive_coupling_opts};
 use headless_chrome::Browser;
+use headless_chrome::protocol::cdp::Emulation;
 use headless_chrome::protocol::cdp::types::Event;
 
 // Row types used to populate otherwise-dark SpaDashboard fields so their
@@ -1593,6 +1594,57 @@ fn sweep_reaches_chart(tab: &headless_chrome::Tab, selector: &str, target_id: &s
     )
 }
 
+/// Overrides the tab's rendered viewport via CDP `Emulation.setDeviceMetricsOverride`
+/// so `window.innerWidth`/`innerHeight` — and every CSS media query keyed
+/// off them, including the `.dash-group-grid` 1280px breakpoint — see
+/// exactly `w`×`h`, independent of the host machine's real Chrome window
+/// size. Geometry tests use this to prove the responsive grid reflows at a
+/// specific breakpoint from measured layout, not from asserting a class
+/// name.
+fn set_viewport(tab: &headless_chrome::Tab, w: u32, h: u32) {
+    tab.call_method(Emulation::SetDeviceMetricsOverride {
+        width: w,
+        height: h,
+        device_scale_factor: 1.0,
+        mobile: false,
+        scale: None,
+        screen_width: None,
+        screen_height: None,
+        position_x: None,
+        position_y: None,
+        dont_set_visible_size: None,
+        screen_orientation: None,
+        viewport: None,
+        display_feature: None,
+        device_posture: None,
+    })
+    .expect("set device metrics override");
+}
+
+/// `(top, left, width)` from `getBoundingClientRect()` of the first element
+/// matching `selector`, or all `-1.0` when nothing matches. Backs the
+/// responsive-geometry proofs below: they measure real rendered geometry —
+/// not class names — to confirm the section grid actually reflows at a
+/// given viewport width. Marshals the rect through `JSON.stringify` because
+/// CDP `Runtime.evaluate` only inlines a `value` for primitive results
+/// (`eval_json`'s contract); an array comes back as an object reference
+/// without one, so a plain `[top, left, width]` return would leave
+/// `eval_json` with nothing to deserialize.
+fn bounding_rect(tab: &headless_chrome::Tab, selector: &str) -> (f64, f64, f64) {
+    let json: String = eval_json(
+        tab,
+        &format!(
+            "(function () {{ \
+                 var el = document.querySelector('{selector}'); \
+                 if (!el) return JSON.stringify([-1, -1, -1]); \
+                 var r = el.getBoundingClientRect(); \
+                 return JSON.stringify([r.top, r.left, r.width]); \
+             }})()"
+        ),
+    );
+    serde_json::from_str(&json).expect("parse bounding rect JSON")
+}
+
 /// A `role="tablist"` must support arrow-key navigation per the
 /// WAI-ARIA Tabs pattern: focus a tab, press `ArrowRight`, and focus +
 /// the selected state move to the next tab. On the un-fixed source the
@@ -2830,4 +2882,74 @@ fn section_collapse_and_expand_keeps_charts_sized() {
         errors.len(),
         errors.join("\n  "),
     );
+}
+
+/// Below the 1280px breakpoint `.dash-group-grid` collapses to a single
+/// column, so every widget — including ones carrying `xl:col-span-2`,
+/// which only takes effect at >=1280px — must render at essentially the
+/// full content width. Proves the laptop-width single-column contract from
+/// measured geometry rather than from asserting a class name is present.
+#[test]
+fn laptop_width_renders_single_column() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let html_path = tmp.path().join("codelore-laptop-width.html");
+    write_smoke_spa(&html_path, "CodeLore Laptop Width Test");
+
+    let Some((_browser, tab)) = boot_spa_tab(&html_path) else {
+        return;
+    };
+    set_viewport(&tab, 1100, 900);
+    std::thread::sleep(Duration::from_millis(300));
+
+    let (_, _, main_w) = bounding_rect(&tab, "main");
+    assert!(main_w > 0.0, "main content width was {main_w} at 1100px");
+
+    for id in ["#widget-arch-matrix", "#widget-hotspot-table"] {
+        let (_, _, w) = bounding_rect(&tab, id);
+        assert!(
+            w >= 0.9 * main_w,
+            "{id} width ({w}) was not >= 0.9x the main content width \
+             ({main_w}) at a 1100px viewport — the single-column laptop \
+             layout regressed"
+        );
+    }
+}
+
+/// At >=1280px each section's grid becomes two columns and its designated
+/// half-width pair shares a row. Drives the Knowledge section (surfaces +
+/// islands) — the same pairing the responsive-rules spec calls out — and
+/// proves the desktop layout from measured geometry: equal row tops and
+/// each card under 60% of the content width.
+#[test]
+fn desktop_width_pairs_half_widgets() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let html_path = tmp.path().join("codelore-desktop-width.html");
+    write_smoke_spa(&html_path, "CodeLore Desktop Width Test");
+
+    let Some((_browser, tab)) = boot_spa_tab(&html_path) else {
+        return;
+    };
+    set_viewport(&tab, 1500, 900);
+    std::thread::sleep(Duration::from_millis(300));
+
+    let (_, _, main_w) = bounding_rect(&tab, "main");
+    let (surfaces_top, _, surfaces_w) = bounding_rect(&tab, "#widget-knowledge-surfaces");
+    let (islands_top, _, islands_w) = bounding_rect(&tab, "#widget-knowledge-islands");
+
+    assert!(
+        (surfaces_top - islands_top).abs() < 1.0,
+        "knowledge-surfaces top ({surfaces_top}) and knowledge-islands top \
+         ({islands_top}) are not in the same row at a 1500px viewport"
+    );
+    for (label, w) in [
+        ("knowledge-surfaces", surfaces_w),
+        ("knowledge-islands", islands_w),
+    ] {
+        assert!(
+            w < 0.6 * main_w,
+            "{label} width ({w}) was not < 0.6x the main content width \
+             ({main_w}) at a 1500px viewport — the half-width pairing \
+             regressed"
+        );
+    }
 }
