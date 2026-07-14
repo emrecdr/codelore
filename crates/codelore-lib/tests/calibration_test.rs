@@ -807,3 +807,101 @@ fn attach_repo_metrics_empty_pools_sets_none() {
         "empty pools must leave repo_metrics as None"
     );
 }
+
+// ─── merge: repo_metrics pooling ─────────────────────────────────────────────
+//
+// `merge` (the public seam) delegates to the private `merge_repo_metrics` for
+// its `repo_metrics` field; these tests exercise all four None/Some
+// combinations through `merge` rather than making the private helper public.
+
+/// Neither artifact carries `repo_metrics` → the merged result stays `None`
+/// (no lens where neither side contributed one).
+#[test]
+fn merge_repo_metrics_both_none_stays_none() {
+    let base = ramp_artifact();
+    let additional = ramp_artifact();
+    assert!(base.repo_metrics.is_none());
+    assert!(additional.repo_metrics.is_none());
+
+    let merged = calibration::merge(base, additional);
+    assert!(
+        merged.repo_metrics.is_none(),
+        "merging two None repo_metrics must stay None"
+    );
+}
+
+/// Only the base artifact carries `repo_metrics` → the merged result keeps it
+/// unchanged.
+#[test]
+fn merge_repo_metrics_base_some_additional_none_keeps_base() {
+    let mut base = ramp_artifact();
+    let mut values = BTreeMap::new();
+    values.insert("propagation_cost".to_string(), vec![0.1, 0.3, 0.5]);
+    base.repo_metrics = Some(RepoMetrics { values });
+    let additional = ramp_artifact();
+
+    let merged = calibration::merge(base, additional);
+    let rm = merged
+        .repo_metrics
+        .expect("base's repo_metrics must carry through when additional lacks one");
+    assert_eq!(rm.values["propagation_cost"], vec![0.1, 0.3, 0.5]);
+}
+
+/// Only the additional artifact carries `repo_metrics` → the merged result
+/// keeps it unchanged.
+#[test]
+fn merge_repo_metrics_base_none_additional_some_keeps_additional() {
+    let base = ramp_artifact();
+    let mut additional = ramp_artifact();
+    let mut values = BTreeMap::new();
+    values.insert("cycle_file_share".to_string(), vec![0.0, 0.25]);
+    additional.repo_metrics = Some(RepoMetrics { values });
+
+    let merged = calibration::merge(base, additional);
+    let rm = merged
+        .repo_metrics
+        .expect("additional's repo_metrics must carry through when base lacks one");
+    assert_eq!(rm.values["cycle_file_share"], vec![0.0, 0.25]);
+}
+
+/// Both artifacts carry `repo_metrics`: a metric key present on both sides
+/// concatenates every raw value and re-sorts ascending (exact pooling, since
+/// the raw values are available — unlike the quantile blend), while a key
+/// present on only one side carries through unchanged.
+#[test]
+fn merge_repo_metrics_both_some_concatenates_overlap_and_keeps_disjoint() {
+    let mut base = ramp_artifact();
+    let mut base_values = BTreeMap::new();
+    base_values.insert("propagation_cost".to_string(), vec![0.5, 0.1, 0.3]);
+    base_values.insert("cycle_file_share".to_string(), vec![0.2]);
+    base.repo_metrics = Some(RepoMetrics {
+        values: base_values,
+    });
+
+    let mut additional = ramp_artifact();
+    let mut add_values = BTreeMap::new();
+    add_values.insert("propagation_cost".to_string(), vec![0.4, 0.0]);
+    add_values.insert("only_in_additional".to_string(), vec![0.9]);
+    additional.repo_metrics = Some(RepoMetrics { values: add_values });
+
+    let merged = calibration::merge(base, additional);
+    let rm = merged
+        .repo_metrics
+        .expect("both-Some repo_metrics must merge to Some");
+
+    assert_eq!(
+        rm.values["propagation_cost"],
+        vec![0.0, 0.1, 0.3, 0.4, 0.5],
+        "overlapping metric must concatenate both sides' raw values and re-sort ascending"
+    );
+    assert_eq!(
+        rm.values["cycle_file_share"],
+        vec![0.2],
+        "base-only metric must carry through unchanged"
+    );
+    assert_eq!(
+        rm.values["only_in_additional"],
+        vec![0.9],
+        "additional-only metric must carry through unchanged"
+    );
+}

@@ -2519,6 +2519,39 @@ fn calibrate_builds_artifact_from_local_fixtures() {
             );
         }
     }
+
+    // Repo-level architecture metrics: `tiny_repo` has no resolvable HEAD-time
+    // imports (empty import graph → skipped entirely per the pooling
+    // contract), while `biomarker_repo` carries one resolvable
+    // `src/importer.rs → src/trivial.rs` edge, so at most one of the two
+    // repos contributes an observation to each pool.
+    let rm = art
+        .repo_metrics
+        .expect("repo_metrics must be populated when at least one repo has a non-empty graph");
+    let propagation_cost = rm
+        .values
+        .get("propagation_cost")
+        .expect("propagation_cost pool present");
+    let cycle_file_share = rm
+        .values
+        .get("cycle_file_share")
+        .expect("cycle_file_share pool present");
+    assert!(
+        !propagation_cost.is_empty() && propagation_cost.len() <= 2,
+        "propagation_cost must have between 1 and repos_included entries, got {}",
+        propagation_cost.len()
+    );
+    assert!(
+        !cycle_file_share.is_empty() && cycle_file_share.len() <= 2,
+        "cycle_file_share must have between 1 and repos_included entries, got {}",
+        cycle_file_share.len()
+    );
+    for &v in propagation_cost.iter().chain(cycle_file_share.iter()) {
+        assert!(
+            (0.0..=1.0).contains(&v),
+            "repo-level metric value {v} must be in [0,1]"
+        );
+    }
 }
 
 /// A manifest with one good repo and one nonexistent path: the bad repo is

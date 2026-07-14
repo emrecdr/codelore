@@ -124,15 +124,19 @@ fn run_ingest_sarif_cmd(args: &IngestSarifArgs) -> Result<()> {
 /// Build a corpus-calibration artifact from a manifest of pinned repos.
 ///
 /// For each `[[repos]]` entry the repo is checked out at its pinned SHA in a
-/// throwaway location, ingested HEAD-only (only the complexity facts the
-/// pooling below reads — no history walk), and its
+/// throwaway location, ingested HEAD-only (the complexity facts and HEAD-time
+/// imports the pooling below reads — no history walk), and pooled two ways:
 /// per-function raw metrics (`cyclomatic`, `cognitive`, `sloc`, `nargs`,
-/// `max_nesting`) pooled per language (derived from each file's extension). The
-/// pooled distributions are reduced to quantile breakpoints by the calibration
-/// builder. A repo that fails to check out or ingest is warned about and
-/// skipped; the run still succeeds and the artifact's `repos_attempted` /
-/// `repos_included` counts record the tally. With `--merge`, the build is folded
-/// into an existing artifact via the library's weighted-blend merge.
+/// `max_nesting`) per language (derived from each file's extension), and
+/// repo-level structural metrics (`propagation_cost`, `cycle_file_share`)
+/// derived from the resolved import graph. The per-language pools are reduced
+/// to quantile breakpoints by the calibration builder; the repo-level pools
+/// are attached as sorted raw-value vectors. A repo that fails to check out or
+/// ingest is warned about and skipped; the run still succeeds and the
+/// artifact's `repos_attempted` / `repos_included` counts record the tally.
+/// With `--merge`, the build is folded into an existing artifact via the
+/// library's weighted-blend merge (repo-level pools merge by exact
+/// concatenation instead, since their raw values are available).
 fn run_calibrate_cmd(args: &CalibrateArgs) -> Result<()> {
     use codelore_lib::calibration::{self, LangObservations};
     use codelore_lib::cli_api::cache::default_cache_root;
@@ -151,6 +155,7 @@ fn run_calibrate_cmd(args: &CalibrateArgs) -> Result<()> {
     let manifest = calibration::load_manifest(&args.repos).context("load corpus manifest")?;
 
     let mut obs = LangObservations::new();
+    let mut pools = calibration::RepoMetrics::default();
     let mut attempted: u32 = 0;
     let mut included: u32 = 0;
 
@@ -158,7 +163,7 @@ fn run_calibrate_cmd(args: &CalibrateArgs) -> Result<()> {
         attempted += 1;
         // The per-repo progress line prints from inside `calibrate_one_repo`
         // once the checkout mode (shallow / full / worktree) is known.
-        match calibrate_one_repo(&repo.source, &repo.sha, &cache_root, &mut obs) {
+        match calibrate_one_repo(&repo.source, &repo.sha, &cache_root, &mut obs, &mut pools) {
             Ok(()) => included += 1,
             Err(e) => eprintln!("calibrate: skip {} @ {}: {e:#}", repo.source, repo.sha),
         }
@@ -167,6 +172,7 @@ fn run_calibrate_cmd(args: &CalibrateArgs) -> Result<()> {
     let mut artifact = calibration::build_from_observations(&vintage, &generated_at, &obs);
     artifact.repos_attempted = attempted;
     artifact.repos_included = included;
+    calibration::attach_repo_metrics(&mut artifact, pools);
 
     if let Some(merge_path) = &args.merge {
         let base = calibration::load(merge_path)
@@ -193,7 +199,8 @@ fn run_calibrate_cmd(args: &CalibrateArgs) -> Result<()> {
 }
 
 /// Check out one manifest repo at its pinned SHA, ingest it HEAD-only, and
-/// pool its per-function raw metrics into `obs`.
+/// pool its per-function raw metrics into `obs` plus its repo-level
+/// architecture metrics into `pools`.
 ///
 /// A `source` containing `://` or starting with `git@` is a clone URL; anything
 /// else is a local filesystem path. Both converge on a throwaway checkout of
@@ -201,13 +208,15 @@ fn run_calibrate_cmd(args: &CalibrateArgs) -> Result<()> {
 /// detached `git worktree` for local paths — so the user's own checkout is
 /// never mutated and the tree matches the pin regardless of where HEAD points.
 /// The ingest runs in head-only mode: only the pinned tree's complexity facts
-/// are extracted (`pool_complexity` reads nothing else), which is what makes
-/// history-less shallow checkouts ingestible in the first place.
+/// and HEAD-time imports are extracted (`pool_complexity` /
+/// `pool_repo_metrics` read nothing else), which is what makes history-less
+/// shallow checkouts ingestible in the first place.
 fn calibrate_one_repo(
     source: &str,
     sha: &str,
     cache_root: &std::path::Path,
     obs: &mut codelore_lib::calibration::LangObservations,
+    pools: &mut codelore_lib::calibration::RepoMetrics,
 ) -> Result<()> {
     // The tempdir / worktree guard is held for the duration of the ingest.
     let (checkout, mode) = checkout_pinned(source, sha)?;
@@ -220,6 +229,7 @@ fn calibrate_one_repo(
     };
     let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, cache_root).context("ingest")?;
     pool_complexity(&db, obs).context("pool complexity metrics")?;
+    pool_repo_metrics(&db, pools).context("pool repo-level architecture metrics")?;
     Ok(())
 }
 
@@ -492,6 +502,50 @@ fn pool_complexity(
 #[allow(clippy::cast_precision_loss)]
 fn value_to_f64(n: i64) -> f64 {
     n as f64
+}
+
+/// Pool one repo's repo-level structural architecture metrics —
+/// `propagation_cost` and `cycle_file_share` (the fraction of the resolved
+/// import graph's files sitting in a non-trivial dependency cycle) — into
+/// the corpus-level `pools`.
+///
+/// A repo whose resolved import graph is empty (no Tier-1 language present in
+/// the checkout, or no resolvable HEAD-time imports) contributes NOTHING to
+/// either metric — no observation is pushed at all. Pooling a synthetic zero
+/// for such a repo would drag the corpus pool toward zero for repos that
+/// simply carry no Tier-1 architecture signal, rather than a genuinely low
+/// propagation cost.
+fn pool_repo_metrics(
+    db: &FactsDb,
+    pools: &mut codelore_lib::calibration::RepoMetrics,
+) -> Result<()> {
+    use codelore_lib::cli_api::analyses::import_graph::{build_import_graph, graph_metrics};
+
+    let graph = build_import_graph(db).context("build import graph")?;
+    if graph.is_empty() {
+        tracing::debug!(
+            "calibrate: empty import graph (no Tier-1 imports); skipping repo-level metric pooling"
+        );
+        return Ok(());
+    }
+    let m = graph_metrics(&graph);
+    // `m.n` is guaranteed non-zero here (the empty-graph case returned above),
+    // so `.max(1)` only guards the cast helper's own contract, not a real
+    // division-by-zero risk.
+    let n = f64::from(u32::try_from(m.n.max(1)).unwrap_or(u32::MAX));
+    let cycle_file_share = f64::from(m.cyclic_nodes) / n;
+
+    pools
+        .values
+        .entry("propagation_cost".to_string())
+        .or_default()
+        .push(m.propagation_cost);
+    pools
+        .values
+        .entry("cycle_file_share".to_string())
+        .or_default()
+        .push(cycle_file_share);
+    Ok(())
 }
 
 /// Quality-gate check. Loads thresholds, runs the hotspots analysis
