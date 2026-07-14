@@ -139,10 +139,10 @@
       color: var(--fg-dim);
       font-size: 12px;
     }
-    /* `main`'s layout primitives now come from Tailwind utilities on
-       the markup (`grid grid-cols-1 xl:grid-cols-2 gap-7 p-7
-       max-w-[1600px] mx-auto`). Nothing else in this stylesheet
-       targets `main`. */
+    /* `main` itself carries no grid layout — each dashboard section
+       (`.dash-group`) owns its own grid (`.dash-group-grid`, below).
+       `main` only centers the page and caps its width via
+       `.dashboard-main`. */
     .widget {
       /* DaisyUI's `card bg-base-200 shadow-lg` classes on the
          section provide elevation, fill, and rounded corners.
@@ -203,7 +203,7 @@
         view-transition-name: none;
       }
     }
-    .widget h2 {
+    .widget h3 {
       margin: 0 0 4px 0;
       font-size: 14px;
       font-weight: 600;
@@ -879,13 +879,20 @@
     /* Wide-screen support. Hand-written here because the inlined
        Tailwind bundle is pre-built; arbitrary `max-w-[…]` classes
        added after the last `tailwindcss -i ... -o ...` run won't
-       be in the inlined stylesheet. A single rule keeps the
-       2-column layout (Tailwind's `xl:grid-cols-2`) but lifts the
+       be in the inlined stylesheet. A single rule lifts the
        horizontal cap from 1600 px to 2400 px so ultra-wide / 4K
        displays don't leave huge whitespace sidebars. Beyond
        2400 px the dashboard centres itself with `mx-auto`. */
     .dashboard-main {
       max-width: 2400px;
+    }
+    /* Section grouping. Hand-written (the pre-built utility bundle is frozen);
+       single column below 1280px, two columns above — wide cards span both. */
+    .dash-group { margin-bottom: 2.5rem; }
+    .dash-group-title { font-size: 1.35rem; font-weight: 700; margin: 0 0 1rem 0.25rem; }
+    .dash-group-grid { display: grid; grid-template-columns: 1fr; gap: 1.75rem; }
+    @media (min-width: 1280px) {
+      .dash-group-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     .badge {
       display: inline-block;
@@ -1150,33 +1157,26 @@
     </label>
   </header>
 
-  <!-- Responsive widget grid:
-       - mobile (< 768 px):     1 column (`grid-cols-1`) — every widget
-                                gets full width, charts can pan but
-                                don't squeeze.
-       - tablet+ (≥ 768 px):    2 columns (`md:grid-cols-2`) — narrow
-                                tablets in portrait already have
-                                enough horizontal room for two
-                                cards side-by-side, especially after
-                                each chart's container takes care
-                                of overflow.
-       - desktop (≥ 1280 px):   wide widgets span both columns
-                                (`xl:col-span-2`) — hotspot circle-pack,
-                                trends, calendar heatmap, X-Ray
-                                sunburst, hotspot table, change-coupling
-                                sankey. At md/lg they sit in the normal
-                                2-col grid taking 1 col each.
-       Two compact widgets pair on row 1 (kpi-tiles +
-       knowledge-islands). The 1600 px max-width matches the
-       dashboard's preferred layout — `max-w-screen-2xl` (1536 px)
-       would shrink the dashboard on ultra-wide displays. -->
-  <main class="mx-auto grid grid-cols-1 md:grid-cols-2 gap-7 p-7 dashboard-main">
+  <!-- Dashboard layout: six titled sections (`.dash-group`), each
+       with its own grid (`.dash-group-grid`), replacing the old flat
+       widget wall. Below 1280px every widget spans the full row —
+       one chart per line, which is what laptop widths need most.
+       At 1280px and above each section's grid becomes two columns;
+       the bundled `xl:col-span-2` utility makes wide cards span
+       both, while the remaining widgets pair up within their
+       section. `.dash-group-grid` is hand-written (see the CSS
+       block above) since the pre-built Tailwind bundle is frozen —
+       no CSS rebuild is needed for layout changes. -->
+  <main class="mx-auto p-7 dashboard-main">
+    <section id="group-overview" class="dash-group" aria-labelledby="group-overview-h">
+      <h2 id="group-overview-h" class="dash-group-title">Overview</h2>
+      <div class="dash-group-grid">
     <!-- Four-factor header: Code / Architecture / Knowledge / Delivery.
          Spans the full dashboard width (xl:col-span-2). Hidden via CSS
          when empty (JS sets display:none on the container when
          data.factors is absent or empty). -->
     <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-factor-header">
-      <h2>Quality dimensions</h2>
+      <h3>Quality dimensions</h3>
       <div class="subtitle">
         Four headline scores (0–100, higher = healthier) summarising the
         repo's Code, Architecture, Knowledge, and Delivery dimensions.
@@ -1187,9 +1187,8 @@
       </div>
       <div id="widget-factor-header-body" class="widget-body" style="min-height: 80px;"></div>
     </section>
-
-    <section class="widget card bg-base-200 shadow-lg" id="widget-kpi-tiles">
-      <h2>Codebase at a glance</h2>
+    <section class="widget card bg-base-200 shadow-lg xl:col-span-2" id="widget-kpi-tiles">
+      <h3>Codebase at a glance</h3>
       <div class="subtitle">
         Summary metrics across the repo. KPI cards are computed at
         ingest time using deterministic published formulas — click
@@ -1206,51 +1205,8 @@
       </details>
       <div id="widget-kpi-tiles-body" class="kpi-grid"></div>
     </section>
-
-    <section class="widget card bg-base-200 shadow-lg" id="widget-knowledge-islands">
-      <h2>Knowledge islands</h2>
-      <div class="subtitle">
-        Files whose primary author has departed and where no
-        substantial other owner exists — auto-detected, no manual
-        ex-developer marking. CodeScene requires you to mark
-        ex-developers manually; CodeLore detects them from commit
-        history + co-change intensity.
-      </div>
-      <details class="learn-more">
-        <summary>Learn more — how to read this panel</summary>
-        <div class="learn-more-content">
-          <p><strong>What it measures.</strong> Files whose primary author (typically ≥80% of historical line-changes) has stopped committing <em>and</em> where no other developer has substantial backup ownership. Detection is purely behavioural — there's no manual "ex-developer" tagging required.</p>
-          <p><strong>How to read it.</strong> One row per orphaned file. The risk score combines code health, complexity, and downstream coupling — the higher the score, the more painful the orphan is.</p>
-          <p><strong>What to watch for.</strong> Concentration: multiple orphaned files in the same module = an entire subsystem with no clear owner. Critical-path orphans (high hotspot score, low health) at the top of the list are the immediate priorities.</p>
-          <p><strong>Suggested action.</strong> Pair-program new contributors with the top files; promote the orphan files to the next sprint's documentation push; assign succession owners explicitly so the names move out of this list.</p>
-          <p><cite>Detection: primary-author share + commit-recency decay + co-change intensity heuristic; see <code>analyses/knowledge_islands.rs</code>.</cite></p>
-        </div>
-      </details>
-      <div id="widget-knowledge-islands-body" class="table-container"></div>
-    </section>
-
-    <section class="widget card bg-base-200 shadow-lg" id="widget-knowledge-surfaces">
-      <h2>Knowledge surfaces</h2>
-      <div class="subtitle">
-        Team familiarity, knowledge islands ratio, tenure mix, and the
-        files with the highest coordination overhead — from one
-        behavioural scan, no manual tagging.
-      </div>
-      <details class="learn-more">
-        <summary>Learn more — how to read this panel</summary>
-        <div class="learn-more-content">
-          <p><strong>Familiarity.</strong> Mean team familiarity across active files: the fraction of each file's weighted change history that active authors "own" — averaged over all files touched in the window. Green ≥ 70 %, yellow 40–70 %, red &lt; 40 %.</p>
-          <p><strong>Islands.</strong> Fraction of active files with no active owner (primary author inactive + no successor). Lower is better. Green ≤ 20 %, yellow 20–40 %, red &gt; 40 %.</p>
-          <p><strong>Team composition.</strong> Commit share split by tenure bucket: <em>onboarded</em> (&lt; 90 days), <em>experienced</em> (90–364 days), <em>veteran</em> (≥ 365 days). A healthy team shows some onboarding throughput without veteran over-concentration.</p>
-          <p><strong>Coordination needs.</strong> Top files by co-change coupling tier and entropy. <em>High</em>-tier files are frequently changed together by multiple authors with high authorship interleaving — the strongest coordination signal.</p>
-          <p><cite>Methodology: knowledge-shares materialized view + coordination-needs entropy; see <code>analyses/code_familiarity.rs</code>, <code>analyses/coordination_needs.rs</code>.</cite></p>
-        </div>
-      </details>
-      <div id="widget-knowledge-surfaces-body"></div>
-    </section>
-
-    <section class="widget card bg-base-200 shadow-lg md:col-span-2 wide-widget" id="widget-guided-tour" aria-label="Guided analysis tour">
-      <h2>Guided tour</h2>
+    <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-guided-tour" aria-label="Guided analysis tour">
+      <h3>Guided tour</h3>
       <div class="subtitle">
         A 4-step walk through the hero map — from code health to refactoring targets.
         Each step sets the circle-pack colour lens and brushes the relevant files.
@@ -1263,9 +1219,8 @@
       </details>
       <div id="widget-guided-tour-body" class="widget-body" style="min-height: 48px;"></div>
     </section>
-
-    <section class="widget card bg-base-200 shadow-lg md:col-span-2 wide-widget" id="widget-hotspot-circle-pack">
-      <h2>Hotspots</h2>
+    <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-hotspot-circle-pack">
+      <h3>Hotspots</h3>
       <div class="subtitle">
         Files sized by churn (revisions). Toggle the colour mapping
         across the behavioural lenses: <b>complexity</b> (cognitive
@@ -1456,9 +1411,107 @@
         </div>
       </details>
     </section>
+      </div>
+    </section>
 
-    <section class="widget card bg-base-200 shadow-lg md:col-span-2 wide-widget" id="widget-trends">
-      <h2>Trends</h2>
+    <section id="group-hotspots" class="dash-group" aria-labelledby="group-hotspots-h">
+      <h2 id="group-hotspots-h" class="dash-group-title">Hotspots &amp; Risk</h2>
+      <div class="dash-group-grid">
+    <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-hotspot-table">
+      <h3>Hotspot table</h3>
+      <div class="subtitle">
+        Sortable drill-down view of every hotspot row. Click a column
+        header to sort. Type to filter by path.
+      </div>
+      <details class="learn-more">
+        <summary>Learn more — how to read this panel</summary>
+        <div class="learn-more-content">
+          <p><strong>What it measures.</strong> The full hotspot list as a sortable, filterable table. One row per file with every behavioural metric the dashboard computes — revisions, cognitive complexity, code health, hotspot score, primary author, AI attribution, MI rank, contributors.</p>
+          <p><strong>How to read it.</strong> Click any column header to sort by that column (click again to reverse). Type in the filter box to narrow by path substring; the summary line under the filter shows how many rows match. Click a row to open the file detail drawer — the file then lights up across the trends, parallel-coords, and any other path-aware panel.</p>
+          <p><strong>What to watch for.</strong> Use the table as the drill-down surface for any signal you spotted in a chart. The combination of high revisions + low health + recent activity is the canonical "fix this now" pattern.</p>
+          <p><strong>Suggested action.</strong> Sort by hotspot score descending, copy the top-N paths into your sprint board, and refactor by priority.</p>
+        </div>
+      </details>
+      <div class="table-controls">
+        <input
+          type="text"
+          id="hotspot-table-filter"
+          class="input input-bordered input-sm"
+          placeholder="filter paths…"
+          autocomplete="off"
+          spellcheck="false"
+          aria-label="Filter hotspots by path">
+        <span class="table-summary" id="hotspot-table-summary" role="status" aria-live="polite"></span>
+        <span class="table-actions" id="hotspot-table-actions"></span>
+      </div>
+      <div id="widget-hotspot-table-body" class="table-container"></div>
+    </section>
+    <!-- Treemap alternative view to the circle-pack. Same
+         `hotspots` data, rendered as nested rectangles. Strict
+         area encoding (cognitive complexity × revisions); useful
+         when size differences need to read exactly rather than
+         perceptually-via-circle-area. -->
+    <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-hotspot-treemap">
+      <h3>Hotspots — treemap view</h3>
+      <div class="subtitle">
+        Same data as the circle-pack above, rendered as nested
+        rectangles for strict area-comparison readability.
+      </div>
+      <details class="learn-more">
+        <summary>Learn more — how to read this panel</summary>
+        <div class="learn-more-content">
+          <p><strong>What it measures.</strong> The same hotspot data as the circle-pack above, rendered as nested rectangles. Area encodes cognitive complexity × revisions; colour encodes the active hotspot lens.</p>
+          <p><strong>How to read it.</strong> Each rectangle is one file (label = abbreviated path). The larger the rectangle, the higher the cognitive × revisions product. Treemaps use strict area encoding — unlike circle area, rectangle area is read accurately by the eye, so this view is the right one when you need to <em>compare</em> sizes precisely.</p>
+          <p><strong>What to watch for.</strong> The two or three rectangles that dominate the layout — they own most of the codebase's pressure. Small, evenly-sized tiles = healthy distribution; one giant tile + many tiny ones = god-class shape.</p>
+          <p><strong>Suggested action.</strong> When you're picking refactor targets by impact, sort by the treemap's largest rectangles. When you're picking by risk lens (complexity, health, friction), the circle-pack's colour ramp is easier to scan — use whichever fits your current question.</p>
+        </div>
+      </details>
+      <div id="widget-hotspot-treemap-body" class="widget-body" style="height: 320px;"></div>
+    </section>
+    <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-xray-sunburst">
+      <h3>Function X-Ray</h3>
+      <div class="subtitle">
+        Function-level cognitive complexity. Inner ring = top-level
+        path segment; outer = function. Click any wedge to drill down.
+        Top 500 functions by cognitive complexity.
+      </div>
+      <details class="learn-more">
+        <summary>Learn more — how to read this panel</summary>
+        <div class="learn-more-content">
+          <p><strong>What it measures.</strong> Function-level cognitive complexity for the top 500 functions in the repository. Sunburst layout: the inner ring is the top-level path segment, the outer rings drill into directories and finally individual functions. Wedge area encodes complexity.</p>
+          <p><strong>How to read it.</strong> Bigger wedge = more complex function. Click any wedge to zoom in (the sunburst re-roots to that subtree); click the centre to zoom back out. Hover for the full module path plus function name.</p>
+          <p><strong>What to watch for.</strong> A single huge outer wedge inside a module = that one function owns most of the module's complexity. The most dangerous pattern is one function dominating <em>and</em> the same file appearing high in the Hotspot list (frequent churn on a complex function).</p>
+          <p><strong>Suggested action.</strong> Refactor the largest wedges first by extracting helpers and simplifying control flow. Even one extraction can drop a wedge by 30–50% of its visual area.</p>
+        </div>
+      </details>
+      <div id="widget-xray-sunburst-body" class="widget-body"></div>
+    </section>
+      </div>
+    </section>
+
+    <section id="group-code-health" class="dash-group" aria-labelledby="group-code-health-h">
+      <h2 id="group-code-health-h" class="dash-group-title">Code Health</h2>
+      <div class="dash-group-grid">
+    <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-health-trend">
+      <h3>Repo health timeline</h3>
+      <div class="subtitle">
+        Combined, architectural, and code health (0–100) recomputed at
+        sampled historical commits. Shows whether overall repo health is
+        improving or degrading over time.
+      </div>
+      <details class="learn-more">
+        <summary>Learn more — how to read this panel</summary>
+        <div class="learn-more-content">
+          <p><strong>What it measures.</strong> Up to 12 commits evenly spaced across history are re-analysed: the import graph and complexity metrics are rebuilt at each revision, then scored as architectural health (propagation cost + cycle penalty, 0–100), code health (mean file health score, 0–100), and combined health (their average). Higher is healthier.</p>
+          <p><strong>How to read it.</strong> The bold line is the combined score; the lighter lines are the two components. The faint background bands mark red (0–40), yellow (40–70), and green (70–100) zones. Use the toggle to switch to a split view showing each component on its own panel.</p>
+          <p><strong>What to watch for.</strong> A declining combined line means the repo is accumulating debt faster than it is being paid down. A divergence between architectural and code health — one rising while the other falls — points to where the primary debt source is. Cross-reference with the Architecture trend panel for cycle and propagation details.</p>
+          <p><strong>Suggested action.</strong> If architectural health is declining, run <code>--analysis dependency-cycles</code> to find the tangles introduced at the inflection point. If code health is declining, the Hotspot table will show which files are driving it.</p>
+        </div>
+      </details>
+      <div id="widget-health-trend-body" class="widget-body" style="min-height: 340px;"></div>
+    </section>
+    <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-trends">
+      <h3>Trends</h3>
       <div class="subtitle">
         Monthly revision counts for the top-10 hotspot files.
         Pattern shows where churn is intensifying or cooling off.
@@ -1512,12 +1565,44 @@
       </div>
       <div id="widget-trends-body" class="widget-body"></div>
     </section>
-
+    <!-- Code Health share bars + effort dot strip (A.5).
+         Two 100%-stacked horizontal bars: LOC share and churn share per
+         code-health band; plus a 20-dot effort strip (each dot = 5%
+         churn). Pure HTML/CSS — no ECharts. Driven by effort_exposure. -->
+    <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-share-bars">
+      <h3>Code Health — effort distribution</h3>
+      <div class="subtitle">
+        Where engineering effort lands across red / yellow / green health
+        bands. A team with most churn in red code is in reactive mode;
+        most churn in green means proactive maintenance.
+      </div>
+      <details class="learn-more">
+        <summary>Learn more — how to read this panel</summary>
+        <div class="learn-more-content">
+          <p><strong>What it measures.</strong> Two 100% stacked bars: the top bar shows the share of total SLOC (source lines of code) in each health band at HEAD; the bottom bar shows the share of trailing-window churn (lines added + deleted) that landed in each band. The dot strip encodes the same churn share as 20 coloured dots — each dot = 5% of window churn.</p>
+          <p><strong>How to read it.</strong> LOC bar = how your codebase is distributed today. Churn bar = where your team is actually spending its energy. If the churn bar has a large red segment while the LOC bar has a small red segment, the team is disproportionately fighting fires in its worst files.</p>
+          <p><strong>What to watch for.</strong> Red churn share consistently above 40% indicates a reactive maintenance pattern. Improving = churn shifting toward green over successive sprints.</p>
+          <p><strong>Suggested action.</strong> Prioritise the top hotspots with red health for refactoring investment to reduce the cost of future changes there.</p>
+        </div>
+      </details>
+      <div id="widget-share-bars-body" class="widget-body" style="min-height: 80px;"></div>
+    </section>
+    <!-- Improvements feed: recent band transitions (regressions ↓ /
+         improvements ↑) surfaced from the per-file health series. Each
+         entry is a clickable path for linked-brushing into the drawer. -->
+    <section class="widget card bg-base-200 shadow-lg" id="widget-improvements-feed">
+      <h3>Health improvements &amp; regressions</h3>
+      <div class="subtitle">
+        Signal-bearing code-health band transitions detected across sampled
+        historical commits. Click any file to open its detail drawer.
+      </div>
+      <div id="widget-improvements-feed-body" class="widget-body" style="min-height: 120px;"></div>
+    </section>
     <!-- Boxplot of cognitive complexity distribution across all
          files. Quartiles + outliers in one glance — answers "how
          lopsided is the cognitive tail?". -->
     <section class="widget card bg-base-200 shadow-lg" id="widget-cognitive-boxplot">
-      <h2>Cognitive distribution</h2>
+      <h3>Cognitive distribution</h3>
       <div class="subtitle">
         How hard each file is to reason about, across the whole
         codebase. Cognitive complexity counts nested decisions and
@@ -1537,94 +1622,80 @@
       </details>
       <div id="widget-cognitive-boxplot-body" class="widget-body" style="height: 220px;"></div>
     </section>
-
-    <!-- Module-to-module chord diagram from the coupling pairs
-         aggregated by top-level directory. Surfaces cross-module
-         Conway's-law structure. -->
-    <section class="widget card bg-base-200 shadow-lg" id="widget-module-chord">
-      <h2>Module coupling</h2>
+    <!-- Parallel coordinates over the top-20 hotspots. Each file
+         is one polyline crossing 5 axes: revisions / cognitive /
+         code-health / hotspot-score / MI. Hover a polyline to see
+         the file path; drag-select on any axis to filter the
+         visible set (ECharts native). Power-user analytical tool —
+         surfaces files that are outliers on multiple axes
+         simultaneously. -->
+    <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-parallel-coords">
+      <h3>Multi-metric comparison</h3>
       <div class="subtitle">
-        Inter-module change-coupling rolled up from the file-pair
-        graph by top-level directory.
+        Top-20 hotspots across five behavioural axes. Drag on any
+        axis to filter — useful for "files high on cognitive AND
+        low on MI" cross-cuts.
       </div>
       <details class="learn-more">
         <summary>Learn more — how to read this panel</summary>
         <div class="learn-more-content">
-          <p><strong>What it measures.</strong> Change-coupling rolled up to the module level (first N path segments controlled by the depth selector below). Modules A and B are coupled when files in A frequently change in the same commits as files in B. Infrastructure files (lock files, <code>.env*</code>, docs, build manifests) are filtered out — they cluster with every release commit and would otherwise dominate the picture.</p>
-          <p><strong>How to read it.</strong> Each node on the circle is one module. Chords (curved bands between nodes) represent cross-module change-coupling; thicker bands = stronger historical coupling. Hover a node to highlight its adjacent chords. Use the depth selector below to widen / narrow the aggregation: <em>2</em> = broad architectural modules, <em>6</em> = near file-level subsystems.</p>
-          <p><strong>What to watch for.</strong> Strong chords between modules that should not be tightly coupled — that is the structural smell. Compare to the Architecture graph below: if two modules are change-coupled but don't import each other, the coupling is implicit (shared utilities, leaky abstractions, contract violations through a third party).</p>
-          <p><strong>Suggested action.</strong> For each unexpected strong chord, open the Change-coupling sankey to find the top file pair driving it, then ask: is there a missing shared abstraction, or is a contract being violated?</p>
-          <p><cite>H. Gall, K. Hajek, M. Jazayeri 1998, <em>Detection of logical coupling based on product release history</em>.</cite></p>
+          <p><strong>What it measures.</strong> The top-20 hotspot files plotted simultaneously across five axes: <strong>Revisions</strong>, <strong>Cognitive</strong> complexity, <strong>Code health</strong>, <strong>Hotspot score</strong> (composite), and <strong>MI rank</strong> (maintainability percentile). Each polyline is one file.</p>
+          <p><strong>How to read it.</strong> Follow a polyline left-to-right to see one file's profile across all five metrics. Drag-select a range on any axis to filter — polylines outside your selection grey out. Hover any polyline to isolate it (others fade to 15%); click to open the file drawer.</p>
+          <p><strong>What to watch for.</strong> Files that are outliers on <em>multiple</em> axes at once — high Revisions AND high Cognitive AND low MI is a triple red flag. Drag-filter the Cognitive axis to "> 200" and the MI axis to "< 5%" simultaneously to see who survives both cuts.</p>
+          <p><strong>Suggested action.</strong> Use this panel when no single metric clearly points to a winner. Multi-axis outliers are the highest-leverage refactor targets — addressing them moves several axes at once.</p>
+          <p><cite>A. Inselberg 1985, <em>The plane with parallel coordinates</em>.</cite></p>
         </div>
       </details>
-      <!-- Aggregation-depth selector. 'Auto' triggers the adaptive
-           loop (deepens until ≥6 distinct modules); the numeric
-           buttons pin a fixed depth. Persisted via Alpine.$persist
-           on `$store.layout.chordDepth`. The reactive effect in the
-           inline store-init script fires the rerenderer list when
-           this changes, so the chord re-paints with the new
-           aggregation level. Buttons use the same DaisyUI
-           `tabs tabs-boxed` pattern as the hotspot color modes for
-           a consistent feel. -->
-      <div role="tablist" class="tabs tabs-boxed mb-2" aria-label="Module coupling depth">
+      <!-- Top-N selector: how many hotspots to render as polylines.
+           Persisted via `$store.layout.parallelTopN`. -->
+      <div role="tablist" class="tabs tabs-boxed mb-2" aria-label="Multi-metric top N hotspots">
         <button type="button" role="tab" class="tab tooltip-host"
-                :class="$store.layout.chordDepth === 'auto' && 'tab-active'"
-                :aria-selected="$store.layout.chordDepth === 'auto' ? 'true' : 'false'"
-                @click="$store.layout.chordDepth = 'auto'">
-          Auto
+                :class="$store.layout.parallelTopN === 10 && 'tab-active'"
+                :aria-selected="$store.layout.parallelTopN === 10 ? 'true' : 'false'"
+                @click="$store.layout.parallelTopN = 10">
+          10
           <span class="tooltip-trigger" aria-hidden="true">?</span>
-          <span class="tooltip-popup" role="tooltip">Adaptive: deepen until at least 6 modules surface. The default — works well for most repos.</span>
+          <span class="tooltip-popup" role="tooltip">Top-10 — the highest-pressure files only. Easiest to spot multi-axis outliers when the polyline soup is thin.</span>
         </button>
         <button type="button" role="tab" class="tab tooltip-host"
-                :class="$store.layout.chordDepth === 2 && 'tab-active'"
-                :aria-selected="$store.layout.chordDepth === 2 ? 'true' : 'false'"
-                @click="$store.layout.chordDepth = 2">
-          2
+                :class="$store.layout.parallelTopN === 20 && 'tab-active'"
+                :aria-selected="$store.layout.parallelTopN === 20 ? 'true' : 'false'"
+                @click="$store.layout.parallelTopN = 20">
+          20
           <span class="tooltip-trigger" aria-hidden="true">?</span>
-          <span class="tooltip-popup" role="tooltip">Aggregate to 2 path segments (e.g. <code>app/services</code>). Broad architectural modules.</span>
+          <span class="tooltip-popup" role="tooltip">Default — top-20 hotspots. Covers most "files high on cognitive AND low on MI" cross-cuts without crowding.</span>
         </button>
         <button type="button" role="tab" class="tab tooltip-host"
-                :class="$store.layout.chordDepth === 3 && 'tab-active'"
-                :aria-selected="$store.layout.chordDepth === 3 ? 'true' : 'false'"
-                @click="$store.layout.chordDepth = 3">
-          3
+                :class="$store.layout.parallelTopN === 50 && 'tab-active'"
+                :aria-selected="$store.layout.parallelTopN === 50 ? 'true' : 'false'"
+                @click="$store.layout.parallelTopN = 50">
+          50
           <span class="tooltip-trigger" aria-hidden="true">?</span>
-          <span class="tooltip-popup" role="tooltip">Aggregate to 3 path segments (e.g. <code>app/services/clients</code>). Feature-area level.</span>
+          <span class="tooltip-popup" role="tooltip">Top-50 — broad view; use drag-select on individual axes to filter visually.</span>
         </button>
         <button type="button" role="tab" class="tab tooltip-host"
-                :class="$store.layout.chordDepth === 4 && 'tab-active'"
-                :aria-selected="$store.layout.chordDepth === 4 ? 'true' : 'false'"
-                @click="$store.layout.chordDepth = 4">
-          4
+                :class="$store.layout.parallelTopN === 'all' && 'tab-active'"
+                :aria-selected="$store.layout.parallelTopN === 'all' ? 'true' : 'false'"
+                @click="$store.layout.parallelTopN = 'all'">
+          All
           <span class="tooltip-trigger" aria-hidden="true">?</span>
-          <span class="tooltip-popup" role="tooltip">Aggregate to 4 path segments. Subsystem level — usually the deepest still-readable view.</span>
-        </button>
-        <button type="button" role="tab" class="tab tooltip-host"
-                :class="$store.layout.chordDepth === 5 && 'tab-active'"
-                :aria-selected="$store.layout.chordDepth === 5 ? 'true' : 'false'"
-                @click="$store.layout.chordDepth = 5">
-          5
-          <span class="tooltip-trigger" aria-hidden="true">?</span>
-          <span class="tooltip-popup" role="tooltip">Aggregate to 5 path segments. Near file level — labels start to get long.</span>
-        </button>
-        <button type="button" role="tab" class="tab tooltip-host"
-                :class="$store.layout.chordDepth === 6 && 'tab-active'"
-                :aria-selected="$store.layout.chordDepth === 6 ? 'true' : 'false'"
-                @click="$store.layout.chordDepth = 6">
-          6
-          <span class="tooltip-trigger" aria-hidden="true">?</span>
-          <span class="tooltip-popup" role="tooltip">Aggregate to 6 path segments. Granular — file-pair-like view.</span>
+          <span class="tooltip-popup" role="tooltip">All hotspot rows. Heavy; the chart works but you'll definitely want axis-drag filtering to extract signal.</span>
         </button>
       </div>
-      <div id="widget-module-chord-body" class="widget-body" style="height: 320px;"></div>
+      <div id="widget-parallel-coords-body" class="widget-body" style="height: 320px;"></div>
+    </section>
+      </div>
     </section>
 
+    <section id="group-architecture" class="dash-group" aria-labelledby="group-architecture-h">
+      <h2 id="group-architecture-h" class="dash-group-title">Architecture</h2>
+      <div class="dash-group-grid">
     <!-- Architecture force-graph from the resolved import edges.
          Shows the actual structural dependency graph alongside the
          behavioural coupling sankey above — disagreement between
          the two signals is itself signal. -->
     <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-arch-graph">
-      <h2>Architecture graph</h2>
+      <h3>Architecture graph</h3>
       <div class="subtitle">
         Force-directed import graph (Rust + Python + JS/TS) fused with
         git history. Nodes are coloured by <em>architectural role</em>
@@ -1724,7 +1795,6 @@
       </div>
       <div id="widget-arch-graph-body" class="widget-body" style="height: 380px;"></div>
     </section>
-
     <!-- Dependency Structure Matrix: the scalable, layer-ordered view
          of the same import graph. Modules ordered by architectural
          layer (architecture-roles' topological level); cells = inter-
@@ -1732,7 +1802,7 @@
          (dependency cycles / layering violations). Shares the depth
          selector with the force graph above. -->
     <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-arch-matrix">
-      <h2>Dependency structure matrix</h2>
+      <h3>Dependency structure matrix</h3>
       <div class="subtitle">
         The same import graph as a layer-ordered matrix — it scales
         where the force graph hairballs. Rows import columns; cells
@@ -1754,13 +1824,12 @@
       </details>
       <div id="widget-arch-matrix-body" class="widget-body" style="height: 460px;"></div>
     </section>
-
     <!-- Architecture decay trend: structural-health metrics recomputed
          at sampled historical revisions. The HEAD metrics (graph / matrix
          above) say how tangled the code is NOW; this says whether it's
          getting worse and roughly when it started. -->
     <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-arch-trend">
-      <h2>Architecture trend</h2>
+      <h3>Architecture trend</h3>
       <div class="subtitle">
         Structural health over time — <strong>propagation cost</strong>
         (blue, left) and <strong>dependency cycles</strong> (red, right)
@@ -1778,283 +1847,88 @@
       </details>
       <div id="widget-arch-trend-body" class="widget-body" style="height: 340px;"></div>
     </section>
-
-    <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-health-trend">
-      <h2>Repo health timeline</h2>
+    <!-- Module-to-module chord diagram from the coupling pairs
+         aggregated by top-level directory. Surfaces cross-module
+         Conway's-law structure. -->
+    <section class="widget card bg-base-200 shadow-lg xl:col-span-2" id="widget-module-chord">
+      <h3>Module coupling</h3>
       <div class="subtitle">
-        Combined, architectural, and code health (0–100) recomputed at
-        sampled historical commits. Shows whether overall repo health is
-        improving or degrading over time.
+        Inter-module change-coupling rolled up from the file-pair
+        graph by top-level directory.
       </div>
       <details class="learn-more">
         <summary>Learn more — how to read this panel</summary>
         <div class="learn-more-content">
-          <p><strong>What it measures.</strong> Up to 12 commits evenly spaced across history are re-analysed: the import graph and complexity metrics are rebuilt at each revision, then scored as architectural health (propagation cost + cycle penalty, 0–100), code health (mean file health score, 0–100), and combined health (their average). Higher is healthier.</p>
-          <p><strong>How to read it.</strong> The bold line is the combined score; the lighter lines are the two components. The faint background bands mark red (0–40), yellow (40–70), and green (70–100) zones. Use the toggle to switch to a split view showing each component on its own panel.</p>
-          <p><strong>What to watch for.</strong> A declining combined line means the repo is accumulating debt faster than it is being paid down. A divergence between architectural and code health — one rising while the other falls — points to where the primary debt source is. Cross-reference with the Architecture trend panel for cycle and propagation details.</p>
-          <p><strong>Suggested action.</strong> If architectural health is declining, run <code>--analysis dependency-cycles</code> to find the tangles introduced at the inflection point. If code health is declining, the Hotspot table will show which files are driving it.</p>
+          <p><strong>What it measures.</strong> Change-coupling rolled up to the module level (first N path segments controlled by the depth selector below). Modules A and B are coupled when files in A frequently change in the same commits as files in B. Infrastructure files (lock files, <code>.env*</code>, docs, build manifests) are filtered out — they cluster with every release commit and would otherwise dominate the picture.</p>
+          <p><strong>How to read it.</strong> Each node on the circle is one module. Chords (curved bands between nodes) represent cross-module change-coupling; thicker bands = stronger historical coupling. Hover a node to highlight its adjacent chords. Use the depth selector below to widen / narrow the aggregation: <em>2</em> = broad architectural modules, <em>6</em> = near file-level subsystems.</p>
+          <p><strong>What to watch for.</strong> Strong chords between modules that should not be tightly coupled — that is the structural smell. Compare to the Architecture graph below: if two modules are change-coupled but don't import each other, the coupling is implicit (shared utilities, leaky abstractions, contract violations through a third party).</p>
+          <p><strong>Suggested action.</strong> For each unexpected strong chord, open the Change-coupling sankey to find the top file pair driving it, then ask: is there a missing shared abstraction, or is a contract being violated?</p>
+          <p><cite>H. Gall, K. Hajek, M. Jazayeri 1998, <em>Detection of logical coupling based on product release history</em>.</cite></p>
         </div>
       </details>
-      <div id="widget-health-trend-body" class="widget-body" style="min-height: 340px;"></div>
-    </section>
-
-    <!-- Improvements feed: recent band transitions (regressions ↓ /
-         improvements ↑) surfaced from the per-file health series. Each
-         entry is a clickable path for linked-brushing into the drawer. -->
-    <section class="widget card bg-base-200 shadow-lg" id="widget-improvements-feed">
-      <h2>Health improvements &amp; regressions</h2>
-      <div class="subtitle">
-        Signal-bearing code-health band transitions detected across sampled
-        historical commits. Click any file to open its detail drawer.
-      </div>
-      <div id="widget-improvements-feed-body" class="widget-body" style="min-height: 120px;"></div>
-    </section>
-
-    <!-- Code Health share bars + effort dot strip (A.5).
-         Two 100%-stacked horizontal bars: LOC share and churn share per
-         code-health band; plus a 20-dot effort strip (each dot = 5%
-         churn). Pure HTML/CSS — no ECharts. Driven by effort_exposure. -->
-    <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-share-bars">
-      <h2>Code Health — effort distribution</h2>
-      <div class="subtitle">
-        Where engineering effort lands across red / yellow / green health
-        bands. A team with most churn in red code is in reactive mode;
-        most churn in green means proactive maintenance.
-      </div>
-      <details class="learn-more">
-        <summary>Learn more — how to read this panel</summary>
-        <div class="learn-more-content">
-          <p><strong>What it measures.</strong> Two 100% stacked bars: the top bar shows the share of total SLOC (source lines of code) in each health band at HEAD; the bottom bar shows the share of trailing-window churn (lines added + deleted) that landed in each band. The dot strip encodes the same churn share as 20 coloured dots — each dot = 5% of window churn.</p>
-          <p><strong>How to read it.</strong> LOC bar = how your codebase is distributed today. Churn bar = where your team is actually spending its energy. If the churn bar has a large red segment while the LOC bar has a small red segment, the team is disproportionately fighting fires in its worst files.</p>
-          <p><strong>What to watch for.</strong> Red churn share consistently above 40% indicates a reactive maintenance pattern. Improving = churn shifting toward green over successive sprints.</p>
-          <p><strong>Suggested action.</strong> Prioritise the top hotspots with red health for refactoring investment to reduce the cost of future changes there.</p>
-        </div>
-      </details>
-      <div id="widget-share-bars-body" class="widget-body" style="min-height: 80px;"></div>
-    </section>
-
-    <!-- Treemap alternative view to the circle-pack. Same
-         `hotspots` data, rendered as nested rectangles. Strict
-         area encoding (cognitive complexity × revisions); useful
-         when size differences need to read exactly rather than
-         perceptually-via-circle-area. -->
-    <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-hotspot-treemap">
-      <h2>Hotspots — treemap view</h2>
-      <div class="subtitle">
-        Same data as the circle-pack above, rendered as nested
-        rectangles for strict area-comparison readability.
-      </div>
-      <details class="learn-more">
-        <summary>Learn more — how to read this panel</summary>
-        <div class="learn-more-content">
-          <p><strong>What it measures.</strong> The same hotspot data as the circle-pack above, rendered as nested rectangles. Area encodes cognitive complexity × revisions; colour encodes the active hotspot lens.</p>
-          <p><strong>How to read it.</strong> Each rectangle is one file (label = abbreviated path). The larger the rectangle, the higher the cognitive × revisions product. Treemaps use strict area encoding — unlike circle area, rectangle area is read accurately by the eye, so this view is the right one when you need to <em>compare</em> sizes precisely.</p>
-          <p><strong>What to watch for.</strong> The two or three rectangles that dominate the layout — they own most of the codebase's pressure. Small, evenly-sized tiles = healthy distribution; one giant tile + many tiny ones = god-class shape.</p>
-          <p><strong>Suggested action.</strong> When you're picking refactor targets by impact, sort by the treemap's largest rectangles. When you're picking by risk lens (complexity, health, friction), the circle-pack's colour ramp is easier to scan — use whichever fits your current question.</p>
-        </div>
-      </details>
-      <div id="widget-hotspot-treemap-body" class="widget-body" style="height: 320px;"></div>
-    </section>
-
-    <!-- Parallel coordinates over the top-20 hotspots. Each file
-         is one polyline crossing 5 axes: revisions / cognitive /
-         code-health / hotspot-score / MI. Hover a polyline to see
-         the file path; drag-select on any axis to filter the
-         visible set (ECharts native). Power-user analytical tool —
-         surfaces files that are outliers on multiple axes
-         simultaneously. -->
-    <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-parallel-coords">
-      <h2>Multi-metric comparison</h2>
-      <div class="subtitle">
-        Top-20 hotspots across five behavioural axes. Drag on any
-        axis to filter — useful for "files high on cognitive AND
-        low on MI" cross-cuts.
-      </div>
-      <details class="learn-more">
-        <summary>Learn more — how to read this panel</summary>
-        <div class="learn-more-content">
-          <p><strong>What it measures.</strong> The top-20 hotspot files plotted simultaneously across five axes: <strong>Revisions</strong>, <strong>Cognitive</strong> complexity, <strong>Code health</strong>, <strong>Hotspot score</strong> (composite), and <strong>MI rank</strong> (maintainability percentile). Each polyline is one file.</p>
-          <p><strong>How to read it.</strong> Follow a polyline left-to-right to see one file's profile across all five metrics. Drag-select a range on any axis to filter — polylines outside your selection grey out. Hover any polyline to isolate it (others fade to 15%); click to open the file drawer.</p>
-          <p><strong>What to watch for.</strong> Files that are outliers on <em>multiple</em> axes at once — high Revisions AND high Cognitive AND low MI is a triple red flag. Drag-filter the Cognitive axis to "> 200" and the MI axis to "< 5%" simultaneously to see who survives both cuts.</p>
-          <p><strong>Suggested action.</strong> Use this panel when no single metric clearly points to a winner. Multi-axis outliers are the highest-leverage refactor targets — addressing them moves several axes at once.</p>
-          <p><cite>A. Inselberg 1985, <em>The plane with parallel coordinates</em>.</cite></p>
-        </div>
-      </details>
-      <!-- Top-N selector: how many hotspots to render as polylines.
-           Persisted via `$store.layout.parallelTopN`. -->
-      <div role="tablist" class="tabs tabs-boxed mb-2" aria-label="Multi-metric top N hotspots">
+      <!-- Aggregation-depth selector. 'Auto' triggers the adaptive
+           loop (deepens until ≥6 distinct modules); the numeric
+           buttons pin a fixed depth. Persisted via Alpine.$persist
+           on `$store.layout.chordDepth`. The reactive effect in the
+           inline store-init script fires the rerenderer list when
+           this changes, so the chord re-paints with the new
+           aggregation level. Buttons use the same DaisyUI
+           `tabs tabs-boxed` pattern as the hotspot color modes for
+           a consistent feel. -->
+      <div role="tablist" class="tabs tabs-boxed mb-2" aria-label="Module coupling depth">
         <button type="button" role="tab" class="tab tooltip-host"
-                :class="$store.layout.parallelTopN === 10 && 'tab-active'"
-                :aria-selected="$store.layout.parallelTopN === 10 ? 'true' : 'false'"
-                @click="$store.layout.parallelTopN = 10">
-          10
+                :class="$store.layout.chordDepth === 'auto' && 'tab-active'"
+                :aria-selected="$store.layout.chordDepth === 'auto' ? 'true' : 'false'"
+                @click="$store.layout.chordDepth = 'auto'">
+          Auto
           <span class="tooltip-trigger" aria-hidden="true">?</span>
-          <span class="tooltip-popup" role="tooltip">Top-10 — the highest-pressure files only. Easiest to spot multi-axis outliers when the polyline soup is thin.</span>
+          <span class="tooltip-popup" role="tooltip">Adaptive: deepen until at least 6 modules surface. The default — works well for most repos.</span>
         </button>
         <button type="button" role="tab" class="tab tooltip-host"
-                :class="$store.layout.parallelTopN === 20 && 'tab-active'"
-                :aria-selected="$store.layout.parallelTopN === 20 ? 'true' : 'false'"
-                @click="$store.layout.parallelTopN = 20">
-          20
+                :class="$store.layout.chordDepth === 2 && 'tab-active'"
+                :aria-selected="$store.layout.chordDepth === 2 ? 'true' : 'false'"
+                @click="$store.layout.chordDepth = 2">
+          2
           <span class="tooltip-trigger" aria-hidden="true">?</span>
-          <span class="tooltip-popup" role="tooltip">Default — top-20 hotspots. Covers most "files high on cognitive AND low on MI" cross-cuts without crowding.</span>
+          <span class="tooltip-popup" role="tooltip">Aggregate to 2 path segments (e.g. <code>app/services</code>). Broad architectural modules.</span>
         </button>
         <button type="button" role="tab" class="tab tooltip-host"
-                :class="$store.layout.parallelTopN === 50 && 'tab-active'"
-                :aria-selected="$store.layout.parallelTopN === 50 ? 'true' : 'false'"
-                @click="$store.layout.parallelTopN = 50">
-          50
+                :class="$store.layout.chordDepth === 3 && 'tab-active'"
+                :aria-selected="$store.layout.chordDepth === 3 ? 'true' : 'false'"
+                @click="$store.layout.chordDepth = 3">
+          3
           <span class="tooltip-trigger" aria-hidden="true">?</span>
-          <span class="tooltip-popup" role="tooltip">Top-50 — broad view; use drag-select on individual axes to filter visually.</span>
+          <span class="tooltip-popup" role="tooltip">Aggregate to 3 path segments (e.g. <code>app/services/clients</code>). Feature-area level.</span>
         </button>
         <button type="button" role="tab" class="tab tooltip-host"
-                :class="$store.layout.parallelTopN === 'all' && 'tab-active'"
-                :aria-selected="$store.layout.parallelTopN === 'all' ? 'true' : 'false'"
-                @click="$store.layout.parallelTopN = 'all'">
-          All
+                :class="$store.layout.chordDepth === 4 && 'tab-active'"
+                :aria-selected="$store.layout.chordDepth === 4 ? 'true' : 'false'"
+                @click="$store.layout.chordDepth = 4">
+          4
           <span class="tooltip-trigger" aria-hidden="true">?</span>
-          <span class="tooltip-popup" role="tooltip">All hotspot rows. Heavy; the chart works but you'll definitely want axis-drag filtering to extract signal.</span>
+          <span class="tooltip-popup" role="tooltip">Aggregate to 4 path segments. Subsystem level — usually the deepest still-readable view.</span>
+        </button>
+        <button type="button" role="tab" class="tab tooltip-host"
+                :class="$store.layout.chordDepth === 5 && 'tab-active'"
+                :aria-selected="$store.layout.chordDepth === 5 ? 'true' : 'false'"
+                @click="$store.layout.chordDepth = 5">
+          5
+          <span class="tooltip-trigger" aria-hidden="true">?</span>
+          <span class="tooltip-popup" role="tooltip">Aggregate to 5 path segments. Near file level — labels start to get long.</span>
+        </button>
+        <button type="button" role="tab" class="tab tooltip-host"
+                :class="$store.layout.chordDepth === 6 && 'tab-active'"
+                :aria-selected="$store.layout.chordDepth === 6 ? 'true' : 'false'"
+                @click="$store.layout.chordDepth = 6">
+          6
+          <span class="tooltip-trigger" aria-hidden="true">?</span>
+          <span class="tooltip-popup" role="tooltip">Aggregate to 6 path segments. Granular — file-pair-like view.</span>
         </button>
       </div>
-      <div id="widget-parallel-coords-body" class="widget-body" style="height: 320px;"></div>
+      <div id="widget-module-chord-body" class="widget-body" style="height: 320px;"></div>
     </section>
-
-    <!-- Delivery Risk Sparkline. Per-commit risk bars over the last
-         30 non-merge commits, decomposed into peer-reviewed Kamei
-         JIT-SDP dimensions (size / spread / concurrency /
-         inexperience / entropy) in the tooltip. Beyond CodeScene:
-         their delivery-risk score is opaque; ours is citable
-         (Kamei et al. 2013, Hassan 2009). -->
-    <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-kamei-risk">
-      <h2>Delivery risk · last 30 commits</h2>
-      <div class="subtitle">
-        Per-commit risk score composited from Kamei's JIT-SDP feature
-        vector (la, ld, nf, ndev, exp, entropy). Hover any bar to see
-        which dimension dominates that commit's risk.
-        Citations: Kamei et al. 2013 · Hassan 2009.
-      </div>
-      <details class="learn-more">
-        <summary>Learn more — how to read this panel</summary>
-        <div class="learn-more-content">
-          <p><strong>What it measures.</strong> A per-commit risk score derived from Kamei's Just-In-Time defect-prediction (JIT-SDP) feature vector. Each commit is scored on <strong>size</strong> (lines added/deleted), <strong>spread</strong> (number of files), <strong>concurrency</strong> (other contributors recently touching the same files), <strong>experience</strong> (the author's familiarity with the touched files), and <strong>entropy</strong> (how diffuse the change is across modules).</p>
-          <p><strong>How to read it.</strong> Each bar is one commit, last 30 non-merge commits, chronological order. Bar height = composite risk %. Bar colour tags whether the commit is heuristically a bug-fix vs. a feature. Hover any bar to see the full feature vector and which dimension dominates that commit's risk.</p>
-          <p><strong>What to watch for.</strong> Streaks of high-risk commits without proportionate review investment. <em>Size</em> dominance = big diff; <em>entropy</em> = scattered changes; <em>concurrency</em> = simultaneous editors fighting over the same files; <em>inexp</em> = an unfamiliar author for the touched files. Each tells a different story.</p>
-          <p><strong>Suggested action.</strong> For commits in the 70%+ band, retroactively check whether the review caught the risky aspects. Use the Kamei dimensions as PR-template prompts: "what dominates the risk on this PR?".</p>
-          <p><cite>Y. Kamei et al. 2013, <em>A large-scale empirical study of just-in-time quality assurance</em>; A. E. Hassan 2009, <em>Predicting faults using the complexity of code changes</em>.</cite></p>
-        </div>
-      </details>
-      <!-- Window selector: how many of the most recent non-merge
-           commits to score. Persisted via
-           `$store.layout.kameiWindow`; backend sends up to 100. -->
-      <div role="tablist" class="tabs tabs-boxed mb-2" aria-label="Delivery risk window">
-        <button type="button" role="tab" class="tab tooltip-host"
-                :class="$store.layout.kameiWindow === 10 && 'tab-active'"
-                :aria-selected="$store.layout.kameiWindow === 10 ? 'true' : 'false'"
-                @click="$store.layout.kameiWindow = 10">
-          10
-          <span class="tooltip-trigger" aria-hidden="true">?</span>
-          <span class="tooltip-popup" role="tooltip">Last 10 commits — tight focus on what just shipped. Best for "what risk did this morning's merges introduce?".</span>
-        </button>
-        <button type="button" role="tab" class="tab tooltip-host"
-                :class="$store.layout.kameiWindow === 30 && 'tab-active'"
-                :aria-selected="$store.layout.kameiWindow === 30 ? 'true' : 'false'"
-                @click="$store.layout.kameiWindow = 30">
-          30
-          <span class="tooltip-trigger" aria-hidden="true">?</span>
-          <span class="tooltip-popup" role="tooltip">Default — last 30 commits. Roughly a sprint's worth on active repos; good for "what's our delivery posture this iteration?".</span>
-        </button>
-        <button type="button" role="tab" class="tab tooltip-host"
-                :class="$store.layout.kameiWindow === 60 && 'tab-active'"
-                :aria-selected="$store.layout.kameiWindow === 60 ? 'true' : 'false'"
-                @click="$store.layout.kameiWindow = 60">
-          60
-          <span class="tooltip-trigger" aria-hidden="true">?</span>
-          <span class="tooltip-popup" role="tooltip">Last 60 commits — two sprints. Better baseline for spotting trend reversals (calming-down vs heating-up).</span>
-        </button>
-        <button type="button" role="tab" class="tab tooltip-host"
-                :class="$store.layout.kameiWindow === 'all' && 'tab-active'"
-                :aria-selected="$store.layout.kameiWindow === 'all' ? 'true' : 'false'"
-                @click="$store.layout.kameiWindow = 'all'">
-          All
-          <span class="tooltip-trigger" aria-hidden="true">?</span>
-          <span class="tooltip-popup" role="tooltip">Full window the backend sent (up to 100). Bars get narrow; useful when you're chasing a multi-week incident retrospective.</span>
-        </button>
-      </div>
-      <!-- 280 px — taller than the original 220 (the per-day risk
-           pattern needs vertical breathing room), but trimmed from
-           the earlier 360 which left the panel feeling unbalanced
-           relative to the calendar heatmap below. -->
-      <div id="widget-kamei-risk-body" class="widget-body" style="height: 280px;"></div>
-    </section>
-
-    <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-calendar-heatmap">
-      <h2>Commit activity</h2>
-      <div class="subtitle">
-        Per-day commit volume across the analysed history.
-      </div>
-      <details class="learn-more">
-        <summary>Learn more — how to read this panel</summary>
-        <div class="learn-more-content">
-          <p><strong>What it measures.</strong> Per-day commit volume across the entire analysed history. GitHub-style heatmap; one cell per day, one calendar block per year.</p>
-          <p><strong>How to read it.</strong> Darker cells = more commits that day. The colour bands at the top map cell shade to commit-count buckets. Hover a cell for the exact date and count.</p>
-          <p><strong>What to watch for.</strong> Cadence patterns and gaps. Sustained dark streaks = consistent delivery. Weekend or off-hours commits = potential burnout signal. Long quiet periods aligned with release dates = release-freeze rhythm. Sudden bursts in unusual periods often correlate with incidents.</p>
-          <p><strong>Suggested action.</strong> Compare against the Delivery risk sparkline — activity bursts that coincide with high-risk commits are worth a retro discussion. Long silent days in a "shipping" team are equally worth surfacing.</p>
-        </div>
-      </details>
-      <div id="widget-calendar-heatmap-body" class="widget-body" style="height: 260px;"></div>
-    </section>
-
-    <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-xray-sunburst">
-      <h2>Function X-Ray</h2>
-      <div class="subtitle">
-        Function-level cognitive complexity. Inner ring = top-level
-        path segment; outer = function. Click any wedge to drill down.
-        Top 500 functions by cognitive complexity.
-      </div>
-      <details class="learn-more">
-        <summary>Learn more — how to read this panel</summary>
-        <div class="learn-more-content">
-          <p><strong>What it measures.</strong> Function-level cognitive complexity for the top 500 functions in the repository. Sunburst layout: the inner ring is the top-level path segment, the outer rings drill into directories and finally individual functions. Wedge area encodes complexity.</p>
-          <p><strong>How to read it.</strong> Bigger wedge = more complex function. Click any wedge to zoom in (the sunburst re-roots to that subtree); click the centre to zoom back out. Hover for the full module path plus function name.</p>
-          <p><strong>What to watch for.</strong> A single huge outer wedge inside a module = that one function owns most of the module's complexity. The most dangerous pattern is one function dominating <em>and</em> the same file appearing high in the Hotspot list (frequent churn on a complex function).</p>
-          <p><strong>Suggested action.</strong> Refactor the largest wedges first by extracting helpers and simplifying control flow. Even one extraction can drop a wedge by 30–50% of its visual area.</p>
-        </div>
-      </details>
-      <div id="widget-xray-sunburst-body" class="widget-body"></div>
-    </section>
-
-    <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-hotspot-table">
-      <h2>Hotspot table</h2>
-      <div class="subtitle">
-        Sortable drill-down view of every hotspot row. Click a column
-        header to sort. Type to filter by path.
-      </div>
-      <details class="learn-more">
-        <summary>Learn more — how to read this panel</summary>
-        <div class="learn-more-content">
-          <p><strong>What it measures.</strong> The full hotspot list as a sortable, filterable table. One row per file with every behavioural metric the dashboard computes — revisions, cognitive complexity, code health, hotspot score, primary author, AI attribution, MI rank, contributors.</p>
-          <p><strong>How to read it.</strong> Click any column header to sort by that column (click again to reverse). Type in the filter box to narrow by path substring; the summary line under the filter shows how many rows match. Click a row to open the file detail drawer — the file then lights up across the trends, parallel-coords, and any other path-aware panel.</p>
-          <p><strong>What to watch for.</strong> Use the table as the drill-down surface for any signal you spotted in a chart. The combination of high revisions + low health + recent activity is the canonical "fix this now" pattern.</p>
-          <p><strong>Suggested action.</strong> Sort by hotspot score descending, copy the top-N paths into your sprint board, and refactor by priority.</p>
-        </div>
-      </details>
-      <div class="table-controls">
-        <input
-          type="text"
-          id="hotspot-table-filter"
-          class="input input-bordered input-sm"
-          placeholder="filter paths…"
-          autocomplete="off"
-          spellcheck="false"
-          aria-label="Filter hotspots by path">
-        <span class="table-summary" id="hotspot-table-summary" role="status" aria-live="polite"></span>
-        <span class="table-actions" id="hotspot-table-actions"></span>
-      </div>
-      <div id="widget-hotspot-table-body" class="table-container"></div>
-    </section>
-
     <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-coupling-sankey">
-      <h2>Change coupling</h2>
+      <h3>Change coupling</h3>
       <div class="subtitle">
         Files that change together at Fisher-significant rates. Wider
         bands = stronger historical coupling. Top 30 pairs by combined
@@ -2128,12 +2002,63 @@
       </details>
       <div id="widget-coupling-sankey-body" class="widget-body"></div>
     </section>
+      </div>
+    </section>
 
+    <section id="group-knowledge" class="dash-group" aria-labelledby="group-knowledge-h">
+      <h2 id="group-knowledge-h" class="dash-group-title">Knowledge</h2>
+      <div class="dash-group-grid">
+    <section class="widget card bg-base-200 shadow-lg" id="widget-knowledge-surfaces">
+      <h3>Knowledge surfaces</h3>
+      <div class="subtitle">
+        Team familiarity, knowledge islands ratio, tenure mix, and the
+        files with the highest coordination overhead — from one
+        behavioural scan, no manual tagging.
+      </div>
+      <details class="learn-more">
+        <summary>Learn more — how to read this panel</summary>
+        <div class="learn-more-content">
+          <p><strong>Familiarity.</strong> Mean team familiarity across active files: the fraction of each file's weighted change history that active authors "own" — averaged over all files touched in the window. Green ≥ 70 %, yellow 40–70 %, red &lt; 40 %.</p>
+          <p><strong>Islands.</strong> Fraction of active files with no active owner (primary author inactive + no successor). Lower is better. Green ≤ 20 %, yellow 20–40 %, red &gt; 40 %.</p>
+          <p><strong>Team composition.</strong> Commit share split by tenure bucket: <em>onboarded</em> (&lt; 90 days), <em>experienced</em> (90–364 days), <em>veteran</em> (≥ 365 days). A healthy team shows some onboarding throughput without veteran over-concentration.</p>
+          <p><strong>Coordination needs.</strong> Top files by co-change coupling tier and entropy. <em>High</em>-tier files are frequently changed together by multiple authors with high authorship interleaving — the strongest coordination signal.</p>
+          <p><cite>Methodology: knowledge-shares materialized view + coordination-needs entropy; see <code>analyses/code_familiarity.rs</code>, <code>analyses/coordination_needs.rs</code>.</cite></p>
+        </div>
+      </details>
+      <div id="widget-knowledge-surfaces-body"></div>
+    </section>
+    <section class="widget card bg-base-200 shadow-lg" id="widget-knowledge-islands">
+      <h3>Knowledge islands</h3>
+      <div class="subtitle">
+        Files whose primary author has departed and where no
+        substantial other owner exists — auto-detected, no manual
+        ex-developer marking. CodeScene requires you to mark
+        ex-developers manually; CodeLore detects them from commit
+        history + co-change intensity.
+      </div>
+      <details class="learn-more">
+        <summary>Learn more — how to read this panel</summary>
+        <div class="learn-more-content">
+          <p><strong>What it measures.</strong> Files whose primary author (typically ≥80% of historical line-changes) has stopped committing <em>and</em> where no other developer has substantial backup ownership. Detection is purely behavioural — there's no manual "ex-developer" tagging required.</p>
+          <p><strong>How to read it.</strong> One row per orphaned file. The risk score combines code health, complexity, and downstream coupling — the higher the score, the more painful the orphan is.</p>
+          <p><strong>What to watch for.</strong> Concentration: multiple orphaned files in the same module = an entire subsystem with no clear owner. Critical-path orphans (high hotspot score, low health) at the top of the list are the immediate priorities.</p>
+          <p><strong>Suggested action.</strong> Pair-program new contributors with the top files; promote the orphan files to the next sprint's documentation push; assign succession owners explicitly so the names move out of this list.</p>
+          <p><cite>Detection: primary-author share + commit-recency decay + co-change intensity heuristic; see <code>analyses/knowledge_islands.rs</code>.</cite></p>
+        </div>
+      </details>
+      <div id="widget-knowledge-islands-body" class="table-container"></div>
+    </section>
+      </div>
+    </section>
+
+    <section id="group-delivery" class="dash-group" aria-labelledby="group-delivery-h">
+      <h2 id="group-delivery-h" class="dash-group-title">Delivery</h2>
+      <div class="dash-group-grid">
     <!-- Delivery card: compact KPI card for delivery-metrics, release-cadence,
          and delivery-friction. Degrades gracefully when data is absent (no tags,
          no merges). Populated by renderDeliveryCard in 30_coupling_trends.js. -->
     <section class="widget card bg-base-200 shadow-lg" id="widget-delivery-card">
-      <h2>Delivery</h2>
+      <h3>Delivery</h3>
       <div class="subtitle">
         Git-only delivery proxies: rework rate, branch duration, lead-time proxy,
         release cadence, and top friction files. Run with
@@ -2141,6 +2066,91 @@
         <code>--release-tag-glob</code> to populate.
       </div>
       <div id="widget-delivery-card-body" class="widget-body" style="min-height: 80px;"></div>
+    </section>
+    <!-- Delivery Risk Sparkline. Per-commit risk bars over the last
+         30 non-merge commits, decomposed into peer-reviewed Kamei
+         JIT-SDP dimensions (size / spread / concurrency /
+         inexperience / entropy) in the tooltip. Beyond CodeScene:
+         their delivery-risk score is opaque; ours is citable
+         (Kamei et al. 2013, Hassan 2009). -->
+    <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-kamei-risk">
+      <h3>Delivery risk · last 30 commits</h3>
+      <div class="subtitle">
+        Per-commit risk score composited from Kamei's JIT-SDP feature
+        vector (la, ld, nf, ndev, exp, entropy). Hover any bar to see
+        which dimension dominates that commit's risk.
+        Citations: Kamei et al. 2013 · Hassan 2009.
+      </div>
+      <details class="learn-more">
+        <summary>Learn more — how to read this panel</summary>
+        <div class="learn-more-content">
+          <p><strong>What it measures.</strong> A per-commit risk score derived from Kamei's Just-In-Time defect-prediction (JIT-SDP) feature vector. Each commit is scored on <strong>size</strong> (lines added/deleted), <strong>spread</strong> (number of files), <strong>concurrency</strong> (other contributors recently touching the same files), <strong>experience</strong> (the author's familiarity with the touched files), and <strong>entropy</strong> (how diffuse the change is across modules).</p>
+          <p><strong>How to read it.</strong> Each bar is one commit, last 30 non-merge commits, chronological order. Bar height = composite risk %. Bar colour tags whether the commit is heuristically a bug-fix vs. a feature. Hover any bar to see the full feature vector and which dimension dominates that commit's risk.</p>
+          <p><strong>What to watch for.</strong> Streaks of high-risk commits without proportionate review investment. <em>Size</em> dominance = big diff; <em>entropy</em> = scattered changes; <em>concurrency</em> = simultaneous editors fighting over the same files; <em>inexp</em> = an unfamiliar author for the touched files. Each tells a different story.</p>
+          <p><strong>Suggested action.</strong> For commits in the 70%+ band, retroactively check whether the review caught the risky aspects. Use the Kamei dimensions as PR-template prompts: "what dominates the risk on this PR?".</p>
+          <p><cite>Y. Kamei et al. 2013, <em>A large-scale empirical study of just-in-time quality assurance</em>; A. E. Hassan 2009, <em>Predicting faults using the complexity of code changes</em>.</cite></p>
+        </div>
+      </details>
+      <!-- Window selector: how many of the most recent non-merge
+           commits to score. Persisted via
+           `$store.layout.kameiWindow`; backend sends up to 100. -->
+      <div role="tablist" class="tabs tabs-boxed mb-2" aria-label="Delivery risk window">
+        <button type="button" role="tab" class="tab tooltip-host"
+                :class="$store.layout.kameiWindow === 10 && 'tab-active'"
+                :aria-selected="$store.layout.kameiWindow === 10 ? 'true' : 'false'"
+                @click="$store.layout.kameiWindow = 10">
+          10
+          <span class="tooltip-trigger" aria-hidden="true">?</span>
+          <span class="tooltip-popup" role="tooltip">Last 10 commits — tight focus on what just shipped. Best for "what risk did this morning's merges introduce?".</span>
+        </button>
+        <button type="button" role="tab" class="tab tooltip-host"
+                :class="$store.layout.kameiWindow === 30 && 'tab-active'"
+                :aria-selected="$store.layout.kameiWindow === 30 ? 'true' : 'false'"
+                @click="$store.layout.kameiWindow = 30">
+          30
+          <span class="tooltip-trigger" aria-hidden="true">?</span>
+          <span class="tooltip-popup" role="tooltip">Default — last 30 commits. Roughly a sprint's worth on active repos; good for "what's our delivery posture this iteration?".</span>
+        </button>
+        <button type="button" role="tab" class="tab tooltip-host"
+                :class="$store.layout.kameiWindow === 60 && 'tab-active'"
+                :aria-selected="$store.layout.kameiWindow === 60 ? 'true' : 'false'"
+                @click="$store.layout.kameiWindow = 60">
+          60
+          <span class="tooltip-trigger" aria-hidden="true">?</span>
+          <span class="tooltip-popup" role="tooltip">Last 60 commits — two sprints. Better baseline for spotting trend reversals (calming-down vs heating-up).</span>
+        </button>
+        <button type="button" role="tab" class="tab tooltip-host"
+                :class="$store.layout.kameiWindow === 'all' && 'tab-active'"
+                :aria-selected="$store.layout.kameiWindow === 'all' ? 'true' : 'false'"
+                @click="$store.layout.kameiWindow = 'all'">
+          All
+          <span class="tooltip-trigger" aria-hidden="true">?</span>
+          <span class="tooltip-popup" role="tooltip">Full window the backend sent (up to 100). Bars get narrow; useful when you're chasing a multi-week incident retrospective.</span>
+        </button>
+      </div>
+      <!-- 280 px — taller than the original 220 (the per-day risk
+           pattern needs vertical breathing room), but trimmed from
+           the earlier 360 which left the panel feeling unbalanced
+           relative to the calendar heatmap below. -->
+      <div id="widget-kamei-risk-body" class="widget-body" style="height: 280px;"></div>
+    </section>
+    <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-calendar-heatmap">
+      <h3>Commit activity</h3>
+      <div class="subtitle">
+        Per-day commit volume across the analysed history.
+      </div>
+      <details class="learn-more">
+        <summary>Learn more — how to read this panel</summary>
+        <div class="learn-more-content">
+          <p><strong>What it measures.</strong> Per-day commit volume across the entire analysed history. GitHub-style heatmap; one cell per day, one calendar block per year.</p>
+          <p><strong>How to read it.</strong> Darker cells = more commits that day. The colour bands at the top map cell shade to commit-count buckets. Hover a cell for the exact date and count.</p>
+          <p><strong>What to watch for.</strong> Cadence patterns and gaps. Sustained dark streaks = consistent delivery. Weekend or off-hours commits = potential burnout signal. Long quiet periods aligned with release dates = release-freeze rhythm. Sudden bursts in unusual periods often correlate with incidents.</p>
+          <p><strong>Suggested action.</strong> Compare against the Delivery risk sparkline — activity bursts that coincide with high-risk commits are worth a retro discussion. Long silent days in a "shipping" team are equally worth surfacing.</p>
+        </div>
+      </details>
+      <div id="widget-calendar-heatmap-body" class="widget-body" style="height: 260px;"></div>
+    </section>
+      </div>
     </section>
   </main>
 
