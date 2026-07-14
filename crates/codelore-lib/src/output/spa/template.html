@@ -905,11 +905,49 @@
        bar — `scrollToDashSection` (00_setup_boot.js) does no offset math
        of its own. */
     .dash-group { margin-bottom: 2.5rem; scroll-margin-top: 3.25rem; }
-    .dash-group-title { font-size: 1.35rem; font-weight: 700; margin: 0 0 1rem 0.25rem; }
+    .dash-group-title { font-size: 1.35rem; font-weight: 700; margin: 0; }
     .dash-group-grid { display: grid; grid-template-columns: 1fr; gap: 1.75rem; }
     @media (min-width: 1280px) {
       .dash-group-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
+    /* Collapsible sections. The chevron button sits beside the `<h2>` in
+       a flex header row; `initDashCollapse` (00_setup_boot.js) toggles
+       `.dash-collapsed` on the `.dash-group` ancestor on click, which
+       hides `.dash-group-grid` (hand-written — the frozen bundle has no
+       collapse utility) and rotates the chevron. Never persisted —
+       sections always render expanded at load so ECharts instances
+       never initialize inside a hidden container; expanding re-runs the
+       existing `resizeAllEchartsIn` sweep over the section so any chart
+       that resized while hidden recovers correct layout. */
+    .dash-group-head {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin: 0 0 1rem 0.25rem;
+    }
+    .dash-collapse {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      padding: 0;
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--fg-dim);
+      cursor: pointer;
+      transition: color 120ms ease, border-color 120ms ease;
+    }
+    .dash-collapse:hover,
+    .dash-collapse:focus-visible {
+      color: var(--fg);
+      border-color: var(--accent);
+      outline: none;
+    }
+    .dash-collapse svg { display: block; transition: transform 160ms ease; }
+    .dash-collapsed .dash-collapse svg { transform: rotate(-90deg); }
+    .dash-collapsed .dash-group-grid { display: none; }
     /* Sticky section nav. `btn btn-xs btn-ghost` (DaisyUI, confirmed
        present in the frozen bundle) style the chip buttons themselves;
        only the bar chrome and the active-chip highlight are hand-written
@@ -1243,11 +1281,20 @@
        both, while the remaining widgets pair up within their
        section. `.dash-group-grid` is hand-written (see the CSS
        block above) since the pre-built Tailwind bundle is frozen —
-       no CSS rebuild is needed for layout changes. -->
+       no CSS rebuild is needed for layout changes. Each heading row
+       (`.dash-group-head`) carries a `.dash-collapse` chevron button
+       (`aria-controls` pointing at the section's grid id) that
+       `initDashCollapse` (00_setup_boot.js) wires to toggle the
+       section closed/open; sections always render expanded. -->
   <main class="mx-auto p-7 dashboard-main">
     <section id="group-overview" class="dash-group" aria-labelledby="group-overview-h">
-      <h2 id="group-overview-h" class="dash-group-title">Overview</h2>
-      <div class="dash-group-grid">
+      <div class="dash-group-head">
+        <h2 id="group-overview-h" class="dash-group-title">Overview</h2>
+        <button type="button" class="dash-collapse" aria-expanded="true" aria-controls="group-overview-grid" aria-label="Toggle Overview section">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+      </div>
+      <div class="dash-group-grid" id="group-overview-grid">
     <!-- Four-factor header: Code / Architecture / Knowledge / Delivery.
          Spans the full dashboard width (xl:col-span-2). Hidden via CSS
          when empty (JS sets display:none on the container when
@@ -1492,8 +1539,13 @@
     </section>
 
     <section id="group-hotspots" class="dash-group" aria-labelledby="group-hotspots-h">
-      <h2 id="group-hotspots-h" class="dash-group-title">Hotspots &amp; Risk</h2>
-      <div class="dash-group-grid">
+      <div class="dash-group-head">
+        <h2 id="group-hotspots-h" class="dash-group-title">Hotspots &amp; Risk</h2>
+        <button type="button" class="dash-collapse" aria-expanded="true" aria-controls="group-hotspots-grid" aria-label="Toggle Hotspots &amp; Risk section">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+      </div>
+      <div class="dash-group-grid" id="group-hotspots-grid">
     <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-hotspot-table">
       <h3>Hotspot table</h3>
       <div class="subtitle">
@@ -1567,8 +1619,13 @@
     </section>
 
     <section id="group-code-health" class="dash-group" aria-labelledby="group-code-health-h">
-      <h2 id="group-code-health-h" class="dash-group-title">Code Health</h2>
-      <div class="dash-group-grid">
+      <div class="dash-group-head">
+        <h2 id="group-code-health-h" class="dash-group-title">Code Health</h2>
+        <button type="button" class="dash-collapse" aria-expanded="true" aria-controls="group-code-health-grid" aria-label="Toggle Code Health section">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+      </div>
+      <div class="dash-group-grid" id="group-code-health-grid">
     <section class="widget card bg-base-200 shadow-lg xl:col-span-2 wide-widget" id="widget-health-trend">
       <h3>Repo health timeline</h3>
       <div class="subtitle">
@@ -1765,8 +1822,13 @@
     </section>
 
     <section id="group-architecture" class="dash-group" aria-labelledby="group-architecture-h">
-      <h2 id="group-architecture-h" class="dash-group-title">Architecture</h2>
-      <div class="dash-group-grid">
+      <div class="dash-group-head">
+        <h2 id="group-architecture-h" class="dash-group-title">Architecture</h2>
+        <button type="button" class="dash-collapse" aria-expanded="true" aria-controls="group-architecture-grid" aria-label="Toggle Architecture section">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+      </div>
+      <div class="dash-group-grid" id="group-architecture-grid">
     <!-- Architecture force-graph from the resolved import edges.
          Shows the actual structural dependency graph alongside the
          behavioural coupling sankey above — disagreement between
@@ -2083,8 +2145,13 @@
     </section>
 
     <section id="group-knowledge" class="dash-group" aria-labelledby="group-knowledge-h">
-      <h2 id="group-knowledge-h" class="dash-group-title">Knowledge</h2>
-      <div class="dash-group-grid">
+      <div class="dash-group-head">
+        <h2 id="group-knowledge-h" class="dash-group-title">Knowledge</h2>
+        <button type="button" class="dash-collapse" aria-expanded="true" aria-controls="group-knowledge-grid" aria-label="Toggle Knowledge section">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+      </div>
+      <div class="dash-group-grid" id="group-knowledge-grid">
     <section class="widget card bg-base-200 shadow-lg" id="widget-knowledge-surfaces">
       <h3>Knowledge surfaces</h3>
       <div class="subtitle">
@@ -2129,8 +2196,13 @@
     </section>
 
     <section id="group-delivery" class="dash-group" aria-labelledby="group-delivery-h">
-      <h2 id="group-delivery-h" class="dash-group-title">Delivery</h2>
-      <div class="dash-group-grid">
+      <div class="dash-group-head">
+        <h2 id="group-delivery-h" class="dash-group-title">Delivery</h2>
+        <button type="button" class="dash-collapse" aria-expanded="true" aria-controls="group-delivery-grid" aria-label="Toggle Delivery section">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+      </div>
+      <div class="dash-group-grid" id="group-delivery-grid">
     <!-- Delivery card: compact KPI card for delivery-metrics, release-cadence,
          and delivery-friction. Degrades gracefully when data is absent (no tags,
          no merges). Populated by renderDeliveryCard in 30_coupling_trends.js. -->

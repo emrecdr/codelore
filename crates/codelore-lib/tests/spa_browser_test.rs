@@ -2739,3 +2739,95 @@ fn arch_matrix_body_grows_to_contain_tall_matrix() {
         errors.join("\n  "),
     );
 }
+
+/// Collapsing a `.dash-group` hides its grid entirely (`display: none` via
+/// `.dash-collapsed`), so any `ECharts` instance inside resizes to 0 — a
+/// canvas that never repaints on its own. Expanding the section must run
+/// the resize-on-expand path (`resizeAllEchartsIn`, `00_setup_boot.js`) so
+/// the chart recovers. Drives the Architecture section, whose
+/// `#wam-chart-host` (arch-matrix) mounts a real chart from the smoke
+/// fixture's `imports` data.
+#[test]
+fn section_collapse_and_expand_keeps_charts_sized() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let html_path = tmp.path().join("codelore-section-collapse.html");
+    write_smoke_spa(&html_path, "CodeLore Section Collapse Test");
+
+    let Some((_browser, tab)) = boot_spa_tab(&html_path) else {
+        return;
+    };
+    let console_errors = attach_exception_sink(&tab);
+
+    let hash_before: String = eval_json(&tab, "location.hash");
+    let series_before = echarts_series_len(&tab, "wam-chart-host");
+    assert!(
+        series_before > 0,
+        "arch-matrix must have rendered cells before collapsing (got {series_before})"
+    );
+
+    let chevron = "document.querySelector('#group-architecture .dash-collapse')";
+    tab.evaluate(&format!("{chevron}.click()"), false)
+        .expect("click architecture chevron");
+    std::thread::sleep(Duration::from_millis(200));
+
+    assert_eq!(
+        client_height(&tab, "group-architecture-grid"),
+        0,
+        "group-architecture-grid must be hidden (0 clientHeight) once collapsed"
+    );
+    let expanded_attr: String =
+        eval_json(&tab, &format!("{chevron}.getAttribute('aria-expanded')"));
+    assert_eq!(
+        expanded_attr, "false",
+        "chevron aria-expanded did not flip to false"
+    );
+
+    tab.evaluate(&format!("{chevron}.click()"), false)
+        .expect("click architecture chevron again");
+    std::thread::sleep(Duration::from_millis(200));
+
+    assert!(
+        client_height(&tab, "group-architecture-grid") > 0,
+        "group-architecture-grid must be visible again after re-expanding"
+    );
+    let expanded_attr_after: String =
+        eval_json(&tab, &format!("{chevron}.getAttribute('aria-expanded')"));
+    assert_eq!(
+        expanded_attr_after, "true",
+        "chevron aria-expanded did not flip back to true"
+    );
+
+    // The resize-on-expand path must have kept the chart sized: both the
+    // ECharts series data and the canvas's rendered pixel width.
+    let series_after = echarts_series_len(&tab, "wam-chart-host");
+    assert!(
+        series_after > 0,
+        "arch-matrix lost its rendered cells after expand (got {series_after})"
+    );
+    let canvas_width: f64 = eval_json(
+        &tab,
+        "(function () { \
+             var host = document.getElementById('wam-chart-host'); \
+             var canvas = host && host.querySelector('canvas'); \
+             return canvas ? canvas.width : 0; \
+         })()",
+    );
+    assert!(
+        canvas_width > 0.0,
+        "arch-matrix canvas has zero rendered width after expand ({canvas_width})"
+    );
+
+    let hash_after: String = eval_json(&tab, "location.hash");
+    assert_eq!(
+        hash_before, hash_after,
+        "collapsing/expanding a section must never mutate location.hash"
+    );
+
+    let errors = console_errors.lock().expect("console mutex").clone();
+    assert!(
+        errors.is_empty(),
+        "section collapse/expand produced {} browser-console error(s):\n{}",
+        errors.len(),
+        errors.join("\n  "),
+    );
+}

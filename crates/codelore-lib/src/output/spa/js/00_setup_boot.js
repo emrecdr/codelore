@@ -329,6 +329,29 @@
     }
   }
 
+  // Wires each section heading's `.dash-collapse` chevron (template.html)
+  // to toggle `.dash-collapsed` on its `.dash-group` ancestor, hiding the
+  // section's `.dash-group-grid` via hand-written CSS. Collapse state is
+  // NEVER persisted — every section renders expanded at load, so ECharts
+  // instances never mount inside a hidden container. Expanding re-runs the
+  // existing `resizeAllEchartsIn` sweep over just that section, recovering
+  // correct layout for any chart that was resized (e.g. by a fullscreen
+  // toggle, window resize, or theme rerender) while its section was
+  // collapsed.
+  function initDashCollapse() {
+    const buttons = document.querySelectorAll('.dash-collapse');
+    for (let i = 0; i < buttons.length; i++) {
+      const btn = buttons[i];
+      btn.addEventListener('click', function () {
+        const group = btn.closest('.dash-group');
+        if (!group) return;
+        const collapsed = group.classList.toggle('dash-collapsed');
+        btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        if (!collapsed) resizeAllEchartsIn(group);
+      });
+    }
+  }
+
   // Promote a `<tr>` (or any container that already has a click handler
   // wired to drill into the detail drawer) into a keyboard-activable
   // control. WCAG 2.1.1 — every operation reachable by mouse must also
@@ -813,30 +836,39 @@
   // boot section had the render call AND the `_codeloreRerenderers
   // .push(() => ...)` line duplicated per widget, which invited
   // theme-rerender drift every time a new widget landed.
+  //
+  // Order matches the dashboard's section order (template.html):
+  // Overview, Hotspots & Risk, Code Health, Architecture, Knowledge,
+  // Delivery — each section's widgets in the order they appear on the
+  // page, top to bottom. `factor-header` stays first since it renders
+  // synchronously before the cooperative boot loop below yields between
+  // the rest. Paint order is otherwise independent of DOM order (every
+  // renderer targets its widget by element id), so this is purely a
+  // "first thing the user sees is the first thing that paints" ordering.
   const WIDGETS = [
     { name: 'factor-header',      rerender: 'theme', render: () => renderFactorHeader(data.factors || [], data.options || {}) },
-    { name: 'share-bars',         rerender: false, render: () => renderShareBars(data.effort_exposure || [], data.options || {}) },
     { name: 'kpi-tiles',          rerender: false, render: () => renderKpiTiles(data) },
-    { name: 'knowledge-islands',  rerender: false, render: () => renderKnowledgeIslands(data.knowledge_islands || []) },
     { name: 'guided-tour',        rerender: false, render: () => renderGuidedTour() },
     { name: 'hotspot-circle-pack', rerender: 'theme', render: () => renderHotspotCirclePack(data.hotspots || [], currentHotspotColorMode) },
     { name: 'hotspot-table',      rerender: false, render: () => renderHotspotTable(data.hotspots || []) },
-    { name: 'coupling-sankey',    rerender: 'theme', render: () => renderCouplingSankey(data.coupling || []) },
-    { name: 'trends',             render: () => renderTrends(data.trends || []) },
-    { name: 'kamei-risk-sparkline', rerender: 'theme', render: () => renderKameiRiskSparkline(data.kamei_risk || []) },
     { name: 'hotspot-treemap',    rerender: 'theme', render: () => renderHotspotTreemap(data.hotspots || []) },
-    { name: 'parallel-coords',    rerender: 'theme', render: () => renderParallelCoords(data.hotspots || []) },
+    { name: 'xray-sunburst',      render: () => renderXRaySunburst(data.xray || []) },
+    { name: 'health-trend',       rerender: 'theme', render: () => renderHealthTrend(data.health_trend || []) },
+    { name: 'trends',             render: () => renderTrends(data.trends || []) },
+    { name: 'share-bars',         rerender: false, render: () => renderShareBars(data.effort_exposure || [], data.options || {}) },
+    { name: 'improvements-feed',  rerender: false,   render: () => renderImprovementsFeed(data.health_transitions || []) },
     { name: 'cognitive-boxplot',  rerender: 'theme', render: () => renderCognitiveBoxplot(data.hotspots || []) },
-    { name: 'module-chord',       render: () => renderModuleChord(data.coupling || []) },
+    { name: 'parallel-coords',    rerender: 'theme', render: () => renderParallelCoords(data.hotspots || []) },
     { name: 'arch-graph',         rerender: 'theme', render: () => renderArchGraph(data.imports || [], data.modularity_violations || [], data.unstable_interface || [], data.architecture_roles || []) },
     { name: 'arch-matrix',        rerender: 'theme', render: () => renderArchMatrix(data.imports || [], data.architecture_roles || [], data.coupling || []) },
     { name: 'arch-trend',         rerender: 'theme', render: () => renderArchTrend(data.architecture_trend || []) },
-    { name: 'health-trend',       rerender: 'theme', render: () => renderHealthTrend(data.health_trend || []) },
-    { name: 'improvements-feed',  rerender: false,   render: () => renderImprovementsFeed(data.health_transitions || []) },
-    { name: 'calendar-heatmap',   rerender: 'theme', render: () => renderCalendarHeatmap(data.daily_commits || []) },
-    { name: 'xray-sunburst',      render: () => renderXRaySunburst(data.xray || []) },
+    { name: 'module-chord',       render: () => renderModuleChord(data.coupling || []) },
+    { name: 'coupling-sankey',    rerender: 'theme', render: () => renderCouplingSankey(data.coupling || []) },
     { name: 'knowledge-surfaces', rerender: false, render: () => renderKnowledgeSurfaces(data.code_familiarity || [], data.team_composition || [], data.coordination_needs || []) },
+    { name: 'knowledge-islands',  rerender: false, render: () => renderKnowledgeIslands(data.knowledge_islands || []) },
     { name: 'delivery-card',      rerender: false,   render: () => renderDeliveryCard(data) },
+    { name: 'kamei-risk-sparkline', rerender: 'theme', render: () => renderKameiRiskSparkline(data.kamei_risk || []) },
+    { name: 'calendar-heatmap',   rerender: 'theme', render: () => renderCalendarHeatmap(data.daily_commits || []) },
   ];
 
   // F97: boot widgets cooperatively. The synchronous `forEach` blocked
@@ -971,6 +1003,8 @@
 
   // Static markup (`#dash-nav` chips, `.dash-group` sections,
   // `#dash-top-btn`) is unconditional template HTML, so the sticky nav
-  // can wire up regardless of whether any widget data loaded above.
+  // and the collapse chevrons can wire up regardless of whether any
+  // widget data loaded above.
   initDashNav();
+  initDashCollapse();
 
