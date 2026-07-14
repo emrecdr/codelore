@@ -35,6 +35,29 @@
     return { edges: ee, nodes: nn };
   }
 
+  // Aggregate change-coupling rows to module granularity at `depth`,
+  // dropping self-pairs (both files rolling up to the same module). A
+  // module pair's weight is the MAX `degree` among the file-pairs that
+  // rolled up into it — the strongest observed signal survives the
+  // roll-up rather than being diluted by an average. Keys are
+  // canonical (alphabetically smaller module first) so a lookup never
+  // needs to know which side of the pair it holds. Feeds the DSM
+  // Fusion cell-mode (`classifyCells`) the same way `aggregateImportsAt`
+  // feeds the structural cells.
+  function aggregateCouplingAt(coupling, depth) {
+    const cc = {};
+    for (var i = 0; i < coupling.length; i++) {
+      const row = coupling[i];
+      const a = modulePath(row.entity_a, depth);
+      const b = modulePath(row.entity_b, depth);
+      if (!a || !b || a === b) continue;
+      const key = (a < b) ? (a + '\x00' + b) : (b + '\x00' + a);
+      const deg = (typeof row.degree === 'number') ? row.degree : 0;
+      if (!(key in cc) || deg > cc[key]) cc[key] = deg;
+    }
+    return cc;
+  }
+
   // ─── §11g Widget: Architecture force-graph ───────────────────────
 
   function renderArchGraph(imports, violations, unstable, roles) {
@@ -621,12 +644,74 @@
     });
   }
 
-  function renderArchMatrix(imports, roles) {
+  // Classify above-diagonal structural edges against aggregated
+  // co-change data for the DSM Fusion cell-mode. Pure and DOM-free —
+  // `renderArchMatrix` supplies module-level maps already rolled up
+  // with the shared `modulePath`/`aggregateImportsAt`/
+  // `aggregateCouplingAt` helpers and owns everything about screen
+  // position (row/col, above/below the diagonal).
+  //
+  //   structEdges — `{ 'srcModule\x00tgtModule': importCount }`, the
+  //                 exact shape `aggregateImportsAt` returns.
+  //   couplingAgg — `{ 'modA\x00modB': maxDegreePct }` (modA < modB
+  //                 alphabetically), from `aggregateCouplingAt`.
+  //
+  // Returns `{ edgeClasses, extra }`:
+  //   - `edgeClasses[key]` classifies an EXISTING structural-edge key
+  //     as `{ cls: 'agree', degree }` (also co-changes) or
+  //     `{ cls: 'struct-only' }` (imports, never co-changes). Callers
+  //     only consult this for forward (above-diagonal) edges —
+  //     back-edges stay red unconditionally, in both modes.
+  //   - `extra` lists `{ a, b, degree }` triples for module pairs that
+  //     co-change with NO structural edge in either direction — cells
+  //     Fusion mode adds that structure mode never draws.
+  function classifyCells(structEdges, couplingAgg) {
+    const edgeClasses = {};
+    Object.keys(structEdges).forEach(function (k) {
+      const parts = k.split('\x00');
+      const canon = (parts[0] < parts[1]) ? k : (parts[1] + '\x00' + parts[0]);
+      const deg = couplingAgg[canon];
+      edgeClasses[k] = (deg === undefined)
+        ? { cls: 'struct-only' }
+        : { cls: 'agree', degree: deg };
+    });
+    const extra = [];
+    Object.keys(couplingAgg).forEach(function (k) {
+      const parts = k.split('\x00'); // canonical: parts[0] < parts[1]
+      const fwd = k;
+      const bwd = parts[1] + '\x00' + parts[0];
+      if (structEdges[fwd] !== undefined || structEdges[bwd] !== undefined) return;
+      extra.push({ a: parts[0], b: parts[1], degree: couplingAgg[k] });
+    });
+    return { edgeClasses: edgeClasses, extra: extra };
+  }
+
+  // Cell-mode legend: text labels so the encoding is never color-only
+  // (WCAG 1.4.1). Shared between the fusion legend row and nowhere
+  // else — kept as one small function so the four labels can't drift
+  // from the tooltip's class names.
+  function archMatrixLegendHtml(fwdColor, violColor, backColor) {
+    // Inline styles only — this markup is injected straight into the DOM
+    // (not scanned by the offline Tailwind build), so Tailwind utility
+    // classes here would silently carry no rules.
+    function item(color, opacity, label) {
+      return '<span style="display:inline-flex;align-items:center;gap:4px;margin-right:12px;">' +
+        '<i style="display:inline-block;width:10px;height:10px;border-radius:2px;' +
+        'background:' + color + ';opacity:' + opacity + '"></i>' + label + '</span>';
+    }
+    return item(fwdColor, 0.85, 'agree — import + co-change') +
+      item(fwdColor, 0.35, 'structural only') +
+      item(violColor, 0.85, 'co-change only (modularity violation)') +
+      item(backColor, 0.95, 'back-edge (cycle)');
+  }
+
+  function renderArchMatrix(imports, roles, coupling) {
     roles = roles || [];
-    const container = document.getElementById('widget-arch-matrix-body');
-    if (!container) return;
+    coupling = coupling || [];
+    const outer = document.getElementById('widget-arch-matrix-body');
+    if (!outer) return;
     if (!imports.length) {
-      container.innerHTML = '<div class="empty">No resolved import edges to matrix yet (Rust + Python + JS/TS).</div>';
+      outer.innerHTML = '<div class="empty">No resolved import edges to matrix yet (Rust + Python + JS/TS).</div>';
       return;
     }
     // Same module roll-up + edge aggregation as the force graph.
@@ -651,7 +736,7 @@
     }
     const mods = Object.keys(nodes);
     if (!mods.length) {
-      container.innerHTML = '<div class="empty">All resolved imports stay intra-module — no inter-module matrix.</div>';
+      outer.innerHTML = '<div class="empty">All resolved imports stay intra-module — no inter-module matrix.</div>';
       return;
     }
     // Module layer = shallowest member file's topological level (from
@@ -678,28 +763,116 @@
     });
     const fwdColor = token('--color-info') || '#2563eb';
     const backColor = token('--color-error') || '#dc2626';
+    const violColor = token('--color-warning') || '#d97706';
     var maxCount = 1;
     Object.keys(edges).forEach(function (k) { if (edges[k] > maxCount) maxCount = edges[k]; });
+
+    // ─── Cell-mode: 'structure' (today's rendering, default) or
+    // 'fusion' (structure×history agreement classes), persisted next
+    // to `archGraphLayout`. The toggle button is injected here (`wt-
+    // btn`), mirroring the health-trend toggle's rebuild-on-click
+    // pattern (`renderHealthTrend`'s `ht-toggle`): the button names
+    // the mode a click switches INTO, and clicking re-invokes this
+    // function with the flipped store value.
+    const mode = (archLayout && archLayout.archMatrixMode === 'fusion') ? 'fusion' : 'structure';
+    const couplingAgg = aggregateCouplingAt(coupling, chosenDepth);
+    const hasCoupling = Object.keys(couplingAgg).length > 0;
+    // Honest absence: Fusion mode with no coupling data degrades to
+    // exactly the structure-mode rendering, plus a hint explaining why.
+    const effectiveMode = (mode === 'fusion' && !hasCoupling) ? 'structure' : mode;
+
+    outer.innerHTML =
+      '<div class="widget-toolbar"><button id="wam-mode-toggle" class="wt-btn">' +
+      (mode === 'fusion' ? 'Structure' : 'Fusion') + '</button></div>' +
+      (mode === 'fusion' && !hasCoupling
+        ? '<div style="font-size:11px;color:' + getCssVar('--fg-dim') + ';margin-bottom:6px;">No co-change data — showing structure only</div>'
+        : '') +
+      '<div id="wam-legend" style="font-size:11px;color:' + getCssVar('--fg-dim') + ';margin-bottom:6px;' +
+      (effectiveMode === 'fusion' ? '' : 'display:none;') + '"></div>' +
+      '<div id="wam-chart-host"></div>';
+    const toggleBtn = document.getElementById('wam-mode-toggle');
+    if (toggleBtn) {
+      toggleBtn.onclick = function () {
+        if (archLayout) archLayout.archMatrixMode = (mode === 'fusion') ? 'structure' : 'fusion';
+        renderArchMatrix(imports, roles, coupling);
+      };
+    }
+    const legendHost = document.getElementById('wam-legend');
+    if (legendHost && effectiveMode === 'fusion') {
+      legendHost.innerHTML = archMatrixLegendHtml(fwdColor, violColor, backColor);
+    }
+    const container = document.getElementById('wam-chart-host');
+    if (!container) return;
+
+    // cellMeta[col + '\x00' + row] parallels `cells` for the tooltip —
+    // keyed by the same [col, row] pair `value` uses, carrying the
+    // class + raw numbers the formatter needs without re-deriving them.
+    const cellMeta = {};
     const cells = [];
     var backEdges = 0;
-    Object.keys(edges).forEach(function (k) {
-      const parts = k.split('\x00');
-      const r = idxOf[parts[0]]; // importer → row
-      const c = idxOf[parts[1]]; // imported → col
-      if (r === undefined || c === undefined) return;
-      const count = edges[k];
-      const isBack = r > c; // imports own-layer-or-shallower = cycle/back-edge
-      if (isBack) backEdges += 1;
-      cells.push({
-        value: [c, r, count],
-        itemStyle: {
-          color: isBack ? backColor : fwdColor,
-          // Forward edges fade by weight; back-edges stay loud (they're the
-          // thing to notice). Floor kept high enough to read on the dark grid.
-          opacity: isBack ? 0.95 : (0.5 + 0.45 * (count / maxCount)),
-        },
+
+    if (effectiveMode !== 'fusion') {
+      // Today's rendering — untouched.
+      Object.keys(edges).forEach(function (k) {
+        const parts = k.split('\x00');
+        const r = idxOf[parts[0]]; // importer → row
+        const c = idxOf[parts[1]]; // imported → col
+        if (r === undefined || c === undefined) return;
+        const count = edges[k];
+        const isBack = r > c; // imports own-layer-or-shallower = cycle/back-edge
+        if (isBack) backEdges += 1;
+        cells.push({
+          value: [c, r, count],
+          itemStyle: {
+            color: isBack ? backColor : fwdColor,
+            // Forward edges fade by weight; back-edges stay loud (they're the
+            // thing to notice). Floor kept high enough to read on the dark grid.
+            opacity: isBack ? 0.95 : (0.5 + 0.45 * (count / maxCount)),
+          },
+        });
       });
-    });
+    } else {
+      // Fusion: reclassify above-diagonal structural cells against
+      // aggregated co-change data, and add coupling-only cells
+      // (`temporal-only`) the structure-mode loop never draws.
+      // Below-diagonal back-edges are untouched in both modes.
+      var maxCouplingDegree = 1;
+      Object.keys(couplingAgg).forEach(function (k) {
+        if (couplingAgg[k] > maxCouplingDegree) maxCouplingDegree = couplingAgg[k];
+      });
+      const classified = classifyCells(edges, couplingAgg);
+      Object.keys(edges).forEach(function (k) {
+        const parts = k.split('\x00');
+        const r = idxOf[parts[0]];
+        const c = idxOf[parts[1]];
+        if (r === undefined || c === undefined) return;
+        const count = edges[k];
+        const isBack = r > c;
+        if (isBack) {
+          backEdges += 1;
+          cells.push({ value: [c, r, count], itemStyle: { color: backColor, opacity: 0.95 } });
+          cellMeta[c + '\x00' + r] = { cls: 'back-edge', count: count };
+          return;
+        }
+        const info = classified.edgeClasses[k] || { cls: 'struct-only' };
+        const opacity = (info.cls === 'agree')
+          ? (0.45 + 0.5 * ((info.degree || 0) / maxCouplingDegree))
+          : 0.35;
+        cells.push({ value: [c, r, count], itemStyle: { color: fwdColor, opacity: opacity } });
+        cellMeta[c + '\x00' + r] = { cls: info.cls, count: count, degree: info.degree };
+      });
+      classified.extra.forEach(function (ex) {
+        const ia = idxOf[ex.a];
+        const ib = idxOf[ex.b];
+        if (ia === undefined || ib === undefined) return;
+        const r = Math.min(ia, ib);
+        const c = Math.max(ia, ib);
+        // -2 marks a coupling-only cell: no import edge backs it, so it
+        // carries no import count (distinct from the -1 diagonal guide).
+        cells.push({ value: [c, r, -2], itemStyle: { color: violColor, opacity: 0.85 } });
+        cellMeta[c + '\x00' + r] = { cls: 'temporal-only', count: 0, degree: ex.degree };
+      });
+    }
     // Diagonal guide cells. No file imports itself, so every r==c cell is
     // empty — without a marker the eye has nothing to anchor the triangle to
     // (the caption's "triangular, all-blue = clean" is otherwise invisible).
@@ -713,7 +886,8 @@
     setChartAriaLabel(container,
       'Dependency structure matrix, ' + n + ' modules ordered by architectural layer, ' +
       Object.keys(edges).length + ' dependency cells, ' + backEdges +
-      ' below-diagonal back-edges (dependency cycles / layering violations) in red.');
+      ' below-diagonal back-edges (dependency cycles / layering violations) in red' +
+      (effectiveMode === 'fusion' ? '. Fusion mode: cells classified by structure×history agreement.' : '.'));
 
     // Square cells so the diagonal is a true 45° line rather than the shallow
     // slope a full-width stretch produces. Reserve fixed margins for the
@@ -736,8 +910,22 @@
           const r = p.value[1];
           const v = p.value[2];
           if (r === c) return order[r] + '<br/><span style="opacity:.7">diagonal (self)</span>';
-          return order[r] + ' &rarr; ' + order[c] + '<br/>' + v + ' import' + (v === 1 ? '' : 's') +
-            (r > c ? '<br/><strong>back-edge — dependency cycle / layering violation</strong>' : '');
+          if (effectiveMode !== 'fusion') {
+            return order[r] + ' &rarr; ' + order[c] + '<br/>' + v + ' import' + (v === 1 ? '' : 's') +
+              (r > c ? '<br/><strong>back-edge — dependency cycle / layering violation</strong>' : '');
+          }
+          const meta = cellMeta[c + '\x00' + r] || { cls: 'struct-only', count: v };
+          const label = {
+            'agree': 'agree — import + co-change',
+            'struct-only': 'structural only',
+            'temporal-only': 'co-change only — modularity violation',
+            'back-edge': 'back-edge — dependency cycle / layering violation',
+          }[meta.cls] || 'structural only';
+          const importsTxt = 'imports: ' + (meta.count || 0);
+          const coTxt = (typeof meta.degree === 'number')
+            ? ('co-change degree: ' + meta.degree.toFixed(1) + '%')
+            : 'co-change degree: n/a';
+          return order[r] + ' &rarr; ' + order[c] + ' — ' + label + '<br/>' + importsTxt + ', ' + coTxt;
         },
       },
       grid: { left: gridLeft, top: padTop, width: span, height: span, containLabel: false },

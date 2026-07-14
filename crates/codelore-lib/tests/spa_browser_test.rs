@@ -1490,6 +1490,63 @@ fn eval_json<T: serde::de::DeserializeOwned>(tab: &headless_chrome::Tab, js: &st
     serde_json::from_value(value).expect("deserialize js result")
 }
 
+/// Trimmed `textContent` of `#id`, or the empty string when the element is
+/// absent. A thin, named specialization of [`eval_json`] over the
+/// `getElementById(...).textContent` readback that interaction assertions
+/// (toggle labels, legends) otherwise repeat inline.
+fn element_text(tab: &headless_chrome::Tab, id: &str) -> String {
+    eval_json(
+        tab,
+        &format!(
+            "(function () {{ \
+                 var el = document.getElementById('{id}'); \
+                 return el ? el.textContent.trim() : ''; \
+             }})()"
+        ),
+    )
+}
+
+/// Number of data points in the first `ECharts` series mounted into `#host_id`,
+/// or `-1` when neither the chart nor `ECharts` itself has mounted. Lets a test
+/// prove a re-render *changed* a matrix (cell count moved) rather than merely
+/// re-painting it.
+fn echarts_series_len(tab: &headless_chrome::Tab, host_id: &str) -> i64 {
+    eval_json(
+        tab,
+        &format!(
+            "(function () {{ \
+                 var el = document.getElementById('{host_id}'); \
+                 if (!el || !window.echarts) return -1; \
+                 var chart = window.echarts.getInstanceByDom(el); \
+                 if (!chart) return -1; \
+                 var opt = chart.getOption(); \
+                 var d = opt && opt.series && opt.series[0] && opt.series[0].data; \
+                 return d ? d.length : -1; \
+             }})()"
+        ),
+    )
+}
+
+/// Enable the CDP `Log`/`Runtime` domains and attach a listener that captures
+/// every `RuntimeExceptionThrown` into the returned sink, so a test can assert
+/// an interaction produced no uncaught browser-side exceptions.
+fn attach_exception_sink(tab: &headless_chrome::Tab) -> Arc<Mutex<Vec<String>>> {
+    let console_errors: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&console_errors);
+    tab.enable_log().expect("enable log");
+    tab.enable_runtime().expect("enable runtime");
+    let listener = move |event: &Event| {
+        if let Event::RuntimeExceptionThrown(thrown) = event {
+            sink.lock()
+                .expect("console mutex")
+                .push(thrown.params.exception_details.text.clone());
+        }
+    };
+    tab.add_event_listener(Arc::new(listener))
+        .expect("add event listener");
+    console_errors
+}
+
 /// A `role="tablist"` must support arrow-key navigation per the
 /// WAI-ARIA Tabs pattern: focus a tab, press `ArrowRight`, and focus +
 /// the selected state move to the next tab. On the un-fixed source the
@@ -2259,5 +2316,130 @@ fn health_trend_toggle_renders_both_views() {
         overlay_back > 250,
         "overlay canvas after toggle-back had clientHeight {overlay_back}px — \
          expected >250px; the toggle re-render may not have restored the overlay"
+    );
+}
+
+/// The DSM Fusion cell-mode toggle (`classifyCells` in
+/// `40_architecture.js`) must classify above-diagonal cells by
+/// structure×history agreement without throwing. `coupling_repo` (see
+/// its doc comment) guarantees a Fisher-significant `src/alpha` ↔
+/// `src/beta` co-change; the synthetic import edges below deliberately
+/// route around that pair (`alpha→gamma`, `gamma→beta`), so Fusion mode
+/// must draw a brand-new `temporal-only` cell for it that structure mode
+/// never has — a robust, magnitude-independent proof that reclassification
+/// actually ran (the cell COUNT must increase), not just a cosmetic
+/// re-paint.
+#[test]
+fn dsm_fusion_mode_toggle_classifies_cells_without_errors() {
+    // -- Step 1: coupling-rich fixture + synthetic cross-module imports
+    // that avoid the alpha↔beta pair. ------------------------------------
+    let fixture = coupling_repo::build();
+    let opts = permissive_coupling_opts(fixture.dir.path().to_path_buf());
+    let repo = GixRepo::open(fixture.dir.path()).expect("open coupling fixture");
+    let db = FactsDb::new_in_memory().expect("in-memory facts db");
+    db.ingest(&repo, &opts).expect("ingest coupling fixture");
+
+    let coupling = run_coupling(&db, &opts).expect("coupling");
+    assert!(
+        !coupling.is_empty(),
+        "coupling_repo fixture must produce coupling rows under permissive opts \
+         (the Fusion precondition)"
+    );
+    // Imports deliberately route around the guaranteed alpha↔beta co-change,
+    // so Fusion mode must add a temporal-only cell structure mode never draws.
+    let dash = SpaDashboard {
+        hotspots: run_hotspots(&db, &opts).expect("hotspots"),
+        summary: run_summary(&db, &opts).expect("summary"),
+        code_health: run_code_health(&db, &opts).expect("code-health"),
+        knowledge_islands: run_knowledge_islands(&db, &opts).expect("knowledge-islands"),
+        coupling,
+        imports: vec![
+            ImportEdgeRow {
+                src_path: "src/alpha/svc.rs".to_string(),
+                target_path: "src/gamma/svc.rs".to_string(),
+            },
+            ImportEdgeRow {
+                src_path: "src/gamma/util.rs".to_string(),
+                target_path: "src/beta/util.rs".to_string(),
+            },
+        ],
+        ..SpaDashboard::default()
+    };
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let html_path = tmp.path().join("codelore-dsm-fusion.html");
+    let mut f = std::fs::File::create(&html_path).expect("create html");
+    write_spa(
+        &dash,
+        "CodeLore DSM Fusion Test",
+        &fixture.dir.path().display().to_string(),
+        "2026-07-14 00:00:00 UTC",
+        &mut f,
+    )
+    .expect("write_spa");
+    drop(f);
+
+    // -- Step 2: launch Chrome and watch for console errors from here on. -
+    let Some((_browser, tab)) = boot_spa_tab(&html_path) else {
+        return;
+    };
+    let console_errors = attach_exception_sink(&tab);
+
+    // -- Step 3: default mode is Structure; the wt-btn toggle announces the
+    // mode a click switches INTO ('Fusion'), mirroring `#ht-toggle`. -------
+    let toggle_label = element_text(&tab, "wam-mode-toggle");
+    assert_eq!(
+        toggle_label, "Fusion",
+        "wam-mode-toggle label was '{toggle_label}'; expected 'Fusion' \
+         (structure is the default mode)"
+    );
+    let structure_cells = echarts_series_len(&tab, "wam-chart-host");
+    assert!(
+        structure_cells > 0,
+        "structure-mode matrix has no rendered cells"
+    );
+
+    // -- Step 4: click the toggle → Fusion mode. --------------------------
+    tab.find_element("#wam-mode-toggle")
+        .expect("wam-mode-toggle element")
+        .click()
+        .expect("click wam-mode-toggle");
+    std::thread::sleep(Duration::from_millis(500));
+
+    let fusion_label = element_text(&tab, "wam-mode-toggle");
+    assert_eq!(
+        fusion_label, "Structure",
+        "toggle label did not flip to 'Structure' after entering Fusion mode"
+    );
+    let fusion_cells = echarts_series_len(&tab, "wam-chart-host");
+    assert!(
+        fusion_cells > structure_cells,
+        "Fusion-mode cell count ({fusion_cells}) was not greater than structure-mode's \
+         ({structure_cells}); the guaranteed src/alpha\u{2194}src/beta coupling-only pair \
+         should add a new temporal-only cell that structure mode never draws"
+    );
+
+    // -- Step 5: the legend row names all four cell classes as TEXT
+    // (never color-only). ------------------------------------------------
+    let legend_text = element_text(&tab, "wam-legend");
+    for phrase in [
+        "agree",
+        "structural only",
+        "modularity violation",
+        "back-edge",
+    ] {
+        assert!(
+            legend_text.contains(phrase),
+            "Fusion legend missing '{phrase}'; legend text was: {legend_text}"
+        );
+    }
+
+    // -- Step 6: the toggle interaction produced zero console errors. -----
+    let errors = console_errors.lock().expect("console mutex").clone();
+    assert!(
+        errors.is_empty(),
+        "DSM Fusion toggle produced {} browser-console error(s):\n{}",
+        errors.len(),
+        errors.join("\n  "),
     );
 }

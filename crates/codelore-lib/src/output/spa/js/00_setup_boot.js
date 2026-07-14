@@ -738,7 +738,7 @@
     { name: 'cognitive-boxplot',  rerender: 'theme', render: () => renderCognitiveBoxplot(data.hotspots || []) },
     { name: 'module-chord',       render: () => renderModuleChord(data.coupling || []) },
     { name: 'arch-graph',         rerender: 'theme', render: () => renderArchGraph(data.imports || [], data.modularity_violations || [], data.unstable_interface || [], data.architecture_roles || []) },
-    { name: 'arch-matrix',        rerender: 'theme', render: () => renderArchMatrix(data.imports || [], data.architecture_roles || []) },
+    { name: 'arch-matrix',        rerender: 'theme', render: () => renderArchMatrix(data.imports || [], data.architecture_roles || [], data.coupling || []) },
     { name: 'arch-trend',         rerender: 'theme', render: () => renderArchTrend(data.architecture_trend || []) },
     { name: 'health-trend',       rerender: 'theme', render: () => renderHealthTrend(data.health_trend || []) },
     { name: 'improvements-feed',  rerender: false,   render: () => renderImprovementsFeed(data.health_transitions || []) },
