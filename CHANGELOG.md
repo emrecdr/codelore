@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-07-14
+
 ### Added
 
 - **Corpus-relative architecture percentiles on `architecture-metrics`.** When an active calibration artifact carries a `repo_metrics` section (populated by `codelore calibrate`; see below), `architecture-metrics` appends `corpus_percentile:propagation_cost` and `corpus_percentile:cycle_file_share` — midpoint-rank percentiles of this repo's values against the corpus pools — plus `corpus_n`, the number of corpus observations backing them. The base is coarse by construction (one observation per corpus repo, so `corpus_n` is on the order of the corpus repo count): `corpus_n` states it honestly, and the lens reads as "percentile among N corpus repositories", never a fine-grained calibration. Rows are absent entirely when no artifact is active or the active one lacks `repo_metrics` — the existing seven `architecture-metrics` rows are unaffected either way. The embedded world corpus has been rebuilt with these pools (vintage `world-2026-07-14`; 99 repos, 79 of which resolve a non-empty import graph and contribute one observation each), so the percentile rows are live by default with no configuration; `--calibration` overrides as usual. The SPA's Architecture factor tile appends the propagation-cost percentile to its detail line (`, P<nn> of <n> corpus repos`) whenever the rows resolve.
