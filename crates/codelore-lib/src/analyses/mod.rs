@@ -19,6 +19,7 @@ pub mod communities;
 pub mod coordination_needs;
 pub mod coupling;
 pub mod crossing;
+pub mod cycle_health;
 pub mod cycle_origins;
 pub mod dashboard;
 pub mod delivery_friction;

@@ -1,15 +1,17 @@
 //! Unit tests for the corpus-calibration artifact: serde round-trip, the
 //! quantile-breakpoint interpolation contract of `percentile`, `load`
 //! validation (format version + quantile monotonicity), the
-//! sample-count-weighted `merge` approximation, and the golden fixture
-//! artifact byte-determinism guard.
+//! sample-count-weighted `merge` approximation, the golden fixture
+//! artifact byte-determinism guard, and the `repo_metrics` optional section
+//! with `raw_percentile` / `attach_repo_metrics`.
 
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::Path;
 
 use codelore_lib::calibration::{
     self, CALIBRATION_FORMAT_VERSION, CalibrationArtifact, LanguageTable, MIN_LANG_SAMPLE,
-    MetricQuantiles, QUANTILE_POINTS, Stratum,
+    MetricQuantiles, QUANTILE_POINTS, RepoMetrics, Stratum,
 };
 
 // ─── fixtures ────────────────────────────────────────────────────────────────
@@ -50,6 +52,7 @@ fn ramp_artifact() -> CalibrationArtifact {
                 }],
             }],
         }],
+        repo_metrics: None,
     }
 }
 
@@ -74,6 +77,7 @@ fn nargs_artifact(quantiles: Vec<f64>) -> CalibrationArtifact {
                 }],
             }],
         }],
+        repo_metrics: None,
     }
 }
 
@@ -595,4 +599,306 @@ fn generate_golden_fixture_artifact() {
     );
     assert_eq!(art.corpus_vintage, GOLDEN_VINTAGE);
     assert_eq!(art.generated_at, GOLDEN_GENERATED_AT);
+}
+
+// ─── repo_metrics: serde additivity ──────────────────────────────────────────
+
+/// An artifact JSON that lacks the `repo_metrics` field entirely (as all
+/// artifacts built before this section existed do). Deserializing it must
+/// yield `repo_metrics: None` — the `#[serde(default)]` path.
+#[test]
+fn old_artifact_without_repo_metrics_deserializes_with_none() {
+    // Minimal valid v1 artifact JSON — no `repo_metrics` key at all.
+    // Quantile vector must be exactly QUANTILE_POINTS (1001) long.
+    let quantiles_json = {
+        let vals: Vec<String> = (0..QUANTILE_POINTS).map(|i| i.to_string()).collect();
+        format!("[{}]", vals.join(","))
+    };
+    let json = format!(
+        r#"{{
+            "format_version": 1,
+            "corpus_vintage": "world-2026-01",
+            "generated_at": "2026-01-01T00:00:00Z",
+            "repos_included": 1,
+            "repos_attempted": 1,
+            "languages": [{{
+                "language": "rust",
+                "sample_functions": 1000,
+                "strata": [{{
+                    "sloc_min": 0,
+                    "sloc_max": 18446744073709551615,
+                    "metrics": [{{
+                        "metric": "cyclomatic",
+                        "quantiles": {quantiles_json}
+                    }}]
+                }}]
+            }}]
+        }}"#,
+    );
+
+    let art: CalibrationArtifact =
+        serde_json::from_str(&json).expect("old artifact without repo_metrics must deserialize");
+    assert!(
+        art.repo_metrics.is_none(),
+        "repo_metrics must be None when the JSON key is absent"
+    );
+    assert_eq!(art.corpus_vintage, "world-2026-01");
+}
+
+/// An artifact WITH `repo_metrics: Some(...)` serializes WITHOUT the key when
+/// it is `None`, and WITH the key when it is `Some`. Both directions must
+/// round-trip through serde.
+#[test]
+fn repo_metrics_none_omitted_from_serialization() {
+    let mut art = ramp_artifact();
+    // Start with None — key must be absent from the JSON.
+    assert!(art.repo_metrics.is_none());
+    let json = serde_json::to_string(&art).expect("serialize None repo_metrics");
+    assert!(
+        !json.contains("repo_metrics"),
+        "repo_metrics:None must not appear in the JSON; got: {json}"
+    );
+
+    // Now set Some — key must appear.
+    let mut values = BTreeMap::new();
+    values.insert("propagation_cost".to_string(), vec![0.1, 0.2, 0.3]);
+    art.repo_metrics = Some(RepoMetrics { values });
+    let json_some = serde_json::to_string(&art).expect("serialize Some repo_metrics");
+    assert!(
+        json_some.contains("repo_metrics"),
+        "repo_metrics:Some must appear in the JSON; got: {json_some}"
+    );
+
+    // Round-trip Some back.
+    let back: CalibrationArtifact =
+        serde_json::from_str(&json_some).expect("deserialize Some repo_metrics");
+    let rm = back
+        .repo_metrics
+        .expect("repo_metrics must be Some after round-trip");
+    assert_eq!(
+        rm.values["propagation_cost"],
+        vec![0.1, 0.2, 0.3],
+        "pool values must survive the round-trip"
+    );
+}
+
+// ─── raw_percentile: table-driven ────────────────────────────────────────────
+
+/// Empty sorted slice → `None` (no observations, no rank possible).
+#[test]
+fn raw_percentile_empty_is_none() {
+    assert!(
+        calibration::raw_percentile(&[], 1.0).is_none(),
+        "empty slice must return None"
+    );
+}
+
+/// `[1.0, 2.0, 3.0]`, value `2.0`:
+/// `count_less` = 1 (value 1.0 < 2.0), `count_equal` = 1 (the one 2.0), n = 3.
+/// p = (1 + 0.5 * 1) / 3 = 1.5 / 3 = 0.5.
+#[test]
+fn raw_percentile_middle_value_of_three() {
+    let sorted = [1.0_f64, 2.0, 3.0];
+    let p = calibration::raw_percentile(&sorted, 2.0).expect("non-empty slice");
+    // Hand-verified: (1 + 0.5*1) / 3 = 0.5
+    assert!((p - 0.5).abs() < 1e-12, "expected 0.5, got {p}");
+}
+
+/// `[1.0, 2.0, 3.0]`, value `0.0` (below all elements):
+/// `count_less` = 0, `count_equal` = 0 (0.0 is not in the slice), n = 3.
+/// p = (0 + 0.5 * 0) / 3 = 0.0.
+#[test]
+fn raw_percentile_below_all_is_zero() {
+    let sorted = [1.0_f64, 2.0, 3.0];
+    let p = calibration::raw_percentile(&sorted, 0.0).expect("non-empty slice");
+    // Hand-verified: (0 + 0.5*0) / 3 = 0.0
+    assert!(
+        p.abs() < 1e-12,
+        "value below all elements → p = 0.0, got {p}"
+    );
+}
+
+/// `[1.0, 2.0, 3.0]`, value `4.0` (above all elements):
+/// `count_less` = 3 (all < 4.0), `count_equal` = 0, n = 3.
+/// p = (3 + 0.5 * 0) / 3 = 1.0.
+#[test]
+fn raw_percentile_above_all_is_one() {
+    let sorted = [1.0_f64, 2.0, 3.0];
+    let p = calibration::raw_percentile(&sorted, 4.0).expect("non-empty slice");
+    // Hand-verified: (3 + 0.5*0) / 3 = 1.0
+    assert!(
+        (p - 1.0).abs() < 1e-12,
+        "value above all elements → p = 1.0, got {p}"
+    );
+}
+
+/// `[1.0, 2.0, 2.0, 3.0]`, value `2.0` (two-element tie):
+/// `count_less` = 1 (only 1.0 < 2.0), `count_equal` = 2 (the two 2.0s), n = 4.
+/// p = (1 + 0.5 * 2) / 4 = 2.0 / 4 = 0.5.
+#[test]
+fn raw_percentile_tie_uses_midpoint_rank() {
+    let sorted = [1.0_f64, 2.0, 2.0, 3.0];
+    let p = calibration::raw_percentile(&sorted, 2.0).expect("non-empty slice");
+    // Hand-verified: (1 + 0.5*2) / 4 = 2/4 = 0.5
+    assert!(
+        (p - 0.5).abs() < 1e-12,
+        "tie: midpoint rank (1 + 0.5*2)/4 = 0.5, got {p}"
+    );
+}
+
+/// Single-element slice `[5.0]`, value `5.0`:
+/// `count_less` = 0, `count_equal` = 1, n = 1.
+/// p = (0 + 0.5 * 1) / 1 = 0.5.
+#[test]
+fn raw_percentile_single_element_equal_is_half() {
+    let sorted = [5.0_f64];
+    let p = calibration::raw_percentile(&sorted, 5.0).expect("non-empty slice");
+    // Hand-verified: (0 + 0.5*1) / 1 = 0.5
+    assert!(
+        (p - 0.5).abs() < 1e-12,
+        "single-element equal: (0 + 0.5*1)/1 = 0.5, got {p}"
+    );
+}
+
+// ─── attach_repo_metrics ──────────────────────────────────────────────────────
+
+/// `attach_repo_metrics` with non-empty pools sets `repo_metrics: Some` and
+/// sorts each vec ascending.
+#[test]
+fn attach_repo_metrics_sets_some_and_sorts() {
+    let mut art = ramp_artifact();
+    let mut values = BTreeMap::new();
+    // Provide out-of-order values; expect them sorted ascending after attach.
+    values.insert("propagation_cost".to_string(), vec![0.5, 0.1, 0.3]);
+    values.insert("cycle_file_share".to_string(), vec![0.9, 0.2]);
+    let pools = RepoMetrics { values };
+
+    calibration::attach_repo_metrics(&mut art, pools);
+
+    let rm = art
+        .repo_metrics
+        .expect("repo_metrics must be Some after attach");
+    assert_eq!(
+        rm.values["propagation_cost"],
+        vec![0.1, 0.3, 0.5],
+        "propagation_cost must be sorted ascending"
+    );
+    assert_eq!(
+        rm.values["cycle_file_share"],
+        vec![0.2, 0.9],
+        "cycle_file_share must be sorted ascending"
+    );
+}
+
+/// `attach_repo_metrics` with an empty `values` map sets `repo_metrics: None`
+/// (empty pools = no lens).
+#[test]
+fn attach_repo_metrics_empty_pools_sets_none() {
+    let mut art = ramp_artifact();
+    let pools = RepoMetrics {
+        values: BTreeMap::new(),
+    };
+    calibration::attach_repo_metrics(&mut art, pools);
+    assert!(
+        art.repo_metrics.is_none(),
+        "empty pools must leave repo_metrics as None"
+    );
+}
+
+// ─── merge: repo_metrics pooling ─────────────────────────────────────────────
+//
+// `merge` (the public seam) delegates to the private `merge_repo_metrics` for
+// its `repo_metrics` field; these tests exercise all four None/Some
+// combinations through `merge` rather than making the private helper public.
+
+/// Neither artifact carries `repo_metrics` → the merged result stays `None`
+/// (no lens where neither side contributed one).
+#[test]
+fn merge_repo_metrics_both_none_stays_none() {
+    let base = ramp_artifact();
+    let additional = ramp_artifact();
+    assert!(base.repo_metrics.is_none());
+    assert!(additional.repo_metrics.is_none());
+
+    let merged = calibration::merge(base, additional);
+    assert!(
+        merged.repo_metrics.is_none(),
+        "merging two None repo_metrics must stay None"
+    );
+}
+
+/// Only the base artifact carries `repo_metrics` → the merged result keeps it
+/// unchanged.
+#[test]
+fn merge_repo_metrics_base_some_additional_none_keeps_base() {
+    let mut base = ramp_artifact();
+    let mut values = BTreeMap::new();
+    values.insert("propagation_cost".to_string(), vec![0.1, 0.3, 0.5]);
+    base.repo_metrics = Some(RepoMetrics { values });
+    let additional = ramp_artifact();
+
+    let merged = calibration::merge(base, additional);
+    let rm = merged
+        .repo_metrics
+        .expect("base's repo_metrics must carry through when additional lacks one");
+    assert_eq!(rm.values["propagation_cost"], vec![0.1, 0.3, 0.5]);
+}
+
+/// Only the additional artifact carries `repo_metrics` → the merged result
+/// keeps it unchanged.
+#[test]
+fn merge_repo_metrics_base_none_additional_some_keeps_additional() {
+    let base = ramp_artifact();
+    let mut additional = ramp_artifact();
+    let mut values = BTreeMap::new();
+    values.insert("cycle_file_share".to_string(), vec![0.0, 0.25]);
+    additional.repo_metrics = Some(RepoMetrics { values });
+
+    let merged = calibration::merge(base, additional);
+    let rm = merged
+        .repo_metrics
+        .expect("additional's repo_metrics must carry through when base lacks one");
+    assert_eq!(rm.values["cycle_file_share"], vec![0.0, 0.25]);
+}
+
+/// Both artifacts carry `repo_metrics`: a metric key present on both sides
+/// concatenates every raw value and re-sorts ascending (exact pooling, since
+/// the raw values are available — unlike the quantile blend), while a key
+/// present on only one side carries through unchanged.
+#[test]
+fn merge_repo_metrics_both_some_concatenates_overlap_and_keeps_disjoint() {
+    let mut base = ramp_artifact();
+    let mut base_values = BTreeMap::new();
+    base_values.insert("propagation_cost".to_string(), vec![0.5, 0.1, 0.3]);
+    base_values.insert("cycle_file_share".to_string(), vec![0.2]);
+    base.repo_metrics = Some(RepoMetrics {
+        values: base_values,
+    });
+
+    let mut additional = ramp_artifact();
+    let mut add_values = BTreeMap::new();
+    add_values.insert("propagation_cost".to_string(), vec![0.4, 0.0]);
+    add_values.insert("only_in_additional".to_string(), vec![0.9]);
+    additional.repo_metrics = Some(RepoMetrics { values: add_values });
+
+    let merged = calibration::merge(base, additional);
+    let rm = merged
+        .repo_metrics
+        .expect("both-Some repo_metrics must merge to Some");
+
+    assert_eq!(
+        rm.values["propagation_cost"],
+        vec![0.0, 0.1, 0.3, 0.4, 0.5],
+        "overlapping metric must concatenate both sides' raw values and re-sort ascending"
+    );
+    assert_eq!(
+        rm.values["cycle_file_share"],
+        vec![0.2],
+        "base-only metric must carry through unchanged"
+    );
+    assert_eq!(
+        rm.values["only_in_additional"],
+        vec![0.9],
+        "additional-only metric must carry through unchanged"
+    );
 }

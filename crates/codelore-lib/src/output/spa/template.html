@@ -1738,14 +1738,18 @@
         where the force graph hairballs. Rows import columns; cells
         <strong>below the diagonal (red)</strong> are <em>back-edges</em>:
         dependency cycles and layering violations. A clean, acyclic
-        architecture is a triangular, all-blue matrix.
+        architecture is a triangular, all-blue matrix. The
+        <strong>Fusion</strong> toggle (top of the panel) reclassifies
+        each cell by structure×history agreement against the change-
+        coupling data — a legend row explains the added colours.
       </div>
       <details class="learn-more">
         <summary>Learn more — how to read this panel</summary>
         <div class="learn-more-content">
           <p><strong>What it measures.</strong> The resolved import graph rolled up to modules (same depth selector as the graph above), rendered as a Dependency Structure Matrix (Steward 1981; Sangal et al. 2005). Modules are ordered by architectural layer — entry points first, foundations last — using the topological level from <code>--analysis architecture-roles</code>.</p>
-          <p><strong>How to read it.</strong> Each cell <code>(row, col)</code> means "row imports col"; blue intensity = number of imports. Because modules are layer-ordered, healthy forward dependencies fall <em>above</em> the diagonal. A cell <em>below</em> the diagonal is <strong>red</strong> — a back-edge, where a module imports something in its own layer or shallower, which only happens inside a dependency cycle. A perfectly triangular all-blue matrix is an acyclic, cleanly-layered architecture.</p>
-          <p><strong>What to watch for.</strong> Red cells below the diagonal are your cycles / layering violations — cross-reference <code>--analysis dependency-cycles</code>. A dense red block straddling the diagonal is a large tangle (the Core). Unlike the force graph, the matrix stays readable as the module count grows — this is the scalable default for big repos.</p>
+          <p><strong>How to read it (Structure mode, the default).</strong> Each cell <code>(row, col)</code> means "row imports col"; blue intensity = number of imports. Because modules are layer-ordered, healthy forward dependencies fall <em>above</em> the diagonal. A cell <em>below</em> the diagonal is <strong>red</strong> — a back-edge, where a module imports something in its own layer or shallower, which only happens inside a dependency cycle. A perfectly triangular all-blue matrix is an acyclic, cleanly-layered architecture.</p>
+          <p><strong>Fusion mode.</strong> Click the <strong>Fusion</strong> button to reclassify each above-diagonal cell against change-coupling data (aggregated to the same module depth): <em>agree</em> cells import <em>and</em> co-change (blue, opacity graded by co-change strength); <em>structural only</em> cells import but never co-change (dimmed); <em>co-change only</em> cells — a modularity violation — co-change with no import edge at all, in the same amber the architecture graph uses for its dashed violation edges. Back-edges below the diagonal stay red in both modes. Every cell's tooltip names its class; a legend row lists all four. With no change-coupling data, Fusion mode shows the structure-mode view plus a one-line hint instead of misleading empty classifications.</p>
+          <p><strong>What to watch for.</strong> Red cells below the diagonal are your cycles / layering violations — cross-reference <code>--analysis dependency-cycles</code>. A dense red block straddling the diagonal is a large tangle (the Core). In Fusion mode, amber co-change-only cells are hidden coupling a resolver can't see — the same signal the architecture graph's dashed edges surface. Unlike the force graph, the matrix stays readable as the module count grows — this is the scalable default for big repos.</p>
         </div>
       </details>
       <div id="widget-arch-matrix-body" class="widget-body" style="height: 460px;"></div>
@@ -2424,6 +2428,11 @@
         // Architecture-graph layout: 'force' (physics) or 'layered'
         // (topological bands). Persisted across reloads.
         archGraphLayout: Alpine.$persist('force').as('codelore_arch_graph_layout'),
+        // DSM cell-mode: 'structure' (today's import-only rendering) or
+        // 'fusion' (structure×history agreement classes). Persisted
+        // across reloads; the toggle button lives inside the matrix
+        // widget's own render function, not a static template control.
+        archMatrixMode: Alpine.$persist('structure').as('codelore_arch_matrix_mode'),
         // Sankey 'files' = no aggregation (top-30 file pairs, the
         // canonical view). Integer 2-6 collapses each pair's
         // entities to N path segments and re-tops the aggregated

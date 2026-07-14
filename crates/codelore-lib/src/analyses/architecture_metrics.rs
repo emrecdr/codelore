@@ -19,8 +19,17 @@
 //! All derived in one pass from the shared import-graph kernel (SCC +
 //! reachability), so this adds no new query cost beyond building the
 //! graph. Accuracy follows the import resolver's language coverage.
+//!
+//! When an active calibration artifact ([`crate::calibration::load_active_artifact`])
+//! carries a `repo_metrics` section (corpus pools populated by `codelore
+//! calibrate`), three additional rows report where this repo's
+//! `propagation_cost` and `cycle_file_share` sit against that corpus — see
+//! [`run_architecture_metrics`]. Absent artifact or absent section ⇒ those
+//! rows are simply not emitted (the additivity contract this module's tests
+//! pin).
 
 use crate::analyses::import_graph::{build_import_graph, graph_metrics};
+use crate::calibration::{load_active_artifact, raw_percentile};
 use crate::facts::FactsDb;
 use crate::{Options, Result};
 
@@ -78,7 +87,7 @@ pub fn run_architecture_metrics(
         "multi-core"
     };
 
-    Ok(vec![
+    let mut rows = vec![
         row("propagation_cost", format!("{:.4}", m.propagation_cost)),
         row("acd", format!("{acd:.2}")),
         row("nccd", format!("{nccd:.2}")),
@@ -86,7 +95,46 @@ pub fn run_architecture_metrics(
         row("largest_cycle", m.largest_cycle.to_string()),
         row("files", m.n.to_string()),
         row("architecture_type", arch_type.to_owned()),
-    ])
+    ];
+
+    // Corpus-relative percentiles (additive; against the `repo_metrics` pools
+    // populated by `codelore calibrate`).
+    // Reuses `m` — the SAME `GraphMetrics` the seven rows above were built
+    // from — so this never rebuilds the import graph. `cycle_file_share`
+    // mirrors `codelore calibrate`'s `pool_repo_metrics` formula exactly
+    // (`cyclic_nodes / n`, `n` already guaranteed non-zero by the early
+    // return above) so this repo's value is directly comparable to the pool.
+    if let Some(artifact) = load_active_artifact(opts)?
+        && let Some(repo_metrics) = artifact.repo_metrics.as_ref()
+    {
+        let cycle_file_share = cyclic_f / n_f;
+        // `corpus_n` documents the sample size behind whichever percentile
+        // row(s) were actually emitted: the `propagation_cost` pool's length
+        // when that row is present (the common case — both metrics are
+        // pooled together by `calibrate`), else the `cycle_file_share`
+        // pool's length when only that one is.
+        let mut corpus_n: Option<usize> = None;
+
+        if let Some(pool) = repo_metrics.values.get("propagation_cost")
+            && !pool.is_empty()
+            && let Some(p) = raw_percentile(pool, m.propagation_cost)
+        {
+            rows.push(row("corpus_percentile:propagation_cost", format!("{p:.2}")));
+            corpus_n = Some(pool.len());
+        }
+        if let Some(pool) = repo_metrics.values.get("cycle_file_share")
+            && !pool.is_empty()
+            && let Some(p) = raw_percentile(pool, cycle_file_share)
+        {
+            rows.push(row("corpus_percentile:cycle_file_share", format!("{p:.2}")));
+            corpus_n.get_or_insert(pool.len());
+        }
+        if let Some(n) = corpus_n {
+            rows.push(row("corpus_n", n.to_string()));
+        }
+    }
+
+    Ok(rows)
 }
 
 fn row(metric: &str, value: String) -> ArchitectureMetricRow {

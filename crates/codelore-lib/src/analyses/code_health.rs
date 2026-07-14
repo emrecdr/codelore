@@ -803,6 +803,7 @@ mod tests {
                     }],
                 }],
             }],
+            repo_metrics: None,
         }
     }
 

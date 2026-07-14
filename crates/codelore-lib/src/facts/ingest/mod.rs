@@ -202,16 +202,18 @@ impl FactsDb {
         Ok(stats)
     }
 
-    /// Head-only ingest (`opts.head_only_ingest`): populate only the
-    /// HEAD-time complexity facts. No commit walk runs, so the two
+    /// Head-only ingest (`opts.head_only_ingest`): populate the HEAD-time
+    /// complexity and import facts. No commit walk runs, so the two
     /// walk-derived inputs of the complexity pass are replaced by direct
     /// tree reads: `current_head_rev` → [`Repo::head_sha`] and
     /// `query_live_paths` → [`Repo::tracked_paths_at_head`], filtered
     /// through the same [`crate::paths_filter::PathsFilter`] +
     /// git-metadata predicate the commit-walk consumer applies to
     /// `changes` rows — both modes must scan the identical file set on
-    /// the same tree. History tables stay empty and the kamei / clones /
-    /// imports / grouping passes are skipped (each reads or joins commit
+    /// the same tree. The same `live_paths` + `head_rev` feed the
+    /// import-extraction and resolver passes afterward, mirroring the
+    /// full path's ordering. History tables stay empty and the kamei /
+    /// clones / grouping passes are skipped (each reads or joins commit
     /// history). The returned stats are truthfully zero — nothing was
     /// walked.
     fn ingest_head_only<R: Repo>(&self, repo: &R, opts: &Options) -> Result<IngestStats> {
@@ -227,6 +229,11 @@ impl FactsDb {
             })
             .collect();
         self.ingest_complexity_at_head(repo, opts, &live_paths, &head_rev)?;
+        let imports_n = self.populate_imports_at_head(repo, opts, &live_paths, &head_rev)?;
+        let resolved_n = self.resolve_imports_at_head(&live_paths, &head_rev)?;
+        tracing::info!(
+            "imports: {resolved_n} of {imports_n} import edges resolved to tracked paths (head-only)"
+        );
         Ok(IngestStats::default())
     }
 }

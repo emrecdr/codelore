@@ -13,7 +13,8 @@ use codelore_lib::Options;
 use codelore_lib::analyses::architecture_roles::ArchitectureRoleRow;
 use codelore_lib::analyses::architecture_trend::ArchitectureTrendRow;
 use codelore_lib::analyses::code_health::run_code_health;
-use codelore_lib::analyses::coupling::run_coupling;
+use codelore_lib::analyses::coupling::{CouplingRow, run_coupling};
+use codelore_lib::analyses::dashboard::ImportEdgeRow;
 use codelore_lib::analyses::effort_exposure::EffortExposureRow;
 use codelore_lib::analyses::factors::FactorTile;
 use codelore_lib::analyses::function_xray::FunctionXrayRow;
@@ -751,6 +752,119 @@ fn spa_embeds_function_xray_data() {
             .get("cyclomatic")
             .and_then(serde_json::Value::as_i64),
         Some(1),
+    );
+}
+
+/// The DSM Fusion cell-mode (SPA-only widget logic in
+/// `40_architecture.js`) aggregates `data.coupling` to module depth and
+/// classifies cells against the SAME `data.imports` the structural
+/// matrix already renders — both fields must round-trip into the
+/// embedded payload, and the widget registry must pass `coupling` as
+/// the third argument to `renderArchMatrix`. Guards against either the
+/// field or the wiring silently dropping.
+#[test]
+fn spa_embeds_dsm_fusion_precondition_data() {
+    let dash = SpaDashboard {
+        imports: vec![ImportEdgeRow {
+            src_path: "src/alpha/service.rs".into(),
+            target_path: "src/beta/handler.rs".into(),
+        }],
+        coupling: vec![CouplingRow {
+            entity_a: "src/alpha/service.rs".into(),
+            entity_b: "src/gamma/handler.rs".into(),
+            shared: 6,
+            revs_a: 10,
+            revs_b: 8,
+            average_revs: 9,
+            degree: 66.7,
+            fisher_p: 0.01,
+        }],
+        ..SpaDashboard::default()
+    };
+
+    let mut buf = Vec::new();
+    write_spa(
+        &dash,
+        "CodeLore Dashboard",
+        "/tmp/dsm-fusion",
+        "2026-07-14 00:00:00 UTC",
+        &mut buf,
+    )
+    .expect("write_spa");
+    let html = String::from_utf8(buf).expect("utf8 html");
+
+    assert!(
+        html.contains(
+            "renderArchMatrix(data.imports || [], data.architecture_roles || [], data.coupling || [])"
+        ),
+        "arch-matrix widget must be wired to pass coupling as the third argument \
+         (the DSM Fusion precondition) — the registry call may have dropped it",
+    );
+
+    let data = extract_data_json(&html).expect("parse data block");
+    let imports = data
+        .get("imports")
+        .and_then(|v| v.as_array())
+        .expect("imports array");
+    assert_eq!(imports.len(), 1, "one import edge expected");
+
+    let coupling = data
+        .get("coupling")
+        .and_then(|v| v.as_array())
+        .expect("coupling array present when non-empty");
+    assert_eq!(coupling.len(), 1, "one coupling row expected");
+    assert_eq!(
+        coupling[0]
+            .get("entity_a")
+            .and_then(serde_json::Value::as_str),
+        Some("src/alpha/service.rs"),
+    );
+    let degree = coupling[0]
+        .get("degree")
+        .and_then(serde_json::Value::as_f64)
+        .expect("degree f64");
+    assert!((degree - 66.7).abs() < 1e-9);
+}
+
+/// Honest absence (spec: "no coupling data → Fusion mode falls back with
+/// a hint"): when `coupling` is empty, `data.coupling` must be absent
+/// from the embedded JSON (the same `skip_serializing_if` contract every
+/// other optional widget field relies on), and the shipped JS bundle
+/// must carry the exact hint string Fusion mode shows instead of a
+/// misleading empty classification.
+#[test]
+fn spa_dsm_fusion_honest_absence_when_coupling_empty() {
+    let dash = SpaDashboard {
+        imports: vec![ImportEdgeRow {
+            src_path: "src/alpha/service.rs".into(),
+            target_path: "src/beta/handler.rs".into(),
+        }],
+        // `coupling` deliberately left at its `Vec::default()` (empty) —
+        // the coupling-free fixture the honest-absence hint must cover.
+        ..SpaDashboard::default()
+    };
+
+    let mut buf = Vec::new();
+    write_spa(
+        &dash,
+        "CodeLore Dashboard",
+        "/tmp/dsm-fusion-absent",
+        "2026-07-14 00:00:00 UTC",
+        &mut buf,
+    )
+    .expect("write_spa");
+    let html = String::from_utf8(buf).expect("utf8 html");
+
+    let data = extract_data_json(&html).expect("parse data block");
+    assert!(
+        data.get("coupling").is_none(),
+        "coupling must be absent from the embedded JSON when empty \
+         (skip_serializing_if contract) — got: {:?}",
+        data.get("coupling"),
+    );
+    assert!(
+        html.contains("No co-change data — showing structure only"),
+        "Fusion mode's honest-absence hint string is missing from the shipped JS bundle",
     );
 }
 

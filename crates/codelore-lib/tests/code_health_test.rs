@@ -814,6 +814,7 @@ fn ramp_artifact(languages: &[&str]) -> CalibrationArtifact {
                 }],
             })
             .collect(),
+        repo_metrics: None,
     }
 }
 

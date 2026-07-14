@@ -22,7 +22,13 @@ use crate::Options;
 /// version): a non-schema correctness fix bumps this without touching the
 /// schema version, and the historical `schema_v` prefix on the value is
 /// retained so older cache files stay invalidated.
-const CACHE_EPOCH: &str = "schema_v9";
+///
+/// Bumped to `schema_v10`: head-only ingest (`opts.head_only_ingest`) now
+/// also populates the `imports` table. Cache files written by an older
+/// binary under head-only ingest carry no import facts, so any analysis
+/// that joins against `imports` would silently see an empty table on a
+/// stale cache hit; the epoch bump forces those caches to be rebuilt.
+const CACHE_EPOCH: &str = "schema_v10";
 
 /// Compute a 32-byte SHA-256 cache key from:
 ///   `canonical_repo_path || NUL || head_sha || NUL || CARGO_PKG_VERSION || NUL`

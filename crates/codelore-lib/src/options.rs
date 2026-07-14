@@ -182,12 +182,12 @@ pub struct Options {
     pub calibration: Option<PathBuf>,
 
     /// Internal ingest mode used by `codelore calibrate`: populate only the
-    /// HEAD-time complexity facts (`entities` + `complexity_metrics`) and
-    /// leave every history table (`commits`, `changes`, `hunks`, …) empty.
-    /// The calibration path reads nothing but `complexity_metrics`, so the
-    /// full history walk — and the kamei/clones/imports passes it feeds —
-    /// is skipped entirely; this also lets calibrate ingest shallow
-    /// (depth-1) checkouts, which the commit walker cannot traverse.
+    /// HEAD-time complexity and import facts (`entities`, `complexity_metrics`,
+    /// `imports`) and leave every history table (`commits`, `changes`,
+    /// `hunks`, …) empty. The full commit-history walk — and the
+    /// kamei/clones passes it feeds — is skipped entirely; this also lets
+    /// calibrate ingest shallow (depth-1) checkouts, which the commit
+    /// walker cannot traverse.
     /// Not exposed as a CLI flag. Serialized like every other field, so
     /// `canonical_json` keys head-only cache entries apart from full ones.
     pub head_only_ingest: bool,

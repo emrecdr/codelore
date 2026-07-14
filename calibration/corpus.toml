@@ -8,7 +8,7 @@
 #
 #   codelore calibrate \
 #     --repos calibration/corpus.toml \
-#     --vintage world-2026-07-13 \
+#     --vintage world-2026-07-14 \
 #     --output crates/codelore-lib/src/calibration/world.calib.json
 #
 # The resulting artifact contains only quantile breakpoints — no source code,

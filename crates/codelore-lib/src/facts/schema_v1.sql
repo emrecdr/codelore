@@ -183,8 +183,17 @@ CREATE INDEX IF NOT EXISTS idx_commits_date        ON commits(date);
 --
 -- kind buckets the import semantics into a small closed set so SQL
 -- can `WHERE kind = 'wildcard'` without parsing the target string.
+--
+-- Schema v6: dropped `rev`'s `REFERENCES commits(rev)` foreign key.
+-- Head-only ingest (`opts.head_only_ingest`) populates `imports` at
+-- HEAD without ever running the commit walk, so `commits` stays
+-- empty in that mode — a hard FK here would reject every head-only
+-- imports row. No analysis joins `imports` to `commits` (each fact
+-- store holds exactly one HEAD snapshot), so the constraint enforced
+-- nothing that any query relied on. `complexity_metrics.rev` and
+-- `clones.rev` were never FK-constrained for the same reason.
 CREATE TABLE IF NOT EXISTS imports (
-    rev         TEXT NOT NULL REFERENCES commits(rev),
+    rev         TEXT NOT NULL,
     src_path    TEXT NOT NULL,
     target      TEXT NOT NULL,
     resolved    BOOLEAN NOT NULL,

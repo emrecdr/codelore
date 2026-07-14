@@ -1135,6 +1135,88 @@ fn spa_without_output_defaults_to_dot_codelore() {
     );
 }
 
+/// The Architecture factor tile's detail line carries the corpus-relative
+/// propagation-cost annotation (`, P<nn> of <n> corpus repos`) exactly when
+/// the active calibration artifact has repo-level pools: present on the
+/// default path (the embedded world artifact carries `repo_metrics`), absent
+/// when `--calibration` points at an artifact without the section.
+#[cfg(feature = "spa")]
+#[test]
+fn spa_architecture_tile_corpus_detail_follows_repo_metrics_presence() {
+    // The biomarker fixture carries one resolvable HEAD-time import edge
+    // (`src/importer.rs → src/trivial.rs`) and enough dated commits for the
+    // health-trend series, so the Architecture tile exists and
+    // architecture-metrics has a non-empty import graph to rank.
+    let fx = codelore_lib::test_support::biomarker_repo::build();
+
+    let arch_detail = |extra_args: &[&str]| -> String {
+        let cwd = tempfile::tempdir().unwrap();
+        let mut args = vec![
+            "analyze",
+            "--repo",
+            fx.dir.path().to_str().unwrap(),
+            "--format",
+            "spa",
+            "--no-banner",
+            "--min-revs",
+            "1",
+        ];
+        args.extend_from_slice(extra_args);
+        Command::cargo_bin("codelore")
+            .unwrap()
+            .current_dir(cwd.path())
+            .args(&args)
+            .assert()
+            .success();
+        let html = std::fs::read_to_string(cwd.path().join(".codelore").join("spa.html"))
+            .expect("spa.html emitted");
+
+        let start_tag = "<script type=\"application/json\" id=\"codelore-data\">";
+        let start = html.find(start_tag).expect("embedded data script") + start_tag.len();
+        let end = html[start..].find("</script>").expect("script close");
+        let payload: serde_json::Value =
+            serde_json::from_str(&html[start..start + end].replace(r"<\/", "</"))
+                .expect("payload parses");
+        payload["factors"]
+            .as_array()
+            .expect("factors array present")
+            .iter()
+            .find(|t| t["name"] == "Architecture")
+            .expect("Architecture tile present")["detail"]
+            .as_str()
+            .expect("detail is a string")
+            .to_owned()
+    };
+
+    // Default path: the embedded world artifact carries repo_metrics.
+    let detail = arch_detail(&[]);
+    assert!(
+        detail.contains("corpus"),
+        "embedded artifact has repo_metrics -> detail must carry the corpus annotation: {detail:?}"
+    );
+
+    // Override with an artifact that has no repo_metrics section: the
+    // annotation must degrade to absent.
+    let artifact = codelore_lib::calibration::CalibrationArtifact {
+        format_version: codelore_lib::calibration::CALIBRATION_FORMAT_VERSION,
+        corpus_vintage: "test-corpus-no-pools".to_string(),
+        generated_at: "2026-07-14T00:00:00Z".to_string(),
+        repos_included: 1,
+        repos_attempted: 1,
+        languages: vec![],
+        repo_metrics: None,
+    };
+    let work = tempfile::tempdir().unwrap();
+    let calib_path = work.path().join("no-pools.calib.json");
+    std::fs::write(&calib_path, serde_json::to_vec(&artifact).unwrap()).unwrap();
+
+    let detail = arch_detail(&["--calibration", calib_path.to_str().unwrap()]);
+    assert!(
+        !detail.contains("corpus"),
+        "artifact without repo_metrics -> detail must not carry the corpus annotation: {detail:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Delta health end-to-end tests
 // ---------------------------------------------------------------------------
@@ -2519,6 +2601,39 @@ fn calibrate_builds_artifact_from_local_fixtures() {
             );
         }
     }
+
+    // Repo-level architecture metrics: `tiny_repo` has no resolvable HEAD-time
+    // imports (empty import graph → skipped entirely per the pooling
+    // contract), while `biomarker_repo` carries one resolvable
+    // `src/importer.rs → src/trivial.rs` edge, so at most one of the two
+    // repos contributes an observation to each pool.
+    let rm = art
+        .repo_metrics
+        .expect("repo_metrics must be populated when at least one repo has a non-empty graph");
+    let propagation_cost = rm
+        .values
+        .get("propagation_cost")
+        .expect("propagation_cost pool present");
+    let cycle_file_share = rm
+        .values
+        .get("cycle_file_share")
+        .expect("cycle_file_share pool present");
+    assert!(
+        !propagation_cost.is_empty() && propagation_cost.len() <= 2,
+        "propagation_cost must have between 1 and repos_included entries, got {}",
+        propagation_cost.len()
+    );
+    assert!(
+        !cycle_file_share.is_empty() && cycle_file_share.len() <= 2,
+        "cycle_file_share must have between 1 and repos_included entries, got {}",
+        cycle_file_share.len()
+    );
+    for &v in propagation_cost.iter().chain(cycle_file_share.iter()) {
+        assert!(
+            (0.0..=1.0).contains(&v),
+            "repo-level metric value {v} must be in [0,1]"
+        );
+    }
 }
 
 /// A manifest with one good repo and one nonexistent path: the bad repo is
@@ -2622,4 +2737,68 @@ fn calibrate_merge_doubles_sample_counts() {
         .sample_functions;
     assert_eq!(merged_rust, base_rust * 2, "merge must sum sample counts");
     assert_eq!(merged_art.repos_included, 2, "merge sums repos_included");
+}
+
+#[test]
+fn cycle_health_csv_has_header() {
+    // Build a minimal inline repo with an `a ↔ b` import cycle so
+    // `cycle-health` has something to report. The smoke test only checks
+    // the CSV header and exit 0; correctness is covered by the lib-level
+    // cycle_health_test integration tests.
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .env("GIT_AUTHOR_DATE", "2026-06-01T10:00:00Z")
+            .env("GIT_COMMITTER_DATE", "2026-06-01T10:00:00Z")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    };
+    git(&["init", "-q", "-b", "main"]);
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(
+        repo.join("Cargo.toml"),
+        "[package]\nname=\"cyc\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
+    )
+    .unwrap();
+    std::fs::write(repo.join("src/lib.rs"), "pub mod a;\npub mod b;\n").unwrap();
+    std::fs::write(
+        repo.join("src/a.rs"),
+        "use crate::b;\npub fn a() { b::b(); }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        repo.join("src/b.rs"),
+        "use crate::a;\npub fn b() { a::a(); }\n",
+    )
+    .unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "init"]);
+
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "cycle-health",
+            "--repo",
+            repo.to_str().unwrap(),
+            "--format",
+            "csv",
+            "--min-revs",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with(
+            "cycle-id,size,members,heat-pct,verdict,extract-candidate,predicted-pc-drop",
+        ));
 }

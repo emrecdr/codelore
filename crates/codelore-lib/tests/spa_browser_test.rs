@@ -1490,6 +1490,101 @@ fn eval_json<T: serde::de::DeserializeOwned>(tab: &headless_chrome::Tab, js: &st
     serde_json::from_value(value).expect("deserialize js result")
 }
 
+/// Trimmed `textContent` of `#id`, or the empty string when the element is
+/// absent. A thin, named specialization of [`eval_json`] over the
+/// `getElementById(...).textContent` readback that interaction assertions
+/// (toggle labels, legends) otherwise repeat inline.
+fn element_text(tab: &headless_chrome::Tab, id: &str) -> String {
+    eval_json(
+        tab,
+        &format!(
+            "(function () {{ \
+                 var el = document.getElementById('{id}'); \
+                 return el ? el.textContent.trim() : ''; \
+             }})()"
+        ),
+    )
+}
+
+/// Number of data points in the first `ECharts` series mounted into `#host_id`,
+/// or `-1` when neither the chart nor `ECharts` itself has mounted. Lets a test
+/// prove a re-render *changed* a matrix (cell count moved) rather than merely
+/// re-painting it.
+fn echarts_series_len(tab: &headless_chrome::Tab, host_id: &str) -> i64 {
+    eval_json(
+        tab,
+        &format!(
+            "(function () {{ \
+                 var el = document.getElementById('{host_id}'); \
+                 if (!el || !window.echarts) return -1; \
+                 var chart = window.echarts.getInstanceByDom(el); \
+                 if (!chart) return -1; \
+                 var opt = chart.getOption(); \
+                 var d = opt && opt.series && opt.series[0] && opt.series[0].data; \
+                 return d ? d.length : -1; \
+             }})()"
+        ),
+    )
+}
+
+/// Enable the CDP `Log`/`Runtime` domains and attach a listener that captures
+/// every `RuntimeExceptionThrown` into the returned sink, so a test can assert
+/// an interaction produced no uncaught browser-side exceptions.
+fn attach_exception_sink(tab: &headless_chrome::Tab) -> Arc<Mutex<Vec<String>>> {
+    let console_errors: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&console_errors);
+    tab.enable_log().expect("enable log");
+    tab.enable_runtime().expect("enable runtime");
+    let listener = move |event: &Event| {
+        if let Event::RuntimeExceptionThrown(thrown) = event {
+            sink.lock()
+                .expect("console mutex")
+                .push(thrown.params.exception_details.text.clone());
+        }
+    };
+    tab.add_event_listener(Arc::new(listener))
+        .expect("add event listener");
+    console_errors
+}
+
+/// `clientHeight` (layout-box height, px) of `#id`, or `-1` when the element
+/// is absent. Lets a test prove a container GREW to contain its chart — the
+/// widget-body-vs-chart-host sizing contract the DSM matrix must hold at any
+/// module count.
+fn client_height(tab: &headless_chrome::Tab, id: &str) -> i64 {
+    eval_json(
+        tab,
+        &format!(
+            "(function () {{ \
+                 var el = document.getElementById('{id}'); \
+                 return el ? el.clientHeight : -1; \
+             }})()"
+        ),
+    )
+}
+
+/// Replicates `resizeAllEchartsIn`'s DOM sweep with `selector` and reports
+/// whether it reaches a mounted `ECharts` instance on the element with id
+/// `target_id`. The fullscreen resize path queries this exact selector shape
+/// and calls `resize()` on each match's chart instance, so a chart on a
+/// nested host is only reached when the selector descends to it.
+fn sweep_reaches_chart(tab: &headless_chrome::Tab, selector: &str, target_id: &str) -> bool {
+    eval_json(
+        tab,
+        &format!(
+            "(function () {{ \
+                 if (!window.echarts) return false; \
+                 var els = document.querySelectorAll('{selector}'); \
+                 for (var i = 0; i < els.length; i++) {{ \
+                     if (els[i].id === '{target_id}' \
+                         && window.echarts.getInstanceByDom(els[i])) return true; \
+                 }} \
+                 return false; \
+             }})()"
+        ),
+    )
+}
+
 /// A `role="tablist"` must support arrow-key navigation per the
 /// WAI-ARIA Tabs pattern: focus a tab, press `ArrowRight`, and focus +
 /// the selected state move to the next tab. On the un-fixed source the
@@ -2259,5 +2354,229 @@ fn health_trend_toggle_renders_both_views() {
         overlay_back > 250,
         "overlay canvas after toggle-back had clientHeight {overlay_back}px — \
          expected >250px; the toggle re-render may not have restored the overlay"
+    );
+}
+
+/// The DSM Fusion cell-mode toggle (`classifyCells` in
+/// `40_architecture.js`) must classify above-diagonal cells by
+/// structure×history agreement without throwing. `coupling_repo` (see
+/// its doc comment) guarantees a Fisher-significant `src/alpha` ↔
+/// `src/beta` co-change; the synthetic import edges below deliberately
+/// route around that pair (`alpha→gamma`, `gamma→beta`), so Fusion mode
+/// must draw a brand-new `temporal-only` cell for it that structure mode
+/// never has — a robust, magnitude-independent proof that reclassification
+/// actually ran (the cell COUNT must increase), not just a cosmetic
+/// re-paint.
+#[test]
+fn dsm_fusion_mode_toggle_classifies_cells_without_errors() {
+    // -- Step 1: coupling-rich fixture + synthetic cross-module imports
+    // that avoid the alpha↔beta pair. ------------------------------------
+    let fixture = coupling_repo::build();
+    let opts = permissive_coupling_opts(fixture.dir.path().to_path_buf());
+    let repo = GixRepo::open(fixture.dir.path()).expect("open coupling fixture");
+    let db = FactsDb::new_in_memory().expect("in-memory facts db");
+    db.ingest(&repo, &opts).expect("ingest coupling fixture");
+
+    let coupling = run_coupling(&db, &opts).expect("coupling");
+    assert!(
+        !coupling.is_empty(),
+        "coupling_repo fixture must produce coupling rows under permissive opts \
+         (the Fusion precondition)"
+    );
+    // Imports deliberately route around the guaranteed alpha↔beta co-change,
+    // so Fusion mode must add a temporal-only cell structure mode never draws.
+    let dash = SpaDashboard {
+        hotspots: run_hotspots(&db, &opts).expect("hotspots"),
+        summary: run_summary(&db, &opts).expect("summary"),
+        code_health: run_code_health(&db, &opts).expect("code-health"),
+        knowledge_islands: run_knowledge_islands(&db, &opts).expect("knowledge-islands"),
+        coupling,
+        imports: vec![
+            ImportEdgeRow {
+                src_path: "src/alpha/svc.rs".to_string(),
+                target_path: "src/gamma/svc.rs".to_string(),
+            },
+            ImportEdgeRow {
+                src_path: "src/gamma/util.rs".to_string(),
+                target_path: "src/beta/util.rs".to_string(),
+            },
+        ],
+        ..SpaDashboard::default()
+    };
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let html_path = tmp.path().join("codelore-dsm-fusion.html");
+    let mut f = std::fs::File::create(&html_path).expect("create html");
+    write_spa(
+        &dash,
+        "CodeLore DSM Fusion Test",
+        &fixture.dir.path().display().to_string(),
+        "2026-07-14 00:00:00 UTC",
+        &mut f,
+    )
+    .expect("write_spa");
+    drop(f);
+
+    // -- Step 2: launch Chrome and watch for console errors from here on. -
+    let Some((_browser, tab)) = boot_spa_tab(&html_path) else {
+        return;
+    };
+    let console_errors = attach_exception_sink(&tab);
+
+    // -- Step 3: default mode is Structure; the wt-btn toggle announces the
+    // mode a click switches INTO ('Fusion'), mirroring `#ht-toggle`. -------
+    let toggle_label = element_text(&tab, "wam-mode-toggle");
+    assert_eq!(
+        toggle_label, "Fusion",
+        "wam-mode-toggle label was '{toggle_label}'; expected 'Fusion' \
+         (structure is the default mode)"
+    );
+    let structure_cells = echarts_series_len(&tab, "wam-chart-host");
+    assert!(
+        structure_cells > 0,
+        "structure-mode matrix has no rendered cells"
+    );
+
+    // -- Step 4: click the toggle → Fusion mode. --------------------------
+    tab.find_element("#wam-mode-toggle")
+        .expect("wam-mode-toggle element")
+        .click()
+        .expect("click wam-mode-toggle");
+    std::thread::sleep(Duration::from_millis(500));
+
+    let fusion_label = element_text(&tab, "wam-mode-toggle");
+    assert_eq!(
+        fusion_label, "Structure",
+        "toggle label did not flip to 'Structure' after entering Fusion mode"
+    );
+    let fusion_cells = echarts_series_len(&tab, "wam-chart-host");
+    assert!(
+        fusion_cells > structure_cells,
+        "Fusion-mode cell count ({fusion_cells}) was not greater than structure-mode's \
+         ({structure_cells}); the guaranteed src/alpha\u{2194}src/beta coupling-only pair \
+         should add a new temporal-only cell that structure mode never draws"
+    );
+
+    // -- Step 5: the legend row names all four cell classes as TEXT
+    // (never color-only). ------------------------------------------------
+    let legend_text = element_text(&tab, "wam-legend");
+    for phrase in [
+        "agree",
+        "structural only",
+        "modularity violation",
+        "back-edge",
+    ] {
+        assert!(
+            legend_text.contains(phrase),
+            "Fusion legend missing '{phrase}'; legend text was: {legend_text}"
+        );
+    }
+
+    // -- Step 6: the toggle interaction produced zero console errors. -----
+    let errors = console_errors.lock().expect("console mutex").clone();
+    assert!(
+        errors.is_empty(),
+        "DSM Fusion toggle produced {} browser-console error(s):\n{}",
+        errors.len(),
+        errors.join("\n  "),
+    );
+}
+
+/// A repo with many modules must not overflow the DSM card. The matrix
+/// mounts on a nested `#wam-chart-host`, but the widget BODY
+/// (`#widget-arch-matrix-body`, pinned to a 460px fallback in the template)
+/// must GROW to contain it — exactly as the widget behaved before the Fusion
+/// toolbar/legend restructuring introduced the nested host. A 3-module
+/// fixture is too short to trip this (host < 460px), which is why the shipped
+/// Fusion test never caught it; the 30-module chain below drives the host past
+/// 768px, so a body still pinned at 460 fails the `body >= host` contract.
+/// The same test also proves the fullscreen resize sweep now reaches the chart
+/// on the nested host (the pre-fix `-body` selector misses it).
+#[test]
+fn arch_matrix_body_grows_to_contain_tall_matrix() {
+    // Coupling-rich base so every widget rendered before the matrix boots
+    // cleanly; imports overridden to a 30-module chain that drives the matrix
+    // well past the 460px fallback.
+    let fixture = coupling_repo::build();
+    let opts = permissive_coupling_opts(fixture.dir.path().to_path_buf());
+    let repo = GixRepo::open(fixture.dir.path()).expect("open coupling fixture");
+    let db = FactsDb::new_in_memory().expect("in-memory facts db");
+    db.ingest(&repo, &opts).expect("ingest coupling fixture");
+
+    // 30 distinct depth-2 modules (`src/mod00`..`src/mod29`) chained so every
+    // edge crosses a module boundary: auto-depth settles at depth 2 with 30
+    // nodes, well past the ~24 that overflow the 460px fallback.
+    let imports: Vec<ImportEdgeRow> = (0..29)
+        .map(|i| ImportEdgeRow {
+            src_path: format!("src/mod{i:02}/f.rs"),
+            target_path: format!("src/mod{:02}/f.rs", i + 1),
+        })
+        .collect();
+    let dash = SpaDashboard {
+        hotspots: run_hotspots(&db, &opts).expect("hotspots"),
+        summary: run_summary(&db, &opts).expect("summary"),
+        code_health: run_code_health(&db, &opts).expect("code-health"),
+        knowledge_islands: run_knowledge_islands(&db, &opts).expect("knowledge-islands"),
+        coupling: run_coupling(&db, &opts).expect("coupling"),
+        imports,
+        ..SpaDashboard::default()
+    };
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let html_path = tmp.path().join("codelore-dsm-tall.html");
+    let mut f = std::fs::File::create(&html_path).expect("create html");
+    write_spa(
+        &dash,
+        "CodeLore DSM Tall Matrix Test",
+        &fixture.dir.path().display().to_string(),
+        "2026-07-14 00:00:00 UTC",
+        &mut f,
+    )
+    .expect("write_spa");
+    drop(f);
+
+    let Some((_browser, tab)) = boot_spa_tab(&html_path) else {
+        return;
+    };
+    let console_errors = attach_exception_sink(&tab);
+
+    // #1 — the body grew past the 460px fallback AND contains the chart host.
+    let host_h = client_height(&tab, "wam-chart-host");
+    let body_h = client_height(&tab, "widget-arch-matrix-body");
+    assert!(
+        host_h > 460,
+        "precondition weak: 30-module host was only {host_h}px; expected >460 \
+         so a pinned body would visibly overflow"
+    );
+    assert!(
+        body_h >= host_h && body_h > 460,
+        "widget-arch-matrix-body clientHeight was {body_h}px but the chart host \
+         was {host_h}px — the body must grow to contain the matrix (>=host, >460) \
+         instead of staying pinned at the template's 460px fallback"
+    );
+
+    // #2 — the fullscreen resize sweep now reaches the chart on the nested
+    // host. The pre-fix selector misses it (the chart is not on a `-body`);
+    // the fixed selector descends into `-chart-host`.
+    assert!(
+        sweep_reaches_chart(
+            &tab,
+            ".widget-body, [id$=\"-body\"], [id$=\"-chart-host\"]",
+            "wam-chart-host",
+        ),
+        "fixed resize sweep did not reach the DSM chart on #wam-chart-host"
+    );
+    assert!(
+        !sweep_reaches_chart(&tab, ".widget-body, [id$=\"-body\"]", "wam-chart-host"),
+        "pre-fix selector unexpectedly matched #wam-chart-host — the regression \
+         proof would be vacuous"
+    );
+
+    let errors = console_errors.lock().expect("console mutex").clone();
+    assert!(
+        errors.is_empty(),
+        "tall-matrix render produced {} browser-console error(s):\n{}",
+        errors.len(),
+        errors.join("\n  "),
     );
 }

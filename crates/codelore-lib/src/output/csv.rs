@@ -694,6 +694,42 @@ pub fn write_coordination_needs_csv<W: Write>(
     Ok(())
 }
 
+/// `cycle-health` CSV emitter — per-SCC heat, verdict, extraction candidate,
+/// and predicted propagation-cost drop.
+///
+/// Header: `cycle-id,size,members,heat-pct,verdict,extract-candidate,predicted-pc-drop`
+/// Floats are formatted `{:.2}`; an absent `predicted_pc_drop` (cycles above the
+/// trial-removal bound) emits an empty cell.
+pub fn write_cycle_health_csv<W: Write>(
+    rows: &[crate::analyses::cycle_health::CycleHealthRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(
+        w,
+        "cycle-id,size,members,heat-pct,verdict,extract-candidate,predicted-pc-drop"
+    )
+    .map_err(CodeLoreError::Io)?;
+    for row in rows {
+        let drop_cell = match row.predicted_pc_drop {
+            Some(d) => format!("{d:.2}"),
+            None => String::new(),
+        };
+        writeln!(
+            w,
+            "{},{},{},{:.2},{},{},{}",
+            row.cycle_id,
+            row.size,
+            quote_if_needed(&row.members_preview),
+            row.heat_pct,
+            row.verdict,
+            quote_if_needed(&row.extract_candidate),
+            drop_cell,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_architecture_metrics_csv<W: Write>(
     rows: &[crate::analyses::architecture_metrics::ArchitectureMetricRow],
     w: &mut W,

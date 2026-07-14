@@ -223,7 +223,13 @@
   }
   function resizeAllEchartsIn(root) {
     if (!root || !window.echarts) return;
-    const bodies = root.querySelectorAll('.widget-body, [id$="-body"]');
+    // `[id$="-chart-host"]` also reaches a chart mounted on a nested host
+    // inside a widget body (the DSM matrix's `#wam-chart-host`), which the
+    // `-body` selectors alone miss. `getInstanceByDom` returns null for the
+    // wrapping `-body` in that case, so there is no double-resize.
+    const bodies = root.querySelectorAll(
+      '.widget-body, [id$="-body"], [id$="-chart-host"]',
+    );
     for (let i = 0; i < bodies.length; i++) {
       const inst = window.echarts.getInstanceByDom(bodies[i]);
       if (inst) inst.resize();
@@ -738,7 +744,7 @@
     { name: 'cognitive-boxplot',  rerender: 'theme', render: () => renderCognitiveBoxplot(data.hotspots || []) },
     { name: 'module-chord',       render: () => renderModuleChord(data.coupling || []) },
     { name: 'arch-graph',         rerender: 'theme', render: () => renderArchGraph(data.imports || [], data.modularity_violations || [], data.unstable_interface || [], data.architecture_roles || []) },
-    { name: 'arch-matrix',        rerender: 'theme', render: () => renderArchMatrix(data.imports || [], data.architecture_roles || []) },
+    { name: 'arch-matrix',        rerender: 'theme', render: () => renderArchMatrix(data.imports || [], data.architecture_roles || [], data.coupling || []) },
     { name: 'arch-trend',         rerender: 'theme', render: () => renderArchTrend(data.architecture_trend || []) },
     { name: 'health-trend',       rerender: 'theme', render: () => renderHealthTrend(data.health_trend || []) },
     { name: 'improvements-feed',  rerender: false,   render: () => renderImprovementsFeed(data.health_transitions || []) },

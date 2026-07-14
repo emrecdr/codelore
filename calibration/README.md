@@ -14,12 +14,17 @@ typescript). Each `[[repos]]` entry pins a `source` (clone URL or local path), a
 `languages` the curator expects it to contribute. The pin makes every build
 reproducible against a fixed tree.
 
-The build ingests each repo at its pinned SHA, pools per-function raw metrics
-(`cyclomatic`, `cognitive`, `sloc`, `nargs`, `max_nesting`) **per language by
-file extension** (the advisory `languages` field is not used to filter — the
-pool reflects whatever the ingest actually finds), and reduces each pool to a
-quantile-breakpoint vector. The resulting artifact contains **only aggregated
-numeric distributions** — no source code and no user data.
+The build ingests each repo at its pinned SHA and pools its metrics two ways:
+per-function raw metrics (`cyclomatic`, `cognitive`, `sloc`, `nargs`,
+`max_nesting`) **per language by file extension** (the advisory `languages`
+field is not used to filter — the pool reflects whatever the ingest actually
+finds), each pool reduced to a quantile-breakpoint vector; and repo-level
+architecture metrics (`propagation_cost`, `cycle_file_share`) from the
+resolved import graph, attached as sorted raw-value vectors in the artifact's
+`repo_metrics` section — **one observation per repo** with a non-empty import
+graph (a repo with no resolvable Tier-1 imports contributes nothing there).
+The resulting artifact contains **only aggregated numeric distributions** —
+no source code and no user data.
 
 ## The embedded artifact
 
@@ -31,9 +36,10 @@ activation:
 - a vintage beginning with `placeholder-` resolves to `None` — the corpus lens
   stays absent-but-wired (no calibration applied) until a maintainer runs the
   real build;
-- any other vintage (e.g. `world-2026-07-13`) resolves to `Some`, activating the
+- any other vintage (e.g. `world-2026-07-14`) resolves to `Some`, activating the
   lens for every `code-health` run that does not pass an explicit
-  `--calibration` file.
+  `--calibration` file — and, through the `repo_metrics` section, the
+  corpus-percentile rows on `architecture-metrics`.
 
 A per-language table is only trusted once its pooled `sample_functions` clears
 the `MIN_LANG_SAMPLE` floor (currently 500); a thinner language is treated as
@@ -48,7 +54,7 @@ cargo build --release -p codelore-cli
 
 ./target/release/codelore calibrate \
   --repos calibration/corpus.toml \
-  --vintage world-2026-07-13 \
+  --vintage world-2026-07-14 \
   --output crates/codelore-lib/src/calibration/world.calib.json
 ```
 
@@ -59,7 +65,7 @@ code-health test suites, and commit the regenerated `world.calib.json`.
 
 Use `world-YYYY-MM` for a full world-corpus build (the month the manifest SHAs
 were pinned / the build was run), appending `-DD` when a rebuild lands within
-the same month (e.g. `world-2026-07-13`) so the two vintages stay
+the same month (e.g. `world-2026-07-14`) so the two vintages stay
 distinguishable. The `placeholder-` prefix is reserved for the
 not-yet-built stand-in. Organization-specific corpora built from a private
 manifest should use a distinct label (e.g. `acme-2026-07`) so provenance stamps
@@ -87,17 +93,17 @@ falls back to a full clone with a warning. Local-path sources use a detached
 taken (`shallow` / `full` / `worktree`).
 
 The ingest is **HEAD-only**: only the pinned tree's per-function complexity
-facts are extracted — no commit history is walked, and the history tables in
-the per-repo cache (under the cache root; `--cache-dir` overrides the default
-XDG cache) stay empty. That is both why shallow checkouts are ingestible
-(there is no history to traverse) and why the cache entries stay small.
-Expect:
+facts and HEAD-time import edges are extracted — no commit history is walked,
+and the history tables in the per-repo cache (under the cache root;
+`--cache-dir` overrides the default XDG cache) stay empty. That is both why
+shallow checkouts are ingestible (there is no history to traverse) and why
+the cache entries stay small. Expect:
 
 - **Time:** dominated by sequential network fetches; a depth-1 fetch moves a
   single tree instead of the whole history, so most repos take seconds and
   the full-clone fallback is the slow path.
 - **Disk:** the per-repo cache accumulates in the cache root, holding only
-  complexity facts per repo. Each repo's cache is only read during its own
+  complexity and import facts per repo. Each repo's cache is only read during its own
   ingest, so a constrained environment can point `--cache-dir` at scratch
   storage and clear it between builds. Transient checkout tempdirs are the
   peak: a shallow checkout needs roughly one working tree's worth of space,
