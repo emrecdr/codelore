@@ -200,6 +200,12 @@ pub mod biomarker_repo {
     //! chaining `&&`/`||`). They ride the seed commit, so every existing
     //! commit's date / author / message is unchanged.
     //!
+    //! `src/importer.rs` carries a single resolvable HEAD-time import edge
+    //! (`use crate::trivial::trivial;` plus a one-line wrapper calling it),
+    //! giving the fixture a non-vacuous `src/importer.rs → src/trivial.rs`
+    //! row in `imports` for the full-vs-head-only ingest equivalence test.
+    //! It also rides the seed commit.
+    //!
     //! Six commits (2026-06-01..2026-06-06): a seed writing the whole
     //! complexity gradient, then co-changing pairs (complex+moderate, then the
     //! duplicated `dup_a`/`dup_b` pair) to create temporal coupling.
@@ -208,12 +214,12 @@ pub mod biomarker_repo {
     //!
     //! The fixture is captured once into a checked-in git bundle
     //! (`src/test_support/data/biomarker-repo.bundle`; HEAD
-    //! `b00f4b4346f7b920f9e3051d3671617ab9d2173c`, deterministic across
+    //! `d1ea2dcbfbfc34dcc0be7c64fe4ee1b9e24f42ea`, deterministic across
     //! regenerations because every author / date / file content is fixed). To
     //! regenerate, revive the pre-bundle programmatic builder from git history
     //! at commit `b412e6d` (it shells out to `git` for each commit and lived in
     //! this module), then EXTEND its seed commit — before the seed `git add .`
-    //! — with three single-function Rust files so the seed tree carries them
+    //! — with four single-function Rust files so the seed tree carries them
     //! without touching any existing commit:
     //!
     //! - `src/nested.rs`: one function nested five scopes deep
@@ -223,6 +229,9 @@ pub mod biomarker_repo {
     //!   four boolean operators (`a && b || c && d || e`), which the metrics
     //!   layer scores as `bool_ops == 3` — it counts boolean *sequences*
     //!   (each operator alternation starts one), not raw operators.
+    //! - `src/importer.rs`: `use crate::trivial::trivial;` followed by
+    //!   `pub fn call_trivial() -> i32 { trivial() }` — a resolvable
+    //!   `crate::`-relative import of an existing sibling file.
     //!
     //! Keep every existing file's content, the six fixed dates, the `Bio
     //! <bio@example.com>` author, and the commit messages exactly as the

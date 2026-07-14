@@ -30,7 +30,12 @@ use time::OffsetDateTime;
 /// `complexity_metrics` and wired the previously-extracted nesting,
 /// argument-count, and boolean-conditional metrics through to the
 /// persisted table.
-pub const SCHEMA_VERSION: u8 = 5;
+///
+/// Schema 6 dropped `imports.rev`'s `REFERENCES commits(rev)` foreign
+/// key so head-only ingest (which populates `imports` at HEAD but
+/// never runs the commit walk, leaving `commits` empty) can write
+/// import rows without violating referential integrity.
+pub const SCHEMA_VERSION: u8 = 6;
 
 /// One commit, as observed by the parser stage. Immutable event.
 // Eq removed: CommitEvent contains Option<KameiFeatures> which has f64 fields (not Eq).

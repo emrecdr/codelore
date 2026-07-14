@@ -10,7 +10,9 @@ Conventional Commits format. All notable changes documented here.
 
 ### Changed
 
-- **`codelore calibrate` builds corpora shallow and HEAD-only.** Each pinned corpus repo is now fetched with a depth-1 fetch of exactly its pinned SHA (with an automatic full-clone fallback when the server disallows shallow SHA fetches — GitHub allows them) and ingested HEAD-only: only the pinned tree's per-function complexity facts are extracted, with no commit-history walk and no kamei/clones/imports passes. Corpus builds need a fraction of the previous disk and wall-time; artifacts are unaffected — the pooled per-function metrics are identical on the same pinned trees. The per-repo progress line now reports the checkout mode (`shallow` / `full` / `worktree`).
+- **`codelore calibrate` builds corpora shallow and HEAD-only.** Each pinned corpus repo is now fetched with a depth-1 fetch of exactly its pinned SHA (with an automatic full-clone fallback when the server disallows shallow SHA fetches — GitHub allows them) and ingested HEAD-only: only the pinned tree's per-function complexity and import facts are extracted, with no commit-history walk and no kamei/clones passes. Corpus builds need a fraction of the previous disk and wall-time; artifacts are unaffected — the pooled per-function metrics are identical on the same pinned trees. The per-repo progress line now reports the checkout mode (`shallow` / `full` / `worktree`).
+
+- **Head-only ingest now extracts import edges too.** Alongside `complexity_metrics`, HEAD-only ingest (`opts.head_only_ingest`) populates the `imports` table — tree-sitter extraction plus the per-language resolver pass — from the same live-at-HEAD file set the complexity pass already scans, no commit walk required. `imports.rev` no longer carries a foreign-key reference to `commits(rev)` (schema v6): head-only ingest never populates `commits`, so the old constraint rejected every head-only import row; no analysis relies on that referential link, since each fact store holds exactly one HEAD snapshot. The cache epoch is bumped so caches written by an older head-only ingest, which carry no import facts, are rebuilt.
 
 ### Fixed
 

@@ -433,6 +433,37 @@ fn ingest_large_repo_crosses_fk_flush_threshold() {
     );
 }
 
+/// Collect a canonical (multiset-comparable) sequence of per-function
+/// complexity facts. ORDER BY over every compared column turns the row set
+/// into a stable sequence, so `Vec` equality is multiset equality.
+fn complexity_facts(db: &FactsDb) -> Vec<String> {
+    let mut stmt = db
+        .prepare(
+            "SELECT path, name, cyclomatic, cognitive, sloc, nargs, max_nesting, bool_ops \
+             FROM complexity_metrics \
+             ORDER BY path, name, cyclomatic, cognitive, sloc, nargs, max_nesting, bool_ops",
+        )
+        .expect("prepare complexity rows");
+    let mapped = stmt
+        .query_map([], |r| {
+            Ok(format!(
+                "{}|{}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<i64>>(2)?,
+                r.get::<_, Option<i64>>(3)?,
+                r.get::<_, Option<i64>>(4)?,
+                r.get::<_, Option<i64>>(5)?,
+                r.get::<_, Option<i64>>(6)?,
+                r.get::<_, Option<i64>>(7)?,
+            ))
+        })
+        .expect("query complexity rows");
+    mapped
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect complexity rows")
+}
+
 /// Head-only ingest must (a) leave every history table empty with
 /// truthfully-zero stats, and (b) extract the IDENTICAL per-function
 /// complexity fact set a full ingest of the same fixture produces — the
@@ -488,41 +519,57 @@ fn head_only_ingest_matches_full_ingest_complexity_and_leaves_history_empty() {
         "head-only rows must carry the fixture's HEAD SHA"
     );
 
-    // Identical multiset of per-function complexity facts. ORDER BY over
-    // every compared column turns the row set into a canonical sequence,
-    // so Vec equality is multiset equality.
-    let rows = |db: &FactsDb| -> Vec<String> {
-        let mut stmt = db
-            .prepare(
-                "SELECT path, name, cyclomatic, cognitive, sloc, nargs, max_nesting, bool_ops \
-                 FROM complexity_metrics \
-                 ORDER BY path, name, cyclomatic, cognitive, sloc, nargs, max_nesting, bool_ops",
-            )
-            .expect("prepare complexity rows");
-        let mapped = stmt
-            .query_map([], |r| {
-                Ok(format!(
-                    "{}|{}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, Option<i64>>(2)?,
-                    r.get::<_, Option<i64>>(3)?,
-                    r.get::<_, Option<i64>>(4)?,
-                    r.get::<_, Option<i64>>(5)?,
-                    r.get::<_, Option<i64>>(6)?,
-                    r.get::<_, Option<i64>>(7)?,
-                ))
-            })
-            .expect("query complexity rows");
-        mapped
-            .collect::<Result<Vec<_>, _>>()
-            .expect("collect complexity rows")
-    };
-    let head_rows = rows(&head_db);
-    let full_rows = rows(&full_db);
+    // Identical multiset of per-function complexity facts.
+    let head_rows = complexity_facts(&head_db);
+    let full_rows = complexity_facts(&full_db);
     assert!(!head_rows.is_empty(), "fixture must yield complexity rows");
     assert_eq!(
         head_rows, full_rows,
         "head-only and full ingest must extract the same complexity facts from the same tree"
+    );
+
+    // Identical multiset of resolved import edges. `src/importer.rs` in the
+    // fixture carries a resolvable `use crate::trivial::trivial;` edge, so
+    // both modes must agree on at least one non-NULL `target_path` row —
+    // the HEAD tree is the same ground truth for imports as it is for
+    // complexity.
+    let import_rows = |db: &FactsDb| -> Vec<String> {
+        let mut stmt = db
+            .prepare(
+                "SELECT src_path, target_path FROM imports \
+                 WHERE target_path IS NOT NULL \
+                 ORDER BY 1, 2",
+            )
+            .expect("prepare imports rows");
+        let mapped = stmt
+            .query_map([], |r| {
+                Ok(format!(
+                    "{}|{}",
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                ))
+            })
+            .expect("query imports rows");
+        mapped
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect imports rows")
+    };
+    let head_import_rows = import_rows(&head_db);
+    let full_import_rows = import_rows(&full_db);
+    assert!(
+        !head_import_rows.is_empty(),
+        "fixture must yield at least one resolved import edge"
+    );
+    assert_eq!(
+        head_import_rows, full_import_rows,
+        "head-only and full ingest must resolve the same import edges from the same tree"
+    );
+
+    // Commits stay empty for head-only regardless of how much else the
+    // head-only path now populates.
+    assert_eq!(
+        count(&head_db, "commits"),
+        0,
+        "commits must stay empty for head-only ingest"
     );
 }

@@ -4,13 +4,12 @@ use codelore_lib::types::{ChangeType, CommitEvent, FileChange, Hunk, SCHEMA_VERS
 use time::macros::datetime;
 
 #[test]
-fn schema_version_is_five() {
-    // Schema v5: adds `nargs INTEGER` and `bool_ops INTEGER` to
-    // `complexity_metrics` and wires the nesting, argument-count, and
-    // boolean-conditional metrics through to the persisted table.
-    // Cache key includes this sentinel so v4 caches are naturally
-    // invalidated on next open.
-    assert_eq!(SCHEMA_VERSION, 5);
+fn schema_version_is_six() {
+    // Schema v6: drops `imports.rev`'s `REFERENCES commits(rev)` foreign
+    // key so head-only ingest can populate `imports` without a walked
+    // `commits` table. Cache key includes this sentinel so v5 caches are
+    // naturally invalidated on next open.
+    assert_eq!(SCHEMA_VERSION, 6);
 }
 
 #[test]
