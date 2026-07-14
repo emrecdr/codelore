@@ -38,6 +38,7 @@ use codelore_lib::output::spa::{SpaDashboard, write_spa};
 use codelore_lib::repo::GixRepo;
 use codelore_lib::test_support::{coupling_repo, differential_repo, permissive_coupling_opts};
 use headless_chrome::Browser;
+use headless_chrome::protocol::cdp::Emulation;
 use headless_chrome::protocol::cdp::types::Event;
 
 // Row types used to populate otherwise-dark SpaDashboard fields so their
@@ -49,6 +50,7 @@ use codelore_lib::analyses::dashboard::{
 };
 use codelore_lib::analyses::effort_exposure::EffortExposureRow;
 use codelore_lib::analyses::entity_ownership::EntityOwnershipRow;
+use codelore_lib::analyses::factors::health_trend_factors;
 use codelore_lib::analyses::health_trend::HealthTrendRow;
 use codelore_lib::analyses::mi::MiRollup;
 use codelore_lib::analyses::modularity_violations::ModularityViolationRow;
@@ -1397,6 +1399,12 @@ fn write_smoke_spa(html_path: &std::path::Path, title: &str) {
         },
     ];
 
+    // Factor-header tiles: derived from the same `health_trend` sample
+    // above via the real production function, so the Code/Architecture
+    // tiles (and their jump-link `data-target`s) render exactly as they
+    // would from a real CLI run rather than from hand-authored literals.
+    let factors = health_trend_factors(&health_trend);
+
     let dash = SpaDashboard {
         hotspots,
         summary,
@@ -1417,6 +1425,7 @@ fn write_smoke_spa(html_path: &std::path::Path, title: &str) {
         health_trend,
         mi_rollup,
         coupling_density,
+        factors,
         effort_exposure: vec![
             EffortExposureRow {
                 band: "red".into(),
@@ -1585,6 +1594,57 @@ fn sweep_reaches_chart(tab: &headless_chrome::Tab, selector: &str, target_id: &s
     )
 }
 
+/// Overrides the tab's rendered viewport via CDP `Emulation.setDeviceMetricsOverride`
+/// so `window.innerWidth`/`innerHeight` — and every CSS media query keyed
+/// off them, including the `.dash-group-grid` 1280px breakpoint — see
+/// exactly `w`×`h`, independent of the host machine's real Chrome window
+/// size. Geometry tests use this to prove the responsive grid reflows at a
+/// specific breakpoint from measured layout, not from asserting a class
+/// name.
+fn set_viewport(tab: &headless_chrome::Tab, w: u32, h: u32) {
+    tab.call_method(Emulation::SetDeviceMetricsOverride {
+        width: w,
+        height: h,
+        device_scale_factor: 1.0,
+        mobile: false,
+        scale: None,
+        screen_width: None,
+        screen_height: None,
+        position_x: None,
+        position_y: None,
+        dont_set_visible_size: None,
+        screen_orientation: None,
+        viewport: None,
+        display_feature: None,
+        device_posture: None,
+    })
+    .expect("set device metrics override");
+}
+
+/// `(top, left, width)` from `getBoundingClientRect()` of the first element
+/// matching `selector`, or all `-1.0` when nothing matches. Backs the
+/// responsive-geometry proofs below: they measure real rendered geometry —
+/// not class names — to confirm the section grid actually reflows at a
+/// given viewport width. Marshals the rect through `JSON.stringify` because
+/// CDP `Runtime.evaluate` only inlines a `value` for primitive results
+/// (`eval_json`'s contract); an array comes back as an object reference
+/// without one, so a plain `[top, left, width]` return would leave
+/// `eval_json` with nothing to deserialize.
+fn bounding_rect(tab: &headless_chrome::Tab, selector: &str) -> (f64, f64, f64) {
+    let json: String = eval_json(
+        tab,
+        &format!(
+            "(function () {{ \
+                 var el = document.querySelector('{selector}'); \
+                 if (!el) return JSON.stringify([-1, -1, -1]); \
+                 var r = el.getBoundingClientRect(); \
+                 return JSON.stringify([r.top, r.left, r.width]); \
+             }})()"
+        ),
+    );
+    serde_json::from_str(&json).expect("parse bounding rect JSON")
+}
+
 /// A `role="tablist"` must support arrow-key navigation per the
 /// WAI-ARIA Tabs pattern: focus a tab, press `ArrowRight`, and focus +
 /// the selected state move to the next tab. On the un-fixed source the
@@ -1659,6 +1719,157 @@ fn tablist_arrow_keys_move_focus_and_selection() {
         selection_moved,
         "ArrowRight moved focus but not the aria-selected / roving-tabindex \
          state to the next tab"
+    );
+}
+
+/// Clicking a sticky-nav chip scrolls its section into view via
+/// `scrollIntoView` — never by mutating `location.hash` (the SPA owns the
+/// hash as its state serializer; anchor-style navigation would corrupt
+/// it). Also proves the scrollspy highlight moves off the overview chip
+/// and onto the clicked one, with zero uncaught console exceptions.
+#[test]
+fn nav_chip_scrolls_section_into_view_without_hash() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let html_path = tmp.path().join("codelore-nav-chip.html");
+    write_smoke_spa(&html_path, "CodeLore Nav Chip Test");
+
+    let Some((_browser, tab)) = boot_spa_tab(&html_path) else {
+        return;
+    };
+    let console_errors = attach_exception_sink(&tab);
+
+    let hash_before: String = eval_json(&tab, "location.hash");
+
+    tab.evaluate(
+        "document.querySelector('.dash-nav-chip[data-target=\"group-architecture\"]').click()",
+        false,
+    )
+    .expect("click architecture chip");
+
+    // Smooth `scrollIntoView` duration scales with distance; poll until
+    // the section has actually settled into view instead of a fixed sleep.
+    let mut rect_top = f64::MAX;
+    let mut viewport_h = 0.0f64;
+    for _ in 0..40 {
+        std::thread::sleep(Duration::from_millis(100));
+        rect_top = eval_json(
+            &tab,
+            "document.getElementById('group-architecture').getBoundingClientRect().top",
+        );
+        viewport_h = eval_json(&tab, "window.innerHeight");
+        if rect_top >= 0.0 && rect_top < viewport_h {
+            break;
+        }
+    }
+    assert!(
+        rect_top >= 0.0 && rect_top < viewport_h,
+        "group-architecture's top ({rect_top}) never settled within the \
+         viewport (height {viewport_h})"
+    );
+
+    let scroll_y: f64 = eval_json(&tab, "window.scrollY");
+    assert!(scroll_y > 0.0, "clicking the chip did not scroll the page");
+
+    let hash_after: String = eval_json(&tab, "location.hash");
+    assert_eq!(
+        hash_before, hash_after,
+        "chip click must never mutate location.hash — the SPA owns it as \
+         its state serializer"
+    );
+
+    let arch_active: bool = eval_json(
+        &tab,
+        "document.querySelector('.dash-nav-chip[data-target=\"group-architecture\"]')\
+             .classList.contains('dash-active')",
+    );
+    let overview_active: bool = eval_json(
+        &tab,
+        "document.querySelector('.dash-nav-chip[data-target=\"group-overview\"]')\
+             .classList.contains('dash-active')",
+    );
+    assert!(arch_active, "clicked chip did not gain the active class");
+    assert!(!overview_active, "overview chip is still marked active");
+
+    let errors = console_errors.lock().expect("console mutex").clone();
+    assert!(
+        errors.is_empty(),
+        "nav chip click produced {} browser-console error(s):\n{}",
+        errors.len(),
+        errors.join("\n  "),
+    );
+}
+
+/// The four factor tiles double as jump links to their sections, using
+/// the same `scrollIntoView` path as the nav chips. This drives the
+/// Architecture tile (rendered by `write_smoke_spa`'s real
+/// `health_trend_factors` output) via the keyboard — Enter must activate
+/// it exactly like a click, scrolling `group-architecture` into view
+/// without ever touching `location.hash`.
+#[test]
+fn factor_tile_is_a_keyboard_activatable_jump_link() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let html_path = tmp.path().join("codelore-factor-tile.html");
+    write_smoke_spa(&html_path, "CodeLore Factor Tile Jump Test");
+
+    let Some((_browser, tab)) = boot_spa_tab(&html_path) else {
+        return;
+    };
+    let console_errors = attach_exception_sink(&tab);
+
+    let tile_selector =
+        "document.querySelector('.factor-tile[data-target=\"group-architecture\"]')";
+
+    let tile_role: String = eval_json(
+        &tab,
+        &format!("({tile_selector}).getAttribute('role') || ''"),
+    );
+    assert_eq!(tile_role, "link", "factor tile must carry role=\"link\"");
+
+    let cursor: String = eval_json(&tab, &format!("getComputedStyle({tile_selector}).cursor"));
+    assert_eq!(cursor, "pointer", "factor tile must show a pointer cursor");
+
+    let hash_before: String = eval_json(&tab, "location.hash");
+    tab.evaluate(
+        &format!(
+            "(() => {{ const t = {tile_selector}; t.focus(); \
+                 t.dispatchEvent(new KeyboardEvent('keydown', {{ key: 'Enter', bubbles: true }})); \
+             }})()"
+        ),
+        false,
+    )
+    .expect("dispatch Enter on the factor tile");
+
+    let mut rect_top = f64::MAX;
+    let mut viewport_h = 0.0f64;
+    for _ in 0..40 {
+        std::thread::sleep(Duration::from_millis(100));
+        rect_top = eval_json(
+            &tab,
+            "document.getElementById('group-architecture').getBoundingClientRect().top",
+        );
+        viewport_h = eval_json(&tab, "window.innerHeight");
+        if rect_top >= 0.0 && rect_top < viewport_h {
+            break;
+        }
+    }
+    assert!(
+        rect_top >= 0.0 && rect_top < viewport_h,
+        "Enter on the Architecture factor tile never scrolled group-architecture \
+         into view (top {rect_top}, viewport {viewport_h})"
+    );
+
+    let hash_after: String = eval_json(&tab, "location.hash");
+    assert_eq!(
+        hash_before, hash_after,
+        "factor-tile Enter activation must never mutate location.hash"
+    );
+
+    let errors = console_errors.lock().expect("console mutex").clone();
+    assert!(
+        errors.is_empty(),
+        "factor tile keyboard activation produced {} browser-console error(s):\n{}",
+        errors.len(),
+        errors.join("\n  "),
     );
 }
 
@@ -2579,4 +2790,166 @@ fn arch_matrix_body_grows_to_contain_tall_matrix() {
         errors.len(),
         errors.join("\n  "),
     );
+}
+
+/// Collapsing a `.dash-group` hides its grid entirely (`display: none` via
+/// `.dash-collapsed`), so any `ECharts` instance inside resizes to 0 — a
+/// canvas that never repaints on its own. Expanding the section must run
+/// the resize-on-expand path (`resizeAllEchartsIn`, `00_setup_boot.js`) so
+/// the chart recovers. Drives the Architecture section, whose
+/// `#wam-chart-host` (arch-matrix) mounts a real chart from the smoke
+/// fixture's `imports` data.
+#[test]
+fn section_collapse_and_expand_keeps_charts_sized() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let html_path = tmp.path().join("codelore-section-collapse.html");
+    write_smoke_spa(&html_path, "CodeLore Section Collapse Test");
+
+    let Some((_browser, tab)) = boot_spa_tab(&html_path) else {
+        return;
+    };
+    let console_errors = attach_exception_sink(&tab);
+
+    let hash_before: String = eval_json(&tab, "location.hash");
+    let series_before = echarts_series_len(&tab, "wam-chart-host");
+    assert!(
+        series_before > 0,
+        "arch-matrix must have rendered cells before collapsing (got {series_before})"
+    );
+
+    let chevron = "document.querySelector('#group-architecture .dash-collapse')";
+    tab.evaluate(&format!("{chevron}.click()"), false)
+        .expect("click architecture chevron");
+    std::thread::sleep(Duration::from_millis(200));
+
+    assert_eq!(
+        client_height(&tab, "group-architecture-grid"),
+        0,
+        "group-architecture-grid must be hidden (0 clientHeight) once collapsed"
+    );
+    let expanded_attr: String =
+        eval_json(&tab, &format!("{chevron}.getAttribute('aria-expanded')"));
+    assert_eq!(
+        expanded_attr, "false",
+        "chevron aria-expanded did not flip to false"
+    );
+
+    tab.evaluate(&format!("{chevron}.click()"), false)
+        .expect("click architecture chevron again");
+    std::thread::sleep(Duration::from_millis(200));
+
+    assert!(
+        client_height(&tab, "group-architecture-grid") > 0,
+        "group-architecture-grid must be visible again after re-expanding"
+    );
+    let expanded_attr_after: String =
+        eval_json(&tab, &format!("{chevron}.getAttribute('aria-expanded')"));
+    assert_eq!(
+        expanded_attr_after, "true",
+        "chevron aria-expanded did not flip back to true"
+    );
+
+    // The resize-on-expand path must have kept the chart sized: both the
+    // ECharts series data and the canvas's rendered pixel width.
+    let series_after = echarts_series_len(&tab, "wam-chart-host");
+    assert!(
+        series_after > 0,
+        "arch-matrix lost its rendered cells after expand (got {series_after})"
+    );
+    let canvas_width: f64 = eval_json(
+        &tab,
+        "(function () { \
+             var host = document.getElementById('wam-chart-host'); \
+             var canvas = host && host.querySelector('canvas'); \
+             return canvas ? canvas.width : 0; \
+         })()",
+    );
+    assert!(
+        canvas_width > 0.0,
+        "arch-matrix canvas has zero rendered width after expand ({canvas_width})"
+    );
+
+    let hash_after: String = eval_json(&tab, "location.hash");
+    assert_eq!(
+        hash_before, hash_after,
+        "collapsing/expanding a section must never mutate location.hash"
+    );
+
+    let errors = console_errors.lock().expect("console mutex").clone();
+    assert!(
+        errors.is_empty(),
+        "section collapse/expand produced {} browser-console error(s):\n{}",
+        errors.len(),
+        errors.join("\n  "),
+    );
+}
+
+/// Below the 1280px breakpoint `.dash-group-grid` collapses to a single
+/// column, so every widget — including ones carrying `xl:col-span-2`,
+/// which only takes effect at >=1280px — must render at essentially the
+/// full content width. Proves the laptop-width single-column contract from
+/// measured geometry rather than from asserting a class name is present.
+#[test]
+fn laptop_width_renders_single_column() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let html_path = tmp.path().join("codelore-laptop-width.html");
+    write_smoke_spa(&html_path, "CodeLore Laptop Width Test");
+
+    let Some((_browser, tab)) = boot_spa_tab(&html_path) else {
+        return;
+    };
+    set_viewport(&tab, 1100, 900);
+    std::thread::sleep(Duration::from_millis(300));
+
+    let (_, _, main_w) = bounding_rect(&tab, "main");
+    assert!(main_w > 0.0, "main content width was {main_w} at 1100px");
+
+    for id in ["#widget-arch-matrix", "#widget-hotspot-table"] {
+        let (_, _, w) = bounding_rect(&tab, id);
+        assert!(
+            w >= 0.9 * main_w,
+            "{id} width ({w}) was not >= 0.9x the main content width \
+             ({main_w}) at a 1100px viewport — the single-column laptop \
+             layout regressed"
+        );
+    }
+}
+
+/// At >=1280px each section's grid becomes two columns and its designated
+/// half-width pair shares a row. Drives the Knowledge section (surfaces +
+/// islands) — the same pairing the responsive-rules spec calls out — and
+/// proves the desktop layout from measured geometry: equal row tops and
+/// each card under 60% of the content width.
+#[test]
+fn desktop_width_pairs_half_widgets() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let html_path = tmp.path().join("codelore-desktop-width.html");
+    write_smoke_spa(&html_path, "CodeLore Desktop Width Test");
+
+    let Some((_browser, tab)) = boot_spa_tab(&html_path) else {
+        return;
+    };
+    set_viewport(&tab, 1500, 900);
+    std::thread::sleep(Duration::from_millis(300));
+
+    let (_, _, main_w) = bounding_rect(&tab, "main");
+    let (surfaces_top, _, surfaces_w) = bounding_rect(&tab, "#widget-knowledge-surfaces");
+    let (islands_top, _, islands_w) = bounding_rect(&tab, "#widget-knowledge-islands");
+
+    assert!(
+        (surfaces_top - islands_top).abs() < 1.0,
+        "knowledge-surfaces top ({surfaces_top}) and knowledge-islands top \
+         ({islands_top}) are not in the same row at a 1500px viewport"
+    );
+    for (label, w) in [
+        ("knowledge-surfaces", surfaces_w),
+        ("knowledge-islands", islands_w),
+    ] {
+        assert!(
+            w < 0.6 * main_w,
+            "{label} width ({w}) was not < 0.6x the main content width \
+             ({main_w}) at a 1500px viewport — the half-width pairing \
+             regressed"
+        );
+    }
 }

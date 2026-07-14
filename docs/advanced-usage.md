@@ -170,6 +170,25 @@ Stack: Tailwind v4 (utility-first layout) + DaisyUI 5 (themed components; OS `pr
 
 The emitter runs every analysis each widget needs (`hotspots`, `summary`, `code_health`, `coupling`, `knowledge_islands`, `entity_ownership`, `xray`, `daily_commits`, `trends`, `effort_exposure`, `code_familiarity`, plus a clone-summary helper and a health-trend scan that populates the file health series and improvements feed) so a single `codelore analyze --format spa` invocation produces a fully populated dashboard. Coupling and knowledge-islands degrade gracefully on tiny fixtures where Fisher significance can't be reached.
 
+### Dashboard layout: sections, navigation, responsive behavior
+
+The widgets above are grouped into six titled sections, each ordered internally overview → ranked → diagnostics:
+
+| Section | Widgets |
+|---|---|
+| **Overview** | Quality dimensions (factor tiles) · Codebase at a glance (KPI tiles) · Guided tour · Hotspots hero (circle-pack) |
+| **Hotspots & Risk** | Hotspot table · Hotspots treemap · Function X-Ray |
+| **Code Health** | Repo health timeline · Trends · Effort distribution · Health improvements & regressions · Cognitive distribution · Multi-metric comparison |
+| **Architecture** | Architecture graph · Dependency structure matrix · Architecture trend · Module coupling · Change coupling |
+| **Knowledge** | Knowledge surfaces · Knowledge islands |
+| **Delivery** | Delivery · Delivery risk (Kamei) · Commit activity |
+
+A sticky navigation bar sits below the header with one chip per section. Clicking a chip smooth-scrolls that section into view; an `IntersectionObserver` highlights the chip for whichever section is currently in view as you scroll, and a back-to-top button appears once you've scrolled past the fold. The four factor tiles double as the same jump links, so clicking "Architecture" in the Overview section jumps straight to the Architecture section. Navigation never touches the URL — reloading or sharing a link always returns to the top of the dashboard.
+
+Each section heading carries a collapse chevron. Sections always render fully expanded on load (collapse state is never persisted) so every chart initializes in a visible container; collapsing hides the section's widgets, and re-expanding resizes any chart that needs it to recover correct dimensions.
+
+Below 1280px-wide viewports (laptops and narrower), every widget renders at full width — one chart per row, the most readable presentation at cramped widths. At 1280px and above, each section's grid becomes two columns: designated pairs share a row (Code Health's health-improvements-feed + cognitive-distribution; Knowledge's surfaces + islands), the Delivery card may sit alone in its row, and every other widget spans both columns. Widgets with wide inner content (the dependency-structure matrix, sortable tables) scroll horizontally inside their own card; the page itself never scrolls sideways.
+
 ### Factor header and XmR attention
 
 The four factor tiles aggregate their respective composites into a single 0–100 headline score:

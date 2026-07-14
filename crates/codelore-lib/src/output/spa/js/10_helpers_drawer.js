@@ -1215,6 +1215,14 @@
   // widget re-renders on theme switch (registered as `rerender: 'theme'`
   // in WIDGETS). Thresholds are read from `data.options` — never
   // hardcoded here.
+  //
+  // Each tile also doubles as a jump link to its dashboard section
+  // (looked up by `name` — see FACTOR_TILE_TARGETS below — rather than
+  // by array index, because any subset of the four can be absent when
+  // the underlying data, e.g. health-trend or delivery metrics, is
+  // missing). Clicking or pressing Enter on a mapped tile scrolls to
+  // its section via `scrollToDashSection` (00_setup_boot.js) — the same
+  // path the sticky nav chips use, so `location.hash` is never touched.
   function renderFactorHeader(factors, opts) {
     const container = document.getElementById('widget-factor-header-body');
     if (!container) return;
@@ -1222,6 +1230,19 @@
       container.innerHTML = '<div class="empty">No factor data — run with health-trend enabled.</div>';
       return;
     }
+
+    // Declared inside the function (not at module scope) so its value is
+    // guaranteed to exist by the time it's read: `renderFactorHeader` is
+    // the FIRST widget in `WIDGETS` (00_setup_boot.js) and runs
+    // synchronously, before this file's own top-level statements — a
+    // module-scope `var` here would still be `undefined` at that point
+    // (only the declaration hoists, not the assignment).
+    const FACTOR_TILE_TARGETS = {
+      Code: 'group-code-health',
+      Architecture: 'group-architecture',
+      Knowledge: 'group-knowledge',
+      Delivery: 'group-delivery',
+    };
 
     const o = opts || {};
     const greenMin = typeof o.health_green_min === 'number' ? o.health_green_min : 70;
@@ -1286,7 +1307,11 @@
       const hasHeadline = t.headline !== null && t.headline !== undefined;
       const headlineStr = hasHeadline ? fmtNumberFlex(t.headline, 1) : null;
       const hasNumbers = t.numbers && t.numbers.length > 0;
-      html += '<div class="factor-tile" id="factor-tile-' + i + '">' +
+      const jumpTarget = FACTOR_TILE_TARGETS[t.name];
+      const jumpAttrs = jumpTarget
+        ? ' data-target="' + jumpTarget + '" role="link" tabindex="0"'
+        : '';
+      html += '<div class="factor-tile" id="factor-tile-' + i + '"' + jumpAttrs + '>' +
         '<div class="factor-name">' + escapeHtml(t.name) + '</div>' +
         (t.attention ? '<span class="factor-attention-chip">Attention</span>' : '') +
         (headlineStr !== null
@@ -1298,6 +1323,25 @@
     }
     html += '</div>';
     container.innerHTML = html;
+
+    // Wire the jump-link tiles (only those with a mapped `data-target`;
+    // see FACTOR_TILE_TARGETS above) onto the same scroll path the
+    // sticky nav chips use — never `location.hash`. `role="link"` +
+    // `tabindex="0"` in the markup above give the tile a natural tab
+    // stop; Enter activates it here, matching native `<a>` semantics
+    // (Space is intentionally not treated as activation).
+    const jumpTiles = container.querySelectorAll('.factor-tile[data-target]');
+    for (let ji = 0; ji < jumpTiles.length; ji++) {
+      const tileEl = jumpTiles[ji];
+      const target = tileEl.getAttribute('data-target');
+      tileEl.addEventListener('click', function () { scrollToDashSection(target); });
+      tileEl.addEventListener('keydown', function (evt) {
+        if (evt.key === 'Enter') {
+          evt.preventDefault();
+          scrollToDashSection(target);
+        }
+      });
+    }
 
     // Render per-tile ECharts sparklines after DOM is set.
     for (var j = 0; j < factors.length; j++) {

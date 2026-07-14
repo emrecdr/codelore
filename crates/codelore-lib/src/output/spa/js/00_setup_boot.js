@@ -244,6 +244,114 @@
     installWidgetResetZoomButtons();
   }
 
+  // ─── §3b  Sticky section nav: scrollspy + jump links + back-to-top ──
+  // `#dash-nav`'s chips (template.html, sibling of `<header>`) and the
+  // four factor tiles (`renderFactorHeader`, 10_helpers_drawer.js) both
+  // jump to a `.dash-group` section through this one function.
+  function dashPrefersReducedMotion() {
+    return typeof window.matchMedia === 'function'
+      && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  }
+
+  // NEVER reads or writes `location.hash` — the SPA owns the hash as its
+  // state serializer (`readUrlIntoStores`/`writeStoresToUrl`, further
+  // down in template.html) and anchor-style navigation would corrupt
+  // it. The sticky nav's height offset is handled by `scroll-margin-top`
+  // on `.dash-group` (hand-written CSS in the inline `<style>` block),
+  // not JS math.
+  function scrollToDashSection(targetId) {
+    const el = document.getElementById(targetId);
+    if (!el) return;
+    el.scrollIntoView({
+      behavior: dashPrefersReducedMotion() ? 'auto' : 'smooth',
+      block: 'start',
+    });
+  }
+
+  // Wires the nav chips (click + scrollspy highlight) and the
+  // back-to-top button. Called once at boot end — the markup it binds
+  // to (`#dash-nav`, `.dash-group`, `#dash-top-btn`) is static template
+  // HTML, present regardless of dashboard data.
+  function initDashNav() {
+    const nav = document.getElementById('dash-nav');
+    if (!nav) return;
+    const chips = nav.querySelectorAll('.dash-nav-chip');
+
+    function setActiveChip(targetId) {
+      for (let i = 0; i < chips.length; i++) {
+        const isMatch = chips[i].getAttribute('data-target') === targetId;
+        chips[i].classList.toggle('dash-active', isMatch);
+      }
+    }
+
+    // Click: highlight immediately — deterministic feedback that
+    // doesn't wait on the scroll animation to settle — then scroll.
+    // The IntersectionObserver below keeps the highlight in sync during
+    // ordinary free-scrolling.
+    for (let i = 0; i < chips.length; i++) {
+      const target = chips[i].getAttribute('data-target');
+      chips[i].addEventListener('click', function () {
+        setActiveChip(target);
+        scrollToDashSection(target);
+      });
+    }
+
+    // Scrollspy: one observer over all six sections. The `-40% / -55%`
+    // margins shrink the intersection root to a thin horizontal band
+    // roughly at reading height, so a section is only "active" once
+    // it's the one the user is actually looking at — not merely
+    // partially visible at the very top or bottom of the viewport.
+    const groups = [];
+    for (let i = 0; i < chips.length; i++) {
+      const el = document.getElementById(chips[i].getAttribute('data-target'));
+      if (el) groups.push(el);
+    }
+    if (groups.length && typeof IntersectionObserver === 'function') {
+      const observer = new IntersectionObserver(function (entries) {
+        for (let i = 0; i < entries.length; i++) {
+          if (entries[i].isIntersecting) setActiveChip(entries[i].target.id);
+        }
+      }, { rootMargin: '-40% 0px -55% 0px' });
+      for (let i = 0; i < groups.length; i++) observer.observe(groups[i]);
+    }
+
+    // Back-to-top: appears once the user has scrolled past 600px;
+    // click scrolls to the document top (no `.dash-group` involved, so
+    // no `scroll-margin-top` offset applies here).
+    const topBtn = document.getElementById('dash-top-btn');
+    if (topBtn) {
+      topBtn.addEventListener('click', function () {
+        window.scrollTo({ top: 0, behavior: dashPrefersReducedMotion() ? 'auto' : 'smooth' });
+      });
+      window.addEventListener('scroll', function () {
+        topBtn.classList.toggle('dash-visible', window.scrollY > 600);
+      }, { passive: true });
+    }
+  }
+
+  // Wires each section heading's `.dash-collapse` chevron (template.html)
+  // to toggle `.dash-collapsed` on its `.dash-group` ancestor, hiding the
+  // section's `.dash-group-grid` via hand-written CSS. Collapse state is
+  // NEVER persisted — every section renders expanded at load, so ECharts
+  // instances never mount inside a hidden container. Expanding re-runs the
+  // existing `resizeAllEchartsIn` sweep over just that section, recovering
+  // correct layout for any chart that was resized (e.g. by a fullscreen
+  // toggle, window resize, or theme rerender) while its section was
+  // collapsed.
+  function initDashCollapse() {
+    const buttons = document.querySelectorAll('.dash-collapse');
+    for (let i = 0; i < buttons.length; i++) {
+      const btn = buttons[i];
+      btn.addEventListener('click', function () {
+        const group = btn.closest('.dash-group');
+        if (!group) return;
+        const collapsed = group.classList.toggle('dash-collapsed');
+        btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        if (!collapsed) resizeAllEchartsIn(group);
+      });
+    }
+  }
+
   // Promote a `<tr>` (or any container that already has a click handler
   // wired to drill into the detail drawer) into a keyboard-activable
   // control. WCAG 2.1.1 — every operation reachable by mouse must also
@@ -728,30 +836,39 @@
   // boot section had the render call AND the `_codeloreRerenderers
   // .push(() => ...)` line duplicated per widget, which invited
   // theme-rerender drift every time a new widget landed.
+  //
+  // Order matches the dashboard's section order (template.html):
+  // Overview, Hotspots & Risk, Code Health, Architecture, Knowledge,
+  // Delivery — each section's widgets in the order they appear on the
+  // page, top to bottom. `factor-header` stays first since it renders
+  // synchronously before the cooperative boot loop below yields between
+  // the rest. Paint order is otherwise independent of DOM order (every
+  // renderer targets its widget by element id), so this is purely a
+  // "first thing the user sees is the first thing that paints" ordering.
   const WIDGETS = [
     { name: 'factor-header',      rerender: 'theme', render: () => renderFactorHeader(data.factors || [], data.options || {}) },
-    { name: 'share-bars',         rerender: false, render: () => renderShareBars(data.effort_exposure || [], data.options || {}) },
     { name: 'kpi-tiles',          rerender: false, render: () => renderKpiTiles(data) },
-    { name: 'knowledge-islands',  rerender: false, render: () => renderKnowledgeIslands(data.knowledge_islands || []) },
     { name: 'guided-tour',        rerender: false, render: () => renderGuidedTour() },
     { name: 'hotspot-circle-pack', rerender: 'theme', render: () => renderHotspotCirclePack(data.hotspots || [], currentHotspotColorMode) },
     { name: 'hotspot-table',      rerender: false, render: () => renderHotspotTable(data.hotspots || []) },
-    { name: 'coupling-sankey',    rerender: 'theme', render: () => renderCouplingSankey(data.coupling || []) },
-    { name: 'trends',             render: () => renderTrends(data.trends || []) },
-    { name: 'kamei-risk-sparkline', rerender: 'theme', render: () => renderKameiRiskSparkline(data.kamei_risk || []) },
     { name: 'hotspot-treemap',    rerender: 'theme', render: () => renderHotspotTreemap(data.hotspots || []) },
-    { name: 'parallel-coords',    rerender: 'theme', render: () => renderParallelCoords(data.hotspots || []) },
+    { name: 'xray-sunburst',      render: () => renderXRaySunburst(data.xray || []) },
+    { name: 'health-trend',       rerender: 'theme', render: () => renderHealthTrend(data.health_trend || []) },
+    { name: 'trends',             render: () => renderTrends(data.trends || []) },
+    { name: 'share-bars',         rerender: false, render: () => renderShareBars(data.effort_exposure || [], data.options || {}) },
+    { name: 'improvements-feed',  rerender: false,   render: () => renderImprovementsFeed(data.health_transitions || []) },
     { name: 'cognitive-boxplot',  rerender: 'theme', render: () => renderCognitiveBoxplot(data.hotspots || []) },
-    { name: 'module-chord',       render: () => renderModuleChord(data.coupling || []) },
+    { name: 'parallel-coords',    rerender: 'theme', render: () => renderParallelCoords(data.hotspots || []) },
     { name: 'arch-graph',         rerender: 'theme', render: () => renderArchGraph(data.imports || [], data.modularity_violations || [], data.unstable_interface || [], data.architecture_roles || []) },
     { name: 'arch-matrix',        rerender: 'theme', render: () => renderArchMatrix(data.imports || [], data.architecture_roles || [], data.coupling || []) },
     { name: 'arch-trend',         rerender: 'theme', render: () => renderArchTrend(data.architecture_trend || []) },
-    { name: 'health-trend',       rerender: 'theme', render: () => renderHealthTrend(data.health_trend || []) },
-    { name: 'improvements-feed',  rerender: false,   render: () => renderImprovementsFeed(data.health_transitions || []) },
-    { name: 'calendar-heatmap',   rerender: 'theme', render: () => renderCalendarHeatmap(data.daily_commits || []) },
-    { name: 'xray-sunburst',      render: () => renderXRaySunburst(data.xray || []) },
+    { name: 'module-chord',       render: () => renderModuleChord(data.coupling || []) },
+    { name: 'coupling-sankey',    rerender: 'theme', render: () => renderCouplingSankey(data.coupling || []) },
     { name: 'knowledge-surfaces', rerender: false, render: () => renderKnowledgeSurfaces(data.code_familiarity || [], data.team_composition || [], data.coordination_needs || []) },
+    { name: 'knowledge-islands',  rerender: false, render: () => renderKnowledgeIslands(data.knowledge_islands || []) },
     { name: 'delivery-card',      rerender: false,   render: () => renderDeliveryCard(data) },
+    { name: 'kamei-risk-sparkline', rerender: 'theme', render: () => renderKameiRiskSparkline(data.kamei_risk || []) },
+    { name: 'calendar-heatmap',   rerender: 'theme', render: () => renderCalendarHeatmap(data.daily_commits || []) },
   ];
 
   // F97: boot widgets cooperatively. The synchronous `forEach` blocked
@@ -883,4 +1000,11 @@
       dashboardStore.hotspots = sorted;
     }
   }
+
+  // Static markup (`#dash-nav` chips, `.dash-group` sections,
+  // `#dash-top-btn`) is unconditional template HTML, so the sticky nav
+  // and the collapse chevrons can wire up regardless of whether any
+  // widget data loaded above.
+  initDashNav();
+  initDashCollapse();
 

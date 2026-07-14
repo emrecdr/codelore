@@ -868,6 +868,100 @@ fn spa_dsm_fusion_honest_absence_when_coupling_empty() {
     );
 }
 
+/// The dashboard's `<main>` region is six titled `.dash-group` sections
+/// (Overview, Hotspots & Risk, Code Health, Architecture, Knowledge,
+/// Delivery), each in a fixed order carrying its assigned widgets — a
+/// pure template-structure contract, unaffected by dashboard data, so
+/// an empty `SpaDashboard::default()` is enough to exercise it.
+#[test]
+fn dashboard_groups_exist_in_order_with_widgets_assigned() {
+    let html = build_dashboard_html();
+    let order = [
+        "group-overview",
+        "group-hotspots",
+        "group-code-health",
+        "group-architecture",
+        "group-knowledge",
+        "group-delivery",
+    ];
+    let mut last = 0;
+    for id in order {
+        let pos = html.find(&format!("id=\"{id}\"")).expect(id);
+        assert!(pos > last, "{id} out of order");
+        last = pos;
+    }
+    // Spot-check assignments: widget id appears AFTER its group id and
+    // BEFORE the next group id.
+    let idx = |needle: &str| html.find(needle).expect(needle);
+    assert!(
+        idx("id=\"widget-hotspot-table\"") > idx("id=\"group-hotspots\"")
+            && idx("id=\"widget-hotspot-table\"") < idx("id=\"group-code-health\"")
+    );
+    assert!(
+        idx("id=\"widget-arch-matrix\"") > idx("id=\"group-architecture\"")
+            && idx("id=\"widget-arch-matrix\"") < idx("id=\"group-knowledge\"")
+    );
+    assert!(idx("id=\"widget-calendar-heatmap\"") > idx("id=\"group-delivery\""));
+}
+
+/// Group headings are the page's `<h2>` tier; widget titles demote to
+/// `<h3>` (heading hierarchy: h1 page → h2 section → h3 widget).
+#[test]
+fn widget_titles_are_h3_under_h2_groups() {
+    let html = build_dashboard_html();
+    assert!(html.contains("<h2 id=\"group-overview-h\""));
+    assert!(html.contains("<h3>Quality dimensions</h3>"));
+    assert!(
+        !html.contains("<h2>Quality dimensions</h2>"),
+        "widget titles must no longer be h2",
+    );
+}
+
+/// The sticky nav (`#dash-nav`, sibling of the header) carries one chip
+/// per `.dash-group` section, in the same order as the sections
+/// themselves — pure template structure, unaffected by dashboard data.
+#[test]
+fn dash_nav_has_six_chips_in_section_order() {
+    let html = build_dashboard_html();
+    let nav_start = html.find("id=\"dash-nav\"").expect("dash-nav present");
+    let order = [
+        "group-overview",
+        "group-hotspots",
+        "group-code-health",
+        "group-architecture",
+        "group-knowledge",
+        "group-delivery",
+    ];
+    let mut last = nav_start;
+    for id in order {
+        let needle = format!("data-target=\"{id}\"");
+        let pos = html.find(&needle).unwrap_or_else(|| panic!("{needle}"));
+        assert!(pos > last, "{id} chip out of order");
+        last = pos;
+    }
+    let chip_count = html.matches("class=\"dash-nav-chip").count();
+    assert_eq!(chip_count, 6, "expected exactly six nav chips");
+}
+
+/// Build the dashboard HTML from an empty (all-default) `SpaDashboard`.
+/// The `<main>` structure — group sections, widget mount points, and
+/// titles — is static template markup independent of any analysis
+/// data, so this is enough to assert structural invariants without
+/// standing up a full fixture repo + `FactsDb` ingest.
+fn build_dashboard_html() -> String {
+    let dash = SpaDashboard::default();
+    let mut buf = Vec::new();
+    write_spa(
+        &dash,
+        "CodeLore Dashboard",
+        "/tmp/layout-overhaul",
+        "2026-07-14 00:00:00 UTC",
+        &mut buf,
+    )
+    .expect("write_spa");
+    String::from_utf8(buf).expect("utf8 html")
+}
+
 /// Walk the HTML, find the `<script type="application/json"
 /// id="codelore-data">…</script>` block, undo the `</` → `<\/`
 /// XSS-escape, and parse it.
