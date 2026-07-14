@@ -97,7 +97,8 @@ pub fn run_architecture_metrics(
         row("architecture_type", arch_type.to_owned()),
     ];
 
-    // Corpus-relative percentiles (additive; Task 3/5's `repo_metrics` pools).
+    // Corpus-relative percentiles (additive; against the `repo_metrics` pools
+    // populated by `codelore calibrate`).
     // Reuses `m` — the SAME `GraphMetrics` the seven rows above were built
     // from — so this never rebuilds the import graph. `cycle_file_share`
     // mirrors `codelore calibrate`'s `pool_repo_metrics` formula exactly
