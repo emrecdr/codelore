@@ -147,7 +147,7 @@ Every file output (except SQLite, where the provenance table lives inside the DB
 
 ### `--format spa` widget surface
 
-The dashboard composes fifteen widgets in one HTML file, plus a tabbed click-target file detail drawer:
+The dashboard composes its widgets in one HTML file — grouped into the six titled sections described below — plus a tabbed click-target file detail drawer:
 
 1. **KPI tiles** — at-a-glance summary: files analyzed, commits, distinct authors, median code health, cognitive p95, knowledge-island count, coupling pair count, coupling-graph density. Each tile has a `?` provenance tooltip linking to the formula in `docs/research-foundations.md`.
 2. **Knowledge islands** (CodeLore differentiator) — ranked table of departed-primary-author files with no substantial other owner. Auto-detected from commit history + co-change intensity. CodeScene paywalls this and requires manual ex-developer marking.
