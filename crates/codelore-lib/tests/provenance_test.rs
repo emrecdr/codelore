@@ -37,6 +37,7 @@ fn test_calib_artifact() -> CalibrationArtifact {
                 }],
             }],
         }],
+        repo_metrics: None,
     }
 }
 

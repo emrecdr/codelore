@@ -68,6 +68,17 @@ const EMBEDDED_WORLD_BYTES: &[u8] = include_bytes!("calibration/world.calib.json
 
 // ─── artifact model ──────────────────────────────────────────────────────────
 
+/// Repo-level metric pools: one observation per corpus repo. Absent on
+/// artifacts built before this section existed — absent = no lens.
+///
+/// Each vec in `values` is sorted ascending (enforced by [`attach_repo_metrics`]).
+/// Downstream lookup via [`raw_percentile`] relies on this invariant.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RepoMetrics {
+    /// Sorted ascending. Key: metric name (`"propagation_cost"`, `"cycle_file_share"`).
+    pub values: std::collections::BTreeMap<String, Vec<f64>>,
+}
+
 /// A versioned corpus-calibration artifact: per-language quantile breakpoints
 /// for raw per-function metrics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,6 +91,12 @@ pub struct CalibrationArtifact {
     pub repos_included: u32,
     pub repos_attempted: u32,
     pub languages: Vec<LanguageTable>,
+    /// Optional repo-level metric pools (one value per corpus repo). Absent on
+    /// artifacts built before this section existed; absent = no repo-level lens.
+    /// Omitted from serialization when `None` so the embedded world artifact
+    /// remains byte-valid for all readers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo_metrics: Option<RepoMetrics>,
 }
 
 /// Per-language breakpoints. `language` is a [`Tier1Language`] name
@@ -386,6 +403,68 @@ fn interpolate_percentile(q: &[f64], value: f64) -> CorpusPercentile {
     }
 }
 
+// ─── raw-values percentile + repo-metrics helper ─────────────────────────────
+
+/// Midpoint-rank percentile of `value` among `sorted` (ascending).
+///
+/// Returns `None` when `sorted` is empty. For a non-empty slice of length `n`:
+///
+/// ```text
+/// p = (count_less + 0.5 * count_equal) / n
+/// ```
+///
+/// where `count_less` is the number of elements strictly less than `value` and
+/// `count_equal` is the number of elements equal to `value`. The result is in
+/// `0.0..=1.0`: a `value` below all elements yields `0.0`; a value above all
+/// elements yields `1.0`. Ties receive the arithmetic midpoint of their rank
+/// range (the standard "midpoint rank" or "fractional rank" formula).
+///
+/// Unlike [`percentile`], which operates on 1001-breakpoint quantile vectors,
+/// this function works directly on raw sorted observations — used for the
+/// coarse repo-level pools in [`RepoMetrics`].
+///
+/// # Precision note
+///
+/// Counts and lengths are bounded by the corpus size (~hundreds), far below
+/// `2^53`, so the `usize` → `f64` conversions are exact.
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn raw_percentile(sorted: &[f64], value: f64) -> Option<f64> {
+    let n = sorted.len();
+    if n == 0 {
+        return None;
+    }
+    // Count elements strictly less than `value` using binary search on the
+    // sorted slice: `partition_point(|x| x < value)` gives the index of the
+    // first element >= value, which equals the count of elements < value.
+    let count_less = sorted.partition_point(|&x| x < value);
+    // Count elements equal to `value`: starting from `count_less`, scan
+    // forward while elements equal `value`. Using `partition_point` again is
+    // equivalent and branchless.
+    let count_less_or_equal = sorted.partition_point(|&x| x <= value);
+    let count_equal = count_less_or_equal - count_less;
+    Some((count_less as f64 + 0.5 * count_equal as f64) / n as f64)
+}
+
+/// Attach repo-level metric pools to a calibration artifact.
+///
+/// Each vec in `pools.values` is sorted ascending in-place before the field is
+/// set, so downstream callers can rely on the sorted invariant for binary
+/// search (see [`raw_percentile`]).
+///
+/// An empty `pools.values` map sets `repo_metrics` to `None` — empty pools
+/// carry no information and must not activate the lens.
+pub fn attach_repo_metrics(artifact: &mut CalibrationArtifact, mut pools: RepoMetrics) {
+    if pools.values.is_empty() {
+        artifact.repo_metrics = None;
+        return;
+    }
+    for vec in pools.values.values_mut() {
+        vec.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    }
+    artifact.repo_metrics = Some(pools);
+}
+
 // ─── builder: pooled observations → breakpoints ──────────────────────────────
 
 /// Raw per-function metric observations, pooled per `(language, metric)` before
@@ -472,6 +551,7 @@ pub fn build_from_observations(
         repos_included: 0,
         repos_attempted: 0,
         languages,
+        repo_metrics: None,
     }
 }
 
@@ -548,6 +628,11 @@ pub fn merge(base: CalibrationArtifact, additional: CalibrationArtifact) -> Cali
     // append order deterministic).
     merged_languages.extend(add_by_lang.into_values());
 
+    // Merge repo_metrics: when only one side has it, carry it through; when
+    // both have it, concatenate + re-sort each metric vec (exact pooling,
+    // unlike the quantile blend which is an approximation).
+    let repo_metrics = merge_repo_metrics(base.repo_metrics, additional.repo_metrics);
+
     CalibrationArtifact {
         format_version: CALIBRATION_FORMAT_VERSION,
         corpus_vintage: base.corpus_vintage,
@@ -559,6 +644,45 @@ pub fn merge(base: CalibrationArtifact, additional: CalibrationArtifact) -> Cali
             .repos_attempted
             .saturating_add(additional.repos_attempted),
         languages: merged_languages,
+        repo_metrics,
+    }
+}
+
+/// Merge two optional [`RepoMetrics`] sections.
+///
+/// - Both `None` → `None`.
+/// - One `Some`, one `None` → keep the `Some` unchanged.
+/// - Both `Some` → concatenate each metric's raw values and re-sort ascending.
+///   This is exact pooling (unlike the quantile blend, which is an
+///   approximation), because the raw values are available here.
+fn merge_repo_metrics(
+    base: Option<RepoMetrics>,
+    additional: Option<RepoMetrics>,
+) -> Option<RepoMetrics> {
+    match (base, additional) {
+        (None, None) => None,
+        (Some(b), None) => Some(b),
+        (None, Some(a)) => Some(a),
+        (Some(mut b), Some(a)) => {
+            for (metric, mut add_vals) in a.values {
+                b.values
+                    .entry(metric)
+                    .and_modify(|base_vals| {
+                        base_vals.append(&mut add_vals);
+                        base_vals
+                            .sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+                    })
+                    .or_insert_with(|| {
+                        add_vals
+                            .sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+                        add_vals
+                    });
+            }
+            // Re-sort any base-only metrics that were already sorted — no-op
+            // since they were not touched, but ensures the invariant holds for
+            // any future caller that relies on sortedness.
+            Some(b)
+        }
     }
 }
 
