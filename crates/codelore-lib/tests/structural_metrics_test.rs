@@ -6,9 +6,10 @@
 //!
 //! Also covers `architecture-metrics`' corpus-relative percentile rows: the
 //! additivity contract (no active `repo_metrics` pool ⇒ byte-identical to
-//! the seven base rows) and the three extra rows once a synthetic
-//! calibration artifact with a `repo_metrics` section is passed via
-//! `--calibration`.
+//! the seven base rows), the three extra rows once a synthetic calibration
+//! artifact with a `repo_metrics` section is passed via `--calibration`, and
+//! the default path where the embedded world artifact's pools activate the
+//! rows with no configuration.
 
 use codelore_lib::analyses::architecture_metrics::run_architecture_metrics;
 use codelore_lib::analyses::instability::run_instability;
@@ -146,20 +147,29 @@ fn write_temp_calibration_artifact(art: &CalibrationArtifact) -> tempfile::TempP
     f.into_temp_path()
 }
 
-/// Additivity contract: with no `--calibration` override, `opts.calibration`
-/// is `None` and `load_active_artifact` falls back to the embedded world
-/// artifact — which is active (a real, non-placeholder vintage) but, as of
-/// this artifact's build, carries no `repo_metrics` section. That is exactly
-/// the "artifact active, section absent" case the corpus-percentile rows must
-/// stay silent for: the row set must be byte-identical to the seven base
-/// metric names architecture-metrics has always emitted.
+/// Additivity contract: an artifact that is active but carries no
+/// `repo_metrics` section (as every artifact built before the section
+/// existed does) must leave the row set byte-identical to the seven base
+/// metric names architecture-metrics has always emitted — the
+/// corpus-percentile rows stay silent.
 #[test]
 fn architecture_metrics_additivity_without_repo_metrics_pool() {
-    let (_dir, db, opts) = ingested_cycle_repo();
-    assert!(
-        opts.calibration.is_none(),
-        "fixture must exercise the default (embedded-artifact) path"
-    );
+    let (_dir, db, mut opts) = ingested_cycle_repo();
+
+    // A valid artifact with no `repo_metrics` key at all — serialization
+    // omits the `None` field, matching pre-section artifacts on disk.
+    let artifact = CalibrationArtifact {
+        format_version: CALIBRATION_FORMAT_VERSION,
+        corpus_vintage: "test-corpus-no-pools".to_string(),
+        generated_at: "2026-07-14T00:00:00Z".to_string(),
+        repos_included: 1,
+        repos_attempted: 1,
+        languages: vec![],
+        repo_metrics: None,
+    };
+    let path = write_temp_calibration_artifact(&artifact);
+    opts.calibration = Some(path.to_path_buf());
+
     let rows = run_architecture_metrics(&db, &opts).expect("run architecture-metrics");
     let names: Vec<&str> = rows.iter().map(|r| r.metric.as_str()).collect();
     assert_eq!(
@@ -174,6 +184,50 @@ fn architecture_metrics_additivity_without_repo_metrics_pool() {
             "architecture_type",
         ],
         "no active repo_metrics pool -> exactly the seven base rows: {names:?}"
+    );
+}
+
+/// The default (no `--calibration` override) path resolves to the embedded
+/// world artifact, which carries repo-level corpus pools — so the three
+/// corpus rows appear after the seven base rows, with a percentile in
+/// `[0, 1]` and `corpus_n` matching the embedded pool length.
+#[test]
+fn architecture_metrics_default_embedded_artifact_emits_corpus_rows() {
+    let (_dir, db, opts) = ingested_cycle_repo();
+    assert!(
+        opts.calibration.is_none(),
+        "fixture must exercise the default (embedded-artifact) path"
+    );
+    let rows = run_architecture_metrics(&db, &opts).expect("run architecture-metrics");
+    let m: HashMap<&str, &str> = rows
+        .iter()
+        .map(|r| (r.metric.as_str(), r.value.as_str()))
+        .collect();
+
+    let p: f64 = m
+        .get("corpus_percentile:propagation_cost")
+        .expect("embedded world artifact must carry a propagation_cost pool")
+        .parse()
+        .expect("percentile parses");
+    assert!(
+        (0.0..=1.0).contains(&p),
+        "percentile must be in [0, 1], got {p}"
+    );
+
+    let embedded =
+        codelore_lib::calibration::embedded_world().expect("embedded world artifact resolves");
+    let pool_len = embedded
+        .repo_metrics
+        .as_ref()
+        .expect("embedded world artifact must carry repo_metrics")
+        .values
+        .get("propagation_cost")
+        .expect("propagation_cost pool present")
+        .len();
+    assert_eq!(
+        m.get("corpus_n").copied(),
+        Some(pool_len.to_string().as_str()),
+        "corpus_n must state the embedded pool size"
     );
 }
 

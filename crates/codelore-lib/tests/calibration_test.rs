@@ -606,9 +606,6 @@ fn generate_golden_fixture_artifact() {
 /// An artifact JSON that lacks the `repo_metrics` field entirely (as all
 /// artifacts built before this section existed do). Deserializing it must
 /// yield `repo_metrics: None` — the `#[serde(default)]` path.
-///
-/// This also exercises the embedded-world artifact: it too lacks the field
-/// and must deserialize cleanly after this serde change.
 #[test]
 fn old_artifact_without_repo_metrics_deserializes_with_none() {
     // Minimal valid v1 artifact JSON — no `repo_metrics` key at all.

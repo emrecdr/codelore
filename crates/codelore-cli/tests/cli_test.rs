@@ -1135,6 +1135,88 @@ fn spa_without_output_defaults_to_dot_codelore() {
     );
 }
 
+/// The Architecture factor tile's detail line carries the corpus-relative
+/// propagation-cost annotation (`, P<nn> of <n> corpus repos`) exactly when
+/// the active calibration artifact has repo-level pools: present on the
+/// default path (the embedded world artifact carries `repo_metrics`), absent
+/// when `--calibration` points at an artifact without the section.
+#[cfg(feature = "spa")]
+#[test]
+fn spa_architecture_tile_corpus_detail_follows_repo_metrics_presence() {
+    // The biomarker fixture carries one resolvable HEAD-time import edge
+    // (`src/importer.rs → src/trivial.rs`) and enough dated commits for the
+    // health-trend series, so the Architecture tile exists and
+    // architecture-metrics has a non-empty import graph to rank.
+    let fx = codelore_lib::test_support::biomarker_repo::build();
+
+    let arch_detail = |extra_args: &[&str]| -> String {
+        let cwd = tempfile::tempdir().unwrap();
+        let mut args = vec![
+            "analyze",
+            "--repo",
+            fx.dir.path().to_str().unwrap(),
+            "--format",
+            "spa",
+            "--no-banner",
+            "--min-revs",
+            "1",
+        ];
+        args.extend_from_slice(extra_args);
+        Command::cargo_bin("codelore")
+            .unwrap()
+            .current_dir(cwd.path())
+            .args(&args)
+            .assert()
+            .success();
+        let html = std::fs::read_to_string(cwd.path().join(".codelore").join("spa.html"))
+            .expect("spa.html emitted");
+
+        let start_tag = "<script type=\"application/json\" id=\"codelore-data\">";
+        let start = html.find(start_tag).expect("embedded data script") + start_tag.len();
+        let end = html[start..].find("</script>").expect("script close");
+        let payload: serde_json::Value =
+            serde_json::from_str(&html[start..start + end].replace(r"<\/", "</"))
+                .expect("payload parses");
+        payload["factors"]
+            .as_array()
+            .expect("factors array present")
+            .iter()
+            .find(|t| t["name"] == "Architecture")
+            .expect("Architecture tile present")["detail"]
+            .as_str()
+            .expect("detail is a string")
+            .to_owned()
+    };
+
+    // Default path: the embedded world artifact carries repo_metrics.
+    let detail = arch_detail(&[]);
+    assert!(
+        detail.contains("corpus"),
+        "embedded artifact has repo_metrics -> detail must carry the corpus annotation: {detail:?}"
+    );
+
+    // Override with an artifact that has no repo_metrics section: the
+    // annotation must degrade to absent.
+    let artifact = codelore_lib::calibration::CalibrationArtifact {
+        format_version: codelore_lib::calibration::CALIBRATION_FORMAT_VERSION,
+        corpus_vintage: "test-corpus-no-pools".to_string(),
+        generated_at: "2026-07-14T00:00:00Z".to_string(),
+        repos_included: 1,
+        repos_attempted: 1,
+        languages: vec![],
+        repo_metrics: None,
+    };
+    let work = tempfile::tempdir().unwrap();
+    let calib_path = work.path().join("no-pools.calib.json");
+    std::fs::write(&calib_path, serde_json::to_vec(&artifact).unwrap()).unwrap();
+
+    let detail = arch_detail(&["--calibration", calib_path.to_str().unwrap()]);
+    assert!(
+        !detail.contains("corpus"),
+        "artifact without repo_metrics -> detail must not carry the corpus annotation: {detail:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Delta health end-to-end tests
 // ---------------------------------------------------------------------------

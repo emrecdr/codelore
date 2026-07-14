@@ -5171,6 +5171,38 @@ fn build_spa_dashboard(
     // code_familiarity when available, falling back to knowledge_islands.
     // Delivery uses delivery_metrics + release_cadence (degrades to no tile).
     let mut factors = codelore_lib::cli_api::analyses::factors::health_trend_factors(&health_trend);
+    // Corpus-relative annotation on the Architecture tile: when an active
+    // calibration artifact carries repo-level corpus pools, the
+    // architecture-metrics rows include `corpus_percentile:propagation_cost`
+    // and `corpus_n` — surface them on the tile's detail line. No active
+    // artifact, no `repo_metrics` section, or no Architecture tile ⇒ the
+    // detail line is unchanged.
+    if let Some(arch_tile) = factors.iter_mut().find(|t| t.name == "Architecture") {
+        let arch_metric_rows =
+            codelore_lib::cli_api::analyses::architecture_metrics::run_architecture_metrics(
+                db, opts,
+            )
+            .unwrap_or_else(|e| {
+                tracing::warn!("dashboard: architecture-metrics for factor tile failed: {e}");
+                Vec::new()
+            });
+        let metric_value = |name: &str| {
+            arch_metric_rows
+                .iter()
+                .find(|r| r.metric == name)
+                .map(|r| r.value.as_str())
+        };
+        if let (Some(p), Some(n)) = (
+            metric_value("corpus_percentile:propagation_cost"),
+            metric_value("corpus_n"),
+        ) && let Ok(p) = p.parse::<f64>()
+        {
+            use std::fmt::Write as _;
+            // The row's percentile is 0..1; the tile shows the conventional
+            // 0..100 "P<nn>" reading.
+            let _ = write!(arch_tile.detail, ", P{:.0} of {n} corpus repos", p * 100.0);
+        }
+    }
     // Knowledge card data — computed once, feeding both the factor tile and
     // the SPA payload. Degrades to empty on failure so the card is simply
     // absent when data is unavailable.

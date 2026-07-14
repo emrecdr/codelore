@@ -93,8 +93,8 @@ pub struct CalibrationArtifact {
     pub languages: Vec<LanguageTable>,
     /// Optional repo-level metric pools (one value per corpus repo). Absent on
     /// artifacts built before this section existed; absent = no repo-level lens.
-    /// Omitted from serialization when `None` so the embedded world artifact
-    /// remains byte-valid for all readers.
+    /// Omitted from serialization when `None` so pre-section artifacts
+    /// round-trip byte-identically.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo_metrics: Option<RepoMetrics>,
 }
