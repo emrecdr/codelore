@@ -900,7 +900,7 @@
         window._codeloreRerenderers.push(w.render);
       }
       // Yield between widgets, NOT after the last one (a trailing
-      // yield is a wasted task). The first widget (kpi-tiles) is
+      // yield is a wasted task). The first widget (factor-header) is
       // cheap structural HTML, so by the time we yield after it the
       // browser has already painted the page chrome + KPI cards.
       if (i < WIDGETS.length - 1) {

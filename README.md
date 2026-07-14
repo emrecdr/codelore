@@ -310,7 +310,7 @@ codelore analyze --format spa --output codelore.html --repo .
 
 ### What's inside
 
-Fifteen interactive widgets driven by a single embedded JSON blob:
+Interactive widgets driven by a single embedded JSON blob, grouped into six navigable sections:
 
 - **Codebase at a glance** — KPIs: files, commits, contributors, median code-health, complexity peaks, MI band breakdown
 - **Knowledge islands** — files whose primary author has departed and where no other substantial owner exists (no manual ex-developer marking required)
