@@ -100,7 +100,7 @@ impl DefectOracle {
         // — common non-defect vocabulary, verified against this repository's
         // own commit history — never classify as fixes.
         let word_boundary =
-            Regex::new(r#"(?i)(?:\bbugfix|\b(?:bug|fix(?:es|ed)?|defect|regression|hotfix)\b)"#)
+            Regex::new(r"(?i)(?:\bbugfix|\b(?:bug|fix(?:es|ed)?|defect|regression|hotfix)\b)")
                 .map_err(|e| {
                     CodeLoreError::Analysis(format!("built-in oracle word-boundary pattern: {e}"))
                 })?;
