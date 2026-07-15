@@ -56,12 +56,11 @@ pub struct OracleConfig {
 /// A commit is a fix iff its message matches, case-insensitively, either:
 /// - a conventional-commit prefix `fix:` / `fix(scope):` anchored to the
 ///   start of the message, or
-/// - a defect-vocabulary term starting at a word boundary:
-///   `bug`, `bugfix`, `fix`/`fixes`/`fixed`, `defect`, `regression`, `hotfix`
-///   (the boundary is checked only at the START of the term, not the end, so
-///   a compound word like `bugfixes` still counts — see the oracle test table
-///   for the exact `prefix bugfixes` → true / `affix labels` → false pair
-///   this asymmetry is calibrated against),
+/// - a defect-vocabulary term at word boundaries: `bug`, `fix`/`fixes`/
+///   `fixed`, `defect`, `regression`, `hotfix` are matched as whole words
+///   (`\b…\b` on both sides — `fixture`, `hotfixture`, `defective`, `affix`
+///   never count), while `bugfix` alone is leading-boundary-only so its
+///   plural compound `bugfixes` still counts,
 ///
 /// AND the caller-supplied `is_merge` flag is false, AND the message does not
 /// begin with the literal git revert prefix `Revert "`.
@@ -96,10 +95,15 @@ impl DefectOracle {
         let conventional = Regex::new(r"(?i)^fix(\([^)]*\))?:").map_err(|e| {
             CodeLoreError::Analysis(format!("built-in oracle conventional pattern: {e}"))
         })?;
+        // `bugfix` is leading-boundary-only so `bugfixes` counts; every other
+        // term is a whole word (`\b…\b`) so `fixture`/`hotfixture`/`defective`
+        // — common non-defect vocabulary, verified against this repository's
+        // own commit history — never classify as fixes.
         let word_boundary =
-            Regex::new(r"(?i)\b(?:bug|bugfix|fix(?:es|ed)?|defect|regression|hotfix)").map_err(
-                |e| CodeLoreError::Analysis(format!("built-in oracle word-boundary pattern: {e}")),
-            )?;
+            Regex::new(r#"(?i)(?:\bbugfix|\b(?:bug|fix(?:es|ed)?|defect|regression|hotfix)\b)"#)
+                .map_err(|e| {
+                    CodeLoreError::Analysis(format!("built-in oracle word-boundary pattern: {e}"))
+                })?;
         let mut extra = Vec::with_capacity(cfg.extra_patterns.len());
         for pattern in &cfg.extra_patterns {
             let re = Regex::new(pattern).map_err(|e| {
@@ -387,12 +391,24 @@ mod tests {
     }
 
     #[test]
-    fn word_boundary_is_leading_only_so_compound_words_still_match() {
-        // "bugfixes" starts with the recognized term "bug" at a true leading
-        // word boundary (preceded by a space); no trailing boundary is
-        // required, so the compound word still counts.
+    fn bugfix_is_leading_only_so_its_plural_compound_still_matches() {
+        // `bugfix` is the one leading-boundary-only term, so its plural
+        // compound "bugfixes" still counts; every other term requires a
+        // trailing boundary too.
         let o = oracle(&[]);
         assert!(o.is_fix("prefix bugfixes", false));
+    }
+
+    #[test]
+    fn fixture_vocabulary_never_classifies_as_a_fix() {
+        // "fixture"/"fixtures" are everyday testing vocabulary — this
+        // repository's own history carries test/ci commits mentioning them —
+        // and the whole-word boundaries keep them out of the defect set.
+        let o = oracle(&[]);
+        assert!(!o.is_fix("test(fixtures): biomarker repo exercises nesting", false));
+        assert!(!o.is_fix("Shared test fixtures as checked-in git bundles", false));
+        assert!(!o.is_fix("hotfixture deploy", false));
+        assert!(!o.is_fix("defective by design", false));
     }
 
     #[test]
