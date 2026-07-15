@@ -679,7 +679,7 @@ codelore diff <RANGE> [OPTIONS]
       --exclude PATTERN     Same as analyze (repeatable)
 ```
 
-The diff subcommand emits five SARIF rule types: CODELORE-HOTSPOT (newly-entering or score-rising hotspots), CODELORE-CLONE (PR-introduced clone families), CODELORE-LIVE-CLONE (PR-introduced live-clones), CODELORE-MISSING-COCHANGE (historically-coupled partner files this PR didn't touch), and CODELORE-DELTA-HEALTH (degrading delta-health functions, one result per degrading file).
+The diff subcommand emits four SARIF rule types: CODELORE-HOTSPOT (newly-entering or score-rising hotspots), CODELORE-CLONE (PR-introduced clone families), CODELORE-MISSING-COCHANGE (historically-coupled partner files this PR didn't touch), and CODELORE-DELTA-HEALTH (degrading delta-health functions, one result per degrading file). CODELORE-LIVE-CLONE is an analyze-mode rule (`--analysis clone-coupling --format sarif`), not a diff rule.
 
 ## 4. PR-mode: `codelore diff`
 
