@@ -273,9 +273,51 @@ fn check_repo_identity_override_allows_a_foreign_repo() {
 
 // ─── band_history: uncapped, at-rev, oldest-first ────────────────────────────
 
+/// Run `git` in `dir` with a fixed author/committer date, panicking on
+/// failure — the same shell-out idiom the other repo-building integration
+/// tests use.
+fn run_git_at(dir: &Path, date: &str, args: &[&str]) {
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_AUTHOR_DATE", date)
+        .env("GIT_COMMITTER_DATE", date)
+        .status()
+        .expect("spawn git");
+    assert!(status.success(), "git {args:?} failed in {}", dir.display());
+}
+
 #[test]
 fn band_history_is_oldest_first_and_uncapped() {
     let fx = codelore_lib::test_support::biomarker_repo::build();
+
+    // Grow the fixture past `health_trend::file_series`'s top-50 hotspot
+    // cap: one extra commit (dated after the fixture's newest, so it becomes
+    // HEAD and the newest sample) adding 55 trivial one-function files. A
+    // capped `band_history` implementation could pass every assertion below
+    // on a sub-50-file tree; against 65 files it cannot.
+    for i in 0..55 {
+        std::fs::write(
+            fx.dir.path().join(format!("src/filler_{i:02}.rs")),
+            format!("pub fn filler_{i:02}() -> i32 {{\n    {i}\n}}\n"),
+        )
+        .expect("write filler file");
+    }
+    let date = "2026-06-07T10:00:00Z";
+    run_git_at(
+        fx.dir.path(),
+        date,
+        &["config", "user.email", "bio@example.com"],
+    );
+    run_git_at(fx.dir.path(), date, &["config", "user.name", "Bio"]);
+    run_git_at(fx.dir.path(), date, &["add", "."]);
+    run_git_at(
+        fx.dir.path(),
+        date,
+        &["commit", "-m", "add filler files", "--quiet"],
+    );
+
     let repo = codelore_lib::repo::GixRepo::open(fx.dir.path()).expect("open");
     let db = codelore_lib::facts::FactsDb::new_in_memory().expect("db");
     let opts = codelore_lib::test_support::permissive_coupling_opts(fx.dir.path().to_path_buf());
@@ -314,12 +356,17 @@ fn band_history_is_oldest_first_and_uncapped() {
     let head_rows =
         codelore_lib::analyses::code_health::run_code_health(&db, &opts).expect("head scan");
     assert!(
-        head_rows.len() < 50,
-        "fixture must stay small enough that a top-50 cap would visibly truncate it \
-         (got {} files) — otherwise this test cannot distinguish capped from uncapped",
+        head_rows.len() > 50,
+        "fixture must outgrow a top-50 cap for this test to bite (got {} files)",
         head_rows.len()
     );
     let (_, last_bands) = samples.last().expect("at least one sample");
+    assert!(
+        last_bands.len() > 50,
+        "band_history's newest sample must carry more entries than a top-50 cap would \
+         allow (got {})",
+        last_bands.len()
+    );
     assert_eq!(
         last_bands.len(),
         head_rows.len(),

@@ -20,8 +20,9 @@
 //!
 //! [`tune_weights`] runs a deterministic coordinate-descent search over the
 //! eight `SMELL_WEIGHTS` and only adopts a tuned set when the evidence
-//! clears the honesty floor (Global Constraint 7: linked defects < 30 OR
-//! implicated files < 10 OR the acceptance margin unmet → defaults kept).
+//! clears an honesty floor: fewer than 30 linked defects, or fewer than 10
+//! implicated files, or a validation-AUC improvement short of the
+//! acceptance margin, each keep the defaults instead of the tuned weights.
 //!
 //! ## Design decision: re-scoring without re-running the SQL pass
 //!
@@ -306,18 +307,23 @@ fn risk_raw(weights: &[f64], intensities: &[f64; 8]) -> f64 {
 
 // ─── Unit D: constrained weight tuning ───────────────────────────────────────
 
-/// Honesty floor (Global Constraint 7): fewer than this many linked defects
-/// keeps the defaults regardless of what the search would find.
+/// Honesty floor: with fewer than this many linked defects, the mined
+/// evidence is too thin to trust a tuned weight set over the defaults, so
+/// the defaults are kept regardless of what the search would find.
 const MIN_LINKED_DEFECTS: usize = 30;
-/// Honesty floor (Global Constraint 7): fewer than this many distinct
-/// implicated files keeps the defaults regardless of what the search would
-/// find.
+/// Honesty floor: with fewer than this many distinct implicated files, the
+/// mined defects are too concentrated in a handful of paths to trust a
+/// tuned weight set over the defaults, so the defaults are kept regardless
+/// of what the search would find.
 const MIN_IMPLICATED_FILES: usize = 10;
 /// The validation-split AUC improvement a tuned weight set must clear over
-/// the defaults' own validation AUC to be adopted (Global Constraint 7).
+/// the defaults' own validation AUC to be adopted — wide enough that a
+/// modest AUC bump from noise or an unlucky split is never mistaken for a
+/// genuine improvement.
 const ACCEPTANCE_MARGIN: f64 = 0.02;
 /// Relative steps tried for each weight during coordinate descent —
-/// `default × step`, the ±50%-relative bound from Global Constraint 7.
+/// `default × step`, bounded to ±50% of the default so a single step can
+/// never swing a weight to an implausible extreme.
 const STEPS: [f64; 5] = [0.5, 0.75, 1.0, 1.25, 1.5];
 /// Coordinate-descent passes over all eight weights (spec: "2 passes").
 const PASSES: usize = 2;
@@ -326,6 +332,16 @@ const PASSES: usize = 2;
 /// by their sum. A no-op when the sum is non-positive — cannot happen with
 /// the non-negative `SMELL_WEIGHTS` defaults and non-negative relative
 /// steps this search uses, but guarded rather than dividing by zero.
+///
+/// This renormalization is naive: it rescales every entry uniformly, so it
+/// does NOT re-clamp any weight back inside [`STEPS`]'s ±50%-of-default
+/// step band. The band only bounds the STEP taken at the moment of
+/// acceptance, not the vector's final resting value — after several
+/// accepted steps across several coordinates, repeated projection can push
+/// an individual weight outside that band (each acceptance divides every
+/// entry by a running sum that itself drifts as other coordinates move).
+/// Readers relying on "every weight stays within ±50% of its default"
+/// should not: only the per-step candidate does.
 fn project_sum_to_one(weights: &mut [f64]) {
     let sum: f64 = weights.iter().sum();
     if sum > 0.0 {
@@ -434,10 +450,11 @@ fn implicated_file_count(train: &[(String, bool)], validation: &[(String, bool)]
 /// prepared by the caller); `defaults` are the weights to fall back to and
 /// the search's starting point (see [`default_weights`]).
 ///
-/// Honesty floor first (Global Constraint 7): fewer than
-/// [`MIN_LINKED_DEFECTS`] total positively-labeled rows, or fewer than
-/// [`MIN_IMPLICATED_FILES`] distinct positively-labeled paths, across
-/// `train` ∪ `validation`, keeps the defaults without running any search.
+/// Honesty floor first: fewer than [`MIN_LINKED_DEFECTS`] total
+/// positively-labeled rows, or fewer than [`MIN_IMPLICATED_FILES`] distinct
+/// positively-labeled paths, across `train` ∪ `validation`, keeps the
+/// defaults without running any search — the mined evidence is too thin to
+/// trust a tuned weight set.
 /// Past the floor, [`coordinate_descent`] searches `train` for the
 /// training-AUC-maximizing weights; the result is adopted only if its
 /// `validation` AUC beats the defaults' own `validation` AUC by at least
@@ -698,9 +715,10 @@ mod tests {
         ];
         let intensities = [1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
         // Raw sum 1.2 must clamp to 1.0.
-        assert_eq!(
-            structural_risk_from_intensities(&weights, &intensities),
-            1.0
+        let risk = structural_risk_from_intensities(&weights, &intensities);
+        assert!(
+            (risk - 1.0).abs() < 1e-12,
+            "expected clamp to 1.0, got {risk}"
         );
     }
 
@@ -761,7 +779,9 @@ mod tests {
                 assert_eq!(auc_validation_default, None);
                 assert_eq!(auc_validation_tuned, None);
             }
-            other => panic!("expected DefaultsKept(floor), got {other:?}"),
+            TuningDecision::Applied { .. } => {
+                panic!("expected DefaultsKept(floor), got Applied")
+            }
         }
     }
 
@@ -816,7 +836,9 @@ mod tests {
                 assert_eq!(auc_validation_default, None);
                 assert_eq!(auc_validation_tuned, None);
             }
-            other => panic!("expected DefaultsKept(floor), got {other:?}"),
+            TuningDecision::Applied { .. } => {
+                panic!("expected DefaultsKept(floor), got Applied")
+            }
         }
     }
 
@@ -861,7 +883,9 @@ mod tests {
                 assert_eq!(auc_validation_default, Some(0.5));
                 assert_eq!(auc_validation_tuned, Some(0.5));
             }
-            other => panic!("expected DefaultsKept(margin), got {other:?}"),
+            TuningDecision::Applied { .. } => {
+                panic!("expected DefaultsKept(margin), got Applied")
+            }
         }
     }
 
@@ -940,7 +964,9 @@ mod tests {
                 // built to produce (inversion against the confuser class).
                 assert!(auc_validation_default < 0.9, "expected a real inversion");
             }
-            other => panic!("expected Applied, got {other:?}"),
+            TuningDecision::DefaultsKept { reason, .. } => {
+                panic!("expected Applied, got DefaultsKept({reason})")
+            }
         }
 
         // The search shifted weight toward complex-method (index 0), the
@@ -953,5 +979,170 @@ mod tests {
             "expected complex-method weight to increase: tuned={tuned_complex_method} \
              default={default_complex_method}"
         );
+        // Every Applied outcome must still land on the sum-to-1 simplex —
+        // a missing (or broken) `project_sum_to_one` call would silently
+        // drift the weights off it.
+        let sum: f64 = weights.iter().map(|(_, w)| w).sum();
+        assert!(
+            (sum - 1.0).abs() < 1e-9,
+            "tuned weights must sum to 1.0, got {sum}"
+        );
+    }
+
+    // ─── coordinate_descent(): stepping-base + train-vs-validation regressions ──
+
+    /// Regression for a bug class the `Applied` test above cannot catch:
+    /// that fixture's training AUC saturates at its maximum (1.0) after a
+    /// single accepted step, so no later step can ever be accepted again —
+    /// and with only one acceptance, `current` still equals `defaults` at
+    /// the moment of stepping, making `defaults[i] * step` and a buggy
+    /// `current[i] * step` produce the IDENTICAL output there.
+    ///
+    /// This fixture forces a SECOND acceptance after a projection has
+    /// already rescaled `current` away from `defaults`, where the two bases
+    /// genuinely diverge. Six files, `defaults = [0.5, 0.3, 0.2]`:
+    /// one negative at `[0.5, 0.4, 0.0]`, two positives at `[0.0, 0.1,
+    /// 1.0]`, three negatives at `[0.3, 0.5, 0.0]`. Hand-traced:
+    ///
+    /// - Default risks: 0.37 / 0.23 / 0.30 — both positives rank below
+    ///   every negative, AUC 0.
+    /// - Weight 0's step ×0.5 (= 0.25) lifts AUC to 0.75 (positives at
+    ///   0.23 rise above the 0.225 negatives) and is accepted; projection
+    ///   rescales to `[1/3, 0.4, 4/15]` (sum was 0.75).
+    /// - Weight 1 must now step from its DEFAULT 0.3: ×0.5 = 0.15 reaches
+    ///   AUC 1.0 → accepted → final projection lands on
+    ///   `[4/9, 0.2, 16/45]`. A mutant stepping from the CURRENT 0.4
+    ///   would accept 0.2 instead and land on `[5/12, 1/4, 1/3]` — off by
+    ///   0.05 in the second slot, far beyond this test's 1e-9 tolerance.
+    ///
+    /// Every decisive AUC comparison above has a margin ≥ 1e-3 and every
+    /// cross-class risk gap ≥ 5e-3, so the expectations are robust — not
+    /// artifacts of floating-point tie-breaking.
+    #[test]
+    fn coordinate_descent_steps_from_the_default_weight_not_the_current_one() {
+        let defaults = [0.5, 0.3, 0.2];
+        let mut train = vec![("neg_a0".to_string(), false)];
+        let mut intensities = HashMap::from([(
+            "neg_a0".to_string(),
+            [0.5, 0.4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        )]);
+        for i in 0..2 {
+            let path = format!("pos{i}");
+            intensities.insert(path.clone(), [0.0, 0.1, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+            train.push((path, true));
+        }
+        for i in 0..3 {
+            let path = format!("neg_b{i}");
+            intensities.insert(path.clone(), [0.3, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+            train.push((path, false));
+        }
+
+        let tuned = coordinate_descent(&defaults, &train, &intensities);
+
+        let expected = [4.0 / 9.0, 0.2, 16.0 / 45.0];
+        for (got, want) in tuned.iter().zip(expected.iter()) {
+            assert!(
+                (got - want).abs() < 1e-9,
+                "coordinate_descent must step from the DEFAULT weight, not the current one \
+                 — expected {expected:?}, got {tuned:?}"
+            );
+        }
+    }
+
+    /// A tuned weight set that only improves the TRAINING split's AUC — and
+    /// not the VALIDATION split's — must never be adopted: that would be
+    /// fitting noise in the split used to search, not evidence the tuned
+    /// weights generalize. `train` reuses the perfectly-separating-plus-
+    /// confuser structure from the `Applied` test above (so training AUC
+    /// genuinely improves, verified independently below); `validation`
+    /// gives every file — positive or negative — the SAME intensity vector,
+    /// so its AUC is exactly 0.5 for ANY weight vector: the tuned weights
+    /// that fit `train` so well cannot possibly show a validation-AUC gain
+    /// here, by construction.
+    #[test]
+    fn tune_weights_rejects_a_tuned_set_that_only_improves_training_auc() {
+        let mut intensities = HashMap::new();
+        let mut train = Vec::new();
+        let mut validation = Vec::new();
+
+        let positive = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let confuser_negative = [0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let plain_negative = [0.0; 8];
+        seed_files(&mut train, &mut intensities, "pos", 18, true, positive);
+        seed_files(
+            &mut train,
+            &mut intensities,
+            "confuser",
+            9,
+            false,
+            confuser_negative,
+        );
+        seed_files(
+            &mut train,
+            &mut intensities,
+            "neg",
+            9,
+            false,
+            plain_negative,
+        );
+
+        let uniform_validation = [0.0; 8];
+        seed_files(
+            &mut validation,
+            &mut intensities,
+            "posv",
+            15,
+            true,
+            uniform_validation,
+        );
+        seed_files(
+            &mut validation,
+            &mut intensities,
+            "negv",
+            15,
+            false,
+            uniform_validation,
+        );
+
+        let defaults = default_weights();
+
+        // Independently confirm this fixture really does give the search
+        // training-AUC headroom past the acceptance margin — otherwise this
+        // test would not be exercising the branch it claims to.
+        let default_raw: Vec<f64> = defaults.iter().map(|(_, w)| *w).collect();
+        let tuned_raw = coordinate_descent(&default_raw, &train, &intensities);
+        let auc_train_default =
+            auc_for(&default_raw, &train, &intensities).expect("train auc (default)");
+        let auc_train_tuned = auc_for(&tuned_raw, &train, &intensities).expect("train auc (tuned)");
+        assert!(
+            auc_train_tuned >= auc_train_default + ACCEPTANCE_MARGIN,
+            "fixture must give the search real training-AUC headroom to justify this test: \
+             default={auc_train_default} tuned={auc_train_tuned}"
+        );
+
+        let (weights, decision) = tune_weights(&intensities, &train, &validation, &defaults);
+        assert_eq!(
+            weights, defaults,
+            "a training-only AUC improvement must never be adopted over the defaults"
+        );
+        match decision {
+            TuningDecision::DefaultsKept {
+                reason,
+                auc_validation_default,
+                auc_validation_tuned,
+            } => {
+                assert_eq!(
+                    reason,
+                    "tuned weights did not beat the default validation AUC by the required margin"
+                );
+                // Both Some(0.5): the uniform validation vectors tie every
+                // file's risk regardless of which weights score them.
+                assert_eq!(auc_validation_default, Some(0.5));
+                assert_eq!(auc_validation_tuned, Some(0.5));
+            }
+            TuningDecision::Applied { .. } => panic!(
+                "expected DefaultsKept(margin): a training-only AUC gain must not be adopted"
+            ),
+        }
     }
 }
