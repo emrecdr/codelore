@@ -1,10 +1,16 @@
 //! Integration tests for the defect-calibration artifact model: serde
 //! round-trip, byte-determinism across two saves, `load` version-mismatch
-//! rejection, and `check_repo_identity` pass/fail/override behavior.
+//! rejection, and `check_repo_identity` pass/fail/override behavior. Also
+//! covers the parts of Units C/D that need a real repo + `FactsDb`
+//! connection — `band_history`'s uncapped at-rev scan and the
+//! biomarker-intensity-capture / Rust-side risk-formula parity against a
+//! real SQL `code-health` scan.
 //!
-//! The oracle's table-driven classification tests live in-module
-//! (`codelore-lib/src/defect_calibration.rs`) since they need no filesystem
-//! I/O; this file covers the parts that do (temp files, path canonicalization).
+//! The oracle's table-driven classification tests, and `validate`'s /
+//! `tune_weights`'s hand-computed-value unit tests, live in-module
+//! (`codelore-lib/src/defect_calibration/{mod,validate}.rs`) since they need
+//! no filesystem I/O or repo fixture; this file covers the parts that do
+//! (temp files, path canonicalization, a real ingested repo).
 
 use std::io::Write;
 use std::path::Path;
@@ -263,4 +269,109 @@ fn check_repo_identity_override_allows_a_foreign_repo() {
     let foreign = tempfile::tempdir().expect("tempdir");
     defect_calibration::check_repo_identity(&art, foreign.path(), true)
         .expect("allow_foreign must bypass the identity check");
+}
+
+// ─── band_history: uncapped, at-rev, oldest-first ────────────────────────────
+
+#[test]
+fn band_history_is_oldest_first_and_uncapped() {
+    let fx = codelore_lib::test_support::biomarker_repo::build();
+    let repo = codelore_lib::repo::GixRepo::open(fx.dir.path()).expect("open");
+    let db = codelore_lib::facts::FactsDb::new_in_memory().expect("db");
+    let opts = codelore_lib::test_support::permissive_coupling_opts(fx.dir.path().to_path_buf());
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let samples =
+        defect_calibration::validate::band_history(&db, &repo, &opts).expect("band_history");
+    assert!(
+        !samples.is_empty(),
+        "fixture with several commits must yield samples"
+    );
+
+    // Oldest-first by date (non-decreasing) — `validate`'s
+    // nearest-sample-at-or-before lookup assumes this ordering.
+    for w in samples.windows(2) {
+        assert!(
+            w[0].0.as_str() <= w[1].0.as_str(),
+            "samples must be oldest-first by date: {} then {}",
+            w[0].0,
+            w[1].0
+        );
+    }
+    for (date, _) in &samples {
+        assert!(
+            date.len() == 10 && date.as_bytes()[4] == b'-' && date.as_bytes()[7] == b'-',
+            "date must be zero-padded YYYY-MM-DD for lexicographic comparison: {date}"
+        );
+    }
+
+    // The newest sample covers the same commit as a full-history HEAD scan
+    // (the sampler always includes the newest commit) — every file HEAD
+    // scores must have a band in that last sample. `health_trend::file_series`
+    // caps this to the top 50 hotspot paths; `band_history` must NOT, since
+    // `validate` needs a band for whichever file a mined defect touched, not
+    // just the busiest ones.
+    let head_rows =
+        codelore_lib::analyses::code_health::run_code_health(&db, &opts).expect("head scan");
+    assert!(
+        head_rows.len() < 50,
+        "fixture must stay small enough that a top-50 cap would visibly truncate it \
+         (got {} files) — otherwise this test cannot distinguish capped from uncapped",
+        head_rows.len()
+    );
+    let (_, last_bands) = samples.last().expect("at least one sample");
+    assert_eq!(
+        last_bands.len(),
+        head_rows.len(),
+        "band_history's newest sample must score every file HEAD scores, not a top-N subset"
+    );
+    for row in &head_rows {
+        assert!(
+            last_bands.contains_key(&row.path),
+            "missing band for {} at the newest sample — band_history must be uncapped",
+            row.path
+        );
+    }
+}
+
+// ─── Unit D parity: Rust-side risk formula vs a real SQL scan ────────────────
+
+#[test]
+fn structural_risk_from_intensities_matches_a_real_sql_scan_on_the_biomarker_fixture() {
+    use codelore_lib::analyses::code_health::{HealthScanCtx, run_code_health_scoped};
+    use codelore_lib::defect_calibration::validate::{
+        capture_intensities, default_weights, structural_risk_from_intensities,
+    };
+
+    let fx = codelore_lib::test_support::biomarker_repo::build();
+    let repo = codelore_lib::repo::GixRepo::open(fx.dir.path()).expect("open");
+    let db = codelore_lib::facts::FactsDb::new_in_memory().expect("db");
+    let opts = codelore_lib::test_support::permissive_coupling_opts(fx.dir.path().to_path_buf());
+    db.ingest(&repo, &opts).expect("ingest");
+
+    // A single HEAD (`include_clones = true`) scan, then capture the
+    // `code_health_biomarkers_v1` rows it leaves behind on the SAME
+    // connection — exactly the recipe `capture_intensities`'s rustdoc
+    // prescribes and `calibrate-defects` will follow.
+    let head_rows = run_code_health_scoped(&db, &opts, &HealthScanCtx::head()).expect("head scan");
+    let intensities = capture_intensities(&db).expect("capture intensities");
+
+    assert!(
+        !head_rows.is_empty(),
+        "biomarker_repo must yield scored rows for the parity loop to bite"
+    );
+
+    let weights = default_weights();
+    for row in &head_rows {
+        let ints = intensities
+            .get(&row.path)
+            .unwrap_or_else(|| panic!("no captured intensities for {}", row.path));
+        let rust_risk = structural_risk_from_intensities(&weights, ints);
+        assert!(
+            (rust_risk - row.structural_risk).abs() < 1e-9,
+            "parity mismatch for {}: rust-side={rust_risk} sql structural_risk={}",
+            row.path,
+            row.structural_risk
+        );
+    }
 }

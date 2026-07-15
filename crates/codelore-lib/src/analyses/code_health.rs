@@ -93,7 +93,11 @@ impl HealthScanCtx {
 /// is generated from this table by [`smell_weights_case`]) and the no-DRY
 /// renormalization divisor. Weights sum to exactly 1.0 so `structural_risk`
 /// stays in [0,1].
-const SMELL_WEIGHTS: &[(&str, f64)] = &[
+///
+/// `pub(crate)` (rather than private) so `defect_calibration::validate` can
+/// key its captured biomarker intensities and its Rust-side risk formula to
+/// this exact order — see `defect_calibration::validate::default_weights`.
+pub(crate) const SMELL_WEIGHTS: &[(&str, f64)] = &[
     ("complex-method", 0.22),
     ("god-class", 0.18),
     ("large-method", 0.12),

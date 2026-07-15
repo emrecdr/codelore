@@ -26,6 +26,25 @@
 //! CLI-side, shelling `git blame --porcelain` and parsing it with
 //! [`szz::parse_blame_porcelain`].
 //!
+//! # Unit C — the historical band scan + validation report
+//!
+//! [`validate::band_history`] recomputes code-health bands at ≤12 evenly
+//! spaced historical revisions (the same at-rev machinery `health_trend`
+//! uses, but with full path coverage — no top-50 cap). [`validate::validate`]
+//! matches each defect-introducing commit to the nearest band sample
+//! at-or-before its date and reports the headline band table plus AUC /
+//! precision@k of HEAD's `structural_risk` against the defect-implicated
+//! file labels.
+//!
+//! # Unit D — constrained weight tuning
+//!
+//! [`validate::tune_weights`] runs a deterministic coordinate-descent search
+//! over the eight smell weights and only adopts a tuned set when the
+//! evidence clears the honesty floor and the acceptance margin — see that
+//! function's rustdoc for the full design decision (biomarker-intensity
+//! capture + the Rust-side risk-scoring formula it re-scores candidates
+//! with).
+//!
 //! # Unit E — the artifact
 //!
 //! [`DefectArtifact`] is a versioned, compact JSON container (mirroring
@@ -44,6 +63,7 @@ use sha2::{Digest, Sha256};
 use crate::{CodeLoreError, Result};
 
 pub mod szz;
+pub mod validate;
 
 /// Artifact schema version. A [`load`]ed artifact whose `format_version`
 /// differs is rejected with a hard error — an explicitly passed
