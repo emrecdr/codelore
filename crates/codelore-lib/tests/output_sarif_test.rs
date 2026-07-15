@@ -43,7 +43,7 @@ fn sarif_hotspots_valid_2_1_0() {
             .iter()
             .any(|t| t.as_str() == Some("behavioral"))
     );
-    assert!(result["properties"]["codelore/revs"].as_u64().unwrap() == 12);
+    assert_eq!(result["properties"]["codelore/revs"].as_u64().unwrap(), 12);
 
     // partialFingerprints present
     let fp = result["partialFingerprints"]["primaryLocationLineHash"]

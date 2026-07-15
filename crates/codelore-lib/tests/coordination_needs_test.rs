@@ -118,7 +118,7 @@ fn coupling_repo_entropy_positive_for_coupled_files() {
         assert!(
             row.cochange_entropy >= 0.0,
             "co-change entropy must be non-negative for {:?}, got {}",
-            &row.path,
+            row.path,
             row.cochange_entropy,
         );
     }
