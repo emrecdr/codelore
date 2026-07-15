@@ -199,7 +199,10 @@ pub fn is_cosmetic_line(content: &str, lang: Option<Tier1Language>) -> bool {
 /// surface — see [`parse_blame_porcelain`]), so there is no reliable line
 /// index to read the defect commit's own blob at. By blame's own guarantee,
 /// though, the line's text is unchanged between the defect commit and the
-/// fix's parent — that's what "last introduced by" means — so this is the
+/// fix's parent *modulo whitespace* (a `-w` blame treats re-indented lines
+/// as unchanged) — and since [`is_cosmetic_line`] trims before both its
+/// blank and comment-prefix checks, the classification is invariant to
+/// exactly that divergence. So for this filter's purpose this reads the
 /// same content the spec calls "at the blamed revision", without an
 /// unresolvable line-index translation.
 ///
@@ -249,8 +252,12 @@ struct LinkAccumulator {
 /// classified as a fix — `commit_dates` supplies the date for every
 /// candidate (defect) commit, keyed by rev; a candidate whose date is
 /// missing is conservatively discarded (the clock-skew guard cannot be
-/// verified). A fix with no deleted pre-image lines (a pure-addition
-/// commit) contributes no candidates and is counted in
+/// verified). Dates are compared LEXICOGRAPHICALLY for the clock-skew
+/// guard, so callers must supply them in one zero-padded, consistently
+/// UTC-normalized format for every commit (the fact store's `commits.date`
+/// timestamps rendered as strings satisfy this; mixed timezone offsets or
+/// unpadded fields would not). A fix with no deleted pre-image lines (a
+/// pure-addition commit) contributes no candidates and is counted in
 /// `MiningStats::pure_addition_fixes`.
 ///
 /// Returned links are sorted by `(defect_rev, fix_rev, path)` — mining
