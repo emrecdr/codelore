@@ -5,9 +5,9 @@
   <title>CodeLore — Read the lore of your codebase.</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
-  <meta name="description" content="CodeLore mines your git history into 54 behavioral analyses — hotspots, change-coupling, ownership, code health — surfaced as SARIF and an interactive dashboard. A Rust drop-in successor to code-maat.">
+  <meta name="description" content="CodeLore mines your git history into dozens of behavioral analyses — hotspots, change-coupling, ownership, code health — fused with the static import graph and calibrated against a reference corpus. SARIF, an interactive dashboard, and a local MCP server. A Rust drop-in successor to code-maat.">
   <meta property="og:title" content="CodeLore — Read the lore of your codebase.">
-  <meta property="og:description" content="Behavioral, git-history code analysis: 54 analyses, SARIF output, and an interactive dashboard. A Rust drop-in successor to code-maat.">
+  <meta property="og:description" content="Behavioral, git-history code analysis fused with static structure: SARIF output, an interactive dashboard, corpus-relative percentiles, and a local MCP server. A Rust drop-in successor to code-maat.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://emrecdr.github.io/codelore/">
   <meta property="og:image" content="https://emrecdr.github.io/codelore/assets/dashboard-hotspots.png">
@@ -181,10 +181,11 @@
       <p class="pitch">
         Behind every codebase is a human narrative your linter cannot see: who wrote this,
         who still understands it, and where the historical scars are buried. CodeLore mines
-        your repository's git history and projects it into <strong>54 behavioral analyses</strong>
-        — hotspots, change-coupling, ownership maps, knowledge fragmentation, code-health scores,
-        and more — surfaced as SARIF for your CI dashboard and as an interactive dashboard you can
-        explore in the browser.
+        your repository's git history and projects it into <strong>dozens of behavioral analyses</strong>
+        — hotspots, change-coupling, ownership maps, knowledge fragmentation, code-health scores —
+        fused with the static import graph and calibrated against a reference corpus, then
+        surfaced as SARIF for your CI dashboard, a single-file interactive dashboard, and a
+        local MCP server for AI agents. Fully local: no account, no telemetry, every formula published.
       </p>
       <div class="ctas">
         <a class="btn btn-primary" href="demo/">Live demo</a>
@@ -197,7 +198,7 @@
              alt="The CodeLore interactive dashboard: a bivariate hotspot map where file size encodes churn and colour encodes health times activity, with switchable behavioural lenses and an off-boarding simulation."
              loading="eager">
       </a>
-      <p class="shot-caption">The interactive dashboard, analyzing CodeLore's own repository. Click to open the live demo &rarr;</p>
+      <p class="shot-caption">The interactive dashboard's hotspot map, analyzing CodeLore's own repository — regenerated on every push to main. Click to open the live demo &rarr;</p>
     </div>
   </header>
 
@@ -225,6 +226,36 @@
           <strong>Live clones</strong>
           <span>Which copy-pasted blocks keep being edited in lockstep (real debt) versus dead patterns nobody touches (noise)?</span>
         </li>
+        <li>
+          <strong>Tangles worth untangling</strong>
+          <span>Which dependency cycles are live and hot versus fossils nobody touches — and which single file is the best extraction point?</span>
+        </li>
+        <li>
+          <strong>"Is a 78 actually good?"</strong>
+          <span>How does this file's complexity — and this repo's architecture — compare to a reference corpus of real OSS projects, or to your own org's portfolio?</span>
+        </li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>In your workflow</h2>
+      <p class="lead">
+        Every number comes from a published, deterministic formula — no opaque ML — and
+        everything runs against the repository on your disk: no account, no server, no telemetry.
+      </p>
+      <ul class="answers">
+        <li>
+          <strong>CI &amp; pull requests</strong>
+          <span>Native SARIF 2.1.0 for GitHub Code Scanning and friends, <code class="inline">codelore diff</code> PR-mode deltas, and <code class="inline">codelore check</code> quality gates with commit evidence chains.</span>
+        </li>
+        <li>
+          <strong>AI agents</strong>
+          <span><code class="inline">codelore mcp</code> serves behavioral analysis to Claude, Cursor, and any MCP client over stdio — fully local.</span>
+        </li>
+        <li>
+          <strong>Humans</strong>
+          <span>One self-contained HTML dashboard — six navigable sections from hotspots to delivery flow, linked brushing across every widget, off-boarding simulation — shareable as a single file.</span>
+        </li>
       </ul>
     </section>
 
@@ -235,6 +266,8 @@
 brew install emrecdr/codelore/codelore</pre>
       <pre><span class="cmt"># Prebuilt binary via cargo-binstall (any Rust dev environment):</span>
 cargo binstall codelore</pre>
+      <pre><span class="cmt"># Container (distroless; the entrypoint is the codelore binary):</span>
+docker run --rm -v "$PWD":/repo ghcr.io/emrecdr/codelore:latest analyze --analysis hotspots --repo /repo</pre>
       <pre><span class="cmt"># From source (Rust 1.96+ toolchain required):</span>
 cargo install --git https://github.com/emrecdr/codelore codelore-cli</pre>
       <p class="install-note">
@@ -267,6 +300,8 @@ cargo install --git https://github.com/emrecdr/codelore codelore-cli</pre>
       <p>
         <a href="https://github.com/emrecdr/codelore">Source on GitHub</a> ·
         <a href="demo/">Live demo</a> ·
+        <a href="dev/bench/">Benchmarks</a> ·
+        <a href="https://github.com/emrecdr/codelore/blob/main/docs/advanced-usage.md">Docs</a> ·
         <a href="https://github.com/emrecdr/codelore/releases">Releases</a>
       </p>
     </div>
