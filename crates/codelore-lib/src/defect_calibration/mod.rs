@@ -1,12 +1,12 @@
-//! Own-repo defect calibration: the fix-commit oracle and the
-//! `defects.calib.json` artifact model.
+//! Own-repo defect calibration: the fix-commit oracle, the AG-SZZ linkage
+//! engine, and the `defects.calib.json` artifact model.
 //!
 //! This module answers *does the health score actually predict where defects
-//! land in THIS repository?* by mining a repo's own fix history (AG-SZZ, added
-//! in later modules of this crate), validating code-health predictions against
-//! it, and — when the evidence clears an honesty floor — tuning the eight
-//! smell weights. Everything here is opt-in and vintage-stamped so default
-//! behavior stays byte-reproducible without the feature.
+//! land in THIS repository?* by mining a repo's own fix history (AG-SZZ),
+//! validating code-health predictions against it, and — when the evidence
+//! clears an honesty floor — tuning the eight smell weights. Everything here
+//! is opt-in and vintage-stamped so default behavior stays byte-reproducible
+//! without the feature.
 //!
 //! # Unit A — the fix-commit oracle
 //!
@@ -16,6 +16,15 @@
 //! alternation is a documented SZZ precision trap. This oracle uses a
 //! narrower, word-boundary-anchored vocabulary intended specifically for
 //! linking fixes to the defects they resolve.
+//!
+//! # Unit B — the AG-SZZ linkage engine
+//!
+//! [`szz`] traces each fix commit's deleted pre-image lines back to the
+//! commit that last introduced them, behind a pluggable
+//! [`szz::LineOriginSource`] seam — the roadmap's "pluggable SZZ". This
+//! module has no production git-subprocess implementation; that lives
+//! CLI-side, shelling `git blame --porcelain` and parsing it with
+//! [`szz::parse_blame_porcelain`].
 //!
 //! # Unit E — the artifact
 //!
@@ -33,6 +42,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{CodeLoreError, Result};
+
+pub mod szz;
 
 /// Artifact schema version. A [`load`]ed artifact whose `format_version`
 /// differs is rejected with a hard error — an explicitly passed
