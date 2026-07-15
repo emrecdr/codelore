@@ -171,6 +171,10 @@ fn ln_factorial(n: u64) -> f64 {
 /// the Mann-Whitney U statistic with midpoint tie handling. None when either
 /// class is empty.
 ///
+/// NaN scores are accepted, never panic, and rank deterministically at an
+/// extreme of the ordering (IEEE-754 total order via `f64::total_cmp`) —
+/// callers wanting NaN rejected must filter beforehand.
+///
 /// # Algorithm
 ///
 /// Sort all `(score, label)` pairs ascending by score and assign each a
@@ -240,7 +244,8 @@ pub fn auc(scored: &[(f64, bool)]) -> Option<f64> {
 /// Items are sorted descending by score with a stable sort, so items with
 /// equal scores keep their relative order from `scored` — the top k is
 /// therefore deterministic for any input, not dependent on sort
-/// implementation details.
+/// implementation details. NaN scores are accepted and rank
+/// deterministically per `f64::total_cmp`, as in [`auc`].
 #[must_use]
 pub fn precision_at_k(scored: &[(f64, bool)], k: usize) -> Option<f64> {
     if k == 0 || k > scored.len() {
