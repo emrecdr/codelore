@@ -156,6 +156,12 @@ pub enum Command {
     /// (`--calibration`). Use `--merge` to fold the build into an existing
     /// artifact (e.g. your org's repos into the world corpus).
     Calibrate(CalibrateArgs),
+    /// Mine a repository's own fix-commit history (AG-SZZ), validate whether
+    /// `code-health` predicted where the mined defects landed, and — when the
+    /// evidence clears an honesty floor — tune the eight smell weights to
+    /// this repository. Writes a `defects.calib.json` artifact consumed by
+    /// `--defect-calibration` on `analyze`/`check`.
+    CalibrateDefects(CalibrateDefectsArgs),
 }
 
 /// MCP server arguments.
@@ -573,6 +579,38 @@ pub struct CalibrateArgs {
     /// the same root used by `analyze` and `check`.
     #[arg(long)]
     pub cache_dir: Option<PathBuf>,
+}
+
+/// Mine a repository's own fix-commit history and build a `defects.calib.json`
+/// artifact (own-repo defect calibration).
+#[derive(clap::Args, Debug)]
+pub struct CalibrateDefectsArgs {
+    /// Path to the git repo to mine (default: cwd).
+    #[arg(short, long, default_value = ".")]
+    pub repo: PathBuf,
+
+    /// Where to write the built artifact (compact JSON).
+    #[arg(long, required = true)]
+    pub output: PathBuf,
+
+    /// Artifact vintage label. Defaults to `defects-YYYY-MM-DD` (today's date).
+    #[arg(long)]
+    pub vintage: Option<String>,
+
+    /// Restrict mining to fix commits within this many trailing days of the
+    /// repo's last commit. Defects those fixes are traced back to may predate
+    /// the window — only which FIXES are mined is narrowed. Omit to mine the
+    /// full history.
+    #[arg(long = "window-days")]
+    pub window_days: Option<u32>,
+
+    /// Mine even though the working tree has uncommitted changes. Mining
+    /// reads only committed state (git history + object-database blobs at
+    /// HEAD), so uncommitted edits are invisible to it — the artifact
+    /// describes the commit stamped as `head_at_mining`, not the tree on
+    /// disk. Default: refuse loudly so that mismatch is a deliberate choice.
+    #[arg(long, default_value_t = false)]
+    pub allow_dirty: bool,
 }
 
 /// Parse a YYYY-MM-DD date for the date-valued flags (`--age-time-now`,
