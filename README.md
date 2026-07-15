@@ -24,7 +24,7 @@
 
 Behind every codebase is a human narrative your linter cannot see: who wrote this, who still understands it, which corners hide tribal knowledge nobody's written down, and where the historical scars are buried. Every commit is a piece of this **lore**.
 
-**CodeLore** mines your repository's git history and projects it into **55 behavioral analyses** — hotspots, change-coupling, ownership maps, knowledge fragmentation, code health scores, copy-paste clones, live clones (clones × Fisher-significant co-change), Leiden community detection on the coupling graph, per-file centrality, knowledge-island bus-factor risk, code familiarity, team composition, coordination needs, marginal-owner risk, god-class detection, layered-architecture rule validation, modularity-violation detection (co-change without imports), unstable-interface detection, per-module bus factor, pair-programming detection, stale-code surfacing, refactoring-targets ROI ranking, and more — surfaced as SARIF for your existing CI dashboard. The socio-technical signal your linter cannot see, with the methodological honesty your team can audit.
+**CodeLore** mines your repository's git history and projects it into a full catalogue of **behavioral analyses** — hotspots, change-coupling, ownership maps, knowledge-island bus-factor risk, code-health scores, live clones (copy-paste blocks × Fisher-significant co-change), dependency tangles ranked by churn heat, modularity violations (co-change without imports), refactoring-targets ROI ranking, and dozens more — fused with the static import graph, calibrated against a reference corpus so you know whether a number is actually bad, and surfaced as SARIF for your existing CI dashboard, a single-file interactive dashboard, and a local MCP server for AI agents. The socio-technical signal your linter cannot see, with the methodological honesty your team can audit.
 
 A Rust **drop-in successor** to Adam Tornhill's [code-maat](https://github.com/adamtornhill/code-maat) — every published code-maat analysis is supported under the same `--analysis NAME` flag, with modern improvements: deterministic tiebreaks, Fisher exact significance gates, SARIF output, persistent cache, PR-mode diffing, and a SQL-queryable fact store. Built on [gix](https://github.com/GitoxideLabs/gitoxide) (pure-Rust git), [DuckDB](https://duckdb.org) (embedded analytics), [fancy-regex](https://github.com/fancy-regex/fancy-regex) (lookaround support for architectural grouping), and a vendored fork of Mozilla's [rust-code-analysis](https://github.com/mozilla/rust-code-analysis) (tree-sitter complexity).
 
@@ -55,19 +55,21 @@ CodeLore focuses on the **socio-technical dimension** — the legends your codeb
 What separates CodeLore from code-maat, CodeScene, and jscpd:
 
 - **🎯 Live-clone × co-change intersection.** Every clone detector finds copy-pasted blocks. CodeLore intersects clones with Fisher-significant change-coupling — flagging only the clones whose copies actually evolve together. Dead clones (look-alike code nobody touches) are filtered out as noise; live clones (real debt) are surfaced with a `combined_score` ranking. We're not aware of another OSS tool that ships this intersection.
-- **📋 Behavioral SARIF.** Findings land natively in **SARIF 2.1.0** with three rules — `CODELORE-HOTSPOT`, `CODELORE-CLONE`, and `CODELORE-LIVE-CLONE`. Drop them straight into GitHub Code Scanning, GitLab security dashboards, or Defectdojo and alerts appear inline on pull requests.
+- **🧬 Structure × history fusion.** The import graph and the change-coupling graph are analyzed *together*, not side by side: `modularity-violations` flags file pairs that always change together with **no** import edge between them, `unstable-interface` and `crossing` find dependency shapes that drag their dependents, `cycle-health` ranks every import tangle by behavioral heat — live vs fossil, with a suggested extraction point and its predicted propagation-cost drop — and the dashboard's dependency matrix has a Fusion mode that classifies every cell by structure×history agreement.
+- **📋 Behavioral SARIF.** Findings land natively in **SARIF 2.1.0**: `CODELORE-HOTSPOT`, `CODELORE-CLONE`, and `CODELORE-LIVE-CLONE` in analyze mode, `CODELORE-MISSING-COCHANGE` and `CODELORE-DELTA-HEALTH` on PR diffs, and per-gate rules with commit evidence chains from `codelore check`. Drop them straight into GitHub Code Scanning, GitLab security dashboards, or Defectdojo and alerts appear inline on pull requests.
 - **🔍 Transparency over opaque ML.** CodeScene's hotspot ranking is a closed ML model. CodeLore ranks with a **published deterministic formula**: `percentile_rank(revisions) × percentile_rank(cognitive_complexity) × (100 − code_health) / 4`. Every input is emitted alongside the score; anyone can reproduce it.
 - **🧾 Provenance manifest.** Every run emits a `.provenance.json` sidecar recording every config knob (auto-derived via canonical Options serialization — adding a new field auto-propagates), version pin, and timestamp. Reproducibility receipt for the run; eliminates the "we got different numbers because we silently used different thresholds" failure mode.
 - **💾 SQL-queryable fact store.** No proprietary format lock-in. Export the full DuckDB store as Parquet or SQLite and query your git history as a database from the command line.
 - **⚡ Persistent cache.** Second invocation on the same `(repo, HEAD, options)` opens read-only in ~10 ms instead of re-walking history — typically a 10-100× speedup on the dev inner loop depending on repo size, and the foundation of the `codelore diff` PR-mode subcommand.
-- **📊 Corpus-relative code-health percentiles.** The `code-health` analysis answers not just "how does this file rank within this repo?" but also "is this complex for the ecosystem?" An embedded reference corpus — built from permissive-license OSS projects across five languages — provides per-language percentile breakpoints, fully offline and shipped in the binary. `codelore calibrate` builds a private org corpus so you can compare against your own codebase portfolio instead of the public world.
+- **📊 Corpus-relative percentiles.** A code-health score of 78 means nothing without a reference point. An embedded reference corpus — built from permissive-license OSS projects across five languages — answers "is this complex for the ecosystem?" with per-language percentile breakpoints on `code-health` and corpus percentiles on repo-level architecture metrics (propagation cost, cycle file share), fully offline and shipped in the binary. `codelore calibrate` builds a private org corpus — each pinned repo is fetched shallow and ingested HEAD-only, so corpus builds are fast — letting you compare against your own codebase portfolio instead of the public world.
+- **🔒 Fully local, including the agent surface.** No account, no server, no telemetry: analysis, quality gates, the dashboard, and the `codelore mcp` server all run against the repository on your disk. The dashboard is one self-contained HTML file; the reference corpus is embedded in the binary; nothing phones home.
 - **🔗 Drop-in code-maat compatibility.** Every published code-maat analysis is supported under the same `--analysis NAME`. The `--code-maat-compat` flag flips internal defaults (`min-revs` pivot, CSV column headers for `summary` / `code-age` / `communication` / `ownership` / `authors`, `--min-soc` overload) back to legacy semantics for users with dashboards that parse code-maat CSV verbatim — see the [migration table](#migrating-from-code-maat) below.
 
 ---
 
 ## The analyses
 
-Run `codelore analyze --analysis NAME` for any of the 55 analyses below. They are grouped by the question you bring, not by how each one is built.
+Run `codelore analyze --analysis NAME` for any of the analyses below. They are grouped by the question you bring, not by how each one is built.
 
 ### Hotspots & change coupling
 
@@ -175,6 +177,7 @@ codelore explain <metric>           # formula + citation + SQL source for any me
 codelore check                      # quality-gate validation against .codelore-thresholds.toml
 codelore diff base..head            # PR-mode diff and quality gate
 codelore mcp --repo <path>          # MCP server over stdio for AI agent integration
+codelore ingest-sarif --repo . scan.sarif   # ingest external scanner findings (CodeQL, Semgrep, …)
 codelore profile                    # operational telemetry (version, schema, deps, cache root)
 codelore docs                       # markdown analysis catalogue
 codelore calibrate --repos corpus.toml --output org.calib.json   # build an org-specific reference corpus
@@ -206,6 +209,10 @@ cargo install --git https://github.com/emrecdr/codelore codelore-cli
 # (`--format spa` — Apache ECharts + d3-hierarchy fetched once at
 # build time, SHA-pinned). Requires internet on first build:
 cargo install --git https://github.com/emrecdr/codelore codelore-cli --features spa
+
+# Container (distroless; the entrypoint is the codelore binary):
+docker run --rm -v "$PWD":/repo ghcr.io/emrecdr/codelore:latest \
+    analyze --analysis hotspots --repo /repo
 ```
 
 Or grab a prebuilt archive straight from a [GitHub Release](https://github.com/emrecdr/codelore/releases/latest) — five targets ship per tag (macOS arm64/x86_64, Linux arm64/x86_64-gnu, Windows x86_64-msvc), each with SLSA L3 build provenance attached.
@@ -235,14 +242,16 @@ The banner doubles as a fail-fast gate: if the path isn't a git repo, the repo h
 Output (CSV, the default, on stdout — pipeable into other tools):
 
 ```
-entity,revisions,cognitive,code-health,hotspot-score
-src/auth/session.rs,87,42.00,60.00,9.1837
-src/db/migrate.rs,54,28.00,71.20,4.6125
-src/api/handlers.rs,38,18.00,80.36,2.4310
+entity,revisions,cognitive,code-health,hotspot-score,mi,mi-rank,mi-band,ai-pct
+src/auth/session.rs,87,42.00,60.00,9.1837,-12.40,0.0312,low,18.39
+src/db/migrate.rs,54,28.00,71.20,4.6125,24.85,0.4157,moderate,0.00
+src/api/handlers.rs,38,18.00,80.36,2.4310,58.11,0.7982,high,4.17
 ```
 
 - `code-health ∈ [60, 100]` — higher = healthier (60 is the floor because the cognitive-complexity term contributes at most 40 points of deduction).
 - `hotspot-score ∈ [0, 10]` — higher = more pressing refactor candidate. `9.18` means "near the top of the curve on revisions × complexity × poor health" — the canonical "on fire" file.
+- `mi` / `mi-rank` / `mi-band` — Maintainability Index with a repo-relative percentile rank and band (`low` / `moderate` / `high`); banding is percentile-based because the literature's absolute MI thresholds misclassify real-world file sizes.
+- `ai-pct` — share of the file's revisions coming from AI-assistant-attributed commits.
 
 The top row is the file to look at first: high churn × high complexity × low code health = highest score.
 
@@ -310,22 +319,15 @@ codelore analyze --format spa --output codelore.html --repo .
 
 ### What's inside
 
-Interactive widgets driven by a single embedded JSON blob, grouped into six navigable sections:
+Interactive widgets driven by a single embedded JSON blob, organised into **six titled sections** — a sticky nav bar tracks your scroll position and jumps to any section, each section collapses behind its heading chevron, and below 1280px everything renders single-column so the dashboard stays readable on a laptop half-screen:
 
-- **Codebase at a glance** — KPIs: files, commits, contributors, median code-health, complexity peaks, MI band breakdown
-- **Knowledge islands** — files whose primary author has departed and where no other substantial owner exists (no manual ex-developer marking required)
-- **Hotspots circle-pack** — files sized by churn, coloured by default as a **bivariate health×activity map** (the unhealthy-and-churning danger quadrant reads at a glance), with seven single-signal lenses one tab away: complexity, code health, tech-debt friction, knowledge map, AI attribution, clones, and knowledge loss under your off-boarding scenario
-- **Hotspots table + treemap** — same data, sortable / filterable / strict-area comparison
-- **Trends** — monthly revision counts for the top-N hotspots
-- **Multi-metric comparison** — parallel coordinates across five behavioural axes, drag-filter on any axis
-- **Delivery risk** — per-commit risk (Kamei JIT-SDP) for the last N commits, with the dominant risk dimension annotated
-- **Module coupling + Architecture graph** — change-coupling chord (modules coloured by top-level cluster) vs. resolved-import force-graph (agreement = healthy modularity; disagreement = signal worth investigating)
-- **Change coupling sankey** — Fisher-significant file pairs
-- **Cognitive distribution** — boxplot across every file with measured complexity
-- **Function X-Ray** — function-level cognitive complexity sunburst
-- **Commit activity** — GitHub-style calendar heatmap
-- **File detail drawer** — click any file anywhere to slide in a tabbed side panel (Overview / Coupling / People / Health / X-Ray) with its full profile; the X-Ray tab shows a per-function change-frequency leaderboard for the top-10 hotspot paths
-- **Factor header + guided tour** — four composite KPI tiles (Code / Architecture / Knowledge / Delivery) with XmR attention badges that fire only on statistically unlikely trends; a four-step guided tour walks each lens in sequence before handing off to free-form exploration
+- **Overview** — four composite factor tiles (Code / Architecture / Knowledge / Delivery) with XmR attention badges that fire only on statistically unlikely trends (the tiles double as section jump links); repo KPIs (files, commits, contributors, median code-health, complexity peaks, MI band breakdown); a four-step guided tour; and the hero **hotspot circle-pack** — files sized by churn, coloured by default as a **bivariate health×activity map** (the unhealthy-and-churning danger quadrant reads at a glance), with seven single-signal lenses one tab away: complexity, code health, tech-debt friction, knowledge map, AI attribution, clones, and knowledge loss under your off-boarding scenario
+- **Hotspots & Risk** — sortable/filterable hotspot table, strict-area treemap of the same data, and the function-level cognitive-complexity sunburst
+- **Code Health** — repo health timeline, monthly revision trends for the top-N hotspots, effort-by-band share bars (what fraction of churn lands in red/yellow/green code), a health improvements & regressions feed, cognitive-complexity distribution boxplot, and a parallel-coordinates comparison across five behavioural axes with drag-filtering
+- **Architecture** — resolved-import force-graph vs change-coupling chord (agreement = healthy modularity; disagreement = signal worth investigating); a dependency structure matrix with a **Fusion cell-mode** that classifies every cell by structure×history agreement — imports that co-change, imports that never do, and co-change with no import edge at all (a modularity violation); architecture trend at sampled historical revisions; and a Fisher-significant change-coupling sankey
+- **Knowledge** — knowledge surfaces (team familiarity, tenure mix, coordination needs) and auto-detected knowledge islands: files whose primary author has departed and where no other substantial owner exists (no manual ex-developer marking required)
+- **Delivery** — git-only delivery-flow proxies (rework %, branch duration, release cadence), per-commit risk (Kamei JIT-SDP) with the dominant risk dimension annotated, and a GitHub-style commit-activity calendar heatmap
+- **File detail drawer** (everywhere) — click any file in any widget to slide in a tabbed side panel (Overview / Coupling / People / Health / X-Ray) with its full profile; the X-Ray tab shows a per-function change-frequency leaderboard for the top-10 hotspot paths
 
 ### What you can do with it
 
@@ -362,12 +364,11 @@ codelore diff origin/main...HEAD \
   --output - >> "$GITHUB_STEP_SUMMARY"
 ```
 
-Five signals per PR, surfaced via SARIF or human-readable Markdown:
+Four signal families per PR, surfaced via SARIF or human-readable Markdown:
 
 - **Hotspot deltas** — files newly entering the top-N or worsening their score (`CODELORE-HOTSPOT` SARIF rule)
 - **Missing co-changes** — "you changed `auth/login.rs` but historically `auth/session.rs` always changes with it — did you forget?" (`CODELORE-MISSING-COCHANGE` SARIF rule, the CodeScene-signature signal)
-- **New clone families** — copy-paste debt introduced by the PR (`CODELORE-CLONE` SARIF rule)
-- **Live clones** — clones whose copies co-change at Fisher-significant rates (`CODELORE-LIVE-CLONE` SARIF rule)
+- **New clone families** — copy-paste debt introduced by the PR (`CODELORE-CLONE` SARIF rule); the text/Markdown/JSON output additionally lists existing clone families the PR touched
 - **Delta health** — per-function health verdict on every function added, modified, or removed by the PR (`CODELORE-DELTA-HEALTH` SARIF rule)
 
 Quality-gate options:
@@ -379,7 +380,8 @@ codelore diff origin/main...HEAD --fail-on rank-entrant
 # Block PRs that worsen an existing hotspot:
 codelore diff origin/main...HEAD --fail-on score-increase
 
-# Block on any of the four signals:
+# Block on any finding (rank entrant, score increase, new clone
+# family, or missing co-change):
 codelore diff origin/main...HEAD --fail-on any
 ```
 
@@ -506,7 +508,7 @@ What we deliberately don't ship: no async runtime, no libgit2 binding, no LLM-ba
 
 ## Status
 
-Release-ready alpha. **Multiple analyses × 11 output formats × `codelore diff` PR-mode × `codelore check` quality gate × 5 SARIF rules.** Full test suite (`codelore-lib` unit + integration, `codelore-cli` integration, differential `GixRepo` vs `GitCliRepo` cross-walker parity, headless-browser SPA smoke) passes on Rust 1.96.0 on Linux and macOS in CI, and the Windows MSVC target runs a curated platform-sensitive test subset (path handling, process spawning, git-backend parity, filesystem semantics) plus full compile-and-link verification on every push (hosted Windows runners cannot fit the full suite's per-test process overhead inside a practical CI ceiling, so the subset targets where Windows can actually diverge); `clippy -D warnings`, `rustfmt --check`, and `cargo deny check` all gate every push. Each tagged release ships prebuilt binaries for five targets (macOS arm64/x86_64, Linux arm64/x86_64-gnu, Windows x86_64-msvc), each with SLSA L3 build provenance attached, a distroless OCI container at `ghcr.io/emrecdr/codelore`, an auto-regenerated formula in the `emrecdr/codelore` Homebrew tap, and a `cargo binstall`-compatible asset layout — all produced by `.github/workflows/release.yml` on every `v*` tag push, gated by the `protect-release-tags` ruleset that requires green CI on the target commit before the tag is accepted.
+Released and under active development (pre-1.0; SemVer policy in [`docs/RELEASING.md`](docs/RELEASING.md)). **A full behavioral-analysis catalogue × 11 output formats × `codelore diff` PR-mode × `codelore check` quality gate × 5 SARIF rules.** Full test suite (`codelore-lib` unit + integration, `codelore-cli` integration, differential `GixRepo` vs `GitCliRepo` cross-walker parity, headless-browser SPA smoke) passes on Rust 1.96.0 on Linux and macOS in CI, and the Windows MSVC target runs a curated platform-sensitive test subset (path handling, process spawning, git-backend parity, filesystem semantics) plus full compile-and-link verification on every push (hosted Windows runners cannot fit the full suite's per-test process overhead inside a practical CI ceiling, so the subset targets where Windows can actually diverge); `clippy -D warnings`, `rustfmt --check`, and `cargo deny check` all gate every push. Each tagged release ships prebuilt binaries for five targets (macOS arm64/x86_64, Linux arm64/x86_64-gnu, Windows x86_64-msvc), each with SLSA L3 build provenance attached, a distroless OCI container at `ghcr.io/emrecdr/codelore`, an auto-regenerated formula in the `emrecdr/codelore` Homebrew tap, and a `cargo binstall`-compatible asset layout — all produced by `.github/workflows/release.yml` on every `v*` tag push, gated by the `protect-release-tags` ruleset that requires green CI on the target commit before the tag is accepted.
 
 Known limitations (the honest list, validated against the current codebase):
 
