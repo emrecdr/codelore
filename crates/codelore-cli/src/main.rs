@@ -1015,6 +1015,8 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
     let opts = Options {
         repo_path: args.repo.clone(),
         calibration: args.calibration.clone(),
+        defect_calibration: args.defect_calibration.clone(),
+        allow_foreign_calibration: args.allow_foreign_calibration,
         ..Options::default()
     };
     let repo = GixRepo::open(&args.repo).context("open repo")?;
@@ -2426,6 +2428,8 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         release_tag_glob: args.release_tag_glob.clone(),
         target: args.target.clone(),
         calibration: args.calibration.clone(),
+        defect_calibration: args.defect_calibration.clone(),
+        allow_foreign_calibration: args.allow_foreign_calibration,
         ..Options::default()
     };
 

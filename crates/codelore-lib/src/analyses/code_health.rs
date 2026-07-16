@@ -110,21 +110,36 @@ pub(crate) const SMELL_WEIGHTS: &[(&str, f64)] = &[
 
 /// Divisor appended to the `structural_risk` SUM when the DRY biomarker is
 /// excluded: the seven remaining weights sum to 0.88, so dividing by 0.88
-/// renormalizes the risk scale back to 1.0. Empty at HEAD.
+/// renormalizes the risk scale back to 1.0. Empty at HEAD. Documents the
+/// default-weights value; runs with a defect-calibration artifact recompute
+/// the divisor from the active DRY weight instead.
 const STRUCTURAL_SCALE_NO_DRY: &str = " / 0.88";
 
+/// [`SMELL_WEIGHTS`] as owned `(name, weight)` tuples — the default argument
+/// for [`smell_weights_case`], and (via
+/// `defect_calibration::validate::default_weights`) the baseline the weight
+/// tuner steps from.
+pub(crate) fn default_smell_weights() -> Vec<(String, f64)> {
+    SMELL_WEIGHTS
+        .iter()
+        .map(|&(name, w)| (name.to_string(), w))
+        .collect()
+}
+
 /// Build the `SUM(intensity * CASE smell … END)` weight expression from
-/// [`SMELL_WEIGHTS`], keeping the weights a single source of truth shared with
-/// the sum-to-1.0 unit test. Smells absent for a file contribute 0, so
-/// co-occurrence is implicit — a file flagged by more smells accumulates more
-/// weighted terms.
-fn smell_weights_case() -> String {
+/// `weights` — [`SMELL_WEIGHTS`] converted on the default path, or a
+/// defect-calibration artifact's tuned set. Smells absent for a file
+/// contribute 0, so co-occurrence is implicit — a file flagged by more smells
+/// accumulates more weighted terms.
+fn smell_weights_case(weights: &[(String, f64)]) -> String {
     use std::fmt::Write as _;
     let mut case = String::from("CASE smell");
-    for (smell, weight) in SMELL_WEIGHTS {
-        // Weights are compile-time literals from SMELL_WEIGHTS, never user
-        // input, so direct interpolation carries no injection surface.
-        // Writing to a String is infallible, so the fmt Result is discarded.
+    for (smell, weight) in weights {
+        // Names and values come from the compile-time SMELL_WEIGHTS table or
+        // from an artifact whose weights `active_weights` has already pinned
+        // to exactly those names, so direct interpolation carries no
+        // injection surface. Writing to a String is infallible, so the fmt
+        // Result is discarded.
         let _ = write!(case, "\n                WHEN '{smell}' THEN {weight}");
     }
     case.push_str("\n                ELSE 0.0\n            END");
@@ -700,13 +715,35 @@ pub fn run_code_health_scoped(
     materialize_biomarkers(db, opts, cx)?;
 
     let cm_src = &cx.complexity_source;
-    let structural_scale = if cx.include_clones {
+    // Tuned smell weights from an opt-in defect-calibration artifact replace
+    // the built-in defaults for the whole scoring pipeline; without the flag
+    // this resolves to `None` (no filesystem read) and the run is untouched.
+    let tuned = crate::defect_calibration::active_weights(opts)?;
+    let weights = tuned
+        .as_ref()
+        .map_or_else(default_smell_weights, |(w, _)| w.clone());
+    let structural_scale_owned;
+    let structural_scale: &str = if cx.include_clones {
         ""
+    } else if let Some((w, _)) = &tuned {
+        // Recompute the no-DRY renormalization divisor from the active DRY
+        // weight (the const below documents the default-weights value).
+        let dry = w.iter().find(|(n, _)| n == "dry").map_or(0.0, |(_, v)| *v);
+        let divisor = 1.0 - dry;
+        if divisor > f64::EPSILON {
+            structural_scale_owned = format!(" / {divisor}");
+            &structural_scale_owned
+        } else {
+            // Degenerate hand-crafted artifact putting all weight on DRY:
+            // skip the rescale rather than divide by zero — LEAST(1.0, …)
+            // still caps the risk.
+            ""
+        }
     } else {
         STRUCTURAL_SCALE_NO_DRY
     };
     let sql = SQL
-        .replace("{smell_weights_case}", &smell_weights_case())
+        .replace("{smell_weights_case}", &smell_weights_case(&weights))
         .replace("{src}", src)
         .replace("{cm_src}", cm_src)
         .replace("{structural_scale}", structural_scale)

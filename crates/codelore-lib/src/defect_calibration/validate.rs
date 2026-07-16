@@ -228,10 +228,7 @@ pub fn validate(
 /// [`structural_risk_from_intensities`] is parity-tested against.
 #[must_use]
 pub fn default_weights() -> Vec<(String, f64)> {
-    SMELL_WEIGHTS
-        .iter()
-        .map(|&(name, weight)| (name.to_string(), weight))
-        .collect()
+    crate::analyses::code_health::default_smell_weights()
 }
 
 /// Capture the per-file, per-smell biomarker intensities [`tune_weights`]

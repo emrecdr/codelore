@@ -181,6 +181,19 @@ pub struct Options {
     /// `--calibration`.
     pub calibration: Option<PathBuf>,
 
+    /// Own-repo defect-calibration artifact (`defects.calib.json`, built with
+    /// `codelore calibrate-defects`) whose smell weights replace the built-in
+    /// code-health defaults for this run. Like `calibration`, a per-invocation
+    /// selector that never affects ingest: `canonical_json` drops the path and
+    /// hashes the file content into `defect_calibration_digest`. Set via
+    /// `--defect-calibration`.
+    pub defect_calibration: Option<PathBuf>,
+
+    /// Skip the repo-identity guard when applying a defect-calibration
+    /// artifact mined from a different repository (forks moved on disk, CI
+    /// checkouts). Set via `--allow-foreign-calibration`.
+    pub allow_foreign_calibration: bool,
+
     /// Internal ingest mode used by `codelore calibrate`: populate only the
     /// HEAD-time complexity and import facts (`entities`, `complexity_metrics`,
     /// `imports`) and leave every history table (`commits`, `changes`,
@@ -238,6 +251,9 @@ impl Options {
         // `calibration_digest` below so provenance still captures which artifact
         // shaped the run.
         snapshot.calibration = None;
+        // `defect_calibration` gets the same selector treatment as
+        // `calibration`: drop the path here, hash the content below.
+        snapshot.defect_calibration = None;
         let mut canon = serde_json::to_value(&snapshot)
             .expect("Options derives Serialize and all fields are Serialize");
 
@@ -269,6 +285,7 @@ impl Options {
         // pointing at byte-identical artifacts from different locations share a
         // provenance stamp — and editing the artifact in place is visible.
         let calibration_digest = self.calibration.as_deref().and_then(digest_of);
+        let defect_calibration_digest = self.defect_calibration.as_deref().and_then(digest_of);
         let bots_digest = digest_of(&self.repo_path.join(".codelorebots"));
         // `.mailmap` is read at walk time by gix to canonicalize author
         // identities; edits change every author-bearing analysis but were
@@ -286,9 +303,14 @@ impl Options {
             map.remove("team_map_file");
             map.remove("group_file");
             map.remove("calibration");
+            map.remove("defect_calibration");
             map.insert("team_map_digest".to_string(), json!(team_map_digest));
             map.insert("group_file_digest".to_string(), json!(group_file_digest));
             map.insert("calibration_digest".to_string(), json!(calibration_digest));
+            map.insert(
+                "defect_calibration_digest".to_string(),
+                json!(defect_calibration_digest),
+            );
             map.insert("codelorebots_digest".to_string(), json!(bots_digest));
             map.insert("mailmap_digest".to_string(), json!(mailmap_digest));
             map.insert(
@@ -458,6 +480,8 @@ impl Default for Options {
             release_tag_glob: crate::constants::DEFAULT_RELEASE_TAG_GLOB.to_string(),
             target: None,
             calibration: None,
+            defect_calibration: None,
+            allow_foreign_calibration: false,
             head_only_ingest: false,
         }
     }
@@ -725,6 +749,45 @@ mod tests {
             ..Options::default()
         };
         assert!(head_only.validate().is_ok());
+    }
+
+    #[test]
+    fn canonical_json_strips_defect_calibration_path_keeps_only_digest() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("defects.calib.json");
+        std::fs::write(&path, b"{}").unwrap();
+        let opts = Options {
+            defect_calibration: Some(path),
+            ..Options::default()
+        };
+        let s = opts.canonical_json().to_string();
+        assert!(
+            !s.contains("defects.calib.json"),
+            "defect-calibration path leaked into canonical form: {s}"
+        );
+        assert!(
+            s.contains("defect_calibration_digest"),
+            "defect_calibration_digest field missing: {s}"
+        );
+    }
+
+    #[test]
+    fn canonical_json_invalidates_when_defect_calibration_content_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("defects.calib.json");
+        std::fs::write(&path, br#"{"format_version":1}"#).unwrap();
+        let base = Options {
+            defect_calibration: Some(path.clone()),
+            ..Options::default()
+        };
+        let v1 = base.canonical_json();
+        // Edit the artifact in place — path unchanged, content changes.
+        std::fs::write(&path, br#"{"format_version":1,"x":2}"#).unwrap();
+        let v2 = base.canonical_json();
+        assert_ne!(
+            v1, v2,
+            "defect-calibration artifact edit must invalidate the provenance stamp"
+        );
     }
 
     #[test]

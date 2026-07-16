@@ -394,6 +394,66 @@ pub fn check_repo_identity(
     )))
 }
 
+/// Resolve the smell weights active for `opts`: `Some((weights, vintage))`
+/// when a `--defect-calibration` artifact is configured and passes both the
+/// repo-identity guard and shape validation; `None` when no artifact is
+/// configured.
+///
+/// The returned weights are the artifact's `weights` field verbatim — for a
+/// `DefaultsKept` artifact those ARE the defaults, so substituting them is
+/// inert by construction while the vintage stamp still records that the
+/// artifact was consulted.
+///
+/// Shape validation pins the weights to exactly the built-in smell names, in
+/// the built-in order, with finite non-negative values. Anything else is a
+/// corrupted or incompatible artifact — and rejecting it here is also what
+/// keeps interpolating the names into the code-health SQL injection-free.
+///
+/// # Errors
+///
+/// Propagates [`load`] failures, the [`check_repo_identity`] foreign-repo
+/// guard (see `Options::allow_foreign_calibration`), and shape-validation
+/// failures, all as hard errors: an explicitly configured artifact that
+/// cannot be applied is a configuration mistake, not a degradable state.
+/// The smell-weight table and artifact vintage resolved by [`active_weights`].
+pub type WeightsAndVintage = (Vec<(String, f64)>, String);
+
+pub fn active_weights(opts: &crate::Options) -> Result<Option<WeightsAndVintage>> {
+    let Some(path) = &opts.defect_calibration else {
+        return Ok(None);
+    };
+    let art = load(path)?;
+    check_repo_identity(&art, &opts.repo_path, opts.allow_foreign_calibration)?;
+    let expected = crate::analyses::code_health::SMELL_WEIGHTS;
+    if art.weights.len() != expected.len()
+        || art
+            .weights
+            .iter()
+            .zip(expected)
+            .any(|((name, w), &(exp, _))| name != exp || !w.is_finite() || *w < 0.0)
+    {
+        return Err(CodeLoreError::Analysis(format!(
+            "defect-calibration artifact {} has malformed weights: expected the {} built-in smells in canonical order with finite non-negative values",
+            path.display(),
+            expected.len()
+        )));
+    }
+    Ok(Some((art.weights, art.vintage)))
+}
+
+/// Vintage string of the defect-calibration artifact active for `opts`. A
+/// thin wrapper over [`active_weights`] — the one place resolution, the
+/// identity guard, and shape validation live — so the provenance stamp and
+/// the weight substitution never drift apart (mirrors
+/// `calibration::active_vintage`).
+///
+/// # Errors
+///
+/// Propagates [`active_weights`] failures.
+pub fn active_vintage(opts: &crate::Options) -> Result<Option<String>> {
+    Ok(active_weights(opts)?.map(|(_, vintage)| vintage))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

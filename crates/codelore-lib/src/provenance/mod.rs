@@ -131,6 +131,11 @@ pub struct Manifest {
     /// and the embedded world artifact is still the placeholder.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub corpus_vintage: Option<String>,
+    /// Vintage string of the own-repo defect-calibration artifact active for
+    /// this run (e.g. `"defects-2026-07-15"`). Absent (`None`, omitted from
+    /// JSON) when no `--defect-calibration` file was passed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub defect_vintage: Option<String>,
 }
 
 impl Manifest {
@@ -173,6 +178,7 @@ impl Manifest {
         let cache_key_hash = hex::encode(cache_key_bytes);
 
         let corpus_vintage = crate::calibration::active_vintage(opts)?;
+        let defect_vintage = crate::defect_calibration::active_vintage(opts)?;
         Ok(Self {
             schema_version: MANIFEST_SCHEMA_VERSION,
             codelore_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -205,6 +211,7 @@ impl Manifest {
             grammars: grammar_pins(),
             options: opts.canonical_json(),
             corpus_vintage,
+            defect_vintage,
         })
     }
 

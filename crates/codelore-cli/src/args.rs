@@ -173,6 +173,12 @@ pub struct McpArgs {
 }
 
 /// Quality-gate check.
+// CheckArgs accumulates 4 independent boolean flags (--history, --ratchet,
+// --quiet, --allow-foreign-calibration) — each one toggles a semantically
+// distinct, user-visible behavior. Clippy's heuristic that >3 bools =
+// "should be an enum" doesn't apply here; the flags are not mutually
+// exclusive states of a single mode.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(clap::Args, Debug)]
 pub struct CheckArgs {
     /// Path to the git repo (default: cwd).
@@ -215,6 +221,18 @@ pub struct CheckArgs {
     /// is used if present.
     #[arg(long)]
     pub calibration: Option<PathBuf>,
+
+    /// Own-repo defect-calibration artifact (build one with `codelore
+    /// calibrate-defects`). Its smell weights replace the built-in code-health
+    /// defaults for this run. Hard error if the artifact was mined from a
+    /// different repository — see --allow-foreign-calibration.
+    #[arg(long)]
+    pub defect_calibration: Option<PathBuf>,
+
+    /// Apply a defect-calibration artifact mined from a different repository
+    /// (forks, moved checkouts): skips the repo-identity guard.
+    #[arg(long)]
+    pub allow_foreign_calibration: bool,
 }
 
 /// Shell-completion script generation.
@@ -509,6 +527,18 @@ pub struct AnalyzeArgs {
     /// and a one-time notice is printed.
     #[arg(long)]
     pub calibration: Option<PathBuf>,
+
+    /// Own-repo defect-calibration artifact (build one with `codelore
+    /// calibrate-defects`). Its smell weights replace the built-in code-health
+    /// defaults for this run. Hard error if the artifact was mined from a
+    /// different repository — see --allow-foreign-calibration.
+    #[arg(long)]
+    pub defect_calibration: Option<PathBuf>,
+
+    /// Apply a defect-calibration artifact mined from a different repository
+    /// (forks, moved checkouts): skips the repo-identity guard.
+    #[arg(long)]
+    pub allow_foreign_calibration: bool,
 }
 
 /// `TimeBucket` mirror on the CLI surface (clap-friendly value enum).
