@@ -1159,3 +1159,72 @@ fn defect_calibration_foreign_artifact_errors_unless_explicitly_allowed() {
         "with the escape hatch the foreign artifact's shifted weights must actually apply"
     );
 }
+
+/// With clones excluded (historical-rev scans), a tuned artifact must drive
+/// the no-DRY renormalization divisor from ITS dry weight — per file, the SQL
+/// risk must equal the non-DRY weighted intensity sum divided by
+/// `1 - dry_weight`, clamped to 1.0.
+#[test]
+fn defect_calibration_recomputes_the_no_dry_scale_from_the_tuned_dry_weight() {
+    use codelore_lib::analyses::code_health::{HealthScanCtx, run_code_health_scoped};
+    use codelore_lib::defect_calibration::validate::capture_intensities;
+
+    let fx = codelore_lib::test_support::biomarker_repo::build();
+    let repo = GixRepo::open(fx.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: fx.dir.path().to_path_buf(),
+        min_revs: 1,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    // Double the DRY weight (0.12 → 0.24) at complex-method's expense, so the
+    // recomputed divisor (0.76) differs measurably from the default 0.88.
+    let tuned: Vec<(String, f64)> = codelore_lib::defect_calibration::validate::default_weights()
+        .into_iter()
+        .map(|(name, w)| match name.as_str() {
+            "dry" => (name, w + 0.12),
+            "complex-method" => (name, w - 0.12),
+            _ => (name, w),
+        })
+        .collect();
+    let dry_weight = 0.24;
+    let art_dir = tempfile::tempdir().expect("tempdir");
+    let path = write_defect_artifact(art_dir.path(), fx.dir.path(), tuned.clone());
+    let flagged_opts = Options {
+        defect_calibration: Some(path),
+        ..opts
+    };
+
+    let cx = HealthScanCtx {
+        include_clones: false,
+        ..HealthScanCtx::head()
+    };
+    let rows = run_code_health_scoped(&db, &flagged_opts, &cx).expect("scoped run");
+    // With clones excluded the biomarker table carries no DRY rows, so the
+    // captured DRY slot is 0 and the expected risk is the non-DRY dot product
+    // rescaled by the tuned divisor.
+    let intensities = capture_intensities(&db).expect("capture intensities");
+
+    let mut checked = 0usize;
+    for row in &rows {
+        let Some(intens) = intensities.get(&row.path) else {
+            continue;
+        };
+        let dot: f64 = tuned.iter().zip(intens).map(|((_, w), i)| w * i).sum();
+        let expected = (dot / (1.0 - dry_weight)).min(1.0);
+        assert!(
+            (row.structural_risk - expected).abs() < 1e-9,
+            "no-DRY risk {} diverges from tuned-divisor prediction {} for {}",
+            row.structural_risk,
+            expected,
+            row.path
+        );
+        checked += 1;
+    }
+    assert!(
+        checked > 0,
+        "at least one scored file must have captured intensities for the divisor check to bite"
+    );
+}

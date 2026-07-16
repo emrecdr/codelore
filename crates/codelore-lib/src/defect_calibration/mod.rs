@@ -394,6 +394,9 @@ pub fn check_repo_identity(
     )))
 }
 
+/// The smell-weight table and artifact vintage resolved by [`active_weights`].
+pub type WeightsAndVintage = (Vec<(String, f64)>, String);
+
 /// Resolve the smell weights active for `opts`: `Some((weights, vintage))`
 /// when a `--defect-calibration` artifact is configured and passes both the
 /// repo-identity guard and shape validation; `None` when no artifact is
@@ -415,9 +418,6 @@ pub fn check_repo_identity(
 /// guard (see `Options::allow_foreign_calibration`), and shape-validation
 /// failures, all as hard errors: an explicitly configured artifact that
 /// cannot be applied is a configuration mistake, not a degradable state.
-/// The smell-weight table and artifact vintage resolved by [`active_weights`].
-pub type WeightsAndVintage = (Vec<(String, f64)>, String);
-
 pub fn active_weights(opts: &crate::Options) -> Result<Option<WeightsAndVintage>> {
     let Some(path) = &opts.defect_calibration else {
         return Ok(None);
