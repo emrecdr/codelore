@@ -4,6 +4,6 @@
 //! CLI↔library contract is enumerated in exactly one place.
 pub use crate::{AnalysisName, CodeLoreError, Options, Result};
 pub use crate::{
-    analyses, analysis, cache, calibration, constants, defect_calibration, external, facts,
-    options, output, provenance, quality_gates, repo,
+    analyses, analysis, cache, calibration, constants, defect_calibration, enrichment, external,
+    facts, options, output, provenance, quality_gates, repo,
 };

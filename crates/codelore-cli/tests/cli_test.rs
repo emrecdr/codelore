@@ -2989,3 +2989,236 @@ fn cycle_health_csv_has_header() {
             "cycle-id,size,members,heat-pct,verdict,extract-candidate,predicted-pc-drop",
         ));
 }
+
+/// End-to-end coverage for `explain <path>` — the deterministic per-file
+/// evidence dossier and its opt-in `--llm` advisory narrative. The dossier
+/// branch needs no network; the `--llm` cases point the client at a
+/// test-local one-shot HTTP server so nothing touches an external endpoint.
+mod explain_path {
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::path::Path;
+    use std::thread;
+
+    use assert_cmd::Command;
+    use predicates::prelude::*;
+
+    /// The LLM environment variables the dossier surface reads. Cleared on every
+    /// spawned CLI so an ambient developer configuration can never leak into a
+    /// test's resolution.
+    const LLM_ENV_VARS: &[&str] = &[
+        "CODELORE_LLM_PROVIDER",
+        "CODELORE_LLM_BASE_URL",
+        "CODELORE_LLM_API_KEY",
+        "CODELORE_LLM_MODEL",
+        "ANTHROPIC_API_KEY",
+    ];
+
+    /// Run `analyze code-health` (with `--min-revs 1`, matching the dossier
+    /// branch) over the fixture and return the worst-scoring file's repo-relative
+    /// path and code-health band. Deriving the target from the same engine the
+    /// dossier uses keeps the assertions robust to fixture regeneration.
+    fn code_health_worst_row(repo: &Path, cache: &Path) -> (String, String) {
+        let out = Command::cargo_bin("codelore")
+            .unwrap()
+            .args([
+                "analyze",
+                "--analysis",
+                "code-health",
+                "--repo",
+                repo.to_str().unwrap(),
+                "--cache-dir",
+                cache.to_str().unwrap(),
+                "--min-revs",
+                "1",
+                "--format",
+                "csv",
+            ])
+            .output()
+            .expect("run code-health");
+        assert!(
+            out.status.success(),
+            "code-health failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stdout = String::from_utf8(out.stdout).expect("utf8 code-health output");
+        let row = stdout
+            .lines()
+            .nth(1)
+            .expect("code-health yields at least one row for the fixture");
+        let fields: Vec<&str> = row.split(',').collect();
+        // Header: entity,cognitive,score,structural_risk,percentile,band,corpus-pct
+        (fields[0].to_string(), fields[5].to_string())
+    }
+
+    /// Spawn a one-shot HTTP server on an ephemeral localhost port that answers a
+    /// single OpenAI-compatible `/chat/completions` request with `narrative` as
+    /// the assistant message, then exits. Returns the bound base URL. `narrative`
+    /// must be free of `"`, `\`, and newlines so it embeds directly in the JSON.
+    fn serve_one_completion(narrative: &str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let base = format!("http://{}", listener.local_addr().expect("local addr"));
+        let body = format!(
+            "{{\"choices\":[{{\"message\":{{\"role\":\"assistant\",\"content\":\"{narrative}\"}}}}]}}"
+        );
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept connection");
+            drain_request(&mut stream);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response");
+            stream.flush().ok();
+        });
+        base
+    }
+
+    /// Read the request up to the end of its headers, then consume any declared
+    /// body, so the client's `POST` fully completes before we reply.
+    fn drain_request(stream: &mut TcpStream) {
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 1024];
+        let header_end = loop {
+            if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                break pos + 4;
+            }
+            let n = stream.read(&mut chunk).expect("read request headers");
+            if n == 0 {
+                return;
+            }
+            buf.extend_from_slice(&chunk[..n]);
+        };
+        let head = String::from_utf8_lossy(&buf[..header_end]).into_owned();
+        let content_length = head
+            .split("\r\n")
+            .filter_map(|line| line.split_once(':'))
+            .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+            .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+            .unwrap_or(0);
+        let mut body_read = buf.len() - header_end;
+        while body_read < content_length {
+            let n = stream.read(&mut chunk).expect("read request body");
+            if n == 0 {
+                break;
+            }
+            body_read += n;
+        }
+    }
+
+    #[test]
+    fn explain_known_topic_still_prints_topic_text() {
+        // Contract 1: a known topic is looked up first and prints byte-for-byte
+        // what it always did — the new file-path branch never runs.
+        Command::cargo_bin("codelore")
+            .unwrap()
+            .args(["explain", "hotspots"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("# hotspots"))
+            .stdout(predicate::str::contains("**Citation**"))
+            .stdout(predicate::str::contains("**Formula**"));
+    }
+
+    #[test]
+    fn explain_file_prints_dossier_without_network() {
+        let fx = codelore_lib::test_support::biomarker_repo::build();
+        let cache = tempfile::tempdir().expect("cache dir");
+        let (target, band) = code_health_worst_row(fx.dir.path(), cache.path());
+
+        let mut cmd = Command::cargo_bin("codelore").unwrap();
+        for var in LLM_ENV_VARS {
+            cmd.env_remove(var);
+        }
+        cmd.args([
+            "explain",
+            &target,
+            "--repo",
+            fx.dir.path().to_str().unwrap(),
+            "--cache-dir",
+            cache.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("code-health"))
+        .stdout(predicate::str::contains(band.as_str()))
+        .stdout(predicate::str::contains(target.as_str()));
+    }
+
+    #[test]
+    fn explain_unknown_arg_errors_naming_topics_and_files() {
+        let fx = codelore_lib::test_support::biomarker_repo::build();
+        Command::cargo_bin("codelore")
+            .unwrap()
+            .args([
+                "explain",
+                "definitely-not-a-topic-or-file",
+                "--repo",
+                fx.dir.path().to_str().unwrap(),
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("topic"))
+            .stderr(predicate::str::contains("file"));
+    }
+
+    #[test]
+    fn explain_file_llm_prints_narrative_and_stamp() {
+        let fx = codelore_lib::test_support::biomarker_repo::build();
+        let cache = tempfile::tempdir().expect("cache dir");
+        let (target, _band) = code_health_worst_row(fx.dir.path(), cache.path());
+
+        let narrative = "Diagnosis: the evidence indicates this file is structurally healthy.";
+        let base = serve_one_completion(narrative);
+
+        let mut cmd = Command::cargo_bin("codelore").unwrap();
+        for var in LLM_ENV_VARS {
+            cmd.env_remove(var);
+        }
+        // Force the OpenAI-compatible dialect at the local test server so
+        // resolution is deterministic regardless of the developer's environment.
+        cmd.env("CODELORE_LLM_PROVIDER", "openai-compat")
+            .env("CODELORE_LLM_BASE_URL", &base)
+            .env("CODELORE_LLM_MODEL", "test-model")
+            .args([
+                "explain",
+                &target,
+                "--llm",
+                "--repo",
+                fx.dir.path().to_str().unwrap(),
+                "--cache-dir",
+                cache.path().to_str().unwrap(),
+            ])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(narrative))
+            .stdout(predicate::str::contains("advisory — model"))
+            .stdout(predicate::str::contains("test-model"));
+    }
+
+    #[test]
+    fn explain_file_llm_without_config_errors_naming_setup_vars() {
+        let fx = codelore_lib::test_support::biomarker_repo::build();
+        let cache = tempfile::tempdir().expect("cache dir");
+        let (target, _band) = code_health_worst_row(fx.dir.path(), cache.path());
+
+        let mut cmd = Command::cargo_bin("codelore").unwrap();
+        for var in LLM_ENV_VARS {
+            cmd.env_remove(var);
+        }
+        cmd.args([
+            "explain",
+            &target,
+            "--llm",
+            "--repo",
+            fx.dir.path().to_str().unwrap(),
+            "--cache-dir",
+            cache.path().to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("CODELORE_LLM_MODEL"));
+    }
+}

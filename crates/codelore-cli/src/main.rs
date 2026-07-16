@@ -2247,13 +2247,100 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
                     );
                     Ok(())
                 }
-                None => Err(CodeLoreError::Analysis(format!(
-                    "unknown topic `{topic}` — run `codelore explain` (no arg) to list supported topics"
-                ))
-                .into()),
+                None => match resolve_explain_file(&args.repo, topic) {
+                    Some(repo_relative) => run_explain_file(args, &repo_relative),
+                    None => Err(CodeLoreError::Analysis(format!(
+                        "unknown topic `{topic}` — run `codelore explain` (no arg) to list \
+                         supported topics, or pass an existing file path (with --repo) to print \
+                         that file's evidence dossier"
+                    ))
+                    .into()),
+                },
             }
         }
     }
+}
+
+/// Resolve an `explain` argument that missed the topic table to a repo-relative
+/// source-file path, or `None` when it names no existing file.
+///
+/// The argument is joined onto `--repo`; `Path::join` lets an absolute argument
+/// replace the repo, so a repo-relative `src/x.rs`, a `--repo`-prefixed path,
+/// and an absolute path to the same file all resolve to the same target. The
+/// fact store keys on repo-relative, forward-slash paths, so the resolved path
+/// is made relative to `--repo` and its separators are normalized to `/`.
+fn resolve_explain_file(repo: &std::path::Path, arg: &str) -> Option<String> {
+    let candidate = repo.join(arg);
+    if !candidate.is_file() {
+        return None;
+    }
+    let relative = match candidate.strip_prefix(repo) {
+        Ok(stripped) => stripped.to_path_buf(),
+        Err(_) => std::path::PathBuf::from(arg),
+    };
+    Some(relative.to_string_lossy().replace('\\', "/"))
+}
+
+/// Print the deterministic evidence dossier for a repo-relative source file,
+/// and — with `--llm` — an advisory grounded narrative plus its citation-check
+/// stamp.
+///
+/// This surface is strictly read-only: it opens (or ingests) the fact store and
+/// assembles a fact sheet from the same analyses the CLI already exposes, never
+/// touching an analysis row, a gate verdict, or a provenance manifest. Analysis
+/// `min_revs` is forced to 1 so any single named file can be explained — the
+/// default corpus gate would otherwise hide most files from their own dossier.
+///
+/// Without `--llm`, when a previously generated narrative exists for a now-changed
+/// fact sheet, a one-line staleness note is printed. With `--llm`, a missing LLM
+/// configuration is a hard error carrying a setup hint.
+fn run_explain_file(args: &args::ExplainArgs, repo_relative: &str) -> Result<()> {
+    use codelore_lib::cli_api::cache::default_cache_root;
+    use codelore_lib::cli_api::enrichment::client::{LlmEnv, resolve_client};
+    use codelore_lib::cli_api::enrichment::fact_sheet::FileFactSheet;
+    use codelore_lib::cli_api::enrichment::prompt::Lens;
+    use codelore_lib::cli_api::enrichment::{cache, engine};
+
+    let cache_root = args.cache_dir.clone().unwrap_or_else(default_cache_root);
+    let opts = Options {
+        repo_path: args.repo.clone(),
+        min_revs: 1,
+        ..Options::default()
+    };
+    let repo = GixRepo::open(&args.repo)
+        .with_context(|| format!("open git repo at {}", args.repo.display()))?;
+    let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &cache_root)
+        .context("open or ingest the fact store")?;
+    let sheet = FileFactSheet::build(&db, &repo, &opts, repo_relative)
+        .with_context(|| format!("build the evidence dossier for {repo_relative}"))?;
+
+    print!("{}", sheet.to_human_text());
+
+    if args.llm {
+        let client = resolve_client(&LlmEnv::from_process_env()).context(
+            "configure an LLM endpoint — set CODELORE_LLM_MODEL for a local OpenAI-compatible \
+             runner (e.g. a model from `ollama list`), or ANTHROPIC_API_KEY for Anthropic; see \
+             the CODELORE_LLM_* variables in the docs",
+        )?;
+        let result = engine::narrate(
+            client.as_ref(),
+            Lens::FileDiagnosis,
+            &sheet.to_canonical_text(),
+            &sheet.numeric_values(),
+            &cache_root,
+            &args.repo,
+            args.llm_refresh,
+        )
+        .context("generate the advisory narrative")?;
+        println!("\n{}", result.narrative);
+        println!("{}", engine::stamp(&result));
+    } else if let Some(latest) = cache::latest(&cache_root, &args.repo)
+        && latest.fact_digest != sheet.digest()
+    {
+        println!("note: cached narrative is stale — evidence changed; re-run with --llm");
+    }
+
+    Ok(())
 }
 
 /// JSON Schema export. The CLI surfaces the row-type catalogue and
