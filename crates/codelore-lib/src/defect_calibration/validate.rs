@@ -20,9 +20,10 @@
 //!
 //! [`tune_weights`] runs a deterministic coordinate-descent search over the
 //! eight `SMELL_WEIGHTS` and only adopts a tuned set when the evidence
-//! clears an honesty floor: fewer than 30 linked defects, or fewer than 10
-//! implicated files, or a validation-AUC improvement short of the
-//! acceptance margin, each keep the defaults instead of the tuned weights.
+//! clears an honesty floor: fewer than 30 linked defects, fewer than 10
+//! implicated files, a tuned validation AUC below random (0.5), or a
+//! validation-AUC improvement short of the acceptance margin, each keep the
+//! defaults instead of the tuned weights.
 //!
 //! ## Design decision: re-scoring without re-running the SQL pass
 //!
@@ -318,6 +319,14 @@ const MIN_IMPLICATED_FILES: usize = 10;
 /// modest AUC bump from noise or an unlucky split is never mistaken for a
 /// genuine improvement.
 const ACCEPTANCE_MARGIN: f64 = 0.02;
+
+/// Absolute discrimination floor: tuned weights must rank defect-implicated
+/// files at least as well as random (AUC 0.5) on the validation split, no
+/// matter how large their margin over the defaults. Beating a
+/// worse-than-random baseline is not evidence of predictive value, and
+/// `tuned (applied)` reads as an endorsement — so a below-random tuning keeps
+/// the defaults and records both AUCs for the reader to judge.
+const DISCRIMINATION_FLOOR: f64 = 0.5;
 /// Relative steps tried for each weight during coordinate descent —
 /// `default × step`, bounded to ±50% of the default so a single step can
 /// never swing a weight to an implausible extreme.
@@ -454,9 +463,10 @@ fn implicated_file_count(train: &[(String, bool)], validation: &[(String, bool)]
 /// trust a tuned weight set.
 /// Past the floor, [`coordinate_descent`] searches `train` for the
 /// training-AUC-maximizing weights; the result is adopted only if its
-/// `validation` AUC beats the defaults' own `validation` AUC by at least
-/// [`ACCEPTANCE_MARGIN`] — otherwise the defaults are kept, with the reason
-/// recorded and both AUCs shown.
+/// `validation` AUC clears [`DISCRIMINATION_FLOOR`] (at least random-level
+/// ranking on unseen recent defects) AND beats the defaults' own
+/// `validation` AUC by at least [`ACCEPTANCE_MARGIN`] — otherwise the
+/// defaults are kept, with the reason recorded and both AUCs shown.
 ///
 /// Returns the chosen weights (tuned when adopted, else `defaults`
 /// unchanged) plus the [`TuningDecision`] recording which branch fired.
@@ -503,6 +513,13 @@ pub fn tune_weights(
     let auc_validation_tuned =
         auc_for(&tuned_raw, validation, intensities).unwrap_or(auc_validation_default);
 
+    if auc_validation_tuned < DISCRIMINATION_FLOOR {
+        return kept(
+            "tuned weights rank below random on the validation split",
+            Some(auc_validation_default),
+            Some(auc_validation_tuned),
+        );
+    }
     if auc_validation_tuned >= auc_validation_default + ACCEPTANCE_MARGIN {
         let weights: Vec<(String, f64)> = defaults
             .iter()
@@ -1140,6 +1157,100 @@ mod tests {
             TuningDecision::Applied { .. } => panic!(
                 "expected DefaultsKept(margin): a training-only AUC gain must not be adopted"
             ),
+        }
+    }
+    #[test]
+    fn tune_weights_keeps_defaults_when_tuned_validation_auc_is_below_random() {
+        let mut intensities = HashMap::new();
+        let mut train = Vec::new();
+        let mut validation = Vec::new();
+
+        // Training: positives score a constant w7 (complex-conditional);
+        // negatives score 0.5·w0 (complex-method). At the defaults the
+        // negatives outrank the positives (0.11 > 0.07) and the ONLY
+        // improving move is halving w0 (0.055 < 0.07) — the search tunes
+        // exactly that weight and nothing else.
+        seed_files(
+            &mut train,
+            &mut intensities,
+            "tpos",
+            30,
+            true,
+            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+        );
+        seed_files(
+            &mut train,
+            &mut intensities,
+            "tneg",
+            10,
+            false,
+            [0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        );
+
+        // Validation: the positive scores w1 (god-class, untouched by
+        // training). Six negatives sit on validation-only slots above it and
+        // three below it at ANY reachable weight set (rank-invariant under
+        // the sum-to-one projection); one negative keys on w0 and crosses
+        // below the positive exactly when w0 drops. Default AUC = 3/10;
+        // tuned AUC = 4/10 — clears the +0.02 margin yet ranks below random,
+        // so the discrimination floor (not the margin rule) must fire.
+        seed_files(
+            &mut validation,
+            &mut intensities,
+            "vpos",
+            1,
+            true,
+            [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        );
+        seed_files(
+            &mut validation,
+            &mut intensities,
+            "vnegw0",
+            1,
+            false,
+            [0.87, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        );
+        seed_files(
+            &mut validation,
+            &mut intensities,
+            "vneghi",
+            6,
+            false,
+            [0.0, 0.0, 0.61, 0.0, 0.61, 0.61, 0.0, 0.0],
+        );
+        seed_files(
+            &mut validation,
+            &mut intensities,
+            "vneglo",
+            3,
+            false,
+            [0.0, 0.0, 0.2, 0.0, 0.2, 0.2, 0.0, 0.0],
+        );
+
+        let defaults = default_weights();
+        let (weights, decision) = tune_weights(&intensities, &train, &validation, &defaults);
+        assert_eq!(
+            weights, defaults,
+            "a below-random tuning must never replace the defaults"
+        );
+        match decision {
+            TuningDecision::DefaultsKept {
+                reason,
+                auc_validation_default,
+                auc_validation_tuned,
+            } => {
+                assert!(
+                    reason.contains("below random"),
+                    "the discrimination floor, not another branch, must fire: {reason}"
+                );
+                let d = auc_validation_default.expect("default validation AUC recorded");
+                let t = auc_validation_tuned.expect("tuned validation AUC recorded");
+                assert!((d - 0.30).abs() < 1e-9, "default validation AUC, got {d}");
+                assert!((t - 0.40).abs() < 1e-9, "tuned validation AUC, got {t}");
+            }
+            other @ TuningDecision::Applied { .. } => {
+                panic!("expected DefaultsKept via the discrimination floor, got {other:?}")
+            }
         }
     }
 }

@@ -96,9 +96,11 @@ Runs inside artifact building, after validation:
   weights to beat the default weights' AUC on the *validation* split by a
   margin (default +0.02).
 - **Honesty floor**: tuning is skipped — defaults kept, reason recorded — when
-  linked defects < 30, or implicated files < 10, or the acceptance margin is
-  not met. The artifact always states which branch was taken and shows both
-  AUCs.
+  linked defects < 30, or implicated files < 10, or the tuned validation AUC
+  is below 0.5 (a below-random ranking on unseen recent defects is never
+  adopted, however large its margin over the defaults), or the acceptance
+  margin is not met. The artifact always states which branch was taken and
+  shows both AUCs.
 
 ## Unit E — artifact + application
 
