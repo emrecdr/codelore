@@ -3,13 +3,124 @@
 //! path, and numeric-value extraction. Uses the biomarker fixture (a repo with
 //! a deliberate complexity gradient and co-changed files) ingested through a
 //! real `FactsDb`, mirroring the ingest pattern in `defect_calibration_test`.
+//!
+//! It also exercises the sidecar narrative cache and the `narrate` orchestrator
+//! end-to-end across the crate boundary, over a real filesystem cache root and a
+//! test-local `ChatClient`.
 
 use codelore_lib::CodeLoreError;
+use codelore_lib::Result;
 use codelore_lib::analyses::code_health::run_code_health;
+use codelore_lib::enrichment::client::ChatClient;
 use codelore_lib::enrichment::fact_sheet::FileFactSheet;
+use codelore_lib::enrichment::prompt::Lens;
+use codelore_lib::enrichment::{cache, engine};
 use codelore_lib::facts::FactsDb;
 use codelore_lib::repo::GixRepo;
 use codelore_lib::test_support::{biomarker_repo, permissive_coupling_opts};
+
+/// A chat client with a canned reply that counts how many times it is asked to
+/// complete — so a test can prove a second `narrate` served from cache never
+/// reached the model.
+struct CountingChatClient {
+    reply: String,
+    model: String,
+    calls: std::cell::Cell<usize>,
+}
+
+impl ChatClient for CountingChatClient {
+    fn complete(&self, _system: &str, _user: &str) -> Result<String> {
+        self.calls.set(self.calls.get() + 1);
+        Ok(self.reply.clone())
+    }
+
+    fn model_id(&self) -> &str {
+        &self.model
+    }
+}
+
+#[test]
+fn narrate_misses_then_hits_then_refresh_regenerates() {
+    let cache_root = tempfile::tempdir().expect("cache root");
+    let repo_path = std::path::Path::new("/tmp/some-repo");
+    let sheet_text = "code-health\n  score = 87.5\n  band = green\n";
+    let facts = [87.5];
+
+    let client = CountingChatClient {
+        reply: "Diagnosis: the health score is 87.5.".to_string(),
+        model: "mock-model".to_string(),
+        calls: std::cell::Cell::new(0),
+    };
+
+    // First call: cache miss — the client is asked, result is fresh.
+    let first = engine::narrate(
+        &client,
+        Lens::FileDiagnosis,
+        sheet_text,
+        &facts,
+        cache_root.path(),
+        repo_path,
+        false,
+    )
+    .expect("first narrate");
+    assert!(!first.from_cache, "a cold cache must miss");
+    assert!(first.grounded, "87.5 is grounded by the fact value");
+    assert_eq!(client.calls.get(), 1, "the model was consulted once");
+
+    // Second call: cache hit — same key, the client must NOT be reached again.
+    let second = engine::narrate(
+        &client,
+        Lens::FileDiagnosis,
+        sheet_text,
+        &facts,
+        cache_root.path(),
+        repo_path,
+        false,
+    )
+    .expect("second narrate");
+    assert!(second.from_cache, "a warm cache must hit");
+    assert_eq!(
+        second.narrative, first.narrative,
+        "hit returns the cached text"
+    );
+    assert_eq!(
+        client.calls.get(),
+        1,
+        "a cache hit does not reach the model"
+    );
+
+    // Refresh forces regeneration regardless of the warm cache.
+    let refreshed = engine::narrate(
+        &client,
+        Lens::FileDiagnosis,
+        sheet_text,
+        &facts,
+        cache_root.path(),
+        repo_path,
+        true,
+    )
+    .expect("refresh narrate");
+    assert!(!refreshed.from_cache, "refresh must bypass the cache");
+    assert_eq!(client.calls.get(), 2, "refresh reaches the model again");
+
+    // The sidecar carries the fact digest for the staleness comparison, and it
+    // equals the digest of the canonical sheet text.
+    let latest = cache::latest(cache_root.path(), repo_path).expect("a cached narrative exists");
+    assert_eq!(latest.model, "mock-model");
+    assert_eq!(latest.fact_digest, sheet_digest(sheet_text));
+
+    // The stamp reflects the grounded verdict.
+    assert!(engine::stamp(&first).contains("grounded"));
+}
+
+/// Lowercase-hex SHA-256 of `text`, mirroring the fact-sheet digest so the test
+/// can check `narrate` stored the sheet-text digest.
+fn sheet_digest(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(text.as_bytes());
+    hex::encode(hasher.finalize())
+}
 
 /// Ingest the biomarker fixture and return the pieces `FileFactSheet::build`
 /// needs. The `TempDir` inside `BiomarkerRepo` must outlive the returned repo,
