@@ -25,14 +25,23 @@ use crate::cache::repo_cache_dir;
 /// A cached advisory narrative plus the provenance a caller needs to decide
 /// whether it still describes the current evidence.
 ///
-/// `fact_digest` is the digest of the fact-sheet text the narrative was written
-/// from; comparing it against a freshly built sheet's digest is how a caller
-/// detects that a cached narrative has gone stale. `created_at` is an ISO-8601
-/// UTC timestamp, so a lexical ordering of two entries is a chronological one.
+/// `subject` is the stable label the narrative describes — the repo-relative
+/// file path for a file diagnosis — so a staleness check compares only against
+/// the subject's own narratives, never a sibling's. `fact_digest` is the digest
+/// of the fact-sheet text the narrative was written from; comparing it against a
+/// freshly built sheet's digest is how a caller detects that a cached narrative
+/// has gone stale. `created_at` is an ISO-8601 UTC timestamp, so a lexical
+/// ordering of two entries is a chronological one.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CachedNarrative {
     /// The narrative text as the model produced it.
     pub narrative: String,
+    /// The subject the narrative describes — the repo-relative file path for a
+    /// file diagnosis, or a caller-chosen stable label for other lenses. Older
+    /// sidecars written before this field existed deserialize as the empty
+    /// string, which matches no real subject and so is simply never served.
+    #[serde(default)]
+    pub subject: String,
     /// Whether every number the narrative quoted was grounded in the fact sheet.
     pub grounded: bool,
     /// The numeric tokens that matched no fact value (empty iff `grounded`).
@@ -116,14 +125,21 @@ pub fn write(cache_root: &Path, repo_path: &Path, key: &str, entry: &CachedNarra
     }
 }
 
-/// The newest cached narrative for this repo by `created_at`, or `None` when the
-/// enrichment cache directory holds no readable entry.
+/// The newest cached narrative for `subject` in this repo by `created_at`, or
+/// `None` when no readable entry describes that subject.
 ///
 /// Callers compare its `fact_digest` against a freshly built fact sheet to warn
-/// when a cached narrative has gone stale. Because `created_at` is a fixed-width
-/// ISO-8601 UTC string, the lexical maximum is the chronological maximum.
+/// when the subject's own narrative has gone stale — scanning every sidecar but
+/// keeping only entries whose `subject` equals the argument, so a narrative for
+/// one file never reports a sibling as stale. Because `created_at` is a
+/// fixed-width ISO-8601 UTC string, the lexical maximum is the chronological
+/// maximum.
 #[must_use]
-pub fn latest(cache_root: &Path, repo_path: &Path) -> Option<CachedNarrative> {
+pub fn latest_for_subject(
+    cache_root: &Path,
+    repo_path: &Path,
+    subject: &str,
+) -> Option<CachedNarrative> {
     let dir = enrichment_dir(cache_root, repo_path);
     let entries = std::fs::read_dir(&dir).ok()?;
     let mut newest: Option<CachedNarrative> = None;
@@ -135,6 +151,9 @@ pub fn latest(cache_root: &Path, repo_path: &Path) -> Option<CachedNarrative> {
         let Some(parsed) = read_entry(&path) else {
             continue;
         };
+        if parsed.subject != subject {
+            continue;
+        }
         if newest
             .as_ref()
             .is_none_or(|current| parsed.created_at > current.created_at)
@@ -152,8 +171,8 @@ fn enrichment_dir(cache_root: &Path, repo_path: &Path) -> PathBuf {
 }
 
 /// Read and deserialize a sidecar at an explicit path — the shared body behind
-/// [`read`] and [`latest`]. A missing/unreadable file is a silent `None`; a file
-/// that fails to parse is logged at `warn` and treated as a miss.
+/// [`read`] and [`latest_for_subject`]. A missing/unreadable file is a silent
+/// `None`; a file that fails to parse is logged at `warn` and treated as a miss.
 fn read_entry(path: &Path) -> Option<CachedNarrative> {
     let text = std::fs::read_to_string(path).ok()?;
     match serde_json::from_str(&text) {
@@ -177,8 +196,15 @@ mod tests {
 
     /// A sample entry for round-trip and ordering tests.
     fn sample(created_at: &str, fact_digest: &str) -> CachedNarrative {
+        sample_for("src/subject.rs", created_at, fact_digest)
+    }
+
+    /// A sample entry describing an explicit `subject`, for the subject-scoped
+    /// staleness tests.
+    fn sample_for(subject: &str, created_at: &str, fact_digest: &str) -> CachedNarrative {
         CachedNarrative {
             narrative: "Diagnosis: score 87.5.".to_string(),
+            subject: subject.to_string(),
             grounded: true,
             unmatched: Vec::new(),
             model: "mock-model".to_string(),
@@ -266,6 +292,7 @@ mod tests {
         let got = super::read(cache_root.path(), repo, &key).expect("entry round-trips");
 
         assert_eq!(got.narrative, entry.narrative);
+        assert_eq!(got.subject, entry.subject);
         assert_eq!(got.grounded, entry.grounded);
         assert_eq!(got.model, entry.model);
         assert_eq!(got.fact_digest, entry.fact_digest);
@@ -300,12 +327,12 @@ mod tests {
 
     #[test]
     #[cfg(feature = "test-support")]
-    fn latest_returns_the_newest_entry_by_created_at() {
+    fn latest_for_subject_returns_the_newest_entry_by_created_at() {
         let cache_root = tempfile::tempdir().expect("cache root");
         let repo = std::path::Path::new("/tmp/repo");
 
-        // Two entries under distinct keys with hand-set timestamps so ordering is
-        // deterministic regardless of directory-read order.
+        // Two entries for the same subject under distinct keys with hand-set
+        // timestamps so ordering is deterministic regardless of read order.
         super::write(
             cache_root.path(),
             repo,
@@ -319,18 +346,49 @@ mod tests {
             &sample("2025-06-30T12:00:00Z", "digest-new"),
         );
 
-        let newest = super::latest(cache_root.path(), repo).expect("an entry exists");
+        let newest = super::latest_for_subject(cache_root.path(), repo, "src/subject.rs")
+            .expect("an entry exists for the subject");
         assert_eq!(
             newest.fact_digest, "digest-new",
-            "latest must return the chronologically newest entry"
+            "latest_for_subject must return the chronologically newest entry"
         );
     }
 
     #[test]
     #[cfg(feature = "test-support")]
-    fn latest_is_none_when_no_entries_exist() {
+    fn latest_for_subject_is_none_when_no_entries_exist() {
         let cache_root = tempfile::tempdir().expect("cache root");
         let repo = std::path::Path::new("/tmp/repo");
-        assert!(super::latest(cache_root.path(), repo).is_none());
+        assert!(super::latest_for_subject(cache_root.path(), repo, "src/subject.rs").is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn latest_for_subject_ignores_other_subjects() {
+        // The regression pin: a narrative cached for "b.rs" must not be reported
+        // as the latest for a never-narrated "a.rs". Explaining a file that has
+        // no narrative of its own must therefore see no staleness signal, even
+        // when a sibling was just narrated.
+        let cache_root = tempfile::tempdir().expect("cache root");
+        let repo = std::path::Path::new("/tmp/repo");
+
+        super::write(
+            cache_root.path(),
+            repo,
+            &cache_key("b-sheet", "mock-model"),
+            &sample_for("b.rs", "2025-06-30T12:00:00Z", "digest-b"),
+        );
+
+        assert!(
+            super::latest_for_subject(cache_root.path(), repo, "a.rs").is_none(),
+            "a subject with no narrative of its own must not match a sibling's"
+        );
+        let for_b = super::latest_for_subject(cache_root.path(), repo, "b.rs")
+            .expect("b.rs has its own narrative");
+        assert_eq!(
+            for_b.fact_digest, "digest-b",
+            "the subject's own narrative is returned"
+        );
+        assert_eq!(for_b.subject, "b.rs");
     }
 }

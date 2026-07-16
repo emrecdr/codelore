@@ -3051,6 +3051,40 @@ mod explain_path {
         (fields[0].to_string(), fields[5].to_string())
     }
 
+    /// Every code-health entity path (one row per file), in engine order, for
+    /// tests that need two distinct files from the fixture.
+    fn code_health_entity_paths(repo: &Path, cache: &Path) -> Vec<String> {
+        let out = Command::cargo_bin("codelore")
+            .unwrap()
+            .args([
+                "analyze",
+                "--analysis",
+                "code-health",
+                "--repo",
+                repo.to_str().unwrap(),
+                "--cache-dir",
+                cache.to_str().unwrap(),
+                "--min-revs",
+                "1",
+                "--format",
+                "csv",
+            ])
+            .output()
+            .expect("run code-health");
+        assert!(
+            out.status.success(),
+            "code-health failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stdout = String::from_utf8(out.stdout).expect("utf8 code-health output");
+        stdout
+            .lines()
+            .skip(1)
+            .filter_map(|line| line.split(',').next())
+            .map(str::to_string)
+            .collect()
+    }
+
     /// Spawn a one-shot HTTP server on an ephemeral localhost port that answers a
     /// single OpenAI-compatible `/chat/completions` request with `narrative` as
     /// the assistant message, then exits. Returns the bound base URL. `narrative`
@@ -3220,5 +3254,62 @@ mod explain_path {
         .assert()
         .failure()
         .stderr(predicate::str::contains("CODELORE_LLM_MODEL"));
+    }
+
+    #[test]
+    fn explain_file_staleness_note_is_scoped_to_the_explained_file() {
+        // Regression: narrating file B must not make explaining a never-narrated
+        // file A print a staleness note. The note is scoped to A's own subject,
+        // and A has no narrative of its own, so no note may appear.
+        let fx = codelore_lib::test_support::biomarker_repo::build();
+        let cache = tempfile::tempdir().expect("cache dir");
+        let paths = code_health_entity_paths(fx.dir.path(), cache.path());
+        let file_b = &paths[0];
+        let file_a = paths
+            .iter()
+            .find(|p| *p != file_b)
+            .expect("fixture yields at least two distinct files");
+
+        // Narrate file B through the local test server so a narrative is cached
+        // for B's subject in this cache root.
+        let base = serve_one_completion("Diagnosis: file B looks structurally healthy.");
+        let mut narrate_b = Command::cargo_bin("codelore").unwrap();
+        for var in LLM_ENV_VARS {
+            narrate_b.env_remove(var);
+        }
+        narrate_b
+            .env("CODELORE_LLM_PROVIDER", "openai-compat")
+            .env("CODELORE_LLM_BASE_URL", &base)
+            .env("CODELORE_LLM_MODEL", "test-model")
+            .args([
+                "explain",
+                file_b,
+                "--llm",
+                "--repo",
+                fx.dir.path().to_str().unwrap(),
+                "--cache-dir",
+                cache.path().to_str().unwrap(),
+            ])
+            .assert()
+            .success();
+
+        // Explain file A without --llm over the same cache root: it has no
+        // narrative of its own, so the staleness note must not appear.
+        let mut explain_a = Command::cargo_bin("codelore").unwrap();
+        for var in LLM_ENV_VARS {
+            explain_a.env_remove(var);
+        }
+        explain_a
+            .args([
+                "explain",
+                file_a,
+                "--repo",
+                fx.dir.path().to_str().unwrap(),
+                "--cache-dir",
+                cache.path().to_str().unwrap(),
+            ])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("stale").not());
     }
 }

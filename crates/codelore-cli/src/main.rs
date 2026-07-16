@@ -2290,10 +2290,13 @@ fn resolve_explain_file(repo: &std::path::Path, arg: &str) -> Option<String> {
 /// touching an analysis row, a gate verdict, or a provenance manifest. Analysis
 /// `min_revs` is forced to 1 so any single named file can be explained — the
 /// default corpus gate would otherwise hide most files from their own dossier.
+/// That 1-revision floor also applies to the dossier's hotspot, coupling, and
+/// ownership sections, so their numbers can differ from a default `analyze` run
+/// that gates low-revision files out.
 ///
-/// Without `--llm`, when a previously generated narrative exists for a now-changed
-/// fact sheet, a one-line staleness note is printed. With `--llm`, a missing LLM
-/// configuration is a hard error carrying a setup hint.
+/// Without `--llm`, when this file's own previously generated narrative exists
+/// for a now-changed fact sheet, a one-line staleness note is printed. With
+/// `--llm`, a missing LLM configuration is a hard error carrying a setup hint.
 fn run_explain_file(args: &args::ExplainArgs, repo_relative: &str) -> Result<()> {
     use codelore_lib::cli_api::cache::default_cache_root;
     use codelore_lib::cli_api::enrichment::client::{LlmEnv, resolve_client};
@@ -2322,11 +2325,16 @@ fn run_explain_file(args: &args::ExplainArgs, repo_relative: &str) -> Result<()>
              runner (e.g. a model from `ollama list`), or ANTHROPIC_API_KEY for Anthropic; see \
              the CODELORE_LLM_* variables in the docs",
         )?;
+        let canonical = sheet.to_canonical_text();
+        let values = sheet.numeric_values();
         let result = engine::narrate(
             client.as_ref(),
             Lens::FileDiagnosis,
-            &sheet.to_canonical_text(),
-            &sheet.numeric_values(),
+            repo_relative,
+            engine::SheetFacts {
+                text: &canonical,
+                values: &values,
+            },
             &cache_root,
             &args.repo,
             args.llm_refresh,
@@ -2334,7 +2342,7 @@ fn run_explain_file(args: &args::ExplainArgs, repo_relative: &str) -> Result<()>
         .context("generate the advisory narrative")?;
         println!("\n{}", result.narrative);
         println!("{}", engine::stamp(&result));
-    } else if let Some(latest) = cache::latest(&cache_root, &args.repo)
+    } else if let Some(latest) = cache::latest_for_subject(&cache_root, &args.repo, repo_relative)
         && latest.fact_digest != sheet.digest()
     {
         println!("note: cached narrative is stale — evidence changed; re-run with --llm");

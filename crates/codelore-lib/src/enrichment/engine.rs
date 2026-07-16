@@ -38,14 +38,31 @@ pub struct NarrativeResult {
     pub from_cache: bool,
 }
 
-/// Produce a grounded advisory narrative for `fact_sheet_text` under `lens`,
-/// consulting — and populating — the sidecar cache.
+/// The fact-sheet evidence a narration is grounded in: the canonical `text` the
+/// model reads (and keys the cache on) and the numeric `values` the reply's
+/// citations are checked against. Both are derived together from one fact sheet,
+/// so they travel together into [`narrate`].
+#[derive(Debug, Clone, Copy)]
+pub struct SheetFacts<'a> {
+    /// The canonical fact-sheet text — the model's input and the cache key input.
+    pub text: &'a str,
+    /// Every parseable numeric value on the sheet, for the citation check.
+    pub values: &'a [f64],
+}
+
+/// Produce a grounded advisory narrative for `facts` under `lens`, consulting —
+/// and populating — the sidecar cache.
 ///
-/// The cache key is derived from the sheet text and the client's model. Unless
+/// `subject` is the stable label the narrative describes — the repo-relative
+/// file path for [`Lens::FileDiagnosis`], a caller-chosen stable label for other
+/// lenses. It is stored on the written entry so a later staleness check can be
+/// scoped to this subject's own narratives rather than any sibling's.
+///
+/// The cache key is derived from `facts.text` and the client's model. Unless
 /// `refresh` is set, a cache hit returns immediately with `from_cache = true`
 /// and the model is never contacted. On a miss (or a forced `refresh`) the
 /// client completes the lens's system/user prompt, the numbers in the reply are
-/// checked against `fact_values`, the result is written to the cache, and it is
+/// checked against `facts.values`, the result is written to the cache, and it is
 /// returned with `from_cache = false`.
 ///
 /// # Errors
@@ -55,14 +72,14 @@ pub struct NarrativeResult {
 pub fn narrate(
     client: &dyn ChatClient,
     lens: Lens,
-    fact_sheet_text: &str,
-    fact_values: &[f64],
+    subject: &str,
+    facts: SheetFacts<'_>,
     cache_root: &Path,
     repo_path: &Path,
     refresh: bool,
 ) -> Result<NarrativeResult> {
     let model = client.model_id().to_string();
-    let key = cache::cache_key(fact_sheet_text, &model);
+    let key = cache::cache_key(facts.text, &model);
 
     if !refresh && let Some(hit) = cache::read(cache_root, repo_path, &key) {
         return Ok(NarrativeResult {
@@ -76,18 +93,19 @@ pub fn narrate(
 
     let narrative = client.complete(
         prompt::system_prompt(lens),
-        &prompt::user_prompt(lens, fact_sheet_text),
+        &prompt::user_prompt(lens, facts.text),
     )?;
-    let groundedness = check_citations(&narrative, fact_values);
+    let groundedness = check_citations(&narrative, facts.values);
 
     let entry = CachedNarrative {
         narrative: narrative.clone(),
+        subject: subject.to_string(),
         grounded: groundedness.grounded,
         unmatched: groundedness.unmatched.clone(),
         model: model.clone(),
         prompt_version: PROMPT_VERSION,
         schema_version: SCHEMA_VERSION,
-        fact_digest: fact_digest(fact_sheet_text),
+        fact_digest: fact_digest(facts.text),
         created_at: now_utc_ts(),
     };
     cache::write(cache_root, repo_path, &key, &entry);
@@ -126,7 +144,7 @@ fn fact_digest(fact_sheet_text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{NarrativeResult, narrate, stamp};
+    use super::{NarrativeResult, SheetFacts, narrate, stamp};
     use crate::Result;
     use crate::enrichment::client::ChatClient;
     use crate::enrichment::prompt::Lens;
@@ -192,7 +210,11 @@ mod tests {
         let cache_root = tempfile::tempdir().expect("cache root");
         let repo = std::path::Path::new("/tmp/repo");
         let sheet = "code-health\n  score = 87.5\n";
-        let facts = [87.5];
+        let values = [87.5];
+        let facts = SheetFacts {
+            text: sheet,
+            values: &values,
+        };
 
         let client = MockChatClient {
             reply: "Diagnosis: the score is 87.5.".to_string(),
@@ -203,8 +225,8 @@ mod tests {
         let first = narrate(
             &client,
             Lens::FileDiagnosis,
-            sheet,
-            &facts,
+            "src/subject.rs",
+            facts,
             cache_root.path(),
             repo,
             false,
@@ -217,8 +239,8 @@ mod tests {
         let second = narrate(
             &client,
             Lens::FileDiagnosis,
-            sheet,
-            &facts,
+            "src/subject.rs",
+            facts,
             cache_root.path(),
             repo,
             false,
@@ -231,8 +253,8 @@ mod tests {
         let refreshed = narrate(
             &client,
             Lens::FileDiagnosis,
-            sheet,
-            &facts,
+            "src/subject.rs",
+            facts,
             cache_root.path(),
             repo,
             true,

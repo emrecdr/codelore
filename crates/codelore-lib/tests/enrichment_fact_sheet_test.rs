@@ -12,6 +12,7 @@ use codelore_lib::CodeLoreError;
 use codelore_lib::Result;
 use codelore_lib::analyses::code_health::run_code_health;
 use codelore_lib::enrichment::client::ChatClient;
+use codelore_lib::enrichment::engine::SheetFacts;
 use codelore_lib::enrichment::fact_sheet::FileFactSheet;
 use codelore_lib::enrichment::prompt::Lens;
 use codelore_lib::enrichment::{cache, engine};
@@ -44,7 +45,11 @@ fn narrate_misses_then_hits_then_refresh_regenerates() {
     let cache_root = tempfile::tempdir().expect("cache root");
     let repo_path = std::path::Path::new("/tmp/some-repo");
     let sheet_text = "code-health\n  score = 87.5\n  band = green\n";
-    let facts = [87.5];
+    let values = [87.5];
+    let facts = SheetFacts {
+        text: sheet_text,
+        values: &values,
+    };
 
     let client = CountingChatClient {
         reply: "Diagnosis: the health score is 87.5.".to_string(),
@@ -56,8 +61,8 @@ fn narrate_misses_then_hits_then_refresh_regenerates() {
     let first = engine::narrate(
         &client,
         Lens::FileDiagnosis,
-        sheet_text,
-        &facts,
+        "src/health.rs",
+        facts,
         cache_root.path(),
         repo_path,
         false,
@@ -71,8 +76,8 @@ fn narrate_misses_then_hits_then_refresh_regenerates() {
     let second = engine::narrate(
         &client,
         Lens::FileDiagnosis,
-        sheet_text,
-        &facts,
+        "src/health.rs",
+        facts,
         cache_root.path(),
         repo_path,
         false,
@@ -93,8 +98,8 @@ fn narrate_misses_then_hits_then_refresh_regenerates() {
     let refreshed = engine::narrate(
         &client,
         Lens::FileDiagnosis,
-        sheet_text,
-        &facts,
+        "src/health.rs",
+        facts,
         cache_root.path(),
         repo_path,
         true,
@@ -103,11 +108,20 @@ fn narrate_misses_then_hits_then_refresh_regenerates() {
     assert!(!refreshed.from_cache, "refresh must bypass the cache");
     assert_eq!(client.calls.get(), 2, "refresh reaches the model again");
 
-    // The sidecar carries the fact digest for the staleness comparison, and it
-    // equals the digest of the canonical sheet text.
-    let latest = cache::latest(cache_root.path(), repo_path).expect("a cached narrative exists");
+    // The sidecar carries the fact digest for the staleness comparison, scoped to
+    // this file's own subject; it equals the digest of the canonical sheet text.
+    let latest = cache::latest_for_subject(cache_root.path(), repo_path, "src/health.rs")
+        .expect("a cached narrative exists");
     assert_eq!(latest.model, "mock-model");
+    assert_eq!(latest.subject, "src/health.rs");
     assert_eq!(latest.fact_digest, sheet_digest(sheet_text));
+
+    // A sibling that was never narrated has no narrative of its own, so a
+    // staleness check for it must not surface this file's entry.
+    assert!(
+        cache::latest_for_subject(cache_root.path(), repo_path, "src/other.rs").is_none(),
+        "the staleness check is scoped to the subject's own narratives"
+    );
 
     // The stamp reflects the grounded verdict.
     assert!(engine::stamp(&first).contains("grounded"));
