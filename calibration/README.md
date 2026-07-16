@@ -5,6 +5,20 @@ This directory holds the **world-corpus manifest** (`corpus.toml`) that the
 artifact powering the corpus-relative percentile lens ("your cyclomatic
 complexity sits at P74 versus a reference corpus").
 
+> **Sibling artifact — don't confuse the two calibrations.** This directory is
+> about **corpus calibration**: a *cross-repo* reference built by `codelore
+> calibrate` from the `corpus.toml` manifest, answering "how does this file
+> compare to the wider world?" as additive percentile columns. **Defect
+> calibration** is a separate, single-repo artifact (`defects.calib.json`,
+> built by `codelore calibrate-defects`) mined from one repository's *own* fix
+> history via AG-SZZ; it answers "does the health score predict where defects
+> land **in this repo**?", validates that claim (the `defect-validation`
+> analysis), and — when the evidence clears an honesty floor — tunes that
+> repo's own smell weights, applied opt-in via `--defect-calibration`. It is
+> not built from this manifest and stamps a distinct `defect_vintage`
+> (e.g. `defects-2026-07`) alongside the corpus `corpus_vintage`; the two
+> compose. See `docs/advanced-usage.md` → "Defect calibration".
+
 ## What the manifest is
 
 `corpus.toml` lists permissive-license, active, real-world open-source projects,

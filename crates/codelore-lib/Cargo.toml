@@ -169,6 +169,10 @@ name = "calibration_test"
 required-features = ["test-support"]
 
 [[test]]
+name = "defect_calibration_test"
+required-features = ["test-support"]
+
+[[test]]
 name = "mailmap_test"
 required-features = ["test-support"]
 

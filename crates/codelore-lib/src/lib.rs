@@ -15,6 +15,7 @@ pub mod cli_api;
 pub mod clones;
 pub mod complexity;
 pub mod constants;
+pub mod defect_calibration;
 pub mod error;
 pub mod external;
 pub mod facts;

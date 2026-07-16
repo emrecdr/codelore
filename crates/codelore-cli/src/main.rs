@@ -17,7 +17,8 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 
 use crate::args::{
-    AnalyzeArgs, CalibrateArgs, CheckFormat, Cli, Command, DiffArgs, IngestSarifArgs, McpArgs,
+    AnalyzeArgs, CalibrateArgs, CalibrateDefectsArgs, CheckFormat, Cli, Command, DiffArgs,
+    IngestSarifArgs, McpArgs,
 };
 
 fn main() {
@@ -52,6 +53,7 @@ fn run() -> Result<()> {
         Command::Mcp(args) => run_mcp_cmd(&args),
         Command::IngestSarif(args) => run_ingest_sarif_cmd(&args),
         Command::Calibrate(args) => run_calibrate_cmd(&args),
+        Command::CalibrateDefects(args) => run_calibrate_defects_cmd(&args),
     }
 }
 
@@ -548,6 +550,409 @@ fn pool_repo_metrics(
     Ok(())
 }
 
+/// Mine a repository's own fix-commit history (AG-SZZ), validate whether
+/// `code-health` predicted where the mined defects landed, and — when the
+/// evidence clears an honesty floor — tune the eight smell weights to this
+/// repository. Writes a `defects.calib.json` artifact.
+///
+/// Flow: open the repo → build a dedicated MINING `FactsDb` (in-memory, full
+/// history, `include_merges = true` so `commit_parents` covers every commit)
+/// → classify fix commits with `DefectOracle` → `link_defects` with the
+/// CLI-side `GitBlameOrigin` → `band_history` → the HEAD code-health scan
+/// with `capture_intensities` read immediately after (the two share the
+/// `code_health_biomarkers_v1` temp table — nothing may run between them) →
+/// `validate` → `tune_weights` → assemble and save the artifact.
+///
+/// Progress is reported to stderr per phase, mirroring `calibrate`'s idiom.
+fn run_calibrate_defects_cmd(args: &CalibrateDefectsArgs) -> Result<()> {
+    use codelore_lib::cli_api::analyses::code_health::run_code_health;
+    use codelore_lib::cli_api::quality_gates::ledger::now_utc_ts;
+    use codelore_lib::defect_calibration::validate::{
+        band_history, capture_intensities, default_weights, tune_weights, validate,
+    };
+    use codelore_lib::defect_calibration::{self, DefectArtifact, OracleConfig};
+
+    let repo =
+        GixRepo::open(&args.repo).with_context(|| format!("open repo {}", args.repo.display()))?;
+    ensure_mining_tree_clean(&repo, args.allow_dirty)?;
+
+    eprintln!(
+        "calibrate-defects: mining full history of {}",
+        args.repo.display()
+    );
+    let opts = Options {
+        repo_path: args.repo.clone(),
+        include_merges: true,
+        ..Options::default()
+    };
+    let db = FactsDb::new_in_memory().context("open in-memory mining fact store")?;
+    db.ingest(&repo, &opts).context("ingest full history")?;
+
+    let oracle_cfg = OracleConfig::default();
+    let (links, mining_stats, commit_dates) = mine_fix_links(&db, &repo, args, &oracle_cfg)?;
+
+    eprintln!("calibrate-defects: scanning historical code-health bands");
+    let bands = band_history(&db, &repo, &opts).context("historical band scan")?;
+
+    eprintln!("calibrate-defects: scanning HEAD code-health");
+    let head_health = run_code_health(&db, &opts).context("HEAD code-health scan")?;
+    // MUST run immediately after the HEAD scan above, before any other
+    // analysis call touches `code_health_biomarkers_v1` — see the module
+    // doc comment on `capture_intensities`.
+    let intensities = capture_intensities(&db).context("capture biomarker intensities")?;
+
+    eprintln!("calibrate-defects: validating structural risk against mined defects");
+    let validation = validate(&links, &commit_dates, &bands, &head_health);
+
+    eprintln!("calibrate-defects: tuning smell weights");
+    let (train, validation_split) =
+        build_train_validation_split(&links, &commit_dates, &intensities);
+    let defaults = default_weights();
+    let (weights, tuning) = tune_weights(&intensities, &train, &validation_split, &defaults);
+
+    let generated_at = now_utc_ts();
+    let vintage = args
+        .vintage
+        .clone()
+        .unwrap_or_else(|| format!("defects-{}", &generated_at[..10]));
+    let artifact = DefectArtifact {
+        format_version: defect_calibration::DEFECT_FORMAT_VERSION,
+        repo_identity: defect_calibration::repo_identity(&args.repo),
+        head_at_mining: repo.head_sha().context("resolve HEAD sha")?,
+        vintage,
+        generated_at,
+        oracle: oracle_cfg,
+        mining: mining_stats,
+        validation,
+        weights,
+        tuning,
+    };
+    defect_calibration::save(&artifact, &args.output)
+        .with_context(|| format!("write artifact {}", args.output.display()))?;
+
+    eprintln!(
+        "calibrate-defects: wrote {} (vintage {})",
+        args.output.display(),
+        artifact.vintage,
+    );
+    Ok(())
+}
+
+/// Refuse to mine from a dirty working tree unless `allow_dirty` opts in.
+/// Mining reads only committed state (git history + object-database blobs at
+/// HEAD), so uncommitted edits are invisible to it — the artifact describes
+/// the commit stamped as `head_at_mining`, not the tree the user is looking
+/// at. Surfacing that mismatch loudly (instead of silently mining something
+/// other than what is on disk) is the point of this guard.
+fn ensure_mining_tree_clean(repo: &GixRepo, allow_dirty: bool) -> Result<()> {
+    if !repo.is_worktree_dirty() {
+        return Ok(());
+    }
+    if allow_dirty {
+        eprintln!(
+            "calibrate-defects: warning: working tree has uncommitted changes; \
+             mining reads only committed state, so the artifact describes HEAD, \
+             not your uncommitted edits (--allow-dirty set, continuing)"
+        );
+        return Ok(());
+    }
+    Err(CodeLoreError::InvalidOptions(
+        "working tree has uncommitted changes; mining reads only committed state, \
+         so the artifact would describe HEAD rather than your current edits — \
+         commit them or pass --allow-dirty to proceed"
+            .to_string(),
+    )
+    .into())
+}
+
+/// `(links, mining_stats, commit_dates)` — see [`mine_fix_links`].
+type MinedLinks = (
+    Vec<codelore_lib::defect_calibration::szz::SzzLink>,
+    codelore_lib::defect_calibration::MiningStats,
+    std::collections::HashMap<String, String>,
+);
+
+/// The oracle + AG-SZZ mining phase: classify fix commits, then trace their
+/// deleted pre-image lines back to the commits that introduced them via
+/// [`GitBlameOrigin`]. Returns the surviving links, the mining tallies, and
+/// the full rev→date map (`link_defects`' clock-skew guard input, reused by
+/// `validate`'s band lookups and the temporal train/validation split).
+fn mine_fix_links(
+    db: &FactsDb,
+    repo: &GixRepo,
+    args: &CalibrateDefectsArgs,
+    oracle_cfg: &codelore_lib::defect_calibration::OracleConfig,
+) -> Result<MinedLinks> {
+    use codelore_lib::defect_calibration::DefectOracle;
+    use codelore_lib::defect_calibration::szz::link_defects;
+
+    eprintln!("calibrate-defects: classifying fix commits");
+    let oracle = DefectOracle::new(oracle_cfg).context("build defect oracle")?;
+    let window_cutoff = match args.window_days {
+        Some(0) => {
+            return Err(
+                CodeLoreError::InvalidOptions("--window-days must be > 0".to_string()).into(),
+            );
+        }
+        Some(days) => window_cutoff_date(db, days).context("compute window cutoff")?,
+        None => None,
+    };
+    let (fixes, commit_dates, root_fixes_skipped, window_excluded) =
+        collect_fixes(db, &oracle, window_cutoff.as_deref()).context("collect fix commits")?;
+    eprintln!(
+        "calibrate-defects: {} fix commit(s) found ({root_fixes_skipped} root-commit fix(es) \
+         skipped — no parent to blame; {window_excluded} outside --window-days excluded)",
+        fixes.len(),
+    );
+
+    eprintln!("calibrate-defects: linking defects (AG-SZZ)");
+    let origin = GitBlameOrigin {
+        repo_path: args.repo.clone(),
+    };
+    let (links, mining_stats) = link_defects(db, repo, &origin, &fixes, &commit_dates)
+        .context("link defects to their introducing commits")?;
+    eprintln!(
+        "calibrate-defects: {} link(s) found ({} file(s) blamed, {} cosmetic line(s) \
+         dropped, {} blame failure(s))",
+        mining_stats.links_found,
+        mining_stats.files_blamed,
+        mining_stats.lines_dropped_cosmetic,
+        mining_stats.blame_failures,
+    );
+    Ok((links, mining_stats, commit_dates))
+}
+
+/// The `commits.date - INTERVAL '<days> days'` cutoff for `--window-days`,
+/// as `CAST(... AS TEXT)` — zero-padded UTC, lexicographically comparable
+/// against the same-format dates [`collect_fixes`] reads. `None` when the
+/// mining store has no commits at all (empty repo — `MAX(date)` is `NULL`).
+fn window_cutoff_date(db: &FactsDb, days: u32) -> Result<Option<String>> {
+    let sql =
+        format!("SELECT CAST((SELECT MAX(date) FROM commits) - INTERVAL '{days} days' AS TEXT)");
+    db.query_row(&sql, [], |r| r.get::<_, Option<String>>(0))
+        .context("query window cutoff")
+}
+
+/// `(fixes, commit_dates, root_fixes_skipped, window_excluded_fixes)` —
+/// see [`collect_fixes`].
+type FixCollection = (
+    Vec<(String, String, String)>,
+    std::collections::HashMap<String, String>,
+    u32,
+    u32,
+);
+
+/// Collect every commit's date (for the clock-skew guard + band lookups)
+/// plus the `(rev, first_parent, date)` triples for fix commits the oracle
+/// classifies, restricted to `window_cutoff` when set (only which FIXES are
+/// mined is narrowed — a candidate defect-introducing commit may predate the
+/// window freely). A classified fix with no first parent (a root commit) has
+/// nothing to blame against and is skipped, tallied in the returned count.
+fn collect_fixes(
+    db: &FactsDb,
+    oracle: &codelore_lib::defect_calibration::DefectOracle,
+    window_cutoff: Option<&str>,
+) -> Result<FixCollection> {
+    use std::collections::HashMap;
+
+    let commit_rows: Vec<(String, String, String, bool)> = db
+        .prepare("SELECT rev, CAST(date AS TEXT), message, is_merge FROM commits")
+        .context("prepare commits query")?
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, bool>(3)?,
+            ))
+        })
+        .context("run commits query")?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("collect commits rows")?;
+
+    let first_parents: HashMap<String, String> = db
+        .prepare("SELECT rev, parent_rev FROM commit_parents WHERE position = 0")
+        .context("prepare first-parent query")?
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .context("run first-parent query")?
+        .collect::<std::result::Result<HashMap<_, _>, _>>()
+        .context("collect first-parent rows")?;
+
+    let mut commit_dates = HashMap::with_capacity(commit_rows.len());
+    let mut fixes = Vec::new();
+    let mut root_fixes_skipped = 0u32;
+    let mut window_excluded = 0u32;
+    for (rev, date, message, is_merge) in commit_rows {
+        if !oracle.is_fix(&message, is_merge) {
+            commit_dates.insert(rev, date);
+            continue;
+        }
+        if let Some(cutoff) = window_cutoff
+            && date.as_str() < cutoff
+        {
+            window_excluded += 1;
+            commit_dates.insert(rev, date);
+            continue;
+        }
+        match first_parents.get(&rev) {
+            Some(parent) => fixes.push((rev.clone(), parent.clone(), date.clone())),
+            None => root_fixes_skipped += 1,
+        }
+        commit_dates.insert(rev, date);
+    }
+    Ok((fixes, commit_dates, root_fixes_skipped, window_excluded))
+}
+
+/// `(train, validation)` — see [`build_train_validation_split`].
+type TrainValidationSplit = (Vec<(String, bool)>, Vec<(String, bool)>);
+
+/// Build the `(path, label)` train/validation split `tune_weights` expects.
+///
+/// Positive rows are one per [`SzzLink`](codelore_lib::defect_calibration::szz::SzzLink)
+/// — deliberately NOT deduplicated by path, matching `tune_weights`'s own
+/// honesty-floor semantics (it counts `(defect, file)` incidences, not
+/// distinct files: a file hit by three separate defects contributes three
+/// rows). They are ordered by the FIX commit's date — the spec's "temporal
+/// split ... by fix date" — so the older 60% trains and the newer 40%
+/// validates: a leakage guard asking "would tuning generalize to the NEXT
+/// defect", not "does it fit today's".
+///
+/// This is deliberately independent of `ValidationMetrics::linked_defects`
+/// (the distinct-defect-rev count `validate()` reports) — that field and
+/// `tune_weights`'s internal floor count different things over different
+/// inputs; feeding one where the other belongs would silently corrupt the
+/// honesty floor.
+///
+/// Negative rows are every file the HEAD scan captured biomarker intensities
+/// for that no link ever touched — deduplicated (a file's "never
+/// implicated" status is one static fact, not a repeated incidence).
+/// Negatives carry no fix date, so they are split in the same 60/40 ratio by
+/// a deterministic path-sorted order instead, disjoint between the two
+/// splits so no single file's intensity vector is memorized across both.
+///
+/// Returns `(train, validation)`.
+fn build_train_validation_split(
+    links: &[codelore_lib::defect_calibration::szz::SzzLink],
+    commit_dates: &std::collections::HashMap<String, String>,
+    intensities: &std::collections::HashMap<String, [f64; 8]>,
+) -> TrainValidationSplit {
+    let mut positives: Vec<(&str, &str)> = links
+        .iter()
+        .filter_map(|link| {
+            commit_dates
+                .get(&link.fix_rev)
+                .map(|date| (date.as_str(), link.path.as_str()))
+        })
+        .collect();
+    positives.sort_unstable();
+
+    let implicated: std::collections::HashSet<&str> =
+        links.iter().map(|l| l.path.as_str()).collect();
+    let mut negatives: Vec<&str> = intensities
+        .keys()
+        .map(String::as_str)
+        .filter(|path| !implicated.contains(path))
+        .collect();
+    negatives.sort_unstable();
+
+    let train_share = |n: usize| n * 60 / 100;
+    let (pos_train, pos_val) = positives.split_at(train_share(positives.len()));
+    let (neg_train, neg_val) = negatives.split_at(train_share(negatives.len()));
+
+    let mut train: Vec<(String, bool)> = pos_train
+        .iter()
+        .map(|&(_, path)| (path.to_string(), true))
+        .collect();
+    train.extend(neg_train.iter().map(|&path| (path.to_string(), false)));
+
+    let mut validation: Vec<(String, bool)> = pos_val
+        .iter()
+        .map(|&(_, path)| (path.to_string(), true))
+        .collect();
+    validation.extend(neg_val.iter().map(|&path| (path.to_string(), false)));
+
+    (train, validation)
+}
+
+/// Production [`LineOriginSource`](codelore_lib::defect_calibration::szz::LineOriginSource):
+/// shells `git blame -w --porcelain` once per `(rev, path)` pair requested by
+/// the AG-SZZ engine, batching every requested line into that single
+/// invocation via one `-L` range per contiguous run (multiple `-L` flags in
+/// one `git blame` call, never one call per range). Detached stdio (`stdin`
+/// nulled; `stdout`/`stderr` captured via `Command::output`'s own default
+/// piping) — the same child-process invariant `calibrate`'s git children use.
+struct GitBlameOrigin {
+    repo_path: std::path::PathBuf,
+}
+
+impl codelore_lib::defect_calibration::szz::LineOriginSource for GitBlameOrigin {
+    fn origins(
+        &self,
+        rev: &str,
+        path: &str,
+        lines: &[u32],
+    ) -> codelore_lib::cli_api::Result<Vec<(u32, String)>> {
+        if lines.is_empty() {
+            return Ok(Vec::new());
+        }
+        let repo_str = self
+            .repo_path
+            .to_str()
+            .ok_or_else(|| CodeLoreError::Analysis("non-UTF-8 repo path".to_string()))?;
+
+        let mut cmd_args: Vec<String> = vec![
+            "-C".to_string(),
+            repo_str.to_string(),
+            "blame".to_string(),
+            "-w".to_string(),
+            "--porcelain".to_string(),
+        ];
+        for (start, end) in merge_line_ranges(lines) {
+            cmd_args.push("-L".to_string());
+            cmd_args.push(format!("{start},{end}"));
+        }
+        cmd_args.push(rev.to_string());
+        cmd_args.push("--".to_string());
+        cmd_args.push(path.to_string());
+
+        let out = std::process::Command::new("git")
+            .args(&cmd_args)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(|e| {
+                CodeLoreError::Analysis(format!("spawn git blame for {path}@{rev}: {e}"))
+            })?;
+        if !out.status.success() {
+            return Err(CodeLoreError::Analysis(format!(
+                "git blame failed for {path}@{rev}: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
+        }
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        codelore_lib::defect_calibration::szz::parse_blame_porcelain(&stdout)
+    }
+}
+
+/// Merge a set of (possibly duplicate, unsorted) 1-based line numbers into
+/// the minimal set of contiguous inclusive ranges, sorted ascending —
+/// [`GitBlameOrigin`]'s batching so every requested line is covered by ONE
+/// `git blame` invocation regardless of how many separate hunks they came
+/// from.
+fn merge_line_ranges(lines: &[u32]) -> Vec<(u32, u32)> {
+    let mut sorted: Vec<u32> = lines.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+
+    let mut ranges: Vec<(u32, u32)> = Vec::new();
+    for line in sorted {
+        match ranges.last_mut() {
+            Some((_, end)) if line == *end + 1 => *end = line,
+            _ => ranges.push((line, line)),
+        }
+    }
+    ranges
+}
+
 /// Quality-gate check. Loads thresholds, runs the hotspots analysis
 /// against the repo, evaluates each row against the gates, and
 /// exits 0 (pass) or 1 (fail). Writes `result=pass|fail` to
@@ -610,6 +1015,8 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
     let opts = Options {
         repo_path: args.repo.clone(),
         calibration: args.calibration.clone(),
+        defect_calibration: args.defect_calibration.clone(),
+        allow_foreign_calibration: args.allow_foreign_calibration,
         ..Options::default()
     };
     let repo = GixRepo::open(&args.repo).context("open repo")?;
@@ -1549,6 +1956,20 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
             "See analyses/cycle_health.rs.",
         ),
         (
+            "defect-validation",
+            "Śliwerski, Zimmermann & Zeller 2005 (SZZ) + Kim et al. 2006 (AG-SZZ)",
+            "Reads an own-repo defect-calibration artifact (built by `codelore \
+             calibrate-defects`) and reports its evidence as flat (metric, value) \
+             rows: the band table (share of defect-introducing changes that landed \
+             in files red / yellow / green at the time), AUC and precision@k of \
+             HEAD structural_risk against the defect-implicated file labels, mining \
+             tallies, and the weight-tuning decision with both validation AUCs. \
+             Association, not causation — a defect touching a red file is evidence \
+             the score ranks it high, not proof the score caused the defect. Reads \
+             the artifact only; without one it emits zero rows and a stderr hint.",
+            "See analyses/defect_validation.rs + defect_calibration/.",
+        ),
+        (
             "architecture-metrics",
             "Lakos 1996 (CCD/ACD/NCCD) + MacCormack/Rusnak/Baldwin 2006/2014",
             "Repo-level (metric, value) rows: propagation_cost = density of the transitive-closure matrix; acd = mean transitive dependency set size; nccd = CCD / balanced-binary-tree CCD (<1 flat, >1 layered, >2 likely cyclic); dependency_cycles, largest_cycle; architecture_type = hierarchical / core-periphery / multi-core.",
@@ -2021,6 +2442,8 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         release_tag_glob: args.release_tag_glob.clone(),
         target: args.target.clone(),
         calibration: args.calibration.clone(),
+        defect_calibration: args.defect_calibration.clone(),
+        allow_foreign_calibration: args.allow_foreign_calibration,
         ..Options::default()
     };
 
@@ -2274,6 +2697,9 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             }
             AnalysisName::CycleHealth => {
                 dispatch_cycle_health(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::DefectValidation => {
+                dispatch_defect_validation(&opts, format, &ctx, &mut out)?;
             }
             AnalysisName::ArchitectureMetrics => {
                 dispatch_architecture_metrics(&db, &opts, format, &ctx, &mut out)?;
@@ -3353,6 +3779,47 @@ fn dispatch_cycle_health(
         "html" => return Err(html_not_wired(ctx.analysis_name)),
         fmt => {
             return Err(unsupported_format("cycle-health", "csv|json|markdown", fmt));
+        }
+    }
+    Ok(())
+}
+
+/// Reads a defect-calibration artifact (never the fact store) and emits its
+/// evidence rows, so it takes no `FactsDb` — unlike the other dispatchers.
+fn dispatch_defect_validation(
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows =
+                codelore_lib::cli_api::analyses::defect_validation::run_defect_validation(opts)
+                    .context("run defect-validation")?;
+            codelore_lib::cli_api::output::csv::write_defect_validation_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows =
+                codelore_lib::cli_api::analyses::defect_validation::run_defect_validation(opts)
+                    .context("run defect-validation")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows =
+                codelore_lib::cli_api::analyses::defect_validation::run_defect_validation(opts)
+                    .context("run defect-validation")?;
+            codelore_lib::cli_api::output::markdown::write_defect_validation_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format(
+                "defect-validation",
+                "csv|json|markdown",
+                fmt,
+            ));
         }
     }
     Ok(())

@@ -949,3 +949,282 @@ fn corpus_lens_populates_covered_language_and_skips_others() {
         );
     }
 }
+
+// ─── defect-calibration weight application ───────────────────────────────────
+
+/// A syntactically valid defect-calibration artifact carrying `weights`,
+/// stamped for `repo_path`, written into `dir`.
+fn write_defect_artifact(
+    dir: &std::path::Path,
+    repo_path: &std::path::Path,
+    weights: Vec<(String, f64)>,
+) -> std::path::PathBuf {
+    use codelore_lib::defect_calibration::{
+        DEFECT_FORMAT_VERSION, DefectArtifact, MiningStats, OracleConfig, TuningDecision,
+        ValidationMetrics, repo_identity, save,
+    };
+    let art = DefectArtifact {
+        format_version: DEFECT_FORMAT_VERSION,
+        repo_identity: repo_identity(repo_path),
+        head_at_mining: "0".repeat(40),
+        vintage: "defects-2026-07-16".to_string(),
+        generated_at: "2026-07-16T00:00:00Z".to_string(),
+        oracle: OracleConfig::default(),
+        mining: MiningStats::default(),
+        validation: ValidationMetrics::default(),
+        weights,
+        tuning: TuningDecision::Applied {
+            auc_train: 0.7,
+            auc_validation_default: 0.6,
+            auc_validation_tuned: 0.7,
+        },
+    };
+    let path = dir.join("defects.calib.json");
+    save(&art, &path).expect("save artifact");
+    path
+}
+
+/// The load-bearing opt-in contract: a run pointed at an artifact carrying
+/// the DEFAULT weights must be byte-identical to a run with no artifact at
+/// all — the threading is provably inert until a tuned set actually differs.
+#[test]
+fn defect_calibration_with_default_weights_is_byte_identical() {
+    let fx = codelore_lib::test_support::biomarker_repo::build();
+    let repo = GixRepo::open(fx.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: fx.dir.path().to_path_buf(),
+        min_revs: 1,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let baseline = run_code_health(&db, &opts).expect("run without artifact");
+
+    let art_dir = tempfile::tempdir().expect("tempdir");
+    let path = write_defect_artifact(
+        art_dir.path(),
+        fx.dir.path(),
+        codelore_lib::defect_calibration::validate::default_weights(),
+    );
+    let flagged_opts = Options {
+        defect_calibration: Some(path),
+        ..opts
+    };
+    let flagged = run_code_health(&db, &flagged_opts).expect("run with default-weights artifact");
+
+    assert_eq!(
+        serde_json::to_string(&baseline).expect("json"),
+        serde_json::to_string(&flagged).expect("json"),
+        "an artifact carrying the default weights must leave output byte-identical"
+    );
+}
+
+/// Tuned weights must actually reshape `structural_risk` — and exactly as the
+/// Rust-side formula predicts: for every scored file the SQL risk under the
+/// shifted weights must match `structural_risk_from_intensities` on the same
+/// captured intensities within 1e-9 (the hand-prediction, per file).
+#[test]
+fn defect_calibration_shifted_weights_apply_and_match_the_rust_side_prediction() {
+    use codelore_lib::defect_calibration::validate::{
+        capture_intensities, structural_risk_from_intensities,
+    };
+
+    let fx = codelore_lib::test_support::biomarker_repo::build();
+    let repo = GixRepo::open(fx.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: fx.dir.path().to_path_buf(),
+        min_revs: 1,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let baseline = run_code_health(&db, &opts).expect("baseline run");
+
+    // Move weight mass from god-class onto complex-method; sum stays 1.0.
+    let shifted: Vec<(String, f64)> = codelore_lib::defect_calibration::validate::default_weights()
+        .into_iter()
+        .map(|(name, w)| match name.as_str() {
+            "complex-method" => (name, w + 0.11),
+            "god-class" => (name, w - 0.11),
+            _ => (name, w),
+        })
+        .collect();
+    let art_dir = tempfile::tempdir().expect("tempdir");
+    let path = write_defect_artifact(art_dir.path(), fx.dir.path(), shifted.clone());
+    let flagged_opts = Options {
+        defect_calibration: Some(path),
+        ..opts
+    };
+    let tuned = run_code_health(&db, &flagged_opts).expect("tuned run");
+    // The tuned run's scan is the most recent, so the biomarker temp table
+    // holds exactly the intensities that scan scored.
+    let intensities = capture_intensities(&db).expect("capture intensities");
+
+    assert_ne!(
+        serde_json::to_string(&baseline).expect("json"),
+        serde_json::to_string(&tuned).expect("json"),
+        "a genuinely shifted weight set must change the output"
+    );
+    let mut parity_checked = 0usize;
+    for row in &tuned {
+        let Some(intens) = intensities.get(&row.path) else {
+            continue;
+        };
+        let predicted = structural_risk_from_intensities(&shifted, intens);
+        assert!(
+            (row.structural_risk - predicted).abs() < 1e-9,
+            "SQL risk {} diverges from Rust-side prediction {} for {}",
+            row.structural_risk,
+            predicted,
+            row.path
+        );
+        parity_checked += 1;
+    }
+    assert!(
+        parity_checked > 0,
+        "at least one scored file must have captured intensities for the parity loop to bite"
+    );
+}
+
+/// Applying an artifact mined from a different repository is a hard error;
+/// `allow_foreign_calibration` is the explicit escape hatch — and the foreign
+/// artifact's weights must then actually apply.
+#[test]
+fn defect_calibration_foreign_artifact_errors_unless_explicitly_allowed() {
+    use codelore_lib::defect_calibration::{
+        DEFECT_FORMAT_VERSION, DefectArtifact, MiningStats, OracleConfig, TuningDecision,
+        ValidationMetrics, save,
+    };
+
+    let fx = codelore_lib::test_support::biomarker_repo::build();
+    let repo = GixRepo::open(fx.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: fx.dir.path().to_path_buf(),
+        min_revs: 1,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+    let baseline = run_code_health(&db, &opts).expect("baseline run");
+
+    let shifted: Vec<(String, f64)> = codelore_lib::defect_calibration::validate::default_weights()
+        .into_iter()
+        .map(|(name, w)| match name.as_str() {
+            "complex-method" => (name, w + 0.11),
+            "god-class" => (name, w - 0.11),
+            _ => (name, w),
+        })
+        .collect();
+    let art = DefectArtifact {
+        format_version: DEFECT_FORMAT_VERSION,
+        repo_identity: "0".repeat(64), // not this repo
+        head_at_mining: "0".repeat(40),
+        vintage: "defects-2026-07-16".to_string(),
+        generated_at: "2026-07-16T00:00:00Z".to_string(),
+        oracle: OracleConfig::default(),
+        mining: MiningStats::default(),
+        validation: ValidationMetrics::default(),
+        weights: shifted,
+        tuning: TuningDecision::DefaultsKept {
+            reason: "test".to_string(),
+            auc_validation_default: None,
+            auc_validation_tuned: None,
+        },
+    };
+    let art_dir = tempfile::tempdir().expect("tempdir");
+    let path = art_dir.path().join("defects.calib.json");
+    save(&art, &path).expect("save artifact");
+
+    let foreign_opts = Options {
+        defect_calibration: Some(path.clone()),
+        ..opts.clone()
+    };
+    let err = run_code_health(&db, &foreign_opts).expect_err("foreign artifact must hard-error");
+    assert!(
+        format!("{err}").contains("different repository"),
+        "error must name the mismatch: {err}"
+    );
+
+    let allowed_opts = Options {
+        defect_calibration: Some(path),
+        allow_foreign_calibration: true,
+        ..opts
+    };
+    let rows = run_code_health(&db, &allowed_opts).expect("allow-foreign must apply");
+    assert_ne!(
+        serde_json::to_string(&baseline).expect("json"),
+        serde_json::to_string(&rows).expect("json"),
+        "with the escape hatch the foreign artifact's shifted weights must actually apply"
+    );
+}
+
+/// With clones excluded (historical-rev scans), a tuned artifact must drive
+/// the no-DRY renormalization divisor from ITS dry weight — per file, the SQL
+/// risk must equal the non-DRY weighted intensity sum divided by
+/// `1 - dry_weight`, clamped to 1.0.
+#[test]
+fn defect_calibration_recomputes_the_no_dry_scale_from_the_tuned_dry_weight() {
+    use codelore_lib::analyses::code_health::{HealthScanCtx, run_code_health_scoped};
+    use codelore_lib::defect_calibration::validate::capture_intensities;
+
+    let fx = codelore_lib::test_support::biomarker_repo::build();
+    let repo = GixRepo::open(fx.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: fx.dir.path().to_path_buf(),
+        min_revs: 1,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    // Double the DRY weight (0.12 → 0.24) at complex-method's expense, so the
+    // recomputed divisor (0.76) differs measurably from the default 0.88.
+    let tuned: Vec<(String, f64)> = codelore_lib::defect_calibration::validate::default_weights()
+        .into_iter()
+        .map(|(name, w)| match name.as_str() {
+            "dry" => (name, w + 0.12),
+            "complex-method" => (name, w - 0.12),
+            _ => (name, w),
+        })
+        .collect();
+    let dry_weight = 0.24;
+    let art_dir = tempfile::tempdir().expect("tempdir");
+    let path = write_defect_artifact(art_dir.path(), fx.dir.path(), tuned.clone());
+    let flagged_opts = Options {
+        defect_calibration: Some(path),
+        ..opts
+    };
+
+    let cx = HealthScanCtx {
+        include_clones: false,
+        ..HealthScanCtx::head()
+    };
+    let rows = run_code_health_scoped(&db, &flagged_opts, &cx).expect("scoped run");
+    // With clones excluded the biomarker table carries no DRY rows, so the
+    // captured DRY slot is 0 and the expected risk is the non-DRY dot product
+    // rescaled by the tuned divisor.
+    let intensities = capture_intensities(&db).expect("capture intensities");
+
+    let mut checked = 0usize;
+    for row in &rows {
+        let Some(intens) = intensities.get(&row.path) else {
+            continue;
+        };
+        let dot: f64 = tuned.iter().zip(intens).map(|((_, w), i)| w * i).sum();
+        let expected = (dot / (1.0 - dry_weight)).min(1.0);
+        assert!(
+            (row.structural_risk - expected).abs() < 1e-9,
+            "no-DRY risk {} diverges from tuned-divisor prediction {} for {}",
+            row.structural_risk,
+            expected,
+            row.path
+        );
+        checked += 1;
+    }
+    assert!(
+        checked > 0,
+        "at least one scored file must have captured intensities for the divisor check to bite"
+    );
+}

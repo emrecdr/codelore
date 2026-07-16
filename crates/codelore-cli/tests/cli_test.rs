@@ -944,6 +944,36 @@ fn health_trend_csv_has_header_and_rows() {
 }
 
 #[test]
+fn defect_validation_without_artifact_emits_header_only_and_stderr_hint() {
+    // No --defect-calibration configured: honest absence, not an error. The
+    // CSV header is still written (so downstream tooling gets a valid empty
+    // table) with zero data rows, and a one-line hint points at
+    // `codelore calibrate-defects` on stderr.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "defect-validation",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "csv",
+            "--min-revs",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("metric,value"))
+        // Header only — no data rows without an artifact.
+        .stdout(predicate::function(|out: &str| {
+            out.lines().filter(|l| !l.trim().is_empty()).count() == 1
+        }))
+        .stderr(predicate::str::contains("calibrate-defects"));
+}
+
+#[test]
 fn effort_exposure_csv_has_header_and_rows() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
     Command::cargo_bin("codelore")
@@ -2737,6 +2767,163 @@ fn calibrate_merge_doubles_sample_counts() {
         .sample_functions;
     assert_eq!(merged_rust, base_rust * 2, "merge must sum sample counts");
     assert_eq!(merged_art.repos_included, 2, "merge sums repos_included");
+}
+
+/// A planted, dated fixture for `calibrate-defects`:
+///   A — introduces `src/lib.rs` with a "buggy" line
+///   B — unrelated churn in a different file
+///   C — `fix: remove buggy line`, deleting A's buggy line (must link to A)
+///   D — a comment-only reformat (adds a `//` line)
+///   E — `fix: tidy`, deleting D's comment line (must be AG-filtered — the
+///       deleted line is cosmetic, so it must yield NO link)
+fn defect_calibration_fixture() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    };
+    let commit_at = |msg: &str, date: &str| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["commit", "-q", "-m", msg])
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .env("GIT_AUTHOR_DATE", date)
+            .env("GIT_COMMITTER_DATE", date)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git commit {msg:?}: {out:?}");
+    };
+
+    git(&["init", "-q", "-b", "main"]);
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+
+    // A: introduces src/lib.rs with a "buggy" line (x + 999).
+    std::fs::write(
+        repo.join("src/lib.rs"),
+        "pub fn compute(x: i32) -> i32 {\n    let result = x + 999;\n    result\n}\n",
+    )
+    .unwrap();
+    git(&["add", "."]);
+    commit_at("feat: add compute helper", "2026-01-01T10:00:00Z");
+
+    // B: unrelated churn in a different file.
+    std::fs::write(
+        repo.join("src/other.rs"),
+        "pub fn other() -> i32 {\n    42\n}\n",
+    )
+    .unwrap();
+    git(&["add", "."]);
+    commit_at(
+        "chore: unrelated churn in another module",
+        "2026-01-02T10:00:00Z",
+    );
+
+    // C: fix removing A's buggy line (x + 999 -> x + 1).
+    std::fs::write(
+        repo.join("src/lib.rs"),
+        "pub fn compute(x: i32) -> i32 {\n    let result = x + 1;\n    result\n}\n",
+    )
+    .unwrap();
+    git(&["add", "."]);
+    commit_at("fix: remove buggy line", "2026-01-03T10:00:00Z");
+
+    // D: comment-only reformat (pure addition).
+    std::fs::write(
+        repo.join("src/lib.rs"),
+        "pub fn compute(x: i32) -> i32 {\n    let result = x + 1;\n    \
+         // TODO: revisit this computation\n    result\n}\n",
+    )
+    .unwrap();
+    git(&["add", "."]);
+    commit_at("docs: annotate compute with a TODO", "2026-01-04T10:00:00Z");
+
+    // E: "fix" that only deletes D's cosmetic comment line — must be
+    // AG-filtered, yielding no link.
+    std::fs::write(
+        repo.join("src/lib.rs"),
+        "pub fn compute(x: i32) -> i32 {\n    let result = x + 1;\n    result\n}\n",
+    )
+    .unwrap();
+    git(&["add", "."]);
+    commit_at("fix: tidy", "2026-01-05T10:00:00Z");
+
+    dir
+}
+
+#[test]
+fn calibrate_defects_links_planted_defect_and_ag_filters_cosmetic_fix() {
+    let repo = defect_calibration_fixture();
+    let out_dir = tempfile::tempdir().unwrap();
+    let output = out_dir.path().join("defects.calib.json");
+
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "calibrate-defects",
+            "--repo",
+            repo.path().to_str().unwrap(),
+            "--output",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let bytes = std::fs::read(&output).expect("artifact written");
+    let artifact: serde_json::Value =
+        serde_json::from_slice(&bytes).expect("artifact parses as JSON");
+
+    assert_eq!(
+        artifact["mining"]["fixes_found"], 2,
+        "C and E both classify as fixes"
+    );
+    assert_eq!(
+        artifact["mining"]["links_found"], 1,
+        "only C -> A must survive; E's cosmetic candidate must be AG-filtered"
+    );
+    // The persisted artifact never carries raw (defect, fix, path) triples
+    // (DefectArtifact only stores aggregated MiningStats/ValidationMetrics) —
+    // the aggregate counts below uniquely pin down the one surviving link as
+    // (defect=A, fix=C, path=src/lib.rs), the only pair the fixture can
+    // possibly produce.
+    assert_eq!(
+        artifact["validation"]["linked_defects"], 1,
+        "exactly one distinct defect-introducing commit (A) must be linked"
+    );
+    assert_eq!(
+        artifact["validation"]["implicated_files"], 1,
+        "exactly one file (src/lib.rs) must be defect-implicated"
+    );
+    let band_table = artifact["validation"]["band_table"]
+        .as_array()
+        .expect("band_table present");
+    assert_eq!(
+        band_table.len(),
+        3,
+        "band_table always carries red/yellow/green"
+    );
+
+    assert_eq!(
+        artifact["tuning"]["outcome"], "DefaultsKept",
+        "1 linked defect is far below the 30-defect honesty floor"
+    );
+    assert_eq!(
+        artifact["tuning"]["reason"], "fewer than 30 linked defects",
+        "the linked-defect floor, not the implicated-file or margin branch, must fire"
+    );
 }
 
 #[test]

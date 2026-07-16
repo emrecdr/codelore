@@ -1,7 +1,8 @@
-//! Statistical helpers used by the analyses. Currently exposes a
-//! single primitive: Fisher's exact two-tail p-value for a 2×2
-//! contingency table, used by `analyses::coupling` to gate
-//! coupling pairs at `p < fisher_significance`.
+//! Statistical helpers used by the analyses.
+//!
+//! Fisher's exact two-tail p-value for a 2×2 contingency table, used
+//! by `analyses::coupling` to gate coupling pairs at
+//! `p < fisher_significance`.
 //!
 //! In-tree port of the algorithm previously consumed via the
 //! `fishers_exact` crate (last release 2018-11). The crate had no live
@@ -12,6 +13,15 @@
 //! .two_tail_pvalue` to ≤ 1e-12 relative error across the regression
 //! suite (see `fisher_matches_upstream_*` tests at the bottom of this
 //! file).
+//!
+//! `auc` and `precision_at_k` are ranking-quality metrics for the
+//! own-repo defect-calibration validation pass: given a per-file score
+//! (e.g. a code-health structural-risk value) and a binary defect
+//! label, they answer whether the score actually separates the
+//! defective files from the rest. Both are sort-based with no
+//! external dependencies.
+
+use std::cmp::Ordering;
 
 /// Fisher's exact two-tail p-value for the 2×2 contingency table
 ///
@@ -157,6 +167,102 @@ fn ln_factorial(n: u64) -> f64 {
     acc
 }
 
+/// Area under the ROC curve for binary labels ranked by score, computed via
+/// the Mann-Whitney U statistic with midpoint tie handling. None when either
+/// class is empty.
+///
+/// NaN scores are accepted, never panic, and rank deterministically at an
+/// extreme of the ordering (IEEE-754 total order via `f64::total_cmp`) —
+/// callers wanting NaN rejected must filter beforehand.
+///
+/// # Algorithm
+///
+/// Sort all `(score, label)` pairs ascending by score and assign each a
+/// 1-based rank; a run of tied scores shares the **average** of the ranks
+/// it would otherwise occupy (the standard mid-rank tie-breaking rule for
+/// the Mann-Whitney U statistic). Summing the ranks of the positive-labeled
+/// rows and subtracting `n_pos * (n_pos + 1) / 2` (the minimum possible sum,
+/// reached when every positive ranks below every negative) yields U, which
+/// counts — across every positive/negative pair — how many pairs rank the
+/// positive above the negative (a tie contributing one half). Normalizing
+/// by `n_pos * n_neg` gives the AUC: the probability a randomly chosen
+/// positive scores higher than a randomly chosen negative.
+///
+/// Comparisons use `f64::total_cmp` rather than `==`/`<` so scores sort into
+/// a well-defined total order (and ties are detected via `Ordering::Equal`)
+/// without tripping over partial-ordering edge cases.
+#[must_use]
+pub fn auc(scored: &[(f64, bool)]) -> Option<f64> {
+    let n_pos = scored.iter().filter(|(_, label)| *label).count();
+    let n_neg = scored.len() - n_pos;
+    if n_pos == 0 || n_neg == 0 {
+        return None;
+    }
+
+    let mut order: Vec<usize> = (0..scored.len()).collect();
+    order.sort_by(|&i, &j| scored[i].0.total_cmp(&scored[j].0));
+
+    // Assign 1-based average ranks to each run of tied scores.
+    let mut ranks = vec![0.0_f64; scored.len()];
+    let mut i = 0;
+    while i < order.len() {
+        let mut j = i + 1;
+        while j < order.len()
+            && scored[order[j]].0.total_cmp(&scored[order[i]].0) == Ordering::Equal
+        {
+            j += 1;
+        }
+        // The tied run occupies 1-based ranks `i+1..=j`; its shared rank is
+        // their average. `i` and `j` are bounded by `scored.len()`,
+        // realistically at most a few hundred thousand rows in an analysis
+        // pass — well within f64's exact-integer range, so this cast is
+        // lossless.
+        #[allow(clippy::cast_precision_loss)]
+        let avg_rank = (i + 1 + j) as f64 / 2.0;
+        for &idx in &order[i..j] {
+            ranks[idx] = avg_rank;
+        }
+        i = j;
+    }
+
+    let rank_sum_pos: f64 = scored
+        .iter()
+        .zip(&ranks)
+        .filter_map(|((_, label), &rank)| label.then_some(rank))
+        .sum();
+
+    // Same lossless-cast rationale as above: counts bounded by `scored.len()`.
+    #[allow(clippy::cast_precision_loss)]
+    let (n_pos_f, n_neg_f) = (n_pos as f64, n_neg as f64);
+    let u = rank_sum_pos - n_pos_f * (n_pos_f + 1.0) / 2.0;
+    Some(u / (n_pos_f * n_neg_f))
+}
+
+/// Of the k highest-scored items (ties broken by stable input order), the
+/// fraction labeled positive. None when k == 0 or k > len.
+///
+/// Items are sorted descending by score with a stable sort, so items with
+/// equal scores keep their relative order from `scored` — the top k is
+/// therefore deterministic for any input, not dependent on sort
+/// implementation details. NaN scores are accepted and rank
+/// deterministically per `f64::total_cmp`, as in [`auc`].
+#[must_use]
+pub fn precision_at_k(scored: &[(f64, bool)], k: usize) -> Option<f64> {
+    if k == 0 || k > scored.len() {
+        return None;
+    }
+
+    let mut order: Vec<usize> = (0..scored.len()).collect();
+    order.sort_by(|&i, &j| scored[j].0.total_cmp(&scored[i].0));
+
+    let positives = order[..k].iter().filter(|&&idx| scored[idx].1).count();
+    // Lossless: `positives <= k <= scored.len()`, realistically bounded by
+    // the number of files in an analysis pass.
+    #[allow(clippy::cast_precision_loss)]
+    let result = positives as f64 / k as f64;
+    Some(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,5 +365,74 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn auc_perfect_separation_is_one() {
+        // Every positive scores strictly above every negative.
+        let scored = [(0.9, true), (0.8, true), (0.3, false), (0.2, false)];
+        assert_eq!(auc(&scored), Some(1.0));
+    }
+
+    #[test]
+    fn auc_reversed_scores_is_zero() {
+        // Every positive scores strictly below every negative.
+        let scored = [(0.2, true), (0.3, true), (0.8, false), (0.9, false)];
+        assert_eq!(auc(&scored), Some(0.0));
+    }
+
+    #[test]
+    fn auc_tie_case_matches_hand_derivation() {
+        // scores [0.9,0.7,0.7,0.1], labels [pos,pos,neg,neg]. Pairwise:
+        // 0.9 beats both negatives (2), the tied 0.7 vs 0.7 counts as a
+        // half-win (0.5), and 0.7 beats 0.1 (1). Total 3.5 / 4 pairs = 0.875.
+        let scored = [(0.9, true), (0.7, true), (0.7, false), (0.1, false)];
+        assert_eq!(auc(&scored), Some(0.875));
+    }
+
+    #[test]
+    fn auc_returns_none_when_positive_class_empty() {
+        let scored = [(0.9, false), (0.1, false)];
+        assert_eq!(auc(&scored), None);
+    }
+
+    #[test]
+    fn auc_returns_none_when_negative_class_empty() {
+        let scored = [(0.9, true), (0.1, true)];
+        assert_eq!(auc(&scored), None);
+    }
+
+    #[test]
+    fn precision_at_k_matches_known_top_two() {
+        // Sorted descending: 0.9(pos), 0.7(neg), 0.5(pos), 0.3(neg), 0.1(pos).
+        // Top 2 are 0.9 (pos) and 0.7 (neg) -> 1 of 2 positive.
+        let scored = [
+            (0.9, true),
+            (0.7, false),
+            (0.5, true),
+            (0.3, false),
+            (0.1, true),
+        ];
+        assert_eq!(precision_at_k(&scored, 2), Some(0.5));
+    }
+
+    #[test]
+    fn precision_at_k_breaks_ties_by_input_order() {
+        // All three scores tie at 0.5; stable descending sort keeps input
+        // order, so the top 2 are index 0 (pos) and index 1 (neg) -> 0.5.
+        let scored = [(0.5, true), (0.5, false), (0.5, true)];
+        assert_eq!(precision_at_k(&scored, 2), Some(0.5));
+    }
+
+    #[test]
+    fn precision_at_k_returns_none_for_k_zero() {
+        let scored = [(0.9, true), (0.1, false)];
+        assert_eq!(precision_at_k(&scored, 0), None);
+    }
+
+    #[test]
+    fn precision_at_k_returns_none_when_k_exceeds_len() {
+        let scored = [(0.9, true), (0.1, false)];
+        assert_eq!(precision_at_k(&scored, 3), None);
     }
 }

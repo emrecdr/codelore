@@ -156,6 +156,12 @@ pub enum Command {
     /// (`--calibration`). Use `--merge` to fold the build into an existing
     /// artifact (e.g. your org's repos into the world corpus).
     Calibrate(CalibrateArgs),
+    /// Mine a repository's own fix-commit history (AG-SZZ), validate whether
+    /// `code-health` predicted where the mined defects landed, and — when the
+    /// evidence clears an honesty floor — tune the eight smell weights to
+    /// this repository. Writes a `defects.calib.json` artifact consumed by
+    /// `--defect-calibration` on `analyze`/`check`.
+    CalibrateDefects(CalibrateDefectsArgs),
 }
 
 /// MCP server arguments.
@@ -167,6 +173,12 @@ pub struct McpArgs {
 }
 
 /// Quality-gate check.
+// CheckArgs accumulates 4 independent boolean flags (--history, --ratchet,
+// --quiet, --allow-foreign-calibration) — each one toggles a semantically
+// distinct, user-visible behavior. Clippy's heuristic that >3 bools =
+// "should be an enum" doesn't apply here; the flags are not mutually
+// exclusive states of a single mode.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(clap::Args, Debug)]
 pub struct CheckArgs {
     /// Path to the git repo (default: cwd).
@@ -209,6 +221,18 @@ pub struct CheckArgs {
     /// is used if present.
     #[arg(long)]
     pub calibration: Option<PathBuf>,
+
+    /// Own-repo defect-calibration artifact (build one with `codelore
+    /// calibrate-defects`). Its smell weights replace the built-in code-health
+    /// defaults for this run. Hard error if the artifact was mined from a
+    /// different repository — see --allow-foreign-calibration.
+    #[arg(long)]
+    pub defect_calibration: Option<PathBuf>,
+
+    /// Apply a defect-calibration artifact mined from a different repository
+    /// (forks, moved checkouts): skips the repo-identity guard.
+    #[arg(long)]
+    pub allow_foreign_calibration: bool,
 }
 
 /// Shell-completion script generation.
@@ -503,6 +527,18 @@ pub struct AnalyzeArgs {
     /// and a one-time notice is printed.
     #[arg(long)]
     pub calibration: Option<PathBuf>,
+
+    /// Own-repo defect-calibration artifact (build one with `codelore
+    /// calibrate-defects`). Its smell weights replace the built-in code-health
+    /// defaults for this run. Hard error if the artifact was mined from a
+    /// different repository — see --allow-foreign-calibration.
+    #[arg(long)]
+    pub defect_calibration: Option<PathBuf>,
+
+    /// Apply a defect-calibration artifact mined from a different repository
+    /// (forks, moved checkouts): skips the repo-identity guard.
+    #[arg(long)]
+    pub allow_foreign_calibration: bool,
 }
 
 /// `TimeBucket` mirror on the CLI surface (clap-friendly value enum).
@@ -573,6 +609,38 @@ pub struct CalibrateArgs {
     /// the same root used by `analyze` and `check`.
     #[arg(long)]
     pub cache_dir: Option<PathBuf>,
+}
+
+/// Mine a repository's own fix-commit history and build a `defects.calib.json`
+/// artifact (own-repo defect calibration).
+#[derive(clap::Args, Debug)]
+pub struct CalibrateDefectsArgs {
+    /// Path to the git repo to mine (default: cwd).
+    #[arg(short, long, default_value = ".")]
+    pub repo: PathBuf,
+
+    /// Where to write the built artifact (compact JSON).
+    #[arg(long, required = true)]
+    pub output: PathBuf,
+
+    /// Artifact vintage label. Defaults to `defects-YYYY-MM-DD` (today's date).
+    #[arg(long)]
+    pub vintage: Option<String>,
+
+    /// Restrict mining to fix commits within this many trailing days of the
+    /// repo's last commit. Defects those fixes are traced back to may predate
+    /// the window — only which FIXES are mined is narrowed. Omit to mine the
+    /// full history.
+    #[arg(long = "window-days")]
+    pub window_days: Option<u32>,
+
+    /// Mine even though the working tree has uncommitted changes. Mining
+    /// reads only committed state (git history + object-database blobs at
+    /// HEAD), so uncommitted edits are invisible to it — the artifact
+    /// describes the commit stamped as `head_at_mining`, not the tree on
+    /// disk. Default: refuse loudly so that mismatch is a deliberate choice.
+    #[arg(long, default_value_t = false)]
+    pub allow_dirty: bool,
 }
 
 /// Parse a YYYY-MM-DD date for the date-valued flags (`--age-time-now`,

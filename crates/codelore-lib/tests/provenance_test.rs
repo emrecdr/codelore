@@ -300,3 +300,70 @@ fn active_vintage_and_lens_share_one_resolution_seam() {
         "active_vintage agrees with the seam on the embedded world vintage"
     );
 }
+
+// ─── defect_vintage stamp ─────────────────────────────────────────────────────
+
+/// `--defect-calibration` active → `defect_vintage` carries the artifact's
+/// vintage; without the flag the field is `None` and omitted from JSON.
+#[test]
+fn manifest_defect_vintage_present_iff_defect_calibration_active() {
+    use codelore_lib::defect_calibration::{
+        DEFECT_FORMAT_VERSION, DefectArtifact, MiningStats, OracleConfig, TuningDecision,
+        ValidationMetrics, repo_identity, save,
+    };
+
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let repo = GixRepo::open(tiny.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let plain = Options {
+        repo_path: tiny.dir.path().to_path_buf(),
+        min_revs: 1,
+        ..Options::default()
+    };
+    db.ingest(&repo, &plain).expect("ingest");
+
+    let m = Manifest::capture(&db, &plain, "code-health").expect("capture");
+    assert!(
+        m.defect_vintage.is_none(),
+        "defect_vintage must be None without --defect-calibration"
+    );
+    assert!(
+        !m.to_json().expect("json").contains("\"defect_vintage\""),
+        "defect_vintage must be omitted from JSON when None"
+    );
+
+    let art = DefectArtifact {
+        format_version: DEFECT_FORMAT_VERSION,
+        repo_identity: repo_identity(tiny.dir.path()),
+        head_at_mining: "0".repeat(40),
+        vintage: "defects-2026-07-16".to_string(),
+        generated_at: "2026-07-16T00:00:00Z".to_string(),
+        oracle: OracleConfig::default(),
+        mining: MiningStats::default(),
+        validation: ValidationMetrics::default(),
+        weights: codelore_lib::defect_calibration::validate::default_weights(),
+        tuning: TuningDecision::DefaultsKept {
+            reason: "test".to_string(),
+            auc_validation_default: None,
+            auc_validation_tuned: None,
+        },
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("defects.calib.json");
+    save(&art, &path).expect("save");
+
+    let flagged = Options {
+        defect_calibration: Some(path),
+        ..plain
+    };
+    let m = Manifest::capture(&db, &flagged, "code-health").expect("capture");
+    assert_eq!(
+        m.defect_vintage.as_deref(),
+        Some("defects-2026-07-16"),
+        "defect_vintage must match the artifact's vintage field"
+    );
+    assert!(
+        m.to_json().expect("json").contains("\"defect_vintage\""),
+        "defect_vintage must be present in JSON when Some"
+    );
+}

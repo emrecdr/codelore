@@ -22,7 +22,7 @@ This guide is the developer-facing reference for CodeLore. The [README](../READM
 
 ## 1. The analyses (what they tell you)
 
-CodeLore ships **55 behavioral analyses** across four tiers. The table below is split into the code-maat-parity analyses (drop-in successors to legacy code-maat), a modern signal (`top-committers` — a first-class per-author leaderboard that code-maat approximated via `-a author-churn` + sort), modern additions marked ★ (the SARIF-backed differentiators including `hotspots`, `code-health`, `clones`, `clone-coupling`, `hotspot-velocity`, `refactoring-targets`, and `finding-hotspot-overlap`), graph-analytics analyses marked ★ (knowledge-islands + code-familiarity + team-composition + coordination-needs + marginal-owner-risk + centrality + communities), and architecture-analytics analyses marked ★★ (god-classes + architecture-violations + dependency-cycles + cycle-health + architecture-roles + instability + architecture-metrics + architecture-trend + cycle-origins + modularity-violations + unstable-interface + crossing + stale-code + pair-programming + lead-time + bus-factor + delivery-friction — `dependency-cycles` (Tarjan SCC), `architecture-roles` (Core/Shared/Control/Periphery), `instability` (Martin Ca/Ce/I) and `architecture-metrics` (Lakos ACD/NCCD + propagation cost) all run on a shared import-graph kernel; `architecture-trend` reruns that kernel at sampled historical revisions to show structural decay over time; `modularity-violations`, `unstable-interface` and `crossing` fuse the structural import graph with the temporal co-change graph (the DV8 hotspot-pattern trilogy); see `docs/maximum-feature-plan.md`).
+CodeLore ships **56 behavioral analyses** across four tiers. The table below is split into the code-maat-parity analyses (drop-in successors to legacy code-maat), a modern signal (`top-committers` — a first-class per-author leaderboard that code-maat approximated via `-a author-churn` + sort), modern additions marked ★ (the SARIF-backed differentiators including `hotspots`, `code-health`, `clones`, `clone-coupling`, `hotspot-velocity`, `refactoring-targets`, and `finding-hotspot-overlap`), graph-analytics analyses marked ★ (knowledge-islands + code-familiarity + team-composition + coordination-needs + marginal-owner-risk + centrality + communities), and architecture-analytics analyses marked ★★ (god-classes + architecture-violations + dependency-cycles + cycle-health + architecture-roles + instability + architecture-metrics + architecture-trend + cycle-origins + modularity-violations + unstable-interface + crossing + stale-code + pair-programming + lead-time + bus-factor + delivery-friction — `dependency-cycles` (Tarjan SCC), `architecture-roles` (Core/Shared/Control/Periphery), `instability` (Martin Ca/Ce/I) and `architecture-metrics` (Lakos ACD/NCCD + propagation cost) all run on a shared import-graph kernel; `architecture-trend` reruns that kernel at sampled historical revisions to show structural decay over time; `modularity-violations`, `unstable-interface` and `crossing` fuse the structural import graph with the temporal co-change graph (the DV8 hotspot-pattern trilogy); see `docs/maximum-feature-plan.md`).
 
 ### Code-maat parity (17) + modern signal
 
@@ -98,7 +98,7 @@ CodeLore ships **55 behavioral analyses** across four tiers. The table below is 
 | `function-xray` ★★ | "Which functions in a file change most often?" | Per-function hunk-overlap attribution: counts revisions where at least one diff hunk overlaps the function's line span; requires `--target <path>` | Gall et al. ICSM 2003 HistoryFinder — per-function change-frequency leaderboard with LOC, cyclomatic, and cognitive complexity; more precise than file-level churn |
 | `function-coupling` ★★ | "Which function pairs in a file always change together?" | Per-function-pair co-change frequency with two-tailed Fisher exact significance; requires `--target <path>`; emits pairs with co-change count ≥ 2, sorted by p-value ascending | Adams et al. ICSM 2006 — function-level logical coupling within a file; pairs with low p-value are candidates for extract-and-share refactoring |
 
-All analyses are pure SQL views over the DuckDB fact store + thin Rust orchestrators. You can run any analysis at any output format.
+Almost all analyses are SQL views over the DuckDB fact store + thin Rust orchestrators (the architecture tier additionally builds the import graph in Rust). The exception is `defect-validation`, which reads a defect-calibration artifact instead of the fact store — see [Defect calibration](#defect-calibration-does-the-health-score-predict-where-defects-land-here) below. You can run any analysis at any output format.
 
 ### Cycle-health analysis
 
@@ -420,6 +420,49 @@ corpus_percentile_max = 0.9
 - an artifact *is* active, but none of the analyzed files produce a percentile — e.g. every covered language was pooled below the 500-function trust floor, every file is in a language the corpus doesn't cover, or the health scan produced no rows at all.
 
 The stderr notice printed on skip mentions passing `--calibration`, but the underlying condition is broader than "no artifact": it is "no row carried a percentile." If you see a skip while an artifact is embedded, check that your repository's languages are covered *and* cleared the sample floor in that artifact.
+
+### Defect calibration: does the health score predict where defects land here?
+
+Corpus percentiles ask "how does this file compare to the wider world." **Defect calibration** asks the question the whole code-health initiative was built on: *does the health score actually predict where defects land in **this** repository?* — and, when the evidence clears an honesty floor, tunes the eight smell weights to the repo's own defect history. Everything is mined from git alone, fully local, and delivered as an opt-in vintage-stamped artifact so scores stay byte-reproducible.
+
+**Mining the artifact — `codelore calibrate-defects`.**
+
+```sh
+codelore calibrate-defects \
+  --repo . \
+  --output defects.calib.json \
+  [--vintage defects-2026-07] \
+  [--window-days 365]
+```
+
+One pass runs three stages and writes a compact `defects.calib.json`:
+
+- **Fix oracle.** A commit is a *fix* when its message matches a conventional-commit `fix:` / `fix(scope):` prefix or a word-boundary defect term (`bug`, `bugfix`, `fix`/`fixes`/`fixed`, `defect`, `regression`, `hotfix`), and it is neither a merge nor a `Revert "…"`. This oracle is deliberately narrower than the kamei `fix` feature (which keeps its broad `issue|error|patch` alternation for JIT-SDP — a documented SZZ precision trap); the oracle model also carries extra include patterns for tracker-id conventions, recorded in the artifact; they are not yet exposed as a CLI option.
+- **AG-SZZ linkage.** For each fix, CodeLore takes the fix's deleted pre-image lines and `git blame`s the fix's parent to find the commit that last introduced each line — the candidate defect-introducing commit — then drops cosmetic (blank / comment-only) blamed lines and any candidate at-or-newer than the fix (the AG filter plus a clock-skew guard). This is annotation-graph SZZ (Śliwerski, Zimmermann & Zeller 2005; Kim et al. 2006 AG-SZZ) behind a pluggable seam. A single file's blame or blob-read failure is skipped and counted, never fatal.
+- **Validation + constrained tuning.** Each defect-introducing commit is matched to the nearest historical code-health band sample at-or-before its date; the report tallies where those changes landed by band and scores HEAD `structural_risk` against the defect-implicated file labels (AUC, precision@k). A deterministic coordinate search over the eight smell weights then tunes them on a temporal 60/40 older-train / newer-validate split (never a random split — a leakage guard) — **but only when the evidence clears an honesty floor**: at least 30 linked defects, at least 10 implicated files, a tuned *validation*-split AUC of at least 0.5 (weights that rank below random on unseen recent defects are never adopted, however large their margin), and the tuned weights must beat the defaults' *validation*-split AUC by a margin (+0.02). If any floor is unmet the defaults are kept and the reason is recorded; the artifact always states which branch was taken and shows both AUCs. Finding no fix commits at all is not an error — the artifact is written with empty linkage and defaults kept.
+
+Two runs over the same history produce byte-identical artifacts. Mining reads only committed state, so `calibrate-defects` refuses a dirty working tree unless you pass `--allow-dirty` (the artifact still describes the committed HEAD, not your edits).
+
+**Applying it — `--defect-calibration`.** Pass the artifact on `analyze` or `check`:
+
+```sh
+codelore analyze --analysis code-health --defect-calibration defects.calib.json
+```
+
+When active, `code-health` substitutes the artifact's weights for the built-in smell weights and the provenance manifest stamps `defect_vintage` alongside `corpus_vintage`. For a *defaults-kept* artifact those weights **are** the defaults, so applying it changes no score while the vintage stamp still records that the artifact was consulted. Applying an artifact mined from a **different repository** is a hard error — a repo-identity fingerprint (a hash of the canonical repo path, recorded at mining time) is checked before the weights are used; pass `--allow-foreign-calibration` to override it for a fork. **Without the `--defect-calibration` flag, behavior is byte-identical to today** — contract-tested by strip-and-compare, the same guarantee the corpus lens carries. The two calibrations compose cleanly: corpus percentiles are additive columns, defect weights change the composite, and both journeys are recorded in provenance.
+
+**Reading the evidence — the `defect-validation` analysis.** `defect-validation` reads the artifact (it never mines) and flattens its evidence into `(metric, value)` rows:
+
+```sh
+codelore analyze --analysis defect-validation --defect-calibration defects.calib.json --format markdown
+```
+
+- `band:red` / `band:yellow` / `band:green` — the share of defect-introducing changes that landed in files at each code-health band *at the time*, each carrying its `count/total` (the total is the linked defect-changes that had band data — `excluded_no_data` counts the rest).
+- `auc_default` — AUC of HEAD `structural_risk` against the defect labels; `precision_at_10` and `precision_at_red` — precision among the 10 highest-risk files and among the files banded red at HEAD.
+- `implicated_files`, `linked_defects`, `excluded_no_data`, `band_samples`, and the mining tallies (`fixes_found`, `links_found`, `blame_failures`).
+- `weights_source` (`tuned (applied)` or `defaults kept: <reason>`) and the tuning AUCs (`tuning_auc_train`, `tuning_auc_validation_default`, `tuning_auc_validation_tuned`) — surfaced **whenever present**, so you can see for yourself when tuning was applied yet the validation AUCs still sit below 0.5.
+
+Presentation follows the project's honesty framing: **association, not causation** — a defect-introducing commit touching a red file is evidence the score ranks that file high, not proof the score *caused* the defect. Every count carries its `n`; an absent metric renders as an explicit `n/a (<why>)`, never silently dropped; there are no vendor-style multipliers. Without a configured artifact the analysis returns zero rows and prints a one-line hint pointing at `codelore calibrate-defects` — an honest absence, not an error.
 
 ### Guided tour
 

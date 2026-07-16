@@ -220,6 +220,15 @@ pub enum AnalysisName {
     // removal minimises the largest surviving SCC (trial-removal Tarjan)
     // and the predicted propagation-cost drop, for cycles of ≤ 64 members.
     CycleHealth,
+    // Defect-validation — reads an own-repo defect-calibration artifact
+    // (built by `codelore calibrate-defects`) and reports its evidence as
+    // flat (metric, value) rows: the band table (where mined defects landed
+    // by code-health band at the time), AUC / precision@k of HEAD structural
+    // risk against the defect labels, mining tallies, the weight-tuning
+    // decision with both validation AUCs, and the artifact vintage. Reads the
+    // artifact only — never mines; without one it emits zero rows plus a
+    // stderr hint. Association, not causation.
+    DefectValidation,
 }
 
 impl AnalysisName {
@@ -281,6 +290,7 @@ impl AnalysisName {
             Self::FunctionCoupling => "function-coupling",
             Self::FindingHotspotOverlap => "finding-hotspot-overlap",
             Self::CycleHealth => "cycle-health",
+            Self::DefectValidation => "defect-validation",
         }
     }
 
@@ -370,6 +380,7 @@ impl AnalysisName {
             FunctionCoupling,
             FindingHotspotOverlap,
             CycleHealth,
+            DefectValidation,
         )
     }
 
