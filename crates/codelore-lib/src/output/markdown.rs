@@ -721,6 +721,36 @@ pub fn write_architecture_metrics_markdown<W: Write>(
     Ok(())
 }
 
+/// `defect-validation` markdown emitter — flat `(metric, value)` evidence
+/// rows from a defect-calibration artifact. Empty (no artifact configured)
+/// prints an honest-absence note pointing at `codelore calibrate-defects`.
+pub fn write_defect_validation_markdown<W: Write>(
+    rows: &[crate::analyses::defect_validation::DefectValidationRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore defect-validation")?;
+    if rows.is_empty() {
+        writeln!(
+            w,
+            "_No defect-calibration artifact configured — run `codelore calibrate-defects` and pass it with `--defect-calibration`._"
+        )
+        .map_err(CodeLoreError::Io)?;
+        return Ok(());
+    }
+    writeln!(w, "| Metric | Value |").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| {} | {} |",
+            escape_md_cell(&row.metric),
+            escape_md_cell(&row.value),
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 /// architecture-roles markdown emitter — per-file role + visibility reach.
 pub fn write_architecture_roles_markdown<W: Write>(
     rows: &[crate::analyses::architecture_roles::ArchitectureRoleRow],

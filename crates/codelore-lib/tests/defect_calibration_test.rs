@@ -271,6 +271,73 @@ fn check_repo_identity_override_allows_a_foreign_repo() {
         .expect("allow_foreign must bypass the identity check");
 }
 
+// ─── defect-validation analysis: reads the artifact through opts ─────────────
+
+#[test]
+fn run_defect_validation_reads_artifact_via_opts_and_returns_evidence_rows() {
+    use codelore_lib::Options;
+    use codelore_lib::analyses::defect_validation::run_defect_validation;
+
+    let art = sample_artifact(&"1".repeat(64));
+    // Keep the TempPath alive for the whole test so the file is not deleted
+    // before `run_defect_validation` reads it.
+    let path = write_temp_json("dv-run", &art);
+    let opts = Options {
+        defect_calibration: Some(Path::new(&path).to_path_buf()),
+        // Synthetic identity → bypass the repo-identity guard the same way
+        // `--allow-foreign-calibration` does.
+        allow_foreign_calibration: true,
+        ..Options::default()
+    };
+
+    let rows = run_defect_validation(&opts).expect("run defect-validation over a real artifact");
+    let value = |metric: &str| {
+        rows.iter()
+            .find(|r| r.metric == metric)
+            .unwrap_or_else(|| panic!("row {metric:?} must be present"))
+            .value
+            .as_str()
+    };
+    assert_eq!(value("vintage"), art.vintage);
+    assert_eq!(value("weights_source"), "tuned (applied)");
+    assert_eq!(value("band:red"), "18/30 defect-changes (60.0%)");
+    // The Applied validation AUCs are surfaced plainly.
+    assert_eq!(value("tuning_auc_validation_default"), "0.710");
+    assert_eq!(value("tuning_auc_validation_tuned"), "0.740");
+}
+
+#[test]
+fn run_defect_validation_without_artifact_returns_zero_rows() {
+    use codelore_lib::Options;
+    use codelore_lib::analyses::defect_validation::run_defect_validation;
+
+    let opts = Options {
+        defect_calibration: None,
+        ..Options::default()
+    };
+    let rows = run_defect_validation(&opts).expect("honest absence must not be an error");
+    assert!(rows.is_empty(), "no artifact configured -> zero rows");
+}
+
+#[test]
+fn run_defect_validation_rejects_a_foreign_artifact_without_override() {
+    use codelore_lib::Options;
+    use codelore_lib::analyses::defect_validation::run_defect_validation;
+
+    let art = sample_artifact(&"2".repeat(64)); // identity never matches a real dir
+    let path = write_temp_json("dv-foreign", &art);
+    let foreign = tempfile::tempdir().expect("tempdir");
+    let opts = Options {
+        defect_calibration: Some(Path::new(&path).to_path_buf()),
+        repo_path: foreign.path().to_path_buf(),
+        allow_foreign_calibration: false,
+        ..Options::default()
+    };
+    let err = run_defect_validation(&opts)
+        .expect_err("a foreign artifact must be rejected without --allow-foreign-calibration");
+    assert!(matches!(err, CodeLoreError::Analysis(_)));
+}
+
 // ─── band_history: uncapped, at-rev, oldest-first ────────────────────────────
 
 /// Run `git` in `dir` with a fixed author/committer date, panicking on

@@ -944,6 +944,36 @@ fn health_trend_csv_has_header_and_rows() {
 }
 
 #[test]
+fn defect_validation_without_artifact_emits_header_only_and_stderr_hint() {
+    // No --defect-calibration configured: honest absence, not an error. The
+    // CSV header is still written (so downstream tooling gets a valid empty
+    // table) with zero data rows, and a one-line hint points at
+    // `codelore calibrate-defects` on stderr.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "defect-validation",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "csv",
+            "--min-revs",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("metric,value"))
+        // Header only — no data rows without an artifact.
+        .stdout(predicate::function(|out: &str| {
+            out.lines().filter(|l| !l.trim().is_empty()).count() == 1
+        }))
+        .stderr(predicate::str::contains("calibrate-defects"));
+}
+
+#[test]
 fn effort_exposure_csv_has_header_and_rows() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
     Command::cargo_bin("codelore")

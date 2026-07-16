@@ -747,6 +747,26 @@ pub fn write_architecture_metrics_csv<W: Write>(
     Ok(())
 }
 
+/// `defect-validation` CSV emitter — flat `(metric, value)` evidence rows from
+/// a defect-calibration artifact. Header `metric,value`; zero rows (no
+/// artifact configured) still emit the header.
+pub fn write_defect_validation_csv<W: Write>(
+    rows: &[crate::analyses::defect_validation::DefectValidationRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(w, "metric,value").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{}",
+            quote_if_needed(&row.metric),
+            quote_if_needed(&row.value),
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 /// `architecture-roles` CSV emitter — per-file Core/Shared/Control/
 /// Periphery role + visibility fan-in/out.
 pub fn write_architecture_roles_csv<W: Write>(

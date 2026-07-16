@@ -24,7 +24,7 @@
 
 Behind every codebase is a human narrative your linter cannot see: who wrote this, who still understands it, which corners hide tribal knowledge nobody's written down, and where the historical scars are buried. Every commit is a piece of this **lore**.
 
-**CodeLore** mines your repository's git history and projects it into **55 behavioral analyses** — hotspots, change-coupling, ownership maps, knowledge fragmentation, code health scores, copy-paste clones, live clones (clones × Fisher-significant co-change), Leiden community detection on the coupling graph, per-file centrality, knowledge-island bus-factor risk, code familiarity, team composition, coordination needs, marginal-owner risk, god-class detection, layered-architecture rule validation, modularity-violation detection (co-change without imports), unstable-interface detection, per-module bus factor, pair-programming detection, stale-code surfacing, refactoring-targets ROI ranking, and more — surfaced as SARIF for your existing CI dashboard. The socio-technical signal your linter cannot see, with the methodological honesty your team can audit.
+**CodeLore** mines your repository's git history and projects it into **56 behavioral analyses** — hotspots, change-coupling, ownership maps, knowledge fragmentation, code health scores, copy-paste clones, live clones (clones × Fisher-significant co-change), Leiden community detection on the coupling graph, per-file centrality, knowledge-island bus-factor risk, code familiarity, team composition, coordination needs, marginal-owner risk, god-class detection, layered-architecture rule validation, modularity-violation detection (co-change without imports), unstable-interface detection, per-module bus factor, pair-programming detection, stale-code surfacing, refactoring-targets ROI ranking, and more — surfaced as SARIF for your existing CI dashboard. The socio-technical signal your linter cannot see, with the methodological honesty your team can audit.
 
 A Rust **drop-in successor** to Adam Tornhill's [code-maat](https://github.com/adamtornhill/code-maat) — every published code-maat analysis is supported under the same `--analysis NAME` flag, with modern improvements: deterministic tiebreaks, Fisher exact significance gates, SARIF output, persistent cache, PR-mode diffing, and a SQL-queryable fact store. Built on [gix](https://github.com/GitoxideLabs/gitoxide) (pure-Rust git), [DuckDB](https://duckdb.org) (embedded analytics), [fancy-regex](https://github.com/fancy-regex/fancy-regex) (lookaround support for architectural grouping), and a vendored fork of Mozilla's [rust-code-analysis](https://github.com/mozilla/rust-code-analysis) (tree-sitter complexity).
 
@@ -67,7 +67,7 @@ What separates CodeLore from code-maat, CodeScene, and jscpd:
 
 ## The analyses
 
-Run `codelore analyze --analysis NAME` for any of the 55 analyses below. They are grouped by the question you bring, not by how each one is built.
+Run `codelore analyze --analysis NAME` for any of the 56 analyses below. They are grouped by the question you bring, not by how each one is built.
 
 ### Hotspots & change coupling
 
@@ -138,6 +138,7 @@ Run `codelore analyze --analysis NAME` for any of the 55 analyses below. They ar
 |---|---|---|
 | `code-health` | biomarker composite score 0..100 per file: `100 × (1 − 0.50·structural_risk − 0.30·churn − 0.20·ownership_fv)`; `structural_risk` is a weighted sum of eight biomarkers (Complex Method 0.22, God Class 0.18, Large Method 0.12, DRY 0.12, Shotgun Surgery 0.12, Deep Nesting 0.10, Many Args 0.07, Complex Conditional 0.07); each row carries a `band` (red ≥ 0.55 / yellow ≥ 0.28 / green) and per-language `percentile` of structural risk; also **corpus-relative percentiles** — how each file's raw complexity compares to a reference corpus, or to your own organization's | Multi-dimensional file-quality score with explicit biomarker breakdown |
 | `health-trend` | code-health score series per file at sampled historical revisions; feeds the health-trend sparklines and improvements feed on the SPA dashboard | Distinguishes files that are genuinely improving from those that briefly recovered before deteriorating again |
+| `defect-validation` | reads a `codelore calibrate-defects` artifact and flattens its evidence: where mined defects landed by code-health band at the time, plus AUC / precision@k of HEAD structural risk against the defect-implicated file labels | Validates whether *this* repo's health score predicts its own defects — association, not causation; reads the artifact only (zero rows + a hint without one) |
 | `clones` | Type 1 + Type 2 clone families via AST structural hashing | Function-level copy-paste detection across Rust/Python/Java/JS/TS |
 | `clone-coupling` | clones intersected with Fisher-significant co-change | **The strategic differentiator** — separates live debt from dead noise |
 | `stale-code` | files alive at HEAD untouched ≥12 months AND low cognitive | The intersection minimises false-positive deletion candidates |

@@ -1956,6 +1956,20 @@ fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
             "See analyses/cycle_health.rs.",
         ),
         (
+            "defect-validation",
+            "Śliwerski, Zimmermann & Zeller 2005 (SZZ) + Kim et al. 2006 (AG-SZZ)",
+            "Reads an own-repo defect-calibration artifact (built by `codelore \
+             calibrate-defects`) and reports its evidence as flat (metric, value) \
+             rows: the band table (share of defect-introducing changes that landed \
+             in files red / yellow / green at the time), AUC and precision@k of \
+             HEAD structural_risk against the defect-implicated file labels, mining \
+             tallies, and the weight-tuning decision with both validation AUCs. \
+             Association, not causation — a defect touching a red file is evidence \
+             the score ranks it high, not proof the score caused the defect. Reads \
+             the artifact only; without one it emits zero rows and a stderr hint.",
+            "See analyses/defect_validation.rs + defect_calibration/.",
+        ),
+        (
             "architecture-metrics",
             "Lakos 1996 (CCD/ACD/NCCD) + MacCormack/Rusnak/Baldwin 2006/2014",
             "Repo-level (metric, value) rows: propagation_cost = density of the transitive-closure matrix; acd = mean transitive dependency set size; nccd = CCD / balanced-binary-tree CCD (<1 flat, >1 layered, >2 likely cyclic); dependency_cycles, largest_cycle; architecture_type = hierarchical / core-periphery / multi-core.",
@@ -2683,6 +2697,9 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             }
             AnalysisName::CycleHealth => {
                 dispatch_cycle_health(&db, &opts, format, &ctx, &mut out)?;
+            }
+            AnalysisName::DefectValidation => {
+                dispatch_defect_validation(&opts, format, &ctx, &mut out)?;
             }
             AnalysisName::ArchitectureMetrics => {
                 dispatch_architecture_metrics(&db, &opts, format, &ctx, &mut out)?;
@@ -3762,6 +3779,47 @@ fn dispatch_cycle_health(
         "html" => return Err(html_not_wired(ctx.analysis_name)),
         fmt => {
             return Err(unsupported_format("cycle-health", "csv|json|markdown", fmt));
+        }
+    }
+    Ok(())
+}
+
+/// Reads a defect-calibration artifact (never the fact store) and emits its
+/// evidence rows, so it takes no `FactsDb` — unlike the other dispatchers.
+fn dispatch_defect_validation(
+    opts: &Options,
+    format: &str,
+    ctx: &EmitCtx,
+    out: &mut Box<dyn Write>,
+) -> Result<()> {
+    match format {
+        "csv" => {
+            let rows =
+                codelore_lib::cli_api::analyses::defect_validation::run_defect_validation(opts)
+                    .context("run defect-validation")?;
+            codelore_lib::cli_api::output::csv::write_defect_validation_csv(&rows, out)
+                .context("write csv")?;
+        }
+        "json" => {
+            let rows =
+                codelore_lib::cli_api::analyses::defect_validation::run_defect_validation(opts)
+                    .context("run defect-validation")?;
+            codelore_lib::cli_api::output::json::write_json(&rows, out).context("write json")?;
+        }
+        "markdown" => {
+            let rows =
+                codelore_lib::cli_api::analyses::defect_validation::run_defect_validation(opts)
+                    .context("run defect-validation")?;
+            codelore_lib::cli_api::output::markdown::write_defect_validation_markdown(&rows, out)
+                .context("write markdown")?;
+        }
+        "html" => return Err(html_not_wired(ctx.analysis_name)),
+        fmt => {
+            return Err(unsupported_format(
+                "defect-validation",
+                "csv|json|markdown",
+                fmt,
+            ));
         }
     }
     Ok(())

@@ -22,6 +22,7 @@ pub mod crossing;
 pub mod cycle_health;
 pub mod cycle_origins;
 pub mod dashboard;
+pub mod defect_validation;
 pub mod delivery_friction;
 pub mod delivery_metrics;
 pub mod delta_health;
