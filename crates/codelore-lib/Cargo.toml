@@ -105,6 +105,14 @@ fancy-regex = "0.18"
 # call. (In 0.8.x `parse` implied `serde`; that bundling went away in
 # the 1.0 release.)
 toml = { version = "1", default-features = false, features = ["parse", "serde", "display"] }
+# Synchronous HTTP client for the advisory enrichment layer's two-dialect chat
+# client (Anthropic-native + OpenAI-compatible). Blocking by design — the crate
+# carries no async runtime and issues one advisory completion per invocation.
+# The `json` feature enables `send_json`/`read_json` for request/response
+# bodies; the default features keep rustls TLS + gzip for real HTTPS endpoints.
+# Also a `[build-dependencies]` entry, where build.rs uses it (default features,
+# no `json`) for the SPA's SHA-pinned vendored-JS fetch.
+ureq = { version = "3", features = ["json"] }
 
 [features]
 default = []
