@@ -205,7 +205,10 @@ impl ChatClient for OpenAiCompatClient {
 
 /// Raw environment inputs for client resolution, read once at the crate's only
 /// environment-touching site so that resolution itself stays pure.
-#[derive(Debug, Clone, Default)]
+///
+/// Deliberately does NOT derive `Debug`: two fields carry API keys, and a
+/// derived impl would print them through any `{:?}` or `tracing` sink.
+#[derive(Clone, Default)]
 pub struct LlmEnv {
     /// `CODELORE_LLM_PROVIDER` — `anthropic` or `openai-compat`; unset lets the
     /// presence of an Anthropic key (else the local default) decide.
