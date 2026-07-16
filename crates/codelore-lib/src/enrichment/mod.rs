@@ -13,4 +13,6 @@
 /// key, so bumping it invalidates every cached narrative naturally.
 pub const SCHEMA_VERSION: u32 = 1;
 
+pub mod citation;
 pub mod fact_sheet;
+pub mod prompt;
