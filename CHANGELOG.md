@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-07-16
+
 ### Added
 
 - **`codelore calibrate-defects` subcommand.** Mines a repository's own fix-commit history and builds a `defects.calib.json` artifact (own-repo defect calibration). A dedicated fix oracle (conventional-commit `fix:` prefixes plus a word-boundary defect vocabulary — `bug`, `bugfix`, `fix`/`fixes`/`fixed`, `defect`, `regression`, `hotfix` — excluding merges and reverts; deliberately narrower than the kamei `fix` feature) classifies fixes; an AG-SZZ linkage engine (`git blame` of each fix's parent, dropping cosmetic and clock-skewed candidate lines) traces each fix back to the commit that introduced the defect (Śliwerski/Zimmermann/Zeller 2005; Kim et al. 2006 AG-SZZ). It then validates HEAD structural risk against the mined defect labels (band table, AUC, precision@k) and runs a constrained, deterministic coordinate search over the eight smell weights on a temporal 60/40 older-train/newer-validate split, adopting tuned weights only when they clear an honesty floor (≥30 linked defects, ≥10 implicated files, a tuned validation AUC of at least 0.5, and a +0.02 validation-AUC margin) — otherwise the defaults are kept with the reason recorded. Two runs over the same history produce byte-identical artifacts. `--vintage` labels the artifact (default `defects-YYYY-MM-DD`), `--window-days` narrows which fixes are mined, and `--allow-dirty` permits mining with an uncommitted working tree (mining reads only committed state).
