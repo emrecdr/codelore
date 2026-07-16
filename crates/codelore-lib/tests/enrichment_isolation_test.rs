@@ -1,9 +1,10 @@
-//! Scoring-isolation guard (Contract 2): no module in the scoring path imports
+//! Scoring-isolation guard: no module in the scoring path imports
 //! the advisory `enrichment` layer. The dependency arrow points one way —
 //! enrichment reads the analyses, never the reverse — so enrichment can never
 //! perturb an analysis row, a gate verdict, an exit code, or a fact-store cache
 //! key. Enforced structurally by scanning the source of every scoring module at
-//! test time for a reference to `crate::enrichment`.
+//! test time for any reference to the `enrichment` module path — including
+//! grouped (`use crate::{…, enrichment::…}`) and `super::`-relative forms.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -58,7 +59,7 @@ fn scoring_modules_never_import_enrichment() {
     let mut offenders = Vec::new();
     for file in &files {
         let text = fs::read_to_string(file).expect("read source file");
-        if text.contains("use crate::enrichment") || text.contains("crate::enrichment::") {
+        if text.contains("enrichment::") || text.contains("use crate::enrichment") {
             offenders.push(file.display().to_string());
         }
     }
