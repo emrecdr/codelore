@@ -45,6 +45,19 @@ const SMALL_INT_EXEMPTION: f64 = 12.0;
 /// `0` at zero decimal places).
 ///
 /// `grounded` is true exactly when `unmatched` is empty.
+///
+/// # Known limitations — this check labels, it does not prove
+///
+/// The token model is an unsigned magnitude, so three classes of invented
+/// claims still pass as grounded: a **sign inversion** (`-0.5` extracts as
+/// `0.5` and is grounded by a fact of `+0.5`); a **small-integer statistic**
+/// covered by the `≤ 12` exemption (`a risk score of 9` passes with no fact
+/// of `9`); and a **percent collision**, where any fraction fact grounds an
+/// unrelated percent token via the `× 100` fallback (`50%` passes whenever
+/// some fact is `0.5`). The failure direction everywhere else is the safe
+/// one — over-flagging (version-like strings decompose into fragments that
+/// read as uncited) — but a `grounded ✓` stamp means "every quoted magnitude
+/// appears in the evidence", not "every claim is true".
 #[must_use]
 pub fn check_citations(narrative: &str, fact_values: &[f64]) -> Groundedness {
     let stripped = strip_thousands_separators(narrative);
