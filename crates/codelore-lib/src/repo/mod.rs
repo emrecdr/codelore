@@ -51,7 +51,8 @@ pub trait Repo: Send + Sync {
     /// files are excluded: every caller (the `calibrate-defects` mining
     /// guard, the cache-hit staleness warning, the dirty cache-write skip)
     /// protects HEAD-time metrics computed over `tracked_paths_at_head()`
-    /// only, so an untracked file cannot affect them.
+    /// only. Exception: a submodule whose only change is untracked content
+    /// in its own worktree may report dirty (backend-dependent).
     ///
     /// Used by the persistent-cache code path to emit a `tracing::warn!`
     /// when a cache HIT occurs on a dirty tree — HEAD-time metrics

@@ -255,8 +255,11 @@ impl Repo for GixRepo {
         // Tracked-only: `Repository::is_dirty()` compares HEAD-tree-vs-index
         // (staged) and index-vs-worktree (unstaged) while skipping the
         // untracked-file dirwalk entirely — matching `GitCliRepo`'s
-        // `--untracked-files=no` porcelain output. Every caller (the
-        // `calibrate-defects` mining guard, the cache-hit staleness
+        // `--untracked-files=no` porcelain output for ordinary worktrees.
+        // Exception: a submodule whose only change is untracked content in its
+        // own worktree reports dirty via `is_dirty()` (which does not expose
+        // submodule-dirwalk alignment) but clean via `GitCliRepo`. Every caller
+        // (the `calibrate-defects` mining guard, the cache-hit staleness
         // warning, the dirty cache-write skip) protects HEAD-time metrics
         // computed over `tracked_paths_at_head()` only, so untracked files
         // must not count.
