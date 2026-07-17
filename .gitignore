@@ -58,6 +58,7 @@ graphify-out/manifest.json
 .serena/
 .mcp.json
 CLAUDE.md
+.playwright-mcp/
 
 # Graphify pipeline outputs — graphs, manifests, cost reports,
 # semantic labels. All regenerable from source via `graphify build`;
