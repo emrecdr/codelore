@@ -1055,7 +1055,7 @@ The posture is local-first: with nothing configured but a model name, requests g
 | `ANTHROPIC_API_KEY` | Credential for the Anthropic dialect (required on it). | unset |
 | `CODELORE_LLM_BASE_URL` | Base URL for the OpenAI-compatible endpoint (ollama, llama.cpp, LM Studio, vLLM, OpenAI, OpenRouter). | `http://localhost:11434/v1` |
 | `CODELORE_LLM_API_KEY` | Optional bearer token for the OpenAI-compatible endpoint; local runners typically need none. | unset |
-| `CODELORE_LLM_MODEL` | Model name. **Required** on the OpenAI-compatible dialect (any name from `ollama list` works); on the Anthropic dialect it overrides the default model. | dialect default |
+| `CODELORE_LLM_MODEL` | Model name. **Required** on the OpenAI-compatible dialect (any name from `ollama list` works); on the Anthropic dialect it overrides the default model. | none on OpenAI-compatible; a Sonnet-class default on Anthropic |
 
 Note: `provider=anthropic` always pins the Anthropic API base URL — `CODELORE_LLM_BASE_URL` applies to the OpenAI-compatible dialect only and is ignored on the Anthropic path.
 

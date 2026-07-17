@@ -583,7 +583,8 @@ impl CodeLoreServer {
         name = "explain_file",
         description = "Return a deterministic per-file evidence dossier for one repo-relative file \
             path. `fact_sheet` is always present: the ordered analysis sections (code-health, \
-            hotspots, coupling, ownership, functions, import cycles, and defect evidence) as \
+            biomarkers, hotspots, coupling, ownership, functions, import cycles, and defect \
+            evidence) as \
             structured JSON. When the server environment has an LLM configured (the \
             `CODELORE_LLM_*` variables), the response also carries a grounded advisory `narrative` \
             with its `model` and a `grounded` citation-check verdict; when it does not, \
