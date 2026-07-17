@@ -63,7 +63,7 @@ What separates CodeLore from code-maat, CodeScene, and jscpd:
 - **💾 SQL-queryable fact store.** No proprietary format lock-in. Export the full DuckDB store as Parquet or SQLite and query your git history as a database from the command line.
 - **⚡ Persistent cache.** Second invocation on the same `(repo, HEAD, options)` opens read-only in ~10 ms instead of re-walking history — typically a 10-100× speedup on the dev inner loop depending on repo size, and the foundation of the `codelore diff` PR-mode subcommand.
 - **📊 Corpus-relative percentiles.** A code-health score of 78 means nothing without a reference point. An embedded reference corpus — built from permissive-license OSS projects across five languages — answers "is this complex for the ecosystem?" with per-language percentile breakpoints on `code-health` and corpus percentiles on repo-level architecture metrics (propagation cost, cycle file share), fully offline and shipped in the binary. `codelore calibrate` builds a private org corpus — each pinned repo is fetched shallow and ingested HEAD-only, so corpus builds are fast — letting you compare against your own codebase portfolio instead of the public world.
-- **🔒 Fully local, including the agent surface.** No account, no server, no telemetry: analysis, quality gates, the dashboard, and the `codelore mcp` server all run against the repository on your disk. The dashboard is one self-contained HTML file; the reference corpus is embedded in the binary; nothing phones home.
+- **🔒 Fully local, including the agent surface.** No account, no server, no telemetry: analysis, quality gates, the dashboard, and the `codelore mcp` server all run against the repository on your disk. The dashboard is one self-contained HTML file; the reference corpus is embedded in the binary; nothing phones home. The one deliberate exception is the opt-in `--llm` layer above — and even that defaults to a local endpoint.
 - **🔗 Drop-in code-maat compatibility.** Every published code-maat analysis is supported under the same `--analysis NAME`. The `--code-maat-compat` flag flips internal defaults (`min-revs` pivot, CSV column headers for `summary` / `code-age` / `communication` / `ownership` / `authors`, `--min-soc` overload) back to legacy semantics for users with dashboards that parse code-maat CSV verbatim — see the [migration table](#migrating-from-code-maat) below.
 
 ---
@@ -396,7 +396,7 @@ Cache the base-rev analysis with `--base-cache PATH` to halve dual-analysis cost
 
 ## Agent integration
 
-`codelore mcp --repo <path>` starts a Model Context Protocol server over stdio, giving AI agents (Claude, Cursor, and any MCP-compatible client) direct access to behavioral code analysis — no account, no network, fully local.
+`codelore mcp --repo <path>` starts a Model Context Protocol server over stdio, giving AI agents (Claude, Cursor, and any MCP-compatible client) direct access to behavioral code analysis — no account, no telemetry, fully local (the only network path is the opt-in LLM narrative, when you configure one).
 
 **Client config** (add to your `claude_desktop_config.json` or Cursor `mcp.json`):
 
@@ -425,7 +425,7 @@ Cache the base-rev analysis with `--base-cache PATH` to halve dual-analysis cost
 | `finding_hotspot_overlap` | Behavioral×static fusion: external SARIF findings joined with hotspot rank and code-health band; each row carries an `act-now` / `plan` / `note` priority. Returns a structured `note` when the sidecar is absent |
 | `explain_file` | Per-file evidence dossier (`fact_sheet`, always returned) plus — only when the server environment configures an LLM via `CODELORE_LLM_*` — a grounded advisory `narrative` with a citation-check verdict; without one, `narrative_error` is set and the call still succeeds |
 
-**Fully local — no account, no network, no telemetry.** The server reads the repository at the path you configure and answers tool calls using the same fact store that powers the CLI. The first call on a cold cache pays the one-time ingest cost (a few seconds to a couple of minutes depending on repo size); subsequent calls in the same session use the warm cache and return in milliseconds.
+**Fully local — no account, no telemetry, and no network beyond the optional `CODELORE_LLM_*` endpoint you configure.** The server reads the repository at the path you configure and answers tool calls using the same fact store that powers the CLI. The first call on a cold cache pays the one-time ingest cost (a few seconds to a couple of minutes depending on repo size); subsequent calls in the same session use the warm cache and return in milliseconds.
 
 See [§11.9 of the advanced-usage guide](docs/advanced-usage.md) for the full tool reference, parameter details, return shape descriptions, and troubleshooting.
 
