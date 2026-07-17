@@ -37,6 +37,7 @@ use codelore_lib::cli_api::{
     },
     repo::GixRepo,
 };
+use codelore_lib::defect_calibration;
 
 /// Convert any displayable error to an MCP `ErrorData` internal error.
 fn internal(e: impl std::fmt::Display) -> ErrorData {
@@ -138,10 +139,13 @@ impl Drop for TempWorktree {
     }
 }
 
-/// MCP server state — the repo path fixed at server startup.
+/// MCP server state — the repo path and defect-calibration configuration
+/// fixed at server startup.
 #[derive(Clone)]
 pub struct CodeLoreServer {
     repo: PathBuf,
+    defect_calibration: Option<PathBuf>,
+    allow_foreign_calibration: bool,
 }
 
 // ── Parameter structs (one per tool) ─────────────────────────────────────────
@@ -584,11 +588,12 @@ impl CodeLoreServer {
         description = "Return a deterministic per-file evidence dossier for one repo-relative file \
             path. `fact_sheet` is always present: the ordered analysis sections (code-health, \
             biomarkers, hotspots, coupling, ownership, functions, and import cycles) as \
-            structured JSON. When the server environment has an LLM configured (the \
-            `CODELORE_LLM_*` variables), the response also carries a grounded advisory `narrative` \
-            with its `model` and a `grounded` citation-check verdict; when it does not, \
-            `narrative_error` is returned instead. The fact sheet is always returned and the call \
-            never fails because the LLM is unavailable. \
+            structured JSON. When the server was started with `--defect-calibration`, the fact \
+            sheet also carries a `defect-evidence` section. When the server environment has an \
+            LLM configured (the `CODELORE_LLM_*` variables), the response also carries a grounded \
+            advisory `narrative` with its `model` and a `grounded` citation-check verdict; when it \
+            does not, `narrative_error` is returned instead. The fact sheet is always returned and \
+            the call never fails because the LLM is unavailable. \
             First call on a cold cache triggers history ingest."
     )]
     async fn explain_file(
@@ -597,12 +602,16 @@ impl CodeLoreServer {
     ) -> Result<String, ErrorData> {
         let repo_path = self.repo.clone();
         let target = params.0.path.clone();
+        let defect_calibration = self.defect_calibration.clone();
+        let allow_foreign_calibration = self.allow_foreign_calibration;
         tokio::task::spawn_blocking(move || {
             // min_revs = 1 so any single named file resolves in its own dossier,
             // matching the `explain <path>` CLI surface.
             let opts = Options {
                 repo_path: repo_path.clone(),
                 min_revs: 1,
+                defect_calibration,
+                allow_foreign_calibration,
                 ..Options::default()
             };
             let repo = GixRepo::open(&repo_path).map_err(internal)?;
@@ -680,12 +689,31 @@ impl CodeLoreServer {
 impl rmcp::handler::server::ServerHandler for CodeLoreServer {}
 
 /// Start the MCP server and block until the client closes the connection.
-pub fn run_mcp_server(repo: PathBuf) -> Result<()> {
+///
+/// When `defect_calibration` is set, the artifact is loaded and its
+/// repo-identity checked before the server starts serving — a bad path or a
+/// foreign artifact (without `allow_foreign_calibration`) is a startup error,
+/// not a failure surfaced on the first `explain_file` call. The loaded
+/// artifact is discarded here; each `explain_file` call loads it again itself
+/// via `Options`.
+pub fn run_mcp_server(
+    repo: PathBuf,
+    defect_calibration: Option<PathBuf>,
+    allow_foreign_calibration: bool,
+) -> Result<()> {
+    if let Some(path) = &defect_calibration {
+        let artifact = defect_calibration::load(path)?;
+        defect_calibration::check_repo_identity(&artifact, &repo, allow_foreign_calibration)?;
+    }
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
         .block_on(async move {
-            let server = CodeLoreServer { repo };
+            let server = CodeLoreServer {
+                repo,
+                defect_calibration,
+                allow_foreign_calibration,
+            };
             let transport = rmcp::transport::io::stdio();
             let running = rmcp::service::serve_server(server, transport)
                 .await

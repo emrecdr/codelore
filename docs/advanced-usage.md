@@ -1379,6 +1379,14 @@ codelore mcp --repo /path/to/repo
 
 The server blocks and reads JSON-RPC 2.0 messages on stdin (newline-delimited), writes responses to stdout. It runs until the client closes the connection.
 
+Pass `--defect-calibration <path>` (built with `codelore calibrate-defects`) to add a **defect-evidence** section to every `explain_file` response for the lifetime of the server — the same section `codelore explain <path> --defect-calibration` adds to the CLI dossier (see [§8.5](#85-llm-enrichment-advisory-narratives)). Unlike the per-file tool parameters, this is a startup-only flag: it applies uniformly to all `explain_file` calls in the session, not per-request. The artifact is loaded and its repo-identity checked before the server starts serving, so a bad path or an artifact mined from a different repository (without `--allow-foreign-calibration`) is a startup error rather than a failure on the first tool call:
+
+```bash
+codelore mcp --repo /path/to/repo --defect-calibration defects.calib.json
+```
+
+This does not add a network dependency — the artifact is a local JSON file produced by a prior `codelore calibrate-defects` run, consulted entirely offline like every other tool.
+
 ### Client configuration
 
 Add an entry to your client's MCP config (exact filename varies by client):
@@ -1490,7 +1498,7 @@ Cost: warm-cache fast after `ingest-sarif`; does not trigger history re-ingest.
 
 #### `explain_file`
 
-Returns the same per-file evidence surface as `codelore explain <path>` ([§8.5](#85-llm-enrichment-advisory-narratives)). `fact_sheet` is always present: the ordered analysis sections (code-health, biomarkers, hotspots, coupling, ownership, functions, and import cycles) as an array of `{section, facts}` objects preserving the dossier's order.
+Returns the same per-file evidence surface as `codelore explain <path>` ([§8.5](#85-llm-enrichment-advisory-narratives)). `fact_sheet` is always present: the ordered analysis sections (code-health, biomarkers, hotspots, coupling, ownership, functions, and import cycles) as an array of `{section, facts}` objects preserving the dossier's order. When the server was started with `--defect-calibration`, the fact sheet also carries a `defect-evidence` section — see the flag's description above.
 
 When the server's environment has an LLM configured (the `CODELORE_LLM_*` variables, §8.5), the response also carries a grounded advisory `narrative` with its `model` id and a `grounded` citation-check verdict. When it does not — or when the request fails — a `narrative_error` field is returned instead. The fact sheet is always returned and the tool call never fails because the LLM is unavailable, so agents without a configured endpoint still receive structured evidence to narrate themselves.
 

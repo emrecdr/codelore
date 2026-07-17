@@ -46,10 +46,24 @@ fn spawn_mcp(
     std::process::ChildStdin,
     BufReader<std::process::ChildStdout>,
 ) {
+    spawn_mcp_with_args(repo_path, &[])
+}
+
+/// Like [`spawn_mcp`], but with extra CLI args appended after `--repo`
+/// (e.g. `--defect-calibration <path> --allow-foreign-calibration`).
+fn spawn_mcp_with_args(
+    repo_path: &str,
+    extra_args: &[&str],
+) -> (
+    std::process::Child,
+    std::process::ChildStdin,
+    BufReader<std::process::ChildStdout>,
+) {
     let bin = assert_cmd::cargo::cargo_bin("codelore");
     let mut builder = Command::new(&bin);
     builder
         .args(["mcp", "--repo", repo_path])
+        .args(extra_args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -514,6 +528,94 @@ fn mcp_explain_file_returns_fact_sheet_and_narrative_error_without_llm() {
     assert!(
         parsed.get("narrative").is_none(),
         "no narrative may be present when the LLM is unavailable: {parsed}"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+/// A syntactically valid defect-calibration artifact with a deliberately
+/// foreign `repo_identity` — proves `--allow-foreign-calibration` is what lets
+/// the server start with it, not merely that the flag parses. `weights` are
+/// the built-in smell defaults in canonical order, matching what
+/// `active_weights` (consulted by the dossier's code-health section)
+/// requires of a well-formed artifact.
+fn write_foreign_defect_artifact(dir: &std::path::Path) -> std::path::PathBuf {
+    use codelore_lib::defect_calibration::{
+        DEFECT_FORMAT_VERSION, DefectArtifact, MiningStats, OracleConfig, TuningDecision,
+        ValidationMetrics, save, validate::default_weights,
+    };
+    let artifact = DefectArtifact {
+        format_version: DEFECT_FORMAT_VERSION,
+        repo_identity: "0".repeat(64),
+        head_at_mining: "0".repeat(40),
+        vintage: "defects-2026-07-17".to_string(),
+        generated_at: "2026-07-17T00:00:00Z".to_string(),
+        oracle: OracleConfig::default(),
+        mining: MiningStats::default(),
+        validation: ValidationMetrics {
+            band_table: vec![("red".to_string(), 5, 1.0)],
+            auc_default: None,
+            precision_at_10: None,
+            precision_at_red: None,
+            implicated_files: 3,
+            linked_defects: 5,
+            sample_dates: vec!["2026-01-01".to_string()],
+            excluded_no_data: 0,
+        },
+        weights: default_weights(),
+        tuning: TuningDecision::DefaultsKept {
+            reason: "insufficient evidence for weight tuning".to_string(),
+            auc_validation_default: None,
+            auc_validation_tuned: None,
+        },
+    };
+    let path = dir.join("defects.calib.json");
+    save(&artifact, &path).expect("save artifact");
+    path
+}
+
+#[test]
+fn mcp_explain_file_defect_calibration_adds_defect_evidence_section() {
+    let repo = delivery_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+    let artifact_dir = tempfile::tempdir().expect("artifact dir");
+    let artifact_path = write_foreign_defect_artifact(artifact_dir.path());
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp_with_args(
+        repo_path,
+        &[
+            "--defect-calibration",
+            artifact_path.to_str().unwrap(),
+            "--allow-foreign-calibration",
+        ],
+    );
+
+    let ch = call_tool(&mut stdin, &mut reader, 1, "code_health", &json!({}));
+    let ch_rows = assert_tool_ok(&ch, "code_health");
+    let target = ch_rows
+        .as_array()
+        .and_then(|rows| rows.first())
+        .and_then(|row| row["path"].as_str())
+        .expect("code_health yields at least one file for delivery_repo")
+        .to_string();
+
+    let resp = call_tool(
+        &mut stdin,
+        &mut reader,
+        2,
+        "explain_file",
+        &json!({ "path": target }),
+    );
+    let parsed = assert_tool_ok(&resp, "explain_file");
+
+    let sections = parsed["fact_sheet"]
+        .as_array()
+        .expect("explain_file always returns a fact_sheet array");
+    assert!(
+        sections.iter().any(|s| s["section"] == "defect-evidence"),
+        "the fact sheet must carry a defect-evidence section when the server \
+         was started with --defect-calibration: {parsed}"
     );
 
     drop(stdin);

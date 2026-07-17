@@ -8,6 +8,8 @@ Conventional Commits format. All notable changes documented here.
 
 - **`--defect-calibration` / `--allow-foreign-calibration` on `codelore explain <path>`.** Passing a defect-calibration artifact adds a `defect-evidence` section to the file's evidence dossier: the artifact's vintage, its headline validation numbers (`auc_default`, `precision_at_10`, `precision_at_red`, when available), `implicated_files`, `linked_defects`, and the band table. Per-file defect implication is not derivable from the artifact, so only its artifact-wide metrics are surfaced. Applying an artifact mined from a different repository is a hard error unless `--allow-foreign-calibration` is passed. Both flags are ignored when the `explain` argument names a known topic. Without `--defect-calibration`, dossier output is byte-identical to before.
 
+- **`--defect-calibration` / `--allow-foreign-calibration` on `codelore mcp`.** The same flag pair, as a server-startup option: when set, every `explain_file` tool call in the session gets the fact sheet's `defect-evidence` section. The artifact is loaded and its repo-identity checked once at server startup — a bad path or a foreign artifact (without `--allow-foreign-calibration`) is a launch-time error, not a failure on the first tool call. Without the flag, `codelore mcp` behavior is unchanged.
+
 ## [0.20.0] - 2026-07-17
 
 ### Added

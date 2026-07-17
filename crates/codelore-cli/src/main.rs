@@ -58,7 +58,11 @@ fn run() -> Result<()> {
 }
 
 fn run_mcp_cmd(args: &McpArgs) -> Result<()> {
-    mcp::run_mcp_server(args.repo.clone())
+    mcp::run_mcp_server(
+        args.repo.clone(),
+        args.defect_calibration.clone(),
+        args.allow_foreign_calibration,
+    )
 }
 
 /// Ingest one or more SARIF files into the per-repo external-findings sidecar.
