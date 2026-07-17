@@ -228,12 +228,17 @@ impl Repo for GitCliRepo {
     }
 
     fn is_worktree_dirty(&self) -> bool {
-        // `git status --porcelain` emits exactly zero bytes for a clean
-        // tree, one short-format line per dirty/untracked path otherwise.
-        // Non-empty stdout therefore means dirty. Errors swallowed per the
-        // trait's contract (`false` on detection failure is preferable to
-        // a hard analyze error).
-        match self.run_git(&["status", "--porcelain"]) {
+        // `git status --porcelain --untracked-files=no` emits one
+        // short-format line per staged or unstaged change to a tracked
+        // path, zero bytes for a clean tree; `--untracked-files=no` drops
+        // the `??` lines so untracked files never count. Every caller (the
+        // `calibrate-defects` mining guard, the cache-hit staleness
+        // warning, the dirty cache-write skip) protects HEAD-time metrics
+        // computed over `tracked_paths_at_head()` only, so untracked files
+        // must not count. Errors swallowed per the trait's contract
+        // (`false` on detection failure is preferable to a hard analyze
+        // error).
+        match self.run_git(&["status", "--porcelain", "--untracked-files=no"]) {
             Ok(output) if output.status.success() => !output.stdout.is_empty(),
             _ => false,
         }

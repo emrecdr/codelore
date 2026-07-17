@@ -58,7 +58,11 @@ fn run() -> Result<()> {
 }
 
 fn run_mcp_cmd(args: &McpArgs) -> Result<()> {
-    mcp::run_mcp_server(args.repo.clone())
+    mcp::run_mcp_server(
+        args.repo.clone(),
+        args.defect_calibration.clone(),
+        args.allow_foreign_calibration,
+    )
 }
 
 /// Ingest one or more SARIF files into the per-repo external-findings sidecar.
@@ -2308,6 +2312,8 @@ fn run_explain_file(args: &args::ExplainArgs, repo_relative: &str) -> Result<()>
     let opts = Options {
         repo_path: args.repo.clone(),
         min_revs: 1,
+        defect_calibration: args.defect_calibration.clone(),
+        allow_foreign_calibration: args.allow_foreign_calibration,
         ..Options::default()
     };
     let repo = GixRepo::open(&args.repo)

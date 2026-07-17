@@ -441,11 +441,11 @@ One pass runs three stages and writes a compact `defects.calib.json`:
 
 - **Fix oracle.** A commit is a *fix* when its message matches a conventional-commit `fix:` / `fix(scope):` prefix or a word-boundary defect term (`bug`, `bugfix`, `fix`/`fixes`/`fixed`, `defect`, `regression`, `hotfix`), and it is neither a merge nor a `Revert "…"`. This oracle is deliberately narrower than the kamei `fix` feature (which keeps its broad `issue|error|patch` alternation for JIT-SDP — a documented SZZ precision trap); the oracle model also carries extra include patterns for tracker-id conventions, recorded in the artifact; they are not yet exposed as a CLI option.
 - **AG-SZZ linkage.** For each fix, CodeLore takes the fix's deleted pre-image lines and `git blame`s the fix's parent to find the commit that last introduced each line — the candidate defect-introducing commit — then drops cosmetic (blank / comment-only) blamed lines and any candidate at-or-newer than the fix (the AG filter plus a clock-skew guard). This is annotation-graph SZZ (Śliwerski, Zimmermann & Zeller 2005; Kim et al. 2006 AG-SZZ) behind a pluggable seam. A single file's blame or blob-read failure is skipped and counted, never fatal.
-- **Validation + constrained tuning.** Each defect-introducing commit is matched to the nearest historical code-health band sample at-or-before its date; the report tallies where those changes landed by band and scores HEAD `structural_risk` against the defect-implicated file labels (AUC, precision@k). A deterministic coordinate search over the eight smell weights then tunes them on a temporal 60/40 older-train / newer-validate split (never a random split — a leakage guard) — **but only when the evidence clears an honesty floor**: at least 30 linked defects, at least 10 implicated files, a tuned *validation*-split AUC of at least 0.5 (weights that rank below random on unseen recent defects are never adopted, however large their margin), and the tuned weights must beat the defaults' *validation*-split AUC by a margin (+0.02). If any floor is unmet the defaults are kept and the reason is recorded; the artifact always states which branch was taken and shows both AUCs. Finding no fix commits at all is not an error — the artifact is written with empty linkage and defaults kept.
+- **Validation + constrained tuning.** Each defect-introducing commit is matched to the nearest historical code-health band sample at-or-before its date; the report tallies where those changes landed by band and scores HEAD `structural_risk` against the defect-implicated file labels (AUC, precision@k). A deterministic coordinate search over the eight smell weights then tunes them on a temporal 60/40 older-train / newer-validate split (never a random split — a leakage guard) — **but only when the evidence clears an honesty floor**: at least 30 linked defect-changes, at least 10 implicated files, a tuned *validation*-split AUC of at least 0.5 (weights that rank below random on unseen recent defects are never adopted, however large their margin), and the tuned weights must beat the defaults' *validation*-split AUC by a margin (+0.02). If any floor is unmet the defaults are kept and the reason is recorded; the artifact always states which branch was taken and shows both AUCs. Finding no fix commits at all is not an error — the artifact is written with empty linkage and defaults kept.
 
 Two runs over the same history produce byte-identical artifacts. Mining reads only committed state, so `calibrate-defects` refuses a dirty working tree unless you pass `--allow-dirty` (the artifact still describes the committed HEAD, not your edits).
 
-**Applying it — `--defect-calibration`.** Pass the artifact on `analyze` or `check`:
+**Applying it — `--defect-calibration`.** Pass the artifact on `analyze`, `check`, or `explain <path>` (see [§8.5](#85-llm-enrichment-advisory-narratives) for the dossier's defect-evidence section):
 
 ```sh
 codelore analyze --analysis code-health --defect-calibration defects.calib.json
@@ -995,7 +995,7 @@ Eviction: 5 entries per repo + 2 GB global cap (LRU). Pruning runs after every s
 
 The cache key includes `head_sha` but NOT the working tree. That's correct for analyses that read only committed history (`revisions`, `coupling`, `ownership`, `churn`, `messages`, ...), but `hotspots`-style HEAD-time metrics computed by `ingest_complexity_at_head` and `populate_clones_at_head` read files from disk at ingest time. If you change files without committing and then re-run codelore, the cache hits on `head_sha` — and you get the previous run's metrics computed from the previous worktree state, not your current edits.
 
-To surface this, codelore emits a `tracing::warn!` whenever a cache hit lands on a working tree with uncommitted modifications or untracked Tier-1 source files:
+To surface this, codelore emits a `tracing::warn!` whenever a cache hit lands on a working tree with uncommitted changes to a tracked file (untracked files don't count — they can't affect a HEAD-time scan):
 
 ```
 WARN cache hit on a working tree with uncommitted changes; HEAD-time metrics
@@ -1003,7 +1003,7 @@ WARN cache hit on a working tree with uncommitted changes; HEAD-time metrics
      Pass `--no-cache` to recompute against the current working tree.
 ```
 
-Detection is cheap (gix `Repository::status` for the pure-Rust walker, `git status --porcelain` for the CLI walker). Pass `--no-cache` if the dirty state matters for your analysis. The warning is informational — codelore still serves the cached result by default to preserve the 10–100× speedup on clean repeated runs. Auto-invalidation via worktree-content hashing was considered and rejected: hashing every tracked file on every invocation costs 100ms–1s on large trees, which would erase the cache's perf win for the majority case where the cache is correct.
+Detection is cheap (gix `Repository::is_dirty` for the pure-Rust walker, `git status --porcelain --untracked-files=no` for the CLI walker). Pass `--no-cache` if the dirty state matters for your analysis. The warning is informational — codelore still serves the cached result by default to preserve the 10–100× speedup on clean repeated runs. Auto-invalidation via worktree-content hashing was considered and rejected: hashing every tracked file on every invocation costs 100ms–1s on large trees, which would erase the cache's perf win for the majority case where the cache is correct.
 
 ## 8.5. LLM enrichment (advisory narratives)
 
@@ -1015,7 +1015,7 @@ Everything in this section is strictly advisory. Scores, gates, SARIF, exit code
 
 | Surface | What it prints | LLM required |
 |---|---|---|
-| `codelore explain <path>` | The file's **evidence dossier**: ordered fact-sheet sections — code-health score/band, biomarker intensities, hotspot rank, coupling partners, ownership, function churn leaders, and import-cycle membership. Deterministic, free, offline. | No |
+| `codelore explain <path>` | The file's **evidence dossier**: ordered fact-sheet sections — code-health score/band, biomarker intensities, hotspot rank, coupling partners, ownership, function churn leaders, import-cycle membership, and (with `--defect-calibration`) the configured artifact's defect-evidence metrics. Deterministic, free, offline. | No |
 | `codelore explain <path> --llm` | The dossier plus a grounded **Diagnosis** narrative. A **Refactoring direction** section appears only when the sheet carries structural evidence for one (an import-cycle or functions section); when the evidence is absent the section is omitted rather than invented. | Yes |
 | `codelore diff <range> --llm` | The deterministic diff output exactly as today, followed by a delimited **LLM narrative (advisory)** block: one reviewer-ready read of what the change does to the codebase's health and which files carry the risk. Rendered for `text` and `markdown` output only; ignored (with a stderr note) for `json`/`sarif`. | Yes |
 
@@ -1033,6 +1033,8 @@ codelore diff origin/main...HEAD --repo . --llm
 The MCP server exposes the same per-file surface as the `explain_file` tool — see [§11.9](#119-mcp-server-codelore-mcp).
 
 The dossier resolves any single tracked source file: its analyses run with a 1-revision floor instead of the default corpus gate, so a file the default `analyze` run would hide still gets its own dossier (its hotspot/coupling/ownership numbers can therefore differ from a default run's).
+
+Passing `--defect-calibration <path>` (see [Defect calibration](#defect-calibration-does-the-health-score-predict-where-defects-land-here)) adds a **defect-evidence** section: the artifact's `vintage`, its headline validation numbers (`auc_default`, `precision_at_10`, `precision_at_red` when available), `implicated_files`, `linked_defects`, and the band table (`band:<band>:changes` / `band:<band>:share`). Per-file defect implication is not derivable from the artifact, so only its artifact-wide metrics are surfaced. `--allow-foreign-calibration` applies an artifact mined from a different repository, exactly as it does for `analyze`/`check`. Without `--defect-calibration` the dossier carries no such section — byte-identical to today.
 
 ### Grounding: fact sheet in, citation check out
 
@@ -1377,6 +1379,14 @@ codelore mcp --repo /path/to/repo
 
 The server blocks and reads JSON-RPC 2.0 messages on stdin (newline-delimited), writes responses to stdout. It runs until the client closes the connection.
 
+Pass `--defect-calibration <path>` (built with `codelore calibrate-defects`) to add a **defect-evidence** section to every `explain_file` response for the lifetime of the server — the same section `codelore explain <path> --defect-calibration` adds to the CLI dossier (see [§8.5](#85-llm-enrichment-advisory-narratives)). Unlike the per-file tool parameters, this is a startup-only flag: it applies uniformly to all `explain_file` calls in the session, not per-request. The artifact is loaded and its repo-identity checked before the server starts serving, so a bad path or an artifact mined from a different repository (without `--allow-foreign-calibration`) is a startup error rather than a failure on the first tool call:
+
+```bash
+codelore mcp --repo /path/to/repo --defect-calibration defects.calib.json
+```
+
+This does not add a network dependency — the artifact is a local JSON file produced by a prior `codelore calibrate-defects` run, consulted entirely offline like every other tool.
+
 ### Client configuration
 
 Add an entry to your client's MCP config (exact filename varies by client):
@@ -1488,7 +1498,7 @@ Cost: warm-cache fast after `ingest-sarif`; does not trigger history re-ingest.
 
 #### `explain_file`
 
-Returns the same per-file evidence surface as `codelore explain <path>` ([§8.5](#85-llm-enrichment-advisory-narratives)). `fact_sheet` is always present: the ordered analysis sections (code-health, biomarkers, hotspots, coupling, ownership, functions, and import cycles) as an array of `{section, facts}` objects preserving the dossier's order.
+Returns the same per-file evidence surface as `codelore explain <path>` ([§8.5](#85-llm-enrichment-advisory-narratives)). `fact_sheet` is always present: the ordered analysis sections (code-health, biomarkers, hotspots, coupling, ownership, functions, and import cycles) as an array of `{section, facts}` objects preserving the dossier's order. When the server was started with `--defect-calibration`, the fact sheet also carries a `defect-evidence` section — see the flag's description above.
 
 When the server's environment has an LLM configured (the `CODELORE_LLM_*` variables, §8.5), the response also carries a grounded advisory `narrative` with its `model` id and a `grounded` citation-check verdict. When it does not — or when the request fails — a `narrative_error` field is returned instead. The fact sheet is always returned and the tool call never fails because the LLM is unavailable, so agents without a configured endpoint still receive structured evidence to narrate themselves.
 

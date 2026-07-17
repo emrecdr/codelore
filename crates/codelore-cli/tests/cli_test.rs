@@ -2921,8 +2921,8 @@ fn calibrate_defects_links_planted_defect_and_ag_filters_cosmetic_fix() {
         "1 linked defect is far below the 30-defect honesty floor"
     );
     assert_eq!(
-        artifact["tuning"]["reason"], "fewer than 30 linked defects",
-        "the linked-defect floor, not the implicated-file or margin branch, must fire"
+        artifact["tuning"]["reason"], "fewer than 30 linked defect-changes",
+        "the linked-defect-changes floor, not the implicated-file or margin branch, must fire"
     );
 }
 
@@ -3179,6 +3179,119 @@ mod explain_path {
         .stdout(predicate::str::contains("code-health"))
         .stdout(predicate::str::contains(band.as_str()))
         .stdout(predicate::str::contains(target.as_str()));
+    }
+
+    /// A syntactically valid defect-calibration artifact with a deliberately
+    /// foreign `repo_identity` — proves `--allow-foreign-calibration` is what
+    /// lets it apply, not merely that the flag parses. `weights` are the
+    /// built-in smell defaults in canonical order, matching what
+    /// `active_weights` (consulted by the dossier's code-health section)
+    /// requires of a well-formed artifact.
+    fn write_foreign_defect_artifact(dir: &Path) -> std::path::PathBuf {
+        use codelore_lib::defect_calibration::{
+            DEFECT_FORMAT_VERSION, DefectArtifact, MiningStats, OracleConfig, TuningDecision,
+            ValidationMetrics, save, validate::default_weights,
+        };
+        let artifact = DefectArtifact {
+            format_version: DEFECT_FORMAT_VERSION,
+            repo_identity: "0".repeat(64),
+            head_at_mining: "0".repeat(40),
+            vintage: "defects-2026-07-17".to_string(),
+            generated_at: "2026-07-17T00:00:00Z".to_string(),
+            oracle: OracleConfig::default(),
+            mining: MiningStats::default(),
+            validation: ValidationMetrics {
+                band_table: vec![("red".to_string(), 5, 1.0)],
+                auc_default: None,
+                precision_at_10: None,
+                precision_at_red: None,
+                implicated_files: 3,
+                linked_defects: 5,
+                sample_dates: vec!["2026-01-01".to_string()],
+                excluded_no_data: 0,
+            },
+            weights: default_weights(),
+            tuning: TuningDecision::DefaultsKept {
+                reason: "insufficient evidence for weight tuning".to_string(),
+                auc_validation_default: None,
+                auc_validation_tuned: None,
+            },
+        };
+        let path = dir.join("defects.calib.json");
+        save(&artifact, &path).expect("save artifact");
+        path
+    }
+
+    #[test]
+    fn explain_file_defect_calibration_adds_defect_evidence_section() {
+        let fx = codelore_lib::test_support::biomarker_repo::build();
+        let cache = tempfile::tempdir().expect("cache dir");
+        let (target, _band) = code_health_worst_row(fx.dir.path(), cache.path());
+        let artifact_dir = tempfile::tempdir().expect("artifact dir");
+        let artifact_path = write_foreign_defect_artifact(artifact_dir.path());
+
+        Command::cargo_bin("codelore")
+            .unwrap()
+            .args([
+                "explain",
+                &target,
+                "--repo",
+                fx.dir.path().to_str().unwrap(),
+                "--cache-dir",
+                cache.path().to_str().unwrap(),
+                "--defect-calibration",
+                artifact_path.to_str().unwrap(),
+                "--allow-foreign-calibration",
+            ])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("defect-evidence"))
+            .stdout(predicate::str::contains("defects-2026-07-17"));
+    }
+
+    #[test]
+    fn explain_file_without_defect_calibration_has_no_defect_evidence_section() {
+        let fx = codelore_lib::test_support::biomarker_repo::build();
+        let cache = tempfile::tempdir().expect("cache dir");
+        let (target, _band) = code_health_worst_row(fx.dir.path(), cache.path());
+
+        Command::cargo_bin("codelore")
+            .unwrap()
+            .args([
+                "explain",
+                &target,
+                "--repo",
+                fx.dir.path().to_str().unwrap(),
+                "--cache-dir",
+                cache.path().to_str().unwrap(),
+            ])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("defect-evidence").not());
+    }
+
+    #[test]
+    fn explain_file_bad_defect_calibration_path_errors_naming_the_path() {
+        let fx = codelore_lib::test_support::biomarker_repo::build();
+        let cache = tempfile::tempdir().expect("cache dir");
+        let (target, _band) = code_health_worst_row(fx.dir.path(), cache.path());
+        let bad_path = cache.path().join("does-not-exist.calib.json");
+
+        Command::cargo_bin("codelore")
+            .unwrap()
+            .args([
+                "explain",
+                &target,
+                "--repo",
+                fx.dir.path().to_str().unwrap(),
+                "--cache-dir",
+                cache.path().to_str().unwrap(),
+                "--defect-calibration",
+                bad_path.to_str().unwrap(),
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(bad_path.to_str().unwrap()));
     }
 
     #[test]
