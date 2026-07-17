@@ -2308,6 +2308,8 @@ fn run_explain_file(args: &args::ExplainArgs, repo_relative: &str) -> Result<()>
     let opts = Options {
         repo_path: args.repo.clone(),
         min_revs: 1,
+        defect_calibration: args.defect_calibration.clone(),
+        allow_foreign_calibration: args.allow_foreign_calibration,
         ..Options::default()
     };
     let repo = GixRepo::open(&args.repo)

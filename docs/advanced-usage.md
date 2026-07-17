@@ -445,7 +445,7 @@ One pass runs three stages and writes a compact `defects.calib.json`:
 
 Two runs over the same history produce byte-identical artifacts. Mining reads only committed state, so `calibrate-defects` refuses a dirty working tree unless you pass `--allow-dirty` (the artifact still describes the committed HEAD, not your edits).
 
-**Applying it — `--defect-calibration`.** Pass the artifact on `analyze` or `check`:
+**Applying it — `--defect-calibration`.** Pass the artifact on `analyze`, `check`, or `explain <path>` (see [§8.5](#85-llm-enrichment-advisory-narratives) for the dossier's defect-evidence section):
 
 ```sh
 codelore analyze --analysis code-health --defect-calibration defects.calib.json
@@ -1015,7 +1015,7 @@ Everything in this section is strictly advisory. Scores, gates, SARIF, exit code
 
 | Surface | What it prints | LLM required |
 |---|---|---|
-| `codelore explain <path>` | The file's **evidence dossier**: ordered fact-sheet sections — code-health score/band, biomarker intensities, hotspot rank, coupling partners, ownership, function churn leaders, and import-cycle membership. Deterministic, free, offline. | No |
+| `codelore explain <path>` | The file's **evidence dossier**: ordered fact-sheet sections — code-health score/band, biomarker intensities, hotspot rank, coupling partners, ownership, function churn leaders, import-cycle membership, and (with `--defect-calibration`) the configured artifact's defect-evidence metrics. Deterministic, free, offline. | No |
 | `codelore explain <path> --llm` | The dossier plus a grounded **Diagnosis** narrative. A **Refactoring direction** section appears only when the sheet carries structural evidence for one (an import-cycle or functions section); when the evidence is absent the section is omitted rather than invented. | Yes |
 | `codelore diff <range> --llm` | The deterministic diff output exactly as today, followed by a delimited **LLM narrative (advisory)** block: one reviewer-ready read of what the change does to the codebase's health and which files carry the risk. Rendered for `text` and `markdown` output only; ignored (with a stderr note) for `json`/`sarif`. | Yes |
 
@@ -1033,6 +1033,8 @@ codelore diff origin/main...HEAD --repo . --llm
 The MCP server exposes the same per-file surface as the `explain_file` tool — see [§11.9](#119-mcp-server-codelore-mcp).
 
 The dossier resolves any single tracked source file: its analyses run with a 1-revision floor instead of the default corpus gate, so a file the default `analyze` run would hide still gets its own dossier (its hotspot/coupling/ownership numbers can therefore differ from a default run's).
+
+Passing `--defect-calibration <path>` (see [Defect calibration](#defect-calibration-does-the-health-score-predict-where-defects-land-here)) adds a **defect-evidence** section: the artifact's `vintage`, its headline validation numbers (`auc_default`, `precision_at_10`, `precision_at_red` when available), `implicated_files`, `linked_defects`, and the band table (`band:<band>:changes` / `band:<band>:share`). Per-file defect implication is not derivable from the artifact, so only its artifact-wide metrics are surfaced. `--allow-foreign-calibration` applies an artifact mined from a different repository, exactly as it does for `analyze`/`check`. Without `--defect-calibration` the dossier carries no such section — byte-identical to today.
 
 ### Grounding: fact sheet in, citation check out
 

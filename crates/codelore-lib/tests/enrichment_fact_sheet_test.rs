@@ -11,6 +11,10 @@
 use codelore_lib::CodeLoreError;
 use codelore_lib::Result;
 use codelore_lib::analyses::code_health::run_code_health;
+use codelore_lib::defect_calibration::{
+    self, DEFECT_FORMAT_VERSION, DefectArtifact, MiningStats, OracleConfig, TuningDecision,
+    ValidationMetrics,
+};
 use codelore_lib::enrichment::client::ChatClient;
 use codelore_lib::enrichment::engine::SheetFacts;
 use codelore_lib::enrichment::fact_sheet::FileFactSheet;
@@ -205,6 +209,85 @@ fn fact_sheet_unknown_path_errors() {
     assert!(
         err.to_string().contains("src/does_not_exist.rs"),
         "the error message must name the offending path: {err}"
+    );
+}
+
+/// A minimal-but-plausible defect-calibration artifact for the
+/// defect-evidence section test — every field the section reads is
+/// populated; `repo_identity` is arbitrary because the test applies the
+/// artifact with `allow_foreign_calibration: true`. `weights` are the
+/// built-in smell defaults in canonical order — `active_weights` (consulted
+/// by the code-health section that builds ahead of defect-evidence in the
+/// same dossier) rejects anything else as a malformed artifact.
+fn minimal_defect_artifact() -> DefectArtifact {
+    DefectArtifact {
+        format_version: DEFECT_FORMAT_VERSION,
+        repo_identity: "test-repo-identity".to_string(),
+        head_at_mining: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_string(),
+        vintage: "defects-2026-07-17".to_string(),
+        generated_at: "2026-07-17T00:00:00Z".to_string(),
+        oracle: OracleConfig::default(),
+        mining: MiningStats::default(),
+        validation: ValidationMetrics {
+            band_table: vec![("red".to_string(), 5, 1.0)],
+            auc_default: None,
+            precision_at_10: None,
+            precision_at_red: None,
+            implicated_files: 3,
+            linked_defects: 5,
+            sample_dates: vec!["2026-01-01".to_string()],
+            excluded_no_data: 0,
+        },
+        weights: defect_calibration::validate::default_weights(),
+        tuning: TuningDecision::DefaultsKept {
+            reason: "insufficient evidence for weight tuning".to_string(),
+            auc_validation_default: None,
+            auc_validation_tuned: None,
+        },
+    }
+}
+
+#[test]
+fn fact_sheet_defect_evidence_section_is_additive() {
+    let (_fx, repo, db, opts) = ingest_biomarker_fixture();
+    let health = run_code_health(&db, &opts.with_no_row_limit()).expect("code-health");
+    let target = health
+        .first()
+        .expect("fixture yields code-health rows")
+        .path
+        .clone();
+
+    // Additive contract: without a configured artifact, no defect-evidence
+    // section appears.
+    let without = FileFactSheet::build(&db, &repo, &opts, &target).expect("build without artifact");
+    assert!(
+        !without.to_canonical_text().contains("defect-evidence"),
+        "no defect-evidence section without a configured artifact: {}",
+        without.to_canonical_text()
+    );
+
+    let artifact_dir = tempfile::tempdir().expect("artifact dir");
+    let artifact_path = artifact_dir.path().join("defects.calib.json");
+    defect_calibration::save(&minimal_defect_artifact(), &artifact_path).expect("save artifact");
+
+    let mut opts_with_calibration = opts.clone();
+    opts_with_calibration.defect_calibration = Some(artifact_path);
+    opts_with_calibration.allow_foreign_calibration = true;
+
+    let with = FileFactSheet::build(&db, &repo, &opts_with_calibration, &target)
+        .expect("build with artifact");
+    let canonical = with.to_canonical_text();
+    assert!(
+        canonical.contains("defect-evidence"),
+        "defect-evidence section present when an artifact is configured: {canonical}"
+    );
+    assert!(
+        canonical.contains("vintage = defects-2026-07-17"),
+        "defect-evidence carries the artifact vintage: {canonical}"
+    );
+    assert!(
+        canonical.contains("linked_defects = 5"),
+        "defect-evidence carries linked_defects: {canonical}"
     );
 }
 

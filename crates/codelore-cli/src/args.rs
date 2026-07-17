@@ -275,6 +275,19 @@ pub struct ExplainArgs {
     /// the OS equivalent).
     #[arg(long)]
     pub cache_dir: Option<PathBuf>,
+
+    /// Own-repo defect-calibration artifact (build one with `codelore
+    /// calibrate-defects`). Adds a `defect-evidence` section to the file
+    /// dossier. Hard error if the artifact was mined from a different
+    /// repository — see --allow-foreign-calibration. Ignored when the
+    /// argument names a known topic.
+    #[arg(long)]
+    pub defect_calibration: Option<PathBuf>,
+
+    /// Apply a defect-calibration artifact mined from a different repository
+    /// (forks, moved checkouts): skips the repo-identity guard.
+    #[arg(long)]
+    pub allow_foreign_calibration: bool,
 }
 
 /// JSON Schema export.
