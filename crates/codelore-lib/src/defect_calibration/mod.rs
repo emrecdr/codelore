@@ -236,7 +236,7 @@ pub enum TuningDecision {
         auc_validation_tuned: f64,
     },
     /// Defaults were kept. `reason` names which branch fired: an honesty-floor
-    /// sample-size guard (too few linked defects / implicated files) or an
+    /// sample-size guard (too few linked defect-changes / implicated files) or an
     /// unmet acceptance margin.
     DefaultsKept {
         reason: String,

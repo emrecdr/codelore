@@ -2921,8 +2921,8 @@ fn calibrate_defects_links_planted_defect_and_ag_filters_cosmetic_fix() {
         "1 linked defect is far below the 30-defect honesty floor"
     );
     assert_eq!(
-        artifact["tuning"]["reason"], "fewer than 30 linked defects",
-        "the linked-defect floor, not the implicated-file or margin branch, must fire"
+        artifact["tuning"]["reason"], "fewer than 30 linked defect-changes",
+        "the linked-defect-changes floor, not the implicated-file or margin branch, must fire"
     );
 }
 

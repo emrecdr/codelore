@@ -20,7 +20,7 @@
 //!
 //! [`tune_weights`] runs a deterministic coordinate-descent search over the
 //! eight `SMELL_WEIGHTS` and only adopts a tuned set when the evidence
-//! clears an honesty floor: fewer than 30 linked defects, fewer than 10
+//! clears an honesty floor: fewer than 30 linked defect-changes, fewer than 10
 //! implicated files, a tuned validation AUC below random (0.5), or a
 //! validation-AUC improvement short of the acceptance margin, each keep the
 //! defaults instead of the tuned weights.
@@ -305,7 +305,7 @@ fn risk_raw(weights: &[f64], intensities: &[f64; 8]) -> f64 {
 
 // ─── Unit D: constrained weight tuning ───────────────────────────────────────
 
-/// Honesty floor: with fewer than this many linked defects, the mined
+/// Honesty floor: with fewer than this many linked defect-changes, the mined
 /// evidence is too thin to trust a tuned weight set over the defaults, so
 /// the defaults are kept regardless of what the search would find.
 const MIN_LINKED_DEFECTS: usize = 30;
@@ -423,7 +423,7 @@ fn coordinate_descent(
 }
 
 /// Total positively-labeled rows across `train` and `validation` combined —
-/// the honesty floor's "linked defects" count. Rows are NOT deduplicated by
+/// the honesty floor's "linked defect-changes" count. Rows are NOT deduplicated by
 /// path here: `train`/`validation` are expected to carry one row per
 /// (defect, file) incidence (the temporal split's caller-side construction),
 /// so a file touched by several distinct defects contributes several rows —
@@ -493,7 +493,7 @@ pub fn tune_weights(
     };
 
     if linked_defect_count(train, validation) < MIN_LINKED_DEFECTS {
-        return kept("fewer than 30 linked defects", None, None);
+        return kept("fewer than 30 linked defect-changes", None, None);
     }
     if implicated_file_count(train, validation) < MIN_IMPLICATED_FILES {
         return kept("fewer than 10 implicated files", None, None);
@@ -789,7 +789,7 @@ mod tests {
                 auc_validation_default,
                 auc_validation_tuned,
             } => {
-                assert_eq!(reason, "fewer than 30 linked defects");
+                assert_eq!(reason, "fewer than 30 linked defect-changes");
                 assert_eq!(auc_validation_default, None);
                 assert_eq!(auc_validation_tuned, None);
             }

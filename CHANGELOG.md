@@ -14,6 +14,10 @@ Conventional Commits format. All notable changes documented here.
 
 - **Dirty-worktree detection no longer counts untracked files.** `calibrate-defects`'s mining guard and the persistent analysis cache's staleness warning/write-skip now treat a working tree as dirty only when a *tracked* file has staged or unstaged changes; untracked files (a stray screenshot, a build artifact) no longer block `calibrate-defects` or suppress the cache.
 
+### Changed
+
+- **Calibrate-defects tuning floor reason now names "linked defect-changes".** The honesty floor's reason string and surrounding prose now consistently describe the counter as "linked defect-changes" (one row per (defect, file) incidence) rather than "linked defects" (deduplicated defect-introducing commits). The counter it gates on counts incidences, not deduplicated commits; `ValidationMetrics::linked_defects` field and artifact fact key retain their names, as they correctly describe the deduplicated defect count.
+
 ## [0.20.0] - 2026-07-17
 
 ### Added
