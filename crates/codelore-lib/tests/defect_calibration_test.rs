@@ -113,7 +113,7 @@ fn serde_round_trip_preserves_every_field() {
 fn serde_round_trip_preserves_defaults_kept_variant() {
     let mut art = sample_artifact("b".repeat(64).as_str());
     art.tuning = TuningDecision::DefaultsKept {
-        reason: "fewer than 30 linked defects".to_string(),
+        reason: "fewer than 30 linked defect-changes".to_string(),
         auc_validation_default: None,
         auc_validation_tuned: None,
     };

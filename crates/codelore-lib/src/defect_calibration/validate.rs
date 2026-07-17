@@ -760,7 +760,7 @@ mod tests {
         let mut intensities = HashMap::new();
         let mut train = Vec::new();
         let mut validation = Vec::new();
-        // 20 linked defects total (< 30), but >= 10 implicated files, so
+        // 20 linked defect-changes total (< 30), but >= 10 implicated files, so
         // only the defect-count floor should fire.
         seed_files(
             &mut train,

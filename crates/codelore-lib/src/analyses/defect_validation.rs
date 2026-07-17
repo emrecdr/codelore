@@ -380,7 +380,7 @@ mod tests {
         validation.sample_dates = vec![];
         let art = base_artifact(
             TuningDecision::DefaultsKept {
-                reason: "fewer than 30 linked defects".to_owned(),
+                reason: "fewer than 30 linked defect-changes".to_owned(),
                 auc_validation_default: None,
                 auc_validation_tuned: None,
             },
@@ -389,7 +389,7 @@ mod tests {
         let rows = rows_from_artifact(&art);
         assert_eq!(
             value_of(&rows, "weights_source"),
-            "defaults kept: fewer than 30 linked defects"
+            "defaults kept: fewer than 30 linked defect-changes"
         );
         assert_eq!(
             value_of(&rows, "auc_default"),
@@ -413,11 +413,11 @@ mod tests {
         );
         assert_eq!(
             value_of(&rows, "tuning_auc_validation_default"),
-            "n/a (defaults kept before scoring: fewer than 30 linked defects)"
+            "n/a (defaults kept before scoring: fewer than 30 linked defect-changes)"
         );
         assert_eq!(
             value_of(&rows, "tuning_auc_validation_tuned"),
-            "n/a (defaults kept before scoring: fewer than 30 linked defects)"
+            "n/a (defaults kept before scoring: fewer than 30 linked defect-changes)"
         );
     }
 }

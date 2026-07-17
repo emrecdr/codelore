@@ -1,0 +1,1813 @@
+- generic [ref=f2e1]:
+  - banner [ref=f2e2]:
+    - heading "CodeLore Dashboard" [level=1] [ref=f2e3]
+    - generic [ref=f2e4]: . · generated 2026-07-17 20:37:55 UTC
+    - generic "Toggle dark theme" [ref=f2e5] [cursor=pointer]:
+      - checkbox "Toggle dark theme"
+  - navigation "Dashboard sections" [ref=f2e11]:
+    - button "Overview" [ref=f2e12] [cursor=pointer]
+    - button "Hotspots & Risk" [ref=f2e13] [cursor=pointer]
+    - button "Code Health" [ref=f2e14] [cursor=pointer]
+    - button "Architecture" [ref=f2e15] [cursor=pointer]
+    - button "Knowledge" [ref=f2e16] [cursor=pointer]
+    - button "Delivery" [ref=f2e17] [cursor=pointer]
+  - main [ref=f2e18]:
+    - region [ref=f2e19]:
+      - generic [ref=f2e20]:
+        - heading "Overview" [level=2] [ref=f2e21]
+        - button "Toggle Overview section" [expanded] [ref=f2e22] [cursor=pointer]
+      - generic [ref=f2e25]:
+        - generic [ref=f2e26]:
+          - heading "Quality dimensions" [level=3] [ref=f2e27]
+          - generic [ref=f2e28]: Four headline scores (0–100, higher = healthier) summarising the repo's Code, Architecture, Knowledge, and Delivery dimensions. The bullet bar shows the current score against the healthy (green) and warning (yellow) thresholds. The sparkline shows the sampled historical trend. The "Attention" chip appears when the Shewhart XmR chart signals a statistical excursion or sustained run.
+          - generic [ref=f2e30]:
+            - link "Code 76.9 76.9 / 100 Code health 76.9 (green) — averaged over all files at latest sample" [ref=f2e31] [cursor=pointer]:
+              - generic [ref=f2e32]: Code
+              - generic [ref=f2e33]: "76.9"
+              - generic "76.9 / 100" [ref=f2e34]: "76.9"
+              - generic [ref=f2e42]: Code health 76.9 (green) — averaged over all files at latest sample
+            - link "Architecture 94.9 94.9 / 100 Architecture health 94.9 (green) — propagation cost and cycle exposure, P48 of 79 corpus repos" [ref=f2e43] [cursor=pointer]:
+              - generic [ref=f2e44]: Architecture
+              - generic [ref=f2e45]: "94.9"
+              - generic "94.9 / 100" [ref=f2e46]: "94.9"
+              - generic [ref=f2e54]: Architecture health 94.9 (green) — propagation cost and cycle exposure, P48 of 79 corpus repos
+            - link "Knowledge 66.8 66.8 / 100 Team familiarity 100.0%, knowledge islands 66.5% of SLOC" [ref=f2e55] [cursor=pointer]:
+              - generic [ref=f2e56]: Knowledge
+              - generic [ref=f2e57]: "66.8"
+              - generic "66.8 / 100" [ref=f2e58]: "66.8"
+              - generic [ref=f2e63]: Team familiarity 100.0%, knowledge islands 66.5% of SLOC
+            - 'link "Delivery rework %8.9 cadence median d0 Git-only proxies — not DORA metrics. Rework band: Pluralsight benchmark (correlational)." [ref=f2e64] [cursor=pointer]':
+              - generic [ref=f2e65]: Delivery
+              - generic [ref=f2e66]:
+                - generic [ref=f2e67]: rework %8.9
+                - generic [ref=f2e68]: cadence median d0
+              - generic [ref=f2e69]: "Git-only proxies — not DORA metrics. Rework band: Pluralsight benchmark (correlational)."
+          - button "Toggle fullscreen" [ref=f2e70] [cursor=pointer]
+        - generic [ref=f2e73]:
+          - heading "Codebase at a glance" [level=3] [ref=f2e74]
+          - generic [ref=f2e75]: Summary metrics across the repo. KPI cards are computed at ingest time using deterministic published formulas — click any value to inspect its derivation in the report sidecar.
+          - group [ref=f2e76]:
+            - generic "▸ Learn more — how to read this panel" [ref=f2e77] [cursor=pointer]
+          - generic [ref=f2e78]:
+            - generic [ref=f2e79]:
+              - generic [ref=f2e80]:
+                - text: Files analyzed
+                - button "What does this metric mean?" [ref=f2e82]: "?"
+              - generic [ref=f2e83]: "128"
+              - generic [ref=f2e84]: live at HEAD
+            - generic [ref=f2e85]:
+              - generic [ref=f2e86]:
+                - text: Commits
+                - button "What does this metric mean?" [ref=f2e88]: "?"
+              - generic [ref=f2e89]: "621"
+              - generic [ref=f2e90]: in the analysed history
+            - generic [ref=f2e91]:
+              - generic [ref=f2e92]:
+                - text: Distinct authors
+                - button "What does this metric mean?" [ref=f2e94]: "?"
+              - generic [ref=f2e95]: "3"
+              - generic [ref=f2e96]: after mailmap resolution
+            - generic [ref=f2e97]:
+              - generic [ref=f2e98]:
+                - text: Median code health
+                - button "What does this metric mean?" [ref=f2e100]: "?"
+              - generic [ref=f2e101]: "79.5"
+              - generic [ref=f2e102]: "band: green"
+            - generic [ref=f2e103]:
+              - generic [ref=f2e104]:
+                - text: Cognitive p95
+                - button "What does this metric mean?" [ref=f2e106]: "?"
+              - generic [ref=f2e107]: "29"
+              - generic [ref=f2e108]: top-5% file complexity
+            - generic [ref=f2e109]:
+              - generic [ref=f2e110]:
+                - text: Coupled file pairs
+                - button "What does this metric mean?" [ref=f2e112]: "?"
+              - generic [ref=f2e113]: "74"
+              - generic [ref=f2e114]: Fisher-significant
+            - generic [ref=f2e115]:
+              - generic [ref=f2e116]:
+                - text: Coupling density
+                - button "What does this metric mean?" [ref=f2e118]: "?"
+              - generic [ref=f2e119]: "0.0166"
+              - generic [ref=f2e120]: graph |E|/(|V|·(|V|−1)/2)
+            - generic [ref=f2e121]:
+              - generic [ref=f2e122]:
+                - text: MI band breakdown
+                - button "What does this metric mean?" [ref=f2e124]: "?"
+              - generic [ref=f2e125]: 🟢 21 / 🟡 36 / 🔴 30
+              - generic [ref=f2e126]: top / mid / bottom quartile
+          - button "Toggle fullscreen" [ref=f2e127] [cursor=pointer]
+        - region "Guided analysis tour" [ref=f2e130]:
+          - heading "Guided tour" [level=3] [ref=f2e131]
+          - generic [ref=f2e132]: A 4-step walk through the hero map — from code health to refactoring targets. Each step sets the circle-pack colour lens and brushes the relevant files.
+          - group [ref=f2e133]:
+            - generic "▸ Learn more" [ref=f2e134] [cursor=pointer]
+          - generic [ref=f2e135]:
+            - generic [ref=f2e136]:
+              - list "Tour steps" [ref=f2e137]:
+                - 'button "Go to step 1: Code health" [ref=f2e138] [cursor=pointer]': "1"
+                - 'button "Go to step 2: Hotspots" [ref=f2e139] [cursor=pointer]': "2"
+                - 'button "Go to step 3: Effort in red" [ref=f2e140] [cursor=pointer]': "3"
+                - 'button "Go to step 4: Refactoring targets" [ref=f2e141] [cursor=pointer]': "4"
+              - generic [ref=f2e142]:
+                - button "Previous tour step" [disabled] [ref=f2e143]: Prev
+                - button "Next" [ref=f2e144] [cursor=pointer]
+                - button "Exit" [ref=f2e145] [cursor=pointer]
+            - status [ref=f2e146]: Code health — Circle color shows the code-health band (green/yellow/red). Large red circles combine high churn with poor health — prime refactoring candidates.
+          - button "Toggle fullscreen" [ref=f2e147] [cursor=pointer]
+        - generic [ref=f2e150]:
+          - heading "Hotspots" [level=3] [ref=f2e151]
+          - generic [ref=f2e152]: "Files sized by churn (revisions). Toggle the colour mapping across the behavioural lenses: complexity (cognitive yellow→red), code health (DaisyUI 3-band), tech-debt friction (Tornhill 2018 score), knowledge map (primary author), AI attribution, and clones (Type-1/Type-2 structural duplication). Files in the top quartile of hotspot score wear a yellow ring overlay."
+          - group [ref=f2e153]:
+            - generic "▸ Learn more — how to read this panel" [ref=f2e154] [cursor=pointer]
+          - group [ref=f2e156]:
+            - generic "Simulate off-boarding" [ref=f2e157] [cursor=pointer]
+          - tablist [ref=f2e158]:
+            - tab "Health×Activity" [ref=f2e159] [cursor=pointer]:
+              - generic [ref=f2e160]: ▦
+              - text: Health×Activity
+              - generic [ref=f2e161]: "?"
+            - tab "Complexity" [ref=f2e162] [cursor=pointer]:
+              - text: Complexity
+              - generic [ref=f2e163]: "?"
+            - tab "Code health" [selected] [ref=f2e164] [cursor=pointer]:
+              - text: Code health
+              - generic [ref=f2e165]: "?"
+            - tab "Tech-debt friction" [ref=f2e166] [cursor=pointer]:
+              - text: Tech-debt friction
+              - generic [ref=f2e167]: "?"
+            - tab "Knowledge map" [ref=f2e168] [cursor=pointer]:
+              - text: Knowledge map
+              - generic [ref=f2e169]: "?"
+            - tab "AI attribution" [ref=f2e170] [cursor=pointer]:
+              - text: AI attribution
+              - generic [ref=f2e171]: "?"
+            - tab "Knowledge loss" [ref=f2e172] [cursor=pointer]:
+              - text: Knowledge loss
+              - generic [ref=f2e173]: "?"
+            - tab "Clones" [ref=f2e174] [cursor=pointer]:
+              - text: Clones
+              - generic [ref=f2e175]: "?"
+          - group [ref=f2e180]:
+            - generic "Keyboard-accessible file list (50)" [ref=f2e181] [cursor=pointer]:
+              - text: Keyboard-accessible file list (50)
+              - generic [ref=f2e182]: "?"
+          - button "Reset zoom" [ref=f2e183] [cursor=pointer]
+          - button "Toggle fullscreen" [ref=f2e187] [cursor=pointer]
+    - region [ref=f2e190]:
+      - generic [ref=f2e191]:
+        - heading "Hotspots & Risk" [level=2] [ref=f2e192]
+        - button "Toggle Hotspots & Risk section" [expanded] [ref=f2e193] [cursor=pointer]
+      - generic [ref=f2e196]:
+        - generic [ref=f2e197]:
+          - heading "Hotspot table" [level=3] [ref=f2e198]
+          - generic [ref=f2e199]: Sortable drill-down view of every hotspot row. Click a column header to sort. Type to filter by path.
+          - group [ref=f2e200]:
+            - generic "▸ Learn more — how to read this panel" [ref=f2e201] [cursor=pointer]
+          - generic [ref=f2e202]:
+            - textbox "Filter hotspots by path" [ref=f2e203]:
+              - /placeholder: filter paths…
+            - status [ref=f2e204]: 128 of 128 rows shown
+          - table [ref=f2e206]:
+            - rowgroup [ref=f2e207]:
+              - row [ref=f2e208]:
+                - columnheader "Path" [ref=f2e209] [cursor=pointer]
+                - columnheader [ref=f2e210] [cursor=pointer]:
+                  - text: Revisions
+                  - button "What does this metric mean?" [ref=f2e212]: "?"
+                - columnheader [ref=f2e213] [cursor=pointer]:
+                  - text: Cognitive
+                  - button "What does this metric mean?" [ref=f2e215]: "?"
+                - columnheader [ref=f2e216] [cursor=pointer]:
+                  - text: Code Health
+                  - button "What does this metric mean?" [ref=f2e218]: "?"
+                - columnheader "Hotspot Score What does this metric mean? ▼" [ref=f2e219] [cursor=pointer]:
+                  - text: Hotspot Score
+                  - button "What does this metric mean?" [ref=f2e221]: "?"
+                  - generic [ref=f2e222]: ▼
+                - columnheader [ref=f2e223] [cursor=pointer]:
+                  - text: MI
+                  - button "What does this metric mean?" [ref=f2e225]: "?"
+                - columnheader [ref=f2e226] [cursor=pointer]:
+                  - text: AI %
+                  - button "What does this metric mean?" [ref=f2e228]: "?"
+            - rowgroup [ref=f2e229]:
+              - button [ref=f2e230] [cursor=pointer]:
+                - cell "crates/codelore-cli/src/main.rs" [ref=f2e231]
+                - cell "94" [ref=f2e232]
+                - cell "42" [ref=f2e233]
+                - cell "87.9" [ref=f2e234]
+                - cell "2.97" [ref=f2e235]
+                - cell "-420.7 Low" [ref=f2e236]:
+                  - text: "-420.7"
+                  - 'generic "MI band: Low" [ref=f2e237]': Low
+                - cell "32%" [ref=f2e238]
+              - button [ref=f2e240] [cursor=pointer]:
+                - cell "crates/codelore-cli/src/diff_output.rs" [ref=f2e241]
+                - cell "15" [ref=f2e242]
+                - cell "29" [ref=f2e243]
+                - cell "91.7" [ref=f2e244]
+                - cell "1.38" [ref=f2e245]
+                - cell "-83.0 Low" [ref=f2e246]:
+                  - text: "-83.0"
+                  - 'generic "MI band: Low" [ref=f2e247]': Low
+                - cell "20%" [ref=f2e248]
+              - button [ref=f2e250] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/analyses/code_health.rs" [ref=f2e251]
+                - cell "30" [ref=f2e252]
+                - cell "20" [ref=f2e253]
+                - cell "94.2" [ref=f2e254]
+                - cell "1.14" [ref=f2e255]
+                - cell "-55.9 Low" [ref=f2e256]:
+                  - text: "-55.9"
+                  - 'generic "MI band: Low" [ref=f2e257]': Low
+                - cell "23%" [ref=f2e258]
+              - button [active] [ref=f2e260] [cursor=pointer]:
+                - cell "crates/codelore-cli/src/diff.rs" [ref=f2e261]
+                - cell "19" [ref=f2e262]
+                - cell "22" [ref=f2e263]
+                - cell "93.7" [ref=f2e264]
+                - cell "1.13" [ref=f2e265]
+                - cell "-70.7 Low" [ref=f2e266]:
+                  - text: "-70.7"
+                  - 'generic "MI band: Low" [ref=f2e267]': Low
+                - cell "42%" [ref=f2e268]
+              - button [ref=f2e270] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/analyses/import_graph.rs" [ref=f2e271]
+                - cell "8" [ref=f2e272]
+                - cell "40" [ref=f2e273]
+                - cell "88.5" [ref=f2e274]
+                - cell "1.09" [ref=f2e275]
+                - cell "-34.8 Low" [ref=f2e276]:
+                  - text: "-34.8"
+                  - 'generic "MI band: Low" [ref=f2e277]': Low
+                - cell "0%" [ref=f2e278]
+              - button [ref=f2e280] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/repo/gix_repo.rs" [ref=f2e281]
+                - cell "38" [ref=f2e282]
+                - cell "14" [ref=f2e283]
+                - cell "96.0" [ref=f2e284]
+                - cell "0.82" [ref=f2e285]
+                - cell "-83.6 Low" [ref=f2e286]:
+                  - text: "-83.6"
+                  - 'generic "MI band: Low" [ref=f2e287]': Low
+                - cell "61%" [ref=f2e288]
+              - button [ref=f2e290] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/cache.rs" [ref=f2e291]
+                - cell "23" [ref=f2e292]
+                - cell "13" [ref=f2e293]
+                - cell "96.3" [ref=f2e294]
+                - cell "0.67" [ref=f2e295]
+                - cell "-37.5 Low" [ref=f2e296]:
+                  - text: "-37.5"
+                  - 'generic "MI band: Low" [ref=f2e297]': Low
+                - cell "43%" [ref=f2e298]
+              - button [ref=f2e300] [cursor=pointer]:
+                - cell "crates/codelore-lib/tests/spa_browser_test.rs" [ref=f2e301]
+                - cell "25" [ref=f2e302]
+                - cell "12" [ref=f2e303]
+                - cell "96.5" [ref=f2e304]
+                - cell "0.63" [ref=f2e305]
+                - cell "-89.9 Low" [ref=f2e306]:
+                  - text: "-89.9"
+                  - 'generic "MI band: Low" [ref=f2e307]': Low
+                - cell "4%" [ref=f2e308]
+              - button [ref=f2e310] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/analyses/clone_coupling.rs" [ref=f2e311]
+                - cell "14" [ref=f2e312]
+                - cell "14" [ref=f2e313]
+                - cell "96.0" [ref=f2e314]
+                - cell "0.58" [ref=f2e315]
+                - cell "2.7 Mid" [ref=f2e316]:
+                  - text: "2.7"
+                  - 'generic "MI band: Mid" [ref=f2e317]': Mid
+                - cell "50%" [ref=f2e318]
+              - button [ref=f2e320] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/repo/git_cli_repo.rs" [ref=f2e321]
+                - cell "21" [ref=f2e322]
+                - cell "11" [ref=f2e323]
+                - cell "96.8" [ref=f2e324]
+                - cell "0.55" [ref=f2e325]
+                - cell "-82.2 Low" [ref=f2e326]:
+                  - text: "-82.2"
+                  - 'generic "MI band: Low" [ref=f2e327]': Low
+                - cell "52%" [ref=f2e328]
+              - button [ref=f2e330] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/options.rs" [ref=f2e331]
+                - cell "32" [ref=f2e332]
+                - cell "10" [ref=f2e333]
+                - cell "97.1" [ref=f2e334]
+                - cell "0.54" [ref=f2e335]
+                - cell "-37.2 Low" [ref=f2e336]:
+                  - text: "-37.2"
+                  - 'generic "MI band: Low" [ref=f2e337]': Low
+                - cell "47%" [ref=f2e338]
+              - button [ref=f2e340] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/output/csv.rs" [ref=f2e341]
+                - cell "44" [ref=f2e342]
+                - cell "7" [ref=f2e343]
+                - cell "98.0" [ref=f2e344]
+                - cell "0.38" [ref=f2e345]
+                - cell "-120.2 Low" [ref=f2e346]:
+                  - text: "-120.2"
+                  - 'generic "MI band: Low" [ref=f2e347]': Low
+                - cell "27%" [ref=f2e348]
+              - button [ref=f2e350] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/output/sarif.rs" [ref=f2e351]
+                - cell "15" [ref=f2e352]
+                - cell "9" [ref=f2e353]
+                - cell "97.4" [ref=f2e354]
+                - cell "0.38" [ref=f2e355]
+                - cell "-43.6 Low" [ref=f2e356]:
+                  - text: "-43.6"
+                  - 'generic "MI band: Low" [ref=f2e357]': Low
+                - cell "27%" [ref=f2e358]
+              - button [ref=f2e360] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/output/markdown.rs" [ref=f2e361]
+                - cell "42" [ref=f2e362]
+                - cell "7" [ref=f2e363]
+                - cell "98.0" [ref=f2e364]
+                - cell "0.38" [ref=f2e365]
+                - cell "-166.5 Low" [ref=f2e366]:
+                  - text: "-166.5"
+                  - 'generic "MI band: Low" [ref=f2e367]': Low
+                - cell "29%" [ref=f2e368]
+              - button [ref=f2e370] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/facts/ingest/consumer.rs" [ref=f2e371]
+                - cell "10" [ref=f2e372]
+                - cell "10" [ref=f2e373]
+                - cell "97.1" [ref=f2e374]
+                - cell "0.32" [ref=f2e375]
+                - cell "-23.3 Low" [ref=f2e376]:
+                  - text: "-23.3"
+                  - 'generic "MI band: Low" [ref=f2e377]': Low
+                - cell "0%" [ref=f2e378]
+              - button [ref=f2e380] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/quality_gates/mod.rs" [ref=f2e381]
+                - cell "14" [ref=f2e382]
+                - cell "7" [ref=f2e383]
+                - cell "98.0" [ref=f2e384]
+                - cell "0.26" [ref=f2e385]
+                - cell "-73.5 Low" [ref=f2e386]:
+                  - text: "-73.5"
+                  - 'generic "MI band: Low" [ref=f2e387]': Low
+                - cell "36%" [ref=f2e388]
+              - button [ref=f2e390] [cursor=pointer]:
+                - cell "crates/codelore-cli/tests/cli_test.rs" [ref=f2e391]
+                - cell "35" [ref=f2e392]
+                - cell "5" [ref=f2e393]
+                - cell "98.6" [ref=f2e394]
+                - cell "0.24" [ref=f2e395]
+                - cell "-126.8 Low" [ref=f2e396]:
+                  - text: "-126.8"
+                  - 'generic "MI band: Low" [ref=f2e397]': Low
+                - cell "20%" [ref=f2e398]
+              - button [ref=f2e400] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/facts/mod.rs" [ref=f2e401]
+                - cell "15" [ref=f2e402]
+                - cell "6" [ref=f2e403]
+                - cell "98.3" [ref=f2e404]
+                - cell "0.23" [ref=f2e405]
+                - cell "-26.6 Low" [ref=f2e406]:
+                  - text: "-26.6"
+                  - 'generic "MI band: Low" [ref=f2e407]': Low
+                - cell "47%" [ref=f2e408]
+              - button [ref=f2e410] [cursor=pointer]:
+                - cell "crates/codelore-lib/tests/spa_integration_test.rs" [ref=f2e411]
+                - cell "15" [ref=f2e412]
+                - cell "6" [ref=f2e413]
+                - cell "98.3" [ref=f2e414]
+                - cell "0.23" [ref=f2e415]
+                - cell "-52.9 Low" [ref=f2e416]:
+                  - text: "-52.9"
+                  - 'generic "MI band: Low" [ref=f2e417]': Low
+                - cell "27%" [ref=f2e418]
+              - button [ref=f2e420] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/output/spa/js/00_setup_boot.js" [ref=f2e421]
+                - cell "6" [ref=f2e422]
+                - cell "17" [ref=f2e423]
+                - cell "95.1" [ref=f2e424]
+                - cell "0.22" [ref=f2e425]
+                - cell [ref=f2e426]
+                - cell "0%" [ref=f2e427]
+              - button [ref=f2e429] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/analyses/pair_programming.rs" [ref=f2e430]
+                - cell "6" [ref=f2e431]
+                - cell "16" [ref=f2e432]
+                - cell "95.4" [ref=f2e433]
+                - cell "0.20" [ref=f2e434]
+                - cell "18.2 Mid" [ref=f2e435]:
+                  - text: "18.2"
+                  - 'generic "MI band: Mid" [ref=f2e436]': Mid
+                - cell "33%" [ref=f2e437]
+              - button [ref=f2e439] [cursor=pointer]:
+                - cell "crates/codelore-lib/tests/differential_repo_test.rs" [ref=f2e440]
+                - cell "17" [ref=f2e441]
+                - cell "5" [ref=f2e442]
+                - cell "98.6" [ref=f2e443]
+                - cell "0.20" [ref=f2e444]
+                - cell "-49.9 Low" [ref=f2e445]:
+                  - text: "-49.9"
+                  - 'generic "MI band: Low" [ref=f2e446]': Low
+                - cell "41%" [ref=f2e447]
+              - button [ref=f2e449] [cursor=pointer]:
+                - cell "crates/codelore-lib/tests/code_health_test.rs" [ref=f2e450]
+                - cell "16" [ref=f2e451]
+                - cell "5" [ref=f2e452]
+                - cell "98.6" [ref=f2e453]
+                - cell "0.19" [ref=f2e454]
+                - cell "-72.7 Low" [ref=f2e455]:
+                  - text: "-72.7"
+                  - 'generic "MI band: Low" [ref=f2e456]': Low
+                - cell "6%" [ref=f2e457]
+              - button [ref=f2e459] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/provenance/mod.rs" [ref=f2e460]
+                - cell "11" [ref=f2e461]
+                - cell "6" [ref=f2e462]
+                - cell "98.3" [ref=f2e463]
+                - cell "0.19" [ref=f2e464]
+                - cell "17.4 Mid" [ref=f2e465]:
+                  - text: "17.4"
+                  - 'generic "MI band: Mid" [ref=f2e466]': Mid
+                - cell "27%" [ref=f2e467]
+              - button [ref=f2e469] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/analyses/coupling.rs" [ref=f2e470]
+                - cell "29" [ref=f2e471]
+                - cell "4" [ref=f2e472]
+                - cell "98.8" [ref=f2e473]
+                - cell "0.17" [ref=f2e474]
+                - cell "-35.3 Low" [ref=f2e475]:
+                  - text: "-35.3"
+                  - 'generic "MI band: Low" [ref=f2e476]': Low
+                - cell "55%" [ref=f2e477]
+              - button [ref=f2e479] [cursor=pointer]:
+                - cell "crates/codelore-lib/build.rs" [ref=f2e480]
+                - cell "8" [ref=f2e481]
+                - cell "6" [ref=f2e482]
+                - cell "98.3" [ref=f2e483]
+                - cell "0.13" [ref=f2e484]
+                - cell "10.2 Mid" [ref=f2e485]:
+                  - text: "10.2"
+                  - 'generic "MI band: Mid" [ref=f2e486]': Mid
+                - cell "75%" [ref=f2e487]
+              - button [ref=f2e489] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/analyses/clones.rs" [ref=f2e490]
+                - cell "14" [ref=f2e491]
+                - cell "4" [ref=f2e492]
+                - cell "98.8" [ref=f2e493]
+                - cell "0.13" [ref=f2e494]
+                - cell "17.8 Mid" [ref=f2e495]:
+                  - text: "17.8"
+                  - 'generic "MI band: Mid" [ref=f2e496]': Mid
+                - cell "57%" [ref=f2e497]
+              - button [ref=f2e499] [cursor=pointer]:
+                - cell "crates/codelore-cli/src/mcp.rs" [ref=f2e500]
+                - cell "7" [ref=f2e501]
+                - cell "7" [ref=f2e502]
+                - cell "98.0" [ref=f2e503]
+                - cell "0.12" [ref=f2e504]
+                - cell "-56.3 Low" [ref=f2e505]:
+                  - text: "-56.3"
+                  - 'generic "MI band: Low" [ref=f2e506]': Low
+                - cell "0%" [ref=f2e507]
+              - button [ref=f2e509] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/analyses/communication.rs" [ref=f2e510]
+                - cell "10" [ref=f2e511]
+                - cell "4" [ref=f2e512]
+                - cell "98.8" [ref=f2e513]
+                - cell "0.10" [ref=f2e514]
+                - cell "33.1 Mid" [ref=f2e515]:
+                  - text: "33.1"
+                  - 'generic "MI band: Mid" [ref=f2e516]': Mid
+                - cell "60%" [ref=f2e517]
+              - button [ref=f2e519] [cursor=pointer]:
+                - cell "crates/codelore-lib/tests/ingest_test.rs" [ref=f2e520]
+                - cell "8" [ref=f2e521]
+                - cell "4" [ref=f2e522]
+                - cell "98.8" [ref=f2e523]
+                - cell "0.08" [ref=f2e524]
+                - cell "-26.2 Low" [ref=f2e525]:
+                  - text: "-26.2"
+                  - 'generic "MI band: Low" [ref=f2e526]': Low
+                - cell "0%" [ref=f2e527]
+              - button [ref=f2e529] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/facts/ingest/mod.rs" [ref=f2e530]
+                - cell "9" [ref=f2e531]
+                - cell "3" [ref=f2e532]
+                - cell "99.1" [ref=f2e533]
+                - cell "0.07" [ref=f2e534]
+                - cell "-8.4 Mid" [ref=f2e535]:
+                  - text: "-8.4"
+                  - 'generic "MI band: Mid" [ref=f2e536]': Mid
+                - cell "0%" [ref=f2e537]
+              - button [ref=f2e539] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/analyses/hotspots.rs" [ref=f2e540]
+                - cell "20" [ref=f2e541]
+                - cell "2" [ref=f2e542]
+                - cell "99.4" [ref=f2e543]
+                - cell "0.06" [ref=f2e544]
+                - cell "17.0 Mid" [ref=f2e545]:
+                  - text: "17.0"
+                  - 'generic "MI band: Mid" [ref=f2e546]': Mid
+                - cell "65%" [ref=f2e547]
+              - button [ref=f2e549] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/analyses/churn.rs" [ref=f2e550]
+                - cell "13" [ref=f2e551]
+                - cell "2" [ref=f2e552]
+                - cell "99.4" [ref=f2e553]
+                - cell "0.05" [ref=f2e554]
+                - cell "-3.0 Mid" [ref=f2e555]:
+                  - text: "-3.0"
+                  - 'generic "MI band: Mid" [ref=f2e556]': Mid
+                - cell "62%" [ref=f2e557]
+              - button [ref=f2e559] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/analyses/soc.rs" [ref=f2e560]
+                - cell "13" [ref=f2e561]
+                - cell "2" [ref=f2e562]
+                - cell "99.4" [ref=f2e563]
+                - cell "0.05" [ref=f2e564]
+                - cell "38.0 High" [ref=f2e565]:
+                  - text: "38.0"
+                  - 'generic "MI band: High" [ref=f2e566]': High
+                - cell "62%" [ref=f2e567]
+              - button [ref=f2e569] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/analyses/code_age.rs" [ref=f2e570]
+                - cell "12" [ref=f2e571]
+                - cell "2" [ref=f2e572]
+                - cell "99.4" [ref=f2e573]
+                - cell "0.05" [ref=f2e574]
+                - cell "28.6 Mid" [ref=f2e575]:
+                  - text: "28.6"
+                  - 'generic "MI band: Mid" [ref=f2e576]': Mid
+                - cell "50%" [ref=f2e577]
+              - button [ref=f2e579] [cursor=pointer]:
+                - cell "crates/codelore-lib/tests/cache_test.rs" [ref=f2e580]
+                - cell "7" [ref=f2e581]
+                - cell "3" [ref=f2e582]
+                - cell "99.1" [ref=f2e583]
+                - cell "0.04" [ref=f2e584]
+                - cell "-9.0 Mid" [ref=f2e585]:
+                  - text: "-9.0"
+                  - 'generic "MI band: Mid" [ref=f2e586]': Mid
+                - cell "71%" [ref=f2e587]
+              - button [ref=f2e589] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/analysis.rs" [ref=f2e590]
+                - cell "39" [ref=f2e591]
+                - cell "1" [ref=f2e592]
+                - cell "99.7" [ref=f2e593]
+                - cell "0.03" [ref=f2e594]
+                - cell "-19.5 Low" [ref=f2e595]:
+                  - text: "-19.5"
+                  - 'generic "MI band: Low" [ref=f2e596]': Low
+                - cell "28%" [ref=f2e597]
+              - button [ref=f2e599] [cursor=pointer]:
+                - cell "crates/codelore-cli/src/args.rs" [ref=f2e600]
+                - cell "33" [ref=f2e601]
+                - cell "1" [ref=f2e602]
+                - cell "99.7" [ref=f2e603]
+                - cell "0.03" [ref=f2e604]
+                - cell "-14.8 Mid" [ref=f2e605]:
+                  - text: "-14.8"
+                  - 'generic "MI band: Mid" [ref=f2e606]': Mid
+                - cell "39%" [ref=f2e607]
+              - button [ref=f2e609] [cursor=pointer]:
+                - cell "crates/codelore-lib/tests/hotspots_test.rs" [ref=f2e610]
+                - cell "6" [ref=f2e611]
+                - cell "3" [ref=f2e612]
+                - cell "99.1" [ref=f2e613]
+                - cell "0.03" [ref=f2e614]
+                - cell "15.7 Mid" [ref=f2e615]:
+                  - text: "15.7"
+                  - 'generic "MI band: Mid" [ref=f2e616]': Mid
+                - cell "67%" [ref=f2e617]
+              - button [ref=f2e619] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/analyses/knowledge_islands.rs" [ref=f2e620]
+                - cell "7" [ref=f2e621]
+                - cell "2" [ref=f2e622]
+                - cell "99.4" [ref=f2e623]
+                - cell "0.02" [ref=f2e624]
+                - cell "21.0 Mid" [ref=f2e625]:
+                  - text: "21.0"
+                  - 'generic "MI band: Mid" [ref=f2e626]': Mid
+                - cell "71%" [ref=f2e627]
+              - button [ref=f2e629] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/identity/bots.rs" [ref=f2e630]
+                - cell "7" [ref=f2e631]
+                - cell "2" [ref=f2e632]
+                - cell "99.4" [ref=f2e633]
+                - cell "0.02" [ref=f2e634]
+                - cell "-12.0 Mid" [ref=f2e635]:
+                  - text: "-12.0"
+                  - 'generic "MI band: Mid" [ref=f2e636]': Mid
+                - cell "50%" [ref=f2e637]
+              - button [ref=f2e639] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/kamei/mod.rs" [ref=f2e640]
+                - cell "7" [ref=f2e641]
+                - cell "2" [ref=f2e642]
+                - cell "99.4" [ref=f2e643]
+                - cell "0.02" [ref=f2e644]
+                - cell "5.7 Mid" [ref=f2e645]:
+                  - text: "5.7"
+                  - 'generic "MI band: Mid" [ref=f2e646]': Mid
+                - cell "71%" [ref=f2e647]
+              - button [ref=f2e649] [cursor=pointer]:
+                - cell "crates/codelore-lib/tests/code_age_test.rs" [ref=f2e650]
+                - cell "7" [ref=f2e651]
+                - cell "2" [ref=f2e652]
+                - cell "99.4" [ref=f2e653]
+                - cell "0.02" [ref=f2e654]
+                - cell "-3.7 Mid" [ref=f2e655]:
+                  - text: "-3.7"
+                  - 'generic "MI band: Mid" [ref=f2e656]': Mid
+                - cell "43%" [ref=f2e657]
+              - button [ref=f2e659] [cursor=pointer]:
+                - cell "crates/codelore-lib/tests/kamei_test.rs" [ref=f2e660]
+                - cell "7" [ref=f2e661]
+                - cell "2" [ref=f2e662]
+                - cell "99.4" [ref=f2e663]
+                - cell "0.02" [ref=f2e664]
+                - cell "-16.3 Mid" [ref=f2e665]:
+                  - text: "-16.3"
+                  - 'generic "MI band: Mid" [ref=f2e666]': Mid
+                - cell "29%" [ref=f2e667]
+              - button [ref=f2e669] [cursor=pointer]:
+                - cell "crates/codelore-lib/tests/refactoring_targets_test.rs" [ref=f2e670]
+                - cell "7" [ref=f2e671]
+                - cell "2" [ref=f2e672]
+                - cell "99.4" [ref=f2e673]
+                - cell "0.02" [ref=f2e674]
+                - cell "7.2 Mid" [ref=f2e675]:
+                  - text: "7.2"
+                  - 'generic "MI band: Mid" [ref=f2e676]': Mid
+                - cell "0%" [ref=f2e677]
+              - button [ref=f2e679] [cursor=pointer]:
+                - cell "crates/codelore-lib/tests/output_sarif_test.rs" [ref=f2e680]
+                - cell "12" [ref=f2e681]
+                - cell "1" [ref=f2e682]
+                - cell "99.7" [ref=f2e683]
+                - cell "0.02" [ref=f2e684]
+                - cell "-34.1 Low" [ref=f2e685]:
+                  - text: "-34.1"
+                  - 'generic "MI band: Low" [ref=f2e686]': Low
+                - cell "33%" [ref=f2e687]
+              - button [ref=f2e689] [cursor=pointer]:
+                - cell "crates/codelore-lib/tests/types_test.rs" [ref=f2e690]
+                - cell "9" [ref=f2e691]
+                - cell "1" [ref=f2e692]
+                - cell "99.7" [ref=f2e693]
+                - cell "0.02" [ref=f2e694]
+                - cell "23.5 Mid" [ref=f2e695]:
+                  - text: "23.5"
+                  - 'generic "MI band: Mid" [ref=f2e696]': Mid
+                - cell "22%" [ref=f2e697]
+              - button [ref=f2e699] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/analyses/refactoring_targets.rs" [ref=f2e700]
+                - cell "6" [ref=f2e701]
+                - cell "2" [ref=f2e702]
+                - cell "99.4" [ref=f2e703]
+                - cell "0.02" [ref=f2e704]
+                - cell "23.9 Mid" [ref=f2e705]:
+                  - text: "23.9"
+                  - 'generic "MI band: Mid" [ref=f2e706]': Mid
+                - cell "0%" [ref=f2e707]
+              - button [ref=f2e709] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/analyses/summary.rs" [ref=f2e710]
+                - cell "6" [ref=f2e711]
+                - cell "2" [ref=f2e712]
+                - cell "99.4" [ref=f2e713]
+                - cell "0.02" [ref=f2e714]
+                - cell "61.7 High" [ref=f2e715]:
+                  - text: "61.7"
+                  - 'generic "MI band: High" [ref=f2e716]': High
+                - cell "50%" [ref=f2e717]
+              - button [ref=f2e719] [cursor=pointer]:
+                - cell "crates/codelore-lib/tests/provenance_test.rs" [ref=f2e720]
+                - cell "6" [ref=f2e721]
+                - cell "2" [ref=f2e722]
+                - cell "99.4" [ref=f2e723]
+                - cell "0.02" [ref=f2e724]
+                - cell "-13.5 Mid" [ref=f2e725]:
+                  - text: "-13.5"
+                  - 'generic "MI band: Mid" [ref=f2e726]': Mid
+                - cell "17%" [ref=f2e727]
+              - button [ref=f2e729] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/analyses/main_dev.rs" [ref=f2e730]
+                - cell "8" [ref=f2e731]
+                - cell "1" [ref=f2e732]
+                - cell "99.7" [ref=f2e733]
+                - cell "0.01" [ref=f2e734]
+                - cell "28.7 Mid" [ref=f2e735]:
+                  - text: "28.7"
+                  - 'generic "MI band: Mid" [ref=f2e736]': Mid
+                - cell "63%" [ref=f2e737]
+              - button [ref=f2e739] [cursor=pointer]:
+                - cell "crates/codelore-lib/tests/facts_test.rs" [ref=f2e740]
+                - cell "6" [ref=f2e741]
+                - cell "1" [ref=f2e742]
+                - cell "99.7" [ref=f2e743]
+                - cell "0.01" [ref=f2e744]
+                - cell "18.9 Mid" [ref=f2e745]:
+                  - text: "18.9"
+                  - 'generic "MI band: Mid" [ref=f2e746]': Mid
+                - cell "17%" [ref=f2e747]
+              - button [ref=f2e749] [cursor=pointer]:
+                - cell ".github/workflows/bench.yml" [ref=f2e750]
+                - cell "13" [ref=f2e751]
+                - cell "0" [ref=f2e752]
+                - cell "100.0" [ref=f2e753]
+                - cell "0.00" [ref=f2e754]
+                - cell [ref=f2e755]
+                - cell "62%" [ref=f2e756]
+              - button [ref=f2e758] [cursor=pointer]:
+                - cell ".github/workflows/ci.yml" [ref=f2e759]
+                - cell "31" [ref=f2e760]
+                - cell "0" [ref=f2e761]
+                - cell "100.0" [ref=f2e762]
+                - cell "0.00" [ref=f2e763]
+                - cell [ref=f2e764]
+                - cell "42%" [ref=f2e765]
+              - button [ref=f2e767] [cursor=pointer]:
+                - cell ".github/workflows/container.yml" [ref=f2e768]
+                - cell "12" [ref=f2e769]
+                - cell "0" [ref=f2e770]
+                - cell "100.0" [ref=f2e771]
+                - cell "0.00" [ref=f2e772]
+                - cell [ref=f2e773]
+                - cell "67%" [ref=f2e774]
+              - button [ref=f2e776] [cursor=pointer]:
+                - cell ".github/workflows/release.yml" [ref=f2e777]
+                - cell "20" [ref=f2e778]
+                - cell "0" [ref=f2e779]
+                - cell "100.0" [ref=f2e780]
+                - cell "0.00" [ref=f2e781]
+                - cell [ref=f2e782]
+                - cell "70%" [ref=f2e783]
+              - button [ref=f2e785] [cursor=pointer]:
+                - cell ".gitignore" [ref=f2e786]
+                - cell "10" [ref=f2e787]
+                - cell "0" [ref=f2e788]
+                - cell "100.0" [ref=f2e789]
+                - cell "0.00" [ref=f2e790]
+                - cell [ref=f2e791]
+                - cell "50%" [ref=f2e792]
+              - button [ref=f2e794] [cursor=pointer]:
+                - cell "CHANGELOG.md" [ref=f2e795]
+                - cell "200" [ref=f2e796]
+                - cell "0" [ref=f2e797]
+                - cell "100.0" [ref=f2e798]
+                - cell "0.00" [ref=f2e799]
+                - cell [ref=f2e800]
+                - cell "32%" [ref=f2e801]
+              - button [ref=f2e803] [cursor=pointer]:
+                - cell "Cargo.lock" [ref=f2e804]
+                - cell "85" [ref=f2e805]
+                - cell "0" [ref=f2e806]
+                - cell "100.0" [ref=f2e807]
+                - cell "0.00" [ref=f2e808]
+                - cell [ref=f2e809]
+                - cell "41%" [ref=f2e810]
+              - button [ref=f2e812] [cursor=pointer]:
+                - cell "Cargo.toml" [ref=f2e813]
+                - cell "55" [ref=f2e814]
+                - cell "0" [ref=f2e815]
+                - cell "100.0" [ref=f2e816]
+                - cell "0.00" [ref=f2e817]
+                - cell [ref=f2e818]
+                - cell "20%" [ref=f2e819]
+              - button [ref=f2e821] [cursor=pointer]:
+                - cell "Containerfile" [ref=f2e822]
+                - cell "8" [ref=f2e823]
+                - cell "0" [ref=f2e824]
+                - cell "100.0" [ref=f2e825]
+                - cell "0.00" [ref=f2e826]
+                - cell [ref=f2e827]
+                - cell "63%" [ref=f2e828]
+              - button [ref=f2e830] [cursor=pointer]:
+                - cell "README.md" [ref=f2e831]
+                - cell "74" [ref=f2e832]
+                - cell "0" [ref=f2e833]
+                - cell "100.0" [ref=f2e834]
+                - cell "0.00" [ref=f2e835]
+                - cell [ref=f2e836]
+                - cell "30%" [ref=f2e837]
+              - button [ref=f2e839] [cursor=pointer]:
+                - cell "calibration/README.md" [ref=f2e840]
+                - cell "5" [ref=f2e841]
+                - cell "0" [ref=f2e842]
+                - cell "100.0" [ref=f2e843]
+                - cell "0.00" [ref=f2e844]
+                - cell [ref=f2e845]
+                - cell "0%" [ref=f2e846]
+              - button [ref=f2e848] [cursor=pointer]:
+                - cell "crates/bca-cli/Cargo.toml" [ref=f2e849]
+                - cell "5" [ref=f2e850]
+                - cell "0" [ref=f2e851]
+                - cell "100.0" [ref=f2e852]
+                - cell "0.00" [ref=f2e853]
+                - cell [ref=f2e854]
+                - cell "60%" [ref=f2e855]
+              - button [ref=f2e857] [cursor=pointer]:
+                - cell "crates/bca-cli/src/main.rs" [ref=f2e858]
+                - cell "10" [ref=f2e859]
+                - cell "0" [ref=f2e860]
+                - cell "100.0" [ref=f2e861]
+                - cell "0.00" [ref=f2e862]
+                - cell [ref=f2e863]
+                - cell "80%" [ref=f2e864]
+              - button [ref=f2e866] [cursor=pointer]:
+                - cell "crates/bca-cli/tests/cli_test.rs" [ref=f2e867]
+                - cell "7" [ref=f2e868]
+                - cell "0" [ref=f2e869]
+                - cell "100.0" [ref=f2e870]
+                - cell "0.00" [ref=f2e871]
+                - cell [ref=f2e872]
+                - cell "86%" [ref=f2e873]
+              - button [ref=f2e875] [cursor=pointer]:
+                - cell "crates/bca-lib/Cargo.toml" [ref=f2e876]
+                - cell "29" [ref=f2e877]
+                - cell "0" [ref=f2e878]
+                - cell "100.0" [ref=f2e879]
+                - cell "0.00" [ref=f2e880]
+                - cell [ref=f2e881]
+                - cell "86%" [ref=f2e882]
+              - button [ref=f2e884] [cursor=pointer]:
+                - cell "crates/bca-lib/src/facts/ingest.rs" [ref=f2e885]
+                - cell "5" [ref=f2e886]
+                - cell "0" [ref=f2e887]
+                - cell "100.0" [ref=f2e888]
+                - cell "0.00" [ref=f2e889]
+                - cell [ref=f2e890]
+                - cell "80%" [ref=f2e891]
+              - button [ref=f2e893] [cursor=pointer]:
+                - cell "crates/bca-lib/src/lib.rs" [ref=f2e894]
+                - cell "16" [ref=f2e895]
+                - cell "0" [ref=f2e896]
+                - cell "100.0" [ref=f2e897]
+                - cell "0.00" [ref=f2e898]
+                - cell [ref=f2e899]
+                - cell "75%" [ref=f2e900]
+              - button [ref=f2e902] [cursor=pointer]:
+                - cell "crates/bca-lib/src/repo/gix_repo.rs" [ref=f2e903]
+                - cell "8" [ref=f2e904]
+                - cell "0" [ref=f2e905]
+                - cell "100.0" [ref=f2e906]
+                - cell "0.00" [ref=f2e907]
+                - cell [ref=f2e908]
+                - cell "88%" [ref=f2e909]
+              - button [ref=f2e911] [cursor=pointer]:
+                - cell "crates/bca-lib/tests/repo_trait_test.rs" [ref=f2e912]
+                - cell "5" [ref=f2e913]
+                - cell "0" [ref=f2e914]
+                - cell "100.0" [ref=f2e915]
+                - cell "0.00" [ref=f2e916]
+                - cell [ref=f2e917]
+                - cell "80%" [ref=f2e918]
+              - button [ref=f2e920] [cursor=pointer]:
+                - cell "crates/bca-lib/tests/types_test.rs" [ref=f2e921]
+                - cell "6" [ref=f2e922]
+                - cell "0" [ref=f2e923]
+                - cell "100.0" [ref=f2e924]
+                - cell "0.00" [ref=f2e925]
+                - cell [ref=f2e926]
+                - cell "83%" [ref=f2e927]
+              - button [ref=f2e929] [cursor=pointer]:
+                - cell "crates/codelore-cli/Cargo.toml" [ref=f2e930]
+                - cell "32" [ref=f2e931]
+                - cell "0" [ref=f2e932]
+                - cell "100.0" [ref=f2e933]
+                - cell "0.00" [ref=f2e934]
+                - cell [ref=f2e935]
+                - cell "28%" [ref=f2e936]
+              - button [ref=f2e938] [cursor=pointer]:
+                - cell "crates/codelore-cli/tests/mcp_test.rs" [ref=f2e939]
+                - cell "5" [ref=f2e940]
+                - cell "7" [ref=f2e941]
+                - cell "98.0" [ref=f2e942]
+                - cell "0.00" [ref=f2e943]
+                - cell "-37.1 Low" [ref=f2e944]:
+                  - text: "-37.1"
+                  - 'generic "MI band: Low" [ref=f2e945]': Low
+                - cell "0%" [ref=f2e946]
+              - button [ref=f2e948] [cursor=pointer]:
+                - cell "crates/codelore-lib/Cargo.toml" [ref=f2e949]
+                - cell "61" [ref=f2e950]
+                - cell "0" [ref=f2e951]
+                - cell "100.0" [ref=f2e952]
+                - cell "0.00" [ref=f2e953]
+                - cell [ref=f2e954]
+                - cell "31%" [ref=f2e955]
+              - button [ref=f2e957] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/analyses/authors.rs" [ref=f2e958]
+                - cell "10" [ref=f2e959]
+                - cell "0" [ref=f2e960]
+                - cell "100.0" [ref=f2e961]
+                - cell "0.00" [ref=f2e962]
+                - cell "33.2 Mid" [ref=f2e963]:
+                  - text: "33.2"
+                  - 'generic "MI band: Mid" [ref=f2e964]': Mid
+                - cell "60%" [ref=f2e965]
+              - button [ref=f2e967] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/analyses/bus_factor.rs" [ref=f2e968]
+                - cell "5" [ref=f2e969]
+                - cell "22" [ref=f2e970]
+                - cell "93.7" [ref=f2e971]
+                - cell "0.00" [ref=f2e972]
+                - cell "-14.8 Mid" [ref=f2e973]:
+                  - text: "-14.8"
+                  - 'generic "MI band: Mid" [ref=f2e974]': Mid
+                - cell "40%" [ref=f2e975]
+              - button [ref=f2e977] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/analyses/entity_effort.rs" [ref=f2e978]
+                - cell "7" [ref=f2e979]
+                - cell "0" [ref=f2e980]
+                - cell "100.0" [ref=f2e981]
+                - cell "0.00" [ref=f2e982]
+                - cell "53.7 High" [ref=f2e983]:
+                  - text: "53.7"
+                  - 'generic "MI band: High" [ref=f2e984]': High
+                - cell "57%" [ref=f2e985]
+              - button [ref=f2e987] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/analyses/entity_ownership.rs" [ref=f2e988]
+                - cell "6" [ref=f2e989]
+                - cell "0" [ref=f2e990]
+                - cell "100.0" [ref=f2e991]
+                - cell "0.00" [ref=f2e992]
+                - cell "49.3 High" [ref=f2e993]:
+                  - text: "49.3"
+                  - 'generic "MI band: High" [ref=f2e994]': High
+                - cell "50%" [ref=f2e995]
+              - button [ref=f2e997] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/analyses/lead_time.rs" [ref=f2e998]
+                - cell "7" [ref=f2e999]
+                - cell "0" [ref=f2e1000]
+                - cell "100.0" [ref=f2e1001]
+                - cell "0.00" [ref=f2e1002]
+                - cell "47.5 High" [ref=f2e1003]:
+                  - text: "47.5"
+                  - 'generic "MI band: High" [ref=f2e1004]': High
+                - cell "29%" [ref=f2e1005]
+              - button [ref=f2e1007] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/analyses/lineage.rs" [ref=f2e1008]
+                - cell "5" [ref=f2e1009]
+                - cell "4" [ref=f2e1010]
+                - cell "98.8" [ref=f2e1011]
+                - cell "0.00" [ref=f2e1012]
+                - cell "10.2 Mid" [ref=f2e1013]:
+                  - text: "10.2"
+                  - 'generic "MI band: Mid" [ref=f2e1014]': Mid
+                - cell "100%" [ref=f2e1015]
+              - button [ref=f2e1017] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/analyses/messages.rs" [ref=f2e1018]
+                - cell "6" [ref=f2e1019]
+                - cell "0" [ref=f2e1020]
+                - cell "100.0" [ref=f2e1021]
+                - cell "0.00" [ref=f2e1022]
+                - cell "51.3 High" [ref=f2e1023]:
+                  - text: "51.3"
+                  - 'generic "MI band: High" [ref=f2e1024]': High
+                - cell "50%" [ref=f2e1025]
+              - button [ref=f2e1027] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/analyses/mod.rs" [ref=f2e1028]
+                - cell "45" [ref=f2e1029]
+                - cell "0" [ref=f2e1030]
+                - cell "100.0" [ref=f2e1031]
+                - cell "0.00" [ref=f2e1032]
+                - cell "37.7 High" [ref=f2e1033]:
+                  - text: "37.7"
+                  - 'generic "MI band: High" [ref=f2e1034]': High
+                - cell "25%" [ref=f2e1035]
+              - button [ref=f2e1037] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/analyses/ownership.rs" [ref=f2e1038]
+                - cell "9" [ref=f2e1039]
+                - cell "0" [ref=f2e1040]
+                - cell "100.0" [ref=f2e1041]
+                - cell "0.00" [ref=f2e1042]
+                - cell "38.6 High" [ref=f2e1043]:
+                  - text: "38.6"
+                  - 'generic "MI band: High" [ref=f2e1044]': High
+                - cell "56%" [ref=f2e1045]
+              - button [ref=f2e1047] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/analyses/revisions.rs" [ref=f2e1048]
+                - cell "10" [ref=f2e1049]
+                - cell "0" [ref=f2e1050]
+                - cell "100.0" [ref=f2e1051]
+                - cell "0.00" [ref=f2e1052]
+                - cell "51.4 High" [ref=f2e1053]:
+                  - text: "51.4"
+                  - 'generic "MI band: High" [ref=f2e1054]': High
+                - cell "70%" [ref=f2e1055]
+              - button [ref=f2e1057] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/analyses/stale_code.rs" [ref=f2e1058]
+                - cell "5" [ref=f2e1059]
+                - cell "1" [ref=f2e1060]
+                - cell "99.7" [ref=f2e1061]
+                - cell "0.00" [ref=f2e1062]
+                - cell "28.7 Mid" [ref=f2e1063]:
+                  - text: "28.7"
+                  - 'generic "MI band: Mid" [ref=f2e1064]': Mid
+                - cell "40%" [ref=f2e1065]
+              - button [ref=f2e1067] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/cli_api.rs" [ref=f2e1068]
+                - cell "5" [ref=f2e1069]
+                - cell "0" [ref=f2e1070]
+                - cell "100.0" [ref=f2e1071]
+                - cell "0.00" [ref=f2e1072]
+                - cell "123.8 High" [ref=f2e1073]:
+                  - text: "123.8"
+                  - 'generic "MI band: High" [ref=f2e1074]': High
+                - cell "0%" [ref=f2e1075]
+              - button [ref=f2e1077] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/clones/extractor.rs" [ref=f2e1078]
+                - cell "5" [ref=f2e1079]
+                - cell "6" [ref=f2e1080]
+                - cell "98.3" [ref=f2e1081]
+                - cell "0.00" [ref=f2e1082]
+                - cell "-4.7 Mid" [ref=f2e1083]:
+                  - text: "-4.7"
+                  - 'generic "MI band: Mid" [ref=f2e1084]': Mid
+                - cell "60%" [ref=f2e1085]
+              - button [ref=f2e1087] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/complexity/mod.rs" [ref=f2e1088]
+                - cell "5" [ref=f2e1089]
+                - cell "9" [ref=f2e1090]
+                - cell "97.4" [ref=f2e1091]
+                - cell "0.00" [ref=f2e1092]
+                - cell "11.7 Mid" [ref=f2e1093]:
+                  - text: "11.7"
+                  - 'generic "MI band: Mid" [ref=f2e1094]': Mid
+                - cell "40%" [ref=f2e1095]
+              - button [ref=f2e1097] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/constants.rs" [ref=f2e1098]
+                - cell "8" [ref=f2e1099]
+                - cell "0" [ref=f2e1100]
+                - cell "100.0" [ref=f2e1101]
+                - cell "0.00" [ref=f2e1102]
+                - cell "60.4 High" [ref=f2e1103]:
+                  - text: "60.4"
+                  - 'generic "MI band: High" [ref=f2e1104]': High
+                - cell "50%" [ref=f2e1105]
+              - button [ref=f2e1107] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/error.rs" [ref=f2e1108]
+                - cell "5" [ref=f2e1109]
+                - cell "1" [ref=f2e1110]
+                - cell "99.7" [ref=f2e1111]
+                - cell "0.00" [ref=f2e1112]
+                - cell "54.1 High" [ref=f2e1113]:
+                  - text: "54.1"
+                  - 'generic "MI band: High" [ref=f2e1114]': High
+                - cell "20%" [ref=f2e1115]
+              - button [ref=f2e1117] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/facts/ingest.rs" [ref=f2e1118]
+                - cell "41" [ref=f2e1119]
+                - cell "0" [ref=f2e1120]
+                - cell "100.0" [ref=f2e1121]
+                - cell "0.00" [ref=f2e1122]
+                - cell [ref=f2e1123]
+                - cell "76%" [ref=f2e1124]
+              - button [ref=f2e1126] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/facts/schema.rs" [ref=f2e1127]
+                - cell "7" [ref=f2e1128]
+                - cell "0" [ref=f2e1129]
+                - cell "100.0" [ref=f2e1130]
+                - cell "0.00" [ref=f2e1131]
+                - cell "106.6 High" [ref=f2e1132]:
+                  - text: "106.6"
+                  - 'generic "MI band: High" [ref=f2e1133]': High
+                - cell "14%" [ref=f2e1134]
+              - button [ref=f2e1136] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/facts/schema_v1.sql" [ref=f2e1137]
+                - cell "14" [ref=f2e1138]
+                - cell "0" [ref=f2e1139]
+                - cell "100.0" [ref=f2e1140]
+                - cell "0.00" [ref=f2e1141]
+                - cell [ref=f2e1142]
+                - cell "23%" [ref=f2e1143]
+              - button [ref=f2e1145] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/lib.rs" [ref=f2e1146]
+                - cell "15" [ref=f2e1147]
+                - cell "0" [ref=f2e1148]
+                - cell "100.0" [ref=f2e1149]
+                - cell "0.00" [ref=f2e1150]
+                - cell "53.6 High" [ref=f2e1151]:
+                  - text: "53.6"
+                  - 'generic "MI band: High" [ref=f2e1152]': High
+                - cell "33%" [ref=f2e1153]
+              - button [ref=f2e1155] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/output/json.rs" [ref=f2e1156]
+                - cell "14" [ref=f2e1157]
+                - cell "0" [ref=f2e1158]
+                - cell "100.0" [ref=f2e1159]
+                - cell "0.00" [ref=f2e1160]
+                - cell "65.9 High" [ref=f2e1161]:
+                  - text: "65.9"
+                  - 'generic "MI band: High" [ref=f2e1162]': High
+                - cell "36%" [ref=f2e1163]
+              - button [ref=f2e1165] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/output/mod.rs" [ref=f2e1166]
+                - cell "13" [ref=f2e1167]
+                - cell "0" [ref=f2e1168]
+                - cell "100.0" [ref=f2e1169]
+                - cell "0.00" [ref=f2e1170]
+                - cell "92.4 High" [ref=f2e1171]:
+                  - text: "92.4"
+                  - 'generic "MI band: High" [ref=f2e1172]': High
+                - cell "63%" [ref=f2e1173]
+              - button [ref=f2e1175] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/output/parquet.rs" [ref=f2e1176]
+                - cell "6" [ref=f2e1177]
+                - cell "0" [ref=f2e1178]
+                - cell "100.0" [ref=f2e1179]
+                - cell "0.00" [ref=f2e1180]
+                - cell "55.0 High" [ref=f2e1181]:
+                  - text: "55.0"
+                  - 'generic "MI band: High" [ref=f2e1182]': High
+                - cell "50%" [ref=f2e1183]
+              - button [ref=f2e1185] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/output/spa.rs" [ref=f2e1186]
+                - cell "20" [ref=f2e1187]
+                - cell "0" [ref=f2e1188]
+                - cell "100.0" [ref=f2e1189]
+                - cell "0.00" [ref=f2e1190]
+                - cell "-8.8 Mid" [ref=f2e1191]:
+                  - text: "-8.8"
+                  - 'generic "MI band: Mid" [ref=f2e1192]': Mid
+                - cell "60%" [ref=f2e1193]
+              - button [ref=f2e1195] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/output/spa/js/10_helpers_drawer.js" [ref=f2e1196]
+                - cell "5" [ref=f2e1197]
+                - cell "139" [ref=f2e1198]
+                - cell "60.0" [ref=f2e1199]
+                - cell "0.00" [ref=f2e1200]
+                - cell "-164.3 Low" [ref=f2e1201]:
+                  - text: "-164.3"
+                  - 'generic "MI band: Low" [ref=f2e1202]': Low
+                - cell "0%" [ref=f2e1203]
+              - button [ref=f2e1205] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/output/spa/tailwind-src/input.css" [ref=f2e1206]
+                - cell "7" [ref=f2e1207]
+                - cell "0" [ref=f2e1208]
+                - cell "100.0" [ref=f2e1209]
+                - cell "0.00" [ref=f2e1210]
+                - cell [ref=f2e1211]
+                - cell "86%" [ref=f2e1212]
+              - button [ref=f2e1214] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/output/spa/tailwind.daisyui.min.css" [ref=f2e1215]
+                - cell "8" [ref=f2e1216]
+                - cell "0" [ref=f2e1217]
+                - cell "100.0" [ref=f2e1218]
+                - cell "0.00" [ref=f2e1219]
+                - cell [ref=f2e1220]
+                - cell "75%" [ref=f2e1221]
+              - button [ref=f2e1223] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/output/spa/template.html" [ref=f2e1224]
+                - cell "44" [ref=f2e1225]
+                - cell "0" [ref=f2e1226]
+                - cell "100.0" [ref=f2e1227]
+                - cell "0.00" [ref=f2e1228]
+                - cell [ref=f2e1229]
+                - cell "39%" [ref=f2e1230]
+              - button [ref=f2e1232] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/output/spa/widgets.js" [ref=f2e1233]
+                - cell "67" [ref=f2e1234]
+                - cell "0" [ref=f2e1235]
+                - cell "100.0" [ref=f2e1236]
+                - cell "0.00" [ref=f2e1237]
+                - cell [ref=f2e1238]
+                - cell "30%" [ref=f2e1239]
+              - button [ref=f2e1241] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/output/step_summary.rs" [ref=f2e1242]
+                - cell "5" [ref=f2e1243]
+                - cell "5" [ref=f2e1244]
+                - cell "98.6" [ref=f2e1245]
+                - cell "0.00" [ref=f2e1246]
+                - cell "-49.5 Low" [ref=f2e1247]:
+                  - text: "-49.5"
+                  - 'generic "MI band: Low" [ref=f2e1248]': Low
+                - cell "60%" [ref=f2e1249]
+              - button [ref=f2e1251] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/repo/mod.rs" [ref=f2e1252]
+                - cell "12" [ref=f2e1253]
+                - cell "0" [ref=f2e1254]
+                - cell "100.0" [ref=f2e1255]
+                - cell "0.00" [ref=f2e1256]
+                - cell "51.1 High" [ref=f2e1257]:
+                  - text: "51.1"
+                  - 'generic "MI band: High" [ref=f2e1258]': High
+                - cell "33%" [ref=f2e1259]
+              - button [ref=f2e1261] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/repo/types.rs" [ref=f2e1262]
+                - cell "5" [ref=f2e1263]
+                - cell "0" [ref=f2e1264]
+                - cell "100.0" [ref=f2e1265]
+                - cell "0.00" [ref=f2e1266]
+                - cell "110.6 High" [ref=f2e1267]:
+                  - text: "110.6"
+                  - 'generic "MI band: High" [ref=f2e1268]': High
+                - cell "0%" [ref=f2e1269]
+              - button [ref=f2e1271] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/test_support/mod.rs" [ref=f2e1272]
+                - cell "24" [ref=f2e1273]
+                - cell "0" [ref=f2e1274]
+                - cell "100.0" [ref=f2e1275]
+                - cell "0.00" [ref=f2e1276]
+                - cell "2.0 Mid" [ref=f2e1277]:
+                  - text: "2.0"
+                  - 'generic "MI band: Mid" [ref=f2e1278]': Mid
+                - cell "25%" [ref=f2e1279]
+              - button [ref=f2e1281] [cursor=pointer]:
+                - cell "crates/codelore-lib/src/types.rs" [ref=f2e1282]
+                - cell "8" [ref=f2e1283]
+                - cell "0" [ref=f2e1284]
+                - cell "100.0" [ref=f2e1285]
+                - cell "0.00" [ref=f2e1286]
+                - cell "51.7 High" [ref=f2e1287]:
+                  - text: "51.7"
+                  - 'generic "MI band: High" [ref=f2e1288]': High
+                - cell "13%" [ref=f2e1289]
+              - button [ref=f2e1291] [cursor=pointer]:
+                - cell "crates/codelore-lib/tests/authors_test.rs" [ref=f2e1292]
+                - cell "5" [ref=f2e1293]
+                - cell "2" [ref=f2e1294]
+                - cell "99.4" [ref=f2e1295]
+                - cell "0.00" [ref=f2e1296]
+                - cell "15.2 Mid" [ref=f2e1297]:
+                  - text: "15.2"
+                  - 'generic "MI band: Mid" [ref=f2e1298]': Mid
+                - cell "40%" [ref=f2e1299]
+              - button [ref=f2e1301] [cursor=pointer]:
+                - cell "crates/codelore-lib/tests/clones_factsdb_test.rs" [ref=f2e1302]
+                - cell "5" [ref=f2e1303]
+                - cell "0" [ref=f2e1304]
+                - cell "100.0" [ref=f2e1305]
+                - cell "0.00" [ref=f2e1306]
+                - cell "13.1 Mid" [ref=f2e1307]:
+                  - text: "13.1"
+                  - 'generic "MI band: Mid" [ref=f2e1308]': Mid
+                - cell "40%" [ref=f2e1309]
+              - button [ref=f2e1311] [cursor=pointer]:
+                - cell "crates/codelore-lib/tests/coupling_test.rs" [ref=f2e1312]
+                - cell "5" [ref=f2e1313]
+                - cell "5" [ref=f2e1314]
+                - cell "98.6" [ref=f2e1315]
+                - cell "0.00" [ref=f2e1316]
+                - cell "-27.3 Low" [ref=f2e1317]:
+                  - text: "-27.3"
+                  - 'generic "MI band: Low" [ref=f2e1318]': Low
+                - cell "40%" [ref=f2e1319]
+              - button [ref=f2e1321] [cursor=pointer]:
+                - cell "crates/codelore-lib/tests/f69_window_spike_test.rs" [ref=f2e1322]
+                - cell "5" [ref=f2e1323]
+                - cell "1" [ref=f2e1324]
+                - cell "99.7" [ref=f2e1325]
+                - cell "0.00" [ref=f2e1326]
+                - cell "3.8 Mid" [ref=f2e1327]:
+                  - text: "3.8"
+                  - 'generic "MI band: Mid" [ref=f2e1328]': Mid
+                - cell "60%" [ref=f2e1329]
+              - button [ref=f2e1331] [cursor=pointer]:
+                - cell "crates/codelore-lib/tests/groups_test.rs" [ref=f2e1332]
+                - cell "5" [ref=f2e1333]
+                - cell "0" [ref=f2e1334]
+                - cell "100.0" [ref=f2e1335]
+                - cell "0.00" [ref=f2e1336]
+                - cell "-23.2 Low" [ref=f2e1337]:
+                  - text: "-23.2"
+                  - 'generic "MI band: Low" [ref=f2e1338]': Low
+                - cell "20%" [ref=f2e1339]
+              - button [ref=f2e1341] [cursor=pointer]:
+                - cell "crates/codelore-lib/tests/output_json_test.rs" [ref=f2e1342]
+                - cell "6" [ref=f2e1343]
+                - cell "0" [ref=f2e1344]
+                - cell "100.0" [ref=f2e1345]
+                - cell "0.00" [ref=f2e1346]
+                - cell "42.7 High" [ref=f2e1347]:
+                  - text: "42.7"
+                  - 'generic "MI band: High" [ref=f2e1348]': High
+                - cell "50%" [ref=f2e1349]
+              - button [ref=f2e1351] [cursor=pointer]:
+                - cell "crates/codelore-lib/tests/output_markdown_test.rs" [ref=f2e1352]
+                - cell "5" [ref=f2e1353]
+                - cell "0" [ref=f2e1354]
+                - cell "100.0" [ref=f2e1355]
+                - cell "0.00" [ref=f2e1356]
+                - cell "28.5 Mid" [ref=f2e1357]:
+                  - text: "28.5"
+                  - 'generic "MI band: Mid" [ref=f2e1358]': Mid
+                - cell "60%" [ref=f2e1359]
+              - button [ref=f2e1361] [cursor=pointer]:
+                - cell "deny.toml" [ref=f2e1362]
+                - cell "5" [ref=f2e1363]
+                - cell "0" [ref=f2e1364]
+                - cell "100.0" [ref=f2e1365]
+                - cell "0.00" [ref=f2e1366]
+                - cell [ref=f2e1367]
+                - cell "80%" [ref=f2e1368]
+              - button [ref=f2e1370] [cursor=pointer]:
+                - cell "docs/RELEASING.md" [ref=f2e1371]
+                - cell "8" [ref=f2e1372]
+                - cell "0" [ref=f2e1373]
+                - cell "100.0" [ref=f2e1374]
+                - cell "0.00" [ref=f2e1375]
+                - cell [ref=f2e1376]
+                - cell "50%" [ref=f2e1377]
+              - button [ref=f2e1379] [cursor=pointer]:
+                - cell "docs/advanced-usage.md" [ref=f2e1380]
+                - cell "50" [ref=f2e1381]
+                - cell "0" [ref=f2e1382]
+                - cell "100.0" [ref=f2e1383]
+                - cell "0.00" [ref=f2e1384]
+                - cell [ref=f2e1385]
+                - cell "30%" [ref=f2e1386]
+              - button [ref=f2e1388] [cursor=pointer]:
+                - cell "docs/codebase_analysis.md" [ref=f2e1389]
+                - cell "25" [ref=f2e1390]
+                - cell "0" [ref=f2e1391]
+                - cell "100.0" [ref=f2e1392]
+                - cell "0.00" [ref=f2e1393]
+                - cell [ref=f2e1394]
+                - cell "40%" [ref=f2e1395]
+              - button [ref=f2e1397] [cursor=pointer]:
+                - cell "docs/perf-evidence-v1.md" [ref=f2e1398]
+                - cell "5" [ref=f2e1399]
+                - cell "0" [ref=f2e1400]
+                - cell "100.0" [ref=f2e1401]
+                - cell "0.00" [ref=f2e1402]
+                - cell [ref=f2e1403]
+                - cell "40%" [ref=f2e1404]
+              - button [ref=f2e1406] [cursor=pointer]:
+                - cell "docs/reports/deep_analysis_report.md" [ref=f2e1407]
+                - cell "87" [ref=f2e1408]
+                - cell "0" [ref=f2e1409]
+                - cell "100.0" [ref=f2e1410]
+                - cell "0.00" [ref=f2e1411]
+                - cell [ref=f2e1412]
+                - cell "43%" [ref=f2e1413]
+              - button [ref=f2e1415] [cursor=pointer]:
+                - cell "docs/research-foundations.md" [ref=f2e1416]
+                - cell "8" [ref=f2e1417]
+                - cell "0" [ref=f2e1418]
+                - cell "100.0" [ref=f2e1419]
+                - cell "0.00" [ref=f2e1420]
+                - cell [ref=f2e1421]
+                - cell "63%" [ref=f2e1422]
+              - button [ref=f2e1424] [cursor=pointer]:
+                - cell "docs/roadmap-v1.x-and-beyond.md" [ref=f2e1425]
+                - cell "20" [ref=f2e1426]
+                - cell "0" [ref=f2e1427]
+                - cell "100.0" [ref=f2e1428]
+                - cell "0.00" [ref=f2e1429]
+                - cell [ref=f2e1430]
+                - cell "60%" [ref=f2e1431]
+              - button [ref=f2e1433] [cursor=pointer]:
+                - cell "docs/superpowers/specs/2026-06-06-bca-design.md" [ref=f2e1434]
+                - cell "8" [ref=f2e1435]
+                - cell "0" [ref=f2e1436]
+                - cell "100.0" [ref=f2e1437]
+                - cell "0.00" [ref=f2e1438]
+                - cell [ref=f2e1439]
+                - cell "88%" [ref=f2e1440]
+              - button [ref=f2e1442] [cursor=pointer]:
+                - cell "docs/ui-roadmap.md" [ref=f2e1443]
+                - cell "14" [ref=f2e1444]
+                - cell "0" [ref=f2e1445]
+                - cell "100.0" [ref=f2e1446]
+                - cell "0.00" [ref=f2e1447]
+                - cell [ref=f2e1448]
+                - cell "79%" [ref=f2e1449]
+              - button [ref=f2e1451] [cursor=pointer]:
+                - cell "justfile" [ref=f2e1452]
+                - cell "5" [ref=f2e1453]
+                - cell "0" [ref=f2e1454]
+                - cell "100.0" [ref=f2e1455]
+                - cell "0.00" [ref=f2e1456]
+                - cell [ref=f2e1457]
+                - cell "40%" [ref=f2e1458]
+              - button [ref=f2e1460] [cursor=pointer]:
+                - cell "scripts/cut-release.sh" [ref=f2e1461]
+                - cell "10" [ref=f2e1462]
+                - cell "0" [ref=f2e1463]
+                - cell "100.0" [ref=f2e1464]
+                - cell "0.00" [ref=f2e1465]
+                - cell [ref=f2e1466]
+                - cell "90%" [ref=f2e1467]
+          - button "Toggle fullscreen" [ref=f2e1469] [cursor=pointer]
+        - generic [ref=f2e1472]:
+          - heading "Hotspots — treemap view" [level=3] [ref=f2e1473]
+          - generic [ref=f2e1474]: Same data as the circle-pack above, rendered as nested rectangles for strict area-comparison readability.
+          - group [ref=f2e1475]:
+            - generic "▸ Learn more — how to read this panel" [ref=f2e1476] [cursor=pointer]
+          - img "Hotspot treemap of 128 files across 6 top-level directories, sized by revisions" [ref=f2e1477]
+          - button "Toggle fullscreen" [ref=f2e1480] [cursor=pointer]
+        - generic [ref=f2e1483]:
+          - heading "Function X-Ray" [level=3] [ref=f2e1484]
+          - generic [ref=f2e1485]: Function-level cognitive complexity. Inner ring = top-level path segment; outer = function. Click any wedge to drill down. Top 500 functions by cognitive complexity.
+          - group [ref=f2e1486]:
+            - generic "▸ Learn more — how to read this panel" [ref=f2e1487] [cursor=pointer]
+          - img "X-Ray complexity sunburst of 500 functions across 1 top-level paths, coloured by cognitive complexity" [ref=f2e1488]
+          - button "Toggle fullscreen" [ref=f2e1491] [cursor=pointer]
+    - region [ref=f2e1494]:
+      - generic [ref=f2e1495]:
+        - heading "Code Health" [level=2] [ref=f2e1496]
+        - button "Toggle Code Health section" [expanded] [ref=f2e1497] [cursor=pointer]
+      - generic [ref=f2e1500]:
+        - generic [ref=f2e1501]:
+          - heading "Repo health timeline" [level=3] [ref=f2e1502]
+          - generic [ref=f2e1503]: Combined, architectural, and code health (0–100) recomputed at sampled historical commits. Shows whether overall repo health is improving or degrading over time.
+          - group [ref=f2e1504]:
+            - generic "▸ Learn more — how to read this panel" [ref=f2e1505] [cursor=pointer]
+          - 'img "Repo health timeline over 12 sampled revisions: combined, architectural, and code health (0–100)." [ref=f2e1506]':
+            - button "Split view" [ref=f2e1508] [cursor=pointer]
+          - button "Toggle fullscreen" [ref=f2e1512] [cursor=pointer]
+        - generic [ref=f2e1515]:
+          - heading "Trends" [level=3] [ref=f2e1516]
+          - generic [ref=f2e1517]: Monthly revision counts for the top-10 hotspot files. Pattern shows where churn is intensifying or cooling off.
+          - group [ref=f2e1518]:
+            - generic "▸ Learn more — how to read this panel" [ref=f2e1519] [cursor=pointer]
+          - tablist "Trends top N files" [ref=f2e1520]:
+            - tab "5" [ref=f2e1521] [cursor=pointer]:
+              - text: "5"
+              - generic [ref=f2e1522]: "?"
+            - tab "10" [selected] [ref=f2e1523] [cursor=pointer]:
+              - text: "10"
+              - generic [ref=f2e1524]: "?"
+            - tab "20" [ref=f2e1525] [cursor=pointer]:
+              - text: "20"
+              - generic [ref=f2e1526]: "?"
+            - tab "All" [ref=f2e1527] [cursor=pointer]:
+              - text: All
+              - generic [ref=f2e1528]: "?"
+          - img "Hotspot-score trend for 10 files over 2 months" [ref=f2e1529]
+          - button "Toggle fullscreen" [ref=f2e1532] [cursor=pointer]
+        - generic [ref=f2e1535]:
+          - heading "Code Health — effort distribution" [level=3] [ref=f2e1536]
+          - generic [ref=f2e1537]: Where engineering effort lands across red / yellow / green health bands. A team with most churn in red code is in reactive mode; most churn in green means proactive maintenance.
+          - group [ref=f2e1538]:
+            - generic "▸ Learn more — how to read this panel" [ref=f2e1539] [cursor=pointer]
+          - generic [ref=f2e1541]:
+            - generic [ref=f2e1542]:
+              - generic [ref=f2e1543]: LOC
+              - 'img "Source lines of code share per health band: Red 37.8%, Yellow 48.7%, Green 13.5%" [ref=f2e1544]':
+                - 'generic "Red: 37.8%" [ref=f2e1545]': Red 37.8%
+                - 'generic "Yellow: 48.7%" [ref=f2e1547]': Yellow 48.7%
+                - 'generic "Green: 13.5%" [ref=f2e1549]': Green 13.5%
+            - generic [ref=f2e1551]:
+              - generic [ref=f2e1552]: Churn
+              - 'img "Churn share per health band in the trailing window: Red 9.7%, Yellow 11.9%, Green 6.2%" [ref=f2e1553]':
+                - 'generic "Red: 34.7%" [ref=f2e1554]': Red 34.7%
+                - 'generic "Yellow: 42.8%" [ref=f2e1556]': Yellow 42.8%
+                - 'generic "Green: 22.5%" [ref=f2e1558]': Green 22.5%
+            - generic [ref=f2e1560]:
+              - generic [ref=f2e1561]: Effort
+              - img "2 red, 17 yellow, 1 green — each dot = 5% of window churn" [ref=f2e1562]:
+                - generic "Red band (5% churn per dot)" [ref=f2e1563]
+                - generic "Red band (5% churn per dot)" [ref=f2e1564]
+                - generic "Yellow band (5% churn per dot)" [ref=f2e1565]
+                - generic "Yellow band (5% churn per dot)" [ref=f2e1566]
+                - generic "Yellow band (5% churn per dot)" [ref=f2e1567]
+                - generic "Yellow band (5% churn per dot)" [ref=f2e1568]
+                - generic "Yellow band (5% churn per dot)" [ref=f2e1569]
+                - generic "Yellow band (5% churn per dot)" [ref=f2e1570]
+                - generic "Yellow band (5% churn per dot)" [ref=f2e1571]
+                - generic "Yellow band (5% churn per dot)" [ref=f2e1572]
+                - generic "Yellow band (5% churn per dot)" [ref=f2e1573]
+                - generic "Yellow band (5% churn per dot)" [ref=f2e1574]
+                - generic "Yellow band (5% churn per dot)" [ref=f2e1575]
+                - generic "Yellow band (5% churn per dot)" [ref=f2e1576]
+                - generic "Yellow band (5% churn per dot)" [ref=f2e1577]
+                - generic "Yellow band (5% churn per dot)" [ref=f2e1578]
+                - generic "Yellow band (5% churn per dot)" [ref=f2e1579]
+                - generic "Yellow band (5% churn per dot)" [ref=f2e1580]
+                - generic "Yellow band (5% churn per dot)" [ref=f2e1581]
+                - generic "Green band (5% churn per dot)" [ref=f2e1582]
+            - paragraph [ref=f2e1583]:
+              - strong [ref=f2e1584]: 9.7%
+              - text: of the last 90 days’ changes landed in red code
+          - button "Toggle fullscreen" [ref=f2e1585] [cursor=pointer]
+        - generic [ref=f2e1588]:
+          - heading "Health improvements & regressions" [level=3] [ref=f2e1589]
+          - generic [ref=f2e1590]: Signal-bearing code-health band transitions detected across sampled historical commits. Click any file to open its detail drawer.
+          - generic [ref=f2e1591]:
+            - heading "↑ Recent improvements" [level=4] [ref=f2e1592]
+            - list [ref=f2e1593]:
+              - button [ref=f2e1594] [cursor=pointer]:
+                - code [ref=f2e1595]: mod.rs
+                - text: yellow → green 2026-07-17
+              - button [ref=f2e1596] [cursor=pointer]:
+                - code [ref=f2e1597]: step_summary.rs
+                - text: red → yellow 2026-07-17
+              - button [ref=f2e1598] [cursor=pointer]:
+                - code [ref=f2e1599]: kamei_test.rs
+                - text: yellow → green 2026-07-09
+              - button [ref=f2e1600] [cursor=pointer]:
+                - code [ref=f2e1601]: clones.rs
+                - text: yellow → green 2026-06-26
+              - button [ref=f2e1602] [cursor=pointer]:
+                - code [ref=f2e1603]: spa.rs
+                - text: yellow → green 2026-06-26
+              - button [ref=f2e1604] [cursor=pointer]:
+                - code [ref=f2e1605]: diff_output.rs
+                - text: red → yellow 2026-06-26
+              - button [ref=f2e1606] [cursor=pointer]:
+                - code [ref=f2e1607]: soc.rs
+                - text: yellow → green 2026-06-15
+              - button [ref=f2e1608] [cursor=pointer]:
+                - code [ref=f2e1609]: mod.rs
+                - text: yellow → green 2026-06-15
+            - heading "↓ Regressions" [level=4] [ref=f2e1610]
+            - list [ref=f2e1611]:
+              - button [ref=f2e1612] [cursor=pointer]:
+                - code [ref=f2e1613]: sarif.rs
+                - text: yellow → red 2026-07-17
+              - button [ref=f2e1614] [cursor=pointer]:
+                - code [ref=f2e1615]: code_health.rs
+                - text: yellow → red 2026-07-09
+              - button [ref=f2e1616] [cursor=pointer]:
+                - code [ref=f2e1617]: diff_output.rs
+                - text: yellow → red 2026-07-09
+              - button [ref=f2e1618] [cursor=pointer]:
+                - code [ref=f2e1619]: mod.rs
+                - text: yellow → red 2026-07-09
+              - button [ref=f2e1620] [cursor=pointer]:
+                - code [ref=f2e1621]: git_cli_repo.rs
+                - text: yellow → red 2026-06-21
+              - button [ref=f2e1622] [cursor=pointer]:
+                - code [ref=f2e1623]: coupling.rs
+                - text: yellow → red 2026-06-15
+              - button [ref=f2e1624] [cursor=pointer]:
+                - code [ref=f2e1625]: markdown.rs
+                - text: yellow → red 2026-06-13
+              - button [ref=f2e1626] [cursor=pointer]:
+                - code [ref=f2e1627]: csv.rs
+                - text: yellow → red 2026-06-09
+          - button "Toggle fullscreen" [ref=f2e1628] [cursor=pointer]
+        - generic [ref=f2e1631]:
+          - heading "Cognitive distribution" [level=3] [ref=f2e1632]
+          - generic [ref=f2e1633]: How hard each file is to reason about, across the whole codebase. Cognitive complexity counts nested decisions and control-flow disruptions — lower = easier to read. Box-and-whisker shows median + middle 50%; outlier count and max sit in the top-right corner.
+          - group [ref=f2e1634]:
+            - generic "▸ Learn more — how to read this panel" [ref=f2e1635] [cursor=pointer]
+          - img "Cognitive-complexity distribution across 64 functions, median 5, 6 outliers" [ref=f2e1636]
+          - button "Toggle fullscreen" [ref=f2e1639] [cursor=pointer]
+        - generic [ref=f2e1642]:
+          - heading "Multi-metric comparison" [level=3] [ref=f2e1643]
+          - generic [ref=f2e1644]: Top-20 hotspots across five behavioural axes. Drag on any axis to filter — useful for "files high on cognitive AND low on MI" cross-cuts.
+          - group [ref=f2e1645]:
+            - generic "▸ Learn more — how to read this panel" [ref=f2e1646] [cursor=pointer]
+          - tablist "Multi-metric top N hotspots" [ref=f2e1647]:
+            - tab "10" [ref=f2e1648] [cursor=pointer]:
+              - text: "10"
+              - generic [ref=f2e1649]: "?"
+            - tab "20" [selected] [ref=f2e1650] [cursor=pointer]:
+              - text: "20"
+              - generic [ref=f2e1651]: "?"
+            - tab "50" [ref=f2e1652] [cursor=pointer]:
+              - text: "50"
+              - generic [ref=f2e1653]: "?"
+            - tab "All" [ref=f2e1654] [cursor=pointer]:
+              - text: All
+              - generic [ref=f2e1655]: "?"
+          - img "Parallel-coordinates plot of 20 files across revisions, cognitive complexity, code health, hotspot score and MI rank" [ref=f2e1656]
+          - button "Toggle fullscreen" [ref=f2e1659] [cursor=pointer]
+    - region [ref=f2e1662]:
+      - generic [ref=f2e1663]:
+        - heading "Architecture" [level=2] [ref=f2e1664]
+        - button "Toggle Architecture section" [expanded] [ref=f2e1665] [cursor=pointer]
+      - generic [ref=f2e1668]:
+        - generic [ref=f2e1669]:
+          - heading "Architecture graph" [level=3] [ref=f2e1670]
+          - generic [ref=f2e1671]:
+            - text: Force-directed import graph (Rust + Python + JS/TS) fused with git history. Nodes are coloured by
+            - emphasis [ref=f2e1672]: architectural role
+            - text: (core / control / shared / periphery);
+            - strong [ref=f2e1673]: diamonds
+            - text: are unstable interfaces;
+            - strong [ref=f2e1674]: ringed
+            - text: nodes sit in a dependency cycle.
+            - strong [ref=f2e1675]: Solid
+            - text: edges are imports;
+            - strong [ref=f2e1676]: dashed
+            - text: edges are
+            - emphasis [ref=f2e1677]: modularity violations
+            - text: (co-change with no import). The title reports the system
+            - emphasis [ref=f2e1678]: propagation cost
+            - text: .
+          - group [ref=f2e1679]:
+            - generic "▸ Learn more — how to read this panel" [ref=f2e1680] [cursor=pointer]
+          - tablist "Architecture graph depth" [ref=f2e1681]:
+            - tab "Auto" [selected] [ref=f2e1682] [cursor=pointer]:
+              - text: Auto
+              - generic [ref=f2e1683]: "?"
+            - tab "2" [ref=f2e1684] [cursor=pointer]:
+              - text: "2"
+              - generic [ref=f2e1685]: "?"
+            - tab "3" [ref=f2e1686] [cursor=pointer]:
+              - text: "3"
+              - generic [ref=f2e1687]: "?"
+            - tab "4" [ref=f2e1688] [cursor=pointer]:
+              - text: "4"
+              - generic [ref=f2e1689]: "?"
+            - tab "5" [ref=f2e1690] [cursor=pointer]:
+              - text: "5"
+              - generic [ref=f2e1691]: "?"
+            - tab "6" [ref=f2e1692] [cursor=pointer]:
+              - text: "6"
+              - generic [ref=f2e1693]: "?"
+          - tablist "Architecture graph layout" [ref=f2e1694]:
+            - tab "Force" [selected] [ref=f2e1695] [cursor=pointer]:
+              - text: Force
+              - generic [ref=f2e1696]: "?"
+            - tab "Layered" [ref=f2e1697] [cursor=pointer]:
+              - text: Layered
+              - generic [ref=f2e1698]: "?"
+          - img "Architecture graph, 36 modules coloured by role (core/control/shared/periphery), 44 import edges, 23 dashed modularity-violation edges, 2 unstable-interface modules shown as diamonds, 2 modules in dependency cycles shown ringed. Propagation cost 4.3 percent." [ref=f2e1699]
+          - button "Reset zoom" [ref=f2e1702] [cursor=pointer]
+          - button "Toggle fullscreen" [ref=f2e1706] [cursor=pointer]
+        - generic [ref=f2e1709]:
+          - heading "Dependency structure matrix" [level=3] [ref=f2e1710]
+          - generic [ref=f2e1711]:
+            - text: The same import graph as a layer-ordered matrix — it scales where the force graph hairballs. Rows import columns; cells
+            - strong [ref=f2e1712]: below the diagonal (red)
+            - text: are
+            - emphasis [ref=f2e1713]: back-edges
+            - text: ": dependency cycles and layering violations. A clean, acyclic architecture is a triangular, all-blue matrix. The"
+            - strong [ref=f2e1714]: Fusion
+            - text: toggle (top of the panel) reclassifies each cell by structure×history agreement against the change- coupling data — a legend row explains the added colours.
+          - group [ref=f2e1715]:
+            - generic "▸ Learn more — how to read this panel" [ref=f2e1716] [cursor=pointer]
+          - generic [ref=f2e1717]:
+            - button "Fusion" [ref=f2e1719] [cursor=pointer]
+            - img "Dependency structure matrix, 22 modules ordered by architectural layer, 44 dependency cells, 13 below-diagonal back-edges (dependency cycles / layering violations) in red." [ref=f2e1720]
+          - button "Toggle fullscreen" [ref=f2e1724] [cursor=pointer]
+        - generic [ref=f2e1727]:
+          - heading "Architecture trend" [level=3] [ref=f2e1728]
+          - generic [ref=f2e1729]:
+            - text: Structural health over time —
+            - strong [ref=f2e1730]: propagation cost
+            - text: (blue, left) and
+            - strong [ref=f2e1731]: dependency cycles
+            - text: (red, right) recomputed at sampled historical commits. Rising lines mean the architecture is decaying; a step up in cycles marks when a tangle first formed.
+          - group [ref=f2e1732]:
+            - generic "▸ Learn more — how to read this panel" [ref=f2e1733] [cursor=pointer]
+          - 'img "Architecture decay trend over 12 sampled revisions: propagation cost (percent) and dependency-cycle count." [ref=f2e1734]'
+          - button "Toggle fullscreen" [ref=f2e1737] [cursor=pointer]
+        - generic [ref=f2e1740]:
+          - heading "Module coupling" [level=3] [ref=f2e1741]
+          - generic [ref=f2e1742]: Inter-module change-coupling rolled up from the file-pair graph by top-level directory.
+          - group [ref=f2e1743]:
+            - generic "▸ Learn more — how to read this panel" [ref=f2e1744] [cursor=pointer]
+          - tablist "Module coupling depth" [ref=f2e1745]:
+            - tab "Auto" [selected] [ref=f2e1746] [cursor=pointer]:
+              - text: Auto
+              - generic [ref=f2e1747]: "?"
+            - tab "2" [ref=f2e1748] [cursor=pointer]:
+              - text: "2"
+              - generic [ref=f2e1749]: "?"
+            - tab "3" [ref=f2e1750] [cursor=pointer]:
+              - text: "3"
+              - generic [ref=f2e1751]: "?"
+            - tab "4" [ref=f2e1752] [cursor=pointer]:
+              - text: "4"
+              - generic [ref=f2e1753]: "?"
+            - tab "5" [ref=f2e1754] [cursor=pointer]:
+              - text: "5"
+              - generic [ref=f2e1755]: "?"
+            - tab "6" [ref=f2e1756] [cursor=pointer]:
+              - text: "6"
+              - generic [ref=f2e1757]: "?"
+          - img "Module change-coupling chord diagram, 8 modules and 11 coupled pairs" [ref=f2e1758]
+          - button "Toggle fullscreen" [ref=f2e1761] [cursor=pointer]
+        - generic [ref=f2e1764]:
+          - heading "Change coupling" [level=3] [ref=f2e1765]
+          - generic [ref=f2e1766]: Files that change together at Fisher-significant rates. Wider bands = stronger historical coupling. Top 30 pairs by combined score.
+          - tablist "Change coupling depth" [ref=f2e1767]:
+            - tab "Files" [selected] [ref=f2e1768] [cursor=pointer]:
+              - text: Files
+              - generic [ref=f2e1769]: "?"
+            - tab "2" [ref=f2e1770] [cursor=pointer]:
+              - text: "2"
+              - generic [ref=f2e1771]: "?"
+            - tab "3" [ref=f2e1772] [cursor=pointer]:
+              - text: "3"
+              - generic [ref=f2e1773]: "?"
+            - tab "4" [ref=f2e1774] [cursor=pointer]:
+              - text: "4"
+              - generic [ref=f2e1775]: "?"
+            - tab "5" [ref=f2e1776] [cursor=pointer]:
+              - text: "5"
+              - generic [ref=f2e1777]: "?"
+            - tab "6" [ref=f2e1778] [cursor=pointer]:
+              - text: "6"
+              - generic [ref=f2e1779]: "?"
+          - group [ref=f2e1780]:
+            - generic "▸ Learn more — how to read this panel" [ref=f2e1781] [cursor=pointer]
+          - img "Change-coupling Sankey flow across 32 entities, 30 co-change links" [ref=f2e1782]
+          - button "Toggle fullscreen" [ref=f2e1785] [cursor=pointer]
+    - region [ref=f2e1788]:
+      - generic [ref=f2e1789]:
+        - heading "Knowledge" [level=2] [ref=f2e1790]
+        - button "Toggle Knowledge section" [expanded] [ref=f2e1791] [cursor=pointer]
+      - generic [ref=f2e1794]:
+        - generic [ref=f2e1795]:
+          - heading "Knowledge surfaces" [level=3] [ref=f2e1796]
+          - generic [ref=f2e1797]: Team familiarity, knowledge islands ratio, tenure mix, and the files with the highest coordination overhead — from one behavioural scan, no manual tagging.
+          - group [ref=f2e1798]:
+            - generic "▸ Learn more — how to read this panel" [ref=f2e1799] [cursor=pointer]
+          - generic [ref=f2e1800]:
+            - generic [ref=f2e1801]:
+              - generic "Mean team familiarity with active files (100.0%)" [ref=f2e1802]:
+                - generic [ref=f2e1803]: Familiarity
+                - generic [ref=f2e1806]: 100.0%
+              - 'generic "Knowledge islands: files with no active owner (66.5% of files)" [ref=f2e1807]':
+                - generic [ref=f2e1808]: Islands
+                - generic [ref=f2e1811]: 66.5%
+              - paragraph [ref=f2e1812]:
+                - text: "Active authors:"
+                - strong [ref=f2e1813]: "3"
+                - text: —
+                - emphasis [ref=f2e1814]: good
+            - generic [ref=f2e1815]:
+              - img "Team tenure distribution":
+                - 'generic "onboarded: 0.0% of commits, undefined author(s)"'
+                - 'generic "onboarded: 0.0% of commits, undefined author(s)"'
+                - 'generic "onboarded: 0.0% of commits, undefined author(s)"'
+                - 'generic "onboarded=100.0% experienced=0.0% veteran=0.0%: 0.0% of commits, undefined author(s)"'
+              - paragraph [ref=f2e1816]: onboarded 0.0% (undefined) onboarded 0.0% (undefined) onboarded 0.0% (undefined) onboarded=100.0% experienced=0.0% veteran=0.0% 0.0% (undefined)
+          - button "Toggle fullscreen" [ref=f2e1817] [cursor=pointer]
+        - generic [ref=f2e1820]:
+          - heading "Knowledge islands" [level=3] [ref=f2e1821]
+          - generic [ref=f2e1822]: Files whose primary author has departed and where no substantial other owner exists — auto-detected, no manual ex-developer marking. CodeScene requires you to mark ex-developers manually; CodeLore detects them from commit history + co-change intensity.
+          - group [ref=f2e1823]:
+            - generic "▸ Learn more — how to read this panel" [ref=f2e1824] [cursor=pointer]
+          - generic [ref=f2e1825]: No knowledge islands. Either no contributors have departed past the threshold or the analysis was not wired through.
+          - button "Toggle fullscreen" [ref=f2e1827] [cursor=pointer]
+    - region [ref=f2e1830]:
+      - generic [ref=f2e1831]:
+        - heading "Delivery" [level=2] [ref=f2e1832]
+        - button "Toggle Delivery section" [expanded] [ref=f2e1833] [cursor=pointer]
+      - generic [ref=f2e1836]:
+        - generic [ref=f2e1837]:
+          - heading "Delivery" [level=3] [ref=f2e1838]
+          - generic [ref=f2e1839]:
+            - text: "Git-only delivery proxies: rework rate, branch duration, lead-time proxy, release cadence, and top friction files. Run with"
+            - code [ref=f2e1840]: "--include-merges"
+            - text: and release tags matching
+            - code [ref=f2e1841]: "--release-tag-glob"
+            - text: to populate.
+          - generic [ref=f2e1842]:
+            - table [ref=f2e1843]:
+              - rowgroup [ref=f2e1844]:
+                - row [ref=f2e1845]:
+                  - cell "Rework" [ref=f2e1846]
+                  - cell "8.9 %" [ref=f2e1847]
+                  - cell "approximate — line drift between commits not tracked; window-anchored to HEAD" [ref=f2e1848]
+                - row [ref=f2e1849]:
+                  - cell "Lead proxy p50" [ref=f2e1850]
+                  - cell "2 h" [ref=f2e1851]
+                  - cell "author→committer date gap; proxy only — does not include waiting time before first review" [ref=f2e1852]
+                - row [ref=f2e1853]:
+                  - cell "Cadence median" [ref=f2e1854]
+                  - cell "0 d (stable)" [ref=f2e1855]
+                  - cell [ref=f2e1856]
+            - generic [ref=f2e1857]: "Where is friction:"
+            - list [ref=f2e1858]:
+              - listitem [ref=f2e1859]: .github/workflows/bench.yml
+              - listitem [ref=f2e1860]: .github/workflows/ci.yml
+              - listitem [ref=f2e1861]: .github/workflows/container.yml
+              - listitem [ref=f2e1862]: .github/workflows/release.yml
+              - listitem [ref=f2e1863]: .gitignore
+            - generic [ref=f2e1864]: Git-only proxies — not DORA metrics.
+          - button "Toggle fullscreen" [ref=f2e1865] [cursor=pointer]
+        - generic [ref=f2e1868]:
+          - heading "Delivery risk · last 30 commits" [level=3] [ref=f2e1869]
+          - generic [ref=f2e1870]: "Per-commit risk score composited from Kamei's JIT-SDP feature vector (la, ld, nf, ndev, exp, entropy). Hover any bar to see which dimension dominates that commit's risk. Citations: Kamei et al. 2013 · Hassan 2009."
+          - group [ref=f2e1871]:
+            - generic "▸ Learn more — how to read this panel" [ref=f2e1872] [cursor=pointer]
+          - tablist "Delivery risk window" [ref=f2e1873]:
+            - tab "10" [ref=f2e1874] [cursor=pointer]:
+              - text: "10"
+              - generic [ref=f2e1875]: "?"
+            - tab "30" [selected] [ref=f2e1876] [cursor=pointer]:
+              - text: "30"
+              - generic [ref=f2e1877]: "?"
+            - tab "60" [ref=f2e1878] [cursor=pointer]:
+              - text: "60"
+              - generic [ref=f2e1879]: "?"
+            - tab "All" [ref=f2e1880] [cursor=pointer]:
+              - text: All
+              - generic [ref=f2e1881]: "?"
+          - img "Kamei delivery-risk per commit over 30 recent commits, 19 flagged as bug-fixes" [ref=f2e1882]
+          - button "Toggle fullscreen" [ref=f2e1885] [cursor=pointer]
+        - generic [ref=f2e1888]:
+          - heading "Commit activity" [level=3] [ref=f2e1889]
+          - generic [ref=f2e1890]: Per-day commit volume across the analysed history.
+          - group [ref=f2e1891]:
+            - generic "▸ Learn more — how to read this panel" [ref=f2e1892] [cursor=pointer]
+          - img "Commit-activity calendar heatmap over 1 year(s), 40 active days" [ref=f2e1893]
+          - button "Toggle fullscreen" [ref=f2e1898] [cursor=pointer]
+  - button "Back to top" [ref=f2e1901] [cursor=pointer]: ↑
+  - contentinfo [ref=f2e1902]:
+    - text: Generated by
+    - link "CodeLore" [ref=f2e1903] [cursor=pointer]:
+      - /url: https://github.com/emrecdr/codelore
+    - text: — the behavioral-code-analysis CLI with published deterministic formulas.
+  - status [ref=f2e1904]: Selection cleared
