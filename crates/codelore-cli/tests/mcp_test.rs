@@ -12,6 +12,17 @@ use std::process::{Command, Stdio};
 use codelore_lib::test_support::{delivery_repo, tiny_repo};
 use serde_json::{Value, json};
 
+/// LLM environment variables the server reads at `explain_file` time. Cleared
+/// on the spawned server so an ambient developer configuration can never make
+/// the no-LLM `explain_file` assertions flaky.
+const LLM_ENV_VARS: &[&str] = &[
+    "CODELORE_LLM_PROVIDER",
+    "CODELORE_LLM_BASE_URL",
+    "CODELORE_LLM_API_KEY",
+    "CODELORE_LLM_MODEL",
+    "ANTHROPIC_API_KEY",
+];
+
 /// Serialize a JSON-RPC message as a newline-terminated line.
 fn ndjson_line(msg: &Value) -> Vec<u8> {
     let mut bytes = serde_json::to_vec(msg).unwrap();
@@ -36,13 +47,16 @@ fn spawn_mcp(
     BufReader<std::process::ChildStdout>,
 ) {
     let bin = assert_cmd::cargo::cargo_bin("codelore");
-    let mut child = Command::new(&bin)
+    let mut builder = Command::new(&bin);
+    builder
         .args(["mcp", "--repo", repo_path])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn codelore mcp");
+        .stderr(Stdio::null());
+    for var in LLM_ENV_VARS {
+        builder.env_remove(var);
+    }
+    let mut child = builder.spawn().expect("spawn codelore mcp");
 
     let mut stdin = child.stdin.take().expect("stdin");
     let stdout = child.stdout.take().expect("stdout");
@@ -134,8 +148,8 @@ fn mcp_tools_list_and_repo_overview() {
     // Exact count — catches both missing tools and accidental extras.
     assert_eq!(
         tools.len(),
-        8,
-        "expected exactly 8 tools, got {}: {:?}",
+        9,
+        "expected exactly 9 tools, got {}: {:?}",
         tools.len(),
         tools
             .iter()
@@ -153,6 +167,7 @@ fn mcp_tools_list_and_repo_overview() {
         "function_xray",
         "check_gates",
         "finding_hotspot_overlap",
+        "explain_file",
     ] {
         assert!(
             tool_names.contains(expected),
@@ -444,4 +459,63 @@ fn mcp_finding_hotspot_overlap_returns_note_when_sidecar_absent() {
         "MCP read must not create the sidecar: {}",
         sidecar_path.display()
     );
+}
+
+#[test]
+fn mcp_explain_file_returns_fact_sheet_and_narrative_error_without_llm() {
+    let repo = delivery_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
+
+    // Derive a target from the `code_health` tool so `explain_file` is guaranteed
+    // a file with a code-health row (its mandatory section). A path present at
+    // the default `min_revs` is a superset of what `explain_file` sees at
+    // `min_revs = 1`.
+    let ch = call_tool(&mut stdin, &mut reader, 1, "code_health", &json!({}));
+    let ch_rows = assert_tool_ok(&ch, "code_health");
+    let target = ch_rows
+        .as_array()
+        .and_then(|rows| rows.first())
+        .and_then(|row| row["path"].as_str())
+        .expect("code_health yields at least one file for delivery_repo")
+        .to_string();
+
+    let resp = call_tool(
+        &mut stdin,
+        &mut reader,
+        2,
+        "explain_file",
+        &json!({ "path": target }),
+    );
+    let parsed = assert_tool_ok(&resp, "explain_file");
+
+    // The fact sheet is always present, and it is the structured sections array.
+    let sections = parsed["fact_sheet"]
+        .as_array()
+        .expect("explain_file always returns a fact_sheet array");
+    assert!(
+        !sections.is_empty(),
+        "the fact sheet carries at least the mandatory code-health section: {parsed}"
+    );
+    assert!(
+        sections
+            .iter()
+            .any(|s| s["section"] == "code-health" && s["facts"].is_object()),
+        "the fact sheet includes a structured code-health section: {parsed}"
+    );
+
+    // The server env carries no LLM configuration (spawn_mcp clears it), so the
+    // narrative degrades to a narrative_error and no narrative is produced.
+    assert!(
+        parsed["narrative_error"].is_string(),
+        "without an LLM configured, explain_file sets narrative_error: {parsed}"
+    );
+    assert!(
+        parsed.get("narrative").is_none(),
+        "no narrative may be present when the LLM is unavailable: {parsed}"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
 }

@@ -23,6 +23,12 @@ use codelore_lib::cli_api::{
         finding_hotspot_overlap, function_xray, hotspots, refactoring_targets, summary,
     },
     cache::default_cache_root,
+    enrichment::{
+        client::{LlmEnv, resolve_client},
+        engine,
+        fact_sheet::FileFactSheet,
+        prompt::Lens,
+    },
     external::ExternalStore,
     facts::FactsDb,
     quality_gates::{
@@ -189,6 +195,14 @@ pub struct CheckGatesParams {}
 /// Parameters for the `finding_hotspot_overlap` tool (none required).
 #[derive(Debug, Deserialize, JsonSchema, Default)]
 pub struct FindingHotspotOverlapParams {}
+
+/// Parameters for the `explain_file` tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ExplainFileParams {
+    /// File path (relative to repo root) to build the evidence dossier for
+    /// (e.g. "src/main.rs").
+    pub path: String,
+}
 
 // ── Output type for check_gates ───────────────────────────────────────────────
 
@@ -558,6 +572,95 @@ impl CodeLoreServer {
             let rows = finding_hotspot_overlap::run_finding_hotspot_overlap(&db, &opts, &store)
                 .map_err(internal)?;
             serde_json::to_string(&rows).map_err(internal)
+        })
+        .await
+        .map_err(internal)?
+    }
+
+    // ── explain_file ──────────────────────────────────────────────────────────
+
+    #[tool(
+        name = "explain_file",
+        description = "Return a deterministic per-file evidence dossier for one repo-relative file \
+            path. `fact_sheet` is always present: the ordered analysis sections (code-health, \
+            hotspots, coupling, ownership, functions, import cycles, and defect evidence) as \
+            structured JSON. When the server environment has an LLM configured (the \
+            `CODELORE_LLM_*` variables), the response also carries a grounded advisory `narrative` \
+            with its `model` and a `grounded` citation-check verdict; when it does not, \
+            `narrative_error` is returned instead. The fact sheet is always returned and the call \
+            never fails because the LLM is unavailable. \
+            First call on a cold cache triggers history ingest."
+    )]
+    async fn explain_file(
+        &self,
+        params: Parameters<ExplainFileParams>,
+    ) -> Result<String, ErrorData> {
+        let repo_path = self.repo.clone();
+        let target = params.0.path.clone();
+        tokio::task::spawn_blocking(move || {
+            // min_revs = 1 so any single named file resolves in its own dossier,
+            // matching the `explain <path>` CLI surface.
+            let opts = Options {
+                repo_path: repo_path.clone(),
+                min_revs: 1,
+                ..Options::default()
+            };
+            let repo = GixRepo::open(&repo_path).map_err(internal)?;
+            let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
+                .map_err(internal)?;
+            let sheet = FileFactSheet::build(&db, &repo, &opts, &target).map_err(internal)?;
+
+            // The structured fact sheet: an ordered array of {section, facts}
+            // objects, preserving the builder's section and key order.
+            let fact_sheet: Vec<serde_json::Value> = sheet
+                .sections
+                .iter()
+                .map(|(name, facts)| {
+                    let facts_obj: serde_json::Map<String, serde_json::Value> = facts
+                        .iter()
+                        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                        .collect();
+                    serde_json::json!({ "section": name, "facts": facts_obj })
+                })
+                .collect();
+
+            // Advisory narrative — best-effort. The tool never fails because the
+            // LLM is unavailable: a resolution or narration error becomes
+            // `narrative_error` alongside the always-present fact sheet.
+            let out = match resolve_client(&LlmEnv::from_process_env()) {
+                Ok(client) => {
+                    let canonical = sheet.to_canonical_text();
+                    let values = sheet.numeric_values();
+                    match engine::narrate(
+                        client.as_ref(),
+                        Lens::FileDiagnosis,
+                        &target,
+                        engine::SheetFacts {
+                            text: &canonical,
+                            values: &values,
+                        },
+                        &default_cache_root(),
+                        &repo_path,
+                        false,
+                    ) {
+                        Ok(result) => serde_json::json!({
+                            "fact_sheet": fact_sheet,
+                            "narrative": result.narrative,
+                            "grounded": result.grounded,
+                            "model": result.model,
+                        }),
+                        Err(e) => serde_json::json!({
+                            "fact_sheet": fact_sheet,
+                            "narrative_error": e.to_string(),
+                        }),
+                    }
+                }
+                Err(e) => serde_json::json!({
+                    "fact_sheet": fact_sheet,
+                    "narrative_error": e.to_string(),
+                }),
+            };
+            serde_json::to_string(&out).map_err(internal)
         })
         .await
         .map_err(internal)?

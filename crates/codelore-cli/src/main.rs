@@ -2388,6 +2388,23 @@ fn run_schema_cmd(args: &args::SchemaArgs) -> Result<()> {
 fn run_diff_cmd(args: &DiffArgs) -> Result<()> {
     let (output, head_db, head_opts) = diff::run_diff(args).context("codelore diff")?;
 
+    // Advisory LLM narrative. Best-effort and format-scoped: it is produced only
+    // for `text`/`markdown` with `--llm`, any failure degrades to a stderr
+    // warning, and it never touches the deterministic output below or the
+    // `should_fail` exit code.
+    let format = args.format.as_str();
+    let narrative: Option<(String, String)> = if args.llm {
+        match format {
+            "text" | "markdown" => diff_llm_narrative(args, &output),
+            _ => {
+                eprintln!("note: --llm applies to text/markdown output only; ignored for {format}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let mut out: Box<dyn Write> = match args.output.as_ref() {
         Some(path) => Box::new(std::fs::File::create(path)?),
         None => Box::new(std::io::stdout().lock()),
@@ -2395,9 +2412,10 @@ fn run_diff_cmd(args: &DiffArgs) -> Result<()> {
     diff_output::emit(
         &mut out,
         &output,
-        args.format.as_str(),
+        format,
         &args.repo,
         Some((&head_db, &head_opts)),
+        narrative,
     )?;
     drop(out);
 
@@ -2406,6 +2424,150 @@ fn run_diff_cmd(args: &DiffArgs) -> Result<()> {
         std::process::exit(4);
     }
     Ok(())
+}
+
+/// Produce the advisory LLM narrative for a diff run, degrading gracefully.
+///
+/// The `DiffOutput` is flattened into a deterministic [`DiffFactSheet`], a chat
+/// client is resolved from the `CODELORE_LLM_*` environment, and the narrative
+/// is generated under [`Lens::DiffNarrative`] with a citation-check stamp. Any
+/// failure — no endpoint configured, network error, or narration error — is
+/// reported on stderr and yields `None`, so the caller's deterministic output
+/// and exit code stay untouched. The narrative cache lives under the default
+/// cache root (diff has no `--cache-dir`).
+fn diff_llm_narrative(args: &DiffArgs, output: &diff::DiffOutput) -> Option<(String, String)> {
+    use codelore_lib::cli_api::cache::default_cache_root;
+    use codelore_lib::cli_api::enrichment::client::{LlmEnv, resolve_client};
+    use codelore_lib::cli_api::enrichment::engine;
+    use codelore_lib::cli_api::enrichment::fact_sheet::DiffFactSheet;
+    use codelore_lib::cli_api::enrichment::prompt::Lens;
+
+    let sheet = DiffFactSheet::from_sections(diff_fact_sections(output));
+    let canonical = sheet.to_canonical_text();
+    let values = sheet.numeric_values();
+    let cache_root = default_cache_root();
+
+    let result = resolve_client(&LlmEnv::from_process_env()).and_then(|client| {
+        engine::narrate(
+            client.as_ref(),
+            Lens::DiffNarrative,
+            "diff",
+            engine::SheetFacts {
+                text: &canonical,
+                values: &values,
+            },
+            &cache_root,
+            &args.repo,
+            args.llm_refresh,
+        )
+    });
+    match result {
+        Ok(result) => Some((result.narrative.clone(), engine::stamp(&result))),
+        Err(e) => {
+            eprintln!("warning: llm narrative unavailable: {e}");
+            None
+        }
+    }
+}
+
+/// Flatten a `DiffOutput` into ordered fact-sheet sections for the advisory diff
+/// narrative. Only sections with data are emitted, and every numeric value is
+/// rendered through the shared [`fmt_num`] formatter so the narrative's citation
+/// check can match each quoted number back to a fact.
+fn diff_fact_sections(output: &diff::DiffOutput) -> Vec<(String, Vec<(String, String)>)> {
+    use codelore_lib::cli_api::enrichment::fact_sheet::fmt_num;
+
+    let mut sections: Vec<(String, Vec<(String, String)>)> = Vec::new();
+
+    // verdict — change-level health ratio, verdict, and change counts.
+    if let Some(dh) = &output.delta_health {
+        let mut facts = vec![("verdict".to_string(), dh.verdict.clone())];
+        if let Some(ratio) = dh.ratio {
+            facts.push(("ratio".to_string(), fmt_num(ratio)));
+        }
+        facts.push(("added".to_string(), dh.counts.added.to_string()));
+        facts.push(("modified".to_string(), dh.counts.modified.to_string()));
+        facts.push(("removed".to_string(), dh.counts.removed.to_string()));
+        facts.push(("skipped".to_string(), dh.counts.skipped.to_string()));
+        sections.push(("verdict".to_string(), facts));
+    }
+
+    // gates — [diff] quality-gate violations.
+    if !output.gate_violations.is_empty() {
+        let mut facts = Vec::new();
+        for (i, v) in output.gate_violations.iter().enumerate() {
+            let n = i + 1;
+            facts.push((format!("{n}.gate"), v.gate.clone()));
+            facts.push((format!("{n}.path"), v.path.clone()));
+            facts.push((format!("{n}.actual"), v.actual.clone()));
+            facts.push((format!("{n}.threshold"), v.threshold.clone()));
+        }
+        sections.push(("gates".to_string(), facts));
+    }
+
+    // entrants — files newly entering the top-N hotspot list.
+    if !output.hotspots.rank_entrants.is_empty() {
+        let mut facts = Vec::new();
+        for (i, h) in output.hotspots.rank_entrants.iter().enumerate() {
+            let n = i + 1;
+            facts.push((format!("{n}.path"), h.path.clone()));
+            facts.push((format!("{n}.hotspot_score"), fmt_num(h.hotspot_score)));
+            facts.push((format!("{n}.revisions"), h.revisions.to_string()));
+            facts.push((format!("{n}.cognitive"), fmt_num(h.cognitive)));
+            facts.push((format!("{n}.code_health"), fmt_num(h.code_health)));
+        }
+        sections.push(("entrants".to_string(), facts));
+    }
+
+    // score-increased — existing hotspots whose score grew past the threshold.
+    if !output.hotspots.score_increased.is_empty() {
+        let mut facts = Vec::new();
+        for (i, s) in output.hotspots.score_increased.iter().enumerate() {
+            let n = i + 1;
+            facts.push((format!("{n}.path"), s.path.clone()));
+            facts.push((format!("{n}.base_score"), fmt_num(s.base_score)));
+            facts.push((format!("{n}.head_score"), fmt_num(s.head_score)));
+            facts.push((format!("{n}.delta"), fmt_num(s.delta)));
+        }
+        sections.push(("score-increased".to_string(), facts));
+    }
+
+    // absences — historically-coupled files omitted from the PR.
+    if !output.coupling_absences.is_empty() {
+        let mut facts = Vec::new();
+        for (i, a) in output.coupling_absences.iter().enumerate() {
+            let n = i + 1;
+            facts.push((format!("{n}.touched_file"), a.touched_file.clone()));
+            facts.push((format!("{n}.expected_partner"), a.expected_partner.clone()));
+            facts.push((
+                format!("{n}.historical_coupling"),
+                fmt_num(a.historical_coupling),
+            ));
+            facts.push((format!("{n}.fisher_p"), fmt_num(a.fisher_p)));
+            facts.push((
+                format!("{n}.historical_shared_revs"),
+                a.historical_shared_revs.to_string(),
+            ));
+        }
+        sections.push(("absences".to_string(), facts));
+    }
+
+    // clones — new clone-family members introduced by the PR.
+    if !output.clones.new_families.is_empty() {
+        let mut facts = Vec::new();
+        for (i, c) in output.clones.new_families.iter().enumerate() {
+            let n = i + 1;
+            facts.push((format!("{n}.clone_group_id"), c.clone_group_id.to_string()));
+            facts.push((format!("{n}.entity"), c.entity.clone()));
+            facts.push((format!("{n}.function"), c.function.clone()));
+            facts.push((format!("{n}.start_line"), c.start_line.to_string()));
+            facts.push((format!("{n}.end_line"), c.end_line.to_string()));
+            facts.push((format!("{n}.node_count"), c.node_count.to_string()));
+        }
+        sections.push(("clones".to_string(), facts));
+    }
+
+    sections
 }
 
 fn init_logging(verbose: bool) {

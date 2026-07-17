@@ -768,4 +768,20 @@ pub struct DiffArgs {
     /// exit (overriding `--fail-on=none`).
     #[arg(long)]
     pub thresholds_file: Option<PathBuf>,
+
+    /// Append an advisory, LLM-generated PR narrative to the diff, grounded in a
+    /// deterministic fact sheet of the run's deltas and stamped with a
+    /// citation-check verdict. Advisory only: the narrative never changes the
+    /// deterministic findings, the gate verdict, or the exit code, and any
+    /// failure to produce it is a stderr warning, not an error. Rendered for
+    /// `text` and `markdown` output only; ignored for `json`/`sarif`. Requires
+    /// an LLM endpoint configured through the `CODELORE_LLM_*` environment
+    /// (local-first by default).
+    #[arg(long)]
+    pub llm: bool,
+
+    /// Regenerate the LLM narrative even when a cached one exists, replacing the
+    /// sidecar cache entry. Only meaningful together with `--llm`.
+    #[arg(long)]
+    pub llm_refresh: bool,
 }

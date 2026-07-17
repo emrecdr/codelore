@@ -3005,8 +3005,8 @@ mod explain_path {
 
     /// The LLM environment variables the dossier surface reads. Cleared on every
     /// spawned CLI so an ambient developer configuration can never leak into a
-    /// test's resolution.
-    const LLM_ENV_VARS: &[&str] = &[
+    /// test's resolution. Shared with the `diff --llm` tests.
+    pub(crate) const LLM_ENV_VARS: &[&str] = &[
         "CODELORE_LLM_PROVIDER",
         "CODELORE_LLM_BASE_URL",
         "CODELORE_LLM_API_KEY",
@@ -3089,7 +3089,7 @@ mod explain_path {
     /// single OpenAI-compatible `/chat/completions` request with `narrative` as
     /// the assistant message, then exits. Returns the bound base URL. `narrative`
     /// must be free of `"`, `\`, and newlines so it embeds directly in the JSON.
-    fn serve_one_completion(narrative: &str) -> String {
+    pub(crate) fn serve_one_completion(narrative: &str) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
         let base = format!("http://{}", listener.local_addr().expect("local addr"));
         let body = format!(
@@ -3311,5 +3311,195 @@ mod explain_path {
             .assert()
             .success()
             .stdout(predicate::str::contains("stale").not());
+    }
+}
+
+/// End-to-end coverage for `diff --llm` — the opt-in, degrade-gracefully
+/// advisory PR narrative. The deterministic diff output, its gate verdict, and
+/// its exit code must be identical with or without the flag; the narrative is
+/// appended only as a delimited advisory block. The `--llm` cases point the
+/// client at the same test-local one-shot HTTP server the `explain` tests use so
+/// nothing touches an external endpoint.
+mod diff_llm {
+    use assert_cmd::Command;
+
+    use crate::explain_path::{LLM_ENV_VARS, serve_one_completion};
+
+    #[test]
+    fn diff_without_llm_has_no_advisory_block() {
+        let (dir, base, head) = super::delta_health_fixture();
+        let mut cmd = Command::cargo_bin("codelore").unwrap();
+        for var in LLM_ENV_VARS {
+            cmd.env_remove(var);
+        }
+        let out = cmd
+            .args([
+                "diff",
+                "--repo",
+                dir.path().to_str().unwrap(),
+                "--min-revs",
+                "1",
+                "--format",
+                "text",
+                &format!("{base}..{head}"),
+            ])
+            .output()
+            .expect("run diff without --llm");
+        assert!(
+            out.status.success(),
+            "diff without --llm should succeed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stdout = String::from_utf8(out.stdout).expect("utf8 diff output");
+        assert!(
+            !stdout.contains("LLM narrative"),
+            "no advisory block without --llm: {stdout}"
+        );
+    }
+
+    #[test]
+    fn diff_llm_appends_advisory_block_and_preserves_exit_code() {
+        let (dir, base, head) = super::delta_health_fixture();
+        let repo = dir.path().to_str().unwrap().to_string();
+        let range = format!("{base}..{head}");
+
+        // Baseline: the no-flag run establishes the exit code the --llm run must
+        // reproduce (the narrative is advisory and must not move it).
+        let mut baseline_cmd = Command::cargo_bin("codelore").unwrap();
+        for var in LLM_ENV_VARS {
+            baseline_cmd.env_remove(var);
+        }
+        let baseline = baseline_cmd
+            .args([
+                "diff",
+                "--repo",
+                &repo,
+                "--min-revs",
+                "1",
+                "--format",
+                "text",
+                &range,
+            ])
+            .output()
+            .expect("baseline diff");
+        assert!(baseline.status.success());
+
+        let narrative = "This change adds a large branchy function that degrades change health.";
+        let base_url = serve_one_completion(narrative);
+
+        // --llm-refresh forces the server round-trip: diff has no --cache-dir, so
+        // it shares the default narrative cache; refreshing keeps the assertion
+        // hermetic against any pre-existing cached narrative for this fact sheet.
+        let mut cmd = Command::cargo_bin("codelore").unwrap();
+        for var in LLM_ENV_VARS {
+            cmd.env_remove(var);
+        }
+        let out = cmd
+            .env("CODELORE_LLM_PROVIDER", "openai-compat")
+            .env("CODELORE_LLM_BASE_URL", &base_url)
+            .env("CODELORE_LLM_MODEL", "test-model")
+            .args([
+                "diff",
+                "--repo",
+                &repo,
+                "--min-revs",
+                "1",
+                "--format",
+                "text",
+                "--llm",
+                "--llm-refresh",
+                &range,
+            ])
+            .output()
+            .expect("run diff --llm");
+        assert!(
+            out.status.success(),
+            "diff --llm should succeed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            out.status.code(),
+            baseline.status.code(),
+            "the advisory narrative must not change the exit code"
+        );
+        let stdout = String::from_utf8(out.stdout).expect("utf8 diff output");
+        assert!(
+            stdout.contains("LLM narrative (advisory)"),
+            "advisory block present: {stdout}"
+        );
+        assert!(
+            stdout.contains(narrative),
+            "the served narrative is rendered: {stdout}"
+        );
+        assert!(
+            stdout.contains("advisory — model"),
+            "the citation-check stamp is rendered: {stdout}"
+        );
+        assert!(
+            stdout.contains("test-model"),
+            "the stamp names the model: {stdout}"
+        );
+    }
+
+    #[test]
+    fn diff_llm_without_config_warns_and_leaves_output_identical() {
+        let (dir, base, head) = super::delta_health_fixture();
+        let repo = dir.path().to_str().unwrap().to_string();
+        let range = format!("{base}..{head}");
+
+        let mut baseline_cmd = Command::cargo_bin("codelore").unwrap();
+        for var in LLM_ENV_VARS {
+            baseline_cmd.env_remove(var);
+        }
+        let baseline = baseline_cmd
+            .args([
+                "diff",
+                "--repo",
+                &repo,
+                "--min-revs",
+                "1",
+                "--format",
+                "text",
+                &range,
+            ])
+            .output()
+            .expect("baseline diff");
+        assert!(baseline.status.success());
+
+        // --llm with no LLM environment: resolution fails, the failure is a
+        // stderr warning, and stdout + exit code are byte-identical to the
+        // no-flag run.
+        let mut cmd = Command::cargo_bin("codelore").unwrap();
+        for var in LLM_ENV_VARS {
+            cmd.env_remove(var);
+        }
+        let out = cmd
+            .args([
+                "diff",
+                "--repo",
+                &repo,
+                "--min-revs",
+                "1",
+                "--format",
+                "text",
+                "--llm",
+                &range,
+            ])
+            .output()
+            .expect("run diff --llm without config");
+        assert_eq!(
+            out.status.code(),
+            baseline.status.code(),
+            "an unavailable narrative must not change the exit code"
+        );
+        assert_eq!(
+            out.stdout, baseline.stdout,
+            "an unavailable narrative must leave stdout identical to the no-flag run"
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("llm narrative unavailable"),
+            "the degrade-gracefully warning is on stderr: {stderr}"
+        );
     }
 }
