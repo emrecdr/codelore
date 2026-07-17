@@ -10,13 +10,13 @@ Conventional Commits format. All notable changes documented here.
 
 - **`--defect-calibration` / `--allow-foreign-calibration` on `codelore mcp`.** The same flag pair, as a server-startup option: when set, every `explain_file` tool call in the session gets the fact sheet's `defect-evidence` section. The artifact is loaded and its repo-identity checked once at server startup — a bad path or a foreign artifact (without `--allow-foreign-calibration`) is a launch-time error, not a failure on the first tool call. Without the flag, `codelore mcp` behavior is unchanged.
 
-### Fixed
-
-- **Dirty-worktree detection no longer counts untracked files.** `calibrate-defects`'s mining guard and the persistent analysis cache's staleness warning/write-skip now treat a working tree as dirty only when a *tracked* file has staged or unstaged changes; untracked files (a stray screenshot, a build artifact) no longer block `calibrate-defects` or suppress the cache.
-
 ### Changed
 
 - **Calibrate-defects tuning floor reason now names "linked defect-changes".** The honesty floor's reason string and surrounding prose now consistently describe the counter as "linked defect-changes" (one row per (defect, file) incidence) rather than "linked defects" (deduplicated defect-introducing commits). The counter it gates on counts incidences, not deduplicated commits; `ValidationMetrics::linked_defects` field and artifact fact key retain their names, as they correctly describe the deduplicated defect count.
+
+### Fixed
+
+- **Dirty-worktree detection no longer counts untracked files.** `calibrate-defects`'s mining guard and the persistent analysis cache's staleness warning/write-skip now treat a working tree as dirty only when a *tracked* file has staged or unstaged changes; untracked files (a stray screenshot, a build artifact) no longer block `calibrate-defects` or suppress the cache.
 
 ## [0.20.0] - 2026-07-17
 
