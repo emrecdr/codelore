@@ -1015,7 +1015,7 @@ Everything in this section is strictly advisory. Scores, gates, SARIF, exit code
 
 | Surface | What it prints | LLM required |
 |---|---|---|
-| `codelore explain <path>` | The file's **evidence dossier**: ordered fact-sheet sections — code-health score/band, biomarker intensities, hotspot rank, coupling partners, ownership, function churn leaders, import-cycle membership, and defect evidence when a defect calibration is configured. Deterministic, free, offline. | No |
+| `codelore explain <path>` | The file's **evidence dossier**: ordered fact-sheet sections — code-health score/band, biomarker intensities, hotspot rank, coupling partners, ownership, function churn leaders, and import-cycle membership. Deterministic, free, offline. | No |
 | `codelore explain <path> --llm` | The dossier plus a grounded **Diagnosis** narrative. A **Refactoring direction** section appears only when the sheet carries structural evidence for one (an import-cycle or functions section); when the evidence is absent the section is omitted rather than invented. | Yes |
 | `codelore diff <range> --llm` | The deterministic diff output exactly as today, followed by a delimited **LLM narrative (advisory)** block: one reviewer-ready read of what the change does to the codebase's health and which files carry the risk. Rendered for `text` and `markdown` output only; ignored (with a stderr note) for `json`/`sarif`. | Yes |
 
@@ -1488,7 +1488,7 @@ Cost: warm-cache fast after `ingest-sarif`; does not trigger history re-ingest.
 
 #### `explain_file`
 
-Returns the same per-file evidence surface as `codelore explain <path>` ([§8.5](#85-llm-enrichment-advisory-narratives)). `fact_sheet` is always present: the ordered analysis sections (code-health, biomarkers, hotspots, coupling, ownership, functions, import cycles, and defect evidence where calibrated) as an array of `{section, facts}` objects preserving the dossier's order.
+Returns the same per-file evidence surface as `codelore explain <path>` ([§8.5](#85-llm-enrichment-advisory-narratives)). `fact_sheet` is always present: the ordered analysis sections (code-health, biomarkers, hotspots, coupling, ownership, functions, and import cycles) as an array of `{section, facts}` objects preserving the dossier's order.
 
 When the server's environment has an LLM configured (the `CODELORE_LLM_*` variables, §8.5), the response also carries a grounded advisory `narrative` with its `model` id and a `grounded` citation-check verdict. When it does not — or when the request fails — a `narrative_error` field is returned instead. The fact sheet is always returned and the tool call never fails because the LLM is unavailable, so agents without a configured endpoint still receive structured evidence to narrate themselves.
 
