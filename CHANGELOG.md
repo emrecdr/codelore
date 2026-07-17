@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-07-17
+
 ### Added
 
 - **`codelore explain <path>` — the per-file evidence dossier.** When the `explain` argument resolves to a tracked source file (known analysis topics keep their existing static documentation byte-for-byte), the CLI prints that file's deterministic fact sheet: ordered sections for code-health (score, band, structural risk), the eight biomarker intensities, hotspot rank and score, top coupling partners, ownership, function churn leaders, and import-cycle membership. Free, offline, no LLM — the dossier is assembled from the same analyses the CLI already exposes, run with a 1-revision floor so any single named file resolves. Two builds over the same fact store produce byte-identical text.
