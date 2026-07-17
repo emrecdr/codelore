@@ -3503,3 +3503,100 @@ mod diff_llm {
         );
     }
 }
+
+/// Scope guard for the advisory `--llm` flag: it exists only on the surfaces
+/// that render narratives (`explain`, `diff`). The scored surfaces (`analyze`,
+/// `check`) must reject it at the parser, so the flag can never even be spelled
+/// on a command whose output feeds gates or CI.
+mod llm_flag_scope {
+    use assert_cmd::Command;
+    use predicates::prelude::*;
+
+    #[test]
+    fn analyze_rejects_the_llm_flag_at_the_parser() {
+        Command::cargo_bin("codelore")
+            .unwrap()
+            .args(["analyze", "--analysis", "hotspots", "--llm", "--repo", "."])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("unexpected argument"))
+            .stderr(predicate::str::contains("--llm"));
+    }
+
+    #[test]
+    fn check_rejects_the_llm_flag_at_the_parser() {
+        Command::cargo_bin("codelore")
+            .unwrap()
+            .args(["check", "--repo", ".", "--llm"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("unexpected argument"))
+            .stderr(predicate::str::contains("--llm"));
+    }
+}
+
+/// Manual-only live check against a local ollama. Run with:
+///
+/// ```text
+/// CODELORE_LLM_MODEL=<model from `ollama list`> \
+///   cargo test -p codelore-cli --test cli_test -- --ignored explain_file_llm_live
+/// ```
+///
+/// Ignored by default: CI performs no live network calls, and the assertion
+/// depends on a developer-local model server at the default base URL.
+#[test]
+#[ignore = "requires a running local ollama and CODELORE_LLM_MODEL set"]
+fn explain_file_llm_live_against_local_ollama() {
+    let model = std::env::var("CODELORE_LLM_MODEL")
+        .expect("set CODELORE_LLM_MODEL to a model name from `ollama list` for the live check");
+    let fx = codelore_lib::test_support::biomarker_repo::build();
+    let cache = tempfile::tempdir().expect("cache dir");
+
+    // Resolve a real dossier target the same way the hermetic explain tests do.
+    let out = Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "code-health",
+            "--repo",
+            fx.dir.path().to_str().unwrap(),
+            "--cache-dir",
+            cache.path().to_str().unwrap(),
+            "--min-revs",
+            "1",
+            "--format",
+            "csv",
+        ])
+        .output()
+        .expect("run code-health");
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).expect("utf8 code-health output");
+    let target = stdout
+        .lines()
+        .nth(1)
+        .and_then(|row| row.split(',').next())
+        .expect("code-health yields at least one row")
+        .to_string();
+
+    let mut cmd = Command::cargo_bin("codelore").unwrap();
+    for var in explain_path::LLM_ENV_VARS {
+        cmd.env_remove(var);
+    }
+    cmd.env("CODELORE_LLM_PROVIDER", "openai-compat")
+        .env("CODELORE_LLM_MODEL", &model)
+        .args([
+            "explain",
+            &target,
+            "--llm",
+            "--llm-refresh",
+            "--repo",
+            fx.dir.path().to_str().unwrap(),
+            "--cache-dir",
+            cache.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("advisory — model"))
+        .stdout(predicate::str::contains(model.as_str()));
+}

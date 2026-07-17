@@ -116,6 +116,8 @@ No cycles ⇒ zero rows. Accuracy follows the import resolver's language coverag
 
 ```bash
 codelore explain <metric>           # formula + citation + SQL source for any metric
+codelore explain <path>             # per-file evidence dossier (add --llm for a grounded
+                                    # advisory narrative — see §8.5)
 codelore check                      # quality-gate validation against .codelore-thresholds.toml
 codelore diff <base>..<head>        # PR-mode quality gate
 codelore profile                    # operational telemetry
@@ -720,6 +722,9 @@ codelore diff <RANGE> [OPTIONS]
                             [default: 0.05]
       --min-revs N          Same as analyze [default: 5]
       --exclude PATTERN     Same as analyze (repeatable)
+      --llm                 Append an advisory LLM PR narrative (text/markdown
+                            only; degrades to a stderr warning on failure — see §8.5)
+      --llm-refresh         Regenerate the narrative even when a cached one exists
 ```
 
 The diff subcommand emits four SARIF rule types: CODELORE-HOTSPOT (newly-entering or score-rising hotspots), CODELORE-CLONE (PR-introduced clone families), CODELORE-MISSING-COCHANGE (historically-coupled partner files this PR didn't touch), and CODELORE-DELTA-HEALTH (degrading delta-health functions, one result per degrading file). CODELORE-LIVE-CLONE is an analyze-mode rule (`--analysis clone-coupling --format sarif`), not a diff rule.
@@ -1000,6 +1005,96 @@ WARN cache hit on a working tree with uncommitted changes; HEAD-time metrics
 
 Detection is cheap (gix `Repository::status` for the pure-Rust walker, `git status --porcelain` for the CLI walker). Pass `--no-cache` if the dirty state matters for your analysis. The warning is informational — codelore still serves the cached result by default to preserve the 10–100× speedup on clean repeated runs. Auto-invalidation via worktree-content hashing was considered and rejected: hashing every tracked file on every invocation costs 100ms–1s on large trees, which would erase the cache's perf win for the majority case where the cache is correct.
 
+## 8.5. LLM enrichment (advisory narratives)
+
+CodeLore's numbers are deterministic. An opt-in LLM layer can synthesize them into reviewer-legible prose — but the differentiation is grounding, not generation: the model's only input is a deterministic **fact sheet** of values the analyses already computed, and every number the reply quotes is checked back against that sheet after generation. Advice with receipts, never generated code.
+
+Everything in this section is strictly advisory. Scores, gates, SARIF, exit codes, and the provenance manifest are computed exactly as if the feature did not exist.
+
+### The three outputs
+
+| Surface | What it prints | LLM required |
+|---|---|---|
+| `codelore explain <path>` | The file's **evidence dossier**: ordered fact-sheet sections — code-health score/band, biomarker intensities, hotspot rank, coupling partners, ownership, function churn leaders, import-cycle membership, and defect evidence when a defect calibration is configured. Deterministic, free, offline. | No |
+| `codelore explain <path> --llm` | The dossier plus a grounded **Diagnosis** narrative. A **Refactoring direction** section appears only when the sheet carries structural evidence for one (an import-cycle or functions section); when the evidence is absent the section is omitted rather than invented. | Yes |
+| `codelore diff <range> --llm` | The deterministic diff output exactly as today, followed by a delimited **LLM narrative (advisory)** block: one reviewer-ready read of what the change does to the codebase's health and which files carry the risk. Rendered for `text` and `markdown` output only; ignored (with a stderr note) for `json`/`sarif`. | Yes |
+
+```bash
+# Free, deterministic, offline — the evidence dossier:
+codelore explain src/core/engine.rs --repo .
+
+# The dossier + the grounded narrative (requires a configured endpoint):
+codelore explain src/core/engine.rs --repo . --llm
+
+# PR narrative appended to the diff output:
+codelore diff origin/main...HEAD --repo . --llm
+```
+
+The MCP server exposes the same per-file surface as the `explain_file` tool — see [§11.9](#119-mcp-server-codelore-mcp).
+
+The dossier resolves any single tracked source file: its analyses run with a 1-revision floor instead of the default corpus gate, so a file the default `analyze` run would hide still gets its own dossier (its hotspot/coupling/ownership numbers can therefore differ from a default run's).
+
+### Grounding: fact sheet in, citation check out
+
+The prompt embeds the fact sheet verbatim as the model's sole evidence and instructs it to use only facts on the sheet, cite the exact numbers, and say "the data doesn't show" rather than guess. After generation, a citation check extracts every numeric token from the narrative and matches it against the sheet's values, tolerant of the narrative's own rounding (a narrative "0.79" is grounded by a fact of 0.786; "80%" by 0.803). Every narrative then carries an inline provenance stamp:
+
+```
+advisory — model <id>, grounded ✓
+advisory — model <id>, ⚠ contains uncited claims
+```
+
+**Honest limits: the check labels magnitudes, it does not prove claims.** `grounded ✓` means "every number the narrative quotes appears in the evidence" — not "every claim is true". The check cannot detect a sign inversion, a fabricated small count (whole numbers up to 12 are exempt as prose scaffolding — list positions, "the 3 files"), a percent that happens to collide with an unrelated fraction on the sheet, or a real number attached to the wrong claim. The narrative is advisory; the dossier above it is the authority.
+
+### Configuration (environment only)
+
+The posture is local-first: with nothing configured but a model name, requests go to a local OpenAI-compatible endpoint (`http://localhost:11434/v1` — ollama's default). Out of the box nothing leaves the machine; a hosted provider requires an explicit environment change. Keys live in the environment only and are never persisted by codelore, and the fact sheet — repository evidence — is the only content ever sent.
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `CODELORE_LLM_PROVIDER` | `anthropic` or `openai-compat`. Unset: an `ANTHROPIC_API_KEY` in the environment selects the Anthropic dialect, otherwise the local-first OpenAI-compatible one. | unset |
+| `ANTHROPIC_API_KEY` | Credential for the Anthropic dialect (required on it). | unset |
+| `CODELORE_LLM_BASE_URL` | Base URL for the OpenAI-compatible endpoint (ollama, llama.cpp, LM Studio, vLLM, OpenAI, OpenRouter). | `http://localhost:11434/v1` |
+| `CODELORE_LLM_API_KEY` | Optional bearer token for the OpenAI-compatible endpoint; local runners typically need none. | unset |
+| `CODELORE_LLM_MODEL` | Model name. **Required** on the OpenAI-compatible dialect (any name from `ollama list` works); on the Anthropic dialect it overrides the default model. | dialect default |
+
+Note: `provider=anthropic` always pins the Anthropic API base URL — `CODELORE_LLM_BASE_URL` applies to the OpenAI-compatible dialect only and is ignored on the Anthropic path.
+
+```bash
+# Fully local via ollama (nothing leaves the machine):
+export CODELORE_LLM_MODEL=llama3.2        # any model from `ollama list`
+codelore explain src/core/engine.rs --repo . --llm
+
+# Hosted Anthropic endpoint (explicit opt-in):
+export ANTHROPIC_API_KEY=sk-ant-…
+codelore explain src/core/engine.rs --repo . --llm
+```
+
+### Narrative cache
+
+Each generated narrative is persisted as a JSON sidecar under the per-repo cache directory (`…/enrichment/<key>.json`, next to the fact store). The key is content-derived — a hash of the fact-sheet text, the prompt and fact-sheet schema versions, and the model id — so a change to the file's evidence, the prompt wording, or the target model misses naturally, and re-running over unchanged evidence is free (no model round-trip). `--llm-refresh` regenerates and replaces the cached entry. The cache is strictly best-effort: a corrupt or unwritable sidecar degrades to a warning, never a failure.
+
+`explain <path>` without `--llm` prints a one-line staleness note when the file's own previously generated narrative no longer matches the current fact sheet. The note is scoped to that file — a sibling file's fresh narrative never triggers it.
+
+### Failure postures
+
+| Surface | On LLM or configuration failure |
+|---|---|
+| `explain <path> --llm` | Hard error with a setup hint — the narrative is the requested product. |
+| `explain <path>` (no flag) | Never touches the network; cannot fail for LLM reasons. |
+| `diff --llm` | One-line stderr warning; the deterministic output and exit code are untouched. |
+| MCP `explain_file` | The call succeeds; the fact sheet is returned with a `narrative_error` field instead of a narrative. |
+
+Requests use a single bounded timeout and no retries — enrichment is interactive, not batch.
+
+### Advisory guarantees
+
+- **Byte-identical without the flag.** Without `--llm`, every command's output is byte-identical to a build without the feature — no network reads, no default-path behavior change. (`explain <path>` is itself additive: a path argument was previously an unknown-topic error.)
+- **Additive with the flag.** With `--llm`, analysis rows, SARIF, gate verdicts, exit codes, fact-store cache keys, and the provenance manifest are unchanged; narratives are additive text (or additive MCP fields) only.
+- **Scoring isolation.** No module in the scoring path imports the enrichment layer; the dependency arrow points one way and is enforced by a structural guard test.
+- **Grounding is visible.** Every narrative carries its model id and groundedness verdict inline.
+
+`analyze` and `check` deliberately have no `--llm` flag — the parser rejects it — so the advisory layer cannot even be requested on the surfaces whose output feeds gates and CI.
+
 ## 9. Tool stack: why these choices
 
 Every dependency in CodeLore was picked for a specific reason. The short version:
@@ -1020,7 +1115,7 @@ Every dependency in CodeLore was picked for a specific reason. The short version
 
 - **No async runtime** — workload is CPU-bound batch; an async runtime would add binary size and `Send` constraints for no measurable throughput gain.
 - **No libgit2** — gix already does everything we need, and pure-Rust matters for our supply chain story.
-- **No LLM** — we're transparency-first. CodeScene's ML hotspot ranking is the opposite of what we ship. (LLM-based bug-link induction is a long-horizon research item with a pluggable interface.)
+- **No LLM in the scoring path** — we're transparency-first. CodeScene's ML hotspot ranking is the opposite of what we ship: every score is a published deterministic formula. The opt-in advisory narrative layer (§8.5) sits strictly outside the scoring path — it reads the analyses' outputs, never feeds them, and a structural guard test enforces that one-way arrow.
 - **No web UI** — explicitly out-of-scope. Power users want SQL access to the fact store and SARIF in their existing CI dashboard; both are first-class outputs.
 
 ## 10. Performance characteristics
@@ -1272,7 +1367,7 @@ The `max_findings_in_hot_files` gate fails when the number of `act-now` rows exc
 
 ## 11.9. MCP server (`codelore mcp`)
 
-`codelore mcp --repo <path>` starts a Model Context Protocol server over stdio. AI agents connect to it and call the tools below; the server answers using the same persistent fact store the CLI uses. It is **fully local** — no account, no API key, no telemetry, no network access.
+`codelore mcp --repo <path>` starts a Model Context Protocol server over stdio. AI agents connect to it and call the tools below; the server answers using the same persistent fact store the CLI uses. It is **fully local** — no account, no API key, no telemetry, no network access. The single exception is opt-in: when the operator configures an LLM endpoint through the `CODELORE_LLM_*` environment (see [§8.5](#85-llm-enrichment-advisory-narratives)), the `explain_file` tool additionally requests an advisory narrative from that endpoint; with nothing configured it stays offline like every other tool.
 
 ### Starting the server
 
@@ -1391,9 +1486,20 @@ Parameters: none.
 
 Cost: warm-cache fast after `ingest-sarif`; does not trigger history re-ingest.
 
+#### `explain_file`
+
+Returns the same per-file evidence surface as `codelore explain <path>` ([§8.5](#85-llm-enrichment-advisory-narratives)). `fact_sheet` is always present: the ordered analysis sections (code-health, biomarkers, hotspots, coupling, ownership, functions, import cycles, and defect evidence where calibrated) as an array of `{section, facts}` objects preserving the dossier's order.
+
+When the server's environment has an LLM configured (the `CODELORE_LLM_*` variables, §8.5), the response also carries a grounded advisory `narrative` with its `model` id and a `grounded` citation-check verdict. When it does not — or when the request fails — a `narrative_error` field is returned instead. The fact sheet is always returned and the tool call never fails because the LLM is unavailable, so agents without a configured endpoint still receive structured evidence to narrate themselves.
+
+Parameters:
+- `path` *(required, string)* — file path relative to the repo root (e.g. `src/main.rs`).
+
+Cost: warm-cache fast for the fact sheet; cold-cache triggers ingest. With an LLM configured, a cache-miss narrative adds one model round-trip (the narrative sidecar cache makes repeat calls on unchanged evidence free).
+
 ### Architecture note
 
-Each tool call opens its own `FactsDb` connection via the warm-cache path. This is intentional: `duckdb::Connection` is `!Send + !Sync` and cannot cross thread or async boundaries, so each call runs entirely on a dedicated blocking thread (`tokio::task::spawn_blocking`) from connection open to result serialization. The connection is dropped before the future resolves. All tools are read-only; no tool modifies the repository or the fact store.
+Each tool call opens its own `FactsDb` connection via the warm-cache path. This is intentional: `duckdb::Connection` is `!Send + !Sync` and cannot cross thread or async boundaries, so each call runs entirely on a dedicated blocking thread (`tokio::task::spawn_blocking`) from connection open to result serialization. The connection is dropped before the future resolves. All tools are read-only with respect to the repository and the fact store; the only write any tool performs is `explain_file` persisting its advisory narrative to the best-effort enrichment sidecar cache.
 
 ### Troubleshooting
 
