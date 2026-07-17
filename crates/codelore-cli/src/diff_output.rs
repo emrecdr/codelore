@@ -40,17 +40,22 @@ fn risk_str(c: Option<RiskClass>) -> &'static str {
 /// matches the `check` recipe. It must NOT be the worktree path that
 /// `db_opts`'s `Options` carries: that is a per-run tempdir already removed by
 /// the time this runs.
+///
+/// `narrative` carries the optional advisory LLM narrative as `(text, stamp)`.
+/// It is rendered only for the `text` and `markdown` formats and never affects
+/// the deterministic `json`/`sarif` payloads; pass `None` to omit it.
 pub fn emit(
     out: &mut dyn Write,
     output: &DiffOutput,
     format: &str,
     repo_root: &std::path::Path,
     db_opts: Option<(&FactsDb, &Options)>,
+    narrative: Option<(String, String)>,
 ) -> Result<()> {
     match format {
-        "text" => emit_text(out, output),
+        "text" => emit_text(out, output, narrative),
         "json" => emit_json(out, output),
-        "markdown" => emit_markdown(out, output),
+        "markdown" => emit_markdown(out, output, narrative),
         "sarif" => emit_sarif(out, output, repo_root, db_opts),
         other => {
             anyhow::bail!("unknown --format {other:?} for diff; valid: text, json, markdown, sarif")
@@ -59,7 +64,11 @@ pub fn emit(
 }
 
 #[allow(clippy::too_many_lines)] // long but linear: renders gate/hotspot/coupling/clone sections in fixed order; splitting would scatter the section sequence
-fn emit_text(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
+fn emit_text(
+    out: &mut dyn Write,
+    output: &DiffOutput,
+    narrative: Option<(String, String)>,
+) -> Result<()> {
     writeln!(
         out,
         "CodeLore diff — {} {} {} ({} files changed)",
@@ -207,6 +216,13 @@ fn emit_text(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
         }
     }
 
+    if let Some((text, stamp)) = narrative {
+        writeln!(out)?;
+        writeln!(out, "── LLM narrative (advisory) ──")?;
+        writeln!(out, "{text}")?;
+        writeln!(out, "{stamp}")?;
+    }
+
     Ok(())
 }
 
@@ -216,7 +232,11 @@ fn emit_json(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
 }
 
 #[allow(clippy::too_many_lines)] // long but linear: renders each markdown section in fixed order; splitting would break the section structure
-fn emit_markdown(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
+fn emit_markdown(
+    out: &mut dyn Write,
+    output: &DiffOutput,
+    narrative: Option<(String, String)>,
+) -> Result<()> {
     writeln!(out, "# CodeLore PR Analysis")?;
     writeln!(out)?;
     writeln!(
@@ -399,7 +419,18 @@ fn emit_markdown(out: &mut dyn Write, output: &DiffOutput) -> Result<()> {
         writeln!(out)?;
     }
 
-    if output.hotspots.rank_entrants.is_empty()
+    let has_narrative = narrative.is_some();
+    if let Some((text, stamp)) = narrative {
+        writeln!(out, "## LLM narrative (advisory)")?;
+        writeln!(out)?;
+        writeln!(out, "{text}")?;
+        writeln!(out)?;
+        writeln!(out, "_{stamp}_")?;
+        writeln!(out)?;
+    }
+
+    if !has_narrative
+        && output.hotspots.rank_entrants.is_empty()
         && output.hotspots.score_increased.is_empty()
         && output.coupling_absences.is_empty()
         && output.clones.new_families.is_empty()

@@ -2989,3 +2989,614 @@ fn cycle_health_csv_has_header() {
             "cycle-id,size,members,heat-pct,verdict,extract-candidate,predicted-pc-drop",
         ));
 }
+
+/// End-to-end coverage for `explain <path>` — the deterministic per-file
+/// evidence dossier and its opt-in `--llm` advisory narrative. The dossier
+/// branch needs no network; the `--llm` cases point the client at a
+/// test-local one-shot HTTP server so nothing touches an external endpoint.
+mod explain_path {
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::path::Path;
+    use std::thread;
+
+    use assert_cmd::Command;
+    use predicates::prelude::*;
+
+    /// The LLM environment variables the dossier surface reads. Cleared on every
+    /// spawned CLI so an ambient developer configuration can never leak into a
+    /// test's resolution. Shared with the `diff --llm` tests.
+    pub(crate) const LLM_ENV_VARS: &[&str] = &[
+        "CODELORE_LLM_PROVIDER",
+        "CODELORE_LLM_BASE_URL",
+        "CODELORE_LLM_API_KEY",
+        "CODELORE_LLM_MODEL",
+        "ANTHROPIC_API_KEY",
+    ];
+
+    /// Run `analyze code-health` (with `--min-revs 1`, matching the dossier
+    /// branch) over the fixture and return the worst-scoring file's repo-relative
+    /// path and code-health band. Deriving the target from the same engine the
+    /// dossier uses keeps the assertions robust to fixture regeneration.
+    fn code_health_worst_row(repo: &Path, cache: &Path) -> (String, String) {
+        let out = Command::cargo_bin("codelore")
+            .unwrap()
+            .args([
+                "analyze",
+                "--analysis",
+                "code-health",
+                "--repo",
+                repo.to_str().unwrap(),
+                "--cache-dir",
+                cache.to_str().unwrap(),
+                "--min-revs",
+                "1",
+                "--format",
+                "csv",
+            ])
+            .output()
+            .expect("run code-health");
+        assert!(
+            out.status.success(),
+            "code-health failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stdout = String::from_utf8(out.stdout).expect("utf8 code-health output");
+        let row = stdout
+            .lines()
+            .nth(1)
+            .expect("code-health yields at least one row for the fixture");
+        let fields: Vec<&str> = row.split(',').collect();
+        // Header: entity,cognitive,score,structural_risk,percentile,band,corpus-pct
+        (fields[0].to_string(), fields[5].to_string())
+    }
+
+    /// Every code-health entity path (one row per file), in engine order, for
+    /// tests that need two distinct files from the fixture.
+    fn code_health_entity_paths(repo: &Path, cache: &Path) -> Vec<String> {
+        let out = Command::cargo_bin("codelore")
+            .unwrap()
+            .args([
+                "analyze",
+                "--analysis",
+                "code-health",
+                "--repo",
+                repo.to_str().unwrap(),
+                "--cache-dir",
+                cache.to_str().unwrap(),
+                "--min-revs",
+                "1",
+                "--format",
+                "csv",
+            ])
+            .output()
+            .expect("run code-health");
+        assert!(
+            out.status.success(),
+            "code-health failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stdout = String::from_utf8(out.stdout).expect("utf8 code-health output");
+        stdout
+            .lines()
+            .skip(1)
+            .filter_map(|line| line.split(',').next())
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// Spawn a one-shot HTTP server on an ephemeral localhost port that answers a
+    /// single OpenAI-compatible `/chat/completions` request with `narrative` as
+    /// the assistant message, then exits. Returns the bound base URL. `narrative`
+    /// must be free of `"`, `\`, and newlines so it embeds directly in the JSON.
+    pub(crate) fn serve_one_completion(narrative: &str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let base = format!("http://{}", listener.local_addr().expect("local addr"));
+        let body = format!(
+            "{{\"choices\":[{{\"message\":{{\"role\":\"assistant\",\"content\":\"{narrative}\"}}}}]}}"
+        );
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept connection");
+            drain_request(&mut stream);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response");
+            stream.flush().ok();
+        });
+        base
+    }
+
+    /// Read the request up to the end of its headers, then consume any declared
+    /// body, so the client's `POST` fully completes before we reply.
+    fn drain_request(stream: &mut TcpStream) {
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 1024];
+        let header_end = loop {
+            if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                break pos + 4;
+            }
+            let n = stream.read(&mut chunk).expect("read request headers");
+            if n == 0 {
+                return;
+            }
+            buf.extend_from_slice(&chunk[..n]);
+        };
+        let head = String::from_utf8_lossy(&buf[..header_end]).into_owned();
+        let content_length = head
+            .split("\r\n")
+            .filter_map(|line| line.split_once(':'))
+            .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+            .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+            .unwrap_or(0);
+        let mut body_read = buf.len() - header_end;
+        while body_read < content_length {
+            let n = stream.read(&mut chunk).expect("read request body");
+            if n == 0 {
+                break;
+            }
+            body_read += n;
+        }
+    }
+
+    #[test]
+    fn explain_known_topic_still_prints_topic_text() {
+        // Contract 1: a known topic is looked up first and prints byte-for-byte
+        // what it always did — the new file-path branch never runs.
+        Command::cargo_bin("codelore")
+            .unwrap()
+            .args(["explain", "hotspots"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("# hotspots"))
+            .stdout(predicate::str::contains("**Citation**"))
+            .stdout(predicate::str::contains("**Formula**"));
+    }
+
+    #[test]
+    fn explain_file_prints_dossier_without_network() {
+        let fx = codelore_lib::test_support::biomarker_repo::build();
+        let cache = tempfile::tempdir().expect("cache dir");
+        let (target, band) = code_health_worst_row(fx.dir.path(), cache.path());
+
+        let mut cmd = Command::cargo_bin("codelore").unwrap();
+        for var in LLM_ENV_VARS {
+            cmd.env_remove(var);
+        }
+        cmd.args([
+            "explain",
+            &target,
+            "--repo",
+            fx.dir.path().to_str().unwrap(),
+            "--cache-dir",
+            cache.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("code-health"))
+        .stdout(predicate::str::contains(band.as_str()))
+        .stdout(predicate::str::contains(target.as_str()));
+    }
+
+    #[test]
+    fn explain_unknown_arg_errors_naming_topics_and_files() {
+        let fx = codelore_lib::test_support::biomarker_repo::build();
+        Command::cargo_bin("codelore")
+            .unwrap()
+            .args([
+                "explain",
+                "definitely-not-a-topic-or-file",
+                "--repo",
+                fx.dir.path().to_str().unwrap(),
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("topic"))
+            .stderr(predicate::str::contains("file"));
+    }
+
+    #[test]
+    fn explain_file_llm_prints_narrative_and_stamp() {
+        let fx = codelore_lib::test_support::biomarker_repo::build();
+        let cache = tempfile::tempdir().expect("cache dir");
+        let (target, _band) = code_health_worst_row(fx.dir.path(), cache.path());
+
+        let narrative = "Diagnosis: the evidence indicates this file is structurally healthy.";
+        let base = serve_one_completion(narrative);
+
+        let mut cmd = Command::cargo_bin("codelore").unwrap();
+        for var in LLM_ENV_VARS {
+            cmd.env_remove(var);
+        }
+        // Force the OpenAI-compatible dialect at the local test server so
+        // resolution is deterministic regardless of the developer's environment.
+        cmd.env("CODELORE_LLM_PROVIDER", "openai-compat")
+            .env("CODELORE_LLM_BASE_URL", &base)
+            .env("CODELORE_LLM_MODEL", "test-model")
+            .args([
+                "explain",
+                &target,
+                "--llm",
+                "--repo",
+                fx.dir.path().to_str().unwrap(),
+                "--cache-dir",
+                cache.path().to_str().unwrap(),
+            ])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(narrative))
+            .stdout(predicate::str::contains("advisory — model"))
+            .stdout(predicate::str::contains("test-model"));
+    }
+
+    #[test]
+    fn explain_file_llm_without_config_errors_naming_setup_vars() {
+        let fx = codelore_lib::test_support::biomarker_repo::build();
+        let cache = tempfile::tempdir().expect("cache dir");
+        let (target, _band) = code_health_worst_row(fx.dir.path(), cache.path());
+
+        let mut cmd = Command::cargo_bin("codelore").unwrap();
+        for var in LLM_ENV_VARS {
+            cmd.env_remove(var);
+        }
+        cmd.args([
+            "explain",
+            &target,
+            "--llm",
+            "--repo",
+            fx.dir.path().to_str().unwrap(),
+            "--cache-dir",
+            cache.path().to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("CODELORE_LLM_MODEL"));
+    }
+
+    #[test]
+    fn explain_file_staleness_note_is_scoped_to_the_explained_file() {
+        // Regression: narrating file B must not make explaining a never-narrated
+        // file A print a staleness note. The note is scoped to A's own subject,
+        // and A has no narrative of its own, so no note may appear.
+        let fx = codelore_lib::test_support::biomarker_repo::build();
+        let cache = tempfile::tempdir().expect("cache dir");
+        let paths = code_health_entity_paths(fx.dir.path(), cache.path());
+        let file_b = &paths[0];
+        let file_a = paths
+            .iter()
+            .find(|p| *p != file_b)
+            .expect("fixture yields at least two distinct files");
+
+        // Narrate file B through the local test server so a narrative is cached
+        // for B's subject in this cache root.
+        let base = serve_one_completion("Diagnosis: file B looks structurally healthy.");
+        let mut narrate_b = Command::cargo_bin("codelore").unwrap();
+        for var in LLM_ENV_VARS {
+            narrate_b.env_remove(var);
+        }
+        narrate_b
+            .env("CODELORE_LLM_PROVIDER", "openai-compat")
+            .env("CODELORE_LLM_BASE_URL", &base)
+            .env("CODELORE_LLM_MODEL", "test-model")
+            .args([
+                "explain",
+                file_b,
+                "--llm",
+                "--repo",
+                fx.dir.path().to_str().unwrap(),
+                "--cache-dir",
+                cache.path().to_str().unwrap(),
+            ])
+            .assert()
+            .success();
+
+        // Explain file A without --llm over the same cache root: it has no
+        // narrative of its own, so the staleness note must not appear.
+        let mut explain_a = Command::cargo_bin("codelore").unwrap();
+        for var in LLM_ENV_VARS {
+            explain_a.env_remove(var);
+        }
+        explain_a
+            .args([
+                "explain",
+                file_a,
+                "--repo",
+                fx.dir.path().to_str().unwrap(),
+                "--cache-dir",
+                cache.path().to_str().unwrap(),
+            ])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("stale").not());
+    }
+}
+
+/// End-to-end coverage for `diff --llm` — the opt-in, degrade-gracefully
+/// advisory PR narrative. The deterministic diff output, its gate verdict, and
+/// its exit code must be identical with or without the flag; the narrative is
+/// appended only as a delimited advisory block. The `--llm` cases point the
+/// client at the same test-local one-shot HTTP server the `explain` tests use so
+/// nothing touches an external endpoint.
+mod diff_llm {
+    use assert_cmd::Command;
+
+    use crate::explain_path::{LLM_ENV_VARS, serve_one_completion};
+
+    #[test]
+    fn diff_without_llm_has_no_advisory_block() {
+        let (dir, base, head) = super::delta_health_fixture();
+        let mut cmd = Command::cargo_bin("codelore").unwrap();
+        for var in LLM_ENV_VARS {
+            cmd.env_remove(var);
+        }
+        let out = cmd
+            .args([
+                "diff",
+                "--repo",
+                dir.path().to_str().unwrap(),
+                "--min-revs",
+                "1",
+                "--format",
+                "text",
+                &format!("{base}..{head}"),
+            ])
+            .output()
+            .expect("run diff without --llm");
+        assert!(
+            out.status.success(),
+            "diff without --llm should succeed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stdout = String::from_utf8(out.stdout).expect("utf8 diff output");
+        assert!(
+            !stdout.contains("LLM narrative"),
+            "no advisory block without --llm: {stdout}"
+        );
+    }
+
+    #[test]
+    fn diff_llm_appends_advisory_block_and_preserves_exit_code() {
+        let (dir, base, head) = super::delta_health_fixture();
+        let repo = dir.path().to_str().unwrap().to_string();
+        let range = format!("{base}..{head}");
+
+        // Baseline: the no-flag run establishes the exit code the --llm run must
+        // reproduce (the narrative is advisory and must not move it).
+        let mut baseline_cmd = Command::cargo_bin("codelore").unwrap();
+        for var in LLM_ENV_VARS {
+            baseline_cmd.env_remove(var);
+        }
+        let baseline = baseline_cmd
+            .args([
+                "diff",
+                "--repo",
+                &repo,
+                "--min-revs",
+                "1",
+                "--format",
+                "text",
+                &range,
+            ])
+            .output()
+            .expect("baseline diff");
+        assert!(baseline.status.success());
+
+        let narrative = "This change adds a large branchy function that degrades change health.";
+        let base_url = serve_one_completion(narrative);
+
+        // --llm-refresh forces the server round-trip: diff has no --cache-dir, so
+        // it shares the default narrative cache; refreshing keeps the assertion
+        // hermetic against any pre-existing cached narrative for this fact sheet.
+        let mut cmd = Command::cargo_bin("codelore").unwrap();
+        for var in LLM_ENV_VARS {
+            cmd.env_remove(var);
+        }
+        let out = cmd
+            .env("CODELORE_LLM_PROVIDER", "openai-compat")
+            .env("CODELORE_LLM_BASE_URL", &base_url)
+            .env("CODELORE_LLM_MODEL", "test-model")
+            .args([
+                "diff",
+                "--repo",
+                &repo,
+                "--min-revs",
+                "1",
+                "--format",
+                "text",
+                "--llm",
+                "--llm-refresh",
+                &range,
+            ])
+            .output()
+            .expect("run diff --llm");
+        assert!(
+            out.status.success(),
+            "diff --llm should succeed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            out.status.code(),
+            baseline.status.code(),
+            "the advisory narrative must not change the exit code"
+        );
+        let stdout = String::from_utf8(out.stdout).expect("utf8 diff output");
+        assert!(
+            stdout.contains("LLM narrative (advisory)"),
+            "advisory block present: {stdout}"
+        );
+        assert!(
+            stdout.contains(narrative),
+            "the served narrative is rendered: {stdout}"
+        );
+        assert!(
+            stdout.contains("advisory — model"),
+            "the citation-check stamp is rendered: {stdout}"
+        );
+        assert!(
+            stdout.contains("test-model"),
+            "the stamp names the model: {stdout}"
+        );
+    }
+
+    #[test]
+    fn diff_llm_without_config_warns_and_leaves_output_identical() {
+        let (dir, base, head) = super::delta_health_fixture();
+        let repo = dir.path().to_str().unwrap().to_string();
+        let range = format!("{base}..{head}");
+
+        let mut baseline_cmd = Command::cargo_bin("codelore").unwrap();
+        for var in LLM_ENV_VARS {
+            baseline_cmd.env_remove(var);
+        }
+        let baseline = baseline_cmd
+            .args([
+                "diff",
+                "--repo",
+                &repo,
+                "--min-revs",
+                "1",
+                "--format",
+                "text",
+                &range,
+            ])
+            .output()
+            .expect("baseline diff");
+        assert!(baseline.status.success());
+
+        // --llm with no LLM environment: resolution fails, the failure is a
+        // stderr warning, and stdout + exit code are byte-identical to the
+        // no-flag run.
+        let mut cmd = Command::cargo_bin("codelore").unwrap();
+        for var in LLM_ENV_VARS {
+            cmd.env_remove(var);
+        }
+        let out = cmd
+            .args([
+                "diff",
+                "--repo",
+                &repo,
+                "--min-revs",
+                "1",
+                "--format",
+                "text",
+                "--llm",
+                &range,
+            ])
+            .output()
+            .expect("run diff --llm without config");
+        assert_eq!(
+            out.status.code(),
+            baseline.status.code(),
+            "an unavailable narrative must not change the exit code"
+        );
+        assert_eq!(
+            out.stdout, baseline.stdout,
+            "an unavailable narrative must leave stdout identical to the no-flag run"
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("llm narrative unavailable"),
+            "the degrade-gracefully warning is on stderr: {stderr}"
+        );
+    }
+}
+
+/// Scope guard for the advisory `--llm` flag: it exists only on the surfaces
+/// that render narratives (`explain`, `diff`). The scored surfaces (`analyze`,
+/// `check`) must reject it at the parser, so the flag can never even be spelled
+/// on a command whose output feeds gates or CI.
+mod llm_flag_scope {
+    use assert_cmd::Command;
+    use predicates::prelude::*;
+
+    #[test]
+    fn analyze_rejects_the_llm_flag_at_the_parser() {
+        Command::cargo_bin("codelore")
+            .unwrap()
+            .args(["analyze", "--analysis", "hotspots", "--llm", "--repo", "."])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("unexpected argument"))
+            .stderr(predicate::str::contains("--llm"));
+    }
+
+    #[test]
+    fn check_rejects_the_llm_flag_at_the_parser() {
+        Command::cargo_bin("codelore")
+            .unwrap()
+            .args(["check", "--repo", ".", "--llm"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("unexpected argument"))
+            .stderr(predicate::str::contains("--llm"));
+    }
+}
+
+/// Manual-only live check against a local ollama. Run with:
+///
+/// ```text
+/// CODELORE_LLM_MODEL=<model from `ollama list`> \
+///   cargo test -p codelore-cli --test cli_test -- --ignored explain_file_llm_live
+/// ```
+///
+/// Ignored by default: CI performs no live network calls, and the assertion
+/// depends on a developer-local model server at the default base URL.
+#[test]
+#[ignore = "requires a running local ollama and CODELORE_LLM_MODEL set"]
+fn explain_file_llm_live_against_local_ollama() {
+    let model = std::env::var("CODELORE_LLM_MODEL")
+        .expect("set CODELORE_LLM_MODEL to a model name from `ollama list` for the live check");
+    let fx = codelore_lib::test_support::biomarker_repo::build();
+    let cache = tempfile::tempdir().expect("cache dir");
+
+    // Resolve a real dossier target the same way the hermetic explain tests do.
+    let out = Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "analyze",
+            "--analysis",
+            "code-health",
+            "--repo",
+            fx.dir.path().to_str().unwrap(),
+            "--cache-dir",
+            cache.path().to_str().unwrap(),
+            "--min-revs",
+            "1",
+            "--format",
+            "csv",
+        ])
+        .output()
+        .expect("run code-health");
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).expect("utf8 code-health output");
+    let target = stdout
+        .lines()
+        .nth(1)
+        .and_then(|row| row.split(',').next())
+        .expect("code-health yields at least one row")
+        .to_string();
+
+    let mut cmd = Command::cargo_bin("codelore").unwrap();
+    for var in explain_path::LLM_ENV_VARS {
+        cmd.env_remove(var);
+    }
+    cmd.env("CODELORE_LLM_PROVIDER", "openai-compat")
+        .env("CODELORE_LLM_MODEL", &model)
+        .args([
+            "explain",
+            &target,
+            "--llm",
+            "--llm-refresh",
+            "--repo",
+            fx.dir.path().to_str().unwrap(),
+            "--cache-dir",
+            cache.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("advisory — model"))
+        .stdout(predicate::str::contains(model.as_str()));
+}

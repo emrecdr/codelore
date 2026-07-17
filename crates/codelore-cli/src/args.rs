@@ -243,12 +243,38 @@ pub struct CompletionsArgs {
     pub shell: clap_complete::Shell,
 }
 
-/// Metric / analysis explanation.
+/// Metric / analysis explanation, or a per-file evidence dossier.
 #[derive(clap::Args, Debug)]
 pub struct ExplainArgs {
-    /// Name of the metric or analysis to explain. Pass without an
-    /// argument to list every supported topic.
+    /// Name of the metric or analysis to explain, or a path to a tracked
+    /// source file. A known topic prints its formula and citations; an
+    /// existing file path (resolved under `--repo`) prints that file's
+    /// deterministic evidence dossier. Pass without an argument to list
+    /// every supported topic.
     pub topic: Option<String>,
+
+    /// Path to the git repo used to resolve a file-path argument and load its
+    /// facts (default: cwd). Ignored when the argument names a known topic.
+    #[arg(long, default_value = ".")]
+    pub repo: PathBuf,
+
+    /// Append an advisory, LLM-generated narrative to a file dossier, grounded
+    /// in the fact sheet and stamped with a citation-check verdict. Requires an
+    /// LLM endpoint configured through the `CODELORE_LLM_*` environment
+    /// (local-first by default). No effect when the argument names a topic.
+    #[arg(long)]
+    pub llm: bool,
+
+    /// Regenerate the LLM narrative even when a cached one exists, replacing the
+    /// sidecar cache entry. Only meaningful together with `--llm`.
+    #[arg(long)]
+    pub llm_refresh: bool,
+
+    /// Override the XDG cache root for the persistent fact-store and the
+    /// advisory narrative sidecar. Defaults to `$XDG_CACHE_HOME/codelore` (or
+    /// the OS equivalent).
+    #[arg(long)]
+    pub cache_dir: Option<PathBuf>,
 }
 
 /// JSON Schema export.
@@ -742,4 +768,20 @@ pub struct DiffArgs {
     /// exit (overriding `--fail-on=none`).
     #[arg(long)]
     pub thresholds_file: Option<PathBuf>,
+
+    /// Append an advisory, LLM-generated PR narrative to the diff, grounded in a
+    /// deterministic fact sheet of the run's deltas and stamped with a
+    /// citation-check verdict. Advisory only: the narrative never changes the
+    /// deterministic findings, the gate verdict, or the exit code, and any
+    /// failure to produce it is a stderr warning, not an error. Rendered for
+    /// `text` and `markdown` output only; ignored for `json`/`sarif`. Requires
+    /// an LLM endpoint configured through the `CODELORE_LLM_*` environment
+    /// (local-first by default).
+    #[arg(long)]
+    pub llm: bool,
+
+    /// Regenerate the LLM narrative even when a cached one exists, replacing the
+    /// sidecar cache entry. Only meaningful together with `--llm`.
+    #[arg(long)]
+    pub llm_refresh: bool,
 }

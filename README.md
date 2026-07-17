@@ -58,6 +58,7 @@ What separates CodeLore from code-maat, CodeScene, and jscpd:
 - **🧬 Structure × history fusion.** The import graph and the change-coupling graph are analyzed *together*, not side by side: `modularity-violations` flags file pairs that always change together with **no** import edge between them, `unstable-interface` and `crossing` find dependency shapes that drag their dependents, `cycle-health` ranks every import tangle by behavioral heat — live vs fossil, with a suggested extraction point and its predicted propagation-cost drop — and the dashboard's dependency matrix has a Fusion mode that classifies every cell by structure×history agreement.
 - **📋 Behavioral SARIF.** Findings land natively in **SARIF 2.1.0**: `CODELORE-HOTSPOT`, `CODELORE-CLONE`, and `CODELORE-LIVE-CLONE` in analyze mode, `CODELORE-MISSING-COCHANGE` and `CODELORE-DELTA-HEALTH` on PR diffs, and per-gate rules with commit evidence chains from `codelore check`. Drop them straight into GitHub Code Scanning, GitLab security dashboards, or Defectdojo and alerts appear inline on pull requests.
 - **🔍 Transparency over opaque ML.** CodeScene's hotspot ranking is a closed ML model. CodeLore ranks with a **published deterministic formula**: `percentile_rank(revisions) × percentile_rank(cognitive_complexity) × (100 − code_health) / 4`. Every input is emitted alongside the score; anyone can reproduce it.
+- **🗣️ Grounded LLM narratives (opt-in, local-first).** `codelore explain <path>` prints a deterministic per-file evidence dossier — free, offline, no LLM. Add `--llm` (or `diff --llm` for a PR narrative) and a model turns that dossier into a diagnosis and refactoring direction, with a **citation check** verifying every number it quotes against the evidence and stamping the result `grounded ✓` or `⚠ contains uncited claims`. Local-first: the default endpoint is a local ollama, keys are env-only and never persisted, and the advisory layer can never touch a score, gate verdict, or exit code.
 - **🧾 Provenance manifest.** Every run emits a `.provenance.json` sidecar recording every config knob (auto-derived via canonical Options serialization — adding a new field auto-propagates), version pin, and timestamp. Reproducibility receipt for the run; eliminates the "we got different numbers because we silently used different thresholds" failure mode.
 - **💾 SQL-queryable fact store.** No proprietary format lock-in. Export the full DuckDB store as Parquet or SQLite and query your git history as a database from the command line.
 - **⚡ Persistent cache.** Second invocation on the same `(repo, HEAD, options)` opens read-only in ~10 ms instead of re-walking history — typically a 10-100× speedup on the dev inner loop depending on repo size, and the foundation of the `codelore diff` PR-mode subcommand.
@@ -175,6 +176,7 @@ In addition to `codelore analyze` and `codelore diff`, the CLI exposes:
 
 ```bash
 codelore explain <metric>           # formula + citation + SQL source for any metric
+codelore explain <path>             # per-file evidence dossier; --llm adds a grounded advisory narrative
 codelore check                      # quality-gate validation against .codelore-thresholds.toml
 codelore diff base..head            # PR-mode diff and quality gate
 codelore mcp --repo <path>          # MCP server over stdio for AI agent integration
@@ -421,6 +423,7 @@ Cache the base-rev analysis with `--base-cache PATH` to halve dual-analysis cost
 | `function_xray` | Per-function change-frequency and complexity for a given file `path` |
 | `check_gates` | Evaluates `.codelore-thresholds.toml` quality gates at HEAD; returns verdict + violations |
 | `finding_hotspot_overlap` | Behavioral×static fusion: external SARIF findings joined with hotspot rank and code-health band; each row carries an `act-now` / `plan` / `note` priority. Returns a structured `note` when the sidecar is absent |
+| `explain_file` | Per-file evidence dossier (`fact_sheet`, always returned) plus — only when the server environment configures an LLM via `CODELORE_LLM_*` — a grounded advisory `narrative` with a citation-check verdict; without one, `narrative_error` is set and the call still succeeds |
 
 **Fully local — no account, no network, no telemetry.** The server reads the repository at the path you configure and answers tool calls using the same fact store that powers the CLI. The first call on a cold cache pays the one-time ingest cost (a few seconds to a couple of minutes depending on repo size); subsequent calls in the same session use the warm cache and return in milliseconds.
 
