@@ -995,7 +995,7 @@ Eviction: 5 entries per repo + 2 GB global cap (LRU). Pruning runs after every s
 
 The cache key includes `head_sha` but NOT the working tree. That's correct for analyses that read only committed history (`revisions`, `coupling`, `ownership`, `churn`, `messages`, ...), but `hotspots`-style HEAD-time metrics computed by `ingest_complexity_at_head` and `populate_clones_at_head` read files from disk at ingest time. If you change files without committing and then re-run codelore, the cache hits on `head_sha` — and you get the previous run's metrics computed from the previous worktree state, not your current edits.
 
-To surface this, codelore emits a `tracing::warn!` whenever a cache hit lands on a working tree with uncommitted modifications or untracked Tier-1 source files:
+To surface this, codelore emits a `tracing::warn!` whenever a cache hit lands on a working tree with uncommitted changes to a tracked file (untracked files don't count — they can't affect a HEAD-time scan):
 
 ```
 WARN cache hit on a working tree with uncommitted changes; HEAD-time metrics
@@ -1003,7 +1003,7 @@ WARN cache hit on a working tree with uncommitted changes; HEAD-time metrics
      Pass `--no-cache` to recompute against the current working tree.
 ```
 
-Detection is cheap (gix `Repository::status` for the pure-Rust walker, `git status --porcelain` for the CLI walker). Pass `--no-cache` if the dirty state matters for your analysis. The warning is informational — codelore still serves the cached result by default to preserve the 10–100× speedup on clean repeated runs. Auto-invalidation via worktree-content hashing was considered and rejected: hashing every tracked file on every invocation costs 100ms–1s on large trees, which would erase the cache's perf win for the majority case where the cache is correct.
+Detection is cheap (gix `Repository::is_dirty` for the pure-Rust walker, `git status --porcelain --untracked-files=no` for the CLI walker). Pass `--no-cache` if the dirty state matters for your analysis. The warning is informational — codelore still serves the cached result by default to preserve the 10–100× speedup on clean repeated runs. Auto-invalidation via worktree-content hashing was considered and rejected: hashing every tracked file on every invocation costs 100ms–1s on large trees, which would erase the cache's perf win for the majority case where the cache is correct.
 
 ## 8.5. LLM enrichment (advisory narratives)
 

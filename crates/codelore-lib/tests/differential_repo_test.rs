@@ -9,6 +9,7 @@ use codelore_lib::test_support::delivery_repo::DeliveryRepo;
 use codelore_lib::test_support::differential_repo::DifferentialRepo;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::OnceLock;
 
 // ---------------------------------------------------------------------------
@@ -549,6 +550,87 @@ fn is_worktree_dirty_matches_on_fresh_clone() {
     assert_eq!(
         gix_dirty, cli_dirty,
         "GixRepo and GitCliRepo disagree on worktree-dirty for a freshly-cloned fixture",
+    );
+}
+
+/// An untracked file must never mark the tree dirty in either backend —
+/// HEAD-time metrics (`complexity`, `clones`) are computed over
+/// `tracked_paths_at_head()` only, so a stray untracked file (e.g. a
+/// screenshot dropped in the repo root) cannot affect them and must not
+/// trip the `calibrate-defects` mining guard or suppress the persistent
+/// cache. Each test below clones its own fixture copy (rather than the
+/// shared `fixture_path()`) because it mutates the worktree.
+#[test]
+fn is_worktree_dirty_ignores_untracked_file() {
+    let repo = codelore_lib::test_support::differential_repo::build();
+    let path = repo.dir.path();
+    std::fs::write(path.join("untracked_scratch.txt"), b"scratch\n").expect("write untracked file");
+
+    let gix = GixRepo::open(path).expect("GixRepo::open");
+    let cli = GitCliRepo::open(path).expect("GitCliRepo::open");
+    let gix_dirty = gix.is_worktree_dirty();
+    let cli_dirty = cli.is_worktree_dirty();
+
+    assert!(
+        !gix_dirty,
+        "an untracked-only worktree must report clean per GixRepo",
+    );
+    assert_eq!(
+        gix_dirty, cli_dirty,
+        "GixRepo and GitCliRepo disagree on an untracked-only worktree",
+    );
+}
+
+/// Editing a tracked file without staging it (worktree vs. index differ)
+/// must mark both backends dirty.
+#[test]
+fn is_worktree_dirty_detects_unstaged_tracked_modification() {
+    let repo = codelore_lib::test_support::differential_repo::build();
+    let path = repo.dir.path();
+    std::fs::write(path.join("README.md"), b"unstaged edit\n").expect("edit tracked file");
+
+    let gix = GixRepo::open(path).expect("GixRepo::open");
+    let cli = GitCliRepo::open(path).expect("GitCliRepo::open");
+    let gix_dirty = gix.is_worktree_dirty();
+    let cli_dirty = cli.is_worktree_dirty();
+
+    assert!(
+        gix_dirty,
+        "an unstaged edit to a tracked file must mark GixRepo dirty",
+    );
+    assert_eq!(
+        gix_dirty, cli_dirty,
+        "GixRepo and GitCliRepo disagree on an unstaged tracked-file modification",
+    );
+}
+
+/// Staging a tracked-file edit (index vs. `HEAD` differ; worktree matches
+/// the index) must still mark both backends dirty.
+#[test]
+fn is_worktree_dirty_detects_staged_tracked_modification() {
+    let repo = codelore_lib::test_support::differential_repo::build();
+    let path = repo.dir.path();
+    std::fs::write(path.join("README.md"), b"staged edit\n").expect("edit tracked file");
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["add", "README.md"])
+        .status()
+        .expect("spawn git add");
+    assert!(status.success(), "git add README.md failed");
+
+    let gix = GixRepo::open(path).expect("GixRepo::open");
+    let cli = GitCliRepo::open(path).expect("GitCliRepo::open");
+    let gix_dirty = gix.is_worktree_dirty();
+    let cli_dirty = cli.is_worktree_dirty();
+
+    assert!(
+        gix_dirty,
+        "a staged edit to a tracked file must mark GixRepo dirty",
+    );
+    assert_eq!(
+        gix_dirty, cli_dirty,
+        "GixRepo and GitCliRepo disagree on a staged tracked-file modification",
     );
 }
 

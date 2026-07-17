@@ -252,33 +252,21 @@ impl Repo for GixRepo {
     }
 
     fn is_worktree_dirty(&self) -> bool {
-        // gix's `Repository::status(progress)` returns a `Platform` whose
-        // `into_iter()` yields a unified stream covering:
-        //   1. Tracked-file modifications (index vs worktree),
-        //   2. Untracked files (via the dirwalk),
-        //   3. Staged-vs-HEAD differences.
+        // Tracked-only: `Repository::is_dirty()` compares HEAD-tree-vs-index
+        // (staged) and index-vs-worktree (unstaged) while skipping the
+        // untracked-file dirwalk entirely — matching `GitCliRepo`'s
+        // `--untracked-files=no` porcelain output. Every caller (the
+        // `calibrate-defects` mining guard, the cache-hit staleness
+        // warning, the dirty cache-write skip) protects HEAD-time metrics
+        // computed over `tracked_paths_at_head()` only, so untracked files
+        // must not count.
         //
-        // Previously we used `into_index_worktree_iter` which
-        // ONLY yields (1) — it SKIPS the dirwalk and therefore reports
-        // untracked-only repos as clean. `GitCliRepo` (via
-        // `git status --porcelain`) DOES report untracked files. The
-        // backends diverged. Switching to the full `into_iter()` brings
-        // them into agreement.
-        //
-        // Errors are deliberately swallowed (`return false` on any failure):
-        // detection is a hint that triggers a tracing::warn!, not a
-        // contract. A missed warning is strictly preferable to a hard
-        // analyze failure on a status-API edge case.
+        // Errors are deliberately swallowed (`unwrap_or(false)`): detection
+        // is a hint that triggers a tracing::warn!, not a contract. A
+        // missed warning is strictly preferable to a hard analyze failure
+        // on a status-API edge case.
         let repo = self.inner.to_thread_local();
-        let Ok(platform) = repo.status(gix::progress::Discard) else {
-            return false;
-        };
-        let Ok(iter) = platform.into_iter(Vec::new()) else {
-            return false;
-        };
-        // Any single yielded item — modified, untracked, or staged — means
-        // the tree is dirty.
-        iter.flatten().next().is_some()
+        repo.is_dirty().unwrap_or(false)
     }
 
     fn read_blob_at(&self, rev: &str, path: &str) -> Result<Option<Vec<u8>>> {

@@ -46,8 +46,12 @@ pub trait Repo: Send + Sync {
     /// Used by the persistent cache to build the cache key.
     fn head_sha(&self) -> Result<String>;
 
-    /// Whether the working tree carries uncommitted modifications, untracked
-    /// Tier-1 source files, or staged-but-uncommitted changes.
+    /// Whether tracked content differs from `HEAD` — staged changes (index
+    /// vs. `HEAD`) or unstaged changes (worktree vs. index). Untracked
+    /// files are excluded: every caller (the `calibrate-defects` mining
+    /// guard, the cache-hit staleness warning, the dirty cache-write skip)
+    /// protects HEAD-time metrics computed over `tracked_paths_at_head()`
+    /// only, so an untracked file cannot affect them.
     ///
     /// Used by the persistent-cache code path to emit a `tracing::warn!`
     /// when a cache HIT occurs on a dirty tree — HEAD-time metrics

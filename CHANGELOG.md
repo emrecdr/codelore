@@ -10,6 +10,10 @@ Conventional Commits format. All notable changes documented here.
 
 - **`--defect-calibration` / `--allow-foreign-calibration` on `codelore mcp`.** The same flag pair, as a server-startup option: when set, every `explain_file` tool call in the session gets the fact sheet's `defect-evidence` section. The artifact is loaded and its repo-identity checked once at server startup — a bad path or a foreign artifact (without `--allow-foreign-calibration`) is a launch-time error, not a failure on the first tool call. Without the flag, `codelore mcp` behavior is unchanged.
 
+### Fixed
+
+- **Dirty-worktree detection no longer counts untracked files.** `calibrate-defects`'s mining guard and the persistent analysis cache's staleness warning/write-skip now treat a working tree as dirty only when a *tracked* file has staged or unstaged changes; untracked files (a stray screenshot, a build artifact) no longer block `calibrate-defects` or suppress the cache.
+
 ## [0.20.0] - 2026-07-17
 
 ### Added
