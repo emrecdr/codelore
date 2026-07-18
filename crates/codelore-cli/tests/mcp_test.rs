@@ -621,3 +621,59 @@ fn mcp_explain_file_defect_calibration_adds_defect_evidence_section() {
     drop(stdin);
     let _ = child.wait();
 }
+
+/// MCP process must exit immediately with code 4 when started with a
+/// foreign defect-calibration artifact and no `--allow-foreign-calibration`
+/// override. The foreign artifact is rejected before the tokio runtime starts,
+/// so the process never reads stdin (attempting an MCP handshake would hang).
+/// This test captures stderr to verify the error message names both the
+/// identity mismatch and the override flag.
+#[test]
+fn mcp_refuses_to_start_on_foreign_artifact_without_override() {
+    let repo = delivery_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+    let artifact_dir = tempfile::tempdir().expect("artifact dir");
+    let artifact_path = write_foreign_defect_artifact(artifact_dir.path());
+
+    // Build the Command directly, mirroring spawn_mcp_with_args's construction
+    // (mcp_test.rs:62-73) but with stderr(Stdio::piped()) to capture the error.
+    // We do NOT use spawn_mcp_with_args because its read_ndjson handshake
+    // would panic on a child that exits before writing the initialize response.
+    let bin = assert_cmd::cargo::cargo_bin("codelore");
+    let mut builder = Command::new(&bin);
+    builder
+        .args([
+            "mcp",
+            "--repo",
+            repo_path,
+            "--defect-calibration",
+            artifact_path.to_str().unwrap(),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for var in LLM_ENV_VARS {
+        builder.env_remove(var);
+    }
+
+    let output = builder.output().expect("spawn codelore mcp");
+
+    // The foreign artifact without --allow-foreign-calibration must cause
+    // the process to exit with code 4.
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "expected exit code 4 for foreign artifact without override, got: {:?}",
+        output.status.code()
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("mined from a different repository"),
+        "stderr must mention 'mined from a different repository', got: {stderr}"
+    );
+    assert!(
+        stderr.contains("--allow-foreign-calibration"),
+        "stderr must mention '--allow-foreign-calibration', got: {stderr}"
+    );
+}
