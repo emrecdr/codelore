@@ -636,9 +636,9 @@ fn mcp_refuses_to_start_on_foreign_artifact_without_override() {
     let artifact_path = write_foreign_defect_artifact(artifact_dir.path());
 
     // Build the Command directly, mirroring spawn_mcp_with_args's construction
-    // (mcp_test.rs:62-73) but with stderr(Stdio::piped()) to capture the error.
-    // We do NOT use spawn_mcp_with_args because its read_ndjson handshake
-    // would panic on a child that exits before writing the initialize response.
+    // but with stderr(Stdio::piped()) to capture the error. We do NOT use
+    // spawn_mcp_with_args because its read_ndjson handshake would panic on a
+    // child that exits before writing the initialize response.
     let bin = assert_cmd::cargo::cargo_bin("codelore");
     let mut builder = Command::new(&bin);
     builder

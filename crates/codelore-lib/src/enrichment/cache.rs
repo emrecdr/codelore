@@ -4,8 +4,11 @@
 //! its inputs, so each one is persisted next to the fact-store cache as a small
 //! JSON sidecar. The cache key is the SHA-256 of the fact-sheet text joined with
 //! the schema version, the prompt version, and the model id: change any of them
-//! and the key changes, so a stale narrative is never served for new evidence,
-//! a re-worded prompt, or a different model.
+//! and the key changes, so the cached narrative text is never stale for new
+//! evidence, a re-worded prompt, or a different model. Its stored groundedness
+//! verdict is a separate matter — a warm read recomputes it from the cached
+//! narrative (see `engine::narrate`), so an improved citation checker reaches
+//! warm caches without a regeneration.
 //!
 //! The key is rendered as plain lowercase hex — no `sha256:` prefix — because it
 //! becomes a filename, and a `:` is not a legal path component on Windows. The
@@ -42,9 +45,15 @@ pub struct CachedNarrative {
     /// string, which matches no real subject and so is simply never served.
     #[serde(default)]
     pub subject: String,
-    /// Whether every number the narrative quoted was grounded in the fact sheet.
+    /// The generation-time groundedness verdict: whether every number the
+    /// narrative quoted was grounded in the fact sheet when it was written.
+    /// `narrate` recomputes the verdict from the cached narrative on every read,
+    /// so a checker improvement applies to warm caches; this field records what
+    /// the writing binary saw.
     pub grounded: bool,
-    /// The numeric tokens that matched no fact value (empty iff `grounded`).
+    /// The numeric tokens that matched no fact value at generation time (empty
+    /// iff `grounded`). Like `grounded`, this is the writing binary's verdict;
+    /// `narrate` recomputes it from the cached narrative on read.
     pub unmatched: Vec<String>,
     /// The model id that produced the narrative.
     pub model: String,

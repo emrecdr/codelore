@@ -54,7 +54,9 @@ const SMALL_INT_EXEMPTION: f64 = 12.0;
 ///
 /// # Known limitations — this check labels, it does not prove
 ///
-/// Sign inversions are caught by the sign-aware extraction above. Two classes
+/// Sign inversions on non-exempt numbers are caught by the sign-aware extraction
+/// above (an inversion on a `≤ 12` whole number is still swallowed by the
+/// exemption). Two classes
 /// of invented claims still pass as grounded, though: a **small-integer
 /// statistic** covered by the `≤ 12` exemption (`a risk score of 9` passes
 /// with no fact of `9`); and a **percent collision**,
@@ -270,7 +272,7 @@ mod tests {
     }
 
     #[test]
-    fn positive_token_no_longer_matches_negative_fact() {
+    fn positive_token_does_not_match_negative_fact() {
         let facts = [-0.5];
         let g = check_citations("a value of 0.5", &facts);
         assert!(!g.grounded);
