@@ -66,6 +66,20 @@ What separates CodeLore from code-maat, CodeScene, and jscpd:
 - **🔒 Fully local, including the agent surface.** No account, no server, no telemetry: analysis, quality gates, the dashboard, and the `codelore mcp` server all run against the repository on your disk. The dashboard is one self-contained HTML file; the reference corpus is embedded in the binary; nothing phones home. The one deliberate exception is the opt-in `--llm` layer above — and even that defaults to a local endpoint.
 - **🔗 Drop-in code-maat compatibility.** Every published code-maat analysis is supported under the same `--analysis NAME`. The `--code-maat-compat` flag flips internal defaults (`min-revs` pivot, CSV column headers for `summary` / `code-age` / `communication` / `ownership` / `authors`, `--min-soc` overload) back to legacy semantics for users with dashboards that parse code-maat CSV verbatim — see the [migration table](#migrating-from-code-maat) below.
 
+### How it compares to GitHub Code Quality
+
+GitHub Code Quality brings native PR integration, zero setup on GitHub-hosted repos, and CodeQL's rule depth to point-in-time static analysis. CodeLore's angle is different — and complementary:
+
+| Axis | GitHub Code Quality | CodeLore |
+|---|---|---|
+| **Analysis signal** | Point-in-time static findings | Git-history behavioral signal: hotspots, change coupling, ownership, defect-calibrated risk |
+| **Where it runs** | Hosted CI on GitHub's infrastructure | A single portable binary, offline-capable — the same one gates this repository's own CI |
+| **Cost model** | Per-committer subscription plus metered CI compute and AI credits | Free and open source |
+| **Agent surface** | None | Local MCP server exposing every analysis as an agent tool |
+| **Data residency** | Code analyzed in GitHub's cloud | Nothing leaves the machine |
+
+This is a comparison with the Code Quality product, not the Code Scanning integration described above — CodeLore's SARIF output feeds GitHub Code Scanning directly; the two sit side by side rather than competing.
+
 ---
 
 ## The analyses
