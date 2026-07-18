@@ -314,12 +314,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.96.0
       - uses: Swatinem/rust-cache@v2
         with:
-          # Stable, release-profile-scoped cache slot. Dogfood is the only
-          # `--release` compile in this workflow, so it cannot reuse the debug
-          # target caches of clippy/test — a shared-key keeps its own cache
-          # deterministic across PR runs (and lets a future release-profile job
-          # share it). Deliberately NOT shared with the debug jobs: mixing
-          # debug+release artifacts under one key would thrash both.
+          # Stable, release-profile-scoped cache slot shared by the two
+          # `--release` compiles in this workflow (dogfood and self-gate) —
+          # neither can reuse the debug target caches of clippy/test, so a
+          # shared-key keeps their common cache deterministic across PR runs.
+          # Deliberately NOT shared with the debug jobs: mixing debug+release
+          # artifacts under one key would thrash both.
           shared-key: release-dogfood
       - name: Build release codelore
         run: cargo build --release -p codelore-cli --features spa
