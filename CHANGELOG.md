@@ -4,6 +4,10 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **This repository gates itself.** A committed `.codelore-thresholds.toml` and a new blocking `self-gate` CI job run `codelore check` against this repository's own code-health, cognitive-complexity, hotspot-score, dependency-cycle, propagation-cost, and red-band-churn gates on every push and pull request.
+
 ### Changed
 
 - **The LLM narrative's citation check is sign-aware, and its `⚠ contains uncited claims` stamp names the uncited tokens.** A leading minus now binds to a quoted number unless it is an infix hyphen in a date or range (`2026-07-15`, `defects-2026`), so a narrative quoting `-0.5` is no longer grounded by a fact of `0.5` (or vice versa). The small-integer exemption now applies to a token's magnitude rather than its raw value, so a whole number like `-15` is still flagged. The uncited-claims stamp lists the first five unmatched tokens (with a `(+n more)` suffix beyond that) instead of just the generic warning.

@@ -255,6 +255,34 @@ jobs:
       # repo with a rust-toolchain.toml override.
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
 
+  self-gate:
+    # This repository gates itself with its own product: `codelore check`
+    # against the committed `.codelore-thresholds.toml`. Unlike `dogfood`
+    # below, this job has NO `continue-on-error` — a violation blocks the
+    # merge, the same as it would for any user running `codelore check`
+    # in their own CI.
+    name: self-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Same reason as `test` / `dogfood`: the import-graph and
+          # churn gates walk this repo's own history, so the gix walker
+          # needs parent ancestry.
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Shares `dogfood`'s cache slot: both are `--release -p
+          # codelore-cli` builds, just with a different feature set.
+          # cargo layers the non-spa artifacts onto the same target dir.
+          shared-key: release-dogfood
+      - name: Build release codelore
+        run: cargo build --release -p codelore-cli
+      - name: Quality gate
+        run: ./target/release/codelore check --repo .
+
   dogfood:
     # Run the release `codelore` binary against this repo's own history
     # so every PR surfaces what CodeLore thinks of its own changes —

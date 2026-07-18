@@ -190,6 +190,8 @@ codelore schema <row-type>          # JSON Schema 2020-12 emit
 
 `codelore check` writes `result=pass|fail` + `violations=N` to `$GITHUB_OUTPUT` when the env var is set — direct GitHub Actions step-output integration. It also works as a git hook: `codelore check --repo . --quiet` exits 0/1 and suppresses per-violation noise for hook scripts. `codelore check --format sarif` emits SARIF 2.1.0 with a commit evidence chain (top-5 contributing commits per violated file) to stdout — pipe it into the `github/codeql-action/upload-sarif` step and findings appear inline on PRs with reviewer-facing commit lineage. See [§11.8 of the advanced-usage guide](docs/advanced-usage.md) for a ready-to-paste `.git/hooks/pre-push` script, exit-code contract, warm-cache performance notes, `--ratchet` + `--history` in hook workflows, and the full GitHub Actions upload snippet.
 
+This repository is gated by its own product: the `self-gate` CI job runs `codelore check` against the committed [`.codelore-thresholds.toml`](.codelore-thresholds.toml) on every push and pull request, and blocks the merge on a violation — the gates in this repo are the product's own output.
+
 **Behavioral×static fusion:** `codelore ingest-sarif --repo . scan.sarif` ingests findings from any SARIF 2.1.0 producer (CodeQL, Semgrep, clippy-sarif) into a per-repo sidecar that survives fact-store cache eviction. `codelore analyze --analysis finding-hotspot-overlap` then joins those findings with the hotspot and code-health signal, producing a priority label (`act-now` / `plan` / `note`) for each flagged file. The `max_findings_in_hot_files` gate in `.codelore-thresholds.toml` enforces a ceiling on `act-now` count in CI; the `finding_hotspot_overlap` MCP tool exposes the same table to AI agents.
 
 ---

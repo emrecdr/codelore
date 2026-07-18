@@ -1,0 +1,24 @@
+# Quality gates for CodeLore's own repository — evaluated by `codelore check`
+# in CI on every push and pull request. Ceilings sit above today's worst
+# measured values so the gates bind on regressions, not on the status quo;
+# floors sit just below today's worst file.
+
+[gates]
+# Worst file today: crates/codelore-cli/src/main.rs at 15.85. Any file
+# decaying below this floor fails the gate.
+code_health_min = 15.0
+# Worst hotspot-row cognitive complexity today: 139 (the SPA drawer module).
+cognitive_max = 150.0
+# Highest hotspot score today: 2.97 (crates/codelore-cli/src/main.rs).
+hotspot_score_max = 4.0
+# Exactly one import cycle exists (the nine-file codelore-rca cluster).
+# Introducing a second cycle fails the gate.
+max_dependency_cycles = 1
+# Propagation cost today: 0.043 — a change reaches ~4% of the system.
+max_propagation_cost = 0.10
+# Share of recent churn landing in red-band files today: 9.6%.
+max_red_effort_pct = 15.0
+
+[diff]
+# A pull request may not introduce a new import cycle.
+no_new_cycles = true
