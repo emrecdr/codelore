@@ -1038,14 +1038,14 @@ Passing `--defect-calibration <path>` (see [Defect calibration](#defect-calibrat
 
 ### Grounding: fact sheet in, citation check out
 
-The prompt embeds the fact sheet verbatim as the model's sole evidence and instructs it to use only facts on the sheet, cite the exact numbers, and say "the data doesn't show" rather than guess. After generation, a citation check extracts every numeric token from the narrative and matches it against the sheet's values, tolerant of the narrative's own rounding (a narrative "0.79" is grounded by a fact of 0.786; "80%" by 0.803). Every narrative then carries an inline provenance stamp:
+The prompt embeds the fact sheet verbatim as the model's sole evidence and instructs it to use only facts on the sheet, cite the exact numbers, and say "the data doesn't show" rather than guess. After generation, a citation check extracts every numeric token from the narrative and matches it against the sheet's values, tolerant of the narrative's own rounding (a narrative "0.79" is grounded by a fact of 0.786; "80%" by 0.803). The extraction is sign-aware: a leading minus binds to the token unless it is an infix hyphen in a date or range (`2026-07-15`, `defects-2026`), so `-0.5` is only grounded by a fact of `-0.5`. Every narrative then carries an inline provenance stamp:
 
 ```
 advisory — model <id>, grounded ✓
-advisory — model <id>, ⚠ contains uncited claims
+advisory — model <id>, ⚠ contains uncited claims: -0.5, 42.5%
 ```
 
-**Honest limits: the check labels magnitudes, it does not prove claims.** `grounded ✓` means "every number the narrative quotes appears in the evidence" — not "every claim is true". The check cannot detect a sign inversion, a fabricated small count (whole numbers up to 12 are exempt as prose scaffolding — list positions, "the 3 files"), a percent that happens to collide with an unrelated fraction on the sheet, or a real number attached to the wrong claim. The narrative is advisory; the dossier above it is the authority.
+**Honest limits: the check labels magnitudes, it does not prove claims.** `grounded ✓` means "every number the narrative quotes appears in the evidence" — not "every claim is true". The check cannot detect a fabricated small count (whole numbers up to 12 in magnitude are exempt as prose scaffolding — list positions, "the 3 files"), a percent that happens to collide with an unrelated fraction on the sheet, or a real number attached to the wrong claim. The narrative is advisory; the dossier above it is the authority.
 
 ### Configuration (environment only)
 
