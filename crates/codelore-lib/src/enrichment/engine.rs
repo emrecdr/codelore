@@ -82,10 +82,16 @@ pub fn narrate(
     let key = cache::cache_key(facts.text, &model);
 
     if !refresh && let Some(hit) = cache::read(cache_root, repo_path, &key) {
+        // The key covers the narrative text — same fact-sheet text, prompt, and
+        // model — but the stored verdict was computed by whatever binary wrote
+        // the entry. Recompute it from the cached narrative so an improved
+        // citation checker reaches warm caches; the hit's key-covered facts are
+        // the same `facts.values`, and the model is still never contacted.
+        let groundedness = check_citations(&hit.narrative, facts.values);
         return Ok(NarrativeResult {
             narrative: hit.narrative,
-            grounded: hit.grounded,
-            unmatched: hit.unmatched,
+            grounded: groundedness.grounded,
+            unmatched: groundedness.unmatched,
             model: hit.model,
             from_cache: true,
         });
@@ -119,15 +125,32 @@ pub fn narrate(
     })
 }
 
+/// Uncited tokens named in the stamp before the list is truncated with a
+/// `(+n more)` suffix.
+const STAMP_UNCITED_PREVIEW: usize = 5;
+
 /// The inline advisory stamp for `result`: it names the model and states whether
-/// every number the narrative quoted was grounded in the fact sheet.
+/// every number the narrative quoted was grounded in the fact sheet, naming the
+/// uncited tokens (up to [`STAMP_UNCITED_PREVIEW`]) when it was not.
 #[must_use]
 pub fn stamp(result: &NarrativeResult) -> String {
     let model = &result.model;
     if result.grounded {
         format!("advisory — model {model}, grounded ✓")
     } else {
-        format!("advisory — model {model}, ⚠ contains uncited claims")
+        let unmatched = &result.unmatched;
+        let list = unmatched
+            .iter()
+            .take(STAMP_UNCITED_PREVIEW)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        let more = unmatched.len().saturating_sub(STAMP_UNCITED_PREVIEW);
+        if more > 0 {
+            format!("advisory — model {model}, ⚠ contains uncited claims: {list} (+{more} more)")
+        } else {
+            format!("advisory — model {model}, ⚠ contains uncited claims: {list}")
+        }
     }
 }
 
@@ -196,12 +219,30 @@ mod tests {
 
     #[test]
     fn stamp_renders_the_uncited_verdict() {
-        let s = stamp(&result_with(false));
+        let mut result = result_with(false);
+        result.unmatched = vec!["42.5%".to_string(), "-0.5".to_string()];
+        let s = stamp(&result);
         assert!(s.contains("mock-model"), "stamp names the model: {s}");
         assert!(
-            s.contains("⚠ contains uncited claims"),
-            "uncited stamp: {s}"
+            s.contains("⚠ contains uncited claims: 42.5%, -0.5"),
+            "uncited stamp names the tokens: {s}"
         );
+    }
+
+    #[test]
+    fn stamp_truncates_the_uncited_list_after_five() {
+        let mut result = result_with(false);
+        result.unmatched = vec![
+            "1".to_string(),
+            "2".to_string(),
+            "3".to_string(),
+            "4".to_string(),
+            "5".to_string(),
+            "6".to_string(),
+            "7".to_string(),
+        ];
+        let s = stamp(&result);
+        assert!(s.contains("(+2 more)"), "truncated stamp: {s}");
     }
 
     #[test]
@@ -262,5 +303,72 @@ mod tests {
         .expect("refresh narrate");
         assert!(!refreshed.from_cache, "refresh bypasses the cache");
         assert_eq!(client.calls.get(), 2, "refresh reaches the model again");
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn cache_hit_serves_a_freshly_recomputed_citation_verdict() {
+        use super::cache::{self, CachedNarrative};
+        use crate::enrichment::SCHEMA_VERSION;
+        use crate::enrichment::prompt::PROMPT_VERSION;
+
+        let cache_root = tempfile::tempdir().expect("cache root");
+        let repo = std::path::Path::new("/tmp/repo");
+        let sheet = "code-health\n  score = 87.5\n";
+        let values = [87.5];
+        let facts = SheetFacts {
+            text: sheet,
+            values: &values,
+        };
+        let model = "mock-model";
+
+        // Hand-write an entry whose stored verdict is a lie under the current
+        // checker: the narrative quotes a signed -0.5 that no fact value grounds,
+        // yet the entry claims grounded with an empty unmatched list — exactly
+        // what an older, sign-blind binary would have recorded. `narrate` must
+        // ignore the stored verdict and recompute it from the narrative.
+        let key = cache::cache_key(sheet, model);
+        let entry = CachedNarrative {
+            narrative: "Diagnosis: a delta of -0.5 appears.".to_string(),
+            subject: "src/subject.rs".to_string(),
+            grounded: true,
+            unmatched: Vec::new(),
+            model: model.to_string(),
+            prompt_version: PROMPT_VERSION,
+            schema_version: SCHEMA_VERSION,
+            fact_digest: "stale-digest".to_string(),
+            created_at: "2025-01-01T00:00:00Z".to_string(),
+        };
+        cache::write(cache_root.path(), repo, &key, &entry);
+
+        let client = MockChatClient {
+            reply: "unused — this call must hit the cache".to_string(),
+            model: model.to_string(),
+            calls: Cell::new(0),
+        };
+
+        let hit = narrate(
+            &client,
+            Lens::FileDiagnosis,
+            "src/subject.rs",
+            facts,
+            cache_root.path(),
+            repo,
+            false,
+        )
+        .expect("narrate hits the hand-written entry");
+
+        assert!(hit.from_cache, "the entry is served from the cache");
+        assert_eq!(client.calls.get(), 0, "a hit never reaches the model");
+        assert!(
+            !hit.grounded,
+            "the recomputed verdict catches the ungrounded -0.5 rather than \
+             trusting the stored grounded:true"
+        );
+        assert_eq!(
+            hit.unmatched,
+            vec!["-0.5".to_string()],
+            "the recomputed unmatched list names the signed token"
+        );
     }
 }

@@ -4,6 +4,12 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **The LLM narrative's citation check is sign-aware, and its `⚠ contains uncited claims` stamp names the uncited tokens.** A leading minus now binds to a quoted number unless it is an infix hyphen in a date or range (`2026-07-15`, `defects-2026`), so a narrative quoting `-0.5` is no longer grounded by a fact of `0.5` (or vice versa). The small-integer exemption now applies to a token's magnitude rather than its raw value, so a whole number like `-15` is still flagged. The uncited-claims stamp lists the first five unmatched tokens (with a `(+n more)` suffix beyond that) instead of just the generic warning.
+
+- **Defect-validation surfaces the full mining tally set.** The defect-validation analysis now reports all seven `MiningStats` fields: `fixes_found`, `links_found`, `files_blamed`, `lines_considered`, `lines_dropped_cosmetic`, `pure_addition_fixes`, and `blame_failures`.
+
 ## [0.21.0] - 2026-07-18
 
 ### Added

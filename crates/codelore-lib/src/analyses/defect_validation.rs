@@ -88,9 +88,16 @@ fn rows_from_artifact(art: &DefectArtifact) -> Vec<DefectValidationRow> {
         row("vintage", art.vintage.clone()),
         row("generated_at", art.generated_at.clone()),
         row("head_at_mining", art.head_at_mining.clone()),
-        // mining tallies (the subset worth surfacing here)
+        // mining tallies (full tally set)
         row("fixes_found", m.fixes_found.to_string()),
         row("links_found", m.links_found.to_string()),
+        row("files_blamed", m.files_blamed.to_string()),
+        row("lines_considered", m.lines_considered.to_string()),
+        row(
+            "lines_dropped_cosmetic",
+            m.lines_dropped_cosmetic.to_string(),
+        ),
+        row("pure_addition_fixes", m.pure_addition_fixes.to_string()),
         row("blame_failures", m.blame_failures.to_string()),
         // validation counts
         row("implicated_files", v.implicated_files.to_string()),
@@ -291,6 +298,10 @@ mod tests {
         assert_eq!(value_of(&rows, "head_at_mining"), "cafebabe");
         assert_eq!(value_of(&rows, "fixes_found"), "295");
         assert_eq!(value_of(&rows, "links_found"), "812");
+        assert_eq!(value_of(&rows, "files_blamed"), "640");
+        assert_eq!(value_of(&rows, "lines_considered"), "9001");
+        assert_eq!(value_of(&rows, "lines_dropped_cosmetic"), "120");
+        assert_eq!(value_of(&rows, "pure_addition_fixes"), "33");
         assert_eq!(value_of(&rows, "blame_failures"), "7");
         assert_eq!(value_of(&rows, "implicated_files"), "25");
         assert_eq!(value_of(&rows, "linked_defects"), "30");

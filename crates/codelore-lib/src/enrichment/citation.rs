@@ -18,29 +18,35 @@ pub struct Groundedness {
     /// True iff every non-exempt numeric token in the narrative matched a fact
     /// value — equivalently, `unmatched.is_empty()`.
     pub grounded: bool,
-    /// The numeric tokens (with thousands separators already stripped) that
-    /// matched no fact value and are not exempt small integers.
+    /// The numeric tokens (with thousands separators already stripped, sign
+    /// and `%` retained as quoted) that matched no fact value and are not
+    /// exempt small integers.
     pub unmatched: Vec<String>,
 }
 
-/// Largest whole-number token treated as prose scaffolding rather than a cited
-/// statistic. See [`check_citations`] for why these are exempt.
+/// Largest magnitude of a whole-number token treated as prose scaffolding
+/// rather than a cited statistic. See [`check_citations`] for why these are
+/// exempt.
 const SMALL_INT_EXEMPTION: f64 = 12.0;
 
 /// Check that every number a narrative quotes is grounded in the fact sheet's
 /// values.
 ///
 /// Numeric tokens are extracted with `(?:\d+\.\d+|\d+)(?:%)?` after thousands
-/// separators are stripped (so `1,234` is read as `1234`). A token matches iff
-/// some fact value, rounded to the token's own number of decimal places, equals
-/// the token's value; a percent token additionally matches when `fact * 100`
-/// rounds to it, so `80%` is grounded by a fact of `0.803` (→ `80.3` → `80`).
+/// separators are stripped (so `1,234` is read as `1234`), then sign-checked:
+/// a leading `-` binds to the token unless it is an infix hyphen in a date or
+/// range (`2026-07-15`, `defects-2026`), in which case the token stays
+/// positive. A token matches iff some fact value, rounded to the token's own
+/// number of decimal places, equals the token's signed value; a percent token
+/// additionally matches when `fact * 100` rounds to it, so `80%` is grounded
+/// by a fact of `0.803` (→ `80.3` → `80`).
 ///
-/// Whole-number tokens `≤ 12` without a percent sign are **exempt**: they are
-/// almost always list positions, section numbering, or small counts in prose
-/// (`the 3 files`, `1.`), not cited statistics, and demanding a matching fact
-/// value for them would flag ordinary writing. A fact value below `fmt_num`'s
-/// resolution renders as `0`, and a narrative quoting `0` is grounded both by
+/// Whole-number tokens with a magnitude `≤ 12` and no percent sign are
+/// **exempt**: they are almost always list positions, section numbering, or
+/// small counts in prose (`the 3 files`, `1.`), not cited statistics, and
+/// demanding a matching fact value for them would flag ordinary writing.
+/// A fact value below `fmt_num`'s resolution renders as `0`, and a narrative
+/// quoting `0` is grounded both by
 /// this exemption and by the standard rounding rule (a `1e-9` fact rounds to
 /// `0` at zero decimal places).
 ///
@@ -48,16 +54,21 @@ const SMALL_INT_EXEMPTION: f64 = 12.0;
 ///
 /// # Known limitations — this check labels, it does not prove
 ///
-/// The token model is an unsigned magnitude, so three classes of invented
-/// claims still pass as grounded: a **sign inversion** (`-0.5` extracts as
-/// `0.5` and is grounded by a fact of `+0.5`); a **small-integer statistic**
-/// covered by the `≤ 12` exemption (`a risk score of 9` passes with no fact
-/// of `9`); and a **percent collision**, where any fraction fact grounds an
-/// unrelated percent token via the `× 100` fallback (`50%` passes whenever
-/// some fact is `0.5`). The failure direction everywhere else is the safe
-/// one — over-flagging (version-like strings decompose into fragments that
-/// read as uncited) — but a `grounded ✓` stamp means "every quoted magnitude
-/// appears in the evidence", not "every claim is true".
+/// Sign inversions on non-exempt numbers are caught by the sign-aware extraction
+/// above (an inversion on a `≤ 12` whole number is still swallowed by the
+/// exemption). Two classes
+/// of invented claims still pass as grounded, though: a **small-integer
+/// statistic** covered by the `≤ 12` exemption (`a risk score of 9` passes
+/// with no fact of `9`); and a **percent collision**,
+/// where any fraction fact grounds an unrelated percent token via the `× 100`
+/// fallback (`50%` passes whenever some fact is `0.5`). A third limitation is
+/// structural rather than numeric: the check is per-number, not per-claim, so
+/// a real, correctly-grounded value can still be attached to the wrong
+/// statement (the right count next to the wrong file). The failure direction
+/// everywhere else is the safe one — over-flagging (version-like strings
+/// decompose into fragments that read as uncited) — but a `grounded ✓` stamp
+/// means "every quoted magnitude appears in the evidence", not "every claim
+/// is true".
 #[must_use]
 pub fn check_citations(narrative: &str, fact_values: &[f64]) -> Groundedness {
     let stripped = strip_thousands_separators(narrative);
@@ -67,24 +78,58 @@ pub fn check_citations(narrative: &str, fact_values: &[f64]) -> Groundedness {
         let is_percent = raw.ends_with('%');
         let digits = raw.trim_end_matches('%');
         let decimals = digits.split_once('.').map_or(0, |(_, frac)| frac.len());
-        let Ok(value) = digits.parse::<f64>() else {
+        let Ok(unsigned_value) = digits.parse::<f64>() else {
             continue;
+        };
+        let negated = is_unary_minus(&stripped, token.start());
+        let value = if negated {
+            -unsigned_value
+        } else {
+            unsigned_value
         };
         // Small whole numbers in prose (list positions, section numbers, "the 3
         // files") are scaffolding, not cited statistics — never flag them.
-        if !is_percent && decimals == 0 && value <= SMALL_INT_EXEMPTION {
+        if !is_percent && decimals == 0 && value.abs() <= SMALL_INT_EXEMPTION {
             continue;
         }
         let matched = fact_values
             .iter()
             .any(|&fact| matches_at(fact, value, decimals, is_percent));
         if !matched {
-            unmatched.push(digits.to_string());
+            let display = if negated {
+                format!("-{raw}")
+            } else {
+                raw.to_string()
+            };
+            unmatched.push(display);
         }
     }
     Groundedness {
         grounded: unmatched.is_empty(),
         unmatched,
+    }
+}
+
+/// Whether the `-` immediately preceding a token at byte offset `token_start`
+/// in `text` (if any) is a unary minus rather than an infix hyphen.
+///
+/// A `-` is infix (a date `2026-07-15`, a vintage `defects-2026`, a range
+/// `5-3`) when the character before it is alphanumeric; then the token is
+/// positive, exactly as if no `-` were there. Otherwise the `-` binds to the
+/// token as a sign. If there is no `-` immediately before the token at all,
+/// this returns `false`.
+fn is_unary_minus(text: &str, token_start: usize) -> bool {
+    let prefix = &text[..token_start];
+    let mut chars = prefix.chars().rev();
+    let Some(prev) = chars.next() else {
+        return false;
+    };
+    if prev != '-' {
+        return false;
+    }
+    match chars.next() {
+        Some(prev2) => !prev2.is_alphanumeric(),
+        None => true,
     }
 }
 
@@ -209,5 +254,63 @@ mod tests {
         let g = check_citations("spanning 4200 revisions", &facts);
         assert!(!g.grounded);
         assert_eq!(g.unmatched, vec!["4200".to_string()]);
+    }
+
+    #[test]
+    fn signed_token_mismatching_positive_fact_is_flagged() {
+        let facts = [0.5];
+        let g = check_citations("a delta of -0.5", &facts);
+        assert!(!g.grounded);
+        assert_eq!(g.unmatched, vec!["-0.5".to_string()]);
+    }
+
+    #[test]
+    fn signed_token_matching_negative_fact_is_grounded() {
+        let facts = [-420.7];
+        let g = check_citations("MI of -420.7", &facts);
+        assert!(g.grounded, "unmatched: {:?}", g.unmatched);
+    }
+
+    #[test]
+    fn positive_token_does_not_match_negative_fact() {
+        let facts = [-0.5];
+        let g = check_citations("a value of 0.5", &facts);
+        assert!(!g.grounded);
+        assert_eq!(g.unmatched, vec!["0.5".to_string()]);
+    }
+
+    #[test]
+    fn hyphenated_date_fragments_stay_unsigned() {
+        let facts: [f64; 0] = [];
+        let g = check_citations("vintage defects-2026-07-15", &facts);
+        assert!(!g.grounded);
+        assert_eq!(g.unmatched, vec!["2026".to_string(), "15".to_string()]);
+        assert!(
+            g.unmatched.iter().all(|tok| !tok.starts_with('-')),
+            "hyphenated date/vintage fragments must never read as negative: {:?}",
+            g.unmatched
+        );
+    }
+
+    #[test]
+    fn negative_small_int_is_exempt() {
+        let facts: [f64; 0] = [];
+        let g = check_citations("a delta of -3", &facts);
+        assert!(g.grounded, "unmatched: {:?}", g.unmatched);
+    }
+
+    #[test]
+    fn negative_large_int_is_not_exempt() {
+        let facts: [f64; 0] = [];
+        let g = check_citations("a delta of -15", &facts);
+        assert!(!g.grounded);
+        assert_eq!(g.unmatched, vec!["-15".to_string()]);
+    }
+
+    #[test]
+    fn unmatched_percent_token_reports_the_percent_sign() {
+        let facts: [f64; 0] = [];
+        let g = check_citations("about 99.5%", &facts);
+        assert_eq!(g.unmatched, vec!["99.5%".to_string()]);
     }
 }
