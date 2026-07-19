@@ -1579,33 +1579,49 @@
 
     // ── 2. Team-composition stacked bar ───────────────────────────────
     if (teamRows && teamRows.length) {
-      // Collect commit share per bucket; fall back to 0 if bucket absent.
       var bucketColors = {
         onboarded:  'var(--color-info,    oklch(0.623 0.214 259.532))',
         experienced:'var(--color-success, oklch(0.753 0.152 163.216))',
         veteran:    'var(--color-primary, oklch(0.491 0.270 282.717))',
       };
-      var totalShare = 0;
-      var segments = '';
-      var legend = '';
+      // Tenure mix is computed from the real per-author rows via their
+      // `bucket` field. The `__summary__` carrier row (which packs percentage
+      // strings into `bucket`) is skipped; share is the author-count fraction
+      // per bucket, rendered in a fixed bucket order so the bar is deterministic.
+      var BUCKET_ORDER = ['onboarded', 'experienced', 'veteran'];
+      var bucketCounts = { onboarded: 0, experienced: 0, veteran: 0 };
+      var realAuthors = 0;
       for (var ti = 0; ti < teamRows.length; ti++) {
         var tr = teamRows[ti];
-        var share = typeof tr.commit_share_pct === 'number' ? tr.commit_share_pct : 0;
-        totalShare += share;
-        var color = bucketColors[tr.bucket] || getCssVar('--p');
-        segments +=
-          '<div class="team-bar-segment" style="width:' + fmtNumberFlex(share, 1) + '%;background:' + color + ';"' +
-            ' title="' + escapeHtml(tr.bucket) + ': ' + fmtNumberFlex(share, 1) + '% of commits, ' + tr.active_authors + ' author(s)">' +
-          '</div>';
-        legend +=
-          '<span class="team-bar-key" style="color:' + color + ';">' + escapeHtml(tr.bucket) + '</span> ' +
-          fmtNumberFlex(share, 1) + '% (' + tr.active_authors + ')  ';
+        if (tr.author === '__summary__') continue;
+        if (Object.prototype.hasOwnProperty.call(bucketCounts, tr.bucket)) {
+          bucketCounts[tr.bucket] += 1;
+          realAuthors += 1;
+        }
       }
-      html +=
-        '<div class="team-composition-bar">' +
-          '<div class="team-bar-track" role="img" aria-label="Team tenure distribution">' + segments + '</div>' +
-          '<p class="knowledge-caption">' + legend.trim() + '</p>' +
-        '</div>';
+      if (realAuthors > 0) {
+        var segments = '';
+        var legend = '';
+        for (var bi = 0; bi < BUCKET_ORDER.length; bi++) {
+          var bucket = BUCKET_ORDER[bi];
+          var count = bucketCounts[bucket];
+          if (count === 0) continue;
+          var share = (count / realAuthors) * 100;
+          var color = bucketColors[bucket];
+          segments +=
+            '<div class="team-bar-segment" style="width:' + fmtNumberFlex(share, 1) + '%;background:' + color + ';"' +
+              ' title="' + escapeHtml(bucket) + ': ' + fmtNumberFlex(share, 1) + '% of authors, ' + count + ' author(s)">' +
+            '</div>';
+          legend +=
+            '<span class="team-bar-key" style="color:' + color + ';">' + escapeHtml(bucket) + '</span> ' +
+            fmtNumberFlex(share, 1) + '% (' + count + ')  ';
+        }
+        html +=
+          '<div class="team-composition-bar">' +
+            '<div class="team-bar-track" role="img" aria-label="Team tenure distribution">' + segments + '</div>' +
+            '<p class="knowledge-caption">' + legend.trim() + '</p>' +
+          '</div>';
+      }
     }
 
     // ── 3. Coordination table ──────────────────────────────────────────

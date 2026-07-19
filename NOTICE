@@ -1,0 +1,11 @@
+NOTICE
+
+CodeLore is licensed under the GNU General Public License, version 3.0 only
+(GPL-3.0-only). See LICENSE for the full text.
+
+CodeLore vendors a fork of Mozilla's rust-code-analysis
+(https://github.com/mozilla/rust-code-analysis) as crates/codelore-rca. Files
+originating from that upstream project retain their original Mozilla Public
+License, version 2.0 (MPL-2.0) terms; files added within that crate by this
+project are GPL-3.0-only. See crates/codelore-rca/LICENSE-MPL for the full
+MPL-2.0 text and crates/codelore-rca/UPSTREAM.md for provenance detail.

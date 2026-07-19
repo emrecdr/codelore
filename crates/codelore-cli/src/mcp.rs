@@ -83,6 +83,12 @@ fn temp_worktree(
 ) -> std::result::Result<(PathBuf, TempWorktree), ErrorData> {
     let dir = tempfile::tempdir().map_err(|e| internal(format!("create temp dir: {e}")))?;
     let wt_path = dir.path().to_path_buf();
+    let wt_path_str = wt_path.to_str().ok_or_else(|| {
+        internal(format!(
+            "worktree temp path is not valid UTF-8: {}",
+            wt_path.display()
+        ))
+    })?;
     // Detached stdio per the module invariant (see `resolve_rev`);
     // stderr is captured so a failure carries git's own diagnosis.
     let out = Command::new("git")
@@ -93,7 +99,7 @@ fn temp_worktree(
             "add",
             "--detach",
             "--quiet",
-            wt_path.to_str().unwrap(),
+            wt_path_str,
             sha,
         ])
         .stdin(std::process::Stdio::null())

@@ -8,11 +8,25 @@ Conventional Commits format. All notable changes documented here.
 
 - **This repository gates itself.** A committed `.codelore-thresholds.toml` and a new blocking `self-gate` CI job run `codelore check` against this repository's own code-health, cognitive-complexity, hotspot-score, dependency-cycle, propagation-cost, and red-band-churn gates on every push and pull request.
 
+- **`DuckDB` connections now carry a memory ceiling and spill to disk instead of OOM-killing.** Every fact-store connection — the persistent cache (read and write), and the `--no-cache`/dirty-worktree in-memory path — sets a `memory_limit` PRAGMA (4 GB, matching this project's documented peak-memory performance target) and a `temp_directory` PRAGMA, so a very large repository degrades to slower disk-bound execution rather than crashing. `--temp-dir <PATH>` overrides the spill directory (on both `analyze` and `check`); it must already exist and be writable. Defaults to a subdirectory of the active cache root, or the system temp directory when there is no cache root in play.
+
 ### Changed
 
 - **The LLM narrative's citation check is sign-aware, and its `⚠ contains uncited claims` stamp names the uncited tokens.** A leading minus now binds to a quoted number unless it is an infix hyphen in a date or range (`2026-07-15`, `defects-2026`), so a narrative quoting `-0.5` is no longer grounded by a fact of `0.5` (or vice versa). The small-integer exemption now applies to a token's magnitude rather than its raw value, so a whole number like `-15` is still flagged. The uncited-claims stamp lists the first five unmatched tokens (with a `(+n more)` suffix beyond that) instead of just the generic warning.
 
 - **Defect-validation surfaces the full mining tally set.** The defect-validation analysis now reports all seven `MiningStats` fields: `fixes_found`, `links_found`, `files_blamed`, `lines_considered`, `lines_dropped_cosmetic`, `pure_addition_fixes`, and `blame_failures`.
+
+- **`marginal-owner-risk` computes every unhealthy file's active-owner share in one set query.** It previously issued one `DuckDB` query per yellow/red file, each recomputing the repo-wide active-authors set from scratch — O(unhealthy files × full history scan) on exactly the repos this analysis targets. Output is unchanged (byte-identical for every row, band, and share).
+
+### Fixed
+
+- **The SPA team-composition tenure bar renders correctly.** The Knowledge-surfaces widget computed the tenure mix from two fields that do not exist on the team-composition row, so it rendered zero-width bars and the literal text `undefined`; it now derives each bucket's share from the real per-author rows. The `__summary__` carrier row is no longer emitted as a data row in the SPA, CSV, or Markdown outputs.
+
+- **A corrupted or unreachable git object no longer masquerades as "file not tracked at HEAD."** The HEAD-time clones and imports scans now match `complexity`'s three-arm handling of `read_blob_at_head`: an untracked path still skips silently, but an object-database error is surfaced with `tracing::warn!` and the file is skipped rather than treated the same as "not tracked." The MCP server's temporary-worktree helper no longer panics when a worktree's temp path is not valid UTF-8; it now returns a clean MCP error instead.
+
+- **Every release artifact now carries its license notices.** The GPL-3.0 `LICENSE` and the MPL-2.0 notice for the vendored `codelore-rca` fork are bundled into every platform tarball and the Windows zip, and copied into the container image at `/usr/share/licenses/codelore/`. A root `NOTICE` file attributes the vendored fork.
+
+- **Docs no longer pin a hard-coded analysis count that drifts as the registry grows.** `docs/codebase_analysis.md`, `docs/roadmap-v1.x-and-beyond.md`, and `docs/ui-roadmap.md` now describe the analysis registry by shape (enumerated by `AnalysisName::all()`) instead of a stale number, a new test guards against the count going stale again, and the CLI's module doc no longer lists subcommands (`query`, `facts`, `config`, `doctor`, `init`) that don't exist.
 
 ## [0.21.0] - 2026-07-18
 

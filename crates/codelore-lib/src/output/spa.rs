@@ -233,10 +233,11 @@ pub struct SpaDashboard {
     /// `knowledge_shares` is unavailable (e.g. no complexity metrics at HEAD).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub code_familiarity: Vec<CodeFamiliarityRow>,
-    /// Team-composition rows — one row per tenure bucket
-    /// (`onboarded` / `experienced` / `veteran`) with active-author
-    /// count, commit share, and onboarding velocity. Drives the
-    /// stacked bucket bar in the Knowledge card.
+    /// Team-composition rows — one row per author (tenure bucket,
+    /// active flag, commit count, files touched, onboarding weeks)
+    /// plus a `__summary__` carrier row holding the bucket-share
+    /// percentages. Drives the stacked bucket bar in the Knowledge
+    /// card.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub team_composition: Vec<TeamCompositionRow>,
     /// Top coordination-needs rows (capped at 10, sorted by tier desc

@@ -23,6 +23,7 @@ use crate::analyses::lineage;
 use crate::facts::FactsDb;
 use crate::options::Options;
 use serde::Serialize;
+use std::collections::HashMap;
 
 /// A single file flagged with marginal-owner risk.
 #[derive(Debug, Clone, Serialize)]
@@ -65,8 +66,9 @@ pub fn classify_risk(band: &str, top_active_share: f64) -> Option<&'static str> 
 /// 1. Materialize `changes_lineage` (if canonical lineage is enabled) and
 ///    `knowledge_shares` (idempotent guard inside).
 /// 2. Run code-health at HEAD to get per-file band labels.
-/// 3. For each yellow/red file, query the maximum `k_norm` among authors
-///    who committed within `opts.window_days`.
+/// 3. For every yellow/red file, compute the maximum `k_norm` among authors
+///    who committed within `opts.window_days`, in a single set query against
+///    a one-shot `active_authors` set (not one query per file).
 /// 4. Apply [`classify_risk`] and emit rows for `high` / `elevated` tiers
 ///    only.
 pub fn run_marginal_owner_risk(
@@ -95,54 +97,18 @@ pub fn run_marginal_owner_risk(
         return Ok(Vec::new());
     }
 
-    // For each unhealthy path, find the maximum k_norm among ACTIVE authors
-    // (authors who have a commit within the trailing window_days).
-    // We use a single parameterised query per path rather than one massive
-    // IN-list query to stay within DuckDB's parameter binding limits and
-    // keep the query plan simple.
-    //
-    // Active-author CTE: any author with at least one commit in
-    //   [MAX(date) - window_days, MAX(date)]
-    // per the same window convention used by every other windowed analysis.
-    let src = lineage::source_table(opts);
+    // Maximum k_norm among ACTIVE authors (authors with a commit within the
+    // trailing window_days) for every unhealthy path, computed with one set
+    // query rather than one query per file.
+    let paths: Vec<String> = unhealthy.iter().map(|(path, _)| path.clone()).collect();
+    let top_active_shares = top_active_shares_by_path(db, opts, &paths)?;
 
     // Build result rows.
     let note = "changes here historically run 45-93% slower (ownership\u{00d7}health interaction)";
     let mut rows: Vec<MarginalOwnerRiskRow> = Vec::new();
 
     for (path, band) in &unhealthy {
-        // Query: max k_norm for active authors on this path.
-        // Active = committed to any file within window_days of repo HEAD date.
-        // Inline the path literal with single-quote escaping (path values
-        // come from the fact store — they are file paths, not user input).
-        let path_escaped = path.replace('\'', "''");
-        let sql = format!(
-            "
-            WITH repo_end AS (
-                SELECT MAX(date) AS end_date FROM commits
-            ),
-            active_authors AS (
-                SELECT DISTINCT co.canonical_author
-                FROM {src} ch
-                JOIN commits co ON co.rev = ch.rev
-                JOIN repo_end re ON TRUE
-                WHERE co.date >= re.end_date - INTERVAL '{window}' DAY
-            ),
-            path_shares AS (
-                SELECT ks.k_norm
-                FROM knowledge_shares ks
-                JOIN active_authors aa ON aa.canonical_author = ks.author
-                WHERE ks.path = '{path_escaped}'
-            )
-            SELECT COALESCE(MAX(k_norm), 0.0) AS top_active_share
-            FROM path_shares
-            ",
-            src = src,
-            window = opts.window_days,
-            path_escaped = path_escaped,
-        );
-
-        let top_active_share: f64 = db.query_row(&sql, [], |row| row.get(0))?;
+        let top_active_share = top_active_shares.get(path).copied().unwrap_or(0.0);
 
         if let Some(risk) = classify_risk(band, top_active_share) {
             rows.push(MarginalOwnerRiskRow {
@@ -156,4 +122,182 @@ pub fn run_marginal_owner_risk(
     }
 
     Ok(rows)
+}
+
+/// For every path in `paths`, compute the maximum `k_norm` among authors
+/// active within `opts.window_days` of the repo's latest commit date, in a
+/// single query.
+///
+/// Active-author set: any author with at least one commit in
+/// `[MAX(date) - window_days, MAX(date)]` — the same window convention used
+/// by every other windowed analysis — evaluated once regardless of how many
+/// paths are requested. A path with no active-author share (or no share at
+/// all) maps to `0.0`, matching `COALESCE(MAX(k_norm), 0.0)` on a per-path
+/// query. Paths not present in `paths` are absent from the returned map.
+/// Returns an empty map for an empty `paths` slice.
+///
+/// # Errors
+///
+/// Returns [`CodeLoreError::Analysis`] on `DuckDB` prepare / query failure.
+fn top_active_shares_by_path(
+    db: &FactsDb,
+    opts: &Options,
+    paths: &[String],
+) -> Result<HashMap<String, f64>, CodeLoreError> {
+    if paths.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let src = lineage::source_table(opts);
+    // Bind `paths` via a VALUES clause rather than string-interpolating
+    // path literals into the SQL text.
+    let placeholders = std::iter::repeat_n("(?)", paths.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "WITH repo_end AS (
+             SELECT MAX(date) AS end_date FROM commits
+         ),
+         active_authors AS (
+             SELECT DISTINCT co.canonical_author
+             FROM {src} ch
+             JOIN commits co ON co.rev = ch.rev
+             JOIN repo_end re ON TRUE
+             WHERE co.date >= re.end_date - INTERVAL '{window}' DAY
+         ),
+         requested_paths(path) AS (
+             VALUES {placeholders}
+         ),
+         path_shares AS (
+             SELECT rp.path, ks.k_norm
+             FROM requested_paths rp
+             JOIN knowledge_shares ks ON ks.path = rp.path
+             JOIN active_authors aa ON aa.canonical_author = ks.author
+         )
+         SELECT rp.path, COALESCE(MAX(ps.k_norm), 0.0) AS top_active_share
+         FROM requested_paths rp
+         LEFT JOIN path_shares ps ON ps.path = rp.path
+         GROUP BY rp.path",
+        src = src,
+        window = opts.window_days,
+    );
+
+    let mut stmt = db
+        .conn()
+        .prepare(&sql)
+        .map_err(|e| CodeLoreError::Analysis(format!("marginal_owner_risk prepare: {e}")))?;
+    let params: Vec<&dyn duckdb::ToSql> = paths.iter().map(|p| p as &dyn duckdb::ToSql).collect();
+    stmt.query_map(params.as_slice(), |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?))
+    })
+    .map_err(|e| CodeLoreError::Analysis(format!("marginal_owner_risk query: {e}")))?
+    .collect::<std::result::Result<HashMap<_, _>, _>>()
+    .map_err(|e| CodeLoreError::Analysis(format!("marginal_owner_risk collect: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::facts::FactsDb;
+
+    /// Regression test for the single set query: each requested path's
+    /// maximum active share must come from that path's OWN
+    /// `knowledge_shares` rows, never another path's, and an inactive
+    /// author's dominant share must not leak through even when it is the
+    /// largest value on the path. Hand-crafts `commits` / `changes` /
+    /// `knowledge_shares` directly so the expected shares are exact
+    /// literals, independent of the decay/reviewer-credit formula that
+    /// `materialize_knowledge_shares` applies.
+    #[test]
+    fn top_active_shares_by_path_does_not_cross_paths() {
+        let db = FactsDb::new_in_memory().expect("in-memory db");
+
+        // Alice is old/inactive; Bob and Carol are recent/active. The
+        // default 90-day window anchors at MAX(date) = Bob's 2024-05-01
+        // commit, so Alice's 2024-01-01 commit (120 days earlier) falls
+        // outside it.
+        db.conn()
+            .execute(
+                "INSERT INTO commits (rev, author_email, author_name, \
+                 committer_email, canonical_author, date, committer_date, \
+                 message, is_merge, parent_count) VALUES \
+                 ('c1', 'alice@x.com', 'Alice', 'alice@x.com', 'Alice', \
+                  TIMESTAMP '2024-01-01', TIMESTAMP '2024-01-01', 'a', false, 1), \
+                 ('c2', 'bob@x.com', 'Bob', 'bob@x.com', 'Bob', \
+                  TIMESTAMP '2024-05-01', TIMESTAMP '2024-05-01', 'b', false, 1), \
+                 ('c3', 'carol@x.com', 'Carol', 'carol@x.com', 'Carol', \
+                  TIMESTAMP '2024-04-20', TIMESTAMP '2024-04-20', 'c', false, 1)",
+                [],
+            )
+            .expect("insert commits");
+
+        // One change row per commit — the active_authors CTE joins
+        // through the source table.
+        db.conn()
+            .execute(
+                "INSERT INTO changes (rev, path, change_type, loc_added, loc_deleted) \
+                 VALUES ('c1', 'pathA.rs', 'modified', 1, 0), \
+                        ('c2', 'pathB.rs', 'modified', 1, 0), \
+                        ('c3', 'pathC.rs', 'modified', 1, 0)",
+                [],
+            )
+            .expect("insert changes");
+
+        // Hand-picked knowledge shares, deliberately not proportional to
+        // the changes above — this test targets only the batched query.
+        db.conn()
+            .execute_batch(
+                "CREATE TEMP TABLE knowledge_shares \
+                 (path TEXT, author TEXT, k DOUBLE, k_norm DOUBLE)",
+            )
+            .expect("create knowledge_shares");
+        db.conn()
+            .execute(
+                "INSERT INTO knowledge_shares (path, author, k, k_norm) VALUES \
+                 ('pathA.rs', 'Alice', 1.0, 1.0), \
+                 ('pathB.rs', 'Bob',   0.8, 0.8), \
+                 ('pathB.rs', 'Carol', 0.2, 0.2), \
+                 ('pathC.rs', 'Alice', 0.9, 0.9), \
+                 ('pathC.rs', 'Carol', 0.1, 0.1), \
+                 ('pathD.rs', 'Bob',   1.0, 1.0)",
+                [],
+            )
+            .expect("insert knowledge_shares");
+
+        // use_canonical_lineage=false so source_table() resolves to the
+        // plain `changes` table this fixture populates, not `changes_lineage`
+        // (which is only materialized by lineage::materialize_if_needed).
+        let opts = Options {
+            use_canonical_lineage: false,
+            ..Options::default()
+        };
+        let paths = vec![
+            "pathA.rs".to_owned(),
+            "pathB.rs".to_owned(),
+            "pathC.rs".to_owned(),
+        ];
+        let shares = top_active_shares_by_path(&db, &opts, &paths).expect("batched query");
+
+        // pathA.rs: sole author Alice is inactive → no active author has
+        // any share on this path → 0.0.
+        assert_eq!(shares.get("pathA.rs").copied(), Some(0.0));
+        // pathB.rs: both authors active → max(0.8, 0.2) = 0.8.
+        assert_eq!(shares.get("pathB.rs").copied(), Some(0.8));
+        // pathC.rs: Alice's dominant 0.9 share belongs to an INACTIVE
+        // author and must be excluded; only Carol's active 0.1 counts.
+        // A path-crossing or activity-filter bug would surface as 0.9,
+        // or as pathB's 0.8, here.
+        assert_eq!(shares.get("pathC.rs").copied(), Some(0.1));
+        // pathD.rs was never requested — must not leak into the result.
+        assert_eq!(shares.get("pathD.rs"), None);
+        assert_eq!(shares.len(), 3);
+    }
+
+    #[test]
+    fn top_active_shares_by_path_empty_paths_returns_empty_map_without_querying() {
+        let db = FactsDb::new_in_memory().expect("in-memory db");
+        let opts = Options::default();
+        let shares = top_active_shares_by_path(&db, &opts, &[]).expect("empty paths");
+        assert!(shares.is_empty());
+    }
 }
