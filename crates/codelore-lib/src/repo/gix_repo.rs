@@ -272,6 +272,23 @@ impl Repo for GixRepo {
         repo.is_dirty().unwrap_or(false)
     }
 
+    fn merge_or_rebase_in_progress(&self) -> bool {
+        // `Repository::state()` reproduces git's own `wt-status` probe: it
+        // inspects `rebase-apply/`, `rebase-merge/`, `CHERRY_PICK_HEAD`,
+        // `MERGE_HEAD`, `BISECT_LOG`, and `REVERT_HEAD` under the (worktree-
+        // correct) git dir and reports the in-progress operation. That covers
+        // all five markers this method contracts on, so we defer to the
+        // library rather than hand-rolling the file checks. The one state it
+        // reports that is NOT one of the five is `Bisect` — a bisect is
+        // neither a merge nor a rebase, and `GitCliRepo` doesn't probe
+        // `BISECT_LOG` — so we exclude it to keep both backends in exact
+        // agreement.
+        use gix::state::InProgress;
+        let repo = self.inner.to_thread_local();
+        repo.state()
+            .is_some_and(|state| state != InProgress::Bisect)
+    }
+
     fn read_blob_at(&self, rev: &str, path: &str) -> Result<Option<Vec<u8>>> {
         let repo = self.inner.to_thread_local();
         // Resolve `rev` to a single object id. `rev_parse_single` handles

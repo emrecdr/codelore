@@ -634,6 +634,64 @@ fn is_worktree_dirty_detects_staged_tracked_modification() {
     );
 }
 
+/// A fresh clone has no merge, rebase, cherry-pick, or revert underway;
+/// both backends must agree it is clean. The agent-loop briefing tools key
+/// their ambiguous-HEAD disclosure off this signal, so a false positive here
+/// would slap a spurious "merge in progress" note on every ordinary briefing.
+#[test]
+fn merge_or_rebase_state_clean_on_fresh_clone() {
+    let (gix, cli) = open_both();
+    assert!(
+        !gix.merge_or_rebase_in_progress(),
+        "a freshly-cloned fixture is not mid-merge/rebase per GixRepo",
+    );
+    assert_eq!(
+        gix.merge_or_rebase_in_progress(),
+        cli.merge_or_rebase_in_progress(),
+        "GixRepo and GitCliRepo disagree on a clean fresh clone",
+    );
+}
+
+/// A conflicted merge leaves `MERGE_HEAD` in the git dir. Writing that file
+/// (the exact artifact `git merge` leaves behind on conflict) must flip both
+/// backends to "in progress" and they must agree. Uses a private fixture
+/// clone because it mutates the git dir.
+#[test]
+fn merge_or_rebase_state_detects_merge_head() {
+    let repo = codelore_lib::test_support::differential_repo::build();
+    let path = repo.dir.path();
+    // 40 zeros is a valid-looking object id; both backends (and git itself)
+    // key on the marker's mere presence, not its contents.
+    std::fs::write(path.join(".git").join("MERGE_HEAD"), "0".repeat(40)).expect("write MERGE_HEAD");
+
+    let gix = GixRepo::open(path).expect("GixRepo::open");
+    let cli = GitCliRepo::open(path).expect("GitCliRepo::open");
+    assert!(gix.merge_or_rebase_in_progress(), "gix must see MERGE_HEAD");
+    assert!(cli.merge_or_rebase_in_progress(), "cli must see MERGE_HEAD");
+}
+
+/// A rebase leaves a `rebase-merge/` DIRECTORY (not a single file) in the git
+/// dir. Both backends must treat the directory marker the same as the file
+/// markers — this exercises the directory-existence branch that the
+/// `MERGE_HEAD` test (a plain file) does not.
+#[test]
+fn merge_or_rebase_state_detects_rebase_merge_dir() {
+    let repo = codelore_lib::test_support::differential_repo::build();
+    let path = repo.dir.path();
+    std::fs::create_dir(path.join(".git").join("rebase-merge")).expect("create rebase-merge dir");
+
+    let gix = GixRepo::open(path).expect("GixRepo::open");
+    let cli = GitCliRepo::open(path).expect("GitCliRepo::open");
+    assert!(
+        gix.merge_or_rebase_in_progress(),
+        "gix must see the rebase-merge/ directory",
+    );
+    assert!(
+        cli.merge_or_rebase_in_progress(),
+        "cli must see the rebase-merge/ directory",
+    );
+}
+
 /// `read_blob_at_head(path)` reads a tracked file from the gix
 /// object DB without disk access — the production complexity scan +
 /// clone fingerprinter both use it so codelore works on bare

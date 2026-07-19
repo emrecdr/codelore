@@ -69,6 +69,27 @@ pub trait Repo: Send + Sync {
         false
     }
 
+    /// Whether the repository is partway through a merge, rebase,
+    /// cherry-pick, or revert — an ambiguous-HEAD state where the working
+    /// tree and `HEAD` no longer describe one coherent commit. True when any
+    /// of `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `rebase-merge/`,
+    /// or `rebase-apply/` is present in the repository's git dir (worktree-
+    /// correct: a linked worktree keeps this state in its own git dir, not
+    /// the common one).
+    ///
+    /// The agent-loop briefing tools call this so they can disclose the
+    /// ambiguous state honestly rather than presenting committed-`HEAD`
+    /// history as the whole picture.
+    ///
+    /// Default impl returns `false` so backends without a cheap check can opt
+    /// out. Like [`is_worktree_dirty`](Self::is_worktree_dirty), detection is
+    /// a hint rather than a contract: an implementation that cannot determine
+    /// the state returns `false` (a missed note) instead of surfacing an
+    /// error.
+    fn merge_or_rebase_in_progress(&self) -> bool {
+        false
+    }
+
     /// Read the blob bytes at revision `rev` for `path` (POSIX-
     /// separated, repo-relative). `rev` is any git revision the backend
     /// can resolve — a commit SHA, `"HEAD"`, a tag, etc. Returns

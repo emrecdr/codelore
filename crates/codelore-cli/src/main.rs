@@ -1016,10 +1016,23 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
         return Ok(());
     }
 
+    // Mirrors `quality_gates::resolve_defect_calibration`, but reuses the
+    // `thresholds` value already loaded above instead of re-discovering
+    // (and re-parsing) the thresholds file.
+    let resolved_defect_calibration = args.defect_calibration.clone().or_else(|| {
+        thresholds.calibration.defect_artifact.clone().map(|p| {
+            if p.is_absolute() {
+                p
+            } else {
+                args.repo.join(p)
+            }
+        })
+    });
+
     let opts = Options {
         repo_path: args.repo.clone(),
         calibration: args.calibration.clone(),
-        defect_calibration: args.defect_calibration.clone(),
+        defect_calibration: resolved_defect_calibration,
         allow_foreign_calibration: args.allow_foreign_calibration,
         temp_dir: args.temp_dir.clone(),
         ..Options::default()
@@ -2311,10 +2324,15 @@ fn run_explain_file(args: &args::ExplainArgs, repo_relative: &str) -> Result<()>
     use codelore_lib::cli_api::enrichment::{cache, engine};
 
     let cache_root = args.cache_dir.clone().unwrap_or_else(default_cache_root);
+    let defect_calibration = codelore_lib::cli_api::quality_gates::resolve_defect_calibration(
+        args.defect_calibration.clone(),
+        &args.repo,
+    )
+    .context("resolve defect calibration")?;
     let opts = Options {
         repo_path: args.repo.clone(),
         min_revs: 1,
-        defect_calibration: args.defect_calibration.clone(),
+        defect_calibration,
         allow_foreign_calibration: args.allow_foreign_calibration,
         ..Options::default()
     };
@@ -2664,6 +2682,12 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         }
     };
 
+    let defect_calibration = codelore_lib::cli_api::quality_gates::resolve_defect_calibration(
+        args.defect_calibration.clone(),
+        &args.repo,
+    )
+    .context("resolve defect calibration")?;
+
     let opts = Options {
         repo_path: args.repo.clone(),
         min_revs: args.min_revs,
@@ -2707,7 +2731,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         release_tag_glob: args.release_tag_glob.clone(),
         target: args.target.clone(),
         calibration: args.calibration.clone(),
-        defect_calibration: args.defect_calibration.clone(),
+        defect_calibration,
         allow_foreign_calibration: args.allow_foreign_calibration,
         temp_dir: args.temp_dir.clone(),
         ..Options::default()

@@ -15,6 +15,7 @@ use rmcp::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use codelore_lib::change_context;
 use codelore_lib::cli_api::{
     Options,
     analyses::{
@@ -33,7 +34,7 @@ use codelore_lib::cli_api::{
     facts::FactsDb,
     quality_gates::{
         GateViolation, Thresholds, evaluate_clone_gate, evaluate_code_health_gate,
-        evaluate_full_tree,
+        evaluate_full_tree, resolve_defect_calibration,
     },
     repo::GixRepo,
 };
@@ -212,6 +213,13 @@ pub struct ExplainFileParams {
     /// File path (relative to repo root) to build the evidence dossier for
     /// (e.g. "src/main.rs").
     pub path: String,
+}
+
+/// Parameters for the `change_context` tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ChangeContextParams {
+    /// Repo-relative paths the caller intends to modify (1-20).
+    pub paths: Vec<String>,
 }
 
 // ── Output type for check_gates ───────────────────────────────────────────────
@@ -680,6 +688,45 @@ impl CodeLoreServer {
         .await
         .map_err(internal)?
     }
+
+    // ── change_context ────────────────────────────────────────────────────────
+
+    #[tool(
+        name = "change_context",
+        description = "Temporal pre-write briefing for files you are about to modify: \
+            code-health band, hotspot standing, historically co-changed partners \
+            (edit those too), owner concentration incl. a departed-owner flag, \
+            calibrated structural risk, and recent churn — compact text, \
+            ~150 tokens per file. 1-20 paths. Committed-history view; for \
+            gate evaluation of the committed tree use `check_gates`. \
+            First call on a cold cache triggers history ingest."
+    )]
+    async fn change_context(
+        &self,
+        params: Parameters<ChangeContextParams>,
+    ) -> Result<String, ErrorData> {
+        let repo_path = self.repo.clone();
+        let defect_calibration = self.defect_calibration.clone();
+        let allow_foreign_calibration = self.allow_foreign_calibration;
+        let paths = params.0.paths.clone();
+        tokio::task::spawn_blocking(move || {
+            // min_revs = 1 so any single named file resolves in its briefing,
+            // matching the `change_context` lib contract.
+            let opts = Options {
+                repo_path: repo_path.clone(),
+                min_revs: 1,
+                defect_calibration,
+                allow_foreign_calibration,
+                ..Options::default()
+            };
+            let repo = GixRepo::open(&repo_path).map_err(internal)?;
+            let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
+                .map_err(internal)?;
+            change_context::build_change_context(&db, &repo, &opts, &paths).map_err(internal)
+        })
+        .await
+        .map_err(internal)?
+    }
 }
 
 /// Wire the tool router into the MCP `ServerHandler` trait and set the
@@ -702,11 +749,21 @@ impl rmcp::handler::server::ServerHandler for CodeLoreServer {}
 /// not a failure surfaced on the first `explain_file` call. The loaded
 /// artifact is discarded here; each `explain_file` call loads it again itself
 /// via `Options`.
+///
+/// When no startup flag is given, a `[calibration]` section in the repo's
+/// thresholds file fills the artifact path instead — validated fail-fast
+/// here identically to the flag path, so a malformed thresholds file fails
+/// server startup rather than surfacing on the first tool call.
 pub fn run_mcp_server(
     repo: PathBuf,
     defect_calibration: Option<PathBuf>,
     allow_foreign_calibration: bool,
 ) -> Result<()> {
+    let defect_calibration = if defect_calibration.is_some() {
+        defect_calibration
+    } else {
+        resolve_defect_calibration(None, &repo)?
+    };
     if let Some(path) = &defect_calibration {
         let artifact = defect_calibration::load(path)?;
         defect_calibration::check_repo_identity(&artifact, &repo, allow_foreign_calibration)?;

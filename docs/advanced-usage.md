@@ -453,6 +453,8 @@ codelore analyze --analysis code-health --defect-calibration defects.calib.json
 
 When active, `code-health` substitutes the artifact's weights for the built-in smell weights and the provenance manifest stamps `defect_vintage` alongside `corpus_vintage`. For a *defaults-kept* artifact those weights **are** the defaults, so applying it changes no score while the vintage stamp still records that the artifact was consulted. Applying an artifact mined from a **different repository** is a hard error — a repo-identity fingerprint (a hash of the canonical repo path, recorded at mining time) is checked before the weights are used; pass `--allow-foreign-calibration` to override it for a fork. **Without the `--defect-calibration` flag, behavior is byte-identical to today** — contract-tested by strip-and-compare, the same guarantee the corpus lens carries. The two calibrations compose cleanly: corpus percentiles are additive columns, defect weights change the composite, and both journeys are recorded in provenance.
 
+Instead of passing `--defect-calibration` on every invocation, declare the artifact once in `.codelore-thresholds.toml`'s `[calibration]` section (see [§5](#5-configuration-codeloreignore--thresholds)) — `analyze`, `check`, `explain <path>`, and `codelore mcp` all resolve it the same way, with the explicit flag always taking precedence.
+
 **Reading the evidence — the `defect-validation` analysis.** `defect-validation` reads the artifact (it never mines) and flattens its evidence into `(metric, value)` rows:
 
 ```sh
@@ -808,9 +810,14 @@ code_familiarity_min = 40.0   # fail when team familiarity drops below 40 % (sca
 no_new_cycles = true          # a PR may not introduce a dependency cycle the base lacked
 delta_health_min = 40.0       # ratio must be ≥ 40 (indeterminate or better)
 deny_degrading_verdict = true # a "degrading" verdict fails the PR gate
+
+[calibration]
+defect_artifact = "defects.calib.json"  # repo-declared default, see below
 ```
 
 `max_dependency_cycles` / `max_propagation_cost` are evaluated against HEAD by `codelore check`; `no_new_cycles` compares the base-rev and head-rev import graphs in `codelore diff` and fails the PR when head has more cycles than base. `delta_health_min` and `deny_degrading_verdict` both act on the `delta_health` section: `delta_health_min` fails when `ratio < threshold` (skipped on `no-code-change` diffs where no ratio exists); `deny_degrading_verdict` fails when the verdict is exactly `"degrading"`. `max_red_effort_pct` gates on the `effort-exposure` churn share (share of changed lines, added + deleted) for the red band; `code_familiarity_min` gates on the repo-scope `familiarity-pct` (0–100) from `code-familiarity` (see the dedicated subsections in the SPA widget surface above).
+
+`[calibration]` is not a gate — it's a config *selector* that declares the repo's default defect-calibration artifact once, so `analyze`, `check`, `explain <path>`, and `codelore mcp` all pick it up without repeating `--defect-calibration` on every invocation. Precedence: an explicit `--defect-calibration` flag (or the MCP server's startup flag) always wins; otherwise the `[calibration] defect_artifact` path is used, resolved relative to the repo root (absolute paths pass through as-is); otherwise the run is uncalibrated. A thresholds file containing only `[calibration]` still leaves `check` vacuously passing — see [Defect calibration](#defect-calibration-does-the-health-score-predict-where-defects-land-here) for what the artifact does once applied.
 
 ## 5. Configuration: `.codeloreignore` + thresholds
 
@@ -1527,6 +1534,36 @@ Parameters:
 - `path` *(required, string)* — file path relative to the repo root (e.g. `src/main.rs`).
 
 Cost: warm-cache fast for the fact sheet; cold-cache triggers ingest. With an LLM configured, a cache-miss narrative adds one model round-trip (the narrative sidecar cache makes repeat calls on unchanged evidence free).
+
+#### `change_context`
+
+Returns a compact, temporal **pre-write briefing** for the 1–20 repo-relative files an agent is about to modify — what the committed history already knows about each path, so an edit can be planned with the file's hotspot standing, coupling, and ownership in view. Unlike every other tool, the result is plain fixed-format text (roughly 150 tokens per file), not JSON: it is written to drop straight into an agent's context.
+
+Each requested path heads its own block, in request order, with five lines:
+
+```text
+crates/codelore-lib/src/cache.rs
+  health 67.3 (yellow) · risk 0.42 · calibrated defects-2026-07-15
+  hotspot #12 (score 0.67, 23 revs)
+  co-change: options.rs (68%, p=0.003) · facts/mod.rs (54%, p=0.011)
+  owner: Emre Camdere 82% (sole owner, active 12d ago)
+  recent: 4 commits, 310 lines churned in last 90d
+```
+
+- **health** — composite score with its band and the `structural_risk` value, plus a `calibrated <vintage>` suffix when the server was started with `--defect-calibration` (or a repo `[calibration]` section), else `uncalibrated`. A path with no code-health row renders `health: no code-health row`.
+- **hotspot** — 1-based rank in the full hotspot ranking; a path outside the ranking renders `not in the hotspot set`.
+- **co-change** — up to three historically co-changed partners (edit those too); when none clear the significance filter it renders `co-change: none significant`.
+- **owner** — main author, ownership share, sole-vs-shared concentration, and a `departed <n>d` flag when the main author has been inactive past the departed threshold (else `active <n>d ago`); no attributable ownership renders `owner: inconclusive`.
+- **recent** — commit count and churned lines over the recent window; a path untouched in the window renders `recent: quiet in last <window>d`.
+
+A genuinely unknown path — absent from every feed (health, hotspots, co-change, ownership, recent churn), i.e. brand-new, untracked, or mistyped — renders a two-line block instead: the path followed by `no history at HEAD (new or untracked file)`. When the repository is partway through a merge, rebase, cherry-pick, or revert, one leading note precedes every block, disclosing that the briefing reflects committed HEAD history.
+
+This is a **committed-history** view — it never inspects the working tree. To evaluate the committed tree against the repo's quality gates, use [`check_gates`](#check_gates).
+
+Parameters:
+- `paths` *(required, array of strings)* — 1–20 repo-relative paths the caller intends to modify. An empty list or a list longer than 20 is a tool error naming the limit.
+
+Cost: warm-cache fast; cold-cache triggers a one-time history ingest.
 
 ### Architecture note
 

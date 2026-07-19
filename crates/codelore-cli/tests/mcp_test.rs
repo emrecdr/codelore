@@ -138,6 +138,20 @@ fn assert_tool_ok(resp: &Value, tool_name: &str) -> Value {
         .unwrap_or_else(|e| panic!("{tool_name}: content text is not valid JSON ({e}): {text}"))
 }
 
+/// Assert a tool response is not an error and return the first content text
+/// verbatim. Unlike [`assert_tool_ok`], this does not parse the text as JSON —
+/// `change_context` returns a plain-text briefing, not a JSON document.
+fn assert_tool_ok_text(resp: &Value, tool_name: &str) -> String {
+    assert_eq!(resp["jsonrpc"], "2.0", "{tool_name}: bad jsonrpc field");
+    assert!(
+        !resp["result"]["isError"].as_bool().unwrap_or(false),
+        "{tool_name} returned MCP error: {resp}"
+    );
+    let content = resp["result"]["content"].as_array().expect("content array");
+    assert!(!content.is_empty(), "{tool_name}: content array is empty");
+    content[0]["text"].as_str().expect("text field").to_string()
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
@@ -162,8 +176,8 @@ fn mcp_tools_list_and_repo_overview() {
     // Exact count — catches both missing tools and accidental extras.
     assert_eq!(
         tools.len(),
-        9,
-        "expected exactly 9 tools, got {}: {:?}",
+        10,
+        "expected exactly 10 tools, got {}: {:?}",
         tools.len(),
         tools
             .iter()
@@ -182,6 +196,7 @@ fn mcp_tools_list_and_repo_overview() {
         "check_gates",
         "finding_hotspot_overlap",
         "explain_file",
+        "change_context",
     ] {
         assert!(
             tool_names.contains(expected),
@@ -676,4 +691,160 @@ fn mcp_refuses_to_start_on_foreign_artifact_without_override() {
         stderr.contains("--allow-foreign-calibration"),
         "stderr must mention '--allow-foreign-calibration', got: {stderr}"
     );
+}
+
+#[test]
+fn mcp_change_context_returns_briefing_for_known_path() {
+    let repo = delivery_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
+
+    // Derive a target from `code_health` so the briefing is guaranteed a file
+    // with recorded history. A path present at the default `min_revs` is a
+    // superset of what the briefing sees at `min_revs = 1`.
+    let ch = call_tool(&mut stdin, &mut reader, 1, "code_health", &json!({}));
+    let ch_rows = assert_tool_ok(&ch, "code_health");
+    let target = ch_rows
+        .as_array()
+        .and_then(|rows| rows.first())
+        .and_then(|row| row["path"].as_str())
+        .expect("code_health yields at least one file for delivery_repo")
+        .to_string();
+
+    let resp = call_tool(
+        &mut stdin,
+        &mut reader,
+        2,
+        "change_context",
+        &json!({ "paths": [target.clone()] }),
+    );
+    let text = assert_tool_ok_text(&resp, "change_context");
+
+    // The briefing is plain text: the requested path heads its block, and the
+    // health + owner lines are present (in honest-absence form if data is
+    // missing, but the labels are always there for a path with history).
+    assert!(
+        text.contains(&target),
+        "briefing must name the requested path: {text}"
+    );
+    assert!(
+        text.contains("health "),
+        "briefing must carry a health line: {text}"
+    );
+    assert!(
+        text.contains("owner:"),
+        "briefing must carry an owner line: {text}"
+    );
+    // The output is a fixed-format text briefing, never a JSON document and
+    // never a renderer that leaked an `undefined` sentinel.
+    assert!(
+        !text.contains("undefined"),
+        "briefing must not contain the literal 'undefined': {text}"
+    );
+    assert!(
+        !text.contains('{') && !text.contains('}'),
+        "briefing is plain text, not JSON: {text}"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn mcp_change_context_rejects_empty_and_oversized_path_lists() {
+    let repo = delivery_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
+
+    // 0 paths — below the 1-path floor.
+    let empty = call_tool(
+        &mut stdin,
+        &mut reader,
+        1,
+        "change_context",
+        &json!({ "paths": [] }),
+    );
+    assert_eq!(empty["jsonrpc"], "2.0");
+    let empty_is_error =
+        empty["error"].is_object() || empty["result"]["isError"].as_bool().unwrap_or(false);
+    assert!(
+        empty_is_error,
+        "an empty path list must be an error, got: {empty}"
+    );
+    assert!(
+        empty.to_string().contains("20"),
+        "the empty-list error must name the 20-path limit: {empty}"
+    );
+
+    // 21 paths — above the 20-path ceiling.
+    let too_many: Vec<String> = (0..21).map(|i| format!("src/file{i}.rs")).collect();
+    let oversized = call_tool(
+        &mut stdin,
+        &mut reader,
+        2,
+        "change_context",
+        &json!({ "paths": too_many }),
+    );
+    assert_eq!(oversized["jsonrpc"], "2.0");
+    let oversized_is_error =
+        oversized["error"].is_object() || oversized["result"]["isError"].as_bool().unwrap_or(false);
+    assert!(
+        oversized_is_error,
+        "an oversized path list must be an error, got: {oversized}"
+    );
+    assert!(
+        oversized.to_string().contains("20"),
+        "the oversized-list error must name the 20-path limit: {oversized}"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn mcp_change_context_stays_within_token_budget() {
+    let repo = delivery_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
+
+    // Two real paths from the code-health rows; if the repo has only one, reuse
+    // it (the budget is per requested path, so a duplicate still exercises two
+    // blocks).
+    let ch = call_tool(&mut stdin, &mut reader, 1, "code_health", &json!({}));
+    let ch_rows = assert_tool_ok(&ch, "code_health");
+    let rows = ch_rows
+        .as_array()
+        .expect("code_health returns an array for delivery_repo");
+    let first = rows
+        .first()
+        .and_then(|row| row["path"].as_str())
+        .expect("code_health yields at least one file for delivery_repo")
+        .to_string();
+    let second = rows
+        .get(1)
+        .and_then(|row| row["path"].as_str())
+        .unwrap_or(&first)
+        .to_string();
+
+    let resp = call_tool(
+        &mut stdin,
+        &mut reader,
+        2,
+        "change_context",
+        &json!({ "paths": [first, second] }),
+    );
+    let text = assert_tool_ok_text(&resp, "change_context");
+
+    // Budget is 150 whitespace-split tokens per requested path (spec §6).
+    let tokens = text.split_whitespace().count();
+    assert!(
+        tokens <= 300,
+        "budget is 150 tokens/path; got {tokens} for 2 paths: {text}"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
 }
