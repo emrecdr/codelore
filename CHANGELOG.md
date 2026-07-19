@@ -24,6 +24,8 @@ Conventional Commits format. All notable changes documented here.
 
 - **A corrupted or unreachable git object no longer masquerades as "file not tracked at HEAD."** The HEAD-time clones and imports scans now match `complexity`'s three-arm handling of `read_blob_at_head`: an untracked path still skips silently, but an object-database error is surfaced with `tracing::warn!` and the file is skipped rather than treated the same as "not tracked." The MCP server's temporary-worktree helper no longer panics when a worktree's temp path is not valid UTF-8; it now returns a clean MCP error instead.
 
+- **Every release artifact now carries its license notices.** The GPL-3.0 `LICENSE` and the MPL-2.0 notice for the vendored `codelore-rca` fork are bundled into every platform tarball and the Windows zip, and copied into the container image at `/usr/share/licenses/codelore/`. A root `NOTICE` file attributes the vendored fork.
+
 ## [0.21.0] - 2026-07-18
 
 ### Added
