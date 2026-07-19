@@ -259,6 +259,43 @@
       </ul>
     </section>
 
+    <section>
+  <h2>How it compares</h2>
+  <p class="lead">
+    GitHub Code Quality brings native PR integration, zero setup on GitHub-hosted
+    repos, and CodeQL's rule depth to point-in-time static analysis. CodeLore's
+    angle is different — and complementary.
+  </p>
+  <ul class="answers">
+    <li>
+      <strong>Analysis signal</strong>
+      <span>Point-in-time static findings versus git-history behavioral signal: hotspots, change coupling, ownership, defect-calibrated risk.</span>
+    </li>
+    <li>
+      <strong>Where it runs</strong>
+      <span>Hosted CI on GitHub's infrastructure versus a single portable binary, offline-capable — the same one gates this repository's own CI.</span>
+    </li>
+    <li>
+      <strong>Cost model</strong>
+      <span>Per-committer subscription plus metered CI compute and AI credits versus free and open source.</span>
+    </li>
+    <li>
+      <strong>Agent surface</strong>
+      <span>None versus a local MCP server exposing every analysis as an agent tool.</span>
+    </li>
+    <li>
+      <strong>Data residency</strong>
+      <span>Code analyzed in GitHub's cloud versus nothing leaving the machine.</span>
+    </li>
+  </ul>
+  <p class="install-note">
+    This is a comparison with the Code Quality product, not the Code Scanning
+    integration above — CodeLore's SARIF output feeds GitHub Code Scanning
+    directly; the two sit side by side rather than competing.
+  </p>
+</section>
+
+
     <section id="install">
       <h2>Install</h2>
       <p class="lead">Pick whichever fits your machine.</p>
