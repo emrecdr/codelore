@@ -58,6 +58,29 @@ impl GitCliRepo {
             .output()
             .map_err(|e| CodeLoreError::Repo(format!("git {}: {e}", args.join(" "))))
     }
+
+    /// Resolve `marker` to its worktree-correct location via `git rev-parse
+    /// --git-path` and report whether that path exists on disk. `rev-parse`
+    /// prints an absolute path when the git dir lies outside the worktree
+    /// (linked worktrees) and a relative one otherwise; `self.root.join`
+    /// handles both (an absolute join replaces the base). Returns `false` on
+    /// any git or UTF-8 failure — a missed hint, never a hard error.
+    fn git_path_exists(&self, marker: &str) -> bool {
+        let Ok(output) = self.run_git(&["rev-parse", "--git-path", marker]) else {
+            return false;
+        };
+        if !output.status.success() {
+            return false;
+        }
+        let Ok(resolved) = String::from_utf8(output.stdout) else {
+            return false;
+        };
+        let resolved = resolved.trim();
+        if resolved.is_empty() {
+            return false;
+        }
+        self.root.join(resolved).exists()
+    }
 }
 
 impl Repo for GitCliRepo {
@@ -242,6 +265,26 @@ impl Repo for GitCliRepo {
             Ok(output) if output.status.success() => !output.stdout.is_empty(),
             _ => false,
         }
+    }
+
+    fn merge_or_rebase_in_progress(&self) -> bool {
+        // `MERGE_HEAD`, `CHERRY_PICK_HEAD`, and `REVERT_HEAD` are files;
+        // `rebase-merge` and `rebase-apply` are directories — `Path::exists`
+        // covers both. We resolve each marker's location with `git rev-parse
+        // --git-path` rather than hand-joining `root/.git/<marker>`: a linked
+        // worktree keeps merge/rebase state in its own git dir, not the
+        // common one, and `--git-path` returns the worktree-correct path.
+        // This is the same five-marker set `GixRepo`'s `state()` covers;
+        // `BISECT_LOG` is deliberately not probed. A detection failure yields
+        // `false` (a missed hint, per the trait contract).
+        const MARKERS: [&str; 5] = [
+            "MERGE_HEAD",
+            "CHERRY_PICK_HEAD",
+            "REVERT_HEAD",
+            "rebase-merge",
+            "rebase-apply",
+        ];
+        MARKERS.iter().any(|marker| self.git_path_exists(marker))
     }
 
     fn read_blob_at(&self, rev: &str, path: &str) -> Result<Option<Vec<u8>>> {
