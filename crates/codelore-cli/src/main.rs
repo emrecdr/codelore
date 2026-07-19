@@ -1021,8 +1021,10 @@ fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
         calibration: args.calibration.clone(),
         defect_calibration: args.defect_calibration.clone(),
         allow_foreign_calibration: args.allow_foreign_calibration,
+        temp_dir: args.temp_dir.clone(),
         ..Options::default()
     };
+    opts.validate().context("validate options")?;
     let repo = GixRepo::open(&args.repo).context("open repo")?;
     let head_sha = repo.head_sha().context("get HEAD sha")?;
     let db =
@@ -2707,6 +2709,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         calibration: args.calibration.clone(),
         defect_calibration: args.defect_calibration.clone(),
         allow_foreign_calibration: args.allow_foreign_calibration,
+        temp_dir: args.temp_dir.clone(),
         ..Options::default()
     };
 
@@ -2802,8 +2805,11 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         let _span =
             tracing::info_span!(target: "codelore::bench", "bench.cache_or_ingest").entered();
         if args.no_cache || needs_writable_db {
-            // --no-cache or sqlite output: always fresh in-memory.
-            let db = FactsDb::new_in_memory().context("open fact store (in-memory)")?;
+            // --no-cache or sqlite output: always fresh in-memory. Still
+            // honors `--temp-dir` so a very large repo spills instead of
+            // OOM-ing on this bypass-the-cache path.
+            let db = FactsDb::new_in_memory_with_temp_dir(opts.temp_dir.as_deref())
+                .context("open fact store (in-memory)")?;
             db.ingest(&repo, &opts).context("ingest commits")?;
             db
         } else if let Some(cache_dir) = &args.cache_dir {

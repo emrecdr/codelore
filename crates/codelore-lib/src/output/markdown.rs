@@ -1366,6 +1366,9 @@ pub fn write_refactoring_targets_markdown<W: Write>(
 }
 
 /// `team-composition` markdown emitter.
+///
+/// The `__summary__` carrier row (bucket-share percentages, not per-author
+/// data) is not a data row and is skipped.
 pub fn write_team_composition_markdown<W: Write>(
     rows: &[crate::analyses::team_composition::TeamCompositionRow],
     w: &mut W,
@@ -1382,6 +1385,9 @@ pub fn write_team_composition_markdown<W: Write>(
     .map_err(CodeLoreError::Io)?;
     writeln!(w, "|---|---:|---|---|---|---:|---:|---:|").map_err(CodeLoreError::Io)?;
     for row in rows {
+        if row.author == "__summary__" {
+            continue;
+        }
         let ob = row
             .onboarding_weeks
             .map_or_else(|| "—".to_string(), |v| v.to_string());
@@ -1651,5 +1657,47 @@ mod escape_tests {
     fn mixed_special_chars_pipe_and_newline() {
         let out = escape_md_cell("a|b\nc");
         assert_eq!(out, "a\\|b↵c");
+    }
+}
+
+#[cfg(test)]
+mod team_composition_tests {
+    use crate::analyses::team_composition::TeamCompositionRow;
+
+    #[test]
+    fn team_composition_markdown_skips_summary_row() {
+        let rows = vec![
+            TeamCompositionRow {
+                author: "alice".to_string(),
+                tenure_days: 110,
+                bucket: "experienced".to_string(),
+                veteran_breadth_ok: false,
+                active: true,
+                commits: 12,
+                files_touched: 3,
+                onboarding_weeks: None,
+            },
+            TeamCompositionRow {
+                author: "__summary__".to_string(),
+                tenure_days: 0,
+                bucket: "onboarded=33.3% experienced=66.7% veteran=0.0%".to_string(),
+                veteran_breadth_ok: false,
+                active: false,
+                commits: 0,
+                files_touched: 0,
+                onboarding_weeks: None,
+            },
+        ];
+        let mut buf = Vec::new();
+        super::write_team_composition_markdown(&rows, &mut buf).expect("write markdown");
+        let out = String::from_utf8(buf).expect("utf8");
+        assert!(
+            !out.contains("__summary__"),
+            "markdown output must not contain the __summary__ carrier row: {out}"
+        );
+        assert!(
+            out.contains("alice"),
+            "markdown output must contain real author rows: {out}"
+        );
     }
 }

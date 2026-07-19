@@ -1134,7 +1134,15 @@ fn team_composition_csv_has_header_and_rows() {
         .stdout(predicate::str::contains(
             "author,tenure-days,bucket,veteran-breadth-ok,active,commits,files-touched,onboarding-weeks",
         ))
-        .stdout(predicate::str::contains("__summary__"));
+        // The `__summary__` carrier row is not emitted as a CSV data row.
+        .stdout(predicate::str::contains("__summary__").not())
+        // At least one real per-author row is present — every author falls in
+        // one of the three tenure buckets.
+        .stdout(
+            predicate::str::contains("onboarded")
+                .or(predicate::str::contains("experienced"))
+                .or(predicate::str::contains("veteran")),
+        );
 }
 
 #[cfg(feature = "spa")]

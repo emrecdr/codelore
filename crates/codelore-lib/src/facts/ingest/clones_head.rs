@@ -49,11 +49,21 @@ impl FactsDb {
                 // and ignores dirty-tree edits. Backends without blob
                 // support return Ok(None) — same skip behaviour as the
                 // disk-not-found case the previous let-Ok-else handled.
-                // Untracked-at-HEAD (Ok(None)) and object-DB errors
-                // (Err) both skip the file — non-fatal, the rest of
-                // the scan continues.
-                let Ok(Some(code)) = repo.read_blob_at_head(&rel) else {
-                    return Ok(Vec::new());
+                let code = match repo.read_blob_at_head(&rel) {
+                    Ok(Some(code)) => code,
+                    Ok(None) => {
+                        // Path not tracked at HEAD; skip (non-fatal, the
+                        // rest of the scan continues).
+                        tracing::debug!("clones: {rel} not tracked at HEAD; skipping");
+                        return Ok(Vec::new());
+                    }
+                    Err(e) => {
+                        // Object-database error (corrupted pack, missing
+                        // shallow object). Surface as a warning and skip
+                        // — the rest of the scan can still complete.
+                        tracing::warn!("clones: blob read failed for {rel}: {e}");
+                        return Ok(Vec::new());
+                    }
                 };
                 // Skip oversized files (generated / minified) before
                 // tree-sitter to avoid OOM / stack-overflow on deeply

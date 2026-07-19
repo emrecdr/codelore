@@ -21,7 +21,7 @@ CodeLore is a 3-crate Cargo workspace:
 | Crate | Responsibility |
 |---|---|
 | `codelore-rca` | Vendored + modified fork of Mozilla's `rust-code-analysis` (MPL-2.0). Provides cyclomatic / cognitive / Halstead / MI complexity metrics. Isolated as its own crate so the vendored license stays cleanly separated. |
-| `codelore-lib` | Core library: the `Repo` trait (`GixRepo` default, `GitCliRepo` oracle for differential tests), the DuckDB-backed `FactsDb` fact store, the 54 analyses, the persistent cache, the multi-format output emitters, identity resolution (mailmap + bot + AI-attribution), and the Kamei change-feature enrichment. |
+| `codelore-lib` | Core library: the `Repo` trait (`GixRepo` default, `GitCliRepo` oracle for differential tests), the DuckDB-backed `FactsDb` fact store, the full analysis registry (enumerated by `AnalysisName::all()`), the persistent cache, the multi-format output emitters, identity resolution (mailmap + bot + AI-attribution), and the Kamei change-feature enrichment. |
 | `codelore-cli` | Clap CLI binary: `analyze` and `diff` subcommands, ignore-file parsing, `Options` construction, output routing. |
 
 ## 3. Pipeline data flow
@@ -88,7 +88,7 @@ Two implementations:
 
 The differential test suite (`tests/differential_repo_test.rs`) is the load-bearing correctness check: any divergence between backends fails CI.
 
-## 5. The 54 analyses
+## 5. The analysis registry
 
 | Tier | Surface | What they share |
 |---|---|---|

@@ -52,9 +52,21 @@ impl FactsDb {
         let per_file: Vec<(String, Vec<RawImport>)> = candidates
             .into_par_iter()
             .filter_map(|(rel, lang)| {
-                let Ok(Some(code)) = repo.read_blob_at_head(&rel) else {
-                    tracing::debug!("imports: {rel} not tracked at HEAD; skipping");
-                    return None;
+                let code = match repo.read_blob_at_head(&rel) {
+                    Ok(Some(code)) => code,
+                    Ok(None) => {
+                        // Path not tracked at HEAD; skip (non-fatal, the
+                        // rest of the scan continues).
+                        tracing::debug!("imports: {rel} not tracked at HEAD; skipping");
+                        return None;
+                    }
+                    Err(e) => {
+                        // Object-database error (corrupted pack, missing
+                        // shallow object). Surface as a warning and skip
+                        // — the rest of the scan can still complete.
+                        tracing::warn!("imports: blob read failed for {rel}: {e}");
+                        return None;
+                    }
                 };
                 if code.len() > crate::constants::DEFAULT_MAX_AST_FILE_BYTES {
                     tracing::debug!(

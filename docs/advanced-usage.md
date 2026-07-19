@@ -648,6 +648,11 @@ codelore analyze [OPTIONS]
       --exclude PATTERN         Path glob to exclude (repeatable)
       --no-cache                Skip the persistent cache; always fresh ingest
       --cache-dir PATH          Override XDG cache root
+      --temp-dir PATH           Override the DuckDB spill directory (must
+                                already exist and be writable). Defaults to a
+                                subdirectory of the cache root, or the system
+                                temp directory when there is no cache root in
+                                play (e.g. --no-cache).
   -v, --verbose                 Verbose logging (info,codelore=debug)
 
   # ── Corpus calibration ────────────────────────────────────────────
@@ -1004,6 +1009,22 @@ WARN cache hit on a working tree with uncommitted changes; HEAD-time metrics
 ```
 
 Detection is cheap (gix `Repository::is_dirty` for the pure-Rust walker, `git status --porcelain --untracked-files=no` for the CLI walker). Pass `--no-cache` if the dirty state matters for your analysis. The warning is informational — codelore still serves the cached result by default to preserve the 10–100× speedup on clean repeated runs. Auto-invalidation via worktree-content hashing was considered and rejected: hashing every tracked file on every invocation costs 100ms–1s on large trees, which would erase the cache's perf win for the majority case where the cache is correct.
+
+### Memory ceiling and disk spill
+
+Every `DuckDB` connection codelore opens — cache hit, cache write, and the `--no-cache`/dirty-worktree in-memory path alike — carries a `memory_limit` PRAGMA (4 GB, matching the peak-memory target in this project's performance targets) and a `temp_directory` PRAGMA. Once a query's resident state would exceed the ceiling, `DuckDB` spills intermediate hash-join/sort/aggregation state to `temp_directory` instead of growing unbounded, so a very large repository degrades to slower (disk-bound) execution rather than getting OOM-killed.
+
+The spill directory defaults to a subdirectory of the active cache root (`<cache_root>/codelore/spill`), or the system temp directory when there is no cache root in play (e.g. `--no-cache`). Override it with `--temp-dir PATH`:
+
+```bash
+# Analyze a very large repo with an explicit scratch volume for spill
+codelore analyze --analysis hotspots --temp-dir /mnt/scratch/codelore-spill
+
+# codelore check honors the same flag
+codelore check --temp-dir /mnt/scratch/codelore-spill
+```
+
+`--temp-dir` must already exist and be writable; codelore validates it up front rather than failing deep inside an ingest. The directory choice has no effect on analysis output — it changes only where `DuckDB` writes scratch files — so it is not part of the persistent-cache key.
 
 ## 8.5. LLM enrichment (advisory narratives)
 

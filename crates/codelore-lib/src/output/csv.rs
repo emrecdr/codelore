@@ -1294,7 +1294,9 @@ pub fn write_refactoring_targets_csv<W: Write>(
 /// CSV header: `author,tenure-days,bucket,veteran-breadth-ok,active,commits,files-touched,onboarding-weeks`
 ///
 /// The `onboarding-weeks` column is empty for `NULL` (founders and authors who
-/// never reached the weekly 80%-core set).
+/// never reached the weekly 80%-core set). The `__summary__` carrier row
+/// (bucket-share percentages, not per-author data) is not a data row and is
+/// skipped.
 pub fn write_team_composition_csv<W: Write>(
     rows: &[crate::analyses::team_composition::TeamCompositionRow],
     w: &mut W,
@@ -1305,6 +1307,9 @@ pub fn write_team_composition_csv<W: Write>(
     )
     .map_err(CodeLoreError::Io)?;
     for row in rows {
+        if row.author == "__summary__" {
+            continue;
+        }
         let ob = row
             .onboarding_weeks
             .map_or_else(String::new, |v| v.to_string());
@@ -1501,5 +1506,44 @@ mod tests {
         // The guard composes with RFC-4180 quote-doubling: an embedded
         // double-quote is still escaped inside the guarded cell.
         assert_eq!(quote_if_needed("=\"x\""), "\"'=\"\"x\"\"\"");
+    }
+
+    #[test]
+    fn team_composition_csv_skips_summary_row() {
+        use crate::analyses::team_composition::TeamCompositionRow;
+
+        let rows = vec![
+            TeamCompositionRow {
+                author: "alice".to_string(),
+                tenure_days: 110,
+                bucket: "experienced".to_string(),
+                veteran_breadth_ok: false,
+                active: true,
+                commits: 12,
+                files_touched: 3,
+                onboarding_weeks: None,
+            },
+            TeamCompositionRow {
+                author: "__summary__".to_string(),
+                tenure_days: 0,
+                bucket: "onboarded=33.3% experienced=66.7% veteran=0.0%".to_string(),
+                veteran_breadth_ok: false,
+                active: false,
+                commits: 0,
+                files_touched: 0,
+                onboarding_weeks: None,
+            },
+        ];
+        let mut buf = Vec::new();
+        super::write_team_composition_csv(&rows, &mut buf).expect("write csv");
+        let out = String::from_utf8(buf).expect("utf8");
+        assert!(
+            !out.contains("__summary__"),
+            "csv output must not contain the __summary__ carrier row: {out}"
+        );
+        assert!(
+            out.contains("alice"),
+            "csv output must contain real author rows: {out}"
+        );
     }
 }
