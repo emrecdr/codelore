@@ -65,6 +65,7 @@ fn is_excluded(rel: &Path) -> bool {
 /// ("**54 analyses**"), since the `**` markers sit outside the matched
 /// span.
 fn stale_count_in_line(line: &str, real_count: usize) -> Option<String> {
+    const WORD: &str = "analyses";
     let bytes = line.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
@@ -82,26 +83,26 @@ fn stale_count_in_line(line: &str, real_count: usize) -> Option<String> {
             j += 1;
         }
         let rest = &line[j..];
-        const WORD: &str = "analyses";
         // `.get()`, not byte-index slicing: `rest` may put the WORD.len()
         // cut point inside a multi-byte UTF-8 character (docs use math
         // symbols like 'σ'), which would panic on a raw `&rest[..N]`.
-        if rest
+        let matches_word = rest
             .get(..WORD.len())
-            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(WORD))
-        {
-            let boundary_ok = rest
-                .as_bytes()
-                .get(WORD.len())
-                .is_none_or(|b| !b.is_ascii_alphanumeric());
-            if boundary_ok {
-                if let Ok(n) = digits.parse::<usize>() {
-                    if n != real_count {
-                        return Some(format!(
-                            "\"{digits} analyses\" (registry currently has {real_count})"
-                        ));
-                    }
+            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(WORD));
+        // Word boundary: the char after "analyses" must not be alphanumeric
+        // (so "analyses" matches but "analysesx" does not).
+        let boundary_ok = rest
+            .as_bytes()
+            .get(WORD.len())
+            .is_none_or(|b| !b.is_ascii_alphanumeric());
+        if matches_word && boundary_ok {
+            match digits.parse::<usize>() {
+                Ok(n) if n != real_count => {
+                    return Some(format!(
+                        "\"{digits} analyses\" (registry currently has {real_count})"
+                    ));
                 }
+                _ => {}
             }
         }
     }
