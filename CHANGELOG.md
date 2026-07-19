@@ -14,6 +14,8 @@ Conventional Commits format. All notable changes documented here.
 
 - **Defect-validation surfaces the full mining tally set.** The defect-validation analysis now reports all seven `MiningStats` fields: `fixes_found`, `links_found`, `files_blamed`, `lines_considered`, `lines_dropped_cosmetic`, `pure_addition_fixes`, and `blame_failures`.
 
+- **`marginal-owner-risk` computes every unhealthy file's active-owner share in one set query.** It previously issued one `DuckDB` query per yellow/red file, each recomputing the repo-wide active-authors set from scratch — O(unhealthy files × full history scan) on exactly the repos this analysis targets. Output is unchanged (byte-identical for every row, band, and share).
+
 ### Fixed
 
 - **The SPA team-composition tenure bar renders correctly.** The Knowledge-surfaces widget computed the tenure mix from two fields that do not exist on the team-composition row, so it rendered zero-width bars and the literal text `undefined`; it now derives each bucket's share from the real per-author rows. The `__summary__` carrier row is no longer emitted as a data row in the SPA, CSV, or Markdown outputs.
