@@ -1,6 +1,7 @@
 //! Clap argument definitions. CLI surface from spec §5.2.
-//! Subcommands: `analyze`, `diff`, `query`, `facts`,
-//! `explain`, `config`, `doctor`, `init`.
+//! Subcommands: `analyze`, `diff`, `completions`, `explain`, `schema`,
+//! `profile`, `docs`, `check`, `mcp`, `ingest-sarif`, `calibrate`,
+//! `calibrate-defects`.
 
 use std::path::PathBuf;
 

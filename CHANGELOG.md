@@ -26,6 +26,8 @@ Conventional Commits format. All notable changes documented here.
 
 - **Every release artifact now carries its license notices.** The GPL-3.0 `LICENSE` and the MPL-2.0 notice for the vendored `codelore-rca` fork are bundled into every platform tarball and the Windows zip, and copied into the container image at `/usr/share/licenses/codelore/`. A root `NOTICE` file attributes the vendored fork.
 
+- **Docs no longer pin a hard-coded analysis count that drifts as the registry grows.** `docs/codebase_analysis.md`, `docs/roadmap-v1.x-and-beyond.md`, and `docs/ui-roadmap.md` now describe the analysis registry by shape (enumerated by `AnalysisName::all()`) instead of a stale number, a new test guards against the count going stale again, and the CLI's module doc no longer lists subcommands (`query`, `facts`, `config`, `doctor`, `init`) that don't exist.
+
 ## [0.21.0] - 2026-07-18
 
 ### Added
