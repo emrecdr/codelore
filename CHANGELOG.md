@@ -22,6 +22,8 @@ Conventional Commits format. All notable changes documented here.
 
 - **The SPA team-composition tenure bar renders correctly.** The Knowledge-surfaces widget computed the tenure mix from two fields that do not exist on the team-composition row, so it rendered zero-width bars and the literal text `undefined`; it now derives each bucket's share from the real per-author rows. The `__summary__` carrier row is no longer emitted as a data row in the SPA, CSV, or Markdown outputs.
 
+- **A corrupted or unreachable git object no longer masquerades as "file not tracked at HEAD."** The HEAD-time clones and imports scans now match `complexity`'s three-arm handling of `read_blob_at_head`: an untracked path still skips silently, but an object-database error is surfaced with `tracing::warn!` and the file is skipped rather than treated the same as "not tracked." The MCP server's temporary-worktree helper no longer panics when a worktree's temp path is not valid UTF-8; it now returns a clean MCP error instead.
+
 ## [0.21.0] - 2026-07-18
 
 ### Added
