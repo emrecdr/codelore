@@ -76,7 +76,8 @@
 use duckdb::params;
 
 use crate::facts::FactsDb;
-use crate::{Options, Result};
+use crate::{CodeLoreError, Options, Result};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct KnowledgeIslandRow {
@@ -88,138 +89,36 @@ pub struct KnowledgeIslandRow {
     pub n_substantial_others: u32,
 }
 
-/// SQL pipeline:
-///
-/// 1. `author_last_commit` — per author's MAX(commit date) ANYWHERE.
-/// 2. `live_paths` — files whose most-recent change isn't `'deleted'`
-///    (same live-at-anchor pattern used in `code_age` / `entity-churn`).
-/// 3. `per_path_author` — per `(path, author)`: SUM(loc_added).
-/// 4. `totals` — per path: SUM of all authors' LoC.
-/// 5. `main_per_path` — per path: pick the author with max LoC
-///    (deterministic alphabetical tiebreak via `first(... ORDER BY ...)`).
-/// 6. `substantial_others` — per path: count of non-main authors with
-///    LoC share ≥ the substantial threshold.
-/// 7. Final SELECT: join + project + filter by
-///    `days_since_main_active > ?`.
-///
-/// Bind values: `[substantial_threshold, anchor, anchor,
-/// departed_threshold_days, row_limit]`.
-// The anchor (`?` placeholder) is applied to EVERY CTE that
-// touches `commits.date` so back-test mode (`--age-time-now <past>`)
-// gets a temporally-isolated view. Previously the anchor was only
-// applied at the outer SELECT's `DATE_DIFF` and the `WHERE
-// days_since_main_active > ?` filter — which left `author_last_commit`,
-// `live_paths`, and `per_path_author` looking at the full repo history
-// (including post-anchor commits). Symptoms:
-//   - Authors who returned & committed after the anchor got future
-//     `last_at` dates → negative `days_since_main_active`.
-//   - Files deleted after the anchor were treated as "still deleted"
-//     instead of "live as-of-anchor".
-//   - LoC ownership counted post-anchor contributions.
-//
-// All three CTEs now share the same `commits.date <= anchor` filter,
-// closing the temporal-isolation contract.
-const SQL: &str = "
-    WITH author_last_commit AS (
-        SELECT canonical_author AS author, MAX(date) AS last_at
-        FROM commits
-        WHERE date <= CAST(? AS TIMESTAMP)
-        GROUP BY canonical_author
-    ),
-    live_paths AS (
-        SELECT path FROM (
-            SELECT c.path,
-                   arg_max(
-                       c.change_type,
-                       ROW(commits.date, -commits.rowid)
-                   ) AS change_type
-            FROM changes c
-            INNER JOIN commits ON commits.rev = c.rev
-            WHERE commits.date <= CAST(? AS TIMESTAMP)
-            GROUP BY c.path
-        ) WHERE change_type != 'deleted'
-    ),
-    per_path_author AS (
-        -- Improvement: filter bots BEFORE aggregating ownership. Bots
-        -- (dependabot, renovate, etc.) don't have knowledge to lose —
-        -- flagging dependabot-dominated lockfiles as 'knowledge islands'
-        -- is exactly the kind of false positive that destroys signal
-        -- credibility. The LEFT JOIN tolerates authors without an
-        -- author_aliases row (legacy / pattern-only classifications).
-        SELECT
-            changes.path,
-            commits.canonical_author AS author,
-            SUM(COALESCE(changes.loc_added, 0)) AS loc
-        FROM changes
-        INNER JOIN commits ON changes.rev = commits.rev
-        INNER JOIN live_paths USING (path)
-        LEFT JOIN (
-            -- F31: dedupe by canonical. author_aliases primary key is
-            -- raw_email; canonical is N:1 (multi-email authors). A naive
-            -- `ON aa.canonical = ...` join multiplied every row by N,
-            -- inflating SUM(loc) by the same factor.
-            SELECT canonical, BOOL_OR(is_bot) AS is_bot
-            FROM author_aliases
-            GROUP BY canonical
-        ) aa ON aa.canonical = commits.canonical_author
-        WHERE COALESCE(aa.is_bot, FALSE) = FALSE
-          AND commits.date <= CAST(? AS TIMESTAMP)
-        GROUP BY changes.path, commits.canonical_author
-    ),
-    totals AS (
-        -- Improvement: filter total_loc > 0 here so binary-only files
-        -- (no LoC tracking) AND fully-bot-owned files (everyone filtered
-        -- out above) don't propagate downstream as NULL-ownership rows.
-        SELECT path, SUM(loc) AS total_loc
-        FROM per_path_author
-        GROUP BY path
-        HAVING SUM(loc) > 0
-    ),
-    main_per_path AS (
-        SELECT
-            path,
-            first(author ORDER BY loc DESC, author ASC) AS author,
-            MAX(loc) AS loc
-        FROM per_path_author
-        GROUP BY path
-    ),
-    substantial_others AS (
-        SELECT
-            ppa.path,
-            CAST(SUM(CASE
-                WHEN ppa.author != m.author
-                 AND t.total_loc > 0
-                 AND CAST(ppa.loc AS DOUBLE) / t.total_loc >= ?
-                THEN 1 ELSE 0
-            END) AS UINTEGER) AS n_others
-        FROM per_path_author ppa
-        INNER JOIN totals t ON ppa.path = t.path
-        INNER JOIN main_per_path m ON m.path = ppa.path
-        GROUP BY ppa.path
-    )
-    SELECT
-        m.path AS entity,
-        m.author AS main_author,
-        100.0 * m.loc / NULLIF(t.total_loc, 0) AS ownership_pct,
-        DATE_DIFF('day', alc.last_at, CAST(? AS TIMESTAMP)) AS days_since_main_active,
-        CAST(CAST(alc.last_at AS DATE) AS TEXT) AS last_main_author_commit,
-        so.n_others AS n_substantial_others
-    FROM main_per_path m
-    INNER JOIN totals t ON t.path = m.path
-    INNER JOIN author_last_commit alc ON alc.author = m.author
-    INNER JOIN substantial_others so ON so.path = m.path
-    WHERE DATE_DIFF('day', alc.last_at, CAST(? AS TIMESTAMP)) > ?
-    ORDER BY ownership_pct DESC, days_since_main_active DESC, entity ASC
-    LIMIT ?
-";
+/// Un-thresholded per-path owner-activity snapshot — the same
+/// ownership/activity primitive behind [`KnowledgeIslandRow`], but
+/// returned for every requested path regardless of how recently the main
+/// author committed. Callers (e.g. the agent-loop pre-write briefing)
+/// decide what counts as "departed" by comparing `days_since_main_active`
+/// against their own threshold.
+#[derive(Debug, Clone)]
+pub struct OwnerActivity {
+    /// Author with the max LoC share on the path (alphabetical-first
+    /// tiebreak; deterministic).
+    pub main_author: String,
+    /// `main_author`'s LoC share of the path (`0`-`100`, two decimals).
+    pub ownership_pct: f64,
+    /// Days since `main_author`'s most-recent commit anywhere in the
+    /// repo, relative to `opts.age_time_now` (or now, if unset).
+    pub days_since_main_active: i32,
+    /// Calendar date (`YYYY-MM-DD`) of that most-recent commit.
+    pub last_main_author_commit: String,
+    /// Count of other authors with a LoC share on this path at or above
+    /// the substantial-owner threshold.
+    pub n_substantial_others: u32,
+}
 
-#[tracing::instrument(name = "knowledge-islands", skip_all, fields(min_revs = opts.min_revs))]
-pub fn run_knowledge_islands(db: &FactsDb, opts: &Options) -> Result<Vec<KnowledgeIslandRow>> {
-    let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
-    // Anchor for "departed" calculation. Re-uses `--age-time-now` when set
-    // (so back-test pattern works: "who had-departed as of June 2024?"),
-    // otherwise the current instant.
-    let anchor_str = if let Some(d) = opts.age_time_now {
+/// Anchor timestamp for "as of" temporal calculations (departure
+/// detection, live-path liveness, days-since-active). Reuses
+/// `--age-time-now` when set (so back-test mode works: "who had departed
+/// as of June 2024?"), otherwise the current instant. Shared by
+/// [`run_knowledge_islands`] and [`owner_activity_for_paths`].
+fn anchor_timestamp(opts: &Options) -> String {
+    if let Some(d) = opts.age_time_now {
         format!(
             "{:04}-{:02}-{:02} 23:59:59",
             d.year(),
@@ -237,10 +136,160 @@ pub fn run_knowledge_islands(db: &FactsDb, opts: &Options) -> Result<Vec<Knowled
             n.minute(),
             n.second(),
         )
-    };
+    }
+}
+
+// Shared CTE fragments between `run_knowledge_islands` (restricted to
+// currently-live paths, filtered to authors past `departed_threshold_days`)
+// and `owner_activity_for_paths` (restricted to a caller-supplied path
+// list, unthresholded) — both need "who owns this file, and when did they
+// last commit anywhere", just gated differently at the edges.
+
+// Per-author `MAX(commits.date)` anywhere in the repo, as of the anchor.
+const AUTHOR_LAST_COMMIT_CTE: &str = "author_last_commit AS (
+        SELECT canonical_author AS author, MAX(date) AS last_at
+        FROM commits
+        WHERE date <= CAST(? AS TIMESTAMP)
+        GROUP BY canonical_author
+    )";
+
+// Per-path total LoC across all (non-bot) authors. `HAVING SUM(loc) > 0`
+// keeps binary-only and fully-bot-owned files from propagating downstream
+// as NULL-ownership rows.
+const TOTALS_CTE: &str = "totals AS (
+        SELECT path, SUM(loc) AS total_loc
+        FROM per_path_author
+        GROUP BY path
+        HAVING SUM(loc) > 0
+    )";
+
+// Per-path dominant author by LoC (deterministic alphabetical tiebreak).
+const MAIN_PER_PATH_CTE: &str = "main_per_path AS (
+        SELECT
+            path,
+            first(author ORDER BY loc DESC, author ASC) AS author,
+            MAX(loc) AS loc
+        FROM per_path_author
+        GROUP BY path
+    )";
+
+// Per-path count of non-main authors holding at least the
+// substantial-owner LoC share threshold.
+const SUBSTANTIAL_OTHERS_CTE: &str = "substantial_others AS (
+        SELECT
+            ppa.path,
+            CAST(SUM(CASE
+                WHEN ppa.author != m.author
+                 AND t.total_loc > 0
+                 AND CAST(ppa.loc AS DOUBLE) / t.total_loc >= ?
+                THEN 1 ELSE 0
+            END) AS UINTEGER) AS n_others
+        FROM per_path_author ppa
+        INNER JOIN totals t ON ppa.path = t.path
+        INNER JOIN main_per_path m ON m.path = ppa.path
+        GROUP BY ppa.path
+    )";
+
+// The shared projection: main author, ownership share, days-since-active,
+// last-active date, substantial-others count. `run_knowledge_islands`
+// appends a departed-threshold `WHERE` + `ORDER BY` + `LIMIT`;
+// `owner_activity_for_paths` appends nothing (unthresholded, unlimited).
+const OWNER_ACTIVITY_SELECT_CORE: &str = "SELECT
+        m.path AS entity,
+        m.author AS main_author,
+        100.0 * m.loc / NULLIF(t.total_loc, 0) AS ownership_pct,
+        DATE_DIFF('day', alc.last_at, CAST(? AS TIMESTAMP)) AS days_since_main_active,
+        CAST(CAST(alc.last_at AS DATE) AS TEXT) AS last_main_author_commit,
+        so.n_others AS n_substantial_others
+    FROM main_per_path m
+    INNER JOIN totals t ON t.path = m.path
+    INNER JOIN author_last_commit alc ON alc.author = m.author
+    INNER JOIN substantial_others so ON so.path = m.path";
+
+/// Per-`(path, author)` LoC-added, bot-filtered, restricted to
+/// `restrict_to` — a CTE providing the candidate `path` set (`live_paths`
+/// for the departed-threshold analysis, `requested_paths` for the
+/// arbitrary-path helper).
+fn per_path_author_cte(restrict_to: &str) -> String {
+    format!(
+        "per_path_author AS (
+        -- Filter bots BEFORE aggregating ownership: bots (dependabot,
+        -- renovate, etc.) don't have knowledge to lose — flagging a
+        -- dependabot-dominated lockfile as a 'knowledge island' is
+        -- exactly the false positive that destroys signal credibility.
+        SELECT
+            changes.path,
+            commits.canonical_author AS author,
+            SUM(COALESCE(changes.loc_added, 0)) AS loc
+        FROM changes
+        INNER JOIN commits ON changes.rev = commits.rev
+        INNER JOIN {restrict_to} USING (path)
+        LEFT JOIN (
+            -- Dedupe by canonical: author_aliases primary key is
+            -- raw_email; canonical is N:1 (multi-email authors). The
+            -- LEFT JOIN tolerates authors without an author_aliases row
+            -- (legacy / pattern-only classifications).
+            SELECT canonical, BOOL_OR(is_bot) AS is_bot
+            FROM author_aliases
+            GROUP BY canonical
+        ) aa ON aa.canonical = commits.canonical_author
+        WHERE COALESCE(aa.is_bot, FALSE) = FALSE
+          AND commits.date <= CAST(? AS TIMESTAMP)
+        GROUP BY changes.path, commits.canonical_author
+    )"
+    )
+}
+
+/// Assemble `run_knowledge_islands`'s query text: the shared CTEs plus the
+/// `live_paths` liveness gate, the departed-threshold `WHERE`, and the
+/// deterministic sort + row limit.
+///
+/// The anchor (`?` placeholder) is applied to EVERY CTE that touches
+/// `commits.date` so back-test mode (`--age-time-now <past>`) gets a
+/// temporally-isolated view: `author_last_commit`, `live_paths`, and
+/// `per_path_author` must all share the same `commits.date <= anchor`
+/// filter, or authors who commit after the anchor leak in (negative
+/// `days_since_main_active`), files deleted after the anchor look
+/// "still deleted" instead of live-as-of-anchor, and LoC ownership counts
+/// post-anchor contributions.
+///
+/// Bind order: `[anchor, anchor, anchor, substantial_threshold, anchor,
+/// anchor, departed_threshold_days, row_limit]`.
+fn knowledge_islands_sql() -> String {
+    let per_path_author = per_path_author_cte("live_paths");
+    format!(
+        "WITH {AUTHOR_LAST_COMMIT_CTE},
+        live_paths AS (
+            SELECT path FROM (
+                SELECT c.path,
+                       arg_max(
+                           c.change_type,
+                           ROW(commits.date, -commits.rowid)
+                       ) AS change_type
+                FROM changes c
+                INNER JOIN commits ON commits.rev = c.rev
+                WHERE commits.date <= CAST(? AS TIMESTAMP)
+                GROUP BY c.path
+            ) WHERE change_type != 'deleted'
+        ),
+        {per_path_author},
+        {TOTALS_CTE},
+        {MAIN_PER_PATH_CTE},
+        {SUBSTANTIAL_OTHERS_CTE}
+        {OWNER_ACTIVITY_SELECT_CORE}
+        WHERE DATE_DIFF('day', alc.last_at, CAST(? AS TIMESTAMP)) > ?
+        ORDER BY ownership_pct DESC, days_since_main_active DESC, entity ASC
+        LIMIT ?"
+    )
+}
+
+#[tracing::instrument(name = "knowledge-islands", skip_all, fields(min_revs = opts.min_revs))]
+pub fn run_knowledge_islands(db: &FactsDb, opts: &Options) -> Result<Vec<KnowledgeIslandRow>> {
+    let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
+    let anchor_str = anchor_timestamp(opts);
     let substantial_threshold = crate::constants::DEFAULT_SUBSTANTIAL_OWNER_THRESHOLD;
     crate::analyses::lineage::materialize_if_needed(db, opts)?;
-    let sql = crate::analyses::lineage::rewrite(SQL, opts);
+    let sql = crate::analyses::lineage::rewrite(&knowledge_islands_sql(), opts);
     super::query::explain_if_requested(
         db,
         &sql,
@@ -282,4 +331,83 @@ pub fn run_knowledge_islands(db: &FactsDb, opts: &Options) -> Result<Vec<Knowled
             })
         },
     )
+}
+
+/// Batched, un-thresholded owner-activity lookup for an arbitrary set of
+/// paths: the same ownership/activity primitive [`run_knowledge_islands`]
+/// computes internally, but returned for every path with LoC-attributable
+/// ownership — not just the ones already past `departed_threshold_days`.
+/// The caller (e.g. a pre-write briefing) compares
+/// `days_since_main_active` to its own threshold.
+///
+/// A path with no LoC-attributable ownership (never touched, binary-only,
+/// or fully bot-owned) has no entry in the returned map — treat a missing
+/// entry as **Inconclusive**, never as "not departed".
+///
+/// Bound via a `VALUES (?), (?), ...` clause rather than one query per
+/// path or string-interpolated path literals (the `marginal_owner_risk`
+/// batching precedent). Empty `paths` short-circuits to an empty map
+/// without querying.
+///
+/// # Errors
+///
+/// Returns [`CodeLoreError::Analysis`] on `DuckDB` prepare, query, or
+/// row-mapping failure.
+pub fn owner_activity_for_paths(
+    db: &FactsDb,
+    opts: &Options,
+    paths: &[String],
+) -> Result<HashMap<String, OwnerActivity>> {
+    if paths.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    crate::analyses::lineage::materialize_if_needed(db, opts)?;
+
+    let anchor_str = anchor_timestamp(opts);
+    let substantial_threshold = crate::constants::DEFAULT_SUBSTANTIAL_OWNER_THRESHOLD;
+    let placeholders = std::iter::repeat_n("(?)", paths.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let per_path_author = per_path_author_cte("requested_paths");
+    let sql = format!(
+        "WITH requested_paths(path) AS (VALUES {placeholders}),
+        {AUTHOR_LAST_COMMIT_CTE},
+        {per_path_author},
+        {TOTALS_CTE},
+        {MAIN_PER_PATH_CTE},
+        {SUBSTANTIAL_OTHERS_CTE}
+        {OWNER_ACTIVITY_SELECT_CORE}"
+    );
+    let sql = crate::analyses::lineage::rewrite(&sql, opts);
+
+    let mut stmt = db
+        .conn()
+        .prepare(&sql)
+        .map_err(|e| CodeLoreError::Analysis(format!("owner_activity_for_paths prepare: {e}")))?;
+
+    let mut bind_params: Vec<&dyn duckdb::ToSql> =
+        paths.iter().map(|p| p as &dyn duckdb::ToSql).collect();
+    bind_params.push(&anchor_str); // author_last_commit CTE WHERE
+    bind_params.push(&anchor_str); // per_path_author WHERE
+    bind_params.push(&substantial_threshold); // substantial_others CASE
+    bind_params.push(&anchor_str); // SELECT DATE_DIFF for days_since
+
+    let rows = stmt
+        .query_map(bind_params.as_slice(), |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                OwnerActivity {
+                    main_author: r.get::<_, String>(1)?,
+                    ownership_pct: r.get::<_, f64>(2)?,
+                    days_since_main_active: i32::try_from(r.get::<_, i64>(3)?).unwrap_or(i32::MAX),
+                    last_main_author_commit: r.get::<_, String>(4)?,
+                    n_substantial_others: r.get::<_, u32>(5)?,
+                },
+            ))
+        })
+        .map_err(|e| CodeLoreError::Analysis(format!("owner_activity_for_paths query: {e}")))?;
+
+    rows.collect::<std::result::Result<HashMap<_, _>, _>>()
+        .map_err(|e| CodeLoreError::Analysis(format!("owner_activity_for_paths collect: {e}")))
 }

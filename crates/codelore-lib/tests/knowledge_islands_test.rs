@@ -7,7 +7,7 @@
 //! AND no other contributor owns a substantial share.
 
 use codelore_lib::Options;
-use codelore_lib::analyses::knowledge_islands::run_knowledge_islands;
+use codelore_lib::analyses::knowledge_islands::{owner_activity_for_paths, run_knowledge_islands};
 use codelore_lib::facts::FactsDb;
 use codelore_lib::repo::GixRepo;
 
@@ -249,4 +249,76 @@ fn knowledge_islands_excludes_deleted_files() {
         !rows.iter().any(|r| r.entity == "gone.txt"),
         "deleted files must not appear in knowledge-islands; got {rows:?}",
     );
+}
+
+/// `owner_activity_for_paths` surfaces the same ownership/activity
+/// primitive as `run_knowledge_islands`, but un-thresholded and scoped to
+/// a caller-supplied path list: Alice's departed ownership on
+/// `alice_owned.txt` shows up even though no `departed_threshold_days` is
+/// ever applied, Bob's recent activity on `bob_dominates.txt` shows up
+/// too, and a path with no history at all is simply absent (Inconclusive)
+/// rather than erroring.
+#[test]
+fn owner_activity_for_paths_returns_unthresholded_activity_and_omits_unknown() {
+    let fixture = build_fixture();
+    let repo = GixRepo::open(fixture.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: fixture.path().to_path_buf(),
+        min_revs: 1,
+        age_time_now: Some(time::macros::date!(2026 - 06 - 01)),
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let paths = vec![
+        "alice_owned.txt".to_string(),
+        "bob_dominates.txt".to_string(),
+        "no_such_file.txt".to_string(),
+    ];
+    let map = owner_activity_for_paths(&db, &opts, &paths).expect("helper");
+
+    // canonical_author resolves to the raw commit email here (no
+    // author_aliases display-name override configured by this fixture) —
+    // matching `knowledge_islands_surfaces_departed_main_author_solo_owner`'s
+    // `alice_row.main_author == "alice@old.com"` assertion above.
+    let alice = map.get("alice_owned.txt").expect("alice file present");
+    assert_eq!(alice.main_author, "alice@old.com");
+    assert!(
+        alice.days_since_main_active > 800,
+        "Alice last committed 2024-03-01; got {}",
+        alice.days_since_main_active
+    );
+
+    let bob = map.get("bob_dominates.txt").expect("bob file present");
+    assert!(
+        bob.days_since_main_active < 30,
+        "Bob is active; got {}",
+        bob.days_since_main_active
+    );
+
+    assert!(
+        !map.contains_key("no_such_file.txt"),
+        "unknown path = no entry = Inconclusive"
+    );
+    assert_eq!(map.len(), 2, "no extra paths leak into the result");
+}
+
+/// Empty `paths` must short-circuit to an empty map without querying —
+/// the same contract `top_active_shares_by_path` (marginal_owner_risk)
+/// gives for a batched path-list helper.
+#[test]
+fn owner_activity_for_paths_empty_paths_returns_empty_map_without_querying() {
+    let fixture = build_fixture();
+    let repo = GixRepo::open(fixture.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: fixture.path().to_path_buf(),
+        age_time_now: Some(time::macros::date!(2026 - 06 - 01)),
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let map = owner_activity_for_paths(&db, &opts, &[]).expect("empty paths");
+    assert!(map.is_empty());
 }
