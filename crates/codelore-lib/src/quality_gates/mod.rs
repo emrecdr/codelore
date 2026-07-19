@@ -18,6 +18,9 @@
 //! delta_code_health_min = -5  # health may drop at most 5 pts in a PR
 //! new_hotspot_max = 0         # zero new hotspots allowed
 //! no_new_cycles = true        # a PR may not introduce a dependency cycle
+//!
+//! [calibration]
+//! defect_artifact = "defects.calib.json"  # repo-declared --defect-calibration default
 //! ```
 //!
 //! ## Why thresholds-in-repo vs CLI flags
@@ -35,7 +38,7 @@ pub mod ledger;
 pub mod ratchet;
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -57,6 +60,8 @@ pub struct Thresholds {
     pub gates: Gates,
     #[serde(default)]
     pub diff: DiffGates,
+    #[serde(default)]
+    pub calibration: CalibrationConfig,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -153,6 +158,19 @@ pub struct DiffGates {
     pub deny_degrading_verdict: bool,
 }
 
+/// The `[calibration]` section: repo-declared analysis calibration, applied
+/// wherever the equivalent CLI flag is accepted. This is a config *selector*,
+/// not a gate — its presence never enables gate evaluation on its own.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CalibrationConfig {
+    /// Path to a `defects.calib.json` defect-calibration artifact, relative
+    /// to the repo root (absolute paths are used as-is). Overridden by the
+    /// `--defect-calibration` CLI flag and the MCP server's startup flag;
+    /// absent everywhere means uncalibrated.
+    pub defect_artifact: Option<PathBuf>,
+}
+
 impl Thresholds {
     /// Auto-discover `.codelore-thresholds.toml` at the repo root.
     /// Returns the default (no gates configured) when the file is
@@ -219,8 +237,38 @@ impl Thresholds {
             && !self.diff.deny_degrading_verdict
         // Note: fail_on_degraded=true is the default and does not make a
         // threshold non-empty by itself — it only affects how degraded
-        // verdicts from other gates are handled.
+        // verdicts from other gates are handled. Likewise `[calibration]`
+        // is deliberately excluded from this expression: it selects a
+        // defect-calibration artifact for analyses to consume, it does not
+        // configure a gate, so a thresholds file containing only
+        // `[calibration]` still leaves `check` vacuously passing.
     }
+}
+
+/// Resolve the effective defect-calibration artifact path for a repo:
+/// an explicit flag wins; otherwise the discovered thresholds file's
+/// `[calibration] defect_artifact` (relative paths joined to the repo
+/// root); otherwise `None` (uncalibrated).
+///
+/// # Errors
+///
+/// [`CodeLoreError::Analysis`] on I/O or parse errors discovering the
+/// thresholds file.
+pub fn resolve_defect_calibration(
+    cli_flag: Option<PathBuf>,
+    repo_root: &Path,
+) -> Result<Option<PathBuf>> {
+    if cli_flag.is_some() {
+        return Ok(cli_flag);
+    }
+    let thresholds = Thresholds::discover(repo_root)?;
+    Ok(thresholds.calibration.defect_artifact.map(|p| {
+        if p.is_absolute() {
+            p
+        } else {
+            repo_root.join(p)
+        }
+    }))
 }
 
 /// One detected gate violation.
@@ -1255,5 +1303,58 @@ new_hotspot_max = 0
             Thresholds::from_text("[gates]\nmax_red_effort_pct = 100.0\n").expect("parse");
         let v = evaluate_effort_exposure_gate(&thresholds, &db, &opts).expect("evaluate gate");
         assert!(v.is_empty(), "threshold 100 must pass: {v:?}");
+    }
+
+    // ───────── [calibration] section ─────────
+
+    #[test]
+    fn calibration_section_parses_and_does_not_make_thresholds_non_empty() {
+        let t = Thresholds::from_text(
+            "[calibration]\ndefect_artifact = \"artifacts/defects.calib.json\"\n",
+        )
+        .expect("parse");
+        assert_eq!(
+            t.calibration.defect_artifact.as_deref(),
+            Some(std::path::Path::new("artifacts/defects.calib.json"))
+        );
+        // A calibration-only file configures no gates: `check` must keep
+        // vacuously passing, exactly like a fail_on_degraded-only file.
+        assert!(t.is_empty(), "calibration alone must not enable gates");
+    }
+
+    #[test]
+    fn calibration_section_rejects_unknown_keys() {
+        let err = Thresholds::from_text("[calibration]\ndefect_artefact = \"x\"\n");
+        assert!(err.is_err(), "deny_unknown_fields must reject the typo");
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn resolve_defect_calibration_prefers_cli_flag_over_section() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join(THRESHOLDS_FILENAME),
+            "[calibration]\ndefect_artifact = \"from-section.json\"\n",
+        )
+        .expect("write thresholds");
+        let cli = Some(PathBuf::from("/explicit/flag.json"));
+        let resolved = resolve_defect_calibration(cli.clone(), dir.path()).expect("resolve");
+        assert_eq!(resolved, cli, "CLI flag wins");
+        let fallback = resolve_defect_calibration(None, dir.path()).expect("resolve");
+        assert_eq!(
+            fallback,
+            Some(dir.path().join("from-section.json")),
+            "section fills None, relative path joined to repo root"
+        );
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn resolve_defect_calibration_without_section_is_none() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert_eq!(
+            resolve_defect_calibration(None, dir.path()).expect("resolve"),
+            None
+        );
     }
 }

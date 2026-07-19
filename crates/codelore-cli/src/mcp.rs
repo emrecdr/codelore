@@ -33,7 +33,7 @@ use codelore_lib::cli_api::{
     facts::FactsDb,
     quality_gates::{
         GateViolation, Thresholds, evaluate_clone_gate, evaluate_code_health_gate,
-        evaluate_full_tree,
+        evaluate_full_tree, resolve_defect_calibration,
     },
     repo::GixRepo,
 };
@@ -702,11 +702,21 @@ impl rmcp::handler::server::ServerHandler for CodeLoreServer {}
 /// not a failure surfaced on the first `explain_file` call. The loaded
 /// artifact is discarded here; each `explain_file` call loads it again itself
 /// via `Options`.
+///
+/// When no startup flag is given, a `[calibration]` section in the repo's
+/// thresholds file fills the artifact path instead — validated fail-fast
+/// here identically to the flag path, so a malformed thresholds file fails
+/// server startup rather than surfacing on the first tool call.
 pub fn run_mcp_server(
     repo: PathBuf,
     defect_calibration: Option<PathBuf>,
     allow_foreign_calibration: bool,
 ) -> Result<()> {
+    let defect_calibration = if defect_calibration.is_some() {
+        defect_calibration
+    } else {
+        resolve_defect_calibration(None, &repo)?
+    };
     if let Some(path) = &defect_calibration {
         let artifact = defect_calibration::load(path)?;
         defect_calibration::check_repo_identity(&artifact, &repo, allow_foreign_calibration)?;

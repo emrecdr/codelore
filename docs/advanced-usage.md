@@ -453,6 +453,8 @@ codelore analyze --analysis code-health --defect-calibration defects.calib.json
 
 When active, `code-health` substitutes the artifact's weights for the built-in smell weights and the provenance manifest stamps `defect_vintage` alongside `corpus_vintage`. For a *defaults-kept* artifact those weights **are** the defaults, so applying it changes no score while the vintage stamp still records that the artifact was consulted. Applying an artifact mined from a **different repository** is a hard error — a repo-identity fingerprint (a hash of the canonical repo path, recorded at mining time) is checked before the weights are used; pass `--allow-foreign-calibration` to override it for a fork. **Without the `--defect-calibration` flag, behavior is byte-identical to today** — contract-tested by strip-and-compare, the same guarantee the corpus lens carries. The two calibrations compose cleanly: corpus percentiles are additive columns, defect weights change the composite, and both journeys are recorded in provenance.
 
+Instead of passing `--defect-calibration` on every invocation, declare the artifact once in `.codelore-thresholds.toml`'s `[calibration]` section (see [§5](#5-configuration-codeloreignore--thresholds)) — `analyze`, `check`, `explain <path>`, and `codelore mcp` all resolve it the same way, with the explicit flag always taking precedence.
+
 **Reading the evidence — the `defect-validation` analysis.** `defect-validation` reads the artifact (it never mines) and flattens its evidence into `(metric, value)` rows:
 
 ```sh
@@ -808,9 +810,14 @@ code_familiarity_min = 40.0   # fail when team familiarity drops below 40 % (sca
 no_new_cycles = true          # a PR may not introduce a dependency cycle the base lacked
 delta_health_min = 40.0       # ratio must be ≥ 40 (indeterminate or better)
 deny_degrading_verdict = true # a "degrading" verdict fails the PR gate
+
+[calibration]
+defect_artifact = "defects.calib.json"  # repo-declared default, see below
 ```
 
 `max_dependency_cycles` / `max_propagation_cost` are evaluated against HEAD by `codelore check`; `no_new_cycles` compares the base-rev and head-rev import graphs in `codelore diff` and fails the PR when head has more cycles than base. `delta_health_min` and `deny_degrading_verdict` both act on the `delta_health` section: `delta_health_min` fails when `ratio < threshold` (skipped on `no-code-change` diffs where no ratio exists); `deny_degrading_verdict` fails when the verdict is exactly `"degrading"`. `max_red_effort_pct` gates on the `effort-exposure` churn share (share of changed lines, added + deleted) for the red band; `code_familiarity_min` gates on the repo-scope `familiarity-pct` (0–100) from `code-familiarity` (see the dedicated subsections in the SPA widget surface above).
+
+`[calibration]` is not a gate — it's a config *selector* that declares the repo's default defect-calibration artifact once, so `analyze`, `check`, `explain <path>`, and `codelore mcp` all pick it up without repeating `--defect-calibration` on every invocation. Precedence: an explicit `--defect-calibration` flag (or the MCP server's startup flag) always wins; otherwise the `[calibration] defect_artifact` path is used, resolved relative to the repo root (absolute paths pass through as-is); otherwise the run is uncalibrated. A thresholds file containing only `[calibration]` still leaves `check` vacuously passing — see [Defect calibration](#defect-calibration-does-the-health-score-predict-where-defects-land-here) for what the artifact does once applied.
 
 ## 5. Configuration: `.codeloreignore` + thresholds
 
