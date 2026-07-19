@@ -66,6 +66,20 @@ What separates CodeLore from code-maat, CodeScene, and jscpd:
 - **🔒 Fully local, including the agent surface.** No account, no server, no telemetry: analysis, quality gates, the dashboard, and the `codelore mcp` server all run against the repository on your disk. The dashboard is one self-contained HTML file; the reference corpus is embedded in the binary; nothing phones home. The one deliberate exception is the opt-in `--llm` layer above — and even that defaults to a local endpoint.
 - **🔗 Drop-in code-maat compatibility.** Every published code-maat analysis is supported under the same `--analysis NAME`. The `--code-maat-compat` flag flips internal defaults (`min-revs` pivot, CSV column headers for `summary` / `code-age` / `communication` / `ownership` / `authors`, `--min-soc` overload) back to legacy semantics for users with dashboards that parse code-maat CSV verbatim — see the [migration table](#migrating-from-code-maat) below.
 
+### How it compares to GitHub Code Quality
+
+GitHub Code Quality brings native PR integration, zero setup on GitHub-hosted repos, and CodeQL's rule depth to point-in-time static analysis. CodeLore's angle is different — and complementary:
+
+| Axis | GitHub Code Quality | CodeLore |
+|---|---|---|
+| **Analysis signal** | Point-in-time static findings | Git-history behavioral signal: hotspots, change coupling, ownership, defect-calibrated risk |
+| **Where it runs** | Hosted CI on GitHub's infrastructure | A single portable binary, offline-capable — the same one gates this repository's own CI |
+| **Cost model** | Per-committer subscription plus metered CI compute and AI credits | Free and open source |
+| **Agent surface** | None | Local MCP server exposing every analysis as an agent tool |
+| **Data residency** | Code analyzed in GitHub's cloud | Nothing leaves the machine |
+
+This is a comparison with the Code Quality product, not the Code Scanning integration described above — CodeLore's SARIF output feeds GitHub Code Scanning directly; the two sit side by side rather than competing.
+
 ---
 
 ## The analyses
@@ -189,6 +203,8 @@ codelore schema <row-type>          # JSON Schema 2020-12 emit
 ```
 
 `codelore check` writes `result=pass|fail` + `violations=N` to `$GITHUB_OUTPUT` when the env var is set — direct GitHub Actions step-output integration. It also works as a git hook: `codelore check --repo . --quiet` exits 0/1 and suppresses per-violation noise for hook scripts. `codelore check --format sarif` emits SARIF 2.1.0 with a commit evidence chain (top-5 contributing commits per violated file) to stdout — pipe it into the `github/codeql-action/upload-sarif` step and findings appear inline on PRs with reviewer-facing commit lineage. See [§11.8 of the advanced-usage guide](docs/advanced-usage.md) for a ready-to-paste `.git/hooks/pre-push` script, exit-code contract, warm-cache performance notes, `--ratchet` + `--history` in hook workflows, and the full GitHub Actions upload snippet.
+
+This repository is gated by its own product: the `self-gate` CI job runs `codelore check` against the committed [`.codelore-thresholds.toml`](.codelore-thresholds.toml) on every push and pull request, and blocks the merge on a violation — the gates in this repo are the product's own output.
 
 **Behavioral×static fusion:** `codelore ingest-sarif --repo . scan.sarif` ingests findings from any SARIF 2.1.0 producer (CodeQL, Semgrep, clippy-sarif) into a per-repo sidecar that survives fact-store cache eviction. `codelore analyze --analysis finding-hotspot-overlap` then joins those findings with the hotspot and code-health signal, producing a priority label (`act-now` / `plan` / `note`) for each flagged file. The `max_findings_in_hot_files` gate in `.codelore-thresholds.toml` enforces a ceiling on `act-now` count in CI; the `finding_hotspot_overlap` MCP tool exposes the same table to AI agents.
 
