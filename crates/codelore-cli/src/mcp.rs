@@ -15,6 +15,7 @@ use rmcp::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use codelore_lib::change_context;
 use codelore_lib::cli_api::{
     Options,
     analyses::{
@@ -212,6 +213,13 @@ pub struct ExplainFileParams {
     /// File path (relative to repo root) to build the evidence dossier for
     /// (e.g. "src/main.rs").
     pub path: String,
+}
+
+/// Parameters for the `change_context` tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ChangeContextParams {
+    /// Repo-relative paths the caller intends to modify (1-20).
+    pub paths: Vec<String>,
 }
 
 // ── Output type for check_gates ───────────────────────────────────────────────
@@ -676,6 +684,45 @@ impl CodeLoreServer {
                 }),
             };
             serde_json::to_string(&out).map_err(internal)
+        })
+        .await
+        .map_err(internal)?
+    }
+
+    // ── change_context ────────────────────────────────────────────────────────
+
+    #[tool(
+        name = "change_context",
+        description = "Temporal pre-write briefing for files you are about to modify: \
+            code-health band, hotspot standing, historically co-changed partners \
+            (edit those too), owner concentration incl. a departed-owner flag, \
+            calibrated structural risk, and recent churn — compact text, \
+            ~150 tokens per file. 1-20 paths. Committed-history view; for \
+            gate evaluation of the committed tree use `check_gates`. \
+            First call on a cold cache triggers history ingest."
+    )]
+    async fn change_context(
+        &self,
+        params: Parameters<ChangeContextParams>,
+    ) -> Result<String, ErrorData> {
+        let repo_path = self.repo.clone();
+        let defect_calibration = self.defect_calibration.clone();
+        let allow_foreign_calibration = self.allow_foreign_calibration;
+        let paths = params.0.paths.clone();
+        tokio::task::spawn_blocking(move || {
+            // min_revs = 1 so any single named file resolves in its briefing,
+            // matching the `change_context` lib contract.
+            let opts = Options {
+                repo_path: repo_path.clone(),
+                min_revs: 1,
+                defect_calibration,
+                allow_foreign_calibration,
+                ..Options::default()
+            };
+            let repo = GixRepo::open(&repo_path).map_err(internal)?;
+            let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
+                .map_err(internal)?;
+            change_context::build_change_context(&db, &repo, &opts, &paths).map_err(internal)
         })
         .await
         .map_err(internal)?

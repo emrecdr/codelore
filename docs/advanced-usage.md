@@ -1535,6 +1535,36 @@ Parameters:
 
 Cost: warm-cache fast for the fact sheet; cold-cache triggers ingest. With an LLM configured, a cache-miss narrative adds one model round-trip (the narrative sidecar cache makes repeat calls on unchanged evidence free).
 
+#### `change_context`
+
+Returns a compact, temporal **pre-write briefing** for the 1–20 repo-relative files an agent is about to modify — what the committed history already knows about each path, so an edit can be planned with the file's hotspot standing, coupling, and ownership in view. Unlike every other tool, the result is plain fixed-format text (roughly 150 tokens per file), not JSON: it is written to drop straight into an agent's context.
+
+Each requested path heads its own block, in request order, with five lines:
+
+```text
+crates/codelore-lib/src/cache.rs
+  health 67.3 (yellow) · risk 0.42 · calibrated defects-2026-07-15
+  hotspot #12 (score 0.67, 23 revs)
+  co-change: options.rs (68%, p=0.003) · facts/mod.rs (54%, p=0.011)
+  owner: Emre Camdere 82% (sole owner, active 12d ago)
+  recent: 4 commits, 310 lines churned in last 90d
+```
+
+- **health** — composite score with its band and the `structural_risk` value, plus a `calibrated <vintage>` suffix when the server was started with `--defect-calibration` (or a repo `[calibration]` section), else `uncalibrated`. A path with no code-health row renders `health: no code-health row`.
+- **hotspot** — 1-based rank in the full hotspot ranking; a path outside the ranking renders `not in the hotspot set`.
+- **co-change** — up to three historically co-changed partners (edit those too); when none clear the significance filter it renders `co-change: none significant`.
+- **owner** — main author, ownership share, sole-vs-shared concentration, and a `departed <n>d` flag when the main author has been inactive past the departed threshold (else `active <n>d ago`); no attributable ownership renders `owner: inconclusive`.
+- **recent** — commit count and churned lines over the recent window; a path untouched in the window renders `recent: quiet in last <window>d`.
+
+A brand-new, untracked, or mistyped path — absent from both the code-health rows and the churn window — renders a two-line block instead: the path followed by `no history at HEAD (new or untracked file)`. When the repository is partway through a merge, rebase, cherry-pick, or revert, one leading note precedes every block, disclosing that the briefing reflects committed HEAD history.
+
+This is a **committed-history** view — it never inspects the working tree. To evaluate the committed tree against the repo's quality gates, use [`check_gates`](#check_gates).
+
+Parameters:
+- `paths` *(required, array of strings)* — 1–20 repo-relative paths the caller intends to modify. An empty list or a list longer than 20 is a tool error naming the limit.
+
+Cost: warm-cache fast; cold-cache triggers a one-time history ingest.
+
 ### Architecture note
 
 Each tool call opens its own `FactsDb` connection via the warm-cache path. This is intentional: `duckdb::Connection` is `!Send + !Sync` and cannot cross thread or async boundaries, so each call runs entirely on a dedicated blocking thread (`tokio::task::spawn_blocking`) from connection open to result serialization. The connection is dropped before the future resolves. All tools are read-only with respect to the repository and the fact store; the only write any tool performs is `explain_file` persisting its advisory narrative to the best-effort enrichment sidecar cache.
