@@ -116,6 +116,16 @@ pub const DEFAULT_REWORK_WINDOW_DAYS: u32 = 21;
 /// that do not represent formal releases.
 pub const DEFAULT_RELEASE_TAG_GLOB: &str = "v*";
 
+/// Default `DuckDB` `memory_limit` PRAGMA applied to every connection this
+/// binary opens (see `facts::mod::apply_memory_pragmas`). Matches the v1
+/// performance target of "peak memory under 4 GB (`DuckDB` spill enabled)"
+/// documented in `docs/superpowers/specs/2026-06-06-codelore-design.md`
+/// (§ Performance targets) and measured in `docs/perf-evidence-v1.md`.
+/// Once a query's resident state would exceed this ceiling, `DuckDB` spills
+/// intermediate hash-join / sort / aggregation state to `temp_directory`
+/// instead of growing unbounded and inviting the OS OOM killer.
+pub const DEFAULT_DUCKDB_MEMORY_LIMIT: &str = "4GB";
+
 /// T8: Threshold for "substantial author" — an author who isn't the
 /// main author but owns at least this fraction of file's `LoC`. Used to
 /// count `n_substantial_others` per file in `knowledge-islands`. A

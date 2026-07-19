@@ -94,6 +94,51 @@ fn open_read_only_rejects_non_factstore_file() {
 }
 
 #[test]
+fn low_memory_limit_spills_to_temp_dir_instead_of_erroring() {
+    // Mirror the shape of a real ingest: a bulk `CREATE TABLE AS SELECT`
+    // that just accumulates rows (no ORDER BY / sort operator involved) —
+    // the same pattern the `Appender`-driven fact-table population uses.
+    // 5M rows of 4 `DOUBLE` columns is ~160 MB of raw column data, which
+    // doesn't fit under a 128 MB ceiling, so `DuckDB` must spill the
+    // growing table's blocks to `temp_directory` rather than erroring.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let spill_dir = dir.path().join("spill");
+
+    let db = FactsDb::new_in_memory_with_memory_limit("128MB", &spill_dir)
+        .expect("in-memory db with a low memory_limit must still open + create schema");
+
+    db.execute_batch(
+        "CREATE TABLE spill_probe AS \
+         SELECT i, random() AS a, random() AS b, random() AS c, random() AS d \
+         FROM range(5000000) AS t(i);",
+    )
+    .expect("bulk table load must succeed by spilling, not by erroring/OOM-ing");
+
+    let count: i64 = db
+        .query_row("SELECT count(*) FROM spill_probe", [], |r| r.get(0))
+        .expect("count spilled rows");
+    assert_eq!(
+        count, 5_000_000,
+        "spilled table load must still see every row"
+    );
+
+    assert!(
+        spill_dir.is_dir(),
+        "temp_directory PRAGMA target must exist: {}",
+        spill_dir.display()
+    );
+    let spilled_files = std::fs::read_dir(&spill_dir)
+        .expect("read spill dir")
+        .count();
+    assert!(
+        spilled_files > 0,
+        "expected DuckDB to write spill file(s) under temp_dir at {}; found none — \
+         the memory_limit may not have been low enough to force an external sort",
+        spill_dir.display()
+    );
+}
+
+#[test]
 fn file_backed_db_persists_and_reopens() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("test.duckdb");

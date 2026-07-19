@@ -7,13 +7,65 @@ pub mod schema;
 pub use groups::{GroupMap, GroupParseError, GroupRule};
 pub use ingest::IngestStats;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use duckdb::{AccessMode, Config, Connection};
 
 use crate::cache;
+use crate::constants::DEFAULT_DUCKDB_MEMORY_LIMIT;
 use crate::repo::Repo;
 use crate::{CodeLoreError, Options, Result};
+
+/// Resolve the default `DuckDB` spill directory when a caller supplies no
+/// explicit override (`Options::temp_dir` / `--temp-dir`): a `spill/`
+/// subdirectory of the cache root when one is in play, so spill files sit
+/// alongside the persistent `.duckdb` cache under the same disk-space
+/// expectations; the system temp directory otherwise (the plain `--no-cache`
+/// in-memory path and `codelore calibrate-defects`'s mining store have no
+/// cache root at all).
+fn default_spill_dir(cache_root: Option<&Path>) -> PathBuf {
+    match cache_root {
+        Some(root) => root.join("codelore").join("spill"),
+        None => std::env::temp_dir().join("codelore-spill"),
+    }
+}
+
+/// Apply the `DuckDB` memory ceiling + spill-to-disk `PRAGMA`s that every
+/// connection this binary opens must carry: `memory_limit` bounds resident
+/// query state; `temp_directory` is where `DuckDB` spills once that ceiling
+/// is hit, instead of growing unbounded and inviting the OS OOM killer on
+/// very large repos. Creates `temp_dir` if it doesn't already exist. Safe to
+/// call on a `ReadOnly`-mode connection — both PRAGMAs are session/engine
+/// settings, not writes to the database file.
+fn apply_memory_pragmas(conn: &Connection, temp_dir: &Path) -> Result<()> {
+    apply_memory_pragmas_with_limit(conn, DEFAULT_DUCKDB_MEMORY_LIMIT, temp_dir)
+}
+
+/// Like [`apply_memory_pragmas`] but with an explicit `memory_limit` value.
+/// Split out so tests can force a spill deterministically on a tiny fixture
+/// (a real 4 GB ceiling never trips over test-sized data) without exposing a
+/// `--memory-limit` CLI flag — the constant default covers real usage.
+fn apply_memory_pragmas_with_limit(
+    conn: &Connection,
+    memory_limit: &str,
+    temp_dir: &Path,
+) -> Result<()> {
+    std::fs::create_dir_all(temp_dir).map_err(|e| {
+        CodeLoreError::Analysis(format!(
+            "create duckdb temp_directory {}: {e}",
+            temp_dir.display()
+        ))
+    })?;
+    conn.pragma_update(None, "memory_limit", &memory_limit.to_string())
+        .map_err(|e| CodeLoreError::Analysis(format!("set duckdb memory_limit: {e}")))?;
+    conn.pragma_update(
+        None,
+        "temp_directory",
+        &temp_dir.to_string_lossy().into_owned(),
+    )
+    .map_err(|e| CodeLoreError::Analysis(format!("set duckdb temp_directory: {e}")))?;
+    Ok(())
+}
 
 pub struct FactsDb {
     conn: Connection,
@@ -138,9 +190,24 @@ impl FactsDb {
         self.knowledge_shares_built.set(true);
     }
 
+    /// Open a fresh in-memory fact store, spilling to the default temp
+    /// directory (see [`default_spill_dir`]) once `memory_limit` is
+    /// exceeded. Equivalent to `new_in_memory_with_temp_dir(None)`.
     pub fn new_in_memory() -> Result<Self> {
+        Self::new_in_memory_with_temp_dir(None)
+    }
+
+    /// Like [`new_in_memory`] but honors an explicit spill-directory
+    /// override (falls back to [`default_spill_dir`] when `None`). Used by
+    /// callers that resolved `Options::temp_dir` / `--temp-dir` — the plain
+    /// `--no-cache` in-memory path bypasses the persistent cache entirely
+    /// (so there is no cache root to derive a default from) but must still
+    /// spill instead of OOM-ing on a very large repo.
+    pub fn new_in_memory_with_temp_dir(temp_dir: Option<&Path>) -> Result<Self> {
         let conn = Connection::open_in_memory()
             .map_err(|e| CodeLoreError::Analysis(format!("open in-memory duckdb: {e}")))?;
+        let spill_dir = temp_dir.map_or_else(|| default_spill_dir(None), Path::to_path_buf);
+        apply_memory_pragmas(&conn, &spill_dir)?;
         let db = Self::from_conn(conn);
         db.create_schema()?;
         Ok(db)
@@ -149,17 +216,20 @@ impl FactsDb {
     pub fn open(path: impl AsRef<std::path::Path>) -> Result<Self> {
         let conn = Connection::open(path)
             .map_err(|e| CodeLoreError::Analysis(format!("open duckdb: {e}")))?;
+        apply_memory_pragmas(&conn, &default_spill_dir(None))?;
         let db = Self::from_conn(conn);
         db.create_schema()?;
         Ok(db)
     }
 
-    /// Open (or create) a read-write `DuckDB` file at `path`.
+    /// Open (or create) a read-write `DuckDB` file at `path`, spilling to
+    /// `temp_dir` once `memory_limit` is exceeded.
     /// Unlike `open()`, this does NOT call `create_schema` — the caller is
     /// responsible for schema initialisation (used internally by `open_or_ingest`).
-    pub fn open_file(path: &Path) -> Result<Self> {
+    pub fn open_file(path: &Path, temp_dir: &Path) -> Result<Self> {
         let conn = Connection::open(path)
             .map_err(|e| CodeLoreError::Analysis(format!("open_file duckdb: {e}")))?;
+        apply_memory_pragmas(&conn, temp_dir)?;
         Ok(Self::from_conn(conn))
     }
 
@@ -178,11 +248,25 @@ impl FactsDb {
     /// fact store, lacks a `provenance` table, or has a different
     /// `schema_version` than this binary produces.
     pub fn open_read_only(path: &Path) -> Result<Self> {
+        Self::open_read_only_with_temp_dir(path, None)
+    }
+
+    /// Like [`open_read_only`] but honors an explicit spill-directory
+    /// override (falls back to [`default_spill_dir`] when `None`). A
+    /// read-only-mode connection can still build `TEMP` tables and
+    /// materialize large intermediate query state (coupling, code-health,
+    /// and friends all do), so it needs the same memory ceiling + spill
+    /// target as the read-write constructors — `memory_limit` and
+    /// `temp_directory` are session/engine settings, not writes to the
+    /// (read-only) database file, so setting them here is safe.
+    pub fn open_read_only_with_temp_dir(path: &Path, temp_dir: Option<&Path>) -> Result<Self> {
         let config = Config::default()
             .access_mode(AccessMode::ReadOnly)
             .map_err(|e| CodeLoreError::Analysis(format!("duckdb config read-only: {e}")))?;
         let conn = Connection::open_with_flags(path, config)
             .map_err(|e| CodeLoreError::Analysis(format!("open_read_only duckdb: {e}")))?;
+        let spill_dir = temp_dir.map_or_else(|| default_spill_dir(None), Path::to_path_buf);
+        apply_memory_pragmas(&conn, &spill_dir)?;
         let db = Self::from_conn(conn);
         db.validate_schema_version(path)?;
         Ok(db)
@@ -280,6 +364,13 @@ impl FactsDb {
         let head_sha = repo.head_sha()?;
         let key = cache::cache_key(&opts.repo_path, &head_sha, opts);
         let cache_p = cache::cache_path_with_root(&key, &opts.repo_path, cache_root);
+        // `--temp-dir` wins when set; otherwise default to a subdir of THIS
+        // cache root (not the global default) so `--cache-dir` and
+        // `--temp-dir` stay consistent with each other.
+        let spill_dir = opts
+            .temp_dir
+            .clone()
+            .unwrap_or_else(|| default_spill_dir(Some(cache_root)));
 
         if cache_p.exists() {
             tracing::info!("cache hit: {}", cache_p.display());
@@ -301,7 +392,7 @@ impl FactsDb {
                      against the current working tree."
                 );
             }
-            return Self::open_read_only(&cache_p);
+            return Self::open_read_only_with_temp_dir(&cache_p, Some(&spill_dir));
         }
 
         tracing::info!("cache miss: ingesting to {}", cache_p.display());
@@ -324,7 +415,7 @@ impl FactsDb {
                  (complexity, clones) under the clean head_sha key. \
                  Commit changes or pass `--no-cache` to suppress this notice."
             );
-            let mem = Self::new_in_memory()?;
+            let mem = Self::new_in_memory_with_temp_dir(Some(&spill_dir))?;
             mem.create_schema()?;
             mem.ingest(repo, opts)?;
             return Ok(mem);
@@ -347,7 +438,7 @@ impl FactsDb {
         // Remove any leftover .tmp from a prior aborted run by THIS PID.
         let _ = std::fs::remove_file(&tmp);
 
-        let db = Self::open_file(&tmp)?;
+        let db = Self::open_file(&tmp, &spill_dir)?;
         db.create_schema()?;
         db.ingest(repo, opts)?;
         // CHECKPOINT flushes DuckDB's WAL to the file before we open() it.
@@ -380,7 +471,23 @@ impl FactsDb {
             cache::prune_global_cache(cache_root, 2 * 1024 * 1024 * 1024);
         }
 
-        Self::open_read_only(&cache_p)
+        Self::open_read_only_with_temp_dir(&cache_p, Some(&spill_dir))
+    }
+
+    /// Test-only: like [`new_in_memory_with_temp_dir`] but with an explicit
+    /// `memory_limit` override, so a test can force `DuckDB` to spill on a
+    /// tiny fixture instead of needing gigabytes of real data (the
+    /// [`DEFAULT_DUCKDB_MEMORY_LIMIT`] ceiling never trips over test-sized
+    /// inputs). Not exposed as a CLI flag — see the module's `--temp-dir`
+    /// docs for why `--memory-limit` is YAGNI.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn new_in_memory_with_memory_limit(memory_limit: &str, temp_dir: &Path) -> Result<Self> {
+        let conn = Connection::open_in_memory()
+            .map_err(|e| CodeLoreError::Analysis(format!("open in-memory duckdb: {e}")))?;
+        apply_memory_pragmas_with_limit(&conn, memory_limit, temp_dir)?;
+        let db = Self::from_conn(conn);
+        db.create_schema()?;
+        Ok(db)
     }
 
     fn create_schema(&self) -> Result<()> {

@@ -228,6 +228,13 @@ pub struct CheckArgs {
     #[arg(long)]
     pub cache_dir: Option<PathBuf>,
 
+    /// Override the `DuckDB` spill directory used once a query's memory
+    /// usage exceeds the internal ceiling (see docs/advanced-usage.md).
+    /// Must already exist and be writable. Defaults to a subdirectory of
+    /// the cache root.
+    #[arg(long = "temp-dir")]
+    pub temp_dir: Option<PathBuf>,
+
     /// Corpus-calibration artifact for the `code-health` corpus-percentile lens.
     /// Overrides the embedded world corpus; when omitted the embedded artifact
     /// is used if present.
@@ -397,6 +404,14 @@ pub struct AnalyzeArgs {
     /// Useful in CI environments that want per-job caches on a shared runner.
     #[arg(long)]
     pub cache_dir: Option<PathBuf>,
+
+    /// Override the `DuckDB` spill directory used once a query's memory
+    /// usage exceeds the internal ceiling (see docs/advanced-usage.md).
+    /// Must already exist and be writable. Defaults to a subdirectory of
+    /// the cache root, or the system temp directory when there is no
+    /// cache root in play (e.g. `--no-cache`).
+    #[arg(long = "temp-dir")]
+    pub temp_dir: Option<PathBuf>,
 
     /// Print the `DuckDB` optimizer plan for the analysis's underlying
     /// SQL to stderr before running the query. Useful for debugging

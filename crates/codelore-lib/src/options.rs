@@ -204,6 +204,18 @@ pub struct Options {
     /// Not exposed as a CLI flag. Serialized like every other field, so
     /// `canonical_json` keys head-only cache entries apart from full ones.
     pub head_only_ingest: bool,
+
+    /// Override the `DuckDB` spill directory (the `temp_directory` PRAGMA
+    /// target used once a query exceeds the internal memory ceiling — see
+    /// `constants::DEFAULT_DUCKDB_MEMORY_LIMIT`). When `None`, `facts::FactsDb`
+    /// defaults to a subdirectory of the cache root, or the system temp
+    /// directory when there is no cache root in play (e.g. `--no-cache`).
+    /// An environment/spill selector — it changes where `DuckDB` writes
+    /// scratch files, never any row an analysis reads, so `canonical_json`
+    /// drops it from the cache key like `target` and `rows_limit`. Set via
+    /// `--temp-dir`; validated as an existing writable directory in
+    /// [`Options::validate`].
+    pub temp_dir: Option<PathBuf>,
 }
 
 impl Options {
@@ -254,6 +266,11 @@ impl Options {
         // `defect_calibration` gets the same selector treatment as
         // `calibration`: drop the path here, hash the content below.
         snapshot.defect_calibration = None;
+        // `temp_dir` is a pure environment/spill selector — unlike
+        // `team_map_file`/`calibration`, its CONTENT (it's a directory, not
+        // a file) has no bearing on analysis output, so it is dropped
+        // outright rather than digested, exactly like `target`.
+        snapshot.temp_dir = None;
         let mut canon = serde_json::to_value(&snapshot)
             .expect("Options derives Serialize and all fields are Serialize");
 
@@ -437,6 +454,27 @@ impl Options {
                     .to_string(),
             ));
         }
+        if let Some(dir) = &self.temp_dir {
+            if !dir.is_dir() {
+                return Err(crate::CodeLoreError::InvalidOptions(format!(
+                    "--temp-dir {} must be an existing directory",
+                    dir.display()
+                )));
+            }
+            // Writability probe: create+remove a PID-suffixed throwaway file
+            // rather than trust `is_dir()` alone (a read-only mount or
+            // permission-denied dir still passes that check). PID-suffixed
+            // so two concurrent `codelore` invocations validating the same
+            // `--temp-dir` never race on the same probe filename.
+            let probe = dir.join(format!(".codelore-temp-dir-probe-{}", std::process::id()));
+            if let Err(e) = std::fs::write(&probe, []) {
+                return Err(crate::CodeLoreError::InvalidOptions(format!(
+                    "--temp-dir {} is not writable: {e}",
+                    dir.display()
+                )));
+            }
+            let _ = std::fs::remove_file(&probe);
+        }
         Ok(())
     }
 }
@@ -483,6 +521,7 @@ impl Default for Options {
             defect_calibration: None,
             allow_foreign_calibration: false,
             head_only_ingest: false,
+            temp_dir: None,
         }
     }
 }
@@ -848,6 +887,64 @@ mod tests {
             ..Options::default()
         };
         assert_eq!(opts_a.canonical_json(), opts_b.canonical_json());
+    }
+
+    #[test]
+    fn validate_accepts_existing_writable_temp_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let opts = Options {
+            temp_dir: Some(dir.path().to_path_buf()),
+            ..Options::default()
+        };
+        assert!(opts.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_missing_temp_dir() {
+        let opts = Options {
+            temp_dir: Some(std::path::PathBuf::from(
+                "/nonexistent/codelore-temp-dir-test",
+            )),
+            ..Options::default()
+        };
+        let err = opts.validate().expect_err("missing --temp-dir must fail");
+        assert!(
+            format!("{err}").contains("temp-dir"),
+            "error must name the offending flag: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_temp_dir_that_is_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("not-a-dir");
+        std::fs::write(&file_path, b"x").unwrap();
+        let opts = Options {
+            temp_dir: Some(file_path),
+            ..Options::default()
+        };
+        assert!(opts.validate().is_err());
+    }
+
+    #[test]
+    fn canonical_json_ignores_temp_dir_entirely() {
+        // temp_dir is a pure environment/spill selector: two runs differing
+        // only in --temp-dir must produce the identical canonical form, not
+        // merely a shared digest — there is no meaningful "content" to hash
+        // for a directory.
+        let dir_a = tempfile::tempdir().unwrap();
+        let dir_b = tempfile::tempdir().unwrap();
+        let opts_a = Options {
+            temp_dir: Some(dir_a.path().to_path_buf()),
+            ..Options::default()
+        };
+        let opts_b = Options {
+            temp_dir: Some(dir_b.path().to_path_buf()),
+            ..Options::default()
+        };
+        let opts_none = Options::default();
+        assert_eq!(opts_a.canonical_json(), opts_b.canonical_json());
+        assert_eq!(opts_a.canonical_json(), opts_none.canonical_json());
     }
 
     #[test]
