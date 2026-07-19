@@ -33,10 +33,13 @@ use codelore_lib::analyses::coupling::run_coupling;
 use codelore_lib::analyses::hotspots::run_hotspots;
 use codelore_lib::analyses::knowledge_islands::run_knowledge_islands;
 use codelore_lib::analyses::summary::run_summary;
+use codelore_lib::analyses::team_composition::run_team_composition;
 use codelore_lib::facts::FactsDb;
 use codelore_lib::output::spa::{SpaDashboard, write_spa};
 use codelore_lib::repo::GixRepo;
-use codelore_lib::test_support::{coupling_repo, differential_repo, permissive_coupling_opts};
+use codelore_lib::test_support::{
+    coupling_repo, delivery_repo, differential_repo, permissive_coupling_opts,
+};
 use headless_chrome::Browser;
 use headless_chrome::protocol::cdp::Emulation;
 use headless_chrome::protocol::cdp::types::Event;
@@ -1152,6 +1155,127 @@ fn detail_drawer_has_accessible_name_and_manages_focus() {
     assert!(
         focus_restored,
         "focus did not return to the trigger row after the drawer closed"
+    );
+}
+
+/// Team-composition Knowledge-surfaces widget renders the tenure mix from
+/// real per-author rows — not the nonexistent `commit_share_pct` /
+/// `active_authors` fields — and never leaks the `__summary__` carrier row
+/// into the DOM. Guards the exact regression: reading fields absent from
+/// `TeamCompositionRow` renders zero-width bars and the literal string
+/// "undefined", and iterating the summary sentinel corrupts the bucket mix.
+#[test]
+fn team_composition_widget_renders_real_buckets_without_undefined() {
+    let fixture = delivery_repo::build();
+    let repo = GixRepo::open(fixture.dir.path()).expect("open fixture repo");
+    let db = FactsDb::new_in_memory().expect("in-memory facts db");
+    let opts = Options {
+        repo_path: fixture.dir.path().to_path_buf(),
+        window_days: 90,
+        min_revs: 1,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest fixture");
+
+    let hotspots = run_hotspots(&db, &opts).expect("hotspots");
+    let summary = run_summary(&db, &opts).expect("summary");
+    let code_health = run_code_health(&db, &opts).expect("code-health");
+    let team_composition = run_team_composition(&db, &opts).expect("team-composition");
+
+    // Fail loudly (not vacuously) if the fixture stops producing the shape
+    // this test depends on: ≥2 real author rows spanning ≥2 distinct tenure
+    // buckets, plus the __summary__ carrier row. Collected as owned `String`s
+    // (rather than borrowing `team_composition`) so the checks below don't
+    // keep a borrow alive across the later move into `SpaDashboard`.
+    let real_author_count = team_composition
+        .iter()
+        .filter(|r| r.author != "__summary__")
+        .count();
+    assert!(
+        real_author_count >= 2,
+        "delivery_repo must produce ≥2 real author rows; got {real_author_count}"
+    );
+    let distinct_buckets: std::collections::HashSet<String> = team_composition
+        .iter()
+        .filter(|r| r.author != "__summary__")
+        .map(|r| r.bucket.clone())
+        .collect();
+    assert!(
+        distinct_buckets.len() >= 2,
+        "delivery_repo must span ≥2 distinct tenure buckets; got {distinct_buckets:?}"
+    );
+    assert!(
+        team_composition.iter().any(|r| r.author == "__summary__"),
+        "delivery_repo team-composition must include the __summary__ carrier row"
+    );
+
+    let dash = SpaDashboard {
+        hotspots,
+        summary,
+        code_health,
+        team_composition,
+        ..SpaDashboard::default()
+    };
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let html_path = tmp.path().join("codelore.html");
+    let mut f = std::fs::File::create(&html_path).expect("create html");
+    write_spa(
+        &dash,
+        "CodeLore Team Composition Test",
+        &fixture.dir.path().display().to_string(),
+        "2026-06-16 00:00:00 UTC",
+        &mut f,
+    )
+    .expect("write_spa");
+    drop(f);
+
+    let Some((_browser, tab)) = boot_spa_tab(&html_path) else {
+        return;
+    };
+
+    let widget_html = tab
+        .find_element("#widget-knowledge-surfaces-body")
+        .expect("knowledge-surfaces widget container")
+        .get_content()
+        .expect("widget html");
+
+    assert!(
+        !widget_html.contains("undefined"),
+        "team-composition widget rendered the literal string 'undefined' — \
+         the renderer is reading a field that does not exist on the row. HTML: {widget_html}"
+    );
+    assert!(
+        !widget_html.contains("__summary__"),
+        "team-composition widget rendered the __summary__ carrier row: {widget_html}"
+    );
+
+    // At least one bucket name from the real rows must appear in the legend.
+    for bucket in &distinct_buckets {
+        assert!(
+            widget_html.contains(bucket.as_str()),
+            "expected bucket name {bucket:?} in the rendered legend; HTML: {widget_html}"
+        );
+    }
+
+    // At least one segment must have a non-zero rendered width (proves the
+    // share is computed from real author counts, not a missing field
+    // defaulting to 0 for every segment).
+    let has_nonzero_segment: bool = eval_json(
+        &tab,
+        "(function () { \
+             var segs = document.querySelectorAll('#widget-knowledge-surfaces-body .team-bar-segment'); \
+             for (var i = 0; i < segs.length; i++) { \
+                 var w = parseFloat(segs[i].style.width); \
+                 if (!isNaN(w) && w > 0) return true; \
+             } \
+             return false; \
+         })()",
+    );
+    assert!(
+        has_nonzero_segment,
+        "no .team-bar-segment had a non-zero rendered width; the widget is \
+         still rendering zero-width bars"
     );
 }
 

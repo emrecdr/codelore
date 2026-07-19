@@ -14,6 +14,10 @@ Conventional Commits format. All notable changes documented here.
 
 - **Defect-validation surfaces the full mining tally set.** The defect-validation analysis now reports all seven `MiningStats` fields: `fixes_found`, `links_found`, `files_blamed`, `lines_considered`, `lines_dropped_cosmetic`, `pure_addition_fixes`, and `blame_failures`.
 
+### Fixed
+
+- **The SPA team-composition tenure bar renders correctly.** The Knowledge-surfaces widget computed the tenure mix from two fields that do not exist on the team-composition row, so it rendered zero-width bars and the literal text `undefined`; it now derives each bucket's share from the real per-author rows. The `__summary__` carrier row is no longer emitted as a data row in the SPA, CSV, or Markdown outputs.
+
 ## [0.21.0] - 2026-07-18
 
 ### Added
