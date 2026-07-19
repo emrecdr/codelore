@@ -59,8 +59,10 @@
 //! - `recent:` — commit count + churned lines over the last `window_days`; a
 //!   path untouched in the window renders `recent: quiet in last <window_days>d`.
 //!
-//! A path absent from *both* the code-health rows and the windowed churn query
-//! (a brand-new, untracked, or mistyped path) renders a two-line block instead:
+//! A path absent from *every* feed — no code-health row, not in the hotspot
+//! ranking, no significant co-change partners, no attributable ownership, and
+//! untouched in the churn window (a brand-new, untracked, or mistyped path) —
+//! renders a two-line block instead:
 //!
 //! ```text
 //! brand/new.rs
@@ -284,10 +286,17 @@ fn render(briefings: &[PathBriefing], merge_note: bool, opts: &Options) -> Strin
     chunks.join("\n\n")
 }
 
-/// One path's block: the two-line no-history form when the path has neither a
-/// code-health row nor recent churn, else the five indented lines.
+/// One path's block: the two-line no-history form when the path is absent
+/// from every feed, else the five indented lines. A path known to any feed —
+/// even just ownership or a hotspot rank — renders the full block, with each
+/// missing line in its honest-absence form.
 fn render_block(briefing: &PathBriefing, opts: &Options) -> String {
-    if briefing.health.is_none() && briefing.recent.is_none() {
+    if briefing.health.is_none()
+        && briefing.hotspot.is_none()
+        && briefing.partners.is_empty()
+        && briefing.owner.is_none()
+        && briefing.recent.is_none()
+    {
         return format!(
             "{}\n  no history at HEAD (new or untracked file)",
             briefing.path
@@ -448,6 +457,37 @@ mod tests {
         assert_eq!(
             render(&[briefing], false, &opts()),
             "brand/new.rs\n  no history at HEAD (new or untracked file)"
+        );
+    }
+
+    #[test]
+    fn owner_only_path_renders_the_five_line_block() {
+        let briefing = PathBriefing {
+            path: "docs/advanced-usage.md".to_string(),
+            health: None,
+            calibration: None,
+            hotspot: None,
+            partners: Vec::new(),
+            owner: Some(owner("Emre Camdere", 91.0, 30, 0)),
+            recent: None,
+        };
+        let out = render(&[briefing], false, &opts());
+        assert!(
+            !out.contains("no history at HEAD"),
+            "a path with ownership is not unknown: {out}"
+        );
+        assert_eq!(
+            out.lines().count(),
+            6,
+            "path line plus the five feed lines: {out}"
+        );
+        assert!(
+            out.contains("health: no code-health row"),
+            "health falls back to its honest-absence form: {out}"
+        );
+        assert!(
+            out.contains("owner: Emre Camdere 91% (sole owner, active 30d ago)"),
+            "the assembled owner row must survive: {out}"
         );
     }
 

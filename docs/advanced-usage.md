@@ -1556,7 +1556,7 @@ crates/codelore-lib/src/cache.rs
 - **owner** — main author, ownership share, sole-vs-shared concentration, and a `departed <n>d` flag when the main author has been inactive past the departed threshold (else `active <n>d ago`); no attributable ownership renders `owner: inconclusive`.
 - **recent** — commit count and churned lines over the recent window; a path untouched in the window renders `recent: quiet in last <window>d`.
 
-A brand-new, untracked, or mistyped path — absent from both the code-health rows and the churn window — renders a two-line block instead: the path followed by `no history at HEAD (new or untracked file)`. When the repository is partway through a merge, rebase, cherry-pick, or revert, one leading note precedes every block, disclosing that the briefing reflects committed HEAD history.
+A genuinely unknown path — absent from every feed (health, hotspots, co-change, ownership, recent churn), i.e. brand-new, untracked, or mistyped — renders a two-line block instead: the path followed by `no history at HEAD (new or untracked file)`. When the repository is partway through a merge, rebase, cherry-pick, or revert, one leading note precedes every block, disclosing that the briefing reflects committed HEAD history.
 
 This is a **committed-history** view — it never inspects the working tree. To evaluate the committed tree against the repo's quality gates, use [`check_gates`](#check_gates).
 
