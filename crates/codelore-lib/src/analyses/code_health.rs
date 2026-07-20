@@ -448,9 +448,13 @@ fn materialize_biomarkers(db: &FactsDb, opts: &Options, cx: &HealthScanCtx) -> R
         gods.iter().map(|g| (g.path.clone(), g.god_score)).collect();
 
     let dry_counts: HashMap<String, u32> = if cx.include_clones {
-        let clones = crate::analyses::clones::run_clones(opts)?;
+        // Memoised so the agent-loop gate's two scoped scans (HEAD baseline +
+        // substituted projection) walk the working tree once, not twice. The
+        // first scan populates the per-`FactsDb` memo; every other caller
+        // (which scores a repo once) sees identical rows and identical cost.
+        let clones = crate::analyses::clones::run_clones_memoised(db, opts)?;
         let mut m: HashMap<String, u32> = HashMap::new();
-        for c in &clones {
+        for c in clones.iter() {
             *m.entry(c.entity.clone()).or_insert(0) += 1;
         }
         m
