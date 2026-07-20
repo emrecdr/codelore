@@ -3,6 +3,35 @@
 
 use time::OffsetDateTime;
 
+/// One tracked path whose content differs from HEAD (staged, unstaged, or
+/// both). `kind` is the NET classification vs HEAD; `rename_from` is set on
+/// the destination entry when the backend reported a rename (the source
+/// appears as its own `Deleted` entry).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeChange {
+    /// Repo-relative, `/`-separated path as it exists in the working tree
+    /// (for `Deleted` entries: as it existed at HEAD).
+    pub path: String,
+    /// Net classification of this path's content vs HEAD.
+    pub kind: WorktreeChangeKind,
+    /// The rename source path when the backend detected this entry as the
+    /// destination of a rename; `None` otherwise.
+    pub rename_from: Option<String>,
+}
+
+/// Net classification of a working-tree path vs HEAD. A path staged as
+/// added then deleted from the worktree nets out to no change and is not
+/// reported at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorktreeChangeKind {
+    /// Not a blob at HEAD; present in the working tree.
+    Added,
+    /// A blob at HEAD; present in the working tree with different content.
+    Modified,
+    /// A blob at HEAD; absent from the working tree.
+    Deleted,
+}
+
 /// A git tag with its resolved target commit OID and the date used for sorting.
 ///
 /// Date semantics follow the git convention for time-ordered tag listing:

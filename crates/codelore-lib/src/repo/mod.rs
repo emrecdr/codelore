@@ -4,7 +4,7 @@
 use crate::{CommitEvent, FileChange, Hunk, Options, Result};
 
 pub mod types;
-pub use types::TagInfo;
+pub use types::{TagInfo, WorktreeChange, WorktreeChangeKind};
 
 /// Read-only git operations needed by the codelore pipeline.
 /// See spec §3.3.
@@ -122,6 +122,19 @@ pub trait Repo: Send + Sync {
         self.read_blob_at("HEAD", path)
     }
 
+    /// Enumerate tracked working-tree changes vs HEAD (union of staged and
+    /// unstaged, net-classified; untracked files excluded; symlinks and
+    /// submodule pointers excluded; sorted by path). Errors on unmerged
+    /// (conflict) entries. Hint quality: backends agree via differential
+    /// tests.
+    ///
+    /// Default impl returns an empty list so backends without a status
+    /// facility can opt out — the same convention as
+    /// [`is_worktree_dirty`](Self::is_worktree_dirty).
+    fn worktree_changes(&self) -> Result<Vec<WorktreeChange>> {
+        Ok(Vec::new())
+    }
+
     /// Every regular-file blob path (the `0o100xxx` mode class — canonical
     /// `100644`/`100755` plus legacy non-canonical variants like `100664`)
     /// in the HEAD commit's tree, repo-relative with `/` separators, sorted
@@ -145,6 +158,59 @@ pub trait Repo: Send + Sync {
     /// annotated tags this is the commit the tag object ultimately points at,
     /// not the tag object's own OID.
     fn tags(&self) -> Result<Vec<TagInfo>>;
+}
+
+/// Merge a `worktree_changes` candidate into the per-path map. A reported
+/// rename source (`Some`) wins over `None` regardless of arrival order —
+/// the same path can reach the map from both status streams (e.g. a staged
+/// rename destination that was then edited again in the worktree).
+fn add_worktree_candidate(
+    candidates: &mut std::collections::BTreeMap<String, Option<String>>,
+    path: String,
+    rename_from: Option<String>,
+) {
+    let slot = candidates.entry(path).or_insert(None);
+    if slot.is_none() {
+        *slot = rename_from;
+    }
+}
+
+/// Net-classify merged `worktree_changes` candidates. Shared by both
+/// backends so the classification table cannot drift between them:
+///
+/// | blob at HEAD | file on disk | result   |
+/// |--------------|--------------|----------|
+/// | no           | yes          | Added    |
+/// | yes          | no           | Deleted  |
+/// | yes          | yes          | Modified |
+/// | no           | no           | dropped  |
+///
+/// The dropped row is the staged-add-then-worktree-delete case (`AD` in
+/// porcelain terms): the path nets out identical to HEAD, so it is not a
+/// change. The map is keyed by path, so the output is already sorted
+/// ascending and free of duplicates.
+fn net_classify_candidates<R: Repo>(
+    repo: &R,
+    worktree_root: &std::path::Path,
+    candidates: std::collections::BTreeMap<String, Option<String>>,
+) -> Result<Vec<WorktreeChange>> {
+    let mut changes = Vec::with_capacity(candidates.len());
+    for (path, rename_from) in candidates {
+        let at_head = repo.read_blob_at_head(&path)?.is_some();
+        let on_disk = std::fs::metadata(worktree_root.join(&path)).is_ok_and(|m| m.is_file());
+        let kind = match (at_head, on_disk) {
+            (false, true) => WorktreeChangeKind::Added,
+            (true, false) => WorktreeChangeKind::Deleted,
+            (true, true) => WorktreeChangeKind::Modified,
+            (false, false) => continue,
+        };
+        changes.push(WorktreeChange {
+            path,
+            kind,
+            rename_from,
+        });
+    }
+    Ok(changes)
 }
 
 pub mod gix_repo;

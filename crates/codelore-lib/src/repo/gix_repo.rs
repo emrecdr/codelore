@@ -327,6 +327,118 @@ impl Repo for GixRepo {
         Ok(Some(std::mem::take(&mut obj.data)))
     }
 
+    fn worktree_changes(&self) -> Result<Vec<super::WorktreeChange>> {
+        use gix::status::index_worktree::Item as IndexWorktreeItem;
+        use gix::status::plumbing::index_as_worktree::{Change as UnstagedChange, EntryStatus};
+
+        let repo = self.inner.to_thread_local();
+        let Some(workdir) = repo.workdir().map(std::path::Path::to_path_buf) else {
+            return Err(CodeLoreError::Repo(
+                "worktree_changes: bare repository has no working tree".into(),
+            ));
+        };
+        // Two streams behind one iterator: `TreeIndex` items are the staged
+        // half (HEAD vs index, rename-tracked per `status.renames` /
+        // `diff.renames` — the same config `git status` reads), and
+        // `IndexWorktree` items are the unstaged half (index vs worktree).
+        // `UntrackedFiles::None` disables the directory walk entirely, so
+        // untracked files never surface and the only reachable
+        // `IndexWorktree` variant is `Modification`. Item ordering is
+        // undefined and the same path can appear in both streams, so
+        // candidates are merged by path before net classification.
+        let items = repo
+            .status(gix::progress::Discard)
+            .map_err(|e| CodeLoreError::Repo(format!("worktree_changes: status: {e}")))?
+            .untracked_files(gix::status::UntrackedFiles::None)
+            .index_worktree_submodules(None)
+            .into_iter(Vec::new())
+            .map_err(|e| CodeLoreError::Repo(format!("worktree_changes: status iter: {e}")))?;
+
+        let mut candidates = std::collections::BTreeMap::new();
+        for item in items {
+            let item = item
+                .map_err(|e| CodeLoreError::Repo(format!("worktree_changes: status item: {e}")))?;
+            match item {
+                gix::status::Item::TreeIndex(change) => {
+                    if is_symlink_or_gitlink(change.entry_mode()) {
+                        continue;
+                    }
+                    if let gix::diff::index::ChangeRef::Rewrite {
+                        source_location,
+                        location,
+                        copy,
+                        ..
+                    } = &change
+                    {
+                        if *copy {
+                            // A copy's source still exists unchanged, so only
+                            // the destination is a candidate.
+                            super::add_worktree_candidate(
+                                &mut candidates,
+                                location.to_string(),
+                                None,
+                            );
+                        } else {
+                            let source = source_location.to_string();
+                            super::add_worktree_candidate(
+                                &mut candidates,
+                                location.to_string(),
+                                Some(source.clone()),
+                            );
+                            super::add_worktree_candidate(&mut candidates, source, None);
+                        }
+                    } else {
+                        super::add_worktree_candidate(
+                            &mut candidates,
+                            change.location().to_string(),
+                            None,
+                        );
+                    }
+                }
+                gix::status::Item::IndexWorktree(IndexWorktreeItem::Modification {
+                    entry,
+                    rela_path,
+                    status,
+                    ..
+                }) => {
+                    if is_symlink_or_gitlink(entry.mode) {
+                        continue;
+                    }
+                    match status {
+                        EntryStatus::Conflict { .. } => {
+                            return Err(CodeLoreError::Analysis(
+                                "unmerged paths in working tree; resolve conflicts before gating"
+                                    .into(),
+                            ));
+                        }
+                        EntryStatus::Change(
+                            UnstagedChange::Removed
+                            | UnstagedChange::Type { .. }
+                            | UnstagedChange::Modification { .. },
+                        )
+                        | EntryStatus::IntentToAdd => {
+                            super::add_worktree_candidate(
+                                &mut candidates,
+                                rela_path.to_string(),
+                                None,
+                            );
+                        }
+                        // Submodule status is disabled via
+                        // `index_worktree_submodules(None)`; `NeedsUpdate`
+                        // means stat-refresh only, not a content change.
+                        EntryStatus::Change(UnstagedChange::SubmoduleModification(_))
+                        | EntryStatus::NeedsUpdate(_) => {}
+                    }
+                }
+                // With the directory walk disabled there are no
+                // directory-contents or worktree-rename items; skip rather
+                // than assert unreachable.
+                gix::status::Item::IndexWorktree(_) => {}
+            }
+        }
+        super::net_classify_candidates(self, &workdir, candidates)
+    }
+
     fn tracked_paths_at_head(&self) -> Result<Vec<String>> {
         let repo = self.inner.to_thread_local();
         let head_id = repo
@@ -456,6 +568,15 @@ impl GixRepo {
         let referent = head.referent_name()?;
         Some(referent.shorten().to_string())
     }
+}
+
+/// True for index-entry modes that carry no source bytes the scans can
+/// parse: symlinks (`120000`) and submodule gitlinks (`160000`), matched
+/// via the file-type class bits so the check mirrors the blob-class
+/// (`100xxx`) convention used by `tracked_paths_at_head`. `GitCliRepo`
+/// applies the same rule to the porcelain-v2 octal mode fields.
+fn is_symlink_or_gitlink(mode: gix::index::entry::Mode) -> bool {
+    matches!(mode.bits() & 0o170_000, 0o120_000 | 0o160_000)
 }
 
 /// Compute the per-file changes for a single commit identified by `rev`.
