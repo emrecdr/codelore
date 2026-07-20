@@ -810,12 +810,25 @@ code_familiarity_min = 40.0   # fail when team familiarity drops below 40 % (sca
 no_new_cycles = true          # a PR may not introduce a dependency cycle the base lacked
 delta_health_min = 40.0       # ratio must be ≥ 40 (indeterminate or better)
 deny_degrading_verdict = true # a "degrading" verdict fails the PR gate
+delta_code_health_min_per_file = 0.0  # working-tree gate only: no changed file may lower its own health
 
 [calibration]
 defect_artifact = "defects.calib.json"  # repo-declared default, see below
 ```
 
 `max_dependency_cycles` / `max_propagation_cost` are evaluated against HEAD by `codelore check`; `no_new_cycles` compares the base-rev and head-rev import graphs in `codelore diff` and fails the PR when head has more cycles than base. `delta_health_min` and `deny_degrading_verdict` both act on the `delta_health` section: `delta_health_min` fails when `ratio < threshold` (skipped on `no-code-change` diffs where no ratio exists); `deny_degrading_verdict` fails when the verdict is exactly `"degrading"`. `max_red_effort_pct` gates on the `effort-exposure` churn share (share of changed lines, added + deleted) for the red band; `code_familiarity_min` gates on the repo-scope `familiarity-pct` (0–100) from `code-familiarity` (see the dedicated subsections in the SPA widget surface above).
+
+Three surfaces evaluate this file, each against a different input: `codelore check` gates the committed tree at HEAD, `codelore gate` (and its MCP twin `gate_changes`, [§11.9](#gate_changes)) gates the uncommitted working tree against HEAD, and `codelore diff` gates a rev range. Same file, three non-overlapping readings:
+
+| | `codelore check` | `codelore gate` / `gate_changes` (MCP) | `codelore diff` |
+|---|---|---|---|
+| Input | committed tree at HEAD | working tree vs HEAD | rev range (`base...head`) |
+| Keys evaluated | `[gates]` (all, plus degraded-gate semantics and `--ratchet`) | `[diff]`: `delta_code_health_min`, `delta_code_health_min_per_file`, `no_new_cycles` | `[diff]`: `delta_code_health_min`, `new_hotspot_max`, `no_new_cycles`, `delta_health_min`, `deny_degrading_verdict` |
+| `delta_code_health_min` population | not evaluated | whole-repo median over all scoreable files (1-revision floor) | whole-repo median over the min-revs-filtered hotspot rows |
+| Cycle semantics | `max_dependency_cycles`: cycle count at HEAD | `no_new_cycles`: cyclic-node *membership* — one violation naming each newly cyclic file; still fires when two existing cycles merge into one | `no_new_cycles`: cycle-*count* comparison — fails when head has more cycles than base |
+| Exit code on violation | 1 | `gate` exits 1; `gate_changes` reports, never exits | 4 |
+
+`delta_code_health_min_per_file` is evaluated only by the working-tree gate surfaces — `codelore diff` ignores it. Conversely, `new_hotspot_max`, `delta_health_min`, and `deny_degrading_verdict` are diff-only and never evaluated by the working-tree gate.
 
 `[calibration]` is not a gate — it's a config *selector* that declares the repo's default defect-calibration artifact once, so `analyze`, `check`, `explain <path>`, and `codelore mcp` all pick it up without repeating `--defect-calibration` on every invocation. Precedence: an explicit `--defect-calibration` flag (or the MCP server's startup flag) always wins; otherwise the `[calibration] defect_artifact` path is used, resolved relative to the repo root (absolute paths pass through as-is); otherwise the run is uncalibrated. A thresholds file containing only `[calibration]` still leaves `check` vacuously passing — see [Defect calibration](#defect-calibration-does-the-health-score-predict-where-defects-land-here) for what the artifact does once applied.
 
@@ -1558,16 +1571,35 @@ crates/codelore-lib/src/cache.rs
 
 A genuinely unknown path — absent from every feed (health, hotspots, co-change, ownership, recent churn), i.e. brand-new, untracked, or mistyped — renders a two-line block instead: the path followed by `no history at HEAD (new or untracked file)`. When the repository is partway through a merge, rebase, cherry-pick, or revert, one leading note precedes every block, disclosing that the briefing reflects committed HEAD history.
 
-This is a **committed-history** view — it never inspects the working tree. To evaluate the committed tree against the repo's quality gates, use [`check_gates`](#check_gates).
+This is a **committed-history** view — it never inspects the working tree. To evaluate the committed tree against the repo's quality gates, use [`check_gates`](#check_gates); to gate the uncommitted working tree, use [`gate_changes`](#gate_changes).
 
 Parameters:
 - `paths` *(required, array of strings)* — 1–20 repo-relative paths the caller intends to modify. An empty list or a list longer than 20 is a tool error naming the limit.
 
 Cost: warm-cache fast; cold-cache triggers a one-time history ingest.
 
+#### `gate_changes`
+
+The working-tree **quality verdict** for the agent loop: what the current uncommitted edits do to the repository *before* they are committed. The tool enumerates the tracked working-tree changes vs HEAD (staged and unstaged; untracked files excluded), re-parses only the changed files, projects their effect through the same code-health scoring engine every committed analysis uses, splices the working-tree import edges into the import graph, and evaluates the repo's working-tree `[diff]` gates against the projection — `delta_code_health_min`, `delta_code_health_min_per_file`, and `no_new_cycles`; see the comparison table in [§4's Quality-gate subsection](#quality-gate). Like `change_context`, the result is compact plain text, not JSON.
+
+Line 1 is the verdict: `PASS`, `FAIL — <n> violation(s)`, or `no thresholds configured — advisory only` — findings and the delta table still render without thresholds, so the tool is useful before a repo commits to gating. A clean tree returns `PASS (no working-tree changes to gate)`. Violations follow in `codelore check`'s row form, then one line per advisory finding (`health-drop`, `newly-cyclic`, `coupling-absence`, `new-file`, `unparseable`), then a per-file delta table capped at the ten largest `|delta|` rows with a `(+n more files)` tail:
+
+```text
+FAIL — 1 violation(s)
+  - delta_code_health_min_per_file: src/core.rs — actual -12.40 vs threshold +0.00
+[health-drop] src/core.rs: projected code health drops from 85.2 to 72.8 (-12.4).
+src/core.rs  85.2 → 72.8  (-12.4)
+```
+
+A file the projection cannot score renders its honest absence in the delta table instead of a fabricated number: `new file (no history baseline)`, `not a Tier-1 source file`, `binary content`, `file exceeds the AST size limit`, `deleted at gate time`, or `no code-health row at HEAD`. Unmerged (conflict) paths are a tool error — resolve conflicts before gating; a conflict-free in-progress merge or rebase proceeds with a leading note that the projection reflects committed HEAD history. The verdict is recomputed on every call from the repo's current thresholds — a cached report can never serve a stale verdict. This tool reports and never exits; the exit-code-bearing surface with the same engine and semantics is `codelore gate`.
+
+Parameters: none — the change set is discovered from the working tree.
+
+Cost: warm-cache fast; the measured change-set report is additionally memoised by content in a sidecar, so repeated calls on an unchanged dirty tree skip the projection. Cold-cache triggers ingest — and a dirty working tree ingests in-memory without persisting the analysis cache, so it pays that ingest on each cold call until the cache is warmed at the same HEAD (for example by a clean-tree run).
+
 ### Architecture note
 
-Each tool call opens its own `FactsDb` connection via the warm-cache path. This is intentional: `duckdb::Connection` is `!Send + !Sync` and cannot cross thread or async boundaries, so each call runs entirely on a dedicated blocking thread (`tokio::task::spawn_blocking`) from connection open to result serialization. The connection is dropped before the future resolves. All tools are read-only with respect to the repository and the fact store; the only write any tool performs is `explain_file` persisting its advisory narrative to the best-effort enrichment sidecar cache.
+Each tool call opens its own `FactsDb` connection via the warm-cache path. This is intentional: `duckdb::Connection` is `!Send + !Sync` and cannot cross thread or async boundaries, so each call runs entirely on a dedicated blocking thread (`tokio::task::spawn_blocking`) from connection open to result serialization. The connection is dropped before the future resolves. All tools are read-only with respect to the repository and the fact store; the only writes any tool performs are best-effort sidecar caches — `explain_file` persisting its advisory narrative, and `gate_changes` memoising its measured change-set report.
 
 ### Troubleshooting
 

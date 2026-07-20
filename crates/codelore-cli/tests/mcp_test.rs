@@ -176,8 +176,8 @@ fn mcp_tools_list_and_repo_overview() {
     // Exact count — catches both missing tools and accidental extras.
     assert_eq!(
         tools.len(),
-        10,
-        "expected exactly 10 tools, got {}: {:?}",
+        11,
+        "expected exactly 11 tools, got {}: {:?}",
         tools.len(),
         tools
             .iter()
@@ -197,6 +197,7 @@ fn mcp_tools_list_and_repo_overview() {
         "finding_hotspot_overlap",
         "explain_file",
         "change_context",
+        "gate_changes",
     ] {
         assert!(
             tool_names.contains(expected),
@@ -843,6 +844,149 @@ fn mcp_change_context_stays_within_token_budget() {
     assert!(
         tokens <= 300,
         "budget is 150 tokens/path; got {tokens} for 2 paths: {text}"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+/// A deeply nested, high-complexity function appended to a tracked fixture
+/// file so its projected code-health score lands strictly below its HEAD
+/// baseline (the population-relative smell ranks make the appended monster the
+/// per-language maximum on every raw metric).
+const GATE_MONSTER_FN: &str = r"
+fn monster(x: i32) -> i32 {
+    let mut acc = 0;
+    for a in 0..x {
+        if a % 2 == 0 && a % 3 == 0 || a % 5 == 0 {
+            for b in 0..a {
+                if b > 1 {
+                    match b % 4 {
+                        0 => { if b > 10 { acc += 1; } else { acc += 2; } }
+                        1 => { while acc < 100 { acc += 1; if acc % 7 == 0 { break; } } }
+                        2 => { for c in 0..b { if c > 3 && c < 9 || c == 5 { acc += c; } } }
+                        _ => { if a > b { acc -= 1; } else { acc += 1; } }
+                    }
+                }
+            }
+        }
+    }
+    acc
+}
+";
+
+/// Append `GATE_MONSTER_FN` to a tracked file in the fixture clone.
+fn worsen_file(repo_root: &std::path::Path, rel_path: &str) {
+    let path = repo_root.join(rel_path);
+    let mut content = std::fs::read_to_string(&path).expect("read fixture file");
+    content.push_str(GATE_MONSTER_FN);
+    std::fs::write(&path, content).expect("write fixture file");
+}
+
+#[test]
+fn gate_changes_reports_clean_tree() {
+    let repo = delivery_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
+    let resp = call_tool(&mut stdin, &mut reader, 1, "gate_changes", &json!({}));
+    let text = assert_tool_ok_text(&resp, "gate_changes");
+
+    assert!(
+        text.contains("no working-tree changes"),
+        "a fresh clone has nothing to gate: {text}"
+    );
+    assert!(
+        text.starts_with("PASS"),
+        "a clean tree is an explicit pass, not a skipped evaluation: {text}"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn gate_changes_flags_working_tree_edit() {
+    let repo = delivery_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+
+    // A per-file floor of 0.0 (no changed file may lower its own health) at
+    // the repo root — discovered by the server, no startup flag involved. The
+    // thresholds file is untracked, so it never enters the change set itself.
+    std::fs::write(
+        repo.dir.path().join(".codelore-thresholds.toml"),
+        "[diff]\ndelta_code_health_min_per_file = 0.0\n",
+    )
+    .unwrap();
+    worsen_file(repo.dir.path(), "src/core.rs");
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
+    let resp = call_tool(&mut stdin, &mut reader, 1, "gate_changes", &json!({}));
+    let text = assert_tool_ok_text(&resp, "gate_changes");
+
+    assert!(
+        text.starts_with("FAIL — "),
+        "line 1 must be the FAIL verdict: {text}"
+    );
+    assert!(
+        text.contains("  - delta_code_health_min_per_file: src/core.rs — actual "),
+        "the violation row must use check's exact form and name the file: {text}"
+    );
+    assert!(
+        text.contains("[health-drop] src/core.rs:"),
+        "the health-drop finding must name the file: {text}"
+    );
+    assert!(
+        text.contains(" → "),
+        "the delta table must render baseline → projected: {text}"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn gate_changes_token_budget_holds() {
+    let repo = delivery_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+
+    // Multi-finding scenario with no thresholds configured: two worsened
+    // tracked files (one health-drop finding each) plus one staged new file
+    // (a new-file finding), exercising the advisory-only verdict form.
+    worsen_file(repo.dir.path(), "src/core.rs");
+    worsen_file(repo.dir.path(), "src/stable.rs");
+    std::fs::write(
+        repo.dir.path().join("src/fresh.rs"),
+        "pub fn fresh() -> u32 { 1 }\n",
+    )
+    .unwrap();
+    let add = Command::new("git")
+        .args(["-C", repo_path, "add", "src/fresh.rs"])
+        .output()
+        .expect("git add");
+    assert!(add.status.success(), "git add failed: {add:?}");
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
+    let resp = call_tool(&mut stdin, &mut reader, 1, "gate_changes", &json!({}));
+    let text = assert_tool_ok_text(&resp, "gate_changes");
+
+    assert!(
+        text.starts_with("no thresholds configured — advisory only"),
+        "without thresholds the verdict line discloses advisory-only: {text}"
+    );
+
+    // Finding lines are the only lines that open with '['.
+    let findings = text.lines().filter(|l| l.starts_with('[')).count();
+    assert!(
+        findings >= 3,
+        "two worsened files plus a staged new file must produce at least \
+         three findings, got {findings}: {text}"
+    );
+    // Budget pinned by the plan: ≤ 80 whitespace tokens base, ≤ 40 per finding.
+    let tokens = text.split_whitespace().count();
+    assert!(
+        tokens <= 80 + 40 * findings,
+        "budget is 80 + 40·findings tokens; got {tokens} for {findings} findings: {text}"
     );
 
     drop(stdin);
