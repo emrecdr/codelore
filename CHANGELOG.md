@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-07-20
+
 ### Added
 
 - **This repository gates itself.** A committed `.codelore-thresholds.toml` and a new blocking `self-gate` CI job run `codelore check` against this repository's own code-health, cognitive-complexity, hotspot-score, dependency-cycle, propagation-cost, and red-band-churn gates on every push and pull request.
