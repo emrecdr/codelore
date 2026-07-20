@@ -709,10 +709,14 @@ fn check_gates_honors_calibration_section() {
 
     // A gate that must be evaluated (non-empty thresholds) plus the
     // calibration section naming the artifact.
+    // A TOML *literal* (single-quoted) string: a Windows absolute path
+    // contains backslashes, which a double-quoted TOML string would read as
+    // escape sequences (e.g. `\U`), making the thresholds file unparseable and
+    // the server refuse to start. A literal string takes the path verbatim.
     std::fs::write(
         repo.dir.path().join(".codelore-thresholds.toml"),
         format!(
-            "[gates]\ncode_health_min = 0.0\n\n[calibration]\ndefect_artifact = \"{}\"\n",
+            "[gates]\ncode_health_min = 0.0\n\n[calibration]\ndefect_artifact = '{}'\n",
             artifact_path.display()
         ),
     )
