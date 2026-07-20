@@ -2067,6 +2067,14 @@ fn gate_ledger_records(
             verdict("delta_code_health_min_per_file"),
         ));
     }
+    if let Some(min) = d.new_file_health_min {
+        records.push(rec(
+            "new_file_health_min",
+            min,
+            count_f64("new_file_health_min"),
+            verdict("new_file_health_min"),
+        ));
+    }
     if d.no_new_cycles {
         records.push(rec(
             "no_new_cycles",

@@ -19,6 +19,7 @@
 //! new_hotspot_max = 0         # zero new hotspots allowed
 //! no_new_cycles = true        # a PR may not introduce a dependency cycle
 //! delta_code_health_min_per_file = 0.0  # gate-only: no changed file may lower its own health
+//! new_file_health_min = 50.0  # gate-only: added files must clear this floor
 //!
 //! [calibration]
 //! defect_artifact = "defects.calib.json"  # repo-declared --defect-calibration default
@@ -164,6 +165,17 @@ pub struct DiffGates {
     /// not evaluate this key — its `delta_code_health_min` sibling stays the
     /// whole-repo-median gate on both surfaces.
     pub delta_code_health_min_per_file: Option<f64>,
+    /// Minimum projected code-health score an ADDED file must meet, evaluated
+    /// only by `codelore gate` / the `gate_changes` MCP tool. An added file
+    /// has no baseline — its `delta_code_health_min_per_file` delta is always
+    /// `None`, so it evades that floor — and its small footprint rarely moves
+    /// the whole-repo median enough to trip `delta_code_health_min` either.
+    /// Without this floor a freshly added low-health file (a new god-class,
+    /// say) can clear every other gate. One violation per offending added
+    /// file, with the file's projected score as the measured value.
+    /// `codelore diff` does not evaluate this key. Deleted files (no
+    /// projected score) never trigger it.
+    pub new_file_health_min: Option<f64>,
 }
 
 /// The `[calibration]` section: repo-declared analysis calibration, applied
@@ -244,6 +256,7 @@ impl Thresholds {
             && self.diff.delta_health_min.is_none()
             && !self.diff.deny_degrading_verdict
             && self.diff.delta_code_health_min_per_file.is_none()
+            && self.diff.new_file_health_min.is_none()
         // Note: fail_on_degraded=true is the default and does not make a
         // threshold non-empty by itself — it only affects how degraded
         // verdicts from other gates are handled. Likewise `[calibration]`
@@ -479,7 +492,7 @@ pub fn evaluate_diff_gate(
 /// Evaluate the `[diff]` gates that apply to a working-tree change-set report
 /// (`codelore gate` / the `gate_changes` MCP tool).
 ///
-/// Only three keys apply to the working-tree surface, with equal-passes
+/// Four keys apply to the working-tree surface, with equal-passes
 /// boundaries mirroring [`evaluate_diff_gate`]:
 ///
 /// - `delta_code_health_min` — floor on the whole-repo-median delta
@@ -489,6 +502,10 @@ pub fn evaluate_diff_gate(
 /// - `delta_code_health_min_per_file` — floor on each changed file's own
 ///   `projected − baseline` delta; one violation per offending file, with the
 ///   file's delta as the measured value.
+/// - `new_file_health_min` — floor on each ADDED file's own projected score
+///   (added files carry no delta, so they never reach the previous gate);
+///   one violation per offending added file, with the file's projected
+///   score as the measured value. Deleted files never trigger it.
 /// - `no_new_cycles` — cyclic-node MEMBERSHIP comparison: one violation per
 ///   path that is cyclic in the projection but not at HEAD. This deliberately
 ///   diverges from `diff`'s cycle-count comparison — membership names the
@@ -530,6 +547,25 @@ pub fn evaluate_gate_thresholds(
                     path: row.path.clone(),
                     actual: format!("{delta:+.2}"),
                     threshold: format!("{min:+.2}"),
+                });
+            }
+        }
+    }
+    if let Some(min) = d.new_file_health_min {
+        for row in &report.health.deltas {
+            // Added files (identified by the honest-absence reason, which also
+            // covers rename destinations) carry no baseline delta, so the
+            // per-file floor above never sees them. A deleted file has no
+            // projected score and is filtered out by the `Some(score)` match.
+            if row.reason.as_deref() == Some(crate::change_set::REASON_NEW_FILE)
+                && let Some(score) = row.projected_score
+                && score < min
+            {
+                out.push(GateViolation {
+                    gate: "new_file_health_min".into(),
+                    path: row.path.clone(),
+                    actual: format!("{score:.1}"),
+                    threshold: format!("{min:.1}"),
                 });
             }
         }
@@ -1271,6 +1307,115 @@ new_hotspot_max = 0
         let err = Thresholds::from_text(raw).expect_err("typo'd key should reject");
         assert!(
             err.contains("unknown field") || err.contains("delta_code_health_min_per_flie"),
+            "expected 'unknown field' in error: {err}"
+        );
+    }
+
+    /// An ADDED file's delta row: baseline absent, projected present, no delta,
+    /// tagged with the new-file honest-absence reason — the exact shape the
+    /// engine produces for a freshly added file.
+    fn make_added_delta(path: &str, projected_score: f64) -> crate::change_set::FileDelta {
+        crate::change_set::FileDelta {
+            path: path.to_string(),
+            kind: "added".to_string(),
+            baseline_score: None,
+            projected_score: Some(projected_score),
+            delta: None,
+            baseline_band: None,
+            projected_band: Some("red".to_string()),
+            reason: Some(crate::change_set::REASON_NEW_FILE.to_string()),
+        }
+    }
+
+    #[test]
+    fn gate_new_file_floor_flags_low_added_file() {
+        // A newly added low-health file evades both delta floors (it carries no
+        // delta), so the whole-repo median barely moves and the per-file floor
+        // skips it. new_file_health_min catches it on projected score alone.
+        let mut t = Thresholds::default();
+        t.diff.new_file_health_min = Some(50.0);
+        let report = make_gate_report(
+            vec![
+                make_added_delta("src/god_class.rs", 20.0), // below floor → violation
+                make_added_delta("src/tidy.rs", 80.0),      // above floor → clean
+                make_gate_delta("src/edited.rs", Some(-40.0)), // modified, has delta → ignored
+                make_gate_delta("src/gone.rs", None),        // deleted (no projected) → ignored
+            ],
+            Some(60.0),
+            Some(59.0),
+            Vec::new(),
+        );
+        let v = evaluate_gate_thresholds(&t, &report);
+        assert_eq!(v.len(), 1, "only the below-floor added file violates: {v:?}");
+        assert_eq!(v[0].gate, "new_file_health_min");
+        assert_eq!(v[0].path, "src/god_class.rs");
+        assert_eq!(v[0].actual, "20.0");
+        assert_eq!(v[0].threshold, "50.0");
+    }
+
+    #[test]
+    fn gate_new_file_floor_absent_key_is_byte_identical_noop() {
+        // The SAME report with no new_file_health_min key must produce zero
+        // new-file violations — added files stay unenforced by default.
+        let t = Thresholds::default();
+        let report = make_gate_report(
+            vec![make_added_delta("src/god_class.rs", 1.0)],
+            Some(60.0),
+            Some(60.0),
+            Vec::new(),
+        );
+        assert!(
+            evaluate_gate_thresholds(&t, &report).is_empty(),
+            "no new_file_health_min ⇒ no new-file gate at all"
+        );
+    }
+
+    #[test]
+    fn gate_new_file_floor_passes_at_boundary() {
+        // Equal-passes: a projected score exactly at the floor is allowed.
+        let mut t = Thresholds::default();
+        t.diff.new_file_health_min = Some(50.0);
+        let report = make_gate_report(
+            vec![make_added_delta("src/edge.rs", 50.0)],
+            Some(50.0),
+            Some(50.0),
+            Vec::new(),
+        );
+        assert!(evaluate_gate_thresholds(&t, &report).is_empty());
+    }
+
+    #[test]
+    fn gate_new_file_floor_never_fires_on_deleted_file() {
+        // A deleted file has no projected score; even a floor of 100 must not
+        // fire on it (the reason is REASON_DELETED, and projected_score is None).
+        let mut t = Thresholds::default();
+        t.diff.new_file_health_min = Some(100.0);
+        let report = make_gate_report(
+            vec![make_gate_delta("src/gone.rs", None)],
+            Some(50.0),
+            Some(50.0),
+            Vec::new(),
+        );
+        assert!(
+            evaluate_gate_thresholds(&t, &report).is_empty(),
+            "deleted files never trip the new-file floor"
+        );
+    }
+
+    #[test]
+    fn new_file_floor_key_parses_and_makes_thresholds_non_empty() {
+        let t = Thresholds::from_text("[diff]\nnew_file_health_min = 50.0\n").unwrap();
+        assert_eq!(t.diff.new_file_health_min, Some(50.0));
+        assert!(!t.is_empty());
+    }
+
+    #[test]
+    fn new_file_floor_unknown_key_rejected() {
+        // Typo guard: deny_unknown_fields must catch a near-miss spelling.
+        let raw = "[diff]\nnew_file_health_minimum = 50.0\n";
+        let err = Thresholds::from_text(raw).expect_err("typo'd key should reject");
+        assert!(
+            err.contains("unknown field") || err.contains("new_file_health_minimum"),
             "expected 'unknown field' in error: {err}"
         );
     }

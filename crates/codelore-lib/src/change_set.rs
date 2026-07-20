@@ -72,7 +72,12 @@ const REASON_NOT_TIER1: &str = "not a Tier-1 source file";
 const REASON_BINARY: &str = "binary content";
 const REASON_SIZE_LIMIT: &str = "file exceeds the AST size limit";
 const REASON_DELETED: &str = "deleted at gate time";
-const REASON_NEW_FILE: &str = "new file (no history baseline)";
+/// Visible to [`crate::quality_gates`] so the `new_file_health_min` gate can
+/// identify added-file rows by their honest-absence reason rather than
+/// re-deriving the same classification from `kind` (which also reads
+/// `"added"` for rename destinations — the same population this reason
+/// already covers).
+pub(crate) const REASON_NEW_FILE: &str = "new file (no history baseline)";
 const REASON_NO_HEAD_ROW: &str = "no code-health row at HEAD";
 /// The projection produced no scoreable row for a file that had one at HEAD
 /// (the working tree emptied its analyzable content). Unreachable for a file
