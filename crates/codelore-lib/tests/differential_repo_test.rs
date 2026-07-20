@@ -1067,6 +1067,65 @@ fn worktree_changes_drops_add_then_delete_and_untracked() {
     );
 }
 
+/// A working tree with unmerged (conflicted) paths cannot be net-classified
+/// against HEAD, so both backends must return `Err` — the error contract is
+/// part of the dual-backend parity guarantee. The conflict is a regular file,
+/// which both backends surface (gix via `EntryStatus::Conflict`, CLI via the
+/// porcelain `u ` record).
+#[test]
+fn worktree_changes_errors_alike_on_merge_conflict() {
+    let repo = codelore_lib::test_support::differential_repo::build();
+    let path = repo.dir.path();
+
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .output()
+            .expect("spawn git")
+    };
+
+    let base = String::from_utf8(git(&["rev-parse", "HEAD"]).stdout)
+        .expect("rev-parse utf8")
+        .trim()
+        .to_string();
+
+    // Two branches from the same base overwrite README.md with different
+    // whole-file content; merging them conflicts on that file.
+    assert!(
+        git(&["checkout", "-q", "-b", "conflict-left"])
+            .status
+            .success()
+    );
+    std::fs::write(path.join("README.md"), b"left side\n").expect("write left");
+    assert!(git(&["commit", "-aqm", "left"]).status.success());
+
+    assert!(
+        git(&["checkout", "-q", "-b", "conflict-right", &base])
+            .status
+            .success()
+    );
+    std::fs::write(path.join("README.md"), b"right side\n").expect("write right");
+    assert!(git(&["commit", "-aqm", "right"]).status.success());
+
+    // The merge is expected to FAIL (conflict) and leave unmerged entries.
+    let merge = git(&["merge", "conflict-left"]);
+    assert!(!merge.status.success(), "merge should have conflicted");
+
+    let gix = GixRepo::open(path).expect("GixRepo::open");
+    let cli = GitCliRepo::open(path).expect("GitCliRepo::open");
+
+    assert!(
+        gix.worktree_changes().is_err(),
+        "GixRepo must error on a conflicted working tree"
+    );
+    assert!(
+        cli.worktree_changes().is_err(),
+        "GitCliRepo must error on a conflicted working tree"
+    );
+}
+
 /// `Repo::tags()` must return byte-identical results from both backends.
 /// Uses the `delivery_repo` fixture which has 4 annotated tags plus one
 /// LIGHTWEIGHT tag (`light-1`, exercising the committer-date fallback path)

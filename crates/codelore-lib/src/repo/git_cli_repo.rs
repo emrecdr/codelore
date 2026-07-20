@@ -502,7 +502,7 @@ fn parse_porcelain_v2(bytes: &[u8]) -> Result<ParsedStatus> {
         let record = String::from_utf8_lossy(token);
         if record.starts_with("u ") {
             return Err(CodeLoreError::Analysis(
-                "unmerged paths in working tree; resolve conflicts before gating".into(),
+                super::WORKTREE_CONFLICT_MESSAGE.into(),
             ));
         }
         if let Some(rest) = record.strip_prefix("1 ") {

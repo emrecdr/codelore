@@ -160,6 +160,13 @@ pub trait Repo: Send + Sync {
     fn tags(&self) -> Result<Vec<TagInfo>>;
 }
 
+/// The error message both backends return from `worktree_changes` when the
+/// working tree has unmerged (conflicted) paths. Shared so the two backends
+/// cannot drift — the differential tests compare returned changes, not error
+/// text.
+pub(crate) const WORKTREE_CONFLICT_MESSAGE: &str =
+    "unmerged paths in working tree; resolve conflicts before gating";
+
 /// Merge a `worktree_changes` candidate into the per-path map. A reported
 /// rename source (`Some`) wins over `None` regardless of arrival order —
 /// the same path can reach the map from both status streams (e.g. a staged

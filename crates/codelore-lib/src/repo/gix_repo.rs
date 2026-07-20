@@ -401,14 +401,14 @@ impl Repo for GixRepo {
                     status,
                     ..
                 }) => {
-                    if is_symlink_or_gitlink(entry.mode) {
-                        continue;
-                    }
+                    // Conflicts must error regardless of file mode so both
+                    // backends agree — the CLI parser rejects `u ` records
+                    // before any mode filtering. The symlink/gitlink filter
+                    // therefore applies only to genuine content changes.
                     match status {
                         EntryStatus::Conflict { .. } => {
                             return Err(CodeLoreError::Analysis(
-                                "unmerged paths in working tree; resolve conflicts before gating"
-                                    .into(),
+                                super::WORKTREE_CONFLICT_MESSAGE.into(),
                             ));
                         }
                         EntryStatus::Change(
@@ -417,11 +417,13 @@ impl Repo for GixRepo {
                             | UnstagedChange::Modification { .. },
                         )
                         | EntryStatus::IntentToAdd => {
-                            super::add_worktree_candidate(
-                                &mut candidates,
-                                rela_path.to_string(),
-                                None,
-                            );
+                            if !is_symlink_or_gitlink(entry.mode) {
+                                super::add_worktree_candidate(
+                                    &mut candidates,
+                                    rela_path.to_string(),
+                                    None,
+                                );
+                            }
                         }
                         // Submodule status is disabled via
                         // `index_worktree_submodules(None)`; `NeedsUpdate`
