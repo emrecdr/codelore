@@ -363,12 +363,20 @@ fn check_squash_workflow(db: &FactsDb) -> Result<()> {
 /// # Formula
 ///
 /// ```text
-/// rework_pct = 100 × Σ overlap(h1, h2) / Σ new_lines(all windowed hunks)
+/// rework_pct = 100 × Σ_h1 LEAST( Σ_h2 overlap(h1, h2), new_lines(h1) )
+///                    / Σ new_lines(all windowed hunks)
 /// ```
 ///
+/// Each added hunk `h1` can be reworked by several later hunks `h2`. Summing
+/// the raw per-pair overlaps would count `h1`'s added lines once per reworking
+/// partner, so a single 10-line region overwritten by 3 later commits would
+/// contribute 30 lines to the numerator against only 10 in the denominator —
+/// pushing the ratio above 100%. The inner `LEAST(…, new_lines(h1))` caps each
+/// added region's contribution at the lines it actually added, so the numerator
+/// can never exceed the denominator and `rework_pct` is bounded to `[0, 100]`.
+///
 /// The denominator is the total lines added across ALL hunks in the window
-/// (not just hunk pairs that happen to have a rework partner), so the
-/// percentage is correctly bounded by the overall churn volume. A denominator
+/// (not just hunk pairs that happen to have a rework partner); a denominator
 /// built only from `h1` sides of matched pairs would inflate the percentage by
 /// excluding unpaired added lines.
 ///
@@ -399,7 +407,14 @@ fn compute_rework_pct(db: &FactsDb, rework_window_days: u32) -> Result<Option<De
         rework_pairs AS (
             -- h1 = the 'added' hunk, h2 = the later hunk that may overwrite it.
             -- Overlap formula: lines of h1's added range that h2 touches.
+            -- Carries h1's identity + new_lines so the numerator can cap each
+            -- added hunk's total overlap by the lines it actually added.
             SELECT
+                h1.path      AS h1_path,
+                h1.rev       AS h1_rev,
+                h1.old_start AS h1_old_start,
+                h1.new_start AS h1_new_start,
+                h1.new_lines AS h1_new_lines,
                 GREATEST(0,
                     LEAST(h1.new_start + h1.new_lines, h2.old_start + h2.old_lines)
                     - GREATEST(h1.new_start, h2.old_start)
@@ -411,15 +426,27 @@ fn compute_rework_pct(db: &FactsDb, rework_window_days: u32) -> Result<Option<De
              AND date_diff('day', h1.commit_date, h2.commit_date) > 0
              AND date_diff('day', h1.commit_date, h2.commit_date) <= {rework_window_days}
         ),
+        capped_rework AS (
+            -- Cap each added hunk's total forward overlap by its own new_lines.
+            -- A single added region can be overwritten by several later hunks;
+            -- summing the raw per-pair overlaps would count its lines once per
+            -- reworking partner, letting the numerator exceed the added-line
+            -- volume (rework_pct > 100%). The per-hunk LEAST() bounds each
+            -- added region's contribution to at most the lines it added, so
+            -- SUM(capped_overlap) <= SUM(new_lines) and rework_pct <= 100.
+            SELECT LEAST(SUM(overlap), h1_new_lines) AS capped_overlap
+            FROM rework_pairs
+            GROUP BY h1_path, h1_rev, h1_old_start, h1_new_start, h1_new_lines
+        ),
         window_added AS (
-            -- Total lines added in the window — the correct denominator.
-            -- This is independent of the pair join so unpaired added lines
-            -- are included, keeping the percentage correctly bounded.
+            -- Total lines added in the window — the denominator. Independent of
+            -- the pair join so unpaired added lines are included; combined with
+            -- the per-added-hunk cap above this keeps rework_pct in [0, 100].
             SELECT SUM(new_lines) AS total_added FROM windowed_hunks
         )
         SELECT
             CASE WHEN (SELECT total_added FROM window_added) > 0
-                 THEN 100.0 * COALESCE((SELECT SUM(overlap) FROM rework_pairs), 0)
+                 THEN 100.0 * COALESCE((SELECT SUM(capped_overlap) FROM capped_rework), 0)
                               / (SELECT total_added FROM window_added)
                  ELSE 0.0 END                    AS rework_pct,
             (SELECT COUNT(*)    FROM rework_pairs) AS pair_count,

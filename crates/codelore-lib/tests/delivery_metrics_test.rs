@@ -143,6 +143,134 @@ fn rework_pct_is_positive() {
     assert!(row.n > 0, "rework_pct n (pair count) must be positive");
 }
 
+/// Build a tiny repo where one 10-line file is created and then fully
+/// rewritten four times in quick succession, so the identical 10-line range
+/// is independently overlapped by every later rewrite within the rework
+/// window (a hot file rewritten repeatedly).
+///
+/// The initial `c0` file-add carries NO hunk row — the ingest only records
+/// hunks for modifications (pure adds/deletes carry empty hunks, see
+/// `repo::gix_repo`). The four rewrite commits `c1..c4` are modifications,
+/// each producing one full-range replace hunk `old=1..11, new=1..11`
+/// (`new_lines=10`), all at the same line numbers. That yields four windowed
+/// hunks and `C(4,2) = 6` forward-in-time pairs, each with a full 10-line
+/// overlap.
+///
+/// Regression fixture for the rework-overlap cap: before the fix,
+/// `SUM(overlap)` counts each hunk's lines once per later reworking partner
+/// → 6 × 10 = 60 against a denominator of 40 (`4 × 10` `new_lines`) → 150%,
+/// which exceeds the logically possible maximum of 100%.
+fn build_rework_multi_partner_repo() -> tempfile::TempDir {
+    use std::fmt::Write as _;
+    use std::process::Command;
+    fn run(path: &std::path::Path, date: &str, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .env("GIT_AUTHOR_DATE", date)
+            .env("GIT_COMMITTER_DATE", date)
+            .status()
+            .expect("git");
+        assert!(status.success());
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path();
+    run(
+        path,
+        "2026-01-01T00:00:00Z",
+        &["init", "-b", "main", "--quiet"],
+    );
+    run(
+        path,
+        "2026-01-01T00:00:00Z",
+        &["config", "user.email", "t@t"],
+    );
+    run(
+        path,
+        "2026-01-01T00:00:00Z",
+        &["config", "user.name", "Tiny"],
+    );
+
+    let file = path.join("rework.txt");
+    let write_version = |n: u32| {
+        // 10 distinct lines; every line changes between versions so each
+        // rewrite is a single full-range replace hunk.
+        let mut content = String::new();
+        for i in 1..=10u32 {
+            writeln!(content, "v{n}-line-{i}").expect("format fixture line");
+        }
+        std::fs::write(&file, content).expect("write fixture file");
+    };
+
+    // c0 (Jan 1): create the file. A pure add carries NO hunk row, so it is
+    // not one of the reworking hunks — it only establishes the baseline that
+    // the later rewrites modify.
+    write_version(0);
+    run(path, "2026-01-01T00:00:00Z", &["add", "rework.txt"]);
+    run(
+        path,
+        "2026-01-01T00:00:00Z",
+        &["commit", "-m", "c0 add", "--quiet"],
+    );
+
+    // c1..c4 (Jan 2..5): each rewrites every line, so git diff reports one
+    // full-range replace hunk `old=1..11, new=1..11` (new_lines=10) at the
+    // same line numbers. Four modification hunks → C(4,2)=6 forward pairs.
+    for (day, version) in [(2u32, 1u32), (3, 2), (4, 3), (5, 4)] {
+        write_version(version);
+        let date = format!("2026-01-0{day}T00:00:00Z");
+        let msg = format!("c{version} rewrite");
+        run(path, &date, &["commit", "-am", &msg, "--quiet"]);
+    }
+
+    dir
+}
+
+#[test]
+fn rework_pct_capped_at_100_with_multiple_reworking_partners() {
+    let fixture = build_rework_multi_partner_repo();
+    let repo = GixRepo::open(fixture.path()).expect("open repo");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: fixture.path().to_path_buf(),
+        include_merges: true,
+        min_revs: 1,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let rows = run_delivery_metrics(&db, &opts).expect("run delivery-metrics");
+
+    let row = rows
+        .iter()
+        .find(|r| r.metric == "rework_pct")
+        .expect("rework_pct row present");
+
+    // Four modification hunks (c1..c4), all covering the identical 10-line
+    // range. Every one of the C(4,2) = 6 forward-in-time pairs has
+    // overlap = 10 lines.
+    //
+    // Pre-fix: SUM(overlap) = 60, denominator (total new_lines) = 40 →
+    // 150%, i.e. > 100%.
+    //
+    // Post-fix: each earlier hunk's total forward overlap is capped at its
+    // own new_lines before summing: c1 → min(10+10+10, 10) = 10;
+    // c2 → min(10+10, 10) = 10; c3 → min(10, 10) = 10; c4 → no later partner
+    // → 0. Total = 30, so rework_pct = 100 × 30 / 40 = 75.0.
+    assert_eq!(row.n, 6, "6 forward-looking hunk pairs (C(4,2))");
+    assert!(
+        row.p50 <= 100.0 + 1e-9,
+        "rework_pct must never exceed 100%; got {:.4}",
+        row.p50
+    );
+    assert!(
+        (row.p50 - 75.0_f64).abs() < 0.5,
+        "rework_pct expected ~75.0 after capping per-added-hunk overlap, got {:.4}",
+        row.p50
+    );
+}
+
 #[test]
 fn batch_size_files_p50_is_one() {
     let fixture = codelore_lib::test_support::delivery_repo::build();
