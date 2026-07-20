@@ -114,12 +114,37 @@ const BRANCH_COMMITS_CTE: &str = "
             JOIN commits co ON co.rev = cp1.rev
             WHERE cp1.position = 1
         ),
+        mainline_reachable AS (
+            -- First-parent walk from each merge's mainline (position=0) parent.
+            -- This spans the true merge base and every shared commit below it,
+            -- so anti-joining it out of the branch walk removes the mainline
+            -- history the branch walk would otherwise cross into. Bounded by the
+            -- same depth and 90-day date floor as the branch walk.
+            SELECT
+                m.merge_rev,
+                m.merge_date,
+                m.mainline_parent      AS mainline_rev,
+                0                      AS depth
+            FROM merges m
+
+            UNION ALL
+
+            SELECT
+                mr.merge_rev,
+                mr.merge_date,
+                cp.parent_rev          AS mainline_rev,
+                mr.depth + 1           AS depth
+            FROM mainline_reachable mr
+            JOIN commit_parents cp ON cp.rev = mr.mainline_rev AND cp.position = 0
+            JOIN commits co ON co.rev = cp.parent_rev
+            WHERE mr.depth < 200
+              AND co.date >= mr.merge_date - INTERVAL '90' DAY
+        ),
         branch_walk AS (
             -- Seed: the branch tip itself for each merge.
             SELECT
                 m.merge_rev,
                 m.merge_date,
-                m.mainline_parent,
                 m.branch_tip           AS branch_rev,
                 0                      AS depth
             FROM merges m
@@ -127,11 +152,16 @@ const BRANCH_COMMITS_CTE: &str = "
             UNION ALL
 
             -- Recursive step: walk each branch commit's first parent
-            -- (position=0), bounded by depth and date floor.
+            -- (position=0), bounded by depth and date floor. The walk runs past
+            -- the merge base into mainline history on purpose; the
+            -- mainline_reachable anti-join in branch_commits trims it back to the
+            -- commits unique to the branch. (Stopping at mainline_parent is
+            -- wrong once mainline advances after the branch is cut, because then
+            -- mainline_parent is no longer on the branch tip's first-parent
+            -- chain — the source of the previous overshoot bug.)
             SELECT
                 bw.merge_rev,
                 bw.merge_date,
-                bw.mainline_parent,
                 cp.parent_rev          AS branch_rev,
                 bw.depth + 1           AS depth
             FROM branch_walk bw
@@ -139,18 +169,23 @@ const BRANCH_COMMITS_CTE: &str = "
             JOIN commits co ON co.rev = cp.parent_rev
             WHERE bw.depth < 200
               AND co.date >= bw.merge_date - INTERVAL '90' DAY
-              -- Stop if we reach the mainline parent (do not cross into main).
-              AND cp.parent_rev <> bw.mainline_parent
         ),
         branch_commits AS (
-            -- Exclude the mainline parent itself; keep only commits that are
-            -- purely on the branch side (not reachable from mainline_parent).
+            -- Branch-side commits: reachable from the branch tip AND NOT
+            -- reachable from the mainline parent. The anti-join drops the merge
+            -- base and all shared mainline history, leaving only commits unique
+            -- to the branch below the merge base.
             SELECT DISTINCT
                 bw.merge_rev,
                 bw.merge_date,
                 bw.branch_rev          AS branch_commit_rev
             FROM branch_walk bw
-            WHERE bw.branch_rev <> bw.mainline_parent
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM mainline_reachable mr
+                WHERE mr.merge_rev = bw.merge_rev
+                  AND mr.mainline_rev = bw.branch_rev
+            )
         )
     ";
 

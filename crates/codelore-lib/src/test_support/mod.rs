@@ -608,3 +608,83 @@ pub mod delivery_repo {
         DeliveryRepo { dir, head_sha }
     }
 }
+
+#[cfg(feature = "test-support")]
+pub mod mainline_advance_repo {
+    //! A minimal fixture where a feature branch stays open **across a mainline
+    //! advance**, so the merge's first parent (mainline tip at merge time) is
+    //! newer than the true merge base.
+    //!
+    //! This is the exact topology the `delivery-metrics` branch-walk needs to
+    //! exercise: `merge-base != first-parent`. The `delivery_repo` fixture does
+    //! not cover it — both of its branches are cut and merged before the next
+    //! mainline commit, so their first parent already equals the merge base.
+    //!
+    //! ## Topology
+    //!
+    //! ```text
+    //! * merge  2026-01-10  Merge branch 'feature' into main  (parents: E, Y)
+    //! |\
+    //! | * Y    2026-01-09  feature: finalize   (src/feature.rs)
+    //! | * X    2026-01-08  feature: add file   (src/feature.rs)
+    //! * | E    2026-01-07  main: advance       (src/main.rs)  <- after branch cut
+    //! |/
+    //! * B      2026-01-05  main: pre-branch    (src/main.rs)  <- merge base
+    //! * A      2026-01-01  seed                (src/main.rs)
+    //! ```
+    //!
+    //! The feature branch is cut from `B` (Jan 5). Main then advances to `E`
+    //! (Jan 7) while the branch is still open, and the `--no-ff` merge (Jan 10)
+    //! records `E` as its first parent. Walking the branch tip's first-parent
+    //! chain therefore never meets `E`; it runs straight through the merge base
+    //! `B` into mainline history. Only the `mainline_reachable` anti-join keeps
+    //! the branch set to the two commits unique to the branch (`X`, `Y`).
+    //!
+    //! Expected corrected metrics (single merge unit, `n = 1`):
+    //! - `batch_size_files` = 1 (only `src/feature.rs`)
+    //! - `branch_duration_hours` = Jan 10 10:00 − Jan 8 10:00 = 48
+    //!
+    //! The pre-fix walk instead vacuumed `B` and `A` (both `src/main.rs`),
+    //! inflating `batch_size_files` to 2 and `branch_duration_hours` to 216.
+    //!
+    //! ## Regenerating the bundle
+    //!
+    //! Build the repo with fixed author/committer dates and identity, then
+    //! capture it as a bundle (deterministic content SHAs):
+    //!
+    //! ```sh
+    //! git init -b main && git config user.name 'Fixture Bot' \
+    //!   && git config user.email 'fixture@example.com'
+    //! # A(Jan01) B(Jan05) on main; branch feature from B; E(Jan07) on main;
+    //! # X(Jan08) Y(Jan09) on feature (src/feature.rs only); then:
+    //! git checkout main && git merge --no-ff --no-edit feature   # merge Jan10
+    //! git bundle create \
+    //!   crates/codelore-lib/src/test_support/data/mainline-advance-repo.bundle --all
+    //! ```
+    //!
+    //! Set `GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE` per commit to the dates above.
+
+    use tempfile::TempDir;
+
+    /// The fixture's git bundle, captured once and embedded at compile time.
+    static BUNDLE: &[u8] = include_bytes!("data/mainline-advance-repo.bundle");
+
+    pub struct MainlineAdvanceRepo {
+        pub dir: TempDir,
+        pub head_sha: String,
+    }
+
+    /// Extract the mainline-advance fixture from the embedded bundle into a
+    /// fresh tempdir via a single atomic `git clone`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `tempfile::tempdir` fails or if `git clone` from the bundle
+    /// fails (either indicates a broken local git install, not a fixture issue).
+    #[must_use]
+    pub fn build() -> MainlineAdvanceRepo {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let head_sha = super::clone_bundle(BUNDLE, dir.path());
+        MainlineAdvanceRepo { dir, head_sha }
+    }
+}

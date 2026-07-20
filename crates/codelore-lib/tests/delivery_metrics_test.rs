@@ -224,3 +224,50 @@ fn no_merge_commits_returns_empty_or_graceful() {
         "branch_duration_hours should be absent without merge commits"
     );
 }
+
+#[test]
+fn mainline_advance_stops_branch_walk_at_merge_base() {
+    // Regression guard for the branch-walk overshoot: the `mainline_advance_repo`
+    // fixture has a feature branch that stays open while main advances, so the
+    // merge's first parent is newer than the merge base. The branch-side commits
+    // touch only src/feature.rs (X on Jan 8, Y on Jan 9), merged Jan 10.
+    //
+    // Correct behaviour (single merge unit, n == 1):
+    //   batch_size_files p50 = 1   (only src/feature.rs)
+    //   branch_duration  p50 = 48  (Jan 10 10:00 − Jan 8 10:00)
+    //
+    // Before the mainline_reachable anti-join, the walk crossed the merge base
+    // into mainline history (src/main.rs on Jan 5 and Jan 1), inflating
+    // batch_size_files to 2 and branch_duration to 216 h.
+    let fixture = codelore_lib::test_support::mainline_advance_repo::build();
+    let repo = GixRepo::open(fixture.dir.path()).expect("open repo");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = base_opts(fixture.dir.path());
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let rows = run_delivery_metrics(&db, &opts).expect("run delivery-metrics");
+
+    let files = rows
+        .iter()
+        .find(|r| r.metric == "batch_size_files")
+        .expect("batch_size_files row present");
+    assert_eq!(files.n, 1, "exactly one merge unit");
+    assert!(
+        (files.p50 - 1.0_f64).abs() < 0.5,
+        "batch_size_files must be 1 (only src/feature.rs); crossing the merge \
+         base would pull in src/main.rs and inflate to 2. got {:.2}",
+        files.p50
+    );
+
+    let dur = rows
+        .iter()
+        .find(|r| r.metric == "branch_duration_hours")
+        .expect("branch_duration_hours row present");
+    assert_eq!(dur.n, 1, "exactly one merge unit");
+    assert!(
+        (dur.p50 - 48.0_f64).abs() < 0.5,
+        "branch_duration must be 48 h (Jan 10 − Jan 8); crossing the merge base \
+         would push MIN(date) back to Jan 1 and inflate to 216 h. got {:.2}",
+        dur.p50
+    );
+}
