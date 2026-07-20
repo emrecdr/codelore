@@ -6282,9 +6282,20 @@ fn build_spa_dashboard(
             )
         })
         .or_else(|| {
+            // Prevalence denominator: all files live at HEAD (no `--min-revs`
+            // gate). Degrades to a zero count on query failure, which the
+            // factor constructor treats as "no denominator" → tile omitted.
+            let total_live_files =
+                codelore_lib::cli_api::analyses::knowledge_islands::count_live_files(db)
+                    .unwrap_or_else(|e| {
+                        tracing::warn!(
+                            "dashboard: live-file count for knowledge tile failed; skipping: {e}"
+                        );
+                        0
+                    });
             codelore_lib::cli_api::analyses::factors::knowledge_factor_from_islands(
                 &knowledge_islands,
-                i32::try_from(opts.departed_threshold_days).unwrap_or(i32::MAX),
+                total_live_files,
             )
         });
     if let Some(kt) = knowledge_tile {

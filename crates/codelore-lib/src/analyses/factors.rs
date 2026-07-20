@@ -11,7 +11,7 @@
 //! |---|---|---|
 //! | Code | `health_trend` `code_health` | — |
 //! | Architecture | `health_trend` `arch_health` | — |
-//! | Knowledge | `code_familiarity` `familiarity_pct` + `islands_pct` | `knowledge_islands` departed share |
+//! | Knowledge | `code_familiarity` `familiarity_pct` + `islands_pct` | `knowledge_islands` island prevalence |
 //! | Delivery | `delivery_metrics` `rework_pct` + `branch_duration_hours`; `release_cadence` summary | hidden (no tile) when all sources absent |
 //!
 //! ## `XmR` attention rule
@@ -188,38 +188,50 @@ pub fn knowledge_factor_from_familiarity(familiarity_pct: f64, islands_pct: f64)
 }
 
 /// Build the Knowledge factor tile from `knowledge_islands` output as a
-/// fallback when `code_familiarity` data is unavailable.
+/// fallback when `code_familiarity` data is unavailable (e.g. repositories
+/// whose primary language has no `complexity_metrics` support).
 ///
-/// Headline = `100 × (1 − departed_island_share)` where
-/// `departed_island_share` = fraction of island files whose main author has
-/// departed (i.e. `days_since_main_active ≥ departed_threshold`).
+/// Every row `run_knowledge_islands` emits is a *departed* knowledge island
+/// by construction — its SQL keeps only files whose main author is already
+/// past `--departed-threshold-days` — so `rows.len()` is exactly the count
+/// of departed islands. The tile scores their *prevalence* across the live
+/// tree rather than the (always-`1.0`) departed-vs-active share:
 ///
-/// This is a conservative proxy: it only penalises for *departed* knowledge
-/// concentration, not for active-but-siloed experts. The `code_familiarity`
-/// source is preferred when available.
+/// `headline = 100 × (1 − departed_islands / total_live_files)`, clamped to
+/// `[0, 100]`.
+///
+/// Returns `None` when there are no island rows (the caller then falls back
+/// to the familiarity path) or when `total_live_files` is zero (no
+/// denominator).
+///
+/// # Parameters
+///
+/// - `rows`: departed knowledge-island files from `run_knowledge_islands`.
+/// - `total_live_files`: count of files present at HEAD (latest
+///   `change_type` ≠ `deleted`) — the prevalence denominator. Counted
+///   plainly, without the `--min-revs` gate the island rows honour, so the
+///   ratio compares departed islands against the full live tree.
 #[must_use]
 pub fn knowledge_factor_from_islands(
     rows: &[KnowledgeIslandRow],
-    departed_threshold_days: i32,
+    total_live_files: u64,
 ) -> Option<FactorTile> {
-    if rows.is_empty() {
+    if rows.is_empty() || total_live_files == 0 {
         return None;
     }
-    let total = rows.len();
-    let departed = rows
-        .iter()
-        .filter(|r| r.days_since_main_active >= departed_threshold_days)
-        .count();
+    let departed_islands = rows.len();
     #[allow(clippy::cast_precision_loss)]
-    let departed_share = departed as f64 / total as f64;
-    let headline = 100.0 * (1.0 - departed_share);
+    let departed_share = departed_islands as f64 / total_live_files as f64;
+    let headline = (100.0 * (1.0 - departed_share)).clamp(0.0, 100.0);
     Some(FactorTile {
         name: "Knowledge".into(),
         headline: Some(headline),
         band: crate::bands::health_band(headline).to_string(),
         series: Vec::new(),
         attention: departed_share > 0.2,
-        detail: format!("{departed} of {total} knowledge-island files have departed main authors"),
+        detail: format!(
+            "{departed_islands} of {total_live_files} live files are departed knowledge islands"
+        ),
         numbers: Vec::new(),
     })
 }
@@ -411,63 +423,59 @@ mod tests {
         assert_eq!(tile.band, "yellow");
     }
 
+    /// Every `run_knowledge_islands` row is a departed island by
+    /// construction, so island-row fields other than identity are irrelevant
+    /// to the prevalence math — this helper stamps deterministic placeholders.
+    fn island_row(entity: &str) -> KnowledgeIslandRow {
+        KnowledgeIslandRow {
+            entity: entity.into(),
+            main_author: "alice".into(),
+            ownership_pct: 90.0,
+            days_since_main_active: 200,
+            last_main_author_commit: "abc".into(),
+            n_substantial_others: 0,
+        }
+    }
+
     #[test]
     fn knowledge_islands_fallback_empty_returns_none() {
-        assert!(knowledge_factor_from_islands(&[], 90).is_none());
+        // No island rows → caller falls back to the familiarity path.
+        assert!(knowledge_factor_from_islands(&[], 100).is_none());
     }
 
     #[test]
-    fn knowledge_islands_fallback_all_active() {
-        let rows = vec![
-            KnowledgeIslandRow {
-                entity: "src/a.rs".into(),
-                main_author: "alice".into(),
-                ownership_pct: 90.0,
-                days_since_main_active: 10,
-                last_main_author_commit: "abc".into(),
-                n_substantial_others: 0,
-            },
-            KnowledgeIslandRow {
-                entity: "src/b.rs".into(),
-                main_author: "bob".into(),
-                ownership_pct: 85.0,
-                days_since_main_active: 5,
-                last_main_author_commit: "def".into(),
-                n_substantial_others: 1,
-            },
-        ];
-        let tile = knowledge_factor_from_islands(&rows, 90).expect("tile");
-        // 0 departed → headline = 100
-        assert!((tile.headline.unwrap() - 100.0).abs() < 1e-9);
+    fn knowledge_islands_fallback_zero_live_files_returns_none() {
+        // A zero denominator has no meaningful prevalence ratio → guard to None.
+        let rows = vec![island_row("src/a.rs")];
+        assert!(knowledge_factor_from_islands(&rows, 0).is_none());
+    }
+
+    #[test]
+    fn knowledge_islands_fallback_prevalence_sets_headline() {
+        // 2 departed islands out of 10 live files → 100 × (1 − 0.2) = 80.
+        let rows = vec![island_row("src/a.rs"), island_row("src/b.rs")];
+        let tile = knowledge_factor_from_islands(&rows, 10).expect("tile");
+        assert!((tile.headline.unwrap() - 80.0).abs() < 1e-9);
         assert_eq!(tile.band, "green");
+        // share == 0.2 is at, not above, the flag threshold → no attention.
         assert!(!tile.attention);
+        assert_eq!(
+            tile.detail,
+            "2 of 10 live files are departed knowledge islands"
+        );
     }
 
     #[test]
-    fn knowledge_islands_fallback_departed_lowers_headline() {
-        let rows = vec![
-            KnowledgeIslandRow {
-                entity: "src/a.rs".into(),
-                main_author: "alice".into(),
-                ownership_pct: 90.0,
-                days_since_main_active: 200, // departed
-                last_main_author_commit: "abc".into(),
-                n_substantial_others: 0,
-            },
-            KnowledgeIslandRow {
-                entity: "src/b.rs".into(),
-                main_author: "bob".into(),
-                ownership_pct: 85.0,
-                days_since_main_active: 5,
-                last_main_author_commit: "def".into(),
-                n_substantial_others: 1,
-            },
-        ];
-        let tile = knowledge_factor_from_islands(&rows, 90).expect("tile");
-        // 1 of 2 departed → share = 0.5 → headline = 50
+    fn knowledge_islands_fallback_high_prevalence_flags_attention() {
+        // 5 departed islands out of 10 live files → 100 × (1 − 0.5) = 50,
+        // and share 0.5 > 0.2 → attention.
+        let rows: Vec<KnowledgeIslandRow> = (0..5)
+            .map(|i| island_row(&format!("src/f{i}.rs")))
+            .collect();
+        let tile = knowledge_factor_from_islands(&rows, 10).expect("tile");
         assert!((tile.headline.unwrap() - 50.0).abs() < 1e-9);
         assert_eq!(tile.band, "yellow");
-        assert!(tile.attention); // > 20% departed
+        assert!(tile.attention);
     }
 
     // ── delivery_factor_from_metrics ─────────────────────────────────────

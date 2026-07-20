@@ -343,6 +343,38 @@ pub fn run_knowledge_islands(db: &FactsDb, opts: &Options) -> Result<Vec<Knowled
     )
 }
 
+/// Count files present at HEAD — the live-tree prevalence denominator.
+///
+/// Mirrors the `live_paths` liveness rule (`arg_max` of the latest
+/// `change_type` per path, keeping non-`deleted`), but *without* the
+/// `--min-revs` gate `run_knowledge_islands` applies to its island rows.
+/// The Knowledge factor's fallback tile divides departed islands (already
+/// `--min-revs`-filtered) by this full live-file count, so applying the gate
+/// here too would compare unlike populations and skew the ratio.
+///
+/// Returns `0` on an empty store (no `changes` rows).
+///
+/// # Errors
+///
+/// Returns [`CodeLoreError::Analysis`] on `DuckDB` prepare, query, or
+/// row-mapping failure.
+pub fn count_live_files(db: &FactsDb) -> Result<u64> {
+    db.query_row(
+        "SELECT COUNT(*) FROM (
+            SELECT c.path,
+                   arg_max(
+                       c.change_type,
+                       ROW(commits.date, -commits.rowid)
+                   ) AS change_type
+            FROM changes c
+            INNER JOIN commits ON commits.rev = c.rev
+            GROUP BY c.path
+        ) WHERE change_type != 'deleted'",
+        [],
+        |r| r.get::<_, u64>(0),
+    )
+}
+
 /// Batched, un-thresholded owner-activity lookup for an arbitrary set of
 /// paths: the same ownership/activity primitive [`run_knowledge_islands`]
 /// computes internally, but returned for every path with LoC-attributable
