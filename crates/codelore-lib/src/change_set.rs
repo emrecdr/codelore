@@ -191,7 +191,12 @@ pub fn build_change_set_report<R: crate::Repo>(
     let head_sha = repo.head_sha()?;
     let changes = repo.worktree_changes()?;
 
-    let key = cache::report_key(&head_sha, &opts.repo_path, &changes)?;
+    let key = cache::report_key(
+        &head_sha,
+        &opts.repo_path,
+        &changes,
+        opts.defect_calibration.as_deref(),
+    )?;
     if let Some(mut cached) = cache::read(cache_root, &opts.repo_path, &key) {
         cached.merge_in_progress = repo.merge_or_rebase_in_progress();
         return Ok(cached);
@@ -853,8 +858,16 @@ pub mod cache {
 
     /// The content key for a change set: lowercase-hex SHA-256 of
     /// `head_sha | sorted "path\0content-sha256" lines | crate version |`
-    /// [`KEY_SCHEMA`]. A deleted path contributes the literal `"deleted"` in
-    /// place of its content hash.
+    /// `calib=<digest> | ` [`KEY_SCHEMA`]. A deleted path contributes the
+    /// literal `"deleted"` in place of its content hash.
+    ///
+    /// The defect-calibration artifact's CONTENT digest is folded in because
+    /// `--defect-calibration` substitutes smell weights inside the scoring
+    /// engine — it changes the MEASURED health scores in the report, not just
+    /// the verdict. Two runs on the same worktree and HEAD, one calibrated and
+    /// one not, must not share a cache entry. `calib=` is empty when no
+    /// artifact is configured. Thresholds stay excluded: they only affect
+    /// verdicts, which consumers always recompute from the cached report.
     ///
     /// # Errors
     ///
@@ -865,6 +878,7 @@ pub mod cache {
         head_sha: &str,
         repo_root: &Path,
         changes: &[WorktreeChange],
+        defect_calibration: Option<&Path>,
     ) -> Result<String> {
         let mut lines: Vec<String> = Vec::with_capacity(changes.len());
         for change in changes {
@@ -879,8 +893,17 @@ pub mod cache {
             lines.push(format!("{}\0{content}", change.path));
         }
         lines.sort();
+        // Content digest, not path — byte-identical artifacts from different
+        // locations share a key, and editing the artifact in place is visible.
+        // Unset or unreadable both yield an empty segment; an unreadable
+        // artifact hard-errors in the scoring engine before any report is
+        // cached, so the collision with "unset" is unreachable.
+        let calib = defect_calibration
+            .and_then(|p| std::fs::read(p).ok())
+            .map(|bytes| hex::encode(Sha256::digest(&bytes)))
+            .unwrap_or_default();
         let material = format!(
-            "{head_sha}|{}|{}|{KEY_SCHEMA}",
+            "{head_sha}|{}|{}|calib={calib}|{KEY_SCHEMA}",
             lines.join("\n"),
             env!("CARGO_PKG_VERSION"),
         );

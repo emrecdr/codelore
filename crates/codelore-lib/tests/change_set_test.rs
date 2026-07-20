@@ -317,6 +317,48 @@ fn report_is_memoised_by_content() {
 }
 
 #[test]
+fn report_key_folds_in_defect_calibration() {
+    // `--defect-calibration` substitutes smell weights inside the scoring
+    // engine, so it changes the MEASURED scores in the report — not just the
+    // verdict. A calibrated and an uncalibrated run on the same worktree and
+    // HEAD must not share a cache entry, and the key must track the artifact's
+    // CONTENT so editing it in place is visible.
+    let fx = differential_repo::build();
+    let repo = GixRepo::open(fx.dir.path()).expect("open repo");
+    let head_sha = repo.head_sha().expect("head sha");
+    let root = fx.dir.path();
+    let changes = [modified("src/main.rs")];
+
+    let calib_a = root.join("a.calib.json");
+    std::fs::write(&calib_a, br#"{"weights":"a"}"#).expect("write calib a");
+    let calib_b = root.join("b.calib.json");
+    std::fs::write(&calib_b, br#"{"weights":"b"}"#).expect("write calib b");
+
+    let key = |cal: Option<&std::path::Path>| {
+        codelore_lib::change_set::cache::report_key(&head_sha, root, &changes, cal)
+            .expect("report_key")
+    };
+
+    let uncalibrated = key(None);
+    let calibrated_a = key(Some(&calib_a));
+    let calibrated_a_again = key(Some(&calib_a));
+    let calibrated_b = key(Some(&calib_b));
+
+    assert_ne!(
+        uncalibrated, calibrated_a,
+        "calibrated and uncalibrated runs must not share a cache key",
+    );
+    assert_eq!(
+        calibrated_a, calibrated_a_again,
+        "identical artifact content must yield a stable key",
+    );
+    assert_ne!(
+        calibrated_a, calibrated_b,
+        "different artifact content must yield different keys",
+    );
+}
+
+#[test]
 fn finding_ids_stable_across_runs() {
     let (fx, repo, db, opts) = fresh();
     append(&fx.dir.path().join("src/main.rs"), MONSTER_FN);
