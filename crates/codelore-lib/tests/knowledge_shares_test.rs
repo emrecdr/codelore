@@ -449,3 +449,175 @@ fn reviewer_trailer_credits_reviewer_and_renormalizes() {
         );
     }
 }
+
+/// Build a 3-commit fixture where Alice both authors `shared.rs` (contributor
+/// row) and is credited as reviewer on it via a trailer on Bob's later commit
+/// to the same path. When `with_trailer` is false, Bob's final commit carries
+/// no trailer, so Alice never gets reviewer credit — used as a control to
+/// compare against the merged (contributor + reviewer) knowledge value.
+fn build_overlap_repo(with_trailer: bool) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path();
+    let git = |args: &[&str], author: &str, email: &str, date: &str| {
+        git_as(path, args, author, email, date);
+    };
+    git(
+        &["init", "--quiet"],
+        "Alice",
+        "alice@example.com",
+        "2026-01-01T10:00:00Z",
+    );
+    git(
+        &["config", "gc.auto", "0"],
+        "Alice",
+        "alice@example.com",
+        "2026-01-01T10:00:00Z",
+    );
+
+    // Commit 1: Alice authors alice.rs (registers her identity).
+    std::fs::write(path.join("alice.rs"), "pub fn a() -> u32 { 1 }\n").expect("write");
+    git(
+        &["add", "alice.rs"],
+        "Alice",
+        "alice@example.com",
+        "2026-01-01T10:00:00Z",
+    );
+    git(
+        &["commit", "--quiet", "-m", "feat: alice file"],
+        "Alice",
+        "alice@example.com",
+        "2026-01-01T10:00:00Z",
+    );
+
+    // Commit 2: Alice authors shared.rs — this is her contributor row.
+    std::fs::write(path.join("shared.rs"), "pub fn s() -> u32 { 1 }\n").expect("write");
+    git(
+        &["add", "shared.rs"],
+        "Alice",
+        "alice@example.com",
+        "2026-01-02T10:00:00Z",
+    );
+    git(
+        &["commit", "--quiet", "-m", "feat: alice creates shared.rs"],
+        "Alice",
+        "alice@example.com",
+        "2026-01-02T10:00:00Z",
+    );
+
+    // Commit 3: Bob edits shared.rs. With `with_trailer`, the message credits
+    // Alice as reviewer via `Reviewed-by:` on the SAME path she already
+    // authored — this is the overlap that must merge into one row.
+    std::fs::write(
+        path.join("shared.rs"),
+        "pub fn s() -> u32 { 1 }\npub fn s2() -> u32 { 2 }\n",
+    )
+    .expect("write");
+    git(
+        &["add", "shared.rs"],
+        "Bob",
+        "bob@example.com",
+        "2026-01-03T10:00:00Z",
+    );
+    let message = if with_trailer {
+        "feat: bob extends shared.rs\n\nReviewed-by: Alice <alice@example.com>"
+    } else {
+        "feat: bob extends shared.rs"
+    };
+    git(
+        &["commit", "--quiet", "-m", message],
+        "Bob",
+        "bob@example.com",
+        "2026-01-03T10:00:00Z",
+    );
+    git(
+        &["repack", "-d", "--quiet"],
+        "Alice",
+        "alice@example.com",
+        "2026-01-03T10:00:00Z",
+    );
+
+    dir
+}
+
+/// An author who is BOTH a contributor and a reviewer-trailer on the same
+/// path must yield exactly one `(path, author)` row in `knowledge_shares`,
+/// with `k` reflecting the sum of her contributor and reviewer-credit
+/// weights (not two un-merged rows, which would let `code_familiarity`'s
+/// `ROW_NUMBER() OVER (PARTITION BY path ORDER BY k_norm DESC)` rank the
+/// same person #1 and #2, and would bias `coordination_needs` fragmentation
+/// `1 − Σk_norm²` high since `a² + b² < (a + b)²`).
+#[test]
+fn reviewer_and_contributor_shares_merge_into_one_row_per_path() {
+    let with_trailer = build_overlap_repo(true);
+    let repo = GixRepo::open(with_trailer.path()).expect("GixRepo::open");
+    let db = FactsDb::new_in_memory().expect("new_in_memory");
+    let opts = Options {
+        repo_path: with_trailer.path().to_path_buf(),
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+    materialize_knowledge_shares(&db, &opts).expect("materialize with overlap");
+
+    let rows: Vec<(f64, f64)> = db
+        .prepare(
+            "SELECT k, k_norm FROM knowledge_shares
+             WHERE path = 'shared.rs' AND author = 'alice@example.com'",
+        )
+        .expect("prepare")
+        .query_map([], |r| Ok((r.get::<_, f64>(0)?, r.get::<_, f64>(1)?)))
+        .expect("query_map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect");
+
+    assert_eq!(
+        rows.len(),
+        1,
+        "alice contributed to AND is a reviewer-trailer on shared.rs — must \
+         merge into exactly one (path, author) row, got {rows:?}"
+    );
+    let k_merged = rows[0].0;
+
+    // k_norm must still sum to ~1.0 per path after the merge.
+    let totals: Vec<(String, f64)> = db
+        .prepare("SELECT path, SUM(k_norm) FROM knowledge_shares GROUP BY path")
+        .expect("prepare")
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))
+        .expect("query_map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect");
+    for (p, total) in &totals {
+        assert!(
+            (total - 1.0).abs() < 1e-9,
+            "k_norm for {p} must sum to 1.0 after merge, got {total}"
+        );
+    }
+
+    // Control: without the trailer, Alice only holds her contributor k.
+    let without_trailer = build_overlap_repo(false);
+    let repo2 = GixRepo::open(without_trailer.path()).expect("GixRepo::open");
+    let db2 = FactsDb::new_in_memory().expect("new_in_memory");
+    let opts2 = Options {
+        repo_path: without_trailer.path().to_path_buf(),
+        ..Options::default()
+    };
+    db2.ingest(&repo2, &opts2).expect("ingest");
+    materialize_knowledge_shares(&db2, &opts2).expect("materialize without overlap");
+
+    let k_contributor_only: f64 = db2
+        .prepare(
+            "SELECT k FROM knowledge_shares
+             WHERE path = 'shared.rs' AND author = 'alice@example.com'",
+        )
+        .expect("prepare")
+        .query_map([], |r| r.get::<_, f64>(0))
+        .expect("query_map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect")[0];
+
+    assert!(
+        k_merged > k_contributor_only,
+        "merged k ({k_merged}) must exceed contributor-only k \
+         ({k_contributor_only}) — the reviewer-credit weight must be added, \
+         not dropped, when merging into one row"
+    );
+}
