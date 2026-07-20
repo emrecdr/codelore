@@ -1,11 +1,17 @@
-//! Engine tests for the projected code-health half of the change-set engine.
-//! Each test clones its own copy of the 50-commit differential fixture (it
-//! mutates the working tree) and drives `change_set::project_health` directly.
+//! Engine tests for the change-set engine: the projected code-health half
+//! (driven via `change_set::project_health` directly) and the full report
+//! assembly (cycle splice, coupling absences, findings, sidecar memoisation)
+//! via `change_set::build_change_set_report`. Each test clones its own copy
+//! of a bundle fixture because it mutates the working tree.
+
+use std::path::Path;
 
 use codelore_lib::Options;
-use codelore_lib::change_set::project_health;
+use codelore_lib::cache::repo_cache_dir;
+use codelore_lib::change_set::{build_change_set_report, project_health};
 use codelore_lib::facts::FactsDb;
 use codelore_lib::repo::{GixRepo, Repo, WorktreeChange, WorktreeChangeKind};
+use codelore_lib::test_support::coupling_repo;
 use codelore_lib::test_support::differential_repo::{self, DifferentialRepo};
 
 /// A monster function: nested loops + match + boolean conditionals so its
@@ -190,6 +196,179 @@ fn project_health_leaves_the_fact_tables_untouched() {
         perm_before,
         "no new permanent tables may be created",
     );
+}
+
+/// Append `text` to the file at `path`.
+fn append(path: &Path, text: &str) {
+    let mut content = std::fs::read_to_string(path).expect("read file");
+    content.push_str(text);
+    std::fs::write(path, content).expect("write file");
+}
+
+/// Count the `.json` sidecar entries in `dir` (0 when the dir doesn't exist).
+fn sidecar_count(dir: &Path) -> usize {
+    std::fs::read_dir(dir).map_or(0, |entries| {
+        entries
+            .flatten()
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json"))
+            .count()
+    })
+}
+
+#[test]
+fn newly_cyclic_detected_when_edit_introduces_cycle() {
+    let (fx, repo, db, opts) = fresh();
+    // A working-tree edit that makes src/main.rs and src/lib.rs import each
+    // other via the `crate::` form the Rust resolver maps to `src/<name>.rs`.
+    // Neither file imports the other at HEAD, so the pair is a NEW cycle.
+    append(&fx.dir.path().join("src/main.rs"), "use crate::lib;\n");
+    append(&fx.dir.path().join("src/lib.rs"), "use crate::main;\n");
+    let cache_root = tempfile::tempdir().expect("cache root");
+
+    let report = build_change_set_report(&db, &repo, &opts, cache_root.path()).expect("report");
+
+    assert_eq!(
+        report.newly_cyclic_paths,
+        vec!["src/lib.rs".to_string(), "src/main.rs".to_string()],
+        "the edit-introduced cycle members must be newly cyclic, sorted",
+    );
+    for path in ["src/lib.rs", "src/main.rs"] {
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.kind == "newly-cyclic" && f.path == path),
+            "a newly-cyclic finding must name {path}: {:?}",
+            report.findings,
+        );
+    }
+}
+
+#[test]
+fn absence_fires_for_historical_partner() {
+    // The coupling fixture's src/alpha/svc.rs and src/beta/svc.rs co-change in
+    // 7 of 19 commits (each has 9 revisions) — a Fisher-significant pair well
+    // above the shared-revisions floor. Touching only one side must flag the
+    // other as an absent historical partner.
+    let fx = coupling_repo::build();
+    let repo = GixRepo::open(fx.dir.path()).expect("open repo");
+    let db = FactsDb::new_in_memory().expect("open fact store");
+    let opts = Options {
+        repo_path: fx.dir.path().to_path_buf(),
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+    append(
+        &fx.dir.path().join("src/alpha/svc.rs"),
+        "\npub fn gate_probe() {}\n",
+    );
+    let cache_root = tempfile::tempdir().expect("cache root");
+
+    let report = build_change_set_report(&db, &repo, &opts, cache_root.path()).expect("report");
+
+    let absence = report
+        .coupling_absences
+        .iter()
+        .find(|a| a.touched_file == "src/alpha/svc.rs" && a.expected_partner == "src/beta/svc.rs")
+        .expect("the historically-coupled partner must be flagged absent");
+    assert!(
+        absence.historical_shared_revs >= 5,
+        "the pair's shared revisions carry the signal strength: {absence:?}",
+    );
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.kind == "coupling-absence" && f.path == "src/alpha/svc.rs"),
+        "a coupling-absence finding must name the touched file: {:?}",
+        report.findings,
+    );
+}
+
+#[test]
+fn report_is_memoised_by_content() {
+    let (fx, repo, db, opts) = fresh();
+    let main_path = fx.dir.path().join("src/main.rs");
+    append(&main_path, MONSTER_FN);
+    let cache_root = tempfile::tempdir().expect("cache root");
+    let sidecar_dir = repo_cache_dir(cache_root.path(), fx.dir.path()).join("change-set");
+
+    let first = build_change_set_report(&db, &repo, &opts, cache_root.path()).expect("first");
+    assert_eq!(
+        sidecar_count(&sidecar_dir),
+        1,
+        "first build writes a sidecar"
+    );
+    let second = build_change_set_report(&db, &repo, &opts, cache_root.path()).expect("second");
+    assert_eq!(first, second, "a warm rebuild must return the same report");
+    assert_eq!(
+        sidecar_count(&sidecar_dir),
+        1,
+        "unchanged content must hit the same sidecar entry",
+    );
+
+    append(&main_path, "\n// content flip\n");
+    let _third = build_change_set_report(&db, &repo, &opts, cache_root.path()).expect("third");
+    assert_eq!(
+        sidecar_count(&sidecar_dir),
+        2,
+        "flipped content must produce a different cache key",
+    );
+}
+
+#[test]
+fn finding_ids_stable_across_runs() {
+    let (fx, repo, db, opts) = fresh();
+    append(&fx.dir.path().join("src/main.rs"), MONSTER_FN);
+    // Distinct cache roots so the second build recomputes rather than being
+    // served from the first build's sidecar.
+    let cache_a = tempfile::tempdir().expect("cache a");
+    let cache_b = tempfile::tempdir().expect("cache b");
+
+    let first = build_change_set_report(&db, &repo, &opts, cache_a.path()).expect("first");
+    let second = build_change_set_report(&db, &repo, &opts, cache_b.path()).expect("second");
+
+    assert!(
+        !first.findings.is_empty(),
+        "the monster append must produce at least a health-drop finding",
+    );
+    let ids_a: Vec<&str> = first.findings.iter().map(|f| f.id.as_str()).collect();
+    let ids_b: Vec<&str> = second.findings.iter().map(|f| f.id.as_str()).collect();
+    assert_eq!(ids_a, ids_b, "finding ids must be stable across runs");
+    for f in &first.findings {
+        assert_eq!(
+            f.id.len(),
+            12,
+            "finding id is a 12-hex digest prefix: {f:?}"
+        );
+        assert!(
+            f.id.chars().all(|c| c.is_ascii_hexdigit()),
+            "finding id must be hex: {f:?}",
+        );
+    }
+}
+
+#[test]
+fn report_renders_byte_identical_across_two_builds() {
+    // Full determinism: two independent ingests of the same mutated clone,
+    // each with its own cold cache, must serialize to byte-identical JSON.
+    let fx = differential_repo::build();
+    let repo = GixRepo::open(fx.dir.path()).expect("open repo");
+    let opts = Options {
+        repo_path: fx.dir.path().to_path_buf(),
+        ..Options::default()
+    };
+    append(&fx.dir.path().join("src/main.rs"), MONSTER_FN);
+
+    let mut jsons = Vec::new();
+    for label in ["a", "b"] {
+        let db = FactsDb::new_in_memory().expect("open fact store");
+        db.ingest(&repo, &opts).expect("ingest");
+        let cache_root = tempfile::tempdir().expect("cache root");
+        let report = build_change_set_report(&db, &repo, &opts, cache_root.path()).expect("report");
+        jsons.push(serde_json::to_string(&report).unwrap_or_else(|e| panic!("json {label}: {e}")));
+    }
+    assert_eq!(jsons[0], jsons[1], "rendered report must be byte-identical");
 }
 
 fn complexity_metrics_count(db: &FactsDb) -> i64 {

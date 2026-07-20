@@ -7,7 +7,10 @@ use time::OffsetDateTime;
 /// both). `kind` is the NET classification vs HEAD; `rename_from` is set on
 /// the destination entry when the backend reported a rename (the source
 /// appears as its own `Deleted` entry).
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Serde derives because the change-set report embeds these entries and
+/// round-trips them through its JSON sidecar cache.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct WorktreeChange {
     /// Repo-relative, `/`-separated path as it exists in the working tree
     /// (for `Deleted` entries: as it existed at HEAD).
@@ -22,7 +25,11 @@ pub struct WorktreeChange {
 /// Net classification of a working-tree path vs HEAD. A path staged as
 /// added then deleted from the worktree nets out to no change and is not
 /// reported at all.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Serialises lowercase (`"added"` / `"modified"` / `"deleted"`) to match
+/// the string form the change-set report's per-file rows use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum WorktreeChangeKind {
     /// Not a blob at HEAD; present in the working tree.
     Added,

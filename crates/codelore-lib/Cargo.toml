@@ -31,7 +31,11 @@ hex = "0.4"
 [dependencies]
 time = { version = "0.3", features = ["serde", "macros"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `float_roundtrip`: exact f64 parsing so a JSON sidecar (change-set report,
+# enrichment narrative) deserializes to the bit-identical value it was written
+# from — without it serde_json's best-effort float parse drifts in the last
+# ULPs and a warm cache read would differ from the cold computation.
+serde_json = { version = "1", features = ["float_roundtrip"] }
 thiserror = "2"
 arrow = "59.1"
 gix = { version = "0.85", features = ["max-performance", "blob-diff"] }
@@ -170,6 +174,10 @@ required-features = ["test-support"]
 
 [[test]]
 name = "code_health_test"
+required-features = ["test-support"]
+
+[[test]]
+name = "change_set_test"
 required-features = ["test-support"]
 
 [[test]]

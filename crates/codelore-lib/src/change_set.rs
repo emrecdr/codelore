@@ -30,13 +30,22 @@
 //! here so the gate's `delta_code_health_min` reading is understood as
 //! all-scoreable-files rather than the hotspot subset.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
+use sha2::{Digest, Sha256};
+
 use crate::analyses::code_health::{CodeHealthRow, HealthScanCtx, run_code_health_scoped};
+use crate::analyses::coupling::{CouplingAbsence, compute_coupling_absences, run_coupling};
+use crate::analyses::import_graph::{
+    ImportGraph, build_import_graph, build_import_graph_from_edges, tarjan_scc,
+};
+use crate::analyses::query::query_map_collect;
 use crate::complexity::{ComplexityEntity, Tier1Language, compute_for_file};
+use crate::constants::{DEFAULT_FISHER_SIGNIFICANCE, DEFAULT_MIN_SHARED_REVS};
 use crate::facts::FactsDb;
 use crate::facts::ingest::consumer::{dedup_entities, f64_to_i32_clamped};
+use crate::imports::{ImportLanguage, extract_imports, resolve_by_extension};
 use crate::repo::{WorktreeChange, WorktreeChangeKind};
 use crate::{CodeLoreError, Options, Result};
 
@@ -47,6 +56,11 @@ const PROJECTED_COMPLEXITY_TABLE: &str = "complexity_metrics_projected";
 /// The temporary table listing every change-set path (changed + deleted +
 /// rename sources) whose HEAD complexity rows the projection replaces.
 const CHANGED_PATHS_TABLE: &str = "changed_paths_v1";
+
+/// The temporary table listing every path gone from the working tree
+/// (deleted files + rename sources). The cycle splice drops HEAD import
+/// edges INTO these paths — the file no longer exists to be imported.
+const DELETED_PATHS_TABLE: &str = "deleted_paths_v1";
 
 /// NUL-byte binary sniff window, mirroring the repo layer's blob heuristic
 /// (`BINARY_SNIFF_BYTES` in `repo::gix_repo`). HEAD ingest never sees binary
@@ -67,7 +81,7 @@ const REASON_NO_PROJECTED_ROW: &str = "no code-health row after projection";
 
 /// One changed file's HEAD-vs-projected code-health scores, or an honest reason
 /// a score is absent.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FileDelta {
     /// Repo-relative, `/`-separated path (for a rename, the destination).
     pub path: String,
@@ -88,7 +102,7 @@ pub struct FileDelta {
 }
 
 /// The projected-health half of a change-set report.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct HealthProjection {
     /// One row per change-set path, sorted `|delta|` descending (rows with no
     /// delta last), ties broken by path ascending.
@@ -98,6 +112,124 @@ pub struct HealthProjection {
     /// Whole-repo median over the projection run's scores (same population
     /// rule); `None` when empty.
     pub projected_median: Option<f64>,
+}
+
+/// The full measured picture of what the current working-tree edits do to the
+/// repository: enumerated changes, projected health deltas, cycle-membership
+/// delta, absent historical co-change partners, and the advisory findings
+/// derived from all of them.
+///
+/// Everything in here is MEASURED data — no verdicts. Consumers evaluate
+/// thresholds against the report on every read, so a cached report can never
+/// serve a stale verdict.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ChangeSetReport {
+    /// Full SHA-1 hex of the HEAD the projection is anchored to.
+    pub head_sha: String,
+    /// Whether the repository is partway through a merge / rebase /
+    /// cherry-pick / revert. Recomputed on every build — including sidecar
+    /// cache hits — because it is repo state, not measured content.
+    pub merge_in_progress: bool,
+    /// The enumerated working-tree changes, as the repo backend returned
+    /// them (sorted by path).
+    pub changes: Vec<WorktreeChange>,
+    /// Projected code-health deltas plus whole-repo medians.
+    pub health: HealthProjection,
+    /// Files on some import cycle at HEAD, sorted.
+    pub base_cyclic_paths: Vec<String>,
+    /// Files cyclic in the projected graph but not at HEAD (cyclic-node
+    /// membership difference, not a cycle-count comparison), sorted.
+    pub newly_cyclic_paths: Vec<String>,
+    /// Historically-coupled partners absent from the change set. The touched
+    /// side is every non-deleted change-set path; a rename destination is a
+    /// fresh path with no coupling rows in the fact store, so it inherits
+    /// none of its source's partners.
+    pub coupling_absences: Vec<CouplingAbsence>,
+    /// Advisory findings assembled from the fields above, sorted by
+    /// `(kind, path, detail)`.
+    pub findings: Vec<Finding>,
+}
+
+/// One advisory observation about the change set. Findings carry no verdict;
+/// gate verdicts come from evaluating thresholds against the report.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Finding {
+    /// First 12 hex chars of SHA-256 over `"{kind}|{path}|{detail}"` —
+    /// stable across runs for identical content.
+    pub id: String,
+    /// `"health-drop"` | `"newly-cyclic"` | `"coupling-absence"` |
+    /// `"new-file"` | `"unparseable"`.
+    pub kind: String,
+    /// The repo-relative file the finding is about.
+    pub path: String,
+    /// One deterministic sentence of evidence.
+    pub detail: String,
+}
+
+/// Build the full change-set report for the current working tree vs HEAD.
+///
+/// Enumerates the tracked changes itself via [`crate::Repo::worktree_changes`],
+/// then runs the health projection, the cycle splice, and the coupling-absence
+/// scan, and assembles the advisory findings. The whole report is memoised in
+/// a content-keyed JSON sidecar under `cache_root`: a hit is returned as-is
+/// except for `merge_in_progress`, which is recomputed because it is repo
+/// state rather than measured content. Thresholds and calibration are
+/// deliberately NOT part of the cache key — the report stores measured data
+/// only, and consumers re-evaluate verdicts on every read.
+///
+/// # Errors
+///
+/// Propagates repo errors (including the unmerged-paths refusal from
+/// `worktree_changes`), fact-store / SQL errors as
+/// [`CodeLoreError::Analysis`], and working-tree read failures.
+pub fn build_change_set_report<R: crate::Repo>(
+    db: &FactsDb,
+    repo: &R,
+    opts: &Options,
+    cache_root: &Path,
+) -> Result<ChangeSetReport> {
+    let head_sha = repo.head_sha()?;
+    let changes = repo.worktree_changes()?;
+
+    let key = cache::report_key(&head_sha, &opts.repo_path, &changes)?;
+    if let Some(mut cached) = cache::read(cache_root, &opts.repo_path, &key) {
+        cached.merge_in_progress = repo.merge_or_rebase_in_progress();
+        return Ok(cached);
+    }
+
+    let health = project_health(db, repo, opts, &changes)?;
+    let (base_cyclic_paths, newly_cyclic_paths) = project_cycles(db, repo, opts, &changes)?;
+
+    // Touched side of the absence scan: every non-deleted change-set path.
+    // Deleted files are excluded (there is nothing to co-change with), and a
+    // rename destination is a fresh path that inherits no coupling history.
+    let touched: HashSet<String> = changes
+        .iter()
+        .filter(|c| c.kind != WorktreeChangeKind::Deleted)
+        .map(|c| c.path.clone())
+        .collect();
+    let coupling = run_coupling(db, opts)?;
+    let coupling_absences = compute_coupling_absences(
+        &coupling,
+        &touched,
+        DEFAULT_MIN_SHARED_REVS,
+        DEFAULT_FISHER_SIGNIFICANCE,
+    );
+
+    let findings = assemble_findings(&health, &newly_cyclic_paths, &coupling_absences, &changes);
+
+    let report = ChangeSetReport {
+        head_sha,
+        merge_in_progress: repo.merge_or_rebase_in_progress(),
+        changes,
+        health,
+        base_cyclic_paths,
+        newly_cyclic_paths,
+        coupling_absences,
+        findings,
+    };
+    cache::write(cache_root, &opts.repo_path, &key, &report);
+    Ok(report)
 }
 
 /// Project the code-health effect of `changes` on the working tree vs HEAD.
@@ -178,35 +310,7 @@ fn build_projected_complexity_table(
     changes: &[WorktreeChange],
     head_sha: &str,
 ) -> Result<HashMap<String, &'static str>> {
-    // Every change-set path whose HEAD rows the projection drops: the change
-    // path itself plus any rename source.
-    let mut seen: HashSet<&str> = HashSet::new();
-    let mut changed_paths: Vec<&str> = Vec::new();
-    for change in changes {
-        // The change path, plus the rename source when the entry is a rename
-        // destination — both point at HEAD rows the projection must drop.
-        let paths = std::iter::once(change.path.as_str()).chain(change.rename_from.as_deref());
-        for path in paths {
-            if seen.insert(path) {
-                changed_paths.push(path);
-            }
-        }
-    }
-
-    db.execute_batch(&format!(
-        "CREATE OR REPLACE TEMPORARY TABLE {CHANGED_PATHS_TABLE} (path TEXT NOT NULL)"
-    ))?;
-    {
-        let mut stmt = db
-            .conn()
-            .prepare(&format!("INSERT INTO {CHANGED_PATHS_TABLE} VALUES (?)"))
-            .map_err(|e| CodeLoreError::Analysis(format!("prepare {CHANGED_PATHS_TABLE}: {e}")))?;
-        for path in &changed_paths {
-            stmt.execute(duckdb::params![path]).map_err(|e| {
-                CodeLoreError::Analysis(format!("insert {CHANGED_PATHS_TABLE}: {e}"))
-            })?;
-        }
-    }
+    populate_path_table(db, CHANGED_PATHS_TABLE, changed_set_paths(changes))?;
 
     // HEAD complexity for every file NOT in the change set. `CREATE … AS
     // SELECT *` clones the column shape (dropping constraints) so the prepared
@@ -278,6 +382,65 @@ fn build_projected_complexity_table(
     }
 
     Ok(skip_reasons)
+}
+
+/// Every change-set path whose HEAD facts the projection replaces or drops:
+/// the change path itself plus any rename source (both point at HEAD rows
+/// the substituted table must not carry), deduped in first-seen order.
+fn changed_set_paths(changes: &[WorktreeChange]) -> Vec<&str> {
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut paths: Vec<&str> = Vec::new();
+    for change in changes {
+        let candidates = std::iter::once(change.path.as_str()).chain(change.rename_from.as_deref());
+        for path in candidates {
+            if seen.insert(path) {
+                paths.push(path);
+            }
+        }
+    }
+    paths
+}
+
+/// Paths that no longer exist in the working tree: every `Deleted` entry plus
+/// any rename source (the backend contract emits the source as its own
+/// `Deleted` entry, so the explicit `rename_from` sweep is belt-and-braces),
+/// deduped in first-seen order.
+fn deleted_set_paths(changes: &[WorktreeChange]) -> Vec<&str> {
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut paths: Vec<&str> = Vec::new();
+    for change in changes {
+        let deleted = (change.kind == WorktreeChangeKind::Deleted).then_some(change.path.as_str());
+        for path in deleted.into_iter().chain(change.rename_from.as_deref()) {
+            if seen.insert(path) {
+                paths.push(path);
+            }
+        }
+    }
+    paths
+}
+
+/// (Re)create the single-column temporary table `name (path TEXT NOT NULL)`
+/// holding `paths`, inserted via prepared `INSERT` (the read-only-safe
+/// `at_rev` idiom — never `Appender`). `name` is always one of this module's
+/// compile-time table-name constants, never user input, so the SQL
+/// interpolation is safe.
+fn populate_path_table<'a>(
+    db: &FactsDb,
+    name: &str,
+    paths: impl IntoIterator<Item = &'a str>,
+) -> Result<()> {
+    db.execute_batch(&format!(
+        "CREATE OR REPLACE TEMPORARY TABLE {name} (path TEXT NOT NULL)"
+    ))?;
+    let mut stmt = db
+        .conn()
+        .prepare(&format!("INSERT INTO {name} VALUES (?)"))
+        .map_err(|e| CodeLoreError::Analysis(format!("prepare {name}: {e}")))?;
+    for path in paths {
+        stmt.execute(duckdb::params![path])
+            .map_err(|e| CodeLoreError::Analysis(format!("insert {name}: {e}")))?;
+    }
+    Ok(())
 }
 
 /// The result of re-parsing one changed working-tree file.
@@ -435,4 +598,353 @@ fn median(scores: impl Iterator<Item = f64>) -> Option<f64> {
     } else {
         f64::midpoint(v[mid - 1], v[mid])
     })
+}
+
+/// Compare cyclic-node MEMBERSHIP between the HEAD import graph and the
+/// working-tree projection: `(base cyclic paths, newly cyclic paths)`, both
+/// sorted. Membership (not a cycle-count comparison) names the files and is
+/// immune to the count blind spot where two HEAD cycles merging into one
+/// bigger tangle DROPS the count.
+///
+/// The projected edge set is a three-part rebuild — a naive out-edge
+/// replacement would keep stale edges INTO deleted files and miss imports in
+/// unchanged files that only became resolvable now:
+///
+/// 1. HEAD edges that survive: resolved `imports` rows whose source is not a
+///    change-set path (changed sources are re-extracted below; deleted
+///    sources are gone) AND whose target still exists in the working tree.
+/// 2. Re-extracted edges: each changed non-deleted file with an import
+///    grammar is parsed from its working-tree bytes and resolved against the
+///    updated live set.
+/// 3. Re-resolution sweep: unresolved `imports` rows from UNCHANGED files are
+///    retried against the updated live set — an added file can make a
+///    previously-unresolvable import resolvable.
+fn project_cycles<R: crate::Repo>(
+    db: &FactsDb,
+    repo: &R,
+    opts: &Options,
+    changes: &[WorktreeChange],
+) -> Result<(Vec<String>, Vec<String>)> {
+    let base_graph = build_import_graph(db)?;
+    let base_cyclic = cyclic_paths(&base_graph);
+
+    // Updated live set = tracked-at-HEAD − deleted − rename sources
+    // + added / rename-destination paths (modified paths are already
+    // tracked at HEAD).
+    let gone: HashSet<&str> = deleted_set_paths(changes).into_iter().collect();
+    let mut live: HashSet<String> = repo
+        .tracked_paths_at_head()?
+        .into_iter()
+        .filter(|p| !gone.contains(p.as_str()))
+        .collect();
+    for change in changes {
+        if change.kind == WorktreeChangeKind::Added {
+            live.insert(change.path.clone());
+        }
+    }
+
+    populate_path_table(db, CHANGED_PATHS_TABLE, changed_set_paths(changes))?;
+    populate_path_table(db, DELETED_PATHS_TABLE, deleted_set_paths(changes))?;
+
+    // Part 1: surviving HEAD edges.
+    let mut edges: Vec<(String, String)> = query_map_collect(
+        db,
+        &format!(
+            "SELECT src_path, target_path FROM imports \
+             WHERE target_path IS NOT NULL \
+               AND src_path NOT IN (SELECT path FROM {CHANGED_PATHS_TABLE}) \
+               AND target_path NOT IN (SELECT path FROM {DELETED_PATHS_TABLE})"
+        ),
+        [],
+        "change-set surviving import edges",
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+    )?;
+
+    // Part 2: re-extracted edges from the changed files' working-tree bytes.
+    // Ingest parity with `populate_imports_at_head`: the AST size cap gates
+    // extraction, and a per-file extraction error is logged and skipped
+    // rather than failing the run.
+    for change in changes {
+        if change.kind == WorktreeChangeKind::Deleted {
+            continue;
+        }
+        let Some(lang) = ImportLanguage::from_path(Path::new(&change.path)) else {
+            continue;
+        };
+        let source = std::fs::read(opts.repo_path.join(&change.path)).map_err(|e| {
+            CodeLoreError::Analysis(format!("read worktree file {}: {e}", change.path))
+        })?;
+        if source.len() > crate::constants::DEFAULT_MAX_AST_FILE_BYTES {
+            continue;
+        }
+        let imports = match extract_imports(&source, lang) {
+            Ok(imports) => imports,
+            Err(e) => {
+                tracing::warn!("change-set: import extract failed for {}: {e}", change.path);
+                continue;
+            }
+        };
+        for import in imports {
+            if let Some(target_path) = resolve_by_extension(&change.path, &import.target, &live) {
+                edges.push((change.path.clone(), target_path));
+            }
+        }
+    }
+
+    // Part 3: re-resolution sweep over unchanged files' unresolved imports.
+    let unresolved: Vec<(String, String)> = query_map_collect(
+        db,
+        &format!(
+            "SELECT src_path, target FROM imports \
+             WHERE NOT resolved \
+               AND src_path NOT IN (SELECT path FROM {CHANGED_PATHS_TABLE})"
+        ),
+        [],
+        "change-set unresolved import sweep",
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+    )?;
+    for (src_path, target) in unresolved {
+        if let Some(target_path) = resolve_by_extension(&src_path, &target, &live) {
+            edges.push((src_path, target_path));
+        }
+    }
+
+    let projected_cyclic = cyclic_paths(&build_import_graph_from_edges(&edges));
+    let newly: Vec<String> = projected_cyclic.difference(&base_cyclic).cloned().collect();
+    Ok((base_cyclic.into_iter().collect(), newly))
+}
+
+/// The paths sitting on some import cycle of `graph` (members of any SCC of
+/// size ≥ 2), as a sorted set.
+fn cyclic_paths(graph: &ImportGraph) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for component in tarjan_scc(&graph.adj) {
+        if component.len() >= 2 {
+            for id in component {
+                out.insert(graph.id_to_path[id].clone());
+            }
+        }
+    }
+    out
+}
+
+/// Assemble the advisory findings from the measured report parts, sorted by
+/// `(kind, path, detail)` — deterministic even when one path carries several
+/// findings of the same kind (a file with two absent coupling partners).
+fn assemble_findings(
+    health: &HealthProjection,
+    newly_cyclic: &[String],
+    absences: &[CouplingAbsence],
+    changes: &[WorktreeChange],
+) -> Vec<Finding> {
+    let mut findings: Vec<Finding> = Vec::new();
+
+    for delta_row in &health.deltas {
+        let (Some(delta), Some(baseline), Some(projected)) = (
+            delta_row.delta,
+            delta_row.baseline_score,
+            delta_row.projected_score,
+        ) else {
+            continue;
+        };
+        if delta < 0.0 {
+            findings.push(finding(
+                "health-drop",
+                &delta_row.path,
+                &format!(
+                    "projected code health drops from {baseline:.1} to {projected:.1} ({delta:+.1})."
+                ),
+            ));
+        }
+    }
+    for path in newly_cyclic {
+        findings.push(finding(
+            "newly-cyclic",
+            path,
+            "enters an import cycle that does not exist at HEAD.",
+        ));
+    }
+    for absence in absences {
+        findings.push(finding(
+            "coupling-absence",
+            &absence.touched_file,
+            &format!(
+                "historically co-changes with {} ({:.0}% of commits, {} shared revisions), \
+                 which is not in this change set.",
+                absence.expected_partner,
+                absence.historical_coupling,
+                absence.historical_shared_revs,
+            ),
+        ));
+    }
+    for change in changes {
+        if change.kind == WorktreeChangeKind::Added {
+            let detail = match change.rename_from.as_deref() {
+                Some(source) => {
+                    format!("renamed from {source}; history does not carry over to the new path.")
+                }
+                None => "new file with no history baseline.".to_string(),
+            };
+            findings.push(finding("new-file", &change.path, &detail));
+        }
+    }
+    for delta_row in &health.deltas {
+        let Some(reason) = delta_row.reason.as_deref() else {
+            continue;
+        };
+        if reason == REASON_BINARY || reason == REASON_SIZE_LIMIT {
+            findings.push(finding(
+                "unparseable",
+                &delta_row.path,
+                &format!("could not be re-parsed for the projection: {reason}."),
+            ));
+        }
+    }
+
+    findings.sort_by(|a, b| {
+        a.kind
+            .cmp(&b.kind)
+            .then_with(|| a.path.cmp(&b.path))
+            .then_with(|| a.detail.cmp(&b.detail))
+    });
+    findings
+}
+
+/// Construct one [`Finding`], deriving its content-stable id: the first 12
+/// hex chars of SHA-256 over `"{kind}|{path}|{detail}"`.
+fn finding(kind: &str, path: &str, detail: &str) -> Finding {
+    let digest = Sha256::digest(format!("{kind}|{path}|{detail}").as_bytes());
+    let mut id = hex::encode(digest);
+    id.truncate(12);
+    Finding {
+        id,
+        kind: kind.to_string(),
+        path: path.to_string(),
+        detail: detail.to_string(),
+    }
+}
+
+pub mod cache {
+    //! Content-keyed JSON sidecar for [`ChangeSetReport`], mirroring the
+    //! enrichment narrative cache's shape: plain-hex key, per-repo directory
+    //! under the shared cache root, best-effort read/write, corrupt = miss.
+    //!
+    //! The key covers HEAD plus the exact worktree content of every
+    //! change-set path, so any edit — or a commit — moves it. Thresholds and
+    //! calibration are deliberately EXCLUDED: the sidecar stores only
+    //! MEASURED data, and consumers recompute verdicts on every read, so an
+    //! improved gate configuration reaches warm caches without invalidation.
+
+    use std::path::{Path, PathBuf};
+
+    use sha2::{Digest, Sha256};
+
+    use super::ChangeSetReport;
+    use crate::cache::repo_cache_dir;
+    use crate::repo::{WorktreeChange, WorktreeChangeKind};
+    use crate::{CodeLoreError, Result};
+
+    /// Report-shape tag folded into the key so a future incompatible report
+    /// change invalidates old sidecars by construction.
+    const KEY_SCHEMA: &str = "change-set-v1";
+
+    /// Filename length: the first 16 hex chars of the 64-char key.
+    const FILE_STEM_LEN: usize = 16;
+
+    /// The content key for a change set: lowercase-hex SHA-256 of
+    /// `head_sha | sorted "path\0content-sha256" lines | crate version |`
+    /// [`KEY_SCHEMA`]. A deleted path contributes the literal `"deleted"` in
+    /// place of its content hash.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CodeLoreError::Analysis`] when a non-deleted change-set
+    /// file cannot be read from the working tree — the engine could not
+    /// project it either, so failing early is honest.
+    pub fn report_key(
+        head_sha: &str,
+        repo_root: &Path,
+        changes: &[WorktreeChange],
+    ) -> Result<String> {
+        let mut lines: Vec<String> = Vec::with_capacity(changes.len());
+        for change in changes {
+            let content = if change.kind == WorktreeChangeKind::Deleted {
+                "deleted".to_string()
+            } else {
+                let bytes = std::fs::read(repo_root.join(&change.path)).map_err(|e| {
+                    CodeLoreError::Analysis(format!("read worktree file {}: {e}", change.path))
+                })?;
+                hex::encode(Sha256::digest(&bytes))
+            };
+            lines.push(format!("{}\0{content}", change.path));
+        }
+        lines.sort();
+        let material = format!(
+            "{head_sha}|{}|{}|{KEY_SCHEMA}",
+            lines.join("\n"),
+            env!("CARGO_PKG_VERSION"),
+        );
+        Ok(hex::encode(Sha256::digest(material.as_bytes())))
+    }
+
+    /// The on-disk sidecar path for `key`:
+    /// `repo_cache_dir(cache_root, repo_path)/change-set/<first 16 hex>.json`.
+    #[must_use]
+    pub fn cache_path(cache_root: &Path, repo_path: &Path, key: &str) -> PathBuf {
+        let stem = &key[..FILE_STEM_LEN.min(key.len())];
+        repo_cache_dir(cache_root, repo_path)
+            .join("change-set")
+            .join(format!("{stem}.json"))
+    }
+
+    /// Read the cached report at `key`, or `None` when absent or corrupt. A
+    /// missing file is the ordinary miss and stays silent; a file that no
+    /// longer deserializes is logged at `warn` and treated as a miss.
+    #[must_use]
+    pub fn read(cache_root: &Path, repo_path: &Path, key: &str) -> Option<ChangeSetReport> {
+        let path = cache_path(cache_root, repo_path, key);
+        let text = std::fs::read_to_string(&path).ok()?;
+        match serde_json::from_str(&text) {
+            Ok(report) => Some(report),
+            Err(e) => {
+                tracing::warn!(
+                    "change-set cache: ignoring corrupt entry {}: {e}",
+                    path.display()
+                );
+                None
+            }
+        }
+    }
+
+    /// Write `report` to the sidecar for `key`, creating the directory if
+    /// needed. Best-effort: a cache is an optimization, so any failure is
+    /// logged at `warn` and swallowed — a gate run must never fail because
+    /// its report could not be cached.
+    pub fn write(cache_root: &Path, repo_path: &Path, key: &str, report: &ChangeSetReport) {
+        let path = cache_path(cache_root, repo_path, key);
+        let Some(parent) = path.parent() else {
+            tracing::warn!(
+                "change-set cache: entry path {} has no parent directory",
+                path.display()
+            );
+            return;
+        };
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            tracing::warn!(
+                "change-set cache: could not create {}: {e}",
+                parent.display()
+            );
+            return;
+        }
+        let json = match serde_json::to_string_pretty(report) {
+            Ok(json) => json,
+            Err(e) => {
+                tracing::warn!("change-set cache: could not serialize entry for {key}: {e}");
+                return;
+            }
+        };
+        if let Err(e) = std::fs::write(&path, json) {
+            tracing::warn!("change-set cache: could not write {}: {e}", path.display());
+        }
+    }
 }
