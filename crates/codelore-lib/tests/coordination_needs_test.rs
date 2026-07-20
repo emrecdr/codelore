@@ -209,3 +209,206 @@ fn delivery_repo_fragmentation_and_nonsingle_tier() {
         rework.interleave
     );
 }
+
+// ── 4-6. Hand-built FactsDb fixtures for SQL edge cases ─────────────────────
+//
+// The scenarios below (all-zero-loc_added history, a dormant multi-author
+// file, exact fragmentation ties) are impractical to reproduce via a
+// git-bundle fixture, so these tests build a minimal `FactsDb` directly via
+// `execute_batch` (public API — see `facts::FactsDb`), bypassing git ingest
+// entirely. `run_code_health_scoped`'s clone-detection walk tolerates a
+// repo_path with no source files (empty tempdir): `health_band` is simply
+// "unknown" for every row, which none of these tests assert on.
+
+#[test]
+fn binary_only_path_all_zero_loc_added_does_not_crash_and_has_zero_fragmentation() {
+    // A path whose entire history is binary changes (loc_added=0 for every
+    // commit) drives its only `knowledge_shares` row to k=0, hence
+    // k_norm = 0 / NULLIF(0, 0) = NULL. Before the `frag` CTE's COALESCE
+    // guard, `SUM(k_norm * k_norm)` over that all-NULL group was NULL, so
+    // `fragmentation` was NULL — and `run_coordination_needs` errored out
+    // reading that NULL column as a non-Option `f64`. Confirms (1) no
+    // crash and (2) fragmentation is exactly 0.0 (degenerate-knowledge
+    // default), mirroring `knowledge_islands`'s `HAVING SUM(loc) > 0`
+    // defensive intent.
+    let db = FactsDb::new_in_memory().expect("in-memory db");
+    db.execute_batch(
+        "INSERT INTO author_aliases (raw_email, canonical, is_bot) \
+         VALUES ('alice@x.com', 'Alice', false)",
+    )
+    .expect("insert author_aliases");
+    db.execute_batch(
+        "INSERT INTO commits (rev, author_email, author_name, \
+         committer_email, canonical_author, date, committer_date, \
+         message, is_merge, parent_count) VALUES \
+         ('c1', 'alice@x.com', 'Alice', 'alice@x.com', 'Alice', \
+          TIMESTAMP '2026-01-01', TIMESTAMP '2026-01-01', 'add binary', false, 1)",
+    )
+    .expect("insert commits");
+    db.execute_batch(
+        "INSERT INTO changes (rev, path, change_type, loc_added, loc_deleted) \
+         VALUES ('c1', 'assets/logo.png', 'binary', 0, 0)",
+    )
+    .expect("insert changes");
+
+    let repo_dir = tempfile::tempdir().expect("tempdir");
+    let opts = Options {
+        repo_path: repo_dir.path().to_path_buf(),
+        min_revs: 1,
+        window_days: 90,
+        ..Options::default()
+    };
+
+    let rows = run_coordination_needs(&db, &opts)
+        .expect("all-zero loc_added path must not crash run_coordination_needs");
+    let row = rows
+        .iter()
+        .find(|r| r.path == "assets/logo.png")
+        .expect("assets/logo.png must appear in results");
+    assert!(
+        row.fragmentation.abs() < f64::EPSILON,
+        "all-zero-loc_added path must have fragmentation=0.0 (degenerate-knowledge \
+         default), got {}",
+        row.fragmentation
+    );
+}
+
+#[test]
+fn dormant_multi_author_file_is_not_classified_high() {
+    // dormant.rs was touched by two authors (Alice, Bob) on the SAME
+    // historical date — giving them identical decay factors, hence exactly
+    // 0.5/0.5 knowledge shares (fragmentation == 0.50) — with one author
+    // switch between them (interleave == 1.0). A later, unrelated commit
+    // (c3, on other.rs) pushes the repo's anchor (MAX(date)) far enough
+    // forward that BOTH of dormant.rs's commits fall outside the trailing
+    // 90-day window: `authors` (which counts only active-window
+    // contributors) is 0 for dormant.rs, even though its historical
+    // fragmentation/interleave both clear the 0.50 "high" thresholds.
+    // Before the authors<=1 guard, `authors == 0` fell through the
+    // `single`-tier check straight into the `high` rule.
+    let db = FactsDb::new_in_memory().expect("in-memory db");
+    db.execute_batch(
+        "INSERT INTO author_aliases (raw_email, canonical, is_bot) VALUES \
+         ('alice@x.com', 'Alice', false), \
+         ('bob@x.com', 'Bob', false)",
+    )
+    .expect("insert author_aliases");
+    db.execute_batch(
+        "INSERT INTO commits (rev, author_email, author_name, \
+         committer_email, canonical_author, date, committer_date, \
+         message, is_merge, parent_count) VALUES \
+         ('c1', 'alice@x.com', 'Alice', 'alice@x.com', 'Alice', \
+          TIMESTAMP '2025-06-01', TIMESTAMP '2025-06-01', 'alice edit', false, 1), \
+         ('c2', 'bob@x.com', 'Bob', 'bob@x.com', 'Bob', \
+          TIMESTAMP '2025-06-01', TIMESTAMP '2025-06-01', 'bob edit', false, 1), \
+         ('c3', 'alice@x.com', 'Alice', 'alice@x.com', 'Alice', \
+          TIMESTAMP '2026-01-01', TIMESTAMP '2026-01-01', 'recent unrelated', false, 1)",
+    )
+    .expect("insert commits");
+    db.execute_batch(
+        "INSERT INTO changes (rev, path, change_type, loc_added, loc_deleted) VALUES \
+         ('c1', 'dormant.rs', 'added', 100, 0), \
+         ('c2', 'dormant.rs', 'modified', 100, 0), \
+         ('c3', 'other.rs', 'added', 10, 0)",
+    )
+    .expect("insert changes");
+
+    let repo_dir = tempfile::tempdir().expect("tempdir");
+    let opts = Options {
+        repo_path: repo_dir.path().to_path_buf(),
+        min_revs: 1,
+        window_days: 90,
+        ..Options::default()
+    };
+
+    let rows = run_coordination_needs(&db, &opts).expect("run coordination-needs");
+    let dormant = rows
+        .iter()
+        .find(|r| r.path == "dormant.rs")
+        .expect("dormant.rs must appear in results");
+
+    assert_eq!(
+        dormant.authors, 0,
+        "dormant.rs has no commits inside the trailing window; authors must be 0, got {dormant:?}"
+    );
+    assert!(
+        dormant.fragmentation >= 0.50,
+        "dormant.rs historical fragmentation must be >= 0.50 for this to be a \
+         meaningful regression test, got {}",
+        dormant.fragmentation
+    );
+    assert!(
+        dormant.interleave >= 0.50,
+        "dormant.rs historical interleave must be >= 0.50 for this to be a \
+         meaningful regression test, got {}",
+        dormant.interleave
+    );
+    assert_eq!(
+        dormant.tier, "single",
+        "a dormant file (authors=0, no CURRENT coordination activity) must fold into \
+         the 'single' tier, not be misclassified 'high' from stale historical signal, \
+         got {dormant:?}"
+    );
+}
+
+#[test]
+fn equal_fragmentation_rows_are_ordered_deterministically_by_entity() {
+    // Three single-author files (fragmentation == 0.0 for all three),
+    // inserted in REVERSE alphabetical order on purpose. Before the
+    // `entity ASC` tiebreak (both in the SQL `ORDER BY` and the Rust
+    // `sort_by`), ties broke on whatever order the SQL engine happened to
+    // produce — unspecified. After the fix, the final `Vec`'s tiebreak is
+    // fully determined by `path ASC` regardless of insertion/incoming order.
+    let db = FactsDb::new_in_memory().expect("in-memory db");
+    db.execute_batch(
+        "INSERT INTO author_aliases (raw_email, canonical, is_bot) \
+         VALUES ('solo@x.com', 'Solo', false)",
+    )
+    .expect("insert author_aliases");
+    db.execute_batch(
+        "INSERT INTO commits (rev, author_email, author_name, \
+         committer_email, canonical_author, date, committer_date, \
+         message, is_merge, parent_count) VALUES \
+         ('c1', 'solo@x.com', 'Solo', 'solo@x.com', 'Solo', \
+          TIMESTAMP '2026-01-01', TIMESTAMP '2026-01-01', 'z', false, 1), \
+         ('c2', 'solo@x.com', 'Solo', 'solo@x.com', 'Solo', \
+          TIMESTAMP '2026-01-02', TIMESTAMP '2026-01-02', 'm', false, 1), \
+         ('c3', 'solo@x.com', 'Solo', 'solo@x.com', 'Solo', \
+          TIMESTAMP '2026-01-03', TIMESTAMP '2026-01-03', 'a', false, 1)",
+    )
+    .expect("insert commits");
+    db.execute_batch(
+        "INSERT INTO changes (rev, path, change_type, loc_added, loc_deleted) VALUES \
+         ('c1', 'z_file.rs', 'added', 10, 0), \
+         ('c2', 'm_file.rs', 'added', 10, 0), \
+         ('c3', 'a_file.rs', 'added', 10, 0)",
+    )
+    .expect("insert changes");
+
+    let repo_dir = tempfile::tempdir().expect("tempdir");
+    let opts = Options {
+        repo_path: repo_dir.path().to_path_buf(),
+        min_revs: 1,
+        window_days: 90,
+        ..Options::default()
+    };
+
+    let rows = run_coordination_needs(&db, &opts).expect("run coordination-needs");
+    assert_eq!(
+        rows.len(),
+        3,
+        "expected exactly the 3 fixture paths, got {rows:?}"
+    );
+    for row in &rows {
+        assert!(
+            row.fragmentation.abs() < f64::EPSILON,
+            "single-author file must have fragmentation=0, got {row:?}"
+        );
+    }
+    let paths: Vec<&str> = rows.iter().map(|r| r.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        vec!["a_file.rs", "m_file.rs", "z_file.rs"],
+        "tied fragmentation rows must be ordered deterministically by entity ASC"
+    );
+}
