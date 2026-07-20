@@ -1,7 +1,7 @@
 //! Gate-run ledger: append-only JSONL record of every evaluated gate.
 //!
-//! Each `codelore check` run appends one [`GateRunRecord`] per evaluated
-//! gate to a per-repo JSONL file at
+//! Each `codelore check` or `codelore gate` run appends one
+//! [`GateRunRecord`] per evaluated gate to a per-repo JSONL file at
 //! `<cache_root>/codelore/<repo_hash_8>/gate_runs.jsonl`.
 //!
 //! The path reuses the same `<repo_hash_8>` component that `cache.rs`
@@ -31,7 +31,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::Result;
 
-/// One evaluated gate from one `codelore check` invocation.
+/// One evaluated gate from one `codelore check` or `codelore gate`
+/// invocation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct GateRunRecord {
     /// ISO-8601 UTC timestamp of the check run (`"YYYY-MM-DDTHH:MM:SSZ"`).
@@ -47,7 +48,9 @@ pub struct GateRunRecord {
     pub value: f64,
     /// Outcome: `"passed"` | `"failed"` | `"degraded"` | `"skipped"`.
     pub verdict: String,
-    /// Invocation mode: always `"check"` for now; reserved for `"diff"`.
+    /// Invocation mode: `"check"` (full-tree gates), `"ratchet"` (snapshot
+    /// comparison), or `"gate"` (working-tree change-set gates); reserved
+    /// for `"diff"`.
     pub mode: String,
 }
 
