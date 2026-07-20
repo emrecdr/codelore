@@ -167,3 +167,89 @@ fn delivery_friction_wip_age_anchored_to_newest_commit_deterministically() {
         app.wip_age_days,
     );
 }
+
+/// Build a repo whose sole commit has `committer_date` set BEFORE
+/// `date` (author date) — the clock-skew / rebase-artefact case #7b
+/// guards against. Author and committer dates are set independently
+/// (unlike the other fixtures in this file, which pin both env vars to
+/// the same value).
+fn build_clock_skew_repo() -> tempfile::TempDir {
+    use std::process::Command;
+    fn run(path: &std::path::Path, author_date: &str, committer_date: &str, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .env("GIT_AUTHOR_DATE", author_date)
+            .env("GIT_COMMITTER_DATE", committer_date)
+            .status()
+            .expect("git");
+        assert!(status.success());
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path();
+    let init_date = "2024-01-01T00:00:00Z";
+    run(
+        path,
+        init_date,
+        init_date,
+        &["init", "-b", "main", "--quiet"],
+    );
+    run(path, init_date, init_date, &["config", "user.email", "t@t"]);
+    run(path, init_date, init_date, &["config", "user.name", "Tiny"]);
+
+    std::fs::write(path.join("skewed.txt"), "one\n").unwrap();
+    run(path, init_date, init_date, &["add", "skewed.txt"]);
+    // committer_date (2024-03-01) is BEFORE author date (2024-03-02) —
+    // clock-skew / rebase artefact, not a real negative lead time.
+    run(
+        path,
+        "2024-03-02T12:00:00Z",
+        "2024-03-01T12:00:00Z",
+        &["commit", "-m", "skewed commit", "--quiet"],
+    );
+    dir
+}
+
+#[test]
+fn delivery_friction_excludes_negative_lead_times_from_median() {
+    let skewed = build_clock_skew_repo();
+    let repo = GixRepo::open(skewed.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: skewed.path().to_path_buf(),
+        min_revs: 1,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let rows = run_delivery_friction(&db, &opts).expect("run delivery-friction");
+    let row = rows
+        .iter()
+        .find(|r| r.path == "skewed.txt")
+        .expect("skewed.txt must surface (1 revision >= min_revs=1)");
+
+    assert_eq!(
+        row.revisions, 1,
+        "the clock-skew commit must still count toward revisions — only \
+         the lead-time statistic excludes it, not the per-file commit count"
+    );
+    assert!(
+        row.median_lead_time_days >= 0.0,
+        "clock-skew commit (committer_date < date) must not produce a \
+         negative median; got {}",
+        row.median_lead_time_days,
+    );
+    assert!(
+        row.median_lead_time_days.abs() < f64::EPSILON,
+        "the only commit's lead_secs is excluded (non-positive) so the \
+         median falls back to the documented zero, exactly like the \
+         rebase-only-workflow case; got {}",
+        row.median_lead_time_days,
+    );
+    assert!(
+        row.p95_lead_time_days.abs() < f64::EPSILON,
+        "same exclusion applies to the p95 aggregate; got {}",
+        row.p95_lead_time_days,
+    );
+}
