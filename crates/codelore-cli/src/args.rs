@@ -1,6 +1,6 @@
 //! Clap argument definitions. CLI surface from spec §5.2.
 //! Subcommands: `analyze`, `diff`, `completions`, `explain`, `schema`,
-//! `profile`, `docs`, `check`, `mcp`, `ingest-sarif`, `calibrate`,
+//! `profile`, `docs`, `check`, `gate`, `mcp`, `ingest-sarif`, `calibrate`,
 //! `calibrate-defects`.
 
 use std::path::PathBuf;
@@ -19,6 +19,16 @@ use codelore_lib::cli_api::constants::{
 pub enum CheckFormat {
     Text,
     Sarif,
+}
+
+/// Output format for `codelore gate`. Strongly typed so a typo
+/// (`--format josn`) is caught at parse time rather than silently
+/// falling back to text.
+#[derive(ValueEnum, Clone, Debug)]
+#[clap(rename_all = "lowercase")]
+pub enum GateFormat {
+    Text,
+    Json,
 }
 
 /// Output format for `codelore diff`. Strongly typed so a typo
@@ -138,6 +148,12 @@ pub enum Command {
     /// Writes `result=pass|fail` to `$GITHUB_OUTPUT` when the env var
     /// is set, for direct GitHub Actions step-output integration.
     Check(CheckArgs),
+    /// Gate the current working tree against `.codelore-thresholds.toml`
+    /// before committing: projects what the uncommitted edits do to
+    /// code health and the import graph vs HEAD, and evaluates the
+    /// working-tree `[diff]` gates against the projection. Exit 0 on
+    /// pass, 1 on any violation — the same exit contract as `check`.
+    Gate(GateArgs),
     /// Start a Model Context Protocol (MCP) server over stdio. Exposes
     /// `CodeLore` analyses as MCP tools for use by AI assistants and
     /// agent frameworks. Read-only — no network, no account, no
@@ -246,6 +262,56 @@ pub struct CheckArgs {
     /// calibrate-defects`). Its smell weights replace the built-in code-health
     /// defaults for this run. Hard error if the artifact was mined from a
     /// different repository — see --allow-foreign-calibration.
+    #[arg(long)]
+    pub defect_calibration: Option<PathBuf>,
+
+    /// Apply a defect-calibration artifact mined from a different repository
+    /// (forks, moved checkouts): skips the repo-identity guard.
+    #[arg(long)]
+    pub allow_foreign_calibration: bool,
+}
+
+/// Working-tree quality gate.
+#[derive(clap::Args, Debug)]
+pub struct GateArgs {
+    /// Path to the git repo (default: cwd).
+    #[arg(short, long, default_value = ".")]
+    pub repo: PathBuf,
+    /// Optional explicit thresholds file. When omitted,
+    /// `.codelore-thresholds.toml` at the repo root is auto-
+    /// discovered. Empty/missing file → empty rule set → gate
+    /// passes vacuously.
+    #[arg(long)]
+    pub thresholds_file: Option<PathBuf>,
+    /// Suppress diagnostic noise (vacuous-pass messages, per-violation detail
+    /// lines, advisory findings, the delta table, skip notices). The final
+    /// verdict line (PASS / FAIL) and exit code are never suppressed — they
+    /// are the machine contract used by hooks and CI scripts.
+    #[arg(long)]
+    pub quiet: bool,
+    /// Output format: `text` (default, human-readable) or `json` (the full
+    /// change-set report plus the evaluated violations as one document on
+    /// stdout). Exit codes and verdict lines are unchanged regardless of
+    /// format.
+    #[arg(long, value_enum, default_value_t = GateFormat::Text)]
+    pub format: GateFormat,
+    /// Override the XDG cache root for the persistent fact-store, gate-run
+    /// ledger, and change-set report sidecar. Defaults to
+    /// `$XDG_CACHE_HOME/codelore` (or the OS equivalent).
+    #[arg(long)]
+    pub cache_dir: Option<PathBuf>,
+
+    /// Override the `DuckDB` spill directory used once a query's memory
+    /// usage exceeds the internal ceiling (see docs/advanced-usage.md).
+    /// Must already exist and be writable. Defaults to a subdirectory of
+    /// the cache root.
+    #[arg(long = "temp-dir")]
+    pub temp_dir: Option<PathBuf>,
+
+    /// Own-repo defect-calibration artifact (build one with `codelore
+    /// calibrate-defects`). Its smell weights replace the built-in code-health
+    /// defaults for both scoped projection runs. Hard error if the artifact
+    /// was mined from a different repository — see --allow-foreign-calibration.
     #[arg(long)]
     pub defect_calibration: Option<PathBuf>,
 

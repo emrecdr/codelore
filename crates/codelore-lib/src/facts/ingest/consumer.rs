@@ -382,7 +382,13 @@ pub(crate) fn dedup_entities(
 }
 
 /// Safely clamp a finite non-negative f64 to i32 range.
-pub(super) fn f64_to_i32_clamped(v: f64) -> i32 {
+///
+/// `pub(crate)` (rather than `pub(super)`) so the agent-loop gate's
+/// projected-complexity substitution (`crate::change_set`) clamps re-parsed
+/// working-tree metrics to the exact INTEGER values HEAD ingest produced —
+/// byte-identical rows for a byte-identical file, the property the gate's
+/// zero-delta guarantee rests on.
+pub(crate) fn f64_to_i32_clamped(v: f64) -> i32 {
     if v.is_finite() && v >= 0.0 {
         #[allow(clippy::cast_possible_truncation)]
         // the enclosing is_finite()+>=0.0 guard plus .min(f64::from(i32::MAX)) clamp guarantee the value fits i32 before the cast

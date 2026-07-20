@@ -888,6 +888,249 @@ fn diff_hunks_match_across_backends() {
     }
 }
 
+/// `worktree_changes()` on a freshly-cloned fixture must be empty on both
+/// backends — the baseline every mutating test below perturbs. Uses the
+/// shared fixture (read-only probe).
+#[test]
+fn worktree_changes_empty_on_fresh_clone() {
+    let (gix, cli) = open_both();
+    let gix_changes = gix.worktree_changes().expect("gix worktree_changes");
+    let cli_changes = cli.worktree_changes().expect("cli worktree_changes");
+    assert_eq!(
+        gix_changes,
+        Vec::new(),
+        "fresh clone must have no worktree changes per GixRepo"
+    );
+    assert_eq!(
+        gix_changes, cli_changes,
+        "GixRepo and GitCliRepo disagree on a fresh clone"
+    );
+}
+
+/// Unstaged, staged, and staged-then-re-edited modifications must each
+/// surface exactly once with kind `Modified` — the union of the two stages
+/// merged by path, never a duplicate entry for the both-stages case.
+#[test]
+fn worktree_changes_detects_staged_and_unstaged_edits() {
+    use codelore_lib::repo::types::{WorktreeChange, WorktreeChangeKind};
+
+    let repo = codelore_lib::test_support::differential_repo::build();
+    let path = repo.dir.path();
+
+    // Unstaged: worktree differs from index.
+    std::fs::write(path.join("README.md"), b"unstaged edit\n").expect("edit README.md");
+    // Staged: index differs from HEAD, worktree matches index.
+    std::fs::write(path.join("Cargo.lock"), b"# staged edit\n").expect("edit Cargo.lock");
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["add", "Cargo.lock"])
+        .status()
+        .expect("spawn git add");
+    assert!(status.success(), "git add Cargo.lock failed");
+    // Both stages: staged edit + a further unstaged edit on top.
+    std::fs::write(path.join("src/lib.rs"), b"// staged\n").expect("edit src/lib.rs");
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["add", "src/lib.rs"])
+        .status()
+        .expect("spawn git add");
+    assert!(status.success(), "git add src/lib.rs failed");
+    std::fs::write(path.join("src/lib.rs"), b"// staged then edited again\n")
+        .expect("re-edit src/lib.rs");
+
+    let gix = GixRepo::open(path).expect("GixRepo::open");
+    let cli = GitCliRepo::open(path).expect("GitCliRepo::open");
+    let gix_changes = gix.worktree_changes().expect("gix worktree_changes");
+    let cli_changes = cli.worktree_changes().expect("cli worktree_changes");
+
+    let expected = vec![
+        WorktreeChange {
+            path: "Cargo.lock".to_string(),
+            kind: WorktreeChangeKind::Modified,
+            rename_from: None,
+        },
+        WorktreeChange {
+            path: "README.md".to_string(),
+            kind: WorktreeChangeKind::Modified,
+            rename_from: None,
+        },
+        WorktreeChange {
+            path: "src/lib.rs".to_string(),
+            kind: WorktreeChangeKind::Modified,
+            rename_from: None,
+        },
+    ];
+    assert_eq!(
+        gix_changes, expected,
+        "GixRepo must report the three edits once each, kind Modified, sorted"
+    );
+    assert_eq!(
+        gix_changes, cli_changes,
+        "GixRepo and GitCliRepo disagree on staged/unstaged edits"
+    );
+}
+
+/// A staged deletion surfaces as `Deleted`; a `git mv` surfaces as the
+/// destination `Added` with `rename_from` naming the source plus the source
+/// as its own `Deleted` entry — and both backends must agree on all three.
+#[test]
+fn worktree_changes_detects_delete_and_rename() {
+    use codelore_lib::repo::types::{WorktreeChange, WorktreeChangeKind};
+
+    let repo = codelore_lib::test_support::differential_repo::build();
+    let path = repo.dir.path();
+
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["rm", "-q", "src/main.rs"])
+        .status()
+        .expect("spawn git rm");
+    assert!(status.success(), "git rm src/main.rs failed");
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["mv", "Cargo.lock", "Cargo2.lock"])
+        .status()
+        .expect("spawn git mv");
+    assert!(status.success(), "git mv Cargo.lock Cargo2.lock failed");
+
+    let gix = GixRepo::open(path).expect("GixRepo::open");
+    let cli = GitCliRepo::open(path).expect("GitCliRepo::open");
+    let gix_changes = gix.worktree_changes().expect("gix worktree_changes");
+    let cli_changes = cli.worktree_changes().expect("cli worktree_changes");
+
+    let expected = vec![
+        WorktreeChange {
+            path: "Cargo.lock".to_string(),
+            kind: WorktreeChangeKind::Deleted,
+            rename_from: None,
+        },
+        WorktreeChange {
+            path: "Cargo2.lock".to_string(),
+            kind: WorktreeChangeKind::Added,
+            rename_from: Some("Cargo.lock".to_string()),
+        },
+        WorktreeChange {
+            path: "src/main.rs".to_string(),
+            kind: WorktreeChangeKind::Deleted,
+            rename_from: None,
+        },
+    ];
+    assert_eq!(
+        gix_changes, expected,
+        "GixRepo must report the rename pair plus the staged deletion"
+    );
+    assert_eq!(
+        gix_changes, cli_changes,
+        "GixRepo and GitCliRepo disagree on delete/rename"
+    );
+}
+
+/// A file added to the index then removed from the worktree (status `AD`)
+/// nets out to no change vs HEAD and must be dropped; untracked files must
+/// never appear. Both backends must agree the change list is empty.
+#[test]
+fn worktree_changes_drops_add_then_delete_and_untracked() {
+    let repo = codelore_lib::test_support::differential_repo::build();
+    let path = repo.dir.path();
+
+    // The AD case: stage a brand-new file, then delete it from the worktree.
+    std::fs::write(path.join("ephemeral.rs"), b"// briefly staged\n").expect("write ephemeral.rs");
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["add", "ephemeral.rs"])
+        .status()
+        .expect("spawn git add");
+    assert!(status.success(), "git add ephemeral.rs failed");
+    std::fs::remove_file(path.join("ephemeral.rs")).expect("remove ephemeral.rs");
+
+    // Untracked: never a candidate.
+    std::fs::write(path.join("untracked_scratch.txt"), b"scratch\n").expect("write untracked");
+
+    let gix = GixRepo::open(path).expect("GixRepo::open");
+    let cli = GitCliRepo::open(path).expect("GitCliRepo::open");
+    let gix_changes = gix.worktree_changes().expect("gix worktree_changes");
+    let cli_changes = cli.worktree_changes().expect("cli worktree_changes");
+
+    assert_eq!(
+        gix_changes,
+        Vec::new(),
+        "add-then-delete nets to nothing and untracked files are excluded (gix)"
+    );
+    assert_eq!(
+        gix_changes, cli_changes,
+        "GixRepo and GitCliRepo disagree on the AD/untracked case"
+    );
+}
+
+/// A working tree with unmerged (conflicted) paths cannot be net-classified
+/// against HEAD, so both backends must return `Err` — the error contract is
+/// part of the dual-backend parity guarantee. The conflict is a regular file,
+/// which both backends surface (gix via `EntryStatus::Conflict`, CLI via the
+/// porcelain `u ` record).
+#[test]
+fn worktree_changes_errors_alike_on_merge_conflict() {
+    let repo = codelore_lib::test_support::differential_repo::build();
+    let path = repo.dir.path();
+
+    // Supply a committer identity on every call: the fixture is a fresh clone
+    // and the two `commit` calls below would otherwise fail on any machine
+    // without an ambient `user.name`/`user.email` (e.g. a clean CI runner).
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(["-c", "user.email=codelore-test@example.com"])
+            .args(["-c", "user.name=CodeLore Test"])
+            .args(args)
+            .output()
+            .expect("spawn git")
+    };
+
+    let base = String::from_utf8(git(&["rev-parse", "HEAD"]).stdout)
+        .expect("rev-parse utf8")
+        .trim()
+        .to_string();
+
+    // Two branches from the same base overwrite README.md with different
+    // whole-file content; merging them conflicts on that file.
+    assert!(
+        git(&["checkout", "-q", "-b", "conflict-left"])
+            .status
+            .success()
+    );
+    std::fs::write(path.join("README.md"), b"left side\n").expect("write left");
+    assert!(git(&["commit", "-aqm", "left"]).status.success());
+
+    assert!(
+        git(&["checkout", "-q", "-b", "conflict-right", &base])
+            .status
+            .success()
+    );
+    std::fs::write(path.join("README.md"), b"right side\n").expect("write right");
+    assert!(git(&["commit", "-aqm", "right"]).status.success());
+
+    // The merge is expected to FAIL (conflict) and leave unmerged entries.
+    let merge = git(&["merge", "conflict-left"]);
+    assert!(!merge.status.success(), "merge should have conflicted");
+
+    let gix = GixRepo::open(path).expect("GixRepo::open");
+    let cli = GitCliRepo::open(path).expect("GitCliRepo::open");
+
+    assert!(
+        gix.worktree_changes().is_err(),
+        "GixRepo must error on a conflicted working tree"
+    );
+    assert!(
+        cli.worktree_changes().is_err(),
+        "GitCliRepo must error on a conflicted working tree"
+    );
+}
+
 /// `Repo::tags()` must return byte-identical results from both backends.
 /// Uses the `delivery_repo` fixture which has 4 annotated tags plus one
 /// LIGHTWEIGHT tag (`light-1`, exercising the committer-date fallback path)

@@ -16,7 +16,9 @@ use anyhow::{Context, Result, anyhow};
 use codelore_lib::cli_api::Options;
 use codelore_lib::cli_api::analyses::clones::{ClonesRow, run_clones};
 use codelore_lib::cli_api::analyses::code_health::run_code_health;
-use codelore_lib::cli_api::analyses::coupling::{CouplingRow, run_coupling};
+use codelore_lib::cli_api::analyses::coupling::{
+    CouplingAbsence, CouplingRow, compute_coupling_absences, run_coupling,
+};
 use codelore_lib::cli_api::analyses::delta_health::{
     DeltaHealthSection, FunctionMetricRow, compute_delta_health, run_function_metrics,
 };
@@ -106,20 +108,6 @@ pub struct ScoreDelta {
     pub base_score: f64,
     pub head_score: f64,
     pub delta: f64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct CouplingAbsence {
-    /// File present in the PR's changed set.
-    pub touched_file: String,
-    /// Expected co-change partner NOT in the PR — historically the two
-    /// always change together at Fisher-significant rates.
-    pub expected_partner: String,
-    /// `degree_pct` (0-100) from the base analysis.
-    pub historical_coupling: f64,
-    pub fisher_p: f64,
-    /// `shared_revs` from base — strength of the historical signal.
-    pub historical_shared_revs: u32,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -439,44 +427,6 @@ fn compute_hotspots_delta(
         score_increased,
         pr_touched_existing,
     }
-}
-
-fn compute_coupling_absences(
-    base_coupling: &[CouplingRow],
-    pr_files: &std::collections::HashSet<String>,
-    min_shared: u32,
-    fisher_p_gate: f64,
-) -> Vec<CouplingAbsence> {
-    // Strong historical signal only: shared >= --absence-min-shared
-    // (default 5 per research brief mitigation 3) AND Fisher-significant
-    // at --absence-fisher-p (default 0.05).
-    base_coupling
-        .iter()
-        .filter(|c| c.shared >= min_shared && c.fisher_p < fisher_p_gate)
-        .filter_map(|c| {
-            let a_in = pr_files.contains(&c.entity_a);
-            let b_in = pr_files.contains(&c.entity_b);
-            if a_in && !b_in {
-                Some(CouplingAbsence {
-                    touched_file: c.entity_a.clone(),
-                    expected_partner: c.entity_b.clone(),
-                    historical_coupling: c.degree,
-                    fisher_p: c.fisher_p,
-                    historical_shared_revs: c.shared,
-                })
-            } else if b_in && !a_in {
-                Some(CouplingAbsence {
-                    touched_file: c.entity_b.clone(),
-                    expected_partner: c.entity_a.clone(),
-                    historical_coupling: c.degree,
-                    fisher_p: c.fisher_p,
-                    historical_shared_revs: c.shared,
-                })
-            } else {
-                None
-            }
-        })
-        .collect()
 }
 
 fn compute_clones_delta(

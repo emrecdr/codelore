@@ -160,6 +160,65 @@ pub fn partner_index(rows: &[CouplingRow]) -> HashMap<String, HashSet<String>> {
     partners
 }
 
+/// A historically-coupled partner missing from a change set. Produced by
+/// [`compute_coupling_absences`] for both the PR-scoped `diff` surface and
+/// the working-tree change-set engine.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CouplingAbsence {
+    /// File present in the PR's changed set.
+    pub touched_file: String,
+    /// Expected co-change partner NOT in the PR — historically the two
+    /// always change together at Fisher-significant rates.
+    pub expected_partner: String,
+    /// `degree_pct` (0-100) from the base analysis.
+    pub historical_coupling: f64,
+    pub fisher_p: f64,
+    /// `shared_revs` from base — strength of the historical signal.
+    pub historical_shared_revs: u32,
+}
+
+/// Flag every coupling pair where exactly one side is in the changed set:
+/// the touched file's historically-coupled partner is absent, which is the
+/// signal a co-change was forgotten. Advisory — callers decide severity.
+#[must_use]
+pub fn compute_coupling_absences<S: std::hash::BuildHasher>(
+    base_coupling: &[CouplingRow],
+    pr_files: &HashSet<String, S>,
+    min_shared: u32,
+    fisher_p_gate: f64,
+) -> Vec<CouplingAbsence> {
+    // Strong historical signal only: shared >= --absence-min-shared
+    // (default 5 per research brief mitigation 3) AND Fisher-significant
+    // at --absence-fisher-p (default 0.05).
+    base_coupling
+        .iter()
+        .filter(|c| c.shared >= min_shared && c.fisher_p < fisher_p_gate)
+        .filter_map(|c| {
+            let a_in = pr_files.contains(&c.entity_a);
+            let b_in = pr_files.contains(&c.entity_b);
+            if a_in && !b_in {
+                Some(CouplingAbsence {
+                    touched_file: c.entity_a.clone(),
+                    expected_partner: c.entity_b.clone(),
+                    historical_coupling: c.degree,
+                    fisher_p: c.fisher_p,
+                    historical_shared_revs: c.shared,
+                })
+            } else if b_in && !a_in {
+                Some(CouplingAbsence {
+                    touched_file: c.entity_b.clone(),
+                    expected_partner: c.entity_a.clone(),
+                    historical_coupling: c.degree,
+                    fisher_p: c.fisher_p,
+                    historical_shared_revs: c.shared,
+                })
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 /// Source-table selector for the coupling query family. Returns the SQL
 /// identifier name (`"changes"` for raw commit grain or `"changes_bucketed"`
 /// when `--time-bucket` is active). Used to swap the source table in the

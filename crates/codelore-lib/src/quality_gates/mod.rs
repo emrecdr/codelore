@@ -18,6 +18,7 @@
 //! delta_code_health_min = -5  # health may drop at most 5 pts in a PR
 //! new_hotspot_max = 0         # zero new hotspots allowed
 //! no_new_cycles = true        # a PR may not introduce a dependency cycle
+//! delta_code_health_min_per_file = 0.0  # gate-only: no changed file may lower its own health
 //!
 //! [calibration]
 //! defect_artifact = "defects.calib.json"  # repo-declared --defect-calibration default
@@ -156,6 +157,13 @@ pub struct DiffGates {
     /// When true, a `degrading` delta-health verdict fails the gate.
     #[serde(default)]
     pub deny_degrading_verdict: bool,
+    /// Per-file floor on the working-tree projected code-health delta,
+    /// evaluated only by `codelore gate` / the `gate_changes` MCP tool: every
+    /// changed file whose `projected − baseline` score delta falls below this
+    /// floor fails the gate (one violation per file). `codelore diff` does
+    /// not evaluate this key — its `delta_code_health_min` sibling stays the
+    /// whole-repo-median gate on both surfaces.
+    pub delta_code_health_min_per_file: Option<f64>,
 }
 
 /// The `[calibration]` section: repo-declared analysis calibration, applied
@@ -235,6 +243,7 @@ impl Thresholds {
             && !self.diff.no_new_cycles
             && self.diff.delta_health_min.is_none()
             && !self.diff.deny_degrading_verdict
+            && self.diff.delta_code_health_min_per_file.is_none()
         // Note: fail_on_degraded=true is the default and does not make a
         // threshold non-empty by itself — it only affects how degraded
         // verdicts from other gates are handled. Likewise `[calibration]`
@@ -463,6 +472,77 @@ pub fn evaluate_diff_gate(
             actual: "degrading".into(),
             threshold: "verdict != degrading".into(),
         });
+    }
+    out
+}
+
+/// Evaluate the `[diff]` gates that apply to a working-tree change-set report
+/// (`codelore gate` / the `gate_changes` MCP tool).
+///
+/// Only three keys apply to the working-tree surface, with equal-passes
+/// boundaries mirroring [`evaluate_diff_gate`]:
+///
+/// - `delta_code_health_min` — floor on the whole-repo-median delta
+///   (`projected − baseline`), the same semantics the key carries on `diff`.
+///   Skipped when either median is absent (no scoreable files); callers
+///   surface the skip as a notice.
+/// - `delta_code_health_min_per_file` — floor on each changed file's own
+///   `projected − baseline` delta; one violation per offending file, with the
+///   file's delta as the measured value.
+/// - `no_new_cycles` — cyclic-node MEMBERSHIP comparison: one violation per
+///   path that is cyclic in the projection but not at HEAD. This deliberately
+///   diverges from `diff`'s cycle-count comparison — membership names the
+///   files and still fires when two existing cycles merge into one bigger
+///   tangle (which DROPS the count).
+///
+/// The remaining `[diff]` keys (`new_hotspot_max`, `delta_health_min`,
+/// `deny_degrading_verdict`) are diff-only and never evaluated here.
+#[must_use]
+pub fn evaluate_gate_thresholds(
+    thresholds: &Thresholds,
+    report: &crate::change_set::ChangeSetReport,
+) -> Vec<GateViolation> {
+    let mut out = Vec::new();
+    let d = &thresholds.diff;
+    if let Some(min) = d.delta_code_health_min
+        && let (Some(base), Some(projected)) = (
+            report.health.baseline_median,
+            report.health.projected_median,
+        )
+    {
+        let delta = projected - base;
+        if delta < min {
+            out.push(GateViolation {
+                gate: "delta_code_health_min".into(),
+                path: "(change-set)".into(),
+                actual: format!("{delta:+.2}"),
+                threshold: format!("{min:+.2}"),
+            });
+        }
+    }
+    if let Some(min) = d.delta_code_health_min_per_file {
+        for row in &report.health.deltas {
+            if let Some(delta) = row.delta
+                && delta < min
+            {
+                out.push(GateViolation {
+                    gate: "delta_code_health_min_per_file".into(),
+                    path: row.path.clone(),
+                    actual: format!("{delta:+.2}"),
+                    threshold: format!("{min:+.2}"),
+                });
+            }
+        }
+    }
+    if d.no_new_cycles {
+        for path in &report.newly_cyclic_paths {
+            out.push(GateViolation {
+                gate: "no_new_cycles".into(),
+                path: path.clone(),
+                actual: "newly cyclic".into(),
+                threshold: "no new cycles".into(),
+            });
+        }
     }
     out
 }
@@ -1012,6 +1092,187 @@ new_hotspot_max = 0
         assert!(!t.is_empty());
         let t = Thresholds::from_text("[diff]\ndeny_degrading_verdict = true\n").unwrap();
         assert!(!t.is_empty());
+    }
+
+    // ───────────────── gate (working-tree) evaluator ─────────────────
+
+    fn make_gate_delta(path: &str, delta: Option<f64>) -> crate::change_set::FileDelta {
+        crate::change_set::FileDelta {
+            path: path.to_string(),
+            kind: "modified".to_string(),
+            baseline_score: delta.map(|_| 50.0),
+            projected_score: delta.map(|d| 50.0 + d),
+            delta,
+            baseline_band: None,
+            projected_band: None,
+            reason: delta.map_or_else(|| Some("deleted at gate time".to_string()), |_| None),
+        }
+    }
+
+    fn make_gate_report(
+        deltas: Vec<crate::change_set::FileDelta>,
+        baseline_median: Option<f64>,
+        projected_median: Option<f64>,
+        newly_cyclic: Vec<String>,
+    ) -> crate::change_set::ChangeSetReport {
+        crate::change_set::ChangeSetReport {
+            head_sha: "0123456789abcdef0123456789abcdef01234567".to_string(),
+            merge_in_progress: false,
+            changes: Vec::new(),
+            health: crate::change_set::HealthProjection {
+                deltas,
+                baseline_median,
+                projected_median,
+            },
+            base_cyclic_paths: Vec::new(),
+            newly_cyclic_paths: newly_cyclic,
+            coupling_absences: Vec::new(),
+            findings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn gate_thresholds_vacuous_when_unconfigured() {
+        let t = Thresholds::default();
+        let report = make_gate_report(
+            vec![make_gate_delta("a.rs", Some(-50.0))],
+            Some(90.0),
+            Some(10.0),
+            vec!["b.rs".to_string()],
+        );
+        assert!(
+            evaluate_gate_thresholds(&t, &report).is_empty(),
+            "no [diff] gates ⇒ no violations regardless of the report"
+        );
+    }
+
+    #[test]
+    fn gate_median_floor_fires_below_min() {
+        let mut t = Thresholds::default();
+        t.diff.delta_code_health_min = Some(-5.0);
+        let report = make_gate_report(Vec::new(), Some(60.0), Some(50.0), Vec::new());
+        let v = evaluate_gate_thresholds(&t, &report);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].gate, "delta_code_health_min");
+        assert_eq!(v[0].path, "(change-set)");
+        assert_eq!(v[0].actual, "-10.00");
+        assert_eq!(v[0].threshold, "-5.00");
+    }
+
+    #[test]
+    fn gate_median_floor_passes_at_boundary() {
+        // Equal-passes: a median delta exactly at the floor is allowed.
+        let mut t = Thresholds::default();
+        t.diff.delta_code_health_min = Some(-5.0);
+        let report = make_gate_report(Vec::new(), Some(60.0), Some(55.0), Vec::new());
+        assert!(evaluate_gate_thresholds(&t, &report).is_empty());
+    }
+
+    #[test]
+    fn gate_median_floor_skipped_when_median_absent() {
+        // No scoreable median on either side ⇒ the gate is skipped, not
+        // failed (callers surface the skip as a notice).
+        let mut t = Thresholds::default();
+        t.diff.delta_code_health_min = Some(0.0);
+        let no_base = make_gate_report(Vec::new(), None, Some(50.0), Vec::new());
+        assert!(evaluate_gate_thresholds(&t, &no_base).is_empty());
+        let no_projected = make_gate_report(Vec::new(), Some(50.0), None, Vec::new());
+        assert!(evaluate_gate_thresholds(&t, &no_projected).is_empty());
+    }
+
+    #[test]
+    fn gate_per_file_floor_flags_each_offending_file() {
+        // Path-level: one violation per file below the floor; files at/above
+        // the floor and files with no delta (deleted / unscoreable) never fire.
+        let mut t = Thresholds::default();
+        t.diff.delta_code_health_min_per_file = Some(0.0);
+        let report = make_gate_report(
+            vec![
+                make_gate_delta("a.rs", Some(-2.5)),
+                make_gate_delta("b.rs", Some(-0.1)),
+                make_gate_delta("c.rs", Some(1.0)),
+                make_gate_delta("d.rs", None),
+            ],
+            Some(50.0),
+            Some(50.0),
+            Vec::new(),
+        );
+        let v = evaluate_gate_thresholds(&t, &report);
+        assert_eq!(v.len(), 2, "exactly the two below-floor files: {v:?}");
+        assert!(v.iter().all(|x| x.gate == "delta_code_health_min_per_file"));
+        assert_eq!(v[0].path, "a.rs");
+        assert_eq!(v[0].actual, "-2.50");
+        assert_eq!(v[0].threshold, "+0.00");
+        assert_eq!(v[1].path, "b.rs");
+    }
+
+    #[test]
+    fn gate_per_file_floor_passes_at_boundary() {
+        // Equal-passes: a delta exactly at the floor is allowed.
+        let mut t = Thresholds::default();
+        t.diff.delta_code_health_min_per_file = Some(-1.0);
+        let report = make_gate_report(
+            vec![make_gate_delta("a.rs", Some(-1.0))],
+            Some(50.0),
+            Some(50.0),
+            Vec::new(),
+        );
+        assert!(evaluate_gate_thresholds(&t, &report).is_empty());
+    }
+
+    #[test]
+    fn gate_no_new_cycles_names_each_newly_cyclic_path() {
+        let mut t = Thresholds::default();
+        t.diff.no_new_cycles = true;
+        let report = make_gate_report(
+            Vec::new(),
+            Some(50.0),
+            Some(50.0),
+            vec!["src/a.rs".to_string(), "src/b.rs".to_string()],
+        );
+        let v = evaluate_gate_thresholds(&t, &report);
+        assert_eq!(v.len(), 2, "one violation per newly cyclic path: {v:?}");
+        assert!(v.iter().all(|x| x.gate == "no_new_cycles"));
+        assert_eq!(v[0].path, "src/a.rs");
+        assert_eq!(v[1].path, "src/b.rs");
+        // No newly cyclic paths ⇒ clean, even with the gate on.
+        let clean = make_gate_report(Vec::new(), Some(50.0), Some(50.0), Vec::new());
+        assert!(evaluate_gate_thresholds(&t, &clean).is_empty());
+    }
+
+    #[test]
+    fn gate_ignores_diff_only_keys() {
+        // new_hotspot_max / delta_health_min / deny_degrading_verdict are
+        // diff-only: the working-tree evaluator never fires them.
+        let mut t = Thresholds::default();
+        t.diff.new_hotspot_max = Some(0);
+        t.diff.delta_health_min = Some(100.0);
+        t.diff.deny_degrading_verdict = true;
+        let report = make_gate_report(
+            vec![make_gate_delta("a.rs", Some(-50.0))],
+            Some(90.0),
+            Some(10.0),
+            Vec::new(),
+        );
+        assert!(evaluate_gate_thresholds(&t, &report).is_empty());
+    }
+
+    #[test]
+    fn per_file_floor_key_parses_and_makes_thresholds_non_empty() {
+        let t = Thresholds::from_text("[diff]\ndelta_code_health_min_per_file = 0.0\n").unwrap();
+        assert_eq!(t.diff.delta_code_health_min_per_file, Some(0.0));
+        assert!(!t.is_empty());
+    }
+
+    #[test]
+    fn per_file_floor_unknown_key_rejected() {
+        // Typo guard: deny_unknown_fields must catch a near-miss spelling.
+        let raw = "[diff]\ndelta_code_health_min_per_flie = 0.0\n";
+        let err = Thresholds::from_text(raw).expect_err("typo'd key should reject");
+        assert!(
+            err.contains("unknown field") || err.contains("delta_code_health_min_per_flie"),
+            "expected 'unknown field' in error: {err}"
+        );
     }
 
     // ───────── max_red_effort_pct gate ─────────

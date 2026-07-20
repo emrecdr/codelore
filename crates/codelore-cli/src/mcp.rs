@@ -16,6 +16,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use codelore_lib::change_context;
+use codelore_lib::change_set;
 use codelore_lib::cli_api::{
     Options,
     analyses::{
@@ -34,9 +35,9 @@ use codelore_lib::cli_api::{
     facts::FactsDb,
     quality_gates::{
         GateViolation, Thresholds, evaluate_clone_gate, evaluate_code_health_gate,
-        evaluate_full_tree, resolve_defect_calibration,
+        evaluate_full_tree, evaluate_gate_thresholds, resolve_defect_calibration,
     },
-    repo::GixRepo,
+    repo::{GixRepo, Repo as _},
 };
 use codelore_lib::defect_calibration;
 
@@ -221,6 +222,11 @@ pub struct ChangeContextParams {
     /// Repo-relative paths the caller intends to modify (1-20).
     pub paths: Vec<String>,
 }
+
+/// Parameters for the `gate_changes` tool (none required — the change set is
+/// discovered from the working tree).
+#[derive(Debug, Deserialize, JsonSchema, Default)]
+pub struct GateChangesParams {}
 
 // ── Output type for check_gates ───────────────────────────────────────────────
 
@@ -465,6 +471,8 @@ impl CodeLoreServer {
         _params: Parameters<CheckGatesParams>,
     ) -> Result<String, ErrorData> {
         let repo_path = self.repo.clone();
+        let defect_calibration = self.defect_calibration.clone();
+        let allow_foreign_calibration = self.allow_foreign_calibration;
         tokio::task::spawn_blocking(move || {
             let thresholds = Thresholds::discover(&repo_path).map_err(internal)?;
             if thresholds.is_empty() {
@@ -476,8 +484,13 @@ impl CodeLoreServer {
                 return serde_json::to_string(&summary).map_err(internal);
             }
 
+            // The server-resolved calibration threads into the analyses so
+            // this verdict matches a `codelore check` run under the same
+            // repo `[calibration]` section or startup flag.
             let opts = Options {
                 repo_path: repo_path.clone(),
+                defect_calibration,
+                allow_foreign_calibration,
                 ..Options::default()
             };
             let repo = GixRepo::open(&repo_path).map_err(internal)?;
@@ -727,6 +740,121 @@ impl CodeLoreServer {
         .await
         .map_err(internal)?
     }
+
+    // ── gate_changes ──────────────────────────────────────────────────────────
+
+    #[tool(
+        name = "gate_changes",
+        description = "Working-tree quality verdict for the agent loop: projects what the \
+            current uncommitted edits do to code health and the import graph vs HEAD, \
+            evaluates the repo's working-tree `[diff]` gates against the projection, \
+            and returns compact text — verdict line, violations, advisory findings, \
+            and a per-file delta table. With no thresholds configured the verdict \
+            line reads `no thresholds configured — advisory only` and the advisory \
+            sections still render; a clean tree returns \
+            `PASS (no working-tree changes to gate)`. Reads the working tree; the \
+            committed-tree counterpart is `check_gates`. \
+            First call on a cold cache triggers history ingest."
+    )]
+    async fn gate_changes(
+        &self,
+        _params: Parameters<GateChangesParams>,
+    ) -> Result<String, ErrorData> {
+        let repo_path = self.repo.clone();
+        let defect_calibration = self.defect_calibration.clone();
+        let allow_foreign_calibration = self.allow_foreign_calibration;
+        tokio::task::spawn_blocking(move || {
+            let opts = Options {
+                repo_path: repo_path.clone(),
+                defect_calibration,
+                allow_foreign_calibration,
+                ..Options::default()
+            };
+            let repo = GixRepo::open(&repo_path).map_err(internal)?;
+            let changes = repo.worktree_changes().map_err(internal)?;
+            if changes.is_empty() {
+                return Ok("PASS (no working-tree changes to gate)".to_string());
+            }
+            let cache_root = default_cache_root();
+            let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &cache_root)
+                .map_err(internal)?;
+            let report = change_set::build_change_set_report(&db, &repo, &opts, &cache_root)
+                .map_err(internal)?;
+            // Thresholds are re-evaluated on every call — a warm sidecar hit
+            // returns measured data only, never a stored verdict.
+            let thresholds = Thresholds::discover(&repo_path).map_err(internal)?;
+            let violations = if thresholds.is_empty() {
+                None
+            } else {
+                Some(evaluate_gate_thresholds(&thresholds, &report))
+            };
+            Ok(render_gate_changes(&report, violations.as_deref()))
+        })
+        .await
+        .map_err(internal)?
+    }
+}
+
+/// Render the `gate_changes` text document, mirroring `codelore gate`'s text
+/// forms: a verdict line (`PASS` / `FAIL — n violation(s)` / the advisory-only
+/// disclosure when `violations` is `None` because no thresholds are
+/// configured), the merge-in-progress note, violation rows in `codelore
+/// check`'s exact form, one line per advisory finding, and the per-file delta
+/// table capped at the CLI's row limit with a `(+n more files)` tail.
+fn render_gate_changes(
+    report: &change_set::ChangeSetReport,
+    violations: Option<&[GateViolation]>,
+) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    match violations {
+        None => lines.push("no thresholds configured — advisory only".to_string()),
+        Some([]) => lines.push("PASS".to_string()),
+        Some(v) => lines.push(format!("FAIL — {} violation(s)", v.len())),
+    }
+    if report.merge_in_progress {
+        lines.push(
+            "note: merge/rebase in progress — projection reflects committed HEAD history"
+                .to_string(),
+        );
+    }
+    for v in violations.unwrap_or_default() {
+        lines.push(format!(
+            "  - {gate}: {path} — actual {actual} vs threshold {threshold}",
+            gate = v.gate,
+            path = v.path,
+            actual = v.actual,
+            threshold = v.threshold,
+        ));
+    }
+    for f in &report.findings {
+        lines.push(format!("[{}] {}: {}", f.kind, f.path, f.detail));
+    }
+    for d in report
+        .health
+        .deltas
+        .iter()
+        .take(crate::GATE_DELTA_TABLE_ROWS)
+    {
+        match (d.baseline_score, d.projected_score, d.delta) {
+            (Some(b), Some(p), Some(delta)) => {
+                lines.push(format!("{}  {b:.1} → {p:.1}  ({delta:+.1})", d.path));
+            }
+            _ => lines.push(format!(
+                "{}  — {}",
+                d.path,
+                d.reason.as_deref().unwrap_or("not scored")
+            )),
+        }
+    }
+    let hidden = report
+        .health
+        .deltas
+        .len()
+        .saturating_sub(crate::GATE_DELTA_TABLE_ROWS);
+    if hidden > 0 {
+        lines.push(format!("(+{hidden} more files)"));
+    }
+    lines.join("\n")
 }
 
 /// Wire the tool router into the MCP `ServerHandler` trait and set the

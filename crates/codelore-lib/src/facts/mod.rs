@@ -110,6 +110,20 @@ pub struct FactsDb {
     /// Same single-thread `RefCell` + `Rc` rationale as `coupling_memo`.
     import_graph_memo:
         std::cell::RefCell<Option<std::rc::Rc<crate::analyses::import_graph::ImportGraph>>>,
+    /// Process-local single-slot memo for
+    /// [`crate::analyses::clones::run_clones_memoised`]. `run_clones` walks
+    /// the working tree and tree-sitter-fingerprints every Tier-1 function —
+    /// an O(files) filesystem + parse pass with no `changes` / `imports`
+    /// dependency, so its result is fixed for a given (repo, clone-affecting
+    /// opts) pair. The agent-loop gate's projected-health engine runs
+    /// `run_code_health_scoped` twice on one `FactsDb` (HEAD baseline vs the
+    /// substituted-complexity projection); both scoped runs re-walk clones for
+    /// the DRY biomarker over the SAME working tree with the SAME
+    /// `opts_scan`, so the second walk is pure waste. A single slot suffices
+    /// because the only memoised caller is code-health, whose clone-affecting
+    /// opts are fixed within a run. Same single-thread `RefCell` + `Rc`
+    /// rationale as `import_graph_memo`.
+    clones_memo: std::cell::RefCell<Option<std::rc::Rc<Vec<crate::analyses::clones::ClonesRow>>>>,
 }
 
 impl FactsDb {
@@ -123,6 +137,7 @@ impl FactsDb {
             changes_lineage_built: std::cell::Cell::new(false),
             knowledge_shares_built: std::cell::Cell::new(false),
             import_graph_memo: std::cell::RefCell::new(None),
+            clones_memo: std::cell::RefCell::new(None),
         }
     }
 
@@ -160,6 +175,22 @@ impl FactsDb {
         graph: std::rc::Rc<crate::analyses::import_graph::ImportGraph>,
     ) {
         *self.import_graph_memo.borrow_mut() = Some(graph);
+    }
+
+    /// Shared handle to the memoised clones walk, if computed this run.
+    /// `None` on a miss; the caller then walks and stores.
+    pub(crate) fn clones_memo_get(
+        &self,
+    ) -> Option<std::rc::Rc<Vec<crate::analyses::clones::ClonesRow>>> {
+        self.clones_memo.borrow().clone()
+    }
+
+    /// Store the clones walk for reuse across the two agent-loop scoped scans.
+    pub(crate) fn clones_memo_put(
+        &self,
+        rows: std::rc::Rc<Vec<crate::analyses::clones::ClonesRow>>,
+    ) {
+        *self.clones_memo.borrow_mut() = Some(rows);
     }
 
     /// Whether `changes_lineage` is already materialised for this run.

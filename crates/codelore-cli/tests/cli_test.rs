@@ -2098,6 +2098,194 @@ fn check_default_format_is_text_not_json() {
     );
 }
 
+/// A monster function: nested loops + match + boolean conditionals so its
+/// cyclomatic / cognitive / nesting / bool-op counts dominate the fixture,
+/// making the appended-to file's projected code-health score strictly worse
+/// than its HEAD baseline.
+const GATE_MONSTER_FN: &str = r"
+fn monster(x: i32) -> i32 {
+    let mut acc = 0;
+    for a in 0..x {
+        if a % 2 == 0 && a % 3 == 0 || a % 5 == 0 {
+            for b in 0..a {
+                if b > 1 {
+                    match b % 4 {
+                        0 => { if b > 10 { acc += 1; } else { acc += 2; } }
+                        1 => { while acc < 100 { acc += 1; if acc % 7 == 0 { break; } } }
+                        2 => { for c in 0..b { if c > 3 && c < 9 || c == 5 { acc += c; } } }
+                        _ => { if a > b { acc -= 1; } else { acc += 1; } }
+                    }
+                }
+            }
+        }
+    }
+    acc
+}
+";
+
+/// Append `text` to the file at `path`.
+fn append_to_file(path: &std::path::Path, text: &str) {
+    let mut content = std::fs::read_to_string(path).expect("read file");
+    content.push_str(text);
+    std::fs::write(path, content).expect("write file");
+}
+
+/// Write a scratch thresholds file with `body` into its own tempdir and
+/// return the guard plus the file path (the guard keeps the dir alive).
+fn scratch_thresholds(body: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().expect("thresholds tempdir");
+    let path = dir.path().join("gate-thresholds.toml");
+    std::fs::write(&path, body).expect("write thresholds");
+    (dir, path)
+}
+
+#[test]
+fn gate_vacuous_passes_without_thresholds() {
+    // Without a thresholds file the gate vacuously passes with the same
+    // diagnostic contract as `check` (wording substitutes "gate"); exit 0.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args(["gate", "--repo", tiny.dir.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "codelore gate: no thresholds configured",
+        ))
+        .stderr(predicate::str::contains("vacuously passing"));
+}
+
+#[test]
+fn gate_passes_on_clean_tree_with_thresholds() {
+    // A fresh clone has no working-tree changes: with gates configured the
+    // run still passes (exit 0) and says so explicitly — a clean tree is a
+    // pass, not a skipped evaluation.
+    let fx = codelore_lib::test_support::differential_repo::build();
+    let (_guard, thresholds) = scratch_thresholds("[diff]\ndelta_code_health_min_per_file = 0.0\n");
+    let cache = tempfile::tempdir().expect("cache tempdir");
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "gate",
+            "--repo",
+            fx.dir.path().to_str().unwrap(),
+            "--thresholds-file",
+            thresholds.to_str().unwrap(),
+            "--cache-dir",
+            cache.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("no working-tree changes"));
+}
+
+#[test]
+fn gate_fails_on_per_file_floor() {
+    // Appending a deeply-nested high-complexity function to a tracked file
+    // makes its projected score strictly worse than its HEAD baseline, so a
+    // per-file floor of 0.0 (no file may lower its own health) must fail the
+    // gate with check's exit contract (1) and name the offending file.
+    let fx = codelore_lib::test_support::differential_repo::build();
+    append_to_file(&fx.dir.path().join("src/main.rs"), GATE_MONSTER_FN);
+    let (_guard, thresholds) = scratch_thresholds("[diff]\ndelta_code_health_min_per_file = 0.0\n");
+    let cache = tempfile::tempdir().expect("cache tempdir");
+    Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "gate",
+            "--repo",
+            fx.dir.path().to_str().unwrap(),
+            "--thresholds-file",
+            thresholds.to_str().unwrap(),
+            "--cache-dir",
+            cache.path().to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("codelore gate: FAIL"))
+        .stderr(predicate::str::contains("delta_code_health_min_per_file"))
+        .stderr(predicate::str::contains("src/main.rs"));
+}
+
+#[test]
+fn gate_json_shape() {
+    // --format json puts the full change-set report plus the evaluated
+    // violations on stdout as one JSON document: `changes`, `findings`, and
+    // `violations` are the contract keys downstream consumers read.
+    let fx = codelore_lib::test_support::differential_repo::build();
+    append_to_file(&fx.dir.path().join("src/main.rs"), GATE_MONSTER_FN);
+    // no_new_cycles is configured (non-empty thresholds) but the append
+    // introduces no import edge, so the run passes: violations = [].
+    let (_guard, thresholds) = scratch_thresholds("[diff]\nno_new_cycles = true\n");
+    let cache = tempfile::tempdir().expect("cache tempdir");
+    let output = Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "gate",
+            "--repo",
+            fx.dir.path().to_str().unwrap(),
+            "--thresholds-file",
+            thresholds.to_str().unwrap(),
+            "--cache-dir",
+            cache.path().to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("run codelore gate --format json");
+    assert!(
+        output.status.success(),
+        "no cycle introduced ⇒ pass, got {}: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout is utf-8");
+    let doc: serde_json::Value =
+        serde_json::from_str(&stdout).expect("stdout must be one JSON document");
+    let changes = doc["changes"].as_array().expect("changes array");
+    assert_eq!(changes.len(), 1, "one modified file: {changes:?}");
+    assert!(doc["findings"].is_array(), "findings key present: {doc}");
+    let violations = doc["violations"].as_array().expect("violations array");
+    assert!(violations.is_empty(), "clean pass: {violations:?}");
+    // The verdict line is emitted regardless of format; in JSON it goes to
+    // stderr so stdout stays a pure document.
+    let stderr = String::from_utf8(output.stderr).expect("stderr is utf-8");
+    assert!(
+        stderr.contains("codelore gate: PASS"),
+        "JSON PASS must still print a verdict line to stderr: {stderr}",
+    );
+}
+
+#[test]
+fn gate_vacuous_json_emits_contract_document() {
+    // With no thresholds configured, `--format json` must still put one
+    // contract document on stdout so an agent hook that always parses JSON
+    // never special-cases a repo without a thresholds file.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let output = Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "gate",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("run codelore gate --format json");
+    assert!(output.status.success(), "vacuous pass exits 0");
+    let stdout = String::from_utf8(output.stdout).expect("stdout is utf-8");
+    let doc: serde_json::Value =
+        serde_json::from_str(&stdout).expect("vacuous JSON must be one parseable document");
+    assert!(doc["changes"].is_array(), "changes key present: {doc}");
+    assert!(doc["findings"].is_array(), "findings key present: {doc}");
+    assert!(
+        doc["violations"].is_array(),
+        "violations key present: {doc}"
+    );
+}
+
 #[test]
 fn check_max_findings_gate_skips_gracefully_when_no_sidecar() {
     // Gate configured, but no prior `ingest-sarif` run → sidecar absent.

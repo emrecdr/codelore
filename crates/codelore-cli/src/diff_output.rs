@@ -801,7 +801,8 @@ fn emit_sarif(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diff::{CouplingAbsence, DiffOutput};
+    use crate::diff::DiffOutput;
+    use codelore_lib::cli_api::analyses::coupling::CouplingAbsence;
 
     #[test]
     fn emit_sarif_includes_missing_cochange_rule_and_results() {

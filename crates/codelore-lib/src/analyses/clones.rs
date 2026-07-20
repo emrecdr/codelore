@@ -18,6 +18,7 @@ use serde::Serialize;
 use walkdir::WalkDir;
 
 use crate::clones::{CloneLanguage, extract_functions, group_clones};
+use crate::facts::FactsDb;
 use crate::options::Options;
 use crate::{CodeLoreError, Result};
 
@@ -131,6 +132,33 @@ pub fn run_clones(opts: &Options) -> Result<Vec<ClonesRow>> {
     Ok(rows)
 }
 
+/// Memoised [`run_clones`] for the one `FactsDb` that scores a repo more than
+/// once in a single process.
+///
+/// `run_clones` itself stays db-free so the standalone `clones` analysis and
+/// `diff`'s at-a-rev walk (neither of which owns the scoring `FactsDb`) keep
+/// calling it directly. The only in-process caller that scores the same tree
+/// twice — the agent-loop gate's projected-health engine, which runs
+/// code-health once for the HEAD baseline and again for the substituted
+/// projection — routes through here so the identical second working-tree walk
+/// is served from `db`'s single-slot memo instead of re-fingerprinting every
+/// Tier-1 function. Returns a shared handle; callers read it by reference.
+///
+/// # Errors
+///
+/// Propagates any [`run_clones`] error on a memo miss.
+pub(crate) fn run_clones_memoised(
+    db: &FactsDb,
+    opts: &Options,
+) -> Result<std::rc::Rc<Vec<ClonesRow>>> {
+    if let Some(cached) = db.clones_memo_get() {
+        return Ok(cached);
+    }
+    let rows = std::rc::Rc::new(run_clones(opts)?);
+    db.clones_memo_put(rows.clone());
+    Ok(rows)
+}
+
 fn relative(root: &Path, abs: &Path) -> String {
     // Normalise to POSIX `/` so this matches `changes.path` (git always
     // emits `/`). See `crate::paths::to_posix` for the rationale.
@@ -173,5 +201,33 @@ mod tests {
         let entities: Vec<_> = rows.iter().map(|r| r.entity.as_str()).collect();
         assert!(entities.iter().any(|e| e.ends_with("a.rs")));
         assert!(entities.iter().any(|e| e.ends_with("b.rs")));
+    }
+
+    #[test]
+    fn run_clones_memoised_serves_second_call_from_the_memo() {
+        // Two `run_clones_memoised` calls on one FactsDb must return the SAME
+        // allocation: the first walks + fingerprints, the second is served
+        // whole from the single-slot memo (Rc::ptr_eq proves no recompute).
+        let fx = crate::test_support::differential_repo::build();
+        let repo = crate::repo::GixRepo::open(fx.dir.path()).expect("open");
+        let db = crate::facts::FactsDb::new_in_memory().expect("db");
+        let opts = Options {
+            repo_path: fx.dir.path().to_path_buf(),
+            min_clone_node_count: 0,
+            ..Options::default()
+        };
+        db.ingest(&repo, &opts).expect("ingest");
+
+        assert!(db.clones_memo_get().is_none(), "memo starts empty");
+        let first = run_clones_memoised(&db, &opts).expect("first walk");
+        assert!(
+            db.clones_memo_get().is_some(),
+            "first call must populate the memo",
+        );
+        let second = run_clones_memoised(&db, &opts).expect("second walk");
+        assert!(
+            std::rc::Rc::ptr_eq(&first, &second),
+            "second call must be served from the memo (same Rc allocation)",
+        );
     }
 }
