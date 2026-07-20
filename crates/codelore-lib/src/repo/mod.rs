@@ -147,8 +147,8 @@ pub trait Repo: Send + Sync {
     /// head-only ingest mode depends on that.
     fn tracked_paths_at_head(&self) -> Result<Vec<String>>;
 
-    /// Return all git tags in this repository, sorted ascending by
-    /// `(date, name)`.
+    /// Return all git tags in this repository, sorted ascending by date,
+    /// tie-broken via [`tag_tiebreak_cmp`] for same-date tags.
     ///
     /// Date semantics:
     /// - **Annotated tags** — the tagger timestamp (when `git tag -a` was run).
@@ -218,6 +218,111 @@ fn net_classify_candidates<R: Repo>(
         });
     }
     Ok(changes)
+}
+
+/// Parse the leading `v?MAJOR[.MINOR[.PATCH]]` numeric prefix of a tag name.
+/// The optional leading `v`/`V` is stripped; missing `MINOR`/`PATCH`
+/// components default to `0` (e.g. `"v2"` parses as `(2, 0, 0)`). Any
+/// trailing content after the parsed digits of a segment (pre-release or
+/// build metadata, e.g. `"3-rc1"`) is ignored for that segment. Returns
+/// `None` when the name doesn't start with a decimal digit (after the
+/// optional `v`) — i.e. it isn't semver-shaped at all.
+///
+/// This is a hand-rolled numeric-prefix parse, not full semver validation
+/// (no `semver` crate dependency) — it only needs to order tag names
+/// correctly, not validate them.
+fn parse_semver_prefix(name: &str) -> Option<(u64, u64, u64)> {
+    fn leading_number(segment: &str) -> Option<u64> {
+        let digits: String = segment.chars().take_while(char::is_ascii_digit).collect();
+        if digits.is_empty() {
+            None
+        } else {
+            digits.parse().ok()
+        }
+    }
+
+    let rest = name.strip_prefix(['v', 'V']).unwrap_or(name);
+    let mut parts = rest.split('.');
+    let major = leading_number(parts.next()?)?;
+    let minor = parts.next().and_then(leading_number).unwrap_or(0);
+    let patch = parts.next().and_then(leading_number).unwrap_or(0);
+    Some((major, minor, patch))
+}
+
+/// Tie-break comparator for tags sharing the same date, used by both
+/// backends' `tags()` implementations so they cannot drift (mirrors the
+/// [`net_classify_candidates`] sharing pattern for `worktree_changes`).
+///
+/// Semver-aware: parses each name's leading `v?MAJOR.MINOR.PATCH` numerically
+/// (via [`parse_semver_prefix`]) and compares components, so `"v1.9.0"`
+/// sorts before `"v1.10.0"` — a plain lexical compare would invert this
+/// (`'1' < '9'` as characters), corrupting the per-tag gap sequence that
+/// `release_cadence` derives from tag order. Falls back to a lexical compare
+/// of the full name when either name isn't semver-shaped, or when both parse
+/// to the identical numeric triple (e.g. `"v1.2.3"` vs. `"v1.2.3-rc1"`) —
+/// ties still need a deterministic total order.
+pub(crate) fn tag_tiebreak_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    match (parse_semver_prefix(a), parse_semver_prefix(b)) {
+        (Some(pa), Some(pb)) => pa.cmp(&pb).then_with(|| a.cmp(b)),
+        _ => a.cmp(b),
+    }
+}
+
+#[cfg(test)]
+mod tag_tiebreak_tests {
+    use super::tag_tiebreak_cmp;
+    use std::cmp::Ordering;
+
+    #[test]
+    fn semver_minor_version_orders_numerically_not_lexically() {
+        // Lexical compare would put "v1.10.0" before "v1.9.0" ('1' < '9').
+        assert_eq!(tag_tiebreak_cmp("v1.9.0", "v1.10.0"), Ordering::Less);
+        assert_eq!(tag_tiebreak_cmp("v1.10.0", "v1.9.0"), Ordering::Greater);
+    }
+
+    #[test]
+    fn semver_major_version_orders_numerically() {
+        assert_eq!(tag_tiebreak_cmp("v2.0.0", "v10.0.0"), Ordering::Less);
+    }
+
+    #[test]
+    fn non_semver_names_fall_back_to_lexical() {
+        assert_eq!(
+            tag_tiebreak_cmp("nightly-1", "nightly-2"),
+            Ordering::Less,
+            "neither name is semver-shaped; must fall back to lexical order"
+        );
+        assert_eq!(tag_tiebreak_cmp("release-a", "release-b"), Ordering::Less);
+    }
+
+    #[test]
+    fn mixed_semver_and_non_semver_falls_back_to_lexical() {
+        // One side doesn't parse as semver: the pair as a whole falls back
+        // to lexical rather than mixing numeric and lexical comparisons.
+        // Lexically 'v' > 'n', so "v1.0.0" sorts AFTER "nightly-1" here —
+        // this asserts the fallback is a plain `str` compare, not that the
+        // ordering is intuitive.
+        assert_eq!(tag_tiebreak_cmp("v1.0.0", "nightly-1"), Ordering::Greater);
+        assert_eq!(tag_tiebreak_cmp("nightly-1", "v1.0.0"), Ordering::Less);
+    }
+
+    #[test]
+    fn missing_patch_defaults_to_zero() {
+        // "v1.9" parses as (1, 9, 0), same triple as "v1.9.0" — falls back
+        // to lexical for the tie, which is still deterministic.
+        assert_eq!(tag_tiebreak_cmp("v1.9", "v1.9.0"), Ordering::Less);
+        assert_eq!(tag_tiebreak_cmp("v1.9", "v1.10.0"), Ordering::Less);
+    }
+
+    #[test]
+    fn uppercase_v_prefix_is_stripped() {
+        assert_eq!(tag_tiebreak_cmp("V1.9.0", "V1.10.0"), Ordering::Less);
+    }
+
+    #[test]
+    fn equal_names_are_equal() {
+        assert_eq!(tag_tiebreak_cmp("v1.2.3", "v1.2.3"), Ordering::Equal);
+    }
 }
 
 pub mod gix_repo;

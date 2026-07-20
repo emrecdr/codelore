@@ -431,7 +431,11 @@ impl Repo for GitCliRepo {
             });
         }
 
-        tags.sort_by(|a, b| a.date.cmp(&b.date).then(a.name.cmp(&b.name)));
+        tags.sort_by(|a, b| {
+            a.date
+                .cmp(&b.date)
+                .then_with(|| super::tag_tiebreak_cmp(&a.name, &b.name))
+        });
         Ok(tags)
     }
 }
