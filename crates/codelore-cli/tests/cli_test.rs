@@ -2248,6 +2248,42 @@ fn gate_json_shape() {
     assert!(doc["findings"].is_array(), "findings key present: {doc}");
     let violations = doc["violations"].as_array().expect("violations array");
     assert!(violations.is_empty(), "clean pass: {violations:?}");
+    // The verdict line is emitted regardless of format; in JSON it goes to
+    // stderr so stdout stays a pure document.
+    let stderr = String::from_utf8(output.stderr).expect("stderr is utf-8");
+    assert!(
+        stderr.contains("codelore gate: PASS"),
+        "JSON PASS must still print a verdict line to stderr: {stderr}",
+    );
+}
+
+#[test]
+fn gate_vacuous_json_emits_contract_document() {
+    // With no thresholds configured, `--format json` must still put one
+    // contract document on stdout so an agent hook that always parses JSON
+    // never special-cases a repo without a thresholds file.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let output = Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "gate",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("run codelore gate --format json");
+    assert!(output.status.success(), "vacuous pass exits 0");
+    let stdout = String::from_utf8(output.stdout).expect("stdout is utf-8");
+    let doc: serde_json::Value =
+        serde_json::from_str(&stdout).expect("vacuous JSON must be one parseable document");
+    assert!(doc["changes"].is_array(), "changes key present: {doc}");
+    assert!(doc["findings"].is_array(), "findings key present: {doc}");
+    assert!(
+        doc["violations"].is_array(),
+        "violations key present: {doc}"
+    );
 }
 
 #[test]

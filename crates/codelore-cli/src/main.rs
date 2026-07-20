@@ -1804,6 +1804,16 @@ fn run_gate_cmd(args: &args::GateArgs) -> Result<()> {
                 "codelore gate: no thresholds configured (no `.codelore-thresholds.toml` at repo root); vacuously passing."
             );
         }
+        // A JSON consumer still gets one contract document on stdout — the same
+        // empty shape a clean tree emits — so an agent hook that always runs
+        // `gate --format json` never has to special-case a repo with no
+        // thresholds configured.
+        if matches!(args.format, GateFormat::Json) {
+            println!(
+                "{}",
+                serde_json::json!({ "changes": [], "findings": [], "violations": [] })
+            );
+        }
         write_github_output("result", "pass");
         return Ok(());
     }
@@ -1971,6 +1981,15 @@ fn render_gate_verdict(
                 report.changes.len()
             );
             render_gate_advisories(args, report);
+        } else {
+            // JSON keeps stdout pure for the report document (already printed),
+            // so the verdict line goes to stderr — mirroring the clean-tree and
+            // FAIL paths, and honoring the contract that a verdict line is
+            // emitted regardless of format.
+            eprintln!(
+                "✅ codelore gate: PASS ({} changed file(s) evaluated)",
+                report.changes.len()
+            );
         }
         write_github_output("result", "pass");
         write_github_output("violations", "0");
