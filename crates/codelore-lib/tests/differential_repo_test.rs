@@ -1077,10 +1077,15 @@ fn worktree_changes_errors_alike_on_merge_conflict() {
     let repo = codelore_lib::test_support::differential_repo::build();
     let path = repo.dir.path();
 
+    // Supply a committer identity on every call: the fixture is a fresh clone
+    // and the two `commit` calls below would otherwise fail on any machine
+    // without an ambient `user.name`/`user.email` (e.g. a clean CI runner).
     let git = |args: &[&str]| {
         Command::new("git")
             .arg("-C")
             .arg(path)
+            .args(["-c", "user.email=codelore-test@example.com"])
+            .args(["-c", "user.name=CodeLore Test"])
             .args(args)
             .output()
             .expect("spawn git")
