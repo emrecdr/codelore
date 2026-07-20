@@ -1565,7 +1565,7 @@ crates/codelore-lib/src/cache.rs
 
 - **health** — composite score with its band and the `structural_risk` value, plus a `calibrated <vintage>` suffix when the server was started with `--defect-calibration` (or a repo `[calibration]` section), else `uncalibrated`. A path with no code-health row renders `health: no code-health row`.
 - **hotspot** — 1-based rank in the full hotspot ranking; a path outside the ranking renders `not in the hotspot set`.
-- **co-change** — up to three historically co-changed partners (edit those too); when none clear the significance filter it renders `co-change: none significant`.
+- **co-change** — up to three historically co-changed partners (edit those too), with any further significant partners disclosed as ` (+n more)` at the end of the line; when none clear the significance filter it renders `co-change: none significant`.
 - **owner** — main author, ownership share, sole-vs-shared concentration, and a `departed <n>d` flag when the main author has been inactive past the departed threshold (else `active <n>d ago`); no attributable ownership renders `owner: inconclusive`.
 - **recent** — commit count and churned lines over the recent window; a path untouched in the window renders `recent: quiet in last <window>d`.
 

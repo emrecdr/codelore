@@ -694,6 +694,53 @@ fn mcp_refuses_to_start_on_foreign_artifact_without_override() {
     );
 }
 
+/// `check_gates` must evaluate under the calibration the server resolved at
+/// startup — here via the thresholds `[calibration]` section. The artifact is
+/// valid when the server starts (startup validation passes) and is deleted
+/// before the tool call, so the call can only fail if the per-call `Options`
+/// actually carries the calibration path into the analyses. A server that
+/// ignored the section here would return a verdict instead of an error.
+#[test]
+fn check_gates_honors_calibration_section() {
+    let repo = delivery_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+    let artifact_dir = tempfile::tempdir().expect("artifact dir");
+    let artifact_path = write_foreign_defect_artifact(artifact_dir.path());
+
+    // A gate that must be evaluated (non-empty thresholds) plus the
+    // calibration section naming the artifact.
+    std::fs::write(
+        repo.dir.path().join(".codelore-thresholds.toml"),
+        format!(
+            "[gates]\ncode_health_min = 0.0\n\n[calibration]\ndefect_artifact = \"{}\"\n",
+            artifact_path.display()
+        ),
+    )
+    .unwrap();
+
+    // The artifact is foreign to the fixture repo; the override lets startup
+    // validation pass so the failure below can only come from the tool call.
+    let (mut child, mut stdin, mut reader) =
+        spawn_mcp_with_args(repo_path, &["--allow-foreign-calibration"]);
+
+    std::fs::remove_file(&artifact_path).expect("delete artifact after startup");
+
+    let resp = call_tool(&mut stdin, &mut reader, 1, "check_gates", &json!({}));
+    let is_error =
+        resp["error"].is_object() || resp["result"]["isError"].as_bool().unwrap_or(false);
+    assert!(
+        is_error,
+        "check_gates must fail when the configured calibration artifact cannot be loaded: {resp}"
+    );
+    assert!(
+        resp.to_string().contains("defects.calib.json"),
+        "the error must name the missing artifact: {resp}"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
 #[test]
 fn mcp_change_context_returns_briefing_for_known_path() {
     let repo = delivery_repo::build();

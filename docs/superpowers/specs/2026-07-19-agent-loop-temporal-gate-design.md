@@ -31,7 +31,7 @@ New library module `crates/codelore-lib/src/change_set/`, consumed by both surfa
 
 **Engine hardening (in scope):**
 - **Content-hash memoization.** Per-file analysis results are memoized in-process (and in the sidecar cache dir, keyed on file content hash + HEAD sha) so repeated gate calls in an agent loop re-analyze only files edited since the previous call.
-- **Large-change cap with disclosure.** At most 100 changed files are analyzed per call; beyond that the report states exactly how many were skipped and which gates could not be fully evaluated (which flips those gates to `degraded` under the existing `fail_on_degraded` semantics rather than passing on blindness).
+- **No engine-level change-set cap.** The engine analyzes every changed Tier-1 file — the cost is bounded above by a full ingest, which a cold cache already pays. Large change-sets are tamed at the *render* layer instead: the delta table caps at the ten largest-`|delta|` rows with a `(+n more files)` tail (§6) while the JSON report carries every row, so no gate ever degrades for change-set size.
 - **Change-type handling.** Deleted files contribute their removed structural risk (a deletion of a red file is an improvement, reported as such); renames follow the rename source for history lookups; binary files are listed unanalyzed.
 
 ## 4. Surfaces
@@ -41,12 +41,12 @@ New library module `crates/codelore-lib/src/change_set/`, consumed by both surfa
 Parameters: `paths` — 1 to 20 repo-relative paths the caller intends to modify (an empty list or more than 20 paths is a tool-argument error naming the limit). Reads only the committed-HEAD cache (no engine invocation). Per file:
 
 - code-health band and score; hotspot standing (rank/score when in the hotspot set);
-- top-3 historical co-change partners with confidence and significance — "editing this file historically means editing these";
+- top-3 historical co-change partners with confidence and significance — "editing this file historically means editing these" — with any further significant partners disclosed as ` (+n more)`;
 - dominant-owner share, with a knowledge-concentration flag when high;
 - calibrated defect risk when calibration is configured (labeled `uncalibrated` otherwise);
 - a one-line recent-churn note.
 
-Paths with no history (new/untracked files) return an honest "no history yet" row — never an error, because agents create files constantly. Output is compact fixed-order structured text (see §6).
+Every line has an honest-absence form when its feed has no data for the path: `health: no code-health row` (the path has history but no scored code-health row), `not in the hotspot set`, `co-change: none significant`, `owner: inconclusive`, and `recent: quiet in last <n>d`. A path absent from *every* feed — no code-health row, not in the hotspot ranking, no significant co-change partners, no attributable ownership, and untouched in the recent-churn window (brand-new, untracked, or mistyped) — collapses to a two-line "no history at HEAD" block instead; never an error, because agents create files constantly. Output is compact fixed-order structured text (see §6).
 
 ### 4.2 `gate_changes` (MCP tool)
 
@@ -58,12 +58,12 @@ Same engine and verdict. Text output for humans; `--format json` for scripts (th
 
 ### 4.4 Threshold semantics — reuse `[diff]`
 
-No third config section. The `[diff]` keys express change-gates and bind identically whether the change-set is a committed branch (`codelore diff`) or the working tree (`gate_changes` / `codelore gate`):
+No third config section. The `[diff]` keys express change-gates; each binds on the surfaces documented below, with equal-passes boundaries everywhere:
 
-- `no_new_cycles` — binds in working-tree mode via the engine's cycle delta.
-- `delta_code_health_min` — binds against the median projected health delta **across the change-set files only**. Note this is a deliberate divergence from `codelore diff`, whose `delta_code_health_min` medians over the *whole-repo* hotspot set (base vs head) and so dilutes a single file's regression across every unchanged file; the working-tree gate scopes the median to changed files, which is both cheaper and more sensitive. Because even a change-set median can mask one severely-regressed file among neutral edits, the gate additionally supports an optional **`delta_code_health_min_per_file`** floor that fails on any single changed file dropping more than the allowed magnitude. Both are documented as change-set-scoped in the `[diff]` binding table.
-- `deny_degrading_verdict` — binds against the engine's overall verdict classification.
-- `new_hotspot_max` — **diff-only** (requires committed churn to define a hotspot); documented as not binding in working-tree mode.
+- `no_new_cycles` — in working-tree mode, a cyclic-node **membership** comparison: one violation per path that is cyclic in the projected import graph but was not cyclic at HEAD, naming the file. This deliberately diverges from `codelore diff`'s cycle-*count* comparison — membership names the offending files and still fires when two existing cycles merge into one bigger tangle (which *drops* the count).
+- `delta_code_health_min` — a floor on the **whole-repo median** delta (projected − baseline), the same semantics the key carries on `codelore diff`: one key, one meaning on both surfaces. The median is computable in working-tree mode because both scoped scoring runs return full row sets. (The populations differ honestly: the gate scores with `min_revs = 1` over all scoreable files, while `diff` medians over its min-revs-filtered hotspot rows.)
+- `delta_code_health_min_per_file` — the change-scoped sharp tool: a floor on each changed file's own projected − baseline score, one violation per offending file. A whole-repo median dilutes a single file's regression across every unchanged file; the per-file floor catches exactly that. Evaluated only by `codelore gate` / `gate_changes`; `codelore diff` does not evaluate this key.
+- `new_hotspot_max`, `delta_health_min`, `deny_degrading_verdict` — **diff-only** (they need committed churn or a committed-range function delta to be meaningful); never evaluated in working-tree mode.
 
 The docs table states, per `[diff]` key, which consumers it binds in.
 
@@ -90,12 +90,12 @@ Honest-absence convention throughout: every degradation is visible in output; no
 - No calibration: risk labeled `uncalibrated`.
 - No committed cache: built once; first-call cost disclosed in the report.
 - Clean tree: `gate_changes`/`codelore gate` return an explicit "no uncommitted changes" pass.
-- Over-cap change-sets: skipped-count disclosed; affected gates degrade (fail under `fail_on_degraded = true`, warn under `false`).
+- Large change-sets: every changed file is analyzed and gated; only the rendered delta table truncates, with a `(+n more files)` tail (§6).
 - Repo/config errors (bad artifact, non-repo path): typed hard errors with the existing exit codes; MCP tool calls surface them as tool errors except artifact misconfiguration at server startup, which already fails fast.
 
 ## 6. Token economy (spec'd contract, not a vibe)
 
-Both tools emit compact fixed-order structured text — never JSON blobs, never file contents. Hard caps with `(+n more)` disclosure: top-3 partners per file, top-5 findings per gate call, 20-file `change_context` limit, 100-file engine cap. Budget targets, pinned by a token-counting test on a fixture (whitespace-split proxy measure, asserted with headroom):
+Both tools emit compact fixed-order structured text — never JSON blobs, never file contents. Hard caps with `(+n more)` disclosure: top-3 co-change partners per file (` (+n more)` for the rest), the 20-file `change_context` limit, and a **render-level** delta-table cap — `gate_changes` / `codelore gate` show the ten largest-`|delta|` rows with a `(+n more files)` tail while the JSON report carries every row. The cap is rendering only: the engine analyzes and gates every changed file, so no gate ever degrades for change-set size. Findings are not capped; they are budgeted per-finding. Budget targets, pinned by a token-counting test on a fixture (whitespace-split proxy measure, asserted with headroom):
 
 - `change_context`: ≤ 150 tokens per requested file (compact mode).
 - `gate_changes`: ≤ 80 tokens base + ≤ 40 per finding.
@@ -136,9 +136,9 @@ Each was verified against source before adoption; two proposed refinements were 
 
 1. **Projected-delta framing — corrected and folded into §3.3.** The composite is linear, not multiplicative, so the frozen-history delta is exact, not an approximation. The real nuance is the `shotgun-surgery` coupling-centrality carve-out (now in §3.3): that history-derived sub-term of `structural_risk` must be frozen from the HEAD cache rather than recomputed.
 2. **Cycle-delta edge replacement — folded into §3.5.** Confirmed the import graph is adjacency-list keyed by source node, so edges must be replaced, not appended.
-3. **Median blind spot — corrected and folded into §4.4.** `codelore diff` medians over the *whole repo*, not changed files; the spec previously mis-described this. The working-tree gate is scoped to the change-set median plus an optional per-file floor.
-4. **Deterministic 100-file cap ordering.** The engine sorts the change-set by descending projected structural-risk delta, tie-broken by path, **before** truncating to the cap, so the determinism contract (§7) holds. Matches the codebase's existing sort-before-emit discipline for HashSet/HashMap iteration order.
-5. **Per-file delta-table token budget (§6).** `gate_changes` caps the delta table at the top-N changed files by `|projected delta|` with a `(+n more)` disclosure line, folded into the §6 token-budget test; at the 100-file cap the full table would otherwise blow the base budget.
+3. **Median blind spot — corrected and folded into §4.4.** `codelore diff` medians over the *whole repo*, not changed files; the spec previously mis-described this. The working-tree gate keeps the key's whole-repo-median semantics (one key, one meaning on both surfaces) and adds the optional `delta_code_health_min_per_file` floor for change-scoped sharpness.
+4. **Deterministic delta-table ordering.** The report's delta rows sort by descending `|projected delta|` (rows with no delta last), tie-broken by path, **before** the render-level row cap, so the determinism contract (§7) holds. Matches the codebase's existing sort-before-emit discipline for HashSet/HashMap iteration order.
+5. **Per-file delta-table token budget (§6).** `gate_changes` caps the delta table at the top-N changed files by `|projected delta|` with a `(+n more)` disclosure line, folded into the §6 token-budget test; on a large change-set the full table would otherwise blow the base budget.
 6. **Determinism at the rendered level (§7).** The determinism contract is defined over the *rounded/bucketed rendered* `ChangeSetReport` (sign + magnitude class), not bit-identical raw `f64`, since projected deltas are floating-point.
 7. **Memoization: HEAD-advances-mid-loop cost.** Per-file memoization is keyed on `file-content-hash + HEAD sha`, so a commit inside the agent loop moves HEAD and invalidates the *entire* per-file cache (even untouched files), forcing a full re-derive on the next call. The write→gate→write→commit-last loop is unaffected; a commit-then-continue agent pays repeated re-derives. Disclosed in the cost note.
 8. **`change_context` honest-absence edges (§4.1).** A path present neither at HEAD nor in the working tree (a typo/hallucinated path) returns a "no history yet" row, not an error. During an in-progress merge or rebase (`MERGE_HEAD`/rebase state present), where "versus HEAD" is ambiguous, the tool returns a one-line honest-absence note rather than misreporting — no merge/rebase-state detection exists in the `Repo` trait today, so this is new (small) plumbing.

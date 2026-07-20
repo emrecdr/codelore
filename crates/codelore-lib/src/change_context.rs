@@ -51,7 +51,9 @@
 //!   renders `not in the hotspot set`.
 //! - `co-change:` — up to three partners with `shared >= DEFAULT_MIN_SHARED_REVS`
 //!   and `fisher_p < DEFAULT_FISHER_SIGNIFICANCE`, sorted by `degree` descending
-//!   then partner path ascending; none renders `co-change: none significant`.
+//!   then partner path ascending; when more partners clear the filter than are
+//!   rendered, the line ends with ` (+n more)` disclosing the overflow count;
+//!   none renders `co-change: none significant`.
 //! - `owner:` — main author, ownership share, `sole owner` / `shared`
 //!   concentration, and `departed <n>d` when `days_since_main_active` exceeds
 //!   `departed_threshold_days` (else `active <n>d ago`). A path with no
@@ -105,6 +107,10 @@ struct PathBriefing {
     hotspot: Option<(usize, f64, u32)>,
     /// `(partner, degree, fisher_p)`, already filtered, sorted, and truncated.
     partners: Vec<(String, f64, f64)>,
+    /// Count of partners that cleared the significance filter *before*
+    /// truncation; when it exceeds the rendered count the co-change line
+    /// discloses the overflow as ` (+n more)`.
+    partners_total: usize,
     /// Owner activity when the path has LoC-attributable ownership.
     owner: Option<OwnerActivity>,
     /// `(revisions, churned_lines)` over the recent window when the path was
@@ -177,12 +183,14 @@ fn assemble(db: &FactsDb, opts: &Options, paths: &[String]) -> Result<Vec<PathBr
                 .enumerate()
                 .find(|(_, r)| r.path == *path)
                 .map(|(idx, r)| (idx + 1, r.hotspot_score, r.revisions));
+            let (partners, partners_total) = coupling_partners(&coupling_rows, path);
             PathBriefing {
                 path: path.clone(),
                 health,
                 calibration: vintage.clone(),
                 hotspot,
-                partners: coupling_partners(&coupling_rows, path),
+                partners,
+                partners_total,
                 owner: owners.get(path).cloned(),
                 recent: churn.get(path).copied(),
             }
@@ -192,8 +200,10 @@ fn assemble(db: &FactsDb, opts: &Options, paths: &[String]) -> Result<Vec<PathBr
 }
 
 /// The path's Fisher-significant co-change partners, sorted by `degree`
-/// descending then partner path ascending, capped at [`MAX_PARTNERS`].
-fn coupling_partners(rows: &[CouplingRow], path: &str) -> Vec<(String, f64, f64)> {
+/// descending then partner path ascending, capped at [`MAX_PARTNERS`] —
+/// paired with the pre-truncation partner count so the renderer can disclose
+/// how many significant partners the cap hid.
+fn coupling_partners(rows: &[CouplingRow], path: &str) -> (Vec<(String, f64, f64)>, usize) {
     let mut partners: Vec<(&str, f64, f64)> = rows
         .iter()
         .filter_map(|r| {
@@ -209,11 +219,13 @@ fn coupling_partners(rows: &[CouplingRow], path: &str) -> Vec<(String, f64, f64)
         })
         .collect();
     partners.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    let total = partners.len();
     partners.truncate(MAX_PARTNERS);
-    partners
+    let rendered = partners
         .into_iter()
         .map(|(partner, degree, fisher_p)| (partner.to_string(), degree, fisher_p))
-        .collect()
+        .collect();
+    (rendered, total)
 }
 
 /// Per-path commit count + churned lines over the last `opts.window_days`,
@@ -342,7 +354,12 @@ fn cochange_line(briefing: &PathBriefing) -> String {
         .iter()
         .map(|(partner, degree, fisher_p)| format!("{partner} ({degree:.0}%, p={fisher_p:.3})"))
         .collect();
-    format!("co-change: {}", parts.join(" · "))
+    let hidden = briefing.partners_total.saturating_sub(MAX_PARTNERS);
+    if hidden > 0 {
+        format!("co-change: {} (+{hidden} more)", parts.join(" · "))
+    } else {
+        format!("co-change: {}", parts.join(" · "))
+    }
 }
 
 fn owner_line(briefing: &PathBriefing, opts: &Options) -> String {
@@ -380,7 +397,7 @@ fn recent_line(briefing: &PathBriefing, opts: &Options) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_PARTNERS, PathBriefing, render};
+    use super::{MAX_PARTNERS, PathBriefing, cochange_line, render};
     use crate::Options;
     use crate::analyses::knowledge_islands::OwnerActivity;
 
@@ -412,6 +429,7 @@ mod tests {
                 ("options.rs".to_string(), 68.0, 0.003),
                 ("facts/mod.rs".to_string(), 54.0, 0.011),
             ],
+            partners_total: 2,
             owner: Some(owner("Emre Camdere", 82.0, 12, 0)),
             recent: Some((4, 310)),
         }
@@ -451,6 +469,7 @@ mod tests {
             calibration: None,
             hotspot: None,
             partners: Vec::new(),
+            partners_total: 0,
             owner: None,
             recent: None,
         };
@@ -468,6 +487,7 @@ mod tests {
             calibration: None,
             hotspot: None,
             partners: Vec::new(),
+            partners_total: 0,
             owner: Some(owner("Emre Camdere", 91.0, 30, 0)),
             recent: None,
         };
@@ -552,6 +572,9 @@ mod tests {
                     0.009,
                 ),
             ],
+            // Five significant partners, three rendered — the maximal
+            // co-change line carries the ` (+2 more)` disclosure suffix.
+            partners_total: 5,
             owner: Some(owner("Some Long Author Name", 74.0, 365, 2)),
             recent: Some((41, 9310)),
         };
@@ -562,11 +585,31 @@ mod tests {
             make("crates/codelore-lib/src/analyses/knowledge_islands.rs"),
         ];
         let out = render(&briefings, true, &opts());
+        assert!(
+            out.contains("(+2 more)"),
+            "the disclosure suffix must render and be counted in the budget: {out}"
+        );
         let tokens = out.split_whitespace().count();
         assert!(
             tokens <= 150 * briefings.len(),
             "budget is 150 tokens/path; got {tokens} for {} paths",
             briefings.len()
+        );
+    }
+
+    #[test]
+    fn cochange_line_discloses_truncated_partners() {
+        let mut briefing = populated();
+        briefing.partners = vec![
+            ("a.rs".to_string(), 90.0, 0.001),
+            ("b.rs".to_string(), 80.0, 0.002),
+            ("c.rs".to_string(), 70.0, 0.003),
+        ];
+        briefing.partners_total = 6;
+        let line = cochange_line(&briefing);
+        assert!(
+            line.contains("(+3 more)"),
+            "three of six significant partners rendered must disclose the other three: {line}"
         );
     }
 }

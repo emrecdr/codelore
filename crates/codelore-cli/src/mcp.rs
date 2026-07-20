@@ -471,6 +471,8 @@ impl CodeLoreServer {
         _params: Parameters<CheckGatesParams>,
     ) -> Result<String, ErrorData> {
         let repo_path = self.repo.clone();
+        let defect_calibration = self.defect_calibration.clone();
+        let allow_foreign_calibration = self.allow_foreign_calibration;
         tokio::task::spawn_blocking(move || {
             let thresholds = Thresholds::discover(&repo_path).map_err(internal)?;
             if thresholds.is_empty() {
@@ -482,8 +484,13 @@ impl CodeLoreServer {
                 return serde_json::to_string(&summary).map_err(internal);
             }
 
+            // The server-resolved calibration threads into the analyses so
+            // this verdict matches a `codelore check` run under the same
+            // repo `[calibration]` section or startup flag.
             let opts = Options {
                 repo_path: repo_path.clone(),
+                defect_calibration,
+                allow_foreign_calibration,
                 ..Options::default()
             };
             let repo = GixRepo::open(&repo_path).map_err(internal)?;
