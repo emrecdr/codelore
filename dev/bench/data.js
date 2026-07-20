@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783936067822,
+  "lastUpdate": 1784541019245,
   "repoUrl": "https://github.com/emrecdr/codelore",
   "entries": {
     "Benchmark": [
@@ -139,6 +139,76 @@ window.BENCHMARK_DATA = {
             "name": "ingest_capacity_sweep/1024",
             "value": 99623060,
             "range": "± 3862483",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Emre Camdere",
+            "username": "emrecdr",
+            "email": "cemre79@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "eb9a339ae2bee00af598298549e889296db8bc23",
+          "message": "feat: agent-loop temporal gate Phase 1 — [calibration] section + change_context briefing tool (#109)\n\n* docs(spec): agent-loop temporal quality gate — change_context, gate_changes, codelore gate\n\n* docs(spec): fold validated review refinements into agent-loop gate design\n\n* docs(plan): agent-loop gate phase 1 — calibration section + change_context briefing\n\n* feat(thresholds): repo-declared defect calibration via a [calibration] section\n\nAdds a [calibration] section to .codelore-thresholds.toml with a single\ndefect_artifact path, so a repo can declare its defect-calibration\nartifact once instead of passing --defect-calibration on every\nanalyze/check/explain/mcp invocation. An explicit CLI flag (or the MCP\nserver's startup flag) always takes precedence; relative paths resolve\nagainst the repo root. The section is a config selector, not a gate —\na thresholds file containing only [calibration] still leaves `check`\nvacuously passing.\n\n* feat(knowledge-islands): batched per-path owner-activity lookup without the departed threshold\n\n* feat(repo): expose merge/rebase-in-progress state on both backends\n\n* feat(change-context): temporal pre-write briefing assembly with budgeted deterministic rendering\n\n* feat(mcp): change_context — temporal pre-write briefing tool\n\n* fix(change-context): reserve the no-history row for paths absent from every feed\n\n---------\n\nCo-authored-by: Emre Camdere <emre@valocom.nl>",
+          "timestamp": "2026-07-19T23:14:21Z",
+          "url": "https://github.com/emrecdr/codelore/commit/eb9a339ae2bee00af598298549e889296db8bc23"
+        },
+        "date": 1784541018385,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "ingest_tiny",
+            "value": 54653789,
+            "range": "± 4294697",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest/medium_500_commits",
+            "value": 97433530,
+            "range": "± 2604619",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "complexity_extraction/parallel_default_threads",
+            "value": 95928800,
+            "range": "± 1426154",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "complexity_extraction/serial_1_thread",
+            "value": 96023116,
+            "range": "± 1702137",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/16",
+            "value": 94261995,
+            "range": "± 2178639",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/64",
+            "value": 95786645,
+            "range": "± 2260966",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/256",
+            "value": 93465005,
+            "range": "± 1873075",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/1024",
+            "value": 93243341,
+            "range": "± 6747399",
             "unit": "ns/iter"
           }
         ]
