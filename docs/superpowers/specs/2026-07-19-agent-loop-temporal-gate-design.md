@@ -50,7 +50,7 @@ Every line has an honest-absence form when its feed has no data for the path: `h
 
 ### 4.2 `gate_changes` (MCP tool)
 
-No parameters — the working tree is the argument. Runs the engine, evaluates thresholds, and returns: verdict (`pass` / `fail` / `pass (no uncommitted changes)`), the findings list (capped, each with `finding_id`), and the per-file delta table. Threshold failures list the same reason wording the CLI gate prints.
+No parameters — the working tree is the argument. Runs the engine, evaluates thresholds, and returns: verdict (`pass` / `fail` / `pass (no uncommitted changes)`), the findings list (one line each, budgeted per-finding, each with `finding_id`), and the per-file delta table. Threshold failures list the same reason wording the CLI gate prints.
 
 ### 4.3 `codelore gate` (CLI subcommand)
 
