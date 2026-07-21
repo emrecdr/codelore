@@ -23,14 +23,15 @@ use crate::Options;
 /// schema version, and the historical `schema_v` prefix on the value is
 /// retained so older cache files stay invalidated.
 ///
-/// The current epoch (`schema_v11`) invalidates caches whose complexity
-/// facts predate two extraction corrections: cognitive complexity detects
-/// `else if` chains correctly and counts constructs it previously missed
-/// (`loop`, enhanced-`for`, ternary, `match`), and `.tsx` sources are parsed
-/// with the TSX grammar instead of plain TypeScript. Both shift the cognitive
-/// and nesting numbers written into ingested facts, so a stale hit from an
-/// older binary would serve wrong values.
-const CACHE_EPOCH: &str = "schema_v11";
+/// The current epoch (`schema_v12`) invalidates caches whose import facts
+/// predate the Rust import resolver's structural rewrite: grouped
+/// (`use a::{b, c}`), `pub(crate)`, and `super`/`self` `use` declarations
+/// are now captured and resolved correctly, where an older binary emitted
+/// mangled targets, dropped group members, or fabricated `super`/`self`
+/// edges under the non-`mod.rs` module layout. Those edges feed the
+/// architecture and import-cycle graphs, so a stale hit would serve a
+/// wrong structure.
+const CACHE_EPOCH: &str = "schema_v12";
 
 /// Compute a 32-byte SHA-256 cache key from:
 ///   `canonical_repo_path || NUL || head_sha || NUL || CARGO_PKG_VERSION || NUL`

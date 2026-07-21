@@ -320,6 +320,111 @@ fn imports_pass_skips_non_tier1_files() {
     assert_eq!(count, 0, "non-Tier-1 files must not produce import rows");
 }
 
+/// Grouped, `super`, and `#[cfg(test)]` Rust imports under a
+/// non-`mod.rs` module layout (`src/foo.rs` owning `src/foo/`).
+///
+/// Proves three corrections end-to-end: `use crate::{a, b}` fans out to
+/// both leaves, a production `use super::sibling` resolves to the sibling
+/// module dir, and a `#[cfg(test)]` `use super::decoy` produces no row
+/// (and thus no edge) even though `src/foo/decoy.rs` exists — the skip is
+/// what stops a false edge.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn ingest_resolves_grouped_and_super_imports_in_non_mod_layout() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path();
+    std::fs::create_dir_all(path.join("src/foo")).unwrap();
+
+    std::fs::write(path.join("src/a.rs"), "pub fn a() {}\n").unwrap();
+    std::fs::write(path.join("src/b.rs"), "pub fn b() {}\n").unwrap();
+    // Grouped import fans out to both crate-root leaves.
+    std::fs::write(
+        path.join("src/foo.rs"),
+        "use crate::{a, b};\npub fn foo() {}\n",
+    )
+    .unwrap();
+    // Production `super::sibling` → the sibling module. The
+    // `#[cfg(test)]` `super::decoy` must not surface at all, even though
+    // `src/foo/decoy.rs` exists.
+    std::fs::write(
+        path.join("src/foo/bar.rs"),
+        "use super::sibling;\n#[cfg(test)]\nmod tests {\n    use super::decoy;\n}\n",
+    )
+    .unwrap();
+    std::fs::write(path.join("src/foo/sibling.rs"), "pub fn sibling() {}\n").unwrap();
+    std::fs::write(path.join("src/foo/decoy.rs"), "pub fn decoy() {}\n").unwrap();
+
+    run_git(path, &["init", "-b", "main", "--quiet"]);
+    run_git(path, &["config", "user.email", "t@e.com"]);
+    run_git(path, &["config", "user.name", "T"]);
+    run_git(path, &["add", "."]);
+    run_git(path, &["commit", "-m", "init", "--quiet"]);
+
+    let repo = GixRepo::open(path).expect("gix open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: path.to_path_buf(),
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    // Only the three real imports land — the cfg(test) `super::decoy`
+    // never becomes a row.
+    let total: i64 = db
+        .query_row("SELECT COUNT(*) FROM imports", [], |r| r.get(0))
+        .expect("count imports");
+    assert_eq!(
+        total, 3,
+        "expected 3 import rows (decoy skipped), got {total}"
+    );
+
+    let decoy_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM imports WHERE target LIKE '%decoy%'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(decoy_rows, 0, "cfg(test) import must not produce a row");
+
+    // Grouped `use crate::{a, b}` → two resolved edges.
+    let grouped: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM imports \
+             WHERE src_path = 'src/foo.rs' AND resolved = TRUE \
+               AND target_path IN ('src/a.rs', 'src/b.rs')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(grouped, 2, "grouped import should resolve to both leaves");
+
+    // Production `super::sibling` → `src/foo/sibling.rs`.
+    let super_edge: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM imports \
+             WHERE src_path = 'src/foo/bar.rs' AND resolved = TRUE \
+               AND target_path = 'src/foo/sibling.rs'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        super_edge, 1,
+        "super::sibling should resolve to the sibling module"
+    );
+
+    // No edge lands on the decoy module.
+    let decoy_edge: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM imports WHERE target_path = 'src/foo/decoy.rs'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(decoy_edge, 0, "no edge may resolve to the cfg(test) decoy");
+}
+
 fn run_git(repo: &std::path::Path, args: &[&str]) {
     let status = std::process::Command::new("git")
         .args(args)
