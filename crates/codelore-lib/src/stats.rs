@@ -534,6 +534,9 @@ mod tests {
         // Order-independence: the internal sort makes the cutoff invariant to
         // input order, bit-for-bit.
         let shuffled = [0.9, 0.041, 0.001, 0.039, 0.008];
-        bits_eq(bh_fdr_threshold(&shuffled, 0.05), bh_fdr_threshold(&p, 0.05));
+        bits_eq(
+            bh_fdr_threshold(&shuffled, 0.05),
+            bh_fdr_threshold(&p, 0.05),
+        );
     }
 }
