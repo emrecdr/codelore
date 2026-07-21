@@ -195,7 +195,42 @@ fn delivery_repo_summary_bucket_string_contains_pcts() {
     );
 }
 
-// ── 3. Veteran-breadth gate ───────────────────────────────────────────────────
+// ── 3. Bot exclusion ─────────────────────────────────────────────────────────
+
+/// `differential_repo` has 3 human canonical authors + 1 bot (dependabot,
+/// see `bot_commit_visible_in_both` in `differential_repo_test.rs`). The bot
+/// must never appear in team-composition output: not as an author row, not
+/// contributing to the core set / `__summary__` percentages.
+#[test]
+fn differential_repo_excludes_bot_author() {
+    let fixture = codelore_lib::test_support::differential_repo::build();
+    let db = ingest(fixture.dir.path());
+    let opts = Options {
+        repo_path: fixture.dir.path().to_path_buf(),
+        window_days: 365,
+        min_revs: 1,
+        ..Options::default()
+    };
+    let rows = run_team_composition(&db, &opts).expect("run team-composition");
+    let author_rows: Vec<_> = rows.iter().filter(|r| r.author != "__summary__").collect();
+
+    assert_eq!(
+        author_rows.len(),
+        3,
+        "differential_repo has 3 human canonical authors; bot must be excluded; got {} rows: {:?}",
+        author_rows.len(),
+        author_rows.iter().map(|r| &r.author).collect::<Vec<_>>(),
+    );
+    for row in &author_rows {
+        assert!(
+            !row.author.to_lowercase().contains("dependabot"),
+            "bot author must not appear in team-composition rows; got {:?}",
+            row.author,
+        );
+    }
+}
+
+// ── 4. Veteran-breadth gate ───────────────────────────────────────────────────
 
 /// Run one git command with a fixed identity and date (no passthrough to shell).
 #[cfg(feature = "test-support")]

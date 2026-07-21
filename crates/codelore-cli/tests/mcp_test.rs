@@ -1043,3 +1043,46 @@ fn gate_changes_token_budget_holds() {
     drop(stdin);
     let _ = child.wait();
 }
+
+#[test]
+fn gate_changes_findings_render_capped_with_more_tail() {
+    // Regression: a change set large enough to produce more findings
+    // than the render cap must still stay within the token budget — the
+    // per-finding budget formula alone doesn't protect against this because
+    // it scales WITH the finding count. 13 newly-added files (each its own
+    // "new-file" finding) exceed the 10-row render cap, so a "(+n more
+    // findings)" tail must appear and the render must not grow past it.
+    const ADDED: usize = 13;
+    let repo = delivery_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+
+    for i in 0..ADDED {
+        std::fs::write(
+            repo.dir.path().join(format!("src/gate_extra_{i}.rs")),
+            format!("pub fn extra_{i}() -> u32 {{ {i} }}\n"),
+        )
+        .unwrap();
+    }
+    let add = Command::new("git")
+        .args(["-C", repo_path, "add", "-A"])
+        .output()
+        .expect("git add");
+    assert!(add.status.success(), "git add failed: {add:?}");
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
+    let resp = call_tool(&mut stdin, &mut reader, 1, "gate_changes", &json!({}));
+    let text = assert_tool_ok_text(&resp, "gate_changes");
+
+    let finding_lines = text.lines().filter(|l| l.starts_with("[new-file]")).count();
+    assert_eq!(
+        finding_lines, 10,
+        "the findings render must cap at 10 rows: {text}"
+    );
+    assert!(
+        text.contains(&format!("(+{} more findings)", ADDED - 10)),
+        "a '(+n more findings)' tail must disclose the hidden rows: {text}"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}

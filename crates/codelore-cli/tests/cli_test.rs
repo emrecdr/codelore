@@ -2258,6 +2258,68 @@ fn gate_json_shape() {
 }
 
 #[test]
+fn gate_findings_render_capped_with_more_tail() {
+    // Regression: the findings RENDER must cap at a fixed row count with
+    // a "(+n more findings)" tail, mirroring the delta-table cap — otherwise
+    // a big change set (13 newly-added files here, each producing its own
+    // "new-file" finding) blows the text render's token budget even though
+    // the underlying `ChangeSetReport.findings` stays unbounded by design.
+    const ADDED: usize = 13; // > the render cap (10) — a tail is guaranteed.
+    let fx = codelore_lib::test_support::differential_repo::build();
+    for i in 0..ADDED {
+        std::fs::write(
+            fx.dir.path().join(format!("src/gate_extra_{i}.rs")),
+            format!("pub fn extra_{i}() -> u32 {{ {i} }}\n"),
+        )
+        .expect("write extra file");
+    }
+    let add = std::process::Command::new("git")
+        .args(["-C", fx.dir.path().to_str().unwrap(), "add", "-A"])
+        .output()
+        .expect("git add");
+    assert!(add.status.success(), "git add failed: {add:?}");
+    // A real (non-empty) thresholds file: the vacuous "no thresholds
+    // configured" path returns before `build_change_set_report` ever runs, so
+    // it never reaches the findings render this test is pinning. `no_new_cycles`
+    // is a threshold none of these additions can violate (no import edges).
+    let (_guard, thresholds) = scratch_thresholds("[diff]\nno_new_cycles = true\n");
+    let cache = tempfile::tempdir().expect("cache tempdir");
+
+    let output = Command::cargo_bin("codelore")
+        .unwrap()
+        .args([
+            "gate",
+            "--repo",
+            fx.dir.path().to_str().unwrap(),
+            "--thresholds-file",
+            thresholds.to_str().unwrap(),
+            "--cache-dir",
+            cache.path().to_str().unwrap(),
+        ])
+        .output()
+        .expect("run codelore gate");
+    assert!(
+        output.status.success(),
+        "no cycle introduced ⇒ pass: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout is utf-8");
+
+    let finding_lines = stdout
+        .lines()
+        .filter(|l| l.starts_with("[new-file]"))
+        .count();
+    assert_eq!(
+        finding_lines, 10,
+        "the findings render must cap at 10 rows: {stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("(+{} more findings)", ADDED - 10)),
+        "a '(+n more findings)' tail must disclose the hidden rows: {stdout}"
+    );
+}
+
+#[test]
 fn gate_vacuous_json_emits_contract_document() {
     // With no thresholds configured, `--format json` must still put one
     // contract document on stdout so an agent hook that always parses JSON

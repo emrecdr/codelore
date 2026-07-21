@@ -8,7 +8,9 @@ use std::collections::{HashMap, HashSet};
 use crate::analyses::architecture_trend::{
     import_graph_from_live_paths, live_paths_at, sampled_commits,
 };
-use crate::analyses::code_health::{CodeHealthRow, HealthScanCtx, run_code_health_scoped};
+use crate::analyses::code_health::{
+    CloneSource, CodeHealthRow, HealthScanCtx, run_code_health_scoped,
+};
 use crate::analyses::import_graph::{GraphMetrics, graph_metrics};
 use crate::facts::FactsDb;
 use crate::facts::ingest::at_rev::{ingest_complexity_at_rev, materialize_imports_at_rev};
@@ -265,6 +267,7 @@ pub fn run_health_trend_detail<R: Repo>(
             imports_source: IMPORTS_AT_REV.to_string(),
             history_cutoff: Some(ts.clone()),
             include_clones: false,
+            clone_source: CloneSource::WorkingTree,
         };
         let code_rows = run_code_health_scoped(db, &scan_opts, &cx)?;
         let code = repo_code_health(&code_rows);

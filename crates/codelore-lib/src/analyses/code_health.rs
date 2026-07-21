@@ -52,6 +52,24 @@ use crate::analyses::coupling::{run_coupling, run_coupling_scoped};
 use crate::facts::FactsDb;
 use crate::{CodeLoreError, Options, Result};
 
+/// Where the DRY biomarker sources its per-file clone-family counts. The
+/// standalone scan and the gate PROJECTION fingerprint the live working tree;
+/// the gate BASELINE reads HEAD-faithful counts from the ingested `clones`
+/// table so a working-tree-introduced duplicate no longer appears in both runs
+/// and cancels out of the delta.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloneSource {
+    /// Fingerprint the live working tree via
+    /// [`crate::analyses::clones::run_clones_memoised`]. On a clean tree this
+    /// equals HEAD, so `codelore check` and the gate projection both use it.
+    WorkingTree,
+    /// Read HEAD clone counts from the `clones` table populated at ingest from
+    /// HEAD blobs (`facts::ingest::populate_clones_at_head`). The gate baseline
+    /// uses it so `baseline_score` is HEAD-faithful and a newly duplicated
+    /// function shows as a real negative delta rather than cancelling.
+    Head,
+}
+
 /// What revision / sources a code-health scan runs against. `head()` resolves
 /// to today's HEAD tables so existing behaviour is byte-identical.
 #[derive(Debug, Clone)]
@@ -66,10 +84,16 @@ pub struct HealthScanCtx {
     /// Include the clone/DRY biomarker (true at HEAD; false at a historical rev
     /// where clone detection is unavailable).
     pub include_clones: bool,
+    /// Which surface the DRY biomarker counts clones from (ignored when
+    /// [`include_clones`](Self::include_clones) is false).
+    pub clone_source: CloneSource,
 }
 
 impl HealthScanCtx {
     /// The HEAD scan — every source resolves to today's table, DRY included.
+    /// Clones are counted from the working tree, matching `codelore check`;
+    /// the gate baseline overrides [`clone_source`](Self::clone_source) to
+    /// [`CloneSource::Head`].
     #[must_use]
     pub fn head() -> Self {
         Self {
@@ -77,6 +101,7 @@ impl HealthScanCtx {
             imports_source: "imports".to_string(),
             history_cutoff: None,
             include_clones: true,
+            clone_source: CloneSource::WorkingTree,
         }
     }
 
@@ -447,19 +472,26 @@ fn materialize_biomarkers(db: &FactsDb, opts: &Options, cx: &HealthScanCtx) -> R
     let god_by_path: HashMap<String, f64> =
         gods.iter().map(|g| (g.path.clone(), g.god_score)).collect();
 
-    let dry_counts: HashMap<String, u32> = if cx.include_clones {
-        // Memoised so the agent-loop gate's two scoped scans (HEAD baseline +
-        // substituted projection) walk the working tree once, not twice. The
-        // first scan populates the per-`FactsDb` memo; every other caller
-        // (which scores a repo once) sees identical rows and identical cost.
-        let clones = crate::analyses::clones::run_clones_memoised(db, opts)?;
-        let mut m: HashMap<String, u32> = HashMap::new();
-        for c in clones.iter() {
-            *m.entry(c.entity.clone()).or_insert(0) += 1;
+    let dry_counts: HashMap<String, u32> = match (cx.include_clones, cx.clone_source) {
+        (false, _) => HashMap::new(),
+        (true, CloneSource::WorkingTree) => {
+            // Memoised so the agent-loop gate's projection walks the working
+            // tree once, not twice. The first scan populates the per-`FactsDb`
+            // memo; every other caller (which scores a repo once) sees
+            // identical rows and identical cost.
+            let clones = crate::analyses::clones::run_clones_memoised(db, opts)?;
+            let mut m: HashMap<String, u32> = HashMap::new();
+            for c in clones.iter() {
+                *m.entry(c.entity.clone()).or_insert(0) += 1;
+            }
+            m
         }
-        m
-    } else {
-        HashMap::new()
+        // Gate baseline: HEAD-faithful counts from the ingested `clones` table
+        // so a working-tree-introduced duplicate is present only in the
+        // projection's working-tree walk, not this run — the delta stops
+        // cancelling. On a clean tree these equal the working-tree walk, so the
+        // unchanged-tree delta stays exactly 0.0.
+        (true, CloneSource::Head) => crate::analyses::clones::head_clone_counts(db)?,
     };
 
     // Full file universe (files with complexity data), grouped by language —

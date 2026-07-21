@@ -148,13 +148,29 @@ pub fn materialize_knowledge_shares(db: &FactsDb, opts: &Options) -> Result<()> 
         // rejects window functions inside UPDATE ("Binder Error: window
         // functions are not allowed in UPDATE"), so rebuild the temp table
         // with the recomputed shares instead.
+        //
+        // An author can appear twice at this point: once from the base
+        // contributor row (Step 1) and once from a reviewer-trailer row
+        // (this step), when they both wrote code on a path AND are named
+        // in a Co-Authored-By/Reviewed-By trailer on a commit touching that
+        // same path. GROUP BY path, author merges those into one row before
+        // computing k_norm — otherwise the same person keeps two un-merged
+        // shares of the same path, which lets consumers like
+        // `code_familiarity`'s per-path ROW_NUMBER() rank the same person
+        // #1 and #2, and inflates `coordination_needs` fragmentation
+        // (1 − Σk_norm²) since a² + b² < (a + b)².
         db.execute_batch(
             "CREATE OR REPLACE TEMP TABLE knowledge_shares AS
+             WITH merged AS (
+               SELECT path, author, SUM(k) AS k
+               FROM knowledge_shares
+               GROUP BY path, author
+             )
              SELECT path,
                     author,
                     k,
                     k / NULLIF(SUM(k) OVER (PARTITION BY path), 0) AS k_norm
-             FROM knowledge_shares",
+             FROM merged",
         )?;
     }
 

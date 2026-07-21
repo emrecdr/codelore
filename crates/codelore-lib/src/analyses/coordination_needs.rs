@@ -32,7 +32,10 @@
 //!   0.0` and are still emitted (they appear in the path-aggregated result).
 //!
 //! **Tier classification** (for triage prioritisation):
-//! - `single`: `authors == 1` — no coordination needed yet.
+//! - `single`: `authors <= 1` — either exactly one active-window contributor,
+//!   or zero (a dormant file with no commits in the trailing window at all,
+//!   whatever its historical author count) — no *current* coordination
+//!   activity, so no coordination need right now.
 //! - `low`: `fragmentation < 0.25` — one author dominates, others are minor.
 //! - `medium`: `fragmentation ∈ [0.25, 0.50)` OR `interleave < 0.50`.
 //! - `high`: `fragmentation ≥ 0.50 AND interleave ≥ 0.50` — strong signal.
@@ -115,9 +118,17 @@ pub fn run_coordination_needs(db: &FactsDb, opts: &Options) -> Result<Vec<Coordi
              WHERE co.date >= window_cutoff.cutoff
          ),
          frag AS (
+             -- COALESCE guards a path whose decayed knowledge sums to zero
+             -- (e.g. binary files / deletion-only history, where every
+             -- contributor's loc_added is 0): k_norm is NULL for every row
+             -- of that path (0 / NULLIF(0, 0) = 0 / NULL), so SUM(k_norm²)
+             -- is NULL and would otherwise propagate a NULL fragmentation —
+             -- mirrors knowledge_islands's `HAVING SUM(loc) > 0` defensive
+             -- intent, applied here as a COALESCE since the degenerate case
+             -- must still emit a row (zero fragmentation), not be dropped.
              SELECT
                  ks.path,
-                 1.0 - SUM(ks.k_norm * ks.k_norm) AS fragmentation
+                 COALESCE(1.0 - SUM(ks.k_norm * ks.k_norm), 0.0) AS fragmentation
              FROM knowledge_shares ks
              GROUP BY ks.path
          ),
@@ -132,7 +143,7 @@ pub fn run_coordination_needs(db: &FactsDb, opts: &Options) -> Result<Vec<Coordi
          FROM frag
          LEFT JOIN act_count ON act_count.path = frag.path
          WHERE frag.path IS NOT NULL
-         ORDER BY frag.fragmentation DESC",
+         ORDER BY frag.fragmentation DESC, frag.path ASC",
         src = src,
         wd = opts.window_days,
     );
@@ -270,11 +281,14 @@ pub fn run_coordination_needs(db: &FactsDb, opts: &Options) -> Result<Vec<Coordi
         })
         .collect();
 
-    // Sort by fragmentation descending (highest coordination overhead first).
+    // Sort by fragmentation descending (highest coordination overhead
+    // first); tie-break on `path` ascending so equal-fragmentation rows
+    // sort deterministically regardless of the SQL engine's incoming order.
     rows.sort_by(|a, b| {
         b.fragmentation
             .partial_cmp(&a.fragmentation)
             .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.path.cmp(&b.path))
     });
 
     Ok(rows)
@@ -283,14 +297,21 @@ pub fn run_coordination_needs(db: &FactsDb, opts: &Options) -> Result<Vec<Coordi
 /// Classify a coordination tier from author count, fragmentation, and interleave.
 ///
 /// Rules (evaluated top-to-bottom, first match wins):
-/// - `single`:  `authors == 1` — exactly one active-window contributor.
-///   Authors=0 is impossible: the fragmentation CTE only emits paths that
-///   appear in `knowledge_shares`, which requires ≥1 commit, so ≥1 author.
+/// - `single`:  `authors <= 1`. `authors` counts only *active-window*
+///   contributors (see the module docs), so it is 0 for a dormant file —
+///   one with historical (possibly multi-author) knowledge but no commits
+///   at all in the trailing window. `fragmentation`/`interleave` are
+///   computed over ALL historical knowledge, so a dormant file can still
+///   carry a stale `fragmentation >= 0.50 AND interleave >= 0.50` signal;
+///   without this guard that misclassifies it `high` even though nobody is
+///   currently touching it. Folding `authors == 0` into `single` reflects
+///   the real invariant: no *current* coordination activity, so no
+///   coordination need right now.
 /// - `low`:     `fragmentation < 0.25` — one author dominates, others are minor.
 /// - `high`:    `fragmentation ≥ 0.50 AND interleave ≥ 0.50` — strong signal.
 /// - `medium`:  everything else.
 fn classify_tier(authors: u32, fragmentation: f64, interleave: f64) -> String {
-    if authors == 1 {
+    if authors <= 1 {
         return "single".to_string();
     }
     if fragmentation < 0.25 {

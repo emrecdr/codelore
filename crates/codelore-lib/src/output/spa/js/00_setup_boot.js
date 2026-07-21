@@ -442,6 +442,72 @@
     }
   }
 
+  // Wire a `role="tree"` for the WAI-ARIA Tree View keyboard pattern
+  // (the hotspot file list — template.html's parallel DOM tree next to
+  // the circle-pack canvas). Single-level, so only the "move focus"
+  // behaviors apply — no Left/Right expand/collapse. Two deliberate
+  // differences from `wireTablistArrows` above:
+  //   - Arrow keys only MOVE FOCUS; they don't activate. Per the
+  //     WAI-ARIA APG treeview pattern, activation is Enter/Space,
+  //     which template.html already wires inline against
+  //     `_codeloreShowDetail` — this handler doesn't duplicate that.
+  //   - Navigation does NOT wrap at the ends (Down Arrow on the last
+  //     node — and Up Arrow on the first — does nothing further),
+  //     unlike the tablist's wraparound.
+  // Roving tabindex still applies (exactly one treeitem is a tab
+  // stop), but the INITIAL state is set by the tree's Alpine
+  // `:tabindex="fileIdx === 0 ? '0' : '-1'"` binding rather than here
+  // — the list is `x-for`-generated against `$store.dashboard.hotspots`,
+  // which is populated after this boot script's synchronous body runs,
+  // so there may be zero treeitems in the DOM at wire time. That's
+  // fine: `items()` re-queries the DOM live on every keydown, and the
+  // listener is attached to the tree container itself so it keeps
+  // working once Alpine renders the rows.
+  function wireTreeArrows(treeEl) {
+    function items() {
+      return Array.prototype.slice.call(
+        treeEl.querySelectorAll('[role="treeitem"]')
+      );
+    }
+    function syncRovingTabindex(activeIdx) {
+      const list = items();
+      for (var i = 0; i < list.length; i++) {
+        list[i].setAttribute('tabindex', i === activeIdx ? '0' : '-1');
+      }
+    }
+    function focusItem(idx) {
+      const list = items();
+      const target = list[idx];
+      if (!target) return;
+      target.focus();
+      syncRovingTabindex(idx);
+    }
+    treeEl.addEventListener('keydown', function (evt) {
+      const list = items();
+      const current = list.indexOf(document.activeElement);
+      if (current < 0) return;
+      var next = null;
+      if (evt.key === 'ArrowDown') {
+        next = Math.min(current + 1, list.length - 1);
+      } else if (evt.key === 'ArrowUp') {
+        next = Math.max(current - 1, 0);
+      } else if (evt.key === 'Home') {
+        next = 0;
+      } else if (evt.key === 'End') {
+        next = list.length - 1;
+      }
+      if (next === null || next === current) return;
+      evt.preventDefault();
+      focusItem(next);
+    });
+  }
+  function wireAllTrees() {
+    const trees = document.querySelectorAll('[role="tree"]');
+    for (var i = 0; i < trees.length; i++) {
+      wireTreeArrows(trees[i]);
+    }
+  }
+
   // Expose a chart container to assistive tech as a single labelled
   // image. Canvas/ECharts/d3 charts paint to a bitmap that screen
   // readers can't interpret, so without this they announce as an empty
@@ -551,6 +617,9 @@
   // Arrow-key navigation + roving tabindex for every `role="tablist"`
   // (hotspot color modes, trends, chord/arch depth, kamei, sankey).
   wireAllTablists();
+  // Arrow-key navigation + roving tabindex for every `role="tree"`
+  // (the hotspot file list's keyboard-accessible DOM tree).
+  wireAllTrees();
 
 
   // ═════════════════════════════════════════════════════════════════

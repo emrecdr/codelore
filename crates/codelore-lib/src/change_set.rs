@@ -13,8 +13,14 @@
 //!   shotgun-surgery via coupling centrality) read the untouched `changes` /
 //!   `commits` tables, so they are identical in both runs.
 //! - **Cross-file structure** — god-class fan-in/out reads the untouched
-//!   `imports` table (`imports_source` stays `"imports"`); the DRY biomarker
-//!   walks the working tree on *both* runs, so its delta cancels to zero.
+//!   `imports` table (`imports_source` stays `"imports"`). The DRY biomarker is
+//!   *dual-sourced*: the baseline counts clones from the HEAD-faithful `clones`
+//!   table (ingested from HEAD blobs) while the projection fingerprints the
+//!   working tree, so a duplicate introduced only in the working tree raises
+//!   the projection's DRY count without touching the baseline — a real
+//!   negative delta and a `clone-introduction` finding, not a cancel to zero.
+//!   On a clean tree the two clone sources agree, keeping the delta exactly
+//!   `0.0`.
 //! - **Calibrated weights, clamps, and the no-DRY scale divisor** are inherited
 //!   byte-for-byte because both runs go through the one real scoring engine.
 //!
@@ -35,7 +41,9 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-use crate::analyses::code_health::{CodeHealthRow, HealthScanCtx, run_code_health_scoped};
+use crate::analyses::code_health::{
+    CloneSource, CodeHealthRow, HealthScanCtx, run_code_health_scoped,
+};
 use crate::analyses::coupling::{CouplingAbsence, compute_coupling_absences, run_coupling};
 use crate::analyses::import_graph::{
     ImportGraph, build_import_graph, build_import_graph_from_edges, tarjan_scc,
@@ -71,8 +79,27 @@ const BINARY_SNIFF_BYTES: usize = 8000;
 const REASON_NOT_TIER1: &str = "not a Tier-1 source file";
 const REASON_BINARY: &str = "binary content";
 const REASON_SIZE_LIMIT: &str = "file exceeds the AST size limit";
+/// A deleted file's per-file delta is intentionally `None` — deletions are
+/// excluded from `delta_code_health_min_per_file` and `new_file_health_min`
+/// (both skip rows with no delta / no projected score). There is no honest
+/// numeric "projected score" for a file that no longer exists, so the row
+/// stays an explicit absence rather than a synthetic one; `baseline_score`
+/// is still reported so the deletion's context (what health the file HAD)
+/// isn't lost. Note this is NOT the same as "no effect": the whole-repo
+/// `baseline_median`/`projected_median` pair (which `delta_code_health_min`
+/// reads) is computed over each run's own scored population, so a deleted
+/// file's row leaves the projected population — but because the projection
+/// also re-sources clone/duplication counts from the working tree (see the
+/// module doc comment), OTHER files' scores can shift too, so no fixed
+/// direction (the median moving up or down) is guaranteed from a deletion
+/// alone.
 const REASON_DELETED: &str = "deleted at gate time";
-const REASON_NEW_FILE: &str = "new file (no history baseline)";
+/// Visible to [`crate::quality_gates`] so the `new_file_health_min` gate can
+/// identify added-file rows by their honest-absence reason rather than
+/// re-deriving the same classification from `kind` (which also reads
+/// `"added"` for rename destinations — the same population this reason
+/// already covers).
+pub(crate) const REASON_NEW_FILE: &str = "new file (no history baseline)";
 const REASON_NO_HEAD_ROW: &str = "no code-health row at HEAD";
 /// The projection produced no scoreable row for a file that had one at HEAD
 /// (the working tree emptied its analyzable content). Unreachable for a file
@@ -158,7 +185,7 @@ pub struct Finding {
     /// stable across runs for identical content.
     pub id: String,
     /// `"health-drop"` | `"newly-cyclic"` | `"coupling-absence"` |
-    /// `"new-file"` | `"unparseable"`.
+    /// `"clone-introduction"` | `"new-file"` | `"unparseable"`.
     pub kind: String,
     /// The repo-relative file the finding is about.
     pub path: String,
@@ -191,12 +218,7 @@ pub fn build_change_set_report<R: crate::Repo>(
     let head_sha = repo.head_sha()?;
     let changes = repo.worktree_changes()?;
 
-    let key = cache::report_key(
-        &head_sha,
-        &opts.repo_path,
-        &changes,
-        opts.defect_calibration.as_deref(),
-    )?;
+    let key = cache::report_key(&head_sha, &changes, opts)?;
     if let Some(mut cached) = cache::read(cache_root, &opts.repo_path, &key) {
         cached.merge_in_progress = repo.merge_or_rebase_in_progress();
         return Ok(cached);
@@ -221,7 +243,14 @@ pub fn build_change_set_report<R: crate::Repo>(
         DEFAULT_FISHER_SIGNIFICANCE,
     );
 
-    let findings = assemble_findings(&health, &newly_cyclic_paths, &coupling_absences, &changes);
+    let clone_intros = clone_introductions(db, opts, &changes)?;
+    let findings = assemble_findings(
+        &health,
+        &newly_cyclic_paths,
+        &coupling_absences,
+        &clone_intros,
+        &changes,
+    );
 
     let report = ChangeSetReport {
         head_sha,
@@ -268,13 +297,23 @@ pub fn project_health<R: crate::Repo>(
         o
     };
 
-    // 1. Baseline: today's HEAD tables — byte-for-byte the standard scan.
-    let baseline_rows = run_code_health_scoped(db, &opts_scan, &HealthScanCtx::head())?;
+    // 1. Baseline: today's HEAD tables. `CloneSource::Head` reads the DRY
+    //    biomarker from the ingested `clones` table (HEAD blobs) rather than
+    //    the working tree, so `baseline_score` is HEAD-faithful and a
+    //    working-tree-introduced duplicate is absent here — it stops cancelling
+    //    against the projection below.
+    let baseline_ctx = HealthScanCtx {
+        clone_source: CloneSource::Head,
+        ..HealthScanCtx::head()
+    };
+    let baseline_rows = run_code_health_scoped(db, &opts_scan, &baseline_ctx)?;
 
     // 2. Substitute the changed files' complexity, then re-run the SAME engine
     //    against the projected table. `include_clones: true` on both runs so
-    //    the STRUCTURAL_SCALE_NO_DRY divisor matches (scale parity); the clones
-    //    and coupling memos make the second walk / self-join free.
+    //    the STRUCTURAL_SCALE_NO_DRY divisor matches (scale parity). The
+    //    projection counts clones from the working tree (`CloneSource::WorkingTree`,
+    //    served from the clones memo), so a newly duplicated function raises its
+    //    DRY count above the HEAD baseline instead of appearing in both runs.
     let head_sha = repo.head_sha()?;
     let skip_reasons = build_projected_complexity_table(db, opts, changes, &head_sha)?;
     let projected_ctx = HealthScanCtx {
@@ -282,6 +321,7 @@ pub fn project_health<R: crate::Repo>(
         imports_source: "imports".to_string(),
         history_cutoff: None,
         include_clones: true,
+        clone_source: CloneSource::WorkingTree,
     };
     let projected_rows = run_code_health_scoped(db, &opts_scan, &projected_ctx)?;
 
@@ -733,6 +773,61 @@ fn cyclic_paths(graph: &ImportGraph) -> BTreeSet<String> {
     out
 }
 
+/// One changed file whose working-tree clone-family membership exceeds its
+/// HEAD membership — a duplicate the edit introduced (or enlarged).
+struct CloneIntroduction {
+    /// Repo-relative, `/`-separated path of the changed file.
+    path: String,
+    /// Clone-family members the file carries at HEAD (from the `clones` table).
+    head_members: u32,
+    /// Clone-family members the file carries in the working tree.
+    worktree_members: u32,
+}
+
+/// Detect duplicated functions introduced by the working-tree edits.
+///
+/// Compares each changed non-deleted file's HEAD clone-family membership (the
+/// ingested `clones` table, via [`crate::analyses::clones::head_clone_counts`])
+/// against its working-tree membership (the same
+/// [`crate::analyses::clones::run_clones_memoised`] walk the projection already
+/// warmed) and reports the files whose working-tree count is higher. Only
+/// changed files are considered — an unchanged file that happens to become a
+/// clone of an edited one is not the user's introduction to act on, mirroring
+/// how coupling absences report only the touched side.
+///
+/// # Errors
+///
+/// Returns [`CodeLoreError::Analysis`] on a fact-store / SQL / clone-walk error.
+fn clone_introductions(
+    db: &FactsDb,
+    opts: &Options,
+    changes: &[WorktreeChange],
+) -> Result<Vec<CloneIntroduction>> {
+    let head = crate::analyses::clones::head_clone_counts(db)?;
+    let worktree_rows = crate::analyses::clones::run_clones_memoised(db, opts)?;
+    let mut worktree: HashMap<&str, u32> = HashMap::new();
+    for c in worktree_rows.iter() {
+        *worktree.entry(c.entity.as_str()).or_insert(0) += 1;
+    }
+
+    let mut intros = Vec::new();
+    for change in changes {
+        if change.kind == WorktreeChangeKind::Deleted {
+            continue;
+        }
+        let head_members = head.get(&change.path).copied().unwrap_or(0);
+        let worktree_members = worktree.get(change.path.as_str()).copied().unwrap_or(0);
+        if worktree_members > head_members {
+            intros.push(CloneIntroduction {
+                path: change.path.clone(),
+                head_members,
+                worktree_members,
+            });
+        }
+    }
+    Ok(intros)
+}
+
 /// Assemble the advisory findings from the measured report parts, sorted by
 /// `(kind, path, detail)` — deterministic even when one path carries several
 /// findings of the same kind (a file with two absent coupling partners).
@@ -740,6 +835,7 @@ fn assemble_findings(
     health: &HealthProjection,
     newly_cyclic: &[String],
     absences: &[CouplingAbsence],
+    clone_intros: &[CloneIntroduction],
     changes: &[WorktreeChange],
 ) -> Vec<Finding> {
     let mut findings: Vec<Finding> = Vec::new();
@@ -779,6 +875,18 @@ fn assemble_findings(
                 absence.expected_partner,
                 absence.historical_coupling,
                 absence.historical_shared_revs,
+            ),
+        ));
+    }
+    for intro in clone_intros {
+        let gained = intro.worktree_members.saturating_sub(intro.head_members);
+        findings.push(finding(
+            "clone-introduction",
+            &intro.path,
+            &format!(
+                "introduces {gained} duplicated function(s) absent at HEAD \
+                 (clone-family members rise from {} to {}).",
+                intro.head_members, intro.worktree_members,
             ),
         ));
     }
@@ -847,7 +955,7 @@ pub mod cache {
     use super::ChangeSetReport;
     use crate::cache::repo_cache_dir;
     use crate::repo::{WorktreeChange, WorktreeChangeKind};
-    use crate::{CodeLoreError, Result};
+    use crate::{CodeLoreError, Options, Result};
 
     /// Report-shape tag folded into the key so a future incompatible report
     /// change invalidates old sidecars by construction.
@@ -858,8 +966,9 @@ pub mod cache {
 
     /// The content key for a change set: lowercase-hex SHA-256 of
     /// `head_sha | sorted "path\0content-sha256" lines | crate version |`
-    /// `calib=<digest> | ` [`KEY_SCHEMA`]. A deleted path contributes the
-    /// literal `"deleted"` in place of its content hash.
+    /// `calib=<digest> | rows_limit=<n> | opts=<canonical-json digest> | `
+    /// [`KEY_SCHEMA`]. A deleted path contributes the literal `"deleted"` in
+    /// place of its content hash.
     ///
     /// The defect-calibration artifact's CONTENT digest is folded in because
     /// `--defect-calibration` substitutes smell weights inside the scoring
@@ -869,6 +978,21 @@ pub mod cache {
     /// artifact is configured. Thresholds stay excluded: they only affect
     /// verdicts, which consumers always recompute from the cached report.
     ///
+    /// Every other report-affecting `Options` knob is folded in via
+    /// [`Options::canonical_json`] — the same digest the ingest cache uses —
+    /// so `min_revs`, `exclude_patterns`/`include_ignored`, the clone
+    /// thresholds, and any future field are covered with zero per-field
+    /// maintenance: `build_change_set_report`'s `run_coupling(db, opts)` and
+    /// `clone_introductions(db, opts, …)` calls pass the caller's `opts`
+    /// straight through (unlike the health projection's own `opts_scan`,
+    /// which pins `min_revs = 1`), so any of those knobs can change which
+    /// coupling-absence or clone-introduction findings this report contains.
+    /// `rows_limit` is folded in explicitly ALONGSIDE the canonical digest
+    /// rather than relying on it: `canonical_json` deliberately drops
+    /// `rows_limit` as cosmetic for the ingest cache, but
+    /// `run_coupling(db, opts)` truncates to it before the coupling-absence
+    /// filter runs, so it is not cosmetic here.
+    ///
     /// # Errors
     ///
     /// Returns [`CodeLoreError::Analysis`] when a non-deleted change-set
@@ -876,16 +1000,15 @@ pub mod cache {
     /// project it either, so failing early is honest.
     pub fn report_key(
         head_sha: &str,
-        repo_root: &Path,
         changes: &[WorktreeChange],
-        defect_calibration: Option<&Path>,
+        opts: &Options,
     ) -> Result<String> {
         let mut lines: Vec<String> = Vec::with_capacity(changes.len());
         for change in changes {
             let content = if change.kind == WorktreeChangeKind::Deleted {
                 "deleted".to_string()
             } else {
-                let bytes = std::fs::read(repo_root.join(&change.path)).map_err(|e| {
+                let bytes = std::fs::read(opts.repo_path.join(&change.path)).map_err(|e| {
                     CodeLoreError::Analysis(format!("read worktree file {}: {e}", change.path))
                 })?;
                 hex::encode(Sha256::digest(&bytes))
@@ -898,14 +1021,18 @@ pub mod cache {
         // Unset or unreadable both yield an empty segment; an unreadable
         // artifact hard-errors in the scoring engine before any report is
         // cached, so the collision with "unset" is unreachable.
-        let calib = defect_calibration
+        let calib = opts
+            .defect_calibration
+            .as_deref()
             .and_then(|p| std::fs::read(p).ok())
             .map(|bytes| hex::encode(Sha256::digest(&bytes)))
             .unwrap_or_default();
+        let opts_digest = opts.canonical_json().to_string();
         let material = format!(
-            "{head_sha}|{}|{}|calib={calib}|{KEY_SCHEMA}",
+            "{head_sha}|{}|{}|calib={calib}|rows_limit={:?}|opts={opts_digest}|{KEY_SCHEMA}",
             lines.join("\n"),
             env!("CARGO_PKG_VERSION"),
+            opts.rows_limit,
         );
         Ok(hex::encode(Sha256::digest(material.as_bytes())))
     }

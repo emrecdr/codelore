@@ -121,6 +121,7 @@ fn knowledge_islands_surfaces_departed_main_author_solo_owner() {
     // Threshold 30 days.
     let opts = Options {
         repo_path: fixture.path().to_path_buf(),
+        min_revs: 1,
         age_time_now: Some(time::macros::date!(2026 - 06 - 01)),
         departed_threshold_days: 30,
         ..Options::default()
@@ -159,6 +160,7 @@ fn knowledge_islands_threshold_gates_inclusion() {
     // High threshold (10 years) → nobody is "departed" → empty output.
     let opts = Options {
         repo_path: fixture.path().to_path_buf(),
+        min_revs: 1,
         age_time_now: Some(time::macros::date!(2026 - 06 - 01)),
         departed_threshold_days: 365 * 10,
         ..Options::default()
@@ -239,6 +241,7 @@ fn knowledge_islands_excludes_deleted_files() {
     let db = FactsDb::new_in_memory().expect("db");
     let opts = Options {
         repo_path: path.to_path_buf(),
+        min_revs: 1,
         age_time_now: Some(time::macros::date!(2026 - 06 - 01)),
         departed_threshold_days: 30,
         ..Options::default()
@@ -321,4 +324,106 @@ fn owner_activity_for_paths_empty_paths_returns_empty_map_without_querying() {
 
     let map = owner_activity_for_paths(&db, &opts, &[]).expect("empty paths");
     assert!(map.is_empty());
+}
+
+/// Build a single-file, single-commit repo whose sole author is
+/// long-departed by the test anchor — the minimal fixture to isolate the
+/// `--min-revs` floor from every other gating condition (departure,
+/// substantial-others, liveness).
+fn build_single_commit_fixture() -> tempfile::TempDir {
+    use std::process::Command;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path();
+    fn run(path: &std::path::Path, date: &str, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .env("GIT_AUTHOR_DATE", date)
+            .env("GIT_COMMITTER_DATE", date)
+            .status()
+            .expect("git");
+        assert!(status.success());
+    }
+    run(
+        path,
+        "2024-01-01T00:00:00Z",
+        &["init", "-b", "main", "--quiet"],
+    );
+    run(
+        path,
+        "2024-01-01T00:00:00Z",
+        &["config", "user.email", "init@x"],
+    );
+    run(
+        path,
+        "2024-01-01T00:00:00Z",
+        &["config", "user.name", "Init"],
+    );
+
+    std::fs::write(path.join("solo.txt"), "a\nb\nc\n").unwrap();
+    run(path, "2024-03-01T12:00:00Z", &["add", "solo.txt"]);
+    run(
+        path,
+        "2024-03-01T12:00:00Z",
+        &[
+            "commit",
+            "-m",
+            "solo add",
+            "--author",
+            "Old <old@dev.com>",
+            "--quiet",
+        ],
+    );
+    dir
+}
+
+/// `--min-revs` must gate `knowledge-islands` per-path exactly like
+/// every other per-path analysis (`hotspots`, `revisions`) — a file
+/// touched by only one commit is invisible under a `--min-revs 2` floor
+/// even though its sole author is long-departed and 100%-owns the file
+/// (every other inclusion condition is satisfied), but surfaces once the
+/// floor drops to 1.
+#[test]
+fn knowledge_islands_min_revs_gates_single_commit_files() {
+    let fixture = build_single_commit_fixture();
+    let repo = GixRepo::open(fixture.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    // Old's one commit (2024-03-01) is ~822 days before the 2026-06-01
+    // anchor → departed at any threshold well below that; solo ownership
+    // → n_substantial_others = 0. Both conditions satisfied regardless of
+    // min_revs, isolating the assertion to the revision-count floor.
+    let ingest_opts = Options {
+        repo_path: fixture.path().to_path_buf(),
+        age_time_now: Some(time::macros::date!(2026 - 06 - 01)),
+        departed_threshold_days: 30,
+        ..Options::default()
+    };
+    db.ingest(&repo, &ingest_opts).expect("ingest");
+
+    let opts_min_revs_2 = Options {
+        min_revs: 2,
+        ..ingest_opts.clone()
+    };
+    let rows_at_2 = run_knowledge_islands(&db, &opts_min_revs_2).expect("run min_revs=2");
+    assert!(
+        !rows_at_2.iter().any(|r| r.entity == "solo.txt"),
+        "solo.txt has 1 revision; must be excluded under min_revs=2, got {rows_at_2:?}",
+    );
+
+    let opts_min_revs_1 = Options {
+        min_revs: 1,
+        ..ingest_opts
+    };
+    let rows_at_1 = run_knowledge_islands(&db, &opts_min_revs_1).expect("run min_revs=1");
+    let solo_row = rows_at_1
+        .iter()
+        .find(|r| r.entity == "solo.txt")
+        .expect("solo.txt must surface under min_revs=1");
+    assert_eq!(solo_row.main_author, "old@dev.com");
+    assert!(
+        (solo_row.ownership_pct - 100.0).abs() < f64::EPSILON,
+        "solo author owns 100%; got {}",
+        solo_row.ownership_pct,
+    );
 }

@@ -529,6 +529,8 @@ jobs:
 
 The step summary appears at the bottom of the workflow run page in the GitHub Actions UI. The HTML artefact is a separate downloadable file with the full interactive dashboard.
 
+**MI bands are repo-relative, not absolute** (see [`analyses::mi`](../crates/codelore-lib/src/analyses/mi.rs) for the full rationale): `High`/`Moderate`/`Low` are derived from each file's Maintainability Index percentile rank within the repo (`PERCENT_RANK`), not a fixed Coleman/SEI cutoff — the literature's absolute thresholds were calibrated on much smaller 1990s modules and would misclassify most modern files as "low". One consequence: a repository where every scored file has an identical MI value (a toy fixture, or a corpus of near-duplicate files) bands every file `Low` — `PERCENT_RANK` assigns rank `0` to every row of a tied population, and rank `0` falls in the bottom-quartile `Low` cut. This is the deliberate cost of relative banding on a degenerate population, not a defect; the raw `mi` value and `mi_rank` percentile are always surfaced alongside the band so you can see the absolute context too.
+
 ### SARIF rules CodeLore ships
 
 | Rule ID | Tags | When it fires |
@@ -811,6 +813,7 @@ no_new_cycles = true          # a PR may not introduce a dependency cycle the ba
 delta_health_min = 40.0       # ratio must be ≥ 40 (indeterminate or better)
 deny_degrading_verdict = true # a "degrading" verdict fails the PR gate
 delta_code_health_min_per_file = 0.0  # working-tree gate only: no changed file may lower its own health
+new_file_health_min = 50.0    # working-tree gate only: each ADDED file must clear this projected score
 
 [calibration]
 defect_artifact = "defects.calib.json"  # repo-declared default, see below
@@ -818,17 +821,19 @@ defect_artifact = "defects.calib.json"  # repo-declared default, see below
 
 `max_dependency_cycles` / `max_propagation_cost` are evaluated against HEAD by `codelore check`; `no_new_cycles` compares the base-rev and head-rev import graphs in `codelore diff` and fails the PR when head has more cycles than base. `delta_health_min` and `deny_degrading_verdict` both act on the `delta_health` section: `delta_health_min` fails when `ratio < threshold` (skipped on `no-code-change` diffs where no ratio exists); `deny_degrading_verdict` fails when the verdict is exactly `"degrading"`. `max_red_effort_pct` gates on the `effort-exposure` churn share (share of changed lines, added + deleted) for the red band; `code_familiarity_min` gates on the repo-scope `familiarity-pct` (0–100) from `code-familiarity` (see the dedicated subsections in the SPA widget surface above).
 
+`new_file_health_min` sits beside `delta_code_health_min_per_file` as the other change-scoped floor, but for the population `delta_code_health_min_per_file` structurally cannot see: a brand-new added file carries no baseline score to delta against, so it never reaches the per-file delta floor no matter how unhealthy it is. `new_file_health_min` closes that gap by floor-checking each added file's own *projected* score directly — one violation per offending added file, naming the file and its projected score. A deleted file has no projected score and never triggers it. Like `delta_code_health_min_per_file`, it is evaluated only by the working-tree gate surfaces (`codelore gate` / `gate_changes`); `codelore diff` ignores the key.
+
 Three surfaces evaluate this file, each against a different input: `codelore check` gates the committed tree at HEAD, `codelore gate` (and its MCP twin `gate_changes`, [§11.9](#gate_changes)) gates the uncommitted working tree against HEAD, and `codelore diff` gates a rev range. Same file, three non-overlapping readings:
 
 | | `codelore check` | `codelore gate` / `gate_changes` (MCP) | `codelore diff` |
 |---|---|---|---|
 | Input | committed tree at HEAD | working tree vs HEAD | rev range (`base...head`) |
-| Keys evaluated | `[gates]` (all, plus degraded-gate semantics and `--ratchet`) | `[diff]`: `delta_code_health_min`, `delta_code_health_min_per_file`, `no_new_cycles` | `[diff]`: `delta_code_health_min`, `new_hotspot_max`, `no_new_cycles`, `delta_health_min`, `deny_degrading_verdict` |
+| Keys evaluated | `[gates]` (all, plus degraded-gate semantics and `--ratchet`) | `[diff]`: `delta_code_health_min`, `delta_code_health_min_per_file`, `new_file_health_min`, `no_new_cycles` | `[diff]`: `delta_code_health_min`, `new_hotspot_max`, `no_new_cycles`, `delta_health_min`, `deny_degrading_verdict` |
 | `delta_code_health_min` population | not evaluated | whole-repo median over all scoreable files (1-revision floor) | whole-repo median over the min-revs-filtered hotspot rows |
 | Cycle semantics | `max_dependency_cycles`: cycle count at HEAD | `no_new_cycles`: cyclic-node *membership* — one violation naming each newly cyclic file; still fires when two existing cycles merge into one | `no_new_cycles`: cycle-*count* comparison — fails when head has more cycles than base |
 | Exit code on violation | 1 | `gate` exits 1; `gate_changes` reports, never exits | 4 |
 
-`delta_code_health_min_per_file` is evaluated only by the working-tree gate surfaces — `codelore diff` ignores it. Conversely, `new_hotspot_max`, `delta_health_min`, and `deny_degrading_verdict` are diff-only and never evaluated by the working-tree gate.
+`delta_code_health_min_per_file` and `new_file_health_min` are evaluated only by the working-tree gate surfaces — `codelore diff` ignores both. Conversely, `new_hotspot_max`, `delta_health_min`, and `deny_degrading_verdict` are diff-only and never evaluated by the working-tree gate.
 
 `[calibration]` is not a gate — it's a config *selector* that declares the repo's default defect-calibration artifact once, so `analyze`, `check`, `explain <path>`, and `codelore mcp` all pick it up without repeating `--defect-calibration` on every invocation. Precedence: an explicit `--defect-calibration` flag (or the MCP server's startup flag) always wins; otherwise the `[calibration] defect_artifact` path is used, resolved relative to the repo root (absolute paths pass through as-is); otherwise the run is uncalibrated. A thresholds file containing only `[calibration]` still leaves `check` vacuously passing — see [Defect calibration](#defect-calibration-does-the-health-score-predict-where-defects-land-here) for what the artifact does once applied.
 
@@ -1042,6 +1047,10 @@ codelore analyze --analysis hotspots --temp-dir /mnt/scratch/codelore-spill
 
 # codelore check honors the same flag
 codelore check --temp-dir /mnt/scratch/codelore-spill
+
+# codelore calibrate-defects mines entirely in memory (no cache root), so its
+# spill directory always defaults to the system temp directory unless overridden
+codelore calibrate-defects --repo . --output defects.calib.json --temp-dir /mnt/scratch/codelore-spill
 ```
 
 `--temp-dir` must already exist and be writable; codelore validates it up front rather than failing deep inside an ingest. The directory choice has no effect on analysis output — it changes only where `DuckDB` writes scratch files — so it is not part of the persistent-cache key.
@@ -1580,9 +1589,9 @@ Cost: warm-cache fast; cold-cache triggers a one-time history ingest.
 
 #### `gate_changes`
 
-The working-tree **quality verdict** for the agent loop: what the current uncommitted edits do to the repository *before* they are committed. The tool enumerates the tracked working-tree changes vs HEAD (staged and unstaged; untracked files excluded), re-parses only the changed files, projects their effect through the same code-health scoring engine every committed analysis uses, splices the working-tree import edges into the import graph, and evaluates the repo's working-tree `[diff]` gates against the projection — `delta_code_health_min`, `delta_code_health_min_per_file`, and `no_new_cycles`; see the comparison table in [§4's Quality-gate subsection](#quality-gate). Like `change_context`, the result is compact plain text, not JSON.
+The working-tree **quality verdict** for the agent loop: what the current uncommitted edits do to the repository *before* they are committed. The tool enumerates the tracked working-tree changes vs HEAD (staged and unstaged; untracked files excluded), re-parses only the changed files, projects their effect through the same code-health scoring engine every committed analysis uses, splices the working-tree import edges into the import graph, and evaluates the repo's working-tree `[diff]` gates against the projection — `delta_code_health_min`, `delta_code_health_min_per_file`, `new_file_health_min`, and `no_new_cycles`; see the comparison table in [§4's Quality-gate subsection](#quality-gate). Like `change_context`, the result is compact plain text, not JSON.
 
-Line 1 is the verdict: `PASS`, `FAIL — <n> violation(s)`, or `no thresholds configured — advisory only` — findings and the delta table still render without thresholds, so the tool is useful before a repo commits to gating. A clean tree returns `PASS (no working-tree changes to gate)`. Violations follow in `codelore check`'s row form, then one line per advisory finding (`health-drop`, `newly-cyclic`, `coupling-absence`, `new-file`, `unparseable`), then a per-file delta table capped at the ten largest `|delta|` rows with a `(+n more files)` tail:
+Line 1 is the verdict: `PASS`, `FAIL — <n> violation(s)`, or `no thresholds configured — advisory only` — findings and the delta table still render without thresholds, so the tool is useful before a repo commits to gating. A clean tree returns `PASS (no working-tree changes to gate)`. Violations follow in `codelore check`'s row form, then one line per advisory finding (`health-drop`, `newly-cyclic`, `coupling-absence`, `clone-introduction`, `new-file`, `unparseable`), then a per-file delta table capped at the ten largest `|delta|` rows with a `(+n more files)` tail:
 
 ```text
 FAIL — 1 violation(s)

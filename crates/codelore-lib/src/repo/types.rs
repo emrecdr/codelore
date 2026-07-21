@@ -47,7 +47,8 @@ pub enum WorktreeChangeKind {
 /// - **Lightweight tags** use the target commit's *committer* timestamp.
 ///
 /// The `Vec<TagInfo>` returned by [`super::Repo::tags`] is sorted ascending
-/// by `(date, name)`.
+/// by date, tie-broken via [`super::tag_tiebreak_cmp`] (semver-aware) for
+/// same-date tags.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TagInfo {
     /// Short tag name — e.g. `"v1.0.0"`, not `"refs/tags/v1.0.0"`.

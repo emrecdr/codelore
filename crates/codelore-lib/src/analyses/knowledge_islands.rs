@@ -241,8 +241,8 @@ fn per_path_author_cte(restrict_to: &str) -> String {
 }
 
 /// Assemble `run_knowledge_islands`'s query text: the shared CTEs plus the
-/// `live_paths` liveness gate, the departed-threshold `WHERE`, and the
-/// deterministic sort + row limit.
+/// `live_paths` liveness + `--min-revs` gate, the departed-threshold
+/// `WHERE`, and the deterministic sort + row limit.
 ///
 /// The anchor (`?` placeholder) is applied to EVERY CTE that touches
 /// `commits.date` so back-test mode (`--age-time-now <past>`) gets a
@@ -253,23 +253,31 @@ fn per_path_author_cte(restrict_to: &str) -> String {
 /// "still deleted" instead of live-as-of-anchor, and LoC ownership counts
 /// post-anchor contributions.
 ///
-/// Bind order: `[anchor, anchor, anchor, substantial_threshold, anchor,
-/// anchor, departed_threshold_days, row_limit]`.
+/// Bind order: `[anchor, anchor, min_revs, anchor, substantial_threshold,
+/// anchor, anchor, departed_threshold_days, row_limit]`.
 fn knowledge_islands_sql() -> String {
     let per_path_author = per_path_author_cte("live_paths");
     format!(
         "WITH {AUTHOR_LAST_COMMIT_CTE},
         live_paths AS (
+            -- (rev, path) is the changes PK, so COUNT(c.rev) ==
+            -- COUNT(DISTINCT c.rev) per path — the same `--min-revs`
+            -- floor every other per-path analysis honors (see
+            -- hotspots.rs / revisions.rs), applied here so single-commit
+            -- files don't escape the floor just because this CTE's
+            -- primary job is liveness detection.
             SELECT path FROM (
                 SELECT c.path,
                        arg_max(
                            c.change_type,
                            ROW(commits.date, -commits.rowid)
-                       ) AS change_type
+                       ) AS change_type,
+                       COUNT(c.rev) AS revs
                 FROM changes c
                 INNER JOIN commits ON commits.rev = c.rev
                 WHERE commits.date <= CAST(? AS TIMESTAMP)
                 GROUP BY c.path
+                HAVING revs >= ?
             ) WHERE change_type != 'deleted'
         ),
         {per_path_author},
@@ -296,12 +304,13 @@ pub fn run_knowledge_islands(db: &FactsDb, opts: &Options) -> Result<Vec<Knowled
         params![
             anchor_str,                   // [1] author_last_commit CTE WHERE
             anchor_str,                   // [2] live_paths inner SELECT WHERE
-            anchor_str,                   // [3] per_path_author WHERE
-            substantial_threshold,        // [4] substantial_others CASE
-            anchor_str,                   // [5] main SELECT DATE_DIFF for days_since
-            anchor_str,                   // [6] WHERE DATE_DIFF (departure filter)
-            opts.departed_threshold_days, // [7]
-            row_limit,                    // [8]
+            opts.min_revs,                // [3] live_paths HAVING revs >= ?
+            anchor_str,                   // [4] per_path_author WHERE
+            substantial_threshold,        // [5] substantial_others CASE
+            anchor_str,                   // [6] main SELECT DATE_DIFF for days_since
+            anchor_str,                   // [7] WHERE DATE_DIFF (departure filter)
+            opts.departed_threshold_days, // [8]
+            row_limit,                    // [9]
         ],
         "knowledge-islands",
         opts,
@@ -312,12 +321,13 @@ pub fn run_knowledge_islands(db: &FactsDb, opts: &Options) -> Result<Vec<Knowled
         params![
             anchor_str,                   // [1] author_last_commit CTE WHERE
             anchor_str,                   // [2] live_paths inner SELECT WHERE
-            anchor_str,                   // [3] per_path_author WHERE
-            substantial_threshold,        // [4] substantial_others CASE
-            anchor_str,                   // [5] main SELECT DATE_DIFF for days_since
-            anchor_str,                   // [6] WHERE DATE_DIFF (departure filter)
-            opts.departed_threshold_days, // [7]
-            row_limit,                    // [8]
+            opts.min_revs,                // [3] live_paths HAVING revs >= ?
+            anchor_str,                   // [4] per_path_author WHERE
+            substantial_threshold,        // [5] substantial_others CASE
+            anchor_str,                   // [6] main SELECT DATE_DIFF for days_since
+            anchor_str,                   // [7] WHERE DATE_DIFF (departure filter)
+            opts.departed_threshold_days, // [8]
+            row_limit,                    // [9]
         ],
         "knowledge-islands",
         |r| {
@@ -330,6 +340,38 @@ pub fn run_knowledge_islands(db: &FactsDb, opts: &Options) -> Result<Vec<Knowled
                 n_substantial_others: r.get::<_, u32>(5)?,
             })
         },
+    )
+}
+
+/// Count files present at HEAD — the live-tree prevalence denominator.
+///
+/// Mirrors the `live_paths` liveness rule (`arg_max` of the latest
+/// `change_type` per path, keeping non-`deleted`), but *without* the
+/// `--min-revs` gate `run_knowledge_islands` applies to its island rows.
+/// The Knowledge factor's fallback tile divides departed islands (already
+/// `--min-revs`-filtered) by this full live-file count, so applying the gate
+/// here too would compare unlike populations and skew the ratio.
+///
+/// Returns `0` on an empty store (no `changes` rows).
+///
+/// # Errors
+///
+/// Returns [`CodeLoreError::Analysis`] on `DuckDB` prepare, query, or
+/// row-mapping failure.
+pub fn count_live_files(db: &FactsDb) -> Result<u64> {
+    db.query_row(
+        "SELECT COUNT(*) FROM (
+            SELECT c.path,
+                   arg_max(
+                       c.change_type,
+                       ROW(commits.date, -commits.rowid)
+                   ) AS change_type
+            FROM changes c
+            INNER JOIN commits ON commits.rev = c.rev
+            GROUP BY c.path
+        ) WHERE change_type != 'deleted'",
+        [],
+        |r| r.get::<_, u64>(0),
     )
 }
 

@@ -588,9 +588,12 @@ fn run_calibrate_defects_cmd(args: &CalibrateDefectsArgs) -> Result<()> {
     let opts = Options {
         repo_path: args.repo.clone(),
         include_merges: true,
+        temp_dir: args.temp_dir.clone(),
         ..Options::default()
     };
-    let db = FactsDb::new_in_memory().context("open in-memory mining fact store")?;
+    opts.validate().context("validate options")?;
+    let db = FactsDb::new_in_memory_with_temp_dir(args.temp_dir.as_deref())
+        .context("open in-memory mining fact store")?;
     db.ingest(&repo, &opts).context("ingest full history")?;
 
     let oracle_cfg = OracleConfig::default();
@@ -1932,8 +1935,17 @@ fn render_gate_json(
 /// `(+n more files)` tail. The JSON document always carries every row.
 const GATE_DELTA_TABLE_ROWS: usize = 10;
 
+/// Number of advisory-finding rows the text render shows; the rest fold into
+/// a `(+n more findings)` tail. Mirrors [`GATE_DELTA_TABLE_ROWS`]'s
+/// render-only cap — `report.findings` (the JSON document, and the in-memory
+/// `ChangeSetReport`) always carries every finding by design (spec §6); only
+/// the rendered text is bounded, so a large coupling cluster or a big batch
+/// of added files can never blow the token budget.
+const GATE_FINDINGS_ROWS: usize = 10;
+
 /// Print the advisory (non-verdict) text sections to stdout: one line per
-/// finding, then the per-file delta table in the engine's order (|delta|
+/// finding (capped at [`GATE_FINDINGS_ROWS`] with a `(+n more findings)`
+/// tail), then the per-file delta table in the engine's order (|delta|
 /// descending, unscored rows last). Suppressed under `--quiet`.
 fn render_gate_advisories(
     args: &args::GateArgs,
@@ -1942,8 +1954,12 @@ fn render_gate_advisories(
     if args.quiet {
         return;
     }
-    for f in &report.findings {
+    for f in report.findings.iter().take(GATE_FINDINGS_ROWS) {
         println!("[{}] {}: {}", f.kind, f.path, f.detail);
+    }
+    let hidden_findings = report.findings.len().saturating_sub(GATE_FINDINGS_ROWS);
+    if hidden_findings > 0 {
+        println!("(+{hidden_findings} more findings)");
     }
     for d in report.health.deltas.iter().take(GATE_DELTA_TABLE_ROWS) {
         match (d.baseline_score, d.projected_score, d.delta) {
@@ -2065,6 +2081,14 @@ fn gate_ledger_records(
             min,
             count_f64("delta_code_health_min_per_file"),
             verdict("delta_code_health_min_per_file"),
+        ));
+    }
+    if let Some(min) = d.new_file_health_min {
+        records.push(rec(
+            "new_file_health_min",
+            min,
+            count_f64("new_file_health_min"),
+            verdict("new_file_health_min"),
         ));
     }
     if d.no_new_cycles {
@@ -6282,9 +6306,20 @@ fn build_spa_dashboard(
             )
         })
         .or_else(|| {
+            // Prevalence denominator: all files live at HEAD (no `--min-revs`
+            // gate). Degrades to a zero count on query failure, which the
+            // factor constructor treats as "no denominator" → tile omitted.
+            let total_live_files =
+                codelore_lib::cli_api::analyses::knowledge_islands::count_live_files(db)
+                    .unwrap_or_else(|e| {
+                        tracing::warn!(
+                            "dashboard: live-file count for knowledge tile failed; skipping: {e}"
+                        );
+                        0
+                    });
             codelore_lib::cli_api::analyses::factors::knowledge_factor_from_islands(
                 &knowledge_islands,
-                i32::try_from(opts.departed_threshold_days).unwrap_or(i32::MAX),
+                total_live_files,
             )
         });
     if let Some(kt) = knowledge_tile {

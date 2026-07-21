@@ -9,7 +9,10 @@
 //!   files where individual commits sit longer between author and
 //!   merge — proxy for "review bottleneck" or "PR thrash". Needs the
 //!   schema v3 `commits.committer_date` column populated; pre-v3
-//!   this analysis returns zero across the board.
+//!   this analysis returns zero across the board. Commits where
+//!   `committer_date <= date` (clock-skew or timezone artefacts) are
+//!   excluded from the lead-time statistics — matching
+//!   `delivery_metrics`'s documented exclusion.
 //! - **Complexity** (max cognitive): files where the per-function
 //!   gnarly-ness is highest are slower to change correctly.
 //!
@@ -40,10 +43,14 @@ pub struct DeliveryFrictionRow {
     pub cognitive: f64,
     /// Median `committer_date - date` across the file's commits, in
     /// days. Zero on rebase-only workflows where author and committer
-    /// timestamps coincide for every commit.
+    /// timestamps coincide for every commit. Commits where
+    /// `committer_date <= date` (clock-skew or timezone artefacts) are
+    /// excluded from this statistic — they do not shrink `revisions`,
+    /// only the lead-time aggregates.
     pub median_lead_time_days: f64,
     /// 95th-percentile lead time in days. Surfaces the right tail —
-    /// the "one commit took two weeks" worst case.
+    /// the "one commit took two weeks" worst case. Same negative/zero
+    /// exclusion as `median_lead_time_days`.
     pub p95_lead_time_days: f64,
     /// Days since the file's last commit. `MAX(committer_date)` minus
     /// the analysis-time anchor. Files high on both friction and
@@ -61,7 +68,12 @@ const SQL: &str = "
         -- commit lead-time ONCE so MEDIAN and QUANTILE_CONT both
         -- aggregate over the same precomputed `lead_secs` column —
         -- avoids the two EXTRACT(EPOCH) calls per row the prior shape
-        -- carried.
+        -- carried. `lead_secs` is NULL (not row-excluded) when
+        -- `committer_date <= date`: MEDIAN/QUANTILE_CONT skip NULLs per
+        -- standard SQL aggregate semantics, so clock-skew/rebase commits
+        -- drop out of the lead-time stats without shrinking `revisions`
+        -- or `last_touched` — those must stay the true per-file commit
+        -- count/last-touch regardless of any one commit's lead-time sign.
         SELECT
             path,
             COUNT(rev) AS revisions,
@@ -73,8 +85,10 @@ const SQL: &str = "
                 ch.path,
                 c.rev,
                 c.committer_date,
-                EXTRACT(EPOCH FROM c.committer_date)
-                    - EXTRACT(EPOCH FROM c.date) AS lead_secs
+                CASE WHEN c.committer_date > c.date
+                     THEN EXTRACT(EPOCH FROM c.committer_date)
+                          - EXTRACT(EPOCH FROM c.date)
+                END AS lead_secs
             FROM changes ch
             INNER JOIN commits c ON c.rev = ch.rev
             WHERE c.is_merge = FALSE

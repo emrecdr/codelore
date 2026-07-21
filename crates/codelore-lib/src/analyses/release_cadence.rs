@@ -18,9 +18,15 @@
 //!    - **median** (middle gap for odd N; average of two middle for even N).
 //!    - **IQR** (Q3 − Q1; P75 − P25 by linear interpolation).
 //!    - **trend**: sign of the ordinary-least-squares slope fitted to the
-//!      gap sequence (x = 0-based index, y = days). Threshold ±0.1
-//!      day/release: positive slope → `"slowing"`, negative → `"accelerating"`,
-//!      within ±0.1 → `"stable"`.
+//!      gap sequence (x = 0-based index, y = days), judged **relative to the
+//!      repo's own median gap** (see [`TREND_SLOPE_FRACTION`]) rather than
+//!      an absolute day count — a slope whose magnitude exceeds
+//!      `TREND_SLOPE_FRACTION * median` is a meaningful trend: positive →
+//!      `"slowing"`, negative → `"accelerating"`, within the threshold →
+//!      `"stable"`. Scale-relative because a fixed absolute cutoff conflates
+//!      a yearly-cadence repo with a two-day-cadence one — the same 1-day
+//!      slope drift is noise for the former and a real trend for the
+//!      latter. See [`classify_trend`].
 //! 5. Emit per-tag rows sorted by date ascending, then a synthetic
 //!    `tag = "__summary__"` row carrying median, IQR, and trend in the
 //!    `days_since_prev` field (median) and the `date` field (IQR as a
@@ -29,6 +35,14 @@
 use crate::repo::Repo;
 use crate::{CodeLoreError, Options, Result};
 use globset::Glob;
+
+/// Fraction of the median inter-release gap used as the trend-slope
+/// threshold (see [`classify_trend`]). `0.1` (10%) means an OLS slope has to
+/// move the gap by more than a tenth of the repo's own typical cadence,
+/// per release, to count as a trend rather than noise. Chosen as a modest
+/// double-digit-percent cutoff: small enough to catch real drift, large
+/// enough that single-release jitter doesn't flip the verdict.
+const TREND_SLOPE_FRACTION: f64 = 0.1;
 
 /// One tag in the release timeline, plus a synthetic summary row.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -106,6 +120,24 @@ fn percentile_sorted(sorted: &[f64], p: f64) -> f64 {
     sorted[lo] * (1.0 - frac) + sorted[hi] * frac
 }
 
+/// Classify an OLS slope relative to the repo's own median gap: a slope
+/// whose magnitude exceeds [`TREND_SLOPE_FRACTION`] of `median_gap` is a
+/// meaningful trend, not noise. `median_gap` is expected non-negative (a day
+/// difference); when it is `0.0` the threshold degenerates to `0.0`, so any
+/// non-zero slope is reported as a trend — a repo whose baseline cadence is
+/// literally zero (many same-day releases) has no "typical gap" to be
+/// relative to, so any drift is significant by construction.
+fn classify_trend(slope: f64, median_gap: f64) -> &'static str {
+    let threshold = TREND_SLOPE_FRACTION * median_gap;
+    if slope > threshold {
+        "slowing"
+    } else if slope < -threshold {
+        "accelerating"
+    } else {
+        "stable"
+    }
+}
+
 /// Run the release-cadence analysis.
 ///
 /// Returns per-tag rows sorted ascending by date, followed by a
@@ -176,11 +208,7 @@ pub fn run_release_cadence<R: Repo>(repo: &R, opts: &Options) -> Result<Vec<Rele
     let q3 = percentile_sorted(&sorted_gaps, 0.75);
     let iqr = q3 - q1;
 
-    let trend = match ols_slope(&gaps) {
-        Some(slope) if slope > 0.1 => "slowing",
-        Some(slope) if slope < -0.1 => "accelerating",
-        _ => "stable",
-    };
+    let trend = ols_slope(&gaps).map_or("stable", |slope| classify_trend(slope, median));
 
     rows.push(ReleaseCadenceRow {
         tag: "__summary__".to_string(),
@@ -238,45 +266,73 @@ mod tests {
 
     #[test]
     fn trend_slowing() {
-        // slope = 10 > 0.1 → slowing
+        // gaps [10, 20, 30] → slope = 10, median = 20, threshold = 2 → slowing
         let gaps = vec![10.0, 20.0, 30.0];
         let slope = ols_slope(&gaps).unwrap();
-        let trend = if slope > 0.1 {
-            "slowing"
-        } else if slope < -0.1 {
-            "accelerating"
-        } else {
-            "stable"
-        };
-        assert_eq!(trend, "slowing");
+        assert_eq!(classify_trend(slope, 20.0), "slowing");
     }
 
     #[test]
     fn trend_accelerating() {
+        // gaps [30, 20, 10] → slope = -10, median = 20, threshold = 2 → accelerating
         let gaps = vec![30.0, 20.0, 10.0];
         let slope = ols_slope(&gaps).unwrap();
-        let trend = if slope > 0.1 {
-            "slowing"
-        } else if slope < -0.1 {
-            "accelerating"
-        } else {
-            "stable"
-        };
-        assert_eq!(trend, "accelerating");
+        assert_eq!(classify_trend(slope, 20.0), "accelerating");
     }
 
     #[test]
     fn trend_stable_near_zero() {
-        // gaps [10, 10] → slope = 0.0 → stable
+        // gaps [10, 10] → slope = 0.0 → stable regardless of median
         let gaps = vec![10.0, 10.0];
         let slope = ols_slope(&gaps).unwrap();
-        let trend = if slope > 0.1 {
-            "slowing"
-        } else if slope < -0.1 {
-            "accelerating"
-        } else {
-            "stable"
-        };
-        assert_eq!(trend, "stable");
+        assert_eq!(classify_trend(slope, 10.0), "stable");
+    }
+
+    #[test]
+    fn scale_relative_yearly_cadence_small_drift_is_stable() {
+        // A yearly-release repo (median ~360 d) drifting by half a day per
+        // release: slope = 0.5 > the OLD absolute 0.1 threshold (would have
+        // been misclassified "slowing"), but 0.5 is only ~0.14% of the
+        // repo's own 360 d cadence — well under the 10% relative threshold,
+        // so this must read "stable".
+        let gaps = vec![360.0, 360.5, 361.0];
+        let slope = ols_slope(&gaps).unwrap();
+        assert!((slope - 0.5).abs() < 1e-9, "slope={slope}");
+        let median = median_sorted(&{
+            let mut s = gaps.clone();
+            s.sort_by(f64::total_cmp);
+            s
+        });
+        assert!((median - 360.5).abs() < 1e-9, "median={median}");
+        assert_eq!(classify_trend(slope, median), "stable");
+    }
+
+    #[test]
+    fn scale_relative_fast_cadence_small_drift_is_accelerating() {
+        // A continuous-deployment repo (median ~0.5 d = 12 h) drifting by
+        // 0.06 d per release: |slope| = 0.06 is UNDER the OLD absolute 0.1
+        // threshold (would have been hidden as "stable"), but it's 12% of
+        // the repo's own half-day cadence — a real, meaningful trend that
+        // the relative rule now correctly surfaces as "accelerating".
+        let gaps = vec![0.56, 0.5, 0.44];
+        let slope = ols_slope(&gaps).unwrap();
+        assert!((slope - -0.06).abs() < 1e-9, "slope={slope}");
+        let median = median_sorted(&{
+            let mut s = gaps.clone();
+            s.sort_by(f64::total_cmp);
+            s
+        });
+        assert!((median - 0.5).abs() < 1e-9, "median={median}");
+        assert_eq!(classify_trend(slope, median), "accelerating");
+    }
+
+    #[test]
+    fn classify_trend_zero_median_any_nonzero_slope_is_a_trend() {
+        // Degenerate case: median gap of 0.0 (baseline cadence is literally
+        // zero) means the relative threshold is also 0.0, so any non-zero
+        // slope counts as a trend.
+        assert_eq!(classify_trend(0.01, 0.0), "slowing");
+        assert_eq!(classify_trend(-0.01, 0.0), "accelerating");
+        assert_eq!(classify_trend(0.0, 0.0), "stable");
     }
 }

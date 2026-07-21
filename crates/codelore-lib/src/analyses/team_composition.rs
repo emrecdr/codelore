@@ -85,22 +85,35 @@ pub struct TeamCompositionRow {
 
 /// Main SQL for all per-author metrics plus the breadth-based veteran gate.
 ///
-/// Produces one row per distinct `canonical_author` in `commits`, sorted by
-/// `tenure_days DESC, commits DESC, author ASC`.
+/// Produces one row per distinct non-bot `canonical_author` in `commits`,
+/// sorted by `tenure_days DESC, commits DESC, author ASC`. Bot authors
+/// (`author_aliases.is_bot`) are excluded so they never inflate tenure
+/// buckets, `total_commits`, the 80%-core set, or `core_median_paths`.
 const SQL_AUTHOR_METRICS: &str = "
 WITH
 anchor AS (
     SELECT MAX(date) AS max_d, MIN(date) AS min_d FROM commits
 ),
--- Per-author first/last commit and total commit count.
+-- One row per canonical author (a canonical may own several raw emails in
+-- author_aliases; a direct JOIN would multiply commit counts by that alias
+-- count). Bot canonicals are dropped here so they never enter tenure
+-- buckets, the core set, or the __summary__ percentages.
+canon_authors AS (
+    SELECT canonical FROM author_aliases
+    GROUP BY canonical
+    HAVING NOT BOOL_OR(is_bot)
+),
+-- Per-author first/last commit and total commit count. Bots excluded via
+-- the canon_authors join.
 author_stats AS (
     SELECT
-        canonical_author                     AS author,
-        MIN(date)                            AS first_commit,
-        MAX(date)                            AS last_commit,
+        c.canonical_author                   AS author,
+        MIN(c.date)                          AS first_commit,
+        MAX(c.date)                          AS last_commit,
         COUNT(*)                             AS commits
-    FROM commits
-    GROUP BY canonical_author
+    FROM commits c
+    JOIN canon_authors ca ON ca.canonical = c.canonical_author
+    GROUP BY c.canonical_author
 ),
 -- Active = any commit within trailing window.
 active_authors AS (
@@ -204,6 +217,10 @@ ORDER BY ab.tenure_days DESC, ab.commits DESC, ab.author ASC
 /// 3. An author is "in core" for a given week when their cumulative total is
 ///    ≤ 80% of the week's grand cumulative total (Pareto 80% coverage).
 /// 4. Take each author's earliest such week; subtract their first-commit week.
+///
+/// Bot authors (`author_aliases.is_bot`) are excluded from every CTE that
+/// feeds the weekly grand total, so bot commits never shift the 80%-core
+/// threshold real authors are measured against.
 const SQL_ONBOARDING: &str = "
 WITH
 anchor AS (
@@ -217,14 +234,23 @@ project_week AS (
 founder_cutoff AS (
     SELECT pw + INTERVAL '{fw} weeks' AS cutoff FROM project_week
 ),
--- Per-author weekly commit counts.
+-- Bot canonicals excluded (see SQL_AUTHOR_METRICS::canon_authors): a bot's
+-- commits must not inflate the weekly grand_total used to compute the
+-- 80%-core threshold, or they'd shift real authors' onboarding_weeks.
+canon_authors AS (
+    SELECT canonical FROM author_aliases
+    GROUP BY canonical
+    HAVING NOT BOOL_OR(is_bot)
+),
+-- Per-author weekly commit counts. Bots excluded via the canon_authors join.
 weekly_counts AS (
     SELECT
-        canonical_author              AS author,
-        date_trunc('week', date)      AS week,
+        c.canonical_author            AS author,
+        date_trunc('week', c.date)    AS week,
         COUNT(*)                      AS week_commits
-    FROM commits
-    GROUP BY canonical_author, date_trunc('week', date)
+    FROM commits c
+    JOIN canon_authors ca ON ca.canonical = c.canonical_author
+    GROUP BY c.canonical_author, date_trunc('week', c.date)
 ),
 -- Cumulative commits per author up to (and including) each week they
 -- appear in. We need ALL weeks the project has commits, not just weeks
@@ -285,11 +311,12 @@ core_membership AS (
         (running_core_total - cum_commits) < grand_total * 0.8 AS in_core
     FROM week_ranked
 ),
--- First commit per author.
+-- First commit per author. Bots excluded via the canon_authors join.
 author_first AS (
-    SELECT canonical_author AS author, MIN(date) AS first_commit
-    FROM commits
-    GROUP BY canonical_author
+    SELECT c.canonical_author AS author, MIN(c.date) AS first_commit
+    FROM commits c
+    JOIN canon_authors ca ON ca.canonical = c.canonical_author
+    GROUP BY c.canonical_author
 ),
 -- First week each author enters core (NULL if never).
 first_core_week AS (

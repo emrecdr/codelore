@@ -23,7 +23,7 @@ use crate::{CodeLoreError, Options, Result};
 /// expectations; the system temp directory otherwise (the plain `--no-cache`
 /// in-memory path and `codelore calibrate-defects`'s mining store have no
 /// cache root at all).
-fn default_spill_dir(cache_root: Option<&Path>) -> PathBuf {
+pub(crate) fn default_spill_dir(cache_root: Option<&Path>) -> PathBuf {
     match cache_root {
         Some(root) => root.join("codelore").join("spill"),
         None => std::env::temp_dir().join("codelore-spill"),
@@ -37,7 +37,7 @@ fn default_spill_dir(cache_root: Option<&Path>) -> PathBuf {
 /// very large repos. Creates `temp_dir` if it doesn't already exist. Safe to
 /// call on a `ReadOnly`-mode connection — both PRAGMAs are session/engine
 /// settings, not writes to the database file.
-fn apply_memory_pragmas(conn: &Connection, temp_dir: &Path) -> Result<()> {
+pub(crate) fn apply_memory_pragmas(conn: &Connection, temp_dir: &Path) -> Result<()> {
     apply_memory_pragmas_with_limit(conn, DEFAULT_DUCKDB_MEMORY_LIMIT, temp_dir)
 }
 

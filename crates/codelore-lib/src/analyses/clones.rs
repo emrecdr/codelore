@@ -11,12 +11,14 @@
 //! detection; Sajnani et al., ICSE 2016 — `SourcererCC`, the
 //! index-then-probe pattern `CodeLore` follows).
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use walkdir::WalkDir;
 
+use crate::analyses::query::query_map_collect;
 use crate::clones::{CloneLanguage, extract_functions, group_clones};
 use crate::facts::FactsDb;
 use crate::options::Options;
@@ -157,6 +159,32 @@ pub(crate) fn run_clones_memoised(
     let rows = std::rc::Rc::new(run_clones(opts)?);
     db.clones_memo_put(rows.clone());
     Ok(rows)
+}
+
+/// HEAD-faithful per-file clone-family membership counts, read from the
+/// `clones` table populated at ingest from HEAD blobs
+/// (`facts::ingest::populate_clones_at_head`). One count per path: the number
+/// of that file's functions that belong to some clone family — the same
+/// per-path tally [`run_clones`] yields for a clean working tree, so the gate
+/// baseline (this) and the gate projection (the working-tree walk) agree
+/// exactly when the tree equals HEAD.
+///
+/// # Errors
+///
+/// Returns [`CodeLoreError::Analysis`] on a fact-store / SQL error.
+pub(crate) fn head_clone_counts(db: &FactsDb) -> Result<HashMap<String, u32>> {
+    let rows = query_map_collect(
+        db,
+        "SELECT path, COUNT(*) FROM clones GROUP BY path",
+        [],
+        "head clone counts",
+        |r| {
+            let path = r.get::<_, String>(0)?;
+            let count = u32::try_from(r.get::<_, i64>(1)?).unwrap_or(u32::MAX);
+            Ok((path, count))
+        },
+    )?;
+    Ok(rows.into_iter().collect())
 }
 
 fn relative(root: &Path, abs: &Path) -> String {

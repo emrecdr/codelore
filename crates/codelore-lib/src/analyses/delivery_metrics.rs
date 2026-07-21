@@ -114,12 +114,37 @@ const BRANCH_COMMITS_CTE: &str = "
             JOIN commits co ON co.rev = cp1.rev
             WHERE cp1.position = 1
         ),
+        mainline_reachable AS (
+            -- First-parent walk from each merge's mainline (position=0) parent.
+            -- This spans the true merge base and every shared commit below it,
+            -- so anti-joining it out of the branch walk removes the mainline
+            -- history the branch walk would otherwise cross into. Bounded by the
+            -- same depth and 90-day date floor as the branch walk.
+            SELECT
+                m.merge_rev,
+                m.merge_date,
+                m.mainline_parent      AS mainline_rev,
+                0                      AS depth
+            FROM merges m
+
+            UNION ALL
+
+            SELECT
+                mr.merge_rev,
+                mr.merge_date,
+                cp.parent_rev          AS mainline_rev,
+                mr.depth + 1           AS depth
+            FROM mainline_reachable mr
+            JOIN commit_parents cp ON cp.rev = mr.mainline_rev AND cp.position = 0
+            JOIN commits co ON co.rev = cp.parent_rev
+            WHERE mr.depth < 200
+              AND co.date >= mr.merge_date - INTERVAL '90' DAY
+        ),
         branch_walk AS (
             -- Seed: the branch tip itself for each merge.
             SELECT
                 m.merge_rev,
                 m.merge_date,
-                m.mainline_parent,
                 m.branch_tip           AS branch_rev,
                 0                      AS depth
             FROM merges m
@@ -127,11 +152,16 @@ const BRANCH_COMMITS_CTE: &str = "
             UNION ALL
 
             -- Recursive step: walk each branch commit's first parent
-            -- (position=0), bounded by depth and date floor.
+            -- (position=0), bounded by depth and date floor. The walk runs past
+            -- the merge base into mainline history on purpose; the
+            -- mainline_reachable anti-join in branch_commits trims it back to the
+            -- commits unique to the branch. (Stopping at mainline_parent is
+            -- wrong once mainline advances after the branch is cut, because then
+            -- mainline_parent is no longer on the branch tip's first-parent
+            -- chain — the source of the previous overshoot bug.)
             SELECT
                 bw.merge_rev,
                 bw.merge_date,
-                bw.mainline_parent,
                 cp.parent_rev          AS branch_rev,
                 bw.depth + 1           AS depth
             FROM branch_walk bw
@@ -139,18 +169,23 @@ const BRANCH_COMMITS_CTE: &str = "
             JOIN commits co ON co.rev = cp.parent_rev
             WHERE bw.depth < 200
               AND co.date >= bw.merge_date - INTERVAL '90' DAY
-              -- Stop if we reach the mainline parent (do not cross into main).
-              AND cp.parent_rev <> bw.mainline_parent
         ),
         branch_commits AS (
-            -- Exclude the mainline parent itself; keep only commits that are
-            -- purely on the branch side (not reachable from mainline_parent).
+            -- Branch-side commits: reachable from the branch tip AND NOT
+            -- reachable from the mainline parent. The anti-join drops the merge
+            -- base and all shared mainline history, leaving only commits unique
+            -- to the branch below the merge base.
             SELECT DISTINCT
                 bw.merge_rev,
                 bw.merge_date,
                 bw.branch_rev          AS branch_commit_rev
             FROM branch_walk bw
-            WHERE bw.branch_rev <> bw.mainline_parent
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM mainline_reachable mr
+                WHERE mr.merge_rev = bw.merge_rev
+                  AND mr.mainline_rev = bw.branch_rev
+            )
         )
     ";
 
@@ -328,12 +363,20 @@ fn check_squash_workflow(db: &FactsDb) -> Result<()> {
 /// # Formula
 ///
 /// ```text
-/// rework_pct = 100 × Σ overlap(h1, h2) / Σ new_lines(all windowed hunks)
+/// rework_pct = 100 × Σ_h1 LEAST( Σ_h2 overlap(h1, h2), new_lines(h1) )
+///                    / Σ new_lines(all windowed hunks)
 /// ```
 ///
+/// Each added hunk `h1` can be reworked by several later hunks `h2`. Summing
+/// the raw per-pair overlaps would count `h1`'s added lines once per reworking
+/// partner, so a single 10-line region overwritten by 3 later commits would
+/// contribute 30 lines to the numerator against only 10 in the denominator —
+/// pushing the ratio above 100%. The inner `LEAST(…, new_lines(h1))` caps each
+/// added region's contribution at the lines it actually added, so the numerator
+/// can never exceed the denominator and `rework_pct` is bounded to `[0, 100]`.
+///
 /// The denominator is the total lines added across ALL hunks in the window
-/// (not just hunk pairs that happen to have a rework partner), so the
-/// percentage is correctly bounded by the overall churn volume. A denominator
+/// (not just hunk pairs that happen to have a rework partner); a denominator
 /// built only from `h1` sides of matched pairs would inflate the percentage by
 /// excluding unpaired added lines.
 ///
@@ -364,7 +407,14 @@ fn compute_rework_pct(db: &FactsDb, rework_window_days: u32) -> Result<Option<De
         rework_pairs AS (
             -- h1 = the 'added' hunk, h2 = the later hunk that may overwrite it.
             -- Overlap formula: lines of h1's added range that h2 touches.
+            -- Carries h1's identity + new_lines so the numerator can cap each
+            -- added hunk's total overlap by the lines it actually added.
             SELECT
+                h1.path      AS h1_path,
+                h1.rev       AS h1_rev,
+                h1.old_start AS h1_old_start,
+                h1.new_start AS h1_new_start,
+                h1.new_lines AS h1_new_lines,
                 GREATEST(0,
                     LEAST(h1.new_start + h1.new_lines, h2.old_start + h2.old_lines)
                     - GREATEST(h1.new_start, h2.old_start)
@@ -376,15 +426,27 @@ fn compute_rework_pct(db: &FactsDb, rework_window_days: u32) -> Result<Option<De
              AND date_diff('day', h1.commit_date, h2.commit_date) > 0
              AND date_diff('day', h1.commit_date, h2.commit_date) <= {rework_window_days}
         ),
+        capped_rework AS (
+            -- Cap each added hunk's total forward overlap by its own new_lines.
+            -- A single added region can be overwritten by several later hunks;
+            -- summing the raw per-pair overlaps would count its lines once per
+            -- reworking partner, letting the numerator exceed the added-line
+            -- volume (rework_pct > 100%). The per-hunk LEAST() bounds each
+            -- added region's contribution to at most the lines it added, so
+            -- SUM(capped_overlap) <= SUM(new_lines) and rework_pct <= 100.
+            SELECT LEAST(SUM(overlap), h1_new_lines) AS capped_overlap
+            FROM rework_pairs
+            GROUP BY h1_path, h1_rev, h1_old_start, h1_new_start, h1_new_lines
+        ),
         window_added AS (
-            -- Total lines added in the window — the correct denominator.
-            -- This is independent of the pair join so unpaired added lines
-            -- are included, keeping the percentage correctly bounded.
+            -- Total lines added in the window — the denominator. Independent of
+            -- the pair join so unpaired added lines are included; combined with
+            -- the per-added-hunk cap above this keeps rework_pct in [0, 100].
             SELECT SUM(new_lines) AS total_added FROM windowed_hunks
         )
         SELECT
             CASE WHEN (SELECT total_added FROM window_added) > 0
-                 THEN 100.0 * COALESCE((SELECT SUM(overlap) FROM rework_pairs), 0)
+                 THEN 100.0 * COALESCE((SELECT SUM(capped_overlap) FROM capped_rework), 0)
                               / (SELECT total_added FROM window_added)
                  ELSE 0.0 END                    AS rework_pct,
             (SELECT COUNT(*)    FROM rework_pairs) AS pair_count,

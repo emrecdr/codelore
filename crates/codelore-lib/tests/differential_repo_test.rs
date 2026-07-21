@@ -1029,6 +1029,117 @@ fn worktree_changes_detects_delete_and_rename() {
     );
 }
 
+/// Differential coverage: a rename staged via literal `git rm` (not
+/// `git mv`) plus a separate `git add` of the new path must be detected as a
+/// rename exactly like `worktree_changes_detects_delete_and_rename`'s `git
+/// mv` case — `git mv` is itself implemented as this same rm-then-add
+/// sequence, so this test proves the pairing does not depend on the `mv`
+/// convenience wrapper. Current behavior is CORRECT: the destination is not
+/// dropped.
+#[test]
+fn worktree_changes_detects_rm_then_add_rename() {
+    use codelore_lib::repo::types::{WorktreeChange, WorktreeChangeKind};
+
+    let repo = codelore_lib::test_support::differential_repo::build();
+    let path = repo.dir.path();
+
+    // Byte-identical content (git's rename detection pairs by similarity;
+    // identical content is unambiguously a 100%-similarity match).
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["rm", "-q", "README.md"])
+        .status()
+        .expect("spawn git rm");
+    assert!(status.success(), "git rm README.md failed");
+    // README.md's blob content was removed from the worktree by `git rm`
+    // (unlike `git mv`, plain `git rm` also deletes the worktree file), so
+    // recreate the destination from the HEAD blob to keep content identical.
+    let head_readme = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["show", "HEAD:README.md"])
+        .output()
+        .expect("git show HEAD:README.md");
+    assert!(
+        head_readme.status.success(),
+        "git show HEAD:README.md failed"
+    );
+    std::fs::write(path.join("RENAMED.md"), &head_readme.stdout).expect("write RENAMED.md");
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["add", "RENAMED.md"])
+        .status()
+        .expect("spawn git add");
+    assert!(status.success(), "git add RENAMED.md failed");
+
+    let gix = GixRepo::open(path).expect("GixRepo::open");
+    let cli = GitCliRepo::open(path).expect("GitCliRepo::open");
+    let gix_changes = gix.worktree_changes().expect("gix worktree_changes");
+    let cli_changes = cli.worktree_changes().expect("cli worktree_changes");
+
+    let expected = vec![
+        WorktreeChange {
+            path: "README.md".to_string(),
+            kind: WorktreeChangeKind::Deleted,
+            rename_from: None,
+        },
+        WorktreeChange {
+            path: "RENAMED.md".to_string(),
+            kind: WorktreeChangeKind::Added,
+            rename_from: Some("README.md".to_string()),
+        },
+    ];
+    assert_eq!(
+        gix_changes, expected,
+        "a literal `git rm` + `git add` rename must pair identically to `git mv`"
+    );
+    assert_eq!(
+        gix_changes, cli_changes,
+        "GixRepo and GitCliRepo disagree on the rm-then-add rename"
+    );
+}
+
+/// Differential coverage: an UNSTAGED rename (a plain filesystem `mv`,
+/// no `git add`) is NOT detected as a rename by either backend — the
+/// destination is untracked, and untracked files are excluded from
+/// `worktree_changes` by design (spec contract: "untracked files excluded on
+/// both" backends; `GixRepo::worktree_changes` disables the directory walk
+/// entirely via `UntrackedFiles::None`, and `GitCliRepo` passes
+/// `--untracked-files=no`). This is confirmed-correct existing behavior, not
+/// a bug: only the source shows up, as a plain `Deleted` entry.
+#[test]
+fn worktree_changes_unstaged_rename_drops_untracked_destination_by_design() {
+    use codelore_lib::repo::types::{WorktreeChange, WorktreeChangeKind};
+
+    let repo = codelore_lib::test_support::differential_repo::build();
+    let path = repo.dir.path();
+
+    std::fs::rename(path.join("README.md"), path.join("RENAMED2.md"))
+        .expect("plain filesystem rename (no git mv/add)");
+
+    let gix = GixRepo::open(path).expect("GixRepo::open");
+    let cli = GitCliRepo::open(path).expect("GitCliRepo::open");
+    let gix_changes = gix.worktree_changes().expect("gix worktree_changes");
+    let cli_changes = cli.worktree_changes().expect("cli worktree_changes");
+
+    let expected = vec![WorktreeChange {
+        path: "README.md".to_string(),
+        kind: WorktreeChangeKind::Deleted,
+        rename_from: None,
+    }];
+    assert_eq!(
+        gix_changes, expected,
+        "an unstaged rename's untracked destination must be excluded by design; \
+         only the tracked source's deletion is reported"
+    );
+    assert_eq!(
+        gix_changes, cli_changes,
+        "GixRepo and GitCliRepo disagree on the unstaged-rename case"
+    );
+}
+
 /// A file added to the index then removed from the worktree (status `AD`)
 /// nets out to no change vs HEAD and must be dropped; untracked files must
 /// never appear. Both backends must agree the change list is empty.
