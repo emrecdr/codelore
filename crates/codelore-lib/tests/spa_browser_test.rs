@@ -1846,6 +1846,131 @@ fn tablist_arrow_keys_move_focus_and_selection() {
     );
 }
 
+/// The hotspot file list (`role="tree"`) is a parallel DOM structure next
+/// to the circle-pack canvas, offered as a keyboard/screen-reader
+/// alternative. Confirms `wireTreeArrows` (00_setup_boot.js) gives it real
+/// WAI-ARIA treeview keyboard semantics:
+///   - `ArrowDown` moves focus AND the roving tabindex to the next
+///     treeitem, but — unlike the tablist pattern above — does NOT also
+///     activate it (arrow keys only move focus per the APG treeview
+///     pattern; there is no wraparound either).
+///   - `Enter` on the focused treeitem still opens the file-detail drawer
+///     through the existing inline `_codeloreShowDetail` binding.
+/// On the un-fixed source every treeitem is `tabindex="0"` with no
+/// keydown handler on the tree, so `ArrowDown` does nothing and this test
+/// fails.
+#[test]
+fn hotspot_tree_arrow_keys_move_focus_and_enter_opens_drawer() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let html_path = tmp.path().join("codelore-tree-keyboard.html");
+    write_smoke_spa(&html_path, "CodeLore Tree Keyboard Test");
+
+    let Some((_browser, tab)) = boot_spa_tab(&html_path) else {
+        return;
+    };
+    let console_errors = attach_exception_sink(&tab);
+
+    // The keyboard-accessible file list lives inside a closed-by-default
+    // `<details>` — native `<details>` hides its content subtree
+    // (including from focus) while collapsed, so force it open before
+    // driving the tree with focus/keydown. Opening and focusing are two
+    // separate round trips (with a real settle in between) because
+    // DaisyUI's collapse reveal is a CSS transition — focusing in the
+    // same synchronous script as the `open = true` write races the
+    // browser's style recalc and silently no-ops.
+    tab.evaluate(
+        "(() => { const menu = document.querySelector('[role=\"tree\"]'); \
+             const details = menu && menu.closest('details'); \
+             if (details) details.open = true; \
+             const items = menu ? menu.querySelectorAll('[role=\"treeitem\"]') : []; \
+             if (items[0]) items[0].setAttribute('data-kb-first', '1'); \
+             if (items[1]) items[1].setAttribute('data-kb-second', '1'); \
+         })()",
+        false,
+    )
+    .expect("open tree details + mark rows");
+    std::thread::sleep(Duration::from_millis(200));
+
+    let setup_ok: bool = eval_json(
+        &tab,
+        "(() => { const first = document.querySelector('[data-kb-first]'); \
+             const second = document.querySelector('[data-kb-second]'); \
+             if (!first || !second) return false; \
+             first.focus(); \
+             return document.activeElement === first && \
+                    first.getAttribute('tabindex') === '0' && \
+                    second.getAttribute('tabindex') === '-1'; })()",
+    );
+    assert!(
+        setup_ok,
+        "could not focus the first treeitem with roving tabindex=0; \
+         either the hotspot tree has fewer than 2 rows or the initial \
+         roving-tabindex binding is wrong"
+    );
+
+    // ArrowDown: focus + roving tabindex move to the second item, but the
+    // row must NOT activate (no drawer open) — arrow keys only move focus
+    // per the WAI-ARIA treeview pattern.
+    tab.evaluate(
+        "document.querySelector('[data-kb-first]').dispatchEvent(\
+             new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))",
+        false,
+    )
+    .expect("dispatch ArrowDown");
+    std::thread::sleep(Duration::from_millis(200));
+
+    let focus_moved: bool = eval_json(
+        &tab,
+        "(() => { const first = document.querySelector('[data-kb-first]'); \
+             const second = document.querySelector('[data-kb-second]'); \
+             return document.activeElement === second && \
+                    second.getAttribute('tabindex') === '0' && \
+                    first.getAttribute('tabindex') === '-1'; })()",
+    );
+    assert!(
+        focus_moved,
+        "ArrowDown did not move focus + roving tabindex to the next \
+         treeitem — the tree has no arrow-key navigation"
+    );
+
+    let drawer_still_closed: bool = eval_json(
+        &tab,
+        "document.getElementById('file-detail-drawer').open !== true",
+    );
+    assert!(
+        drawer_still_closed,
+        "ArrowDown must only move focus (WAI-ARIA treeview pattern) — it \
+         must not also activate the row and open the drawer"
+    );
+
+    // Enter on the now-focused (second) item activates it via the
+    // existing inline `_codeloreShowDetail` binding.
+    tab.evaluate(
+        "document.querySelector('[data-kb-second]').dispatchEvent(\
+             new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))",
+        false,
+    )
+    .expect("dispatch Enter");
+    std::thread::sleep(Duration::from_millis(300));
+
+    let drawer_opened: bool = eval_json(
+        &tab,
+        "document.getElementById('file-detail-drawer').open === true",
+    );
+    assert!(
+        drawer_opened,
+        "Enter on the focused treeitem did not open the file-detail drawer"
+    );
+
+    let errors = console_errors.lock().expect("console mutex").clone();
+    assert!(
+        errors.is_empty(),
+        "tree keyboard nav produced {} browser-console error(s):\n{}",
+        errors.len(),
+        errors.join("\n  "),
+    );
+}
+
 /// Clicking a sticky-nav chip scrolls its section into view via
 /// `scrollIntoView` — never by mutating `location.hash` (the SPA owns the
 /// hash as its state serializer; anchor-style navigation would corrupt

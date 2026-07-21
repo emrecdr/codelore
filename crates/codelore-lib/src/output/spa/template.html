@@ -914,7 +914,10 @@
        of its own. */
     .dash-group { margin-bottom: 2.5rem; scroll-margin-top: 3.25rem; }
     .dash-group-title { font-size: 1.35rem; font-weight: 700; margin: 0; }
-    .dash-group-grid { display: grid; grid-template-columns: 1fr; gap: 1.75rem; }
+    /* align-items: start (not the grid default `stretch`) — without it
+       every widget stretches to match its tallest row-mate, voiding
+       narrower cards with empty space below their content. */
+    .dash-group-grid { display: grid; grid-template-columns: 1fr; gap: 1.75rem; align-items: start; }
     @media (min-width: 1280px) {
       .dash-group-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
@@ -1502,9 +1505,9 @@
             <template x-if="$store.dashboard.hotspots.length === 0">
               <li><span class="opacity-60 px-2 py-1">No hotspot data loaded.</span></li>
             </template>
-            <template x-for="file in $store.dashboard.hotspots" :key="file.path">
+            <template x-for="(file, fileIdx) in $store.dashboard.hotspots" :key="file.path">
               <li role="none">
-                <a role="treeitem" tabindex="0"
+                <a role="treeitem" :tabindex="fileIdx === 0 ? '0' : '-1'"
                    class="flex items-center justify-between gap-2 ki-row-link"
                    :class="file.primary_author && $store.scenario.departed.includes(file.primary_author)
                            ? 'ki-row-departed'
