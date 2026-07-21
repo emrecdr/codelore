@@ -58,7 +58,7 @@ pub fn cache_key(repo_path: &Path, head_sha: &str, opts: &Options) -> [u8; 32] {
 /// Resolve the on-disk path for a cache entry:
 ///   `<cache_root>/codelore/<repo_hash_8>/<cache_key_16>.duckdb`
 ///
-/// `cache_root` defaults to [`dirs::cache_dir()`] but can be overridden (Task 14).
+/// `cache_root` defaults to [`dirs::cache_dir()`] but can be overridden via `--cache-dir`.
 #[must_use]
 pub fn cache_path(key: &[u8; 32], repo_path: &Path) -> PathBuf {
     cache_path_with_root(key, repo_path, &default_cache_root())
