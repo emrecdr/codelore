@@ -23,12 +23,13 @@ use crate::Options;
 /// schema version, and the historical `schema_v` prefix on the value is
 /// retained so older cache files stay invalidated.
 ///
-/// Bumped to `schema_v11`: the cognitive-complexity metric now detects
-/// `else if` chains correctly and counts previously-missed constructs
-/// (`loop`, enhanced-`for`, ternary, `match`). These cognitive and nesting
-/// numbers flow into ingested facts, so a cache written by an older binary
-/// would serve pre-fix values on a stale hit; the epoch bump forces those
-/// caches to be rebuilt.
+/// The current epoch (`schema_v11`) invalidates caches whose complexity
+/// facts predate two extraction corrections: cognitive complexity detects
+/// `else if` chains correctly and counts constructs it previously missed
+/// (`loop`, enhanced-`for`, ternary, `match`), and `.tsx` sources are parsed
+/// with the TSX grammar instead of plain TypeScript. Both shift the cognitive
+/// and nesting numbers written into ingested facts, so a stale hit from an
+/// older binary would serve wrong values.
 const CACHE_EPOCH: &str = "schema_v11";
 
 /// Compute a 32-byte SHA-256 cache key from:
