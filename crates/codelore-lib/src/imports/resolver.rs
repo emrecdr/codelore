@@ -52,9 +52,10 @@ pub fn resolve_by_extension<S: std::hash::BuildHasher>(
 /// Resolve a Rust `use` path against the live-at-HEAD set. Handles
 /// the conventional `crate::foo::bar` → `src/foo/bar.rs` |
 /// `src/foo/bar/mod.rs` mapping. `self::` and `super::` resolve
-/// relative to the importer's parent module. External crates
-/// (anything not starting with `crate::`/`self::`/`super::`) return
-/// `None`.
+/// relative to the importer's module directory (see [`module_dir`]),
+/// which is the sibling `foo/` for a non-`mod.rs` `foo.rs`; each leading
+/// `super` climbs one further level. External crates (anything not
+/// starting with `crate::`/`self::`/`super::`) return `None`.
 #[must_use]
 pub fn resolve_rust_path<S: std::hash::BuildHasher>(
     importer_path: &str,
@@ -73,15 +74,24 @@ pub fn resolve_rust_path<S: std::hash::BuildHasher>(
     // importer's containing crate `src/` directory — for Cargo
     // workspaces (which codelore itself is) that means walking the
     // importer path backward from its `src/` boundary, NOT a literal
-    // top-level `src/`. `self::` is relative to the importer's parent
-    // module; `super::` climbs one parent.
+    // top-level `src/`. `self::` anchors at the importer's module
+    // directory; each leading `super::` climbs one level above it.
     let (rest, root): (&[&str], PathBuf) = match segments[0] {
         "crate" => (&segments[1..], crate_src_root(importer_path)),
-        "self" => (&segments[1..], parent_dir(importer_path)),
+        "self" => (&segments[1..], module_dir(importer_path)),
         "super" => {
-            let mut p = parent_dir(importer_path);
-            p.pop();
-            (&segments[1..], p)
+            // Each leading `super` climbs one module level from the
+            // importer's own module directory, so `super::super::x`
+            // resolves against the grandparent module.
+            let mut climbed = 1;
+            while segments.get(climbed) == Some(&"super") {
+                climbed += 1;
+            }
+            let mut base = module_dir(importer_path);
+            for _ in 0..climbed {
+                base.pop();
+            }
+            (&segments[climbed..], base)
         }
         // Bare module paths (`foo::bar`) refer to extern crates in
         // Rust 2018+ — not the same crate. Skip resolution; these
@@ -205,6 +215,21 @@ fn parent_dir(path: &str) -> PathBuf {
     Path::new(path)
         .parent()
         .map_or_else(PathBuf::new, std::path::Path::to_path_buf)
+}
+
+/// The directory a Rust file's child modules live in — the anchor for
+/// `self::` / `super::` resolution. For the module-root files
+/// (`mod.rs`, `lib.rs`, `main.rs`) that's the file's own parent
+/// directory; for any other `foo.rs` the children live in the sibling
+/// `foo/` directory, so returning `parent/foo` corrects resolution
+/// under the non-`mod.rs` module layout.
+fn module_dir(importer_path: &str) -> PathBuf {
+    let path = Path::new(importer_path);
+    let parent = path.parent().unwrap_or_else(|| Path::new(""));
+    match path.file_stem().and_then(std::ffi::OsStr::to_str) {
+        Some("mod" | "lib" | "main") | None => parent.to_path_buf(),
+        Some(stem) => parent.join(stem),
+    }
 }
 
 /// `crate::` root resolution. For a single-crate repo this is
@@ -375,5 +400,69 @@ mod tests {
         // Importer is .tsx so [ts, tsx, js, jsx, mjs, cjs] is the order.
         // .ts not present; .tsx not present for Button; falls through to jsx.
         assert_eq!(got, Some("src/Button.jsx".to_string()));
+    }
+
+    #[test]
+    fn rust_self_resolves_against_sibling_dir_for_non_mod_file() {
+        // `foo.rs`'s child modules live in the sibling `foo/` dir.
+        let live = live(&["src/foo.rs", "src/foo/x.rs"]);
+        let got = resolve_rust_path("src/foo.rs", "self::x", &live);
+        assert_eq!(got, Some("src/foo/x.rs".to_string()));
+    }
+
+    #[test]
+    fn rust_super_resolves_to_parent_module_for_non_mod_file() {
+        // From `src/foo/bar.rs` (non-mod), `super::y` is `foo::y`.
+        let live = live(&["src/foo/bar.rs", "src/foo/y.rs"]);
+        let got = resolve_rust_path("src/foo/bar.rs", "super::y", &live);
+        assert_eq!(got, Some("src/foo/y.rs".to_string()));
+    }
+
+    #[test]
+    fn rust_self_from_mod_rs_is_unchanged() {
+        // `mod.rs`'s module dir is its own parent — a strict no-op vs
+        // the pre-fix behaviour.
+        let live = live(&["src/foo/mod.rs", "src/foo/x.rs"]);
+        let got = resolve_rust_path("src/foo/mod.rs", "self::x", &live);
+        assert_eq!(got, Some("src/foo/x.rs".to_string()));
+    }
+
+    #[test]
+    fn rust_super_from_mod_rs_is_unchanged() {
+        // From `src/foo/mod.rs`, `super::y` climbs to the crate root.
+        let live = live(&["src/foo/mod.rs", "src/y.rs"]);
+        let got = resolve_rust_path("src/foo/mod.rs", "super::y", &live);
+        assert_eq!(got, Some("src/y.rs".to_string()));
+    }
+
+    #[test]
+    fn rust_grouped_leaves_each_resolve() {
+        // Post-expansion leaves arrive one at a time; each maps home.
+        let live = live(&["src/main.rs", "src/a.rs", "src/b.rs"]);
+        assert_eq!(
+            resolve_rust_path("src/main.rs", "crate::a", &live),
+            Some("src/a.rs".to_string()),
+        );
+        assert_eq!(
+            resolve_rust_path("src/main.rs", "crate::b", &live),
+            Some("src/b.rs".to_string()),
+        );
+    }
+
+    #[test]
+    fn rust_super_does_not_false_edge_to_crate_root_decoy() {
+        // Pre-fix, `super::x` from a non-mod file climbed to the crate
+        // root and matched `src/x.rs`. It must now miss.
+        let live = live(&["src/foo/bar.rs", "src/x.rs"]);
+        let got = resolve_rust_path("src/foo/bar.rs", "super::x", &live);
+        assert!(got.is_none(), "must not resolve to the crate-root decoy");
+    }
+
+    #[test]
+    fn rust_chained_super_climbs_each_level() {
+        // `super::super::x` from `src/a/b/c.rs` (non-mod) → `src/a/x.rs`.
+        let live = live(&["src/a/b/c.rs", "src/a/x.rs"]);
+        let got = resolve_rust_path("src/a/b/c.rs", "super::super::x", &live);
+        assert_eq!(got, Some("src/a/x.rs".to_string()));
     }
 }
