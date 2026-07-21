@@ -1339,14 +1339,18 @@ new_hotspot_max = 0
                 make_added_delta("src/god_class.rs", 20.0), // below floor → violation
                 make_added_delta("src/tidy.rs", 80.0),      // above floor → clean
                 make_gate_delta("src/edited.rs", Some(-40.0)), // modified, has delta → ignored
-                make_gate_delta("src/gone.rs", None),        // deleted (no projected) → ignored
+                make_gate_delta("src/gone.rs", None),       // deleted (no projected) → ignored
             ],
             Some(60.0),
             Some(59.0),
             Vec::new(),
         );
         let v = evaluate_gate_thresholds(&t, &report);
-        assert_eq!(v.len(), 1, "only the below-floor added file violates: {v:?}");
+        assert_eq!(
+            v.len(),
+            1,
+            "only the below-floor added file violates: {v:?}"
+        );
         assert_eq!(v[0].gate, "new_file_health_min");
         assert_eq!(v[0].path, "src/god_class.rs");
         assert_eq!(v[0].actual, "20.0");

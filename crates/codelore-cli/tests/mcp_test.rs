@@ -1073,10 +1073,7 @@ fn gate_changes_findings_render_capped_with_more_tail() {
     let resp = call_tool(&mut stdin, &mut reader, 1, "gate_changes", &json!({}));
     let text = assert_tool_ok_text(&resp, "gate_changes");
 
-    let finding_lines = text
-        .lines()
-        .filter(|l| l.starts_with("[new-file]"))
-        .count();
+    let finding_lines = text.lines().filter(|l| l.starts_with("[new-file]")).count();
     assert_eq!(
         finding_lines, 10,
         "the findings render must cap at 10 rows: {text}"

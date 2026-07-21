@@ -527,8 +527,7 @@ fn report_key_folds_in_defect_calibration() {
             defect_calibration: cal,
             ..Options::default()
         };
-        codelore_lib::change_set::cache::report_key(&head_sha, &changes, &opts)
-            .expect("report_key")
+        codelore_lib::change_set::cache::report_key(&head_sha, &changes, &opts).expect("report_key")
     };
 
     let uncalibrated = key(None);

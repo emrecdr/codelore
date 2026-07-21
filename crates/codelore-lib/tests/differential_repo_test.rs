@@ -1061,7 +1061,10 @@ fn worktree_changes_detects_rm_then_add_rename() {
         .args(["show", "HEAD:README.md"])
         .output()
         .expect("git show HEAD:README.md");
-    assert!(head_readme.status.success(), "git show HEAD:README.md failed");
+    assert!(
+        head_readme.status.success(),
+        "git show HEAD:README.md failed"
+    );
     std::fs::write(path.join("RENAMED.md"), &head_readme.stdout).expect("write RENAMED.md");
     let status = Command::new("git")
         .arg("-C")

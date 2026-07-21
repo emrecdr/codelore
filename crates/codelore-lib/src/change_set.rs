@@ -998,7 +998,11 @@ pub mod cache {
     /// Returns [`CodeLoreError::Analysis`] when a non-deleted change-set
     /// file cannot be read from the working tree — the engine could not
     /// project it either, so failing early is honest.
-    pub fn report_key(head_sha: &str, changes: &[WorktreeChange], opts: &Options) -> Result<String> {
+    pub fn report_key(
+        head_sha: &str,
+        changes: &[WorktreeChange],
+        opts: &Options,
+    ) -> Result<String> {
         let mut lines: Vec<String> = Vec::with_capacity(changes.len());
         for change in changes {
             let content = if change.kind == WorktreeChangeKind::Deleted {
