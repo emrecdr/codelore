@@ -26,7 +26,7 @@ pub fn run_summary(db: &FactsDb, opts: &Options) -> Result<Vec<SummaryRow>> {
         "
         SELECT 'number-of-commits' AS metric, COUNT(*) AS value FROM commits
         UNION ALL
-        SELECT 'number-of-entities', COUNT(*) FROM entities
+        SELECT 'number-of-entities', COUNT(DISTINCT path) FROM changes  -- code-maat counts distinct changed paths, not tree-sitter entities
         UNION ALL
         SELECT 'number-of-entities-changed', COUNT(*) FROM changes
         UNION ALL

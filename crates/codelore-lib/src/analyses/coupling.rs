@@ -583,7 +583,11 @@ fn collect_fisher_filtered(
             continue; // degenerate table — skip pair
         };
 
-        if fisher_p < opts.fisher_significance {
+        // code-maat's `coupling` applies no significance test — it emits every
+        // pair passing the degree / min-shared / min-revs thresholds (all in the
+        // SQL above). Under compat we bypass the Fisher gate so the row set
+        // matches code-maat; modern mode keeps it (refactor-sweep noise control).
+        if opts.code_maat_compat || fisher_p < opts.fisher_significance {
             out.push(CouplingRow {
                 entity_a: path_a,
                 entity_b: path_b,
