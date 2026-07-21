@@ -573,6 +573,13 @@ pub struct AnalyzeArgs {
     #[arg(long = "code-maat-compat", default_value_t = false)]
     pub code_maat_compat: bool,
 
+    /// Apply a Benjamini-Hochberg false-discovery-rate correction to the
+    /// Fisher co-change gate instead of the per-pair significance test.
+    /// Controls the family-wise false-discovery rate across all tested
+    /// coupling pairs; stricter than the per-pair gate. Off by default.
+    #[arg(long = "fdr-correction", default_value_t = false)]
+    pub fdr_correction: bool,
+
     /// Strict-grouping mode: paths that don't match any rule in the
     /// `--group-file` are DROPPED from analysis output (code-maat's
     /// behavior). Default: false — unmapped paths keep their raw names

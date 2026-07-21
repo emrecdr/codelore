@@ -279,6 +279,31 @@ pub fn precision_at_k(scored: &[(f64, bool)], k: usize) -> Option<f64> {
     Some(result)
 }
 
+/// Benjamini-Hochberg FDR step-up p-value cutoff for a family of p-values
+/// at false-discovery-rate level `q`. Returns the largest p(k) with
+/// p(k) <= (k/m)*q (sorted ascending); every p <= the returned cutoff is a
+/// discovery. Returns `f64::NEG_INFINITY` (reject nothing) for an empty
+/// family or when no rank satisfies the criterion.
+#[must_use]
+pub fn bh_fdr_threshold(pvalues: &[f64], q: f64) -> f64 {
+    let m = pvalues.len();
+    if m == 0 {
+        return f64::NEG_INFINITY;
+    }
+    let mut sorted = pvalues.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    #[allow(clippy::cast_precision_loss)]
+    let m_f = m as f64;
+    for k in (1..=m).rev() {
+        #[allow(clippy::cast_precision_loss)]
+        let crit = (k as f64 / m_f) * q;
+        if sorted[k - 1] <= crit {
+            return sorted[k - 1];
+        }
+    }
+    f64::NEG_INFINITY
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -480,5 +505,35 @@ mod tests {
     fn precision_at_k_returns_none_when_k_exceeds_len() {
         let scored = [(0.9, true), (0.1, false)];
         assert_eq!(precision_at_k(&scored, 3), None);
+    }
+
+    #[test]
+    fn bh_fdr_threshold_matches_hand_computed() {
+        // The cutoff is always one of the input p-values (or NEG_INFINITY),
+        // returned verbatim with no arithmetic, so bit-equality is the exact
+        // and correct comparison here — as in `ln_factorial_is_bit_identical`.
+        fn bits_eq(a: f64, b: f64) {
+            assert_eq!(a.to_bits(), b.to_bits(), "expected {b}, got {a}");
+        }
+
+        // Family of 5 p-values at q = 0.05. The per-test gate (p < 0.05) would
+        // keep 4 (0.001, 0.008, 0.039, 0.041); Benjamini-Hochberg keeps only
+        // the first 2. Walking k from 5 down: (5/5)·0.05=0.05 < 0.9,
+        // (4/5)·0.05=0.04 < 0.041, (3/5)·0.05=0.03 < 0.039, then
+        // (2/5)·0.05=0.02 ≥ 0.008 → cutoff is 0.008.
+        let p = [0.001, 0.008, 0.039, 0.041, 0.9];
+        bits_eq(bh_fdr_threshold(&p, 0.05), 0.008);
+
+        // Empty family rejects nothing.
+        bits_eq(bh_fdr_threshold(&[], 0.05), f64::NEG_INFINITY);
+        // No p-value clears its rank's criterion → reject nothing.
+        bits_eq(bh_fdr_threshold(&[0.9, 0.95], 0.05), f64::NEG_INFINITY);
+        // Every p-value clears → cutoff is the largest.
+        bits_eq(bh_fdr_threshold(&[0.001, 0.002], 0.05), 0.002);
+
+        // Order-independence: the internal sort makes the cutoff invariant to
+        // input order, bit-for-bit.
+        let shuffled = [0.9, 0.041, 0.001, 0.039, 0.008];
+        bits_eq(bh_fdr_threshold(&shuffled, 0.05), bh_fdr_threshold(&p, 0.05));
     }
 }

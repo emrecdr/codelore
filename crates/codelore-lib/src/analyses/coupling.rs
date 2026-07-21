@@ -100,6 +100,7 @@ pub struct CouplingMemoKey {
     time_bucket: Option<TimeBucket>,
     use_canonical_lineage: bool,
     code_maat_compat: bool,
+    fdr_correction: bool,
 }
 
 impl CouplingMemoKey {
@@ -114,6 +115,7 @@ impl CouplingMemoKey {
             time_bucket: opts.time_bucket,
             use_canonical_lineage: opts.use_canonical_lineage,
             code_maat_compat: opts.code_maat_compat,
+            fdr_correction: opts.fdr_correction,
         }
     }
 }
@@ -530,12 +532,12 @@ pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
     Ok(out)
 }
 
-/// Run a prepared coupling statement, collect every candidate pair, and keep
-/// only those passing the Fisher exact significance filter (step 7). Returns
-/// the FULL, un-truncated result — callers apply `rows_limit` (and, for
-/// [`run_coupling`], memoization) themselves. Shared by [`run_coupling`] and
-/// [`run_coupling_scoped`] so the row-mapping + Fisher filter lives in exactly
-/// one place.
+/// Run a prepared coupling statement, collect every candidate pair with a
+/// valid Fisher p-value, and keep those the significance gate selects (step 7,
+/// delegated to [`select_significant`]). Returns the FULL, un-truncated result
+/// — callers apply `rows_limit` (and, for [`run_coupling`], memoization)
+/// themselves. Shared by [`run_coupling`] and [`run_coupling_scoped`] so the
+/// row-mapping + gate lives in exactly one place.
 ///
 /// Candidates are collected in full BEFORE truncation because the previous
 /// in-SQL `LIMIT ?` ran ahead of the Fisher filter, letting significance
@@ -569,7 +571,7 @@ fn collect_fisher_filtered(
         )
         .map_err(|e| CodeLoreError::Analysis(format!("query coupling: {e}")))?;
 
-    let mut out = Vec::new();
+    let mut candidates = Vec::new();
     for raw in raw_rows {
         let (path_a, path_b, shared_raw, count_a, count_b, avg_raw, degree) =
             raw.map_err(|e| CodeLoreError::Analysis(format!("collect coupling row: {e}")))?;
@@ -583,24 +585,49 @@ fn collect_fisher_filtered(
             continue; // degenerate table — skip pair
         };
 
-        // code-maat's `coupling` applies no significance test — it emits every
-        // pair passing the degree / min-shared / min-revs thresholds (all in the
-        // SQL above). Under compat we bypass the Fisher gate so the row set
-        // matches code-maat; modern mode keeps it (refactor-sweep noise control).
-        if opts.code_maat_compat || fisher_p < opts.fisher_significance {
-            out.push(CouplingRow {
-                entity_a: path_a,
-                entity_b: path_b,
-                shared,
-                revs_a,
-                revs_b,
-                average_revs,
-                degree,
-                fisher_p,
-            });
-        }
+        // Every pair that produced a valid p-value is a candidate; the gate
+        // decision is made once, over the whole family, by `select_significant`
+        // (so the FDR correction can see all tested pairs at once). Pushed in
+        // the SQL order they arrive so the surviving subsequence is stable.
+        candidates.push(CouplingRow {
+            entity_a: path_a,
+            entity_b: path_b,
+            shared,
+            revs_a,
+            revs_b,
+            average_revs,
+            degree,
+            fisher_p,
+        });
     }
-    Ok(out)
+    Ok(select_significant(candidates, opts))
+}
+
+/// Decide which Fisher-tested candidate pairs are significant.
+///
+/// Precedence: `--code-maat-compat` emits every pair (code-maat has no
+/// significance test); otherwise `--fdr-correction` applies Benjamini-Hochberg
+/// over the whole tested family at level `fisher_significance`; otherwise the
+/// per-test `fisher_p < fisher_significance` gate. The family for FDR is
+/// exactly the pairs that produced a valid (non-degenerate) Fisher p-value —
+/// SQL-filtered-out and degenerate pairs were never tested and are correctly
+/// absent.
+fn select_significant(candidates: Vec<CouplingRow>, opts: &Options) -> Vec<CouplingRow> {
+    if opts.code_maat_compat {
+        return candidates;
+    }
+    if opts.fdr_correction {
+        let pvalues: Vec<f64> = candidates.iter().map(|r| r.fisher_p).collect();
+        let cutoff = crate::stats::bh_fdr_threshold(&pvalues, opts.fisher_significance);
+        return candidates
+            .into_iter()
+            .filter(|r| r.fisher_p <= cutoff)
+            .collect();
+    }
+    candidates
+        .into_iter()
+        .filter(|r| r.fisher_p < opts.fisher_significance)
+        .collect()
 }
 
 /// Scoped variant of [`run_coupling`]: reads change history from
@@ -882,5 +909,103 @@ mod fisher_two_tail_invariant_tests {
             None,
             "pathological u32::MAX inputs must not panic + must reject"
         );
+    }
+}
+
+#[cfg(test)]
+mod select_significant_tests {
+    use super::{CouplingRow, select_significant};
+    use crate::Options;
+
+    /// A candidate carrying only the `fisher_p` the gate reads; the other
+    /// fields are inert placeholders. The path encodes the p-value so a
+    /// surviving row is identifiable.
+    fn candidate(fisher_p: f64) -> CouplingRow {
+        CouplingRow {
+            entity_a: format!("a{fisher_p}"),
+            entity_b: format!("b{fisher_p}"),
+            shared: 1,
+            revs_a: 1,
+            revs_b: 1,
+            average_revs: 1,
+            degree: 0.0,
+            fisher_p,
+        }
+    }
+
+    fn pvalues(rows: &[CouplingRow]) -> Vec<f64> {
+        rows.iter().map(|r| r.fisher_p).collect()
+    }
+
+    #[test]
+    fn fdr_on_is_strict_subset_of_off() {
+        let candidates = || {
+            vec![
+                candidate(0.001),
+                candidate(0.03),
+                candidate(0.045),
+                candidate(0.5),
+            ]
+        };
+        let off = select_significant(
+            candidates(),
+            &Options {
+                fisher_significance: 0.05,
+                fdr_correction: false,
+                ..Options::default()
+            },
+        );
+        let on = select_significant(
+            candidates(),
+            &Options {
+                fisher_significance: 0.05,
+                fdr_correction: true,
+                ..Options::default()
+            },
+        );
+        // Per-test gate keeps the three below 0.05; BH's cutoff is 0.001
+        // (only (1/4)·0.05 = 0.0125 ≥ 0.001 clears), so ON keeps just one.
+        assert_eq!(pvalues(&off), vec![0.001, 0.03, 0.045]);
+        assert_eq!(pvalues(&on), vec![0.001]);
+        assert!(
+            on.len() < off.len(),
+            "FDR result must be a strict subset of the per-test result"
+        );
+    }
+
+    #[test]
+    fn fdr_off_is_byte_identical_per_test_gate() {
+        let candidates = vec![
+            candidate(0.01),
+            candidate(0.049),
+            candidate(0.05),
+            candidate(0.2),
+        ];
+        let off = select_significant(
+            candidates,
+            &Options {
+                fisher_significance: 0.05,
+                fdr_correction: false,
+                ..Options::default()
+            },
+        );
+        // Strict `<` 0.05: 0.05 itself is excluded.
+        assert_eq!(pvalues(&off), vec![0.01, 0.049]);
+    }
+
+    #[test]
+    fn compat_bypasses_both_gates() {
+        let candidates = vec![candidate(0.01), candidate(0.9), candidate(0.99)];
+        let kept = select_significant(
+            candidates,
+            &Options {
+                fisher_significance: 0.05,
+                fdr_correction: true,
+                code_maat_compat: true,
+                ..Options::default()
+            },
+        );
+        // compat wins over fdr and the per-test gate: every candidate survives.
+        assert_eq!(pvalues(&kept), vec![0.01, 0.9, 0.99]);
     }
 }

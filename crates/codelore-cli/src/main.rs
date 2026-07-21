@@ -3045,6 +3045,7 @@ fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         // is always-strict). Other compat behaviors are gated at the
         // analysis / emitter layer.
         code_maat_compat: args.code_maat_compat,
+        fdr_correction: args.fdr_correction,
         strict_grouping: args.strict_grouping || args.code_maat_compat,
         // --time-bucket. Maps from the CLI's enum to the lib's enum.
         time_bucket: args.time_bucket.map(Into::into),
