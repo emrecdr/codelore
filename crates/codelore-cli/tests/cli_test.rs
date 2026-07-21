@@ -2259,7 +2259,7 @@ fn gate_json_shape() {
 
 #[test]
 fn gate_findings_render_capped_with_more_tail() {
-    // #12e regression: the findings RENDER must cap at a fixed row count with
+    // Regression: the findings RENDER must cap at a fixed row count with
     // a "(+n more findings)" tail, mirroring the delta-table cap — otherwise
     // a big change set (13 newly-added files here, each producing its own
     // "new-file" finding) blows the text render's token budget even though

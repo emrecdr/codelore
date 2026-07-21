@@ -378,7 +378,7 @@ fn build_single_commit_fixture() -> tempfile::TempDir {
     dir
 }
 
-/// O2: `--min-revs` must gate `knowledge-islands` per-path exactly like
+/// `--min-revs` must gate `knowledge-islands` per-path exactly like
 /// every other per-path analysis (`hotspots`, `revisions`) — a file
 /// touched by only one commit is invisible under a `--min-revs 2` floor
 /// even though its sole author is long-departed and 100%-owns the file

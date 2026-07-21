@@ -169,8 +169,8 @@ fn delivery_friction_wip_age_anchored_to_newest_commit_deterministically() {
 }
 
 /// Build a repo whose sole commit has `committer_date` set BEFORE
-/// `date` (author date) — the clock-skew / rebase-artefact case #7b
-/// guards against. Author and committer dates are set independently
+/// `date` (author date) — the clock-skew / rebase-artefact case the
+/// negative-lead-time filter guards against. Author and committer dates are set independently
 /// (unlike the other fixtures in this file, which pin both env vars to
 /// the same value).
 fn build_clock_skew_repo() -> tempfile::TempDir {

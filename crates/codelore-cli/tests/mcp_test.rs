@@ -1046,7 +1046,7 @@ fn gate_changes_token_budget_holds() {
 
 #[test]
 fn gate_changes_findings_render_capped_with_more_tail() {
-    // #12e regression: a change set large enough to produce more findings
+    // Regression: a change set large enough to produce more findings
     // than the render cap must still stay within the token budget — the
     // per-finding budget formula alone doesn't protect against this because
     // it scales WITH the finding count. 13 newly-added files (each its own

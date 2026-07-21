@@ -1029,7 +1029,7 @@ fn worktree_changes_detects_delete_and_rename() {
     );
 }
 
-/// #12c differential coverage: a rename staged via literal `git rm` (not
+/// Differential coverage: a rename staged via literal `git rm` (not
 /// `git mv`) plus a separate `git add` of the new path must be detected as a
 /// rename exactly like `worktree_changes_detects_delete_and_rename`'s `git
 /// mv` case — `git mv` is itself implemented as this same rm-then-add
@@ -1101,7 +1101,7 @@ fn worktree_changes_detects_rm_then_add_rename() {
     );
 }
 
-/// #12c differential coverage: an UNSTAGED rename (a plain filesystem `mv`,
+/// Differential coverage: an UNSTAGED rename (a plain filesystem `mv`,
 /// no `git add`) is NOT detected as a rename by either backend — the
 /// destination is untracked, and untracked files are excluded from
 /// `worktree_changes` by design (spec contract: "untracked files excluded on

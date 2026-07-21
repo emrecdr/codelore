@@ -551,7 +551,7 @@ fn report_key_folds_in_defect_calibration() {
 
 #[test]
 fn report_key_folds_in_min_revs() {
-    // #12a regression: `report_key` used to cover only head_sha + change-set
+    // Regression: `report_key` used to cover only head_sha + change-set
     // content + defect-calibration digest — every other report-affecting
     // `Options` knob was invisible to the cache key. `min_revs` reaches
     // `run_coupling(db, opts)` inside `build_change_set_report` (the ORIGINAL
@@ -594,7 +594,7 @@ fn report_key_folds_in_min_revs() {
 
 #[test]
 fn report_key_folds_in_rows_limit() {
-    // #12a regression: `canonical_json` deliberately drops `rows_limit` as
+    // Regression: `canonical_json` deliberately drops `rows_limit` as
     // cosmetic for the ingest cache, but `build_change_set_report`'s
     // `run_coupling(db, opts)` call truncates to it BEFORE the
     // coupling-absence filter runs — not cosmetic for this report. Folded in
