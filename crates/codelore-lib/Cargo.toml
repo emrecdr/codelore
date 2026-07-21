@@ -107,8 +107,11 @@ fancy-regex = "0.18"
 # core deserializer and `serde` for the typed `from_str` API
 # `quality_gates::Thresholds::parse` and `arch_rules::LayerRules::parse`
 # call. (In 0.8.x `parse` implied `serde`; that bundling went away in
-# the 1.0 release.)
-toml = { version = "1", default-features = false, features = ["parse", "serde", "display"] }
+# the 1.0 release.) `preserve_order` makes `toml::Table` iterate layers
+# in the order they appear in the file (backed by `indexmap`), so
+# arch-rules first-match layer classification follows declaration order
+# instead of the sorted layer names.
+toml = { version = "1", default-features = false, features = ["parse", "serde", "display", "preserve_order"] }
 # Synchronous HTTP client for the advisory enrichment layer's two-dialect chat
 # client (Anthropic-native + OpenAI-compatible). Blocking by design — the crate
 # carries no async runtime and issues one advisory completion per invocation.

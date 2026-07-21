@@ -102,12 +102,11 @@ impl LayerRules {
     ///
     /// Returns a static `&str` description of the parse failure.
     pub fn from_text(raw: &str) -> std::result::Result<Self, String> {
-        // Deserialise via `toml::Table` (order-preserving) and walk
-        // the `[layer.*]` keys in declaration order so `classify()`'s
-        // first-match contract is reproducible across runs. The
-        // default `HashMap<String, WireLayer>` shape lost order to
-        // hash randomisation and made arch-violations non-deterministic
-        // on inputs with nested-prefix layers.
+        // Deserialise via `toml::Table` and walk the `[layer.*]` keys in
+        // declaration order — the `toml/preserve_order` feature makes the
+        // table iterate in the order layers appear in the file, so
+        // `classify()`'s first-match picks the first-declared matching
+        // layer rather than the alphabetically-first one.
         let table: toml::Table = toml::from_str(raw).map_err(|e| e.to_string())?;
         let mut layers: Vec<Layer> = Vec::new();
         if let Some(layer_section) = table.get("layer") {
@@ -262,10 +261,33 @@ paths = ["src/"]
 may_depend_on = []
 "#;
         let rules = LayerRules::from_text(raw).unwrap();
-        // src/api/foo.rs matches both — first-declared (api) wins
-        // deterministically via the order-preserving `toml::Table`
-        // walk in `from_text`.
+        // src/api/foo.rs matches both — the first-declared layer (api)
+        // wins, since `from_text` walks layers in declaration order via
+        // `toml/preserve_order`.
         assert_eq!(rules.classify("src/api/foo.rs"), Some("api"));
+    }
+
+    #[test]
+    fn classification_respects_declaration_order_not_alphabetical() {
+        // `zeta_specific` is declared FIRST but sorts AFTER `alpha_general`
+        // alphabetically — so alphabetical iteration and declaration order
+        // disagree here. Declaration order must win: the specific
+        // `src/api/` layer is written first and must classify before the
+        // catch-all `src/` layer.
+        let raw = r#"
+[layer.zeta_specific]
+paths = ["src/api/"]
+may_depend_on = []
+
+[layer.alpha_general]
+paths = ["src/"]
+may_depend_on = []
+"#;
+        let rules = LayerRules::from_text(raw).unwrap();
+        // Parsed order follows the file, not the sorted layer names.
+        assert_eq!(rules.layers[0].name, "zeta_specific");
+        // First-match classification returns the first-declared match.
+        assert_eq!(rules.classify("src/api/foo.rs"), Some("zeta_specific"));
     }
 
     #[test]
