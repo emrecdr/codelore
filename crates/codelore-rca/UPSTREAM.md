@@ -53,7 +53,11 @@ The dangling references from Task 4's file drops were resolved by:
   `Mozjs::VariableDeclarator` references in JS/TS/TSX impl blocks to use correct enum namespaces
 - `src/alterator.rs` — removed `impl Alterator for MozjsCode` block
 - `src/metrics/cognitive.rs` — removed `impl Cognitive for MozjsCode`; updated MozjsParser tests
-  to use JavascriptParser (snapshot adjusted for JS grammar difference: sum 11→16)
+  to use JavascriptParser. The re-pointed mozjs else-if test read sum 16 instead of 11 not
+  because of a grammar difference but because the JavaScript `is_else_if` helper compared the
+  wrong parent node kind and never matched, so `else if` branches were over-counted. The
+  cognitive-complexity correctness fix (see the "Cognitive-complexity correctness" section)
+  restores 11.
 - `src/metrics/cyclomatic.rs` — removed `impl Cyclomatic for MozjsCode`
 - `src/metrics/exit.rs` — removed `impl Exit for MozjsCode`
 - `src/metrics/halstead.rs` — removed `impl Halstead for MozjsCode`; updated MozjsParser test refs
@@ -99,6 +103,28 @@ let root = tree.root_node();
 println!("{} id: {}", root.kind(), root.kind_id());
 ```
 and comparing against the enum constants in `src/languages/language_*.rs`.
+
+## Cognitive-complexity correctness
+
+The cognitive-complexity visitors in `src/metrics/cognitive.rs` and their
+`is_else_if` helpers in `src/checker.rs` diverge from upstream to correct
+miscounts against the Campbell/SonarSource cognitive-complexity specification.
+Current behavior:
+
+- **`else if` detection.** `is_else_if` for JavaScript and TSX compares the
+  parent node kind against `else_clause`. Upstream compared it against
+  `if_statement`, which never matches because tree-sitter wraps the else branch
+  in an `else_clause`; the result was that `else if` branches were counted as
+  freshly-nested `if`s. Java has no `else_clause` node, so its `is_else_if`
+  matches an `if_statement` whose parent `if_statement` holds it as the
+  `alternative` field.
+
+- **Missing nesting constructs.** The increase-nesting arm also covers Rust
+  `loop`, Java enhanced-`for` and ternary, and Python `match`. `case`/`switch`
+  arms add nothing on their own, matching upstream's treatment of `switch`.
+
+- **`finally` is not a branch.** Python `finally` does not increment; only
+  `else`, `elif`, and `except` do. `except`/`catch` still counts via its own arm.
 
 ## License
 

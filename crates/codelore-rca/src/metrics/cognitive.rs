@@ -286,7 +286,11 @@ impl Cognitive for PythonCode {
         let (mut nesting, mut depth, mut lambda) = get_nesting_from_map(node, nesting_map);
 
         match node.kind_id().into() {
-            IfStatement | ForStatement | WhileStatement | ConditionalExpression => {
+            IfStatement
+            | ForStatement
+            | WhileStatement
+            | MatchStatement
+            | ConditionalExpression => {
                 increase_nesting(stats, &mut nesting, depth, lambda);
             }
             ElifClause => {
@@ -296,9 +300,10 @@ impl Cognitive for PythonCode {
                 // Reset the boolean sequence
                 stats.boolean_seq.reset();
             }
-            ElseClause | FinallyClause => {
-                // No nesting increment for them because their cost has already
-                // been paid by the if construct
+            ElseClause => {
+                // No nesting increment: the branch cost has already been paid
+                // by the if construct. `finally` is not a branch and does not
+                // increment.
                 increment_by_one(stats);
             }
             ExceptClause => {
@@ -365,7 +370,7 @@ impl Cognitive for RustCode {
                     increase_nesting(stats,&mut nesting, depth, lambda);
                 }
             }
-            ForExpression | WhileExpression | MatchExpression => {
+            ForExpression | WhileExpression | LoopExpression | MatchExpression => {
                 increase_nesting(stats,&mut nesting, depth, lambda);
             }
             Else /*else-if also */ => {
@@ -509,7 +514,8 @@ impl Cognitive for JavaCode {
                     increase_nesting(stats,&mut nesting, depth, lambda);
                 }
             }
-            ForStatement | WhileStatement | DoStatement | SwitchBlock | CatchClause => {
+            ForStatement | EnhancedForStatement | WhileStatement | DoStatement | SwitchBlock
+            | CatchClause | TernaryExpression => {
                 increase_nesting(stats,&mut nesting, depth, lambda);
             }
             Else /* else-if also */ => {
@@ -1378,10 +1384,10 @@ mod tests {
                     metric.cognitive,
                     @r###"
                     {
-                      "sum": 16.0,
-                      "average": 16.0,
+                      "sum": 11.0,
+                      "average": 11.0,
                       "min": 0.0,
-                      "max": 16.0
+                      "max": 11.0
                     }"###
                 );
             },
@@ -1769,6 +1775,218 @@ mod tests {
                       "average": 4.0,
                       "min": 0.0,
                       "max": 4.0
+                    }"###
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn rust_loop() {
+        check_metrics::<RustParser>(
+            "fn f(a: bool) {
+                 loop { // +1
+                     if a { // +2 (nesting = 1)
+                         break;
+                     }
+                 }
+             }",
+            "foo.rs",
+            |metric| {
+                insta::assert_json_snapshot!(
+                    metric.cognitive,
+                    @r###"
+                    {
+                      "sum": 3.0,
+                      "average": 3.0,
+                      "min": 0.0,
+                      "max": 3.0
+                    }"###
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn javascript_if_else_if_else() {
+        check_metrics::<JavascriptParser>(
+            "function foo(a, b) {
+                 if (a) { // +1
+                     g();
+                 } else if (b) { // +1
+                     g();
+                 } else { // +1
+                     g();
+                 }
+             }",
+            "foo.js",
+            |metric| {
+                insta::assert_json_snapshot!(
+                    metric.cognitive,
+                    @r###"
+                    {
+                      "sum": 3.0,
+                      "average": 3.0,
+                      "min": 0.0,
+                      "max": 3.0
+                    }"###
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn tsx_if_else_if_else() {
+        check_metrics::<TsxParser>(
+            "function foo(a, b) {
+                 if (a) { // +1
+                     g();
+                 } else if (b) { // +1
+                     g();
+                 } else { // +1
+                     g();
+                 }
+             }",
+            "foo.tsx",
+            |metric| {
+                insta::assert_json_snapshot!(
+                    metric.cognitive,
+                    @r###"
+                    {
+                      "sum": 3.0,
+                      "average": 3.0,
+                      "min": 0.0,
+                      "max": 3.0
+                    }"###
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn java_enhanced_for() {
+        check_metrics::<JavaParser>(
+            "class X {
+                void f(int[] xs) {
+                    for (int x : xs) { // +1
+                        if (x > 0) { // +2 (nesting = 1)
+                            g(x);
+                        }
+                    }
+                }
+            }",
+            "foo.java",
+            |metric| {
+                insta::assert_json_snapshot!(
+                    metric.cognitive,
+                    @r###"
+                    {
+                      "sum": 3.0,
+                      "average": 3.0,
+                      "min": 0.0,
+                      "max": 3.0
+                    }"###
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn java_ternary() {
+        check_metrics::<JavaParser>(
+            "class X {
+                int f(boolean a) {
+                    return a ? 1 : 2; // +1
+                }
+            }",
+            "foo.java",
+            |metric| {
+                insta::assert_json_snapshot!(
+                    metric.cognitive,
+                    @r###"
+                    {
+                      "sum": 1.0,
+                      "average": 1.0,
+                      "min": 0.0,
+                      "max": 1.0
+                    }"###
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn java_else_if() {
+        check_metrics::<JavaParser>(
+            "class X {
+                void f(int a) {
+                    if (a == 1) { // +1
+                        g();
+                    } else if (a == 2) { // +1
+                        g();
+                    } else { // +1
+                        g();
+                    }
+                }
+            }",
+            "foo.java",
+            |metric| {
+                insta::assert_json_snapshot!(
+                    metric.cognitive,
+                    @r###"
+                    {
+                      "sum": 3.0,
+                      "average": 3.0,
+                      "min": 0.0,
+                      "max": 3.0
+                    }"###
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn python_match() {
+        check_metrics::<PythonParser>(
+            "def f(x):
+                match x:  # +1
+                    case 1:
+                        if x:  # +2 (nesting = 1)
+                            g(x)",
+            "foo.py",
+            |metric| {
+                insta::assert_json_snapshot!(
+                    metric.cognitive,
+                    @r###"
+                    {
+                      "sum": 3.0,
+                      "average": 3.0,
+                      "min": 0.0,
+                      "max": 3.0
+                    }"###
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn python_finally_no_increment() {
+        check_metrics::<PythonParser>(
+            "def f():
+                try:
+                    g()
+                finally:  # +0 (finally is not a branch)
+                    h()",
+            "foo.py",
+            |metric| {
+                insta::assert_json_snapshot!(
+                    metric.cognitive,
+                    @r###"
+                    {
+                      "sum": 0.0,
+                      "average": 0.0,
+                      "min": 0.0,
+                      "max": 0.0
                     }"###
                 );
             },

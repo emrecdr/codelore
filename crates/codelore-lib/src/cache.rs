@@ -23,12 +23,13 @@ use crate::Options;
 /// schema version, and the historical `schema_v` prefix on the value is
 /// retained so older cache files stay invalidated.
 ///
-/// Bumped to `schema_v10`: head-only ingest (`opts.head_only_ingest`) now
-/// also populates the `imports` table. Cache files written by an older
-/// binary under head-only ingest carry no import facts, so any analysis
-/// that joins against `imports` would silently see an empty table on a
-/// stale cache hit; the epoch bump forces those caches to be rebuilt.
-const CACHE_EPOCH: &str = "schema_v10";
+/// Bumped to `schema_v11`: the cognitive-complexity metric now detects
+/// `else if` chains correctly and counts previously-missed constructs
+/// (`loop`, enhanced-`for`, ternary, `match`). These cognitive and nesting
+/// numbers flow into ingested facts, so a cache written by an older binary
+/// would serve pre-fix values on a stale hit; the epoch bump forces those
+/// caches to be rebuilt.
+const CACHE_EPOCH: &str = "schema_v11";
 
 /// Compute a 32-byte SHA-256 cache key from:
 ///   `canonical_repo_path || NUL || head_sha || NUL || CARGO_PKG_VERSION || NUL`

@@ -354,7 +354,20 @@ impl Checker for JavaCode {
         node.kind_id() == Java::StringLiteral
     }
 
-    fn is_else_if(_: &Node) -> bool {
+    fn is_else_if(node: &Node) -> bool {
+        // Java has no `else_clause` node — the grammar attaches the else branch
+        // as the `alternative` field of the enclosing `if_statement`. An
+        // else-if is therefore an `if_statement` that is itself the
+        // `alternative` of its parent `if_statement`.
+        if node.kind_id() != Java::IfStatement {
+            return false;
+        }
+        if let Some(parent) = node.parent() {
+            return parent.kind_id() == Java::IfStatement
+                && parent
+                    .child_by_field_name("alternative")
+                    .is_some_and(|alt| alt.id() == node.id());
+        }
         false
     }
 
@@ -410,8 +423,7 @@ impl Checker for JavascriptCode {
             return false;
         }
         if let Some(parent) = node.parent() {
-            return node.kind_id() == Javascript::IfStatement
-                && parent.kind_id() == Javascript::IfStatement;
+            return parent.kind_id() == Javascript::ElseClause;
         }
         false
     }
@@ -527,7 +539,7 @@ impl Checker for TsxCode {
             return false;
         }
         if let Some(parent) = node.parent() {
-            return node.kind_id() == Tsx::IfStatement && parent.kind_id() == Tsx::IfStatement;
+            return parent.kind_id() == Tsx::ElseClause;
         }
         false
     }
