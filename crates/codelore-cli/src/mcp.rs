@@ -799,8 +799,9 @@ impl CodeLoreServer {
 /// forms: a verdict line (`PASS` / `FAIL — n violation(s)` / the advisory-only
 /// disclosure when `violations` is `None` because no thresholds are
 /// configured), the merge-in-progress note, violation rows in `codelore
-/// check`'s exact form, one line per advisory finding, and the per-file delta
-/// table capped at the CLI's row limit with a `(+n more files)` tail.
+/// check`'s exact form, one line per advisory finding capped at the CLI's row
+/// limit with a `(+n more findings)` tail, and the per-file delta table
+/// capped at the CLI's row limit with a `(+n more files)` tail.
 fn render_gate_changes(
     report: &change_set::ChangeSetReport,
     violations: Option<&[GateViolation]>,
@@ -826,8 +827,15 @@ fn render_gate_changes(
             threshold = v.threshold,
         ));
     }
-    for f in &report.findings {
+    for f in report.findings.iter().take(crate::GATE_FINDINGS_ROWS) {
         lines.push(format!("[{}] {}: {}", f.kind, f.path, f.detail));
+    }
+    let hidden_findings = report
+        .findings
+        .len()
+        .saturating_sub(crate::GATE_FINDINGS_ROWS);
+    if hidden_findings > 0 {
+        lines.push(format!("(+{hidden_findings} more findings)"));
     }
     for d in report
         .health

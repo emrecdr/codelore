@@ -171,6 +171,103 @@ fn non_tier1_file_reports_reason() {
 }
 
 #[test]
+fn deleted_red_file_is_handled_honestly() {
+    // spec §8: "delete a red-band file → assert improvement reporting."
+    // Commit a monster-complexity version of src/main.rs first so its HEAD
+    // baseline is genuinely red, then delete it (uncommitted, working-tree
+    // only) and assert deterministic, honest-absence handling: no crash, the
+    // `REASON_DELETED` reason, no synthetic projected score or delta, and the
+    // baseline score preserved so the deletion's context isn't lost. This is
+    // the "assert improvement reporting" spec bullet read literally per
+    // `REASON_DELETED`'s doc comment: there is no safe, fixed-direction
+    // per-file "improvement" number for a file that no longer exists to
+    // score (verified below — the whole-repo median does not move in a
+    // single guaranteed direction, because the projection also re-sources
+    // clone/duplication counts from the working tree, which can shift OTHER
+    // files' scores too), so the report stays honest rather than inventing
+    // one.
+    let fx = differential_repo::build();
+    let main_path = fx.dir.path().join("src/main.rs");
+    append(&main_path, MONSTER_FN);
+    // Cross-platform: a fresh clone carries no committer identity, so every
+    // `commit` call must supply one explicitly.
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(fx.dir.path())
+            .args(["-c", "user.email=codelore-test@example.com"])
+            .args(["-c", "user.name=CodeLore Test"])
+            .args(args)
+            .status()
+            .expect("spawn git")
+    };
+    assert!(
+        git(&["commit", "-aqm", "worsen main.rs"]).success(),
+        "commit must succeed"
+    );
+
+    let repo = GixRepo::open(fx.dir.path()).expect("open repo");
+    let db = FactsDb::new_in_memory().expect("open fact store");
+    let opts = Options {
+        repo_path: fx.dir.path().to_path_buf(),
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    // Confirm the committed baseline is genuinely red before deleting it.
+    let baseline_probe =
+        project_health(&db, &repo, &opts, &[modified("src/main.rs")]).expect("baseline probe");
+    let baseline_delta = baseline_probe
+        .deltas
+        .iter()
+        .find(|d| d.path == "src/main.rs")
+        .expect("src/main.rs has a delta row");
+    let baseline_score = baseline_delta
+        .baseline_score
+        .expect("committed main.rs is scored");
+    assert_eq!(
+        baseline_delta.baseline_band.as_deref(),
+        Some("red"),
+        "the monster-fn commit must make src/main.rs red at HEAD: {baseline_delta:?}",
+    );
+
+    // Now delete it (uncommitted) and project the change set. Must not
+    // panic, and must resolve to the honest-absence shape.
+    std::fs::remove_file(&main_path).expect("delete main.rs");
+    let deletion = WorktreeChange {
+        path: "src/main.rs".to_string(),
+        kind: WorktreeChangeKind::Deleted,
+        rename_from: None,
+    };
+    let projection = project_health(&db, &repo, &opts, &[deletion]).expect("project deletion");
+    let delta = projection
+        .deltas
+        .iter()
+        .find(|d| d.path == "src/main.rs")
+        .expect("a deleted file still gets a delta row");
+
+    assert_eq!(delta.reason.as_deref(), Some("deleted at gate time"));
+    assert_eq!(
+        delta.projected_score, None,
+        "a deleted file has no projected score"
+    );
+    assert_eq!(
+        delta.delta, None,
+        "a deleted file reports no numeric per-file delta — excluded from \
+         delta_code_health_min_per_file and new_file_health_min by construction"
+    );
+    assert_eq!(
+        delta.baseline_score,
+        Some(baseline_score),
+        "the baseline score is preserved even though the file left the projection"
+    );
+    assert!(
+        projection.baseline_median.is_some() && projection.projected_median.is_some(),
+        "the whole-repo medians must still resolve deterministically around a deletion: {projection:?}",
+    );
+}
+
+#[test]
 fn project_health_leaves_the_fact_tables_untouched() {
     // Scoring isolation: the engine writes only session-scoped temp tables. The
     // persistent `complexity_metrics` row count and the set of permanent tables
@@ -424,15 +521,20 @@ fn report_key_folds_in_defect_calibration() {
     let calib_b = root.join("b.calib.json");
     std::fs::write(&calib_b, br#"{"weights":"b"}"#).expect("write calib b");
 
-    let key = |cal: Option<&std::path::Path>| {
-        codelore_lib::change_set::cache::report_key(&head_sha, root, &changes, cal)
+    let key = |cal: Option<std::path::PathBuf>| {
+        let opts = Options {
+            repo_path: root.to_path_buf(),
+            defect_calibration: cal,
+            ..Options::default()
+        };
+        codelore_lib::change_set::cache::report_key(&head_sha, &changes, &opts)
             .expect("report_key")
     };
 
     let uncalibrated = key(None);
-    let calibrated_a = key(Some(&calib_a));
-    let calibrated_a_again = key(Some(&calib_a));
-    let calibrated_b = key(Some(&calib_b));
+    let calibrated_a = key(Some(calib_a.clone()));
+    let calibrated_a_again = key(Some(calib_a));
+    let calibrated_b = key(Some(calib_b));
 
     assert_ne!(
         uncalibrated, calibrated_a,
@@ -445,6 +547,82 @@ fn report_key_folds_in_defect_calibration() {
     assert_ne!(
         calibrated_a, calibrated_b,
         "different artifact content must yield different keys",
+    );
+}
+
+#[test]
+fn report_key_folds_in_min_revs() {
+    // #12a regression: `report_key` used to cover only head_sha + change-set
+    // content + defect-calibration digest — every other report-affecting
+    // `Options` knob was invisible to the cache key. `min_revs` reaches
+    // `run_coupling(db, opts)` inside `build_change_set_report` (the ORIGINAL
+    // `opts`, not the health projection's `min_revs = 1` override), so two
+    // runs differing only in `min_revs` can legitimately produce different
+    // coupling-absence findings and must not share a cache entry.
+    let fx = differential_repo::build();
+    let repo = GixRepo::open(fx.dir.path()).expect("open repo");
+    let head_sha = repo.head_sha().expect("head sha");
+    let changes = [modified("src/main.rs")];
+
+    let opts_a = Options {
+        repo_path: fx.dir.path().to_path_buf(),
+        min_revs: 1,
+        ..Options::default()
+    };
+    let opts_b = Options {
+        min_revs: 7,
+        ..opts_a.clone()
+    };
+    let opts_a_again = opts_a.clone();
+
+    let key_a = codelore_lib::change_set::cache::report_key(&head_sha, &changes, &opts_a)
+        .expect("report_key a");
+    let key_b = codelore_lib::change_set::cache::report_key(&head_sha, &changes, &opts_b)
+        .expect("report_key b");
+    let key_a_again =
+        codelore_lib::change_set::cache::report_key(&head_sha, &changes, &opts_a_again)
+            .expect("report_key a again");
+
+    assert_ne!(
+        key_a, key_b,
+        "differing only in min_revs must yield different cache keys",
+    );
+    assert_eq!(
+        key_a, key_a_again,
+        "identical Options must yield an identical cache key",
+    );
+}
+
+#[test]
+fn report_key_folds_in_rows_limit() {
+    // #12a regression: `canonical_json` deliberately drops `rows_limit` as
+    // cosmetic for the ingest cache, but `build_change_set_report`'s
+    // `run_coupling(db, opts)` call truncates to it BEFORE the
+    // coupling-absence filter runs — not cosmetic for this report. Folded in
+    // explicitly alongside the canonical digest.
+    let fx = differential_repo::build();
+    let repo = GixRepo::open(fx.dir.path()).expect("open repo");
+    let head_sha = repo.head_sha().expect("head sha");
+    let changes = [modified("src/main.rs")];
+
+    let opts_a = Options {
+        repo_path: fx.dir.path().to_path_buf(),
+        rows_limit: None,
+        ..Options::default()
+    };
+    let opts_b = Options {
+        rows_limit: Some(5),
+        ..opts_a.clone()
+    };
+
+    let key_a = codelore_lib::change_set::cache::report_key(&head_sha, &changes, &opts_a)
+        .expect("report_key a");
+    let key_b = codelore_lib::change_set::cache::report_key(&head_sha, &changes, &opts_b)
+        .expect("report_key b");
+
+    assert_ne!(
+        key_a, key_b,
+        "differing only in rows_limit must yield different cache keys",
     );
 }
 

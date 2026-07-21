@@ -1932,8 +1932,17 @@ fn render_gate_json(
 /// `(+n more files)` tail. The JSON document always carries every row.
 const GATE_DELTA_TABLE_ROWS: usize = 10;
 
+/// Number of advisory-finding rows the text render shows; the rest fold into
+/// a `(+n more findings)` tail. Mirrors [`GATE_DELTA_TABLE_ROWS`]'s
+/// render-only cap — `report.findings` (the JSON document, and the in-memory
+/// `ChangeSetReport`) always carries every finding by design (spec §6); only
+/// the rendered text is bounded, so a large coupling cluster or a big batch
+/// of added files can never blow the token budget.
+const GATE_FINDINGS_ROWS: usize = 10;
+
 /// Print the advisory (non-verdict) text sections to stdout: one line per
-/// finding, then the per-file delta table in the engine's order (|delta|
+/// finding (capped at [`GATE_FINDINGS_ROWS`] with a `(+n more findings)`
+/// tail), then the per-file delta table in the engine's order (|delta|
 /// descending, unscored rows last). Suppressed under `--quiet`.
 fn render_gate_advisories(
     args: &args::GateArgs,
@@ -1942,8 +1951,12 @@ fn render_gate_advisories(
     if args.quiet {
         return;
     }
-    for f in &report.findings {
+    for f in report.findings.iter().take(GATE_FINDINGS_ROWS) {
         println!("[{}] {}: {}", f.kind, f.path, f.detail);
+    }
+    let hidden_findings = report.findings.len().saturating_sub(GATE_FINDINGS_ROWS);
+    if hidden_findings > 0 {
+        println!("(+{hidden_findings} more findings)");
     }
     for d in report.health.deltas.iter().take(GATE_DELTA_TABLE_ROWS) {
         match (d.baseline_score, d.projected_score, d.delta) {

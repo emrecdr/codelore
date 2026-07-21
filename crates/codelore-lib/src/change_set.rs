@@ -79,6 +79,20 @@ const BINARY_SNIFF_BYTES: usize = 8000;
 const REASON_NOT_TIER1: &str = "not a Tier-1 source file";
 const REASON_BINARY: &str = "binary content";
 const REASON_SIZE_LIMIT: &str = "file exceeds the AST size limit";
+/// A deleted file's per-file delta is intentionally `None` — deletions are
+/// excluded from `delta_code_health_min_per_file` and `new_file_health_min`
+/// (both skip rows with no delta / no projected score). There is no honest
+/// numeric "projected score" for a file that no longer exists, so the row
+/// stays an explicit absence rather than a synthetic one; `baseline_score`
+/// is still reported so the deletion's context (what health the file HAD)
+/// isn't lost. Note this is NOT the same as "no effect": the whole-repo
+/// `baseline_median`/`projected_median` pair (which `delta_code_health_min`
+/// reads) is computed over each run's own scored population, so a deleted
+/// file's row leaves the projected population — but because the projection
+/// also re-sources clone/duplication counts from the working tree (see the
+/// module doc comment), OTHER files' scores can shift too, so no fixed
+/// direction (the median moving up or down) is guaranteed from a deletion
+/// alone.
 const REASON_DELETED: &str = "deleted at gate time";
 /// Visible to [`crate::quality_gates`] so the `new_file_health_min` gate can
 /// identify added-file rows by their honest-absence reason rather than
@@ -204,12 +218,7 @@ pub fn build_change_set_report<R: crate::Repo>(
     let head_sha = repo.head_sha()?;
     let changes = repo.worktree_changes()?;
 
-    let key = cache::report_key(
-        &head_sha,
-        &opts.repo_path,
-        &changes,
-        opts.defect_calibration.as_deref(),
-    )?;
+    let key = cache::report_key(&head_sha, &changes, opts)?;
     if let Some(mut cached) = cache::read(cache_root, &opts.repo_path, &key) {
         cached.merge_in_progress = repo.merge_or_rebase_in_progress();
         return Ok(cached);
@@ -946,7 +955,7 @@ pub mod cache {
     use super::ChangeSetReport;
     use crate::cache::repo_cache_dir;
     use crate::repo::{WorktreeChange, WorktreeChangeKind};
-    use crate::{CodeLoreError, Result};
+    use crate::{CodeLoreError, Options, Result};
 
     /// Report-shape tag folded into the key so a future incompatible report
     /// change invalidates old sidecars by construction.
@@ -957,8 +966,9 @@ pub mod cache {
 
     /// The content key for a change set: lowercase-hex SHA-256 of
     /// `head_sha | sorted "path\0content-sha256" lines | crate version |`
-    /// `calib=<digest> | ` [`KEY_SCHEMA`]. A deleted path contributes the
-    /// literal `"deleted"` in place of its content hash.
+    /// `calib=<digest> | rows_limit=<n> | opts=<canonical-json digest> | `
+    /// [`KEY_SCHEMA`]. A deleted path contributes the literal `"deleted"` in
+    /// place of its content hash.
     ///
     /// The defect-calibration artifact's CONTENT digest is folded in because
     /// `--defect-calibration` substitutes smell weights inside the scoring
@@ -968,23 +978,33 @@ pub mod cache {
     /// artifact is configured. Thresholds stay excluded: they only affect
     /// verdicts, which consumers always recompute from the cached report.
     ///
+    /// Every other report-affecting `Options` knob is folded in via
+    /// [`Options::canonical_json`] — the same digest the ingest cache uses —
+    /// so `min_revs`, `exclude_patterns`/`include_ignored`, the clone
+    /// thresholds, and any future field are covered with zero per-field
+    /// maintenance: `build_change_set_report`'s `run_coupling(db, opts)` and
+    /// `clone_introductions(db, opts, …)` calls pass the caller's `opts`
+    /// straight through (unlike the health projection's own `opts_scan`,
+    /// which pins `min_revs = 1`), so any of those knobs can change which
+    /// coupling-absence or clone-introduction findings this report contains.
+    /// `rows_limit` is folded in explicitly ALONGSIDE the canonical digest
+    /// rather than relying on it: `canonical_json` deliberately drops
+    /// `rows_limit` as cosmetic for the ingest cache, but
+    /// `run_coupling(db, opts)` truncates to it before the coupling-absence
+    /// filter runs, so it is not cosmetic here.
+    ///
     /// # Errors
     ///
     /// Returns [`CodeLoreError::Analysis`] when a non-deleted change-set
     /// file cannot be read from the working tree — the engine could not
     /// project it either, so failing early is honest.
-    pub fn report_key(
-        head_sha: &str,
-        repo_root: &Path,
-        changes: &[WorktreeChange],
-        defect_calibration: Option<&Path>,
-    ) -> Result<String> {
+    pub fn report_key(head_sha: &str, changes: &[WorktreeChange], opts: &Options) -> Result<String> {
         let mut lines: Vec<String> = Vec::with_capacity(changes.len());
         for change in changes {
             let content = if change.kind == WorktreeChangeKind::Deleted {
                 "deleted".to_string()
             } else {
-                let bytes = std::fs::read(repo_root.join(&change.path)).map_err(|e| {
+                let bytes = std::fs::read(opts.repo_path.join(&change.path)).map_err(|e| {
                     CodeLoreError::Analysis(format!("read worktree file {}: {e}", change.path))
                 })?;
                 hex::encode(Sha256::digest(&bytes))
@@ -997,14 +1017,18 @@ pub mod cache {
         // Unset or unreadable both yield an empty segment; an unreadable
         // artifact hard-errors in the scoring engine before any report is
         // cached, so the collision with "unset" is unreachable.
-        let calib = defect_calibration
+        let calib = opts
+            .defect_calibration
+            .as_deref()
             .and_then(|p| std::fs::read(p).ok())
             .map(|bytes| hex::encode(Sha256::digest(&bytes)))
             .unwrap_or_default();
+        let opts_digest = opts.canonical_json().to_string();
         let material = format!(
-            "{head_sha}|{}|{}|calib={calib}|{KEY_SCHEMA}",
+            "{head_sha}|{}|{}|calib={calib}|rows_limit={:?}|opts={opts_digest}|{KEY_SCHEMA}",
             lines.join("\n"),
             env!("CARGO_PKG_VERSION"),
+            opts.rows_limit,
         );
         Ok(hex::encode(Sha256::digest(material.as_bytes())))
     }
