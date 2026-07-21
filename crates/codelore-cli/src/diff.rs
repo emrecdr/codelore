@@ -500,7 +500,10 @@ fn list_pr_files(
 fn base_cache_opts_digest(min_revs: u32, exclude: &[String]) -> String {
     let mut exclude = exclude.to_vec();
     exclude.sort();
-    format!("min_revs={min_revs}|exclude=[{}]", exclude.join(","))
+    // Separate patterns with NUL, which cannot appear in a path glob or CLI
+    // argument, so a pattern that itself contains the separator (e.g. a brace
+    // glob `src/{gen,vendor}/**`) can never collide with a different set.
+    format!("min_revs={min_revs}|exclude=[{}]", exclude.join("\0"))
 }
 
 /// A base cache is reusable only when it was built at the same base SHA AND
