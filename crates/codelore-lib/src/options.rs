@@ -144,6 +144,12 @@ pub struct Options {
     /// code-maat CSV verbatim aren't broken on day one of migration.
     pub code_maat_compat: bool,
 
+    /// Apply a Benjamini-Hochberg false-discovery-rate correction across the
+    /// whole family of Fisher-tested coupling pairs instead of the per-pair
+    /// `fisher_p < fisher_significance` gate. Off by default — the per-test
+    /// gate is unchanged. `--code-maat-compat` still bypasses both gates.
+    pub fdr_correction: bool,
+
     /// Trailing window in days for activity-scoped analyses. Anchored to the
     /// repo's last commit date (not wall-clock time) so results are
     /// reproducible on old or archived repos. Valid range: 1–3650.
@@ -512,6 +518,7 @@ impl Default for Options {
             min_soc: None,
             time_bucket: None,
             code_maat_compat: false,
+            fdr_correction: false,
             window_days: crate::constants::DEFAULT_WINDOW_DAYS,
             knowledge_model: "commits".to_string(),
             rework_window_days: crate::constants::DEFAULT_REWORK_WINDOW_DAYS,
@@ -961,5 +968,21 @@ mod tests {
         // forms must be byte-equal so a cached result hits regardless of
         // the user's `--rows N` choice.
         assert_eq!(a.canonical_json(), b.canonical_json());
+    }
+
+    #[test]
+    fn canonical_json_distinguishes_fdr_correction() {
+        // `fdr_correction` changes which coupling rows survive, so it must
+        // key the cache apart — a new bool is auto-included in the canonical
+        // form (it is not on the drop-list).
+        let off = Options {
+            fdr_correction: false,
+            ..Options::default()
+        };
+        let on = Options {
+            fdr_correction: true,
+            ..Options::default()
+        };
+        assert_ne!(off.canonical_json(), on.canonical_json());
     }
 }

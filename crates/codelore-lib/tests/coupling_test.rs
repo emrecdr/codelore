@@ -549,3 +549,85 @@ fn coupling_bypasses_fisher_gate_under_compat() {
         "compat: all three trio pairs survive despite fisher_significance=0.0"
     );
 }
+
+/// End-to-end wiring: `--fdr-correction` must flow from `Options` through
+/// `run_coupling` into the significance gate. The FDR-corrected result is a
+/// subset of the per-test result, and equals the set the shared
+/// Benjamini-Hochberg helper selects over the full tested family.
+#[test]
+fn run_coupling_applies_fdr_when_enabled() {
+    use std::collections::HashSet;
+
+    let dir = build_trio_repo(8);
+    let repo = GixRepo::open(dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+
+    // The full tested family: fisher_significance = 2.0 disables the per-test
+    // gate, so every pair with a valid p-value surfaces.
+    let family_opts = Options {
+        repo_path: dir.path().to_path_buf(),
+        min_revs: 1,
+        min_shared_revs: 1,
+        min_coupling_pct: 0,
+        max_coupling_pct: 100,
+        fisher_significance: 2.0,
+        use_canonical_lineage: false,
+        ..Options::default()
+    };
+    db.ingest(&repo, &family_opts).expect("ingest");
+    let family = run_coupling(&db, &family_opts).expect("family");
+    assert!(!family.is_empty(), "trio repo must produce tested pairs");
+
+    let pair_set = |rows: &[codelore_lib::analyses::coupling::CouplingRow]| {
+        rows.iter()
+            .map(|r| (r.entity_a.clone(), r.entity_b.clone()))
+            .collect::<HashSet<_>>()
+    };
+
+    // Per-test gate at the conventional 0.05.
+    let off = run_coupling(
+        &db,
+        &Options {
+            fisher_significance: 0.05,
+            fdr_correction: false,
+            ..family_opts.clone()
+        },
+    )
+    .expect("fdr off");
+
+    // BH-FDR gate at the same level.
+    let on = run_coupling(
+        &db,
+        &Options {
+            fisher_significance: 0.05,
+            fdr_correction: true,
+            ..family_opts.clone()
+        },
+    )
+    .expect("fdr on");
+
+    // Expected FDR survivors, computed from the real family via the shared
+    // helper — proves the analysis applies exactly the documented cutoff.
+    let pvalues: Vec<f64> = family.iter().map(|r| r.fisher_p).collect();
+    let cutoff = codelore_lib::stats::bh_fdr_threshold(&pvalues, 0.05);
+    let expected: HashSet<(String, String)> = family
+        .iter()
+        .filter(|r| r.fisher_p <= cutoff)
+        .map(|r| (r.entity_a.clone(), r.entity_b.clone()))
+        .collect();
+
+    let on_set = pair_set(&on);
+    let off_set = pair_set(&off);
+    assert_eq!(
+        on_set, expected,
+        "FDR survivors must match the BH cutoff set"
+    );
+    assert!(
+        on_set.is_subset(&off_set),
+        "FDR-on set {on_set:?} must be a subset of the per-test set {off_set:?}"
+    );
+    assert!(
+        on.len() <= off.len(),
+        "FDR is at least as strict as the per-test gate"
+    );
+}
