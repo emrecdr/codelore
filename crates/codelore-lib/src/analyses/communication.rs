@@ -47,9 +47,12 @@ fn build_communication_sql(code_maat_compat: bool) -> String {
         "(ta.commits + tb.commits) / 2"
     };
     let strength_expr = if code_maat_compat {
-        // Truncated to integer, then re-cast to DOUBLE so the row type
-        // stays uniform; the Rust orchestrator formats as `XX`.
-        "CAST(CAST(100.0 * p.shared / NULLIF((ta.commits + tb.commits) / 2.0, 0) AS INTEGER) \
+        // Truncate toward zero via FLOOR (matches Clojure `(int)`; strength >= 0),
+        // and divide by the CEIL'd average — code-maat divides shared by
+        // `average-commits` (the ceil'd mean in the `average` column), not the raw
+        // mean. Re-cast to DOUBLE so the row type stays uniform; the Rust
+        // orchestrator formats as `XX`.
+        "CAST(FLOOR(100.0 * p.shared / NULLIF(CEIL((ta.commits + tb.commits) / 2.0), 0)) \
          AS DOUBLE)"
     } else {
         // Float with two-decimal CSV formatting.

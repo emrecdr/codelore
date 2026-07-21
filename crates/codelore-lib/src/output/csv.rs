@@ -255,14 +255,23 @@ pub fn write_communication_csv<W: Write>(
     };
     writeln!(w, "{header}").map_err(CodeLoreError::Io)?;
     for row in rows {
+        // code-maat emits strength as a truncated integer (`(int …)`); the
+        // compat SQL already floors it, so `as i64` reproduces code-maat's cell
+        // verbatim. Modern mode keeps two-decimal precision.
+        #[allow(clippy::cast_possible_truncation)]
+        let strength_cell = if code_maat_compat {
+            format!("{}", row.strength as i64)
+        } else {
+            format!("{:.2}", row.strength)
+        };
         writeln!(
             w,
-            "{},{},{},{},{:.2}",
+            "{},{},{},{},{}",
             quote_if_needed(&row.author_a),
             quote_if_needed(&row.author_b),
             row.shared,
             row.average,
-            row.strength
+            strength_cell
         )
         .map_err(CodeLoreError::Io)?;
     }

@@ -509,3 +509,43 @@ fn par6_min_revs_pivot_differs_under_code_maat_compat() {
         );
     }
 }
+
+/// code-maat's `coupling` has no significance test — it emits every pair
+/// passing the degree / min-shared / min-revs thresholds. Under `--code-maat-compat`
+/// the Fisher gate must be bypassed so the row set matches code-maat.
+///
+/// Deterministic without tuning a p-value: `fisher_significance = 0.0` makes the
+/// modern gate `fisher_p < 0.0` reject EVERY pair (p ≥ 0 always); only the compat
+/// bypass lets the three trio pairs survive.
+#[test]
+fn coupling_bypasses_fisher_gate_under_compat() {
+    let dir = build_trio_repo(8);
+    let repo = GixRepo::open(dir.path()).expect("open");
+    let base = Options {
+        repo_path: dir.path().to_path_buf(),
+        min_revs: 1,
+        min_shared_revs: 1,
+        min_coupling_pct: 0,
+        max_coupling_pct: 100,
+        fisher_significance: 0.0,
+        use_canonical_lineage: false,
+        ..Options::default()
+    };
+    let db_m = FactsDb::new_in_memory().expect("db");
+    db_m.ingest(&repo, &base).expect("ingest");
+    assert!(
+        run_coupling(&db_m, &base).expect("modern").is_empty(),
+        "modern: fisher_significance=0.0 must drop all pairs"
+    );
+    let db_c = FactsDb::new_in_memory().expect("db");
+    let compat = Options {
+        code_maat_compat: true,
+        ..base.clone()
+    };
+    db_c.ingest(&repo, &compat).expect("ingest");
+    assert_eq!(
+        run_coupling(&db_c, &compat).expect("compat").len(),
+        3,
+        "compat: all three trio pairs survive despite fisher_significance=0.0"
+    );
+}
