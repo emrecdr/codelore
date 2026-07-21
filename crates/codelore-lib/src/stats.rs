@@ -21,6 +21,7 @@
 //! defective files from the rest. Both are sort-based with no
 //! external dependencies.
 
+use std::cell::RefCell;
 use std::cmp::Ordering;
 
 /// Fisher's exact two-tail p-value for the 2×2 contingency table
@@ -135,36 +136,51 @@ pub fn fisher_two_tail_pvalue(a: u32, b: u32, c: u32, d: u32) -> Option<f64> {
     Some(pvalue.min(1.0))
 }
 
-/// Natural log of `n!`, computed in `O(n)` for small `n`. The largest
-/// `n` we care about here is bounded by the analysed repo's commit
-/// count — even Linux-kernel-scale (~1.3 M commits) is well within
-/// what an `f64` accumulator handles before precision degrades
-/// (each iteration adds `ln(i)` which is `< 30`, so 1.3 M iterations
-/// of accumulation gives `< 5e7` total — exact enough for the
-/// difference-of-factorials use in `log_pmf` above).
+/// Natural log of `n!`.
 ///
-/// We deliberately avoid the Stirling / Lanczos approximation: the
-/// hot path is `analyses::coupling` which calls this in tight loops
-/// over modest-sized marginals; precision matters and the direct
-/// sum is well within f64 precision for the input range. The
-/// `lookup_or_compute` cache below brings amortised cost to ~O(1)
-/// per call within a single analysis pass.
+/// Backed by a lazily-grown cumulative-sum table: entry `k` holds
+/// `ln(k!)`, so a lookup is O(1) and the table extends only to the
+/// largest `n` seen. The largest `n` here is bounded by the analysed
+/// repo's commit count, well within `f64` precision for the
+/// difference-of-factorials use in `log_pmf`.
+///
+/// The direct cumulative sum is used over a Stirling / Lanczos
+/// approximation deliberately: the hot path is `analyses::coupling`,
+/// which calls this in tight loops over modest marginals where
+/// precision matters and the sum stays within `f64` precision for the
+/// input range.
+///
+/// The table lives in a `thread_local!` `RefCell<Vec<f64>>`; `ln(k!)`
+/// is a pure constant, so a per-thread memo is race-free and fits the
+/// single-connection, `!Send` analysis model.
 #[must_use]
 fn ln_factorial(n: u64) -> f64 {
-    if n <= 1 {
-        return 0.0;
+    thread_local! {
+        // Entry `k` == ln(k!). Seeded with ln(0!) = ln(1!) = 0.
+        static TABLE: RefCell<Vec<f64>> = RefCell::new(vec![0.0, 0.0]);
     }
-    let mut acc = 0.0_f64;
-    for i in 2..=n {
-        // `i as f64` is lossless for `i <= 2^53`; coupling marginals
-        // would have to exceed quadrillions of commits before this
-        // truncates, so the cast is exact in any realistic input.
-        #[allow(clippy::cast_precision_loss)]
-        {
-            acc += (i as f64).ln();
+    TABLE.with(|cell| {
+        let mut table = cell.borrow_mut();
+        // `n` is a marginal count bounded by the analysed repo's commit
+        // count, which never approaches `usize::MAX` even on 32-bit targets.
+        #[allow(clippy::cast_possible_truncation)]
+        let idx = n as usize;
+        if idx >= table.len() {
+            // Extend by continuing the running sum from the current high-water
+            // mark: each new entry is `previous + ln(k)` in strictly increasing
+            // `k`, so the accumulation order — and every rounding — is identical
+            // to a fresh `sum_{i=2}^{n} ln(i)`, independent of call order.
+            let mut acc = *table.last().expect("seeded with two entries");
+            for k in table.len() as u64..=n {
+                #[allow(clippy::cast_precision_loss)]
+                {
+                    acc += (k as f64).ln();
+                }
+                table.push(acc);
+            }
         }
-    }
-    acc
+        table[idx]
+    })
 }
 
 /// Area under the ROC curve for binary labels ranked by score, computed via
@@ -266,6 +282,36 @@ pub fn precision_at_k(scored: &[(f64, bool)], k: usize) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ln_factorial_direct(n: u64) -> f64 {
+        if n <= 1 {
+            return 0.0;
+        }
+        let mut acc = 0.0_f64;
+        for i in 2..=n {
+            #[allow(clippy::cast_precision_loss)]
+            {
+                acc += (i as f64).ln();
+            }
+        }
+        acc
+    }
+
+    #[test]
+    fn ln_factorial_is_bit_identical_to_direct_sum() {
+        for n in 0..=50u64 {
+            assert_eq!(
+                ln_factorial(n).to_bits(),
+                ln_factorial_direct(n).to_bits(),
+                "cached ln_factorial({n}) must be bit-identical to the direct sum"
+            );
+        }
+        for &n in &[100u64, 1_000, 100_000] {
+            assert_eq!(ln_factorial(n).to_bits(), ln_factorial_direct(n).to_bits());
+        }
+        // Call order must not perturb the result.
+        assert_eq!(ln_factorial(7).to_bits(), ln_factorial_direct(7).to_bits());
+    }
 
     /// Compare against pre-captured reference values from
     /// `fishers_exact::fishers_exact(&[a, b, c, d]).two_tail_pvalue`
