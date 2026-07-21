@@ -11,7 +11,7 @@ pub use language::Tier1Language;
 use crate::Result;
 use codelore_rca::{
     FuncSpace, JavaParser, JavascriptParser, ParserTrait, PythonParser, RustParser, SpaceKind,
-    TypescriptParser, metrics,
+    TsxParser, TypescriptParser, metrics,
 };
 use std::path::Path;
 
@@ -148,6 +148,25 @@ fn collect_entities(space: &FuncSpace, path: &str, out: &mut Vec<ComplexityEntit
     }
 }
 
+/// Build a parser of type `T`, disclose any parse errors, then compute its
+/// `FuncSpace` metric tree.
+///
+/// When the parse tree carries error nodes — JSX tags a plain grammar can't
+/// accept, a truncated blob, a syntax the grammar rejects — the metrics are
+/// derived from a partially error-recovered tree: approximate, but still
+/// emitted so the file keeps its code-health coverage instead of silently
+/// dropping out. The error condition is logged for visibility.
+fn metrics_with_guard<T: ParserTrait>(source: Vec<u8>, path: &Path) -> Option<FuncSpace> {
+    let parser = T::new(source, path, None);
+    if parser.get_root().has_error() {
+        tracing::warn!(
+            "complexity: parse errors in {} — metrics computed on a partial tree",
+            path.display()
+        );
+    }
+    metrics(&parser, path)
+}
+
 /// Compute complexity entities for a Tier-1 source file.
 ///
 /// `source` is taken by value because every `codelore-rca` parser constructor
@@ -164,26 +183,12 @@ pub fn compute_for_file(
     let path_str = path.to_str().unwrap_or("");
 
     let root: Option<FuncSpace> = match lang {
-        Tier1Language::Rust => {
-            let parser = RustParser::new(source, path, None);
-            metrics(&parser, path)
-        }
-        Tier1Language::Python => {
-            let parser = PythonParser::new(source, path, None);
-            metrics(&parser, path)
-        }
-        Tier1Language::Java => {
-            let parser = JavaParser::new(source, path, None);
-            metrics(&parser, path)
-        }
-        Tier1Language::JavaScript => {
-            let parser = JavascriptParser::new(source, path, None);
-            metrics(&parser, path)
-        }
-        Tier1Language::TypeScript => {
-            let parser = TypescriptParser::new(source, path, None);
-            metrics(&parser, path)
-        }
+        Tier1Language::Rust => metrics_with_guard::<RustParser>(source, path),
+        Tier1Language::Python => metrics_with_guard::<PythonParser>(source, path),
+        Tier1Language::Java => metrics_with_guard::<JavaParser>(source, path),
+        Tier1Language::JavaScript => metrics_with_guard::<JavascriptParser>(source, path),
+        Tier1Language::TypeScript => metrics_with_guard::<TypescriptParser>(source, path),
+        Tier1Language::Tsx => metrics_with_guard::<TsxParser>(source, path),
     };
 
     let mut entities = Vec::new();

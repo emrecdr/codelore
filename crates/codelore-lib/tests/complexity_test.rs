@@ -244,6 +244,73 @@ fn max_nesting_typescript_three_deep() {
     );
 }
 
+/// Halstead volume of the file-level `unit` entity (the whole-file aggregate).
+fn unit_halstead_volume(entities: &[codelore_lib::complexity::ComplexityEntity]) -> f64 {
+    entities
+        .iter()
+        .find(|e| e.kind == "unit")
+        .and_then(|e| e.halstead_volume)
+        .expect("file unit should carry a finite Halstead volume")
+}
+
+#[test]
+fn tsx_with_jsx_parses_and_scores() {
+    // A real `.tsx` component: an arrow function bound to a const that returns
+    // JSX, with a nested `.map` callback and a ternary. tree-sitter's error
+    // recovery is robust enough that the plain-TypeScript grammar still
+    // recovers the control-flow shape (cyclomatic/cognitive survive), so those
+    // metrics alone can't tell the two grammars apart. Where the grammars
+    // genuinely diverge is Halstead: under the plain grammar the JSX tags
+    // collapse into ERROR nodes whose operators/operands go uncounted, so the
+    // volume is undercounted — and that error propagates into MI. Routing
+    // `.tsx` through the TSX grammar counts the JSX, giving a strictly higher
+    // (correct) volume.
+    let src = b"export const Grid = (items: number[]) => {
+    return (
+        <ul>
+            {items.map((x) => (
+                <li key={x}>{x > 0 ? \"pos\" : \"neg\"}</li>
+            ))}
+        </ul>
+    );
+};
+";
+    let entities =
+        compute_for_file(Path::new("Grid.tsx"), src.to_vec(), Tier1Language::Tsx).expect("compute");
+    assert!(
+        !entities.is_empty(),
+        "TSX component should extract entities"
+    );
+
+    // The outer arrow and the nested `.map` callback are both scored.
+    let max_cognitive = entities
+        .iter()
+        .map(|e| e.cognitive)
+        .fold(f64::NEG_INFINITY, f64::max);
+    assert!(
+        max_cognitive >= 1.0,
+        "the JSX/ternary control flow should produce cognitive >= 1, got {max_cognitive}"
+    );
+
+    // Guard the `compute_for_file` routing (`Tsx` → the TSX grammar, not the
+    // plain-TypeScript grammar): parsing the same source with the plain grammar
+    // undercounts Halstead operands, so the TSX volume must be strictly larger.
+    let correct_volume = unit_halstead_volume(&entities);
+    let error_tree_volume = unit_halstead_volume(
+        &compute_for_file(
+            Path::new("Grid.tsx"),
+            src.to_vec(),
+            Tier1Language::TypeScript,
+        )
+        .expect("compute"),
+    );
+    assert!(
+        correct_volume > error_tree_volume,
+        "TSX grammar must count the JSX operands the plain-TS error tree drops: \
+         correct_volume={correct_volume} should exceed error_tree_volume={error_tree_volume}"
+    );
+}
+
 #[test]
 fn bool_ops_typescript_and_or() {
     let src = b"function cond(a: boolean, b: boolean, c: boolean) {

@@ -156,7 +156,8 @@ pub fn line_comment_prefix(lang: Tier1Language) -> &'static str {
         Tier1Language::Rust
         | Tier1Language::Java
         | Tier1Language::JavaScript
-        | Tier1Language::TypeScript => "//",
+        | Tier1Language::TypeScript
+        | Tier1Language::Tsx => "//",
         Tier1Language::Python => "#",
     }
 }
@@ -534,6 +535,7 @@ e8486215e55737c14e0787394a0467e84b346e69 7 8 1
         assert_eq!(line_comment_prefix(Tier1Language::Java), "//");
         assert_eq!(line_comment_prefix(Tier1Language::JavaScript), "//");
         assert_eq!(line_comment_prefix(Tier1Language::TypeScript), "//");
+        assert_eq!(line_comment_prefix(Tier1Language::Tsx), "//");
         assert_eq!(line_comment_prefix(Tier1Language::Python), "#");
     }
 
