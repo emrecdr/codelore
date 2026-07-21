@@ -1,11 +1,28 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
 
+/// Build a `codelore` command with GitHub Actions file-command env vars
+/// stripped, so `check`/`gate` subprocesses never append to the CI
+/// runner's real `$GITHUB_OUTPUT`/summary files (parallel test processes
+/// would interleave writes and corrupt them).
+fn codelore_cmd() -> Command {
+    let mut cmd = Command::cargo_bin("codelore").unwrap();
+    for var in [
+        "GITHUB_OUTPUT",
+        "GITHUB_STEP_SUMMARY",
+        "GITHUB_ENV",
+        "GITHUB_STATE",
+        "GITHUB_PATH",
+    ] {
+        cmd.env_remove(var);
+    }
+    cmd
+}
+
 #[test]
 fn analyze_revisions_emits_csv() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -26,8 +43,7 @@ fn analyze_revisions_emits_csv() {
 
 #[test]
 fn analyze_rejects_unknown_analysis() {
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args(["analyze", "--analysis", "not-real", "--repo", "."])
         .assert()
         .failure()
@@ -39,8 +55,7 @@ fn version_flag_works() {
     // Compare against the package version Cargo resolves at compile time, not
     // a hardcoded literal — otherwise every version bump fails CI silently
     // until someone re-reads this test file.
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .arg("--version")
         .assert()
         .success()
@@ -53,8 +68,7 @@ fn diff_rejects_base_equals_head() {
     // used to run two identical analyses and emit an empty diff with
     // no signal. Now the entry point bails early with a typed error.
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    let output = Command::cargo_bin("codelore")
-        .unwrap()
+    let output = codelore_cmd()
         .args([
             "diff",
             "--repo",
@@ -74,8 +88,7 @@ fn diff_rejects_base_equals_head() {
 
 #[test]
 fn invalid_repo_exits_with_code_3() {
-    let output = Command::cargo_bin("codelore")
-        .unwrap()
+    let output = codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -97,8 +110,7 @@ fn invalid_options_exit_with_code_2() {
     // coverage; a refactor dropping the typed error to a bare
     // `anyhow::bail!` would silently regress it to exit 1.
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    let output = Command::cargo_bin("codelore")
-        .unwrap()
+    let output = codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -118,8 +130,7 @@ fn invalid_options_exit_with_code_2() {
 #[test]
 fn analyze_hotspots_emits_csv() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -141,8 +152,7 @@ fn analyze_hotspots_emits_csv() {
 #[test]
 fn analyze_code_health_emits_csv() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -162,8 +172,7 @@ fn analyze_code_health_emits_csv() {
 #[test]
 fn analyze_code_age_emits_csv() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -185,8 +194,7 @@ fn analyze_code_age_emits_csv() {
 #[test]
 fn analyze_abs_churn_emits_csv() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -206,8 +214,7 @@ fn analyze_abs_churn_emits_csv() {
 #[test]
 fn analyze_author_churn_emits_csv() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -227,8 +234,7 @@ fn analyze_author_churn_emits_csv() {
 #[test]
 fn analyze_entity_churn_emits_csv() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -248,8 +254,7 @@ fn analyze_entity_churn_emits_csv() {
 #[test]
 fn analyze_communication_emits_csv() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -271,8 +276,7 @@ fn analyze_communication_emits_csv() {
 #[test]
 fn analyze_ownership_emits_csv() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -294,8 +298,7 @@ fn analyze_ownership_emits_csv() {
 #[test]
 fn analyze_coupling_emits_csv() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -317,8 +320,7 @@ fn analyze_coupling_emits_csv() {
 #[test]
 fn analyze_summary_emits_csv() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -338,8 +340,7 @@ fn analyze_summary_emits_csv() {
 #[test]
 fn analyze_hotspots_emits_sarif() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -362,8 +363,7 @@ fn analyze_hotspots_emits_sarif() {
 #[test]
 fn analyze_revisions_emits_json() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -383,8 +383,7 @@ fn analyze_revisions_emits_json() {
 #[test]
 fn analyze_hotspots_emits_markdown() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -406,8 +405,7 @@ fn analyze_hotspots_emits_parquet() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("hotspots.parquet");
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -435,8 +433,7 @@ fn analyze_emits_sqlite_dump() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("dump.db");
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -460,8 +457,7 @@ fn analyze_emits_provenance_sidecar_for_csv_output() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("hotspots.csv");
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -500,8 +496,7 @@ fn analyze_emits_provenance_sidecar_for_parquet_output() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("hotspots.parquet");
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -530,8 +525,7 @@ fn analyze_skips_sidecar_for_sqlite_output() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("dump.db");
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -561,8 +555,7 @@ fn analyze_skips_sidecar_for_stdout() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
     let dir = tempfile::tempdir().unwrap();
     // Run from inside the tempdir so any accidental relative-path sidecar shows up.
-    let assert = Command::cargo_bin("codelore")
-        .unwrap()
+    let assert = codelore_cmd()
         .current_dir(dir.path())
         .args([
             "analyze",
@@ -597,8 +590,7 @@ fn parquet_requires_output_flag() {
     // A binary format with no --output is an output-side usage error →
     // CodeLoreError::Output → spec §6.6 exit 5 (not the generic 1).
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -622,8 +614,7 @@ fn sarif_rejects_unsupported_analysis() {
     // `revisions` is still unsupported and must bail with a helpful
     // message naming the supported analyses.
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -646,8 +637,7 @@ fn sarif_rejects_unsupported_analysis() {
 #[test]
 fn unknown_analysis_lists_supported_names() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -670,8 +660,7 @@ fn unknown_analysis_lists_supported_names() {
 #[test]
 fn no_cache_flag_produces_valid_output() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -696,8 +685,7 @@ fn cache_dir_flag_writes_cache_to_custom_location() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
     let cache_dir = tempfile::tempdir().expect("tempdir");
 
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -742,8 +730,7 @@ fn cache_dir_flag_writes_cache_to_custom_location() {
 #[test]
 fn time_bucket_rejected_for_incompatible_analysis() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -770,8 +757,7 @@ fn time_bucket_rejected_for_incompatible_analysis() {
 #[test]
 fn time_bucket_accepted_for_coupling() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -803,8 +789,7 @@ fn unsupported_format_bails_cleanly_instead_of_panicking() {
     // the dispatch bails grew typed error buckets). Cover ndjson and gha.
     let tiny = codelore_lib::test_support::tiny_repo::build();
     for fmt in ["ndjson", "gha"] {
-        Command::cargo_bin("codelore")
-            .unwrap()
+        codelore_cmd()
             .args([
                 "analyze",
                 "--analysis",
@@ -830,8 +815,7 @@ fn unknown_format_exits_with_analysis_code() {
     // An unrecognised `--format` value is an analysis-selection error →
     // CodeLoreError::Analysis → spec §6.6 exit 4, never a panic or a bare 1.
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -857,8 +841,7 @@ fn schema_lists_every_registered_analysis() {
     // and `main-dev-by-deletions` are registered analyses that were
     // missing from the hardcoded catalogue.
     for name in codelore_lib::analysis::AnalysisName::all() {
-        Command::cargo_bin("codelore")
-            .unwrap()
+        codelore_cmd()
             .args(["schema", name.as_str()])
             .assert()
             .success()
@@ -902,10 +885,7 @@ fn explain_covers_every_registered_analysis_or_allowlists_it() {
     // recorded about it.
     for name in codelore_lib::analysis::AnalysisName::all() {
         let allowlisted = EXPLAIN_UNCOVERED.contains(&name.as_str());
-        let assert = Command::cargo_bin("codelore")
-            .unwrap()
-            .args(["explain", name.as_str()])
-            .assert();
+        let assert = codelore_cmd().args(["explain", name.as_str()]).assert();
         if allowlisted {
             assert
                 .failure()
@@ -919,8 +899,7 @@ fn explain_covers_every_registered_analysis_or_allowlists_it() {
 #[test]
 fn health_trend_csv_has_header_and_rows() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -950,8 +929,7 @@ fn defect_validation_without_artifact_emits_header_only_and_stderr_hint() {
     // table) with zero data rows, and a one-line hint points at
     // `codelore calibrate-defects` on stderr.
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -976,8 +954,7 @@ fn defect_validation_without_artifact_emits_header_only_and_stderr_hint() {
 #[test]
 fn effort_exposure_csv_has_header_and_rows() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -1005,8 +982,7 @@ fn code_familiarity_csv_has_header() {
     // tiny_repo has no recognized source files → complexity_metrics is empty
     // → no familiarity rows. This test only verifies the CSV header is present.
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -1030,8 +1006,7 @@ fn code_familiarity_csv_has_header_and_rows() {
     // delivery_repo has src/*.rs files (Rust, Tier-1) → complexity_metrics
     // populated → knowledge_shares materialised → one familiarity row emitted.
     let delivery = codelore_lib::test_support::delivery_repo::build();
-    let out = Command::cargo_bin("codelore")
-        .unwrap()
+    let out = codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -1071,8 +1046,7 @@ fn code_familiarity_csv_has_header_and_rows() {
 fn bus_factor_csv_contains_model_column() {
     // Verify the `model` column is present in both commits and doe mode output.
     let delivery = codelore_lib::test_support::delivery_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -1089,8 +1063,7 @@ fn bus_factor_csv_contains_model_column() {
         .stdout(predicate::str::contains(
             "module,total_commits,bus_factor,top_contributor,top_contributor_share,model",
         ));
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -1116,8 +1089,7 @@ fn bus_factor_csv_contains_model_column() {
 fn team_composition_csv_has_header_and_rows() {
     // Verify CSV header columns and that delivery_repo produces author data.
     let delivery = codelore_lib::test_support::delivery_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -1152,8 +1124,7 @@ fn spa_without_output_defaults_to_dot_codelore() {
     // `.codelore/spa.html` under the current working directory.
     let tiny = codelore_lib::test_support::tiny_repo::build();
     let cwd = tempfile::tempdir().unwrap();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .current_dir(cwd.path())
         .args([
             "analyze",
@@ -1200,8 +1171,7 @@ fn spa_architecture_tile_corpus_detail_follows_repo_metrics_presence() {
             "1",
         ];
         args.extend_from_slice(extra_args);
-        Command::cargo_bin("codelore")
-            .unwrap()
+        codelore_cmd()
             .current_dir(cwd.path())
             .args(&args)
             .assert()
@@ -1314,8 +1284,7 @@ fn delta_health_fixture() -> (tempfile::TempDir, String, String) {
 #[test]
 fn diff_emits_degrading_delta_health_for_added_monster() {
     let (dir, base, head) = delta_health_fixture();
-    let output = Command::cargo_bin("codelore")
-        .unwrap()
+    let output = codelore_cmd()
         .args([
             "diff",
             "--repo",
@@ -1348,8 +1317,7 @@ fn diff_delta_health_gate_fails_the_run() {
     let (dir, base, head) = delta_health_fixture();
     let thresholds = dir.path().join("gates.toml");
     std::fs::write(&thresholds, "[diff]\ndeny_degrading_verdict = true\n").unwrap();
-    let output = Command::cargo_bin("codelore")
-        .unwrap()
+    let output = codelore_cmd()
         .args([
             "diff",
             "--repo",
@@ -1414,8 +1382,7 @@ fn diff_docs_only_change_is_no_code_change() {
     git(&["commit", "-q", "-m", "docs"]);
     let head = git(&["rev-parse", "HEAD"]);
 
-    let output = Command::cargo_bin("codelore")
-        .unwrap()
+    let output = codelore_cmd()
         .args([
             "diff",
             "--repo",
@@ -1440,8 +1407,7 @@ fn diff_sarif_schema_url_and_info_uri_use_canonical_constants() {
     // codelore_lib::output::sarif, and degrading delta-health results must carry
     // codeFlows evidence chains (the monster function has one head commit).
     let (dir, base, head) = delta_health_fixture();
-    let output = Command::cargo_bin("codelore")
-        .unwrap()
+    let output = codelore_cmd()
         .args([
             "diff",
             "--repo",
@@ -1569,8 +1535,7 @@ fn diff_sarif_hotspot_rank_entrant_carries_code_flows_and_related_locations() {
     git(&["commit", "-q", "-m", "feat: extend hot file"]);
     let head = git(&["rev-parse", "HEAD"]);
 
-    let output = Command::cargo_bin("codelore")
-        .unwrap()
+    let output = codelore_cmd()
         .args([
             "diff",
             "--repo",
@@ -1789,8 +1754,7 @@ fn diff_delta_health_flags_pasted_clone_as_high_risk() {
     git(&["commit", "-q", "-m", "paste copy"]);
     let head = git(&["rev-parse", "HEAD"]);
 
-    let output = Command::cargo_bin("codelore")
-        .unwrap()
+    let output = codelore_cmd()
         .args([
             "diff",
             "--repo",
@@ -1839,8 +1803,7 @@ fn coordination_needs_csv_has_header_and_rows() {
     // delivery_repo has src/*.rs Rust files → complexity ingest fires →
     // knowledge_shares materialised → coordination-needs rows produced.
     let delivery = codelore_lib::test_support::delivery_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -1867,8 +1830,7 @@ fn coordination_needs_csv_has_header_and_rows() {
 fn release_cadence_csv_has_header_and_rows() {
     // delivery_repo has v0.1.0, v0.2.0, v1.0.0 tags → 3 rows + summary.
     let delivery = codelore_lib::test_support::delivery_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -1894,8 +1856,7 @@ fn delivery_metrics_markdown_exits_zero() {
     // delivery_repo has two --no-ff merges and two author→committer gaps;
     // run with include_merges so the commit_parents table is populated.
     let delivery = codelore_lib::test_support::delivery_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -1918,8 +1879,7 @@ fn check_quiet_suppresses_vacuous_pass_noise() {
     // diagnostic to stderr. With --quiet that diagnostic is suppressed;
     // exit 0 is preserved.
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "check",
             "--repo",
@@ -1936,8 +1896,7 @@ fn check_without_quiet_prints_vacuous_pass_diagnostic() {
     // Without --quiet the vacuous-pass diagnostic appears on stderr so users
     // know the check did nothing.
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args(["check", "--repo", tiny.dir.path().to_str().unwrap()])
         .assert()
         .success()
@@ -1947,8 +1906,7 @@ fn check_without_quiet_prints_vacuous_pass_diagnostic() {
 #[test]
 fn function_xray_emits_markdown_header() {
     let repo = codelore_lib::test_support::function_xray_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -1970,8 +1928,7 @@ fn function_xray_emits_markdown_header() {
 #[test]
 fn function_coupling_emits_markdown_header() {
     let repo = codelore_lib::test_support::function_xray_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -2003,8 +1960,7 @@ fn check_quiet_violation_path_suppresses_detail_keeps_verdict() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
     let thresholds = tiny.dir.path().join(".codelore-thresholds.toml");
     std::fs::write(&thresholds, "[gates]\ncode_health_min = 100.0\n").unwrap();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "check",
             "--repo",
@@ -2033,8 +1989,7 @@ fn check_format_sarif_emits_valid_sarif_and_exits_1() {
     let thresholds = repo.dir.path().join(".codelore-thresholds.toml");
     std::fs::write(&thresholds, "[gates]\ncode_health_min = 100.0\n").unwrap();
 
-    let output = Command::cargo_bin("codelore")
-        .unwrap()
+    let output = codelore_cmd()
         .args([
             "check",
             "--repo",
@@ -2081,8 +2036,7 @@ fn check_default_format_is_text_not_json() {
     // stdout/stderr), not a JSON/SARIF document. Verifies that the
     // default_value_t = CheckFormat::Text contract holds end-to-end.
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    let output = Command::cargo_bin("codelore")
-        .unwrap()
+    let output = codelore_cmd()
         .args(["check", "--repo", tiny.dir.path().to_str().unwrap()])
         .output()
         .expect("run codelore check without --format");
@@ -2144,8 +2098,7 @@ fn gate_vacuous_passes_without_thresholds() {
     // Without a thresholds file the gate vacuously passes with the same
     // diagnostic contract as `check` (wording substitutes "gate"); exit 0.
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args(["gate", "--repo", tiny.dir.path().to_str().unwrap()])
         .assert()
         .success()
@@ -2163,8 +2116,7 @@ fn gate_passes_on_clean_tree_with_thresholds() {
     let fx = codelore_lib::test_support::differential_repo::build();
     let (_guard, thresholds) = scratch_thresholds("[diff]\ndelta_code_health_min_per_file = 0.0\n");
     let cache = tempfile::tempdir().expect("cache tempdir");
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "gate",
             "--repo",
@@ -2189,8 +2141,7 @@ fn gate_fails_on_per_file_floor() {
     append_to_file(&fx.dir.path().join("src/main.rs"), GATE_MONSTER_FN);
     let (_guard, thresholds) = scratch_thresholds("[diff]\ndelta_code_health_min_per_file = 0.0\n");
     let cache = tempfile::tempdir().expect("cache tempdir");
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "gate",
             "--repo",
@@ -2219,8 +2170,7 @@ fn gate_json_shape() {
     // introduces no import edge, so the run passes: violations = [].
     let (_guard, thresholds) = scratch_thresholds("[diff]\nno_new_cycles = true\n");
     let cache = tempfile::tempdir().expect("cache tempdir");
-    let output = Command::cargo_bin("codelore")
-        .unwrap()
+    let output = codelore_cmd()
         .args([
             "gate",
             "--repo",
@@ -2285,8 +2235,7 @@ fn gate_findings_render_capped_with_more_tail() {
     let (_guard, thresholds) = scratch_thresholds("[diff]\nno_new_cycles = true\n");
     let cache = tempfile::tempdir().expect("cache tempdir");
 
-    let output = Command::cargo_bin("codelore")
-        .unwrap()
+    let output = codelore_cmd()
         .args([
             "gate",
             "--repo",
@@ -2325,8 +2274,7 @@ fn gate_vacuous_json_emits_contract_document() {
     // contract document on stdout so an agent hook that always parses JSON
     // never special-cases a repo without a thresholds file.
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    let output = Command::cargo_bin("codelore")
-        .unwrap()
+    let output = codelore_cmd()
         .args([
             "gate",
             "--repo",
@@ -2372,8 +2320,7 @@ fn check_max_findings_gate_skips_gracefully_when_no_sidecar() {
     );
 
     // Run check — should pass (no other gates configured) and skip the overlap gate.
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args(["check", "--repo", repo_path.to_str().unwrap()])
         .assert()
         .success();
@@ -2414,8 +2361,7 @@ fn check_corpus_percentile_gate_skips_when_no_health_rows() {
     std::fs::write(&thresholds, "[gates]\ncorpus_percentile_max = 0.9\n").unwrap();
 
     // Run check — should pass (no rows → gate skipped, no other gates).
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args(["check", "--repo", repo_path.to_str().unwrap()])
         .assert()
         .success();
@@ -2488,8 +2434,7 @@ fn check_max_findings_gate_skips_when_sidecar_present_but_empty() {
     // Create an EMPTY sidecar via ingest-sarif with a zero-finding SARIF.
     let empty_sarif = cache_dir.path().join("empty.sarif.json");
     std::fs::write(&empty_sarif, sarif_zero_findings("semgrep")).unwrap();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "ingest-sarif",
             "--repo",
@@ -2510,8 +2455,7 @@ fn check_max_findings_gate_skips_when_sidecar_present_but_empty() {
     drop(store);
 
     // check must exit 0 — the empty sidecar is skipped, not an error.
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "check",
             "--repo",
@@ -2550,8 +2494,7 @@ fn analyze_finding_overlap_respects_cache_dir() {
     // Ingest one finding into the sidecar under the custom cache root.
     let sarif = cache_dir.path().join("one.sarif.json");
     std::fs::write(&sarif, sarif_one_finding("semgrep", "src/lib.rs")).unwrap();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "ingest-sarif",
             "--repo",
@@ -2565,8 +2508,7 @@ fn analyze_finding_overlap_respects_cache_dir() {
 
     // The overlap analysis under the same cache-dir must FIND the ingested
     // finding (emit ≥1 row), not report the missing-sidecar pre-condition error.
-    let output = Command::cargo_bin("codelore")
-        .unwrap()
+    let output = codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -2610,8 +2552,7 @@ fn analyze_finding_overlap_empty_sidecar_reports_precondition_error() {
     // Create an EMPTY sidecar via ingest-sarif with a zero-finding SARIF.
     let empty_sarif = cache_dir.path().join("empty.sarif.json");
     std::fs::write(&empty_sarif, sarif_zero_findings("semgrep")).unwrap();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "ingest-sarif",
             "--repo",
@@ -2633,8 +2574,7 @@ fn analyze_finding_overlap_empty_sidecar_reports_precondition_error() {
 
     // The overlap analysis must FAIL with the pre-condition error, not succeed
     // with an empty table.
-    let output = Command::cargo_bin("codelore")
-        .unwrap()
+    let output = codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -2674,8 +2614,7 @@ fn ingest_sarif_clean_rescan_clears_stale_engine_rows() {
     // First scan: one finding for engine "semgrep".
     let with_finding = cache_dir.path().join("with_finding.sarif.json");
     std::fs::write(&with_finding, sarif_one_finding("semgrep", "src/lib.rs")).unwrap();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "ingest-sarif",
             "--repo",
@@ -2701,8 +2640,7 @@ fn ingest_sarif_clean_rescan_clears_stale_engine_rows() {
     // Second scan for the SAME engine reports zero findings (issue fixed).
     let clean = cache_dir.path().join("clean.sarif.json");
     std::fs::write(&clean, sarif_zero_findings("semgrep")).unwrap();
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "ingest-sarif",
             "--repo",
@@ -2733,8 +2671,7 @@ fn ingest_sarif_clean_rescan_clears_stale_engine_rows() {
 fn check_format_sarif_vacuous_pass_emits_zero_result_document() {
     // tiny_repo has no `.codelore-thresholds.toml` → vacuous pass.
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    let output = Command::cargo_bin("codelore")
-        .unwrap()
+    let output = codelore_cmd()
         .args([
             "check",
             "--repo",
@@ -2777,8 +2714,7 @@ fn check_ratchet_format_sarif_init_emits_valid_document() {
     // Fresh clone → no `.codelore-ratchet.toml`, so --ratchet takes the init
     // path. No thresholds file, but --ratchet bypasses the vacuous-pass guard.
     let tiny = codelore_lib::test_support::tiny_repo::build();
-    let output = Command::cargo_bin("codelore")
-        .unwrap()
+    let output = codelore_cmd()
         .args([
             "check",
             "--repo",
@@ -2845,8 +2781,7 @@ fn calibrate_builds_artifact_from_local_fixtures() {
     );
     let out = work.path().join("world.calib.json");
 
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "calibrate",
             "--repos",
@@ -2943,8 +2878,7 @@ fn calibrate_skips_unreachable_repo_and_exits_zero() {
     );
     let out = work.path().join("world.calib.json");
 
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "calibrate",
             "--repos",
@@ -2978,8 +2912,7 @@ fn calibrate_merge_doubles_sample_counts() {
 
     // Base build.
     let base = work.path().join("base.calib.json");
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "calibrate",
             "--repos",
@@ -3001,8 +2934,7 @@ fn calibrate_merge_doubles_sample_counts() {
 
     // Merge the base artifact into a rebuild over the same repo.
     let merged = work.path().join("merged.calib.json");
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "calibrate",
             "--repos",
@@ -3128,8 +3060,7 @@ fn calibrate_defects_links_planted_defect_and_ag_filters_cosmetic_fix() {
     let out_dir = tempfile::tempdir().unwrap();
     let output = out_dir.path().join("defects.calib.json");
 
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "calibrate-defects",
             "--repo",
@@ -3228,8 +3159,7 @@ fn cycle_health_csv_has_header() {
     git(&["add", "."]);
     git(&["commit", "-q", "-m", "init"]);
 
-    Command::cargo_bin("codelore")
-        .unwrap()
+    codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -3258,7 +3188,7 @@ mod explain_path {
     use std::path::Path;
     use std::thread;
 
-    use assert_cmd::Command;
+    use crate::codelore_cmd;
     use predicates::prelude::*;
 
     /// The LLM environment variables the dossier surface reads. Cleared on every
@@ -3277,8 +3207,7 @@ mod explain_path {
     /// path and code-health band. Deriving the target from the same engine the
     /// dossier uses keeps the assertions robust to fixture regeneration.
     fn code_health_worst_row(repo: &Path, cache: &Path) -> (String, String) {
-        let out = Command::cargo_bin("codelore")
-            .unwrap()
+        let out = codelore_cmd()
             .args([
                 "analyze",
                 "--analysis",
@@ -3312,8 +3241,7 @@ mod explain_path {
     /// Every code-health entity path (one row per file), in engine order, for
     /// tests that need two distinct files from the fixture.
     fn code_health_entity_paths(repo: &Path, cache: &Path) -> Vec<String> {
-        let out = Command::cargo_bin("codelore")
-            .unwrap()
+        let out = codelore_cmd()
             .args([
                 "analyze",
                 "--analysis",
@@ -3404,8 +3332,7 @@ mod explain_path {
     fn explain_known_topic_still_prints_topic_text() {
         // Contract 1: a known topic is looked up first and prints byte-for-byte
         // what it always did — the new file-path branch never runs.
-        Command::cargo_bin("codelore")
-            .unwrap()
+        codelore_cmd()
             .args(["explain", "hotspots"])
             .assert()
             .success()
@@ -3420,7 +3347,7 @@ mod explain_path {
         let cache = tempfile::tempdir().expect("cache dir");
         let (target, band) = code_health_worst_row(fx.dir.path(), cache.path());
 
-        let mut cmd = Command::cargo_bin("codelore").unwrap();
+        let mut cmd = codelore_cmd();
         for var in LLM_ENV_VARS {
             cmd.env_remove(var);
         }
@@ -3488,8 +3415,7 @@ mod explain_path {
         let artifact_dir = tempfile::tempdir().expect("artifact dir");
         let artifact_path = write_foreign_defect_artifact(artifact_dir.path());
 
-        Command::cargo_bin("codelore")
-            .unwrap()
+        codelore_cmd()
             .args([
                 "explain",
                 &target,
@@ -3513,8 +3439,7 @@ mod explain_path {
         let cache = tempfile::tempdir().expect("cache dir");
         let (target, _band) = code_health_worst_row(fx.dir.path(), cache.path());
 
-        Command::cargo_bin("codelore")
-            .unwrap()
+        codelore_cmd()
             .args([
                 "explain",
                 &target,
@@ -3535,8 +3460,7 @@ mod explain_path {
         let (target, _band) = code_health_worst_row(fx.dir.path(), cache.path());
         let bad_path = cache.path().join("does-not-exist.calib.json");
 
-        Command::cargo_bin("codelore")
-            .unwrap()
+        codelore_cmd()
             .args([
                 "explain",
                 &target,
@@ -3555,8 +3479,7 @@ mod explain_path {
     #[test]
     fn explain_unknown_arg_errors_naming_topics_and_files() {
         let fx = codelore_lib::test_support::biomarker_repo::build();
-        Command::cargo_bin("codelore")
-            .unwrap()
+        codelore_cmd()
             .args([
                 "explain",
                 "definitely-not-a-topic-or-file",
@@ -3578,7 +3501,7 @@ mod explain_path {
         let narrative = "Diagnosis: the evidence indicates this file is structurally healthy.";
         let base = serve_one_completion(narrative);
 
-        let mut cmd = Command::cargo_bin("codelore").unwrap();
+        let mut cmd = codelore_cmd();
         for var in LLM_ENV_VARS {
             cmd.env_remove(var);
         }
@@ -3609,7 +3532,7 @@ mod explain_path {
         let cache = tempfile::tempdir().expect("cache dir");
         let (target, _band) = code_health_worst_row(fx.dir.path(), cache.path());
 
-        let mut cmd = Command::cargo_bin("codelore").unwrap();
+        let mut cmd = codelore_cmd();
         for var in LLM_ENV_VARS {
             cmd.env_remove(var);
         }
@@ -3644,7 +3567,7 @@ mod explain_path {
         // Narrate file B through the local test server so a narrative is cached
         // for B's subject in this cache root.
         let base = serve_one_completion("Diagnosis: file B looks structurally healthy.");
-        let mut narrate_b = Command::cargo_bin("codelore").unwrap();
+        let mut narrate_b = codelore_cmd();
         for var in LLM_ENV_VARS {
             narrate_b.env_remove(var);
         }
@@ -3666,7 +3589,7 @@ mod explain_path {
 
         // Explain file A without --llm over the same cache root: it has no
         // narrative of its own, so the staleness note must not appear.
-        let mut explain_a = Command::cargo_bin("codelore").unwrap();
+        let mut explain_a = codelore_cmd();
         for var in LLM_ENV_VARS {
             explain_a.env_remove(var);
         }
@@ -3692,14 +3615,14 @@ mod explain_path {
 /// client at the same test-local one-shot HTTP server the `explain` tests use so
 /// nothing touches an external endpoint.
 mod diff_llm {
-    use assert_cmd::Command;
+    use crate::codelore_cmd;
 
     use crate::explain_path::{LLM_ENV_VARS, serve_one_completion};
 
     #[test]
     fn diff_without_llm_has_no_advisory_block() {
         let (dir, base, head) = super::delta_health_fixture();
-        let mut cmd = Command::cargo_bin("codelore").unwrap();
+        let mut cmd = codelore_cmd();
         for var in LLM_ENV_VARS {
             cmd.env_remove(var);
         }
@@ -3736,7 +3659,7 @@ mod diff_llm {
 
         // Baseline: the no-flag run establishes the exit code the --llm run must
         // reproduce (the narrative is advisory and must not move it).
-        let mut baseline_cmd = Command::cargo_bin("codelore").unwrap();
+        let mut baseline_cmd = codelore_cmd();
         for var in LLM_ENV_VARS {
             baseline_cmd.env_remove(var);
         }
@@ -3761,7 +3684,7 @@ mod diff_llm {
         // --llm-refresh forces the server round-trip: diff has no --cache-dir, so
         // it shares the default narrative cache; refreshing keeps the assertion
         // hermetic against any pre-existing cached narrative for this fact sheet.
-        let mut cmd = Command::cargo_bin("codelore").unwrap();
+        let mut cmd = codelore_cmd();
         for var in LLM_ENV_VARS {
             cmd.env_remove(var);
         }
@@ -3818,7 +3741,7 @@ mod diff_llm {
         let repo = dir.path().to_str().unwrap().to_string();
         let range = format!("{base}..{head}");
 
-        let mut baseline_cmd = Command::cargo_bin("codelore").unwrap();
+        let mut baseline_cmd = codelore_cmd();
         for var in LLM_ENV_VARS {
             baseline_cmd.env_remove(var);
         }
@@ -3840,7 +3763,7 @@ mod diff_llm {
         // --llm with no LLM environment: resolution fails, the failure is a
         // stderr warning, and stdout + exit code are byte-identical to the
         // no-flag run.
-        let mut cmd = Command::cargo_bin("codelore").unwrap();
+        let mut cmd = codelore_cmd();
         for var in LLM_ENV_VARS {
             cmd.env_remove(var);
         }
@@ -3880,13 +3803,12 @@ mod diff_llm {
 /// `check`) must reject it at the parser, so the flag can never even be spelled
 /// on a command whose output feeds gates or CI.
 mod llm_flag_scope {
-    use assert_cmd::Command;
+    use crate::codelore_cmd;
     use predicates::prelude::*;
 
     #[test]
     fn analyze_rejects_the_llm_flag_at_the_parser() {
-        Command::cargo_bin("codelore")
-            .unwrap()
+        codelore_cmd()
             .args(["analyze", "--analysis", "hotspots", "--llm", "--repo", "."])
             .assert()
             .failure()
@@ -3896,8 +3818,7 @@ mod llm_flag_scope {
 
     #[test]
     fn check_rejects_the_llm_flag_at_the_parser() {
-        Command::cargo_bin("codelore")
-            .unwrap()
+        codelore_cmd()
             .args(["check", "--repo", ".", "--llm"])
             .assert()
             .failure()
@@ -3924,8 +3845,7 @@ fn explain_file_llm_live_against_local_ollama() {
     let cache = tempfile::tempdir().expect("cache dir");
 
     // Resolve a real dossier target the same way the hermetic explain tests do.
-    let out = Command::cargo_bin("codelore")
-        .unwrap()
+    let out = codelore_cmd()
         .args([
             "analyze",
             "--analysis",
@@ -3950,7 +3870,7 @@ fn explain_file_llm_live_against_local_ollama() {
         .expect("code-health yields at least one row")
         .to_string();
 
-    let mut cmd = Command::cargo_bin("codelore").unwrap();
+    let mut cmd = codelore_cmd();
     for var in explain_path::LLM_ENV_VARS {
         cmd.env_remove(var);
     }
