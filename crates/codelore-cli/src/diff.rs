@@ -142,6 +142,14 @@ pub struct RevAnalyses {
     /// the delta-health context multiplier.
     #[serde(default)]
     pub red_files: Vec<String>,
+    /// Digest of the analysis-affecting options (`min_revs`, `exclude`) that
+    /// produced this base cache. Compared alongside `sha` on `--base-cache`
+    /// reuse so a cache built under one option set is never served to a run
+    /// with different options. `#[serde(default)]` so a pre-existing cache
+    /// lacking the field deserialises to "" and is treated as a mismatch —
+    /// recomputed once, never served.
+    #[serde(default)]
+    pub opts_digest: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -354,6 +362,7 @@ fn analyze_at_rev(
         dependency_cycles,
         functions,
         red_files,
+        opts_digest: base_cache_opts_digest(args.min_revs, &args.exclude),
     };
     Ok((analyses, db, opts))
 }
@@ -460,6 +469,12 @@ fn list_pr_files(
     let out = Command::new("git")
         .arg("-C")
         .arg(repo)
+        // `core.quotepath=false` so non-ASCII paths come back as raw UTF-8.
+        // Git's default octal-escapes and quotes them (e.g. `"caf\303\251.rs"`),
+        // which then never match the raw-UTF-8 paths the analyses ingest —
+        // silently dropping those files from PR detection, delta-health, and
+        // coupling-absence classification. Mirrors `GitCliRepo::run_git`.
+        .args(["-c", "core.quotepath=false"])
         .args(["diff", "--name-only", &format!("{base_sha}..{head_sha}")])
         .output()
         .context("git diff --name-only")?;
@@ -474,6 +489,25 @@ fn list_pr_files(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect())
+}
+
+/// Fingerprint of the `DiffArgs` fields that shape a base-rev `RevAnalyses`.
+/// Only `min_revs` and `exclude` flow into the `Options` that
+/// `analyze_at_rev` builds; everything else comes from `Options::default()`.
+/// The base tree's own content is pinned by the cached `sha`, so it needs no
+/// representation here. Any new `args.*` field folded into `analyze_at_rev`'s
+/// `Options` must be added here too.
+fn base_cache_opts_digest(min_revs: u32, exclude: &[String]) -> String {
+    let mut exclude = exclude.to_vec();
+    exclude.sort();
+    format!("min_revs={min_revs}|exclude=[{}]", exclude.join(","))
+}
+
+/// A base cache is reusable only when it was built at the same base SHA AND
+/// under the same analysis-affecting options. Keyed on both so a cache built
+/// under one option set is never served to a run with different options.
+fn base_cache_is_fresh(cached: &RevAnalyses, base_sha: &str, expected_digest: &str) -> bool {
+    cached.sha == base_sha && cached.opts_digest == expected_digest
 }
 
 // ---------------------------------------------------------------------------
@@ -591,10 +625,23 @@ pub fn run_diff(args: &DiffArgs) -> Result<(DiffOutput, FactsDb, Options)> {
     // hotspot entrants, false coupling absences, and wrong clones delta —
     // without any warning. On mismatch: warn, recompute, overwrite.
     let base_analyses = if let Some(cache_path) = args.base_cache.as_ref() {
+        let expected_digest = base_cache_opts_digest(args.min_revs, &args.exclude);
         match cache_path.exists().then(|| load_base_cache(cache_path)) {
-            Some(Ok(cached)) if cached.sha == base_sha => {
+            Some(Ok(cached)) if base_cache_is_fresh(&cached, &base_sha, &expected_digest) => {
                 tracing::info!("loading base analysis from {}", cache_path.display());
                 cached
+            }
+            Some(Ok(cached)) if cached.sha == base_sha => {
+                tracing::warn!(
+                    "base-cache options mismatch at {} (SHA matches {base_sha}, but the \
+                     cache was built under different analysis options such as --min-revs \
+                     or --exclude); discarding cache and recomputing base analysis",
+                    cache_path.display(),
+                );
+                // Base rev only needs the analyses; drop the db + opts.
+                let (a, _db, _opts) = analyze_at_rev(&args.repo, &base_sha, args, true)?;
+                write_base_cache(cache_path, &a)?;
+                a
             }
             Some(Ok(cached)) => {
                 tracing::warn!(
@@ -930,5 +977,122 @@ mod prune_tests {
             new_entries.is_empty(),
             "F6 regression: add_worktree leaked a tempdir on git failure: {new_entries:?}",
         );
+    }
+
+    /// `list_pr_files` must return non-ASCII paths as raw UTF-8, matching the
+    /// paths the analyses ingest. Git's default `core.quotepath=true`
+    /// octal-escapes and quotes them; without the `core.quotepath=false`
+    /// override the returned set holds the quoted form and the file silently
+    /// drops from PR detection. Uses a non-decomposable Cyrillic name — Latin
+    /// accented letters like `é`/`ï` decompose to NFD under macOS APFS and
+    /// would flake.
+    #[test]
+    fn list_pr_files_returns_non_ascii_paths_unquoted() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path();
+        let git = |args: &[&str]| {
+            assert!(
+                Command::new("git")
+                    .arg("-C")
+                    .arg(path)
+                    .args(args)
+                    .status()
+                    .expect("spawn git")
+                    .success(),
+                "git {args:?} failed"
+            );
+        };
+        git(&["init", "-b", "main", "--quiet"]);
+        git(&["config", "user.email", "x@x"]);
+        git(&["config", "user.name", "X"]);
+        // Force the bug regardless of the tester's global git config.
+        git(&["config", "core.quotepath", "true"]);
+        std::fs::write(path.join("seed.txt"), "1\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "seed", "--quiet"]);
+        let base = git_rev_parse(path, "HEAD").unwrap();
+        std::fs::write(path.join("файл.rs"), "fn main() {}\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "add cyrillic", "--quiet"]);
+        let head = git_rev_parse(path, "HEAD").unwrap();
+
+        let files = list_pr_files(path, &base, &head).unwrap();
+        assert!(
+            files.contains("файл.rs"),
+            "expected raw-UTF-8 path in returned set, got {files:?}"
+        );
+    }
+
+    /// A different `--min-revs` shapes a different base cache, so the digest
+    /// must fold it in.
+    #[test]
+    fn base_cache_opts_digest_folds_in_min_revs() {
+        assert_ne!(
+            base_cache_opts_digest(2, &[]),
+            base_cache_opts_digest(10, &[])
+        );
+    }
+
+    /// A different `--exclude` set shapes a different base cache, so the
+    /// digest must fold it in.
+    #[test]
+    fn base_cache_opts_digest_folds_in_exclude() {
+        assert_ne!(
+            base_cache_opts_digest(2, &["src/gen/**".to_string()]),
+            base_cache_opts_digest(2, &[])
+        );
+    }
+
+    /// `--exclude` order does not change the resulting analysis, so the
+    /// digest must be order-stable.
+    #[test]
+    fn base_cache_opts_digest_is_exclude_order_stable() {
+        assert_eq!(
+            base_cache_opts_digest(2, &["a".to_string(), "b".to_string()]),
+            base_cache_opts_digest(2, &["b".to_string(), "a".to_string()])
+        );
+    }
+
+    /// A cache built under one option digest is not fresh for a run with a
+    /// different digest (even at the same SHA), and not fresh for a different
+    /// SHA (even at the same digest).
+    #[test]
+    fn base_cache_not_fresh_when_opts_digest_differs() {
+        let cached = RevAnalyses {
+            sha: "abc123".to_string(),
+            opts_digest: base_cache_opts_digest(2, &[]),
+            ..Default::default()
+        };
+        assert!(!base_cache_is_fresh(
+            &cached,
+            "abc123",
+            &base_cache_opts_digest(10, &[])
+        ));
+        assert!(base_cache_is_fresh(
+            &cached,
+            "abc123",
+            &base_cache_opts_digest(2, &[])
+        ));
+        assert!(!base_cache_is_fresh(
+            &cached,
+            "def456",
+            &base_cache_opts_digest(2, &[])
+        ));
+    }
+
+    /// A base cache written before `opts_digest` existed deserialises with an
+    /// empty digest and is treated as a mismatch — recomputed once, never
+    /// served.
+    #[test]
+    fn legacy_base_cache_missing_opts_digest_deserialises_empty_and_is_not_served() {
+        let parsed: RevAnalyses =
+            serde_json::from_str(r#"{"sha":"abc","hotspots":[],"coupling":[],"clones":[]}"#)
+                .expect("legacy base-cache JSON should deserialise");
+        assert_eq!(parsed.opts_digest, "");
+        assert!(!base_cache_is_fresh(
+            &parsed,
+            "abc",
+            &base_cache_opts_digest(2, &[])
+        ));
     }
 }
