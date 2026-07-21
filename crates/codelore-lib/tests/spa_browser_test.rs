@@ -1848,7 +1848,7 @@ fn tablist_arrow_keys_move_focus_and_selection() {
 
 /// The hotspot file list (`role="tree"`) is a parallel DOM structure next
 /// to the circle-pack canvas, offered as a keyboard/screen-reader
-/// alternative. Confirms `wireTreeArrows` (00_setup_boot.js) gives it real
+/// alternative. Confirms `wireTreeArrows` (`00_setup_boot.js`) gives it real
 /// WAI-ARIA treeview keyboard semantics:
 ///   - `ArrowDown` moves focus AND the roving tabindex to the next
 ///     treeitem, but — unlike the tablist pattern above — does NOT also
@@ -1856,6 +1856,7 @@ fn tablist_arrow_keys_move_focus_and_selection() {
 ///     pattern; there is no wraparound either).
 ///   - `Enter` on the focused treeitem still opens the file-detail drawer
 ///     through the existing inline `_codeloreShowDetail` binding.
+///
 /// On the un-fixed source every treeitem is `tabindex="0"` with no
 /// keydown handler on the tree, so `ArrowDown` does nothing and this test
 /// fails.
