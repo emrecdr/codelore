@@ -1042,6 +1042,10 @@ codelore analyze --analysis hotspots --temp-dir /mnt/scratch/codelore-spill
 
 # codelore check honors the same flag
 codelore check --temp-dir /mnt/scratch/codelore-spill
+
+# codelore calibrate-defects mines entirely in memory (no cache root), so its
+# spill directory always defaults to the system temp directory unless overridden
+codelore calibrate-defects --repo . --output defects.calib.json --temp-dir /mnt/scratch/codelore-spill
 ```
 
 `--temp-dir` must already exist and be writable; codelore validates it up front rather than failing deep inside an ingest. The directory choice has no effect on analysis output — it changes only where `DuckDB` writes scratch files — so it is not part of the persistent-cache key.

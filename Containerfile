@@ -79,10 +79,11 @@ COPY --from=builder /src/target/release/codelore /usr/local/bin/codelore
 
 # GPL-3.0-only (workspace) plus the MPL-2.0 notice for the vendored
 # codelore-rca fork (see UPSTREAM.md), renamed to avoid ambiguity with
-# LICENSE. Distroless has no shell, so these ride in as plain COPYs
-# rather than a mkdir + cp.
+# LICENSE, plus the NOTICE summarizing both. Distroless has no shell,
+# so these ride in as plain COPYs rather than a mkdir + cp.
 COPY --from=builder /src/LICENSE /usr/share/licenses/codelore/LICENSE
 COPY --from=builder /src/crates/codelore-rca/LICENSE-MPL /usr/share/licenses/codelore/LICENSE-MPL-codelore-rca
+COPY --from=builder /src/NOTICE /usr/share/licenses/codelore/NOTICE
 
 USER nonroot
 WORKDIR /repo

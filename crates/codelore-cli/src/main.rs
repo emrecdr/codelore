@@ -588,9 +588,12 @@ fn run_calibrate_defects_cmd(args: &CalibrateDefectsArgs) -> Result<()> {
     let opts = Options {
         repo_path: args.repo.clone(),
         include_merges: true,
+        temp_dir: args.temp_dir.clone(),
         ..Options::default()
     };
-    let db = FactsDb::new_in_memory().context("open in-memory mining fact store")?;
+    opts.validate().context("validate options")?;
+    let db = FactsDb::new_in_memory_with_temp_dir(args.temp_dir.as_deref())
+        .context("open in-memory mining fact store")?;
     db.ingest(&repo, &opts).context("ingest full history")?;
 
     let oracle_cfg = OracleConfig::default();

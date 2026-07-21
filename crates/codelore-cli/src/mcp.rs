@@ -871,7 +871,9 @@ fn render_gate_changes(
 /// communicated at the protocol layer, not only in `--help`.
 #[tool_handler(
     instructions = "Local-only behavioral analysis of the git repository configured at startup. \
-        Read-only. No network, no account, no telemetry. \
+        Read-only. No network, no account, no telemetry — beyond the optional CODELORE_LLM_* \
+        endpoint you configure for explain_file's advisory narrative (off by default, and \
+        local-first when enabled). \
         First call on a cold cache pays a one-time history ingest (5–30 s for typical repos); \
         subsequent calls within the same server session are fast."
 )]

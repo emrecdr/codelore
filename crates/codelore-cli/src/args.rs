@@ -767,6 +767,14 @@ pub struct CalibrateDefectsArgs {
     #[arg(long = "window-days")]
     pub window_days: Option<u32>,
 
+    /// Override the `DuckDB` spill directory used once a query's memory
+    /// usage exceeds the internal ceiling (see docs/advanced-usage.md). Must
+    /// already exist and be writable. Defaults to the system temp directory
+    /// — mining runs entirely in memory and has no persistent cache root to
+    /// nest a default spill dir under.
+    #[arg(long = "temp-dir")]
+    pub temp_dir: Option<PathBuf>,
+
     /// Mine even though the working tree has uncommitted changes. Mining
     /// reads only committed state (git history + object-database blobs at
     /// HEAD), so uncommitted edits are invisible to it — the artifact

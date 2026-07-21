@@ -4,6 +4,16 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The root `NOTICE` file is now actually bundled into release artifacts.** It previously existed only at the repo root; every platform tarball, the Windows zip, and the container image now carry it alongside `LICENSE` and the MPL-2.0 notice.
+
+- **`codelore mcp`'s server instructions no longer claim an unconditional "no network."** The positioning now names the one opt-in exception: `explain_file`'s advisory narrative, which egresses only when `CODELORE_LLM_*` is explicitly configured (off by default, local-first when enabled) — matching the qualification already made in the README.
+
+- **`codelore calibrate-defects` honors `--temp-dir`.** Its in-memory mining fact store previously always spilled to the system temp directory regardless of an explicit override; it now accepts the same `--temp-dir` flag as `analyze`, `check`, and `gate`.
+
+- **The external-findings sidecar store now carries the same memory ceiling and spill `PRAGMA`s as every other `DuckDB` connection.** `codelore ingest-sarif` and gate/check's SARIF-overlap reads previously opened this connection with no `memory_limit` or `temp_directory` set, leaving it outside the OOM-avoidance guarantee the rest of the binary carries.
+
 ## [0.22.0] - 2026-07-20
 
 ### Added

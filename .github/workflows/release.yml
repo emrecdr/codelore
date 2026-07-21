@@ -122,12 +122,13 @@ jobs:
       - name: Stage artifact
         id: stage
         shell: bash
-        # Every artifact ships GPL-3.0-only LICENSE plus the MPL-2.0 notice
+        # Every artifact ships GPL-3.0-only LICENSE, the MPL-2.0 notice
         # for the vendored codelore-rca fork (renamed to avoid ambiguity
-        # with LICENSE). Both files are staged into a scratch directory
-        # alongside the binary (and, on Windows, README/CHANGELOG) so tar
-        # and 7z can pack them with plain relative names — no path
-        # traversal or cross-directory arguments.
+        # with LICENSE), and the NOTICE file summarizing both. All three
+        # are staged into a scratch directory alongside the binary (and,
+        # on Windows, README/CHANGELOG) so tar and 7z can pack them with
+        # plain relative names — no path traversal or cross-directory
+        # arguments.
         run: |
           mkdir -p dist
           archive_name="codelore-${{ needs.plan.outputs.tag }}-${{ matrix.target }}"
@@ -135,15 +136,16 @@ jobs:
           mkdir -p "$stage_dir"
           cp LICENSE "$stage_dir/LICENSE"
           cp crates/codelore-rca/LICENSE-MPL "$stage_dir/LICENSE-MPL-codelore-rca"
+          cp NOTICE "$stage_dir/NOTICE"
           if [[ "${{ matrix.target }}" == *windows* ]]; then
             cp "target/${{ matrix.target }}/release/codelore.exe" "$stage_dir/codelore.exe"
             cp README.md "$stage_dir/README.md"
             cp CHANGELOG.md "$stage_dir/CHANGELOG.md"
-            (cd "$stage_dir" && 7z a "../${archive_name}.zip" codelore.exe README.md CHANGELOG.md LICENSE LICENSE-MPL-codelore-rca 2>/dev/null || true)
+            (cd "$stage_dir" && 7z a "../${archive_name}.zip" codelore.exe README.md CHANGELOG.md LICENSE LICENSE-MPL-codelore-rca NOTICE 2>/dev/null || true)
             echo "archive=dist/${archive_name}.zip" >> "$GITHUB_OUTPUT"
           else
             cp "target/${{ matrix.target }}/release/codelore" "$stage_dir/codelore"
-            tar -C "$stage_dir" -czf "dist/${archive_name}.tar.gz" codelore LICENSE LICENSE-MPL-codelore-rca
+            tar -C "$stage_dir" -czf "dist/${archive_name}.tar.gz" codelore LICENSE LICENSE-MPL-codelore-rca NOTICE
             echo "archive=dist/${archive_name}.tar.gz" >> "$GITHUB_OUTPUT"
           fi
           rm -rf "$stage_dir"

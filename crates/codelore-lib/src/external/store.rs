@@ -47,6 +47,7 @@ use std::path::{Path, PathBuf};
 use duckdb::{AccessMode, Config, Connection};
 
 use crate::cache::repo_cache_dir;
+use crate::facts::{apply_memory_pragmas, default_spill_dir};
 use crate::quality_gates::ledger::now_utc_ts;
 use crate::{CodeLoreError, Result};
 
@@ -99,7 +100,7 @@ impl ExternalStore {
         if !path.exists() {
             return Ok(None);
         }
-        let conn = open_read_only(&path)?;
+        let conn = open_read_only(&path, cache_root)?;
         Ok(Some(Self { conn, path }))
     }
 
@@ -178,6 +179,7 @@ impl ExternalStore {
         let conn = Connection::open(&path).map_err(|e| {
             CodeLoreError::Analysis(format!("external store: open {}: {e}", path.display()))
         })?;
+        apply_memory_pragmas(&conn, &default_spill_dir(Some(cache_root)))?;
         conn.execute_batch(CREATE_TABLE).map_err(|e| {
             CodeLoreError::Analysis(format!(
                 "external store: create table in {}: {e}",
@@ -386,7 +388,12 @@ impl ExternalStore {
 /// Uses [`AccessMode::ReadOnly`] so the connection takes a shared lock and
 /// coexists with other readers instead of taking the exclusive write lock a
 /// default open would. The caller has already checked that `path` exists.
-fn open_read_only(path: &Path) -> Result<Connection> {
+///
+/// Applies the same `memory_limit` / `temp_directory` `PRAGMA`s as
+/// [`crate::facts::FactsDb`] connections, spilling under `cache_root` (see
+/// [`default_spill_dir`]) — a read-only connection can still build large
+/// intermediate query state, so it needs the same ceiling.
+fn open_read_only(path: &Path, cache_root: &Path) -> Result<Connection> {
     let config = Config::default()
         .access_mode(AccessMode::ReadOnly)
         .map_err(|e| {
@@ -395,12 +402,14 @@ fn open_read_only(path: &Path) -> Result<Connection> {
                 path.display()
             ))
         })?;
-    Connection::open_with_flags(path, config).map_err(|e| {
+    let conn = Connection::open_with_flags(path, config).map_err(|e| {
         CodeLoreError::Analysis(format!(
             "external store: open read-only {}: {e}",
             path.display()
         ))
-    })
+    })?;
+    apply_memory_pragmas(&conn, &default_spill_dir(Some(cache_root)))?;
+    Ok(conn)
 }
 
 /// Per-path aggregation produced by [`ExternalStore::findings_by_path`].
