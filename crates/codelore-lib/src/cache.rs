@@ -23,12 +23,14 @@ use crate::Options;
 /// schema version, and the historical `schema_v` prefix on the value is
 /// retained so older cache files stay invalidated.
 ///
-/// Bumped to `schema_v10`: head-only ingest (`opts.head_only_ingest`) now
-/// also populates the `imports` table. Cache files written by an older
-/// binary under head-only ingest carry no import facts, so any analysis
-/// that joins against `imports` would silently see an empty table on a
-/// stale cache hit; the epoch bump forces those caches to be rebuilt.
-const CACHE_EPOCH: &str = "schema_v10";
+/// The current epoch (`schema_v11`) invalidates caches whose complexity
+/// facts predate two extraction corrections: cognitive complexity detects
+/// `else if` chains correctly and counts constructs it previously missed
+/// (`loop`, enhanced-`for`, ternary, `match`), and `.tsx` sources are parsed
+/// with the TSX grammar instead of plain TypeScript. Both shift the cognitive
+/// and nesting numbers written into ingested facts, so a stale hit from an
+/// older binary would serve wrong values.
+const CACHE_EPOCH: &str = "schema_v11";
 
 /// Compute a 32-byte SHA-256 cache key from:
 ///   `canonical_repo_path || NUL || head_sha || NUL || CARGO_PKG_VERSION || NUL`
@@ -57,7 +59,7 @@ pub fn cache_key(repo_path: &Path, head_sha: &str, opts: &Options) -> [u8; 32] {
 /// Resolve the on-disk path for a cache entry:
 ///   `<cache_root>/codelore/<repo_hash_8>/<cache_key_16>.duckdb`
 ///
-/// `cache_root` defaults to [`dirs::cache_dir()`] but can be overridden (Task 14).
+/// `cache_root` defaults to [`dirs::cache_dir()`] but can be overridden via `--cache-dir`.
 #[must_use]
 pub fn cache_path(key: &[u8; 32], repo_path: &Path) -> PathBuf {
     cache_path_with_root(key, repo_path, &default_cache_root())
