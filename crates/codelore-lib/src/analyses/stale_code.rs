@@ -39,11 +39,17 @@ const DEFAULT_MAX_COGNITIVE: f64 = 5.0;
 
 const SQL: &str = "
     WITH live_paths AS (
-        SELECT path, MAX(date) AS last_touched
-        FROM changes
-        INNER JOIN commits USING (rev)
-        GROUP BY path
-        HAVING MAX(CASE WHEN change_type = 'deleted' THEN 1 ELSE 0 END) = 0
+        SELECT path, last_touched FROM (
+            SELECT c.path,
+                   MAX(commits.date) AS last_touched,
+                   arg_max(
+                       c.change_type,
+                       ROW(commits.date, -commits.rowid)
+                   ) AS change_type
+            FROM changes c
+            INNER JOIN commits ON commits.rev = c.rev
+            GROUP BY c.path
+        ) WHERE change_type != 'deleted'
     ),
     file_complexity AS (
         SELECT path, MAX(cognitive) AS max_cognitive
@@ -96,7 +102,8 @@ pub fn run_stale_code(db: &FactsDb, opts: &Options) -> Result<Vec<StaleCodeRow>>
     // second-to-second.
     let anchor = anchor_str(db, opts)?;
     let cm_src = crate::analyses::grouped_complexity::source_table(opts);
-    let sql = SQL.replace("{cm_src}", cm_src);
+    crate::analyses::lineage::materialize_if_needed(db, opts)?;
+    let sql = crate::analyses::lineage::rewrite(&SQL.replace("{cm_src}", cm_src), opts);
     super::query::explain_if_requested(
         db,
         &sql,
