@@ -245,6 +245,96 @@ fn newly_cyclic_detected_when_edit_introduces_cycle() {
 }
 
 #[test]
+fn unchanged_tree_projects_zero_delta_with_clones_present() {
+    // Dual-source DRY must not perturb the exact-0.0 invariant when clones
+    // actually exist at HEAD: with `min_clone_node_count: 0` the HEAD `clones`
+    // table is populated, so this exercises the baseline's HEAD-table counts
+    // against the projection's working-tree walk on identical content. A
+    // content-identical re-parse must still project exactly 0.0.
+    let fx = differential_repo::build();
+    let repo = GixRepo::open(fx.dir.path()).expect("open repo");
+    let db = FactsDb::new_in_memory().expect("open fact store");
+    let opts = Options {
+        repo_path: fx.dir.path().to_path_buf(),
+        min_clone_node_count: 0,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+    // Write the HEAD blob back so the working-tree bytes equal HEAD exactly,
+    // then force the (content-identical) change into the projection.
+    let head_bytes = repo
+        .read_blob_at_head("src/main.rs")
+        .expect("read blob")
+        .expect("main.rs tracked at HEAD");
+    std::fs::write(fx.dir.path().join("src/main.rs"), &head_bytes).expect("restore main.rs");
+
+    let projection =
+        project_health(&db, &repo, &opts, &[modified("src/main.rs")]).expect("project_health");
+    let delta = projection
+        .deltas
+        .iter()
+        .find(|d| d.path == "src/main.rs")
+        .expect("src/main.rs has a delta row");
+    assert_eq!(
+        delta.delta,
+        Some(0.0),
+        "an unchanged tree must project exactly zero delta even with clones present",
+    );
+}
+
+#[test]
+fn worktree_clone_introduction_surfaces_a_finding() {
+    // Dual-source DRY: the baseline reads HEAD-faithful clone counts from the
+    // ingested `clones` table while the projection walks the working tree, so a
+    // duplicate introduced only in the working tree can no longer cancel to
+    // zero between the two runs. `min_clone_node_count: 0` lets the small
+    // fixture functions register as a clone family.
+    let fx = differential_repo::build();
+    let repo = GixRepo::open(fx.dir.path()).expect("open repo");
+    let db = FactsDb::new_in_memory().expect("open fact store");
+    let opts = Options {
+        repo_path: fx.dir.path().to_path_buf(),
+        min_clone_node_count: 0,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    // Two structurally-identical (Type-2) functions absent at HEAD: they form a
+    // new clone family in the working tree only, so src/main.rs gains clone
+    // members the HEAD baseline does not carry.
+    append(
+        &fx.dir.path().join("src/main.rs"),
+        "\nfn dup_alpha(a: i32) -> i32 { let p = a + 1; let q = p * 2; let r = q - 3; r + p + q }\n\
+         fn dup_beta(b: i32) -> i32 { let s = b + 1; let t = s * 2; let u = t - 3; u + s + t }\n",
+    );
+    let cache_root = tempfile::tempdir().expect("cache root");
+
+    let report = build_change_set_report(&db, &repo, &opts, cache_root.path()).expect("report");
+
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.kind == "clone-introduction" && f.path == "src/main.rs"),
+        "a working-tree-introduced duplicate must raise a clone-introduction finding: {:?}",
+        report.findings,
+    );
+    // The projection must never read the introduced clone as an improvement.
+    if let Some(delta) = report
+        .health
+        .deltas
+        .iter()
+        .find(|d| d.path == "src/main.rs")
+        .and_then(|d| d.delta)
+    {
+        assert!(
+            delta <= 0.0,
+            "an introduced duplicate must not raise the projected health: {delta}",
+        );
+    }
+}
+
+#[test]
 fn absence_fires_for_historical_partner() {
     // The coupling fixture's src/alpha/svc.rs and src/beta/svc.rs co-change in
     // 7 of 19 commits (each has 9 revisions) — a Fisher-significant pair well

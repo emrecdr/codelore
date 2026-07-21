@@ -13,8 +13,14 @@
 //!   shotgun-surgery via coupling centrality) read the untouched `changes` /
 //!   `commits` tables, so they are identical in both runs.
 //! - **Cross-file structure** — god-class fan-in/out reads the untouched
-//!   `imports` table (`imports_source` stays `"imports"`); the DRY biomarker
-//!   walks the working tree on *both* runs, so its delta cancels to zero.
+//!   `imports` table (`imports_source` stays `"imports"`). The DRY biomarker is
+//!   *dual-sourced*: the baseline counts clones from the HEAD-faithful `clones`
+//!   table (ingested from HEAD blobs) while the projection fingerprints the
+//!   working tree, so a duplicate introduced only in the working tree raises
+//!   the projection's DRY count without touching the baseline — a real
+//!   negative delta and a `clone-introduction` finding, not a cancel to zero.
+//!   On a clean tree the two clone sources agree, keeping the delta exactly
+//!   `0.0`.
 //! - **Calibrated weights, clamps, and the no-DRY scale divisor** are inherited
 //!   byte-for-byte because both runs go through the one real scoring engine.
 //!
@@ -35,7 +41,9 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-use crate::analyses::code_health::{CodeHealthRow, HealthScanCtx, run_code_health_scoped};
+use crate::analyses::code_health::{
+    CloneSource, CodeHealthRow, HealthScanCtx, run_code_health_scoped,
+};
 use crate::analyses::coupling::{CouplingAbsence, compute_coupling_absences, run_coupling};
 use crate::analyses::import_graph::{
     ImportGraph, build_import_graph, build_import_graph_from_edges, tarjan_scc,
@@ -163,7 +171,7 @@ pub struct Finding {
     /// stable across runs for identical content.
     pub id: String,
     /// `"health-drop"` | `"newly-cyclic"` | `"coupling-absence"` |
-    /// `"new-file"` | `"unparseable"`.
+    /// `"clone-introduction"` | `"new-file"` | `"unparseable"`.
     pub kind: String,
     /// The repo-relative file the finding is about.
     pub path: String,
@@ -226,7 +234,14 @@ pub fn build_change_set_report<R: crate::Repo>(
         DEFAULT_FISHER_SIGNIFICANCE,
     );
 
-    let findings = assemble_findings(&health, &newly_cyclic_paths, &coupling_absences, &changes);
+    let clone_intros = clone_introductions(db, opts, &changes)?;
+    let findings = assemble_findings(
+        &health,
+        &newly_cyclic_paths,
+        &coupling_absences,
+        &clone_intros,
+        &changes,
+    );
 
     let report = ChangeSetReport {
         head_sha,
@@ -273,13 +288,23 @@ pub fn project_health<R: crate::Repo>(
         o
     };
 
-    // 1. Baseline: today's HEAD tables — byte-for-byte the standard scan.
-    let baseline_rows = run_code_health_scoped(db, &opts_scan, &HealthScanCtx::head())?;
+    // 1. Baseline: today's HEAD tables. `CloneSource::Head` reads the DRY
+    //    biomarker from the ingested `clones` table (HEAD blobs) rather than
+    //    the working tree, so `baseline_score` is HEAD-faithful and a
+    //    working-tree-introduced duplicate is absent here — it stops cancelling
+    //    against the projection below.
+    let baseline_ctx = HealthScanCtx {
+        clone_source: CloneSource::Head,
+        ..HealthScanCtx::head()
+    };
+    let baseline_rows = run_code_health_scoped(db, &opts_scan, &baseline_ctx)?;
 
     // 2. Substitute the changed files' complexity, then re-run the SAME engine
     //    against the projected table. `include_clones: true` on both runs so
-    //    the STRUCTURAL_SCALE_NO_DRY divisor matches (scale parity); the clones
-    //    and coupling memos make the second walk / self-join free.
+    //    the STRUCTURAL_SCALE_NO_DRY divisor matches (scale parity). The
+    //    projection counts clones from the working tree (`CloneSource::WorkingTree`,
+    //    served from the clones memo), so a newly duplicated function raises its
+    //    DRY count above the HEAD baseline instead of appearing in both runs.
     let head_sha = repo.head_sha()?;
     let skip_reasons = build_projected_complexity_table(db, opts, changes, &head_sha)?;
     let projected_ctx = HealthScanCtx {
@@ -287,6 +312,7 @@ pub fn project_health<R: crate::Repo>(
         imports_source: "imports".to_string(),
         history_cutoff: None,
         include_clones: true,
+        clone_source: CloneSource::WorkingTree,
     };
     let projected_rows = run_code_health_scoped(db, &opts_scan, &projected_ctx)?;
 
@@ -738,6 +764,61 @@ fn cyclic_paths(graph: &ImportGraph) -> BTreeSet<String> {
     out
 }
 
+/// One changed file whose working-tree clone-family membership exceeds its
+/// HEAD membership — a duplicate the edit introduced (or enlarged).
+struct CloneIntroduction {
+    /// Repo-relative, `/`-separated path of the changed file.
+    path: String,
+    /// Clone-family members the file carries at HEAD (from the `clones` table).
+    head_members: u32,
+    /// Clone-family members the file carries in the working tree.
+    worktree_members: u32,
+}
+
+/// Detect duplicated functions introduced by the working-tree edits.
+///
+/// Compares each changed non-deleted file's HEAD clone-family membership (the
+/// ingested `clones` table, via [`crate::analyses::clones::head_clone_counts`])
+/// against its working-tree membership (the same
+/// [`crate::analyses::clones::run_clones_memoised`] walk the projection already
+/// warmed) and reports the files whose working-tree count is higher. Only
+/// changed files are considered — an unchanged file that happens to become a
+/// clone of an edited one is not the user's introduction to act on, mirroring
+/// how coupling absences report only the touched side.
+///
+/// # Errors
+///
+/// Returns [`CodeLoreError::Analysis`] on a fact-store / SQL / clone-walk error.
+fn clone_introductions(
+    db: &FactsDb,
+    opts: &Options,
+    changes: &[WorktreeChange],
+) -> Result<Vec<CloneIntroduction>> {
+    let head = crate::analyses::clones::head_clone_counts(db)?;
+    let worktree_rows = crate::analyses::clones::run_clones_memoised(db, opts)?;
+    let mut worktree: HashMap<&str, u32> = HashMap::new();
+    for c in worktree_rows.iter() {
+        *worktree.entry(c.entity.as_str()).or_insert(0) += 1;
+    }
+
+    let mut intros = Vec::new();
+    for change in changes {
+        if change.kind == WorktreeChangeKind::Deleted {
+            continue;
+        }
+        let head_members = head.get(&change.path).copied().unwrap_or(0);
+        let worktree_members = worktree.get(change.path.as_str()).copied().unwrap_or(0);
+        if worktree_members > head_members {
+            intros.push(CloneIntroduction {
+                path: change.path.clone(),
+                head_members,
+                worktree_members,
+            });
+        }
+    }
+    Ok(intros)
+}
+
 /// Assemble the advisory findings from the measured report parts, sorted by
 /// `(kind, path, detail)` — deterministic even when one path carries several
 /// findings of the same kind (a file with two absent coupling partners).
@@ -745,6 +826,7 @@ fn assemble_findings(
     health: &HealthProjection,
     newly_cyclic: &[String],
     absences: &[CouplingAbsence],
+    clone_intros: &[CloneIntroduction],
     changes: &[WorktreeChange],
 ) -> Vec<Finding> {
     let mut findings: Vec<Finding> = Vec::new();
@@ -784,6 +866,18 @@ fn assemble_findings(
                 absence.expected_partner,
                 absence.historical_coupling,
                 absence.historical_shared_revs,
+            ),
+        ));
+    }
+    for intro in clone_intros {
+        let gained = intro.worktree_members.saturating_sub(intro.head_members);
+        findings.push(finding(
+            "clone-introduction",
+            &intro.path,
+            &format!(
+                "introduces {gained} duplicated function(s) absent at HEAD \
+                 (clone-family members rise from {} to {}).",
+                intro.head_members, intro.worktree_members,
             ),
         ));
     }
