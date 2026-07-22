@@ -23,16 +23,15 @@ use crate::Options;
 /// schema version, and the historical `schema_v` prefix on the value is
 /// retained so older cache files stay invalidated.
 ///
-/// The current epoch (`schema_v13`) invalidates caches whose import facts
-/// predate the AST-based JS/TS import resolver: re-exports (`export … from`),
-/// `CommonJS` `require`, dynamic `import()`, side-effect (`import "x"`), and
-/// minified specifiers are now captured, and `NodeNext` `.js` specifiers strip
-/// their emit extension to resolve onto the `.ts` source. An older binary
-/// captured only ESM `import … from` via a fragile string parse, so barrel
-/// files sank and `CommonJS` graphs came back empty. Those edges feed the
-/// architecture and import-cycle graphs, so a stale hit would serve a
-/// wrong structure.
-const CACHE_EPOCH: &str = "schema_v13";
+/// The current epoch (`schema_v14`) invalidates caches whose import facts
+/// predate the AST-based Python import resolver: `from . import x` now
+/// expands to one sibling-module edge per imported name (previously dropped
+/// entirely), and absolute first-party imports (`from mypkg.utils import
+/// calc`, `import mypkg.sub`) resolve to their tracked file by dotted-path
+/// suffix match. An older binary bailed on both forms, so Python import
+/// graphs came back near-vacuous. Those edges feed the architecture and
+/// import-cycle graphs, so a stale hit would serve a wrong structure.
+const CACHE_EPOCH: &str = "schema_v14";
 
 /// Compute a 32-byte SHA-256 cache key from:
 ///   `canonical_repo_path || NUL || head_sha || NUL || CARGO_PKG_VERSION || NUL`

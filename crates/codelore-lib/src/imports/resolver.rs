@@ -41,7 +41,7 @@ pub fn resolve_by_extension<S: std::hash::BuildHasher>(
         .and_then(std::ffi::OsStr::to_str);
     match ext {
         Some("rs") => resolve_rust_path(importer_path, target, live_paths),
-        Some("py" | "pyi") => resolve_python_relative(importer_path, target, live_paths),
+        Some("py" | "pyi") => resolve_python(importer_path, target, live_paths),
         Some("js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx") => {
             resolve_js_relative(importer_path, target, live_paths)
         }
@@ -209,6 +209,65 @@ pub fn resolve_python_relative<S: std::hash::BuildHasher>(
         }
     }
     None
+}
+
+/// Resolve a Python import `target` by shape: a leading-dot target is
+/// relative (delegated to [`resolve_python_relative`]); everything else
+/// is an absolute dotted module path resolved by suffix match.
+fn resolve_python<S: std::hash::BuildHasher>(
+    importer_path: &str,
+    target: &str,
+    live_paths: &HashSet<String, S>,
+) -> Option<String> {
+    if target.starts_with('.') {
+        resolve_python_relative(importer_path, target, live_paths)
+    } else {
+        resolve_python_absolute(target, live_paths)
+    }
+}
+
+/// Resolve an absolute Python module path (`mypkg.utils`, `os`) to a
+/// tracked file by matching the dotted path as a repo-path suffix
+/// (`a/b/c.py` or `a/b/c/__init__.py`) against the live-at-HEAD set —
+/// Python has no explicit import root, so the module may live under any
+/// source prefix. The match must be unique: zero or more than one
+/// candidate yields `None`, so an ambiguous suffix never fabricates a
+/// false edge and stdlib / third-party modules (no tracked file)
+/// resolve to `None`.
+#[must_use]
+pub fn resolve_python_absolute<S: std::hash::BuildHasher>(
+    target: &str,
+    live_paths: &HashSet<String, S>,
+) -> Option<String> {
+    let rel: String = target
+        .split('.')
+        .filter(|s| !s.is_empty() && !s.contains(' '))
+        .collect::<Vec<_>>()
+        .join("/");
+    if rel.is_empty() {
+        return None;
+    }
+    let module = format!("{rel}.py");
+    let package = format!("{rel}/__init__.py");
+    // The leading `/` guards against partial-segment hits such as
+    // `notmypkg/utils.py` for `mypkg.utils`; the `==` arms cover a
+    // module that lives at the repo root.
+    let module_suffix = format!("/{module}");
+    let package_suffix = format!("/{package}");
+    let mut found: Option<&String> = None;
+    for path in live_paths {
+        if path == &module
+            || path == &package
+            || path.ends_with(&module_suffix)
+            || path.ends_with(&package_suffix)
+        {
+            if found.is_some() {
+                return None; // ambiguous suffix — refuse to guess
+            }
+            found = Some(path);
+        }
+    }
+    found.cloned()
 }
 
 fn parent_dir(path: &str) -> PathBuf {
@@ -514,5 +573,82 @@ mod tests {
         let live = live(&["src/a/b/c.rs", "src/a/x.rs"]);
         let got = resolve_rust_path("src/a/b/c.rs", "super::super::x", &live);
         assert_eq!(got, Some("src/a/x.rs".to_string()));
+    }
+
+    #[test]
+    fn python_relative_sibling_resolves() {
+        let live = live(&["pkg/app.py", "pkg/x.py"]);
+        let got = resolve_python("pkg/app.py", ".x", &live);
+        assert_eq!(got, Some("pkg/x.py".to_string()));
+    }
+
+    #[test]
+    fn python_relative_module_resolves() {
+        let live = live(&["pkg/app.py", "pkg/mod.py"]);
+        let got = resolve_python("pkg/app.py", ".mod", &live);
+        assert_eq!(got, Some("pkg/mod.py".to_string()));
+    }
+
+    #[test]
+    fn python_parent_relative_resolves() {
+        // `..pkg` from `a/b/app.py` climbs to `a/` then names `pkg`.
+        let live = live(&["a/b/app.py", "a/pkg.py"]);
+        let got = resolve_python("a/b/app.py", "..pkg", &live);
+        assert_eq!(got, Some("a/pkg.py".to_string()));
+    }
+
+    #[test]
+    fn python_relative_subpackage_init_resolves() {
+        let live = live(&["pkg/app.py", "pkg/sub/__init__.py"]);
+        let got = resolve_python("pkg/app.py", ".sub", &live);
+        assert_eq!(got, Some("pkg/sub/__init__.py".to_string()));
+    }
+
+    #[test]
+    fn python_absolute_module_resolves_by_suffix() {
+        let live = live(&["src/mypkg/utils.py", "src/mypkg/__init__.py"]);
+        let got = resolve_python_absolute("mypkg.utils", &live);
+        assert_eq!(got, Some("src/mypkg/utils.py".to_string()));
+    }
+
+    #[test]
+    fn python_absolute_package_init_resolves() {
+        let live = live(&["src/mypkg/__init__.py", "src/other.py"]);
+        let got = resolve_python_absolute("mypkg", &live);
+        assert_eq!(got, Some("src/mypkg/__init__.py".to_string()));
+    }
+
+    #[test]
+    fn python_absolute_repo_root_module_resolves() {
+        // A module that lives at the repo root matches via the `==` arm.
+        let live = live(&["mypkg.py", "other.py"]);
+        let got = resolve_python_absolute("mypkg", &live);
+        assert_eq!(got, Some("mypkg.py".to_string()));
+    }
+
+    #[test]
+    fn python_absolute_ambiguous_suffix_returns_none() {
+        // Two tracked files end with `mypkg/utils.py` — an ambiguous
+        // suffix must not fabricate an edge.
+        let live = live(&["a/mypkg/utils.py", "b/mypkg/utils.py"]);
+        let got = resolve_python_absolute("mypkg.utils", &live);
+        assert!(got.is_none(), "ambiguous suffix must resolve to None");
+    }
+
+    #[test]
+    fn python_absolute_stdlib_returns_none() {
+        // `os` has no tracked file — stdlib / third-party resolve to None.
+        let live = live(&["src/app.py", "src/mypkg/utils.py"]);
+        let got = resolve_python_absolute("os", &live);
+        assert!(got.is_none(), "stdlib module must resolve to None");
+    }
+
+    #[test]
+    fn python_absolute_partial_segment_does_not_match() {
+        // `mypkg.utils` must not match `notmypkg/utils.py` — the leading
+        // slash in the suffix guards against partial-segment hits.
+        let live = live(&["src/notmypkg/utils.py"]);
+        let got = resolve_python_absolute("mypkg.utils", &live);
+        assert!(got.is_none(), "partial-segment suffix must not match");
     }
 }

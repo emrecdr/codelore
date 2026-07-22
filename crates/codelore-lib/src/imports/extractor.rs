@@ -23,8 +23,9 @@ use tree_sitter::{Node, Parser, TreeCursor};
 pub struct RawImport {
     /// The normalised target string — for Rust this is "`std::fs`", for
     /// JS/TS the module specifier read from the AST (the string literal
-    /// of an `import`/`export … from`/`require`/dynamic `import()`).
-    /// Python and Java are trimmed from the raw statement text.
+    /// of an `import`/`export … from`/`require`/dynamic `import()`), and
+    /// for Python the dotted module path read from the AST. Java is
+    /// trimmed from the raw statement text.
     pub target: String,
     /// Coarse semantic bucket so SQL can filter without parsing
     /// `target`. See [`ImportKind`].
@@ -109,8 +110,12 @@ fn walk_imports(root: Node<'_>, source: &[u8], lang: ImportLanguage, out: &mut V
                 ImportLanguage::JavaScript | ImportLanguage::TypeScript | ImportLanguage::Tsx => {
                     collect_js_imports(current, source, lang, out);
                 }
-                // Python / Java still ride the string-normalising path.
-                ImportLanguage::Python | ImportLanguage::Java => {
+                // Python module paths are read from the AST so bare-dot
+                // relative (`from . import x`) and absolute first-party
+                // (`from mypkg.utils import x`) imports each surface.
+                ImportLanguage::Python => collect_python_imports(current, source, out),
+                // Java still rides the string-normalising path.
+                ImportLanguage::Java => {
                     if let Some(raw) = node_text(current, source)
                         && let Some(target) = normalise_target(&raw, lang)
                         && !target.is_empty()
@@ -396,15 +401,94 @@ fn node_text<'a>(node: Node<'a>, source: &'a [u8]) -> Option<String> {
     std::str::from_utf8(slice).ok().map(str::to_string)
 }
 
-/// String-normalising target extraction for the languages that still
-/// ride the text path (Python, Java). Strips the import keyword +
-/// trailing punctuation down to the dotted module specifier.
+/// Expand a Python import node into zero or more [`RawImport`]s by
+/// reading the module path + imported names straight from the AST (the
+/// same strategy as the Rust and JS extractors).
+///
+/// `import a.b` / `import a, b.c as d` yields one edge per `name` field
+/// (the dotted module, `as` alias dropped). `from a.b import x` yields
+/// the absolute edge `a.b`. `from .mod import y` / `from ..pkg import z`
+/// yield the relative edge (`.mod`, `..pkg`). `from . import x, y`
+/// carries no module tail, so each imported name is a sibling-module
+/// candidate: one relative edge per name (`.x`, `.y`). `from foo import
+/// *` yields the package edge `foo`; `from . import *` has no name tail
+/// and yields nothing. `from __future__ import …` is a
+/// `future_import_statement` — a node kind the walker never visits.
+fn collect_python_imports(node: Node<'_>, source: &[u8], out: &mut Vec<RawImport>) {
+    match node.kind() {
+        "import_statement" => {
+            let mut cursor = node.walk();
+            for name in node.children_by_field_name("name", &mut cursor) {
+                if let Some(target) = python_name_text(name, source) {
+                    push_python_target(target, out);
+                }
+            }
+        }
+        "import_from_statement" => {
+            let Some(module) = node.child_by_field_name("module_name") else {
+                return;
+            };
+            // `from a.b import …` — the module is the absolute target;
+            // the imported names are members, not modules.
+            if module.kind() == "dotted_name" {
+                if let Some(target) = node_text(module, source) {
+                    push_python_target(target, out);
+                }
+                return;
+            }
+            // Relative form: the `import_prefix` carries the leading dots.
+            let Some(dots) =
+                named_child_of_kind(module, "import_prefix").and_then(|p| node_text(p, source))
+            else {
+                return;
+            };
+            if let Some(tail) = named_child_of_kind(module, "dotted_name") {
+                // `from .mod import y` — one edge on the dotted tail.
+                if let Some(t) = node_text(tail, source) {
+                    push_python_target(format!("{dots}{t}"), out);
+                }
+            } else {
+                // `from . import x, y` — one edge per imported name.
+                let mut cursor = node.walk();
+                for name in node.children_by_field_name("name", &mut cursor) {
+                    if let Some(t) = python_name_text(name, source) {
+                        push_python_target(format!("{dots}{t}"), out);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Text of an import `name` field — the dotted module path, with any
+/// `as` alias dropped.
+fn python_name_text(name: Node<'_>, source: &[u8]) -> Option<String> {
+    let path = if name.kind() == "aliased_import" {
+        name.child_by_field_name("name")?
+    } else {
+        name
+    };
+    node_text(path, source)
+}
+
+/// Classify and record a non-empty Python target as a [`RawImport`].
+fn push_python_target(target: String, out: &mut Vec<RawImport>) {
+    if target.is_empty() {
+        return;
+    }
+    let kind = classify(&target, ImportLanguage::Python);
+    out.push(RawImport { target, kind });
+}
+
+/// String-normalising target extraction for Java, the one language that
+/// still rides the text path. Strips the import keyword + trailing
+/// punctuation down to the dotted module specifier.
 ///
 /// Returns `None` when the statement carries no meaningful module
-/// identifier (e.g. a Python `from X import Y` whose specifier is
-/// empty); the caller skips the row rather than storing raw statement
-/// text as a phantom target. Rust and JS/TS are extracted structurally
-/// from the AST and never reach here.
+/// identifier; the caller skips the row rather than storing raw
+/// statement text as a phantom target. Rust, JS/TS, and Python are
+/// extracted structurally from the AST and never reach here.
 fn normalise_target(raw: &str, lang: ImportLanguage) -> Option<String> {
     // Collapse whitespace + strip leading/trailing punctuation.
     let s = raw.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -421,7 +505,12 @@ fn normalise_target(raw: &str, lang: ImportLanguage) -> Option<String> {
             debug_assert!(false, "js/ts imports bypass normalise_target");
             return None;
         }
-        ImportLanguage::Python => normalise_python_target(&s)?,
+        ImportLanguage::Python => {
+            // Python imports are expanded structurally by
+            // `collect_python_imports`; they never reach this normaliser.
+            debug_assert!(false, "python imports bypass normalise_target");
+            return None;
+        }
         ImportLanguage::Java => s
             .trim_start_matches("import ")
             .trim_start_matches("static ")
@@ -433,26 +522,6 @@ fn normalise_target(raw: &str, lang: ImportLanguage) -> Option<String> {
         return None;
     }
     Some(trimmed)
-}
-
-/// Python target normalisation. Strips the `import` / `from` keyword
-/// and discards everything after a `from X import Y`'s ` import ` so
-/// only the dotted module specifier survives — `from os.path import
-/// join` → `os.path`. `import x.y` → `x.y`. Returns None when the
-/// statement carries no module specifier at all.
-fn normalise_python_target(s: &str) -> Option<String> {
-    let after = s.trim_start_matches("from ").trim_start_matches("import ");
-    // `from X import Y` shape: keep everything before ` import `.
-    let head = after.split_once(" import ").map_or(after, |(h, _)| h);
-    // `import X, Y, Z` shape: keep the first dotted module.
-    let first = head.split(',').next().unwrap_or(head).trim();
-    // Drop `as Alias` tails on either branch.
-    let target = first.split_once(" as ").map_or(first, |(h, _)| h).trim();
-    if target.is_empty() {
-        None
-    } else {
-        Some(target.to_string())
-    }
 }
 
 /// Coarse classification using the cleaned `target` string.
@@ -518,6 +587,110 @@ mod tests {
             got.iter().any(|r| r.target.contains("os.path")),
             "expected os.path target, got {got:?}"
         );
+    }
+
+    /// Extract Python targets as `(target, kind)` pairs, sorted by
+    /// target for order-independent assertions.
+    fn py_edges(src: &str) -> Vec<(String, ImportKind)> {
+        let mut got: Vec<(String, ImportKind)> =
+            extract_imports(src.as_bytes(), ImportLanguage::Python)
+                .unwrap()
+                .into_iter()
+                .map(|r| (r.target, r.kind))
+                .collect();
+        got.sort_by(|a, b| a.0.cmp(&b.0));
+        got
+    }
+
+    #[test]
+    fn python_bare_dot_import_yields_sibling_edge() {
+        assert_eq!(
+            py_edges("from . import x\n"),
+            vec![(".x".to_string(), ImportKind::Relative)],
+        );
+    }
+
+    #[test]
+    fn python_bare_dot_import_fans_out_per_name() {
+        assert_eq!(
+            py_edges("from . import x, y\n"),
+            vec![
+                (".x".to_string(), ImportKind::Relative),
+                (".y".to_string(), ImportKind::Relative),
+            ],
+        );
+    }
+
+    #[test]
+    fn python_relative_module_import_keeps_dotted_tail() {
+        assert_eq!(
+            py_edges("from .mod import y\n"),
+            vec![(".mod".to_string(), ImportKind::Relative)],
+        );
+    }
+
+    #[test]
+    fn python_parent_relative_import_keeps_double_dot() {
+        assert_eq!(
+            py_edges("from ..pkg import z\n"),
+            vec![("..pkg".to_string(), ImportKind::Relative)],
+        );
+    }
+
+    #[test]
+    fn python_absolute_from_import_is_absolute_edge() {
+        assert_eq!(
+            py_edges("from mypkg.utils import calc\n"),
+            vec![("mypkg.utils".to_string(), ImportKind::Absolute)],
+        );
+    }
+
+    #[test]
+    fn python_bare_imports_yield_one_edge_each() {
+        assert_eq!(
+            py_edges("import os\nimport pkg.sub\n"),
+            vec![
+                ("os".to_string(), ImportKind::Absolute),
+                ("pkg.sub".to_string(), ImportKind::Absolute),
+            ],
+        );
+    }
+
+    #[test]
+    fn python_multi_import_fans_out() {
+        assert_eq!(
+            py_edges("import a, b.c\n"),
+            vec![
+                ("a".to_string(), ImportKind::Absolute),
+                ("b.c".to_string(), ImportKind::Absolute),
+            ],
+        );
+    }
+
+    #[test]
+    fn python_aliased_import_drops_alias() {
+        assert_eq!(
+            py_edges("import numpy as np\n"),
+            vec![("numpy".to_string(), ImportKind::Absolute)],
+        );
+    }
+
+    #[test]
+    fn python_parenthesised_bare_dot_import_fans_out() {
+        assert_eq!(
+            py_edges("from . import (\n    a,\n    b,\n)\n"),
+            vec![
+                (".a".to_string(), ImportKind::Relative),
+                (".b".to_string(), ImportKind::Relative),
+            ],
+        );
+    }
+
+    #[test]
+    fn python_future_import_yields_no_edge() {
+        // `from __future__ import …` is a `future_import_statement`, a
+        // node kind the walker never visits — no edge.
+        assert!(py_edges("from __future__ import annotations\n").is_empty());
     }
 
     #[test]
