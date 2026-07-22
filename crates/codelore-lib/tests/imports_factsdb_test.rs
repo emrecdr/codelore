@@ -425,6 +425,110 @@ fn ingest_resolves_grouped_and_super_imports_in_non_mod_layout() {
     assert_eq!(decoy_edge, 0, "no edge may resolve to the cfg(test) decoy");
 }
 
+/// End-to-end coverage of the AST-based JS/TS extraction plus the
+/// `NodeNext` `.js`→`.ts` strip-retry.
+///
+/// Exercises three forms the old string-parse resolver missed: a barrel
+/// re-export (`export … from`), a `CommonJS` `require`, and an ESM
+/// `import … from "./widget.js"` whose emit-extension specifier must
+/// resolve onto the authored `widget.ts`. All three land as resolved
+/// edges pointing at in-repo targets.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn ingest_resolves_reexport_require_and_nodenext_specifier() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path();
+    std::fs::create_dir_all(path.join("src")).unwrap();
+
+    // Shared TS target for the barrel re-export and the NodeNext import.
+    std::fs::write(path.join("src/widget.ts"), "export const thing = 1;\n").unwrap();
+    // Barrel re-export: `export { thing } from './widget'` → src/widget.ts.
+    std::fs::write(
+        path.join("src/barrel.ts"),
+        "export { thing } from './widget';\n",
+    )
+    .unwrap();
+    // NodeNext ESM specifier names the `.js` emit; resolves to widget.ts.
+    std::fs::write(
+        path.join("src/consumer.ts"),
+        "import { thing } from './widget.js';\nthing;\n",
+    )
+    .unwrap();
+    // CommonJS require → src/helper.js. `module.exports` is not a call,
+    // so helper.js contributes no edge of its own.
+    std::fs::write(
+        path.join("src/legacy.js"),
+        "const dep = require('./helper');\ndep;\n",
+    )
+    .unwrap();
+    std::fs::write(path.join("src/helper.js"), "module.exports = {};\n").unwrap();
+
+    run_git(path, &["init", "-b", "main", "--quiet"]);
+    run_git(path, &["config", "user.email", "t@e.com"]);
+    run_git(path, &["config", "user.name", "T"]);
+    run_git(path, &["add", "."]);
+    run_git(path, &["commit", "-m", "init", "--quiet"]);
+
+    let repo = GixRepo::open(path).expect("gix open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: path.to_path_buf(),
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    // Exactly three edges: the barrel, the NodeNext import, the require.
+    let total: i64 = db
+        .query_row("SELECT COUNT(*) FROM imports", [], |r| r.get(0))
+        .expect("count imports");
+    assert_eq!(total, 3, "expected 3 import edges, got {total}");
+
+    // Barrel re-export → src/widget.ts.
+    let barrel: Option<String> = db
+        .query_row(
+            "SELECT target_path FROM imports \
+             WHERE src_path = 'src/barrel.ts' AND target = './widget' AND resolved = TRUE",
+            [],
+            |r| r.get(0),
+        )
+        .ok();
+    assert_eq!(
+        barrel.as_deref(),
+        Some("src/widget.ts"),
+        "barrel re-export did not resolve to src/widget.ts",
+    );
+
+    // NodeNext `.js` specifier strips to the authored `.ts` source.
+    let consumer: Option<String> = db
+        .query_row(
+            "SELECT target_path FROM imports \
+             WHERE src_path = 'src/consumer.ts' AND target = './widget.js' AND resolved = TRUE",
+            [],
+            |r| r.get(0),
+        )
+        .ok();
+    assert_eq!(
+        consumer.as_deref(),
+        Some("src/widget.ts"),
+        "NodeNext .js specifier did not resolve to src/widget.ts",
+    );
+
+    // CommonJS require → src/helper.js.
+    let require_edge: Option<String> = db
+        .query_row(
+            "SELECT target_path FROM imports \
+             WHERE src_path = 'src/legacy.js' AND target = './helper' AND resolved = TRUE",
+            [],
+            |r| r.get(0),
+        )
+        .ok();
+    assert_eq!(
+        require_edge.as_deref(),
+        Some("src/helper.js"),
+        "require('./helper') did not resolve to src/helper.js",
+    );
+}
+
 fn run_git(repo: &std::path::Path, args: &[&str]) {
     let status = std::process::Command::new("git")
         .args(args)

@@ -22,10 +22,9 @@ use tree_sitter::{Node, Parser, TreeCursor};
 #[derive(Debug, Clone)]
 pub struct RawImport {
     /// The normalised target string — for Rust this is "`std::fs`", for
-    /// JS this is the contents of the `from '…'` string literal where
-    /// the normaliser can extract it. Today's normaliser is best-
-    /// effort trimming; per-language AST-child extraction is a
-    /// planned enhancement.
+    /// JS/TS the module specifier read from the AST (the string literal
+    /// of an `import`/`export … from`/`require`/dynamic `import()`).
+    /// Python and Java are trimmed from the raw statement text.
     pub target: String,
     /// Coarse semantic bucket so SQL can filter without parsing
     /// `target`. See [`ImportKind`].
@@ -99,17 +98,27 @@ fn walk_imports(root: Node<'_>, source: &[u8], lang: ImportLanguage, out: &mut V
     loop {
         let current = cursor.node();
         if kinds.contains(&current.kind()) {
-            if lang == ImportLanguage::Rust {
+            match lang {
                 // Rust `use` trees are expanded structurally so grouped
                 // (`use a::{b, c}`), `pub(crate)`, and `super`/`self`
                 // imports each yield one clean, per-leaf target.
-                collect_rust_imports(current, source, out);
-            } else if let Some(raw) = node_text(current, source)
-                && let Some(target) = normalise_target(&raw, lang)
-                && !target.is_empty()
-            {
-                let kind = classify(&target, lang);
-                out.push(RawImport { target, kind });
+                ImportLanguage::Rust => collect_rust_imports(current, source, out),
+                // JS/TS specifiers are read from the AST so re-exports,
+                // `require`, dynamic `import()`, side-effect, and minified
+                // forms each resolve to their string-literal target.
+                ImportLanguage::JavaScript | ImportLanguage::TypeScript | ImportLanguage::Tsx => {
+                    collect_js_imports(current, source, lang, out);
+                }
+                // Python / Java still ride the string-normalising path.
+                ImportLanguage::Python | ImportLanguage::Java => {
+                    if let Some(raw) = node_text(current, source)
+                        && let Some(target) = normalise_target(&raw, lang)
+                        && !target.is_empty()
+                    {
+                        let kind = classify(&target, lang);
+                        out.push(RawImport { target, kind });
+                    }
+                }
             }
         }
         // Descend if possible — child first for preorder.
@@ -275,6 +284,105 @@ fn attr_gates_test(node: Node<'_>, source: &[u8]) -> bool {
     })
 }
 
+/// Expand a JS/TS import-bearing node into zero or more [`RawImport`]s
+/// by reading the module specifier straight from the AST.
+///
+/// Covers every specifier-carrying form the grammar exposes:
+///   - `import … from "x"`, side-effect `import "x"`, and minified
+///     `import{a}from"x"` — the `import_statement`'s `source` field.
+///   - `import x = require("x")` — the specifier hangs off the
+///     `import_require_clause`'s `source` field, not the statement's.
+///   - `export … from "x"` / `export * from "x"` — the
+///     `export_statement`'s `source` field, which a plain
+///     `export const`/`export {}` lacks (so it yields nothing).
+///   - dynamic `import("x")` and `CommonJS` `require("x")` — a
+///     `call_expression` whose callee is the `import` keyword or the
+///     `require` identifier, with a string-literal first argument.
+///
+/// Non-literal specifiers (`require(name)`, template strings) and empty
+/// string literals produce no edge.
+fn collect_js_imports(
+    node: Node<'_>,
+    source: &[u8],
+    lang: ImportLanguage,
+    out: &mut Vec<RawImport>,
+) {
+    match node.kind() {
+        "import_statement" => {
+            if let Some(src_node) = node.child_by_field_name("source") {
+                push_js_specifier(src_node, source, lang, out);
+            } else if let Some(clause) = named_child_of_kind(node, "import_require_clause")
+                && let Some(src_node) = clause.child_by_field_name("source")
+            {
+                push_js_specifier(src_node, source, lang, out);
+            }
+        }
+        // Only re-exports (`export … from "x"`) carry a `source`; a
+        // plain `export const`/`export {}` has none and adds no edge.
+        "export_statement" => {
+            if let Some(src_node) = node.child_by_field_name("source") {
+                push_js_specifier(src_node, source, lang, out);
+            }
+        }
+        "call_expression" => {
+            let Some(func) = node.child_by_field_name("function") else {
+                return;
+            };
+            // `import(…)` parses its callee as an `import` keyword node;
+            // `require(…)` as a bare `require` identifier. A method call
+            // like `foo.require(…)` is a `member_expression` callee and
+            // is correctly skipped.
+            let is_module_call = func.kind() == "import"
+                || (func.kind() == "identifier"
+                    && node_text(func, source).as_deref() == Some("require"));
+            if !is_module_call {
+                return;
+            }
+            let Some(args) = node.child_by_field_name("arguments") else {
+                return;
+            };
+            let mut cursor = args.walk();
+            // Only a string-literal first argument names a module —
+            // `require(variable)` and `` import(`./x`) `` (template
+            // string) both fall through without an edge.
+            if let Some(first) = args.named_children(&mut cursor).next()
+                && first.kind() == "string"
+            {
+                push_js_specifier(first, source, lang, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Read a JS/TS string-literal node's quote-free content and, when
+/// non-empty, classify and push it as a [`RawImport`]. An empty string
+/// literal (`""`, which has no `string_fragment` child) yields nothing.
+fn push_js_specifier(
+    string_node: Node<'_>,
+    source: &[u8],
+    lang: ImportLanguage,
+    out: &mut Vec<RawImport>,
+) {
+    let Some(fragment) = named_child_of_kind(string_node, "string_fragment") else {
+        return;
+    };
+    let Some(target) = node_text(fragment, source) else {
+        return;
+    };
+    if target.is_empty() {
+        return;
+    }
+    let kind = classify(&target, lang);
+    out.push(RawImport { target, kind });
+}
+
+/// First named child of `node` whose `kind()` matches `kind`.
+fn named_child_of_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor).find(|c| c.kind() == kind)
+}
+
 /// Slice the raw source between `node`'s byte range. Returns `None`
 /// when the bytes don't form valid UTF-8 — files we can't read as
 /// text shouldn't surface in the import graph anyway.
@@ -288,16 +396,15 @@ fn node_text<'a>(node: Node<'a>, source: &'a [u8]) -> Option<String> {
     std::str::from_utf8(slice).ok().map(str::to_string)
 }
 
-/// Per-language target normalisation. Strips the language's import
-/// keyword + trailing punctuation. A future enhancement will replace
-/// this with proper AST-child extraction; today's heuristic gets
-/// ~95 % correctness on real-world code while staying surgical.
+/// String-normalising target extraction for the languages that still
+/// ride the text path (Python, Java). Strips the import keyword +
+/// trailing punctuation down to the dotted module specifier.
 ///
-/// Returns `None` when the statement cannot be normalised to a
-/// meaningful module identifier (JS side-effect / dynamic imports,
-/// Python `from X import Y` whose module specifier is empty). The
-/// caller skips the row rather than storing the raw statement
-/// text as a phantom target.
+/// Returns `None` when the statement carries no meaningful module
+/// identifier (e.g. a Python `from X import Y` whose specifier is
+/// empty); the caller skips the row rather than storing raw statement
+/// text as a phantom target. Rust and JS/TS are extracted structurally
+/// from the AST and never reach here.
 fn normalise_target(raw: &str, lang: ImportLanguage) -> Option<String> {
     // Collapse whitespace + strip leading/trailing punctuation.
     let s = raw.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -308,6 +415,12 @@ fn normalise_target(raw: &str, lang: ImportLanguage) -> Option<String> {
             debug_assert!(false, "rust imports bypass normalise_target");
             return None;
         }
+        ImportLanguage::JavaScript | ImportLanguage::TypeScript | ImportLanguage::Tsx => {
+            // JS/TS specifiers are read from the AST by
+            // `collect_js_imports`; they never reach this normaliser.
+            debug_assert!(false, "js/ts imports bypass normalise_target");
+            return None;
+        }
         ImportLanguage::Python => normalise_python_target(&s)?,
         ImportLanguage::Java => s
             .trim_start_matches("import ")
@@ -315,14 +428,6 @@ fn normalise_target(raw: &str, lang: ImportLanguage) -> Option<String> {
             .trim_end_matches(';')
             .trim()
             .to_string(),
-        ImportLanguage::JavaScript | ImportLanguage::TypeScript | ImportLanguage::Tsx => {
-            // The meaningful target is the string literal after
-            // `from`. Side-effect imports (`import 'foo';`) and
-            // dynamic imports have no such literal — return None so
-            // the walker drops them, rather than storing the raw
-            // statement text as a phantom target.
-            extract_js_module_target(&s)?.trim().to_string()
-        }
     };
     if trimmed.is_empty() {
         return None;
@@ -347,24 +452,6 @@ fn normalise_python_target(s: &str) -> Option<String> {
         None
     } else {
         Some(target.to_string())
-    }
-}
-
-/// Extract the module specifier from a JS/TS import statement —
-/// the contents of the string literal after `from`. Returns `None`
-/// when the pattern doesn't match (dynamic import, side-effect
-/// import without `from`).
-fn extract_js_module_target(s: &str) -> Option<&str> {
-    let after_from = s.split_once(" from ")?.1.trim();
-    // Strip the surrounding quotes; tolerate both single and double.
-    let stripped = after_from
-        .trim_start_matches(['\'', '"'])
-        .trim_end_matches(';')
-        .trim_end_matches(['\'', '"']);
-    if stripped.is_empty() {
-        None
-    } else {
-        Some(stripped)
     }
 }
 
@@ -447,6 +534,115 @@ mod tests {
         let src = b"import foo from './bar/baz';\n";
         let got = extract_imports(src, ImportLanguage::JavaScript).unwrap();
         assert_eq!(got[0].kind, ImportKind::Relative);
+    }
+
+    /// Extract JS/TS targets under `lang` as `(target, kind)` pairs.
+    fn js_edges(src: &str, lang: ImportLanguage) -> Vec<(String, ImportKind)> {
+        extract_imports(src.as_bytes(), lang)
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.target, r.kind))
+            .collect()
+    }
+
+    #[test]
+    fn js_reexport_named_captures_edge() {
+        let got = js_edges("export { a } from './x';\n", ImportLanguage::TypeScript);
+        assert_eq!(got, vec![("./x".to_string(), ImportKind::Relative)]);
+    }
+
+    #[test]
+    fn js_reexport_star_captures_edge() {
+        let got = js_edges("export * from './x';\n", ImportLanguage::TypeScript);
+        assert_eq!(got, vec![("./x".to_string(), ImportKind::Relative)]);
+    }
+
+    #[test]
+    fn js_plain_export_const_yields_no_edge() {
+        // A local `export const` has no `source` field — no import edge.
+        let got = js_edges("export const x = 1;\n", ImportLanguage::TypeScript);
+        assert!(got.is_empty(), "plain export must not surface, got {got:?}");
+    }
+
+    #[test]
+    fn js_require_captures_edge() {
+        let got = js_edges("const x = require('./x');\n", ImportLanguage::JavaScript);
+        assert_eq!(got, vec![("./x".to_string(), ImportKind::Relative)]);
+    }
+
+    #[test]
+    fn js_dynamic_import_captures_edge() {
+        let got = js_edges("const x = import('./x');\n", ImportLanguage::JavaScript);
+        assert_eq!(got, vec![("./x".to_string(), ImportKind::Relative)]);
+    }
+
+    #[test]
+    fn js_side_effect_import_captures_edge() {
+        // `import "./x"` has no clause but keeps its `source` string.
+        let got = js_edges("import './x';\n", ImportLanguage::JavaScript);
+        assert_eq!(got, vec![("./x".to_string(), ImportKind::Relative)]);
+    }
+
+    #[test]
+    fn js_minified_import_captures_edge() {
+        // No whitespace around `from` — the string parse used to fail here.
+        let got = js_edges("import{a}from\"./x\";", ImportLanguage::JavaScript);
+        assert_eq!(got, vec![("./x".to_string(), ImportKind::Relative)]);
+    }
+
+    #[test]
+    fn js_require_of_variable_yields_no_edge() {
+        // Non-literal specifier — nothing to resolve, no edge.
+        let got = js_edges("const x = require(someVar);\n", ImportLanguage::JavaScript);
+        assert!(got.is_empty(), "require(variable) must not surface");
+    }
+
+    #[test]
+    fn js_dynamic_import_of_template_yields_no_edge() {
+        // Template-string specifier is a `template_string`, not a `string`.
+        let got = js_edges("const x = import(`./x`);\n", ImportLanguage::JavaScript);
+        assert!(got.is_empty(), "template specifier must not surface");
+    }
+
+    #[test]
+    fn ts_import_require_clause_captures_edge() {
+        // `import x = require("y")` — the specifier hangs off the
+        // import_require_clause's source, not the statement's.
+        let got = js_edges("import x = require('./y');\n", ImportLanguage::TypeScript);
+        assert_eq!(got, vec![("./y".to_string(), ImportKind::Relative)]);
+    }
+
+    #[test]
+    fn ts_variant_routes_through_ast_extraction() {
+        // A TypeScript source hits the same AST arm — bare specifier
+        // classifies Absolute, relative classifies Relative.
+        let got = js_edges(
+            "import { X } from 'pkg';\nexport { Y } from './y';\n",
+            ImportLanguage::TypeScript,
+        );
+        assert_eq!(
+            got,
+            vec![
+                ("pkg".to_string(), ImportKind::Absolute),
+                ("./y".to_string(), ImportKind::Relative),
+            ],
+        );
+    }
+
+    #[test]
+    fn tsx_variant_captures_side_effect_import() {
+        let got = js_edges("import './styles.css';\n", ImportLanguage::Tsx);
+        assert_eq!(
+            got,
+            vec![("./styles.css".to_string(), ImportKind::Relative)]
+        );
+    }
+
+    #[test]
+    fn js_empty_specifier_yields_no_edge() {
+        // `import ""` has a `string` node with no `string_fragment` child.
+        let got = js_edges("import \"\";\n", ImportLanguage::JavaScript);
+        assert!(got.is_empty(), "empty specifier must not surface");
     }
 
     #[test]
