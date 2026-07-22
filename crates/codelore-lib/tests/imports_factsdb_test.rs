@@ -529,6 +529,122 @@ fn ingest_resolves_reexport_require_and_nodenext_specifier() {
     );
 }
 
+/// End-to-end coverage of the AST-based Python extractor plus the
+/// bare-dot relative and absolute first-party resolvers.
+///
+/// A single-package fixture exercises every Python import shape the old
+/// string+relative-only path dropped: `from . import helper` (bare-dot
+/// sibling), `from .util import calc` (dotted relative), `from
+/// mypkg.core import boot` and `import mypkg.util` (absolute first-party,
+/// resolved by dotted-path suffix), and `import os` (stdlib, correctly
+/// left unresolved).
+#[test]
+#[allow(clippy::too_many_lines)]
+fn ingest_resolves_python_relative_and_absolute_imports() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path();
+    std::fs::create_dir_all(path.join("src/mypkg")).unwrap();
+
+    std::fs::write(path.join("src/mypkg/__init__.py"), "").unwrap();
+    std::fs::write(
+        path.join("src/mypkg/helper.py"),
+        "def helper():\n    pass\n",
+    )
+    .unwrap();
+    std::fs::write(path.join("src/mypkg/util.py"), "def calc():\n    pass\n").unwrap();
+    std::fs::write(path.join("src/mypkg/core.py"), "def boot():\n    pass\n").unwrap();
+    std::fs::write(
+        path.join("src/mypkg/app.py"),
+        "from . import helper\n\
+         from .util import calc\n\
+         from mypkg.core import boot\n\
+         import mypkg.util\n\
+         import os\n",
+    )
+    .unwrap();
+
+    run_git(path, &["init", "-b", "main", "--quiet"]);
+    run_git(path, &["config", "user.email", "t@e.com"]);
+    run_git(path, &["config", "user.name", "T"]);
+    run_git(path, &["add", "."]);
+    run_git(path, &["commit", "-m", "init", "--quiet"]);
+
+    let repo = GixRepo::open(path).expect("gix open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: path.to_path_buf(),
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    // Five edges, all from app.py — one per import statement.
+    let app_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM imports WHERE src_path = 'src/mypkg/app.py'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("count app rows");
+    assert_eq!(app_rows, 5, "expected 5 Python import edges from app.py");
+
+    // `from . import helper` → src/mypkg/helper.py (bare-dot relative).
+    let helper: Option<String> = db
+        .query_row(
+            "SELECT target_path FROM imports \
+             WHERE src_path = 'src/mypkg/app.py' AND target = '.helper' AND resolved = TRUE",
+            [],
+            |r| r.get(0),
+        )
+        .ok();
+    assert_eq!(
+        helper.as_deref(),
+        Some("src/mypkg/helper.py"),
+        "bare-dot `from . import helper` did not resolve",
+    );
+
+    // `from mypkg.core import boot` → src/mypkg/core.py (absolute).
+    let core: Option<String> = db
+        .query_row(
+            "SELECT target_path FROM imports \
+             WHERE src_path = 'src/mypkg/app.py' AND target = 'mypkg.core' AND resolved = TRUE",
+            [],
+            |r| r.get(0),
+        )
+        .ok();
+    assert_eq!(
+        core.as_deref(),
+        Some("src/mypkg/core.py"),
+        "absolute `from mypkg.core` did not resolve",
+    );
+
+    // `import mypkg.util` → src/mypkg/util.py (absolute).
+    let util: Option<String> = db
+        .query_row(
+            "SELECT target_path FROM imports \
+             WHERE src_path = 'src/mypkg/app.py' AND target = 'mypkg.util' AND resolved = TRUE",
+            [],
+            |r| r.get(0),
+        )
+        .ok();
+    assert_eq!(
+        util.as_deref(),
+        Some("src/mypkg/util.py"),
+        "absolute `import mypkg.util` did not resolve",
+    );
+
+    // `import os` stays unresolved — stdlib has no tracked file.
+    let os_unresolved: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM imports \
+             WHERE src_path = 'src/mypkg/app.py' AND target = 'os' \
+               AND resolved = FALSE AND target_path IS NULL",
+            [],
+            |r| r.get(0),
+        )
+        .expect("count os row");
+    assert_eq!(os_unresolved, 1, "stdlib `import os` must stay unresolved");
+}
+
 fn run_git(repo: &std::path::Path, args: &[&str]) {
     let status = std::process::Command::new("git")
         .args(args)
