@@ -645,6 +645,145 @@ fn ingest_resolves_python_relative_and_absolute_imports() {
     assert_eq!(os_unresolved, 1, "stdlib `import os` must stay unresolved");
 }
 
+/// End-to-end coverage of the Java FQN resolver plus the ingest allow-list
+/// that now feeds `.java` rows to it.
+///
+/// A conventional `src/main/java` layout exercises every Java import shape:
+/// a same-package class (`com.example.Service`), a sub-package class
+/// (`com.example.util.Helper`), a static-member import
+/// (`static com.example.Service.CONSTANT`, which strips the member and
+/// lands on the class file), and a JDK import (`java.util.List`, which has
+/// no tracked file and stays unresolved). This also guards the ingest SQL
+/// fix — without the `.java` clause in the resolver-pass allow-list, none
+/// of these would resolve.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn ingest_resolves_java_imports_to_target_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path();
+    std::fs::create_dir_all(path.join("src/main/java/com/example/util")).unwrap();
+
+    std::fs::write(
+        path.join("src/main/java/com/example/Service.java"),
+        "package com.example;\nclass Service {}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        path.join("src/main/java/com/example/util/Helper.java"),
+        "package com.example.util;\nclass Helper {}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        path.join("src/main/java/com/example/App.java"),
+        "package com.example;\n\
+         import com.example.Service;\n\
+         import com.example.util.Helper;\n\
+         import static com.example.Service.CONSTANT;\n\
+         import java.util.List;\n\
+         class App {}\n",
+    )
+    .unwrap();
+
+    run_git(path, &["init", "-b", "main", "--quiet"]);
+    run_git(path, &["config", "user.email", "t@e.com"]);
+    run_git(path, &["config", "user.name", "T"]);
+    run_git(path, &["add", "."]);
+    run_git(path, &["commit", "-m", "init", "--quiet"]);
+
+    let repo = GixRepo::open(path).expect("gix open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: path.to_path_buf(),
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    // Four edges, all from App.java — one per import statement.
+    let app_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM imports WHERE src_path = 'src/main/java/com/example/App.java'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("count app rows");
+    assert_eq!(app_rows, 4, "expected 4 Java import edges from App.java");
+
+    // `import com.example.Service` → the same-package class file.
+    let service: Option<String> = db
+        .query_row(
+            "SELECT target_path FROM imports \
+             WHERE src_path = 'src/main/java/com/example/App.java' \
+               AND target = 'com.example.Service' AND resolved = TRUE",
+            [],
+            |r| r.get(0),
+        )
+        .ok();
+    assert_eq!(
+        service.as_deref(),
+        Some("src/main/java/com/example/Service.java"),
+        "`import com.example.Service` did not resolve",
+    );
+
+    // `import com.example.util.Helper` → the sub-package class file.
+    let helper: Option<String> = db
+        .query_row(
+            "SELECT target_path FROM imports \
+             WHERE src_path = 'src/main/java/com/example/App.java' \
+               AND target = 'com.example.util.Helper' AND resolved = TRUE",
+            [],
+            |r| r.get(0),
+        )
+        .ok();
+    assert_eq!(
+        helper.as_deref(),
+        Some("src/main/java/com/example/util/Helper.java"),
+        "`import com.example.util.Helper` did not resolve",
+    );
+
+    // `import static com.example.Service.CONSTANT` strips the member and
+    // lands on the enclosing class file.
+    let static_member: Option<String> = db
+        .query_row(
+            "SELECT target_path FROM imports \
+             WHERE src_path = 'src/main/java/com/example/App.java' \
+               AND target = 'com.example.Service.CONSTANT' AND resolved = TRUE",
+            [],
+            |r| r.get(0),
+        )
+        .ok();
+    assert_eq!(
+        static_member.as_deref(),
+        Some("src/main/java/com/example/Service.java"),
+        "static-member import did not strip to the class file",
+    );
+
+    // `import java.util.List` stays unresolved — the JDK has no tracked file.
+    let jdk_unresolved: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM imports \
+             WHERE src_path = 'src/main/java/com/example/App.java' AND target = 'java.util.List' \
+               AND resolved = FALSE AND target_path IS NULL",
+            [],
+            |r| r.get(0),
+        )
+        .expect("count jdk row");
+    assert_eq!(
+        jdk_unresolved, 1,
+        "JDK `import java.util.List` must stay unresolved"
+    );
+
+    // Exactly three of the four Java edges resolve to in-repo targets.
+    let resolved_count: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM imports \
+             WHERE src_path = 'src/main/java/com/example/App.java' AND resolved = TRUE",
+            [],
+            |r| r.get(0),
+        )
+        .expect("count resolved");
+    assert_eq!(resolved_count, 3, "expected 3 resolved Java edges");
+}
+
 fn run_git(repo: &std::path::Path, args: &[&str]) {
     let status = std::process::Command::new("git")
         .args(args)

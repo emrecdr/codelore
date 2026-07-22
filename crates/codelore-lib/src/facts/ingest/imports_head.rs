@@ -128,9 +128,8 @@ impl FactsDb {
     /// the total number of rows successfully resolved.
     ///
     /// Covers Rust `crate::` / `self::` / `super::` paths, Python
-    /// relative imports, and JS/TS `./` / `../` paths today. Java
-    /// FQN → filesystem-path mapping is project-layout-specific
-    /// and is not attempted here.
+    /// relative + absolute imports, JS/TS `./` / `../` paths, and Java
+    /// FQNs (resolved to `.java` files by package-path suffix match).
     pub(super) fn resolve_imports_at_head(
         &self,
         live_paths: &[String],
@@ -138,10 +137,10 @@ impl FactsDb {
     ) -> Result<usize> {
         use crate::imports::resolve_by_extension;
 
-        // 1. Pull every unresolved import row scoped to a language
-        //    the multi-language resolver supports (JS/TS, Python,
-        //    Rust). Java FQNs are project-layout-specific and stay
-        //    deferred until a Java-specific resolver lands.
+        // 1. Pull every unresolved import row scoped to a language the
+        //    multi-language resolver supports. The extension allow-list
+        //    mirrors the full Tier-1 set (JS/TS, Python, Rust, Java) so
+        //    every extracted edge is fed to its per-language resolver.
         let mut stmt = self
             .conn()
             .prepare(
@@ -152,7 +151,7 @@ impl FactsDb {
                        src_path LIKE '%.mjs' OR src_path LIKE '%.cjs' OR
                        src_path LIKE '%.ts' OR src_path LIKE '%.tsx' OR
                        src_path LIKE '%.py' OR src_path LIKE '%.pyi' OR
-                       src_path LIKE '%.rs'
+                       src_path LIKE '%.rs' OR src_path LIKE '%.java'
                    )",
             )
             .map_err(|e| CodeLoreError::Analysis(format!("prepare imports scan: {e}")))?;

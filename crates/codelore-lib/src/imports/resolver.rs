@@ -3,9 +3,8 @@
 //! Maps the raw `target` strings captured by `extractor.rs` to
 //! repo-relative paths that exist in the `changes` table at HEAD,
 //! when resolution is possible. Per-language strategies cover the
-//! Rust `crate::` / Python `.` / JS/TS `./` patterns; Java FQN →
-//! filesystem-path mapping is project-layout-specific and is not
-//! attempted here.
+//! Rust `crate::` / Python `.` / JS/TS `./` patterns and Java FQN →
+//! package-path suffix mapping.
 //!
 //! Architecture: every resolver takes the raw target + the importer's
 //! source path + a `&HashSet<String>` of live-at-HEAD tracked paths,
@@ -25,11 +24,11 @@ const TS_EXTENSIONS: &[&str] = &["ts", "tsx"];
 
 /// Resolve an import `target` from `importer_path` to a tracked path,
 /// dispatching to the per-language resolver by the importer's file
-/// extension. Returns `None` for languages without a resolver (Java
-/// FQNs, etc.) or for unresolvable targets. The single dispatch point
-/// shared by the HEAD ingest (`resolve_imports_at_head`) and the
-/// historical scan (`architecture-trend`), so language coverage — and
-/// which extensions route where — is defined in exactly one place.
+/// extension. Returns `None` for extensions without a resolver or for
+/// unresolvable targets. The single dispatch point shared by the HEAD
+/// ingest (`resolve_imports_at_head`) and the historical scan
+/// (`architecture-trend`), so language coverage — and which extensions
+/// route where — is defined in exactly one place.
 #[must_use]
 pub fn resolve_by_extension<S: std::hash::BuildHasher>(
     importer_path: &str,
@@ -45,6 +44,7 @@ pub fn resolve_by_extension<S: std::hash::BuildHasher>(
         Some("js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx") => {
             resolve_js_relative(importer_path, target, live_paths)
         }
+        Some("java") => resolve_java(target, live_paths),
         _ => None,
     }
 }
@@ -261,6 +261,67 @@ pub fn resolve_python_absolute<S: std::hash::BuildHasher>(
             || path.ends_with(&module_suffix)
             || path.ends_with(&package_suffix)
         {
+            if found.is_some() {
+                return None; // ambiguous suffix — refuse to guess
+            }
+            found = Some(path);
+        }
+    }
+    found.cloned()
+}
+
+/// Resolve a Java `import` FQN (`com.foo.Bar`) to a tracked `.java` file
+/// by matching the package/class path as a unique repo-path suffix
+/// (`com/foo/Bar.java` — Java packages map directly to directories). The
+/// match must be unique (zero or more than one candidate yields `None`)
+/// so an ambiguous suffix never fabricates an edge; JDK / third-party
+/// imports (`java.util.List`) have no tracked file and resolve to `None`.
+/// Wildcard package imports (`com.foo.*`) name a directory, not a file,
+/// and are skipped. A static-member import (`com.foo.Bar.baz`) or a
+/// nested class (`com.foo.Outer.Inner`) resolves via a single strip-retry
+/// to the enclosing class file — the full path is probed first, so a real
+/// inner-class file wins before the strip.
+#[must_use]
+pub fn resolve_java<S: std::hash::BuildHasher>(
+    target: &str,
+    live_paths: &HashSet<String, S>,
+) -> Option<String> {
+    if target.contains('*') {
+        return None;
+    }
+    let mut segments: Vec<&str> = target
+        .split('.')
+        .filter(|s| !s.is_empty() && !s.contains(' '))
+        .collect();
+    if segments.is_empty() {
+        return None;
+    }
+    if let Some(hit) = java_suffix_match(&segments, live_paths) {
+        return Some(hit);
+    }
+    // Inner-class / static-member import: strip the trailing member and
+    // retry once against the enclosing class file.
+    segments.pop();
+    if segments.is_empty() {
+        return None;
+    }
+    java_suffix_match(&segments, live_paths)
+}
+
+/// Match the `/`-joined package path (`com/foo/Bar.java`) as a unique
+/// repo-path suffix. The leading `/` in the suffix guards against
+/// partial-segment hits (`notcom/foo/Bar.java` for `com.foo.Bar`); the
+/// `==` arm covers a class that lives at the repo root. A second match
+/// yields `None` — an ambiguous suffix must not fabricate an edge.
+fn java_suffix_match<S: std::hash::BuildHasher>(
+    segments: &[&str],
+    live_paths: &HashSet<String, S>,
+) -> Option<String> {
+    let file = format!("{}.java", segments.join("/"));
+    let file_suffix = format!("/{file}");
+    let mut found: Option<&String> = None;
+    for path in live_paths {
+        if path == &file || path.ends_with(&file_suffix) {
             if found.is_some() {
                 return None; // ambiguous suffix — refuse to guess
             }
@@ -650,5 +711,97 @@ mod tests {
         let live = live(&["src/notmypkg/utils.py"]);
         let got = resolve_python_absolute("mypkg.utils", &live);
         assert!(got.is_none(), "partial-segment suffix must not match");
+    }
+
+    #[test]
+    fn java_import_resolves_by_package_suffix() {
+        let live = live(&["src/main/java/com/foo/Bar.java"]);
+        let got = resolve_java("com.foo.Bar", &live);
+        assert_eq!(got, Some("src/main/java/com/foo/Bar.java".to_string()));
+    }
+
+    #[test]
+    fn java_repo_root_class_resolves() {
+        // A class that lives at the repo root matches via the `==` arm.
+        let live = live(&["Bar.java", "Other.java"]);
+        let got = resolve_java("Bar", &live);
+        assert_eq!(got, Some("Bar.java".to_string()));
+    }
+
+    #[test]
+    fn java_jdk_import_returns_none() {
+        // `java.util.List` has no tracked file — JDK / third-party
+        // imports resolve to None.
+        let live = live(&["src/main/java/com/foo/App.java"]);
+        let got = resolve_java("java.util.List", &live);
+        assert!(got.is_none(), "JDK import must resolve to None");
+    }
+
+    #[test]
+    fn java_ambiguous_suffix_returns_none() {
+        // Two tracked files end with `com/foo/Bar.java` — an ambiguous
+        // suffix must not fabricate an edge.
+        let live = live(&["a/com/foo/Bar.java", "b/com/foo/Bar.java"]);
+        let got = resolve_java("com.foo.Bar", &live);
+        assert!(got.is_none(), "ambiguous suffix must resolve to None");
+    }
+
+    #[test]
+    fn java_partial_segment_does_not_match() {
+        // `com.foo.Bar` must not match `notcom/foo/Bar.java` — the leading
+        // slash in the suffix guards against partial-segment hits.
+        let live = live(&["src/notcom/foo/Bar.java"]);
+        let got = resolve_java("com.foo.Bar", &live);
+        assert!(got.is_none(), "partial-segment suffix must not match");
+    }
+
+    #[test]
+    fn java_wildcard_import_returns_none() {
+        // `com.foo.*` names a directory, not a file — skipped.
+        let live = live(&["src/main/java/com/foo/Bar.java"]);
+        let got = resolve_java("com.foo.*", &live);
+        assert!(got.is_none(), "wildcard import must resolve to None");
+    }
+
+    #[test]
+    fn java_inner_class_strips_to_enclosing_file() {
+        // `com.foo.Outer.Inner` with only the enclosing `Outer.java` live
+        // strips one segment and resolves to it.
+        let live = live(&["src/main/java/com/foo/Outer.java"]);
+        let got = resolve_java("com.foo.Outer.Inner", &live);
+        assert_eq!(got, Some("src/main/java/com/foo/Outer.java".to_string()));
+    }
+
+    #[test]
+    fn java_static_member_strips_to_class_file() {
+        // A static-member import `com.foo.Bar.baz` strips the member and
+        // resolves to the enclosing class file.
+        let live = live(&["src/main/java/com/foo/Bar.java"]);
+        let got = resolve_java("com.foo.Bar.baz", &live);
+        assert_eq!(got, Some("src/main/java/com/foo/Bar.java".to_string()));
+    }
+
+    #[test]
+    fn java_full_path_wins_over_strip_retry() {
+        // A real inner-class file resolves at level 0 before the
+        // strip-retry considers the enclosing class.
+        let live = live(&[
+            "src/main/java/com/foo/Outer/Inner.java",
+            "src/main/java/com/foo/Outer.java",
+        ]);
+        let got = resolve_java("com.foo.Outer.Inner", &live);
+        assert_eq!(
+            got,
+            Some("src/main/java/com/foo/Outer/Inner.java".to_string()),
+        );
+    }
+
+    #[test]
+    fn java_strip_retry_still_ambiguity_guarded() {
+        // Stripping a segment must not fabricate an edge when the
+        // enclosing class name is ambiguous across two files.
+        let live = live(&["a/com/foo/Outer.java", "b/com/foo/Outer.java"]);
+        let got = resolve_java("com.foo.Outer.Inner", &live);
+        assert!(got.is_none(), "ambiguous strip-retry must resolve to None");
     }
 }
