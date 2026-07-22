@@ -23,15 +23,16 @@ use crate::Options;
 /// schema version, and the historical `schema_v` prefix on the value is
 /// retained so older cache files stay invalidated.
 ///
-/// The current epoch (`schema_v12`) invalidates caches whose import facts
-/// predate the Rust import resolver's structural rewrite: grouped
-/// (`use a::{b, c}`), `pub(crate)`, and `super`/`self` `use` declarations
-/// are now captured and resolved correctly, where an older binary emitted
-/// mangled targets, dropped group members, or fabricated `super`/`self`
-/// edges under the non-`mod.rs` module layout. Those edges feed the
+/// The current epoch (`schema_v13`) invalidates caches whose import facts
+/// predate the AST-based JS/TS import resolver: re-exports (`export … from`),
+/// `CommonJS` `require`, dynamic `import()`, side-effect (`import "x"`), and
+/// minified specifiers are now captured, and `NodeNext` `.js` specifiers strip
+/// their emit extension to resolve onto the `.ts` source. An older binary
+/// captured only ESM `import … from` via a fragile string parse, so barrel
+/// files sank and `CommonJS` graphs came back empty. Those edges feed the
 /// architecture and import-cycle graphs, so a stale hit would serve a
 /// wrong structure.
-const CACHE_EPOCH: &str = "schema_v12";
+const CACHE_EPOCH: &str = "schema_v13";
 
 /// Compute a 32-byte SHA-256 cache key from:
 ///   `canonical_repo_path || NUL || head_sha || NUL || CARGO_PKG_VERSION || NUL`

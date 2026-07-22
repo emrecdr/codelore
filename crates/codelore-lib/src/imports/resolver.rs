@@ -265,10 +265,14 @@ fn to_posix(p: &Path) -> String {
 /// path set. Returns the canonical repo-relative path if a match
 /// exists, or `None` for unresolvable / external imports.
 ///
-/// Handles the three canonical patterns:
+/// Handles the canonical patterns:
 /// 1. `./foo` + `.ts/.js/.tsx/.jsx/.mjs/.cjs` — direct file match
 /// 2. `./foo` + `index.{ts,tsx,js,...}` — package directory
-/// 3. `./foo.ts` — explicit-extension form (no probing needed)
+/// 3. `./foo.ts` — explicit-extension form (direct hit, tried first)
+/// 4. `./foo.js` from a TypeScript source — `NodeNext` names the emit
+///    extension, so a trailing `.js/.jsx/.mjs/.cjs` is stripped and the
+///    base is re-probed (`./foo.js` → `foo.ts`) when no literal file
+///    matches.
 #[must_use]
 pub fn resolve_js_relative<S: std::hash::BuildHasher>(
     importer_path: &str,
@@ -296,20 +300,30 @@ pub fn resolve_js_relative<S: std::hash::BuildHasher>(
         _ => TS_EXTENSIONS,
     };
 
-    // Pattern 3: explicit extension already present — direct lookup.
+    // Pattern 3: explicit extension already present — a real
+    // `./foo.mjs`/`./foo.js` file wins directly, before any strip-retry.
     if Path::new(&base).extension().is_some() && live_paths.contains(&base) {
         return Some(base);
     }
+    // NodeNext/ESM `import x from "./foo.js"` names the *emit* extension
+    // even when the file on disk is authored as `.ts`/`.tsx`. Strip a
+    // trailing emit extension so the base+extension probes retry against
+    // the source file (`./foo.js` → probe `foo.ts`, `foo.tsx`, …). A
+    // non-emit extension (or none) leaves the base untouched.
+    let probe_base = match Path::new(&base).extension().and_then(|e| e.to_str()) {
+        Some(e @ ("js" | "jsx" | "mjs" | "cjs")) => base[..base.len() - e.len() - 1].to_string(),
+        _ => base.clone(),
+    };
     // Pattern 1: base + extension probe.
     for ext in primary.iter().chain(secondary.iter()) {
-        let candidate = format!("{base}.{ext}");
+        let candidate = format!("{probe_base}.{ext}");
         if live_paths.contains(&candidate) {
             return Some(candidate);
         }
     }
     // Pattern 2: base/index + extension probe.
     for ext in primary.iter().chain(secondary.iter()) {
-        let candidate = format!("{base}/index.{ext}");
+        let candidate = format!("{probe_base}/index.{ext}");
         if live_paths.contains(&candidate) {
             return Some(candidate);
         }
@@ -400,6 +414,42 @@ mod tests {
         // Importer is .tsx so [ts, tsx, js, jsx, mjs, cjs] is the order.
         // .ts not present; .tsx not present for Button; falls through to jsx.
         assert_eq!(got, Some("src/Button.jsx".to_string()));
+    }
+
+    #[test]
+    fn nodenext_js_specifier_strips_to_ts_source() {
+        // `import x from "./foo.js"` from a .ts importer resolves to the
+        // authored `.ts` source — the emit extension is stripped and
+        // re-probed.
+        let live = live(&["src/app.ts", "src/foo.ts"]);
+        let got = resolve_js_relative("src/app.ts", "./foo.js", &live);
+        assert_eq!(got, Some("src/foo.ts".to_string()));
+    }
+
+    #[test]
+    fn nodenext_js_specifier_strips_to_tsx_source() {
+        // Same strip-retry falls through the extension priority to .tsx.
+        let live = live(&["src/app.ts", "src/Widget.tsx"]);
+        let got = resolve_js_relative("src/app.ts", "./Widget.js", &live);
+        assert_eq!(got, Some("src/Widget.tsx".to_string()));
+    }
+
+    #[test]
+    fn real_mjs_file_wins_over_ts_strip_retry() {
+        // A literal `./foo.mjs` on disk is a direct Pattern-3 hit and must
+        // win before the strip-retry considers the sibling `.ts`.
+        let live = live(&["src/app.ts", "src/foo.mjs", "src/foo.ts"]);
+        let got = resolve_js_relative("src/app.ts", "./foo.mjs", &live);
+        assert_eq!(got, Some("src/foo.mjs".to_string()));
+    }
+
+    #[test]
+    fn nodenext_strip_retry_still_existence_guarded() {
+        // Stripping `.js` must not fabricate an edge when no source file
+        // exists under any probed extension.
+        let live = live(&["src/app.ts", "src/other.ts"]);
+        let got = resolve_js_relative("src/app.ts", "./foo.js", &live);
+        assert!(got.is_none(), "strip-retry must stay existence-guarded");
     }
 
     #[test]

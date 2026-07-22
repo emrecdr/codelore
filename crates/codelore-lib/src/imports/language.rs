@@ -66,14 +66,20 @@ impl ImportLanguage {
     ///   - Rust:    `use_declaration`
     ///   - Python:  `import_statement` (bare) + `import_from_statement` (from-style)
     ///   - Java:    `import_declaration`
-    ///   - JS/TS:   `import_statement` (covers default, named, namespace, side-effect)
+    ///   - JS/TS:   `import_statement` (default / named / namespace / side-effect /
+    ///     `import x = require(…)`), `export_statement` (re-exports:
+    ///     `export … from`), and `call_expression` (dynamic `import(…)` and
+    ///     `CommonJS` `require(…)`). The extractor filters call expressions down
+    ///     to the two callee shapes that name a module.
     #[must_use]
     pub fn import_node_kinds(self) -> &'static [&'static str] {
         match self {
             Self::Rust => &["use_declaration"],
             Self::Python => &["import_statement", "import_from_statement"],
             Self::Java => &["import_declaration"],
-            Self::JavaScript | Self::TypeScript | Self::Tsx => &["import_statement"],
+            Self::JavaScript | Self::TypeScript | Self::Tsx => {
+                &["import_statement", "export_statement", "call_expression"]
+            }
         }
     }
 }
