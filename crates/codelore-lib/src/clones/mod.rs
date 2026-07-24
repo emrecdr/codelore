@@ -2,9 +2,9 @@
 //!
 //! Identifies Type 1 (exact) and Type 2 (renamed/parameterized) clones via
 //! AST structural hashing on tree-sitter parses. The fingerprint walks the
-//! AST in pre-order emitting `(node_kind_id, child_count)` pairs while
-//! skipping identifier + literal nodes — this normalization is what makes
-//! the hash Type 2-aware.
+//! AST in pre-order emitting `(kind_name, child_count)` pairs while
+//! skipping identifier, literal, and comment nodes — this normalization is
+//! what makes the hash Type 2-aware.
 //!
 //! Optional Type 3 (near-miss) support via `MinHash` + LSH is not yet
 //! implemented.

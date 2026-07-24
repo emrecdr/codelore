@@ -41,10 +41,19 @@ pub fn extract_functions(
         .ok_or_else(|| CodeLoreError::Analysis("clones::extract: parse returned None".into()))?;
 
     let skip: HashSet<&'static str> = lang.skip_kinds().iter().copied().collect();
+    let comment: HashSet<&'static str> = lang.comment_kinds().iter().copied().collect();
     let func_kinds: HashSet<&'static str> = lang.function_kinds().iter().copied().collect();
 
     let mut out: Vec<FunctionFingerprint> = Vec::new();
-    visit(tree.root_node(), code, path, &skip, &func_kinds, &mut out);
+    visit(
+        tree.root_node(),
+        code,
+        path,
+        &skip,
+        &comment,
+        &func_kinds,
+        &mut out,
+    );
     Ok(out)
 }
 
@@ -53,6 +62,7 @@ fn visit(
     code: &[u8],
     path: &str,
     skip: &HashSet<&'static str>,
+    comment: &HashSet<&'static str>,
     func_kinds: &HashSet<&'static str>,
     out: &mut Vec<FunctionFingerprint>,
 ) {
@@ -73,8 +83,8 @@ fn visit(
     loop {
         let current = cursor.node();
         if func_kinds.contains(current.kind()) {
-            let mut sequence: Vec<(u16, u16)> = Vec::new();
-            walk_preorder_internal(current, skip, &mut sequence);
+            let mut sequence: Vec<(&str, u16)> = Vec::new();
+            walk_preorder_internal(current, skip, comment, &mut sequence);
             let fingerprint = Fingerprint::from_sequence(&sequence);
             let function_name = extract_function_name(current, code).unwrap_or_default();
             let start_line = u32::try_from(current.start_position().row + 1).unwrap_or(u32::MAX);
@@ -256,6 +266,29 @@ mod tests {
                 b.members[0].fingerprint.digest
             );
         }
+    }
+
+    #[test]
+    fn in_body_comment_does_not_split_clone_family_rust() {
+        // Two functions identical except for an in-body comment must still
+        // group into one clone family — the comment is skipped during
+        // fingerprinting, so both digests collide.
+        let a = extract_functions(
+            "a.rs",
+            b"fn add(a: i32, b: i32) -> i32 { let x = 1; a + b + x }",
+            CloneLanguage::Rust,
+        )
+        .unwrap();
+        let b = extract_functions(
+            "b.rs",
+            b"fn add(a: i32, b: i32) -> i32 { let x = 1; // note\n a + b + x }",
+            CloneLanguage::Rust,
+        )
+        .unwrap();
+        let all: Vec<_> = a.into_iter().chain(b).collect();
+        let groups = group_clones(all, 0);
+        assert_eq!(groups.len(), 1, "comment must not split the clone family");
+        assert_eq!(groups[0].members.len(), 2);
     }
 
     #[test]

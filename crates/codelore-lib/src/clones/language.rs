@@ -63,10 +63,15 @@ impl CloneLanguage {
     }
 
     /// Per-language set of node-kind names to skip when fingerprinting.
-    /// Identifiers and literals are normalized away — this is what makes
-    /// the fingerprint Type 2-aware. The names are tree-sitter `kind()`
-    /// strings, not numeric kind ids (kind ids are language-specific
-    /// and can shift across grammar revisions; names are stable).
+    /// Identifiers, literals, and comments are normalized away — dropping
+    /// identifiers/literals is what makes the fingerprint Type 2-aware, and
+    /// dropping comments keeps a lone `// TODO` from defeating an otherwise
+    /// exact match. The names are tree-sitter `kind()` strings, not numeric
+    /// kind ids (kind ids are language-specific and can shift across grammar
+    /// revisions; names are stable). Only the top-level comment kinds appear
+    /// here: the walk prunes a comment's whole subtree (see
+    /// [`Self::comment_kinds`]), so a `///` doc comment's inner marker/text
+    /// children are never reached and need no entry.
     #[must_use]
     pub fn skip_kinds(self) -> &'static [&'static str] {
         match self {
@@ -83,6 +88,8 @@ impl CloneLanguage {
                 "raw_string_literal",
                 "byte_literal",
                 "byte_string_literal",
+                "line_comment",
+                "block_comment",
             ],
             Self::Python => &[
                 "identifier",
@@ -93,6 +100,7 @@ impl CloneLanguage {
                 "false",
                 "none",
                 "concatenated_string",
+                "comment",
             ],
             Self::Java => &[
                 "identifier",
@@ -105,6 +113,8 @@ impl CloneLanguage {
                 "true",
                 "false",
                 "null_literal",
+                "line_comment",
+                "block_comment",
             ],
             Self::JavaScript | Self::TypeScript | Self::Tsx => &[
                 "identifier",
@@ -119,7 +129,29 @@ impl CloneLanguage {
                 "null",
                 "undefined",
                 "regex",
+                "comment",
+                "html_comment",
             ],
+        }
+    }
+
+    /// Per-language set of comment node-kind names. A subset of
+    /// [`Self::skip_kinds`], but tracked separately because comments must be
+    /// *fully transparent* to the fingerprint: unlike identifiers and
+    /// literals (which are dropped from the emitted sequence yet still count
+    /// toward their parent's arity so shape is preserved), a comment must
+    /// also not inflate its parent's child count — otherwise a lone
+    /// `// TODO` between two statements would perturb the enclosing block's
+    /// arity and defeat the match. Only the top-level comment kinds appear
+    /// here; Rust's doc-marker/`doc_comment` children live inside a
+    /// `line_comment`/`block_comment` and never as a direct child of a code
+    /// node, so they need no arity handling.
+    #[must_use]
+    pub fn comment_kinds(self) -> &'static [&'static str] {
+        match self {
+            Self::Rust | Self::Java => &["line_comment", "block_comment"],
+            Self::Python => &["comment"],
+            Self::JavaScript | Self::TypeScript | Self::Tsx => &["comment", "html_comment"],
         }
     }
 
