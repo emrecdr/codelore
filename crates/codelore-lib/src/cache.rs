@@ -23,14 +23,14 @@ use crate::Options;
 /// schema version, and the historical `schema_v` prefix on the value is
 /// retained so older cache files stay invalidated.
 ///
-/// The current epoch (`schema_v15`) invalidates caches whose import facts
-/// predate the Java import resolver: a Java `import com.foo.Bar;` now
-/// resolves to its tracked `.java` file by matching the package path as a
-/// unique repo-path suffix (`com/foo/Bar.java`). Java edges were extracted
-/// but never resolved before, so Java import graphs came back empty. Those
-/// edges feed the architecture and import-cycle graphs, so a stale hit
-/// would serve a wrong structure.
-const CACHE_EPOCH: &str = "schema_v15";
+/// The current epoch (`schema_v16`) invalidates caches whose clone facts
+/// predate the comment-skipping, kind-name digest: clone fingerprints now
+/// drop comment nodes (a lone `// TODO` no longer defeats a match) and hash
+/// stable node-kind names rather than grammar-local numeric kind ids (so
+/// `.ts`/`.tsx` and parameterless `.js`/`.ts` clones compare across
+/// dialects). A stale hit would serve wrong clone counts and digests, which
+/// feed the code-health DRY smell.
+const CACHE_EPOCH: &str = "schema_v16";
 
 /// Compute a 32-byte SHA-256 cache key from:
 ///   `canonical_repo_path || NUL || head_sha || NUL || CARGO_PKG_VERSION || NUL`
