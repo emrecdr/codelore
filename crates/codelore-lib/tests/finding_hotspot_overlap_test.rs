@@ -17,6 +17,8 @@ use codelore_lib::external::ExternalFinding;
 use codelore_lib::facts::FactsDb;
 use codelore_lib::repo::GixRepo;
 use codelore_lib::test_support::{finding_for, temp_external_store};
+use std::path::Path;
+use std::process::Command;
 
 /// Helper: ingest the `tiny_repo` fixture and return (db, opts).
 fn ingest_tiny() -> (tempfile::TempDir, FactsDb, Options) {
@@ -287,6 +289,197 @@ fn with_variant_and_wrapper_agree_on_identical_inputs() {
             w.path,
             w.revs_percentile,
             ww.revs_percentile
+        );
+    }
+}
+
+// ─── --rows must rank against the full population, then truncate at output ────
+
+fn git(dir: &Path, args: &[&str]) {
+    let ok = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .status()
+        .expect("spawn git")
+        .success();
+    assert!(ok, "git {args:?} failed");
+}
+
+fn commit_all(dir: &Path, msg: &str) {
+    git(dir, &["add", "."]);
+    let ok = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["commit", "-m", msg, "--quiet"])
+        .status()
+        .expect("spawn git commit")
+        .success();
+    assert!(ok, "git commit {msg} failed");
+}
+
+fn write_body(root: &Path, rel: &str, n: u32) {
+    let path = root.join(rel);
+    std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+    std::fs::write(path, format!("pub fn f() -> u32 {{ {n} }}\n")).expect("write");
+}
+
+/// Build a repo whose three files differ only in revision count:
+/// `src/a.rs` (3 revs), `src/m.rs` (1 rev), `src/z.rs` (2 revs). All three
+/// carry identical zero-complexity bodies, so the hotspot ranking is decided
+/// purely by `path ASC` — `src/a.rs` sorts first, `src/z.rs` last. A small
+/// `--rows` prefix therefore drops `src/z.rs` from the inner hotspot set even
+/// though its middle revision count gives it a non-trivial percentile.
+fn build_percentile_population_repo() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let p = dir.path();
+    git(p, &["init", "-b", "main", "--quiet"]);
+    git(p, &["config", "user.email", "rows@example.com"]);
+    git(p, &["config", "user.name", "Rows"]);
+
+    // Seed: all three files get revision #1.
+    write_body(p, "src/a.rs", 0);
+    write_body(p, "src/m.rs", 0);
+    write_body(p, "src/z.rs", 0);
+    commit_all(p, "seed");
+
+    // a.rs → 2 revisions.
+    write_body(p, "src/a.rs", 1);
+    commit_all(p, "edit a");
+
+    // a.rs → 3 revisions, z.rs → 2 revisions (one commit touches both).
+    write_body(p, "src/a.rs", 2);
+    write_body(p, "src/z.rs", 1);
+    commit_all(p, "edit a and z");
+
+    dir
+}
+
+/// A finding on the alphabetically-last, middle-revs file must carry the same
+/// `revs_percentile` and `health_band` whether or not `--rows` is set: the
+/// percentile denominator is the whole hotspot population, not the truncated
+/// prefix. On the pre-fix path `--rows` flows into the inner analyses, so the
+/// retained row's percentile/band collapse to the absent defaults.
+#[test]
+fn rows_limit_does_not_corrupt_retained_percentile_or_band() {
+    let dir = build_percentile_population_repo();
+    let p = dir.path();
+    let repo = GixRepo::open(p).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: p.to_path_buf(),
+        min_revs: 1,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let store_dir = tempfile::tempdir().expect("tempdir");
+    let store = temp_external_store(store_dir.path());
+    let f = finding_for("src/z.rs", "semgrep", "warning");
+    store.replace_engine("semgrep", &[f]).expect("replace");
+
+    let limited = Options {
+        rows_limit: Some(1),
+        ..opts.clone()
+    };
+
+    let full_rows = run_finding_hotspot_overlap(&db, &opts, &store).expect("full");
+    let limited_rows = run_finding_hotspot_overlap(&db, &limited, &store).expect("limited");
+
+    let z_full = full_rows
+        .iter()
+        .find(|r| r.path == "src/z.rs")
+        .expect("z.rs in full run");
+    let z_limited = limited_rows
+        .iter()
+        .find(|r| r.path == "src/z.rs")
+        .expect("z.rs in limited run");
+
+    assert!(
+        (z_full.revs_percentile - z_limited.revs_percentile).abs() < 1e-9,
+        "revs_percentile must be independent of --rows: full={} limited={}",
+        z_full.revs_percentile,
+        z_limited.revs_percentile
+    );
+    assert_eq!(
+        z_full.health_band, z_limited.health_band,
+        "health_band must be independent of --rows"
+    );
+    // Non-vacuity: z.rs really is a mid-population hotspot, so a corrupted
+    // denominator would visibly move its percentile off this middle value.
+    assert!(
+        z_full.revs_percentile > 0.0 && z_full.revs_percentile < 1.0,
+        "z.rs should have a middle percentile; got {}",
+        z_full.revs_percentile
+    );
+}
+
+/// `--rows N` truncates the final priority-sorted output to its top N — and
+/// only there. With more finding-paths than N, the retained rows are exactly
+/// the highest-priority prefix of the unlimited run. The pre-fix path never
+/// truncated the output at all, so every finding-path leaked through.
+#[test]
+fn rows_limit_truncates_to_highest_priority_prefix() {
+    let dir = build_percentile_population_repo();
+    let p = dir.path();
+    let repo = GixRepo::open(p).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: p.to_path_buf(),
+        min_revs: 1,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    // Findings on all three paths with distinct counts (3 / 2 / 1) so the
+    // priority sort is fully determined; distinct fingerprints avoid dedup.
+    let mk = |path: &str, fp: &str| ExternalFinding {
+        engine: "semgrep".to_string(),
+        engine_version: "1.0.0".to_string(),
+        rule_id: "rule".to_string(),
+        path: path.to_string(),
+        start_line: Some(1),
+        end_line: None,
+        level: "note".to_string(),
+        fingerprint: fp.to_string(),
+        message: "m".to_string(),
+    };
+    let findings = [
+        mk("src/a.rs", "test/v1/a1"),
+        mk("src/a.rs", "test/v1/a2"),
+        mk("src/a.rs", "test/v1/a3"),
+        mk("src/m.rs", "test/v1/m1"),
+        mk("src/m.rs", "test/v1/m2"),
+        mk("src/z.rs", "test/v1/z1"),
+    ];
+    let store_dir = tempfile::tempdir().expect("tempdir");
+    let store = temp_external_store(store_dir.path());
+    store.replace_engine("semgrep", &findings).expect("replace");
+
+    let limited = Options {
+        rows_limit: Some(2),
+        ..opts.clone()
+    };
+
+    let full_rows = run_finding_hotspot_overlap(&db, &opts, &store).expect("full");
+    let limited_rows = run_finding_hotspot_overlap(&db, &limited, &store).expect("limited");
+
+    assert_eq!(
+        full_rows.len(),
+        3,
+        "three finding-paths → three rows unlimited"
+    );
+    assert_eq!(limited_rows.len(), 2, "--rows 2 keeps exactly two rows");
+    // The retained two are the highest-priority prefix of the full sort.
+    for (i, lim) in limited_rows.iter().enumerate() {
+        assert_eq!(
+            lim.path, full_rows[i].path,
+            "limited row {i} must equal the full run's prefix"
+        );
+        assert_eq!(
+            lim.priority, full_rows[i].priority,
+            "priority for {} must match the full run",
+            lim.path
         );
     }
 }

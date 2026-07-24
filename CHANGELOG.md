@@ -10,6 +10,8 @@ Conventional Commits format. All notable changes documented here.
 
 ### Fixed
 
+- **`finding-hotspot-overlap` ranks every finding against the full hotspot population and applies `--rows` only at output.** `--rows N` previously flowed into the inner hotspot and code-health analyses, so `PERCENT_RANK` divided by the truncated count instead of the population: a retained finding-path could report a wrong `revs_percentile`, and any finding-path ranked past `N` silently collapsed to a `0.0` percentile and an `"unknown"` health band (and the flag otherwise did nothing, since the fused output was never truncated). The inner analyses now always run unbounded; `--rows` caps the final priority-sorted rows. The gate path, which fuses pre-computed rows directly, is unaffected.
+
 - **`delivery-metrics`'s branch-walk now stops at the true merge base.** The branch-side commit walk followed first parents from a merge's branch tip but recognized only the merge's immediate mainline parent as the boundary; once mainline advanced past that commit after the branch was cut, the walk no longer detected it and vacuumed up to 90 days of mainline history into the branch, inflating `batch_size_files` / `batch_size_loc` and pinning `branch_duration_hours` near the date ceiling. A `mainline_reachable` anti-join (a first-parent walk from the mainline parent, same depth and time bounds) now excludes shared history from the branch commit set.
 
 - **`delivery-metrics`'s `rework_pct` no longer exceeds 100%.** Per-hunk overlapping-line counts summed across a file's hunks could exceed that hunk's own added-line count on files with several overlapping rewrites, pushing `rework_pct` past 100; each hunk's overlap is now capped at its own added-line count before summing.

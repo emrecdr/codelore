@@ -181,9 +181,20 @@ pub fn run_finding_hotspot_overlap(
     opts: &Options,
     store: &ExternalStore,
 ) -> Result<Vec<FindingHotspotOverlapRow>> {
-    let hotspot_rows = run_hotspots(db, opts)?;
-    let health_rows = run_code_health(db, opts)?;
-    run_finding_hotspot_overlap_with(store, &hotspot_rows, &health_rows)
+    // Percentiles must rank each finding-path against the FULL hotspot /
+    // health population, so the inner analyses run unbounded — feeding a
+    // `--rows`-truncated set into `compute_percent_ranks` would divide by the
+    // wrong denominator and silently drop any finding-path ranked past the
+    // limit to `(0.0, "unknown")`. `--rows` instead caps the final,
+    // priority-sorted output.
+    let full = opts.with_no_row_limit();
+    let hotspot_rows = run_hotspots(db, &full)?;
+    let health_rows = run_code_health(db, &full)?;
+    let mut rows = run_finding_hotspot_overlap_with(store, &hotspot_rows, &health_rows)?;
+    if let Some(limit) = opts.rows_limit {
+        rows.truncate(limit as usize);
+    }
+    Ok(rows)
 }
 
 fn priority_rank(p: &str) -> u8 {
