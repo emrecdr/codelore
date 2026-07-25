@@ -308,3 +308,117 @@ fn ai_pct_covers_pre_rename_commits_under_canonical_lineage() {
         "pre-rename AI commits must fold into the canonical ai_pct"
     );
 }
+
+// ─── ai_pct survives --time-bucket ────────────────────────────────────────────
+
+/// `ai_pct` is a COMMIT-LEVEL percentage: the share of the file's real
+/// commits that carry an AI-attribution signal. Under `--time-bucket` the
+/// change source feeding `file_revs` is `changes_bucketed`, whose `rev` is a
+/// synthetic `date_trunc` string, not a real SHA. `file_ai` therefore must
+/// keep reading a real-rev source so its `INNER JOIN commits co ON co.rev =
+/// ch.rev` still matches; if `file_ai` followed the bucket rewrite the join
+/// would never match and every file's `ai_pct` would come back NULL.
+#[test]
+fn ai_pct_is_populated_under_time_bucket() {
+    use codelore_lib::options::TimeBucket;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let p = dir.path();
+    git(p, &["init", "-b", "main", "--quiet"]);
+    git(p, &["config", "user.email", "dev@example.com"]);
+    git(p, &["config", "user.name", "Dev"]);
+
+    std::fs::create_dir_all(p.join("src")).expect("mkdir");
+    // One human seed, then one AI-assisted edit — same file, so its commit
+    // population is one human + one AI commit (ai_pct expected = 50%).
+    std::fs::write(p.join("src/app.rs"), "pub fn f() -> u32 {\n    1\n}\n").expect("write");
+    commit(p, &["seed app"]);
+    std::fs::write(p.join("src/app.rs"), "pub fn f() -> u32 {\n    2\n}\n").expect("write");
+    commit(p, &["edit app", "Co-Authored-By: Claude"]);
+
+    let repo = GixRepo::open(p).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: p.to_path_buf(),
+        min_revs: 1,
+        time_bucket: Some(TimeBucket::Month),
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let rows = run_hotspots(&db, &opts).expect("run");
+    let row = rows
+        .iter()
+        .find(|r| r.path == "src/app.rs")
+        .expect("src/app.rs must appear in bucketed hotspots");
+
+    // The regression routed file_ai through the bucket rewrite, making its
+    // `rev` a date string that never joined `commits`, so this came back None
+    // for every file under --time-bucket.
+    let ai = row.ai_pct.expect(
+        "ai_pct must be populated under --time-bucket (real-rev source, not changes_bucketed)",
+    );
+    assert!(
+        ai > 0.0,
+        "the AI-assisted commit must lift ai_pct above zero; got {ai}"
+    );
+    // One AI of two real commits → 50%, regardless of how the two collapse
+    // into month-buckets (the bucket count only drives `revs`, never ai_pct).
+    assert!(
+        (ai - 50.0).abs() < 1e-9,
+        "ai_pct is commit-level (1 AI / 2 commits = 50%), independent of bucketing; got {ai}"
+    );
+}
+
+/// `--time-bucket` composed with `--use-canonical-lineage`: `file_ai` must
+/// read `changes_lineage` (a real-rev source) so pre-rename AI commits still
+/// fold into the canonical file's `ai_pct`. This also proves `changes_lineage`
+/// is materialised on the bucketed-lineage path — `changes_bucketed` is itself
+/// built `FROM changes_lineage`, so the lineage view is guaranteed present.
+#[test]
+fn ai_pct_is_populated_under_time_bucket_with_canonical_lineage() {
+    use codelore_lib::options::TimeBucket;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let p = dir.path();
+    git(p, &["init", "-b", "main", "--quiet"]);
+    git(p, &["config", "user.email", "dev@example.com"]);
+    git(p, &["config", "user.name", "Dev"]);
+
+    std::fs::create_dir_all(p.join("src")).expect("mkdir");
+    // AI-assisted edits pre-rename, then a rename + human edit post-rename.
+    std::fs::write(p.join("src/old.rs"), "pub fn f() -> u32 {\n    1\n}\n").expect("write");
+    commit(p, &["seed old"]);
+    std::fs::write(p.join("src/old.rs"), "pub fn f() -> u32 {\n    2\n}\n").expect("write");
+    commit(p, &["edit old", "Co-Authored-By: Claude"]);
+    git(p, &["mv", "src/old.rs", "src/new.rs"]);
+    commit(p, &["rename old to new"]);
+    std::fs::write(p.join("src/new.rs"), "pub fn f() -> u32 {\n    3\n}\n").expect("write");
+    commit(p, &["edit new"]);
+
+    let repo = GixRepo::open(p).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: p.to_path_buf(),
+        min_revs: 1,
+        time_bucket: Some(TimeBucket::Month),
+        use_canonical_lineage: true,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let rows = run_hotspots(&db, &opts).expect("run");
+    // Pre-rename history folds into the canonical (latest) name.
+    let row = rows
+        .iter()
+        .find(|r| r.path == "src/new.rs")
+        .expect("src/new.rs must appear under bucketed canonical lineage");
+
+    let ai = row
+        .ai_pct
+        .expect("ai_pct must be populated under --time-bucket + canonical lineage");
+    assert!(
+        ai > 0.0,
+        "the pre-rename AI commit must fold into the canonical ai_pct; got {ai}"
+    );
+}

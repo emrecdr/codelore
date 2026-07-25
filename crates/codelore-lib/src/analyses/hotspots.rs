@@ -83,13 +83,14 @@ pub struct HotspotRow {
 //   hotspot_score: percent_rank(revs) * percent_rank(cog) * (100 − code_health) / 4
 //                  ∈ [0, 10] — see module-level docstring for why the divisor
 //                  is 4, not 10 (code_health bottoms at 60, not 0).
-/// The change source is resolved by routing the assembled SQL through
-/// [`crate::analyses::lineage::rewrite`], which rewrites EVERY `FROM changes`
-/// (and `JOIN changes`) — including the aliased `file_ai` CTE's
-/// `FROM changes ch` — to `changes_lineage` / `changes_bucketed` when the
-/// corresponding flag is on. A prior literal `FROM changes\n` replace only
-/// matched the un-aliased `file_revs` CTE and silently left `file_ai` reading
-/// raw `changes`, so `ai_pct` counted a different population than `revs`.
+/// The `file_revs` change source is resolved by routing the assembled SQL
+/// through [`crate::analyses::lineage::rewrite`], which rewrites every
+/// `FROM changes` / `JOIN changes` to `changes_lineage` / `changes_bucketed`
+/// when the corresponding flag is on. `file_ai` is deliberately EXEMPT: its
+/// `{ai_src}` placeholder resolves to `changes_lineage` (canonical lineage) or
+/// raw `changes`, never `changes_bucketed` — because `ai_pct` joins `commits`
+/// on a real `rev` and `changes_bucketed`'s synthetic date-string `rev` would
+/// never match, leaving `ai_pct` NULL under `--time-bucket`.
 /// `{cm_src}` becomes `complexity_metrics` or `complexity_metrics_grouped`
 /// (per `analyses::grouped_complexity`). `{file_mi_cte}` swaps the `file_mi`
 /// CTE body between the `entities`-join (raw paths) form and the
@@ -104,10 +105,21 @@ pub fn build_sql(opts: &Options, cm_src: &str) -> String {
     } else {
         FILE_MI_RAW
     };
+    // `file_ai` must join `commits` on a real `rev` (SHA), so it resolves to
+    // the rename-aware but UN-bucketed source — `changes_lineage` under
+    // canonical lineage, else raw `changes`. Substituted AFTER `rewrite` so the
+    // whole-SQL rewrite (which sends `file_revs` to `changes_bucketed` under
+    // `--time-bucket`) leaves the `{ai_src}` placeholder untouched; routing
+    // `file_ai` to `changes_bucketed` would null `ai_pct`.
+    let ai_src = if opts.use_canonical_lineage {
+        "changes_lineage"
+    } else {
+        "changes"
+    };
     let sql = SQL
         .replace("{cm_src}", cm_src)
         .replace("{file_mi_cte}", file_mi_cte);
-    crate::analyses::lineage::rewrite(&sql, opts)
+    crate::analyses::lineage::rewrite(&sql, opts).replace("{ai_src}", ai_src)
 }
 
 /// Returns the SAME hotspots SQL with `?` placeholders substituted for
@@ -189,7 +201,7 @@ pub const SQL: &str = "
             COUNT(CASE WHEN co.ai_attribution IN ('ai-assisted', 'ai-authored')
                        THEN 1 END) * 100.0
                 / NULLIF(COUNT(ch.rev), 0) AS ai_pct
-        FROM changes ch
+        FROM {ai_src} ch
         INNER JOIN commits co ON co.rev = ch.rev
         GROUP BY ch.path
     ),
