@@ -19,10 +19,13 @@
 //!
 //! ## Anchoring
 //!
-//! "Now" is `MAX(commits.date)`, NOT wall-clock today, so the result is
-//! reproducible and survives back-testing (the same anchor lesson
-//! `code-age` / `stale-code` learned). A repo whose last commit was a
-//! year ago still reports its final-year velocity, not all-zeros.
+//! "Now" defaults to `MAX(commits.date)`, NOT wall-clock today, so the
+//! result is reproducible and survives back-testing (the same anchor
+//! lesson `code-age` / `stale-code` learned). A repo whose last commit
+//! was a year ago still reports its final-year velocity, not all-zeros.
+//! `--age-time-now <date>` overrides the anchor with that calendar date's
+//! end-of-day, re-cutting both windows so a back-test reproduces the
+//! velocity the repo showed on that date.
 
 use duckdb::params;
 
@@ -52,23 +55,34 @@ pub struct HotspotVelocityRow {
     pub acceleration: f64,
 }
 
-// Two windows anchored at MAX(commits.date): recent = last RECENT_DAYS,
+// Two windows anchored at the reproducible "now": recent = last RECENT_DAYS,
 // baseline = the BASELINE_DAYS before that. Rates are per-week so the
 // unequal-length windows compare fairly. Only files touched in the recent
 // window are reported (a file that went fully cold is stale-code's job);
 // the `>= ?` floor drops one-off noise.
+//
+// The `anchor` CTE resolves "now" once: the leading positional param is the
+// caller's `--age-time-now` end-of-day (or NULL), and `COALESCE(…, MAX(date))`
+// falls back to the latest commit when the param is NULL — so the default
+// path stays byte-identical to a bare `MAX(date)` while a back-test re-cuts
+// both windows. `win` derives both window edges from that single value.
+//
 // SQL template. The day-window placeholders `{recent}` / `{baseline}` /
 // `{boundary}` are resolved by `build_sql` from RECENT_DAYS / BASELINE_DAYS
 // so those constants are the single source of truth (a naive literal `30`
 // / `120` / `90` sprinkled through the SQL silently ignores the consts).
 // `{boundary}` = RECENT_DAYS + BASELINE_DAYS, the baseline window's far edge.
 const SQL_TEMPLATE: &str = "
-    WITH win AS (
-        SELECT
-            MAX(date) AS now_ts,
-            MAX(date) - INTERVAL '{recent} days'  AS recent_start,
-            MAX(date) - INTERVAL '{boundary} days' AS baseline_start
+    WITH anchor AS (
+        SELECT COALESCE(CAST(? AS TIMESTAMP), MAX(date)) AS now_ts
         FROM commits
+    ),
+    win AS (
+        SELECT
+            now_ts,
+            now_ts - INTERVAL '{recent} days'  AS recent_start,
+            now_ts - INTERVAL '{boundary} days' AS baseline_start
+        FROM anchor
     ),
     recent AS (
         SELECT ch.path, COUNT(ch.rev) AS revs_recent
@@ -121,18 +135,32 @@ fn build_sql() -> String {
 #[tracing::instrument(name = "hotspot-velocity", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_hotspot_velocity(db: &FactsDb, opts: &Options) -> Result<Vec<HotspotVelocityRow>> {
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
-    let sql = build_sql();
+    // Reproducible anchor: when `--age-time-now` is set, bind that date's
+    // END-OF-DAY (the same back-test idiom `code-age` uses); otherwise bind
+    // NULL so the `anchor` CTE's `COALESCE(…, MAX(date))` falls back to the
+    // latest commit and the default output stays identical to the un-anchored
+    // behavior.
+    let anchor: Option<String> = opts.age_time_now.map(|d| {
+        format!(
+            "{:04}-{:02}-{:02} 23:59:59",
+            d.year(),
+            u8::from(d.month()),
+            d.day()
+        )
+    });
+    crate::analyses::lineage::materialize_if_needed(db, opts)?;
+    let sql = crate::analyses::lineage::rewrite(&build_sql(), opts);
     crate::analyses::query::explain_if_requested(
         db,
         &sql,
-        params![opts.min_revs, row_limit],
+        params![anchor, opts.min_revs, row_limit],
         "hotspot-velocity",
         opts,
     )?;
     crate::analyses::query::query_map_collect(
         db,
         &sql,
-        params![opts.min_revs, row_limit],
+        params![anchor, opts.min_revs, row_limit],
         "hotspot-velocity",
         |r| {
             Ok(HotspotVelocityRow {
