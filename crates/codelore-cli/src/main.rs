@@ -883,10 +883,14 @@ fn build_train_validation_split(
 }
 
 /// Production [`LineOriginSource`](codelore_lib::defect_calibration::szz::LineOriginSource):
-/// shells `git blame -w --porcelain` once per `(rev, path)` pair requested by
-/// the AG-SZZ engine, batching every requested line into that single
+/// shells `git blame -w -M --porcelain` once per `(rev, path)` pair requested
+/// by the AG-SZZ engine, batching every requested line into that single
 /// invocation via one `-L` range per contiguous run (multiple `-L` flags in
-/// one `git blame` call, never one call per range). Detached stdio (`stdin`
+/// one `git blame` call, never one call per range). `-w` neutralises pure
+/// reindentation; `-M` follows within-file line moves so a deleted line that
+/// an intermediate commit merely relocated is attributed to its true
+/// introducer rather than to the relocating commit (the AG-SZZ genealogy the
+/// engine relies on). Detached stdio (`stdin`
 /// nulled; `stdout`/`stderr` captured via `Command::output`'s own default
 /// piping) — the same child-process invariant `calibrate`'s git children use.
 struct GitBlameOrigin {
@@ -913,6 +917,7 @@ impl codelore_lib::defect_calibration::szz::LineOriginSource for GitBlameOrigin 
             repo_str.to_string(),
             "blame".to_string(),
             "-w".to_string(),
+            "-M".to_string(),
             "--porcelain".to_string(),
         ];
         for (start, end) in merge_line_ranges(lines) {
@@ -6541,5 +6546,142 @@ fn compute_spa_coupling_density(
             tracing::warn!("spa: coupling-density node count failed; skipping: {e}");
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codelore_lib::defect_calibration::OracleConfig;
+    use codelore_lib::defect_calibration::szz::SzzLink;
+
+    /// Run `git -C <repo> <args>` with a deterministic identity, asserting the
+    /// invocation succeeds. When `date` is set it fixes both the author and
+    /// committer date so the mined history is reproducible (a fresh fixture
+    /// repo inherits no ambient git identity or clock).
+    fn git_in(repo: &std::path::Path, args: &[&str], date: Option<&str>) -> std::process::Output {
+        let mut cmd = std::process::Command::new("git");
+        cmd.arg("-C")
+            .arg(repo)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t");
+        if let Some(d) = date {
+            cmd.env("GIT_AUTHOR_DATE", d).env("GIT_COMMITTER_DATE", d);
+        }
+        let out = cmd.output().expect("run git");
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+        out
+    }
+
+    fn head_sha(repo: &std::path::Path) -> String {
+        let out = git_in(repo, &["rev-parse", "HEAD"], None);
+        String::from_utf8(out.stdout)
+            .expect("HEAD sha is utf-8")
+            .trim()
+            .to_string()
+    }
+
+    /// A relocated line's defect must be blamed on the commit that *introduced*
+    /// it, not the one that merely moved it within the same file. The fixture:
+    ///   A — introduces a distinctive line near the top of a handler;
+    ///   B — moves that exact line (byte-identical) past three stable lines to
+    ///       the end of the handler — a genuine relocation, not a reindent
+    ///       (which `-w` already neutralises);
+    ///   C — a `fix:`-typed commit that deletes the relocated line.
+    /// The AG-SZZ engine blames C's deleted pre-image line at C's first parent
+    /// (B's tree). Without move-following, blame attributes the line to B (the
+    /// relocator); `git blame -M` follows the move back to A (the introducer),
+    /// which is the `defect_rev` this asserts. The distinctive line is chosen
+    /// to clear `-M`'s default 20-alphanumeric-character move-detection
+    /// threshold so a bare `-M` recognises the relocation.
+    #[test]
+    fn szz_blame_attributes_a_relocated_line_to_its_true_introducer() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let repo = dir.path();
+        std::fs::create_dir_all(repo.join("src")).expect("mkdir src");
+        git_in(repo, &["init", "-q", "-b", "main"], None);
+
+        let line = "    let checksum = computePayloadChecksum(inputPayloadBytes);\n";
+
+        // A — introduce the distinctive line near the top of the handler.
+        std::fs::write(
+            repo.join("src/lib.rs"),
+            format!("fn handler() {{\n{line}    validate();\n    persist();\n    respond();\n}}\n"),
+        )
+        .expect("write A");
+        git_in(repo, &["add", "."], None);
+        git_in(
+            repo,
+            &["commit", "-q", "-m", "feat: add request handler"],
+            Some("2026-01-01T00:00:00Z"),
+        );
+        let a = head_sha(repo);
+
+        // B — relocate the exact same line to the end of the handler.
+        std::fs::write(
+            repo.join("src/lib.rs"),
+            format!("fn handler() {{\n    validate();\n    persist();\n    respond();\n{line}}}\n"),
+        )
+        .expect("write B");
+        git_in(repo, &["add", "."], None);
+        git_in(
+            repo,
+            &[
+                "commit",
+                "-q",
+                "-m",
+                "refactor: relocate checksum to end of handler",
+            ],
+            Some("2026-01-02T00:00:00Z"),
+        );
+
+        // C — fix that deletes the relocated line.
+        std::fs::write(
+            repo.join("src/lib.rs"),
+            "fn handler() {\n    validate();\n    persist();\n    respond();\n}\n",
+        )
+        .expect("write C");
+        git_in(repo, &["add", "."], None);
+        git_in(
+            repo,
+            &["commit", "-q", "-m", "fix: drop stale checksum line"],
+            Some("2026-01-03T00:00:00Z"),
+        );
+        let c = head_sha(repo);
+
+        let git_repo = GixRepo::open(repo).expect("open fixture repo");
+        let opts = Options {
+            repo_path: repo.to_path_buf(),
+            include_merges: true,
+            ..Options::default()
+        };
+        let db = FactsDb::new_in_memory().expect("in-memory fact store");
+        db.ingest(&git_repo, &opts).expect("ingest fixture history");
+
+        let args = CalibrateDefectsArgs {
+            repo: repo.to_path_buf(),
+            output: repo.join("defects.calib.json"),
+            vintage: None,
+            window_days: None,
+            temp_dir: None,
+            allow_dirty: false,
+        };
+        let (links, _stats, _dates) =
+            mine_fix_links(&db, &git_repo, &args, &OracleConfig::default())
+                .expect("mine fix links");
+
+        // Without `-M` this vec would carry `defect_rev: <B>` (the relocator)
+        // and the assertion would fail; with `-M` the move is followed to A.
+        assert_eq!(
+            links,
+            vec![SzzLink {
+                defect_rev: a,
+                fix_rev: c,
+                path: "src/lib.rs".to_string(),
+            }],
+        );
     }
 }
