@@ -60,12 +60,18 @@ fn build_communication_sql(code_maat_compat: bool) -> String {
     };
     format!(
         "
-    WITH author_files AS (
+    WITH canon_authors AS (
+        SELECT canonical FROM author_aliases
+        GROUP BY canonical
+        HAVING NOT BOOL_OR(is_bot)
+    ),
+    author_files AS (
         SELECT DISTINCT
             changes.path,
             commits.canonical_author AS author
         FROM commits
         INNER JOIN changes ON changes.rev = commits.rev
+        INNER JOIN canon_authors a ON a.canonical = commits.canonical_author
     ),
     pairs AS (
         SELECT
@@ -92,6 +98,7 @@ fn build_communication_sql(code_maat_compat: bool) -> String {
             -- skips DuckDB's distinct-tracking overhead.
             COUNT(rev) AS commits
         FROM commits
+        INNER JOIN canon_authors a ON a.canonical = commits.canonical_author
         GROUP BY canonical_author
     )
     SELECT

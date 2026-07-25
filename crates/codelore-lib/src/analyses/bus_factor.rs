@@ -71,7 +71,12 @@ pub struct BusFactorRow {
 // than silently dropped — every commit contributes to some module's
 // bus-factor risk.
 const SQL_COMMITS: &str = "
-        WITH per_module_author AS (
+        WITH canon_authors AS (
+            SELECT canonical FROM author_aliases
+            GROUP BY canonical
+            HAVING NOT BOOL_OR(is_bot)
+        ),
+        per_module_author AS (
             SELECT
                 CASE
                     WHEN c.path LIKE '%/%' THEN regexp_extract(c.path, '^[^/]+', 0)
@@ -81,6 +86,7 @@ const SQL_COMMITS: &str = "
                 COUNT(DISTINCT c.rev) AS commits
             FROM changes c
             INNER JOIN commits co ON co.rev = c.rev
+            INNER JOIN canon_authors a ON a.canonical = co.canonical_author
             WHERE co.is_merge = FALSE
             GROUP BY module, co.canonical_author
         ),
@@ -151,7 +157,12 @@ const SQL_DOE_EXPERTS: &str = "
 ";
 
 const SQL_DOE_MODULE_COMMITS: &str = "
-    WITH per_module AS (
+    WITH canon_authors AS (
+        SELECT canonical FROM author_aliases
+        GROUP BY canonical
+        HAVING NOT BOOL_OR(is_bot)
+    ),
+    per_module AS (
         SELECT
             CASE
                 WHEN c.path LIKE '%/%' THEN regexp_extract(c.path, '^[^/]+', 0)
@@ -160,6 +171,7 @@ const SQL_DOE_MODULE_COMMITS: &str = "
             COUNT(DISTINCT c.rev) AS total_commits
         FROM changes c
         INNER JOIN commits co ON co.rev = c.rev
+        INNER JOIN canon_authors a ON a.canonical = co.canonical_author
         WHERE co.is_merge = FALSE
         GROUP BY module
     )

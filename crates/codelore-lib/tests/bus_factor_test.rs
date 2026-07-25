@@ -366,3 +366,227 @@ fn bus_factor_attributes_renamed_file_to_one_module_under_lineage() {
         "lineage-routed bus-factor must still produce rows",
     );
 }
+
+/// Run one git command in `path` with an explicit author/committer identity
+/// and fixed dates, so a single fixture can mix human and bot authors.
+fn git_as(path: &std::path::Path, date: &str, author: &str, email: &str, args: &[&str]) {
+    use std::process::Command;
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(args)
+        .env("GIT_AUTHOR_NAME", author)
+        .env("GIT_AUTHOR_EMAIL", email)
+        .env("GIT_COMMITTER_NAME", author)
+        .env("GIT_COMMITTER_EMAIL", email)
+        .env("GIT_AUTHOR_DATE", date)
+        .env("GIT_COMMITTER_DATE", date)
+        .status()
+        .expect("git");
+    assert!(status.success(), "git {args:?} failed");
+}
+
+/// Assert the fixture's `dependabot[bot]` identity was flagged as a bot at
+/// ingest — the precondition every bot-exclusion assertion depends on.
+fn assert_bot_registered(db: &FactsDb) {
+    let is_bot: bool = db
+        .query_row(
+            "SELECT COALESCE(BOOL_OR(is_bot), FALSE) FROM author_aliases \
+             WHERE canonical LIKE '%dependabot%'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("query is_bot");
+    assert!(is_bot, "dependabot must be flagged is_bot at ingest");
+}
+
+/// Build a repo whose history mixes two humans (Alice, Bob) with a CI bot
+/// (`dependabot[bot]`). The bot is the single heaviest committer on the
+/// `src` module and the sole author of the `deps` module — so any analysis
+/// that fails to exclude bots would crown the bot the key person of `src`
+/// and surface a `deps` module no human maintains.
+///
+/// Commit shape on `src`: Alice 2, Bob 1, bot 3 (six commits total; three
+/// human). Alice and Bob each create a file so both qualify as DOE experts.
+fn build_bot_and_humans_repo() -> tempfile::TempDir {
+    const BOT_NAME: &str = "dependabot[bot]";
+    const BOT_EMAIL: &str = "dependabot[bot]@noreply.github.com";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path();
+    git_as(
+        path,
+        "2026-01-01T00:00:00Z",
+        "Alice",
+        "alice@example.com",
+        &["init", "-b", "main", "--quiet"],
+    );
+
+    // Alice: creates then edits src/a.rs (2 commits; creator → DOE expert).
+    std::fs::create_dir_all(path.join("src")).unwrap();
+    std::fs::write(path.join("src/a.rs"), "fn a() {}\n").unwrap();
+    git_as(
+        path,
+        "2026-01-02T12:00:00Z",
+        "Alice",
+        "alice@example.com",
+        &["add", "src/a.rs"],
+    );
+    git_as(
+        path,
+        "2026-01-02T12:00:00Z",
+        "Alice",
+        "alice@example.com",
+        &["commit", "-m", "a1", "--quiet"],
+    );
+    std::fs::write(path.join("src/a.rs"), "fn a() {}\n// more\n").unwrap();
+    git_as(
+        path,
+        "2026-01-03T12:00:00Z",
+        "Alice",
+        "alice@example.com",
+        &["commit", "-am", "a2", "--quiet"],
+    );
+
+    // Bob: creates src/b.rs (1 commit; creator → DOE expert).
+    std::fs::write(path.join("src/b.rs"), "fn b() {}\n").unwrap();
+    git_as(
+        path,
+        "2026-01-04T12:00:00Z",
+        "Bob",
+        "bob@example.com",
+        &["add", "src/b.rs"],
+    );
+    git_as(
+        path,
+        "2026-01-04T12:00:00Z",
+        "Bob",
+        "bob@example.com",
+        &["commit", "-m", "b1", "--quiet"],
+    );
+
+    // dependabot: 3 edits to src/a.rs — the heaviest committer on `src`.
+    for (i, day) in [5u32, 6, 7].iter().enumerate() {
+        std::fs::write(
+            path.join("src/a.rs"),
+            format!("fn a() {{}}\n// more\n// bump {i}\n"),
+        )
+        .unwrap();
+        git_as(
+            path,
+            &format!("2026-01-{day:02}T12:00:00Z"),
+            BOT_NAME,
+            BOT_EMAIL,
+            &["commit", "-am", &format!("bump {i}"), "--quiet"],
+        );
+    }
+
+    // dependabot: sole author of the `deps` module (2 commits).
+    std::fs::create_dir_all(path.join("deps")).unwrap();
+    std::fs::write(path.join("deps/x.rs"), "// dep x\n").unwrap();
+    git_as(
+        path,
+        "2026-01-08T12:00:00Z",
+        BOT_NAME,
+        BOT_EMAIL,
+        &["add", "deps/x.rs"],
+    );
+    git_as(
+        path,
+        "2026-01-08T12:00:00Z",
+        BOT_NAME,
+        BOT_EMAIL,
+        &["commit", "-m", "dep x", "--quiet"],
+    );
+    std::fs::write(path.join("deps/y.rs"), "// dep y\n").unwrap();
+    git_as(
+        path,
+        "2026-01-09T12:00:00Z",
+        BOT_NAME,
+        BOT_EMAIL,
+        &["add", "deps/y.rs"],
+    );
+    git_as(
+        path,
+        "2026-01-09T12:00:00Z",
+        BOT_NAME,
+        BOT_EMAIL,
+        &["commit", "-m", "dep y", "--quiet"],
+    );
+    dir
+}
+
+/// Commits mode: a bot must never be crowned a module's key person, its
+/// commits must not inflate the module total, and a module touched only by
+/// the bot must drop out of the output entirely.
+#[test]
+fn bus_factor_commits_mode_excludes_bot_authors() {
+    let fixture = build_bot_and_humans_repo();
+    let repo = GixRepo::open(fixture.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: fixture.path().to_path_buf(),
+        min_revs: 1,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+    assert_bot_registered(&db);
+
+    let rows = run_bus_factor(&db, &opts).expect("run bus-factor");
+
+    let src = rows
+        .iter()
+        .find(|r| r.module == "src")
+        .expect("`src` module must be present");
+    // The bot made the most commits to `src`, but the top contributor must be
+    // the heaviest *human* (Alice, 2 commits), not the bot.
+    assert_eq!(
+        src.top_contributor, "alice@example.com",
+        "bot must be excluded from bus-factor ranking; got top_contributor={}",
+        src.top_contributor,
+    );
+    assert!(
+        !src.top_contributor.contains("[bot]"),
+        "top contributor must not be a bot",
+    );
+    // `src` total commits count only the humans' 2 + 1, never the bot's 3.
+    assert_eq!(
+        src.total_commits, 3,
+        "module commit total must exclude the bot's commits",
+    );
+    // A module touched ONLY by the bot drops out entirely.
+    assert!(
+        !rows.iter().any(|r| r.module == "deps"),
+        "a bot-only module must not appear in bus-factor output; got {:?}",
+        rows.iter().map(|r| &r.module).collect::<Vec<_>>(),
+    );
+}
+
+/// DOE mode: the `bus_factor` metric is already bot-free (it reads
+/// `doe_scores`), but the `total_commits` display column previously counted
+/// the bot's commits. It must count only the humans' commits.
+#[test]
+fn bus_factor_doe_mode_total_commits_excludes_bot() {
+    let fixture = build_bot_and_humans_repo();
+    let repo = GixRepo::open(fixture.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: fixture.path().to_path_buf(),
+        min_revs: 1,
+        knowledge_model: "doe".to_string(),
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+    assert_bot_registered(&db);
+
+    let rows = run_bus_factor(&db, &opts).expect("run bus-factor doe");
+    let src = rows
+        .iter()
+        .find(|r| r.module == "src")
+        .expect("`src` module must be present in DOE mode");
+    assert_eq!(src.model, "doe");
+    // Humans made 2 + 1 = 3 commits on `src`; the bot's 3 must not be counted.
+    assert_eq!(
+        src.total_commits, 3,
+        "DOE total_commits must exclude the bot's commits",
+    );
+}
