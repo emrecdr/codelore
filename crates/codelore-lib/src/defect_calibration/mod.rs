@@ -767,4 +767,60 @@ mod tests {
             "identity must be sha256 of the root commit SHA"
         );
     }
+
+    /// Add one commit on top of `HEAD` in an existing repo, advancing `HEAD`
+    /// while leaving the root commit fixed.
+    #[cfg(feature = "test-support")]
+    fn add_commit(dir: &Path, message: &str, content: &str) {
+        std::fs::write(dir.join("file.txt"), content).expect("write fixture file");
+        run_git(dir, &["add", "."]);
+        let date = "2026-02-01T00:00:00Z";
+        let ok = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["commit", "--quiet", "-m", message])
+            .env("GIT_AUTHOR_DATE", date)
+            .env("GIT_COMMITTER_DATE", date)
+            .status()
+            .expect("spawn git commit")
+            .success();
+        assert!(ok, "git commit failed");
+    }
+
+    /// The identity is the repo's *root* fingerprint, not its current tip:
+    /// advancing `HEAD` with a new commit (root fixed) must leave the identity
+    /// unchanged. This is the property a single-commit fixture (where
+    /// `HEAD == root`) cannot exercise — it distinguishes "hashes the root"
+    /// from "hashes `HEAD`" or "hashes all commits".
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn repo_identity_is_stable_when_head_advances() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        init_repo_with_commit(dir.path(), "root commit", "first\n");
+        let root = root_sha_via_git(dir.path());
+        let id_before = repo_identity(dir.path());
+
+        add_commit(dir.path(), "second commit", "second\n");
+        let head = root_sha_via_git(dir.path()); // still the root; HEAD moved past it
+        assert_eq!(root, head, "the root commit is unchanged by the new tip");
+        let head_tip = {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .expect("spawn git rev-parse");
+            String::from_utf8(out.stdout)
+                .expect("utf8")
+                .trim()
+                .to_string()
+        };
+        assert_ne!(head_tip, root, "HEAD must have advanced past the root");
+
+        let id_after = repo_identity(dir.path());
+        assert_eq!(
+            id_before, id_after,
+            "identity must track the root commit, so it is unchanged when HEAD advances"
+        );
+    }
 }
