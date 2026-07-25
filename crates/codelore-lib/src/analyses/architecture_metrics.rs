@@ -48,8 +48,10 @@ pub struct ArchitectureMetricRow {
 const CORE_DOMINANCE: f64 = 0.6;
 
 /// Run the `architecture-metrics` analysis. Returns one row per
-/// repo-level metric, in a fixed presentation order. Empty when no
-/// imports resolve.
+/// repo-level metric, in a fixed presentation order, plus an
+/// `import_resolution_rate` disclosure row. Returns just that row when the
+/// repo has import statements but none resolve (`n == 0`); empty only when
+/// the repo has no imports at all.
 ///
 /// # Errors
 ///
@@ -62,8 +64,19 @@ pub fn run_architecture_metrics(
 ) -> Result<Vec<ArchitectureMetricRow>> {
     let graph = build_import_graph(db)?;
     let m = graph_metrics(&graph);
+
+    // Import resolution coverage: the fraction of import statements whose
+    // target resolved to an in-repo file. External / stdlib imports point
+    // outside the repo and count as unresolved, so a repo with many
+    // third-party deps naturally reads lower — this discloses how much of the
+    // import surface the dependency graph below actually covers, NOT a defect
+    // score. Emitted whenever the repo has any imports (even when none
+    // resolved, `n == 0` — precisely the sparse-graph case worth surfacing);
+    // absent only when the repo has no import statements at all.
+    let resolution_row = import_resolution_row(db)?;
+
     if m.n == 0 {
-        return Ok(Vec::new());
+        return Ok(resolution_row.into_iter().collect());
     }
 
     let n_f = f64::from(u32::try_from(m.n).unwrap_or(u32::MAX));
@@ -96,6 +109,9 @@ pub fn run_architecture_metrics(
         row("files", m.n.to_string()),
         row("architecture_type", arch_type.to_owned()),
     ];
+    if let Some(r) = resolution_row {
+        rows.push(r);
+    }
 
     // Corpus-relative percentiles (additive; against the `repo_metrics` pools
     // populated by `codelore calibrate`).
@@ -135,6 +151,27 @@ pub fn run_architecture_metrics(
     }
 
     Ok(rows)
+}
+
+/// The `import_resolution_rate` disclosure row: resolved imports / total
+/// imports over the `imports` table, as a `{:.4}` fraction. `None` when the
+/// repo has no imports at all (the rate is undefined). Query-time over the
+/// already-ingested `imports` fact — no graph rebuild.
+fn import_resolution_row(db: &FactsDb) -> Result<Option<ArchitectureMetricRow>> {
+    let counts: Vec<(f64, i64)> = crate::analyses::query::query_map_collect(
+        db,
+        "SELECT \
+           COALESCE(COUNT(*) FILTER (WHERE target_path IS NOT NULL) * 1.0 \
+                    / NULLIF(COUNT(*), 0), 0.0), \
+           COUNT(*) \
+         FROM imports",
+        [],
+        "import-resolution-rate",
+        |r| Ok((r.get::<_, f64>(0)?, r.get::<_, i64>(1)?)),
+    )?;
+    Ok(counts.first().and_then(|&(rate, total)| {
+        (total > 0).then(|| row("import_resolution_rate", format!("{rate:.4}")))
+    }))
 }
 
 fn row(metric: &str, value: String) -> ArchitectureMetricRow {
