@@ -70,7 +70,7 @@ pub mod validate;
 /// `--defect-calibration` file that cannot be used is a configuration
 /// mistake, not a degradable state (mirrors
 /// `calibration::CALIBRATION_FORMAT_VERSION`).
-pub const DEFECT_FORMAT_VERSION: u32 = 1;
+pub const DEFECT_FORMAT_VERSION: u32 = 2;
 
 // ─── Unit A: fix-commit oracle ───────────────────────────────────────────────
 
@@ -258,8 +258,9 @@ pub enum TuningDecision {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DefectArtifact {
     pub format_version: u32,
-    /// SHA-256 hex (64 chars) of the canonicalized repo path at mining time —
-    /// see [`repo_identity`]. Distinct from `head_at_mining`: this identifies
+    /// SHA-256 hex (64 chars) identifying *which repository* this artifact was
+    /// mined from, derived from the repo's root commit SHA — see
+    /// [`repo_identity`]. Distinct from `head_at_mining`: this identifies
     /// *which repository*, not *which commit*.
     pub repo_identity: String,
     /// HEAD SHA at mining time.
@@ -354,16 +355,73 @@ fn canonicalize_repo_path(repo_path: &Path) -> PathBuf {
     }
 }
 
-/// SHA-256 hex (all 64 chars) of the canonicalized `repo_path` — the
-/// full-length counterpart to `cache::repo_hash_short`'s 8-char truncation.
-/// Used both to stamp a freshly-mined artifact's `repo_identity` and, via
+/// Derive a repository's identity from its root (parentless) commit SHA(s).
+///
+/// The root commit is git's stable repo fingerprint: unchanged by moving or
+/// re-cloning the repository (the commit object is content-addressed), distinct
+/// across unrelated repositories, and shared across forks — so a fork
+/// legitimately reuses its parent's calibration artifact. History is walked
+/// from `HEAD` and every parentless commit collected; a lone root hashes on its
+/// own, while multiple roots (grafted or merged histories) are sorted and
+/// NUL-joined before hashing so the result is order-independent.
+///
+/// Returns the reason for falling back (as `Err`) — rather than a bare `None` —
+/// so [`repo_identity`] can name it in its warning: `repo_path` is not a git
+/// repository, `HEAD` cannot be resolved, the walk fails, or no root commit is
+/// reachable (e.g. a shallow clone whose root is absent).
+fn root_commit_identity(repo_path: &Path) -> std::result::Result<String, String> {
+    let repo = gix::open(repo_path).map_err(|e| format!("not a git repository ({e})"))?;
+    let head = repo
+        .head_id()
+        .map_err(|e| format!("cannot resolve HEAD ({e})"))?;
+    let walk = repo
+        .rev_walk([head])
+        .all()
+        .map_err(|e| format!("history walk failed ({e})"))?;
+    // `Info::parent_ids` is populated eagerly for every yielded commit, so a
+    // root is exactly a commit with no parents — no second object lookup
+    // needed to re-parse the commit.
+    let mut roots: Vec<String> = Vec::new();
+    for info in walk {
+        let info = info.map_err(|e| format!("history walk failed ({e})"))?;
+        if info.parent_ids.is_empty() {
+            roots.push(info.id.to_hex().to_string());
+        }
+    }
+    if roots.is_empty() {
+        return Err("no root commit reachable (shallow clone?)".to_string());
+    }
+    roots.sort_unstable();
+    let mut hasher = Sha256::new();
+    hasher.update(roots.join("\0").as_bytes());
+    Ok(hex::encode(hasher.finalize()))
+}
+
+/// SHA-256 hex (all 64 chars) identifying the repository at `repo_path` — used
+/// both to stamp a freshly-mined artifact's `repo_identity` and, via
 /// [`check_repo_identity`], to verify one before applying it.
+///
+/// The identity derives from the repo's root commit SHA(s) (see
+/// [`root_commit_identity`]) so it survives moves and re-clones and does not
+/// collide across unrelated repos sharing a path. When the root commit cannot
+/// be resolved (non-git or shallow path), it falls back to the SHA-256 of the
+/// canonicalized path — the full-length counterpart to `cache::repo_hash_short`'s
+/// 8-char truncation — keeping the function infallible.
 #[must_use]
 pub fn repo_identity(repo_path: &Path) -> String {
-    let canonical = canonicalize_repo_path(repo_path);
-    let mut hasher = Sha256::new();
-    hasher.update(canonical.to_string_lossy().as_bytes());
-    hex::encode(hasher.finalize())
+    match root_commit_identity(repo_path) {
+        Ok(identity) => identity,
+        Err(reason) => {
+            tracing::warn!(
+                "defect_calibration::repo_identity: could not resolve root commit for {} ({reason}); falling back to path-based identity",
+                repo_path.display()
+            );
+            let canonical = canonicalize_repo_path(repo_path);
+            let mut hasher = Sha256::new();
+            hasher.update(canonical.to_string_lossy().as_bytes());
+            hex::encode(hasher.finalize())
+        }
+    }
 }
 
 /// Guard against applying an artifact mined from a different repository.
@@ -572,5 +630,197 @@ mod tests {
         let a = repo_identity(Path::new("/tmp"));
         let b = repo_identity(Path::new("/var"));
         assert_ne!(a, b, "distinct paths must hash to distinct identities");
+    }
+
+    // ─── artifact: identity from the root commit SHA ─────────────────────────
+
+    /// Run a `git` subcommand in `dir`, asserting success.
+    #[cfg(feature = "test-support")]
+    fn run_git(dir: &Path, args: &[&str]) {
+        let ok = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .status()
+            .expect("spawn git")
+            .success();
+        assert!(ok, "git {args:?} failed");
+    }
+
+    /// Initialise a git repo at `dir` with a single commit — fixed author,
+    /// committer and date so the root commit SHA is deterministic — holding one
+    /// file whose body is `content`.
+    #[cfg(feature = "test-support")]
+    fn init_repo_with_commit(dir: &Path, message: &str, content: &str) {
+        run_git(dir, &["init", "-b", "main", "--quiet"]);
+        run_git(dir, &["config", "user.email", "fixture@example.com"]);
+        run_git(dir, &["config", "user.name", "Fixture"]);
+        std::fs::write(dir.join("file.txt"), content).expect("write fixture file");
+        run_git(dir, &["add", "."]);
+        let date = "2026-01-01T00:00:00Z";
+        let ok = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["commit", "--quiet", "-m", message])
+            .env("GIT_AUTHOR_DATE", date)
+            .env("GIT_COMMITTER_DATE", date)
+            .status()
+            .expect("spawn git commit")
+            .success();
+        assert!(ok, "git commit failed");
+    }
+
+    /// The root (parentless) commit SHA of `dir`, via the git binary — the
+    /// independent oracle the gix-derived identity is checked against.
+    #[cfg(feature = "test-support")]
+    fn root_sha_via_git(dir: &Path) -> String {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["rev-list", "--max-parents=0", "HEAD"])
+            .output()
+            .expect("spawn git rev-list");
+        assert!(out.status.success(), "git rev-list failed");
+        String::from_utf8(out.stdout)
+            .expect("utf8 sha")
+            .trim()
+            .to_string()
+    }
+
+    /// The pre-fix path-only hash of `dir`, recomputed inline so tests can
+    /// prove the identity no longer equals it for a real repo.
+    #[cfg(feature = "test-support")]
+    fn path_only_identity(dir: &Path) -> String {
+        let canonical = canonicalize_repo_path(dir);
+        let mut hasher = Sha256::new();
+        hasher.update(canonical.to_string_lossy().as_bytes());
+        hex::encode(hasher.finalize())
+    }
+
+    /// Moving or re-cloning the SAME repository to a new path must not change
+    /// its identity: a full clone copies the root commit object verbatim, so
+    /// its SHA — and the derived identity — is path-independent. (On the
+    /// pre-fix path-only code the two paths hash differently.)
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn repo_identity_is_stable_across_reclone_to_a_new_path() {
+        let origin = tempfile::tempdir().expect("origin tempdir");
+        init_repo_with_commit(origin.path(), "root commit", "alpha\n");
+        let id_origin = repo_identity(origin.path());
+
+        let clone_parent = tempfile::tempdir().expect("clone tempdir");
+        let clone_path = clone_parent.path().join("reclone");
+        let ok = std::process::Command::new("git")
+            .args(["clone", "--quiet"])
+            .arg(origin.path())
+            .arg(&clone_path)
+            .status()
+            .expect("spawn git clone")
+            .success();
+        assert!(ok, "git clone failed");
+        let id_clone = repo_identity(&clone_path);
+
+        assert_eq!(
+            id_origin, id_clone,
+            "a moved / re-cloned repo must keep its identity (root commit SHA is path-independent)"
+        );
+    }
+
+    /// Two independently initialised repos have distinct root commits (distinct
+    /// content and message → distinct root SHAs) and so must have distinct
+    /// identities — the foreign-repo guard the identity exists to enforce.
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn repo_identity_differs_for_independently_initialised_repos() {
+        let a = tempfile::tempdir().expect("tempdir a");
+        let b = tempfile::tempdir().expect("tempdir b");
+        init_repo_with_commit(a.path(), "root of repo a", "content-a\n");
+        init_repo_with_commit(b.path(), "root of repo b", "content-b\n");
+        assert_ne!(
+            repo_identity(a.path()),
+            repo_identity(b.path()),
+            "independent repos with distinct root commits must have distinct identities"
+        );
+    }
+
+    /// For a real git repo the identity must derive from the root commit SHA,
+    /// not the path: it does not equal the path-only hash (proving the git
+    /// branch ran, not the fallback), and it equals `sha256(root_commit_sha)`.
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn repo_identity_uses_root_commit_sha_not_path_for_a_git_repo() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        init_repo_with_commit(dir.path(), "sole commit", "body\n");
+
+        let identity = repo_identity(dir.path());
+        assert_ne!(
+            identity,
+            path_only_identity(dir.path()),
+            "for a real git repo the identity must derive from the root commit, not the path"
+        );
+
+        let mut hasher = Sha256::new();
+        hasher.update(root_sha_via_git(dir.path()).as_bytes());
+        let expected = hex::encode(hasher.finalize());
+        assert_eq!(
+            identity, expected,
+            "identity must be sha256 of the root commit SHA"
+        );
+    }
+
+    /// Add one commit on top of `HEAD` in an existing repo, advancing `HEAD`
+    /// while leaving the root commit fixed.
+    #[cfg(feature = "test-support")]
+    fn add_commit(dir: &Path, message: &str, content: &str) {
+        std::fs::write(dir.join("file.txt"), content).expect("write fixture file");
+        run_git(dir, &["add", "."]);
+        let date = "2026-02-01T00:00:00Z";
+        let ok = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["commit", "--quiet", "-m", message])
+            .env("GIT_AUTHOR_DATE", date)
+            .env("GIT_COMMITTER_DATE", date)
+            .status()
+            .expect("spawn git commit")
+            .success();
+        assert!(ok, "git commit failed");
+    }
+
+    /// The identity is the repo's *root* fingerprint, not its current tip:
+    /// advancing `HEAD` with a new commit (root fixed) must leave the identity
+    /// unchanged. This is the property a single-commit fixture (where
+    /// `HEAD == root`) cannot exercise — it distinguishes "hashes the root"
+    /// from "hashes `HEAD`" or "hashes all commits".
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn repo_identity_is_stable_when_head_advances() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        init_repo_with_commit(dir.path(), "root commit", "first\n");
+        let root = root_sha_via_git(dir.path());
+        let id_before = repo_identity(dir.path());
+
+        add_commit(dir.path(), "second commit", "second\n");
+        let head = root_sha_via_git(dir.path()); // still the root; HEAD moved past it
+        assert_eq!(root, head, "the root commit is unchanged by the new tip");
+        let head_tip = {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .expect("spawn git rev-parse");
+            String::from_utf8(out.stdout)
+                .expect("utf8")
+                .trim()
+                .to_string()
+        };
+        assert_ne!(head_tip, root, "HEAD must have advanced past the root");
+
+        let id_after = repo_identity(dir.path());
+        assert_eq!(
+            id_before, id_after,
+            "identity must track the root commit, so it is unchanged when HEAD advances"
+        );
     }
 }

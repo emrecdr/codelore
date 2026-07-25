@@ -195,9 +195,12 @@ pub struct Options {
     /// `--defect-calibration`.
     pub defect_calibration: Option<PathBuf>,
 
-    /// Skip the repo-identity guard when applying a defect-calibration
-    /// artifact mined from a different repository (forks moved on disk, CI
-    /// checkouts). Set via `--allow-foreign-calibration`.
+    /// Skip the repo-identity guard when deliberately applying a
+    /// defect-calibration artifact whose root-commit identity does not match
+    /// this repository — e.g. reusing one repository's calibration on a
+    /// genuinely different repo, or a shallow / non-git checkout whose root
+    /// commit is unreachable (so the identity falls back to the path and no
+    /// longer matches). Set via `--allow-foreign-calibration`.
     pub allow_foreign_calibration: bool,
 
     /// Internal ingest mode used by `codelore calibrate`: populate only the
