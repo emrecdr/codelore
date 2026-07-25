@@ -83,25 +83,31 @@ pub struct HotspotRow {
 //   hotspot_score: percent_rank(revs) * percent_rank(cog) * (100 − code_health) / 4
 //                  ∈ [0, 10] — see module-level docstring for why the divisor
 //                  is 4, not 10 (code_health bottoms at 60, not 0).
-/// `{src}` becomes `changes` (legacy) or `changes_lineage` (canonical
-/// rename-aware). `{cm_src}` becomes `complexity_metrics` or
-/// `complexity_metrics_grouped` (per `analyses::grouped_complexity`).
-/// `{file_mi_cte}` swaps the `file_mi` CTE body between the
-/// `entities`-join (raw paths) form and the pre-baked-from-grouped
-/// form — the entities join can't be reused post-grouping because
-/// `entities.path` is never rewritten by `apply_grouping`, so the
-/// rolled-up `mi` must come straight from
+/// The change source is resolved by routing the assembled SQL through
+/// [`crate::analyses::lineage::rewrite`], which rewrites EVERY `FROM changes`
+/// (and `JOIN changes`) — including the aliased `file_ai` CTE's
+/// `FROM changes ch` — to `changes_lineage` / `changes_bucketed` when the
+/// corresponding flag is on. A prior literal `FROM changes\n` replace only
+/// matched the un-aliased `file_revs` CTE and silently left `file_ai` reading
+/// raw `changes`, so `ai_pct` counted a different population than `revs`.
+/// `{cm_src}` becomes `complexity_metrics` or `complexity_metrics_grouped`
+/// (per `analyses::grouped_complexity`). `{file_mi_cte}` swaps the `file_mi`
+/// CTE body between the `entities`-join (raw paths) form and the
+/// pre-baked-from-grouped form — the entities join can't be reused
+/// post-grouping because `entities.path` is never rewritten by
+/// `apply_grouping`, so the rolled-up `mi` must come straight from
 /// `complexity_metrics_grouped.mi`.
 #[must_use]
-pub fn build_sql(src: &str, cm_src: &str) -> String {
+pub fn build_sql(opts: &Options, cm_src: &str) -> String {
     let file_mi_cte = if cm_src == "complexity_metrics_grouped" {
         FILE_MI_GROUPED
     } else {
         FILE_MI_RAW
     };
-    SQL.replace("FROM changes\n", &format!("FROM {src}\n"))
+    let sql = SQL
         .replace("{cm_src}", cm_src)
-        .replace("{file_mi_cte}", file_mi_cte)
+        .replace("{file_mi_cte}", file_mi_cte);
+    crate::analyses::lineage::rewrite(&sql, opts)
 }
 
 /// Returns the SAME hotspots SQL with `?` placeholders substituted for
@@ -110,10 +116,10 @@ pub fn build_sql(src: &str, cm_src: &str) -> String {
 /// formula with [`build_sql`] eliminates the silent-drift risk between
 /// the two paths.
 #[must_use]
-pub fn build_inlined_sql(src: &str, cm_src: &str, min_revs: u32, row_limit: i64) -> String {
+pub fn build_inlined_sql(opts: &Options, cm_src: &str, min_revs: u32, row_limit: i64) -> String {
     // SQL has exactly two `?` placeholders: first is min_revs (HAVING),
     // second is row_limit (LIMIT). Substitute in order.
-    build_sql(src, cm_src)
+    build_sql(opts, cm_src)
         .replacen('?', &min_revs.to_string(), 1)
         .replace('?', &row_limit.to_string())
 }
@@ -252,9 +258,8 @@ pub fn run_hotspots(db: &FactsDb, opts: &Options) -> Result<Vec<HotspotRow>> {
     // including the composition where both flags are on (bucketing of the
     // lineage-resolved view).
     crate::analyses::lineage::materialize_source(db, opts)?;
-    let src = crate::analyses::lineage::source_table(opts);
     let cm_src = crate::analyses::grouped_complexity::source_table(opts);
-    let sql = build_sql(src, cm_src);
+    let sql = build_sql(opts, cm_src);
     crate::analyses::query::explain_if_requested(
         db,
         &sql,

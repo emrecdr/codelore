@@ -2,6 +2,8 @@ use codelore_lib::Options;
 use codelore_lib::analyses::hotspots::run_hotspots;
 use codelore_lib::facts::FactsDb;
 use codelore_lib::repo::GixRepo;
+use std::path::Path;
+use std::process::Command;
 
 #[test]
 fn hotspots_for_tiny_repo() {
@@ -132,8 +134,16 @@ fn explain_sql_returns_non_empty_plan() {
 
     // Resolve the template placeholders via `build_sql` — the raw `SQL`
     // const carries `{cm_src}` / `{file_mi_cte}` markers that `DuckDB`
-    // can't parse. This mirrors the ungrouped runtime path.
-    let sql = build_sql("changes", "complexity_metrics");
+    // can't parse. Lineage off mirrors the ungrouped raw-`changes` runtime
+    // path (default `Options` has canonical lineage ON, which would name a
+    // `changes_lineage` temp this in-memory query never materialises).
+    let sql = build_sql(
+        &Options {
+            use_canonical_lineage: false,
+            ..Options::default()
+        },
+        "complexity_metrics",
+    );
     let plan = db
         .explain_sql(&sql, params![1u32, i64::MAX])
         .expect("explain");
@@ -150,5 +160,151 @@ fn explain_sql_returns_non_empty_plan() {
             || upper.contains("JOIN")
             || upper.contains("AGGREGATE"),
         "EXPLAIN plan missing common operator names; got {plan:?}"
+    );
+}
+
+/// Guard: turning canonical lineage OFF must make `build_sql` a pure
+/// pass-through — the assembled SQL still reads raw `changes` in BOTH the
+/// `file_revs` (`FROM changes`) and the aliased `file_ai` (`FROM changes ch`)
+/// CTEs, with no `changes_lineage` anywhere. Turning lineage ON must be
+/// exactly the source-table swap applied to that same reference in BOTH
+/// CTEs — the `file_ai` rewrite being the whole point of routing through
+/// `lineage::rewrite` instead of the old literal `FROM changes\n` replace
+/// that only matched `file_revs`.
+#[test]
+fn build_sql_lineage_off_is_noop_and_on_swaps_both_ctes() {
+    use codelore_lib::analyses::hotspots::build_sql;
+
+    let sql_off = build_sql(
+        &Options {
+            use_canonical_lineage: false,
+            ..Options::default()
+        },
+        "complexity_metrics",
+    );
+    // Lineage off is a no-op: raw `changes` in both CTEs, no lineage table.
+    assert!(
+        !sql_off.contains("changes_lineage"),
+        "lineage-off must not route through changes_lineage:\n{sql_off}"
+    );
+    assert!(
+        sql_off.contains("FROM changes\n"),
+        "file_revs must read raw `changes` when lineage is off:\n{sql_off}"
+    );
+    assert!(
+        sql_off.contains("FROM changes ch"),
+        "file_ai must read raw `changes` when lineage is off:\n{sql_off}"
+    );
+
+    let sql_on = build_sql(
+        &Options {
+            use_canonical_lineage: true,
+            ..Options::default()
+        },
+        "complexity_metrics",
+    );
+    // Lineage on is exactly the source-table swap over the off reference,
+    // in BOTH CTEs (the aliased `file_ai` included) and nothing else.
+    let expected_on = sql_off
+        .replace("FROM changes\n", "FROM changes_lineage AS changes\n")
+        .replace("FROM changes ch", "FROM changes_lineage ch");
+    assert_eq!(
+        sql_on, expected_on,
+        "lineage-on must rewrite the source table in both file_revs and \
+         file_ai and change nothing else"
+    );
+}
+
+// ─── file_ai honors renames under canonical lineage ──────────────────────────
+
+fn git(dir: &Path, args: &[&str]) {
+    let ok = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .status()
+        .expect("spawn git")
+        .success();
+    assert!(ok, "git {args:?} failed");
+}
+
+/// Stage everything and commit; each `msg` becomes its own message paragraph
+/// (so an AI trailer lands in the commit body).
+fn commit(dir: &Path, msgs: &[&str]) {
+    git(dir, &["add", "."]);
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(dir).arg("commit").arg("--quiet");
+    for m in msgs {
+        cmd.arg("-m").arg(m);
+    }
+    let ok = cmd.status().expect("spawn git commit").success();
+    assert!(ok, "git commit failed for {msgs:?}");
+}
+
+/// A file's AI-attribution percentage must aggregate over its full rename
+/// lineage, not just the commits that touched its current name. The pre-fix
+/// `build_sql` rewrote only `file_revs` (`FROM changes`) to the lineage table
+/// and left `file_ai` (`FROM changes ch`) reading raw `changes`, so a renamed
+/// file's `ai_pct` counted a different — post-rename-only — population than
+/// its `revs`.
+#[test]
+fn ai_pct_covers_pre_rename_commits_under_canonical_lineage() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let p = dir.path();
+    git(p, &["init", "-b", "main", "--quiet"]);
+    git(p, &["config", "user.email", "ai@example.com"]);
+    git(p, &["config", "user.name", "Dev"]);
+
+    std::fs::create_dir_all(p.join("src")).expect("mkdir");
+    // src/old.rs: a human seed, then two AI-assisted edits — all pre-rename.
+    std::fs::write(p.join("src/old.rs"), "pub fn f() -> u32 {\n    1\n}\n").expect("write");
+    commit(p, &["seed old"]);
+    std::fs::write(p.join("src/old.rs"), "pub fn f() -> u32 {\n    2\n}\n").expect("write");
+    commit(p, &["edit old", "Co-Authored-By: Claude"]);
+    std::fs::write(p.join("src/old.rs"), "pub fn f() -> u32 {\n    3\n}\n").expect("write");
+    commit(p, &["edit old again", "Co-Authored-By: Claude"]);
+
+    // Pure rename to src/new.rs (human), then one human post-rename edit.
+    git(p, &["mv", "src/old.rs", "src/new.rs"]);
+    commit(p, &["rename old to new"]);
+    std::fs::write(p.join("src/new.rs"), "pub fn f() -> u32 {\n    4\n}\n").expect("write");
+    commit(p, &["edit new"]);
+
+    let repo = GixRepo::open(p).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: p.to_path_buf(),
+        min_revs: 1,
+        use_canonical_lineage: true,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let rows = run_hotspots(&db, &opts).expect("run");
+
+    // The old path folds into the canonical (latest) name.
+    assert!(
+        !rows.iter().any(|r| r.path == "src/old.rs"),
+        "old.rs should merge into src/new.rs under canonical lineage; got {rows:?}"
+    );
+    let row = rows
+        .iter()
+        .find(|r| r.path == "src/new.rs")
+        .expect("src/new.rs must appear in hotspots");
+
+    // Exactly two AI-assisted commits (both pre-rename) fold into the
+    // canonical population. `ai_pct`'s denominator is that same population,
+    // so it must equal `2 / revs * 100`. On the pre-fix path `file_ai` saw
+    // only the post-rename human commits and reported 0.
+    let ai = row.ai_pct.expect("ai_pct present on the canonical row");
+    let expected = 2.0 / f64::from(row.revisions) * 100.0;
+    assert!(
+        (ai - expected).abs() < 1e-9,
+        "ai_pct must cover the same population as revs: ai_pct={ai} revs={} expected={expected}",
+        row.revisions
+    );
+    assert!(
+        ai > 0.0,
+        "pre-rename AI commits must fold into the canonical ai_pct"
     );
 }
