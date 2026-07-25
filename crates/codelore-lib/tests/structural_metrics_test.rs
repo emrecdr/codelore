@@ -74,6 +74,51 @@ fn ingested_cycle_repo() -> (tempfile::TempDir, FactsDb, codelore_lib::Options) 
     (dir, db, opts)
 }
 
+/// Build a fixture with a known resolved/unresolved import mix: two
+/// in-repo `use crate::…` edges that resolve to tracked files, and two
+/// `use std::…` edges that legitimately point outside the repo and stay
+/// unresolved (`target_path` NULL). The `imports` table therefore holds
+/// four rows, exactly half resolved → `import_resolution_rate` = 0.5.
+fn ingested_resolution_mix_repo() -> (tempfile::TempDir, FactsDb, codelore_lib::Options) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let p = dir.path();
+    git(p, &["init", "-b", "main", "--quiet"]);
+    git(p, &["config", "user.email", "m@example.com"]);
+    git(p, &["config", "user.name", "M"]);
+    write(
+        p,
+        "Cargo.toml",
+        "[package]\nname=\"m\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
+    );
+    write(p, "src/lib.rs", "pub mod a;\npub mod b;\n");
+    write(
+        p,
+        "src/a.rs",
+        "use crate::b;\nuse std::fmt;\npub fn a() { b::b(); }\n",
+    );
+    write(
+        p,
+        "src/b.rs",
+        "use crate::a;\nuse std::io;\npub fn b() { a::a(); }\n",
+    );
+    git(p, &["add", "."]);
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(p)
+        .args(["commit", "-m", "init", "--quiet"])
+        .env("GIT_AUTHOR_DATE", "2026-01-01T10:00:00Z")
+        .env("GIT_COMMITTER_DATE", "2026-01-01T10:00:00Z")
+        .status()
+        .expect("spawn git commit");
+    assert!(status.success(), "git commit failed");
+
+    let repo = GixRepo::open(p).expect("open repo");
+    let db = FactsDb::new_in_memory().expect("in-memory db");
+    let opts = permissive_coupling_opts(p.to_path_buf());
+    db.ingest(&repo, &opts).expect("ingest repo");
+    (dir, db, opts)
+}
+
 #[test]
 fn instability_matches_martin_metrics() {
     let (_dir, db, opts) = ingested_cycle_repo();
@@ -130,6 +175,31 @@ fn architecture_metrics_report_the_cycle_and_type() {
     assert!((0.0..=1.0).contains(&pc), "propagation cost in [0,1]: {pc}");
 }
 
+/// `import_resolution_rate` discloses the fraction of import *statements*
+/// whose target resolved to an in-repo file — the coverage the structural
+/// metrics above are computed over. The fixture's four imports split two
+/// resolved (`use crate::…`) / two unresolved (`use std::…`), so the row
+/// is present and reads 0.5.
+#[test]
+fn architecture_metrics_discloses_import_resolution_rate() {
+    let (_dir, db, opts) = ingested_resolution_mix_repo();
+    let rows = run_architecture_metrics(&db, &opts).expect("run architecture-metrics");
+    let m: HashMap<&str, &str> = rows
+        .iter()
+        .map(|r| (r.metric.as_str(), r.value.as_str()))
+        .collect();
+
+    let rate: f64 = m
+        .get("import_resolution_rate")
+        .expect("import_resolution_rate row present")
+        .parse()
+        .expect("import_resolution_rate parses as a number");
+    assert!(
+        (rate - 0.5).abs() < 1e-9,
+        "two of four imports resolve → 0.5, got {rate}: {m:?}"
+    );
+}
+
 // ─── corpus-relative percentile rows ─────────────────────────────────────────
 
 /// Serialize a synthetic [`CalibrationArtifact`] to a temp `.calib.json` file
@@ -182,8 +252,10 @@ fn architecture_metrics_additivity_without_repo_metrics_pool() {
             "largest_cycle",
             "files",
             "architecture_type",
+            "import_resolution_rate",
         ],
-        "no active repo_metrics pool -> exactly the seven base rows: {names:?}"
+        "no active repo_metrics pool -> the base rows plus the \
+         import-resolution-rate disclosure, no corpus rows: {names:?}"
     );
 }
 
@@ -284,11 +356,13 @@ fn architecture_metrics_emits_corpus_percentiles_when_pool_active() {
             "largest_cycle",
             "files",
             "architecture_type",
+            "import_resolution_rate",
             "corpus_percentile:propagation_cost",
             "corpus_percentile:cycle_file_share",
             "corpus_n",
         ],
-        "the three corpus rows must append, in order, after the seven base rows: {names:?}"
+        "the corpus rows must append, in order, after the base rows and the \
+         import-resolution-rate disclosure: {names:?}"
     );
 
     let m: HashMap<&str, &str> = rows

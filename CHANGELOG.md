@@ -6,6 +6,8 @@ Conventional Commits format. All notable changes documented here.
 
 ### Added
 
+- **`architecture-metrics` discloses an `import_resolution_rate`.** The dependency graph is built only from imports that resolved to an in-repo file, so a repo whose imports mostly fail to resolve renders a sparse, deceptively "clean" architecture with no signal that coverage was poor. A new `import_resolution_rate` row reports the fraction of import statements whose target resolved (resolved ÷ total over the `imports` table). External and standard-library imports legitimately point outside the repo and count as unresolved, so a codebase with many third-party dependencies reads lower — this is a graph-**coverage** disclosure, not a defect score. The row is emitted whenever the repo has any imports, including when none resolve (so the sparsest graphs still surface the signal); it is absent only when there are no import statements at all.
+
 - **`.codelore-thresholds.toml`'s `[diff]` section gains `new_file_health_min`.** A floor on each *added* file's own projected code-health score. `delta_code_health_min_per_file` structurally cannot see added files (they carry no baseline to delta against), so this key closes that gap: one violation per offending added file, naming the file and its projected score. Deleted files never trigger it. Evaluated only by the working-tree gate surfaces (`codelore gate` / `gate_changes`); `codelore diff` ignores the key.
 
 ### Fixed
