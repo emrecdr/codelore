@@ -119,3 +119,117 @@ fn communication_strength_truncates_over_ceiled_average_under_compat() {
         pair.strength
     );
 }
+
+/// Run one git command in `path` with an explicit author/committer identity
+/// and fixed dates, so a single fixture can mix human and bot authors.
+fn git_as(path: &std::path::Path, date: &str, author: &str, email: &str, args: &[&str]) {
+    use std::process::Command;
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(args)
+        .env("GIT_AUTHOR_NAME", author)
+        .env("GIT_AUTHOR_EMAIL", email)
+        .env("GIT_COMMITTER_NAME", author)
+        .env("GIT_COMMITTER_EMAIL", email)
+        .env("GIT_AUTHOR_DATE", date)
+        .env("GIT_COMMITTER_DATE", date)
+        .status()
+        .expect("git");
+    assert!(status.success(), "git {args:?} failed");
+}
+
+/// Build a repo where a CI bot (`dependabot[bot]`) co-edits one shared file
+/// with both humans. A communication analysis that fails to exclude bots
+/// manufactures phantom Conway's-law edges (Alice↔bot, Bob↔bot) alongside
+/// the only real edge (Alice↔Bob).
+fn build_bot_coedit_repo() -> tempfile::TempDir {
+    const BOT_NAME: &str = "dependabot[bot]";
+    const BOT_EMAIL: &str = "dependabot[bot]@noreply.github.com";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path();
+    git_as(
+        path,
+        "2026-03-01T00:00:00Z",
+        "Alice",
+        "alice@example.com",
+        &["init", "-b", "main", "--quiet"],
+    );
+    std::fs::write(path.join("shared.txt"), "line1\n").unwrap();
+    git_as(
+        path,
+        "2026-03-01T12:00:00Z",
+        "Alice",
+        "alice@example.com",
+        &["add", "shared.txt"],
+    );
+    git_as(
+        path,
+        "2026-03-01T12:00:00Z",
+        "Alice",
+        "alice@example.com",
+        &["commit", "-m", "a", "--quiet"],
+    );
+    std::fs::write(path.join("shared.txt"), "line1\nline2\n").unwrap();
+    git_as(
+        path,
+        "2026-03-02T12:00:00Z",
+        "Bob",
+        "bob@example.com",
+        &["commit", "-am", "b", "--quiet"],
+    );
+    std::fs::write(path.join("shared.txt"), "line1\nline2\nline3\n").unwrap();
+    git_as(
+        path,
+        "2026-03-03T12:00:00Z",
+        BOT_NAME,
+        BOT_EMAIL,
+        &["commit", "-am", "bump", "--quiet"],
+    );
+    dir
+}
+
+/// The bot co-edits the shared file with both humans, yet no communication
+/// pair may name it — only the human↔human edge survives.
+#[test]
+fn communication_excludes_bot_pairs() {
+    let fixture = build_bot_coedit_repo();
+    let repo = GixRepo::open(fixture.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: fixture.path().to_path_buf(),
+        min_shared_revs: 1,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    // Precondition: the bot identity is flagged is_bot at ingest.
+    let is_bot: bool = db
+        .query_row(
+            "SELECT COALESCE(BOOL_OR(is_bot), FALSE) FROM author_aliases \
+             WHERE canonical LIKE '%dependabot%'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("query is_bot");
+    assert!(is_bot, "dependabot must be flagged is_bot at ingest");
+
+    let rows = run_communication(&db, &opts).expect("run");
+
+    for row in &rows {
+        assert!(
+            !row.author_a.contains("[bot]") && !row.author_b.contains("[bot]"),
+            "no communication pair may name a bot; got ({}, {})",
+            row.author_a,
+            row.author_b,
+        );
+    }
+    assert!(
+        rows.iter()
+            .any(|r| r.author_a == "alice@example.com" && r.author_b == "bob@example.com"),
+        "the human↔human pair must survive bot exclusion; got {:?}",
+        rows.iter()
+            .map(|r| (r.author_a.as_str(), r.author_b.as_str()))
+            .collect::<Vec<_>>(),
+    );
+}
