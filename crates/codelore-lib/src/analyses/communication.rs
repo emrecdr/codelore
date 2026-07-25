@@ -27,8 +27,8 @@ pub struct CommunicationRow {
     pub strength: f64, // 100 * shared / average
 }
 
-// DEEP-11 + DEEP-12: communication has two numeric divergences vs
-// code-maat's `communication.clj with-commit-stats`:
+// communication has two numeric divergences vs code-maat's
+// `communication.clj with-commit-stats`:
 //
 //   - `average`: code-maat uses `(math/ceil (m/average my peer))` — ceiling
 //     rounding. CodeLore's modern default uses integer-div floor `(a+b)/2`
@@ -36,8 +36,12 @@ pub struct CommunicationRow {
 //   - `strength`: code-maat uses `(int (m/as-percentage ...))` — truncated
 //     integer. CodeLore's modern default emits a float `XX.XX` for precision.
 //
-// Under `--code-maat-compat`, we honour both code-maat semantics so
-// downstream tools parsing the legacy CSV see identical values.
+// Under `--code-maat-compat`, we honour both code-maat numeric semantics so
+// downstream tools parsing the legacy CSV see identical values. Bot authors
+// are excluded in compat mode too, as in every other social analysis:
+// human↔human rows stay byte-identical, but a pair involving a bot is dropped
+// even under compat — where upstream code-maat, which has no bot concept,
+// would emit it. Uniform bot exclusion is preferred over reproducing bot noise.
 fn build_communication_sql(code_maat_compat: bool) -> String {
     let avg_expr = if code_maat_compat {
         // CEIL of mean — matches code-maat's `(math/ceil (m/average …))`.
