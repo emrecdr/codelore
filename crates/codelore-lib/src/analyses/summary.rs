@@ -40,7 +40,11 @@ pub fn run_summary(db: &FactsDb, opts: &Options) -> Result<Vec<SummaryRow>> {
         UNION ALL
         SELECT 'entities', COUNT(*) FROM entities
         UNION ALL
-        SELECT 'authors', COUNT(DISTINCT canonical_author) FROM commits;
+        SELECT 'authors', COUNT(DISTINCT co.canonical_author)
+        FROM commits co
+        JOIN (
+            SELECT canonical FROM author_aliases GROUP BY canonical HAVING NOT BOOL_OR(is_bot)
+        ) canon ON canon.canonical = co.canonical_author;
     "
     };
     crate::analyses::query::explain_if_requested(db, sql, [], "summary", opts)?;

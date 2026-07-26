@@ -2,6 +2,35 @@ use codelore_lib::Options;
 use codelore_lib::analyses::summary::run_summary;
 use codelore_lib::facts::FactsDb;
 use codelore_lib::repo::GixRepo;
+use std::path::Path;
+use std::process::Command;
+
+/// Commit one change to `file` in `dir` authored by `name <email>` with a
+/// fixed date, so a fixture can mix human and bot authors deterministically.
+fn commit_as(dir: &Path, name: &str, email: &str, file: &str, body: &str) {
+    std::fs::write(dir.join(file), body).expect("write fixture file");
+    let add = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["add", "."])
+        .status()
+        .expect("spawn git add");
+    assert!(add.success(), "git add failed");
+    let ok = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["commit", "--quiet", "-m", "change"])
+        .env("GIT_AUTHOR_NAME", name)
+        .env("GIT_AUTHOR_EMAIL", email)
+        .env("GIT_COMMITTER_NAME", name)
+        .env("GIT_COMMITTER_EMAIL", email)
+        .env("GIT_AUTHOR_DATE", "2026-01-01T00:00:00Z")
+        .env("GIT_COMMITTER_DATE", "2026-01-01T00:00:00Z")
+        .status()
+        .expect("spawn git commit")
+        .success();
+    assert!(ok, "git commit failed");
+}
 
 #[test]
 fn summary_for_tiny_repo() {
@@ -49,4 +78,76 @@ fn summary_number_of_entities_counts_changed_paths_under_compat() {
     assert_eq!(get("number-of-entities-changed"), 5);
     assert_eq!(get("number-of-commits"), 5);
     assert_eq!(get("number-of-authors"), 1);
+}
+
+/// The modern `authors` count excludes bot identities, matching every other
+/// social analysis — a CI bot is not a human contributor. Under
+/// `--code-maat-compat` the count stays bot-inclusive, byte-faithful to
+/// upstream code-maat (which has no bot concept), so downstream scripts
+/// parsing the legacy CSV see the same value they always did.
+#[test]
+fn authors_count_excludes_bots_in_modern_but_not_compat() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let p = dir.path();
+    let init = Command::new("git")
+        .arg("-C")
+        .arg(p)
+        .args(["init", "-b", "main", "--quiet"])
+        .status()
+        .expect("spawn git init");
+    assert!(init.success(), "git init failed");
+
+    // Two humans and one CI bot; the bot's `[bot]` identity is flagged at
+    // ingest by the built-in bot heuristic.
+    commit_as(p, "Alice", "alice@example.com", "a.rs", "fn a() {}\n");
+    commit_as(p, "Bob", "bob@example.com", "b.rs", "fn b() {}\n");
+    commit_as(
+        p,
+        "dependabot[bot]",
+        "dependabot[bot]@users.noreply.github.com",
+        "deps.rs",
+        "// bump\n",
+    );
+
+    let repo = GixRepo::open(p).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: p.to_path_buf(),
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    // Precondition: the bot identity really was flagged, so the assertions
+    // below exercise the filter rather than an empty bot set.
+    let is_bot: bool = db
+        .query_row(
+            "SELECT COALESCE(BOOL_OR(is_bot), FALSE) FROM author_aliases \
+             WHERE canonical LIKE '%dependabot%'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("query is_bot");
+    assert!(is_bot, "dependabot must be flagged is_bot at ingest");
+
+    let modern = run_summary(&db, &opts).expect("run modern");
+    let modern_authors = modern.iter().find(|r| r.metric == "authors").unwrap().value;
+    assert_eq!(
+        modern_authors, 2,
+        "modern `authors` counts the two humans, not the bot: {modern:?}"
+    );
+
+    let compat_opts = Options {
+        code_maat_compat: true,
+        ..opts
+    };
+    let compat = run_summary(&db, &compat_opts).expect("run compat");
+    let compat_authors = compat
+        .iter()
+        .find(|r| r.metric == "number-of-authors")
+        .unwrap()
+        .value;
+    assert_eq!(
+        compat_authors, 3,
+        "--code-maat-compat stays bot-inclusive (byte-faithful to code-maat): {compat:?}"
+    );
 }
