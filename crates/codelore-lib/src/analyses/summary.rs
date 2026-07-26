@@ -16,8 +16,8 @@ pub struct SummaryRow {
 
 #[tracing::instrument(name = "summary", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_summary(db: &FactsDb, opts: &Options) -> Result<Vec<SummaryRow>> {
-    // DEEP-15: Under `--code-maat-compat`, emit code-maat's exact statistic
-    // names (hyphenated `number-of-X`) so downstream scripts parsing CSV
+    // Under `--code-maat-compat`, emit code-maat's exact statistic names
+    // (hyphenated `number-of-X`) so downstream scripts parsing CSV
     // like `if statistic == "number-of-commits"` keep working. The
     // CodeLore modern default uses concise names (`commits`, `entities`)
     // because the row label is already self-explanatory in the modern
@@ -40,7 +40,11 @@ pub fn run_summary(db: &FactsDb, opts: &Options) -> Result<Vec<SummaryRow>> {
         UNION ALL
         SELECT 'entities', COUNT(*) FROM entities
         UNION ALL
-        SELECT 'authors', COUNT(DISTINCT canonical_author) FROM commits;
+        SELECT 'authors', COUNT(DISTINCT co.canonical_author)
+        FROM commits co
+        JOIN (
+            SELECT canonical FROM author_aliases GROUP BY canonical HAVING NOT BOOL_OR(is_bot)
+        ) canon ON canon.canonical = co.canonical_author;
     "
     };
     crate::analyses::query::explain_if_requested(db, sql, [], "summary", opts)?;
