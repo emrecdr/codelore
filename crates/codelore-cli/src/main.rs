@@ -23,6 +23,16 @@ use crate::args::{Cli, Command, DiffArgs, IngestSarifArgs, McpArgs};
 
 fn main() {
     if let Err(e) = run() {
+        // A reader closing our stdout early — the classic `codelore … | head`,
+        // or a pager quit — surfaces as a BrokenPipe I/O error on the next
+        // write. That is a normal way to consume partial output, not a failure,
+        // so exit 0 silently (no error line), matching conventional CLI
+        // behaviour. The workspace forbids `unsafe`, so we cannot restore the
+        // default SIGPIPE disposition; recognising the error on the way out is
+        // the mechanism.
+        if is_broken_pipe(&e) {
+            std::process::exit(0);
+        }
         eprintln!("error: {e:#}");
         // Map CodeLoreError to its spec §6.6 exit code if present in the chain.
         // Falls back to 1 for non-CodeLoreError errors (e.g. clap parse errors).
@@ -32,6 +42,30 @@ fn main() {
             .map_or(1, codelore_lib::cli_api::CodeLoreError::exit_code);
         std::process::exit(code);
     }
+}
+
+/// True when `err`'s cause chain carries a `BrokenPipe` I/O error — i.e. the
+/// process reading our stdout closed the pipe before we finished writing.
+///
+/// Output emitters surface this in two shapes: a bare `std::io::Error` (the
+/// CSV/Markdown writers propagate it via `map_err(CodeLoreError::Io)`, and the
+/// serde-based JSON/NDJSON/SARIF writers rebuild it as `Io` so the kind is
+/// preserved), and a `CodeLoreError::Io`/`RepoIo` wrapping one directly. Walk
+/// the whole chain and match either.
+fn is_broken_pipe(err: &anyhow::Error) -> bool {
+    use std::io::ErrorKind::BrokenPipe;
+    err.chain().any(|cause| {
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            io.kind() == BrokenPipe
+        } else if let Some(cle) = cause.downcast_ref::<CodeLoreError>() {
+            matches!(
+                cle,
+                CodeLoreError::Io(io) | CodeLoreError::RepoIo(io) if io.kind() == BrokenPipe
+            )
+        } else {
+            false
+        }
+    })
 }
 
 fn run() -> Result<()> {
@@ -180,54 +214,75 @@ pub(crate) fn write_github_output(key: &str, value: &str) {
 /// hood — schema version, pinned dependency versions, supported
 /// analysis count, supported output format count. Useful for triage
 /// when behaviour surprises a user.
-#[allow(clippy::unnecessary_wraps)] // dispatcher uniformity — every arm returns Result<()>
 fn run_profile_cmd() -> Result<()> {
     use codelore_lib::cli_api::analysis::AnalysisName;
-    println!("# CodeLore profile\n");
-    println!("**Version**: {}", env!("CARGO_PKG_VERSION"));
-    println!(
+    // Write through a locked stdout handle with propagating `writeln!` rather
+    // than `println!`: a reader closing the pipe part-way through this dump
+    // (`codelore profile | head`) then routes the BrokenPipe up to `main`'s
+    // quiet-exit arm instead of panicking inside the print macro.
+    let mut out = std::io::stdout().lock();
+    writeln!(out, "# CodeLore profile\n")?;
+    writeln!(out, "**Version**: {}", env!("CARGO_PKG_VERSION"))?;
+    writeln!(
+        out,
         "**Schema**: schema_v{} (`facts/schema_v1.sql`)",
         codelore_lib::cli_api::facts::schema::CURRENT_SCHEMA_VERSION
-    );
-    println!("**Analyses**: {} registered", AnalysisName::all().len());
-    println!("**Output formats**: csv | json | sarif | markdown | parquet | sqlite | html | spa");
-    println!(
+    )?;
+    writeln!(
+        out,
+        "**Analyses**: {} registered",
+        AnalysisName::all().len()
+    )?;
+    writeln!(
+        out,
+        "**Output formats**: csv | json | sarif | markdown | parquet | sqlite | html | spa"
+    )?;
+    writeln!(
+        out,
         "**Pinned third-party**:\n  - gix {gix}\n  - DuckDB {duckdb}\n  - tree-sitter 0.25.x (Rust/Python/Java/JS/TS/TSX/C++)",
         gix = codelore_lib::cli_api::provenance::GIX_VERSION,
         duckdb = codelore_lib::cli_api::provenance::DUCKDB_VERSION,
-    );
-    println!("\n**Cache root**:");
+    )?;
+    writeln!(out, "\n**Cache root**:")?;
     if let Some(dir) = dirs::cache_dir() {
-        println!("  {}/codelore/", dir.display());
+        writeln!(out, "  {}/codelore/", dir.display())?;
     } else {
-        println!("  <unavailable on this platform>");
+        writeln!(out, "  <unavailable on this platform>")?;
     }
-    println!(
+    writeln!(
+        out,
         "\n**SPA feature**: {}",
         if cfg!(feature = "spa") {
             "ENABLED"
         } else {
             "disabled (build with --features spa to opt in)"
         }
-    );
-    println!("\n_For per-analysis SQL + citations, run `codelore explain <topic>`._");
+    )?;
+    writeln!(
+        out,
+        "\n_For per-analysis SQL + citations, run `codelore explain <topic>`._"
+    )?;
     Ok(())
 }
 
 /// Markdown dump of every supported analysis. Seeds the planned
 /// full static-HTML doc site.
-#[allow(clippy::unnecessary_wraps)] // dispatcher uniformity — every arm returns Result<()>
 fn run_docs_cmd() -> Result<()> {
     use codelore_lib::cli_api::analysis::AnalysisName;
-    println!("# CodeLore — Analysis catalogue\n");
-    println!(
+    // Propagating `writeln!` over a locked stdout (see `run_profile_cmd`): this
+    // multi-line catalogue is a natural `codelore docs | head` target, so an
+    // early pipe close must reach `main`'s quiet-exit arm, not panic.
+    let mut out = std::io::stdout().lock();
+    writeln!(out, "# CodeLore — Analysis catalogue\n")?;
+    writeln!(
+        out,
         "Auto-generated from `AnalysisName::all()`. Run `codelore explain <topic>` for per-analysis citations and formulas. The full citation chain lives in `docs/research-foundations.md`.\n"
-    );
-    println!("## Supported analyses\n");
+    )?;
+    writeln!(out, "## Supported analyses\n")?;
     for analysis in AnalysisName::all() {
-        println!("- `{}`", analysis.as_str());
+        writeln!(out, "- `{}`", analysis.as_str())?;
     }
-    println!("\n## Output formats\n");
+    writeln!(out, "\n## Output formats\n")?;
     for fmt in &[
         ("csv", "code-maat-compatible flat tables"),
         ("json", "stable JSON shape per row type"),
@@ -249,19 +304,30 @@ fn run_docs_cmd() -> Result<()> {
             "single-file interactive dashboard (opt-in via `spa` feature)",
         ),
     ] {
-        println!("- `{}` — {}", fmt.0, fmt.1);
+        writeln!(out, "- `{}` — {}", fmt.0, fmt.1)?;
     }
-    println!("\n## Conventions\n");
-    println!("- Files alive at HEAD only (deleted files excluded from path-aggregating analyses)");
-    println!("- Mailmap + `.codelore-teams` + `.codelorebots` consulted at ingest time");
-    println!("- `.gitignore` / `.codeloreignore` honoured");
-    println!("- `--time-bucket` supported on: hotspots, coupling, soc, code-health");
-    println!(
+    writeln!(out, "\n## Conventions\n")?;
+    writeln!(
+        out,
+        "- Files alive at HEAD only (deleted files excluded from path-aggregating analyses)"
+    )?;
+    writeln!(
+        out,
+        "- Mailmap + `.codelore-teams` + `.codelorebots` consulted at ingest time"
+    )?;
+    writeln!(out, "- `.gitignore` / `.codeloreignore` honoured")?;
+    writeln!(
+        out,
+        "- `--time-bucket` supported on: hotspots, coupling, soc, code-health"
+    )?;
+    writeln!(
+        out,
         "\n## Reproducibility\n\nEvery file output is paired with a `.provenance.json` sidecar capturing the run's full `Options` shape. SQLite outputs embed the equivalent inside the `provenance` table."
-    );
-    println!(
+    )?;
+    writeln!(
+        out,
         "\n_See also: `codelore profile` for operational telemetry, `codelore schema <type>` for row schemas, `docs/research-foundations.md` for citations._"
-    );
+    )?;
     Ok(())
 }
 
@@ -282,22 +348,27 @@ fn run_completions_cmd(args: &args::CompletionsArgs) {
 /// will populate the `items` shape once `schemars` derive lands.
 fn run_schema_cmd(args: &args::SchemaArgs) -> Result<()> {
     let row_types: Vec<&str> = AnalysisName::all().iter().map(|a| a.as_str()).collect();
+    // Locked stdout + propagating `writeln!` (see `run_profile_cmd`) so the
+    // row-type catalogue survives `codelore schema | head` as a quiet exit.
+    let mut out = std::io::stdout().lock();
     match &args.row_type {
         None => {
-            println!("Supported row types ({}):", row_types.len());
+            writeln!(out, "Supported row types ({}):", row_types.len())?;
             for name in &row_types {
-                println!("  {name}");
+                writeln!(out, "  {name}")?;
             }
-            println!(
+            writeln!(
+                out,
                 "\nUsage: codelore schema <row-type>\n\nNote: today's emitter ships the row-type catalogue and a minimal envelope. The full JSON Schema documents populate the `items` shape once `schemars` derive is applied to every analyses/* row type."
-            );
+            )?;
             Ok(())
         }
         Some(name) => {
             if row_types.contains(&name.as_str()) {
-                println!(
+                writeln!(
+                    out,
                     "{{\n  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n  \"$id\": \"https://codelore.dev/schemas/{name}.json\",\n  \"title\": \"{name}\",\n  \"type\": \"array\",\n  \"items\": {{\n    \"$comment\": \"Full row-shape schema populates once schemars derive is applied.\"\n  }}\n}}"
-                );
+                )?;
                 Ok(())
             } else {
                 Err(CodeLoreError::Analysis(format!(
@@ -510,4 +581,48 @@ fn init_logging(verbose: bool) {
         .with_writer(std::io::stderr)
         .with_span_events(FmtSpan::CLOSE)
         .init();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_broken_pipe;
+    use anyhow::Context as _;
+    use codelore_lib::cli_api::CodeLoreError;
+    use std::io::{Error as IoError, ErrorKind};
+
+    #[test]
+    fn detects_bare_broken_pipe() {
+        let err = anyhow::Error::new(IoError::from(ErrorKind::BrokenPipe));
+        assert!(is_broken_pipe(&err));
+    }
+
+    #[test]
+    fn detects_broken_pipe_behind_context() {
+        // The shape the CSV/Markdown writers produce: an io error carried up
+        // through one or more `.context(...)` frames.
+        let err = std::result::Result::<(), _>::Err(IoError::from(ErrorKind::BrokenPipe))
+            .context("write csv")
+            .unwrap_err();
+        assert!(is_broken_pipe(&err));
+    }
+
+    #[test]
+    fn detects_broken_pipe_wrapped_in_codelore_io() {
+        let err = anyhow::Error::new(CodeLoreError::Io(IoError::from(ErrorKind::BrokenPipe)));
+        assert!(is_broken_pipe(&err));
+    }
+
+    #[test]
+    fn ignores_other_io_kinds() {
+        let err = anyhow::Error::new(CodeLoreError::Io(IoError::from(
+            ErrorKind::PermissionDenied,
+        )));
+        assert!(!is_broken_pipe(&err));
+    }
+
+    #[test]
+    fn ignores_unrelated_errors() {
+        let err = anyhow::Error::new(CodeLoreError::Analysis("boom".into()));
+        assert!(!is_broken_pipe(&err));
+    }
 }

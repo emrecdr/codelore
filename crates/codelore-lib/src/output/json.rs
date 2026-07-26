@@ -14,7 +14,7 @@
 //! retired in commit b2efe20's successor: 27 shims removed, 33 call
 //! sites updated to use the generic.
 
-use crate::{CodeLoreError, Result};
+use crate::Result;
 use std::io::Write;
 
 /// Generic JSON emitter. Serialises any `serde::Serialize` slice as a
@@ -25,9 +25,11 @@ use std::io::Write;
 ///
 /// # Errors
 ///
-/// Returns [`CodeLoreError::Output`] on serialisation or I/O failure.
+/// Returns [`crate::CodeLoreError::Io`] when the output sink fails mid-write
+/// (e.g. a reader closed the pipe early) and [`crate::CodeLoreError::Output`]
+/// on a genuine serialisation fault.
 pub fn write_json<W: Write, T: serde::Serialize>(rows: &[T], w: &mut W) -> Result<()> {
-    serde_json::to_writer_pretty(w, rows).map_err(|e| CodeLoreError::Output(format!("json: {e}")))
+    serde_json::to_writer_pretty(w, rows).map_err(|e| super::serde_json_io_err("json", &e))
 }
 
 /// `revisions` emitter — the tuple `(path, n_revs)` is serialised as a
@@ -37,7 +39,9 @@ pub fn write_json<W: Write, T: serde::Serialize>(rows: &[T], w: &mut W) -> Resul
 ///
 /// # Errors
 ///
-/// Returns [`CodeLoreError::Output`] on serialisation or I/O failure.
+/// Returns [`crate::CodeLoreError::Io`] when the output sink fails mid-write
+/// (e.g. a reader closed the pipe early) and [`crate::CodeLoreError::Output`]
+/// on a genuine serialisation fault.
 pub fn write_revisions_json<W: Write>(rows: &[(String, u32)], w: &mut W) -> Result<()> {
     #[derive(serde::Serialize)]
     struct R<'a> {
@@ -61,10 +65,12 @@ pub fn write_revisions_json<W: Write>(rows: &[(String, u32)], w: &mut W) -> Resu
 ///
 /// # Errors
 ///
-/// Returns [`CodeLoreError::Output`] on serialisation or I/O failure.
+/// Returns [`crate::CodeLoreError::Io`] when the output sink fails mid-write
+/// (e.g. a reader closed the pipe early) and [`crate::CodeLoreError::Output`]
+/// on a genuine serialisation fault.
 pub fn write_communities_json<W: Write>(
     result: &crate::analyses::communities::CommunitiesResult,
     w: &mut W,
 ) -> Result<()> {
-    serde_json::to_writer_pretty(w, result).map_err(|e| CodeLoreError::Output(format!("json: {e}")))
+    serde_json::to_writer_pretty(w, result).map_err(|e| super::serde_json_io_err("json", &e))
 }
