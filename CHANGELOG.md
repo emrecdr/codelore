@@ -10,6 +10,20 @@ Conventional Commits format. All notable changes documented here.
 
 - **`.codelore-thresholds.toml`'s `[diff]` section gains `new_file_health_min`.** A floor on each *added* file's own projected code-health score. `delta_code_health_min_per_file` structurally cannot see added files (they carry no baseline to delta against), so this key closes that gap: one violation per offending added file, naming the file and its projected score. Deleted files never trigger it. Evaluated only by the working-tree gate surfaces (`codelore gate` / `gate_changes`); `codelore diff` ignores the key.
 
+### Changed
+
+- **`codelore mcp`'s read tools bound their output and disclose truncation.** `code_health`, `refactoring_targets`, and `finding_hotspot_overlap` now cap their JSON at a `limit` (default 50, max 500) — worst-health / highest-priority first — appending a trailing `{omitted, total, note}` summary object whenever rows are suppressed; `delta_health` caps its per-function rows the same way with an `omitted_functions` count. An unbounded listing could previously overflow an agent's context budget with no signal that the list was partial.
+
+- **`codelore mcp`'s `function_xray` and `code_health` reject an unknown path instead of silently returning an empty result.** A path not tracked at HEAD now returns an error naming it and pointing at `repo_overview` / `hotspots`, rather than a bare `[]` that reads as "this file has nothing" — the usual cause is a typo or an absolute path where a repo-relative one is expected. A tracked file in a language without function analysis returns an explanatory note; a tracked source file with genuinely no functions still returns `[]`.
+
+- **`codelore mcp`'s `check_gates` payload names the gates it did not evaluate.** The result gains a `skipped_gates` array listing any configured `[gates]` gate outside this tool's committed-tree subset (`max_findings_in_hot_files`, `corpus_percentile_max`), so a client sees where the verdict can diverge from `codelore check` without parsing the tool description.
+
+- **`codelore mcp`'s `change_context` and `gate_changes` end with one next-action line.** `change_context` surfaces the top co-change partner to edit alongside (or, absent partners, a departed main author as a knowledge-continuity risk); `gate_changes` names the worst-delta file to fix first and the gate driving the failure (or, on a passing run with findings, the first finding to review). Both render within the tools' existing token budgets.
+
+- **`codelore mcp` returns `invalid_params` (-32602) for caller-input errors.** A bad revision, an out-of-range path list, or an unknown file path now surfaces as JSON-RPC `invalid_params` rather than `internal_error` (-32603), which stays reserved for genuine internal failures — a client can now distinguish "I sent bad input" from "the server broke".
+
+- **`codelore mcp`'s `delta_health` description discloses it is a simplified subset of `codelore diff`.** The tool factors neither clone-group membership nor base red-file context into its per-function scoring; its description now says so and points at `codelore diff` for the full report.
+
 ### Fixed
 
 - **`.codelore-thresholds.toml` now rejects non-finite and out-of-range gate values as configuration errors.** TOML permits `nan`/`inf` float literals and a bare parse accepted any magnitude, so `code_health_min = nan` (a floor that can never fire), `hotspot_score_max = inf` (a ceiling that vacuous-passes every file), a negative floor, or a percentage above 100 loaded silently and disabled the gate — the value-level blind spot beside the existing `deny_unknown_fields` typo guard. Loading a thresholds file now validates every numeric threshold against its documented domain (scores/percentages on `[0, 100]`, ratios on `[0, 1]`, health deltas on `[-100, 100]`, the open-topped `cognitive_max`/`hotspot_score_max` ceilings finite and non-negative) and fails with a configuration error (exit 2) that names every offending key, its value, and the accepted range at once. Valid configs are unaffected.
