@@ -584,6 +584,15 @@ codelore analyze [OPTIONS]
       --max-coupling N          Max coupling degree percentage [default: 100]
       --max-changeset-size N    Drop commits touching more than N files
                                 (refactor-sweep filter) [default: 30]
+      --fdr-correction          Select `coupling`'s significant pairs by a
+                                Benjamini-Hochberg false-discovery-rate
+                                correction over the whole family of
+                                Fisher-tested pairs, in place of the per-pair
+                                `p < 0.05` gate. Off by default; controls the
+                                expected false-positive fraction across all
+                                tested pairs (fewer, higher-confidence pairs
+                                on large repos). `--code-maat-compat` still
+                                bypasses the significance gate entirely.
 
   # ── SoC threshold ─────────────────────────────────────────────────
       --min-soc N               Minimum Sum-of-Coupling per entity for `soc`
