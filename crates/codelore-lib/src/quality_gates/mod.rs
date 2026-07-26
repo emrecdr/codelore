@@ -207,11 +207,15 @@ impl Thresholds {
         Self::from_path(&path)
     }
 
-    /// Parse a thresholds file from disk.
+    /// Parse a thresholds file from disk and validate its values.
     ///
     /// # Errors
     ///
-    /// [`CodeLoreError::Analysis`] on I/O or parse errors.
+    /// - [`CodeLoreError::RepoIo`] (exit 3) when the file cannot be read.
+    /// - [`CodeLoreError::Analysis`] (exit 4) when the TOML fails to parse.
+    /// - [`CodeLoreError::InvalidOptions`] (exit 2, the configuration-error
+    ///   bucket) when a threshold value is non-finite or out of range — the
+    ///   value-level sibling of the `deny_unknown_fields` typo guard.
     pub fn from_path(path: &Path) -> Result<Self> {
         let raw = fs::read_to_string(path).map_err(|e| {
             // Read-side input failure (unreadable `--thresholds-file`) →
@@ -222,9 +226,13 @@ impl Thresholds {
                 format!("read thresholds {}: {e}", path.display()),
             ))
         })?;
-        Self::from_text(&raw).map_err(|e| {
+        let thresholds = Self::from_text(&raw).map_err(|e| {
             CodeLoreError::Analysis(format!("parse thresholds {}: {e}", path.display()))
-        })
+        })?;
+        thresholds.validate().map_err(|e| {
+            CodeLoreError::InvalidOptions(format!("thresholds {}: {e}", path.display()))
+        })?;
+        Ok(thresholds)
     }
 
     /// Parse from in-memory TOML text. Used by tests + `from_path`.
@@ -264,6 +272,129 @@ impl Thresholds {
         // defect-calibration artifact for analyses to consume, it does not
         // configure a gate, so a thresholds file containing only
         // `[calibration]` still leaves `check` vacuously passing.
+    }
+
+    /// Validate every numeric threshold's value. A bare `toml::from_str`
+    /// accepts TOML's `nan`/`inf` float literals and any out-of-range
+    /// magnitude, and every gate comparison is a bare `>`/`<`: a `nan`
+    /// floor can never fire, an `inf` ceiling vacuous-passes, and a negative
+    /// or overshot bound is silently degenerate. This is the value-level
+    /// sibling of the struct's `deny_unknown_fields` typo guard.
+    ///
+    /// Each field's domain is derived from its own documented semantics:
+    /// scores and percentages on `[0, 100]`, ratios on `[0, 1]`, health
+    /// *deltas* on `[-100, 100]` (a `[0, 100]` score can move at most a full
+    /// span either way), and the two open-topped ceilings (`cognitive_max`,
+    /// `hotspot_score_max`) require only finiteness and non-negativity.
+    /// `u32` counts (`max_dependency_cycles`, `new_hotspot_max`,
+    /// `max_findings_in_hot_files`) cannot express a non-finite or negative
+    /// value, so the type already guards them.
+    ///
+    /// Every offending key is collected in one pass so a degenerate config
+    /// surfaces all its problems at once rather than one re-run at a time.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `String` naming each offending key, its value, and the
+    /// accepted domain. `Ok(())` when every configured threshold is in range.
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        // Finite and within an inclusive `[lo, hi]` domain.
+        fn finite_in(problems: &mut Vec<String>, key: &str, value: Option<f64>, lo: f64, hi: f64) {
+            let Some(v) = value else { return };
+            if !v.is_finite() {
+                problems.push(format!("{key} = {v} must be a finite number"));
+            } else if !(lo..=hi).contains(&v) {
+                problems.push(format!(
+                    "{key} = {v} is outside the accepted range [{lo}, {hi}]"
+                ));
+            }
+        }
+        // Finite and at or above `min`, with no upper bound (open-topped
+        // ceilings whose worst value a huge file can legitimately reach).
+        fn finite_min(problems: &mut Vec<String>, key: &str, value: Option<f64>, min: f64) {
+            let Some(v) = value else { return };
+            if !v.is_finite() {
+                problems.push(format!("{key} = {v} must be a finite number"));
+            } else if v < min {
+                problems.push(format!("{key} = {v} must be >= {min}"));
+            }
+        }
+
+        let mut problems = Vec::new();
+        let g = &self.gates;
+        finite_min(&mut problems, "cognitive_max", g.cognitive_max, 0.0);
+        finite_in(
+            &mut problems,
+            "code_health_min",
+            g.code_health_min,
+            0.0,
+            100.0,
+        );
+        finite_min(&mut problems, "hotspot_score_max", g.hotspot_score_max, 0.0);
+        finite_in(
+            &mut problems,
+            "max_propagation_cost",
+            g.max_propagation_cost,
+            0.0,
+            1.0,
+        );
+        finite_in(
+            &mut problems,
+            "max_red_effort_pct",
+            g.max_red_effort_pct,
+            0.0,
+            100.0,
+        );
+        finite_in(
+            &mut problems,
+            "code_familiarity_min",
+            g.code_familiarity_min,
+            0.0,
+            100.0,
+        );
+        finite_in(
+            &mut problems,
+            "corpus_percentile_max",
+            g.corpus_percentile_max,
+            0.0,
+            1.0,
+        );
+
+        let d = &self.diff;
+        finite_in(
+            &mut problems,
+            "delta_code_health_min",
+            d.delta_code_health_min,
+            -100.0,
+            100.0,
+        );
+        finite_in(
+            &mut problems,
+            "delta_health_min",
+            d.delta_health_min,
+            0.0,
+            100.0,
+        );
+        finite_in(
+            &mut problems,
+            "delta_code_health_min_per_file",
+            d.delta_code_health_min_per_file,
+            -100.0,
+            100.0,
+        );
+        finite_in(
+            &mut problems,
+            "new_file_health_min",
+            d.new_file_health_min,
+            0.0,
+            100.0,
+        );
+
+        if problems.is_empty() {
+            Ok(())
+        } else {
+            Err(problems.join("; "))
+        }
     }
 }
 
@@ -1766,5 +1897,161 @@ new_hotspot_max = 0
             resolve_defect_calibration(None, dir.path()).expect("resolve"),
             None
         );
+    }
+
+    // ───────── value validation ─────────
+
+    #[test]
+    fn validate_accepts_default_and_empty_config() {
+        // The default (all-None) and an empty file configure no gates, so
+        // there is nothing to validate — both must pass.
+        Thresholds::default().validate().expect("default is valid");
+        Thresholds::from_text("")
+            .unwrap()
+            .validate()
+            .expect("empty config is valid");
+    }
+
+    #[test]
+    fn validate_accepts_repo_own_threshold_shape() {
+        // Mirror this repository's committed `.codelore-thresholds.toml`; a
+        // valid config must parse AND validate exactly as before this guard.
+        let raw = "\
+[gates]
+code_health_min = 35.0
+cognitive_max = 150.0
+hotspot_score_max = 4.0
+max_dependency_cycles = 1
+max_propagation_cost = 0.10
+max_red_effort_pct = 15.0
+
+[diff]
+no_new_cycles = true
+";
+        Thresholds::from_text(raw)
+            .expect("parse")
+            .validate()
+            .expect("the repo's own thresholds must validate");
+    }
+
+    #[test]
+    fn validate_accepts_negative_delta_floor() {
+        // A negative delta floor is legitimate and documented (`health may
+        // drop at most 5 pts`): -5 is in [-100, 100], so it must pass.
+        Thresholds::from_text("[diff]\ndelta_code_health_min = -5\n")
+            .unwrap()
+            .validate()
+            .expect("negative delta floor is valid");
+    }
+
+    #[test]
+    fn validate_rejects_nan() {
+        // `nan` parses as a float literal, then can never fire a `<` gate.
+        let err = Thresholds::from_text("[gates]\ncode_health_min = nan\n")
+            .unwrap()
+            .validate()
+            .expect_err("nan must be rejected");
+        assert!(
+            err.contains("code_health_min") && err.contains("finite"),
+            "message names the key and the finiteness requirement: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_inf() {
+        // `inf` ceiling vacuous-passes every file — reject it.
+        let err = Thresholds::from_text("[gates]\nhotspot_score_max = inf\n")
+            .unwrap()
+            .validate()
+            .expect_err("inf must be rejected");
+        assert!(
+            err.contains("hotspot_score_max") && err.contains("finite"),
+            "message names the key and the finiteness requirement: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_negative_floor() {
+        // A negative score floor fails every file (all scores >= 0) —
+        // degenerate. `code_health_min` is a [0, 100] domain, so -5 is out.
+        let err = Thresholds::from_text("[gates]\ncode_health_min = -5.0\n")
+            .unwrap()
+            .validate()
+            .expect_err("negative score floor must be rejected");
+        assert!(
+            err.contains("code_health_min") && err.contains("[0, 100]"),
+            "message names the key and its domain: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_out_of_range_ratio() {
+        // A propagation-cost ceiling above 1.0 is meaningless (the metric is
+        // a [0, 1] density) — reject with the domain named.
+        let err = Thresholds::from_text("[gates]\nmax_propagation_cost = 2.0\n")
+            .unwrap()
+            .validate()
+            .expect_err("out-of-range ratio must be rejected");
+        assert!(
+            err.contains("max_propagation_cost") && err.contains("[0, 1]"),
+            "message names the key and its [0, 1] domain: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_reports_all_offenders_at_once() {
+        // A degenerate config with several bad values surfaces EVERY problem
+        // in one error, not one per re-run.
+        let raw = "\
+[gates]
+code_health_min = nan
+max_propagation_cost = 5.0
+hotspot_score_max = -1.0
+
+[diff]
+new_file_health_min = 200.0
+";
+        let err = Thresholds::from_text(raw)
+            .unwrap()
+            .validate()
+            .expect_err("multiple offenders must be rejected");
+        for key in [
+            "code_health_min",
+            "max_propagation_cost",
+            "hotspot_score_max",
+            "new_file_health_min",
+        ] {
+            assert!(
+                err.contains(key),
+                "every offender named ({key} missing): {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn from_path_degenerate_value_is_config_error_exit_2() {
+        // End-to-end: a degenerate value on the disk-load path surfaces as a
+        // configuration error (exit-2 taxonomy), naming the offending key —
+        // the value-level counterpart of the deny_unknown_fields typo guard,
+        // which malformed TOML (Analysis, exit 4) does not cover.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(THRESHOLDS_FILENAME);
+        std::fs::write(&path, "[gates]\nhotspot_score_max = inf\n").expect("write");
+        let err = Thresholds::from_path(&path).expect_err("degenerate value must error");
+        assert_eq!(err.exit_code(), 2, "config-error taxonomy (exit 2): {err}");
+        assert!(
+            err.to_string().contains("hotspot_score_max"),
+            "error names the offending key: {err}"
+        );
+    }
+
+    #[test]
+    fn from_path_valid_config_is_byte_identical_ok() {
+        // A valid file loads exactly as before the value guard existed.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(THRESHOLDS_FILENAME);
+        std::fs::write(&path, "[gates]\ncode_health_min = 60.0\n").expect("write");
+        let t = Thresholds::from_path(&path).expect("valid config must load");
+        assert_eq!(t.gates.code_health_min, Some(60.0));
     }
 }
