@@ -41,6 +41,73 @@ fn analyze_revisions_emits_csv() {
         .stdout(predicate::str::contains("src/lib.rs,1"));
 }
 
+/// A reader closing our stdout early (`codelore … | head`, or a pager quit)
+/// must exit 0 quietly — never erroring (exit 5) or panicking.
+///
+/// The assertion is deliberately lenient about *which* internal path fires:
+/// on a tiny fixture the child usually finishes writing into the OS pipe
+/// buffer before we drop the read end (a plain clean exit 0), whereas output
+/// large enough to fill that buffer would block the child and surface a
+/// `BrokenPipe` on the next write (mapped to a quiet exit 0 by the CLI's
+/// central arm). Both outcomes are exit 0 with no error/panic on stderr, so the
+/// test cannot flake on scheduling. The deterministic proof that the
+/// `BrokenPipe` → exit-0 mapping itself fires lives in `main.rs`'s
+/// `is_broken_pipe` unit tests.
+#[test]
+fn stdout_reader_closing_early_exits_quietly() {
+    use std::io::Read as _;
+    use std::process::{Command, Stdio};
+
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_codelore"));
+    for var in [
+        "GITHUB_OUTPUT",
+        "GITHUB_STEP_SUMMARY",
+        "GITHUB_ENV",
+        "GITHUB_STATE",
+        "GITHUB_PATH",
+    ] {
+        cmd.env_remove(var);
+    }
+    let mut child = cmd
+        .args([
+            "analyze",
+            "--analysis",
+            "revisions",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "csv",
+            "--min-revs",
+            "1",
+            "--no-banner",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn codelore");
+
+    // Consume a few bytes, then drop the read end — closing our side of the
+    // pipe while the child may still be writing.
+    {
+        let mut stdout = child.stdout.take().expect("child stdout piped");
+        let mut buf = [0u8; 8];
+        let _ = stdout.read(&mut buf);
+    }
+
+    let output = child.wait_with_output().expect("wait for child");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "early pipe close must exit 0 quietly; stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("Broken pipe") && !stderr.contains("error:") && !stderr.contains("panic"),
+        "stderr must stay quiet on early pipe close: {stderr}"
+    );
+}
+
 #[test]
 fn analyze_rejects_unknown_analysis() {
     codelore_cmd()

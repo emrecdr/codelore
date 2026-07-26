@@ -27,11 +27,13 @@ use std::io::Write;
 ///
 /// # Errors
 ///
-/// Returns [`CodeLoreError::Output`] on serialisation or I/O failure.
+/// Returns [`CodeLoreError::Io`] when the output sink fails mid-write (e.g. a
+/// reader closed the pipe early) and [`CodeLoreError::Output`] on a genuine
+/// serialisation fault.
 pub fn write_ndjson<W: Write, T: serde::Serialize>(rows: &[T], w: &mut W) -> Result<()> {
     for row in rows {
         serde_json::to_writer(&mut *w, row)
-            .map_err(|e| CodeLoreError::Output(format!("ndjson row: {e}")))?;
+            .map_err(|e| super::serde_json_io_err("ndjson row", &e))?;
         w.write_all(b"\n").map_err(CodeLoreError::Io)?;
     }
     Ok(())

@@ -33,10 +33,15 @@ pub(crate) fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
 
     let cache_root = args.cache_dir.clone().unwrap_or_else(default_cache_root);
 
-    // --history: print ledger without running any gate evaluations.
+    // --history: print ledger without running any gate evaluations. Write the
+    // (potentially many-row) table through a propagating `write!` rather than
+    // `print!` so a reader closing the pipe early (`codelore check --history |
+    // head`) routes the BrokenPipe up to `main`'s quiet-exit arm, not a panic.
     if args.history {
+        use std::io::Write as _;
         let records = read_gate_runs(&cache_root, &args.repo).context("read gate-run ledger")?;
-        print!("{}", format_history(&records, 20));
+        let mut out = std::io::stdout().lock();
+        write!(out, "{}", format_history(&records, 20)).context("write gate-run history")?;
         return Ok(());
     }
 

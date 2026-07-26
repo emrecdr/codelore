@@ -5,6 +5,8 @@
 //! it to a repo-relative source file and prints that file's deterministic
 //! evidence dossier — and, with `--llm`, an advisory grounded narrative.
 
+use std::io::Write as _;
+
 use anyhow::{Context, Result};
 use codelore_lib::cli_api::facts::FactsDb;
 use codelore_lib::cli_api::repo::GixRepo;
@@ -366,26 +368,33 @@ pub(crate) fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
             "See analyses/churn.rs.",
         ),
     ];
+    // Emit topic listings / dossiers through a locked stdout with propagating
+    // `writeln!` so an early pipe close (`codelore explain | head`) reaches
+    // `main`'s quiet-exit arm instead of panicking in the print macro.
     match &args.topic {
         None => {
-            println!("Supported topics:");
+            let mut out = std::io::stdout().lock();
+            writeln!(out, "Supported topics:").context("write explain topics")?;
             for (name, _, _, _) in topics {
-                println!("  {name}");
+                writeln!(out, "  {name}").context("write explain topics")?;
             }
-            println!("\nUsage: codelore explain <topic>");
+            writeln!(out, "\nUsage: codelore explain <topic>").context("write explain topics")?;
             Ok(())
         }
         Some(topic) => {
             let found = topics.iter().find(|(n, ..)| n.eq_ignore_ascii_case(topic));
             match found {
                 Some((name, citation, formula, source)) => {
-                    println!("# {name}\n");
-                    println!("**Citation**\n  {citation}\n");
-                    println!("**Formula**\n  {formula}\n");
-                    println!("**Source**\n  {source}\n");
-                    println!(
+                    let mut out = std::io::stdout().lock();
+                    writeln!(out, "# {name}\n").context("write explain topic")?;
+                    writeln!(out, "**Citation**\n  {citation}\n").context("write explain topic")?;
+                    writeln!(out, "**Formula**\n  {formula}\n").context("write explain topic")?;
+                    writeln!(out, "**Source**\n  {source}\n").context("write explain topic")?;
+                    writeln!(
+                        out,
                         "**Foundations**\n  See docs/research-foundations.md for the full citation chain."
-                    );
+                    )
+                    .context("write explain topic")?;
                     Ok(())
                 }
                 None => match resolve_explain_file(&args.repo, topic) {
@@ -465,7 +474,13 @@ fn run_explain_file(args: &args::ExplainArgs, repo_relative: &str) -> Result<()>
     let sheet = FileFactSheet::build(&db, &repo, &opts, repo_relative)
         .with_context(|| format!("build the evidence dossier for {repo_relative}"))?;
 
-    print!("{}", sheet.to_human_text());
+    // Propagating writes over a locked stdout (see `run_explain_cmd`): the
+    // dossier and any narrative are multi-line, so an early pipe close must
+    // surface as a quiet exit, not a panic.
+    {
+        let mut out = std::io::stdout().lock();
+        write!(out, "{}", sheet.to_human_text()).context("write evidence dossier")?;
+    }
 
     if args.llm {
         let client = resolve_client(&LlmEnv::from_process_env()).context(
@@ -488,12 +503,18 @@ fn run_explain_file(args: &args::ExplainArgs, repo_relative: &str) -> Result<()>
             args.llm_refresh,
         )
         .context("generate the advisory narrative")?;
-        println!("\n{}", result.narrative);
-        println!("{}", engine::stamp(&result));
+        let mut out = std::io::stdout().lock();
+        writeln!(out, "\n{}", result.narrative).context("write narrative")?;
+        writeln!(out, "{}", engine::stamp(&result)).context("write narrative stamp")?;
     } else if let Some(latest) = cache::latest_for_subject(&cache_root, &args.repo, repo_relative)
         && latest.fact_digest != sheet.digest()
     {
-        println!("note: cached narrative is stale — evidence changed; re-run with --llm");
+        let mut out = std::io::stdout().lock();
+        writeln!(
+            out,
+            "note: cached narrative is stale — evidence changed; re-run with --llm"
+        )
+        .context("write staleness note")?;
     }
 
     Ok(())

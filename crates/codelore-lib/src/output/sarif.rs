@@ -4,11 +4,11 @@
 //! security-severity proxy: `(100 − cognitive_health) / 10`
 //! partialFingerprints for stable identity across CI runs.
 
+use crate::Result;
 use crate::analyses::hotspots::HotspotRow;
 use crate::hashing::sha256_prefixed;
 use crate::quality_gates::GateViolation;
 use crate::quality_gates::evidence::EvidenceCommit;
-use crate::{CodeLoreError, Result};
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -132,8 +132,7 @@ pub fn write_hotspots_sarif<W: Write>(
     w: &mut W,
 ) -> Result<()> {
     let doc = build_sarif(rows, repo_root);
-    serde_json::to_writer_pretty(w, &doc)
-        .map_err(|e| CodeLoreError::Output(format!("sarif: {e}")))?;
+    serde_json::to_writer_pretty(w, &doc).map_err(|e| super::serde_json_io_err("sarif", &e))?;
     Ok(())
 }
 
@@ -308,7 +307,7 @@ const CLONE_AUTOMATION_ID_PREFIX: &str = "codelore/clones/run";
 pub fn write_clones_sarif<W: Write>(rows: &[ClonesRow], repo_root: &str, w: &mut W) -> Result<()> {
     let doc = build_clones_sarif(rows, repo_root);
     serde_json::to_writer_pretty(w, &doc)
-        .map_err(|e| CodeLoreError::Output(format!("clones sarif: {e}")))?;
+        .map_err(|e| super::serde_json_io_err("clones sarif", &e))?;
     Ok(())
 }
 
@@ -476,7 +475,7 @@ pub fn write_clone_coupling_sarif<W: Write>(
 ) -> Result<()> {
     let doc = build_clone_coupling_sarif(rows, repo_root);
     serde_json::to_writer_pretty(w, &doc)
-        .map_err(|e| CodeLoreError::Output(format!("clone-coupling sarif: {e}")))?;
+        .map_err(|e| super::serde_json_io_err("clone-coupling sarif", &e))?;
     Ok(())
 }
 
@@ -660,7 +659,9 @@ const CHECK_AUTOMATION_ID_PREFIX: &str = "codelore/check/run";
 ///
 /// # Errors
 ///
-/// Returns [`CodeLoreError::Output`] when JSON serialization fails.
+/// Returns [`crate::CodeLoreError::Io`] when the output sink fails mid-write
+/// (e.g. a reader closed the pipe early) and [`crate::CodeLoreError::Output`]
+/// on a genuine JSON serialization fault.
 pub fn write_check_sarif<W: Write, S: std::hash::BuildHasher>(
     violations: &[GateViolation],
     evidence: &HashMap<String, Vec<EvidenceCommit>, S>,
@@ -670,7 +671,7 @@ pub fn write_check_sarif<W: Write, S: std::hash::BuildHasher>(
 ) -> Result<()> {
     let doc = build_check_sarif(violations, evidence, repo_root, head_sha);
     serde_json::to_writer_pretty(w, &doc)
-        .map_err(|e| CodeLoreError::Output(format!("check sarif: {e}")))?;
+        .map_err(|e| super::serde_json_io_err("check sarif", &e))?;
     Ok(())
 }
 

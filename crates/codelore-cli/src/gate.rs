@@ -6,6 +6,8 @@
 //! and exits 0 (pass) or 1 (fail) — the same exit contract as `codelore check`.
 //! Writes `result=pass|fail` to `$GITHUB_OUTPUT` for GitHub Actions consumption.
 
+use std::io::Write as _;
+
 use anyhow::{Context, Result};
 use codelore_lib::cli_api::Options;
 use codelore_lib::cli_api::facts::FactsDb;
@@ -157,10 +159,11 @@ fn render_gate_json(
 ) -> Result<()> {
     let mut doc = serde_json::to_value(report).context("serialize change-set report")?;
     doc["violations"] = serde_json::to_value(violations).context("serialize gate violations")?;
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&doc).context("render gate JSON")?
-    );
+    // Propagating `writeln!` so this (potentially large) document survives an
+    // early pipe close as a quiet exit rather than a print-macro panic.
+    let rendered = serde_json::to_string_pretty(&doc).context("render gate JSON")?;
+    let mut out = std::io::stdout().lock();
+    writeln!(out, "{rendered}").context("write gate JSON")?;
     Ok(())
 }
 
@@ -171,27 +174,33 @@ fn render_gate_json(
 fn render_gate_advisories(
     args: &args::GateArgs,
     report: &codelore_lib::change_set::ChangeSetReport,
-) {
+) -> Result<()> {
     if args.quiet {
-        return;
+        return Ok(());
     }
+    // Propagating `writeln!` over a locked stdout so this per-row advisory table
+    // survives an early pipe close (`codelore gate | head`) as a quiet exit.
+    let mut out = std::io::stdout().lock();
     for f in report.findings.iter().take(GATE_FINDINGS_ROWS) {
-        println!("[{}] {}: {}", f.kind, f.path, f.detail);
+        writeln!(out, "[{}] {}: {}", f.kind, f.path, f.detail).context("write gate advisory")?;
     }
     let hidden_findings = report.findings.len().saturating_sub(GATE_FINDINGS_ROWS);
     if hidden_findings > 0 {
-        println!("(+{hidden_findings} more findings)");
+        writeln!(out, "(+{hidden_findings} more findings)").context("write gate advisory")?;
     }
     for d in report.health.deltas.iter().take(GATE_DELTA_TABLE_ROWS) {
         match (d.baseline_score, d.projected_score, d.delta) {
             (Some(b), Some(p), Some(delta)) => {
-                println!("{}  {b:.1} → {p:.1}  ({delta:+.1})", d.path);
+                writeln!(out, "{}  {b:.1} → {p:.1}  ({delta:+.1})", d.path)
+                    .context("write gate advisory")?;
             }
-            _ => println!(
+            _ => writeln!(
+                out,
                 "{}  — {}",
                 d.path,
                 d.reason.as_deref().unwrap_or("not scored")
-            ),
+            )
+            .context("write gate advisory")?,
         }
     }
     let hidden = report
@@ -200,8 +209,9 @@ fn render_gate_advisories(
         .len()
         .saturating_sub(GATE_DELTA_TABLE_ROWS);
     if hidden > 0 {
-        println!("(+{hidden} more files)");
+        writeln!(out, "(+{hidden} more files)").context("write gate advisory")?;
     }
+    Ok(())
 }
 
 /// Print the verdict, write the GitHub Actions step outputs, and apply
@@ -217,7 +227,7 @@ fn render_gate_verdict(
                 "✅ codelore gate: PASS ({} changed file(s) evaluated)",
                 report.changes.len()
             );
-            render_gate_advisories(args, report);
+            render_gate_advisories(args, report)?;
         } else {
             // JSON keeps stdout pure for the report document (already printed),
             // so the verdict line goes to stderr — mirroring the clean-tree and
@@ -245,7 +255,7 @@ fn render_gate_verdict(
                 );
             }
         }
-        render_gate_advisories(args, report);
+        render_gate_advisories(args, report)?;
     }
     write_github_output("result", "fail");
     write_github_output("violations", &violations.len().to_string());
