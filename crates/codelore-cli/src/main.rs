@@ -169,7 +169,10 @@ pub(crate) fn write_github_output(key: &str, value: &str) {
             .open(&path)
     {
         use std::io::Write;
-        let _ = writeln!(f, "{key}={value}");
+        // Pre-assemble the whole `key=value\n` line and emit it with one
+        // `write_all`, matching the gate-run ledger's single-write append.
+        let line = format!("{key}={value}\n");
+        let _ = f.write_all(line.as_bytes());
     }
 }
 

@@ -73,10 +73,16 @@ pub fn ledger_path(cache_root: &Path, repo_path: &Path) -> PathBuf {
 
 /// Append `records` to the gate-run ledger.
 ///
-/// Creates the file (and parent directories) if they do not exist.
-/// Uses `O_APPEND` so concurrent writes from parallel check invocations
-/// do not truncate each other's records (each JSON line is written
-/// atomically as a single `write(2)` call on POSIX).
+/// Creates the file (and parent directories) if they do not exist. Each
+/// record is pre-assembled into a single buffer (JSON body + `\n`) and
+/// emitted with one `write_all`, so the whole line reaches the file in one
+/// `write(2)`. Combined with `O_APPEND`, that keeps concurrent writes from
+/// parallel check invocations interleaving only at record boundaries — never
+/// mid-line — so a reader never sees a physical line holding two half-records.
+/// (POSIX guarantees an `O_APPEND` write of at most `PIPE_BUF` bytes is
+/// atomic; on Windows the append is best-effort. A `writeln!` on an
+/// unbuffered `File` would instead emit the body and the newline as two
+/// separate `write(2)` calls, which is the interleaving this avoids.)
 ///
 /// IO errors are **logged and silently dropped** — a ledger write failure
 /// must never alter the exit code of `codelore check`.
@@ -105,8 +111,11 @@ pub fn append_gate_runs(cache_root: &Path, repo_path: &Path, records: &[GateRunR
     };
     for rec in records {
         match serde_json::to_string(rec) {
-            Ok(line) => {
-                if let Err(e) = writeln!(file, "{line}") {
+            Ok(mut line) => {
+                // Pre-assemble body + newline so the record lands in ONE
+                // write(2); a `writeln!` would split it into two.
+                line.push('\n');
+                if let Err(e) = file.write_all(line.as_bytes()) {
                     tracing::warn!("ledger: write failed: {e}");
                 }
             }
@@ -284,6 +293,31 @@ mod tests {
         assert_eq!(read.len(), 2);
         assert_eq!(read[0].gate, "code_health_min");
         assert_eq!(read[1].verdict, "passed");
+    }
+
+    #[test]
+    fn append_writes_exactly_one_physical_line_per_record() {
+        // The single-write construction (body + newline in one `write_all`)
+        // is the atomicity guarantee. A multiprocess interleaving race is not
+        // deterministically testable, so we assert the on-disk shape the
+        // construction produces — exactly one physical line per record, each
+        // independently parseable — which is precisely what the append
+        // guarantees so concurrent runs never fuse two records onto one line.
+        let dir = tempdir().expect("tempdir");
+        let repo = dir.path().join("repo");
+        let records = vec![
+            sample_record("code_health_min", "failed"),
+            sample_record("cognitive_max", "passed"),
+            sample_record("hotspot_score_max", "degraded"),
+        ];
+        append_gate_runs(dir.path(), &repo, &records);
+        let raw = fs::read_to_string(ledger_path(dir.path(), &repo)).expect("read raw");
+        assert!(raw.ends_with('\n'), "each record is newline-terminated");
+        let lines: Vec<&str> = raw.lines().collect();
+        assert_eq!(lines.len(), records.len(), "one physical line per record");
+        for line in lines {
+            serde_json::from_str::<GateRunRecord>(line).expect("each line parses standalone");
+        }
     }
 
     #[test]
