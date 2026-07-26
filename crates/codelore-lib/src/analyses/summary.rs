@@ -16,8 +16,8 @@ pub struct SummaryRow {
 
 #[tracing::instrument(name = "summary", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_summary(db: &FactsDb, opts: &Options) -> Result<Vec<SummaryRow>> {
-    // DEEP-15: Under `--code-maat-compat`, emit code-maat's exact statistic
-    // names (hyphenated `number-of-X`) so downstream scripts parsing CSV
+    // Under `--code-maat-compat`, emit code-maat's exact statistic names
+    // (hyphenated `number-of-X`) so downstream scripts parsing CSV
     // like `if statistic == "number-of-commits"` keep working. The
     // CodeLore modern default uses concise names (`commits`, `entities`)
     // because the row label is already self-explanatory in the modern
