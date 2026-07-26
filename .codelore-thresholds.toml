@@ -4,12 +4,11 @@
 # floors sit just below today's worst file.
 
 [gates]
-# Worst file today: crates/codelore-cli/src/main.rs at 14.44 — the CLI
-# monolith (a split into subcommand modules is the tracked remediation). The
-# blame-flag and gate/test additions across this cycle's PRs accreted onto it
-# (14.99 → 14.44), and the floor tracks the worst file. Any file decaying
-# below this floor fails the gate.
-code_health_min = 14.0
+# Worst file today: crates/codelore-cli/src/main.rs at 35.26 — the CLI
+# entry point and shared dispatch, now that every subcommand lives in its own
+# module. The floor tracks the worst file. Any file decaying below this floor
+# fails the gate.
+code_health_min = 35.0
 # Worst hotspot-row cognitive complexity today: 139 (the SPA drawer module).
 cognitive_max = 150.0
 # Highest hotspot score today: 2.97 (crates/codelore-cli/src/main.rs).
