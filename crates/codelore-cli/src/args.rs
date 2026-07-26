@@ -4,12 +4,121 @@
 //! `calibrate-defects`.
 
 use std::path::PathBuf;
+use std::str::FromStr;
 
+use clap::builder::{PossibleValue, PossibleValuesParser, TypedValueParser};
 use clap::{Parser, Subcommand, ValueEnum};
+use codelore_lib::cli_api::analysis::{AnalysisName, UnknownAnalysisError};
 use codelore_lib::cli_api::constants::{
     DEFAULT_FISHER_SIGNIFICANCE, DEFAULT_MAX_CHANGESET_SIZE, DEFAULT_MAX_COUPLING_PCT,
     DEFAULT_MIN_COUPLING_PCT, DEFAULT_MIN_REVS, DEFAULT_MIN_SHARED_REVS,
 };
+
+/// The canonical `codelore analyze` output-format catalogue: `(name, description)`.
+///
+/// The single source of truth rendered by three surfaces — the `--format`
+/// possible-values (and thus its parse-time validation and did-you-mean), the
+/// `codelore profile` telemetry line, and the `codelore docs` catalogue. Adding a
+/// format here surfaces it in all three at once, so the three lists can no longer
+/// drift apart.
+pub const ANALYZE_FORMATS: &[(&str, &str)] = &[
+    ("csv", "code-maat-compatible flat tables"),
+    ("json", "stable JSON shape per row type"),
+    (
+        "ndjson",
+        "newline-delimited JSON — one row per line for stream consumers (LSP, `jq -c`, CI pipelines)",
+    ),
+    ("sarif", "SARIF 2.1.0 — surfaces in GitHub Code Scanning"),
+    ("markdown", "GFM tables for `$GITHUB_STEP_SUMMARY`"),
+    (
+        "gha",
+        "GitHub Actions workflow commands — `::error::` / `::warning::` / `::notice::` on stdout, surfaced as inline PR annotations",
+    ),
+    ("html", "self-contained per-analysis HTML report"),
+    ("parquet", "columnar bulk export for analytical pipelines"),
+    ("sqlite", "full DuckDB fact-store dump"),
+    (
+        "spa",
+        "single-file interactive dashboard (opt-in via `spa` feature)",
+    ),
+    (
+        "step-summary",
+        "GFM summary for `$GITHUB_STEP_SUMMARY`; streams to stdout",
+    ),
+];
+
+/// The format names alone, in catalogue order. Drives `--format` value parsing
+/// and the compact `codelore profile` render.
+#[must_use]
+pub fn analyze_format_names() -> Vec<&'static str> {
+    ANALYZE_FORMATS.iter().map(|(name, _)| *name).collect()
+}
+
+/// Clap value parser for `--analysis`. Owns the parse so an unknown value is a
+/// parse-time error (exit 2) carrying clap's native possible-values list and
+/// did-you-mean suggestion — the same contract `--format` and the other typed
+/// flags already give. Resolution itself is delegated to [`AnalysisName::from_str`],
+/// the one place that knows the canonical names AND the code-maat compatibility
+/// aliases (`fragmentation`, `code-ownership`, `refactoring-main-dev`) and the
+/// `identity` migration redirect, so this parser adds no second copy of that
+/// knowledge.
+#[derive(Clone)]
+pub struct AnalysisNameParser;
+
+impl TypedValueParser for AnalysisNameParser {
+    type Value = AnalysisName;
+
+    fn parse_ref(
+        &self,
+        cmd: &clap::Command,
+        arg: Option<&clap::Arg>,
+        value: &std::ffi::OsStr,
+    ) -> Result<Self::Value, clap::Error> {
+        // The canonical possible-values set, shared by the delegated error path
+        // below and by `possible_values()` (help + shell completions).
+        let possible = || PossibleValuesParser::new(AnalysisName::all().iter().map(|a| a.as_str()));
+
+        let Some(raw) = value.to_str() else {
+            // Non-UTF-8: let the possible-values parser raise the canonical error.
+            return Err(possible()
+                .parse_ref(cmd, arg, value)
+                .err()
+                .unwrap_or_else(|| {
+                    clap::Error::raw(clap::error::ErrorKind::InvalidUtf8, "invalid UTF-8\n")
+                }));
+        };
+
+        match AnalysisName::from_str(raw) {
+            Ok(name) => Ok(name),
+            // Preserve the code-maat `identity` migration redirect, but as a
+            // parser-level rejection so it shares the exit-2 arg-error contract.
+            Err(e @ UnknownAnalysisError::IdentityRedirect) => {
+                Err(clap::Error::raw(clap::error::ErrorKind::ValueValidation, e))
+            }
+            // Genuine unknown value: delegate to the possible-values parser for
+            // clap's native "invalid value … [possible values: …]" plus its
+            // did-you-mean tip. It rejects every value `from_str` rejected, so
+            // this branch only ever yields an `Err`.
+            Err(UnknownAnalysisError::Unknown(_)) => Err(possible()
+                .parse_ref(cmd, arg, value)
+                .err()
+                .unwrap_or_else(|| {
+                    clap::Error::raw(
+                        clap::error::ErrorKind::InvalidValue,
+                        format!("invalid value '{raw}'\n"),
+                    )
+                })),
+        }
+    }
+
+    fn possible_values(&self) -> Option<Box<dyn Iterator<Item = PossibleValue> + '_>> {
+        Some(Box::new(
+            AnalysisName::all()
+                .iter()
+                .map(|a| PossibleValue::new(a.as_str())),
+        ))
+    }
+}
 
 /// Output format for `codelore check`. Strongly typed so a typo
 /// (`--format sariff`) is caught at parse time rather than silently
@@ -392,22 +501,35 @@ pub struct SchemaArgs {
 #[allow(clippy::struct_excessive_bools)]
 #[derive(clap::Args, Debug)]
 pub struct AnalyzeArgs {
-    /// Analysis name.
-    #[arg(short, long, default_value = "revisions")]
-    pub analysis: String,
+    /// Analysis to run. An unknown value is rejected at parse time with the
+    /// supported list and a did-you-mean suggestion.
+    #[arg(
+        short,
+        long,
+        value_parser = AnalysisNameParser,
+        default_value_t = AnalysisName::Revisions
+    )]
+    pub analysis: AnalysisName,
 
     /// Path to the git repo (default: cwd).
     #[arg(short, long, default_value = ".")]
     pub repo: PathBuf,
 
-    /// Output format: csv | json | ndjson | sarif | markdown | gha | html | parquet | sqlite | spa | step-summary.
-    /// Most analyses emit csv/json/markdown. ndjson: hotspots, code-health, coupling, lead-time.
-    /// sarif: hotspots, clones, clone-coupling. gha: hotspots. html: hotspots, code-health,
-    /// knowledge-islands, clone-coupling, summary, revisions, authors, top-committers.
-    /// parquet: hotspots, revisions, summary; requires --output. sqlite: full fact-store dump;
-    /// requires --output. spa: interactive dashboard; --output optional (defaults to .codelore/spa.html).
-    /// step-summary: GFM summary for `$GITHUB_STEP_SUMMARY`; streams to stdout.
-    #[arg(short, long, default_value = "csv")]
+    /// Output format (see the possible-values list below for the full set).
+    /// Most analyses emit csv/json/markdown. ndjson: hotspots, code-health,
+    /// coupling, lead-time. sarif: hotspots, clones, clone-coupling. gha:
+    /// hotspots. html: hotspots, code-health, knowledge-islands, clone-coupling,
+    /// summary, revisions, authors, top-committers. parquet: hotspots, revisions,
+    /// summary; requires --output. sqlite: full fact-store dump; requires
+    /// --output. spa: interactive dashboard; --output optional (defaults to
+    /// .codelore/spa.html). step-summary: GFM summary for
+    /// `$GITHUB_STEP_SUMMARY`; streams to stdout.
+    #[arg(
+        short,
+        long,
+        default_value = "csv",
+        value_parser = PossibleValuesParser::new(analyze_format_names())
+    )]
     pub format: String,
 
     /// Write output to file instead of stdout.
@@ -422,8 +544,9 @@ pub struct AnalyzeArgs {
     #[arg(long)]
     pub rows: Option<u32>,
 
-    /// Complexity sampling strategy: head (default) | adaptive | full.
-    #[arg(long, default_value = "head")]
+    /// Complexity sampling strategy. Only `head` (metrics computed at HEAD) is
+    /// currently implemented; it is the default and the sole accepted value.
+    #[arg(long, default_value = "head", value_parser = ["head"])]
     pub complexity_sample: String,
 
     /// Architectural grouping file (one `<lhs> => <group>` mapping per line, code-maat
@@ -679,6 +802,68 @@ pub struct AnalyzeArgs {
     /// (forks, moved checkouts): skips the repo-identity guard.
     #[arg(long)]
     pub allow_foreign_calibration: bool,
+}
+
+/// Warnings for analysis-scoped `analyze` flags that were explicitly set but are
+/// ignored by the selected analysis. Not errors — deliberately sharing one flag
+/// set across several analyses in a script is legitimate — but a silent no-op is
+/// a UX trap, so `analyze` prints one advisory line per offending flag to stderr.
+///
+/// This is the single table pairing each flag with the analyses that honor it.
+/// "Explicitly set" is detected structurally, with no argument-provenance
+/// plumbing: `Option` flags by `Some`, defaulted flags by a value differing from
+/// their default (so passing the default value explicitly is harmlessly not
+/// warned about). Multi-owner flags — the coupling-family thresholds and
+/// `--window-days`, each honored by a broad set of analyses — are intentionally
+/// excluded; a false "ignored" warning would be worse than silence.
+#[must_use]
+pub fn ignored_flag_warnings(args: &AnalyzeArgs, analysis: AnalysisName) -> Vec<String> {
+    use codelore_lib::cli_api::constants::{
+        DEFAULT_DEPARTED_THRESHOLD_DAYS, DEFAULT_RELEASE_TAG_GLOB, DEFAULT_REWORK_WINDOW_DAYS,
+    };
+    let selected = analysis.as_str();
+    let mut warnings = Vec::new();
+    let mut consider = |flag: &str, honored_by: &[&str], is_set: bool| {
+        if is_set && !honored_by.contains(&selected) {
+            warnings.push(format!(
+                "warning: --{flag} was set but is ignored by analysis `{selected}`; \
+                 it is honored only by: {}",
+                honored_by.join(", ")
+            ));
+        }
+    };
+    consider(
+        "target",
+        &["function-xray", "function-coupling"],
+        args.target.is_some(),
+    );
+    consider(
+        "expression-to-match",
+        &["messages"],
+        args.message_regex.is_some(),
+    );
+    consider("min-soc", &["soc"], args.min_soc.is_some());
+    consider(
+        "knowledge-model",
+        &["bus-factor"],
+        args.knowledge_model != "commits",
+    );
+    consider(
+        "departed-threshold-days",
+        &["knowledge-islands"],
+        args.departed_threshold_days != DEFAULT_DEPARTED_THRESHOLD_DAYS,
+    );
+    consider(
+        "rework-window-days",
+        &["delivery-metrics"],
+        args.rework_window_days != DEFAULT_REWORK_WINDOW_DAYS,
+    );
+    consider(
+        "release-tag-glob",
+        &["release-cadence"],
+        args.release_tag_glob != DEFAULT_RELEASE_TAG_GLOB,
+    );
+    warnings
 }
 
 /// `TimeBucket` mirror on the CLI surface (clap-friendly value enum).

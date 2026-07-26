@@ -110,11 +110,25 @@ fn stdout_reader_closing_early_exits_quietly() {
 
 #[test]
 fn analyze_rejects_unknown_analysis() {
+    // `--analysis` is a clap value_parser now, so a bad value is a parse error:
+    // exit 2 (the documented CLI/arg-error code, unified with --format and
+    // --complexity-sample) with the supported list rendered by clap.
     codelore_cmd()
         .args(["analyze", "--analysis", "not-real", "--repo", "."])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("unknown analysis"));
+        .code(2)
+        .stderr(predicate::str::contains("invalid value"))
+        .stderr(predicate::str::contains("hotspots"));
+}
+
+#[test]
+fn analyze_unknown_analysis_suggests_nearest() {
+    // A near-miss typo gets clap's native did-you-mean tip.
+    codelore_cmd()
+        .args(["analyze", "--analysis", "hotspot", "--repo", "."])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("hotspots"));
 }
 
 #[test]
@@ -713,8 +727,8 @@ fn unknown_analysis_lists_supported_names() {
             tiny.dir.path().to_str().unwrap(),
         ])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("unknown analysis"))
+        .code(2)
+        .stderr(predicate::str::contains("invalid value"))
         .stderr(predicate::str::contains("hotspots"))
         .stderr(predicate::str::contains("clones"));
 }
@@ -878,9 +892,10 @@ fn unsupported_format_bails_cleanly_instead_of_panicking() {
 }
 
 #[test]
-fn unknown_format_exits_with_analysis_code() {
-    // An unrecognised `--format` value is an analysis-selection error →
-    // CodeLoreError::Analysis → spec §6.6 exit 4, never a panic or a bare 1.
+fn unknown_format_exits_with_arg_code() {
+    // An unrecognised `--format` value is now rejected at the parser → clap arg
+    // error → exit 2 (the documented CLI/arg-error code), listing the supported
+    // formats. Previously it reached the analysis layer and exited 4.
     let tiny = codelore_lib::test_support::tiny_repo::build();
     codelore_cmd()
         .args([
@@ -896,9 +911,63 @@ fn unknown_format_exits_with_analysis_code() {
             "1",
         ])
         .assert()
-        .code(4)
-        .stderr(predicate::str::contains("unknown --format"))
+        .code(2)
+        .stderr(predicate::str::contains("invalid value"))
+        .stderr(predicate::str::contains("csv"))
         .stderr(predicate::str::contains("panicked").not());
+}
+
+#[test]
+fn analyze_warns_when_analysis_scoped_flag_is_ignored() {
+    // `--target` is honored only by function-xray/function-coupling. Passing it
+    // to another analysis is not an error (scripts may share a flag set), but it
+    // must surface a stderr advisory naming the honoring analyses — while the run
+    // still succeeds and emits normal output.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    codelore_cmd()
+        .args([
+            "analyze",
+            "--analysis",
+            "hotspots",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "csv",
+            "--min-revs",
+            "1",
+            "--no-banner",
+            "--target",
+            "src/main.rs",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty().not())
+        .stderr(predicate::str::contains("--target"))
+        .stderr(predicate::str::contains("function-xray"));
+}
+
+#[test]
+fn complexity_sample_rejects_unimplemented_values() {
+    // `--complexity-sample` advertises only `head` now (its sole implemented
+    // strategy). `adaptive`/`full` are rejected honestly at the parser (exit 2)
+    // rather than accepted-then-errored with a "not yet available" message.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    codelore_cmd()
+        .args([
+            "analyze",
+            "--analysis",
+            "hotspots",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--complexity-sample",
+            "adaptive",
+            "--min-revs",
+            "1",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("invalid value"))
+        .stderr(predicate::str::contains("head"));
 }
 
 #[test]
@@ -961,6 +1030,20 @@ fn explain_covers_every_registered_analysis_or_allowlists_it() {
             assert.success();
         }
     }
+}
+
+#[test]
+fn explain_unknown_topic_suggests_nearest() {
+    // A free-string topic argument (not a clap enum) gets a hand-rolled
+    // nearest-match suggestion. `hotspot` is an abbreviation of the real
+    // `hotspots` topic.
+    codelore_cmd()
+        .args(["explain", "hotspot"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unknown topic"))
+        .stderr(predicate::str::contains("did you mean"))
+        .stderr(predicate::str::contains("hotspots"));
 }
 
 #[test]
@@ -1413,6 +1496,29 @@ fn diff_delta_health_gate_fails_the_run() {
         "violations: {}",
         json["gate_violations"]
     );
+}
+
+#[test]
+fn diff_degenerate_thresholds_file_exits_with_config_code() {
+    // A thresholds file with an out-of-range value is a configuration error →
+    // CodeLoreError::InvalidOptions → exit 2, the same as `check`/`gate`. The
+    // diff path used to flatten the typed error through `anyhow!` and exit 1.
+    let (dir, base, head) = delta_health_fixture();
+    let thresholds = dir.path().join("bad-thresholds.toml");
+    std::fs::write(&thresholds, "[gates]\ncode_health_min = 200.0\n").unwrap();
+    codelore_cmd()
+        .args([
+            "diff",
+            "--repo",
+            dir.path().to_str().unwrap(),
+            "--min-revs",
+            "1",
+            "--thresholds-file",
+            thresholds.to_str().unwrap(),
+            &format!("{base}..{head}"),
+        ])
+        .assert()
+        .code(2);
 }
 
 #[test]

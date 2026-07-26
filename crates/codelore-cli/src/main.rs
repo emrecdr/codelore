@@ -10,6 +10,7 @@ mod diff_output;
 mod explain;
 mod gate;
 mod mcp;
+mod suggest;
 
 use std::io::Write;
 
@@ -235,7 +236,8 @@ fn run_profile_cmd() -> Result<()> {
     )?;
     writeln!(
         out,
-        "**Output formats**: csv | json | sarif | markdown | parquet | sqlite | html | spa"
+        "**Output formats**: {}",
+        args::analyze_format_names().join(" | ")
     )?;
     writeln!(
         out,
@@ -283,28 +285,8 @@ fn run_docs_cmd() -> Result<()> {
         writeln!(out, "- `{}`", analysis.as_str())?;
     }
     writeln!(out, "\n## Output formats\n")?;
-    for fmt in &[
-        ("csv", "code-maat-compatible flat tables"),
-        ("json", "stable JSON shape per row type"),
-        (
-            "ndjson",
-            "newline-delimited JSON — one row per line for stream consumers (LSP, `jq -c`, CI pipelines)",
-        ),
-        ("sarif", "SARIF 2.1.0 — surfaces in GitHub Code Scanning"),
-        ("markdown", "GFM tables for `$GITHUB_STEP_SUMMARY`"),
-        (
-            "gha",
-            "GitHub Actions workflow commands — `::error::` / `::warning::` / `::notice::` on stdout, surfaced as inline PR annotations",
-        ),
-        ("parquet", "columnar bulk export for analytical pipelines"),
-        ("sqlite", "full DuckDB fact-store dump"),
-        ("html", "self-contained per-analysis HTML report"),
-        (
-            "spa",
-            "single-file interactive dashboard (opt-in via `spa` feature)",
-        ),
-    ] {
-        writeln!(out, "- `{}` — {}", fmt.0, fmt.1)?;
+    for (name, description) in args::ANALYZE_FORMATS {
+        writeln!(out, "- `{name}` — {description}")?;
     }
     writeln!(out, "\n## Conventions\n")?;
     writeln!(
@@ -371,8 +353,11 @@ fn run_schema_cmd(args: &args::SchemaArgs) -> Result<()> {
                 )?;
                 Ok(())
             } else {
+                let hint = suggest::nearest(name, row_types.iter().copied())
+                    .map(|s| format!(" (did you mean `{s}`?)"))
+                    .unwrap_or_default();
                 Err(CodeLoreError::Analysis(format!(
-                    "unknown row type `{name}` — run `codelore schema` (no arg) to list supported row types"
+                    "unknown row type `{name}`{hint} — run `codelore schema` (no arg) to list supported row types"
                 ))
                 .into())
             }
