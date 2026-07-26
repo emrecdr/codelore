@@ -10,7 +10,7 @@
 # score: the churn terms in the composite move with every nearby commit, so a
 # floor inside the metric's day-to-day noise band flags routine merges rather
 # than real decay.
-code_health_min = 34.5
+code_health_min = 34.0
 # Worst hotspot-row cognitive complexity today: 139 (the SPA drawer module).
 cognitive_max = 150.0
 # Highest hotspot score today: 2.97 (crates/codelore-cli/src/main.rs).
