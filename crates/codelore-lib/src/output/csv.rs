@@ -94,7 +94,7 @@ pub fn write_hotspots_csv<W: Write>(rows: &[HotspotRow], w: &mut W) -> Result<()
     // Range [0, 100]; absolute interpretation is meaningful across repos.
     writeln!(
         w,
-        "entity,revisions,cognitive,code-health,hotspot-score,mi,mi-rank,mi-band,ai-pct"
+        "entity,revisions,cognitive,cognitive-health,hotspot-score,mi,mi-rank,mi-band,ai-pct"
     )
     .map_err(CodeLoreError::Io)?;
     for row in rows {
@@ -121,7 +121,7 @@ pub fn write_hotspots_csv<W: Write>(rows: &[HotspotRow], w: &mut W) -> Result<()
             quote_if_needed(&row.path),
             row.revisions,
             row.cognitive,
-            row.code_health,
+            row.cognitive_health,
             row.hotspot_score,
             mi_cell,
             rank_cell,

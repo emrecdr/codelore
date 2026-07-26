@@ -8,7 +8,7 @@ fn sarif_hotspots_valid_2_1_0() {
         path: "src/main.rs".into(),
         revisions: 12,
         cognitive: 25.0,
-        code_health: 50.0,
+        cognitive_health: 50.0,
         hotspot_score: 0.75,
         mi: Some(60.0),
         mi_rank: None,
@@ -55,16 +55,16 @@ fn sarif_hotspots_valid_2_1_0() {
 #[test]
 fn sarif_level_warning_above_threshold() {
     // SARIF level derives from security-severity bands (matches the
-    // live-clone rule pattern). security-severity = (100 - code_health) / 10:
+    // live-clone rule pattern). security-severity = (100 - cognitive_health) / 10:
     //   ≥ 7.0 → error
     //   ≥ 4.0 → warning
     //   < 4.0 → note
-    // For "warning" we need code_health ≤ 60.
+    // For "warning" we need cognitive_health ≤ 60.
     let rows = vec![HotspotRow {
         path: "src/lib.rs".into(),
         revisions: 5,
         cognitive: 10.0,
-        code_health: 55.0, // → severity 4.5 → warning band
+        cognitive_health: 55.0, // → severity 4.5 → warning band
         hotspot_score: 0.6,
         mi: Some(68.0),
         mi_rank: None,
@@ -91,7 +91,7 @@ fn sarif_level_error_for_severe_findings() {
         path: "src/severe.rs".into(),
         revisions: 50,
         cognitive: 100.0,
-        code_health: 20.0, // → severity 8.0 → error band
+        cognitive_health: 20.0, // → severity 8.0 → error band
         hotspot_score: 0.9,
         mi: Some(40.0),
         mi_rank: None,
@@ -117,7 +117,7 @@ fn sarif_level_note_below_threshold() {
         path: "src/util.rs".into(),
         revisions: 2,
         cognitive: 3.0,
-        code_health: 90.0,
+        cognitive_health: 90.0,
         hotspot_score: 0.3,
         mi: Some(88.0),
         mi_rank: None,
@@ -143,7 +143,7 @@ fn sarif_security_severity_proxy() {
         path: "src/danger.rs".into(),
         revisions: 30,
         cognitive: 100.0,
-        code_health: 20.0,
+        cognitive_health: 20.0,
         hotspot_score: 0.9,
         mi: Some(35.0),
         mi_rank: None,
@@ -171,7 +171,7 @@ fn sarif_fingerprint_is_stable() {
         path: "src/main.rs".into(),
         revisions: 12,
         cognitive: 25.0,
-        code_health: 50.0,
+        cognitive_health: 50.0,
         hotspot_score: 0.75,
         mi: None,
         mi_rank: None,
@@ -215,7 +215,7 @@ fn sarif_information_uri_points_at_codelore_repo() {
         path: "src/main.rs".into(),
         revisions: 1,
         cognitive: 1.0,
-        code_health: 90.0,
+        cognitive_health: 90.0,
         hotspot_score: 0.1,
         mi: None,
         mi_rank: None,
@@ -251,7 +251,7 @@ fn sarif_artifact_uri_percent_encodes_special_chars() {
             path: raw.into(),
             revisions: 1,
             cognitive: 1.0,
-            code_health: 90.0,
+            cognitive_health: 90.0,
             hotspot_score: 0.1,
             mi: None,
             mi_rank: None,
@@ -288,7 +288,7 @@ fn sarif_automation_id_is_unique_per_run() {
         path: "src/main.rs".into(),
         revisions: 1,
         cognitive: 1.0,
-        code_health: 90.0,
+        cognitive_health: 90.0,
         hotspot_score: 0.1,
         mi: None,
         mi_rank: None,

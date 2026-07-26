@@ -145,7 +145,7 @@ fn analyze_hotspots_emits_csv() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "entity,revisions,cognitive,code-health,hotspot-score",
+            "entity,revisions,cognitive,cognitive-health,hotspot-score",
         ));
 }
 

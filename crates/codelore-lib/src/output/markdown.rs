@@ -120,7 +120,7 @@ pub fn write_hotspots_markdown<W: Write>(rows: &[HotspotRow], w: &mut W) -> Resu
     // (ai-assisted | ai-authored), rendered as `X.X%` or `—`.
     writeln!(
         w,
-        "| Entity | Revisions | Cognitive | Code Health | Score | MI | AI % |"
+        "| Entity | Revisions | Cognitive | Cognitive Health | Score | MI | AI % |"
     )
     .map_err(CodeLoreError::Io)?;
     writeln!(w, "|---|---|---|---|---|---|---|").map_err(CodeLoreError::Io)?;
@@ -146,7 +146,7 @@ pub fn write_hotspots_markdown<W: Write>(rows: &[HotspotRow], w: &mut W) -> Resu
             escape_md_cell(&row.path),
             row.revisions,
             row.cognitive,
-            row.code_health,
+            row.cognitive_health,
             row.hotspot_score,
             mi_cell,
             ai_cell

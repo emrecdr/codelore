@@ -824,7 +824,7 @@ fn median_code_health(rows: &[HotspotRow]) -> f64 {
     if rows.is_empty() {
         return 0.0;
     }
-    let mut healths: Vec<f64> = rows.iter().map(|r| r.code_health).collect();
+    let mut healths: Vec<f64> = rows.iter().map(|r| r.cognitive_health).collect();
     healths.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let mid = healths.len() / 2;
     if healths.len() % 2 == 1 {

@@ -585,7 +585,7 @@
       overviewHtml += '<h4>Hotspot</h4><dl>' +
         '<dt>Revisions</dt><dd>' + fmtInt(hot.revisions) + '</dd>' +
         '<dt>Cognitive</dt><dd>' + fmtNumberFlex(hot.cognitive, 0) + '</dd>' +
-        '<dt>Code health</dt><dd>' + fmtNumberFlex(hot.code_health, 1) + '</dd>' +
+        '<dt>Cognitive health</dt><dd>' + fmtNumberFlex(hot.cognitive_health, 1) + '</dd>' +
         '<dt>Hotspot score</dt><dd>' + fmtNumberFlex(hot.hotspot_score, 2) + '</dd>' +
         '</dl>';
     }

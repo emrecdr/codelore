@@ -19,7 +19,7 @@ fn copy_to_parquet(db: &FactsDb, query: &str, path: &Path) -> Result<()> {
 
 pub fn write_hotspots_parquet(db: &FactsDb, opts: &Options, path: &Path) -> Result<()> {
     // Single source of truth: `analyses::hotspots::build_inlined_sql`. Any
-    // change to the hotspots formula (revs / cognitive / code-health /
+    // change to the hotspots formula (revs / cognitive / cognitive-health /
     // score) propagates to Parquet output automatically — no risk of the
     // two paths drifting. Previously this writer carried a verbatim copy
     // of the SQL that had to be hand-synced after every formula change.

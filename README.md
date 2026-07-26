@@ -57,7 +57,7 @@ What separates CodeLore from code-maat, CodeScene, and jscpd:
 - **🎯 Live-clone × co-change intersection.** Every clone detector finds copy-pasted blocks. CodeLore intersects clones with Fisher-significant change-coupling — flagging only the clones whose copies actually evolve together. Dead clones (look-alike code nobody touches) are filtered out as noise; live clones (real debt) are surfaced with a `combined_score` ranking. We're not aware of another OSS tool that ships this intersection.
 - **🧬 Structure × history fusion.** The import graph and the change-coupling graph are analyzed *together*, not side by side: `modularity-violations` flags file pairs that always change together with **no** import edge between them, `unstable-interface` and `crossing` find dependency shapes that drag their dependents, `cycle-health` ranks every import tangle by behavioral heat — live vs fossil, with a suggested extraction point and its predicted propagation-cost drop — and the dashboard's dependency matrix has a Fusion mode that classifies every cell by structure×history agreement.
 - **📋 Behavioral SARIF.** Findings land natively in **SARIF 2.1.0**: `CODELORE-HOTSPOT`, `CODELORE-CLONE`, and `CODELORE-LIVE-CLONE` in analyze mode, `CODELORE-MISSING-COCHANGE` and `CODELORE-DELTA-HEALTH` on PR diffs, and per-gate rules with commit evidence chains from `codelore check`. Drop them straight into GitHub Code Scanning, GitLab security dashboards, or Defectdojo and alerts appear inline on pull requests.
-- **🔍 Transparency over opaque ML.** CodeScene's hotspot ranking is a closed ML model. CodeLore ranks with a **published deterministic formula**: `percentile_rank(revisions) × percentile_rank(cognitive_complexity) × (100 − code_health) / 4`. Every input is emitted alongside the score; anyone can reproduce it.
+- **🔍 Transparency over opaque ML.** CodeScene's hotspot ranking is a closed ML model. CodeLore ranks with a **published deterministic formula**: `percentile_rank(revisions) × percentile_rank(cognitive_complexity) × (100 − cognitive_health) / 4`. Every input is emitted alongside the score; anyone can reproduce it.
 - **🗣️ Grounded LLM narratives (opt-in, local-first).** `codelore explain <path>` prints a deterministic per-file evidence dossier — free, offline, no LLM. Add `--llm` (or `diff --llm` for a PR narrative) and a model turns that dossier into a diagnosis and refactoring direction, with a **citation check** verifying every number it quotes against the evidence and stamping the result `grounded ✓` or `⚠ contains uncited claims`. Local-first: the default endpoint is a local ollama, keys are env-only and never persisted, and the advisory layer can never touch a score, gate verdict, or exit code.
 - **🧾 Provenance manifest.** Every run emits a `.provenance.json` sidecar recording every config knob (auto-derived via canonical Options serialization — adding a new field auto-propagates), version pin, and timestamp. Reproducibility receipt for the run; eliminates the "we got different numbers because we silently used different thresholds" failure mode.
 - **💾 SQL-queryable fact store.** No proprietary format lock-in. Export the full DuckDB store as Parquet or SQLite and query your git history as a database from the command line.
@@ -96,7 +96,7 @@ Run `codelore analyze --analysis NAME` for any of the analyses below. They are g
 |---|---|---|
 | `summary` | one-page repo overview | First slide of any review |
 | `revisions` | per-file commit count | First-look hotspot proxy |
-| `hotspots` | files ranked by `percentile_rank(revs) × percentile_rank(cognitive) × (100 − code_health) / 4` | Published formula transparency; CodeScene-equivalent signal |
+| `hotspots` | files ranked by `percentile_rank(revs) × percentile_rank(cognitive) × (100 − cognitive_health) / 4` | Published formula transparency; CodeScene-equivalent signal |
 | `hotspot-velocity` | files *accelerating* in churn — recent vs baseline change rate | Early warning: a file becoming a hotspot before its all-time count shows it |
 | `coupling` | file pairs with Fisher-significant co-change | Hidden architectural debt |
 | `soc` | sum of coupling per file (centrality measure) | Network-level coupling outliers |
@@ -266,13 +266,13 @@ The banner doubles as a fail-fast gate: if the path isn't a git repo, the repo h
 Output (CSV, the default, on stdout — pipeable into other tools):
 
 ```
-entity,revisions,cognitive,code-health,hotspot-score,mi,mi-rank,mi-band,ai-pct
+entity,revisions,cognitive,cognitive-health,hotspot-score,mi,mi-rank,mi-band,ai-pct
 src/auth/session.rs,87,42.00,60.00,9.1837,-12.40,0.0312,low,18.39
 src/db/migrate.rs,54,28.00,71.20,4.6125,24.85,0.4157,moderate,0.00
 src/api/handlers.rs,38,18.00,80.36,2.4310,58.11,0.7982,high,4.17
 ```
 
-- `code-health ∈ [60, 100]` — higher = healthier (60 is the floor because the cognitive-complexity term contributes at most 40 points of deduction).
+- `cognitive-health ∈ [60, 100]` — higher = healthier (60 is the floor because the cognitive-complexity term contributes at most 40 points of deduction). This is the hotspots analysis's own inline proxy, distinct from the `code-health` analysis's composite score.
 - `hotspot-score ∈ [0, 10]` — higher = more pressing refactor candidate. `9.18` means "near the top of the curve on revisions × complexity × poor health" — the canonical "on fire" file.
 - `mi` / `mi-rank` / `mi-band` — Maintainability Index with a repo-relative percentile rank and band (`low` / `moderate` / `high`); banding is percentile-based because the literature's absolute MI thresholds misclassify real-world file sizes.
 - `ai-pct` — share of the file's revisions coming from AI-assistant-attributed commits.
