@@ -101,7 +101,8 @@ pub struct FactsDb {
     knowledge_shares_built: std::cell::Cell<bool>,
     /// Process-local memo for the structural import graph
     /// ([`crate::analyses::import_graph::build_import_graph`]). The graph is
-    /// a pure function of the immutable `imports` table, yet a `--format
+    /// a pure function of the immutable `complexity_metrics` (node set) +
+    /// `imports` (edges) tables, yet a `--format
     /// spa` render or a `codelore check` arch-suite rebuilds it (SQL scan +
     /// path interning + adjacency) once per arch analysis —
     /// `architecture-roles`, `modularity-violations`, `instability`,
