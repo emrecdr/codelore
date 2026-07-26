@@ -50,7 +50,7 @@ activation:
 - a vintage beginning with `placeholder-` resolves to `None` — the corpus lens
   stays absent-but-wired (no calibration applied) until a maintainer runs the
   real build;
-- any other vintage (e.g. `world-2026-07-14`) resolves to `Some`, activating the
+- any other vintage (e.g. `world-2026-07-26`) resolves to `Some`, activating the
   lens for every `code-health` run that does not pass an explicit
   `--calibration` file — and, through the `repo_metrics` section, the
   corpus-percentile rows on `architecture-metrics`.
@@ -68,7 +68,7 @@ cargo build --release -p codelore-cli
 
 ./target/release/codelore calibrate \
   --repos calibration/corpus.toml \
-  --vintage world-2026-07-14 \
+  --vintage world-2026-07-26 \
   --output crates/codelore-lib/src/calibration/world.calib.json
 ```
 
@@ -79,7 +79,7 @@ code-health test suites, and commit the regenerated `world.calib.json`.
 
 Use `world-YYYY-MM` for a full world-corpus build (the month the manifest SHAs
 were pinned / the build was run), appending `-DD` when a rebuild lands within
-the same month (e.g. `world-2026-07-14`) so the two vintages stay
+the same month (e.g. `world-2026-07-26`) so the two vintages stay
 distinguishable. The `placeholder-` prefix is reserved for the
 not-yet-built stand-in. Organization-specific corpora built from a private
 manifest should use a distinct label (e.g. `acme-2026-07`) so provenance stamps
