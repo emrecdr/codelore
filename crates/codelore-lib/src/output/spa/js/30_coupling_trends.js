@@ -645,7 +645,7 @@
         name: r.path,
         value: r.revisions || 1,
         cognitive: r.cognitive || 0,
-        code_health: r.code_health,
+        cognitive_health: r.cognitive_health,
         hotspot_score: r.hotspot_score,
       });
     }
@@ -664,7 +664,7 @@
           return '<b>' + escapeHtml(d.name) + '</b>' +
             '<br/>revisions: ' + (d.value || 0) +
             '<br/>cognitive: ' + d.cognitive.toFixed(0) +
-            (d.code_health != null ? '<br/>health: ' + d.code_health.toFixed(1) : '') +
+            (d.cognitive_health != null ? '<br/>cognitive health: ' + d.cognitive_health.toFixed(1) : '') +
             (d.hotspot_score != null ? '<br/>score: ' + d.hotspot_score.toFixed(2) : '');
         },
       },
@@ -746,7 +746,7 @@
     const top = (parallelTopN === 'all') ? sorted : sorted.slice(0, Number(parallelTopN));
     setChartAriaLabel(container,
       'Parallel-coordinates plot of ' + top.length + ' files across ' +
-      'revisions, cognitive complexity, code health, hotspot score and MI rank');
+      'revisions, cognitive complexity, cognitive health, hotspot score and MI rank');
     const chart = mountEcharts(container);
     // Build the polyline data once so the cross-widget selection listener can
     // re-style individual lines by mutating their per-item lineStyle (emphasis
@@ -757,7 +757,7 @@
         value: [
           r.revisions || 0,
           r.cognitive || 0,
-          r.code_health != null ? r.code_health : 0,
+          r.cognitive_health != null ? r.cognitive_health : 0,
           r.hotspot_score != null ? r.hotspot_score : 0,
           typeof r.mi_rank === 'number' ? r.mi_rank : 0,
         ],
@@ -767,7 +767,7 @@
       parallelAxis: [
         { dim: 0, name: 'Revisions' },
         { dim: 1, name: 'Cognitive' },
-        { dim: 2, name: 'Code health', inverse: true },
+        { dim: 2, name: 'Cognitive health', inverse: true },
         { dim: 3, name: 'Hotspot score' },
         { dim: 4, name: 'MI rank', max: 1.0 },
       ],

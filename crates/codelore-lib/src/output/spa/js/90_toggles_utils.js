@@ -73,7 +73,7 @@
             child.metrics = {
               revisions: row.revisions,
               cognitive: row.cognitive,
-              code_health: row.code_health,
+              cognitive_health: row.cognitive_health,
               hotspot_score: row.hotspot_score,
             };
           } else {

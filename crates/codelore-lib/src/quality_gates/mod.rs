@@ -1010,14 +1010,14 @@ new_hotspot_max = 0
     fn make_row(
         path: &str,
         cognitive: f64,
-        code_health: f64,
+        cognitive_health: f64,
         hotspot: f64,
     ) -> crate::analyses::hotspots::HotspotRow {
         crate::analyses::hotspots::HotspotRow {
             path: path.to_string(),
             revisions: 1,
             cognitive,
-            code_health,
+            cognitive_health,
             hotspot_score: hotspot,
             mi: None,
             mi_rank: None,

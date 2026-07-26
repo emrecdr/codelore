@@ -23,7 +23,7 @@ pub(crate) fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
         (
             "hotspot-score",
             "Tornhill 2018 — Software Design X-Rays",
-            "percentile_rank(revisions) × percentile_rank(cognitive) × (100 − code_health) / 4. Range [0, 10].",
+            "percentile_rank(revisions) × percentile_rank(cognitive) × (100 − cognitive_health) / 4. Range [0, 10]. cognitive_health here is the hotspots analysis's own inline proxy — 100 × (1 − 0.40 × normalize(cognitive)), bounded [60, 100] — NOT the code-health analysis's 8-smell composite score; see the code-health topic for that distinct metric.",
             "See analyses/hotspots.rs::SQL (file_revs + file_complexity + joined CTEs).",
         ),
         (
@@ -53,7 +53,7 @@ pub(crate) fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
         (
             "hotspots",
             "Tornhill 2015 + Bird et al. 2011",
-            "Per-file behavioural risk surface: revisions × max(cognitive) × code-health composite. The flagship CodeLore analysis.",
+            "Per-file behavioural risk surface: revisions × max(cognitive) × the inline cognitive-health proxy (distinct from the code-health composite score). The flagship CodeLore analysis.",
             "See analyses/hotspots.rs.",
         ),
         (

@@ -1497,7 +1497,7 @@
           Keyboard-accessible file list
           (<span x-text="$store.dashboard.hotspots.length"></span>)
           <span class="tooltip-trigger" aria-hidden="true">?</span>
-          <span class="tooltip-popup" role="tooltip">A screen-reader-friendly textual alternative to the canvas circle-pack above. Same top-50 hotspot files, browsable with arrow keys and selectable with Enter / Space. Useful for WAI-ARIA accessibility and for users who prefer scanning a list to clicking circles. Each row shows the path plus a colour-coded code-health badge.</span>
+          <span class="tooltip-popup" role="tooltip">A screen-reader-friendly textual alternative to the canvas circle-pack above. Same top-50 hotspot files, browsable with arrow keys and selectable with Enter / Space. Useful for WAI-ARIA accessibility and for users who prefer scanning a list to clicking circles. Each row shows the path plus a colour-coded cognitive-health badge.</span>
         </summary>
         <div class="collapse-content">
           <menu role="tree" aria-label="Hotspot files"
@@ -1528,16 +1528,16 @@
                         class="ki-knowledge-loss-badge">
                     knowledge-loss
                   </span>
-                  <!-- Code-health badge — DaisyUI semantic classes
+                  <!-- Cognitive-health badge — DaisyUI semantic classes
                        are complete literals so Tailwind v4 @source
                        sees them. The 3-band cut matches
                        widgets.js::codeHealthColor (≤40 / 41-70 / ≥71). -->
                   <span class="badge badge-sm flex-shrink-0"
-                        :class="file.code_health == null ? 'badge-ghost'
-                              : file.code_health <= 40 ? 'badge-error'
-                              : file.code_health <= 70 ? 'badge-warning'
+                        :class="file.cognitive_health == null ? 'badge-ghost'
+                              : file.cognitive_health <= 40 ? 'badge-error'
+                              : file.cognitive_health <= 70 ? 'badge-warning'
                               : 'badge-success'"
-                        x-text="file.code_health != null ? file.code_health.toFixed(0) : '?'">
+                        x-text="file.cognitive_health != null ? file.cognitive_health.toFixed(0) : '?'">
                   </span>
                 </a>
               </li>
@@ -1566,7 +1566,7 @@
       <details class="learn-more">
         <summary>Learn more — how to read this panel</summary>
         <div class="learn-more-content">
-          <p><strong>What it measures.</strong> The full hotspot list as a sortable, filterable table. One row per file with every behavioural metric the dashboard computes — revisions, cognitive complexity, code health, hotspot score, primary author, AI attribution, MI rank, contributors.</p>
+          <p><strong>What it measures.</strong> The full hotspot list as a sortable, filterable table. One row per file with every behavioural metric the dashboard computes — revisions, cognitive complexity, cognitive health, hotspot score, primary author, AI attribution, MI rank, contributors.</p>
           <p><strong>How to read it.</strong> Click any column header to sort by that column (click again to reverse). Type in the filter box to narrow by path substring; the summary line under the filter shows how many rows match. Click a row to open the file detail drawer — the file then lights up across the trends, parallel-coords, and any other path-aware panel.</p>
           <p><strong>What to watch for.</strong> Use the table as the drill-down surface for any signal you spotted in a chart. The combination of high revisions + low health + recent activity is the canonical "fix this now" pattern.</p>
           <p><strong>Suggested action.</strong> Sort by hotspot score descending, copy the top-N paths into your sprint board, and refactor by priority.</p>
@@ -1769,7 +1769,7 @@
     </section>
     <!-- Parallel coordinates over the top-20 hotspots. Each file
          is one polyline crossing 5 axes: revisions / cognitive /
-         code-health / hotspot-score / MI. Hover a polyline to see
+         cognitive-health / hotspot-score / MI. Hover a polyline to see
          the file path; drag-select on any axis to filter the
          visible set (ECharts native). Power-user analytical tool —
          surfaces files that are outliers on multiple axes
@@ -1784,7 +1784,7 @@
       <details class="learn-more">
         <summary>Learn more — how to read this panel</summary>
         <div class="learn-more-content">
-          <p><strong>What it measures.</strong> The top-20 hotspot files plotted simultaneously across five axes: <strong>Revisions</strong>, <strong>Cognitive</strong> complexity, <strong>Code health</strong>, <strong>Hotspot score</strong> (composite), and <strong>MI rank</strong> (maintainability percentile). Each polyline is one file.</p>
+          <p><strong>What it measures.</strong> The top-20 hotspot files plotted simultaneously across five axes: <strong>Revisions</strong>, <strong>Cognitive</strong> complexity, <strong>Cognitive health</strong>, <strong>Hotspot score</strong> (composite), and <strong>MI rank</strong> (maintainability percentile). Each polyline is one file.</p>
           <p><strong>How to read it.</strong> Follow a polyline left-to-right to see one file's profile across all five metrics. Drag-select a range on any axis to filter — polylines outside your selection grey out. Hover any polyline to isolate it (others fade to 15%); click to open the file drawer.</p>
           <p><strong>What to watch for.</strong> Files that are outliers on <em>multiple</em> axes at once — high Revisions AND high Cognitive AND low MI is a triple red flag. Drag-filter the Cognitive axis to "> 200" and the MI axis to "< 5%" simultaneously to see who survives both cuts.</p>
           <p><strong>Suggested action.</strong> Use this panel when no single metric clearly points to a winner. Multi-axis outliers are the highest-leverage refactor targets — addressing them moves several axes at once.</p>
@@ -2559,7 +2559,7 @@
       // keyboard-accessible surface IS this DOM tree, parented to
       // the same data the chart shows.
       Alpine.store('dashboard', {
-        hotspots: [],   // [{path, code_health, hotspot_score}], top-N sorted
+        hotspots: [],   // [{path, cognitive_health, hotspot_score}], top-N sorted
       });
       // Cross-widget selection: tracks the currently focused file
       // path so the trends chart, parallel-coords, and any other

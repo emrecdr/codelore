@@ -415,7 +415,7 @@ mod tests {
                 path: "src/main.rs".into(),
                 revisions: 12,
                 cognitive: 42.0,
-                code_health: 78.0,
+                cognitive_health: 78.0,
                 hotspot_score: 5.5,
                 mi: Some(54.0),
                 // Bottom quartile → Low band when MiRollup runs over this set.
@@ -426,7 +426,7 @@ mod tests {
                 path: "src/lib/util.rs".into(),
                 revisions: 8,
                 cognitive: 28.0,
-                code_health: 88.0,
+                cognitive_health: 88.0,
                 hotspot_score: 2.1,
                 mi: Some(82.5),
                 // Top quartile → High band.

@@ -110,8 +110,8 @@ pub fn write_hotspots_gha<W: Write>(rows: &[HotspotRow], w: &mut W) -> Result<()
         };
         let title = format!("CodeLore hotspot — score {:.2}", row.hotspot_score);
         let message = format!(
-            "Hotspot: {} revisions, cognitive {:.0}, code-health {:.1}, score {:.2}",
-            row.revisions, row.cognitive, row.code_health, row.hotspot_score
+            "Hotspot: {} revisions, cognitive {:.0}, cognitive-health {:.1}, score {:.2}",
+            row.revisions, row.cognitive, row.cognitive_health, row.hotspot_score
         );
         writeln!(
             w,
@@ -174,7 +174,7 @@ mod tests {
             path: path.into(),
             revisions: 12,
             cognitive: 25.0,
-            code_health: 65.0,
+            cognitive_health: 65.0,
             hotspot_score: score,
             mi: None,
             mi_rank: None,
