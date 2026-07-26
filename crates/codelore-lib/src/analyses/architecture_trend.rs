@@ -31,7 +31,8 @@
 
 use std::collections::HashSet;
 
-use crate::analyses::import_graph::{build_import_graph_from_edges, graph_metrics};
+use crate::analyses::import_graph::{build_import_graph_seeded, graph_metrics};
+use crate::complexity::Tier1Language;
 use crate::facts::FactsDb;
 use crate::repo::Repo;
 use crate::{Options, Result};
@@ -46,7 +47,8 @@ pub struct ArchitectureTrendRow {
     pub date: String,
     /// The sampled commit's short SHA (first 12 chars).
     pub rev: String,
-    /// Files in the resolved import graph at this rev.
+    /// Live Tier-1 source files in the import graph at this rev (isolated
+    /// files included, not only resolved-import participants).
     pub files: u32,
     /// Propagation cost — density of the transitive-closure matrix
     /// (`sum(vfo)/n²`); "a change to a random file reaches this fraction
@@ -145,8 +147,21 @@ pub(crate) fn import_graph_from_live_paths<R: Repo>(
     rev: &str,
     live: &[String],
 ) -> crate::analyses::import_graph::ImportGraph {
+    // Seed from the Tier-1 source files live at this rev so isolated files
+    // are counted, keeping the shared kernel's `n` in step with the HEAD
+    // `architecture-metrics` node universe (`complexity_metrics`) — the
+    // newest trend sample must equal the HEAD tile by construction.
+    // Documented acceptable divergence: the historical seed is the
+    // extension-filtered live-path set, which can't cheaply reproduce
+    // HEAD's oversized-blob exclusion at a past rev, so an over-cap file
+    // that the HEAD scan would drop can appear here as a singleton.
+    let seeds: Vec<String> = live
+        .iter()
+        .filter(|p| Tier1Language::from_path(p.as_str()).is_some())
+        .cloned()
+        .collect();
     let edges = resolve_imports_at_rev(repo, rev, live);
-    build_import_graph_from_edges(&edges)
+    build_import_graph_seeded(&seeds, &edges)
 }
 
 /// Pick up to `k` evenly-spaced indices over `0..len`, always including

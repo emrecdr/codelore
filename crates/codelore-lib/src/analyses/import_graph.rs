@@ -19,8 +19,10 @@ use std::rc::Rc;
 use crate::Result;
 use crate::facts::FactsDb;
 
-/// The directed structural import graph. Nodes are repo-relative file
-/// paths that appear as a resolved import endpoint; edges are
+/// The directed structural import graph. Nodes are repo-relative paths:
+/// every live Tier-1 source file, plus any resolved import endpoint. A
+/// file that neither imports nor is imported is still a node (a singleton
+/// with empty adjacency), so isolated files are counted in `n`. Edges are
 /// `src → target` ("src imports target").
 pub struct ImportGraph {
     /// Dense node id → path.
@@ -39,22 +41,28 @@ impl ImportGraph {
         self.id_to_path.len()
     }
 
-    /// Whether the graph has no nodes (no resolved import edges).
+    /// Whether the graph has no nodes (no live source files).
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.id_to_path.is_empty()
     }
 }
 
-/// Build the directed import graph from the resolved edges in the
-/// `imports` table (`target_path IS NOT NULL`). Parallel edges are
-/// deduped and self-loops dropped — neither affects reachability or
-/// SCC membership, and removing them keeps the adjacency tight.
+/// Build the directed import graph over every live Tier-1 source file.
+/// Nodes are seeded from `complexity_metrics` (one row per parsed source
+/// file, isolated files included) and edges from the resolved rows in the
+/// `imports` table (`target_path IS NOT NULL`). Seeding from all source
+/// files — not just resolved endpoints — keeps a file that neither imports
+/// nor is imported in `n`, so `propagation_cost` and cycle share are
+/// computed over the full component set (per `MacCormack`/Lakos). Parallel
+/// edges are deduped and self-loops dropped — neither affects reachability
+/// or SCC membership, and removing them keeps the adjacency tight.
 ///
 /// Memoised per [`FactsDb`]: the graph is a pure function of the immutable
-/// `imports` table, so the several architecture analyses that each call
-/// this in one process (SPA dashboard, `codelore check` arch-suite) share a
-/// single build through the returned `Rc` handle.
+/// `complexity_metrics` (node set) + `imports` (edges) tables, so the
+/// several architecture analyses that each call this in one process (SPA
+/// dashboard, `codelore check` arch-suite) share a single build through the
+/// returned `Rc` handle.
 ///
 /// # Errors
 ///
@@ -63,6 +71,17 @@ pub fn build_import_graph(db: &FactsDb) -> Result<Rc<ImportGraph>> {
     if let Some(graph) = db.import_graph_memo_get() {
         return Ok(graph);
     }
+    // Seed the node universe from every live Tier-1 source file, ordered
+    // for deterministic id assignment. Isolated files (no import in either
+    // direction) never appear in `imports`, so they enter the graph only
+    // through this seed.
+    let nodes: Vec<String> = crate::analyses::query::query_map_collect(
+        db,
+        "SELECT DISTINCT path FROM complexity_metrics ORDER BY path",
+        [],
+        "import-graph seed nodes",
+        |r| r.get::<_, String>(0),
+    )?;
     let edges: Vec<(String, String)> = crate::analyses::query::query_map_collect(
         db,
         "SELECT src_path, target_path FROM imports WHERE target_path IS NOT NULL",
@@ -70,20 +89,39 @@ pub fn build_import_graph(db: &FactsDb) -> Result<Rc<ImportGraph>> {
         "import-graph edges",
         |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
     )?;
-    let graph = Rc::new(build_import_graph_from_edges(&edges));
+    let graph = Rc::new(build_import_graph_seeded(&nodes, &edges));
     db.import_graph_memo_put(Rc::clone(&graph));
     Ok(graph)
 }
 
 /// Build the directed import graph from an in-memory `(src, target)`
-/// edge list — the same dedup/self-loop handling as
-/// [`build_import_graph`], but from resolved edges already in memory
-/// (the historical `architecture-trend` scan resolves blobs at a past
-/// rev without round-tripping through the `imports` table).
+/// edge list alone — the zero-seed case of [`build_import_graph_seeded`],
+/// so nodes are exactly the resolved edge endpoints. Used where the node
+/// set is intended to be edge-derived (e.g. the change-set projection's
+/// cycle check, which only reasons over SCCs of size ≥ 2 that singletons
+/// never enter).
 #[must_use]
 pub fn build_import_graph_from_edges(edges: &[(String, String)]) -> ImportGraph {
+    build_import_graph_seeded(&[], edges)
+}
+
+/// Build the directed import graph over `seed_nodes` ∪ edge-endpoints.
+/// Seed nodes are interned first, so a seed file with no edges becomes a
+/// singleton (empty-adjacency) node counted in `n` — isolated source
+/// files that neither import nor are imported still participate in the
+/// `propagation_cost` and cycle-share denominators. Edges use the same
+/// parallel-edge dedup + self-loop drop as [`build_import_graph`]; the
+/// adjacency is sized after all interning, so singletons get empty vecs.
+#[must_use]
+pub fn build_import_graph_seeded(seed_nodes: &[String], edges: &[(String, String)]) -> ImportGraph {
     let mut path_to_id: HashMap<String, usize> = HashMap::new();
     let mut id_to_path: Vec<String> = Vec::new();
+
+    // Intern seed nodes first so every source file is a node even with no
+    // edge; edge endpoints interned below reuse these ids.
+    for p in seed_nodes {
+        intern(p, &mut path_to_id, &mut id_to_path);
+    }
 
     // Dedup edges into a set first so parallel imports collapse.
     let mut edge_set: HashSet<(usize, usize)> = HashSet::with_capacity(edges.len());
@@ -404,7 +442,8 @@ pub fn reach_index(adj: &[Vec<usize>], sccs: &[Vec<usize>]) -> ReachIndex {
 /// (HEAD) and `architecture-trend` (sampled history) so the two can
 /// never disagree on propagation cost or cycle structure.
 pub struct GraphMetrics {
-    /// Node count (files in the resolved import graph).
+    /// Node count — every live Tier-1 source file (plus any resolved-edge
+    /// endpoint), so isolated files are included.
     pub n: usize,
     /// Cumulative Component Dependency = Σ visibility-fan-out (each
     /// file's transitive dependency set incl. self). Feeds Lakos ACD/NCCD.

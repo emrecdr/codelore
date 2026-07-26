@@ -141,6 +141,32 @@ fn instability_matches_martin_metrics() {
     assert!((c.instability - 1.0).abs() < 1e-9, "c I=1: {c:?}");
 }
 
+/// An isolated Tier-1 source file — one that imports nothing and is
+/// imported by nothing — is still a counted node. `src/lib.rs`
+/// (`pub mod a; pub mod b; pub mod c;`) declares modules but carries no
+/// `use` edges, so it never appears in the resolved `imports` table in
+/// either direction. The graph is seeded from every live source file, so
+/// it is a singleton (empty-adjacency) node with `ca == ce == 0` and
+/// `instability == 0.0`, rather than being absent from the graph.
+#[test]
+fn isolated_source_file_is_a_counted_node() {
+    let (_dir, db, opts) = ingested_cycle_repo();
+    let rows = run_instability(&db, &opts).expect("run instability");
+    let lib = rows
+        .iter()
+        .find(|r| r.path == "src/lib.rs")
+        .expect("isolated src/lib.rs is a counted node");
+    assert_eq!(
+        (lib.ca, lib.ce),
+        (0, 0),
+        "isolated file imports nothing and is imported by nothing: {lib:?}"
+    );
+    assert!(
+        lib.instability.abs() < 1e-9,
+        "no coupling either way → instability 0.0: {lib:?}"
+    );
+}
+
 #[test]
 fn architecture_metrics_report_the_cycle_and_type() {
     let (_dir, db, opts) = ingested_cycle_repo();
@@ -152,8 +178,8 @@ fn architecture_metrics_report_the_cycle_and_type() {
 
     assert_eq!(
         m.get("files"),
-        Some(&"3"),
-        "3 files in the import graph: {m:?}"
+        Some(&"4"),
+        "4 source files in the graph (a, b, c + the isolated lib.rs): {m:?}"
     );
     assert_eq!(m.get("dependency_cycles"), Some(&"1"), "one cycle: {m:?}");
     assert_eq!(
@@ -307,18 +333,20 @@ fn architecture_metrics_default_embedded_artifact_emits_corpus_rows() {
 /// passed via `--calibration`, the three corpus-percentile rows appear with
 /// hand-computed values.
 ///
-/// The fixture's import graph (`a ↔ b` 2-cycle, `c → a`) has, per
+/// The fixture's import graph (`a ↔ b` 2-cycle, `c → a`, plus the isolated
+/// `src/lib.rs` singleton) has, per
 /// `architecture_metrics_report_the_cycle_and_type` above and
-/// `import_graph::graph_metrics`'s definition: `n = 3`, `cyclic_nodes = 2`
-/// (`a`, `b`), so `propagation_cost = 7/9 ≈ 0.7778` (`ccd = vfo(a) + vfo(b) +
-/// vfo(c) = 2 + 2 + 3 = 7`, `n² = 9`) and `cycle_file_share = 2/3 ≈ 0.6667`.
+/// `import_graph::graph_metrics`'s definition: `n = 4`, `cyclic_nodes = 2`
+/// (`a`, `b`), so `propagation_cost = 8/16 = 0.5` (`ccd = vfo(a) + vfo(b) +
+/// vfo(c) + vfo(lib) = 2 + 2 + 3 + 1 = 8`, `n² = 16`) and
+/// `cycle_file_share = 2/4 = 0.5`.
 ///
 /// Pools are chosen so neither this-repo value collides with a pool member,
 /// keeping the `raw_percentile` midpoint-rank arithmetic unambiguous:
-/// - `propagation_cost` pool `[0.1, 0.5, 0.9]`: 0.7778 sits strictly between
-///   0.5 and 0.9, so `count_less = 2`, `count_equal = 0`, `n = 3` →
+/// - `propagation_cost` pool `[0.1, 0.3, 0.9]`: 0.5 sits strictly between
+///   0.3 and 0.9, so `count_less = 2`, `count_equal = 0`, `n = 3` →
 ///   `p = 2/3 ≈ 0.6667` → `"0.67"`.
-/// - `cycle_file_share` pool `[0.0, 0.2]`: 0.6667 sits strictly above both,
+/// - `cycle_file_share` pool `[0.0, 0.2]`: 0.5 sits strictly above both,
 ///   so `count_less = 2`, `count_equal = 0`, `n = 2` → `p = 2/2 = 1.0` →
 ///   `"1.00"`.
 /// - `corpus_n` uses the `propagation_cost` pool's length (3), per the
@@ -337,7 +365,7 @@ fn architecture_metrics_emits_corpus_percentiles_when_pool_active() {
         repo_metrics: None,
     };
     let mut values = BTreeMap::new();
-    values.insert("propagation_cost".to_string(), vec![0.1, 0.5, 0.9]);
+    values.insert("propagation_cost".to_string(), vec![0.1, 0.3, 0.9]);
     values.insert("cycle_file_share".to_string(), vec![0.0, 0.2]);
     attach_repo_metrics(&mut artifact, RepoMetrics { values });
 

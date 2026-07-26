@@ -32,7 +32,7 @@
 use std::collections::HashMap;
 
 use crate::analyses::import_graph::{
-    ImportGraph, build_import_graph, build_import_graph_from_edges, graph_metrics, tarjan_scc,
+    ImportGraph, build_import_graph, build_import_graph_seeded, graph_metrics, tarjan_scc,
 };
 use crate::analyses::lineage;
 use crate::analyses::query::query_map_collect;
@@ -280,14 +280,20 @@ fn highest_degree_member(adj: &[Vec<usize>], members: &[usize]) -> usize {
     members[best]
 }
 
-/// Rebuild the import graph from its edge list minus every edge touching
-/// `node` — node extraction, for the propagation-cost prediction.
+/// Rebuild the import graph with `node` extracted: every other node is
+/// retained (as a seed) and every edge touching `node` dropped — node
+/// extraction, for the propagation-cost prediction. Seeding the survivors
+/// keeps `n` at `graph.len() - 1`, so the predicted drop is measured
+/// against the same file population as the full-graph `propagation_cost`
+/// (isolated singletons, which carry no edges, stay in the denominator).
 fn graph_without_node(graph: &ImportGraph, node: usize) -> ImportGraph {
+    let mut seeds: Vec<String> = Vec::with_capacity(graph.id_to_path.len().saturating_sub(1));
     let mut edges: Vec<(String, String)> = Vec::new();
     for (u, targets) in graph.adj.iter().enumerate() {
         if u == node {
             continue;
         }
+        seeds.push(graph.id_to_path[u].clone());
         for &v in targets {
             if v == node {
                 continue;
@@ -295,7 +301,7 @@ fn graph_without_node(graph: &ImportGraph, node: usize) -> ImportGraph {
             edges.push((graph.id_to_path[u].clone(), graph.id_to_path[v].clone()));
         }
     }
-    build_import_graph_from_edges(&edges)
+    build_import_graph_seeded(&seeds, &edges)
 }
 
 #[cfg(test)]

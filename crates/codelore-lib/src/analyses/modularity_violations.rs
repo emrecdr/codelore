@@ -103,9 +103,11 @@ pub fn run_modularity_violations(
         .into_iter()
         .filter(|p| {
             // Both files must be import-graph nodes AND have a path
-            // between them to count as structurally connected. A file
-            // with no resolved imports isn't a node, so a co-change with
-            // it is correctly kept as a violation.
+            // between them to count as structurally connected. A
+            // co-change participant that is not a source node (a config
+            // or doc file, absent from the graph) or an isolated source
+            // file with no dependency path is correctly kept as a
+            // violation.
             match (
                 graph.path_to_id.get(&p.entity_a),
                 graph.path_to_id.get(&p.entity_b),
