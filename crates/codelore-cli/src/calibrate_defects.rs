@@ -104,7 +104,77 @@ pub(crate) fn run_calibrate_defects_cmd(args: &CalibrateDefectsArgs) -> Result<(
         args.output.display(),
         artifact.vintage,
     );
+    for line in format_validation_evidence(&artifact) {
+        eprintln!("{line}");
+    }
     Ok(())
+}
+
+/// Render `value` to `decimals` fixed places, or an honest `n/a` when the
+/// metric is absent — an artifact mined without both a defect-implicated and a
+/// clean file class has no AUC / precision to report, and a silent `0.00`
+/// would read as a real, terrible score. Never emits a misleading zero.
+fn fmt_metric(value: Option<f64>, decimals: usize) -> String {
+    match value {
+        Some(x) => format!("{x:.decimals$}"),
+        None => "n/a".to_string(),
+    }
+}
+
+/// One-line tuning verdict from the artifact's [`TuningDecision`]: the honesty
+/// signal of whether the mined evidence cleared the tuning floor (smell weights
+/// retuned to this repo, with the validation-split AUCs side by side) or the
+/// weights were left at their defaults (with the reason the floor named).
+fn tuning_verdict(tuning: &codelore_lib::defect_calibration::TuningDecision) -> String {
+    use codelore_lib::defect_calibration::TuningDecision;
+    match tuning {
+        TuningDecision::Applied {
+            auc_train,
+            auc_validation_default,
+            auc_validation_tuned,
+        } => format!(
+            "weights tuned to this repo (validation AUC {auc_validation_default:.3} \
+             -> {auc_validation_tuned:.3}, train {auc_train:.3})"
+        ),
+        TuningDecision::DefaultsKept { reason, .. } => {
+            format!("weights left at defaults ({reason})")
+        }
+    }
+}
+
+/// The compact validation-evidence summary printed after a successful
+/// `calibrate-defects` run: the AUC / precision@k / sample sizes / tuning
+/// verdict already recorded on the artifact, surfaced at the moment the user
+/// looks instead of only inside the JSON. Pure over the artifact (no mining),
+/// so the honest-absence rendering is unit-testable. Each returned line is
+/// printed verbatim via `eprintln!`, matching the command's progress idiom.
+fn format_validation_evidence(
+    art: &codelore_lib::defect_calibration::DefectArtifact,
+) -> Vec<String> {
+    let v = &art.validation;
+    let mut lines = Vec::with_capacity(3);
+    match v.auc_default {
+        Some(auc) => lines.push(format!(
+            "calibrate-defects: validation - structural-risk AUC {auc:.3}, \
+             precision@10 {}, precision@red {}",
+            fmt_metric(v.precision_at_10, 2),
+            fmt_metric(v.precision_at_red, 2),
+        )),
+        None => lines.push(
+            "calibrate-defects: validation - not enough defect signal to score \
+             structural risk (needs both defect-implicated and clean files)"
+                .to_string(),
+        ),
+    }
+    lines.push(format!(
+        "calibrate-defects: {} defect-implicated file(s) across {} linked defect(s)",
+        v.implicated_files, v.linked_defects,
+    ));
+    lines.push(format!(
+        "calibrate-defects: {}",
+        tuning_verdict(&art.tuning)
+    ));
+    lines
 }
 
 /// Refuse to mine from a dirty working tree unless `allow_dirty` opts in.
@@ -430,6 +500,7 @@ fn merge_line_ranges(lines: &[u32]) -> Vec<(u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codelore_lib::defect_calibration::DefectArtifact;
     use codelore_lib::defect_calibration::OracleConfig;
     use codelore_lib::defect_calibration::szz::SzzLink;
 
@@ -561,5 +632,89 @@ mod tests {
                 path: "src/lib.rs".to_string(),
             }],
         );
+    }
+
+    // ─── completion-summary evidence formatting ──────────────────────────────
+
+    /// Build a synthetic artifact carrying `validation`/`tuning` — the only two
+    /// fields [`format_validation_evidence`] reads — so the summary formatter
+    /// can be exercised without mining a repo.
+    fn artifact_with(
+        validation: codelore_lib::defect_calibration::ValidationMetrics,
+        tuning: codelore_lib::defect_calibration::TuningDecision,
+    ) -> DefectArtifact {
+        DefectArtifact {
+            format_version: codelore_lib::defect_calibration::DEFECT_FORMAT_VERSION,
+            repo_identity: "0".repeat(64),
+            head_at_mining: "0".repeat(40),
+            vintage: "defects-2026-07-20".to_string(),
+            generated_at: "2026-07-20T00:00:00Z".to_string(),
+            oracle: OracleConfig::default(),
+            mining: codelore_lib::defect_calibration::MiningStats::default(),
+            validation,
+            weights: codelore_lib::defect_calibration::validate::default_weights(),
+            tuning,
+        }
+    }
+
+    #[test]
+    fn validation_evidence_summary_reports_auc_precision_and_tuning() {
+        use codelore_lib::defect_calibration::{TuningDecision, ValidationMetrics};
+        let art = artifact_with(
+            ValidationMetrics {
+                band_table: vec![],
+                auc_default: Some(0.803),
+                precision_at_10: Some(0.6),
+                precision_at_red: Some(0.75),
+                implicated_files: 12,
+                linked_defects: 20,
+                sample_dates: vec![],
+                excluded_no_data: 0,
+            },
+            TuningDecision::Applied {
+                auc_train: 0.812,
+                auc_validation_default: 0.780,
+                auc_validation_tuned: 0.834,
+            },
+        );
+        let out = format_validation_evidence(&art).join("\n");
+        assert!(out.contains("AUC 0.803"), "{out}");
+        assert!(out.contains("precision@10 0.60"), "{out}");
+        assert!(out.contains("precision@red 0.75"), "{out}");
+        assert!(out.contains("12 defect-implicated file(s)"), "{out}");
+        assert!(out.contains("20 linked defect(s)"), "{out}");
+        assert!(
+            out.contains("weights tuned to this repo") && out.contains("0.780 -> 0.834"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn validation_evidence_summary_honest_absence_never_prints_zero() {
+        use codelore_lib::defect_calibration::{TuningDecision, ValidationMetrics};
+        let art = artifact_with(
+            ValidationMetrics {
+                band_table: vec![],
+                auc_default: None,
+                precision_at_10: None,
+                precision_at_red: None,
+                implicated_files: 0,
+                linked_defects: 0,
+                sample_dates: vec![],
+                excluded_no_data: 0,
+            },
+            TuningDecision::DefaultsKept {
+                reason: "too few linked defects".to_string(),
+                auc_validation_default: None,
+                auc_validation_tuned: None,
+            },
+        );
+        let out = format_validation_evidence(&art).join("\n");
+        assert!(out.contains("not enough defect signal"), "{out}");
+        assert!(out.contains("weights left at defaults"), "{out}");
+        assert!(out.contains("too few linked defects"), "{out}");
+        // An absent metric must never render as a real-looking zero score.
+        assert!(!out.contains("0.00"), "absent metric read as 0.00: {out}");
+        assert!(!out.contains("0.000"), "absent metric read as 0.000: {out}");
     }
 }
