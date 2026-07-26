@@ -120,7 +120,11 @@ fn write_top_hotspots<W: Write>(dash: &SpaDashboard, w: &mut W) -> Result<()> {
     }
     writeln!(w, "## 🔥 Top hotspots").map_err(io)?;
     writeln!(w).map_err(io)?;
-    writeln!(w, "| # | File | Score | Code Health | Cognitive | MI |").map_err(io)?;
+    writeln!(
+        w,
+        "| # | File | Score | Cognitive Health | Cognitive | MI |"
+    )
+    .map_err(io)?;
     writeln!(w, "|---|---|---|---|---|---|").map_err(io)?;
     for (i, row) in rows.iter().enumerate() {
         let mi_cell = match (row.mi, row.mi_rank) {
@@ -136,7 +140,7 @@ fn write_top_hotspots<W: Write>(dash: &SpaDashboard, w: &mut W) -> Result<()> {
             n = i + 1,
             path = escape_md(&row.path),
             score = row.hotspot_score,
-            health = row.code_health,
+            health = row.cognitive_health,
             cog = row.cognitive,
             mi = mi_cell,
         )
@@ -326,7 +330,7 @@ mod tests {
                     path: "src/main.rs".into(),
                     revisions: 35,
                     cognitive: 30.0,
-                    code_health: 60.0,
+                    cognitive_health: 60.0,
                     hotspot_score: 9.7,
                     mi: Some(-137.0),
                     mi_rank: Some(0.03),
@@ -336,7 +340,7 @@ mod tests {
                     path: "src/lib.rs".into(),
                     revisions: 24,
                     cognitive: 14.0,
-                    code_health: 81.3,
+                    cognitive_health: 81.3,
                     hotspot_score: 3.9,
                     mi: Some(50.0),
                     mi_rank: Some(0.7),

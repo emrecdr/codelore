@@ -1,32 +1,38 @@
-//! Hotspot ranking analysis. `code_health` is on `[0, 100]` (higher = healthier);
+//! Hotspot ranking analysis. `cognitive_health` is on `[0, 100]` (higher = healthier);
 //! `percentile_rank` is on `[0, 1]`; the score formula combines them so unhealthy +
 //! frequently-changed + complex files rank highest. Output range is `[0, 10]`:
 //!
 //! ```text
 //!   hotspot_score(entity) = percentile_rank(revisions)
 //!                         × percentile_rank(cognitive_complexity)
-//!                         × (100 − code_health) / 4
+//!                         × (100 − cognitive_health) / 4
 //! ```
 //!
-//! Why divide by 4 (not 10)?  `code_health` is computed inline as
+//! Why divide by 4 (not 10)?  `cognitive_health` is computed inline as
 //! `100 × (1 − 0.40 × normalize(cognitive))`, so its empirical range is
 //! `[60, 100]` — the `0.40` weight bounds the deduction. That makes
-//! `(100 − code_health) ∈ [0, 40]`; multiplied by two percent ranks (each
+//! `(100 − cognitive_health) ∈ [0, 40]`; multiplied by two percent ranks (each
 //! in `[0, 1]`) the unscaled product caps at `40`. Dividing by 4 lands the
 //! score in the documented `[0, 10]` range and matches the `CodeScene`
 //! convention that `≈10 ⇒ "on fire"`.
 //!
-//! Earlier divisor history: the original `(10 − code_health) / 10` produced
-//! NEGATIVE scores (`code_health` is `[0, 100]`, not `[0, 10]`). The previous
-//! fix `(100 − code_health) / 10` kept the sign positive but capped output at
+//! Earlier divisor history: the original `(10 − cognitive_health) / 10` produced
+//! NEGATIVE scores (`cognitive_health` is `[0, 100]`, not `[0, 10]`). The previous
+//! fix `(100 − cognitive_health) / 10` kept the sign positive but capped output at
 //! `4.0` instead of `10.0` — so the documented `[0, 10]` scale was never
 //! reached and "on fire" was unreachable. The current `/ 4.0` closes that
 //! documented-range-vs-math drift.
 //!
-//! `code_health` itself is computed inline using cognitive complexity only;
-//! the churn / fragmentation / coupling inputs from `code_health` analysis
-//! aren't reused here — `hotspots` is the lightweight "what to look at first"
-//! ranking, `code-health` is the deeper analysis.
+//! `cognitive_health` is the hotspots analysis's own inline structural proxy,
+//! computed from cognitive complexity only — it is deliberately NOT the
+//! `code-health` analysis's composite score. The churn / fragmentation /
+//! coupling inputs that feed the `code-health` composite are not reused here:
+//! `hotspots` is the lightweight "what to look at first" ranking, whose
+//! `cognitive_health` proxy is bounded to `[60, 100]`, while `code-health`
+//! is the deeper analysis whose composite spans the full `[0, 100]`. The same
+//! file can read healthy here and unhealthy there — they measure different
+//! things, which is why this field is named `cognitive_health` and not
+//! `code_health`.
 //!
 //! Research basis: see `docs/research-foundations.md` entry "hotspots"
 //! (Tornhill, *Software Design X-Rays*, 2018; `McCabe`, *IEEE TSE* 1976
@@ -53,7 +59,12 @@ pub struct HotspotRow {
     pub path: String,
     pub revisions: u32,
     pub cognitive: f64,
-    pub code_health: f64,
+    /// Inline structural proxy on `[60, 100]` (higher = healthier), computed
+    /// from cognitive complexity alone as `100 × (1 − 0.40 × normalize(cognitive))`.
+    /// This is the hotspots analysis's own signal for ranking — NOT the
+    /// `code-health` analysis's 8-smell composite score. A file can read
+    /// healthy here and unhealthy in `code-health`; the two are distinct.
+    pub cognitive_health: f64,
     pub hotspot_score: f64,
     /// File-level Maintainability Index (SEI variant). `None` when the
     /// file has no `kind='unit'` complexity entry — typically because
@@ -79,10 +90,10 @@ pub struct HotspotRow {
 // Aggregate per-path:
 //   revisions:   count of distinct commits in changes
 //   cognitive:   MAX of cognitive across all entities in the path's file
-//   code_health: 100 * (1 − 0.40 * normalize(cognitive))   ∈ [60, 100]
-//   hotspot_score: percent_rank(revs) * percent_rank(cog) * (100 − code_health) / 4
+//   cognitive_health: 100 * (1 − 0.40 * normalize(cognitive))   ∈ [60, 100]
+//   hotspot_score: percent_rank(revs) * percent_rank(cog) * (100 − cognitive_health) / 4
 //                  ∈ [0, 10] — see module-level docstring for why the divisor
-//                  is 4, not 10 (code_health bottoms at 60, not 0).
+//                  is 4, not 10 (cognitive_health bottoms at 60, not 0).
 /// The `file_revs` change source is resolved by routing the assembled SQL
 /// through [`crate::analyses::lineage::rewrite`], which rewrites every
 /// `FROM changes` / `JOIN changes` to `changes_lineage` / `changes_bucketed`
@@ -253,7 +264,7 @@ pub const SQL: &str = "
         path,
         revs,
         cognitive,
-        GREATEST(0.0, LEAST(100.0, 100.0 * (1.0 - 0.40 * norm_cx))) AS code_health,
+        GREATEST(0.0, LEAST(100.0, 100.0 * (1.0 - 0.40 * norm_cx))) AS cognitive_health,
         pr_rev * pr_cx * (100.0 - GREATEST(0.0, LEAST(100.0, 100.0 * (1.0 - 0.40 * norm_cx)))) / 4.0 AS score,
         mi,
         mi_rank,
@@ -289,7 +300,7 @@ pub fn run_hotspots(db: &FactsDb, opts: &Options) -> Result<Vec<HotspotRow>> {
                 path: r.get::<_, String>(0)?,
                 revisions: u32::try_from(r.get::<_, i64>(1)?).unwrap_or(u32::MAX),
                 cognitive: r.get::<_, f64>(2)?,
-                code_health: r.get::<_, f64>(3)?,
+                cognitive_health: r.get::<_, f64>(3)?,
                 hotspot_score: r.get::<_, f64>(4)?,
                 mi: r.get::<_, Option<f64>>(5)?,
                 mi_rank: r.get::<_, Option<f64>>(6)?,

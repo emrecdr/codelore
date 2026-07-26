@@ -560,7 +560,7 @@ fn emit_sarif(
                 }
             }],
             "properties": {
-                "security-severity": ((100.0 - h.code_health) / 10.0).clamp(0.0, 10.0),
+                "security-severity": ((100.0 - h.cognitive_health) / 10.0).clamp(0.0, 10.0),
                 "codelore/diff-classification": "rank-entrant",
                 "codelore/score": h.hotspot_score,
                 "tags": ["behavioral", "hotspot", "pr-diff"]

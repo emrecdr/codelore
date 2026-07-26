@@ -435,7 +435,7 @@ fn diff_fact_sections(output: &diff::DiffOutput) -> Vec<(String, Vec<(String, St
             facts.push((format!("{n}.hotspot_score"), fmt_num(h.hotspot_score)));
             facts.push((format!("{n}.revisions"), h.revisions.to_string()));
             facts.push((format!("{n}.cognitive"), fmt_num(h.cognitive)));
-            facts.push((format!("{n}.code_health"), fmt_num(h.code_health)));
+            facts.push((format!("{n}.cognitive_health"), fmt_num(h.cognitive_health)));
         }
         sections.push(("entrants".to_string(), facts));
     }

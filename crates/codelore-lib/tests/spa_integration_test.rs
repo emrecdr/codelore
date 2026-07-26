@@ -205,7 +205,7 @@ fn spa_emits_full_dashboard_from_differential_fixture() {
         "path",
         "revisions",
         "cognitive",
-        "code_health",
+        "cognitive_health",
         "hotspot_score",
     ] {
         assert!(

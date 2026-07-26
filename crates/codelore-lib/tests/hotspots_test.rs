@@ -36,7 +36,7 @@ fn hotspots_for_tiny_repo() {
     }
 
     // Hotspot score should be in [0, 10] range (formula bounds:
-    // percentile_rank ∈ [0,1], code_health ∈ [0,100], so score ∈ [0, 10])
+    // percentile_rank ∈ [0,1], cognitive_health ∈ [0,100], so score ∈ [0, 10])
     for row in &rows {
         assert!(
             row.hotspot_score >= 0.0,

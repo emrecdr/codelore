@@ -8,7 +8,7 @@ fn json_hotspots_emits_array() {
         path: "src/main.rs".into(),
         revisions: 4,
         cognitive: 7.0,
-        code_health: 75.5,
+        cognitive_health: 75.5,
         hotspot_score: 0.42,
         mi: Some(72.0),
         mi_rank: None,

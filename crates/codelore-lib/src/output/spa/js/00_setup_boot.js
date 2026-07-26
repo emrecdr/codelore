@@ -678,16 +678,16 @@
       citation: { label: 'Coleman 1994 + SEI 1997 — why repo-relative', anchor: '#hotspots-' },
     },
     hotspot_score: {
-      formula: 'percentile_rank(revisions) × percentile_rank(cognitive) × (100 − code_health) / 4. Range [0, 10] (CodeScene convention).',
+      formula: 'percentile_rank(revisions) × percentile_rank(cognitive) × (100 − cognitive_health) / 4. Range [0, 10] (CodeScene convention).',
       citation: { label: 'Tornhill 2018 — Software Design X-Rays', anchor: '#hotspots-' },
     },
     revisions: {
       formula: 'Count of distinct commits touching the file in the analysed history, after time-bucket and lineage rewrites.',
       citation: { label: 'Revisions analysis', anchor: '#revisions-' },
     },
-    code_health: {
-      formula: 'Hotspot-table Code Health column: the hotspots analysis\'s own inline signal, 100 × (1 − 0.40 × normalize(cognitive)), empirical range [60, 100]; lower = more cognitively complex. (Distinct from the code-health composite score.)',
-      citation: { label: 'hotspots inline code-health', anchor: '#hotspots-' },
+    cognitive_health: {
+      formula: 'Hotspot-table Cognitive Health column: the hotspots analysis\'s own inline signal, 100 × (1 − 0.40 × normalize(cognitive)), empirical range [60, 100]; lower = more cognitively complex. (Distinct from the code-health composite score.)',
+      citation: { label: 'hotspots inline cognitive-health', anchor: '#hotspots-' },
     },
     cognitive: {
       formula: 'Max cognitive complexity across entities within the file (SonarSource formalisation, Campbell 2018).',
@@ -1061,7 +1061,7 @@
         .map(function (r) {
           return {
             path: r.path,
-            code_health: r.code_health,
+            cognitive_health: r.cognitive_health,
             hotspot_score: r.hotspot_score,
             primary_author: listPrimaryAuthorByPath[r.path] || null,
           };

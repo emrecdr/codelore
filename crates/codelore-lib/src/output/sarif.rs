@@ -1,7 +1,7 @@
 //! SARIF 2.1.0 emitter for hotspot results — Behavioral SARIF taxonomy (spec §5.4).
 //!
 //! Rule `CODELORE-HOTSPOT`: properties.tags includes "behavioral" and "hotspot"
-//! security-severity proxy: `(100 − code_health) / 10`
+//! security-severity proxy: `(100 − cognitive_health) / 10`
 //! partialFingerprints for stable identity across CI runs.
 
 use crate::analyses::hotspots::HotspotRow;
@@ -179,8 +179,8 @@ fn build_sarif(rows: &[HotspotRow], repo_root: &str) -> serde_json::Value {
 fn build_result(row: &HotspotRow, repo_root: &str) -> serde_json::Value {
     use serde_json::json;
 
-    // security-severity proxy: (100 - code_health) / 10  (range 0.0–10.0)
-    let security_severity = (100.0 - row.code_health) / 10.0;
+    // security-severity proxy: (100 - cognitive_health) / 10  (range 0.0–10.0)
+    let security_severity = (100.0 - row.cognitive_health) / 10.0;
 
     // SARIF `level` derived from the same security-severity scale that
     // populates `properties.security-severity`. One source of truth —
@@ -222,16 +222,22 @@ fn build_result(row: &HotspotRow, repo_root: &str) -> serde_json::Value {
     };
     let message_text = match (row.mi, band_str) {
         (Some(v), Some(band)) => format!(
-            "Hotspot '{}': score={:.3}, code_health={:.1}, revisions={}, cognitive={:.1}, mi={:.1} ({})",
-            row.path, row.hotspot_score, row.code_health, row.revisions, row.cognitive, v, band
+            "Hotspot '{}': score={:.3}, cognitive_health={:.1}, revisions={}, cognitive={:.1}, mi={:.1} ({})",
+            row.path,
+            row.hotspot_score,
+            row.cognitive_health,
+            row.revisions,
+            row.cognitive,
+            v,
+            band
         ),
         (Some(v), None) => format!(
-            "Hotspot '{}': score={:.3}, code_health={:.1}, revisions={}, cognitive={:.1}, mi={:.1}",
-            row.path, row.hotspot_score, row.code_health, row.revisions, row.cognitive, v
+            "Hotspot '{}': score={:.3}, cognitive_health={:.1}, revisions={}, cognitive={:.1}, mi={:.1}",
+            row.path, row.hotspot_score, row.cognitive_health, row.revisions, row.cognitive, v
         ),
         _ => format!(
-            "Hotspot '{}': score={:.3}, code_health={:.1}, revisions={}, cognitive={:.1}",
-            row.path, row.hotspot_score, row.code_health, row.revisions, row.cognitive
+            "Hotspot '{}': score={:.3}, cognitive_health={:.1}, revisions={}, cognitive={:.1}",
+            row.path, row.hotspot_score, row.cognitive_health, row.revisions, row.cognitive
         ),
     };
 
@@ -239,7 +245,7 @@ fn build_result(row: &HotspotRow, repo_root: &str) -> serde_json::Value {
         "security-severity": security_severity,
         "codelore/revs": row.revisions,
         "codelore/cognitive": row.cognitive,
-        "codelore/codehealth": row.code_health,
+        "codelore/cognitivehealth": row.cognitive_health,
         "codelore/score": row.hotspot_score,
         "tags": ["behavioral", "hotspot"]
     });

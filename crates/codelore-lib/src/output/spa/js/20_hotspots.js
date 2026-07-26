@@ -45,7 +45,7 @@
     (data.code_health || []).forEach(function (r) { bandByPath[r.path] = r.band; });
 
     // Step 1: build a filesystem-style hierarchy from flat HotspotRow[].
-    // Each row is { path, revisions, cognitive, code_health, hotspot_score }.
+    // Each row is { path, revisions, cognitive, cognitive_health, hotspot_score }.
     // Path "a/b/c.rs" yields tree:
     //   root -> "a" -> "b" -> "c.rs" (leaf with the metrics)
     const tree = buildFsHierarchy(rows);
@@ -180,7 +180,7 @@
           return '<b>' + escapeHtml(d.fullPath) + '</b>' +
             '<br/>revisions: ' + m.revisions +
             '<br/>cognitive: ' + m.cognitive.toFixed(0) +
-            '<br/>code health: ' + m.code_health.toFixed(1) +
+            '<br/>cognitive health: ' + m.cognitive_health.toFixed(1) +
             '<br/>hotspot score: ' + m.hotspot_score.toFixed(2) +
             couplingLine;
         },
@@ -304,15 +304,16 @@
               // Code Health Map mode — 3-band green / yellow / red
               // via DaisyUI semantic tokens
               // (`--color-success` / `--color-warning` / `--color-error`)
-              // so the bands auto-adapt to light and dark themes. Null
-              // code_health (binary, unsupported language) renders as
-              // the dim foreground rather than misleading green.
-              leafColor = codeHealthColor(m ? m.code_health : null);
+              // so the bands auto-adapt to light and dark themes. Colours by
+              // the hotspots `cognitive_health` proxy (bounded [60, 100]); a
+              // null value (binary / unsupported language) renders as the dim
+              // foreground rather than misleading green.
+              leafColor = codeHealthColor(m ? m.cognitive_health : null);
             } else if (colorMode === 'friction') {
               // Technical Debt Friction mode — continuous heat ramp
               // on hotspot_score. The formula
               // `percentile_rank(revisions) × percentile_rank(cognitive)
-              // × (100 − code_health) / 4` already intersects activity
+              // × (100 − cognitive_health) / 4` already intersects activity
               // with unhealthy code (Tornhill 2018 score, range [0,10]),
               // so this is pure SQL → ramp surfacing. OKLCH interpolation
               // via heatRamp keeps the midpoint perceptually correct.
@@ -588,7 +589,7 @@
       { key: 'path',          label: 'Path',         cls: 'path', kind: 'string', defaultDir: 1 },
       { key: 'revisions',     label: 'Revisions',    cls: 'num',  kind: 'number', defaultDir: -1, defKey: 'revisions' },
       { key: 'cognitive',     label: 'Cognitive',    cls: 'num',  kind: 'number', defaultDir: -1, defKey: 'cognitive' },
-      { key: 'code_health',   label: 'Code Health',  cls: 'num',  kind: 'number', defaultDir: 1,  defKey: 'code_health' },
+      { key: 'cognitive_health', label: 'Cognitive Health', cls: 'num', kind: 'number', defaultDir: 1, defKey: 'cognitive_health' },
       { key: 'hotspot_score', label: 'Hotspot Score', cls: 'num', kind: 'number', defaultDir: -1, defKey: 'hotspot_score' },
       { key: 'mi',            label: 'MI',           cls: 'num',  kind: 'number', defaultDir: -1, defKey: 'mi' },
       { key: 'ai_pct',        label: 'AI %',         cls: 'num',  kind: 'number', defaultDir: -1, defKey: 'ai_pct' },
@@ -768,7 +769,7 @@
           '<td class="path">' + escapeHtml(r.path) + '</td>' +
           '<td class="num">' + (r.revisions != null ? r.revisions : '') + '</td>' +
           '<td class="num">' + fmtNumber(r.cognitive, { decimals: 0 }) + '</td>' +
-          '<td class="num">' + fmtNumber(r.code_health, { decimals: 1 }) + '</td>' +
+          '<td class="num">' + fmtNumber(r.cognitive_health, { decimals: 1 }) + '</td>' +
           '<td class="num">' + fmtNumber(r.hotspot_score, { decimals: 2 }) + '</td>' +
           '<td class="num">' + miCell + '</td>' +
           '<td class="num">' + aiCell + '</td>' +
