@@ -152,6 +152,18 @@ fn assert_tool_ok_text(resp: &Value, tool_name: &str) -> String {
     content[0]["text"].as_str().expect("text field").to_string()
 }
 
+/// Assert a response is a JSON-RPC error carrying `expected_code`. `-32602` is
+/// `invalid_params` (a caller-input problem); `-32603` is `internal_error`.
+fn assert_rpc_error_code(resp: &Value, expected_code: i64, ctx: &str) {
+    let code = resp["error"]["code"].as_i64().unwrap_or_else(|| {
+        panic!("{ctx}: expected a JSON-RPC error object with a numeric code, got: {resp}")
+    });
+    assert_eq!(
+        code, expected_code,
+        "{ctx}: wrong JSON-RPC error code: {resp}"
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
@@ -374,6 +386,171 @@ fn mcp_check_gates_returns_verdict() {
         parsed["verdict"], "pass",
         "check_gates: expected pass verdict with permissive threshold, got: {parsed}"
     );
+    // Only an evaluated gate is explicitly configured — but `fail_on_degraded`
+    // defaults to true and is check-only, so it is always disclosed as skipped
+    // unless the config switches it off. Nothing else may appear.
+    let skipped: Vec<&str> = parsed["skipped_gates"]
+        .as_array()
+        .expect("check_gates: skipped_gates array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(
+        skipped,
+        vec!["fail_on_degraded"],
+        "check_gates: only the default-on degraded semantics may be skipped when \
+         every explicitly set gate is evaluated: {parsed}"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn mcp_check_gates_discloses_skipped_gates() {
+    let repo = delivery_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+
+    // An evaluated gate (so the verdict is a real pass) plus a check-only gate
+    // this tool does not evaluate on the committed-tree read path. Degraded
+    // semantics are explicitly switched off to prove the disclosure honors it.
+    std::fs::write(
+        repo.dir.path().join(".codelore-thresholds.toml"),
+        "[gates]\ncode_health_min = 0.0\nmax_findings_in_hot_files = 100\nfail_on_degraded = false\n",
+    )
+    .unwrap();
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
+    let resp = call_tool(&mut stdin, &mut reader, 1, "check_gates", &json!({}));
+    let parsed = assert_tool_ok(&resp, "check_gates");
+
+    let skipped: Vec<&str> = parsed["skipped_gates"]
+        .as_array()
+        .expect("check_gates: skipped_gates array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert!(
+        skipped.contains(&"max_findings_in_hot_files"),
+        "a configured check-only gate must be disclosed under skipped_gates: {parsed}"
+    );
+    assert!(
+        !skipped.contains(&"fail_on_degraded"),
+        "explicitly disabled degraded semantics must not be disclosed as skipped: {parsed}"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn mcp_function_xray_errors_on_unknown_path() {
+    let repo = delivery_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
+    let resp = call_tool(
+        &mut stdin,
+        &mut reader,
+        1,
+        "function_xray",
+        &json!({ "path": "src/does_not_exist.rs" }),
+    );
+    assert_eq!(resp["jsonrpc"], "2.0");
+    // A typo path is caller input, not a file "with no functions": invalid_params
+    // (-32602), and the message names the offending path.
+    assert_rpc_error_code(&resp, -32602, "function_xray unknown path");
+    assert!(
+        resp.to_string().contains("src/does_not_exist.rs"),
+        "the error must name the unknown path: {resp}"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn mcp_code_health_errors_on_unknown_path() {
+    let repo = delivery_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
+    let resp = call_tool(
+        &mut stdin,
+        &mut reader,
+        1,
+        "code_health",
+        &json!({ "path": "src/does_not_exist.rs" }),
+    );
+    assert_eq!(resp["jsonrpc"], "2.0");
+    assert_rpc_error_code(&resp, -32602, "code_health unknown path");
+    assert!(
+        resp.to_string().contains("src/does_not_exist.rs"),
+        "the error must name the unknown path: {resp}"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn mcp_code_health_limit_is_honored() {
+    let repo = delivery_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
+    // delivery_repo has a single file above the default revision floor, so the
+    // fixture cannot exceed the cap; assert the cap is honored and the bare-
+    // array shape is preserved when nothing is omitted. The omitted-summary
+    // contract on a >cap population is unit-tested in src/mcp.rs, which can
+    // construct the population deterministically.
+    let resp = call_tool(
+        &mut stdin,
+        &mut reader,
+        1,
+        "code_health",
+        &json!({ "limit": 1 }),
+    );
+    let parsed = assert_tool_ok(&resp, "code_health");
+    let arr = parsed
+        .as_array()
+        .expect("code_health returns an array when listing");
+    let real_rows = arr.iter().filter(|v| v.get("path").is_some()).count();
+    assert!(
+        real_rows <= 1,
+        "limit=1 must cap real rows at one: {parsed}"
+    );
+    assert!(
+        arr.iter().all(|v| v.get("omitted").is_none()),
+        "an untruncated list carries no omitted summary object: {parsed}"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn mcp_delta_health_description_discloses_diff_subset() {
+    let repo = tiny_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
+    let list_req = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {} });
+    stdin.write_all(&ndjson_line(&list_req)).unwrap();
+    stdin.flush().unwrap();
+    let list_resp = read_ndjson(&mut reader);
+    let tools = list_resp["result"]["tools"]
+        .as_array()
+        .expect("tools array");
+    let delta = tools
+        .iter()
+        .find(|t| t["name"] == "delta_health")
+        .expect("delta_health tool present");
+    let desc = delta["description"].as_str().unwrap_or_default();
+    assert!(
+        desc.contains("codelore diff"),
+        "delta_health must disclose it is a subset of `codelore diff`: {desc}"
+    );
 
     drop(stdin);
     let _ = child.wait();
@@ -402,6 +579,9 @@ fn mcp_delta_health_rejects_bad_rev() {
         is_rpc_error || is_tool_error,
         "delta_health with bad rev should return an error, got: {resp}"
     );
+    // A bad rev is caller input, so it must surface as invalid_params (-32602),
+    // not internal_error (-32603).
+    assert_rpc_error_code(&resp, -32602, "delta_health bad rev");
 
     drop(stdin);
     let _ = child.wait();
@@ -829,6 +1009,8 @@ fn mcp_change_context_rejects_empty_and_oversized_path_lists() {
         empty.to_string().contains("20"),
         "the empty-list error must name the 20-path limit: {empty}"
     );
+    // A bad path list is caller input → invalid_params (-32602).
+    assert_rpc_error_code(&empty, -32602, "change_context empty paths");
 
     // 21 paths — above the 20-path ceiling.
     let too_many: Vec<String> = (0..21).map(|i| format!("src/file{i}.rs")).collect();
@@ -850,6 +1032,7 @@ fn mcp_change_context_rejects_empty_and_oversized_path_lists() {
         oversized.to_string().contains("20"),
         "the oversized-list error must name the 20-path limit: {oversized}"
     );
+    assert_rpc_error_code(&oversized, -32602, "change_context oversized paths");
 
     drop(stdin);
     let _ = child.wait();
@@ -990,6 +1173,15 @@ fn gate_changes_flags_working_tree_edit() {
     assert!(
         text.contains(" → "),
         "the delta table must render baseline → projected: {text}"
+    );
+    // The FAIL next-action line names the worst-delta file and the driving gate.
+    assert!(
+        text.contains("\u{2192} fix src/core.rs first"),
+        "the FAIL action line must name the worst-delta file to fix first: {text}"
+    );
+    assert!(
+        text.contains("drives the delta_code_health_min_per_file violation"),
+        "the FAIL action line must name the driving gate: {text}"
     );
 
     drop(stdin);

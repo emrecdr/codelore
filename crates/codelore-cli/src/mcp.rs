@@ -15,6 +15,7 @@ use rmcp::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use codelore_lib::CodeLoreError;
 use codelore_lib::change_context;
 use codelore_lib::change_set;
 use codelore_lib::cli_api::{
@@ -34,16 +35,95 @@ use codelore_lib::cli_api::{
     external::ExternalStore,
     facts::FactsDb,
     quality_gates::{
-        GateViolation, Thresholds, evaluate_clone_gate, evaluate_code_health_gate,
+        GateViolation, Gates, Thresholds, evaluate_clone_gate, evaluate_code_health_gate,
         evaluate_full_tree, evaluate_gate_thresholds, resolve_defect_calibration,
     },
     repo::{GixRepo, Repo as _},
 };
+use codelore_lib::complexity::Tier1Language;
 use codelore_lib::defect_calibration;
 
-/// Convert any displayable error to an MCP `ErrorData` internal error.
+/// Convert any displayable error to an MCP `ErrorData` internal error. Used for
+/// genuinely internal failures (serialization, task-join, git process spawn)
+/// that carry no `CodeLoreError` variant. Library calls go through
+/// [`map_lib_err`], which routes caller-input errors to `invalid_params`.
 fn internal(e: impl std::fmt::Display) -> ErrorData {
     ErrorData::internal_error(e.to_string(), None)
+}
+
+/// Map a library error to the correct JSON-RPC error kind. The CLI's exit-2
+/// bucket — [`CodeLoreError::InvalidOptions`] / `MalformedTeamMap`, i.e. bad
+/// parameters or malformed user config — is a caller-input problem and becomes
+/// `invalid_params` (-32602) so a client can tell it supplied bad input; every
+/// other variant is a genuine internal/environment failure and stays
+/// `internal_error` (-32603).
+fn map_lib_err(e: &CodeLoreError) -> ErrorData {
+    if e.exit_code() == 2 {
+        ErrorData::invalid_params(e.to_string(), None)
+    } else {
+        ErrorData::internal_error(e.to_string(), None)
+    }
+}
+
+/// Default and hard-ceiling row caps for the listing read tools. An unbounded
+/// listing can blow the caller's token budget, so every list tool caps its
+/// output and discloses the suppressed remainder (see [`serialize_capped_rows`]).
+const DEFAULT_ROW_CAP: usize = 50;
+const MAX_ROW_CAP: usize = 500;
+
+/// Resolve a caller-supplied `limit` into `1..=MAX_ROW_CAP`, defaulting to
+/// `DEFAULT_ROW_CAP` when absent. A `0` clamps up to 1 (a listing tool always
+/// returns at least the single worst row).
+fn resolve_row_cap(limit: Option<u32>) -> usize {
+    limit.map_or(DEFAULT_ROW_CAP, |n| (n as usize).clamp(1, MAX_ROW_CAP))
+}
+
+/// Serialize a rank-ordered row slice already truncated to its cap. When rows
+/// were suppressed, a trailing `{omitted, total, note}` summary object is
+/// appended to the JSON array so a caller sees the list is incomplete; an
+/// untruncated list serializes as the bare array the tool has always returned,
+/// so the absence of a summary object means the list is complete.
+fn serialize_capped_rows<T: Serialize>(
+    shown: &[T],
+    total: usize,
+    note: &str,
+) -> std::result::Result<String, ErrorData> {
+    let omitted = total.saturating_sub(shown.len());
+    if omitted == 0 {
+        return serde_json::to_string(shown).map_err(internal);
+    }
+    let mut arr = shown
+        .iter()
+        .map(serde_json::to_value)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(internal)?;
+    arr.push(serde_json::json!({
+        "omitted": omitted,
+        "total": total,
+        "note": note,
+    }));
+    serde_json::to_string(&arr).map_err(internal)
+}
+
+/// Confirm `path` is in the repo's analyzed-file universe (tracked at HEAD).
+/// Returns an actionable `invalid_params` error naming the path when it is not —
+/// a typo or an absolute path where a repo-relative one is expected otherwise
+/// reads as an empty result. Mirrors how `explain_file`'s fact sheet rejects an
+/// unknown path.
+fn require_tracked_path(repo: &GixRepo, path: &str) -> std::result::Result<(), ErrorData> {
+    match repo
+        .read_blob_at("HEAD", path)
+        .map_err(|e| map_lib_err(&e))?
+    {
+        Some(_) => Ok(()),
+        None => Err(ErrorData::invalid_params(
+            format!(
+                "path not found among files tracked at HEAD: {path:?} — paths are \
+                 repo-relative; try repo_overview or hotspots to list analyzed files"
+            ),
+            None,
+        )),
+    }
 }
 
 /// Resolve a revision string against `repo` via `git rev-parse`.
@@ -175,6 +255,10 @@ pub struct CodeHealthParams {
     /// Filter results to this file path (relative to repo root).
     /// Omit to return all files with complexity data.
     pub path: Option<String>,
+    /// When listing (no `path`), the maximum rows to return, worst-health
+    /// first (default: 50, clamped to 1..=500). A trailing summary object
+    /// discloses any suppressed rows.
+    pub limit: Option<u32>,
 }
 
 /// Parameters for the `delta_health` tool.
@@ -184,6 +268,9 @@ pub struct DeltaHealthParams {
     pub base: String,
     /// Head revision (branch, tag, or full SHA). Must be resolvable by `git rev-parse`.
     pub head: String,
+    /// Maximum per-function rows to return (default: 50, clamped to 1..=500).
+    /// An `omitted_functions` count is added when rows are suppressed.
+    pub limit: Option<u32>,
 }
 
 /// Parameters for the `refactoring_targets` tool.
@@ -204,9 +291,13 @@ pub struct FunctionXrayParams {
 #[derive(Debug, Deserialize, JsonSchema, Default)]
 pub struct CheckGatesParams {}
 
-/// Parameters for the `finding_hotspot_overlap` tool (none required).
+/// Parameters for the `finding_hotspot_overlap` tool.
 #[derive(Debug, Deserialize, JsonSchema, Default)]
-pub struct FindingHotspotOverlapParams {}
+pub struct FindingHotspotOverlapParams {
+    /// Maximum rows to return, highest-priority (`act-now`) first (default: 50,
+    /// clamped to 1..=500). A trailing summary object discloses suppressed rows.
+    pub limit: Option<u32>,
+}
 
 /// Parameters for the `explain_file` tool.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -239,6 +330,72 @@ struct GateSummary {
     violation_count: usize,
     /// Individual gate violations, if any.
     violations: Vec<GateViolation>,
+    /// Configured `[gates]` gates that this tool did NOT evaluate, so its
+    /// verdict is a subset of `codelore check` (which evaluates all of them).
+    /// Empty when nothing is skipped. See [`skipped_check_gates`].
+    skipped_gates: Vec<&'static str>,
+}
+
+/// The `[gates]` gates configured in `thresholds` that `check_gates` does not
+/// evaluate. `codelore check` evaluates every `[gates]` gate; this tool omits
+/// the ones whose committed-tree inputs it does not carry (external findings,
+/// the corpus lens), so the disclosure is (configured gates) − (the set
+/// evaluated here). Returned in a stable declaration order; empty when nothing
+/// is skipped.
+fn skipped_check_gates(thresholds: &Thresholds) -> Vec<&'static str> {
+    // Gates this tool evaluates, kept beside the evaluation calls in
+    // `check_gates`. A configured `[gates]` gate absent from this set is
+    // disclosed as skipped, so a gate added to the config surfaces here until
+    // the tool is taught to evaluate it.
+    const EVALUATED_HERE: &[&str] = &[
+        "cognitive_max",
+        "hotspot_score_max",
+        "code_health_min",
+        "disallow_clone_type_1",
+        "max_dependency_cycles",
+        "max_propagation_cost",
+        "max_red_effort_pct",
+        "code_familiarity_min",
+    ];
+    // Exhaustive destructuring: adding a field to `Gates` fails to compile
+    // here until the new gate is classified as evaluated or skipped.
+    let Gates {
+        cognitive_max,
+        code_health_min,
+        hotspot_score_max,
+        disallow_clone_type_1,
+        max_dependency_cycles,
+        max_propagation_cost,
+        max_red_effort_pct,
+        code_familiarity_min,
+        max_findings_in_hot_files,
+        corpus_percentile_max,
+        fail_on_degraded,
+    } = &thresholds.gates;
+    let configured: [(&'static str, bool); 11] = [
+        ("cognitive_max", cognitive_max.is_some()),
+        ("hotspot_score_max", hotspot_score_max.is_some()),
+        ("code_health_min", code_health_min.is_some()),
+        ("disallow_clone_type_1", *disallow_clone_type_1),
+        ("max_dependency_cycles", max_dependency_cycles.is_some()),
+        ("max_propagation_cost", max_propagation_cost.is_some()),
+        ("max_red_effort_pct", max_red_effort_pct.is_some()),
+        ("code_familiarity_min", code_familiarity_min.is_some()),
+        (
+            "max_findings_in_hot_files",
+            max_findings_in_hot_files.is_some(),
+        ),
+        ("corpus_percentile_max", corpus_percentile_max.is_some()),
+        // Defaults to true, so degraded-gate semantics are active in almost
+        // every `codelore check` run while this tool never applies them —
+        // disclosed whenever active.
+        ("fail_on_degraded", *fail_on_degraded),
+    ];
+    configured
+        .into_iter()
+        .filter(|(name, set)| *set && !EVALUATED_HERE.contains(name))
+        .map(|(name, _)| name)
+        .collect()
 }
 
 #[tool_router]
@@ -261,10 +418,10 @@ impl CodeLoreServer {
                 repo_path: repo_path.clone(),
                 ..Options::default()
             };
-            let repo = GixRepo::open(&repo_path).map_err(internal)?;
+            let repo = GixRepo::open(&repo_path).map_err(|e| map_lib_err(&e))?;
             let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
-                .map_err(internal)?;
-            let rows = summary::run_summary(&db, &opts).map_err(internal)?;
+                .map_err(|e| map_lib_err(&e))?;
+            let rows = summary::run_summary(&db, &opts).map_err(|e| map_lib_err(&e))?;
             let out = serde_json::json!({
                 "summary": rows,
                 "options": opts.canonical_json(),
@@ -292,10 +449,10 @@ impl CodeLoreServer {
                 ..Options::default()
             };
             opts.rows_limit = Some(limit);
-            let repo = GixRepo::open(&repo_path).map_err(internal)?;
+            let repo = GixRepo::open(&repo_path).map_err(|e| map_lib_err(&e))?;
             let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
-                .map_err(internal)?;
-            let rows = hotspots::run_hotspots(&db, &opts).map_err(internal)?;
+                .map_err(|e| map_lib_err(&e))?;
+            let rows = hotspots::run_hotspots(&db, &opts).map_err(|e| map_lib_err(&e))?;
             serde_json::to_string(&rows).map_err(internal)
         })
         .await
@@ -307,25 +464,44 @@ impl CodeLoreServer {
     #[tool(
         name = "code_health",
         description = "Return per-file composite code-health scores (band: red/yellow/green, score 0–100) as JSON. \
-            Pass `path` to filter to a single file. \
+            Pass `path` to filter to a single file; an unknown path returns an error naming it, \
+            not an empty result. Otherwise the list is worst-health first, capped by `limit` \
+            (default 50, max 500), with a trailing `{omitted, total, note}` summary object when rows \
+            are suppressed. \
             First call on a cold cache triggers history ingest."
     )]
     async fn code_health(&self, params: Parameters<CodeHealthParams>) -> Result<String, ErrorData> {
         let repo_path = self.repo.clone();
         let filter_path = params.0.path.clone();
+        let cap = resolve_row_cap(params.0.limit);
         tokio::task::spawn_blocking(move || {
             let opts = Options {
                 repo_path: repo_path.clone(),
                 ..Options::default()
             };
-            let repo = GixRepo::open(&repo_path).map_err(internal)?;
+            let repo = GixRepo::open(&repo_path).map_err(|e| map_lib_err(&e))?;
+            // A path outside the analyzed-file universe is a caller error, not
+            // an empty single-file result — reject it before the ingest. A
+            // tracked file with no health row (e.g. below the revision floor)
+            // legitimately returns [].
+            if let Some(p) = &filter_path {
+                require_tracked_path(&repo, p)?;
+            }
             let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
-                .map_err(internal)?;
-            let mut rows = code_health::run_code_health(&db, &opts).map_err(internal)?;
+                .map_err(|e| map_lib_err(&e))?;
+            let mut rows = code_health::run_code_health(&db, &opts).map_err(|e| map_lib_err(&e))?;
             if let Some(p) = filter_path {
                 rows.retain(|r| r.path == p);
+                return serde_json::to_string(&rows).map_err(internal);
             }
-            serde_json::to_string(&rows).map_err(internal)
+            // Rows arrive worst-health first (score ascending); cap the tail.
+            let total = rows.len();
+            rows.truncate(cap);
+            serialize_capped_rows(
+                &rows,
+                total,
+                "worst-health files first; raise limit (max 500) or pass a path for the rest",
+            )
         })
         .await
         .map_err(internal)?
@@ -338,6 +514,10 @@ impl CodeLoreServer {
         description = "Return a function-level health delta between two revisions as JSON. \
             `base` and `head` are any rev-parse-able strings (branch, tag, SHA). \
             Returns verdict (improved/neutral/degraded), ratio, and per-function breakdown. \
+            This is a simplified subset of `codelore diff`: clone-group membership and \
+            base red-file context are not scored here — run `codelore diff` for the full report. \
+            Pass `limit` to cap the per-function rows (default 50, max 500); an `omitted_functions` \
+            count is added when rows are suppressed. \
             Cost: ingests history twice (once per rev); expect 5–30 s on a cold cache."
     )]
     async fn delta_health(
@@ -347,6 +527,7 @@ impl CodeLoreServer {
         let repo_path = self.repo.clone();
         let base_rev = params.0.base.clone();
         let head_rev = params.0.head.clone();
+        let cap = resolve_row_cap(params.0.limit);
 
         // Resolve revisions up front on the async thread (cheap git I/O).
         let base_sha = resolve_rev(&repo_path, &base_rev)?;
@@ -371,10 +552,10 @@ impl CodeLoreServer {
                     repo_path: wt.to_path_buf(),
                     ..Options::default()
                 };
-                let repo = GixRepo::open(wt).map_err(internal)?;
-                let db = FactsDb::new_in_memory().map_err(internal)?;
-                db.ingest(&repo, &opts).map_err(internal)?;
-                run_function_metrics(&db).map_err(internal)
+                let repo = GixRepo::open(wt).map_err(|e| map_lib_err(&e))?;
+                let db = FactsDb::new_in_memory().map_err(|e| map_lib_err(&e))?;
+                db.ingest(&repo, &opts).map_err(|e| map_lib_err(&e))?;
+                run_function_metrics(&db).map_err(|e| map_lib_err(&e))
             };
 
             let base_fns = ingest_at(&base_path)?;
@@ -385,10 +566,24 @@ impl CodeLoreServer {
             let clone_members: HashSet<(String, String)> = HashSet::new();
             let base_red: HashSet<String> = HashSet::new();
 
-            let section: DeltaHealthSection =
+            let mut section: DeltaHealthSection =
                 compute_delta_health(&base_fns, &head_fns, &pr_files, &clone_members, &base_red);
 
-            serde_json::to_string(&section).map_err(internal)
+            // Bound the per-function rows so a large diff cannot blow the
+            // caller's token budget. The rows are (path, name)-ordered, so a
+            // truncation drops the lexicographically-last functions; the added
+            // `omitted_functions` count discloses it and `codelore diff` gives
+            // the full list.
+            let total_fns = section.functions.len();
+            let omitted_fns = total_fns.saturating_sub(cap);
+            if omitted_fns > 0 {
+                section.functions.truncate(cap);
+            }
+            let mut value = serde_json::to_value(&section).map_err(internal)?;
+            if omitted_fns > 0 {
+                value["omitted_functions"] = serde_json::json!(omitted_fns);
+            }
+            serde_json::to_string(&value).map_err(internal)
         })
         .await
         .map_err(internal)?
@@ -399,7 +594,8 @@ impl CodeLoreServer {
     #[tool(
         name = "refactoring_targets",
         description = "Return the highest-priority refactoring candidates ranked by risk÷LOC as JSON. \
-            Pass `limit` to cap rows (default: all). \
+            Pass `limit` to cap rows (default 50, max 500); a trailing `{omitted, total, note}` \
+            summary object discloses any suppressed rows. \
             First call on a cold cache triggers history ingest."
     )]
     async fn refactoring_targets(
@@ -407,21 +603,26 @@ impl CodeLoreServer {
         params: Parameters<RefactoringTargetsParams>,
     ) -> Result<String, ErrorData> {
         let repo_path = self.repo.clone();
-        let limit = params.0.limit;
+        let cap = resolve_row_cap(params.0.limit);
         tokio::task::spawn_blocking(move || {
-            let mut opts = Options {
+            let opts = Options {
                 repo_path: repo_path.clone(),
                 ..Options::default()
             };
-            if let Some(n) = limit {
-                opts.rows_limit = Some(n);
-            }
-            let repo = GixRepo::open(&repo_path).map_err(internal)?;
+            let repo = GixRepo::open(&repo_path).map_err(|e| map_lib_err(&e))?;
             let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
-                .map_err(internal)?;
-            let rows =
-                refactoring_targets::run_refactoring_targets(&db, &opts).map_err(internal)?;
-            serde_json::to_string(&rows).map_err(internal)
+                .map_err(|e| map_lib_err(&e))?;
+            // Run unbounded so the true total is known, then cap in-tool with the
+            // omitted disclosure (the analysis ranks over the full set either way).
+            let mut rows = refactoring_targets::run_refactoring_targets(&db, &opts)
+                .map_err(|e| map_lib_err(&e))?;
+            let total = rows.len();
+            rows.truncate(cap);
+            serialize_capped_rows(
+                &rows,
+                total,
+                "highest-priority refactor targets first; raise limit (max 500) for the rest",
+            )
         })
         .await
         .map_err(internal)?
@@ -431,8 +632,11 @@ impl CodeLoreServer {
 
     #[tool(
         name = "function_xray",
-        description = "Return per-function change-frequency and complexity for a file as JSON. \
+        description = "Return per-function change-frequency and complexity for a file as a JSON array. \
             `path` is the file path relative to the repo root (e.g. \"src/main.rs\"). \
+            A path not tracked at HEAD returns an error naming it, not an empty array; \
+            a tracked file in a language without function analysis returns a `{note}` object; \
+            a tracked source file with no parsed functions returns []. \
             First call on a cold cache triggers history ingest."
     )]
     async fn function_xray(
@@ -446,11 +650,28 @@ impl CodeLoreServer {
                 repo_path: repo_path.clone(),
                 ..Options::default()
             };
-            let repo = GixRepo::open(&repo_path).map_err(internal)?;
+            let repo = GixRepo::open(&repo_path).map_err(|e| map_lib_err(&e))?;
+            // Resolve the path against the analyzed-file universe first: a typo
+            // or absolute path is a caller error, not a file "with no functions".
+            require_tracked_path(&repo, &target)?;
+            // A tracked file the function analyser does not support (not a
+            // Tier-1 language) legitimately yields no functions — say that,
+            // rather than returning a bare [] that reads like an empty result.
+            if Tier1Language::from_path(&target).is_none() {
+                let note = serde_json::json!({
+                    "functions": [],
+                    "note": format!(
+                        "{target} is tracked but not a Tier-1 source file (function analysis \
+                         covers Rust, Python, Java, JavaScript, TypeScript); no per-function \
+                         breakdown available"
+                    ),
+                });
+                return serde_json::to_string(&note).map_err(internal);
+            }
             let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
-                .map_err(internal)?;
-            let rows =
-                function_xray::run_function_xray(&db, &repo, &opts, &target).map_err(internal)?;
+                .map_err(|e| map_lib_err(&e))?;
+            let rows = function_xray::run_function_xray(&db, &repo, &opts, &target)
+                .map_err(|e| map_lib_err(&e))?;
             serde_json::to_string(&rows).map_err(internal)
         })
         .await
@@ -462,7 +683,11 @@ impl CodeLoreServer {
     #[tool(
         name = "check_gates",
         description = "Evaluate `.codelore-thresholds.toml` quality gates at HEAD and return a JSON \
-            summary with verdict (pass/fail/no_thresholds), violation count, and individual violations. \
+            summary with verdict (pass/fail/no_thresholds), violation count, individual violations, \
+            and a `skipped_gates` array naming any configured gate this tool did not evaluate. \
+            This tool evaluates a subset of `codelore check`: the `max_findings_in_hot_files` and \
+            `corpus_percentile_max` gates, `--ratchet`, and degraded-gate handling remain check-only, \
+            so a config using those can make this verdict diverge — `codelore check` is authoritative. \
             Returns `no_thresholds` verdict when no config file is found. \
             First call on a cold cache triggers history ingest."
     )]
@@ -474,12 +699,13 @@ impl CodeLoreServer {
         let defect_calibration = self.defect_calibration.clone();
         let allow_foreign_calibration = self.allow_foreign_calibration;
         tokio::task::spawn_blocking(move || {
-            let thresholds = Thresholds::discover(&repo_path).map_err(internal)?;
+            let thresholds = Thresholds::discover(&repo_path).map_err(|e| map_lib_err(&e))?;
             if thresholds.is_empty() {
                 let summary = GateSummary {
                     verdict: "no_thresholds".into(),
                     violation_count: 0,
                     violations: Vec::<GateViolation>::new(),
+                    skipped_gates: Vec::new(),
                 };
                 return serde_json::to_string(&summary).map_err(internal);
             }
@@ -493,22 +719,22 @@ impl CodeLoreServer {
                 allow_foreign_calibration,
                 ..Options::default()
             };
-            let repo = GixRepo::open(&repo_path).map_err(internal)?;
+            let repo = GixRepo::open(&repo_path).map_err(|e| map_lib_err(&e))?;
             let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
-                .map_err(internal)?;
+                .map_err(|e| map_lib_err(&e))?;
 
             let mut violations: Vec<GateViolation> = Vec::new();
 
             // hotspot-scoped gates (cognitive_max, hotspot_score_max)
-            let hs = hotspots::run_hotspots(&db, &opts).map_err(internal)?;
+            let hs = hotspots::run_hotspots(&db, &opts).map_err(|e| map_lib_err(&e))?;
             violations.extend(evaluate_full_tree(&thresholds, &hs));
 
             // code_health_min gate
-            let ch = code_health::run_code_health(&db, &opts).map_err(internal)?;
+            let ch = code_health::run_code_health(&db, &opts).map_err(|e| map_lib_err(&e))?;
             violations.extend(evaluate_code_health_gate(&thresholds, &ch));
 
             // clone gate
-            violations.extend(evaluate_clone_gate(&thresholds, &db).map_err(internal)?);
+            violations.extend(evaluate_clone_gate(&thresholds, &db).map_err(|e| map_lib_err(&e))?);
 
             // effort-exposure gate — reuses the code-health rows computed for
             // code_health_min so the heaviest analysis runs once per call.
@@ -519,7 +745,7 @@ impl CodeLoreServer {
                         &opts.with_no_row_limit(),
                         &ch,
                     )
-                    .map_err(internal)?;
+                    .map_err(|e| map_lib_err(&e))?;
                 violations.extend(
                     codelore_lib::cli_api::quality_gates::evaluate_effort_exposure_rows(max, &rows),
                 );
@@ -528,12 +754,12 @@ impl CodeLoreServer {
             // architecture + familiarity gates. This tool evaluates a subset
             // of `codelore check`: the `max_findings_in_hot_files` and
             // `corpus_percentile_max` gates, degraded-gate semantics, and
-            // `--ratchet` remain check-only, so a config using those gates can
-            // make this verdict diverge from a CI run — `codelore check` is
-            // authoritative.
+            // `--ratchet` remain check-only — `skipped_gates` (below) names any
+            // that this config configured, so a client sees where this verdict
+            // can diverge from a CI run. `codelore check` is authoritative.
             violations.extend(
                 codelore_lib::cli_api::quality_gates::evaluate_architecture_gate(&thresholds, &db)
-                    .map_err(internal)?,
+                    .map_err(|e| map_lib_err(&e))?,
             );
             violations.extend(
                 codelore_lib::cli_api::quality_gates::evaluate_familiarity_gate(
@@ -541,7 +767,7 @@ impl CodeLoreServer {
                     &db,
                     &opts,
                 )
-                .map_err(internal)?,
+                .map_err(|e| map_lib_err(&e))?,
             );
 
             let verdict = if violations.is_empty() {
@@ -553,6 +779,7 @@ impl CodeLoreServer {
                 verdict: verdict.into(),
                 violation_count: violations.len(),
                 violations,
+                skipped_gates: skipped_check_gates(&thresholds),
             };
             serde_json::to_string(&summary).map_err(internal)
         })
@@ -568,13 +795,16 @@ impl CodeLoreServer {
             joined with hotspot rank and code-health band, producing an `act-now` / `plan` / `note` \
             priority for each flagged file. Requires a prior `codelore ingest-sarif` run to populate \
             the external findings sidecar; returns a structured note when the sidecar is absent or empty. \
+            Rows are highest-priority first, capped by `limit` (default 50, max 500), with a trailing \
+            `{omitted, total, note}` summary object when rows are suppressed. \
             Cost: warm-cache fast after ingest; does not trigger history re-ingest."
     )]
     async fn finding_hotspot_overlap(
         &self,
-        _params: Parameters<FindingHotspotOverlapParams>,
+        params: Parameters<FindingHotspotOverlapParams>,
     ) -> Result<String, ErrorData> {
         let repo_path = self.repo.clone();
+        let cap = resolve_row_cap(params.0.limit);
         tokio::task::spawn_blocking(move || {
             let cache_root = default_cache_root();
 
@@ -582,8 +812,8 @@ impl CodeLoreServer {
             // present-but-empty — the MCP tool never creates it; that is
             // ingest-sarif's job. Both cases return the structured "run
             // ingest-sarif first" note.
-            let Some(store) =
-                ExternalStore::open_nonempty(&cache_root, &repo_path).map_err(internal)?
+            let Some(store) = ExternalStore::open_nonempty(&cache_root, &repo_path)
+                .map_err(|e| map_lib_err(&e))?
             else {
                 let note = serde_json::json!({
                     "findings": [],
@@ -596,13 +826,19 @@ impl CodeLoreServer {
                 repo_path: repo_path.clone(),
                 ..Options::default()
             };
-            let repo = GixRepo::open(&repo_path).map_err(internal)?;
+            let repo = GixRepo::open(&repo_path).map_err(|e| map_lib_err(&e))?;
             let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &cache_root)
-                .map_err(internal)?;
+                .map_err(|e| map_lib_err(&e))?;
 
-            let rows = finding_hotspot_overlap::run_finding_hotspot_overlap(&db, &opts, &store)
-                .map_err(internal)?;
-            serde_json::to_string(&rows).map_err(internal)
+            let mut rows = finding_hotspot_overlap::run_finding_hotspot_overlap(&db, &opts, &store)
+                .map_err(|e| map_lib_err(&e))?;
+            let total = rows.len();
+            rows.truncate(cap);
+            serialize_capped_rows(
+                &rows,
+                total,
+                "act-now findings first; raise limit (max 500) for the rest",
+            )
         })
         .await
         .map_err(internal)?
@@ -641,10 +877,11 @@ impl CodeLoreServer {
                 allow_foreign_calibration,
                 ..Options::default()
             };
-            let repo = GixRepo::open(&repo_path).map_err(internal)?;
+            let repo = GixRepo::open(&repo_path).map_err(|e| map_lib_err(&e))?;
             let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
-                .map_err(internal)?;
-            let sheet = FileFactSheet::build(&db, &repo, &opts, &target).map_err(internal)?;
+                .map_err(|e| map_lib_err(&e))?;
+            let sheet =
+                FileFactSheet::build(&db, &repo, &opts, &target).map_err(|e| map_lib_err(&e))?;
 
             // The structured fact sheet: an ordered array of {section, facts}
             // objects, preserving the builder's section and key order.
@@ -732,10 +969,15 @@ impl CodeLoreServer {
                 allow_foreign_calibration,
                 ..Options::default()
             };
-            let repo = GixRepo::open(&repo_path).map_err(internal)?;
+            let repo = GixRepo::open(&repo_path).map_err(|e| map_lib_err(&e))?;
             let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
-                .map_err(internal)?;
-            change_context::build_change_context(&db, &repo, &opts, &paths).map_err(internal)
+                .map_err(|e| map_lib_err(&e))?;
+            // An empty or oversized path list surfaces as `InvalidOptions`
+            // (the CLI's exit-2 config/param bucket), which `map_lib_err`
+            // routes to a JSON-RPC `invalid_params` so the client sees it as
+            // bad input rather than an internal failure.
+            change_context::build_change_context(&db, &repo, &opts, &paths)
+                .map_err(|e| map_lib_err(&e))
         })
         .await
         .map_err(internal)?
@@ -770,19 +1012,19 @@ impl CodeLoreServer {
                 allow_foreign_calibration,
                 ..Options::default()
             };
-            let repo = GixRepo::open(&repo_path).map_err(internal)?;
-            let changes = repo.worktree_changes().map_err(internal)?;
+            let repo = GixRepo::open(&repo_path).map_err(|e| map_lib_err(&e))?;
+            let changes = repo.worktree_changes().map_err(|e| map_lib_err(&e))?;
             if changes.is_empty() {
                 return Ok("PASS (no working-tree changes to gate)".to_string());
             }
             let cache_root = default_cache_root();
             let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &cache_root)
-                .map_err(internal)?;
+                .map_err(|e| map_lib_err(&e))?;
             let report = change_set::build_change_set_report(&db, &repo, &opts, &cache_root)
-                .map_err(internal)?;
+                .map_err(|e| map_lib_err(&e))?;
             // Thresholds are re-evaluated on every call — a warm sidecar hit
             // returns measured data only, never a stored verdict.
-            let thresholds = Thresholds::discover(&repo_path).map_err(internal)?;
+            let thresholds = Thresholds::discover(&repo_path).map_err(|e| map_lib_err(&e))?;
             let violations = if thresholds.is_empty() {
                 None
             } else {
@@ -862,7 +1104,46 @@ fn render_gate_changes(
     if hidden > 0 {
         lines.push(format!("(+{hidden} more files)"));
     }
+    if let Some(action) = gate_changes_action(report, violations) {
+        lines.push(action);
+    }
     lines.join("\n")
+}
+
+/// One next-action line for `gate_changes`, derived only from data already in
+/// `report` — no new analysis. On FAIL it names the first violated gate and the
+/// changed file whose projected health delta is worst (the one to fix first);
+/// on a pass (or advisory-only) run that still carries findings it names the
+/// first finding to review. `None` when there is nothing actionable to add, so
+/// no filler line is rendered. Compact by construction — it renders inside the
+/// tool's existing token budget.
+fn gate_changes_action(
+    report: &change_set::ChangeSetReport,
+    violations: Option<&[GateViolation]>,
+) -> Option<String> {
+    match violations {
+        Some(v) if !v.is_empty() => {
+            let gate = &v[0].gate;
+            // Worst projected delta among scored files (most negative).
+            let worst = report
+                .health
+                .deltas
+                .iter()
+                .filter_map(|d| d.delta.map(|delta| (delta, d.path.as_str())))
+                .min_by(|a, b| a.0.total_cmp(&b.0));
+            Some(match worst {
+                Some((delta, path)) => format!(
+                    "→ fix {path} first (health delta {delta:+.1}) — it drives the {gate} violation"
+                ),
+                None => format!("→ address the {gate} violation — see the rows above"),
+            })
+        }
+        // PASS or advisory-only with advisory findings: point at the first one.
+        _ => report
+            .findings
+            .first()
+            .map(|f| format!("→ review {} ({}) before committing", f.path, f.kind)),
+    }
 }
 
 /// Wire the tool router into the MCP `ServerHandler` trait and set the
@@ -925,4 +1206,119 @@ pub fn run_mcp_server(
                 .map(|_| ())
                 .map_err(|e| anyhow::anyhow!("MCP server error: {e}"))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        DEFAULT_ROW_CAP, MAX_ROW_CAP, map_lib_err, resolve_row_cap, serialize_capped_rows,
+        skipped_check_gates,
+    };
+    use codelore_lib::CodeLoreError;
+    use codelore_lib::cli_api::quality_gates::Thresholds;
+    use serde_json::{Value, json};
+
+    #[test]
+    fn row_cap_defaults_and_clamps() {
+        assert_eq!(resolve_row_cap(None), DEFAULT_ROW_CAP);
+        assert_eq!(resolve_row_cap(Some(10)), 10);
+        // 0 clamps up to 1 (a list tool always returns at least one row); an
+        // oversized request clamps down to the hard ceiling.
+        assert_eq!(resolve_row_cap(Some(0)), 1);
+        assert_eq!(resolve_row_cap(Some(10_000)), MAX_ROW_CAP);
+    }
+
+    #[test]
+    fn capped_rows_are_a_bare_array_when_complete() {
+        let rows = vec![json!({ "path": "a" }), json!({ "path": "b" })];
+        let out = serialize_capped_rows(&rows, rows.len(), "note").unwrap();
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        let arr = parsed.as_array().expect("bare array");
+        assert_eq!(
+            arr.len(),
+            2,
+            "no summary object when nothing omitted: {out}"
+        );
+        assert!(
+            arr.iter().all(|v| v.get("omitted").is_none()),
+            "an untruncated list carries no omitted summary: {out}"
+        );
+    }
+
+    #[test]
+    fn capped_rows_append_omitted_summary_when_truncated() {
+        // Two of five rows shown → a trailing {omitted, total, note} object.
+        let shown = vec![json!({ "path": "a" }), json!({ "path": "b" })];
+        let out = serialize_capped_rows(&shown, 5, "worst first").unwrap();
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        let arr = parsed.as_array().expect("array");
+        assert_eq!(arr.len(), 3, "two rows plus one summary object: {out}");
+        let summary = arr.last().unwrap();
+        assert_eq!(
+            summary["omitted"], 3,
+            "5 total − 2 shown = 3 omitted: {out}"
+        );
+        assert_eq!(summary["total"], 5);
+        assert_eq!(summary["note"], "worst first");
+        assert!(
+            summary.get("path").is_none(),
+            "the summary object is distinguishable from a row (no path): {out}"
+        );
+    }
+
+    #[test]
+    fn skipped_gates_lists_configured_but_unevaluated_gates() {
+        // A config mixing an evaluated gate with the two check-only gates:
+        // the check-only ones are disclosed as skipped, and so is the
+        // default-on degraded handling (check-only, active unless disabled).
+        let thresholds = Thresholds::from_text(
+            "[gates]\ncode_health_min = 50.0\nmax_findings_in_hot_files = 5\ncorpus_percentile_max = 0.9\n",
+        )
+        .expect("parse thresholds");
+        assert_eq!(
+            skipped_check_gates(&thresholds),
+            vec![
+                "max_findings_in_hot_files",
+                "corpus_percentile_max",
+                "fail_on_degraded"
+            ],
+        );
+    }
+
+    #[test]
+    fn skipped_gates_empty_when_all_configured_gates_are_evaluated() {
+        // Degraded handling defaults to on and is check-only, so an empty
+        // disclosure requires explicitly switching it off.
+        let thresholds = Thresholds::from_text(
+            "[gates]\ncode_health_min = 50.0\ncognitive_max = 30.0\nfail_on_degraded = false\n",
+        )
+        .expect("parse thresholds");
+        assert!(
+            skipped_check_gates(&thresholds).is_empty(),
+            "gates this tool evaluates are not disclosed as skipped"
+        );
+    }
+
+    #[test]
+    fn skipped_gates_disclose_default_on_degraded_handling() {
+        // With no explicit setting, `fail_on_degraded` is active (defaults to
+        // true) and this tool never applies it — it must be disclosed so a
+        // pass here is never mistaken for a full `codelore check` pass.
+        let thresholds =
+            Thresholds::from_text("[gates]\ncode_health_min = 50.0\n").expect("parse thresholds");
+        assert_eq!(skipped_check_gates(&thresholds), vec!["fail_on_degraded"]);
+    }
+
+    #[test]
+    fn lib_error_kind_follows_the_exit_code_bucket() {
+        // exit-2 (config/param) → invalid_params (-32602); everything else →
+        // internal_error (-32603). ErrorData exposes the numeric code.
+        let params = map_lib_err(&CodeLoreError::InvalidOptions("bad".into()));
+        assert_eq!(
+            params.code.0, -32602,
+            "InvalidOptions maps to invalid_params"
+        );
+        let internal = map_lib_err(&CodeLoreError::Analysis("boom".into()));
+        assert_eq!(internal.code.0, -32603, "Analysis maps to internal_error");
+    }
 }

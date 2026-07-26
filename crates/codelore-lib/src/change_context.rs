@@ -29,7 +29,8 @@
 //! ```
 //!
 //! Each requested path renders one block; blocks are separated by a single
-//! blank line. A path with recorded history renders five indented lines:
+//! blank line. A path with recorded history renders five indented lines, plus
+//! an optional sixth `→` next-action line:
 //!
 //! ```text
 //! crates/codelore-lib/src/cache.rs
@@ -38,6 +39,7 @@
 //!   co-change: options.rs (68%, p=0.003) · facts/mod.rs (54%, p=0.011)
 //!   owner: Emre Camdere 82% (sole owner, active 12d ago)
 //!   recent: 4 commits, 310 lines churned in last 90d
+//!   → historically co-changes with options.rs — consider the same edit there
 //! ```
 //!
 //! Each line falls back to an honest-absence form when its data is missing:
@@ -60,6 +62,10 @@
 //!   attributable ownership renders `owner: inconclusive`.
 //! - `recent:` — commit count + churned lines over the last `window_days`; a
 //!   path untouched in the window renders `recent: quiet in last <window_days>d`.
+//! - `→` (optional final line) — a single next action derived from the picked
+//!   values: co-change partners surface the top partner to edit alongside; with
+//!   no partners, a main author past `departed_threshold_days` surfaces a
+//!   knowledge-continuity flag. A block with neither carries no action line.
 //!
 //! A path absent from *every* feed — no code-health row, not in the hotspot
 //! ranking, no significant co-change partners, no attributable ownership, and
@@ -299,9 +305,10 @@ fn render(briefings: &[PathBriefing], merge_note: bool, opts: &Options) -> Strin
 }
 
 /// One path's block: the two-line no-history form when the path is absent
-/// from every feed, else the five indented lines. A path known to any feed —
-/// even just ownership or a hotspot rank — renders the full block, with each
-/// missing line in its honest-absence form.
+/// from every feed, else the five indented feed lines plus an optional final
+/// `→` action line ([`action_line`]). A path known to any feed — even just
+/// ownership or a hotspot rank — renders the full block, with each missing feed
+/// line in its honest-absence form.
 fn render_block(briefing: &PathBriefing, opts: &Options) -> String {
     if briefing.health.is_none()
         && briefing.hotspot.is_none()
@@ -314,7 +321,7 @@ fn render_block(briefing: &PathBriefing, opts: &Options) -> String {
             briefing.path
         );
     }
-    let lines = [
+    let mut lines = vec![
         briefing.path.clone(),
         format!("  {}", health_line(briefing)),
         format!("  {}", hotspot_line(briefing)),
@@ -322,7 +329,33 @@ fn render_block(briefing: &PathBriefing, opts: &Options) -> String {
         format!("  {}", owner_line(briefing, opts)),
         format!("  {}", recent_line(briefing, opts)),
     ];
+    if let Some(action) = action_line(briefing, opts) {
+        lines.push(format!("  {action}"));
+    }
     lines.join("\n")
+}
+
+/// One optional next-action line for a block, derived only from data already
+/// picked into the briefing — no new queries. Co-change partners are the most
+/// actionable signal (edit the partner too), so they take priority; absent
+/// those, a departed main author is the knowledge-continuity risk worth
+/// flagging. A block with neither gets no line, so the briefing carries no
+/// filler.
+fn action_line(briefing: &PathBriefing, opts: &Options) -> Option<String> {
+    if let Some((partner, _, _)) = briefing.partners.first() {
+        return Some(format!(
+            "\u{2192} historically co-changes with {partner} — consider the same edit there"
+        ));
+    }
+    let owner = briefing.owner.as_ref()?;
+    let threshold = i32::try_from(opts.departed_threshold_days).unwrap_or(i32::MAX);
+    if owner.days_since_main_active > threshold {
+        return Some(format!(
+            "\u{2192} knowledge risk: main author {} has departed — line up a second reviewer",
+            owner.main_author
+        ));
+    }
+    None
 }
 
 fn health_line(briefing: &PathBriefing) -> String {
@@ -436,14 +469,56 @@ mod tests {
     }
 
     #[test]
-    fn renders_the_exact_five_line_block() {
+    fn renders_the_exact_block() {
+        // The five feed lines plus the co-change next-action line (populated()
+        // has significant partners, so the action line names the top one).
         let expected = "crates/codelore-lib/src/cache.rs\n  \
              health 67.3 (yellow) · risk 0.42 · calibrated defects-2026-07-15\n  \
              hotspot #12 (score 0.67, 23 revs)\n  \
              co-change: options.rs (68%, p=0.003) · facts/mod.rs (54%, p=0.011)\n  \
              owner: Emre Camdere 82% (sole owner, active 12d ago)\n  \
-             recent: 4 commits, 310 lines churned in last 90d";
+             recent: 4 commits, 310 lines churned in last 90d\n  \
+             \u{2192} historically co-changes with options.rs — consider the same edit there";
         assert_eq!(render(&[populated()], false, &opts()), expected);
+    }
+
+    #[test]
+    fn action_line_names_the_top_cochange_partner() {
+        // options.rs has the higher degree, so it is the partner surfaced.
+        let out = render(&[populated()], false, &opts());
+        assert!(
+            out.contains("\u{2192} historically co-changes with options.rs"),
+            "the action line surfaces the top co-change partner: {out}"
+        );
+    }
+
+    #[test]
+    fn action_line_flags_departed_owner_when_no_partners() {
+        // No significant partners, but the main author is past the departed
+        // threshold → the knowledge-risk action line, not co-change.
+        let mut briefing = populated();
+        briefing.partners = Vec::new();
+        briefing.partners_total = 0;
+        briefing.owner = Some(owner("Ada Departed", 55.0, 400, 0));
+        let out = render(&[briefing], false, &opts());
+        assert!(
+            out.contains("\u{2192} knowledge risk: main author Ada Departed has departed"),
+            "a departed sole author with no partners triggers the knowledge-risk line: {out}"
+        );
+    }
+
+    #[test]
+    fn no_action_line_without_partners_or_departed_owner() {
+        // Present but active owner, no partners → nothing actionable, no filler.
+        let mut briefing = populated();
+        briefing.partners = Vec::new();
+        briefing.partners_total = 0;
+        briefing.owner = Some(owner("Present Owner", 70.0, 5, 0));
+        let out = render(&[briefing], false, &opts());
+        assert!(
+            !out.contains('\u{2192}'),
+            "no partners and an active owner means no action line: {out}"
+        );
     }
 
     #[test]
