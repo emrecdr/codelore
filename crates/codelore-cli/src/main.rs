@@ -1345,7 +1345,11 @@ fn eval_hotspot_gates(
 )> {
     use codelore_lib::cli_api::analyses::hotspots::run_hotspots;
     use codelore_lib::cli_api::quality_gates::evaluate_full_tree;
-    let hotspots = run_hotspots(db, opts).context("run hotspots")?;
+    // The gate must see the whole population — a `--rows` display cap must
+    // never change which files the gate evaluates. `with_no_row_limit` is a
+    // no-op when no cap is set, so the gate outcome is unaffected today and
+    // stays correct if a row cap is ever threaded into this path.
+    let hotspots = run_hotspots(db, &opts.with_no_row_limit()).context("run hotspots")?;
     let hs_violations = evaluate_full_tree(thresholds, &hotspots);
     let g = &thresholds.gates;
     let mut recs = Vec::new();
@@ -1396,8 +1400,14 @@ fn eval_code_health_gate(
 )> {
     use codelore_lib::cli_api::quality_gates::ledger::GateRunRecord;
     use codelore_lib::cli_api::quality_gates::{GateViolation, evaluate_code_health_gate};
-    let code_health = codelore_lib::cli_api::analyses::code_health::run_code_health(db, opts)
-        .context("run code-health")?;
+    // Gate over the whole population — a `--rows` display cap must not change
+    // which files the gate evaluates (no-op today; correct if a cap is ever
+    // threaded in).
+    let code_health = codelore_lib::cli_api::analyses::code_health::run_code_health(
+        db,
+        &opts.with_no_row_limit(),
+    )
+    .context("run code-health")?;
     let g = &thresholds.gates;
     let Some(min) = g.code_health_min else {
         return Ok(((Vec::new(), Vec::new()), code_health));
