@@ -22,11 +22,12 @@
 //!
 //! When an active calibration artifact ([`crate::calibration::load_active_artifact`])
 //! carries a `repo_metrics` section (corpus pools populated by `codelore
-//! calibrate`), three additional rows report where this repo's
-//! `propagation_cost` and `cycle_file_share` sit against that corpus — see
-//! [`run_architecture_metrics`]. Absent artifact or absent section ⇒ those
-//! rows are simply not emitted (the additivity contract this module's tests
-//! pin).
+//! calibrate`), additional rows report where this repo's `propagation_cost`
+//! and `cycle_file_share` sit against that corpus, each paired with a Wilson
+//! 95% confidence interval (`…:ci_low` / `…:ci_high`) that reflects the finite
+//! corpus pool's sampling uncertainty — see [`run_architecture_metrics`].
+//! Absent artifact or absent section ⇒ those rows are simply not emitted (the
+//! additivity contract this module's tests pin).
 
 use crate::analyses::import_graph::{build_import_graph, graph_metrics};
 use crate::calibration::{load_active_artifact, raw_percentile};
@@ -136,6 +137,15 @@ pub fn run_architecture_metrics(
             && let Some(p) = raw_percentile(pool, m.propagation_cost)
         {
             rows.push(row("corpus_percentile:propagation_cost", format!("{p:.2}")));
+            let (lo, hi) = crate::stats::wilson_ci_from_proportion(p, pool_sample_size(pool));
+            rows.push(row(
+                "corpus_percentile:propagation_cost:ci_low",
+                format!("{lo:.2}"),
+            ));
+            rows.push(row(
+                "corpus_percentile:propagation_cost:ci_high",
+                format!("{hi:.2}"),
+            ));
             corpus_n = Some(pool.len());
         }
         if let Some(pool) = repo_metrics.values.get("cycle_file_share")
@@ -143,6 +153,15 @@ pub fn run_architecture_metrics(
             && let Some(p) = raw_percentile(pool, cycle_file_share)
         {
             rows.push(row("corpus_percentile:cycle_file_share", format!("{p:.2}")));
+            let (lo, hi) = crate::stats::wilson_ci_from_proportion(p, pool_sample_size(pool));
+            rows.push(row(
+                "corpus_percentile:cycle_file_share:ci_low",
+                format!("{lo:.2}"),
+            ));
+            rows.push(row(
+                "corpus_percentile:cycle_file_share:ci_high",
+                format!("{hi:.2}"),
+            ));
             corpus_n.get_or_insert(pool.len());
         }
         if let Some(n) = corpus_n {
@@ -172,6 +191,13 @@ fn import_resolution_row(db: &FactsDb) -> Result<Option<ArchitectureMetricRow>> 
     Ok(counts.first().and_then(|&(rate, total)| {
         (total > 0).then(|| row("import_resolution_rate", format!("{rate:.4}")))
     }))
+}
+
+/// The `n` for a repo-level metric's Wilson interval: the count of corpus repos
+/// contributing to this pool. Saturates on the impossible >4-billion case
+/// rather than wrapping.
+fn pool_sample_size(pool: &[f64]) -> u32 {
+    u32::try_from(pool.len()).unwrap_or(u32::MAX)
 }
 
 fn row(metric: &str, value: String) -> ArchitectureMetricRow {

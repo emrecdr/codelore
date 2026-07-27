@@ -492,13 +492,15 @@ fn code_health_csv_column_contract() {
         band: "yellow".to_string(),
         corpus_percentile: None,
         beyond_corpus: false,
+        corpus_percentile_ci_low: None,
+        corpus_percentile_ci_high: None,
     }];
     let mut buf: Vec<u8> = Vec::new();
     codelore_lib::output::csv::write_code_health_csv(&rows, &mut buf).expect("csv");
     let out = String::from_utf8(buf).expect("utf8");
     assert_eq!(
         out.lines().next().unwrap(),
-        "entity,cognitive,score,structural_risk,percentile,band,corpus-pct"
+        "entity,cognitive,score,structural_risk,percentile,band,corpus-pct,corpus-pct-ci-low,corpus-pct-ci-high"
     );
     assert!(
         out.lines().nth(1).unwrap().starts_with("src/x.rs,"),
@@ -520,6 +522,8 @@ fn code_health_csv_corpus_pct_populated_and_none() {
         band: "green".into(),
         corpus_percentile: cp,
         beyond_corpus: bc,
+        corpus_percentile_ci_low: cp.map(|_| 0.61),
+        corpus_percentile_ci_high: cp.map(|_| 0.90),
     };
     let rows = vec![
         make(Some(0.75), false),
@@ -530,27 +534,28 @@ fn code_health_csv_corpus_pct_populated_and_none() {
     codelore_lib::output::csv::write_code_health_csv(&rows, &mut buf).expect("csv");
     let csv = String::from_utf8(buf).expect("utf8");
     let lines: Vec<&str> = csv.lines().collect();
-    // header
+    // header now carries the paired Wilson-CI columns after corpus-pct
     assert!(
-        lines[0].ends_with(",corpus-pct"),
-        "header must end with corpus-pct"
+        lines[0].ends_with(",corpus-pct,corpus-pct-ci-low,corpus-pct-ci-high"),
+        "header must end with the corpus-pct + CI columns: {}",
+        lines[0]
     );
-    // row 0: populated, beyond_corpus false → raw value
+    // row 0: populated percentile followed by its two CI bounds
     assert!(
-        lines[1].ends_with(",0.75"),
-        "populated row must carry the corpus-pct value: {}",
+        lines[1].ends_with(",0.75,0.61,0.90"),
+        "populated row must carry corpus-pct and its CI: {}",
         lines[1]
     );
-    // row 1: populated, beyond_corpus true → raw value (beyond_corpus doesn't change cell)
+    // row 1: beyond_corpus true → percentile value unchanged, CI still present
     assert!(
-        lines[2].ends_with(",1.00"),
-        "beyond-corpus row must carry 1.00: {}",
+        lines[2].ends_with(",1.00,0.61,0.90"),
+        "beyond-corpus row must carry 1.00 and its CI: {}",
         lines[2]
     );
-    // row 2: None → empty cell (trailing comma, no value)
+    // row 2: None → three empty trailing cells (percentile + both CI bounds)
     assert!(
-        lines[3].ends_with(','),
-        "None row must emit empty corpus-pct cell: {}",
+        lines[3].ends_with(",,,"),
+        "None row must emit empty corpus-pct + CI cells: {}",
         lines[3]
     );
 }
@@ -569,6 +574,8 @@ fn code_health_markdown_corpus_pct_column() {
         band: "green".into(),
         corpus_percentile: cp,
         beyond_corpus: bc,
+        corpus_percentile_ci_low: cp.map(|_| 0.61),
+        corpus_percentile_ci_high: cp.map(|_| 0.90),
     };
     let rows = vec![
         make(Some(0.74), false),
@@ -578,10 +585,14 @@ fn code_health_markdown_corpus_pct_column() {
     let mut buf: Vec<u8> = Vec::new();
     codelore_lib::output::markdown::write_code_health_markdown(&rows, &mut buf).expect("md");
     let md = String::from_utf8(buf).expect("utf8");
-    // Header must include the new column
+    // Header must include the corpus percentile column and its paired CI column
     assert!(
         md.contains("Corpus percentile"),
         "markdown header must contain 'Corpus percentile'"
+    );
+    assert!(
+        md.contains("Corpus 95% CI"),
+        "markdown header must contain the 'Corpus 95% CI' column: {md}"
     );
     // Populated row: rendered as integer percent
     assert!(
@@ -593,7 +604,12 @@ fn code_health_markdown_corpus_pct_column() {
         md.contains("100%+"),
         "beyond_corpus row must render as 100%+: {md}"
     );
-    // None row: em-dash
+    // Populated rows render the Wilson interval as an integer-percent range
+    assert!(
+        md.contains("61–90%"),
+        "populated CI bounds 0.61/0.90 must render as 61–90%: {md}"
+    );
+    // None row: em-dash (both the percentile and the CI cell)
     assert!(
         md.contains("—"),
         "None corpus_percentile must render as em-dash"
@@ -872,6 +888,8 @@ fn corpus_lens_is_additive_over_shipped_fields() {
         let obj = v.as_object_mut().expect("row is an object");
         obj.remove("corpus_percentile");
         obj.remove("beyond_corpus");
+        obj.remove("corpus_percentile_ci_low");
+        obj.remove("corpus_percentile_ci_high");
         v
     };
 

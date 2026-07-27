@@ -100,10 +100,10 @@ pub fn write_code_health_markdown<W: Write>(rows: &[CodeHealthRow], w: &mut W) -
     header(w, "CodeLore code-health")?;
     writeln!(
         w,
-        "| Entity | Cognitive | Score | Structural risk | Percentile | Band | Corpus percentile |"
+        "| Entity | Cognitive | Score | Structural risk | Percentile | Band | Corpus percentile | Corpus 95% CI |"
     )
     .map_err(CodeLoreError::Io)?;
-    writeln!(w, "|---|---|---|---|---|---|---|").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---|---|---|---|---|---|---|").map_err(CodeLoreError::Io)?;
     for row in rows {
         let corpus_cell = match row.corpus_percentile {
             Some(v) => {
@@ -118,16 +118,28 @@ pub fn write_code_health_markdown<W: Write>(rows: &[CodeHealthRow], w: &mut W) -
             }
             None => "—".to_owned(),
         };
+        // Wilson 95% interval on the corpus percentile, as an integer-percent
+        // range. Present exactly when `corpus_percentile` is.
+        let corpus_ci_cell = match (row.corpus_percentile_ci_low, row.corpus_percentile_ci_high) {
+            (Some(lo), Some(hi)) => {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                // Both bounds are in [0.0, 1.0]; *100+round fits u32.
+                let (lo_pct, hi_pct) = ((lo * 100.0).round() as u32, (hi * 100.0).round() as u32);
+                format!("{lo_pct}–{hi_pct}%")
+            }
+            _ => "—".to_owned(),
+        };
         writeln!(
             w,
-            "| `{}` | {:.2} | {:.2} | {:.4} | {:.4} | {} | {} |",
+            "| `{}` | {:.2} | {:.2} | {:.4} | {:.4} | {} | {} | {} |",
             escape_md_cell(&row.path),
             row.cognitive,
             row.score,
             row.structural_risk,
             row.percentile,
             row.band,
-            corpus_cell
+            corpus_cell,
+            corpus_ci_cell
         )
         .map_err(CodeLoreError::Io)?;
     }

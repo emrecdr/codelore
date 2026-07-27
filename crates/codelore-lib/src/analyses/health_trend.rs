@@ -457,6 +457,8 @@ mod tests {
                 band: "green".into(),
                 corpus_percentile: None,
                 beyond_corpus: false,
+                corpus_percentile_ci_low: None,
+                corpus_percentile_ci_high: None,
             },
             CodeHealthRow {
                 path: "b".into(),
@@ -467,6 +469,8 @@ mod tests {
                 band: "yellow".into(),
                 corpus_percentile: None,
                 beyond_corpus: false,
+                corpus_percentile_ci_low: None,
+                corpus_percentile_ci_high: None,
             },
         ];
         assert!((repo_code_health(&rows) - 70.0).abs() < 1e-9);
