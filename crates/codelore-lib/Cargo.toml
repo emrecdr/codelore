@@ -38,9 +38,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 thiserror = "2"
 arrow = "59.1"
-gix = { version = "0.85", features = ["max-performance", "blob-diff"] }
+gix = { version = "0.86", features = ["max-performance", "blob-diff"] }
 tempfile = { version = "3", optional = true }
-duckdb = { version = "=1.10504.0", features = ["bundled", "appender-arrow"] }
+duckdb = { version = "=1.10505.0", features = ["bundled", "appender-arrow"] }
 crossbeam-channel = "0.5"
 codelore-rca = { path = "../codelore-rca", version = "0.22.0" }
 # RFC 3986 §4.1 percent-encoding for SARIF artifactLocation.uri values.
