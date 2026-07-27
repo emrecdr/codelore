@@ -252,6 +252,63 @@ impl Options {
         use serde_json::json;
         use sha2::{Digest, Sha256};
 
+        // Cache-key classification guard. Destructuring `Self` with no `..`
+        // means adding a field to `Options` fails to COMPILE here until the
+        // author decides which side it belongs on — silence is no longer an
+        // option. The default is dangerous: a new field flows into `canon`
+        // verbatim below (via serde), so an absolute-path or per-invocation
+        // field would silently make every cache key machine-specific. Nothing
+        // reads these bindings; the block exists solely so the two lists below
+        // cannot drift from the struct. When this breaks, add the new field to
+        // exactly one group and mirror the choice in the code beneath.
+        let Self {
+            // ----- Excluded / specially handled: dropped or content-digested
+            // in the body below; MUST NOT reach `canon` verbatim. -----
+            rows_limit: _,         // dropped — cosmetic output truncation
+            explain: _,            // dropped — cosmetic (stderr query plan)
+            target: _,             // dropped — per-invocation file selector
+            temp_dir: _,           // dropped — env/spill selector
+            calibration: _,        // path dropped; content → calibration_digest
+            defect_calibration: _, // path dropped; content → defect_calibration_digest
+            group_file: _,         // path dropped; content → group_file_digest
+            team_map_file: _,      // path dropped; content → team_map_digest
+            // ----- Included in the cache key: serialized verbatim into `canon`
+            // (exclude_patterns is sorted first; every other field flows as-is).
+            // Any change to one of these must invalidate the cache. -----
+            repo_path: _,
+            after: _,
+            before: _,
+            min_revs: _,
+            min_shared_revs: _,
+            min_coupling_pct: _,
+            max_coupling_pct: _,
+            max_changeset_size: _,
+            fisher_significance: _,
+            message_regex: _,
+            age_time_now: _,
+            include_merges: _,
+            strict_grouping: _,
+            complexity_sample: _,
+            use_canonical_lineage: _,
+            min_clone_node_count: _,
+            exclude_patterns: _,
+            include_ignored: _,
+            departed_threshold_days: _,
+            min_clone_shared_revs: _,
+            clone_similarity_floor: _,
+            clone_skip_same_dir: _,
+            min_soc: _,
+            time_bucket: _,
+            code_maat_compat: _,
+            fdr_correction: _,
+            window_days: _,
+            knowledge_model: _,
+            rework_window_days: _,
+            release_tag_glob: _,
+            allow_foreign_calibration: _,
+            head_only_ingest: _,
+        } = self;
+
         let mut snapshot = self.clone();
         snapshot.exclude_patterns.sort();
         // Two exclusion categories, both keyed on "ingest never reads it":
@@ -727,6 +784,73 @@ mod tests {
             "path leaked into canonical form: {s}"
         );
         assert!(s.contains("team_map_digest"), "digest field missing: {s}");
+    }
+
+    /// Pins the cache-key field classification. The exhaustive-destructure
+    /// guard in `canonical_json` makes adding an `Options` field a COMPILE
+    /// error until it is classified; this test pins the RESULT so an
+    /// accidental reclassification (an excluded field reverting to included, a
+    /// new field silently entering the key) also trips a red test. The digest
+    /// below is a known-good fingerprint of the whole canonical key — the
+    /// "before/after" byte-proof. Regenerate it ONLY on a deliberate,
+    /// reviewed (re)classification, never to make a red test green.
+    #[test]
+    fn canonical_json_cache_key_classification_is_pinned() {
+        use sha2::{Digest, Sha256};
+
+        // A fixed, nonexistent repo path so every content-digest lookup
+        // resolves to `null` and the canonical form is deterministic and
+        // platform-independent (no path separators, no files on disk).
+        let opts = Options {
+            repo_path: std::path::PathBuf::from("pin-repo"),
+            ..Options::default()
+        };
+        let canon = opts.canonical_json();
+
+        // Deterministic across calls.
+        assert_eq!(canon.to_string(), opts.canonical_json().to_string());
+
+        let obj = canon.as_object().expect("canonical form is a JSON object");
+        // Path selectors are stripped — only their content digests key the cache.
+        for stripped in [
+            "team_map_file",
+            "group_file",
+            "calibration",
+            "defect_calibration",
+        ] {
+            assert!(
+                !obj.contains_key(stripped),
+                "{stripped} path must not key the cache"
+            );
+        }
+        for digest in [
+            "team_map_digest",
+            "group_file_digest",
+            "calibration_digest",
+            "defect_calibration_digest",
+            "codelorebots_digest",
+            "mailmap_digest",
+            "codeloreignore_digest",
+        ] {
+            assert!(obj.contains_key(digest), "{digest} must key the cache");
+        }
+        // Cosmetic / per-invocation selectors are neutralised, not dropped.
+        assert!(obj["rows_limit"].is_null(), "rows_limit must be dropped");
+        assert!(obj["target"].is_null(), "target must be dropped");
+        assert!(obj["temp_dir"].is_null(), "temp_dir must be dropped");
+        assert_eq!(
+            obj["explain"].as_bool(),
+            Some(false),
+            "explain must be neutralised"
+        );
+
+        let digest = hex::encode(Sha256::digest(canon.to_string().as_bytes()));
+        assert_eq!(
+            digest,
+            "fd97ba3da81292be838811545a9ea1eac49a99987705e7159c5d696001a6aa20",
+            "cache-key classification changed:\n{}",
+            canon.to_string()
+        );
     }
 
     #[test]
