@@ -23,7 +23,7 @@
   //         escapeHtml
   //         · token (cached) · invalidateTokenCache ·
   //           registerThemeRerender · resolveCssColor ·
-  //           codeHealthColor · heatRamp
+  //           bandLeafColor · heatRamp
   //   §5  Detail drawer
   //         initDetailDrawer · showFileDetailDrawer
   //   §6  Widget: KPI tiles                        — renderKpiTiles
@@ -776,7 +776,7 @@
   //   health    → 'health'    (code-health band view)
   //   activity  → 'cognitive' (complexity/churn; closest to "hotspot activity")
   //   effort    → 'friction'  (friction heat-ramp; effort-weighted churn)
-  //   targets   → 'health'    (re-use health lens; top-10 hotspot paths brushed)
+  //   targets   → 'health'    (re-use health lens; top-10 refactoring targets brushed)
   //
   // The 'effort' and 'targets' modes are not distinct circle-pack color
   // modes today — they re-use the closest existing mode and distinguish
@@ -805,12 +805,13 @@
     {
       title: 'Refactoring targets',
       lens: 'health',
-      // Top-10 hotspot paths by score — refactoring-targets data is not yet
-      // in SpaDashboard; brushing the top-10 hotspots by hotspot_score is the
-      // equivalent until the dedicated analysis is wired into the SPA payload.
-      note: 'Top-10 hotspots by score are brushed across all widgets. ' +
-            'These are the highest-priority refactoring candidates: high churn, poor health, complex code.',
-      brushTopHotspots: true,
+      // Brushes the top-10 refactoring targets (data.refactoring_targets,
+      // ranked by return-on-investment: risk ÷ inspection effort). Falls back
+      // to the top-10 hotspots by score when that field is absent.
+      note: 'Top-10 refactoring targets are brushed across all widgets. ' +
+            'These are ranked by return-on-investment — structural risk × churn, ' +
+            'divided by inspection effort — so small, dense, unhealthy files rise to the top.',
+      brushRefactoringTargets: true,
     },
   ];
 
@@ -835,18 +836,30 @@
     currentHotspotColorMode = step.lens;
     renderHotspotCirclePack(data.hotspots || [], step.lens);
 
-    // 2. Publish brush — top-10 hotspots for the "targets" step, empty otherwise.
+    // 2. Publish brush — the real refactoring targets for the "targets"
+    //    step, empty otherwise. `data.refactoring_targets` is pre-sorted by
+    //    priority (return-on-investment: risk ÷ effort) DESC in the builder,
+    //    so its first 10 are the highest-ROI candidates — a genuinely
+    //    different ordering from raw hotspot score. When the field is absent
+    //    (older payloads, or the code-health composite was unavailable), fall
+    //    back to the top-10 hotspots by score so the step still highlights
+    //    something rather than breaking the tour.
     if (window.Alpine && window.Alpine.store) {
       var bs = window.Alpine.store('brush');
       if (bs) {
-        if (step.brushTopHotspots) {
-          var top10 = (data.hotspots || [])
-            .slice()
-            .sort(function (a, b) {
-              return ((b.hotspot_score || 0) - (a.hotspot_score || 0));
-            })
+        if (step.brushRefactoringTargets) {
+          var top10 = (data.refactoring_targets || [])
             .slice(0, 10)
             .map(function (r) { return r.path; });
+          if (!top10.length) {
+            top10 = (data.hotspots || [])
+              .slice()
+              .sort(function (a, b) {
+                return ((b.hotspot_score || 0) - (a.hotspot_score || 0));
+              })
+              .slice(0, 10)
+              .map(function (r) { return r.path; });
+          }
           // Publish as a synthetic brush cell so all brush listeners fire.
           bs.set(['targets', 'top10'], top10);
         } else {
@@ -1069,6 +1082,24 @@
       dashboardStore.hotspots = sorted;
     }
   }
+
+  // Ownership-cap note. When the entity-ownership embed was capped to the
+  // top-N hotspot files (data.entity_ownership_cap present), the knowledge-map
+  // lens, off-boarding picker, and drawer contributor lists cover only those
+  // files — say so rather than silently omitting the rest. No Alpine
+  // dependency: a plain DOM write, so it works on the fallback boot path too.
+  (function () {
+    const note = document.getElementById('ownership-cap-note');
+    if (!note) return;
+    const cap = data.entity_ownership_cap;
+    if (typeof cap === 'number' && cap > 0) {
+      note.textContent =
+        'Contributor & ownership data is limited to the ' + cap +
+        ' most-active files to keep this report self-contained; ' +
+        'lower-ranked files show no author colour or contributor list.';
+      note.hidden = false;
+    }
+  })();
 
   // Static markup (`#dash-nav` chips, `.dash-group` sections,
   // `#dash-top-btn`) is unconditional template HTML, so the sticky nav

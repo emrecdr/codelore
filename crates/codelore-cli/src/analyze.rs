@@ -3096,6 +3096,13 @@ fn build_spa_dashboard(
     };
     use codelore_lib::cli_api::output::spa::SpaDashboard;
 
+    // Entity-ownership embed cap: retain ownership rows only for the top-N
+    // hotspot files (the displayable set). See the `entity_ownership` block.
+    const SPA_OWNERSHIP_FILE_CAP: usize = 200;
+    // Refactoring-targets embed cap: the guided tour brushes the top-10; a
+    // generous head of 20 leaves room without bloating the payload.
+    const SPA_REFACTORING_TARGET_CAP: usize = 20;
+
     // Each run_* call is an SQL query over the already-ingested fact
     // store, so the composite cost is bounded by the query mix
     // (typically <1s on mid-size repos). Optional widgets degrade
@@ -3118,12 +3125,49 @@ fn build_spa_dashboard(
                 tracing::warn!("dashboard: knowledge-islands analysis failed; skipping: {e}");
                 Vec::new()
             });
-    let entity_ownership =
-        codelore_lib::cli_api::analyses::entity_ownership::run_entity_ownership(db, opts)
-            .unwrap_or_else(|e| {
-                tracing::warn!("dashboard: entity-ownership analysis failed; skipping: {e}");
-                Vec::new()
-            });
+    // Entity-ownership feeds the knowledge-map lens, the off-boarding picker,
+    // and the drawer's contributor list — all keyed on hotspot paths (the
+    // only files the circle-pack colours and the drawer opens). It is the
+    // largest embedded field (O(files × authors)); cap it to the ownership
+    // rows for the top-N hotspot paths so the HTML stays bounded on big repos.
+    // Rows for non-hotspot files are never displayed, so dropping them loses
+    // nothing on screen — a truncation note fires only when a *hotspot* file's
+    // ownership is dropped. `with_no_row_limit` so the cap is the
+    // deterministic top-N by hotspot rank, independent of the user's `--rows`
+    // (the raw analysis would otherwise truncate alphabetically).
+    let (entity_ownership, entity_ownership_cap) = {
+        let full = codelore_lib::cli_api::analyses::entity_ownership::run_entity_ownership(
+            db,
+            &opts.with_no_row_limit(),
+        )
+        .unwrap_or_else(|e| {
+            tracing::warn!("dashboard: entity-ownership analysis failed; skipping: {e}");
+            Vec::new()
+        });
+        // Hotspots are sorted by score DESC, so the first N paths are the
+        // displayable head; ownership for anything past it can't be shown.
+        let hotspot_paths: std::collections::HashSet<&str> =
+            hotspots.iter().map(|h| h.path.as_str()).collect();
+        let capped_paths: std::collections::HashSet<&str> = hotspots
+            .iter()
+            .take(SPA_OWNERSHIP_FILE_CAP)
+            .map(|h| h.path.as_str())
+            .collect();
+        let mut dropped_displayable = false;
+        let kept: Vec<_> = full
+            .into_iter()
+            .filter(|r| {
+                let keep = capped_paths.contains(r.entity.as_str());
+                if !keep && hotspot_paths.contains(r.entity.as_str()) {
+                    dropped_displayable = true;
+                }
+                keep
+            })
+            .collect();
+        let cap =
+            dropped_displayable.then(|| u32::try_from(SPA_OWNERSHIP_FILE_CAP).unwrap_or(u32::MAX));
+        (kept, cap)
+    };
     let xray = run_xray(db, 500).unwrap_or_else(|e| {
         tracing::warn!("dashboard: xray query failed; skipping: {e}");
         Vec::new()
@@ -3189,33 +3233,44 @@ fn build_spa_dashboard(
             tracing::warn!("dashboard: architecture-roles failed; skipping: {e}");
             Vec::new()
         });
+    // Open the repo ONCE for the three history/HEAD scans below —
+    // sample-trends, release-cadence, and function-xray. All three take an
+    // immutable handle and read only, so a single open (instead of one per
+    // scan) avoids re-parsing the repo config three times. A failed open
+    // degrades every dependent widget to empty, exactly as the per-scan opens
+    // did before.
+    let spa_repo = match codelore_lib::cli_api::repo::GixRepo::open(repo_path) {
+        Ok(r) => Some(r),
+        Err(e) => {
+            tracing::warn!(
+                "dashboard: could not open repo for history/xray scans; skipping those widgets: {e}"
+            );
+            None
+        }
+    };
     // Architecture-trend and health-trend both re-read source at the same
     // sampled historical revs and each rebuild the identical per-rev import
     // graph. `run_sample_trends` builds each graph ONCE and derives both views
     // from it, so a dashboard that shows both pays that historical scan once,
-    // not twice. One repo handle; any failure leaves both trend views empty
-    // rather than sinking the whole dashboard.
-    let (architecture_trend, health_trend, file_health_series, health_transitions) =
-        codelore_lib::cli_api::repo::GixRepo::open(repo_path)
-            .map_err(anyhow::Error::from)
-            .and_then(|repo| {
-                codelore_lib::cli_api::analyses::health_trend::run_sample_trends(db, &repo, opts)
-                    .map_err(anyhow::Error::from)
-            })
-            .map_or_else(
-                |e| {
+    // not twice. Any failure leaves both trend views empty rather than sinking
+    // the whole dashboard.
+    let (architecture_trend, health_trend, file_health_series, health_transitions) = spa_repo
+        .as_ref()
+        .and_then(|repo| {
+            match codelore_lib::cli_api::analyses::health_trend::run_sample_trends(db, repo, opts) {
+                Ok(t) => Some((
+                    t.architecture,
+                    t.health.trend,
+                    t.health.file_series,
+                    t.health.transitions,
+                )),
+                Err(e) => {
                     tracing::warn!("dashboard: trend scan failed; skipping: {e}");
-                    (Vec::new(), Vec::new(), Vec::new(), Vec::new())
-                },
-                |t| {
-                    (
-                        t.architecture,
-                        t.health.trend,
-                        t.health.file_series,
-                        t.health.transitions,
-                    )
-                },
-            );
+                    None
+                }
+            }
+        })
+        .unwrap_or_else(|| (Vec::new(), Vec::new(), Vec::new(), Vec::new()));
     // Effort-exposure: LOC/commit/churn share per band over the trailing
     // window. Pure SQL over already-ingested facts; runs the same
     // code-health HEAD scan as the factor header (cheap, cached). Degrades
@@ -3246,17 +3301,21 @@ fn build_spa_dashboard(
                 Vec::new()
             })
     };
-    // Release cadence — uses a separate Repo handle (same as architecture-trend).
-    let release_cadence = codelore_lib::cli_api::repo::GixRepo::open(repo_path)
-        .map_err(anyhow::Error::from)
-        .and_then(|repo| {
-            codelore_lib::cli_api::analyses::release_cadence::run_release_cadence(&repo, opts)
-                .map_err(anyhow::Error::from)
-        })
-        .unwrap_or_else(|e| {
-            tracing::warn!("dashboard: release-cadence failed; skipping: {e}");
-            Vec::new()
-        });
+    // Release cadence — reuses the shared `spa_repo` handle.
+    let release_cadence = spa_repo
+        .as_ref()
+        .and_then(
+            |repo| match codelore_lib::cli_api::analyses::release_cadence::run_release_cadence(
+                repo, opts,
+            ) {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    tracing::warn!("dashboard: release-cadence failed; skipping: {e}");
+                    None
+                }
+            },
+        )
+        .unwrap_or_default();
     // Delivery-friction — top 5 rows for the "where is friction" drill line.
     let delivery_friction =
         codelore_lib::cli_api::analyses::delivery_friction::run_delivery_friction(db, opts)
@@ -3267,41 +3326,55 @@ fn build_spa_dashboard(
             .into_iter()
             .take(5)
             .collect::<Vec<_>>();
-    // Per-file function X-Ray for the top-10 hotspot paths. Each call
-    // opens the HEAD blob via the gix repo handle (cheap; tree-sitter
-    // spans only) and joins against already-ingested hunks. One failure
-    // per path degrades gracefully to an empty rows vec for that path.
-    let function_xray: Vec<codelore_lib::cli_api::output::spa::FileFunctionXray> =
-        codelore_lib::cli_api::repo::GixRepo::open(repo_path).map_or_else(
+    // Per-file function X-Ray for the top-10 hotspot paths. Each call reads
+    // the HEAD blob via the shared `spa_repo` handle (cheap; tree-sitter spans
+    // only) and joins against already-ingested hunks. One failure per path
+    // degrades gracefully to an empty rows vec for that path.
+    let function_xray: Vec<codelore_lib::cli_api::output::spa::FileFunctionXray> = spa_repo
+        .as_ref()
+        .map(|xray_repo| {
+            hotspots
+                .iter()
+                .take(10)
+                .filter_map(|h| {
+                    match codelore_lib::cli_api::analyses::function_xray::run_function_xray(
+                        db, xray_repo, opts, &h.path,
+                    ) {
+                        Ok(rows) if !rows.is_empty() => {
+                            Some(codelore_lib::cli_api::output::spa::FileFunctionXray {
+                                path: h.path.clone(),
+                                rows,
+                            })
+                        }
+                        Ok(_) => None,
+                        Err(e) => {
+                            tracing::debug!("dashboard: function-xray skipped for {}: {e}", h.path);
+                            None
+                        }
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    // Refactoring targets — return-on-investment ranking (risk ÷ effort),
+    // capped to a small head. The guided tour brushes the top-10 across every
+    // widget. `with_no_row_limit` so the ranking is the true top-N by
+    // priority, independent of the user's `--rows`. Degrades to empty when the
+    // code-health composite is unavailable (the tour then falls back to the
+    // hotspot proxy).
+    let refactoring_targets =
+        codelore_lib::cli_api::analyses::refactoring_targets::run_refactoring_targets(
+            db,
+            &opts.with_no_row_limit(),
+        )
+        .map_or_else(
             |e| {
-                tracing::warn!("dashboard: could not open repo for function-xray; skipping: {e}");
+                tracing::warn!("dashboard: refactoring-targets failed; skipping: {e}");
                 Vec::new()
             },
-            |xray_repo| {
-                hotspots
-                    .iter()
-                    .take(10)
-                    .filter_map(|h| {
-                        match codelore_lib::cli_api::analyses::function_xray::run_function_xray(
-                            db, &xray_repo, opts, &h.path,
-                        ) {
-                            Ok(rows) if !rows.is_empty() => {
-                                Some(codelore_lib::cli_api::output::spa::FileFunctionXray {
-                                    path: h.path.clone(),
-                                    rows,
-                                })
-                            }
-                            Ok(_) => None,
-                            Err(e) => {
-                                tracing::debug!(
-                                    "dashboard: function-xray skipped for {}: {e}",
-                                    h.path
-                                );
-                                None
-                            }
-                        }
-                    })
-                    .collect()
+            |mut rows| {
+                rows.truncate(SPA_REFACTORING_TARGET_CAP);
+                rows
             },
         );
     // Four-factor header tiles assembled from already-computed data.
@@ -3441,6 +3514,7 @@ fn build_spa_dashboard(
         coupling,
         knowledge_islands,
         entity_ownership,
+        entity_ownership_cap,
         xray,
         daily_commits,
         trends,
@@ -3465,6 +3539,7 @@ fn build_spa_dashboard(
         release_cadence,
         delivery_friction,
         function_xray,
+        refactoring_targets,
         factors,
         options: codelore_lib::cli_api::output::spa::SpaOptionsSnapshot::from_options(opts),
     })

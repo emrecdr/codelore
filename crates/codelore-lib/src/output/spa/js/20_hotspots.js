@@ -301,14 +301,18 @@
                 leafColor = heatmapColor(Math.min(1, groups / cloneScale));
               }
             } else if (colorMode === 'health') {
-              // Code Health Map mode — 3-band green / yellow / red
-              // via DaisyUI semantic tokens
-              // (`--color-success` / `--color-warning` / `--color-error`)
-              // so the bands auto-adapt to light and dark themes. Colours by
-              // the hotspots `cognitive_health` proxy (bounded [60, 100]); a
-              // null value (binary / unsupported language) renders as the dim
-              // foreground rather than misleading green.
-              leafColor = codeHealthColor(m ? m.cognitive_health : null);
+              // Code Health Map mode — colours by the COMPOSITE code-health
+              // band (`data.code_health` rows: green / yellow / red from the
+              // code-health analysis), which is exactly what this lens's
+              // tooltip/label claim. Sourcing the band — not the hotspots
+              // `cognitive_health` proxy bounded to [60, 100] — is what makes
+              // the red band reachable and keeps the lens consistent with the
+              // bivariate map and its legend (same `bandByPath`). Paths absent
+              // from the composite (non-Tier-1 source, analysis skipped) fall
+              // back to the neutral grey the other lenses use for "no data".
+              // The cognitive-health proxy stays on the surfaces that name it
+              // honestly (table / drawer / tooltip metric rows).
+              leafColor = bandLeafColor(bandByPath[n.data.fullPath]);
             } else if (colorMode === 'friction') {
               // Technical Debt Friction mode — continuous heat ramp
               // on hotspot_score. The formula

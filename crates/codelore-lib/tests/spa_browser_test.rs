@@ -57,6 +57,7 @@ use codelore_lib::analyses::factors::health_trend_factors;
 use codelore_lib::analyses::health_trend::HealthTrendRow;
 use codelore_lib::analyses::mi::MiRollup;
 use codelore_lib::analyses::modularity_violations::ModularityViolationRow;
+use codelore_lib::analyses::refactoring_targets::RefactoringTargetRow;
 use codelore_lib::analyses::unstable_interface::UnstableInterfaceRow;
 
 /// Render the SPA from the differential fixture and run it in a real
@@ -239,6 +240,42 @@ fn rendered_spa_boots_without_console_errors() {
         },
     ];
 
+    // Refactoring-targets rows with paths deliberately DISTINCT from the
+    // hotspot set, pre-sorted by priority DESC (as the builder emits them).
+    // The guided tour's "targets" step must brush THESE paths, not the
+    // top-hotspot proxy — so the step-3 assertion can prove the brush was
+    // sourced from `data.refactoring_targets`.
+    let refactoring_targets = vec![
+        RefactoringTargetRow {
+            path: "src/refac/first_target.rs".to_string(),
+            priority: 9.9,
+            combined_risk: 42.0,
+            structural_risk: 0.8,
+            hotspot_score: 6.0,
+            revisions: 20,
+            loc: 30,
+            dominant_type: "complex-method".to_string(),
+            band: "red".to_string(),
+            manual_up_rank: 1,
+        },
+        RefactoringTargetRow {
+            path: "src/refac/second_target.rs".to_string(),
+            priority: 7.1,
+            combined_risk: 21.0,
+            structural_risk: 0.6,
+            hotspot_score: 4.0,
+            revisions: 12,
+            loc: 40,
+            dominant_type: "duplication".to_string(),
+            band: "yellow".to_string(),
+            manual_up_rank: 2,
+        },
+    ];
+    let refactoring_target_paths = refactoring_targets
+        .iter()
+        .map(|r| r.path.clone())
+        .collect::<Vec<_>>();
+
     let dash = SpaDashboard {
         hotspots,
         summary,
@@ -256,6 +293,7 @@ fn rendered_spa_boots_without_console_errors() {
         imports,
         xray,
         effort_exposure,
+        refactoring_targets,
         ..SpaDashboard::default()
     };
 
@@ -775,7 +813,7 @@ fn rendered_spa_boots_without_console_errors() {
     assert_eq!(
         brush_count(),
         0,
-        "step 0 should not set a brush (brushTopHotspots is false for step 0)"
+        "step 0 should not set a brush (brushRefactoringTargets is false for step 0)"
     );
 
     // Next → step 1 (cognitive).
@@ -804,9 +842,29 @@ fn rendered_spa_boots_without_console_errors() {
     let brushed_on_step3 = brush_count();
     assert!(
         brushed_on_step3 > 0,
-        "step 3 (brushTopHotspots=true) should brush at least one path; \
+        "step 3 (brushRefactoringTargets=true) should brush at least one path; \
          Alpine brush store is empty — bs.set(['targets','top10'],[...]) may not have fired"
     );
+    // The brushed set must be the REAL refactoring targets (risk ÷ effort
+    // ordering), not the top-hotspot proxy. The fixture's target paths are
+    // disjoint from the hotspot set, so their presence proves the brush was
+    // sourced from `data.refactoring_targets`. eval_json only reads primitives,
+    // so stringify the array in-page and parse it here.
+    let brushed_json: String = eval_json(
+        &tab,
+        "(function () { \
+             var s = window.Alpine && window.Alpine.store && window.Alpine.store('brush'); \
+             return JSON.stringify((s && s.paths) ? s.paths : []); \
+         })()",
+    );
+    let brushed_paths: Vec<String> = serde_json::from_str(&brushed_json).expect("brush paths json");
+    for want in &refactoring_target_paths {
+        assert!(
+            brushed_paths.iter().any(|p| p == want),
+            "step 3 brush should contain refactoring-target path {want:?} \
+             (sourced from data.refactoring_targets, not the hotspot proxy); got {brushed_paths:?}"
+        );
+    }
 
     // Next on the last step → Exit tour → bivariate restored, brush cleared.
     click_next();
