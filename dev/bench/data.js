@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784541019245,
+  "lastUpdate": 1785148011185,
   "repoUrl": "https://github.com/emrecdr/codelore",
   "entries": {
     "Benchmark": [
@@ -209,6 +209,76 @@ window.BENCHMARK_DATA = {
             "name": "ingest_capacity_sweep/1024",
             "value": 93243341,
             "range": "± 6747399",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Emre Camdere",
+            "username": "emrecdr",
+            "email": "cemre79@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "bd4ca7973e403a80f88c2b492d83551714a45f34",
+          "message": "refactor(cli): collapse the mechanical per-analysis dispatch shells (#151)\n\nThe ~48 near-verbatim 4-arm dispatch_* functions in analyze.rs (each a\ncsv/json/markdown + html + unsupported-format shell differing only in the\nrun-fn and emitter names) collapse into one `dispatch!` macro consumed by a\nsingle `run_streaming_dispatch` table — one declarative arm per analysis. The\nspecials (hotspots' sarif/ndjson/gha, code-health's ndjson + corpus notice,\nthe repo/target/store-taking analyses, the bespoke html-wired set) stay\nexplicit but share the macro core plus an extra writer line.\n\nThe dispatch now READS the seam instead of mirroring it: `supported_formats`\nand `HTML_WIRED` are promoted out of the test module to module scope, and the\nerror helpers derive from them — `unsupported_format` builds its advertised\nlist from `supported_formats(analysis)` and `html_not_wired` builds its covered\nlist from `HTML_WIRED`, so the messages and the wiring cannot drift. The\nregistration-surface tests keep the same contract, now reading the promoted\nseam.\n\nFold in the stale-string fix: the `--format html` guidance omitted\n`refactoring-targets` (which wires a real html emitter); deriving the list from\n`HTML_WIRED` restores it and prevents future drift.\n\nBehavior is byte-identical for every analysis x format combination: a full\nsweep (56 analyses x csv/json/markdown/sarif/ndjson/gha/html) over a fixed repo\ndiffs empty before/after, modulo the pre-existing nondeterministic SARIF run id\nand the known coordination-needs cochange_entropy last-ULP JSON noise.\nanalyze.rs: 4131 -> 2236 lines.\n\nCo-authored-by: Emre Camdere <emre@valocom.nl>",
+          "timestamp": "2026-07-27T09:36:19Z",
+          "url": "https://github.com/emrecdr/codelore/commit/bd4ca7973e403a80f88c2b492d83551714a45f34"
+        },
+        "date": 1785148009793,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "ingest_tiny",
+            "value": 55882588,
+            "range": "± 3969859",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest/medium_500_commits",
+            "value": 99680740,
+            "range": "± 3810103",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "complexity_extraction/parallel_default_threads",
+            "value": 96680180,
+            "range": "± 1871062",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "complexity_extraction/serial_1_thread",
+            "value": 98909475,
+            "range": "± 2753398",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/16",
+            "value": 97707097,
+            "range": "± 3899576",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/64",
+            "value": 99418288,
+            "range": "± 2807894",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/256",
+            "value": 97661148,
+            "range": "± 2122869",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/1024",
+            "value": 97040735,
+            "range": "± 9051268",
             "unit": "ns/iter"
           }
         ]
