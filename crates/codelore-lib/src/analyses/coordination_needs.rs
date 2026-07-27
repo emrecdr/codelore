@@ -236,7 +236,16 @@ pub fn run_coordination_needs(db: &FactsDb, opts: &Options) -> Result<Vec<Coordi
              WHERE twoe > 0
          ),
          h AS (
-             SELECT -SUM(pk * LN(pk)) AS hs FROM p WHERE pk > 0
+             -- ORDER BY path forces DuckDB to sum the entropy terms in a
+             -- fixed (total-ordered, since path is unique in `p`) sequence
+             -- instead of whatever order parallel partitioning happens to
+             -- produce. Float addition is non-associative, so the unordered
+             -- SUM wobbles by ~1 ULP run to run and defeats byte-for-byte
+             -- reproducibility; the ordered aggregate pins one value. Cheap:
+             -- coordination-needs is not a hot path and `p` has one row per
+             -- file. `twoe = SUM(d)` above is exact integer arithmetic, so
+             -- only this float SUM needs pinning.
+             SELECT -SUM(pk * LN(pk) ORDER BY path) AS hs FROM p WHERE pk > 0
          )
          SELECT p.path, p.pk * h.hs AS h_a FROM p, h",
         src = src,
