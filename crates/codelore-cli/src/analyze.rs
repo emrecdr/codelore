@@ -162,34 +162,34 @@ pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
     if matches!(analysis, AnalysisName::Clones)
         && matches!(format, "csv" | "json" | "markdown" | "sarif")
     {
-        let mut out: Box<dyn Write> = match args.output.as_ref() {
-            Some(path) => Box::new(std::fs::File::create(path)?),
-            None => Box::new(std::io::stdout().lock()),
-        };
         let rows =
             codelore_lib::cli_api::analyses::clones::run_clones(&opts).context("run clones")?;
-        match format {
-            "csv" => {
-                codelore_lib::cli_api::output::csv::write_clones_csv(&rows, &mut out)
-                    .context("write csv")?;
+        emit_to_output_or_stdout(args.output.as_deref(), |out| {
+            match format {
+                "csv" => {
+                    codelore_lib::cli_api::output::csv::write_clones_csv(&rows, out)
+                        .context("write csv")?;
+                }
+                "json" => {
+                    codelore_lib::cli_api::output::json::write_json(&rows, out)
+                        .context("write json")?;
+                }
+                "markdown" => {
+                    codelore_lib::cli_api::output::markdown::write_clones_markdown(&rows, out)
+                        .context("write markdown")?;
+                }
+                "sarif" => {
+                    codelore_lib::cli_api::output::sarif::write_clones_sarif(
+                        &rows,
+                        &sarif_repo_root(&args.repo),
+                        out,
+                    )
+                    .context("write sarif")?;
+                }
+                _ => unreachable!("format validated by outer matches!()"),
             }
-            "json" => {
-                codelore_lib::cli_api::output::json::write_json(&rows, &mut out)
-                    .context("write json")?;
-            }
-            "markdown" => {
-                codelore_lib::cli_api::output::markdown::write_clones_markdown(&rows, &mut out)
-                    .context("write markdown")?;
-            }
-            "sarif" => {
-                let repo_root = args.repo.display().to_string();
-                codelore_lib::cli_api::output::sarif::write_clones_sarif(
-                    &rows, &repo_root, &mut out,
-                )
-                .context("write sarif")?;
-            }
-            _ => unreachable!("format validated by outer matches!()"),
-        }
+            Ok(())
+        })?;
         return Ok(());
     }
 
@@ -310,10 +310,6 @@ pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
     {
         let _span =
             tracing::info_span!(target: "codelore::bench", "bench.analyze_and_emit").entered();
-        let mut out: Box<dyn Write> = match args.output.as_ref() {
-            Some(path) => Box::new(std::fs::File::create(path)?),
-            None => Box::new(std::io::stdout().lock()),
-        };
 
         // SARIF needs the repo root; HTML needs the page title plus a
         // generated-at timestamp. Bundle them once and hand the same context
@@ -332,22 +328,28 @@ pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
             now.second(),
         );
         let ctx = EmitCtx {
-            repo_root: args.repo.display().to_string(),
+            // Canonicalized so `--repo .` and an absolute path yield the same
+            // SARIF fingerprints (see `sarif_repo_root`).
+            repo_root: sarif_repo_root(&args.repo),
             title: format!("CodeLore: {}", analysis.as_str()),
             generated_at,
             analysis,
         };
 
-        run_streaming_dispatch(
-            &db,
-            &repo,
-            &opts,
-            args.cache_dir.as_deref(),
-            format,
-            &ctx,
-            &mut out,
-        )?;
-    } // out is dropped here, flushing any buffered writes
+        // Atomic when writing to a file: an interrupted or failing run never
+        // truncates a previous good output (it lands in a temp sibling first).
+        emit_to_output_or_stdout(args.output.as_deref(), |out| {
+            run_streaming_dispatch(
+                &db,
+                &repo,
+                &opts,
+                args.cache_dir.as_deref(),
+                format,
+                &ctx,
+                out,
+            )
+        })?;
+    } // the writer is dropped inside the helper, flushing before the rename
 
     if let Some(path) = args.output.as_ref() {
         write_provenance_sidecar(&db, &opts, analysis_name, path)?;
@@ -381,6 +383,41 @@ struct EmitCtx {
     title: String,
     generated_at: String,
     analysis: AnalysisName,
+}
+
+/// Canonicalize `repo` for the SARIF fingerprint's `repo_root|path` key so an
+/// analysis invoked as `--repo .` and as `--repo /abs/path` produces identical
+/// fingerprints — otherwise every alert re-keys on invocation style and GitHub
+/// churns them. Falls back to the raw path when canonicalize fails (e.g. the
+/// path was removed mid-run). Mirrors the idiom in `check`/`diff` (canonicalize
+/// then `to_string_lossy`), so a file flagged by more than one command coalesces
+/// to a single alert.
+fn sarif_repo_root(repo: &std::path::Path) -> String {
+    repo.canonicalize()
+        .unwrap_or_else(|_| repo.to_path_buf())
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Emit streaming output to `dest`: atomically to the file when `Some`, or to
+/// stdout when `None`. On the file path the `emit` closure fills a temp sibling
+/// that is renamed over the destination only after it succeeds (via
+/// [`atomic_publish`](codelore_lib::cli_api::output::atomic_publish)), so an
+/// interrupted or failing run never truncates a previous good output. Stdout
+/// writes stream directly — there is nothing to publish atomically.
+fn emit_to_output_or_stdout<F>(dest: Option<&std::path::Path>, emit: F) -> Result<()>
+where
+    F: FnOnce(&mut Box<dyn Write>) -> Result<()>,
+{
+    if let Some(path) = dest {
+        codelore_lib::cli_api::output::atomic_publish(path, |tmp| {
+            let mut out: Box<dyn Write> = Box::new(std::fs::File::create(tmp)?);
+            emit(&mut out)
+        })
+    } else {
+        let mut out: Box<dyn Write> = Box::new(std::io::stdout().lock());
+        emit(&mut out)
+    }
 }
 
 /// The streaming `--format` values each analysis's dispatch wires to a real
@@ -1762,13 +1799,15 @@ fn run_spa_dispatch(
     let title = "CodeLore Dashboard";
     let repo_display = repo_path.display().to_string();
 
-    let mut out = std::fs::File::create(output)
-        .with_context(|| format!("create spa output {}", output.display()))?;
-    write_spa(&dash, title, &repo_display, &generated_at, &mut out)
-        .context("write spa dashboard")?;
-    // Drop the writer so file size is finalised on disk before the
-    // stat() below.
-    drop(out);
+    // Atomic publish: an interrupted or failing write never truncates a
+    // previous good dashboard, and the file is renamed into place (so the
+    // stat() below sees the final size) before this returns.
+    codelore_lib::cli_api::output::atomic_publish(output, |tmp| {
+        let mut out = std::fs::File::create(tmp)
+            .with_context(|| format!("create spa output {}", output.display()))?;
+        write_spa(&dash, title, &repo_display, &generated_at, &mut out)
+            .context("write spa dashboard")
+    })?;
 
     // User feedback: --format spa is silent on success by default,
     // which makes the dashboard look like nothing happened. Print
@@ -1825,10 +1864,14 @@ fn run_step_summary_dispatch(
     // `codelore ... --format step-summary >> $GITHUB_STEP_SUMMARY`
     // directly. `--output PATH` opt-in for local use / testing.
     if let Some(path) = output {
-        let mut out = std::fs::File::create(path)
-            .with_context(|| format!("create step-summary output {}", path.display()))?;
-        write_step_summary(&dash, title, &repo_display, &generated_at, &mut out)
-            .context("write step-summary")?;
+        // Atomic publish so an interrupted write never truncates a previous
+        // good summary file (the stdout path streams directly, below).
+        codelore_lib::cli_api::output::atomic_publish(path, |tmp| {
+            let mut out = std::fs::File::create(tmp)
+                .with_context(|| format!("create step-summary output {}", path.display()))?;
+            write_step_summary(&dash, title, &repo_display, &generated_at, &mut out)
+                .context("write step-summary")
+        })?;
         eprintln!("✓ step-summary written to {}", path.display());
     } else {
         let mut out = std::io::stdout().lock();

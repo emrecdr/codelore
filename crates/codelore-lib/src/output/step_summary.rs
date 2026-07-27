@@ -22,6 +22,7 @@
 use std::io::Write;
 
 use crate::analyses::mi::MiBand;
+use crate::output::markdown::escape_md_cell;
 use crate::output::spa::SpaDashboard;
 use crate::{CodeLoreError, Result};
 
@@ -85,7 +86,7 @@ fn write_at_a_glance<W: Write>(dash: &SpaDashboard, w: &mut W) -> Result<()> {
         writeln!(
             w,
             "| Top hotspot | `{}` (score {:.2}) |",
-            escape_md(&top.path),
+            escape_md_cell(&top.path),
             top.hotspot_score
         )
         .map_err(io)?;
@@ -138,7 +139,7 @@ fn write_top_hotspots<W: Write>(dash: &SpaDashboard, w: &mut W) -> Result<()> {
             w,
             "| {n} | `{path}` | {score:.2} | {health:.1} | {cog:.0} | {mi} |",
             n = i + 1,
-            path = escape_md(&row.path),
+            path = escape_md_cell(&row.path),
             score = row.hotspot_score,
             health = row.cognitive_health,
             cog = row.cognitive,
@@ -257,8 +258,8 @@ fn write_knowledge_islands<W: Write>(dash: &SpaDashboard, w: &mut W) -> Result<(
         writeln!(
             w,
             "| `{}` | {} | {:.1}% | {} | {} |",
-            escape_md(&row.entity),
-            escape_md(&row.main_author),
+            escape_md_cell(&row.entity),
+            escape_md_cell(&row.main_author),
             row.ownership_pct,
             row.days_since_main_active,
             row.n_substantial_others,
@@ -304,13 +305,6 @@ fn titlecase(s: &str) -> String {
         Some(first) => first.to_uppercase().chain(chars).collect(),
         None => String::new(),
     }
-}
-
-/// Escape pipe characters in a string so it can appear inside a GFM
-/// table cell without breaking the column structure. Backslash-pipe is
-/// the GFM-standard escape.
-fn escape_md(s: &str) -> String {
-    s.replace('|', "\\|")
 }
 
 #[cfg(test)]
@@ -489,6 +483,22 @@ mod tests {
         dash.hotspots[0].path = "src/a|b.rs".into();
         let md = render(&dash);
         assert!(md.contains(r"src/a\|b.rs"));
+    }
+
+    #[test]
+    fn newline_in_author_cannot_forge_markdown_rows() {
+        // An author name carrying a newline (crafted, or via a corrupt
+        // mailmap) must not break out of its table cell and inject a heading
+        // into the rendered $GITHUB_STEP_SUMMARY. escape_md_cell folds \n/\r
+        // to the visual ↵ glyph so the row stays on one line.
+        let mut dash = sample_dash();
+        dash.knowledge_islands[0].main_author = "Real Dev\n# INJECTED HEADING".into();
+        let md = render(&dash);
+        assert!(
+            !md.contains("\n# INJECTED HEADING"),
+            "author newline forged a heading:\n{md}"
+        );
+        assert!(md.contains("Real Dev↵# INJECTED HEADING"));
     }
 
     #[test]

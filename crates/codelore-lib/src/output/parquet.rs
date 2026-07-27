@@ -8,13 +8,17 @@ use crate::{CodeLoreError, Options, Result};
 use std::path::Path;
 
 fn copy_to_parquet(db: &FactsDb, query: &str, path: &Path) -> Result<()> {
-    // Escape single quotes in path (DuckDB COPY uses SQL string literals)
-    let path_str = path.display().to_string().replace('\'', "''");
-    let sql = format!("COPY ({query}) TO '{path_str}' (FORMAT PARQUET);");
-    db.conn()
-        .execute_batch(&sql)
-        .map_err(|e| CodeLoreError::Output(format!("parquet: {e}")))?;
-    Ok(())
+    // Atomic publish: COPY into a temp sibling and rename over `path` only on
+    // success, so an interrupted write never truncates the previous good file.
+    crate::output::atomic_publish(path, |tmp| {
+        // Escape single quotes in path (DuckDB COPY uses SQL string literals)
+        let path_str = tmp.display().to_string().replace('\'', "''");
+        let sql = format!("COPY ({query}) TO '{path_str}' (FORMAT PARQUET);");
+        db.conn()
+            .execute_batch(&sql)
+            .map_err(|e| CodeLoreError::Output(format!("parquet: {e}")))?;
+        Ok(())
+    })
 }
 
 pub fn write_hotspots_parquet(db: &FactsDb, opts: &Options, path: &Path) -> Result<()> {
