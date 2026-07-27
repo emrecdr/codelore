@@ -758,11 +758,11 @@ pub fn run_diff(args: &DiffArgs) -> Result<(DiffOutput, FactsDb, Options)> {
     let thresholds_opt = if let Some(path) = args.thresholds_file.as_ref() {
         Some(
             codelore_lib::cli_api::quality_gates::Thresholds::from_path(path)
-                .map_err(|e| anyhow::anyhow!("load thresholds file: {e}"))?,
+                .context("load thresholds file")?,
         )
     } else {
         let discovered = codelore_lib::cli_api::quality_gates::Thresholds::discover(&args.repo)
-            .map_err(|e| anyhow::anyhow!("discover thresholds file: {e}"))?;
+            .context("discover thresholds file")?;
         if discovered.is_empty() {
             None
         } else {

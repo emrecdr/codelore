@@ -7,7 +7,6 @@
 //! single-page dashboard from the full analysis suite.
 
 use std::io::Write;
-use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use codelore_lib::cli_api::facts::FactsDb;
@@ -17,7 +16,7 @@ use codelore_lib::cli_api::{AnalysisName, CodeLoreError, Options};
 use crate::args::AnalyzeArgs;
 use crate::notice_corpus_lens_absent;
 
-#[allow(clippy::too_many_lines)] // long but linear: pre-flight → format-validate → ingest → 43-analysis dispatch → emit; splitting would obscure the top-level orchestration flow
+#[allow(clippy::too_many_lines)] // long but linear: pre-flight → ingest → 43-analysis dispatch → emit; splitting would obscure the top-level orchestration flow
 pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
     use codelore_lib::cli_api::output::banner;
     // Bracket the whole run with a wall-clock timer so the footer can report
@@ -26,20 +25,19 @@ pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
     // what `cargo build`'s `Finished in Xs` includes.
     let started_at = std::time::Instant::now();
 
-    let analysis = AnalysisName::from_str(&args.analysis)
-        .with_context(|| format!("parsing --analysis {:?}", args.analysis))?;
+    // `--analysis` is parsed and validated by clap (see `args::AnalysisNameParser`),
+    // so it arrives already resolved — including the code-maat aliases.
+    let analysis = args.analysis;
 
-    let format = args.format.as_str();
-    match format {
-        "csv" | "json" | "ndjson" | "sarif" | "markdown" | "parquet" | "sqlite" | "html"
-        | "spa" | "step-summary" | "gha" => {}
-        other => {
-            return Err(CodeLoreError::Analysis(format!(
-                "unknown --format {other:?}. Supported: csv, json, ndjson, sarif, markdown, parquet, sqlite, html, spa, step-summary, gha"
-            ))
-            .into());
-        }
+    // Advise when an analysis-scoped flag was explicitly set but the selected
+    // analysis will ignore it. Stderr only — never changes results or exit code.
+    for warning in crate::args::ignored_flag_warnings(args, analysis) {
+        eprintln!("{warning}");
     }
+
+    // `--format` is validated by clap against the canonical catalogue
+    // (`args::ANALYZE_FORMATS`), so every value reaching here is supported.
+    let format = args.format.as_str();
 
     // Format constraints. parquet + sqlite are binary fact-store dumps with no
     // sensible default filename, so they still require --output. `spa` defaults
@@ -67,23 +65,9 @@ pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         .into());
     }
 
-    let complexity_sample = match args.complexity_sample.as_str() {
-        "head" => codelore_lib::cli_api::options::ComplexitySample::Head,
-        "adaptive" | "full" => {
-            return Err(CodeLoreError::InvalidOptions(
-                "--complexity-sample currently supports only 'head'; \
-                 'adaptive' and 'full' are not yet available"
-                    .to_string(),
-            )
-            .into());
-        }
-        other => {
-            return Err(CodeLoreError::InvalidOptions(format!(
-                "unknown --complexity-sample value {other:?}; expected 'head'"
-            ))
-            .into());
-        }
-    };
+    // `--complexity-sample` is clap-restricted to `head` — the only implemented
+    // sampling strategy — so it maps unconditionally.
+    let complexity_sample = codelore_lib::cli_api::options::ComplexitySample::Head;
 
     let defect_calibration = codelore_lib::cli_api::quality_gates::resolve_defect_calibration(
         args.defect_calibration.clone(),

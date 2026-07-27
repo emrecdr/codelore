@@ -397,15 +397,21 @@ pub(crate) fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
                     .context("write explain topic")?;
                     Ok(())
                 }
-                None => match resolve_explain_file(&args.repo, topic) {
-                    Some(repo_relative) => run_explain_file(args, &repo_relative),
-                    None => Err(CodeLoreError::Analysis(format!(
-                        "unknown topic `{topic}` — run `codelore explain` (no arg) to list \
-                         supported topics, or pass an existing file path (with --repo) to print \
-                         that file's evidence dossier"
-                    ))
-                    .into()),
-                },
+                None => {
+                    if let Some(repo_relative) = resolve_explain_file(&args.repo, topic) {
+                        run_explain_file(args, &repo_relative)
+                    } else {
+                        let hint = crate::suggest::nearest(topic, topics.iter().map(|(n, ..)| *n))
+                            .map(|s| format!(" (did you mean `{s}`?)"))
+                            .unwrap_or_default();
+                        Err(CodeLoreError::Analysis(format!(
+                            "unknown topic `{topic}`{hint} — run `codelore explain` (no arg) to \
+                             list supported topics, or pass an existing file path (with --repo) to \
+                             print that file's evidence dossier"
+                        ))
+                        .into())
+                    }
+                }
             }
         }
     }
