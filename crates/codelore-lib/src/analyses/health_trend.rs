@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::analyses::architecture_trend::{
-    import_graph_from_live_paths, live_paths_at, sampled_commits,
+    ArchitectureTrendRow, import_graph_from_live_paths, live_paths_at, sampled_commits,
 };
 use crate::analyses::code_health::{
     CloneSource, CodeHealthRow, HealthScanCtx, run_code_health_scoped,
@@ -133,6 +133,24 @@ pub struct HealthTrendDetail {
     pub transitions: Vec<HealthTransitionRow>,
 }
 
+/// Both historical trend views derived from ONE pass over the sampled revs.
+///
+/// `architecture-trend` and `health-trend` each rebuild the identical per-rev
+/// import graph over the same [`sampled_commits`] set. A dashboard that shows
+/// both would pay that historical scan twice; [`run_sample_trends`] computes
+/// each rev's graph once and derives both views from it. The `architecture`
+/// rows are byte-identical to a standalone [`run_architecture_trend`] and the
+/// `health` detail byte-identical to a standalone [`run_health_trend_detail`]
+/// (both are thin projections of this driver).
+///
+/// [`run_architecture_trend`]: crate::analyses::architecture_trend::run_architecture_trend
+pub struct SampleTrends {
+    /// Architecture-decay rows, oldest→newest (as `architecture-trend`).
+    pub architecture: Vec<ArchitectureTrendRow>,
+    /// Repo-health timeline + per-file series + transitions (as `health-trend`).
+    pub health: HealthTrendDetail,
+}
+
 /// Session-scoped temp-table names the rev-scoped `HealthScanCtx` points at.
 /// `CREATE OR REPLACE` inside the helpers means reusing them across samples is
 /// safe — each iteration replaces the prior rev's contents.
@@ -206,11 +224,17 @@ fn detect_transitions(
     out
 }
 
-/// Compute the three health scores plus per-file series and band transitions
-/// across ≤12 evenly-spaced historical revs.
+/// Compute BOTH historical trend views in a single pass over the sampled
+/// revs, building each rev's import graph once and deriving the
+/// architecture-decay row and the health data point from it.
 ///
-/// This is the full detail variant. [`run_health_trend`] is a thin wrapper
-/// that returns only `.trend` so the CSV/Markdown emitters are unchanged.
+/// The per-rev primitives are exactly those the standalone analyses use
+/// ([`import_graph_from_live_paths`] + [`graph_metrics`] for the graph,
+/// [`ingest_complexity_at_rev`] + [`run_code_health_scoped`] for the code
+/// half), so `architecture` equals a standalone
+/// [`run_architecture_trend`](crate::analyses::architecture_trend::run_architecture_trend)
+/// and `health` equals a standalone [`run_health_trend_detail`], by
+/// construction — the only difference is the graph is built once, not twice.
 ///
 /// **Per-file series** — for every sampled rev, the per-file score from
 /// [`run_code_health_scoped`] is captured for paths in the top-50 hotspots
@@ -226,12 +250,8 @@ fn detect_transitions(
 /// # Errors
 ///
 /// Returns [`crate::CodeLoreError::Analysis`] on any query / ingest failure.
-#[tracing::instrument(name = "health-trend-detail", skip_all)]
-pub fn run_health_trend_detail<R: Repo>(
-    db: &FactsDb,
-    repo: &R,
-    opts: &Options,
-) -> Result<HealthTrendDetail> {
+#[tracing::instrument(name = "sample-trends", skip_all)]
+pub fn run_sample_trends<R: Repo>(db: &FactsDb, repo: &R, opts: &Options) -> Result<SampleTrends> {
     const FILE_SERIES_CAP: usize = 50;
 
     let samples = sampled_commits(db)?;
@@ -241,6 +261,7 @@ pub fn run_health_trend_detail<R: Repo>(
     // Compute the top-50 hotspot path set once before the loop.
     let top_paths = top_hotspot_paths(db, opts, FILE_SERIES_CAP)?;
 
+    let mut arch_rows = Vec::with_capacity(samples.len());
     let mut trend = Vec::with_capacity(samples.len());
     let mut file_series: Vec<FileHealthPoint> = Vec::new();
     let mut all_transitions: Vec<HealthTransitionRow> = Vec::new();
@@ -253,13 +274,23 @@ pub fn run_health_trend_detail<R: Repo>(
         // Resolve the live-at-`ts` path set once.
         let live = live_paths_at(db, ts)?;
 
-        // Architectural half.
+        // Import graph — built ONCE and shared by both trend views.
         let graph = import_graph_from_live_paths(repo, rev, &live);
         let m = graph_metrics(&graph);
         let files = u32::try_from(m.n).unwrap_or(u32::MAX);
+
+        // Architecture-decay row (same graph the health arch half scores).
+        arch_rows.push(ArchitectureTrendRow {
+            date: date.to_string(),
+            rev: rev.chars().take(12).collect(),
+            files,
+            propagation_cost: m.propagation_cost,
+            cycle_count: m.cycle_count,
+            largest_cycle: m.largest_cycle,
+        });
         let arch = arch_health(&m);
 
-        // Code half — per-file rows available at zero extra scan cost.
+        // Code half — per-file rows available at zero extra graph cost.
         ingest_complexity_at_rev(db, repo, rev, &live, CM_AT_REV)?;
         materialize_imports_at_rev(db, &graph, IMPORTS_AT_REV)?;
         let cx = HealthScanCtx {
@@ -313,11 +344,32 @@ pub fn run_health_trend_detail<R: Repo>(
     // Transitions are newest-first: reverse the chronological order.
     all_transitions.reverse();
 
-    Ok(HealthTrendDetail {
-        trend,
-        file_series,
-        transitions: all_transitions,
+    Ok(SampleTrends {
+        architecture: arch_rows,
+        health: HealthTrendDetail {
+            trend,
+            file_series,
+            transitions: all_transitions,
+        },
     })
+}
+
+/// Compute the three health scores plus per-file series and band transitions
+/// across ≤12 evenly-spaced historical revs.
+///
+/// Thin projection of [`run_sample_trends`] returning only its `health` view
+/// (the standalone `health-trend` output). [`run_health_trend`] narrows this
+/// further to `.trend` for the CSV/Markdown emitters.
+///
+/// # Errors
+///
+/// Returns [`crate::CodeLoreError::Analysis`] on any query / ingest failure.
+pub fn run_health_trend_detail<R: Repo>(
+    db: &FactsDb,
+    repo: &R,
+    opts: &Options,
+) -> Result<HealthTrendDetail> {
+    Ok(run_sample_trends(db, repo, opts)?.health)
 }
 
 /// Compute the three health scores across ≤12 evenly-spaced historical revs.

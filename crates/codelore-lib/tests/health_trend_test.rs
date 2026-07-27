@@ -1,5 +1,5 @@
 use codelore_lib::analyses::health_trend::{
-    HealthTrendRow, health_band, run_health_trend, run_health_trend_detail,
+    HealthTrendRow, health_band, run_health_trend, run_health_trend_detail, run_sample_trends,
 };
 
 fn all_scores_in_range(rows: &[HealthTrendRow]) {
@@ -119,4 +119,67 @@ fn detail_trend_matches_wrapper_and_transitions_are_valid() {
             "transitions must be actual changes"
         );
     }
+}
+
+#[test]
+fn shared_driver_matches_standalone_trends() {
+    use codelore_lib::analyses::architecture_trend::run_architecture_trend;
+
+    // One fixture; each analysis runs on its own freshly-ingested db so temp
+    // tables from one call never bleed into another (matches the wrapper test).
+    let fx = codelore_lib::test_support::biomarker_repo::build();
+    let opts = codelore_lib::test_support::permissive_coupling_opts(fx.dir.path().to_path_buf());
+    let fresh = || {
+        let repo = codelore_lib::repo::GixRepo::open(fx.dir.path()).expect("open");
+        let db = codelore_lib::facts::FactsDb::new_in_memory().expect("db");
+        db.ingest(&repo, &opts).expect("ingest");
+        (repo, db)
+    };
+
+    let (repo_s, db_s) = fresh();
+    let shared = run_sample_trends(&db_s, &repo_s, &opts).expect("sample-trends");
+
+    let (repo_a, db_a) = fresh();
+    let arch = run_architecture_trend(&db_a, &repo_a, &opts).expect("arch-trend");
+
+    let (repo_h, db_h) = fresh();
+    let health = run_health_trend_detail(&db_h, &repo_h, &opts).expect("health-detail");
+
+    // Architecture-decay rows from the shared driver equal the standalone run.
+    assert_eq!(shared.architecture.len(), arch.len(), "arch row count");
+    for (s, a) in shared.architecture.iter().zip(arch.iter()) {
+        assert_eq!(s.date, a.date);
+        assert_eq!(s.rev, a.rev);
+        assert_eq!(s.files, a.files);
+        assert!(
+            (s.propagation_cost - a.propagation_cost).abs() < 1e-12,
+            "propagation_cost {} vs {} at {}",
+            s.propagation_cost,
+            a.propagation_cost,
+            s.rev
+        );
+        assert_eq!(s.cycle_count, a.cycle_count);
+        assert_eq!(s.largest_cycle, a.largest_cycle);
+    }
+
+    // Health view from the shared driver equals the standalone detail run.
+    assert_eq!(shared.health.trend.len(), health.trend.len(), "trend rows");
+    for (s, h) in shared.health.trend.iter().zip(health.trend.iter()) {
+        assert_eq!(s.date, h.date);
+        assert_eq!(s.rev, h.rev);
+        assert_eq!(s.files, h.files);
+        assert!((s.arch_health - h.arch_health).abs() < 1e-12);
+        assert!((s.code_health - h.code_health).abs() < 1e-12);
+        assert!((s.combined_health - h.combined_health).abs() < 1e-12);
+    }
+    assert_eq!(
+        shared.health.file_series.len(),
+        health.file_series.len(),
+        "file_series length"
+    );
+    assert_eq!(
+        shared.health.transitions.len(),
+        health.transitions.len(),
+        "transitions length"
+    );
 }

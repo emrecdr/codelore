@@ -3189,41 +3189,32 @@ fn build_spa_dashboard(
             tracing::warn!("dashboard: architecture-roles failed; skipping: {e}");
             Vec::new()
         });
-    // Architecture-trend is the one dashboard input that needs the repo
-    // (it re-reads source at sampled historical revs) and the only one
-    // markedly heavier than an SQL query — so it opens its own repo
-    // handle and degrades gracefully: any failure leaves the trend chart
-    // empty rather than sinking the whole dashboard.
-    let architecture_trend = codelore_lib::cli_api::repo::GixRepo::open(repo_path)
-        .map_err(anyhow::Error::from)
-        .and_then(|repo| {
-            codelore_lib::cli_api::analyses::architecture_trend::run_architecture_trend(
-                db, &repo, opts,
-            )
-            .map_err(anyhow::Error::from)
-        })
-        .unwrap_or_else(|e| {
-            tracing::warn!("dashboard: architecture-trend failed; skipping: {e}");
-            Vec::new()
-        });
-    // Repo health timeline + per-file series + transitions — like
-    // architecture-trend, needs the repo to re-read source at sampled
-    // historical revs. Opens its own handle and degrades gracefully.
-    let (health_trend, file_health_series, health_transitions) =
+    // Architecture-trend and health-trend both re-read source at the same
+    // sampled historical revs and each rebuild the identical per-rev import
+    // graph. `run_sample_trends` builds each graph ONCE and derives both views
+    // from it, so a dashboard that shows both pays that historical scan once,
+    // not twice. One repo handle; any failure leaves both trend views empty
+    // rather than sinking the whole dashboard.
+    let (architecture_trend, health_trend, file_health_series, health_transitions) =
         codelore_lib::cli_api::repo::GixRepo::open(repo_path)
             .map_err(anyhow::Error::from)
             .and_then(|repo| {
-                codelore_lib::cli_api::analyses::health_trend::run_health_trend_detail(
-                    db, &repo, opts,
-                )
-                .map_err(anyhow::Error::from)
+                codelore_lib::cli_api::analyses::health_trend::run_sample_trends(db, &repo, opts)
+                    .map_err(anyhow::Error::from)
             })
             .map_or_else(
                 |e| {
-                    tracing::warn!("dashboard: health-trend failed; skipping: {e}");
-                    (Vec::new(), Vec::new(), Vec::new())
+                    tracing::warn!("dashboard: trend scan failed; skipping: {e}");
+                    (Vec::new(), Vec::new(), Vec::new(), Vec::new())
                 },
-                |d| (d.trend, d.file_series, d.transitions),
+                |t| {
+                    (
+                        t.architecture,
+                        t.health.trend,
+                        t.health.file_series,
+                        t.health.transitions,
+                    )
+                },
             );
     // Effort-exposure: LOC/commit/churn share per band over the trailing
     // window. Pure SQL over already-ingested facts; runs the same
