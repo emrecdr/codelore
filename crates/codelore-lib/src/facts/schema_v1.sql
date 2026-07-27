@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS changes (
 --
 -- All four offset columns are NOT NULL (a hunk that's missing any of
 -- old_start / old_lines / new_start / new_lines is malformed; the
--- parser in `repo::git_cli_repo::parse_hunk_headers` returns None on
+-- parser in `repo::git_cli_repo::history::parse_hunk_headers` returns None on
 -- such headers so they never reach the Appender, and the gix path
 -- constructs `Hunk` from u32 fields that can't be NULL).
 --
