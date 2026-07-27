@@ -3671,3 +3671,461 @@ fn compute_spa_coupling_density(
         }
     }
 }
+
+/// Registration-surface exhaustiveness.
+///
+/// An analysis is registered on several independent output surfaces, and only
+/// one of them is guarded by the compiler:
+///
+/// 1. **dispatch** — the `match &analysis` in [`analyze`] that routes each
+///    [`AnalysisName`] to its `dispatch_*` fn. This IS compiler-exhaustive: a
+///    new variant fails to compile until it has an arm.
+/// 2. **csv** / 3. **markdown** — the `match format` inside each `dispatch_*`
+///    fn decides which `--format` values reach a real emitter. These arms are
+///    NOT tied to the enum, so a new analysis can silently ship without one.
+/// 4. **spa** — [`build_spa_dashboard`] hand-picks which analyses contribute
+///    rendered data to `--format spa`; it is a composite, not a per-name
+///    dispatch, so it too drifts independently.
+///
+/// This drift is not hypothetical: an analysis wired for dispatch but forgotten
+/// on a rendering surface ships silently — no compile error, no test failure.
+/// The contract enforced here: **every [`AnalysisName`] must be EITHER wired on
+/// a surface OR listed in that surface's documented-absence registry with an
+/// honest one-line reason.** A new analysis that accounts for neither fails a
+/// test that names it and the surface.
+///
+/// # Mechanism per surface (why each is chosen)
+///
+/// The seams [`registration_surfaces::supported_formats`] and
+/// [`registration_surfaces::renders_in_spa`] are each an **exhaustive `match`
+/// over `AnalysisName`** — the strongest *contained* option (a queryable
+/// per-name function), short of collapsing each `dispatch_*` fn to READ these
+/// seams directly (a larger refactor left for later). Adding a variant fails to
+/// compile until its wiring is declared; the tests then hold each declaration
+/// to account against `AnalysisName::all()` and the documented-absence lists.
+///
+/// A **runtime probe** was rejected: the `dispatch_*` fns run the analysis
+/// before checking the format, and several carry preconditions an empty
+/// in-memory db can't satisfy (`--target` for function-xray/-coupling, a
+/// SARIF sidecar for finding-hotspot-overlap, historical blob reads for the
+/// trend analyses), so a probe would be neither uniform nor side-effect-free.
+/// A **source-scan** (`include_str!` + grep of the match arms) was rejected as
+/// brittle. The seams live in this file, beside the dispatch match and
+/// `build_spa_dashboard`, so they stay truthful by colocation; the csv/markdown
+/// emitters they name in turn live in `output/{csv,markdown}.rs` and are reached
+/// only through these arms (the compiler proves the named `write_*` exists).
+#[cfg(test)]
+mod registration_surfaces {
+    use codelore_lib::cli_api::AnalysisName;
+
+    /// The streaming `--format` values whose per-analysis `dispatch_*` arm
+    /// reaches a real emitter. Exhaustive over `AnalysisName`: a new variant
+    /// will not compile until it is placed in one of the groups. Mirrors the
+    /// `match format { … }` arms in the `dispatch_*` fns above — `csv`, `json`
+    /// and `markdown` are wired for every analysis; `html` is opt-in, present
+    /// only where a bespoke row-type `write_html` is wired (all others return
+    /// the shared `html_not_wired` guidance).
+    fn supported_formats(name: AnalysisName) -> &'static [&'static str] {
+        use AnalysisName::{
+            AbsChurn, ArchViolations, ArchitectureMetrics, ArchitectureRoles, ArchitectureTrend,
+            AuthorChurn, Authors, BusFactor, Centrality, CloneCoupling, Clones, CodeAge,
+            CodeFamiliarity, CodeHealth, Communication, Communities, CoordinationNeeds, Coupling,
+            Crossing, CycleHealth, CycleOrigins, DefectValidation, DeliveryFriction,
+            DeliveryMetrics, DependencyCycles, EffortExposure, EntityChurn, EntityEffort,
+            EntityOwnership, FindingHotspotOverlap, FunctionCoupling, FunctionXray, GodClasses,
+            HealthTrend, HotspotVelocity, Hotspots, Instability, KnowledgeIslands, LeadTime,
+            MainDev, MainDevByDeletions, MainDevByRevs, MarginalOwnerRisk, Messages,
+            ModularityViolations, Ownership, PairProgramming, RefactoringTargets, ReleaseCadence,
+            Revisions, Soc, StaleCode, Summary, TeamComposition, TopCommitters, UnstableInterface,
+        };
+        // Three streaming formats every analysis wires.
+        const STREAM: &[&str] = &["csv", "json", "markdown"];
+        // The above plus a bespoke HTML emitter.
+        const STREAM_HTML: &[&str] = &["csv", "json", "markdown", "html"];
+        match name {
+            Hotspots | CodeHealth | KnowledgeIslands | CloneCoupling | Summary | Revisions
+            | Authors | TopCommitters | RefactoringTargets => STREAM_HTML,
+            HotspotVelocity
+            | Coupling
+            | Ownership
+            | CodeAge
+            | AbsChurn
+            | AuthorChurn
+            | EntityChurn
+            | Communication
+            | Clones
+            | Soc
+            | Messages
+            | MainDev
+            | MainDevByRevs
+            | MainDevByDeletions
+            | EntityEffort
+            | EntityOwnership
+            | Centrality
+            | Communities
+            | GodClasses
+            | ArchViolations
+            | DependencyCycles
+            | ArchitectureRoles
+            | Instability
+            | ArchitectureMetrics
+            | ArchitectureTrend
+            | HealthTrend
+            | CycleOrigins
+            | ModularityViolations
+            | UnstableInterface
+            | Crossing
+            | StaleCode
+            | PairProgramming
+            | LeadTime
+            | BusFactor
+            | DeliveryFriction
+            | DeliveryMetrics
+            | EffortExposure
+            | CodeFamiliarity
+            | TeamComposition
+            | CoordinationNeeds
+            | MarginalOwnerRisk
+            | ReleaseCadence
+            | FunctionXray
+            | FunctionCoupling
+            | FindingHotspotOverlap
+            | CycleHealth
+            | DefectValidation => STREAM,
+        }
+    }
+
+    /// Whether the analysis contributes rendered data to the `--format spa`
+    /// dashboard composite. Exhaustive over `AnalysisName`: a new variant will
+    /// not compile until it is placed in one of the groups. Mirrors the `run_*`
+    /// calls inside `build_spa_dashboard` — a reviewed judgment, not a
+    /// mechanical mapping, because several SPA widgets are fed by dashboard-only
+    /// composite queries (`run_xray`, `run_trends`, `run_daily_commits`,
+    /// `run_kamei_risk`, `run_imports_for_arch_graph`) that map to no
+    /// `AnalysisName`, while `architecture-metrics` contributes only the
+    /// corpus-percentile annotation on the Architecture factor tile.
+    fn renders_in_spa(name: AnalysisName) -> bool {
+        use AnalysisName::{
+            AbsChurn, ArchViolations, ArchitectureMetrics, ArchitectureRoles, ArchitectureTrend,
+            AuthorChurn, Authors, BusFactor, Centrality, CloneCoupling, Clones, CodeAge,
+            CodeFamiliarity, CodeHealth, Communication, Communities, CoordinationNeeds, Coupling,
+            Crossing, CycleHealth, CycleOrigins, DefectValidation, DeliveryFriction,
+            DeliveryMetrics, DependencyCycles, EffortExposure, EntityChurn, EntityEffort,
+            EntityOwnership, FindingHotspotOverlap, FunctionCoupling, FunctionXray, GodClasses,
+            HealthTrend, HotspotVelocity, Hotspots, Instability, KnowledgeIslands, LeadTime,
+            MainDev, MainDevByDeletions, MainDevByRevs, MarginalOwnerRisk, Messages,
+            ModularityViolations, Ownership, PairProgramming, RefactoringTargets, ReleaseCadence,
+            Revisions, Soc, StaleCode, Summary, TeamComposition, TopCommitters, UnstableInterface,
+        };
+        match name {
+            Hotspots | Coupling | CodeHealth | Summary | Clones | EntityOwnership
+            | KnowledgeIslands | ArchitectureRoles | ArchitectureMetrics | ArchitectureTrend
+            | HealthTrend | ModularityViolations | UnstableInterface | DeliveryFriction
+            | DeliveryMetrics | RefactoringTargets | EffortExposure | CodeFamiliarity
+            | TeamComposition | CoordinationNeeds | MarginalOwnerRisk | ReleaseCadence
+            | FunctionXray => true,
+            HotspotVelocity
+            | Ownership
+            | CodeAge
+            | AbsChurn
+            | AuthorChurn
+            | EntityChurn
+            | Communication
+            | Revisions
+            | Authors
+            | CloneCoupling
+            | Soc
+            | Messages
+            | MainDev
+            | MainDevByRevs
+            | MainDevByDeletions
+            | EntityEffort
+            | TopCommitters
+            | Centrality
+            | Communities
+            | GodClasses
+            | ArchViolations
+            | DependencyCycles
+            | Instability
+            | CycleOrigins
+            | Crossing
+            | StaleCode
+            | PairProgramming
+            | LeadTime
+            | BusFactor
+            | FunctionCoupling
+            | FindingHotspotOverlap
+            | CycleHealth
+            | DefectValidation => false,
+        }
+    }
+
+    /// Analyses with no CSV emitter, each with the reason. Empty today — every
+    /// analysis streams CSV. A future analysis that opts out must be listed
+    /// here (with a reason) or the CSV surface test fails naming it.
+    const DOCUMENTED_ABSENT_CSV: &[(AnalysisName, &str)] = &[];
+
+    /// Analyses with no Markdown emitter, each with the reason. Empty today —
+    /// every analysis streams Markdown.
+    const DOCUMENTED_ABSENT_MARKDOWN: &[(AnalysisName, &str)] = &[];
+
+    /// Analyses that render NO widget/data in the `--format spa` dashboard,
+    /// each with an honest one-line reason. The counterpart of the `true`
+    /// group in [`renders_in_spa`]: the two must partition `AnalysisName::all()`
+    /// exactly, so adding an analysis to one forces removing it from the other.
+    const DOCUMENTED_ABSENT_SPA: &[(AnalysisName, &str)] = &[
+        (
+            AnalysisName::HotspotVelocity,
+            "no widget; change-acceleration is a CLI early-warning table",
+        ),
+        (
+            AnalysisName::Ownership,
+            "SPA renders ownership via entity-ownership; the repo fractal has no widget",
+        ),
+        (AnalysisName::CodeAge, "no code-age widget"),
+        (
+            AnalysisName::AbsChurn,
+            "no widget; absolute churn is summarised in the KPI tiles",
+        ),
+        (
+            AnalysisName::AuthorChurn,
+            "no widget; per-author churn is a CLI table",
+        ),
+        (
+            AnalysisName::EntityChurn,
+            "no widget; per-file churn is subsumed by the hotspots widget",
+        ),
+        (
+            AnalysisName::Communication,
+            "no widget; the author-communication graph is CLI-only",
+        ),
+        (
+            AnalysisName::Revisions,
+            "no widget; per-file revision counts are subsumed by the hotspots widget",
+        ),
+        (
+            AnalysisName::Authors,
+            "no widget; the per-file author-risk table is CLI-only",
+        ),
+        (
+            AnalysisName::CloneCoupling,
+            "no widget; the live-clone x co-change intersection is CLI-only",
+        ),
+        (
+            AnalysisName::Soc,
+            "no widget; sum-of-coupling is a scalar CLI metric",
+        ),
+        (
+            AnalysisName::Messages,
+            "no widget; commit-message matching is CLI-only",
+        ),
+        (
+            AnalysisName::MainDev,
+            "no widget; main-developer tables are CLI-only",
+        ),
+        (
+            AnalysisName::MainDevByRevs,
+            "no widget; main-developer (by revisions) is CLI-only",
+        ),
+        (
+            AnalysisName::MainDevByDeletions,
+            "no widget; main-developer (by deletions) is CLI-only",
+        ),
+        (
+            AnalysisName::EntityEffort,
+            "no widget; per-(entity, author) effort rows are CLI-only",
+        ),
+        (
+            AnalysisName::TopCommitters,
+            "no widget; the committer leaderboard is CLI-only",
+        ),
+        (
+            AnalysisName::Centrality,
+            "no widget; coupling-graph centrality is CLI-only",
+        ),
+        (
+            AnalysisName::Communities,
+            "no widget; Leiden community detection is CLI-only",
+        ),
+        (
+            AnalysisName::GodClasses,
+            "no widget; god-class detection is CLI-only",
+        ),
+        (
+            AnalysisName::ArchViolations,
+            "no widget; layer-rule validation is opt-in CLI-only",
+        ),
+        (
+            AnalysisName::DependencyCycles,
+            "no widget; the architecture graph rings cycle members via architecture-roles",
+        ),
+        (
+            AnalysisName::Instability,
+            "no widget; Martin instability is CLI-only",
+        ),
+        (
+            AnalysisName::CycleOrigins,
+            "no widget; cycle-origin bisection is CLI-only",
+        ),
+        (
+            AnalysisName::Crossing,
+            "no widget; the DV8 crossing pattern is CLI-only",
+        ),
+        (
+            AnalysisName::StaleCode,
+            "no widget; stale-code surfacing is CLI-only",
+        ),
+        (
+            AnalysisName::PairProgramming,
+            "no widget; co-author pairing is CLI-only",
+        ),
+        (
+            AnalysisName::LeadTime,
+            "no widget; the delivery card uses delivery-metrics and release-cadence",
+        ),
+        (
+            AnalysisName::BusFactor,
+            "no widget; per-module bus factor is CLI-only",
+        ),
+        (
+            AnalysisName::FunctionCoupling,
+            "no widget; per-function-pair co-change needs a --target file",
+        ),
+        (
+            AnalysisName::FindingHotspotOverlap,
+            "no widget; external-findings fusion needs prior ingest-sarif",
+        ),
+        (
+            AnalysisName::CycleHealth,
+            "no widget; per-SCC heat/verdict is CLI-only",
+        ),
+        (
+            AnalysisName::DefectValidation,
+            "no widget; defect-calibration evidence is a diagnostic CLI dump",
+        ),
+    ];
+
+    /// The analyses that wire a bespoke HTML emitter (the `STREAM_HTML` group).
+    /// HTML is not one of the four tracked surfaces (absence is the norm — most
+    /// analyses stream only, by design), so it gets this compact guard rather
+    /// than a full documented-absence registry: the derived set must match, so
+    /// a new bespoke `write_html` (or a lost one) is named here.
+    const HTML_WIRED: &[AnalysisName] = &[
+        AnalysisName::Hotspots,
+        AnalysisName::CodeHealth,
+        AnalysisName::KnowledgeIslands,
+        AnalysisName::CloneCoupling,
+        AnalysisName::Summary,
+        AnalysisName::Revisions,
+        AnalysisName::Authors,
+        AnalysisName::TopCommitters,
+        AnalysisName::RefactoringTargets,
+    ];
+
+    /// Assert that `handled` (the structural seam) and `absent` (the reviewed
+    /// registry) partition `AnalysisName::all()` exactly for one surface:
+    /// every analysis is accounted for on exactly one side. Failures name the
+    /// offending analysis (and this surface) so a drift points straight at the
+    /// missing emitter/widget or the missing documented-absence entry.
+    fn assert_surface_partition(
+        surface: &str,
+        handled: impl Fn(AnalysisName) -> bool,
+        absent: &[(AnalysisName, &str)],
+    ) {
+        let absent_names: std::collections::BTreeSet<&'static str> =
+            absent.iter().map(|(a, _)| a.as_str()).collect();
+        assert_eq!(
+            absent_names.len(),
+            absent.len(),
+            "{surface}: the documented-absence list has duplicate entries",
+        );
+        for (a, reason) in absent {
+            assert!(
+                !reason.trim().is_empty(),
+                "{surface}: documented-absence entry for `{}` has an empty reason",
+                a.as_str(),
+            );
+        }
+
+        let mut unaccounted = Vec::new();
+        let mut double_counted = Vec::new();
+        for &a in AnalysisName::all() {
+            match (handled(a), absent_names.contains(a.as_str())) {
+                (false, false) => unaccounted.push(a.as_str()),
+                (true, true) => double_counted.push(a.as_str()),
+                _ => {}
+            }
+        }
+        assert!(
+            unaccounted.is_empty(),
+            "{surface}: {} analysis/analyses are neither wired nor documented-absent — \
+             wire a `{surface}` emitter/widget, or add each to the `{surface}` \
+             documented-absence list with a reason: {}",
+            unaccounted.len(),
+            unaccounted.join(", "),
+        );
+        assert!(
+            double_counted.is_empty(),
+            "{surface}: {} analysis/analyses are BOTH wired and documented-absent — \
+             remove the stale documented-absence entry: {}",
+            double_counted.len(),
+            double_counted.join(", "),
+        );
+    }
+
+    /// dispatch surface: the `match &analysis` is compiler-exhaustive, so every
+    /// analysis is dispatchable. Assert the seam agrees — an analysis that
+    /// wired no output format at all would be a dead dispatch arm.
+    #[test]
+    fn dispatch_surface_reaches_every_analysis() {
+        for &a in AnalysisName::all() {
+            assert!(
+                !supported_formats(a).is_empty(),
+                "dispatch: `{}` declares no output format (unreachable analysis)",
+                a.as_str(),
+            );
+        }
+    }
+
+    #[test]
+    fn csv_surface_accounts_for_every_analysis() {
+        assert_surface_partition(
+            "csv",
+            |a| supported_formats(a).contains(&"csv"),
+            DOCUMENTED_ABSENT_CSV,
+        );
+    }
+
+    #[test]
+    fn markdown_surface_accounts_for_every_analysis() {
+        assert_surface_partition(
+            "markdown",
+            |a| supported_formats(a).contains(&"markdown"),
+            DOCUMENTED_ABSENT_MARKDOWN,
+        );
+    }
+
+    #[test]
+    fn spa_surface_accounts_for_every_analysis() {
+        assert_surface_partition("spa", renders_in_spa, DOCUMENTED_ABSENT_SPA);
+    }
+
+    /// Compact guard for the (non-tracked) HTML surface: the analyses whose
+    /// `supported_formats` includes `html` must be exactly `HTML_WIRED`.
+    #[test]
+    fn html_emitter_set_is_documented() {
+        let derived: std::collections::BTreeSet<&str> = AnalysisName::all()
+            .iter()
+            .copied()
+            .filter(|&a| supported_formats(a).contains(&"html"))
+            .map(AnalysisName::as_str)
+            .collect();
+        let documented: std::collections::BTreeSet<&str> =
+            HTML_WIRED.iter().map(|a| a.as_str()).collect();
+        assert_eq!(
+            derived, documented,
+            "html: the bespoke-HTML-emitter set drifted from HTML_WIRED — reconcile \
+             `supported_formats` with the analyses whose dispatch arm wires a real `write_html`",
+        );
+    }
+}
