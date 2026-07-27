@@ -46,6 +46,22 @@ impl ImportGraph {
     pub fn is_empty(&self) -> bool {
         self.id_to_path.is_empty()
     }
+
+    /// The resolved `(src_path, target_path)` edges as borrowed pairs, in
+    /// adjacency order. Lets `facts::ingest` materialize a historical import
+    /// table from a graph the analyses layer built without `facts` naming the
+    /// `ImportGraph` type (the analyses→facts layering only points one way).
+    #[must_use]
+    pub fn resolved_edges(&self) -> Vec<(&str, &str)> {
+        let mut edges = Vec::new();
+        for (u, neighbors) in self.adj.iter().enumerate() {
+            let src = self.id_to_path[u].as_str();
+            for &v in neighbors {
+                edges.push((src, self.id_to_path[v].as_str()));
+            }
+        }
+        edges
+    }
 }
 
 /// Build the directed import graph over every live Tier-1 source file.
@@ -68,7 +84,8 @@ impl ImportGraph {
 ///
 /// Returns [`crate::CodeLoreError::Analysis`] on `DuckDB` query errors.
 pub fn build_import_graph(db: &FactsDb) -> Result<Rc<ImportGraph>> {
-    if let Some(graph) = db.import_graph_memo_get() {
+    let memo = db.analysis_memo::<crate::analyses::memo::ImportGraphMemo>();
+    if let Some(graph) = memo.get() {
         return Ok(graph);
     }
     // Seed the node universe from every live Tier-1 source file, ordered
@@ -90,7 +107,7 @@ pub fn build_import_graph(db: &FactsDb) -> Result<Rc<ImportGraph>> {
         |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
     )?;
     let graph = Rc::new(build_import_graph_seeded(&nodes, &edges));
-    db.import_graph_memo_put(Rc::clone(&graph));
+    memo.put(Rc::clone(&graph));
     Ok(graph)
 }
 

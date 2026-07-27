@@ -107,7 +107,8 @@ fn materialize_imports_at_rev_writes_edge_rows() {
     let edges = vec![("src/main.rs".to_string(), "src/lib.rs".to_string())];
     let graph = build_import_graph_from_edges(&edges);
 
-    materialize_imports_at_rev(&db, &graph, "im_at_rev").expect("materialize_imports_at_rev");
+    materialize_imports_at_rev(&db, &graph.resolved_edges(), "im_at_rev")
+        .expect("materialize_imports_at_rev");
 
     let mut stmt = db
         .prepare("SELECT src_path, target_path FROM im_at_rev ORDER BY src_path")
@@ -142,7 +143,8 @@ fn materialize_imports_at_rev_empty_graph_produces_no_rows() {
     db.ingest(&repo, &opts).expect("ingest");
 
     let graph = build_import_graph_from_edges(&[]);
-    materialize_imports_at_rev(&db, &graph, "im_empty").expect("materialize empty graph");
+    materialize_imports_at_rev(&db, &graph.resolved_edges(), "im_empty")
+        .expect("materialize empty graph");
 
     let count: i64 = db
         .query_row("SELECT COUNT(*) FROM im_empty", [], |r| r.get(0))

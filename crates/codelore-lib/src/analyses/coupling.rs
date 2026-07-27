@@ -463,7 +463,8 @@ pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
     // truncation, so a hit short-circuits the O(K²) self-join + Fisher pass
     // and each caller still re-applies its own row cap below.
     let memo_key = CouplingMemoKey::from_opts(opts);
-    if let Some(cached) = db.coupling_memo_get(&memo_key) {
+    let memo = db.analysis_memo::<crate::analyses::memo::CouplingMemo>();
+    if let Some(cached) = memo.get(&memo_key) {
         let mut out = (*cached).clone();
         if let Some(n) = opts.rows_limit {
             out.truncate(n as usize);
@@ -522,7 +523,7 @@ pub fn run_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CouplingRow>> {
     // the cached entry stays caller-agnostic and a `--rows N` choice never
     // poisons it.
     let full = std::rc::Rc::new(out);
-    db.coupling_memo_put(memo_key, std::rc::Rc::clone(&full));
+    memo.put(memo_key, std::rc::Rc::clone(&full));
 
     let mut out = (*full).clone();
     if let Some(n) = opts.rows_limit {

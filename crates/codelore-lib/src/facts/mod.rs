@@ -69,21 +69,18 @@ fn apply_memory_pragmas_with_limit(
 
 pub struct FactsDb {
     conn: Connection,
-    /// Process-local memo for [`crate::analyses::coupling::run_coupling`].
-    /// That function is pure per `(db, coupling-affecting opts)` but is
-    /// invoked 2-5× per CLI run on identical inputs (code-health,
-    /// centrality, communities, clone-coupling, and the SPA dashboard all
-    /// re-derive the same global coupling graph). The result is the full,
-    /// Fisher-filtered, un-row-limited `Vec` — callers re-apply their own
-    /// `rows_limit` after the lookup, so a `--rows N` choice never poisons
-    /// the shared entry. `RefCell` + `Rc` (not a `Mutex`/`Arc`) because the
-    /// `DuckDB` `Connection` is `!Send + !Sync` and every coupling call
-    /// already runs on the single connection-owning thread.
-    coupling_memo: std::cell::RefCell<
-        std::collections::HashMap<
-            crate::analyses::coupling::CouplingMemoKey,
-            std::rc::Rc<Vec<crate::analyses::coupling::CouplingRow>>,
-        >,
+    /// Type-erased, per-`FactsDb` slot map for the analyses layer's process-
+    /// local memos (coupling graph, import graph, clones walk, code-health).
+    /// Those caches are keyed on `analyses` row/graph types, so storing them
+    /// here concretely would make the `facts` layer depend on `analyses` — a
+    /// module cycle. Instead each memo is a `T` the analyses layer defines
+    /// (in its `memo` module) and reaches through [`Self::analysis_memo`],
+    /// which lazily inserts one `T` per connection and hands back a shared
+    /// `Rc<T>`. `RefCell` + `Rc<dyn Any>` (not a `Mutex`/`Arc`) because the
+    /// `DuckDB` `Connection` is `!Send + !Sync` and every analysis runs on the
+    /// single connection-owning thread. This field names no `analyses` type.
+    analysis_memos: std::cell::RefCell<
+        std::collections::HashMap<std::any::TypeId, std::rc::Rc<dyn std::any::Any>>,
     >,
     /// Set once `changes_lineage` has been materialised for this fact
     /// store, so the recursive rename CTE + full table copy + index builds
@@ -95,103 +92,43 @@ pub struct FactsDb {
     /// materialise rebuilds against the grouped paths. `Cell` (not
     /// `RefCell`) — a plain `bool` on the single connection-owning thread.
     changes_lineage_built: std::cell::Cell<bool>,
-    /// Idempotence guard for [`crate::analyses::knowledge::shares::materialize_knowledge_shares`].
-    /// Mirrors `changes_lineage_built`: set on first materialise, checked at
-    /// every entry to skip redundant temp-table rebuilds within a single run.
+    /// Idempotence guard for the knowledge-share temp tables (set on first
+    /// materialise, checked at every entry to skip redundant rebuilds within
+    /// a single run). Mirrors `changes_lineage_built`; a plain `bool`, so it
+    /// names no `analyses` type and stays here with the other SQL-level guards.
     knowledge_shares_built: std::cell::Cell<bool>,
-    /// Process-local memo for the structural import graph
-    /// ([`crate::analyses::import_graph::build_import_graph`]). The graph is
-    /// a pure function of the immutable `complexity_metrics` (node set) +
-    /// `imports` (edges) tables, yet a `--format
-    /// spa` render or a `codelore check` arch-suite rebuilds it (SQL scan +
-    /// path interning + adjacency) once per arch analysis —
-    /// `architecture-roles`, `modularity-violations`, `instability`,
-    /// `architecture-metrics`, `dependency-cycles` — in a single process. A
-    /// shared `Rc` handed to every caller collapses those into one build.
-    /// Same single-thread `RefCell` + `Rc` rationale as `coupling_memo`.
-    import_graph_memo:
-        std::cell::RefCell<Option<std::rc::Rc<crate::analyses::import_graph::ImportGraph>>>,
-    /// Process-local single-slot memo for
-    /// [`crate::analyses::clones::run_clones_memoised`]. `run_clones` walks
-    /// the working tree and tree-sitter-fingerprints every Tier-1 function —
-    /// an O(files) filesystem + parse pass with no `changes` / `imports`
-    /// dependency, so its result is fixed for a given (repo, clone-affecting
-    /// opts) pair. The agent-loop gate's projected-health engine runs
-    /// `run_code_health_scoped` twice on one `FactsDb` (HEAD baseline vs the
-    /// substituted-complexity projection); both scoped runs re-walk clones for
-    /// the DRY biomarker over the SAME working tree with the SAME
-    /// `opts_scan`, so the second walk is pure waste. A single slot suffices
-    /// because the only memoised caller is code-health, whose clone-affecting
-    /// opts are fixed within a run. Same single-thread `RefCell` + `Rc`
-    /// rationale as `import_graph_memo`.
-    clones_memo: std::cell::RefCell<Option<std::rc::Rc<Vec<crate::analyses::clones::ClonesRow>>>>,
 }
 
 impl FactsDb {
-    /// Wrap an open `DuckDB` connection with an empty coupling memo. The
-    /// single point where the `coupling_memo` field is initialised so the
-    /// four public constructors stay in lockstep.
+    /// Wrap an open `DuckDB` connection with an empty analysis-memo map. The
+    /// single point where the non-`conn` fields are initialised so the four
+    /// public constructors stay in lockstep.
     fn from_conn(conn: Connection) -> Self {
         Self {
             conn,
-            coupling_memo: std::cell::RefCell::new(std::collections::HashMap::new()),
+            analysis_memos: std::cell::RefCell::new(std::collections::HashMap::new()),
             changes_lineage_built: std::cell::Cell::new(false),
             knowledge_shares_built: std::cell::Cell::new(false),
-            import_graph_memo: std::cell::RefCell::new(None),
-            clones_memo: std::cell::RefCell::new(None),
         }
     }
 
-    /// Look up a memoised coupling result for `key`. Returns a shared
-    /// handle to the full, un-row-limited `Vec` so the caller re-applies
-    /// its own `rows_limit` without recomputing the O(K²) self-join +
-    /// Fisher pass. `None` on a miss; the caller then computes and stores.
-    pub(crate) fn coupling_memo_get(
-        &self,
-        key: &crate::analyses::coupling::CouplingMemoKey,
-    ) -> Option<std::rc::Rc<Vec<crate::analyses::coupling::CouplingRow>>> {
-        self.coupling_memo.borrow().get(key).cloned()
-    }
-
-    /// Store the full, un-row-limited coupling result under `key`.
-    pub(crate) fn coupling_memo_put(
-        &self,
-        key: crate::analyses::coupling::CouplingMemoKey,
-        rows: std::rc::Rc<Vec<crate::analyses::coupling::CouplingRow>>,
-    ) {
-        self.coupling_memo.borrow_mut().insert(key, rows);
-    }
-
-    /// Shared handle to the memoised structural import graph, if built this
-    /// run. `None` on a miss; the caller then builds and stores.
-    pub(crate) fn import_graph_memo_get(
-        &self,
-    ) -> Option<std::rc::Rc<crate::analyses::import_graph::ImportGraph>> {
-        self.import_graph_memo.borrow().clone()
-    }
-
-    /// Store the structural import graph for reuse across arch analyses.
-    pub(crate) fn import_graph_memo_put(
-        &self,
-        graph: std::rc::Rc<crate::analyses::import_graph::ImportGraph>,
-    ) {
-        *self.import_graph_memo.borrow_mut() = Some(graph);
-    }
-
-    /// Shared handle to the memoised clones walk, if computed this run.
-    /// `None` on a miss; the caller then walks and stores.
-    pub(crate) fn clones_memo_get(
-        &self,
-    ) -> Option<std::rc::Rc<Vec<crate::analyses::clones::ClonesRow>>> {
-        self.clones_memo.borrow().clone()
-    }
-
-    /// Store the clones walk for reuse across the two agent-loop scoped scans.
-    pub(crate) fn clones_memo_put(
-        &self,
-        rows: std::rc::Rc<Vec<crate::analyses::clones::ClonesRow>>,
-    ) {
-        *self.clones_memo.borrow_mut() = Some(rows);
+    /// Hand back this connection's process-local memo of type `T`, lazily
+    /// creating an empty one on first use. The analyses layer defines each
+    /// memo `T` (in its `memo` module) and drives it through the returned
+    /// `Rc<T>`; keeping the concrete types out of `facts` is what breaks the
+    /// facts→analyses cycle. One `T` is stored per `FactsDb` and shared for
+    /// its lifetime, so the once-per-run memo semantics hold.
+    pub(crate) fn analysis_memo<T: std::any::Any + Default>(&self) -> std::rc::Rc<T> {
+        let mut slots = self.analysis_memos.borrow_mut();
+        let any =
+            std::rc::Rc::clone(slots.entry(std::any::TypeId::of::<T>()).or_insert_with(|| {
+                std::rc::Rc::new(T::default()) as std::rc::Rc<dyn std::any::Any>
+            }));
+        // The entry under `TypeId::of::<T>()` is always `Rc::new(T::default())`,
+        // so this downcast cannot fail; return a fresh detached default on the
+        // unreachable branch rather than unwrap/expect.
+        any.downcast::<T>()
+            .unwrap_or_else(|_| std::rc::Rc::new(T::default()))
     }
 
     /// Whether `changes_lineage` is already materialised for this run.

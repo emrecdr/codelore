@@ -153,11 +153,12 @@ pub(crate) fn run_clones_memoised(
     db: &FactsDb,
     opts: &Options,
 ) -> Result<std::rc::Rc<Vec<ClonesRow>>> {
-    if let Some(cached) = db.clones_memo_get() {
+    let memo = db.analysis_memo::<crate::analyses::memo::ClonesMemo>();
+    if let Some(cached) = memo.get() {
         return Ok(cached);
     }
     let rows = std::rc::Rc::new(run_clones(opts)?);
-    db.clones_memo_put(rows.clone());
+    memo.put(rows.clone());
     Ok(rows)
 }
 
@@ -246,10 +247,17 @@ mod tests {
         };
         db.ingest(&repo, &opts).expect("ingest");
 
-        assert!(db.clones_memo_get().is_none(), "memo starts empty");
+        assert!(
+            db.analysis_memo::<crate::analyses::memo::ClonesMemo>()
+                .get()
+                .is_none(),
+            "memo starts empty"
+        );
         let first = run_clones_memoised(&db, &opts).expect("first walk");
         assert!(
-            db.clones_memo_get().is_some(),
+            db.analysis_memo::<crate::analyses::memo::ClonesMemo>()
+                .get()
+                .is_some(),
             "first call must populate the memo",
         );
         let second = run_clones_memoised(&db, &opts).expect("second walk");
