@@ -4,6 +4,21 @@ use codelore_lib::output::sqlite;
 use codelore_lib::repo::GixRepo;
 use duckdb::Connection;
 
+/// Base tables the `SQLite` export must dump, derived from the schema itself so
+/// a new `CREATE TABLE` added to `schema_v1.sql` that the export forgets to
+/// dump fails this test instead of silently dropping data downstream.
+fn schema_base_tables() -> Vec<String> {
+    const SCHEMA: &str = include_str!("../src/facts/schema_v1.sql");
+    SCHEMA
+        .lines()
+        .filter_map(|line| {
+            let rest = line.trim().strip_prefix("CREATE TABLE IF NOT EXISTS ")?;
+            let name = rest.split([' ', '(']).next()?;
+            (!name.is_empty()).then(|| name.to_string())
+        })
+        .collect()
+}
+
 #[test]
 fn sqlite_full_dump_roundtrip() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
@@ -33,18 +48,18 @@ fn sqlite_full_dump_roundtrip() {
         .expect("count");
     assert_eq!(commit_count, 5, "tiny_repo has 5 commits");
 
-    // Every base table in schema_v1.sql must round-trip. The clones table
-    // was silently omitted before this regression test was added.
-    for table in [
-        "commits",
-        "changes",
-        "hunks",
-        "entities",
-        "complexity_metrics",
-        "author_aliases",
-        "provenance",
-        "clones",
-    ] {
+    // Every base table in schema_v1.sql must round-trip. The clones,
+    // imports, and commit_parents tables were each silently omitted at some
+    // point; deriving the expected set from the schema (rather than a
+    // hand-maintained list that drifts the same way the export does) makes
+    // the next dropped table fail here.
+    let expected = schema_base_tables();
+    assert!(
+        expected.len() >= 10,
+        "schema parse found too few base tables ({}): {expected:?}",
+        expected.len()
+    );
+    for table in &expected {
         let sql = format!("SELECT COUNT(*) FROM db.{table}");
         reader
             .query_row::<i64, _, _>(&sql, [], |r| r.get(0))

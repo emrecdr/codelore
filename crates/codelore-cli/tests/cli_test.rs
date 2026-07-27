@@ -442,6 +442,74 @@ fn analyze_hotspots_emits_sarif() {
 }
 
 #[test]
+fn sarif_fingerprints_are_stable_across_repo_path_style() {
+    // The SARIF fingerprint keys on `repo_root|path`; canonicalizing the repo
+    // path makes `--repo .` and `--repo <absolute>` produce identical
+    // fingerprints, so GitHub Code Scanning does not re-key (churn) the alerts
+    // when the same repo is analysed with a different invocation style.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let abs = tiny.dir.path();
+
+    let fingerprints = |mut cmd: Command| -> Vec<String> {
+        let output = cmd.output().unwrap();
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let sarif: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid SARIF");
+        let mut fps: Vec<String> = sarif["runs"][0]["results"]
+            .as_array()
+            .expect("results array")
+            .iter()
+            .map(|r| {
+                r["partialFingerprints"]["primaryLocationLineHash"]
+                    .as_str()
+                    .expect("each result carries a primaryLocationLineHash")
+                    .to_string()
+            })
+            .collect();
+        fps.sort();
+        fps
+    };
+
+    let mut abs_cmd = codelore_cmd();
+    abs_cmd.args([
+        "analyze",
+        "--analysis",
+        "hotspots",
+        "--repo",
+        abs.to_str().unwrap(),
+        "--format",
+        "sarif",
+        "--min-revs",
+        "1",
+    ]);
+    let abs_fps = fingerprints(abs_cmd);
+
+    // `--repo .` run from inside the repo — canonicalizes to the same path.
+    let mut dot_cmd = codelore_cmd();
+    dot_cmd.current_dir(abs).args([
+        "analyze",
+        "--analysis",
+        "hotspots",
+        "--repo",
+        ".",
+        "--format",
+        "sarif",
+        "--min-revs",
+        "1",
+    ]);
+    let dot_fps = fingerprints(dot_cmd);
+
+    assert!(!abs_fps.is_empty(), "expected at least one SARIF finding");
+    assert_eq!(
+        abs_fps, dot_fps,
+        "SARIF fingerprints must match for `--repo .` and `--repo <absolute>`"
+    );
+}
+
+#[test]
 fn analyze_revisions_emits_json() {
     let tiny = codelore_lib::test_support::tiny_repo::build();
     codelore_cmd()

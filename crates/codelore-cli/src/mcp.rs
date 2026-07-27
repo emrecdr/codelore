@@ -246,6 +246,28 @@ fn memo_key(tool: &str, params_json: &str) -> String {
     format!("{tool}\u{1f}{params_json}")
 }
 
+/// A cheap cache-key fragment identifying the defect-calibration artifact's
+/// current contents. The artifact path is fixed at server startup, but its
+/// bytes can be regenerated (e.g. `codelore calibrate` rewriting it) without
+/// moving HEAD — which the HEAD-scoped memo would otherwise not see, replaying
+/// stale defect evidence. Stat the file for `(len, mtime)`: a rewrite changes at
+/// least one, so folding this into the key makes a regenerated artifact miss the
+/// prior entry. An absent path or a failed stat yields a stable sentinel (no
+/// calibration influence to key on). This is a best-effort probe, not a content
+/// hash — a rewrite preserving both length and mtime-to-the-nanosecond is not
+/// distinguished, matching the "hint, not contract" stance of the merge probe.
+fn calibration_key_fragment(path: Option<&Path>) -> String {
+    let Some(md) = path.and_then(|p| std::fs::metadata(p).ok()) else {
+        return "cal=none".to_string();
+    };
+    let mtime = md
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_nanos());
+    format!("cal={}:{mtime}", md.len())
+}
+
 /// Process-lifetime memo of committed-state MCP tool outputs (serialized JSON or
 /// text — `String` is `Send`, unlike the `!Send` `DuckDB` connection that produced
 /// it). Keyed by `(tool, canonical params)` and scoped to a single HEAD sha: the
@@ -253,6 +275,13 @@ fn memo_key(tool: &str, params_json: &str) -> String {
 /// describe the commit that is currently HEAD. Working-tree-dependent tools
 /// (`gate_changes`) and tools reading mutable out-of-tree inputs (`check_gates`'
 /// thresholds file, `finding_hotspot_overlap`'s findings sidecar) never touch it.
+///
+/// Two committed-state inputs can change without moving HEAD: an in-progress
+/// merge/rebase (which changes a briefing's leading note) and a regenerated
+/// defect-calibration artifact (which changes defect evidence). `change_context`
+/// folds both into its key, and `explain_file` folds the calibration identity in
+/// (see [`calibration_key_fragment`]), so neither replays a stale entry after a
+/// mid-process change at unchanged HEAD.
 ///
 /// Concurrency is a single `Mutex` held only for a get or a put, never across the
 /// `spawn_blocking` compute. Two concurrent calls that miss the same key both
@@ -1050,7 +1079,16 @@ impl CodeLoreServer {
         tokio::task::spawn_blocking(move || {
             let repo = GixRepo::open(&repo_path).map_err(|e| map_lib_err(&e))?;
             let head = repo.head_sha().map_err(|e| map_lib_err(&e))?;
-            let key = memo_key("explain_file", &params_json);
+            // Fold the calibration-artifact identity into the key: the dossier's
+            // defect-evidence section reads that artifact, which can be
+            // regenerated without moving HEAD (see [`calibration_key_fragment`]).
+            let key = memo_key(
+                "explain_file",
+                &format!(
+                    "{params_json}\u{1f}{}",
+                    calibration_key_fragment(defect_calibration.as_deref())
+                ),
+            );
 
             // The advisory narrative is an external, potentially-nondeterministic
             // LLM call, so explain_file is memoized only in its deterministic
@@ -1159,39 +1197,44 @@ impl CodeLoreServer {
         let defect_calibration = self.defect_calibration.clone();
         let allow_foreign_calibration = self.allow_foreign_calibration;
         let paths = params.0.paths.clone();
-        // The calibration artifact is validated at startup and its path is fixed
-        // for the server's lifetime, so it is constant for the memo's lifetime
-        // and needs no place in the key; the briefing is a pure function of
-        // (HEAD, paths) within one process.
         let params_json = serde_json::to_string(&params.0).map_err(internal)?;
+        // Hand-rolled memo (not the generic `memoized`) so the key can carry two
+        // committed-state inputs that change without moving HEAD: an in-progress
+        // merge/rebase (which the briefing's leading note reflects) and a
+        // regenerated calibration artifact (which its defect evidence reflects).
         tokio::task::spawn_blocking(move || {
-            memoized(
-                &memo,
-                &repo_path,
+            let repo = GixRepo::open(&repo_path).map_err(|e| map_lib_err(&e))?;
+            let head = repo.head_sha().map_err(|e| map_lib_err(&e))?;
+            // Both probes are cheap (a git-dir stat and a file stat) and run
+            // before the lookup so a mid-process change misses the prior entry.
+            let merge = repo.merge_or_rebase_in_progress();
+            let cal = calibration_key_fragment(defect_calibration.as_deref());
+            let key = memo_key(
                 "change_context",
-                &params_json,
-                |repo, _head| {
-                    // min_revs = 1 so any single named file resolves in its briefing,
-                    // matching the `change_context` lib contract.
-                    let opts = Options {
-                        repo_path: repo_path.clone(),
-                        min_revs: 1,
-                        defect_calibration,
-                        allow_foreign_calibration,
-                        ..Options::default()
-                    };
-                    let db =
-                        FactsDb::open_or_ingest_with_cache_root(&opts, repo, &default_cache_root())
-                            .map_err(|e| map_lib_err(&e))?;
-                    // An empty or oversized path list surfaces as `InvalidOptions`
-                    // (the CLI's exit-2 config/param bucket), which `map_lib_err`
-                    // routes to a JSON-RPC `invalid_params` so the client sees it as
-                    // bad input rather than an internal failure — and, being an
-                    // error, it is never memoized.
-                    change_context::build_change_context(&db, repo, &opts, &paths)
-                        .map_err(|e| map_lib_err(&e))
-                },
-            )
+                &format!("{params_json}\u{1f}merge={merge}\u{1f}{cal}"),
+            );
+            if let Some(hit) = memo.get(&head, &key) {
+                return Ok(hit);
+            }
+            // min_revs = 1 so any single named file resolves in its briefing,
+            // matching the `change_context` lib contract.
+            let opts = Options {
+                repo_path: repo_path.clone(),
+                min_revs: 1,
+                defect_calibration,
+                allow_foreign_calibration,
+                ..Options::default()
+            };
+            let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
+                .map_err(|e| map_lib_err(&e))?;
+            // An empty or oversized path list surfaces as `InvalidOptions` (the
+            // CLI's exit-2 config/param bucket), which `map_lib_err` routes to a
+            // JSON-RPC `invalid_params` so the client sees it as bad input rather
+            // than an internal failure — and, being an error, it is never memoized.
+            let out = change_context::build_change_context(&db, &repo, &opts, &paths)
+                .map_err(|e| map_lib_err(&e))?;
+            memo.put(&head, key, out.clone());
+            Ok(out)
         })
         .await
         .map_err(internal)?

@@ -8,9 +8,9 @@
 //! `--output`.
 
 use anyhow::{Context, Result};
-use codelore_lib::cli_api::Options;
 use codelore_lib::cli_api::facts::FactsDb;
 use codelore_lib::cli_api::repo::GixRepo;
+use codelore_lib::cli_api::{CodeLoreError, Options};
 
 use crate::args::CalibrateArgs;
 
@@ -62,6 +62,19 @@ pub(crate) fn run_calibrate_cmd(args: &CalibrateArgs) -> Result<()> {
         }
     }
 
+    // Refuse to write an empty artifact when every attempted repo failed to
+    // fetch or ingest — a silent 0-observation artifact would later zero out or
+    // mis-scale the corpus lens rather than fail loudly. Surfaces as an analysis
+    // error (exit 4) through the CLI's error taxonomy. A genuinely empty
+    // manifest (0 attempted) is a distinct config case rejected upstream.
+    if attempted > 0 && included == 0 {
+        return Err(anyhow::Error::new(CodeLoreError::Analysis(format!(
+            "all {attempted} repo(s) failed to fetch or ingest — no calibration data pooled \
+             (see the per-repo skip warnings above); refusing to write an empty artifact to {}",
+            args.output.display()
+        ))));
+    }
+
     let mut artifact = calibration::build_from_observations(&vintage, &generated_at, &obs);
     artifact.repos_attempted = attempted;
     artifact.repos_included = included;
@@ -80,8 +93,12 @@ pub(crate) fn run_calibrate_cmd(args: &CalibrateArgs) -> Result<()> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("create output dir {}", parent.display()))?;
     }
-    std::fs::write(&args.output, &json)
-        .with_context(|| format!("write artifact {}", args.output.display()))?;
+    // Atomic publish: a ^C between here and completion never destroys the
+    // previous good artifact (the payload lands in a temp sibling first).
+    codelore_lib::cli_api::output::atomic_publish(&args.output, |tmp| {
+        std::fs::write(tmp, &json)
+            .with_context(|| format!("write artifact {}", args.output.display()))
+    })?;
 
     eprintln!(
         "calibrate: {included}/{attempted} repo(s) → {} ({} language(s))",

@@ -252,7 +252,12 @@ fn read_env(name: &str) -> Option<String> {
 /// The concrete client an [`LlmEnv`] selects, before the (infallible) HTTP
 /// agent is built. Split out from [`resolve_client`] so the resolution matrix
 /// is unit-testable without constructing an agent.
-#[derive(Debug)]
+///
+/// `Debug` is implemented by hand (not derived) for the same reason [`LlmEnv`]
+/// omits it: both variants carry credential material, and a derived impl would
+/// print the key through any `{:?}` or `tracing` sink. The manual impl redacts
+/// the key while preserving the present/absent distinction for the optional
+/// bearer token.
 enum Resolved {
     Anthropic {
         api_key: String,
@@ -264,6 +269,33 @@ enum Resolved {
         api_key: Option<String>,
         model: String,
     },
+}
+
+impl std::fmt::Debug for Resolved {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Anthropic {
+                model, base_url, ..
+            } => f
+                .debug_struct("Anthropic")
+                .field("api_key", &"<redacted>")
+                .field("model", model)
+                .field("base_url", base_url)
+                .finish(),
+            Self::OpenAiCompat {
+                base_url,
+                api_key,
+                model,
+            } => f
+                .debug_struct("OpenAiCompat")
+                .field("base_url", base_url)
+                // Preserve whether a bearer token was supplied without
+                // printing it: `Some("<redacted>")` vs `None`.
+                .field("api_key", &api_key.as_ref().map(|_| "<redacted>"))
+                .field("model", model)
+                .finish(),
+        }
+    }
 }
 
 /// The valid `CODELORE_LLM_PROVIDER` values, echoed in the unknown-provider
@@ -451,6 +483,45 @@ mod tests {
             }
             Resolved::Anthropic { .. } => panic!("expected the local-first dialect"),
         }
+    }
+
+    #[test]
+    fn debug_redacts_credential_material() {
+        // Anthropic dialect: the required key must never appear in `{:?}`.
+        let anthropic = resolve(&LlmEnv {
+            anthropic_key: Some("sk-ant-super-secret".to_string()),
+            ..LlmEnv::default()
+        })
+        .expect("resolves");
+        let rendered = format!("{anthropic:?}");
+        assert!(
+            !rendered.contains("sk-ant-super-secret"),
+            "Debug leaked the Anthropic key: {rendered}"
+        );
+        assert!(
+            rendered.contains("<redacted>"),
+            "Debug should mark the key redacted: {rendered}"
+        );
+
+        // OpenAI-compatible dialect: the optional bearer token is redacted but
+        // its presence stays visible (Some vs None).
+        let openai = resolve(&LlmEnv {
+            provider: Some("openai-compat".to_string()),
+            base_url: Some("http://localhost:1234/v1".to_string()),
+            api_key: Some("bearer-token-do-not-log".to_string()),
+            model: Some("llama3".to_string()),
+            ..LlmEnv::default()
+        })
+        .expect("resolves");
+        let rendered = format!("{openai:?}");
+        assert!(
+            !rendered.contains("bearer-token-do-not-log"),
+            "Debug leaked the bearer token: {rendered}"
+        );
+        assert!(
+            rendered.contains("Some(\"<redacted>\")"),
+            "Debug should show the token present-but-redacted: {rendered}"
+        );
     }
 
     #[test]

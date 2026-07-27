@@ -983,6 +983,83 @@ fn mcp_change_context_returns_briefing_for_known_path() {
     let _ = child.wait();
 }
 
+/// Resolve `HEAD` to a full SHA via git — used to write a realistic
+/// `MERGE_HEAD` marker into the fixture's git dir.
+fn head_sha(repo_path: &str) -> String {
+    let out = Command::new("git")
+        .args(["-C", repo_path, "rev-parse", "HEAD"])
+        .output()
+        .expect("git rev-parse HEAD");
+    assert!(out.status.success(), "git rev-parse HEAD failed");
+    String::from_utf8(out.stdout)
+        .expect("utf8")
+        .trim()
+        .to_string()
+}
+
+#[test]
+fn mcp_change_context_reflects_mid_session_merge_state() {
+    // A merge/rebase started or aborted at unchanged HEAD must not replay a
+    // stale briefing from the process-lifetime memo. The merge-in-progress
+    // marker changes `merge_or_rebase_in_progress()` (and thus the leading
+    // note) without moving HEAD, so it is folded into the memo key: the note
+    // appears when a merge begins and disappears when it is aborted, across
+    // three calls to one long-lived server process.
+    const NOTE: &str = "merge/rebase in progress";
+    let repo = delivery_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+    let merge_head = repo.dir.path().join(".git").join("MERGE_HEAD");
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
+
+    // A file guaranteed to have history, mirroring the sibling briefing test.
+    let ch = call_tool(&mut stdin, &mut reader, 1, "code_health", &json!({}));
+    let ch_rows = assert_tool_ok(&ch, "code_health");
+    let target = ch_rows
+        .as_array()
+        .and_then(|rows| rows.first())
+        .and_then(|row| row["path"].as_str())
+        .expect("code_health yields at least one file")
+        .to_string();
+    let params = json!({ "paths": [target] });
+
+    // 1) Clean tree: no note. This populates the memo at the merge=false key.
+    let clean = assert_tool_ok_text(
+        &call_tool(&mut stdin, &mut reader, 2, "change_context", &params),
+        "change_context",
+    );
+    assert!(
+        !clean.contains(NOTE),
+        "clean tree must carry no merge note: {clean}"
+    );
+
+    // 2) Merge in progress at the SAME HEAD: the note must appear, proving the
+    // second call did not serve the memoized merge=false briefing.
+    std::fs::write(&merge_head, format!("{}\n", head_sha(repo_path))).expect("write MERGE_HEAD");
+    let merging = assert_tool_ok_text(
+        &call_tool(&mut stdin, &mut reader, 3, "change_context", &params),
+        "change_context",
+    );
+    assert!(
+        merging.contains(NOTE),
+        "a merge started at unchanged HEAD must surface the note, not a memoized-stale briefing: {merging}"
+    );
+
+    // 3) Merge aborted: the note must be gone again.
+    std::fs::remove_file(&merge_head).expect("remove MERGE_HEAD");
+    let aborted = assert_tool_ok_text(
+        &call_tool(&mut stdin, &mut reader, 4, "change_context", &params),
+        "change_context",
+    );
+    assert!(
+        !aborted.contains(NOTE),
+        "an aborted merge at unchanged HEAD must drop the note: {aborted}"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
 #[test]
 fn mcp_change_context_rejects_empty_and_oversized_path_lists() {
     let repo = delivery_repo::build();

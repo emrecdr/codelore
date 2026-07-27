@@ -130,7 +130,14 @@ jobs:
             # to a handful of flows (sarif ingest, gate checks incl. the
             # sidecar-skip path, an analyze-csv/sarif emit, provenance
             # sidecar + cache-dir path handling) instead of its full set.
+            #
+            # `kind(lib) | kind(bin)` adds every workspace UNIT test (the
+            # library and binary crates' own `#[cfg(test)]` modules). These
+            # are fast and were never the reason the full integration suite is
+            # impractical here, so the curated INTEGRATION subset below (the
+            # `binary(...)` list) stays as-is — only the unit tests are added.
             nextest_filter: >-
+              kind(lib) | kind(bin) |
               binary(external_store_test) | binary(sarif_parse_test) |
               binary(canonical_lineage_test) | binary(same_second_rename_test) |
               binary(groups_test) | binary(cache_test) | binary(facts_test) |
