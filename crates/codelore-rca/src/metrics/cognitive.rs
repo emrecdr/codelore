@@ -307,8 +307,14 @@ impl Cognitive for PythonCode {
                 increment_by_one(stats);
             }
             ExceptClause => {
-                nesting += 1;
+                // `except` pays a structural increment plus the nesting penalty
+                // for the branches it sits inside, then raises the nesting level
+                // for its handler body. Establish the clause's own nesting level
+                // before the increment so it is read from here, not from a stale
+                // `stats.nesting` left by an unrelated preceding construct.
+                stats.nesting = nesting + depth + lambda;
                 increment(stats);
+                nesting += 1;
             }
             ExpressionList | ExpressionStatement | Tuple => {
                 stats.boolean_seq.reset();
@@ -375,6 +381,10 @@ impl Cognitive for RustCode {
             }
             Else /*else-if also */ => {
                 increment_by_one(stats);
+                // An else-if condition starts a fresh boolean sequence, so its
+                // operators must not merge with the preceding branch
+                // condition's. Reset at the `else` boundary.
+                stats.boolean_seq.reset();
             }
             BreakExpression | ContinueExpression => {
                 if let Some(label_child) = node.child(1)
@@ -423,8 +433,15 @@ impl Cognitive for CppCode {
             ForStatement | WhileStatement | DoStatement | SwitchStatement | CatchClause => {
                 increase_nesting(stats,&mut nesting, depth, lambda);
             }
-            GotoStatement | Else /* else-if also */ => {
+            GotoStatement => {
                 increment_by_one(stats);
+            }
+            Else /* else-if also */ => {
+                increment_by_one(stats);
+                // An else-if condition starts a fresh boolean sequence, so its
+                // operators must not merge with the preceding branch
+                // condition's. Reset at the `else` boundary.
+                stats.boolean_seq.reset();
             }
             UnaryExpression2 => {
                 stats.boolean_seq.not_operator(node.kind_id());
@@ -458,6 +475,10 @@ macro_rules! js_cognitive {
                 }
                 Else /* else-if also */ => {
                     increment_by_one(stats);
+                    // An else-if condition starts a fresh boolean sequence, so
+                    // its operators must not merge with the preceding branch
+                    // condition's. Reset at the `else` boundary.
+                    stats.boolean_seq.reset();
                 }
                 ExpressionStatement => {
                     // Reset the boolean sequence
@@ -520,6 +541,10 @@ impl Cognitive for JavaCode {
             }
             Else /* else-if also */ => {
                 increment_by_one(stats);
+                // An else-if condition starts a fresh boolean sequence, so its
+                // operators must not merge with the preceding branch
+                // condition's. Reset at the `else` boundary.
+                stats.boolean_seq.reset();
             }
             UnaryExpression => {
                 stats.boolean_seq.not_operator(node.kind_id());
@@ -2180,6 +2205,222 @@ mod tests {
                       "average": 3.0,
                       "min": 0.0,
                       "max": 3.0
+                    }"###
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn rust_boolean_sequence_across_else_if() {
+        // The `&&` in the else-if condition is its own boolean sequence, not a
+        // continuation of the `if` condition's `&&`. Without a reset at the
+        // `else` boundary the two runs merge and the else-if operator is
+        // dropped, undercounting by 1.
+        check_metrics::<RustParser>(
+            "fn f() {
+                 if a && b { // +2 (+1 if, +1 &&)
+                     foo();
+                 } else if c && d { // +2 (+1 else, +1 &&)
+                     bar();
+                 }
+             }",
+            "foo.rs",
+            |metric| {
+                insta::assert_json_snapshot!(
+                    metric.cognitive,
+                    @r###"
+                    {
+                      "sum": 4.0,
+                      "average": 4.0,
+                      "min": 0.0,
+                      "max": 4.0
+                    }"###
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn c_boolean_sequence_across_else_if() {
+        check_metrics::<CppParser>(
+            "void f() {
+                 if (a && b) { // +2 (+1 if, +1 &&)
+                     g();
+                 } else if (c && d) { // +2 (+1 else, +1 &&)
+                     h();
+                 }
+             }",
+            "foo.c",
+            |metric| {
+                insta::assert_json_snapshot!(
+                    metric.cognitive,
+                    @r###"
+                    {
+                      "sum": 4.0,
+                      "average": 4.0,
+                      "min": 0.0,
+                      "max": 4.0
+                    }"###
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn java_boolean_sequence_across_else_if() {
+        check_metrics::<JavaParser>(
+            "class X {
+                void f(boolean a, boolean b, boolean c, boolean d) {
+                    if (a && b) { // +2 (+1 if, +1 &&)
+                        g();
+                    } else if (c && d) { // +2 (+1 else, +1 &&)
+                        h();
+                    }
+                }
+            }",
+            "foo.java",
+            |metric| {
+                insta::assert_json_snapshot!(
+                    metric.cognitive,
+                    @r###"
+                    {
+                      "sum": 4.0,
+                      "average": 4.0,
+                      "min": 0.0,
+                      "max": 4.0
+                    }"###
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn javascript_boolean_sequence_across_else_if() {
+        // Empty branch bodies isolate the `else` boundary: nothing between the
+        // two conditions resets the boolean sequence, so a missing reset at
+        // `else` would merge the two `&&` runs. (A non-empty body would mask
+        // the defect via the `ExpressionStatement` reset.)
+        check_metrics::<JavascriptParser>(
+            "function f(a, b, c, d) {
+                 if (a && b) { // +2 (+1 if, +1 &&)
+                 } else if (c && d) { // +2 (+1 else, +1 &&)
+                 }
+             }",
+            "foo.js",
+            |metric| {
+                insta::assert_json_snapshot!(
+                    metric.cognitive,
+                    @r###"
+                    {
+                      "sum": 4.0,
+                      "average": 4.0,
+                      "min": 0.0,
+                      "max": 4.0
+                    }"###
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn typescript_boolean_sequence_across_else_if() {
+        check_metrics::<TypescriptParser>(
+            "function f(a, b, c, d) {
+                 if (a && b) { // +2 (+1 if, +1 &&)
+                 } else if (c && d) { // +2 (+1 else, +1 &&)
+                 }
+             }",
+            "foo.ts",
+            |metric| {
+                insta::assert_json_snapshot!(
+                    metric.cognitive,
+                    @r###"
+                    {
+                      "sum": 4.0,
+                      "average": 4.0,
+                      "min": 0.0,
+                      "max": 4.0
+                    }"###
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn tsx_boolean_sequence_across_else_if() {
+        check_metrics::<TsxParser>(
+            "function f(a, b, c, d) {
+                 if (a && b) { // +2 (+1 if, +1 &&)
+                 } else if (c && d) { // +2 (+1 else, +1 &&)
+                 }
+             }",
+            "foo.tsx",
+            |metric| {
+                insta::assert_json_snapshot!(
+                    metric.cognitive,
+                    @r###"
+                    {
+                      "sum": 4.0,
+                      "average": 4.0,
+                      "min": 0.0,
+                      "max": 4.0
+                    }"###
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn python_except_nested_in_if() {
+        // A nested `except` must pay the nesting penalty for the branches it
+        // sits inside. Here the handler is one level deep (inside the `if`), so
+        // it costs +2 (+1 base, +1 nesting), not +1.
+        check_metrics::<PythonParser>(
+            "def f(a):
+                if a:  # +1
+                    try:
+                        g()
+                    except Exception:  # +2 (+1 base, +1 nesting)
+                        h()",
+            "foo.py",
+            |metric| {
+                insta::assert_json_snapshot!(
+                    metric.cognitive,
+                    @r###"
+                    {
+                      "sum": 3.0,
+                      "average": 3.0,
+                      "min": 0.0,
+                      "max": 3.0
+                    }"###
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn python_except_not_inflated_by_sibling_nesting() {
+        // The handler sits at nesting level 0; the deeply nested loops in the
+        // `try` body must not inflate its cost. `except` costs +1, giving 4.
+        check_metrics::<PythonParser>(
+            "def f():
+                try:
+                    for i in x:  # +1
+                        for j in y:  # +2 (nesting = 1)
+                            g()
+                except Exception:  # +1 (base only, nesting = 0)
+                    h()",
+            "foo.py",
+            |metric| {
+                insta::assert_json_snapshot!(
+                    metric.cognitive,
+                    @r###"
+                    {
+                      "sum": 4.0,
+                      "average": 4.0,
+                      "min": 0.0,
+                      "max": 4.0
                     }"###
                 );
             },
