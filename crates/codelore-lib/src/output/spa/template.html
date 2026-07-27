@@ -1421,6 +1421,13 @@
           ✕ Clear
         </button>
       </div>
+      <!-- Ownership-cap note. The entity-ownership embed is capped to the
+           top-N hotspot files to bound the report size; when that cap drops a
+           displayable file's ownership the knowledge-map lens, off-boarding
+           picker, and drawer contributor lists cover only the retained files.
+           Populated at boot from data.entity_ownership_cap — hidden when the
+           full set fit. -->
+      <p id="ownership-cap-note" class="text-xs opacity-60 mb-2" hidden></p>
       <!-- DaisyUI `tabs tabs-boxed` accommodates the `health` /
            `friction` / `knowledge-loss` modes cleanly and theme-
            adapts automatically via DaisyUI's `--color-base-*`
@@ -1530,8 +1537,9 @@
                   </span>
                   <!-- Cognitive-health badge — DaisyUI semantic classes
                        are complete literals so Tailwind v4 @source
-                       sees them. The 3-band cut matches
-                       widgets.js::codeHealthColor (≤40 / 41-70 / ≥71). -->
+                       sees them. The 3-band cut (≤40 / 41-70 / ≥71)
+                       colours the cognitive-health proxy shown here;
+                       the composite-band lens uses data.code_health. -->
                   <span class="badge badge-sm flex-shrink-0"
                         :class="file.cognitive_health == null ? 'badge-ghost'
                               : file.cognitive_health <= 40 ? 'badge-error'

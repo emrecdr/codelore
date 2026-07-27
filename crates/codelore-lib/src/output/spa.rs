@@ -49,6 +49,7 @@ use crate::analyses::hotspots::HotspotRow;
 use crate::analyses::knowledge_islands::KnowledgeIslandRow;
 use crate::analyses::marginal_owner_risk::MarginalOwnerRiskRow;
 use crate::analyses::modularity_violations::ModularityViolationRow;
+use crate::analyses::refactoring_targets::RefactoringTargetRow;
 use crate::analyses::summary::SummaryRow;
 use crate::analyses::team_composition::TeamCompositionRow;
 use crate::analyses::unstable_interface::UnstableInterfaceRow;
@@ -110,8 +111,23 @@ pub struct SpaDashboard {
     /// Entity-ownership rows feeding the knowledge-map widget (W7).
     /// Each row is one (path, author) tuple; the JS picks the primary
     /// author per path (max added `LoC`) and palette-colors the circles.
+    ///
+    /// This is the largest embedded field on big repos — `O(files × authors)`
+    /// — so the SPA builder (`build_spa_dashboard`) caps it to the ownership
+    /// rows for the top-N hotspot paths (the only paths the circle-pack
+    /// colours, the drawer opens for, and the table lists). Rows for files
+    /// outside that set are never rendered, so dropping them costs no
+    /// on-screen data. When the cap actually drops a *displayable* (hotspot)
+    /// file's ownership, [`Self::entity_ownership_cap`] carries the
+    /// retained-file count so the UI can show a truncation note.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub entity_ownership: Vec<EntityOwnershipRow>,
+    /// Number of top-activity files whose ownership rows were retained when
+    /// the [`Self::entity_ownership`] embed was truncated to bound the HTML
+    /// size. `None` when the full ownership set for every displayable file
+    /// fit (the common case) — the SPA then shows no truncation note.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entity_ownership_cap: Option<u32>,
     /// Function-level entries feeding the X-Ray sunburst widget (W8).
     /// Each row is one function with its cognitive complexity.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -274,6 +290,17 @@ pub struct SpaDashboard {
     /// hotspots.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub function_xray: Vec<FileFunctionXray>,
+    /// Top refactoring targets ranked by return-on-investment:
+    /// `(structural_risk × hotspot_score) / max(loc, floor)`. Drives the
+    /// guided tour's "Refactoring targets" step, which brushes the top-N
+    /// paths across every widget — a genuinely different ordering from raw
+    /// hotspot score (dividing risk by inspection effort favours small,
+    /// dense, churning, unhealthy files over large ones). Capped in the
+    /// builder (`build_spa_dashboard`). Empty when the code-health composite
+    /// is unavailable (e.g. no `complexity_metrics` at HEAD); the tour then
+    /// falls back to brushing the top hotspots by score.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refactoring_targets: Vec<RefactoringTargetRow>,
     /// Effective thresholds for THIS run, snapshotted at dispatch.
     /// Surfaced into the SPA's `data.options` block so per-metric
     /// tooltips can interpolate `${min_shared_revs}` /

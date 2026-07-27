@@ -251,17 +251,19 @@
     return getComputedStyle(_colorResolver).color;
   }
 
-  // CodeScene-equivalent three-band code-health color. CodeLore's
-  // scale is 0-100 (SonarSource formalisation) where CodeScene's is
-  // 1-10; the cutoffs scale accordingly. Returns DaisyUI semantic
-  // tokens so the bands theme-adapt (green/yellow/red in both light
-  // and dark modes). Falls back to --color-base-content (dim
-  // foreground) when score is null (unsupported language).
-  function codeHealthColor(score) {
-    if (score == null) return token('--color-base-content');
-    if (score <= 40)   return token('--color-error');
-    if (score <= 70)   return token('--color-warning');
-    return token('--color-success');
+  // Composite code-health band → resolved DaisyUI token for the
+  // circle-pack canvas fill. green / yellow / red map to
+  // success / warning / error so the bands theme-adapt in both light
+  // and dark modes. This is the SAME `band` field (from the
+  // code-health composite) the bivariate lens and its legend key off,
+  // so the pure-health lens stays consistent with them. A path absent
+  // from `data.code_health` (non-Tier-1 source, or the analysis was
+  // skipped) gets the neutral grey the other lenses use for "no data".
+  function bandLeafColor(band) {
+    if (band === 'green')  return token('--color-success');
+    if (band === 'yellow') return token('--color-warning');
+    if (band === 'red')    return token('--color-error');
+    return 'rgba(140, 140, 140, 0.55)';
   }
 
   // Bivariate health × activity encoding. A 3×3 matrix: rows = health

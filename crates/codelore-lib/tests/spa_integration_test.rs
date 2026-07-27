@@ -22,6 +22,7 @@ use codelore_lib::analyses::health_trend::HealthTrendRow;
 use codelore_lib::analyses::hotspots::run_hotspots;
 use codelore_lib::analyses::knowledge_islands::run_knowledge_islands;
 use codelore_lib::analyses::modularity_violations::ModularityViolationRow;
+use codelore_lib::analyses::refactoring_targets::RefactoringTargetRow;
 use codelore_lib::analyses::summary::run_summary;
 use codelore_lib::analyses::unstable_interface::UnstableInterfaceRow;
 use codelore_lib::facts::FactsDb;
@@ -941,6 +942,98 @@ fn dash_nav_has_six_chips_in_section_order() {
     }
     let chip_count = html.matches("class=\"dash-nav-chip").count();
     assert_eq!(chip_count, 6, "expected exactly six nav chips");
+}
+
+/// The `refactoring_targets` array (guided-tour brush source) and the
+/// `entity_ownership_cap` truncation marker must round-trip through the
+/// embedded JSON when present, and be omitted (via `skip_serializing_if`)
+/// when empty/`None` so the JS `|| []` / `typeof` degrade-to-empty paths fire.
+#[test]
+fn spa_embeds_refactoring_targets_and_ownership_cap() {
+    let dash = SpaDashboard {
+        refactoring_targets: vec![
+            RefactoringTargetRow {
+                path: "src/hot/one.rs".into(),
+                priority: 9.5,
+                combined_risk: 40.0,
+                structural_risk: 0.8,
+                hotspot_score: 5.0,
+                revisions: 18,
+                loc: 32,
+                dominant_type: "complex-method".into(),
+                band: "red".into(),
+                manual_up_rank: 1,
+            },
+            RefactoringTargetRow {
+                path: "src/hot/two.rs".into(),
+                priority: 6.0,
+                combined_risk: 18.0,
+                structural_risk: 0.5,
+                hotspot_score: 3.6,
+                revisions: 9,
+                loc: 50,
+                dominant_type: "duplication".into(),
+                band: "yellow".into(),
+                manual_up_rank: 2,
+            },
+        ],
+        entity_ownership_cap: Some(200),
+        ..SpaDashboard::default()
+    };
+    let mut buf = Vec::new();
+    write_spa(
+        &dash,
+        "CodeLore Dashboard",
+        "/tmp/x",
+        "2026-07-27 00:00:00 UTC",
+        &mut buf,
+    )
+    .expect("write_spa");
+    let html = String::from_utf8(buf).expect("utf8 html");
+    let data = extract_data_json(&html).expect("parse data block");
+
+    let rt = data
+        .get("refactoring_targets")
+        .and_then(|v| v.as_array())
+        .expect("refactoring_targets array");
+    assert_eq!(rt.len(), 2, "two refactoring-target rows expected");
+    // Rows must serialize in priority-DESC order (as the builder emits them),
+    // since the tour brushes the first 10.
+    assert_eq!(
+        rt[0].get("path").and_then(serde_json::Value::as_str),
+        Some("src/hot/one.rs"),
+    );
+    assert_eq!(
+        rt[0].get("band").and_then(serde_json::Value::as_str),
+        Some("red"),
+    );
+    assert!(
+        (rt[0]
+            .get("priority")
+            .and_then(serde_json::Value::as_f64)
+            .expect("priority")
+            - 9.5)
+            .abs()
+            < 1e-9,
+    );
+    assert_eq!(
+        data.get("entity_ownership_cap")
+            .and_then(serde_json::Value::as_u64),
+        Some(200),
+        "entity_ownership_cap must round-trip when the embed was truncated",
+    );
+
+    // Default dashboard: both fields absent (degrade-to-empty convention).
+    let default_html = build_dashboard_html();
+    let default_data = extract_data_json(&default_html).expect("parse default data block");
+    assert!(
+        default_data.get("refactoring_targets").is_none(),
+        "empty refactoring_targets must be omitted from the payload",
+    );
+    assert!(
+        default_data.get("entity_ownership_cap").is_none(),
+        "absent entity_ownership_cap must be omitted from the payload",
+    );
 }
 
 /// Build the dashboard HTML from an empty (all-default) `SpaDashboard`.
