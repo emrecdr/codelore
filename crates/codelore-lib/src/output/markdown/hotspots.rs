@@ -177,14 +177,22 @@ pub fn write_effort_exposure_markdown<W: Write>(
     }
     writeln!(
         w,
-        "| Band | Files | LOC share % | Commit share % | Churn share % | CI 95% low | CI 95% high |"
+        "| Band | Files | LOC share % | Commit share % | Churn share % | CI 95% low | CI 95% high | Improving churn % | Degrading churn % |"
     )
     .map_err(CodeLoreError::Io)?;
-    writeln!(w, "|---|---:|---:|---:|---:|---:|---:|").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---:|---:|---:|---:|---:|---:|---:|---:|").map_err(CodeLoreError::Io)?;
     for row in rows {
+        // The improving/degrading split is populated only for the red band when
+        // the decomposition ran (repo available); elsewhere it reads "—".
+        let improving = row
+            .churn_share_improving_pct
+            .map_or_else(|| "—".to_owned(), |v| format!("{v:.1}"));
+        let degrading = row
+            .churn_share_degrading_pct
+            .map_or_else(|| "—".to_owned(), |v| format!("{v:.1}"));
         writeln!(
             w,
-            "| {} | {} | {:.1} | {:.1} | {:.1} | {:.3} | {:.3} |",
+            "| {} | {} | {:.1} | {:.1} | {:.1} | {:.3} | {:.3} | {} | {} |",
             escape_md_cell(&row.band),
             row.files,
             row.loc_share_pct,
@@ -192,6 +200,8 @@ pub fn write_effort_exposure_markdown<W: Write>(
             row.churn_share_pct,
             row.commit_share_ci_low,
             row.commit_share_ci_high,
+            improving,
+            degrading,
         )
         .map_err(CodeLoreError::Io)?;
     }

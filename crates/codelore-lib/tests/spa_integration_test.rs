@@ -549,6 +549,8 @@ fn spa_embeds_fusion_overlay_data() {
             churn_share_pct: 35.0,
             commit_share_ci_low: 0.28,
             commit_share_ci_high: 0.54,
+            churn_share_improving_pct: None,
+            churn_share_degrading_pct: None,
         }],
         ..SpaDashboard::default()
     };

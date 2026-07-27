@@ -510,6 +510,10 @@ fn skipped_check_gates(thresholds: &Thresholds) -> Vec<&'static str> {
         max_findings_in_hot_files,
         corpus_percentile_max,
         fail_on_degraded,
+        // A modifier of max_red_effort_pct, not a standalone gate. This tool
+        // DOES honor it (the effort-exposure gate above decomposes when set), so
+        // it is neither reported as an evaluated gate nor as skipped.
+        red_effort_exempt_improving: _,
     } = &thresholds.gates;
     let configured: [(&'static str, bool); 11] = [
         ("cognitive_max", cognitive_max.is_some()),
@@ -939,17 +943,24 @@ impl CodeLoreServer {
             violations.extend(evaluate_clone_gate(&thresholds, &db).map_err(|e| map_lib_err(&e))?);
 
             // effort-exposure gate — reuses the code-health rows computed for
-            // code_health_min so the heaviest analysis runs once per call.
+            // code_health_min so the heaviest analysis runs once per call. With
+            // the improving-churn exemption on, the red band is decomposed (a
+            // scoped window-start parse of the red files via the repo) so the
+            // gate compares the degrading share; off, the base rows are used.
             if let Some(max) = thresholds.gates.max_red_effort_pct {
-                let rows =
-                    codelore_lib::cli_api::analyses::effort_exposure::run_effort_exposure_with_health(
-                        &db,
-                        &opts.with_no_row_limit(),
-                        &ch,
-                    )
-                    .map_err(|e| map_lib_err(&e))?;
+                use codelore_lib::cli_api::analyses::effort_exposure;
+                let exempt = thresholds.gates.red_effort_exempt_improving;
+                let no_limit = opts.with_no_row_limit();
+                let rows = if exempt {
+                    effort_exposure::run_effort_exposure_decomposed(&db, &repo, &no_limit, &ch)
+                } else {
+                    effort_exposure::run_effort_exposure_with_health(&db, &no_limit, &ch)
+                }
+                .map_err(|e| map_lib_err(&e))?;
                 violations.extend(
-                    codelore_lib::cli_api::quality_gates::evaluate_effort_exposure_rows(max, &rows),
+                    codelore_lib::cli_api::quality_gates::evaluate_effort_exposure_rows_exempt(
+                        max, exempt, &rows,
+                    ),
                 );
             }
 

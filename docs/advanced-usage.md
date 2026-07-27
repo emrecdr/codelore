@@ -235,6 +235,16 @@ max_red_effort_pct = 30.0   # fail when > 30 % of churn (changed lines) is in re
 
 `codelore check` evaluates this against `churn_share_pct` for the red band — the share of changed lines (added + deleted) that landed in red-band files over the trailing window. The gate fails when red-band churn share exceeds the threshold. Set it to a value that reflects your team's current baseline and tighten over time.
 
+**Exempting improving churn.** Red-band churn is not all bad: a commit that *refactors* a red file toward health lands in the same red band as one that degrades it. The optional companion key splits the two:
+
+```toml
+[gates]
+max_red_effort_pct = 15.0
+red_effort_exempt_improving = true   # gate only the DEGRADING share of red churn
+```
+
+With `red_effort_exempt_improving = true`, `codelore check` decomposes the red band's window churn by each red file's own net health movement — improving vs degrading, judged by the same fixed complexity risk bands as `codelore diff`'s `delta-health` — and compares only the **degrading** share against the ceiling. Churn that refactored a red file toward health is exempt. The failure message discloses all three numbers, e.g. `actual 6.20 (red 18.30, improving 12.10 exempt) vs threshold 15.00`, so the exemption is never silent. The key defaults to `false` (the gate compares the full red churn share — behaviour unchanged), and it has no effect unless `max_red_effort_pct` is also set. A file is exempted only on *demonstrable* net improvement; a file that both refactored and degraded within one window is classified by the net of those movements. The `effort-exposure` analysis surfaces the split directly in its `churn-share-improving-pct` / `churn-share-degrading-pct` columns for the red band.
+
 ### Code-familiarity analysis
 
 `--analysis code-familiarity` measures how deeply the active team understands the live codebase, using a time-decayed knowledge model (a contribution's knowledge weight halves roughly every five months of inactivity).

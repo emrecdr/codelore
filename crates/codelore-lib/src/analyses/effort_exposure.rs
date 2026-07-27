@@ -24,13 +24,15 @@
 //! 4. Wilson 95% CI on `commit_share` (k = commits touching band,
 //!    n = total window commits) is appended per row.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use duckdb::params;
 
 use crate::analyses::code_health::{CodeHealthRow, HealthScanCtx, run_code_health_scoped};
+use crate::analyses::delta_health::{Outcome, classify, outcome_for, run_function_metrics};
 use crate::analyses::lineage;
 use crate::facts::FactsDb;
+use crate::repo::Repo;
 use crate::{CodeLoreError, Options, Result};
 
 /// One row per code-health band in the trailing activity window.
@@ -53,6 +55,23 @@ pub struct EffortExposureRow {
     pub commit_share_ci_low: f64,
     /// Wilson 95% CI upper bound for `commit_share_pct / 100`.
     pub commit_share_ci_high: f64,
+    /// Share of *total* window churn (same denominator as
+    /// [`churn_share_pct`](Self::churn_share_pct)) that landed in this band's
+    /// files whose own health IMPROVED over the window. `None` unless the
+    /// decomposition was computed ([`run_effort_exposure_decomposed`], which
+    /// needs repository access); populated only for the `red` band, where the
+    /// improving-churn gate exemption reads it. Additive: absent from the
+    /// serialized output when `None`, so a run without the decomposition is
+    /// byte-identical to before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub churn_share_improving_pct: Option<f64>,
+    /// Complement of [`churn_share_improving_pct`](Self::churn_share_improving_pct):
+    /// the share of total window churn in this band's files whose health did NOT
+    /// improve over the window. For the `red` band the two sum to
+    /// [`churn_share_pct`](Self::churn_share_pct). `None` under the same
+    /// conditions as its sibling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub churn_share_degrading_pct: Option<f64>,
 }
 
 const BANDS_DDL: &str = "
@@ -265,9 +284,300 @@ pub fn run_effort_exposure_with_health(
             churn_share_pct,
             commit_share_ci_low,
             commit_share_ci_high,
+            // The improving/degrading split is an opt-in enrichment computed by
+            // run_effort_exposure_decomposed (which needs repo access); the base
+            // path leaves it absent, keeping existing output byte-identical.
+            churn_share_improving_pct: None,
+            churn_share_degrading_pct: None,
         });
     }
     Ok(out)
+}
+
+/// Run effort-exposure and enrich the `red` band row with its improving vs
+/// degrading window-churn decomposition — the signal the
+/// `red_effort_exempt_improving` gate exemption reads.
+///
+/// `health` must be the HEAD-scope, unlimited-row code-health rows (as for
+/// [`run_effort_exposure_with_health`]); the gate path already holds them.
+///
+/// ## What "improving" means (and its limits)
+///
+/// A red file is classed **improving** when the *net* absolute-risk movement of
+/// its functions between the window-start revision and HEAD is favourable —
+/// good weight strictly exceeds bad weight, using the same fixed LOC /
+/// cyclomatic risk bands as `delta-health` ([`classify`] / [`outcome_for`]).
+/// Every other red file (net-degrading, net-neutral, or with no analyzable
+/// function change) is class **degrading**, the conservative default: the
+/// exemption fires only on demonstrable improvement.
+///
+/// The window-start baseline is the last commit strictly before the trailing
+/// window opened; a red file with no such baseline (added within the window, or
+/// renamed into its HEAD path during it — pairing keys on the HEAD path, so a
+/// rename reads as all-new) has all its functions treated as *added* and is
+/// judged by their absolute risk alone. A file both refactored AND degraded
+/// within one window is classified by the NET of those movements, so a large
+/// regression can mask a smaller concurrent cleanup (and vice-versa). The split
+/// is a directional gate signal, not an exact per-commit attribution.
+///
+/// The two shares reconcile: for the red band,
+/// `churn_share_improving_pct + churn_share_degrading_pct == churn_share_pct`
+/// (both over the same total-window-churn denominator).
+///
+/// ## Cost
+///
+/// One extra pass beyond the base analysis: the window-start source of each red
+/// file that saw window churn is parsed for complexity (via
+/// [`crate::repo::Repo::read_blob_at`] + tree-sitter), scoped to those red files
+/// only — never a second full-tree health scan. Repos with few red files pay
+/// almost nothing.
+///
+/// # Errors
+///
+/// Returns [`crate::CodeLoreError::Analysis`] on SQL or row-mapping failure.
+pub fn run_effort_exposure_decomposed<R: Repo>(
+    db: &FactsDb,
+    repo: &R,
+    opts: &Options,
+    health: &[CodeHealthRow],
+) -> Result<Vec<EffortExposureRow>> {
+    // Base rows also materialize eh_bands_v1 as a side effect, which the
+    // per-red-file churn query below reuses.
+    let mut rows = run_effort_exposure_with_health(db, opts, health)?;
+    let Some(red_idx) = rows.iter().position(|r| r.band == "red") else {
+        return Ok(rows); // No red files ⇒ no exemption-relevant split.
+    };
+    let red_paths: HashSet<String> = health
+        .iter()
+        .filter(|r| r.band == "red")
+        .map(|r| r.path.clone())
+        .collect();
+    let (improving_pct, degrading_pct) = decompose_red_churn(db, repo, opts, &red_paths)?;
+    rows[red_idx].churn_share_improving_pct = Some(improving_pct);
+    rows[red_idx].churn_share_degrading_pct = Some(degrading_pct);
+    Ok(rows)
+}
+
+/// [`run_effort_exposure_decomposed`] computing the HEAD code-health scan
+/// itself — the standalone `codelore analyze effort-exposure` entry point,
+/// where a repository handle is available and the decomposition columns should
+/// carry real values.
+///
+/// # Errors
+///
+/// Returns [`crate::CodeLoreError::Analysis`] on SQL or row-mapping failure.
+pub fn run_effort_exposure_decomposed_scan<R: Repo>(
+    db: &FactsDb,
+    repo: &R,
+    opts: &Options,
+) -> Result<Vec<EffortExposureRow>> {
+    let health = run_code_health_scoped(
+        db,
+        &opts.with_no_row_limit(),
+        &HealthScanCtx::head_default(),
+    )?;
+    run_effort_exposure_decomposed(db, repo, opts, &health)
+}
+
+/// Total window churn (added + deleted LOC) across every band's files — the
+/// shared denominator, identical to the `total_churn` CTE in
+/// [`run_effort_exposure_with_health`].
+fn window_total_churn(db: &FactsDb, src: &str, wd: u32) -> Result<f64> {
+    let sql = format!(
+        "SELECT COALESCE(SUM(c.loc_added + c.loc_deleted), 0)::DOUBLE
+         FROM {src} c
+         WHERE c.rev IN (
+             SELECT rev FROM commits
+             WHERE date >= (SELECT MAX(date) FROM commits) - INTERVAL '{wd} days'
+         )"
+    );
+    db.conn()
+        .query_row(&sql, [], |r| r.get::<_, f64>(0))
+        .map_err(|e| CodeLoreError::Analysis(format!("query window total churn: {e}")))
+}
+
+/// Per-red-file window churn, keyed by path. Joins the trailing window to
+/// `eh_bands_v1` (materialized by [`run_effort_exposure_with_health`]) filtered
+/// to the `red` band, so the summed value equals the red-band `churn` the base
+/// analysis reports.
+fn red_window_churn(db: &FactsDb, src: &str, wd: u32) -> Result<HashMap<String, f64>> {
+    let sql = format!(
+        "SELECT c.path, COALESCE(SUM(c.loc_added + c.loc_deleted), 0)::DOUBLE AS churn
+         FROM {src} c
+         INNER JOIN eh_bands_v1 b ON b.path = c.path AND b.band = 'red'
+         WHERE c.rev IN (
+             SELECT rev FROM commits
+             WHERE date >= (SELECT MAX(date) FROM commits) - INTERVAL '{wd} days'
+         )
+         GROUP BY c.path"
+    );
+    let mut stmt = db
+        .conn()
+        .prepare(&sql)
+        .map_err(|e| CodeLoreError::Analysis(format!("prepare red window churn: {e}")))?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))
+        .map_err(|e| CodeLoreError::Analysis(format!("query red window churn: {e}")))?;
+    rows.collect::<std::result::Result<HashMap<_, _>, _>>()
+        .map_err(|e| CodeLoreError::Analysis(format!("collect red window churn: {e}")))
+}
+
+/// The revision representing each red file's state entering the trailing
+/// window: the newest commit strictly *before* the window opened. `None` when
+/// the window spans all history (no pre-window commit) — every red file is then
+/// judged as newly-added.
+fn window_start_rev(db: &FactsDb, wd: u32) -> Result<Option<String>> {
+    let sql = format!(
+        "SELECT rev FROM commits
+         WHERE date < (SELECT MAX(date) FROM commits) - INTERVAL '{wd} days'
+         ORDER BY date DESC, rev DESC
+         LIMIT 1"
+    );
+    match db.conn().query_row(&sql, [], |r| r.get::<_, String>(0)) {
+        Ok(rev) => Ok(Some(rev)),
+        Err(duckdb::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(CodeLoreError::Analysis(format!(
+            "query window-start rev: {e}"
+        ))),
+    }
+}
+
+/// One function's absolute risk drivers at a revision: worst-case per bare name.
+type FnMetrics = HashMap<String, (u32, f64)>;
+
+/// HEAD per-function `(loc, cyclomatic)` for the red files, indexed by path then
+/// bare function name. Reuses `delta-health`'s [`run_function_metrics`], which
+/// already collapses each `(path, bare-name)` to its worst-case metrics and
+/// keeps only real functions / methods.
+fn head_function_metrics(
+    db: &FactsDb,
+    red_paths: &HashSet<String>,
+) -> Result<HashMap<String, FnMetrics>> {
+    let mut out: HashMap<String, FnMetrics> = HashMap::new();
+    for row in run_function_metrics(db)? {
+        if red_paths.contains(&row.path) {
+            out.entry(row.path)
+                .or_default()
+                .insert(row.name, (row.loc, row.cyclomatic));
+        }
+    }
+    Ok(out)
+}
+
+/// Parse `path` at `rev` for its per-function `(loc, cyclomatic)` — the
+/// window-start baseline. Scoped to the single red file; a per-file blob-read,
+/// size-cap, or parse failure yields an empty baseline (every function reads as
+/// added) rather than aborting the analysis, matching the at-rev scan's
+/// resilience contract.
+fn base_function_metrics<R: Repo>(repo: &R, rev: &str, path: &str) -> FnMetrics {
+    use crate::complexity::{Tier1Language, compute_for_file};
+
+    let mut out: FnMetrics = HashMap::new();
+    let Some(lang) = Tier1Language::from_path(path) else {
+        return out;
+    };
+    let source = match repo.read_blob_at(rev, path) {
+        Ok(Some(b)) => b,
+        Ok(None) => return out,
+        Err(e) => {
+            tracing::warn!("effort-exposure: blob read failed for {path} at {rev}: {e}");
+            return out;
+        }
+    };
+    if source.len() > crate::constants::DEFAULT_MAX_AST_FILE_BYTES {
+        return out;
+    }
+    let entities = match compute_for_file(std::path::Path::new(path), source, lang) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("effort-exposure: parse error {path} at {rev}: {e}");
+            return out;
+        }
+    };
+    for e in entities {
+        if e.kind == "function" || e.kind == "method" {
+            // Same-named functions in one file collapse to worst-case, mirroring
+            // run_function_metrics' MAX rollup on the HEAD side.
+            let entry = out.entry(e.name).or_insert((0, 0.0));
+            entry.0 = entry.0.max(e.loc);
+            entry.1 = entry.1.max(e.cyclomatic);
+        }
+    }
+    out
+}
+
+/// Whether a file's functions net-improved between `base` (window-start) and
+/// `head`. Accumulates `delta-health` good/bad LOC weight over the union of
+/// function names and returns `true` only when good strictly dominates bad —
+/// the conservative test that leaves neutral and net-degrading files degrading.
+fn file_improved(head: &FnMetrics, base: &FnMetrics) -> bool {
+    let mut good_w = 0.0_f64;
+    let mut bad_w = 0.0_f64;
+    let names: HashSet<&String> = head.keys().chain(base.keys()).collect();
+    for name in names {
+        let b = base.get(name);
+        let h = head.get(name);
+        // Identical rows are untouched functions — no movement.
+        if let (Some(b), Some(h)) = (b, h)
+            && b == h
+        {
+            continue;
+        }
+        let before = b.map(|&(loc, cyc)| classify(loc, cyc, false));
+        let after = h.map(|&(loc, cyc)| classify(loc, cyc, false));
+        let weight = f64::from(h.or(b).map_or(0, |&(loc, _)| loc));
+        match outcome_for(before, after) {
+            Outcome::Good => good_w += weight,
+            Outcome::Bad => bad_w += weight,
+            Outcome::Neutral => {}
+        }
+    }
+    good_w > bad_w
+}
+
+/// Split the red band's window churn into `(improving_pct, degrading_pct)` of
+/// total window churn. `red_paths` is the set of red-band files at HEAD.
+fn decompose_red_churn<R: Repo>(
+    db: &FactsDb,
+    repo: &R,
+    opts: &Options,
+    red_paths: &HashSet<String>,
+) -> Result<(f64, f64)> {
+    let src = lineage::source_table(opts);
+    let wd = opts.window_days;
+
+    let total_churn = window_total_churn(db, src, wd)?;
+    if total_churn <= 0.0 {
+        return Ok((0.0, 0.0)); // No window churn ⇒ no shares to split.
+    }
+    let per_file = red_window_churn(db, src, wd)?;
+    if per_file.is_empty() {
+        return Ok((0.0, 0.0)); // Red files exist but saw no window churn.
+    }
+
+    let window_start = window_start_rev(db, wd)?;
+    let head_fns = head_function_metrics(db, red_paths)?;
+    let empty_fns: FnMetrics = HashMap::new();
+
+    let mut improving_churn = 0.0_f64;
+    let mut red_churn = 0.0_f64;
+    for (path, churn) in &per_file {
+        red_churn += churn;
+        let head = head_fns.get(path).unwrap_or(&empty_fns);
+        let base = window_start
+            .as_deref()
+            .map_or_else(FnMetrics::new, |rev| base_function_metrics(repo, rev, path));
+        if file_improved(head, &base) {
+            improving_churn += churn;
+        }
+    }
+
+    let improving_pct = 100.0 * improving_churn / total_churn;
+    // Degrading is the red-band complement, so the two shares sum back to the
+    // band's churn_share_pct exactly (same denominator, every red file in one
+    // bucket).
+    let degrading_pct = 100.0 * (red_churn - improving_churn) / total_churn;
+    Ok((improving_pct, degrading_pct))
 }
 
 #[cfg(test)]
@@ -516,6 +826,8 @@ mod tests {
                 churn_share_pct: *churn_share_pct,
                 commit_share_ci_low: 0.0,
                 commit_share_ci_high: 1.0,
+                churn_share_improving_pct: None,
+                churn_share_degrading_pct: None,
             })
             .collect();
 
@@ -539,5 +851,86 @@ mod tests {
             (reported_actual - red_churn_share).abs() < 0.01,
             "reported actual ({reported_actual:.2}) must match red churn share ({red_churn_share:.2})"
         );
+    }
+
+    // ───────── improving-churn decomposition core (file_improved) ─────────
+
+    use super::{FnMetrics, file_improved};
+
+    /// One function keyed by bare name, with LOC / cyclomatic. LOC 71+ or
+    /// cyclomatic 11+ is High; 31+ / 6+ is Medium; below is Low — the fixed
+    /// `delta-health` bands the classifier reuses.
+    fn fns(entries: &[(&str, u32, f64)]) -> FnMetrics {
+        entries
+            .iter()
+            .map(|&(n, loc, cyc)| (n.to_string(), (loc, cyc)))
+            .collect()
+    }
+
+    #[test]
+    fn file_improved_true_when_a_function_is_refactored_down() {
+        // A High-risk function (loc 120) shrinks to Low (loc 10): good weight,
+        // no bad weight → the file net-improved.
+        let base = fns(&[("f", 120, 3.0)]);
+        let head = fns(&[("f", 10, 3.0)]);
+        assert!(file_improved(&head, &base));
+    }
+
+    #[test]
+    fn file_improved_false_when_a_function_degrades() {
+        // Low (loc 10) grows to High (loc 120): bad weight dominates → degrading.
+        let base = fns(&[("f", 10, 3.0)]);
+        let head = fns(&[("f", 120, 3.0)]);
+        assert!(!file_improved(&head, &base));
+    }
+
+    #[test]
+    fn file_improved_false_on_neutral_only_change() {
+        // Medium (loc 40) → Medium (loc 50): Neutral outcome, no good/bad weight
+        // → not a demonstrable improvement, so it stays degrading (conservative).
+        let base = fns(&[("f", 40, 3.0)]);
+        let head = fns(&[("f", 50, 3.0)]);
+        assert!(!file_improved(&head, &base));
+    }
+
+    #[test]
+    fn file_improved_false_when_no_functions_changed() {
+        // Identical rows = untouched functions = no movement → degrading bucket.
+        let same = fns(&[("f", 40, 3.0), ("g", 5, 1.0)]);
+        assert!(!file_improved(&same, &same.clone()));
+    }
+
+    #[test]
+    fn file_improved_added_high_risk_function_is_degrading() {
+        // No baseline (file born in the window): a High-risk added function is
+        // bad weight → degrading.
+        let base = FnMetrics::new();
+        let head = fns(&[("monster", 200, 20.0)]);
+        assert!(!file_improved(&head, &base));
+    }
+
+    #[test]
+    fn file_improved_removing_a_high_risk_function_is_good() {
+        // Deleting a High-risk function is good weight (base LOC) → improving.
+        let base = fns(&[("monster", 200, 20.0)]);
+        let head = FnMetrics::new();
+        assert!(file_improved(&head, &base));
+    }
+
+    #[test]
+    fn file_improved_net_of_concurrent_improve_and_degrade() {
+        // One function cleaned up (High→Low, weight 10) and one worsened
+        // (Low→High, weight 200) in the same window: bad weight dominates → the
+        // NET is degrading, as documented (a large regression masks a small
+        // cleanup).
+        let base = fns(&[("clean", 120, 3.0), ("rot", 10, 1.0)]);
+        let head = fns(&[("clean", 10, 3.0), ("rot", 200, 20.0)]);
+        assert!(!file_improved(&head, &base));
+        // Now a heavy cleanup outweighs a light regression: deleting a High-risk
+        // function books its full base LOC (200) as good weight, dwarfing the
+        // Low→Medium regression's 40 → net improving.
+        let base2 = fns(&[("clean", 200, 20.0), ("rot", 10, 1.0)]);
+        let head2 = fns(&[("rot", 40, 3.0)]);
+        assert!(file_improved(&head2, &base2));
     }
 }

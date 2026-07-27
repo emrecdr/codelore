@@ -117,6 +117,7 @@ pub(crate) fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
     let (violations, mut ledger_records, hotspot_count, code_health) = evaluate_all_gates(
         &thresholds,
         &db,
+        &repo,
         &opts,
         &head_sha,
         &ts,
@@ -541,6 +542,7 @@ fn eval_arch_gates(
 fn evaluate_all_gates(
     thresholds: &codelore_lib::cli_api::quality_gates::Thresholds,
     db: &codelore_lib::cli_api::facts::FactsDb,
+    repo: &impl codelore_lib::cli_api::repo::Repo,
     opts: &codelore_lib::cli_api::Options,
     head_sha: &str,
     ts: &str,
@@ -593,19 +595,34 @@ fn evaluate_all_gates(
         // effort-exposure's band table derives from the same HEAD scan, and
         // the measured red-band churn share must be recorded on passing runs
         // too (the ratchet and `--history` read it from the ledger).
-        let rows =
-            codelore_lib::cli_api::analyses::effort_exposure::run_effort_exposure_with_health(
-                db,
-                &opts.with_no_row_limit(),
-                &code_health,
-            )
-            .context("run effort-exposure for gate")?;
-        let value = rows
-            .iter()
-            .find(|r| r.band == "red")
-            .map_or(0.0, |r| r.churn_share_pct);
-        let effort_v =
-            codelore_lib::cli_api::quality_gates::evaluate_effort_exposure_rows(max, &rows);
+        //
+        // With the improving-churn exemption on, decompose the red band's
+        // window churn (a scoped window-start parse of the red files only, via
+        // the repo) so the gate compares the DEGRADING share; otherwise stay on
+        // the base SQL rows — no extra scan on the default path.
+        use codelore_lib::cli_api::analyses::effort_exposure;
+        let exempt = g.red_effort_exempt_improving;
+        let no_limit = opts.with_no_row_limit();
+        let rows = if exempt {
+            effort_exposure::run_effort_exposure_decomposed(db, repo, &no_limit, &code_health)
+        } else {
+            effort_exposure::run_effort_exposure_with_health(db, &no_limit, &code_health)
+        }
+        .context("run effort-exposure for gate")?;
+        // The recorded value is the effective gated number: the degrading share
+        // when exempting (falling back to the total red share if the split is
+        // unavailable), else the full red share.
+        let red = rows.iter().find(|r| r.band == "red");
+        let value = if exempt {
+            red.and_then(|r| r.churn_share_degrading_pct)
+                .or_else(|| red.map(|r| r.churn_share_pct))
+                .unwrap_or(0.0)
+        } else {
+            red.map_or(0.0, |r| r.churn_share_pct)
+        };
+        let effort_v = codelore_lib::cli_api::quality_gates::evaluate_effort_exposure_rows_exempt(
+            max, exempt, &rows,
+        );
         recs.push(make_rec(
             "max_red_effort_pct",
             max,

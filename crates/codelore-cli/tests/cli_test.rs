@@ -1187,7 +1187,7 @@ fn effort_exposure_csv_has_header_and_rows() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "band,files,loc-share-pct,commit-share-pct,churn-share-pct,commit-share-ci-low,commit-share-ci-high",
+            "band,files,loc-share-pct,commit-share-pct,churn-share-pct,commit-share-ci-low,commit-share-ci-high,churn-share-improving-pct,churn-share-degrading-pct",
         ))
         // Header alone would pass on empty output — require at least one data row.
         .stdout(predicate::function(|out: &str| {
