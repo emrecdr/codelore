@@ -49,6 +49,6 @@ pub use evaluators::{
     ArchMeasured, GateViolation, evaluate_architecture_gate, evaluate_architecture_gate_measured,
     evaluate_clone_gate, evaluate_code_health_gate, evaluate_corpus_percentile_rows,
     evaluate_diff_gate, evaluate_effort_exposure_gate, evaluate_effort_exposure_rows,
-    evaluate_familiarity_gate, evaluate_familiarity_rows, evaluate_finding_overlap_rows,
-    evaluate_full_tree, evaluate_gate_thresholds,
+    evaluate_effort_exposure_rows_exempt, evaluate_familiarity_gate, evaluate_familiarity_rows,
+    evaluate_finding_overlap_rows, evaluate_full_tree, evaluate_gate_thresholds,
 };

@@ -959,8 +959,12 @@ fn run_streaming_dispatch(
             "json" => output::json::write_communities_json,
             "markdown" => output::markdown::write_communities_markdown,
         }),
+        // The decomposed scan enriches the red band with the improving vs
+        // degrading churn split — the differentiated signal — using the repo
+        // handle to parse each red file's window-start source (scoped to red
+        // files, never a second full scan).
         AnalysisName::EffortExposure => dispatch!(ctx, format, out,
-        analyses::effort_exposure::run_effort_exposure(db, opts),
+        analyses::effort_exposure::run_effort_exposure_decomposed_scan(db, repo, opts),
         {
             "csv" => output::csv::write_effort_exposure_csv,
             "json" => output::json::write_json,
@@ -1502,15 +1506,24 @@ fn build_spa_dashboard(
         })
         .unwrap_or_else(|| (Vec::new(), Vec::new(), Vec::new(), Vec::new()));
     // Effort-exposure: LOC/commit/churn share per band over the trailing
-    // window. Pure SQL over already-ingested facts; runs the same
-    // code-health HEAD scan as the factor header (cheap, cached). Degrades
-    // to empty on analysis failure so no widget is shown.
-    let effort_exposure =
-        codelore_lib::cli_api::analyses::effort_exposure::run_effort_exposure(db, opts)
-            .unwrap_or_else(|e| {
-                tracing::warn!("dashboard: effort-exposure analysis failed; skipping: {e}");
-                Vec::new()
-            });
+    // window. Runs the same code-health HEAD scan as the factor header (cheap,
+    // cached). With the shared repo handle the red band also carries the
+    // improving vs degrading churn split (scoped to red files); without it the
+    // base SQL-only rows are used. Degrades to empty on analysis failure so no
+    // widget is shown.
+    let effort_exposure = {
+        use codelore_lib::cli_api::analyses::effort_exposure::{
+            run_effort_exposure, run_effort_exposure_decomposed_scan,
+        };
+        let result = match &spa_repo {
+            Some(r) => run_effort_exposure_decomposed_scan(db, r, opts),
+            None => run_effort_exposure(db, opts),
+        };
+        result.unwrap_or_else(|e| {
+            tracing::warn!("dashboard: effort-exposure analysis failed; skipping: {e}");
+            Vec::new()
+        })
+    };
     // Marginal-owner risk: ownership concentration × code-health fusion.
     // Degrades to empty when no file meets the high/elevated threshold,
     // or when knowledge_shares is unavailable (e.g. tiny fixture repos).
