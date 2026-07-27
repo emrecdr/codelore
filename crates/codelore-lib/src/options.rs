@@ -848,8 +848,7 @@ mod tests {
         assert_eq!(
             digest,
             "fd97ba3da81292be838811545a9ea1eac49a99987705e7159c5d696001a6aa20",
-            "cache-key classification changed:\n{}",
-            canon.to_string()
+            "cache-key classification changed:\n{canon}"
         );
     }
 

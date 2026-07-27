@@ -413,7 +413,7 @@ fn equal_fragmentation_rows_are_ordered_deterministically_by_entity() {
     );
 }
 
-/// `cochange_entropy` is a floating-point SUM. DuckDB parallelises aggregation
+/// `cochange_entropy` is a floating-point SUM. `DuckDB` parallelises aggregation
 /// and float addition is non-associative, so an unordered SUM can wobble by
 /// ~1 ULP between runs and break byte-for-byte reproducibility. The ordered
 /// aggregate in the entropy CTE pins one value, so re-running the analysis
