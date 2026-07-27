@@ -1278,3 +1278,126 @@ fn gate_changes_findings_render_capped_with_more_tail() {
     drop(stdin);
     let _ = child.wait();
 }
+
+/// Commit every staged/tracked change in `repo_root`, supplying a committer
+/// identity explicitly — a fresh fixture clone carries none (cross-platform).
+fn commit_all(repo_root: &std::path::Path, message: &str) {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .args(["-c", "user.email=codelore-test@example.com"])
+        .args(["-c", "user.name=CodeLore Test"])
+        .args(["commit", "-aqm", message])
+        .status()
+        .expect("spawn git commit");
+    assert!(status.success(), "git commit must succeed");
+}
+
+#[test]
+fn mcp_committed_state_read_repeat_is_byte_identical() {
+    // A repeated identical committed-state read is served from the process
+    // memo, so its serialized payload must be byte-for-byte the same.
+    let repo = delivery_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
+    let first = assert_tool_ok_text(
+        &call_tool(&mut stdin, &mut reader, 1, "code_health", &json!({})),
+        "code_health",
+    );
+    let second = assert_tool_ok_text(
+        &call_tool(&mut stdin, &mut reader, 2, "code_health", &json!({})),
+        "code_health",
+    );
+    assert_eq!(
+        first, second,
+        "a repeated committed-state read must return the memoized payload verbatim"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn mcp_committed_state_read_refreshes_after_new_commit() {
+    // The memo is keyed by HEAD: a new commit between two reads must yield a
+    // fresh result, never the pre-commit payload.
+    let repo = delivery_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
+    let before = assert_tool_ok_text(
+        &call_tool(&mut stdin, &mut reader, 1, "code_health", &json!({})),
+        "code_health",
+    );
+
+    // Worsen a tracked file that already carries a health row, then commit it so
+    // HEAD advances (the memo's invalidation trigger).
+    worsen_file(repo.dir.path(), "src/core.rs");
+    commit_all(repo.dir.path(), "worsen core.rs");
+
+    let after = assert_tool_ok_text(
+        &call_tool(&mut stdin, &mut reader, 2, "code_health", &json!({})),
+        "code_health",
+    );
+    assert_ne!(
+        before, after,
+        "a read after a new commit must be recomputed for the new HEAD, not served \
+         from the pre-commit memo"
+    );
+
+    // The new HEAD's result is itself memoized — an immediate repeat matches it.
+    let after_again = assert_tool_ok_text(
+        &call_tool(&mut stdin, &mut reader, 3, "code_health", &json!({})),
+        "code_health",
+    );
+    assert_eq!(
+        after, after_again,
+        "the post-commit result must be memoized under the new HEAD"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn mcp_gate_changes_is_not_memoized_across_worktree_edit() {
+    // gate_changes reads the working tree, so it must never be memoized: an
+    // uncommitted edit (HEAD unchanged) must change its verdict between two
+    // calls in the same server session.
+    let repo = delivery_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
+    let clean = assert_tool_ok_text(
+        &call_tool(&mut stdin, &mut reader, 1, "gate_changes", &json!({})),
+        "gate_changes",
+    );
+    assert!(
+        clean.contains("no working-tree changes"),
+        "a clean tree reports nothing to gate: {clean}"
+    );
+
+    // Edit the working tree WITHOUT committing: HEAD is unchanged, so a
+    // HEAD-keyed memo would wrongly replay the clean-tree verdict.
+    worsen_file(repo.dir.path(), "src/core.rs");
+    let dirty = assert_tool_ok_text(
+        &call_tool(&mut stdin, &mut reader, 2, "gate_changes", &json!({})),
+        "gate_changes",
+    );
+    assert_ne!(
+        clean, dirty,
+        "an uncommitted edit must change gate_changes output — it is never memoized"
+    );
+    assert!(
+        !dirty.contains("no working-tree changes"),
+        "the second call must observe the uncommitted edit: {dirty}"
+    );
+    assert!(
+        dirty.contains("src/core.rs"),
+        "the worsened file must surface in the second call: {dirty}"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}

@@ -4,9 +4,10 @@
 //! Each tool call opens its own [`FactsDb`] via the warm-cache path so the
 //! `!Send + !Sync` `DuckDB` connection never crosses thread or await boundaries.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use rmcp::{
@@ -227,30 +228,139 @@ impl Drop for TempWorktree {
     }
 }
 
+/// Upper bound on distinct entries the result memo keeps alive. Tool outputs are
+/// already row-capped (see [`serialize_capped_rows`]), so entries are small; this
+/// bound guards only against an unbounded set of distinct `(tool, params)` reads
+/// over a long-lived server. When full, the map is cleared wholesale before the
+/// next insert — the coarsest bound, and safe because staleness is prevented by
+/// the HEAD key, not by which entries happen to survive an eviction.
+const MEMO_CAPACITY: usize = 512;
+
+/// Compose a memo key from the tool name and a canonical parameter serialization.
+/// `params_json` must be a stable serialization of the already-parsed parameter
+/// struct — serializing the deserialized struct (never the raw request) makes the
+/// key independent of JSON object key order, so `{"a":1,"b":2}` and `{"b":2,"a":1}`
+/// resolve to one entry. The unit separator cannot appear in the tool name, so
+/// `tool` and `params_json` can never run together into a colliding key.
+fn memo_key(tool: &str, params_json: &str) -> String {
+    format!("{tool}\u{1f}{params_json}")
+}
+
+/// Process-lifetime memo of committed-state MCP tool outputs (serialized JSON or
+/// text — `String` is `Send`, unlike the `!Send` `DuckDB` connection that produced
+/// it). Keyed by `(tool, canonical params)` and scoped to a single HEAD sha: the
+/// first access at a new HEAD drops every entry, so a stored result can only ever
+/// describe the commit that is currently HEAD. Working-tree-dependent tools
+/// (`gate_changes`) and tools reading mutable out-of-tree inputs (`check_gates`'
+/// thresholds file, `finding_hotspot_overlap`'s findings sidecar) never touch it.
+///
+/// Concurrency is a single `Mutex` held only for a get or a put, never across the
+/// `spawn_blocking` compute. Two concurrent calls that miss the same key both
+/// compute and both insert; the values are identical, so last-write-wins is
+/// harmless — duplicate compute is accepted rather than adding cross-call dedup.
+#[derive(Default)]
+struct ResultMemo {
+    state: Mutex<MemoState>,
+}
+
+#[derive(Default)]
+struct MemoState {
+    /// The HEAD sha every stored entry was computed at. An access carrying a
+    /// different sha clears `entries` before proceeding.
+    head: String,
+    entries: HashMap<String, String>,
+}
+
+impl ResultMemo {
+    /// Return a memoized output for `key` valid at `head`, cloning it out under
+    /// the lock. A `head` differing from the current scope means every entry
+    /// describes a superseded commit: the map is dropped, the scope adopts the
+    /// new `head`, and the lookup misses so the caller recomputes.
+    fn get(&self, head: &str, key: &str) -> Option<String> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.head != head {
+            state.entries.clear();
+            head.clone_into(&mut state.head);
+            return None;
+        }
+        state.entries.get(key).cloned()
+    }
+
+    /// Store `value` under `key` for `head`. If a concurrent access advanced the
+    /// scope to a different HEAD between this call's get and put, the result no
+    /// longer applies to the current scope and is dropped. A full map is cleared
+    /// before the insert (see [`MEMO_CAPACITY`]).
+    fn put(&self, head: &str, key: String, value: String) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.head != head {
+            return;
+        }
+        if state.entries.len() >= MEMO_CAPACITY && !state.entries.contains_key(&key) {
+            state.entries.clear();
+        }
+        state.entries.insert(key, value);
+    }
+}
+
+/// Run `compute` under the result memo. Opens the repo, resolves HEAD, and
+/// returns a memoized output for `(tool, params_json)` when one exists at that
+/// HEAD; otherwise runs `compute` (which receives the open repo and the resolved
+/// HEAD sha), memoizes its `Ok` output, and returns it. Errors propagate without
+/// being memoized. HEAD is resolved in-process via `gix` immediately before the
+/// (skipped-on-hit) ingest, so a hit pays only the repo open plus a hash lookup.
+fn memoized<F>(
+    memo: &ResultMemo,
+    repo_path: &Path,
+    tool: &str,
+    params_json: &str,
+    compute: F,
+) -> std::result::Result<String, ErrorData>
+where
+    F: FnOnce(&GixRepo, &str) -> std::result::Result<String, ErrorData>,
+{
+    let repo = GixRepo::open(repo_path).map_err(|e| map_lib_err(&e))?;
+    let head = repo.head_sha().map_err(|e| map_lib_err(&e))?;
+    let key = memo_key(tool, params_json);
+    if let Some(hit) = memo.get(&head, &key) {
+        return Ok(hit);
+    }
+    let out = compute(&repo, head.as_str())?;
+    memo.put(&head, key, out.clone());
+    Ok(out)
+}
+
 /// MCP server state — the repo path and defect-calibration configuration
-/// fixed at server startup.
+/// fixed at server startup, plus the process-lifetime result memo.
 #[derive(Clone)]
 pub struct CodeLoreServer {
     repo: PathBuf,
     defect_calibration: Option<PathBuf>,
     allow_foreign_calibration: bool,
+    /// Shared across every concurrent tool call (hence `Arc`); see [`ResultMemo`].
+    memo: Arc<ResultMemo>,
 }
 
 // ── Parameter structs (one per tool) ─────────────────────────────────────────
 
 /// Parameters for the `repo_overview` tool (none required).
-#[derive(Debug, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Default)]
 pub struct RepoOverviewParams {}
 
 /// Parameters for the `hotspots` tool.
-#[derive(Debug, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Default)]
 pub struct HotspotsParams {
     /// Maximum rows to return (default: 20).
     pub limit: Option<u32>,
 }
 
 /// Parameters for the `code_health` tool.
-#[derive(Debug, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Default)]
 pub struct CodeHealthParams {
     /// Filter results to this file path (relative to repo root).
     /// Omit to return all files with complexity data.
@@ -262,7 +372,7 @@ pub struct CodeHealthParams {
 }
 
 /// Parameters for the `delta_health` tool.
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct DeltaHealthParams {
     /// Base revision (branch, tag, or full SHA). Must be resolvable by `git rev-parse`.
     pub base: String,
@@ -274,14 +384,14 @@ pub struct DeltaHealthParams {
 }
 
 /// Parameters for the `refactoring_targets` tool.
-#[derive(Debug, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Default)]
 pub struct RefactoringTargetsParams {
     /// Maximum rows to return (default: all).
     pub limit: Option<u32>,
 }
 
 /// Parameters for the `function_xray` tool.
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct FunctionXrayParams {
     /// File path (relative to repo root) to analyse.
     pub path: String,
@@ -300,7 +410,7 @@ pub struct FindingHotspotOverlapParams {
 }
 
 /// Parameters for the `explain_file` tool.
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct ExplainFileParams {
     /// File path (relative to repo root) to build the evidence dossier for
     /// (e.g. "src/main.rs").
@@ -308,7 +418,7 @@ pub struct ExplainFileParams {
 }
 
 /// Parameters for the `change_context` tool.
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct ChangeContextParams {
     /// Repo-relative paths the caller intends to modify (1-20).
     pub paths: Vec<String>,
@@ -410,23 +520,33 @@ impl CodeLoreServer {
     )]
     async fn repo_overview(
         &self,
-        _params: Parameters<RepoOverviewParams>,
+        params: Parameters<RepoOverviewParams>,
     ) -> Result<String, ErrorData> {
         let repo_path = self.repo.clone();
+        let memo = self.memo.clone();
+        let params_json = serde_json::to_string(&params.0).map_err(internal)?;
         tokio::task::spawn_blocking(move || {
-            let opts = Options {
-                repo_path: repo_path.clone(),
-                ..Options::default()
-            };
-            let repo = GixRepo::open(&repo_path).map_err(|e| map_lib_err(&e))?;
-            let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
-                .map_err(|e| map_lib_err(&e))?;
-            let rows = summary::run_summary(&db, &opts).map_err(|e| map_lib_err(&e))?;
-            let out = serde_json::json!({
-                "summary": rows,
-                "options": opts.canonical_json(),
-            });
-            serde_json::to_string(&out).map_err(internal)
+            memoized(
+                &memo,
+                &repo_path,
+                "repo_overview",
+                &params_json,
+                |repo, _head| {
+                    let opts = Options {
+                        repo_path: repo_path.clone(),
+                        ..Options::default()
+                    };
+                    let db =
+                        FactsDb::open_or_ingest_with_cache_root(&opts, repo, &default_cache_root())
+                            .map_err(|e| map_lib_err(&e))?;
+                    let rows = summary::run_summary(&db, &opts).map_err(|e| map_lib_err(&e))?;
+                    let out = serde_json::json!({
+                        "summary": rows,
+                        "options": opts.canonical_json(),
+                    });
+                    serde_json::to_string(&out).map_err(internal)
+                },
+            )
         })
         .await
         .map_err(internal)?
@@ -442,18 +562,28 @@ impl CodeLoreServer {
     )]
     async fn hotspots(&self, params: Parameters<HotspotsParams>) -> Result<String, ErrorData> {
         let repo_path = self.repo.clone();
+        let memo = self.memo.clone();
         let limit = params.0.limit.unwrap_or(20);
+        let params_json = serde_json::to_string(&params.0).map_err(internal)?;
         tokio::task::spawn_blocking(move || {
-            let mut opts = Options {
-                repo_path: repo_path.clone(),
-                ..Options::default()
-            };
-            opts.rows_limit = Some(limit);
-            let repo = GixRepo::open(&repo_path).map_err(|e| map_lib_err(&e))?;
-            let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
-                .map_err(|e| map_lib_err(&e))?;
-            let rows = hotspots::run_hotspots(&db, &opts).map_err(|e| map_lib_err(&e))?;
-            serde_json::to_string(&rows).map_err(internal)
+            memoized(
+                &memo,
+                &repo_path,
+                "hotspots",
+                &params_json,
+                |repo, _head| {
+                    let mut opts = Options {
+                        repo_path: repo_path.clone(),
+                        ..Options::default()
+                    };
+                    opts.rows_limit = Some(limit);
+                    let db =
+                        FactsDb::open_or_ingest_with_cache_root(&opts, repo, &default_cache_root())
+                            .map_err(|e| map_lib_err(&e))?;
+                    let rows = hotspots::run_hotspots(&db, &opts).map_err(|e| map_lib_err(&e))?;
+                    serde_json::to_string(&rows).map_err(internal)
+                },
+            )
         })
         .await
         .map_err(internal)?
@@ -472,36 +602,41 @@ impl CodeLoreServer {
     )]
     async fn code_health(&self, params: Parameters<CodeHealthParams>) -> Result<String, ErrorData> {
         let repo_path = self.repo.clone();
+        let memo = self.memo.clone();
         let filter_path = params.0.path.clone();
         let cap = resolve_row_cap(params.0.limit);
+        let params_json = serde_json::to_string(&params.0).map_err(internal)?;
         tokio::task::spawn_blocking(move || {
-            let opts = Options {
-                repo_path: repo_path.clone(),
-                ..Options::default()
-            };
-            let repo = GixRepo::open(&repo_path).map_err(|e| map_lib_err(&e))?;
-            // A path outside the analyzed-file universe is a caller error, not
-            // an empty single-file result — reject it before the ingest. A
-            // tracked file with no health row (e.g. below the revision floor)
-            // legitimately returns [].
-            if let Some(p) = &filter_path {
-                require_tracked_path(&repo, p)?;
-            }
-            let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
-                .map_err(|e| map_lib_err(&e))?;
-            let mut rows = code_health::run_code_health(&db, &opts).map_err(|e| map_lib_err(&e))?;
-            if let Some(p) = filter_path {
-                rows.retain(|r| r.path == p);
-                return serde_json::to_string(&rows).map_err(internal);
-            }
-            // Rows arrive worst-health first (score ascending); cap the tail.
-            let total = rows.len();
-            rows.truncate(cap);
-            serialize_capped_rows(
-                &rows,
-                total,
-                "worst-health files first; raise limit (max 500) or pass a path for the rest",
-            )
+            memoized(&memo, &repo_path, "code_health", &params_json, |repo, _head| {
+                let opts = Options {
+                    repo_path: repo_path.clone(),
+                    ..Options::default()
+                };
+                // A path outside the analyzed-file universe is a caller error, not
+                // an empty single-file result — reject it before the ingest (the
+                // error propagates un-memoized). A tracked file with no health row
+                // (e.g. below the revision floor) legitimately returns [].
+                if let Some(p) = &filter_path {
+                    require_tracked_path(repo, p)?;
+                }
+                let db =
+                    FactsDb::open_or_ingest_with_cache_root(&opts, repo, &default_cache_root())
+                        .map_err(|e| map_lib_err(&e))?;
+                let mut rows =
+                    code_health::run_code_health(&db, &opts).map_err(|e| map_lib_err(&e))?;
+                if let Some(p) = &filter_path {
+                    rows.retain(|r| &r.path == p);
+                    return serde_json::to_string(&rows).map_err(internal);
+                }
+                // Rows arrive worst-health first (score ascending); cap the tail.
+                let total = rows.len();
+                rows.truncate(cap);
+                serialize_capped_rows(
+                    &rows,
+                    total,
+                    "worst-health files first; raise limit (max 500) or pass a path for the rest",
+                )
+            })
         })
         .await
         .map_err(internal)?
@@ -525,11 +660,14 @@ impl CodeLoreServer {
         params: Parameters<DeltaHealthParams>,
     ) -> Result<String, ErrorData> {
         let repo_path = self.repo.clone();
+        let memo = self.memo.clone();
         let base_rev = params.0.base.clone();
         let head_rev = params.0.head.clone();
         let cap = resolve_row_cap(params.0.limit);
 
-        // Resolve revisions up front on the async thread (cheap git I/O).
+        // Resolve revisions up front on the async thread (cheap git I/O). The
+        // resolved SHAs — not the raw rev strings — key the memo, so a branch
+        // name that later moves to a new commit misses the old entry.
         let base_sha = resolve_rev(&repo_path, &base_rev)?;
         let head_sha = resolve_rev(&repo_path, &head_rev)?;
         if base_sha == head_sha {
@@ -540,6 +678,19 @@ impl CodeLoreServer {
         }
 
         tokio::task::spawn_blocking(move || {
+            // Scope the memo to the repo's current HEAD (uniform with the other
+            // tools); the diff endpoints are the resolved base/head SHAs, so the
+            // result is stable regardless of HEAD — a HEAD move only over-evicts.
+            let main_repo = GixRepo::open(&repo_path).map_err(|e| map_lib_err(&e))?;
+            let head = main_repo.head_sha().map_err(|e| map_lib_err(&e))?;
+            let key = memo_key(
+                "delta_health",
+                &format!("base={base_sha}\u{1f}head={head_sha}\u{1f}limit={cap}"),
+            );
+            if let Some(hit) = memo.get(&head, &key) {
+                return Ok(hit);
+            }
+
             // Ingest each rev in its own worktree → in-memory DB.
             let (base_path, _base_wt) = temp_worktree(&repo_path, &base_sha)?;
             let (head_path, _head_wt) = temp_worktree(&repo_path, &head_sha)?;
@@ -583,7 +734,9 @@ impl CodeLoreServer {
             if omitted_fns > 0 {
                 value["omitted_functions"] = serde_json::json!(omitted_fns);
             }
-            serde_json::to_string(&value).map_err(internal)
+            let out = serde_json::to_string(&value).map_err(internal)?;
+            memo.put(&head, key, out.clone());
+            Ok(out)
         })
         .await
         .map_err(internal)?
@@ -603,25 +756,36 @@ impl CodeLoreServer {
         params: Parameters<RefactoringTargetsParams>,
     ) -> Result<String, ErrorData> {
         let repo_path = self.repo.clone();
+        let memo = self.memo.clone();
         let cap = resolve_row_cap(params.0.limit);
+        let params_json = serde_json::to_string(&params.0).map_err(internal)?;
         tokio::task::spawn_blocking(move || {
-            let opts = Options {
-                repo_path: repo_path.clone(),
-                ..Options::default()
-            };
-            let repo = GixRepo::open(&repo_path).map_err(|e| map_lib_err(&e))?;
-            let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
-                .map_err(|e| map_lib_err(&e))?;
-            // Run unbounded so the true total is known, then cap in-tool with the
-            // omitted disclosure (the analysis ranks over the full set either way).
-            let mut rows = refactoring_targets::run_refactoring_targets(&db, &opts)
-                .map_err(|e| map_lib_err(&e))?;
-            let total = rows.len();
-            rows.truncate(cap);
-            serialize_capped_rows(
-                &rows,
-                total,
-                "highest-priority refactor targets first; raise limit (max 500) for the rest",
+            memoized(
+                &memo,
+                &repo_path,
+                "refactoring_targets",
+                &params_json,
+                |repo, _head| {
+                    let opts = Options {
+                        repo_path: repo_path.clone(),
+                        ..Options::default()
+                    };
+                    let db =
+                        FactsDb::open_or_ingest_with_cache_root(&opts, repo, &default_cache_root())
+                            .map_err(|e| map_lib_err(&e))?;
+                    // Run unbounded so the true total is known, then cap in-tool
+                    // with the omitted disclosure (the analysis ranks over the
+                    // full set either way).
+                    let mut rows = refactoring_targets::run_refactoring_targets(&db, &opts)
+                        .map_err(|e| map_lib_err(&e))?;
+                    let total = rows.len();
+                    rows.truncate(cap);
+                    serialize_capped_rows(
+                        &rows,
+                        total,
+                        "highest-priority refactor targets first; raise limit (max 500) for the rest",
+                    )
+                },
             )
         })
         .await
@@ -644,35 +808,40 @@ impl CodeLoreServer {
         params: Parameters<FunctionXrayParams>,
     ) -> Result<String, ErrorData> {
         let repo_path = self.repo.clone();
+        let memo = self.memo.clone();
         let target = params.0.path.clone();
+        let params_json = serde_json::to_string(&params.0).map_err(internal)?;
         tokio::task::spawn_blocking(move || {
-            let opts = Options {
-                repo_path: repo_path.clone(),
-                ..Options::default()
-            };
-            let repo = GixRepo::open(&repo_path).map_err(|e| map_lib_err(&e))?;
-            // Resolve the path against the analyzed-file universe first: a typo
-            // or absolute path is a caller error, not a file "with no functions".
-            require_tracked_path(&repo, &target)?;
-            // A tracked file the function analyser does not support (not a
-            // Tier-1 language) legitimately yields no functions — say that,
-            // rather than returning a bare [] that reads like an empty result.
-            if Tier1Language::from_path(&target).is_none() {
-                let note = serde_json::json!({
-                    "functions": [],
-                    "note": format!(
-                        "{target} is tracked but not a Tier-1 source file (function analysis \
-                         covers Rust, Python, Java, JavaScript, TypeScript); no per-function \
-                         breakdown available"
-                    ),
-                });
-                return serde_json::to_string(&note).map_err(internal);
-            }
-            let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
-                .map_err(|e| map_lib_err(&e))?;
-            let rows = function_xray::run_function_xray(&db, &repo, &opts, &target)
-                .map_err(|e| map_lib_err(&e))?;
-            serde_json::to_string(&rows).map_err(internal)
+            memoized(&memo, &repo_path, "function_xray", &params_json, |repo, _head| {
+                let opts = Options {
+                    repo_path: repo_path.clone(),
+                    ..Options::default()
+                };
+                // Resolve the path against the analyzed-file universe first: a
+                // typo or absolute path is a caller error (propagated
+                // un-memoized), not a file "with no functions".
+                require_tracked_path(repo, &target)?;
+                // A tracked file the function analyser does not support (not a
+                // Tier-1 language) legitimately yields no functions — say that,
+                // rather than returning a bare [] that reads like an empty result.
+                if Tier1Language::from_path(&target).is_none() {
+                    let note = serde_json::json!({
+                        "functions": [],
+                        "note": format!(
+                            "{target} is tracked but not a Tier-1 source file (function analysis \
+                             covers Rust, Python, Java, JavaScript, TypeScript); no per-function \
+                             breakdown available"
+                        ),
+                    });
+                    return serde_json::to_string(&note).map_err(internal);
+                }
+                let db =
+                    FactsDb::open_or_ingest_with_cache_root(&opts, repo, &default_cache_root())
+                        .map_err(|e| map_lib_err(&e))?;
+                let rows = function_xray::run_function_xray(&db, repo, &opts, &target)
+                    .map_err(|e| map_lib_err(&e))?;
+                serde_json::to_string(&rows).map_err(internal)
+            })
         })
         .await
         .map_err(internal)?
@@ -698,6 +867,10 @@ impl CodeLoreServer {
         let repo_path = self.repo.clone();
         let defect_calibration = self.defect_calibration.clone();
         let allow_foreign_calibration = self.allow_foreign_calibration;
+        // Deliberately not memoized: the verdict depends on the current contents
+        // of `.codelore-thresholds.toml`, an on-disk config re-discovered every
+        // call that can be edited (or created) without a commit, so a HEAD-keyed
+        // entry could serve a stale verdict after a threshold edit.
         tokio::task::spawn_blocking(move || {
             let thresholds = Thresholds::discover(&repo_path).map_err(|e| map_lib_err(&e))?;
             if thresholds.is_empty() {
@@ -805,6 +978,11 @@ impl CodeLoreServer {
     ) -> Result<String, ErrorData> {
         let repo_path = self.repo.clone();
         let cap = resolve_row_cap(params.0.limit);
+        // Deliberately not memoized: the fusion joins the external-findings
+        // sidecar, an on-disk store rewritten by `codelore ingest-sarif` with no
+        // change to HEAD, and the DuckDB-backed sidecar exposes no cheap content
+        // digest to key on (its mtime is unreliable under read-time journaling),
+        // so a HEAD-only key could serve stale fusion after a re-ingest.
         tokio::task::spawn_blocking(move || {
             let cache_root = default_cache_root();
 
@@ -864,10 +1042,28 @@ impl CodeLoreServer {
         params: Parameters<ExplainFileParams>,
     ) -> Result<String, ErrorData> {
         let repo_path = self.repo.clone();
+        let memo = self.memo.clone();
         let target = params.0.path.clone();
+        let params_json = serde_json::to_string(&params.0).map_err(internal)?;
         let defect_calibration = self.defect_calibration.clone();
         let allow_foreign_calibration = self.allow_foreign_calibration;
         tokio::task::spawn_blocking(move || {
+            let repo = GixRepo::open(&repo_path).map_err(|e| map_lib_err(&e))?;
+            let head = repo.head_sha().map_err(|e| map_lib_err(&e))?;
+            let key = memo_key("explain_file", &params_json);
+
+            // The advisory narrative is an external, potentially-nondeterministic
+            // LLM call, so explain_file is memoized only in its deterministic
+            // no-LLM form: when the process has an LLM configured the memo is
+            // bypassed end to end and the narrative is produced fresh every call.
+            // The LLM configuration is read from the process environment, fixed
+            // for the server's lifetime.
+            let client = resolve_client(&LlmEnv::from_process_env());
+            let memoizable = client.is_err();
+            if memoizable && let Some(hit) = memo.get(&head, &key) {
+                return Ok(hit);
+            }
+
             // min_revs = 1 so any single named file resolves in its own dossier,
             // matching the `explain <path>` CLI surface.
             let opts = Options {
@@ -877,7 +1073,6 @@ impl CodeLoreServer {
                 allow_foreign_calibration,
                 ..Options::default()
             };
-            let repo = GixRepo::open(&repo_path).map_err(|e| map_lib_err(&e))?;
             let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
                 .map_err(|e| map_lib_err(&e))?;
             let sheet =
@@ -900,7 +1095,7 @@ impl CodeLoreServer {
             // Advisory narrative — best-effort. The tool never fails because the
             // LLM is unavailable: a resolution or narration error becomes
             // `narrative_error` alongside the always-present fact sheet.
-            let out = match resolve_client(&LlmEnv::from_process_env()) {
+            let out = match client {
                 Ok(client) => {
                     let canonical = sheet.to_canonical_text();
                     let values = sheet.numeric_values();
@@ -933,7 +1128,11 @@ impl CodeLoreServer {
                     "narrative_error": e.to_string(),
                 }),
             };
-            serde_json::to_string(&out).map_err(internal)
+            let serialized = serde_json::to_string(&out).map_err(internal)?;
+            if memoizable {
+                memo.put(&head, key, serialized.clone());
+            }
+            Ok(serialized)
         })
         .await
         .map_err(internal)?
@@ -956,28 +1155,43 @@ impl CodeLoreServer {
         params: Parameters<ChangeContextParams>,
     ) -> Result<String, ErrorData> {
         let repo_path = self.repo.clone();
+        let memo = self.memo.clone();
         let defect_calibration = self.defect_calibration.clone();
         let allow_foreign_calibration = self.allow_foreign_calibration;
         let paths = params.0.paths.clone();
+        // The calibration artifact is validated at startup and its path is fixed
+        // for the server's lifetime, so it is constant for the memo's lifetime
+        // and needs no place in the key; the briefing is a pure function of
+        // (HEAD, paths) within one process.
+        let params_json = serde_json::to_string(&params.0).map_err(internal)?;
         tokio::task::spawn_blocking(move || {
-            // min_revs = 1 so any single named file resolves in its briefing,
-            // matching the `change_context` lib contract.
-            let opts = Options {
-                repo_path: repo_path.clone(),
-                min_revs: 1,
-                defect_calibration,
-                allow_foreign_calibration,
-                ..Options::default()
-            };
-            let repo = GixRepo::open(&repo_path).map_err(|e| map_lib_err(&e))?;
-            let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
-                .map_err(|e| map_lib_err(&e))?;
-            // An empty or oversized path list surfaces as `InvalidOptions`
-            // (the CLI's exit-2 config/param bucket), which `map_lib_err`
-            // routes to a JSON-RPC `invalid_params` so the client sees it as
-            // bad input rather than an internal failure.
-            change_context::build_change_context(&db, &repo, &opts, &paths)
-                .map_err(|e| map_lib_err(&e))
+            memoized(
+                &memo,
+                &repo_path,
+                "change_context",
+                &params_json,
+                |repo, _head| {
+                    // min_revs = 1 so any single named file resolves in its briefing,
+                    // matching the `change_context` lib contract.
+                    let opts = Options {
+                        repo_path: repo_path.clone(),
+                        min_revs: 1,
+                        defect_calibration,
+                        allow_foreign_calibration,
+                        ..Options::default()
+                    };
+                    let db =
+                        FactsDb::open_or_ingest_with_cache_root(&opts, repo, &default_cache_root())
+                            .map_err(|e| map_lib_err(&e))?;
+                    // An empty or oversized path list surfaces as `InvalidOptions`
+                    // (the CLI's exit-2 config/param bucket), which `map_lib_err`
+                    // routes to a JSON-RPC `invalid_params` so the client sees it as
+                    // bad input rather than an internal failure — and, being an
+                    // error, it is never memoized.
+                    change_context::build_change_context(&db, repo, &opts, &paths)
+                        .map_err(|e| map_lib_err(&e))
+                },
+            )
         })
         .await
         .map_err(internal)?
@@ -1005,6 +1219,10 @@ impl CodeLoreServer {
         let repo_path = self.repo.clone();
         let defect_calibration = self.defect_calibration.clone();
         let allow_foreign_calibration = self.allow_foreign_calibration;
+        // Deliberately not memoized: this is a working-tree tool — it projects the
+        // uncommitted edits in `worktree_changes()` against HEAD, so its output
+        // changes with every unstaged keystroke and is never a function of the
+        // committed state alone.
         tokio::task::spawn_blocking(move || {
             let opts = Options {
                 repo_path: repo_path.clone(),
@@ -1195,6 +1413,7 @@ pub fn run_mcp_server(
                 repo,
                 defect_calibration,
                 allow_foreign_calibration,
+                memo: Arc::new(ResultMemo::default()),
             };
             let transport = rmcp::transport::io::stdio();
             let running = rmcp::service::serve_server(server, transport)
@@ -1211,12 +1430,106 @@ pub fn run_mcp_server(
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_ROW_CAP, MAX_ROW_CAP, map_lib_err, resolve_row_cap, serialize_capped_rows,
+        CodeHealthParams, DEFAULT_ROW_CAP, DeltaHealthParams, MAX_ROW_CAP, MEMO_CAPACITY,
+        ResultMemo, map_lib_err, memo_key, resolve_row_cap, serialize_capped_rows,
         skipped_check_gates,
     };
     use codelore_lib::CodeLoreError;
     use codelore_lib::cli_api::quality_gates::Thresholds;
     use serde_json::{Value, json};
+
+    /// Canonical key for a parameter struct the same way the tools build it:
+    /// serialize the already-parsed struct, so JSON object key order never leaks
+    /// into the key.
+    fn key_for<T: serde::Serialize>(tool: &str, params: &T) -> String {
+        memo_key(tool, &serde_json::to_string(params).unwrap())
+    }
+
+    #[test]
+    fn memo_key_is_independent_of_json_field_order() {
+        // Two orderings of the same single-field params (code_health keys off
+        // exactly this serialization).
+        let ch_ab: CodeHealthParams =
+            serde_json::from_str(r#"{"path":"src/a.rs","limit":5}"#).unwrap();
+        let ch_ba: CodeHealthParams =
+            serde_json::from_str(r#"{"limit":5,"path":"src/a.rs"}"#).unwrap();
+        assert_eq!(
+            key_for("code_health", &ch_ab),
+            key_for("code_health", &ch_ba)
+        );
+
+        // A multi-field struct exercises reordering across several keys.
+        let delta_ordered: DeltaHealthParams =
+            serde_json::from_str(r#"{"base":"x","head":"y","limit":3}"#).unwrap();
+        let delta_shuffled: DeltaHealthParams =
+            serde_json::from_str(r#"{"limit":3,"head":"y","base":"x"}"#).unwrap();
+        assert_eq!(
+            key_for("delta_health", &delta_ordered),
+            key_for("delta_health", &delta_shuffled),
+        );
+
+        // Different params (or different tools) must NOT collide.
+        let ch_other: CodeHealthParams =
+            serde_json::from_str(r#"{"path":"src/a.rs","limit":6}"#).unwrap();
+        assert_ne!(
+            key_for("code_health", &ch_ab),
+            key_for("code_health", &ch_other)
+        );
+        assert_ne!(key_for("code_health", &ch_ab), key_for("hotspots", &ch_ab));
+    }
+
+    #[test]
+    fn memo_serves_hit_at_same_head_and_clears_on_head_change() {
+        let memo = ResultMemo::default();
+        // First access at a head is always a miss and adopts that head as scope.
+        assert!(memo.get("head1", "k").is_none());
+        memo.put("head1", "k".to_string(), "v1".to_string());
+        assert_eq!(memo.get("head1", "k").as_deref(), Some("v1"));
+
+        // A different head drops every entry, so the same key now misses; the
+        // new head becomes the scope and a fresh value can be stored.
+        assert!(memo.get("head2", "k").is_none());
+        memo.put("head2", "k".to_string(), "v2".to_string());
+        assert_eq!(memo.get("head2", "k").as_deref(), Some("v2"));
+
+        // Returning to the old head cannot resurrect its cleared entry.
+        assert!(memo.get("head1", "k").is_none());
+    }
+
+    #[test]
+    fn memo_put_is_dropped_when_scope_advanced_during_compute() {
+        // Models a HEAD move landing between one call's get (miss at h1) and its
+        // put: a concurrent call advanced the scope to h2, so the late h1 result
+        // must not be stored under the h2 scope.
+        let memo = ResultMemo::default();
+        assert!(memo.get("h1", "k").is_none()); // scope = h1
+        assert!(memo.get("h2", "k").is_none()); // scope = h2 (concurrent advance)
+        memo.put("h1", "k".to_string(), "stale".to_string());
+        assert!(
+            memo.get("h2", "k").is_none(),
+            "a put for a superseded head must not land in the current scope"
+        );
+    }
+
+    #[test]
+    fn memo_is_bounded_and_clears_when_full() {
+        let memo = ResultMemo::default();
+        assert!(memo.get("h", "seed").is_none()); // adopt scope
+        for i in 0..=MEMO_CAPACITY {
+            memo.put("h", format!("key{i}"), "v".to_string());
+        }
+        // The insert that overflowed the cap cleared the map first, so the
+        // earliest key is gone and only the overflowing key survives.
+        assert!(
+            memo.get("h", "key0").is_none(),
+            "the oldest entry must be evicted once the cap is exceeded"
+        );
+        assert_eq!(
+            memo.get("h", &format!("key{MEMO_CAPACITY}")).as_deref(),
+            Some("v"),
+            "the entry that triggered the clear must itself be retained"
+        );
+    }
 
     #[test]
     fn row_cap_defaults_and_clamps() {
