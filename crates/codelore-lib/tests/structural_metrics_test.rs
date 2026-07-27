@@ -74,12 +74,14 @@ fn ingested_cycle_repo() -> (tempfile::TempDir, FactsDb, codelore_lib::Options) 
     (dir, db, opts)
 }
 
-/// Build a fixture with a known resolved/unresolved import mix: two
-/// in-repo `use crate::…` edges that resolve to tracked files, and two
-/// `use std::…` edges that legitimately point outside the repo and stay
-/// unresolved (`target_path` NULL). The `imports` table therefore holds
-/// four rows, exactly half resolved → `import_resolution_rate` = 0.5.
-fn ingested_resolution_mix_repo() -> (tempfile::TempDir, FactsDb, codelore_lib::Options) {
+/// Build a fixture whose four imports separate all three disclosure signals:
+/// two `use crate::…` edges that resolve to tracked files, one `use
+/// crate::missing` edge that is repo-relative but points at a module with no
+/// tracked file (a *first-party candidate the resolver missed*), and one `use
+/// std::…` edge that legitimately points outside the repo. So:
+/// resolved = 2, first-party candidates = 3 (the two resolved + the missed
+/// relative one), total = 4.
+fn ingested_first_party_mix_repo() -> (tempfile::TempDir, FactsDb, codelore_lib::Options) {
     let dir = tempfile::tempdir().expect("tempdir");
     let p = dir.path();
     git(p, &["init", "-b", "main", "--quiet"]);
@@ -94,13 +96,11 @@ fn ingested_resolution_mix_repo() -> (tempfile::TempDir, FactsDb, codelore_lib::
     write(
         p,
         "src/a.rs",
-        "use crate::b;\nuse std::fmt;\npub fn a() { b::b(); }\n",
+        // crate::b resolves; crate::missing is repo-relative but has no
+        // tracked file (resolver miss); std::fmt is genuinely external.
+        "use crate::b;\nuse crate::missing;\nuse std::fmt;\npub fn a() { b::b(); }\n",
     );
-    write(
-        p,
-        "src/b.rs",
-        "use crate::a;\nuse std::io;\npub fn b() { a::a(); }\n",
-    );
+    write(p, "src/b.rs", "use crate::a;\npub fn b() { a::a(); }\n");
     git(p, &["add", "."]);
     let status = Command::new("git")
         .arg("-C")
@@ -201,28 +201,88 @@ fn architecture_metrics_report_the_cycle_and_type() {
     assert!((0.0..=1.0).contains(&pc), "propagation cost in [0,1]: {pc}");
 }
 
-/// `import_resolution_rate` discloses the fraction of import *statements*
-/// whose target resolved to an in-repo file — the coverage the structural
-/// metrics above are computed over. The fixture's four imports split two
-/// resolved (`use crate::…`) / two unresolved (`use std::…`), so the row
-/// is present and reads 0.5.
+/// The two companion disclosure rows split the headline rate so a low
+/// `import_resolution_rate` can't be misread as a weak resolver. Over the
+/// first-party-mix fixture (resolved 2, first-party candidates 3, total 4):
+/// `import_resolution_rate` = 2/4 = 0.5, `first_party_import_share` = 3/4 =
+/// 0.75, and `resolution_rate_first_party` = 2/3 ≈ 0.6667 — the resolver
+/// covered two of the three imports that actually aim at the repo, a far
+/// higher number than the 0.5 headline the third-party `std::fmt` drags down.
 #[test]
-fn architecture_metrics_discloses_import_resolution_rate() {
-    let (_dir, db, opts) = ingested_resolution_mix_repo();
+fn architecture_metrics_splits_resolution_into_first_party_signals() {
+    let (_dir, db, opts) = ingested_first_party_mix_repo();
     let rows = run_architecture_metrics(&db, &opts).expect("run architecture-metrics");
     let m: HashMap<&str, &str> = rows
         .iter()
         .map(|r| (r.metric.as_str(), r.value.as_str()))
         .collect();
 
-    let rate: f64 = m
-        .get("import_resolution_rate")
-        .expect("import_resolution_rate row present")
-        .parse()
-        .expect("import_resolution_rate parses as a number");
+    assert_eq!(
+        m.get("import_resolution_rate"),
+        Some(&"0.5000"),
+        "resolved 2 / total 4: {m:?}"
+    );
+    assert_eq!(
+        m.get("first_party_import_share"),
+        Some(&"0.7500"),
+        "first-party candidates 3 / total 4: {m:?}"
+    );
+    assert_eq!(
+        m.get("resolution_rate_first_party"),
+        Some(&"0.6667"),
+        "resolved 2 / first-party candidates 3: {m:?}"
+    );
+}
+
+/// When a repo has imports but none are first-party candidates (every import
+/// is an unresolved absolute — external crates / stdlib only), the
+/// `resolution_rate_first_party` rate is undefined (0/0) and must be OMITTED
+/// rather than rendered as a misleading `0.00`. The share and headline rows
+/// still appear at 0. The fixture's lone file imports only `std::…`.
+#[test]
+fn architecture_metrics_omits_first_party_rate_when_no_candidates() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let p = dir.path();
+    git(p, &["init", "-b", "main", "--quiet"]);
+    git(p, &["config", "user.email", "m@example.com"]);
+    git(p, &["config", "user.name", "M"]);
+    write(
+        p,
+        "Cargo.toml",
+        "[package]\nname=\"m\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
+    );
+    write(
+        p,
+        "src/lib.rs",
+        "use std::fmt;\nuse std::io;\npub fn f() {}\n",
+    );
+    git(p, &["add", "."]);
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(p)
+        .args(["commit", "-m", "init", "--quiet"])
+        .env("GIT_AUTHOR_DATE", "2026-01-01T10:00:00Z")
+        .env("GIT_COMMITTER_DATE", "2026-01-01T10:00:00Z")
+        .status()
+        .expect("spawn git commit");
+    assert!(status.success(), "git commit failed");
+
+    let repo = GixRepo::open(p).expect("open repo");
+    let db = FactsDb::new_in_memory().expect("in-memory db");
+    let opts = permissive_coupling_opts(p.to_path_buf());
+    db.ingest(&repo, &opts).expect("ingest repo");
+
+    let rows = run_architecture_metrics(&db, &opts).expect("run architecture-metrics");
+    let m: HashMap<&str, &str> = rows
+        .iter()
+        .map(|r| (r.metric.as_str(), r.value.as_str()))
+        .collect();
+
+    assert_eq!(m.get("import_resolution_rate"), Some(&"0.0000"), "{m:?}");
+    assert_eq!(m.get("first_party_import_share"), Some(&"0.0000"), "{m:?}");
     assert!(
-        (rate - 0.5).abs() < 1e-9,
-        "two of four imports resolve → 0.5, got {rate}: {m:?}"
+        !m.contains_key("resolution_rate_first_party"),
+        "undefined first-party rate must be omitted, never a 0.00: {m:?}"
     );
 }
 
@@ -279,9 +339,11 @@ fn architecture_metrics_additivity_without_repo_metrics_pool() {
             "files",
             "architecture_type",
             "import_resolution_rate",
+            "first_party_import_share",
+            "resolution_rate_first_party",
         ],
-        "no active repo_metrics pool -> the base rows plus the \
-         import-resolution-rate disclosure, no corpus rows: {names:?}"
+        "no active repo_metrics pool -> the base rows plus the three \
+         import-resolution disclosure rows, no corpus rows: {names:?}"
     );
 }
 
@@ -385,12 +447,14 @@ fn architecture_metrics_emits_corpus_percentiles_when_pool_active() {
             "files",
             "architecture_type",
             "import_resolution_rate",
+            "first_party_import_share",
+            "resolution_rate_first_party",
             "corpus_percentile:propagation_cost",
             "corpus_percentile:cycle_file_share",
             "corpus_n",
         ],
         "the corpus rows must append, in order, after the base rows and the \
-         import-resolution-rate disclosure: {names:?}"
+         three import-resolution disclosure rows: {names:?}"
     );
 
     let m: HashMap<&str, &str> = rows

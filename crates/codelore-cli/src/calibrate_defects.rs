@@ -170,6 +170,20 @@ fn format_validation_evidence(
         "calibrate-defects: {} defect-implicated file(s) across {} linked defect(s)",
         v.implicated_files, v.linked_defects,
     ));
+    // Mining-guard disclosure: how many fix commits the SZZ guards excluded,
+    // so a reader sees the mined-vs-excluded split. These counts live only in
+    // the command output (the `MiningStats` guard fields are `#[serde(skip)]`),
+    // never in the artifact — so `DEFECT_FORMAT_VERSION` stays put.
+    let mining = &art.mining;
+    lines.push(format!(
+        "calibrate-defects: mining guards - {} fix commit(s) examined, {} excluded as \
+         tangled (>{} files or >{} changed lines), {} whole-file deletion(s) skipped as ghost",
+        mining.fixes_found,
+        mining.fixes_excluded_tangled,
+        codelore_lib::defect_calibration::szz::TANGLED_MAX_FILES,
+        codelore_lib::defect_calibration::szz::TANGLED_MAX_CHURN,
+        mining.ghost_files_skipped,
+    ));
     lines.push(format!(
         "calibrate-defects: {}",
         tuning_verdict(&art.tuning)
@@ -716,5 +730,36 @@ mod tests {
         // An absent metric must never render as a real-looking zero score.
         assert!(!out.contains("0.00"), "absent metric read as 0.00: {out}");
         assert!(!out.contains("0.000"), "absent metric read as 0.000: {out}");
+    }
+
+    #[test]
+    fn validation_evidence_summary_discloses_mining_guards() {
+        use codelore_lib::defect_calibration::szz::{TANGLED_MAX_CHURN, TANGLED_MAX_FILES};
+        use codelore_lib::defect_calibration::{MiningStats, TuningDecision, ValidationMetrics};
+        let mut art = artifact_with(
+            ValidationMetrics::default(),
+            TuningDecision::DefaultsKept {
+                reason: "too few linked defects".to_string(),
+                auc_validation_default: None,
+                auc_validation_tuned: None,
+            },
+        );
+        art.mining = MiningStats {
+            fixes_found: 50,
+            fixes_excluded_tangled: 4,
+            ghost_files_skipped: 3,
+            ..MiningStats::default()
+        };
+        let out = format_validation_evidence(&art).join("\n");
+        assert!(out.contains("50 fix commit(s) examined"), "{out}");
+        assert!(out.contains("4 excluded as tangled"), "{out}");
+        assert!(
+            out.contains("3 whole-file deletion(s) skipped as ghost"),
+            "{out}"
+        );
+        // The thresholds are surfaced from the shipped consts, not hard-coded.
+        let thresholds =
+            format!(">{TANGLED_MAX_FILES} files or >{TANGLED_MAX_CHURN} changed lines");
+        assert!(out.contains(&thresholds), "{out}");
     }
 }
