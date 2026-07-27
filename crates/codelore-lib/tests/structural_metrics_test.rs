@@ -389,6 +389,27 @@ fn architecture_metrics_default_embedded_artifact_emits_corpus_rows() {
         Some(pool_len.to_string().as_str()),
         "corpus_n must state the embedded pool size"
     );
+
+    // The additive Wilson CI rows accompany the percentile, stay in [0, 1], and
+    // bracket the point estimate.
+    let lo: f64 = m
+        .get("corpus_percentile:propagation_cost:ci_low")
+        .expect("ci_low row present alongside the percentile")
+        .parse()
+        .expect("ci_low parses");
+    let hi: f64 = m
+        .get("corpus_percentile:propagation_cost:ci_high")
+        .expect("ci_high row present alongside the percentile")
+        .parse()
+        .expect("ci_high parses");
+    assert!(
+        (0.0..=1.0).contains(&lo) && (0.0..=1.0).contains(&hi),
+        "CI bounds must be in [0, 1], got [{lo}, {hi}]"
+    );
+    assert!(
+        lo <= p && p <= hi,
+        "CI must bracket the percentile p={p}: [{lo}, {hi}]"
+    );
 }
 
 /// With a synthetic calibration artifact carrying a `repo_metrics` section
@@ -413,6 +434,11 @@ fn architecture_metrics_default_embedded_artifact_emits_corpus_rows() {
 ///   `"1.00"`.
 /// - `corpus_n` uses the `propagation_cost` pool's length (3), per the
 ///   documented precedence rule.
+/// - A Wilson 95% CI wraps each percentile at that pool's `n`:
+///   `propagation_cost` (p = 2/3, n = 3) → centre ≈ 0.573, radius ≈ 0.365 →
+///   `[0.21, 0.94]`; `cycle_file_share` (p = 1.0, n = 2) → centre ≈ 0.671,
+///   radius ≈ 0.329 →
+///   `[0.34, 1.00]` (upper bound clamps to 1.0).
 #[test]
 fn architecture_metrics_emits_corpus_percentiles_when_pool_active() {
     let (_dir, db, mut opts) = ingested_cycle_repo();
@@ -450,11 +476,16 @@ fn architecture_metrics_emits_corpus_percentiles_when_pool_active() {
             "first_party_import_share",
             "resolution_rate_first_party",
             "corpus_percentile:propagation_cost",
+            "corpus_percentile:propagation_cost:ci_low",
+            "corpus_percentile:propagation_cost:ci_high",
             "corpus_percentile:cycle_file_share",
+            "corpus_percentile:cycle_file_share:ci_low",
+            "corpus_percentile:cycle_file_share:ci_high",
             "corpus_n",
         ],
-        "the corpus rows must append, in order, after the base rows and the \
-         three import-resolution disclosure rows: {names:?}"
+        "the corpus rows (percentile + its paired Wilson CI) must append, in \
+         order, after the base rows and the three import-resolution \
+         disclosure rows: {names:?}"
     );
 
     let m: HashMap<&str, &str> = rows
@@ -475,5 +506,29 @@ fn architecture_metrics_emits_corpus_percentiles_when_pool_active() {
         m.get("corpus_n"),
         Some(&"3"),
         "corpus_n uses the propagation_cost pool length: {m:?}"
+    );
+
+    // Hand-computed Wilson 95% intervals on the SAME midpoint-rank percentiles,
+    // at each pool's own `n` (3 and 2 repos) — deliberately wide, the honest
+    // read of a tiny corpus.
+    assert_eq!(
+        m.get("corpus_percentile:propagation_cost:ci_low"),
+        Some(&"0.21"),
+        "Wilson lower bound for p=2/3, n=3: {m:?}"
+    );
+    assert_eq!(
+        m.get("corpus_percentile:propagation_cost:ci_high"),
+        Some(&"0.94"),
+        "Wilson upper bound for p=2/3, n=3: {m:?}"
+    );
+    assert_eq!(
+        m.get("corpus_percentile:cycle_file_share:ci_low"),
+        Some(&"0.34"),
+        "Wilson lower bound for p=1.0, n=2: {m:?}"
+    );
+    assert_eq!(
+        m.get("corpus_percentile:cycle_file_share:ci_high"),
+        Some(&"1.00"),
+        "Wilson upper bound clamps to 1.0 for p=1.0, n=2: {m:?}"
     );
 }

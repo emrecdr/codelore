@@ -191,6 +191,16 @@ pub struct CodeHealthRow {
     /// when true.
     #[serde(skip_serializing_if = "std::ops::Not::not", default)]
     pub beyond_corpus: bool,
+    /// Wilson 95% lower / upper bound for `corpus_percentile`, reflecting the
+    /// sampling uncertainty of the reference pool (a finite corpus sample, not
+    /// the population) — not measurement error in the file's own metrics. `Some`
+    /// exactly when `corpus_percentile` is `Some`; the pool size is the file
+    /// language's pooled per-function sample count. Serialized only when present,
+    /// so a run without an active corpus stays byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub corpus_percentile_ci_low: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub corpus_percentile_ci_high: Option<f64>,
 }
 
 const SQL: &str = "
@@ -707,6 +717,19 @@ fn apply_corpus_lens(
         if let Some((p, beyond)) = file_corpus_lens(&art, language.as_str(), &metrics) {
             row.corpus_percentile = Some(p);
             row.beyond_corpus = beyond;
+            // Wilson interval on the SAME percentile estimate, at the honest
+            // pool size = the language's pooled per-function sample count. The
+            // language cleared the trust floor inside `file_corpus_lens`, so the
+            // same-floored `language_sample_functions` resolves to `Some` here.
+            if let Some(n) = crate::calibration::language_sample_functions(&art, language.as_str())
+            {
+                let (lo, hi) = crate::stats::wilson_ci_from_proportion(
+                    p,
+                    u32::try_from(n).unwrap_or(u32::MAX),
+                );
+                row.corpus_percentile_ci_low = Some(lo);
+                row.corpus_percentile_ci_high = Some(hi);
+            }
         }
     }
     Ok(())
@@ -812,6 +835,8 @@ pub fn run_code_health_scoped(
                 // Populated by the additive corpus pass below (or left absent).
                 corpus_percentile: None,
                 beyond_corpus: false,
+                corpus_percentile_ci_low: None,
+                corpus_percentile_ci_high: None,
             })
         })
         .map_err(|e| CodeLoreError::Analysis(format!("query code-health: {e}")))?;

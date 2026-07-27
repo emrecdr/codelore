@@ -30,7 +30,7 @@ pub(crate) fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
         ),
         (
             "code-health",
-            "code-health composite: biomarker structural risk (Complex/Large Method, God Class, DRY, Shotgun Surgery, Deep Nesting, Many Args, Complex Conditional) fused with behavioral signal (Nagappan & Ball 2005 churn + Mockus & Herbsleb 2002 ownership); coupling centrality enters once via the Shotgun Surgery biomarker (Tornhill 2018); self-relative percentile banding (Alves/Ypma/Visser 2010) plus an additive corpus-relative percentile when a calibration artifact is active",
+            "code-health composite: biomarker structural risk (Complex/Large Method, God Class, DRY, Shotgun Surgery, Deep Nesting, Many Args, Complex Conditional) fused with behavioral signal (Nagappan & Ball 2005 churn + Mockus & Herbsleb 2002 ownership); coupling centrality enters once via the Shotgun Surgery biomarker (Tornhill 2018); self-relative percentile banding (Alves/Ypma/Visser 2010) plus an additive corpus-relative percentile when a calibration artifact is active, each corpus percentile paired with a Wilson 95% confidence interval that reflects the reference pool's sampling uncertainty (not measurement error in the file)",
             "100 × (1 − 0.50·structural_risk − 0.30·churn − 0.20·ownership_fv), where structural_risk is a weighted sum of biomarker intensities (complex-method 0.22, god-class 0.18, large-method 0.12, dry 0.12, shotgun-surgery 0.12, deep-nesting 0.10, many-args 0.07, complex-conditional 0.07); band from structural_risk thresholds (≥0.55 red, ≥0.28 yellow, else green); percentile = per-language PERCENT_RANK of structural_risk.",
             "See analyses/code_health.rs.",
         ),
@@ -115,7 +115,7 @@ pub(crate) fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
         (
             "architecture-metrics",
             "Lakos 1996 (CCD/ACD/NCCD) + MacCormack/Rusnak/Baldwin 2006/2014",
-            "Repo-level (metric, value) rows: propagation_cost = density of the transitive-closure matrix; acd = mean transitive dependency set size; nccd = CCD / balanced-binary-tree CCD (<1 flat, >1 layered, >2 likely cyclic); dependency_cycles, largest_cycle; architecture_type = hierarchical / core-periphery / multi-core.",
+            "Repo-level (metric, value) rows: propagation_cost = density of the transitive-closure matrix; acd = mean transitive dependency set size; nccd = CCD / balanced-binary-tree CCD (<1 flat, >1 layered, >2 likely cyclic); dependency_cycles, largest_cycle; architecture_type = hierarchical / core-periphery / multi-core. When a calibration artifact carries repo-level corpus pools, corpus_percentile:propagation_cost / :cycle_file_share rows locate this repo against the corpus, each paired with a Wilson 95% confidence interval (:ci_low / :ci_high) for the finite pool's sampling uncertainty; corpus_n reports the pool size.",
             "See analyses/architecture_metrics.rs.",
         ),
         (

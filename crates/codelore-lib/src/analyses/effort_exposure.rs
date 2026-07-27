@@ -82,34 +82,6 @@ const BANDS_DDL: &str = "
     );
 ";
 
-/// Wilson score 95% confidence interval for a proportion `k / n`.
-///
-/// Returns `(low, high)` in `[0.0, 1.0]`. Returns `(0.0, 0.0)` when `n = 0`
-/// (undefined proportion). Edge cases `k = 0` and `k = n` are handled
-/// correctly by the formula without special-casing.
-///
-/// Standard Wilson score interval (Wilson 1927); z = 1.96 for 95% coverage.
-///
-/// Parameters are `u32` (not `u64`) to avoid precision-loss on the f64
-/// conversion — all realistic commit counts fit comfortably in 32 bits.
-pub(crate) fn wilson_ci(k: u32, n: u32) -> (f64, f64) {
-    if n == 0 {
-        return (0.0, 0.0);
-    }
-    let k = f64::from(k);
-    let n = f64::from(n);
-    let z = 1.96_f64;
-    let z2 = z * z;
-    let p_hat = k / n;
-    let denom = 1.0 + z2 / n;
-    let centre = (p_hat + z2 / (2.0 * n)) / denom;
-    let radius = (z / denom) * (p_hat * (1.0 - p_hat) / n + z2 / (4.0 * n * n)).sqrt();
-    (
-        f64::max(0.0, centre - radius),
-        f64::min(1.0, centre + radius),
-    )
-}
-
 /// Fetch per-file SLOC totals from `complexity_metrics` (HEAD snapshot).
 ///
 /// `SUM` collapses multiple entity rows (functions / methods) per file into one
@@ -275,7 +247,7 @@ pub fn run_effort_exposure_with_health(
         let (band, files, loc_share_pct, commit_share_pct, churn_share_pct, k, n) =
             r.map_err(|e| CodeLoreError::Analysis(format!("collect effort-exposure: {e}")))?;
         let (commit_share_ci_low, commit_share_ci_high) =
-            wilson_ci(u32::try_from(k).unwrap_or(0), u32::try_from(n).unwrap_or(0));
+            crate::stats::wilson_ci(u32::try_from(k).unwrap_or(0), u32::try_from(n).unwrap_or(0));
         out.push(EffortExposureRow {
             band,
             files,
@@ -582,57 +554,10 @@ fn decompose_red_churn<R: Repo>(
 
 #[cfg(test)]
 mod tests {
-    use super::{EffortExposureRow, populate_bands_table, wilson_ci};
+    use super::{EffortExposureRow, populate_bands_table};
     use crate::analyses::code_health::CodeHealthRow;
     use crate::quality_gates::evaluate_effort_exposure_rows;
     use std::collections::HashMap;
-
-    #[test]
-    fn wilson_ci_k_zero() {
-        let (lo, hi) = wilson_ci(0, 100);
-        assert!(lo >= 0.0, "lo must be ≥ 0: {lo}");
-        assert!(
-            hi > 0.0 && hi < 0.05,
-            "hi for k=0/n=100 should be small: {hi}"
-        );
-    }
-
-    #[test]
-    fn wilson_ci_k_equals_n() {
-        let (lo, hi) = wilson_ci(100, 100);
-        assert!(lo > 0.95 && lo <= 1.0, "lo for k=n should be near 1: {lo}");
-        assert!(
-            (hi - 1.0).abs() < 1e-9,
-            "hi for k=n should be exactly 1: {hi}"
-        );
-    }
-
-    #[test]
-    fn wilson_ci_half() {
-        let (lo, hi) = wilson_ci(50, 100);
-        // p_hat = 0.5; Wilson CI for 0.5 with n=100, z=1.96 ≈ [0.401, 0.599]
-        assert!(lo > 0.39 && lo < 0.50, "lo for k=50/n=100: {lo}");
-        assert!(hi > 0.50 && hi < 0.61, "hi for k=50/n=100: {hi}");
-        assert!(lo < hi, "interval must be non-empty");
-    }
-
-    #[test]
-    fn wilson_ci_n_zero_returns_zeros() {
-        let (lo, hi) = wilson_ci(0, 0);
-        assert_eq!((lo, hi), (0.0, 0.0));
-    }
-
-    #[test]
-    fn wilson_ci_interval_contains_p_hat() {
-        let k = 30_u32;
-        let n = 100_u32;
-        let (lo, hi) = wilson_ci(k, n);
-        let p_hat = f64::from(k) / f64::from(n);
-        assert!(
-            lo <= p_hat && p_hat <= hi,
-            "interval must contain p_hat={p_hat}: [{lo}, {hi}]"
-        );
-    }
 
     /// Verifies that `populate_bands_table` correctly stores red-band entries
     /// and that the aggregation SQL produces a `red` row with a positive
@@ -694,6 +619,8 @@ mod tests {
                 percentile: 0.95,
                 corpus_percentile: None,
                 beyond_corpus: false,
+                corpus_percentile_ci_low: None,
+                corpus_percentile_ci_high: None,
             },
             CodeHealthRow {
                 path: "src/ok.rs".into(),
@@ -704,6 +631,8 @@ mod tests {
                 percentile: 0.50,
                 corpus_percentile: None,
                 beyond_corpus: false,
+                corpus_percentile_ci_low: None,
+                corpus_percentile_ci_high: None,
             },
             CodeHealthRow {
                 path: "src/good.rs".into(),
@@ -714,6 +643,8 @@ mod tests {
                 percentile: 0.10,
                 corpus_percentile: None,
                 beyond_corpus: false,
+                corpus_percentile_ci_low: None,
+                corpus_percentile_ci_high: None,
             },
         ];
 

@@ -251,6 +251,15 @@ fn code_health_section(db: &FactsDb, opts: &Options, path: &str) -> Result<Secti
     ];
     if let Some(corpus) = row.corpus_percentile {
         facts.push(("corpus_percentile".to_string(), fmt_num(corpus)));
+        // Wilson 95% interval on that percentile — the corpus is a finite
+        // sample, so the rank carries sampling uncertainty, not a point value.
+        if let (Some(lo), Some(hi)) = (row.corpus_percentile_ci_low, row.corpus_percentile_ci_high)
+        {
+            facts.push((
+                "corpus_percentile_ci".to_string(),
+                format!("{}–{}", fmt_num(lo), fmt_num(hi)),
+            ));
+        }
     }
     facts.push(("cognitive".to_string(), fmt_num(row.cognitive)));
     Ok(("code-health".to_string(), facts))

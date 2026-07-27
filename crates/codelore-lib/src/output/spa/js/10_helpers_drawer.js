@@ -735,6 +735,12 @@
       if (ch.corpus_percentile != null) {
         var pct = Math.round(ch.corpus_percentile * 100);
         corpusPctCell = pct + '%' + (ch.beyond_corpus ? '+' : '');
+        // Wilson 95% interval, when present — the corpus pool's sampling
+        // uncertainty on the percentile, appended to the same line.
+        if (ch.corpus_percentile_ci_low != null && ch.corpus_percentile_ci_high != null) {
+          corpusPctCell += ' [' + Math.round(ch.corpus_percentile_ci_low * 100) + '–' +
+            Math.round(ch.corpus_percentile_ci_high * 100) + '%]';
+        }
       } else {
         corpusPctCell = '—';
       }
