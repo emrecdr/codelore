@@ -412,3 +412,43 @@ fn equal_fragmentation_rows_are_ordered_deterministically_by_entity() {
         "tied fragmentation rows must be ordered deterministically by entity ASC"
     );
 }
+
+/// `cochange_entropy` is a floating-point SUM. `DuckDB` parallelises aggregation
+/// and float addition is non-associative, so an unordered SUM can wobble by
+/// ~1 ULP between runs and break byte-for-byte reproducibility. The ordered
+/// aggregate in the entropy CTE pins one value, so re-running the analysis
+/// must yield byte-identical rows every time. Uses `coupling_repo` because it
+/// guarantees real co-change edges (non-trivial entropy terms).
+#[test]
+fn coordination_needs_output_is_run_to_run_identical() {
+    let fixture = codelore_lib::test_support::coupling_repo::build();
+    let db = ingest(fixture.dir.path());
+    let opts = Options {
+        repo_path: fixture.dir.path().to_path_buf(),
+        min_revs: 1,
+        window_days: 365,
+        ..Options::default()
+    };
+
+    // Debug renders each f64 at shortest round-trip precision (Ryū), so a
+    // 1-ULP drift in any entropy term produces a different string — the
+    // comparison is exact at float granularity, no serde dependency needed.
+    let baseline = format!(
+        "{:?}",
+        run_coordination_needs(&db, &opts).expect("run coordination-needs")
+    );
+    assert!(
+        baseline.contains("cochange_entropy"),
+        "fixture must exercise the entropy term"
+    );
+    for i in 0..8 {
+        let again = format!(
+            "{:?}",
+            run_coordination_needs(&db, &opts).expect("re-run coordination-needs")
+        );
+        assert_eq!(
+            again, baseline,
+            "coordination-needs output must be identical across runs (iteration {i})"
+        );
+    }
+}

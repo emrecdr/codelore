@@ -3,7 +3,6 @@
 //! tables, enabling the health timeline to build a `HealthScanCtx` that
 //! points at historical data instead of the HEAD tables.
 
-use crate::analyses::import_graph::ImportGraph;
 use crate::{CodeLoreError, Result};
 
 use super::FactsDb;
@@ -258,16 +257,17 @@ fn insert_complexity_rows(
     })
 }
 
-/// Write the resolved edges of `graph` into a freshly-created temporary table
-/// named `dest_table`. The table has the same column shape as `imports`
-/// (`rev, src_path, target, resolved, target_path, kind`) without the FK
-/// constraint on `rev`.
+/// Write resolved `(src_path, target_path)` import `edges` into a
+/// freshly-created temporary table named `dest_table`. The table has the same
+/// column shape as `imports` (`rev, src_path, target, resolved, target_path,
+/// kind`) without the FK constraint on `rev`.
 ///
-/// `ImportGraph` carries only resolved edges (built from
-/// `WHERE target_path IS NOT NULL`), so every row lands with
-/// `resolved = TRUE`, `kind = 'absolute'`, and `target = target_path`.
-/// The `rev` column is set to `"_at_rev_"` — a stable placeholder that
-/// the god-class and biomarker CTEs never filter on.
+/// The caller passes the resolved edges directly (e.g.
+/// `ImportGraph::resolved_edges`) so this `facts::ingest` helper never names
+/// an `analyses` type. Every row lands with `resolved = TRUE`,
+/// `kind = 'absolute'`, and `target = target_path`; the `rev` column is set to
+/// `"_at_rev_"` — a stable placeholder the god-class and biomarker CTEs never
+/// filter on.
 ///
 /// Consequence for callers: the live `imports` table also holds
 /// *unresolved* external edges (`resolved = FALSE`, e.g. std-lib / package
@@ -282,7 +282,7 @@ fn insert_complexity_rows(
 /// counts external fan-out.
 pub fn materialize_imports_at_rev(
     db: &FactsDb,
-    graph: &ImportGraph,
+    edges: &[(&str, &str)],
     dest_table: &str,
 ) -> Result<()> {
     use duckdb::types::Value;
@@ -301,33 +301,24 @@ pub fn materialize_imports_at_rev(
         )"
     ))?;
 
-    if graph.is_empty() {
+    if edges.is_empty() {
         return Ok(());
     }
 
-    // Flatten the adjacency lists into a single edge stream (adjacency order),
-    // then drain in fixed-size multi-row INSERT batches.
-    let mut edges: Vec<(&String, &String)> = Vec::new();
-    for (u, neighbors) in graph.adj.iter().enumerate() {
-        let src_path = &graph.id_to_path[u];
-        for &v in neighbors {
-            edges.push((src_path, &graph.id_to_path[v]));
-        }
-    }
-
+    // Drain the resolved edges in fixed-size multi-row INSERT batches.
     drain_batched(
         db,
         dest_table,
         COLS,
-        &edges,
+        edges,
         |&(src_path, target_path), values| {
             values.push(Value::Text("_at_rev_".to_string()));
-            values.push(Value::Text(src_path.clone()));
+            values.push(Value::Text(src_path.to_string()));
             // resolved path used as the raw target string too.
-            values.push(Value::Text(target_path.clone()));
-            // resolved = TRUE — ImportGraph only holds resolved edges.
+            values.push(Value::Text(target_path.to_string()));
+            // resolved = TRUE — only resolved edges are passed in.
             values.push(Value::Boolean(true));
-            values.push(Value::Text(target_path.clone())); // target_path
+            values.push(Value::Text(target_path.to_string())); // target_path
             values.push(Value::Text("absolute".to_string())); // kind
         },
     )

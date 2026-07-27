@@ -210,10 +210,27 @@ pub fn run_clone_summary(db: &crate::facts::FactsDb) -> Result<Vec<CloneSummary>
 /// the count of revisions that touched the path during the month.
 /// Empty `paths` returns an empty Vec — the widget renders nothing.
 #[tracing::instrument(name = "dashboard-trends", skip_all)]
-pub fn run_trends(db: &crate::facts::FactsDb, paths: &[String]) -> Result<Vec<TrendPoint>> {
+pub fn run_trends(
+    db: &crate::facts::FactsDb,
+    opts: &crate::Options,
+    paths: &[String],
+) -> Result<Vec<TrendPoint>> {
     if paths.is_empty() {
         return Ok(Vec::new());
     }
+    // Aggregate over the canonical-lineage change source so a renamed file's
+    // pre-rename revisions fold onto the head path this series is keyed to —
+    // the `paths` list is the lineage-canonical hotspot set, so raw `changes`
+    // would undercount every renamed file's history. Mirrors
+    // `lineage::materialize_if_needed`'s own guard; the bucketed source is
+    // deliberately excluded because the `ch.rev = c.rev` join below needs the
+    // real per-commit revs that `changes_bucketed` collapses into a date key.
+    crate::analyses::lineage::materialize_if_needed(db, opts)?;
+    let src = if opts.use_canonical_lineage && opts.time_bucket.is_none() {
+        "changes_lineage"
+    } else {
+        "changes"
+    };
     // Bind `paths` via UNNEST so we don't string-interpolate user data
     // into the SQL. DuckDB's list_value() / array binding accepts an
     // owned Vec<String>; we materialise the path list as a temp table
@@ -230,7 +247,7 @@ pub fn run_trends(db: &crate::facts::FactsDb, paths: &[String]) -> Result<Vec<Tr
                 ch.path,
                 CAST(COUNT(*) AS DOUBLE) AS score
          FROM commits c
-         INNER JOIN changes ch ON ch.rev = c.rev
+         INNER JOIN {src} ch ON ch.rev = c.rev
          INNER JOIN paths USING (path)
          GROUP BY month, ch.path
          ORDER BY month ASC, ch.path ASC"

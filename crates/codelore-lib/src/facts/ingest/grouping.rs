@@ -295,7 +295,7 @@ fn swap_grouped_tables(conn: &duckdb::Connection) -> Result<()> {
 /// row per group.
 ///
 /// The table's contract: it must carry every column ANY `{cm_src}`
-/// consumer binds (see `crate::analyses::grouped_complexity`), with
+/// consumer binds (see the grouped-complexity analysis), with
 /// "worst function anywhere in this group" rollup semantics. The widest
 /// consumer is `code_health` — its biomarker INSERT binds `path`,
 /// `name`, `cyclomatic`, `loc`, `max_nesting`, `nargs`, `bool_ops`, and
@@ -322,7 +322,7 @@ fn swap_grouped_tables(conn: &duckdb::Connection) -> Result<()> {
 /// replay — on cache hit, `FactsDb::open_read_only` opens a fresh
 /// connection that has no access to `_grouping_v1`, but the persisted
 /// rollup table is in the `DuckDB` file and is what the analyses read
-/// via `crate::analyses::grouped_complexity::source_table`.
+/// via the grouped-complexity source-table selector.
 fn materialize_complexity_grouped(conn: &duckdb::Connection) -> Result<()> {
     conn.execute("DROP TABLE IF EXISTS complexity_metrics_grouped", [])
         .map_err(|e| CodeLoreError::Analysis(format!("drop complexity_metrics_grouped: {e}")))?;

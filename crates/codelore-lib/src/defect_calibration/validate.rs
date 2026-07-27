@@ -103,7 +103,7 @@ pub fn band_history<R: Repo>(
         let live = live_paths_at(db, ts)?;
         let graph = import_graph_from_live_paths(repo, rev, &live);
         ingest_complexity_at_rev(db, repo, rev, &live, CM_AT_REV)?;
-        materialize_imports_at_rev(db, &graph, IMPORTS_AT_REV)?;
+        materialize_imports_at_rev(db, &graph.resolved_edges(), IMPORTS_AT_REV)?;
 
         let cx = HealthScanCtx {
             complexity_source: CM_AT_REV.to_string(),

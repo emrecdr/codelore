@@ -1412,7 +1412,7 @@ fn build_spa_dashboard(
     // slices `data.trends` reactively when the user changes the
     // selector — no backend round-trip needed.
     let top_paths: Vec<String> = hotspots.iter().take(50).map(|r| r.path.clone()).collect();
-    let trends = run_trends(db, &top_paths).unwrap_or_else(|e| {
+    let trends = run_trends(db, opts, &top_paths).unwrap_or_else(|e| {
         tracing::warn!("dashboard: trends query failed; skipping: {e}");
         Vec::new()
     });
