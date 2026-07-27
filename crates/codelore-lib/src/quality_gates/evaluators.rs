@@ -408,20 +408,58 @@ pub fn evaluate_effort_exposure_rows(
     threshold: f64,
     rows: &[crate::analyses::effort_exposure::EffortExposureRow],
 ) -> Vec<GateViolation> {
-    let actual = rows
-        .iter()
-        .find(|r| r.band == "red")
-        .map_or(0.0, |r| r.churn_share_pct);
-    if actual > threshold {
-        vec![GateViolation {
-            gate: "max_red_effort_pct".into(),
-            path: "(repo-wide)".into(),
-            actual: format!("{actual:.2}"),
-            threshold: format!("{threshold:.2}"),
-        }]
-    } else {
-        Vec::new()
+    evaluate_effort_exposure_rows_exempt(threshold, false, rows)
+}
+
+/// [`evaluate_effort_exposure_rows`] with the improving-churn exemption.
+///
+/// When `exempt_improving` is `false` this is byte-for-byte identical to
+/// [`evaluate_effort_exposure_rows`] — the red band's full `churn_share_pct` is
+/// compared against `threshold`, and the violation's `actual` is that value.
+///
+/// When `exempt_improving` is `true` AND the red row carries a decomposition
+/// ([`churn_share_degrading_pct`] populated — see
+/// [`run_effort_exposure_decomposed`]), only the *degrading* share is compared:
+/// churn that landed in red files whose own health did not improve over the
+/// window. The violation message discloses all three numbers ("red churn 18.30%
+/// of which improving 12.10% exempt → 6.20% vs ceiling 15.00") so the exemption
+/// is never silent. If the exemption is requested but the row has no
+/// decomposition (analysis run without repo access), the gate falls back to the
+/// full red share — the safe direction (no unearned exemption).
+///
+/// [`churn_share_degrading_pct`]: crate::analyses::effort_exposure::EffortExposureRow::churn_share_degrading_pct
+/// [`run_effort_exposure_decomposed`]: crate::analyses::effort_exposure::run_effort_exposure_decomposed
+#[must_use]
+pub fn evaluate_effort_exposure_rows_exempt(
+    threshold: f64,
+    exempt_improving: bool,
+    rows: &[crate::analyses::effort_exposure::EffortExposureRow],
+) -> Vec<GateViolation> {
+    let red = rows.iter().find(|r| r.band == "red");
+    let total = red.map_or(0.0, |r| r.churn_share_pct);
+    // The decomposed degrading share is only used when the exemption is on and
+    // the row actually carries it; otherwise the comparison stays on `total`,
+    // keeping the default path byte-identical to the pre-exemption behaviour.
+    let degrading = red.and_then(|r| r.churn_share_degrading_pct);
+    let (effective, decomposed) = match (exempt_improving, degrading) {
+        (true, Some(d)) => (d, true),
+        _ => (total, false),
+    };
+    if effective <= threshold {
+        return Vec::new();
     }
+    let actual = if decomposed {
+        let improving = red.and_then(|r| r.churn_share_improving_pct).unwrap_or(0.0);
+        format!("{effective:.2} (red {total:.2}, improving {improving:.2} exempt)")
+    } else {
+        format!("{effective:.2}")
+    };
+    vec![GateViolation {
+        gate: "max_red_effort_pct".into(),
+        path: "(repo-wide)".into(),
+        actual,
+        threshold: format!("{threshold:.2}"),
+    }]
 }
 
 /// Evaluate the `max_red_effort_pct` gate: fails when the `red`
@@ -1032,6 +1070,28 @@ mod tests {
             churn_share_pct,
             commit_share_ci_low: 0.0,
             commit_share_ci_high: 0.0,
+            churn_share_improving_pct: None,
+            churn_share_degrading_pct: None,
+        }
+    }
+
+    /// A red-band row carrying the improving/degrading decomposition, for the
+    /// exemption evaluator tests.
+    fn make_decomposed_red_row(
+        churn_share_pct: f64,
+        improving: f64,
+        degrading: f64,
+    ) -> crate::analyses::effort_exposure::EffortExposureRow {
+        crate::analyses::effort_exposure::EffortExposureRow {
+            band: "red".to_string(),
+            files: 1,
+            loc_share_pct: 0.0,
+            commit_share_pct: 0.0,
+            churn_share_pct,
+            commit_share_ci_low: 0.0,
+            commit_share_ci_high: 0.0,
+            churn_share_improving_pct: Some(improving),
+            churn_share_degrading_pct: Some(degrading),
         }
     }
 
@@ -1086,6 +1146,58 @@ mod tests {
         // 100 % ceiling is the upper bound — even a 100% red-band repo passes.
         let rows = vec![make_effort_row("red", 100.0)];
         assert!(evaluate_effort_exposure_rows(100.0, &rows).is_empty());
+    }
+
+    // ───────── improving-churn exemption ─────────
+
+    #[test]
+    fn exempt_off_is_byte_identical_to_plain_evaluator() {
+        // With the exemption off, the exempt evaluator must reproduce the plain
+        // one exactly, even when a decomposition is present on the row.
+        let rows = vec![make_decomposed_red_row(50.0, 40.0, 10.0)];
+        let plain = evaluate_effort_exposure_rows(30.0, &rows);
+        let exempt_off = evaluate_effort_exposure_rows_exempt(30.0, false, &rows);
+        assert_eq!(format!("{plain:?}"), format!("{exempt_off:?}"));
+        // Full 50 % share compared (not the 10 % degrading share) → fails at 30.
+        assert_eq!(exempt_off.len(), 1);
+        assert_eq!(exempt_off[0].actual, "50.00");
+    }
+
+    #[test]
+    fn exempt_on_gates_only_the_degrading_share() {
+        // red 50 %, of which 40 % improving / 10 % degrading. Ceiling 30 %:
+        // total (50) would fail, but the degrading share (10) passes.
+        let rows = vec![make_decomposed_red_row(50.0, 40.0, 10.0)];
+        assert!(
+            evaluate_effort_exposure_rows_exempt(30.0, true, &rows).is_empty(),
+            "degrading share 10 % ≤ ceiling 30 % must pass under the exemption"
+        );
+    }
+
+    #[test]
+    fn exempt_on_violation_discloses_all_three_numbers() {
+        // Degrading share above the ceiling still fails; the message carries the
+        // degrading, total, and improving shares so the exemption is not silent.
+        let rows = vec![make_decomposed_red_row(50.0, 10.0, 40.0)];
+        let v = evaluate_effort_exposure_rows_exempt(30.0, true, &rows);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].gate, "max_red_effort_pct");
+        assert_eq!(v[0].threshold, "30.00");
+        assert_eq!(v[0].actual, "40.00 (red 50.00, improving 10.00 exempt)");
+    }
+
+    #[test]
+    fn exempt_on_without_decomposition_falls_back_to_total() {
+        // Exemption requested but the row carries no split (analysis ran without
+        // repo access) → the gate compares the full red share, the safe
+        // direction, and the message stays the plain single-number form.
+        let rows = vec![make_effort_row("red", 50.0)];
+        let v = evaluate_effort_exposure_rows_exempt(30.0, true, &rows);
+        assert_eq!(v.len(), 1);
+        assert_eq!(
+            v[0].actual, "50.00",
+            "no unearned exemption without a split"
+        );
     }
 
     // ───────── code_familiarity_min gate ─────────

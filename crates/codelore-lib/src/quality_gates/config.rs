@@ -63,6 +63,17 @@ pub struct Gates {
     /// fighting fires in the worst-health files." Missing red band
     /// (zero red files) counts as 0 %, which passes any positive threshold.
     pub max_red_effort_pct: Option<f64>,
+    /// Companion to [`max_red_effort_pct`](Self::max_red_effort_pct): when
+    /// `true`, the ceiling is compared against only the *degrading* share of
+    /// red-band window churn — churn that landed in red files whose own health
+    /// did NOT improve over the window — exempting churn that refactored a red
+    /// file toward health. Default `false` leaves the gate comparing the full
+    /// red churn share (behaviour unchanged). Has no effect unless
+    /// `max_red_effort_pct` is also set; like `fail_on_degraded` it is a
+    /// modifier, not a gate, so it never makes the thresholds non-empty on its
+    /// own.
+    #[serde(default)]
+    pub red_effort_exempt_improving: bool,
     /// Minimum code-familiarity score (`[0, 100]`). Below this threshold
     /// the `code-familiarity` analysis emits a `"risky"` verdict. When
     /// absent the analysis applies a built-in default of 70.0.
@@ -237,7 +248,10 @@ impl Thresholds {
             && self.diff.new_file_health_min.is_none()
         // Note: fail_on_degraded=true is the default and does not make a
         // threshold non-empty by itself — it only affects how degraded
-        // verdicts from other gates are handled. Likewise `[calibration]`
+        // verdicts from other gates are handled. red_effort_exempt_improving is
+        // excluded for the same reason: it only reshapes the max_red_effort_pct
+        // comparison, so a file setting it alone configures no gate. Likewise
+        // `[calibration]`
         // is deliberately excluded from this expression: it selects a
         // defect-calibration artifact for analyses to consume, it does not
         // configure a gate, so a thresholds file containing only
@@ -531,6 +545,38 @@ new_hotspot_max = 0
         let err = Thresholds::from_text(raw).expect_err("typo'd key should reject");
         assert!(
             err.contains("unknown field") || err.contains("max_red_effort"),
+            "expected 'unknown field' in error: {err}"
+        );
+    }
+
+    // ───────── red_effort_exempt_improving modifier ─────────
+
+    #[test]
+    fn red_effort_exempt_improving_parses_and_defaults_false() {
+        let on = Thresholds::from_text("[gates]\nred_effort_exempt_improving = true\n").unwrap();
+        assert!(on.gates.red_effort_exempt_improving);
+        // Omitted ⇒ default false (behaviour unchanged).
+        let off = Thresholds::from_text("[gates]\nmax_red_effort_pct = 15.0\n").unwrap();
+        assert!(!off.gates.red_effort_exempt_improving);
+    }
+
+    #[test]
+    fn red_effort_exempt_improving_alone_does_not_configure_a_gate() {
+        // A modifier, not a gate: like fail_on_degraded it must leave the
+        // thresholds vacuously empty when it is the only key present, and it
+        // must still validate.
+        let t = Thresholds::from_text("[gates]\nred_effort_exempt_improving = true\n").unwrap();
+        assert!(t.is_empty(), "the modifier alone configures no gate");
+        t.validate().expect("bool modifier is always valid");
+    }
+
+    #[test]
+    fn red_effort_exempt_improving_unknown_key_rejected() {
+        // Typo guard: a near-miss must reject, not silently disable the exemption.
+        let raw = "[gates]\nred_effort_exempt_improveing = true\n";
+        let err = Thresholds::from_text(raw).expect_err("typo'd key should reject");
+        assert!(
+            err.contains("unknown field") || err.contains("red_effort_exempt_improveing"),
             "expected 'unknown field' in error: {err}"
         );
     }

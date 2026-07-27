@@ -151,13 +151,21 @@ pub fn write_effort_exposure_csv<W: Write>(
 ) -> Result<()> {
     writeln!(
         w,
-        "band,files,loc-share-pct,commit-share-pct,churn-share-pct,commit-share-ci-low,commit-share-ci-high"
+        "band,files,loc-share-pct,commit-share-pct,churn-share-pct,commit-share-ci-low,commit-share-ci-high,churn-share-improving-pct,churn-share-degrading-pct"
     )
     .map_err(CodeLoreError::Io)?;
     for row in rows {
+        // Improving/degrading split is populated only for the red band when the
+        // decomposition ran (repo available); other rows leave the cells empty.
+        let improving = row
+            .churn_share_improving_pct
+            .map_or_else(String::new, |v| format!("{v:.2}"));
+        let degrading = row
+            .churn_share_degrading_pct
+            .map_or_else(String::new, |v| format!("{v:.2}"));
         writeln!(
             w,
-            "{},{},{:.2},{:.2},{:.2},{:.4},{:.4}",
+            "{},{},{:.2},{:.2},{:.2},{:.4},{:.4},{},{}",
             quote_if_needed(&row.band),
             row.files,
             row.loc_share_pct,
@@ -165,6 +173,8 @@ pub fn write_effort_exposure_csv<W: Write>(
             row.churn_share_pct,
             row.commit_share_ci_low,
             row.commit_share_ci_high,
+            improving,
+            degrading,
         )
         .map_err(CodeLoreError::Io)?;
     }

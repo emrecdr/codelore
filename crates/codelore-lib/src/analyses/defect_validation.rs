@@ -258,6 +258,9 @@ mod tests {
                 lines_dropped_cosmetic: 120,
                 blame_failures: 7,
                 pure_addition_fixes: 33,
+                // Transient `#[serde(skip)]` guard tallies — not part of the
+                // artifact this fixture round-trips.
+                ..MiningStats::default()
             },
             validation,
             weights: crate::defect_calibration::validate::default_weights(),

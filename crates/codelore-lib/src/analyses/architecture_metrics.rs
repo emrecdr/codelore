@@ -20,6 +20,27 @@
 //! reachability), so this adds no new query cost beyond building the
 //! graph. Accuracy follows the import resolver's language coverage.
 //!
+//! Three further rows disclose how much of the import surface the graph
+//! above actually covers — *coverage* transparency, not defect scores, so
+//! that a sparse graph can't read as a clean one. The structural metrics
+//! only ever see the resolved edges (`target_path IS NOT NULL`); these
+//! query the full `imports` table so a poor resolution rate is visible:
+//!
+//! - **`import_resolution_rate`** — fraction of all import statements whose
+//!   target resolved to an in-repo file. External and standard-library
+//!   imports (`numpy`, `java.util`, `std::fmt`, …) legitimately point
+//!   outside the repo and count as unresolved, so a repo with many
+//!   third-party dependencies naturally scores lower — this is expected,
+//!   not a resolver bug.
+//! - **`first_party_import_share`** — fraction of import statements that are
+//!   first-party by intent: either already resolved, or a *relative* import
+//!   (`use crate::…`, `from .mod import …`, `./foo`) naming an in-repo path
+//!   even when the resolver missed it.
+//! - **`resolution_rate_first_party`** — of those first-party imports, the
+//!   fraction that resolved. It drops external imports from the denominator,
+//!   isolating resolver coverage from third-party-dependency density: a low
+//!   value points at a genuine resolver gap rather than many external deps.
+//!
 //! When an active calibration artifact ([`crate::calibration::load_active_artifact`])
 //! carries a `repo_metrics` section (corpus pools populated by `codelore
 //! calibrate`), additional rows report where this repo's `propagation_cost`
@@ -49,10 +70,11 @@ pub struct ArchitectureMetricRow {
 const CORE_DOMINANCE: f64 = 0.6;
 
 /// Run the `architecture-metrics` analysis. Returns one row per
-/// repo-level metric, in a fixed presentation order, plus an
-/// `import_resolution_rate` disclosure row. Returns just that row when the
-/// repo has import statements but none resolve (`n == 0`); empty only when
-/// the repo has no imports at all.
+/// repo-level metric, in a fixed presentation order, plus the
+/// import-resolution disclosure rows (see [`import_resolution_rows`]).
+/// Returns just those disclosure rows when the repo has import statements
+/// but none resolve into the graph (`n == 0`); empty only when the repo
+/// has no imports at all.
 ///
 /// # Errors
 ///
@@ -66,18 +88,16 @@ pub fn run_architecture_metrics(
     let graph = build_import_graph(db)?;
     let m = graph_metrics(&graph);
 
-    // Import resolution coverage: the fraction of import statements whose
-    // target resolved to an in-repo file. External / stdlib imports point
-    // outside the repo and count as unresolved, so a repo with many
-    // third-party deps naturally reads lower — this discloses how much of the
-    // import surface the dependency graph below actually covers, NOT a defect
-    // score. Emitted whenever the repo has any imports (even when none
-    // resolved, `n == 0` — precisely the sparse-graph case worth surfacing);
-    // absent only when the repo has no import statements at all.
-    let resolution_row = import_resolution_row(db)?;
+    // Import-resolution disclosure: coverage of the import surface, split
+    // three ways so a low headline rate can't be misread as resolver
+    // weakness. See [`import_resolution_rows`]. Emitted whenever the repo has
+    // any imports (even when none resolved, `n == 0` — precisely the
+    // sparse-graph case worth surfacing); absent only when the repo has no
+    // import statements at all.
+    let resolution_rows = import_resolution_rows(db)?;
 
     if m.n == 0 {
-        return Ok(resolution_row.into_iter().collect());
+        return Ok(resolution_rows);
     }
 
     let n_f = f64::from(u32::try_from(m.n).unwrap_or(u32::MAX));
@@ -110,9 +130,7 @@ pub fn run_architecture_metrics(
         row("files", m.n.to_string()),
         row("architecture_type", arch_type.to_owned()),
     ];
-    if let Some(r) = resolution_row {
-        rows.push(r);
-    }
+    rows.extend(resolution_rows);
 
     // Corpus-relative percentiles (additive; against the `repo_metrics` pools
     // populated by `codelore calibrate`).
@@ -172,25 +190,86 @@ pub fn run_architecture_metrics(
     Ok(rows)
 }
 
-/// The `import_resolution_rate` disclosure row: resolved imports / total
-/// imports over the `imports` table, as a `{:.4}` fraction. `None` when the
-/// repo has no imports at all (the rate is undefined). Query-time over the
-/// already-ingested `imports` fact — no graph rebuild.
-fn import_resolution_row(db: &FactsDb) -> Result<Option<ArchitectureMetricRow>> {
-    let counts: Vec<(f64, i64)> = crate::analyses::query::query_map_collect(
+/// The import-resolution disclosure rows, over the already-ingested
+/// `imports` fact (query-time, no graph rebuild). Empty when the repo has no
+/// imports at all; otherwise up to three `{:.4}`-fraction rows that split one
+/// coarse number into a resolver-strength signal and a repo-composition one,
+/// so a low headline rate can't be misread as a weak resolver:
+///
+/// - **`import_resolution_rate`** — resolved ÷ *all* imports. Unchanged
+///   semantics (additive-only contract). External crates / stdlib / npm
+///   imports legitimately point outside the repo and stay unresolved, so a
+///   repo with many third-party deps naturally reads low: this is *coverage
+///   of the whole import surface*, NOT a defect score.
+/// - **`first_party_import_share`** — first-party candidates ÷ all imports.
+///   A *first-party candidate* is an import that could target in-repo code:
+///   it either resolved to a tracked file, OR is syntactically repo-relative
+///   (`imports.kind = 'relative'` — Rust `crate::`/`self::`/`super::`, Python
+///   leading-dot, JS/TS `./`|`../`), the exact imports each per-language
+///   resolver *attempts* to resolve in-repo (see `imports::resolver`). An
+///   unresolved *absolute* import is presumed external. This is how much of
+///   the surface even aims at the repo.
+/// - **`resolution_rate_first_party`** — resolved ÷ first-party candidates:
+///   the resolver's strength on the imports that actually point in-repo,
+///   isolated from the third-party mix that drags the headline rate down.
+///   Omitted when there are no first-party candidates (the rate is undefined,
+///   and a `0.00` would misread as "resolved none of them").
+///
+/// Definition caveat (documented, not hidden): an absolute import that fails
+/// to resolve is counted as external, so a genuinely first-party absolute
+/// import the resolver *missed* is under-counted; and for a language with no
+/// syntactic relative marker (Java), first-party candidates reduce to the
+/// resolved imports, making `resolution_rate_first_party` optimistic there.
+fn import_resolution_rows(db: &FactsDb) -> Result<Vec<ArchitectureMetricRow>> {
+    // One pass over `imports`. The `rate` expression is kept verbatim from the
+    // original single-row query so `import_resolution_rate` stays byte-for-byte
+    // identical; the two new rows derive from the raw counts alongside it.
+    let counts: Vec<(f64, i64, i64, i64)> = crate::analyses::query::query_map_collect(
         db,
         "SELECT \
            COALESCE(COUNT(*) FILTER (WHERE target_path IS NOT NULL) * 1.0 \
                     / NULLIF(COUNT(*), 0), 0.0), \
+           COUNT(*) FILTER (WHERE target_path IS NOT NULL), \
+           COUNT(*) FILTER (WHERE target_path IS NOT NULL OR kind = 'relative'), \
            COUNT(*) \
          FROM imports",
         [],
         "import-resolution-rate",
-        |r| Ok((r.get::<_, f64>(0)?, r.get::<_, i64>(1)?)),
+        |r| {
+            Ok((
+                r.get::<_, f64>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+            ))
+        },
     )?;
-    Ok(counts.first().and_then(|&(rate, total)| {
-        (total > 0).then(|| row("import_resolution_rate", format!("{rate:.4}")))
-    }))
+    let Some(&(rate, resolved, first_party, total)) = counts.first() else {
+        return Ok(Vec::new());
+    };
+    if total == 0 {
+        return Ok(Vec::new());
+    }
+    // Counts are small non-negative import tallies; the `u32::try_from … f64`
+    // idiom (as used for `n_f` above) keeps the division lossless and away
+    // from the precision-loss lint without an `unwrap`.
+    let as_f64 = |n: i64| f64::from(u32::try_from(n).unwrap_or(u32::MAX));
+    let (resolved_f, first_party_f, total_f) =
+        (as_f64(resolved), as_f64(first_party), as_f64(total));
+    let mut rows = vec![
+        row("import_resolution_rate", format!("{rate:.4}")),
+        row(
+            "first_party_import_share",
+            format!("{:.4}", first_party_f / total_f),
+        ),
+    ];
+    if first_party > 0 {
+        rows.push(row(
+            "resolution_rate_first_party",
+            format!("{:.4}", resolved_f / first_party_f),
+        ));
+    }
+    Ok(rows)
 }
 
 /// The `n` for a repo-level metric's Wilson interval: the count of corpus repos

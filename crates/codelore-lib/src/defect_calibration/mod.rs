@@ -186,6 +186,22 @@ pub struct MiningStats {
     pub blame_failures: u32,
     /// Fix hunks that were pure additions (no deleted lines, so no candidates).
     pub pure_addition_fixes: u32,
+    /// Fix commits the tangled-commit guard excluded from linkage entirely
+    /// (touched more than [`szz::TANGLED_MAX_FILES`] files or changed more
+    /// than [`szz::TANGLED_MAX_CHURN`] lines).
+    ///
+    /// `#[serde(skip)]`: a transient mining tally surfaced only in the command
+    /// output, never written to the artifact — so `DEFECT_FORMAT_VERSION` does
+    /// not move for a methodology disclosure. Always reloads as `0`.
+    #[serde(skip)]
+    pub fixes_excluded_tangled: u32,
+    /// Whole-file-deletion blame targets the ghost guard skipped: a file
+    /// removed wholesale contributes only removed lines, which cannot embody
+    /// an in-place fix, so blaming them would over-attribute the "defect" to
+    /// every past author. Transient, never serialized (see
+    /// `fixes_excluded_tangled`).
+    #[serde(skip)]
+    pub ghost_files_skipped: u32,
 }
 
 /// Validation-report metrics: does HEAD's structural risk predict where the
