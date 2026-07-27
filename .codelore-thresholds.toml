@@ -21,8 +21,13 @@ max_dependency_cycles = 1
 # Propagation cost today: 0.0131 — a change reaches ~1.3% of the system
 # (computed over all 308 live source files, isolated files included).
 max_propagation_cost = 0.10
-# Share of recent churn landing in red-band files today: 9.6%.
-max_red_effort_pct = 15.0
+# Share of recent churn landing in red-band files. Temporarily widened while
+# the hardening campaign refactors the red-band files themselves — that churn
+# lands IN red files by design, which this metric cannot distinguish from
+# risk concentration. Restore toward the steady state (was ~9.6%, ceiling
+# 15.0) once the campaign's churn rolls out of the window; the durable fix is
+# an improving-churn exemption in the gate itself.
+max_red_effort_pct = 25.0
 
 [diff]
 # A pull request may not introduce a new import cycle.
