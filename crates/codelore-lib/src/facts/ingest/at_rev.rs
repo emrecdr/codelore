@@ -108,19 +108,107 @@ pub fn ingest_complexity_at_rev<R: crate::repo::Repo>(
         )
         .collect();
 
-    // Phase 2 (serial drain): INSERT via prepared statement.
+    // Phase 2 (serial drain): batched multi-row INSERT.
     insert_complexity_rows(db, rev, dest_table, &batches)
 }
 
-/// Serial drain of the parsed per-file complexity entities into `dest_table`.
+/// Rows bound per multi-row `INSERT` statement for the at-rev drains.
 ///
-/// Uses a prepared `INSERT` rather than `DuckDB`'s `Appender`: the Appender
+/// `DuckDB` is an OLAP engine: single-row `INSERT ... VALUES` round-trips are
+/// pathologically slow (the HEAD path uses the bulk `Appender`, which a
+/// read-only connection rejects here). Batching many rows per statement
+/// amortizes the per-execute overhead — the historical health timeline drains
+/// thousands of complexity rows at every sampled rev, so this is the dominant
+/// cost of the trend scan when left un-batched.
+const DRAIN_BATCH_ROWS: usize = 256;
+
+/// Build a multi-row `VALUES` clause: `rows` parenthesised groups of `cols`
+/// `?` placeholders each, comma-joined — e.g. `values_clause(2, 3)` yields
+/// `"(?,?),(?,?),(?,?)"`. `rows == 0` yields the empty string (callers
+/// short-circuit before issuing an empty INSERT).
+fn values_clause(cols: usize, rows: usize) -> String {
+    let group = format!(
+        "({})",
+        std::iter::repeat_n("?", cols).collect::<Vec<_>>().join(",")
+    );
+    std::iter::repeat_n(group.as_str(), rows)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// `Option<f64>` → a `DuckDB` value, binding SQL `NULL` for `None` so the
+/// batched drain reproduces the per-row `params!` binding (which bound the
+/// `Option` directly) byte-for-byte.
+fn opt_double(v: Option<f64>) -> duckdb::types::Value {
+    v.map_or(duckdb::types::Value::Null, duckdb::types::Value::Double)
+}
+
+/// Drain `rows` into `dest_table` as multi-row `INSERT ... VALUES` batches of
+/// [`DRAIN_BATCH_ROWS`], expanding each row to `cols` bound values via
+/// `push_row`. ONE prepared statement is reused across every full-size batch
+/// (their SQL is identical); only a trailing remainder batch prepares a second
+/// right-sized statement. Re-preparing the wide multi-row statement per batch
+/// would itself dominate the drain, so the reuse matters.
+///
+/// A multi-row `INSERT` is used rather than `DuckDB`'s `Appender`: the Appender
 /// checks the connection access mode and rejects writes on read-only
 /// connections, even for temporary tables. Temporary tables live in an
 /// in-memory catalog separate from the file, so SQL `INSERT` goes through a
 /// different path and succeeds on a read-only connection.
+fn drain_batched<T>(
+    db: &FactsDb,
+    dest_table: &str,
+    cols: usize,
+    rows: &[T],
+    mut push_row: impl FnMut(&T, &mut Vec<duckdb::types::Value>),
+) -> Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let full_sql = format!(
+        "INSERT INTO {dest_table} VALUES {}",
+        values_clause(cols, DRAIN_BATCH_ROWS)
+    );
+    let mut full_stmt =
+        if rows.len() >= DRAIN_BATCH_ROWS {
+            Some(db.conn().prepare(&full_sql).map_err(|e| {
+                CodeLoreError::Analysis(format!("prepare insert {dest_table}: {e}"))
+            })?)
+        } else {
+            None
+        };
+
+    let mut values: Vec<duckdb::types::Value> = Vec::with_capacity(DRAIN_BATCH_ROWS * cols);
+    for chunk in rows.chunks(DRAIN_BATCH_ROWS) {
+        values.clear();
+        for row in chunk {
+            push_row(row, &mut values);
+        }
+        let params: Vec<&dyn duckdb::ToSql> =
+            values.iter().map(|v| v as &dyn duckdb::ToSql).collect();
+        if chunk.len() == DRAIN_BATCH_ROWS
+            && let Some(stmt) = full_stmt.as_mut()
+        {
+            stmt.execute(params.as_slice())
+                .map_err(|e| CodeLoreError::Analysis(format!("insert {dest_table}: {e}")))?;
+        } else {
+            let sql = format!(
+                "INSERT INTO {dest_table} VALUES {}",
+                values_clause(cols, chunk.len())
+            );
+            db.conn()
+                .prepare(&sql)
+                .map_err(|e| CodeLoreError::Analysis(format!("prepare insert {dest_table}: {e}")))?
+                .execute(params.as_slice())
+                .map_err(|e| CodeLoreError::Analysis(format!("insert {dest_table}: {e}")))?;
+        }
+    }
+    Ok(())
+}
+
+/// Batched drain of the parsed per-file complexity entities into `dest_table`.
 ///
-/// The bound column list mirrors [`super::consumer::append_metric_row`]
+/// The bound column order mirrors [`super::consumer::append_metric_row`]
 /// (the HEAD-time Appender path) — the two write the same
 /// `complexity_metrics` shape via different `DuckDB` APIs, so keep the two
 /// column orders in sync if the table grows a column.
@@ -130,43 +218,44 @@ fn insert_complexity_rows(
     dest_table: &str,
     batches: &[Option<(String, Vec<crate::complexity::ComplexityEntity>)>],
 ) -> Result<()> {
-    let mut stmt = db
-        .conn()
-        .prepare(&format!(
-            "INSERT INTO {dest_table} VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
-        ))
-        .map_err(|e| CodeLoreError::Analysis(format!("prepare insert {dest_table}: {e}")))?;
+    use duckdb::types::Value;
 
-    for batch in batches {
-        let Some((path, entities)) = batch else {
-            continue;
-        };
-        for ent in entities {
-            stmt.execute(duckdb::params![
-                path,
-                ent.name,
-                rev,
-                f64_to_i32_clamped(ent.cyclomatic),
-                f64_to_i32_clamped(ent.cognitive),
-                ent.halstead_volume,
-                ent.halstead_difficulty,
-                ent.halstead_effort,
-                ent.mi,
-                i32::try_from(ent.nom).unwrap_or(i32::MAX),
-                i32::try_from(ent.nexits).unwrap_or(i32::MAX),
-                i32::try_from(ent.loc).unwrap_or(i32::MAX),
-                i32::try_from(ent.sloc).unwrap_or(i32::MAX),
-                i32::try_from(ent.max_nesting).unwrap_or(i32::MAX),
-                ent.mean_nesting,
-                ent.sd_nesting,
-                i32::try_from(ent.total_nesting).unwrap_or(i32::MAX),
-                i32::try_from(ent.nargs).unwrap_or(i32::MAX),
-                i32::try_from(ent.bool_ops).unwrap_or(i32::MAX),
-            ])
-            .map_err(|e| CodeLoreError::Analysis(format!("insert {dest_table}: {e}")))?;
-        }
-    }
-    Ok(())
+    /// Column count of the `complexity_metrics` shape written below.
+    const COLS: usize = 19;
+
+    // Flatten the per-file entity batches into a single row stream, preserving
+    // order, then bind them in fixed-size multi-row INSERT chunks.
+    let rows: Vec<(&String, &crate::complexity::ComplexityEntity)> = batches
+        .iter()
+        .filter_map(Option::as_ref)
+        .flat_map(|(path, entities)| entities.iter().map(move |ent| (path, ent)))
+        .collect();
+
+    drain_batched(db, dest_table, COLS, &rows, |&(path, ent), values| {
+        values.push(Value::Text(path.clone()));
+        values.push(Value::Text(ent.name.clone()));
+        values.push(Value::Text(rev.to_string()));
+        values.push(Value::Int(f64_to_i32_clamped(ent.cyclomatic)));
+        values.push(Value::Int(f64_to_i32_clamped(ent.cognitive)));
+        values.push(opt_double(ent.halstead_volume));
+        values.push(opt_double(ent.halstead_difficulty));
+        values.push(opt_double(ent.halstead_effort));
+        values.push(opt_double(ent.mi));
+        values.push(Value::Int(i32::try_from(ent.nom).unwrap_or(i32::MAX)));
+        values.push(Value::Int(i32::try_from(ent.nexits).unwrap_or(i32::MAX)));
+        values.push(Value::Int(i32::try_from(ent.loc).unwrap_or(i32::MAX)));
+        values.push(Value::Int(i32::try_from(ent.sloc).unwrap_or(i32::MAX)));
+        values.push(Value::Int(
+            i32::try_from(ent.max_nesting).unwrap_or(i32::MAX),
+        ));
+        values.push(Value::Double(ent.mean_nesting));
+        values.push(Value::Double(ent.sd_nesting));
+        values.push(Value::Int(
+            i32::try_from(ent.total_nesting).unwrap_or(i32::MAX),
+        ));
+        values.push(Value::Int(i32::try_from(ent.nargs).unwrap_or(i32::MAX)));
+        values.push(Value::Int(i32::try_from(ent.bool_ops).unwrap_or(i32::MAX)));
+    })
 }
 
 /// Write the resolved edges of `graph` into a freshly-created temporary table
@@ -196,6 +285,11 @@ pub fn materialize_imports_at_rev(
     graph: &ImportGraph,
     dest_table: &str,
 ) -> Result<()> {
+    use duckdb::types::Value;
+
+    /// Column count of the `imports` shape written below.
+    const COLS: usize = 6;
+
     db.execute_batch(&format!(
         "CREATE OR REPLACE TEMPORARY TABLE {dest_table} (
             rev         TEXT NOT NULL,
@@ -211,28 +305,133 @@ pub fn materialize_imports_at_rev(
         return Ok(());
     }
 
-    // INSERT via prepared statement — same rationale as ingest_complexity_at_rev:
-    // DuckDB's Appender is blocked on read-only connections; SQL INSERT into a
-    // temporary table works because temp tables are in-memory (not file-backed).
-    let mut stmt = db
-        .conn()
-        .prepare(&format!("INSERT INTO {dest_table} VALUES (?,?,?,?,?,?)"))
-        .map_err(|e| CodeLoreError::Analysis(format!("prepare insert {dest_table}: {e}")))?;
-
+    // Flatten the adjacency lists into a single edge stream (adjacency order),
+    // then drain in fixed-size multi-row INSERT batches.
+    let mut edges: Vec<(&String, &String)> = Vec::new();
     for (u, neighbors) in graph.adj.iter().enumerate() {
         let src_path = &graph.id_to_path[u];
         for &v in neighbors {
-            let target_path = &graph.id_to_path[v];
-            stmt.execute(duckdb::params![
-                "_at_rev_",
-                src_path,
-                target_path, // resolved path used as the raw target string too
-                true,        // resolved = TRUE — ImportGraph only holds resolved edges
-                target_path, // target_path
-                "absolute",  // kind
-            ])
-            .map_err(|e| CodeLoreError::Analysis(format!("insert {dest_table} row: {e}")))?;
+            edges.push((src_path, &graph.id_to_path[v]));
         }
     }
-    Ok(())
+
+    drain_batched(
+        db,
+        dest_table,
+        COLS,
+        &edges,
+        |&(src_path, target_path), values| {
+            values.push(Value::Text("_at_rev_".to_string()));
+            values.push(Value::Text(src_path.clone()));
+            // resolved path used as the raw target string too.
+            values.push(Value::Text(target_path.clone()));
+            // resolved = TRUE — ImportGraph only holds resolved edges.
+            values.push(Value::Boolean(true));
+            values.push(Value::Text(target_path.clone())); // target_path
+            values.push(Value::Text("absolute".to_string())); // kind
+        },
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::complexity::ComplexityEntity;
+
+    #[test]
+    fn values_clause_shapes() {
+        assert_eq!(values_clause(2, 3), "(?,?),(?,?),(?,?)");
+        assert_eq!(values_clause(6, 1), "(?,?,?,?,?,?)");
+        assert_eq!(values_clause(19, 0), "");
+    }
+
+    fn entity(name: &str, cognitive: f64, mi: Option<f64>) -> ComplexityEntity {
+        ComplexityEntity {
+            path: String::new(), // unused by the drain (path comes from the batch tuple)
+            name: name.to_string(),
+            kind: "function".to_string(),
+            start_line: 0,
+            end_line: 0,
+            cyclomatic: 1.0,
+            cognitive,
+            halstead_volume: Some(1.0),
+            halstead_difficulty: None, // exercises Option→NULL binding
+            halstead_effort: Some(3.0),
+            mi,
+            nom: 1,
+            nexits: 1,
+            nargs: 0,
+            loc: 10,
+            sloc: 8,
+            max_nesting: 2,
+            mean_nesting: 0.0,
+            sd_nesting: 0.0,
+            total_nesting: 3,
+            bool_ops: 0,
+        }
+    }
+
+    fn create_dest(db: &FactsDb, name: &str) {
+        db.execute_batch(&format!(
+            "CREATE OR REPLACE TEMPORARY TABLE {name} (
+                path TEXT NOT NULL, name TEXT NOT NULL, rev TEXT NOT NULL,
+                cyclomatic INTEGER, cognitive INTEGER, halstead_volume DOUBLE,
+                halstead_difficulty DOUBLE, halstead_effort DOUBLE, mi DOUBLE,
+                nom INTEGER, nexits INTEGER, loc INTEGER, sloc INTEGER,
+                max_nesting INTEGER, mean_nesting DOUBLE, sd_nesting DOUBLE,
+                total_nesting INTEGER, nargs INTEGER, bool_ops INTEGER
+            )"
+        ))
+        .unwrap();
+    }
+
+    #[test]
+    fn insert_complexity_rows_batches_across_boundary_and_remainder() {
+        let db = FactsDb::new_in_memory().unwrap();
+        create_dest(&db, "cm_test");
+
+        // One full DRAIN_BATCH_ROWS chunk plus a 5-row remainder, split across
+        // two file batches with a `None` batch interleaved (must be skipped).
+        // The boundary lands mid-file so a single chunk spans both files.
+        let n = DRAIN_BATCH_ROWS + 5;
+        let mut first: Vec<ComplexityEntity> = Vec::new();
+        for i in 0..n - 1 {
+            let mi = if i % 2 == 0 { Some(1.0) } else { None };
+            first.push(entity(&format!("f{i}"), 1.0, mi));
+        }
+        let batches = vec![
+            Some(("a.rs".to_string(), first)),
+            None,
+            Some(("b.rs".to_string(), vec![entity("marker", 42.0, Some(7.5))])),
+        ];
+        insert_complexity_rows(&db, "deadbeef", "cm_test", &batches).unwrap();
+
+        let count: i64 = db
+            .query_row("SELECT COUNT(*) FROM cm_test", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, i64::try_from(n).unwrap());
+
+        // Spot-check the marker row (last row, in the remainder chunk): rev
+        // bound, cognitive clamped to i32, mi kept.
+        let (rev, cog, mi): (String, i32, f64) = db
+            .query_row(
+                "SELECT rev, cognitive, mi FROM cm_test WHERE path = 'b.rs' AND name = 'marker'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(rev, "deadbeef");
+        assert_eq!(cog, 42);
+        assert!((mi - 7.5).abs() < 1e-9);
+
+        // Every row's halstead_difficulty was `None` → SQL NULL.
+        let null_count: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM cm_test WHERE halstead_difficulty IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(null_count, i64::try_from(n).unwrap());
+    }
 }
