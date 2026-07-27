@@ -434,9 +434,10 @@ fn architecture_metrics_default_embedded_artifact_emits_corpus_rows() {
 ///   `"1.00"`.
 /// - `corpus_n` uses the `propagation_cost` pool's length (3), per the
 ///   documented precedence rule.
-/// - A Wilson 95% CI wraps each percentile at that pool's `n`: propagation_cost
-///   (p = 2/3, n = 3) → centre ≈ 0.573, radius ≈ 0.365 → `[0.21, 0.94]`;
-///   cycle_file_share (p = 1.0, n = 2) → centre ≈ 0.671, radius ≈ 0.329 →
+/// - A Wilson 95% CI wraps each percentile at that pool's `n`:
+///   `propagation_cost` (p = 2/3, n = 3) → centre ≈ 0.573, radius ≈ 0.365 →
+///   `[0.21, 0.94]`; `cycle_file_share` (p = 1.0, n = 2) → centre ≈ 0.671,
+///   radius ≈ 0.329 →
 ///   `[0.34, 1.00]` (upper bound clamps to 1.0).
 #[test]
 fn architecture_metrics_emits_corpus_percentiles_when_pool_active() {
