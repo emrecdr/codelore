@@ -966,6 +966,23 @@ impl CodeLoreServer {
                 );
             }
 
+            // [new_code] two-band period gate — mirrors `codelore check`: reuses
+            // the code-health rows and the effort-exposure window-start
+            // machinery, evaluating the born + touched bands over the committed
+            // HEAD. A run whose history is shallower than the window produces no
+            // new_code violations here; the authoritative `codelore check`
+            // discloses that skip.
+            if let Some(nc) = &thresholds.new_code {
+                use codelore_lib::cli_api::analyses::new_code;
+                let scope = new_code::run_new_code_scope(&db, &repo, &opts, nc.window_days, &ch)
+                    .map_err(|e| map_lib_err(&e))?;
+                if scope.window_start_present {
+                    violations.extend(
+                        codelore_lib::cli_api::quality_gates::evaluate_new_code_rows(nc, &scope),
+                    );
+                }
+            }
+
             // architecture + familiarity gates. This tool evaluates a subset
             // of `codelore check`: the `max_findings_in_hot_files`,
             // `corpus_percentile_max`, and `hotspot_anchored_max` gates,

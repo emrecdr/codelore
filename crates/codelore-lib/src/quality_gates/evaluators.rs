@@ -597,6 +597,63 @@ pub fn evaluate_finding_overlap_rows(
     }
 }
 
+/// Pure inner comparison for the two-band `[new_code]` gate over a
+/// [`NewCodeScope`](crate::analyses::new_code::NewCodeScope).
+///
+/// Two independent bands, each evaluated only when the config enables it:
+///
+/// - **`born_health_min`** — one violation per born-in-window file whose HEAD
+///   code-health score is below the floor (strict `<`, mirroring
+///   `code_health_min`). Skipped when `born_health_min` is absent.
+/// - **`touched_no_degradation`** — one violation per touched-but-not-born file
+///   whose net window health movement is negative. The fail test is
+///   `net < -f64::EPSILON`, so a file that held steady — the typo-fix case that
+///   nets exactly zero — passes; only a genuine net-degradation fails. The
+///   `f64::EPSILON` guard is the gate layer's established float-noise band (the
+///   same one [`ratchet`](super::ratchet) uses); the *semantic* noise immunity
+///   comes from the delta-health banding upstream, which nets sub-risk-band
+///   churn to zero. Skipped when `touched_no_degradation` is off.
+///
+/// Each violation's `gate` names its band, so the rendered message discloses
+/// which obligation a file missed ("born in window" vs "net … over Nd"). A noop
+/// (empty) when neither band is enabled or the scope is empty (including the
+/// shallow-history skip, which yields empty `born`/`touched`).
+#[must_use]
+pub fn evaluate_new_code_rows(
+    cfg: &super::config::NewCodeGates,
+    scope: &crate::analyses::new_code::NewCodeScope,
+) -> Vec<GateViolation> {
+    let mut out = Vec::new();
+    // Born band: HEAD score floor on files first seen inside the window.
+    if let Some(floor) = cfg.born_health_min {
+        for (path, score) in &scope.born {
+            if *score < floor {
+                out.push(GateViolation {
+                    gate: "born_health_min".into(),
+                    path: path.clone(),
+                    actual: format!("{score:.1} (born in window)"),
+                    threshold: format!("{floor:.1}"),
+                });
+            }
+        }
+    }
+    // Touched band: non-degradation of net window health movement on files
+    // touched (but not born) inside the window.
+    if cfg.touched_no_degradation {
+        for (path, net) in &scope.touched {
+            if *net < -f64::EPSILON {
+                out.push(GateViolation {
+                    gate: "touched_no_degradation".into(),
+                    path: path.clone(),
+                    actual: format!("net {net:+.1} over {}d", cfg.window_days),
+                    threshold: "\u{2265} 0".into(),
+                });
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1462,5 +1519,185 @@ mod tests {
             Thresholds::from_text("[gates]\nmax_red_effort_pct = 100.0\n").expect("parse");
         let v = evaluate_effort_exposure_gate(&thresholds, &db, &opts).expect("evaluate gate");
         assert!(v.is_empty(), "threshold 100 must pass: {v:?}");
+    }
+
+    // ───────── evaluate_new_code_rows (two-band [new_code] gate) ─────────
+
+    use crate::analyses::new_code::NewCodeScope;
+    use crate::quality_gates::NewCodeGates;
+
+    /// A config with both bands active: born floor 60, touched non-degradation
+    /// on, over a 90-day window.
+    fn nc_cfg() -> NewCodeGates {
+        NewCodeGates {
+            window_days: 90,
+            born_health_min: Some(60.0),
+            touched_no_degradation: true,
+        }
+    }
+
+    #[test]
+    fn new_code_born_below_floor_violates_with_born_message() {
+        let scope = NewCodeScope {
+            window_start_present: true,
+            born: vec![("src/fresh.rs".into(), 41.2)],
+            touched: vec![],
+        };
+        let v = evaluate_new_code_rows(&nc_cfg(), &scope);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].gate, "born_health_min");
+        assert_eq!(v[0].path, "src/fresh.rs");
+        assert!(
+            v[0].actual.contains("born in window") && v[0].actual.contains("41.2"),
+            "born violation discloses the band + score: {}",
+            v[0].actual
+        );
+        assert_eq!(v[0].threshold, "60.0");
+    }
+
+    #[test]
+    fn new_code_born_at_or_above_floor_passes() {
+        // Boundary: score == floor passes (strict `<`), and a healthy born file
+        // passes.
+        let scope = NewCodeScope {
+            window_start_present: true,
+            born: vec![("at.rs".into(), 60.0), ("above.rs".into(), 80.0)],
+            touched: vec![],
+        };
+        assert!(evaluate_new_code_rows(&nc_cfg(), &scope).is_empty());
+    }
+
+    #[test]
+    fn new_code_born_band_skipped_when_floor_absent() {
+        // No born_health_min ⇒ even a low-health born file is not flagged (only
+        // the touched band would apply).
+        let cfg = NewCodeGates {
+            born_health_min: None,
+            ..nc_cfg()
+        };
+        let scope = NewCodeScope {
+            window_start_present: true,
+            born: vec![("low.rs".into(), 3.0)],
+            touched: vec![],
+        };
+        assert!(evaluate_new_code_rows(&cfg, &scope).is_empty());
+    }
+
+    #[test]
+    fn new_code_touched_net_negative_violates_with_touched_message() {
+        let scope = NewCodeScope {
+            window_start_present: true,
+            born: vec![],
+            touched: vec![("src/legacy.rs".into(), -30.0)],
+        };
+        let v = evaluate_new_code_rows(&nc_cfg(), &scope);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].gate, "touched_no_degradation");
+        assert_eq!(v[0].path, "src/legacy.rs");
+        assert!(
+            v[0].actual.contains("net -30.0") && v[0].actual.contains("90d"),
+            "touched violation discloses net movement + window: {}",
+            v[0].actual
+        );
+    }
+
+    #[test]
+    fn new_code_touched_net_zero_passes_typo_fix() {
+        // A window that touched a file without moving any function across a risk
+        // band nets exactly zero (the delta-health banding is the noise filter)
+        // and must pass — the typo-fix-in-a-monolith case.
+        let scope = NewCodeScope {
+            window_start_present: true,
+            born: vec![],
+            touched: vec![("mono.rs".into(), 0.0)],
+        };
+        assert!(evaluate_new_code_rows(&nc_cfg(), &scope).is_empty());
+    }
+
+    #[test]
+    fn new_code_touched_net_positive_passes() {
+        let scope = NewCodeScope {
+            window_start_present: true,
+            born: vec![],
+            touched: vec![("improved.rs".into(), 42.0)],
+        };
+        assert!(evaluate_new_code_rows(&nc_cfg(), &scope).is_empty());
+    }
+
+    #[test]
+    fn new_code_touched_epsilon_boundary() {
+        // The fail test is `net < -f64::EPSILON`: a float-noise-scale negative
+        // passes (inside the gate layer's established noise band), while any real
+        // degradation — the smallest possible being a single one-line function
+        // crossing a band — fails. Net movement is a sum of exact-integer LOC
+        // weights, so in practice the only "inside epsilon" value is zero.
+        let inside = NewCodeScope {
+            window_start_present: true,
+            born: vec![],
+            touched: vec![("noise.rs".into(), -f64::EPSILON * 0.5)],
+        };
+        assert!(
+            evaluate_new_code_rows(&nc_cfg(), &inside).is_empty(),
+            "a sub-epsilon negative is float noise and passes"
+        );
+        let real = NewCodeScope {
+            window_start_present: true,
+            born: vec![],
+            touched: vec![("real.rs".into(), -1.0)],
+        };
+        assert_eq!(
+            evaluate_new_code_rows(&nc_cfg(), &real).len(),
+            1,
+            "a real net degradation fails"
+        );
+    }
+
+    #[test]
+    fn new_code_touched_band_skipped_when_off() {
+        let cfg = NewCodeGates {
+            touched_no_degradation: false,
+            ..nc_cfg()
+        };
+        let scope = NewCodeScope {
+            window_start_present: true,
+            born: vec![],
+            touched: vec![("rotting.rs".into(), -99.0)],
+        };
+        assert!(evaluate_new_code_rows(&cfg, &scope).is_empty());
+    }
+
+    #[test]
+    fn new_code_both_bands_flag_independently() {
+        // A born-unhealthy file and a touched-degraded file each surface their
+        // own band's violation; an untouched legacy file never enters the scope
+        // (run_new_code_scope only carries born/touched), so it is exempt here by
+        // construction.
+        let scope = NewCodeScope {
+            window_start_present: true,
+            born: vec![("new_bad.rs".into(), 20.0), ("new_ok.rs".into(), 90.0)],
+            touched: vec![
+                ("touched_bad.rs".into(), -12.0),
+                ("touched_ok.rs".into(), 5.0),
+            ],
+        };
+        let v = evaluate_new_code_rows(&nc_cfg(), &scope);
+        assert_eq!(v.len(), 2);
+        assert!(
+            v.iter()
+                .any(|x| x.gate == "born_health_min" && x.path == "new_bad.rs")
+        );
+        assert!(
+            v.iter()
+                .any(|x| x.gate == "touched_no_degradation" && x.path == "touched_bad.rs")
+        );
+    }
+
+    #[test]
+    fn new_code_shallow_history_scope_yields_no_violations() {
+        // The shallow-history skip: run_new_code_scope reports empty born/touched
+        // with window_start_present=false; the evaluator has nothing to flag.
+        let scope = NewCodeScope::default();
+        assert!(!scope.window_start_present);
+        assert!(evaluate_new_code_rows(&nc_cfg(), &scope).is_empty());
     }
 }
