@@ -394,11 +394,16 @@ fn red_window_churn(db: &FactsDb, src: &str, wd: u32) -> Result<HashMap<String, 
         .map_err(|e| CodeLoreError::Analysis(format!("collect red window churn: {e}")))
 }
 
-/// The revision representing each red file's state entering the trailing
-/// window: the newest commit strictly *before* the window opened. `None` when
-/// the window spans all history (no pre-window commit) — every red file is then
-/// judged as newly-added.
-fn window_start_rev(db: &FactsDb, wd: u32) -> Result<Option<String>> {
+/// The revision representing a file's state entering the trailing window: the
+/// newest commit strictly *before* the window opened. `None` when the window
+/// spans all history (no pre-window commit) — every file is then judged as
+/// newly-added, which is also the "history shallower than the window" signal the
+/// `[new_code]` gate skips on.
+///
+/// Shared with the `[new_code]` gate so both views anchor the window start on
+/// the same rev; the caller passes the window length (the effort view uses
+/// `opts.window_days`, the new-code gate its own `[new_code] window_days`).
+pub fn window_start_rev(db: &FactsDb, wd: u32) -> Result<Option<String>> {
     let sql = format!(
         "SELECT rev FROM commits
          WHERE date < (SELECT MAX(date) FROM commits) - INTERVAL '{wd} days'
@@ -417,21 +422,58 @@ fn window_start_rev(db: &FactsDb, wd: u32) -> Result<Option<String>> {
 /// One function's absolute risk drivers at a revision: worst-case per bare name.
 type FnMetrics = HashMap<String, (u32, f64)>;
 
-/// HEAD per-function `(loc, cyclomatic)` for the red files, indexed by path then
-/// bare function name. Reuses `delta-health`'s [`run_function_metrics`], which
-/// already collapses each `(path, bare-name)` to its worst-case metrics and
-/// keeps only real functions / methods.
+/// HEAD per-function `(loc, cyclomatic)` for the given path set, indexed by path
+/// then bare function name. Reuses `delta-health`'s [`run_function_metrics`],
+/// which already collapses each `(path, bare-name)` to its worst-case metrics
+/// and keeps only real functions / methods. Shared by the red-band effort
+/// decomposition and the `[new_code]` touched-band net-movement scan.
 fn head_function_metrics(
     db: &FactsDb,
-    red_paths: &HashSet<String>,
+    paths: &HashSet<String, impl std::hash::BuildHasher>,
 ) -> Result<HashMap<String, FnMetrics>> {
     let mut out: HashMap<String, FnMetrics> = HashMap::new();
     for row in run_function_metrics(db)? {
-        if red_paths.contains(&row.path) {
+        if paths.contains(&row.path) {
             out.entry(row.path)
                 .or_default()
                 .insert(row.name, (row.loc, row.cyclomatic));
         }
+    }
+    Ok(out)
+}
+
+/// Per-file net `delta-health` movement over the trailing window for an
+/// arbitrary set of live-at-HEAD `paths`, sharing the improving-churn
+/// exemption's window-start machinery: HEAD function metrics from the fact
+/// store ([`head_function_metrics`]), the window-start baseline parsed per file
+/// ([`base_function_metrics`]), and the [`net_movement`] classification.
+///
+/// `window_start` is the caller-resolved window-start rev ([`window_start_rev`]);
+/// `None` treats every file as all-new (each function judged by its HEAD risk
+/// alone). This is the signal the `[new_code]` touched band reads — it performs
+/// no second full-tree health scan, only the same scoped per-file at-rev parse
+/// the effort decomposition already uses, here over the touched-not-born set
+/// instead of the red set. A path with no analyzable functions at either rev
+/// (docs, config, unsupported languages) nets zero.
+///
+/// # Errors
+///
+/// Returns [`crate::CodeLoreError::Analysis`] on SQL or row-mapping failure
+/// fetching the HEAD function metrics.
+pub fn window_net_movement<R: Repo>(
+    db: &FactsDb,
+    repo: &R,
+    paths: &HashSet<String, impl std::hash::BuildHasher>,
+    window_start: Option<&str>,
+) -> Result<HashMap<String, f64>> {
+    let head_fns = head_function_metrics(db, paths)?;
+    let empty: FnMetrics = HashMap::new();
+    let mut out = HashMap::with_capacity(paths.len());
+    for path in paths {
+        let head = head_fns.get(path).unwrap_or(&empty);
+        let base =
+            window_start.map_or_else(FnMetrics::new, |rev| base_function_metrics(repo, rev, path));
+        out.insert(path.clone(), net_movement(head, &base));
     }
     Ok(out)
 }
@@ -478,11 +520,20 @@ fn base_function_metrics<R: Repo>(repo: &R, rev: &str, path: &str) -> FnMetrics 
     out
 }
 
-/// Whether a file's functions net-improved between `base` (window-start) and
-/// `head`. Accumulates `delta-health` good/bad LOC weight over the union of
-/// function names and returns `true` only when good strictly dominates bad —
-/// the conservative test that leaves neutral and net-degrading files degrading.
-fn file_improved(head: &FnMetrics, base: &FnMetrics) -> bool {
+/// Net `delta-health` movement of a file between its window-start `base` and
+/// `head` function metrics: good LOC-weight minus bad LOC-weight, classified
+/// with the same fixed risk bands ([`classify`] / [`outcome_for`]) the whole
+/// effort decomposition uses. Positive ⇒ net improvement, negative ⇒ net
+/// degradation, exactly zero ⇒ no function crossed a risk band (untouched
+/// functions and sub-band edits — the typo-fix case — contribute nothing, so
+/// the banded classification is itself the noise filter).
+///
+/// This is the single per-file signal two gates share: the improving-churn
+/// effort exemption asks whether it is strictly positive ([`file_improved`]);
+/// the `[new_code]` touched band asks whether it is non-negative. Neither
+/// applies the delta-health red-file weight multiplier — movement stays in raw
+/// LOC weight, matching the effort decomposition's reported numbers.
+pub(crate) fn net_movement(head: &FnMetrics, base: &FnMetrics) -> f64 {
     let mut good_w = 0.0_f64;
     let mut bad_w = 0.0_f64;
     let names: HashSet<&String> = head.keys().chain(base.keys()).collect();
@@ -504,7 +555,14 @@ fn file_improved(head: &FnMetrics, base: &FnMetrics) -> bool {
             Outcome::Neutral => {}
         }
     }
-    good_w > bad_w
+    good_w - bad_w
+}
+
+/// Whether a file's functions net-improved between `base` (window-start) and
+/// `head` — [`net_movement`] strictly positive (good weight dominates bad). The
+/// conservative test that leaves neutral and net-degrading files degrading.
+fn file_improved(head: &FnMetrics, base: &FnMetrics) -> bool {
+    net_movement(head, base) > 0.0
 }
 
 /// Split the red band's window churn into `(improving_pct, degrading_pct)` of
@@ -786,7 +844,7 @@ mod tests {
 
     // ───────── improving-churn decomposition core (file_improved) ─────────
 
-    use super::{FnMetrics, file_improved};
+    use super::{FnMetrics, file_improved, net_movement};
 
     /// One function keyed by bare name, with LOC / cyclomatic. LOC 71+ or
     /// cyclomatic 11+ is High; 31+ / 6+ is Medium; below is Low — the fixed
@@ -796,6 +854,33 @@ mod tests {
             .iter()
             .map(|&(n, loc, cyc)| (n.to_string(), (loc, cyc)))
             .collect()
+    }
+
+    #[test]
+    fn net_movement_is_signed_weight_and_agrees_with_file_improved() {
+        // A High-risk function (loc 120) shrinks to Low (loc 10): good weight is
+        // the head LOC (10), no bad weight → net +10, and file_improved (net > 0)
+        // agrees. The `[new_code]` touched band reads this same number and asks
+        // net >= 0 instead.
+        let base = fns(&[("f", 120, 3.0)]);
+        let head = fns(&[("f", 10, 3.0)]);
+        assert!((net_movement(&head, &base) - 10.0).abs() < f64::EPSILON);
+        assert!(file_improved(&head, &base));
+
+        // A Low→High degradation books the head LOC (120) as bad weight → net
+        // -120, and file_improved is false.
+        let base = fns(&[("f", 10, 3.0)]);
+        let head = fns(&[("f", 120, 3.0)]);
+        assert!((net_movement(&head, &base) + 120.0).abs() < f64::EPSILON);
+        assert!(!file_improved(&head, &base));
+
+        // A neutral-only change (Medium→Medium) and an untouched file both net
+        // exactly zero — the typo-fix case the touched band lets pass.
+        let base = fns(&[("f", 40, 3.0)]);
+        let head = fns(&[("f", 50, 3.0)]);
+        assert!(net_movement(&head, &base).abs() < f64::EPSILON);
+        let same = fns(&[("f", 40, 3.0)]);
+        assert!(net_movement(&same, &same.clone()).abs() < f64::EPSILON);
     }
 
     #[test]

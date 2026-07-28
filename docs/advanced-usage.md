@@ -854,6 +854,29 @@ Three surfaces evaluate this file, each against a different input: `codelore che
 
 `delta_code_health_min_per_file` and `new_file_health_min` are evaluated only by the working-tree gate surfaces — `codelore diff` ignores both. Conversely, `new_hotspot_max`, `delta_health_min`, and `deny_degrading_verdict` are diff-only and never evaluated by the working-tree gate.
 
+#### The `[new_code]` period gate
+
+`[gates]`' absolute floors bind on the legacy tail: a `code_health_min` must sit below the worst old file, so it says nothing about whether the code being written *this quarter* is healthy, and it ratchets only when someone re-bases it by hand. `[diff]`'s `new_file_health_min` floors new files, but only within *one pull request*. `[new_code]` fills the period-scoped gap — "new and recently-touched code is held to a strict standard; legacy code is only required not to degrade" — over a rolling window rather than a single PR:
+
+```toml
+[new_code]
+window_days = 90            # the rolling working-set window (anchored to the last commit date); [7, 365]
+born_health_min = 60.0      # files BORN in the window must score ≥ this at HEAD; [0, 100]
+touched_no_degradation = true  # files TOUCHED (not born) in the window must not net-degrade over it
+```
+
+Two bands split the window's live-at-HEAD source files by how much of each the window actually wrote:
+
+- **Born in window** — a file whose first commit lands inside the window must meet `born_health_min` at HEAD. This is the period-scope generalization of `[diff]`'s `new_file_health_min`: same "new files must be born healthy" floor, but over a rolling period instead of one PR. A violation reads `born_health_min: <path> — actual 41.2 (born in window) vs threshold 60.0`.
+- **Touched (not born) in window** — a file touched inside the window but first seen earlier owes *non-degradation*: its net health movement over the window must be non-negative when `touched_no_degradation` is on (the default once the section is present). The signal is the **same** per-file net-movement the `red_effort_exempt_improving` exemption computes — delta-health good-minus-bad LOC weight between the window-start revision and HEAD, over a scoped per-file parse of the touched files only (no second full-tree health scan, no blame machinery on the gate path). The effort exemption asks whether that movement is strictly positive; this band asks whether it is non-negative, so a window that touched a file without moving any function across a risk band (a typo fix, a comment) nets zero and passes. A violation reads `touched_no_degradation: <path> — actual net -3.0 over 90d vs threshold ≥ 0`.
+- **Untouched** — legacy files nobody edited in the window are exempt; only the absolute `[gates]` apply to them.
+
+The section is **opt-in by presence**: any `[new_code]` table — even an empty one — enables the gate and makes the thresholds file non-empty; its absence is byte-identical to before everywhere, including the `change_context` briefing. `born_health_min` is optional (omit it to run only the touched band). The gate is evaluated wherever `[gates]` is — `codelore check` and the `check_gates` MCP tool — and is **skipped** (recorded `verdict = "skipped"`, exit code unaffected, disclosed on stderr) when the repository's history is shallower than the window: with the whole repo inside the window there is no legacy tail to contrast the working set against, so flagging every file as born would be a surprise. `codelore gate` / `gate_changes` and `codelore diff` do not evaluate `[new_code]` — they gate the `[diff]` scope, not the `[gates]` scope.
+
+`new_file_health_min` (PR scope) and `[new_code]`'s `born_health_min` (period scope) are complementary and **both stay**: the PR floor answers "is this pull request acceptable now", the period floor answers "is the active working set healthy" — different questions, evaluated by different commands. The agent-loop `change_context` briefing ([§11.9](#gate_changes)) adds a one-line `new-code:` disclosure for a briefed file that is born or touched in the window, but only when the section is configured; it never changes a `gate_changes` verdict.
+
+Why a rolling window rather than a pinned baseline ("all code after tag X is new")? A fixed baseline reintroduces the manual re-basing this repo's own floor history shows people forget. A rolling window is self-maintaining — remediation and growth churn age out on their own — so a team that wants a ratchet instead can pin `window_days` high and tighten `born_health_min` over time; the reverse is not possible.
+
 `[calibration]` is not a gate — it's a config *selector* that declares the repo's default defect-calibration artifact once, so `analyze`, `check`, `explain <path>`, and `codelore mcp` all pick it up without repeating `--defect-calibration` on every invocation. Precedence: an explicit `--defect-calibration` flag (or the MCP server's startup flag) always wins; otherwise the `[calibration] defect_artifact` path is used, resolved relative to the repo root (absolute paths pass through as-is); otherwise the run is uncalibrated. A thresholds file containing only `[calibration]` still leaves `check` vacuously passing — see [Defect calibration](#defect-calibration-does-the-health-score-predict-where-defects-land-here) for what the artifact does once applied.
 
 ## 5. Configuration: `.codeloreignore` + thresholds

@@ -51,6 +51,7 @@ pub mod memo;
 pub mod messages;
 pub mod mi;
 pub mod modularity_violations;
+pub mod new_code;
 pub mod ownership;
 pub mod pair_programming;
 pub mod query;

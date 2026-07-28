@@ -333,6 +333,10 @@ fn emit_gate_notices(
             ("code_health_min", "degraded") => eprintln!(
                 "  ⚠ code_health_min: degraded — health scan returned no rows on a non-empty repo"
             ),
+            ("new_code", "skipped") => eprintln!(
+                "  ⚠ new_code: skipped — repository history is shallower than the {:.0}-day window (no pre-window baseline to contrast the working set against)",
+                r.threshold
+            ),
             _ => {}
         }
     }
@@ -640,6 +644,67 @@ fn evaluate_all_gates(
             head_sha,
         ));
         violations.extend(effort_v);
+    }
+
+    // ── [new_code] two-band period gate ──────────────────────────────────────
+    if let Some(nc) = &thresholds.new_code {
+        // Reuse the HEAD code-health rows already computed for `code_health_min`
+        // (the born band's scores + the live-source universe) and the
+        // effort-exposure window-start machinery (the touched band's net
+        // movement) — no second health scan on this path.
+        use codelore_lib::cli_api::analyses::new_code;
+        let scope = new_code::run_new_code_scope(db, repo, opts, nc.window_days, &code_health)
+            .context("run new-code scope for gate")?;
+        if scope.window_start_present {
+            let nc_v = codelore_lib::cli_api::quality_gates::evaluate_new_code_rows(nc, &scope);
+            // Per-band ledger records so `--history` shows each obligation. The
+            // ratchet reads its own typed metrics, not these, so new gate names
+            // are display-only here.
+            if let Some(floor) = nc.born_health_min {
+                let worst = scope
+                    .born
+                    .iter()
+                    .map(|(_, s)| *s)
+                    .fold(f64::INFINITY, f64::min);
+                recs.push(make_rec(
+                    "born_health_min",
+                    floor,
+                    if worst.is_finite() { worst } else { 0.0 },
+                    nc_v.iter().any(|v| v.gate == "born_health_min"),
+                    ts,
+                    head_sha,
+                ));
+            }
+            if nc.touched_no_degradation {
+                let worst = scope
+                    .touched
+                    .iter()
+                    .map(|(_, n)| *n)
+                    .fold(f64::INFINITY, f64::min);
+                recs.push(make_rec(
+                    "touched_no_degradation",
+                    0.0,
+                    if worst.is_finite() { worst } else { 0.0 },
+                    nc_v.iter().any(|v| v.gate == "touched_no_degradation"),
+                    ts,
+                    head_sha,
+                ));
+            }
+            violations.extend(nc_v);
+        } else {
+            // History shallower than the window ⇒ no legacy baseline to contrast
+            // the working set against. Skip with disclosure, mirroring the
+            // corpus_percentile_max / hotspot_anchored_max skip convention.
+            recs.push(GateRunRecord {
+                ts: ts.to_owned(),
+                head_sha: head_sha.to_owned(),
+                gate: "new_code".into(),
+                threshold: f64::from(nc.window_days),
+                value: 0.0,
+                verdict: "skipped".into(),
+                mode: "check".into(),
+            });
+        }
     }
 
     if let Some(min) = g.code_familiarity_min {
