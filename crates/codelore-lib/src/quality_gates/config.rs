@@ -34,6 +34,11 @@ pub struct Thresholds {
     pub diff: DiffGates,
     #[serde(default)]
     pub calibration: CalibrationConfig,
+    /// The optional `[new_code]` section — a period-scoped two-band gate.
+    /// `None` when the section is absent (byte-identical to no feature);
+    /// `Some` enables it. See [`NewCodeGates`].
+    #[serde(default)]
+    pub new_code: Option<NewCodeGates>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -46,6 +51,19 @@ pub struct Gates {
     pub code_health_min: Option<f64>,
     /// Maximum hotspot score per file.
     pub hotspot_score_max: Option<f64>,
+    /// Maximum corpus-anchored hotspot score per file (the `hotspot-score-anchored`
+    /// column). Same `[0, 10]` scale as `hotspot_score_max`, but the file's
+    /// complexity is ranked against the calibration corpus rather than the repo,
+    /// so this ceiling is stable under improvement — removing or refactoring the
+    /// repo's worst file does not shift any other file's anchored score.
+    ///
+    /// The gate is **skipped** (not failed, not passed) when no calibration
+    /// artifact is active — no embedded world corpus and no `--calibration`
+    /// override means hotspot rows carry no `hotspot_score_anchored`, so there is
+    /// nothing to compare against. The skip is recorded in the ledger with
+    /// `verdict = "skipped"` and printed as a distinct warning line; it does not
+    /// affect the exit code — mirroring `corpus_percentile_max`.
+    pub hotspot_anchored_max: Option<f64>,
     /// Disallow ANY Type-1 clone families.
     #[serde(default)]
     pub disallow_clone_type_1: bool,
@@ -63,6 +81,17 @@ pub struct Gates {
     /// fighting fires in the worst-health files." Missing red band
     /// (zero red files) counts as 0 %, which passes any positive threshold.
     pub max_red_effort_pct: Option<f64>,
+    /// Companion to [`max_red_effort_pct`](Self::max_red_effort_pct): when
+    /// `true`, the ceiling is compared against only the *degrading* share of
+    /// red-band window churn — churn that landed in red files whose own health
+    /// did NOT improve over the window — exempting churn that refactored a red
+    /// file toward health. Default `false` leaves the gate comparing the full
+    /// red churn share (behaviour unchanged). Has no effect unless
+    /// `max_red_effort_pct` is also set; like `fail_on_degraded` it is a
+    /// modifier, not a gate, so it never makes the thresholds non-empty on its
+    /// own.
+    #[serde(default)]
+    pub red_effort_exempt_improving: bool,
     /// Minimum code-familiarity score (`[0, 100]`). Below this threshold
     /// the `code-familiarity` analysis emits a `"risky"` verdict. When
     /// absent the analysis applies a built-in default of 70.0.
@@ -148,6 +177,72 @@ pub struct DiffGates {
     pub new_file_health_min: Option<f64>,
 }
 
+/// The `[new_code]` section: a two-band, period-scoped quality gate over the
+/// active working set.
+///
+/// - **Born in window** — a file first seen inside the rolling
+///   [`window_days`](Self::window_days) window must meet
+///   [`born_health_min`](Self::born_health_min) at HEAD. This generalises the
+///   `[diff]` [`new_file_health_min`](DiffGates::new_file_health_min) floor from
+///   PR scope to period scope.
+/// - **Touched in window** — a file touched (but not born) inside the window
+///   owes non-negative net health movement over the window when
+///   [`touched_no_degradation`](Self::touched_no_degradation) is on (the
+///   default). The signal is the *same* per-file net-movement the
+///   improving-churn effort exemption computes, here required to be
+///   non-degrading rather than strictly improving.
+/// - **Untouched** — legacy files nobody edited in the window are exempt; only
+///   the absolute `[gates]` apply to them.
+///
+/// The section is opt-in: its **presence** (any key, or none) enables the gate
+/// and makes the thresholds file non-empty. Absence is byte-identical to the
+/// behaviour without this feature. The PR-scoped `new_file_health_min` and this
+/// period-scoped floor are complementary and both stay: the former answers "is
+/// this pull request acceptable now", the latter "is the working set healthy".
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NewCodeGates {
+    /// Rolling window, in days, defining the active working set. Anchored to the
+    /// repo's most recent commit date (not wall-clock), so the born/touched
+    /// partition is reproducible on archived repos. Defaults to
+    /// [`DEFAULT_WINDOW_DAYS`](crate::constants::DEFAULT_WINDOW_DAYS) — the same
+    /// window the effort-exposure view uses, so both describe one working set.
+    #[serde(default = "default_new_code_window_days")]
+    pub window_days: u32,
+    /// Floor a file *born* inside the window must meet at HEAD, on the `[0, 100]`
+    /// code-health scale. Absent ⇒ the born band is not evaluated (only the
+    /// touched band applies).
+    pub born_health_min: Option<f64>,
+    /// When `true` (the **default** once the section is present), a file
+    /// *touched but not born* inside the window fails if its net health movement
+    /// over the window is negative. A window that touched a file without moving
+    /// any function across a delta-health risk band (a typo fix, a comment edit)
+    /// nets zero and passes. Set `false` to keep the born band while dropping the
+    /// touched band.
+    #[serde(default = "default_touched_no_degradation")]
+    pub touched_no_degradation: bool,
+}
+
+fn default_new_code_window_days() -> u32 {
+    crate::constants::DEFAULT_WINDOW_DAYS
+}
+
+fn default_touched_no_degradation() -> bool {
+    true
+}
+
+impl Default for NewCodeGates {
+    /// Matches the shape serde produces for an empty `[new_code]` table:
+    /// the default window, no born floor, touched-band on.
+    fn default() -> Self {
+        Self {
+            window_days: default_new_code_window_days(),
+            born_health_min: None,
+            touched_no_degradation: default_touched_no_degradation(),
+        }
+    }
+}
+
 /// The `[calibration]` section: repo-declared analysis calibration, applied
 /// wherever the equivalent CLI flag is accepted. This is a config *selector*,
 /// not a gate — its presence never enables gate evaluation on its own.
@@ -159,6 +254,33 @@ pub struct CalibrationConfig {
     /// `--defect-calibration` CLI flag and the MCP server's startup flag;
     /// absent everywhere means uncalibrated.
     pub defect_artifact: Option<PathBuf>,
+}
+
+/// Push a problem when `value` is present and either non-finite or outside the
+/// inclusive `[lo, hi]` domain. Shared by every bounded [`Thresholds::validate`]
+/// check so the wording of the two failure modes stays identical across keys.
+fn finite_in(problems: &mut Vec<String>, key: &str, value: Option<f64>, lo: f64, hi: f64) {
+    let Some(v) = value else { return };
+    if !v.is_finite() {
+        problems.push(format!("{key} = {v} must be a finite number"));
+    } else if !(lo..=hi).contains(&v) {
+        problems.push(format!(
+            "{key} = {v} is outside the accepted range [{lo}, {hi}]"
+        ));
+    }
+}
+
+/// Push a problem when `value` is present and either non-finite or below `min`,
+/// with no upper bound — the open-topped ceilings (`cognitive_max`,
+/// `hotspot_score_max`, `hotspot_anchored_max`) whose worst value a huge file
+/// can legitimately reach.
+fn finite_min(problems: &mut Vec<String>, key: &str, value: Option<f64>, min: f64) {
+    let Some(v) = value else { return };
+    if !v.is_finite() {
+        problems.push(format!("{key} = {v} must be a finite number"));
+    } else if v < min {
+        problems.push(format!("{key} = {v} must be >= {min}"));
+    }
 }
 
 impl Thresholds {
@@ -221,6 +343,7 @@ impl Thresholds {
         self.gates.cognitive_max.is_none()
             && self.gates.code_health_min.is_none()
             && self.gates.hotspot_score_max.is_none()
+            && self.gates.hotspot_anchored_max.is_none()
             && !self.gates.disallow_clone_type_1
             && self.gates.max_dependency_cycles.is_none()
             && self.gates.max_propagation_cost.is_none()
@@ -235,9 +358,16 @@ impl Thresholds {
             && !self.diff.deny_degrading_verdict
             && self.diff.delta_code_health_min_per_file.is_none()
             && self.diff.new_file_health_min.is_none()
+            // The `[new_code]` section is opt-in by presence: any `[new_code]`
+            // table (even with no keys) enables the period gate and makes the
+            // thresholds file non-empty, so `check` does not short-circuit.
+            && self.new_code.is_none()
         // Note: fail_on_degraded=true is the default and does not make a
         // threshold non-empty by itself — it only affects how degraded
-        // verdicts from other gates are handled. Likewise `[calibration]`
+        // verdicts from other gates are handled. red_effort_exempt_improving is
+        // excluded for the same reason: it only reshapes the max_red_effort_pct
+        // comparison, so a file setting it alone configures no gate. Likewise
+        // `[calibration]`
         // is deliberately excluded from this expression: it selects a
         // defect-calibration artifact for analyses to consume, it does not
         // configure a gate, so a thresholds file containing only
@@ -254,8 +384,9 @@ impl Thresholds {
     /// Each field's domain is derived from its own documented semantics:
     /// scores and percentages on `[0, 100]`, ratios on `[0, 1]`, health
     /// *deltas* on `[-100, 100]` (a `[0, 100]` score can move at most a full
-    /// span either way), and the two open-topped ceilings (`cognitive_max`,
-    /// `hotspot_score_max`) require only finiteness and non-negativity.
+    /// span either way), and the three open-topped ceilings (`cognitive_max`,
+    /// `hotspot_score_max`, `hotspot_anchored_max`) require only finiteness and
+    /// non-negativity.
     /// `u32` counts (`max_dependency_cycles`, `new_hotspot_max`,
     /// `max_findings_in_hot_files`) cannot express a non-finite or negative
     /// value, so the type already guards them.
@@ -268,28 +399,6 @@ impl Thresholds {
     /// Returns a `String` naming each offending key, its value, and the
     /// accepted domain. `Ok(())` when every configured threshold is in range.
     pub fn validate(&self) -> std::result::Result<(), String> {
-        // Finite and within an inclusive `[lo, hi]` domain.
-        fn finite_in(problems: &mut Vec<String>, key: &str, value: Option<f64>, lo: f64, hi: f64) {
-            let Some(v) = value else { return };
-            if !v.is_finite() {
-                problems.push(format!("{key} = {v} must be a finite number"));
-            } else if !(lo..=hi).contains(&v) {
-                problems.push(format!(
-                    "{key} = {v} is outside the accepted range [{lo}, {hi}]"
-                ));
-            }
-        }
-        // Finite and at or above `min`, with no upper bound (open-topped
-        // ceilings whose worst value a huge file can legitimately reach).
-        fn finite_min(problems: &mut Vec<String>, key: &str, value: Option<f64>, min: f64) {
-            let Some(v) = value else { return };
-            if !v.is_finite() {
-                problems.push(format!("{key} = {v} must be a finite number"));
-            } else if v < min {
-                problems.push(format!("{key} = {v} must be >= {min}"));
-            }
-        }
-
         let mut problems = Vec::new();
         let g = &self.gates;
         finite_min(&mut problems, "cognitive_max", g.cognitive_max, 0.0);
@@ -301,6 +410,12 @@ impl Thresholds {
             100.0,
         );
         finite_min(&mut problems, "hotspot_score_max", g.hotspot_score_max, 0.0);
+        finite_min(
+            &mut problems,
+            "hotspot_anchored_max",
+            g.hotspot_anchored_max,
+            0.0,
+        );
         finite_in(
             &mut problems,
             "max_propagation_cost",
@@ -359,6 +474,25 @@ impl Thresholds {
             0.0,
             100.0,
         );
+
+        // `[new_code]` bounds: the window must be a sane trailing period and the
+        // born floor a valid `[0, 100]` score. `window_days` is a `u32`, so the
+        // type already guards non-finite/negative — only the range needs a check.
+        if let Some(nc) = &self.new_code {
+            if !(7..=365).contains(&nc.window_days) {
+                problems.push(format!(
+                    "window_days = {} is outside the accepted range [7, 365]",
+                    nc.window_days
+                ));
+            }
+            finite_in(
+                &mut problems,
+                "born_health_min",
+                nc.born_health_min,
+                0.0,
+                100.0,
+            );
+        }
 
         if problems.is_empty() {
             Ok(())
@@ -535,6 +669,38 @@ new_hotspot_max = 0
         );
     }
 
+    // ───────── red_effort_exempt_improving modifier ─────────
+
+    #[test]
+    fn red_effort_exempt_improving_parses_and_defaults_false() {
+        let on = Thresholds::from_text("[gates]\nred_effort_exempt_improving = true\n").unwrap();
+        assert!(on.gates.red_effort_exempt_improving);
+        // Omitted ⇒ default false (behaviour unchanged).
+        let off = Thresholds::from_text("[gates]\nmax_red_effort_pct = 15.0\n").unwrap();
+        assert!(!off.gates.red_effort_exempt_improving);
+    }
+
+    #[test]
+    fn red_effort_exempt_improving_alone_does_not_configure_a_gate() {
+        // A modifier, not a gate: like fail_on_degraded it must leave the
+        // thresholds vacuously empty when it is the only key present, and it
+        // must still validate.
+        let t = Thresholds::from_text("[gates]\nred_effort_exempt_improving = true\n").unwrap();
+        assert!(t.is_empty(), "the modifier alone configures no gate");
+        t.validate().expect("bool modifier is always valid");
+    }
+
+    #[test]
+    fn red_effort_exempt_improving_unknown_key_rejected() {
+        // Typo guard: a near-miss must reject, not silently disable the exemption.
+        let raw = "[gates]\nred_effort_exempt_improveing = true\n";
+        let err = Thresholds::from_text(raw).expect_err("typo'd key should reject");
+        assert!(
+            err.contains("unknown field") || err.contains("red_effort_exempt_improveing"),
+            "expected 'unknown field' in error: {err}"
+        );
+    }
+
     #[test]
     fn finding_overlap_gate_toml_key_parses() {
         let t = Thresholds::from_text("[gates]\nmax_findings_in_hot_files = 3\n").unwrap();
@@ -692,6 +858,26 @@ no_new_cycles = true
     }
 
     #[test]
+    fn validate_rejects_negative_hotspot_anchored_max() {
+        // Open-topped ceiling like hotspot_score_max: finite and non-negative.
+        let err = Thresholds::from_text("[gates]\nhotspot_anchored_max = -1.0\n")
+            .unwrap()
+            .validate()
+            .expect_err("negative anchored ceiling must be rejected");
+        assert!(
+            err.contains("hotspot_anchored_max") && err.contains(">= 0"),
+            "message names the key and the non-negativity requirement: {err}"
+        );
+    }
+
+    #[test]
+    fn is_empty_false_when_only_hotspot_anchored_max_set() {
+        // A lone anchored ceiling is a real gate — `check` must not short-circuit.
+        let t = Thresholds::from_text("[gates]\nhotspot_anchored_max = 9.9\n").unwrap();
+        assert!(!t.is_empty());
+    }
+
+    #[test]
     fn validate_rejects_negative_floor() {
         // A negative score floor fails every file (all scores >= 0) —
         // degenerate. `code_health_min` is a [0, 100] domain, so -5 is out.
@@ -774,5 +960,106 @@ new_file_health_min = 200.0
         std::fs::write(&path, "[gates]\ncode_health_min = 60.0\n").expect("write");
         let t = Thresholds::from_path(&path).expect("valid config must load");
         assert_eq!(t.gates.code_health_min, Some(60.0));
+    }
+
+    // ───────── [new_code] section ─────────
+
+    #[test]
+    fn new_code_absent_is_none_and_empty() {
+        // No `[new_code]` table ⇒ the field is None and the file stays empty
+        // (byte-identical to before the feature).
+        let t = Thresholds::from_text("[gates]\ncode_health_min = 60.0\n").unwrap();
+        assert!(t.new_code.is_none());
+        let bare = Thresholds::from_text("").unwrap();
+        assert!(bare.new_code.is_none());
+        assert!(bare.is_empty());
+    }
+
+    #[test]
+    fn new_code_empty_section_takes_defaults_and_is_non_empty() {
+        // Presence of the section (even with no keys) enables the gate and makes
+        // the thresholds file non-empty; the defaults are window 90, no born
+        // floor, touched band on.
+        let t = Thresholds::from_text("[new_code]\n").unwrap();
+        let nc = t.new_code.as_ref().expect("section present");
+        assert_eq!(nc.window_days, 90);
+        assert_eq!(nc.born_health_min, None);
+        assert!(nc.touched_no_degradation);
+        assert!(
+            !t.is_empty(),
+            "presence of [new_code] makes the file non-empty"
+        );
+        t.validate().expect("defaults are in range");
+    }
+
+    #[test]
+    fn new_code_parses_explicit_values() {
+        let t = Thresholds::from_text(
+            "[new_code]\nwindow_days = 30\nborn_health_min = 60.0\ntouched_no_degradation = false\n",
+        )
+        .unwrap();
+        let nc = t.new_code.as_ref().expect("section present");
+        assert_eq!(nc.window_days, 30);
+        assert_eq!(nc.born_health_min, Some(60.0));
+        assert!(!nc.touched_no_degradation);
+        assert!(!t.is_empty());
+    }
+
+    #[test]
+    fn new_code_unknown_key_rejected() {
+        // deny_unknown_fields must catch a near-miss spelling, mirroring siblings.
+        let err = Thresholds::from_text("[new_code]\nwindow_dayz = 90\n")
+            .expect_err("typo'd key should reject");
+        assert!(
+            err.contains("unknown field") || err.contains("window_dayz"),
+            "expected 'unknown field' in error: {err}"
+        );
+    }
+
+    #[test]
+    fn new_code_validate_rejects_out_of_range_window() {
+        // Window below the floor and above the ceiling both fail with the domain.
+        for bad in [
+            "[new_code]\nwindow_days = 6\n",
+            "[new_code]\nwindow_days = 366\n",
+        ] {
+            let err = Thresholds::from_text(bad)
+                .unwrap()
+                .validate()
+                .expect_err("out-of-range window must be rejected");
+            assert!(
+                err.contains("window_days") && err.contains("[7, 365]"),
+                "message names the key and its domain: {err}"
+            );
+        }
+        // The inclusive bounds themselves pass.
+        Thresholds::from_text("[new_code]\nwindow_days = 7\n")
+            .unwrap()
+            .validate()
+            .expect("7 is in range");
+        Thresholds::from_text("[new_code]\nwindow_days = 365\n")
+            .unwrap()
+            .validate()
+            .expect("365 is in range");
+    }
+
+    #[test]
+    fn new_code_validate_rejects_out_of_range_born_floor() {
+        let err = Thresholds::from_text("[new_code]\nborn_health_min = 150.0\n")
+            .unwrap()
+            .validate()
+            .expect_err("born floor above 100 must be rejected");
+        assert!(
+            err.contains("born_health_min") && err.contains("[0, 100]"),
+            "message names the key and its domain: {err}"
+        );
+        let err = Thresholds::from_text("[new_code]\nborn_health_min = nan\n")
+            .unwrap()
+            .validate()
+            .expect_err("nan born floor must be rejected");
+        assert!(
+            err.contains("born_health_min") && err.contains("finite"),
+            "message names the key and the finiteness requirement: {err}"
+        );
     }
 }

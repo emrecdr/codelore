@@ -246,7 +246,7 @@
 
   // ─── §3b  Sticky section nav: scrollspy + jump links + back-to-top ──
   // `#dash-nav`'s chips (template.html, sibling of `<header>`) and the
-  // four factor tiles (`renderFactorHeader`, 10_helpers_drawer.js) both
+  // four factor tiles (`renderFactorHeader`, 14_widgets_summary.js) both
   // jump to a `.dash-group` section through this one function.
   function dashPrefersReducedMotion() {
     return typeof window.matchMedia === 'function'

@@ -219,6 +219,8 @@ fn rendered_spa_boots_without_console_errors() {
             churn_share_pct: 30.0,
             commit_share_ci_low: 0.22,
             commit_share_ci_high: 0.50,
+            churn_share_improving_pct: None,
+            churn_share_degrading_pct: None,
         },
         EffortExposureRow {
             band: "yellow".into(),
@@ -228,6 +230,8 @@ fn rendered_spa_boots_without_console_errors() {
             churn_share_pct: 28.0,
             commit_share_ci_low: 0.16,
             commit_share_ci_high: 0.36,
+            churn_share_improving_pct: None,
+            churn_share_degrading_pct: None,
         },
         EffortExposureRow {
             band: "green".into(),
@@ -237,6 +241,8 @@ fn rendered_spa_boots_without_console_errors() {
             churn_share_pct: 42.0,
             commit_share_ci_low: 0.28,
             commit_share_ci_high: 0.54,
+            churn_share_improving_pct: None,
+            churn_share_degrading_pct: None,
         },
     ];
 
@@ -1617,6 +1623,8 @@ fn write_smoke_spa(html_path: &std::path::Path, title: &str) {
                 churn_share_pct: 30.0,
                 commit_share_ci_low: 0.22,
                 commit_share_ci_high: 0.50,
+                churn_share_improving_pct: None,
+                churn_share_degrading_pct: None,
             },
             EffortExposureRow {
                 band: "green".into(),
@@ -1626,6 +1634,8 @@ fn write_smoke_spa(html_path: &std::path::Path, title: &str) {
                 churn_share_pct: 70.0,
                 commit_share_ci_low: 0.54,
                 commit_share_ci_high: 0.74,
+                churn_share_improving_pct: None,
+                churn_share_degrading_pct: None,
             },
         ],
         ..SpaDashboard::default()

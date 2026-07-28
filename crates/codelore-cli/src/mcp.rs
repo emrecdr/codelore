@@ -502,6 +502,7 @@ fn skipped_check_gates(thresholds: &Thresholds) -> Vec<&'static str> {
         cognitive_max,
         code_health_min,
         hotspot_score_max,
+        hotspot_anchored_max,
         disallow_clone_type_1,
         max_dependency_cycles,
         max_propagation_cost,
@@ -510,10 +511,15 @@ fn skipped_check_gates(thresholds: &Thresholds) -> Vec<&'static str> {
         max_findings_in_hot_files,
         corpus_percentile_max,
         fail_on_degraded,
+        // A modifier of max_red_effort_pct, not a standalone gate. This tool
+        // DOES honor it (the effort-exposure gate above decomposes when set), so
+        // it is neither reported as an evaluated gate nor as skipped.
+        red_effort_exempt_improving: _,
     } = &thresholds.gates;
-    let configured: [(&'static str, bool); 11] = [
+    let configured: [(&'static str, bool); 12] = [
         ("cognitive_max", cognitive_max.is_some()),
         ("hotspot_score_max", hotspot_score_max.is_some()),
+        ("hotspot_anchored_max", hotspot_anchored_max.is_some()),
         ("code_health_min", code_health_min.is_some()),
         ("disallow_clone_type_1", *disallow_clone_type_1),
         ("max_dependency_cycles", max_dependency_cycles.is_some()),
@@ -939,26 +945,51 @@ impl CodeLoreServer {
             violations.extend(evaluate_clone_gate(&thresholds, &db).map_err(|e| map_lib_err(&e))?);
 
             // effort-exposure gate — reuses the code-health rows computed for
-            // code_health_min so the heaviest analysis runs once per call.
+            // code_health_min so the heaviest analysis runs once per call. With
+            // the improving-churn exemption on, the red band is decomposed (a
+            // scoped window-start parse of the red files via the repo) so the
+            // gate compares the degrading share; off, the base rows are used.
             if let Some(max) = thresholds.gates.max_red_effort_pct {
-                let rows =
-                    codelore_lib::cli_api::analyses::effort_exposure::run_effort_exposure_with_health(
-                        &db,
-                        &opts.with_no_row_limit(),
-                        &ch,
-                    )
-                    .map_err(|e| map_lib_err(&e))?;
+                use codelore_lib::cli_api::analyses::effort_exposure;
+                let exempt = thresholds.gates.red_effort_exempt_improving;
+                let no_limit = opts.with_no_row_limit();
+                let rows = if exempt {
+                    effort_exposure::run_effort_exposure_decomposed(&db, &repo, &no_limit, &ch)
+                } else {
+                    effort_exposure::run_effort_exposure_with_health(&db, &no_limit, &ch)
+                }
+                .map_err(|e| map_lib_err(&e))?;
                 violations.extend(
-                    codelore_lib::cli_api::quality_gates::evaluate_effort_exposure_rows(max, &rows),
+                    codelore_lib::cli_api::quality_gates::evaluate_effort_exposure_rows_exempt(
+                        max, exempt, &rows,
+                    ),
                 );
             }
 
+            // [new_code] two-band period gate — mirrors `codelore check`: reuses
+            // the code-health rows and the effort-exposure window-start
+            // machinery, evaluating the born + touched bands over the committed
+            // HEAD. A run whose history is shallower than the window produces no
+            // new_code violations here; the authoritative `codelore check`
+            // discloses that skip.
+            if let Some(nc) = &thresholds.new_code {
+                use codelore_lib::cli_api::analyses::new_code;
+                let scope = new_code::run_new_code_scope(&db, &repo, &opts, nc.window_days, &ch)
+                    .map_err(|e| map_lib_err(&e))?;
+                if scope.window_start_present {
+                    violations.extend(
+                        codelore_lib::cli_api::quality_gates::evaluate_new_code_rows(nc, &scope),
+                    );
+                }
+            }
+
             // architecture + familiarity gates. This tool evaluates a subset
-            // of `codelore check`: the `max_findings_in_hot_files` and
-            // `corpus_percentile_max` gates, degraded-gate semantics, and
-            // `--ratchet` remain check-only — `skipped_gates` (below) names any
-            // that this config configured, so a client sees where this verdict
-            // can diverge from a CI run. `codelore check` is authoritative.
+            // of `codelore check`: the `max_findings_in_hot_files`,
+            // `corpus_percentile_max`, and `hotspot_anchored_max` gates,
+            // degraded-gate semantics, and `--ratchet` remain check-only —
+            // `skipped_gates` (below) names any that this config configured, so
+            // a client sees where this verdict can diverge from a CI run.
+            // `codelore check` is authoritative.
             violations.extend(
                 codelore_lib::cli_api::quality_gates::evaluate_architecture_gate(&thresholds, &db)
                     .map_err(|e| map_lib_err(&e))?,

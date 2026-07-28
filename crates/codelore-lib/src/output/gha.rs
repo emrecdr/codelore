@@ -179,6 +179,7 @@ mod tests {
             mi: None,
             mi_rank: None,
             ai_pct: None,
+            hotspot_score_anchored: None,
         }
     }
 

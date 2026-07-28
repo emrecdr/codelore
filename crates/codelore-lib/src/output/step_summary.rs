@@ -329,6 +329,7 @@ mod tests {
                     mi: Some(-137.0),
                     mi_rank: Some(0.03),
                     ai_pct: None,
+                    hotspot_score_anchored: None,
                 },
                 HotspotRow {
                     path: "src/lib.rs".into(),
@@ -339,6 +340,7 @@ mod tests {
                     mi: Some(50.0),
                     mi_rank: Some(0.7),
                     ai_pct: None,
+                    hotspot_score_anchored: None,
                 },
             ],
             summary: vec![

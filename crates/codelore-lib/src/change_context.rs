@@ -62,6 +62,12 @@
 //!   attributable ownership renders `owner: inconclusive`.
 //! - `recent:` — commit count + churned lines over the last `window_days`; a
 //!   path untouched in the window renders `recent: quiet in last <window_days>d`.
+//! - `new-code:` (optional, before the action line) — rendered only when the
+//!   repo declares a `[new_code]` section AND the path is inside its window:
+//!   `born in the last <n>d` (first seen in the window) or `touched in the last
+//!   <n>d` (touched, first seen earlier), each with the obligation that band
+//!   implies. Absent the section, or for a path outside the window, no line
+//!   renders — a repo without `[new_code]` is byte-identical to before.
 //! - `→` (optional final line) — a single next action derived from the picked
 //!   values: co-change partners surface the top partner to edit alongside; with
 //!   no partners, a main author past `departed_threshold_days` surfaces a
@@ -87,6 +93,7 @@ use crate::analyses::lineage;
 use crate::constants::{DEFAULT_FISHER_SIGNIFICANCE, DEFAULT_MIN_SHARED_REVS};
 use crate::defect_calibration::active_vintage;
 use crate::facts::FactsDb;
+use crate::quality_gates::Thresholds;
 use crate::repo::Repo;
 use crate::{CodeLoreError, Options, Result};
 
@@ -122,6 +129,19 @@ struct PathBriefing {
     /// `(revisions, churned_lines)` over the recent window when the path was
     /// touched in it.
     recent: Option<(u32, i64)>,
+    /// `(membership, window_days)` for the optional `[new_code]` disclosure
+    /// line — `Some` only when the repo declares a `[new_code]` section AND the
+    /// path is inside its window. `None` (no line) otherwise, so a repo without
+    /// the section is byte-identical to before this feature.
+    new_code: Option<(NewCodeMembership, u32)>,
+}
+
+/// In-window classification for the `[new_code]` disclosure line: `Born` (first
+/// seen inside the window) or `Touched` (touched, but first seen earlier).
+#[derive(Debug, Clone, Copy)]
+enum NewCodeMembership {
+    Born,
+    Touched,
 }
 
 /// Assemble and render the pre-write briefing for `paths`.
@@ -177,6 +197,21 @@ fn assemble(db: &FactsDb, opts: &Options, paths: &[String]) -> Result<Vec<PathBr
     // Repo-wide: read once, stamp the same vintage on every block.
     let vintage = active_vintage(&opts)?;
 
+    // Optional `[new_code]` disclosure: computed only when the repo declares the
+    // section. Discovery errors (unreadable / malformed thresholds, or a typo in
+    // an unrelated section) are swallowed via `.ok()` so a repo WITHOUT
+    // `[new_code]` renders byte-identically to before this feature — the
+    // briefing stays a best-effort read that never fails on a gate-config
+    // problem the `check` surface is responsible for reporting.
+    let nc_window = Thresholds::discover(&opts.repo_path)
+        .ok()
+        .and_then(|t| t.new_code)
+        .map(|nc| nc.window_days);
+    let nc_membership = match nc_window {
+        Some(wd) => new_code_membership_for_paths(db, &opts, paths, wd)?,
+        None => HashMap::new(),
+    };
+
     let briefings = paths
         .iter()
         .map(|path| {
@@ -199,6 +234,7 @@ fn assemble(db: &FactsDb, opts: &Options, paths: &[String]) -> Result<Vec<PathBr
                 partners_total,
                 owner: owners.get(path).cloned(),
                 recent: churn.get(path).copied(),
+                new_code: nc_window.and_then(|wd| nc_membership.get(path).map(|m| (*m, wd))),
             }
         })
         .collect();
@@ -289,6 +325,76 @@ fn window_churn_for_paths(
         .map_err(|e| CodeLoreError::Analysis(format!("change_context churn collect: {e}")))
 }
 
+/// Per-path `[new_code]` window membership for the requested `paths`, over a
+/// `window_days` window anchored to the repo's last commit date — the same
+/// born/touched partition the `[new_code]` gate evaluates, scoped to the
+/// briefing's paths (mirroring [`window_churn_for_paths`]'s bound-path form).
+/// A path first seen inside the window is [`NewCodeMembership::Born`]; one
+/// touched but first seen earlier is [`NewCodeMembership::Touched`]; a path
+/// outside the window (or with no history) is absent from the map, so no
+/// disclosure line renders for it.
+fn new_code_membership_for_paths(
+    db: &FactsDb,
+    opts: &Options,
+    paths: &[String],
+    window_days: u32,
+) -> Result<HashMap<String, NewCodeMembership>> {
+    if paths.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    lineage::materialize_if_needed(db, opts)?;
+    let src = lineage::source_table(opts);
+    let placeholders = std::iter::repeat_n("(?)", paths.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "SELECT ch.path,
+                (MIN(co.date) >= (SELECT MAX(date) FROM commits) - INTERVAL (?) DAY) AS born,
+                (MAX(co.date) >= (SELECT MAX(date) FROM commits) - INTERVAL (?) DAY) AS touched
+         FROM {src} ch
+         JOIN commits co ON co.rev = ch.rev
+         WHERE ch.path IN (VALUES {placeholders})
+         GROUP BY ch.path"
+    );
+
+    // Bind order follows the placeholders in SQL text: the born INTERVAL, the
+    // touched INTERVAL, then the path list.
+    let window_days = i64::from(window_days);
+    let mut binds: Vec<&dyn duckdb::ToSql> = Vec::with_capacity(paths.len() + 2);
+    binds.push(&window_days);
+    binds.push(&window_days);
+    for path in paths {
+        binds.push(path as &dyn duckdb::ToSql);
+    }
+
+    let mut stmt = db
+        .conn()
+        .prepare(&sql)
+        .map_err(|e| CodeLoreError::Analysis(format!("change_context new-code prepare: {e}")))?;
+    let rows = stmt
+        .query_map(binds.as_slice(), |r| {
+            let path: String = r.get(0)?;
+            let born: bool = r.get(1)?;
+            let touched: bool = r.get(2)?;
+            Ok((path, born, touched))
+        })
+        .map_err(|e| CodeLoreError::Analysis(format!("change_context new-code query: {e}")))?;
+
+    let mut out = HashMap::new();
+    for row in rows {
+        let (path, born, touched) =
+            row.map_err(|e| CodeLoreError::Analysis(format!("change_context new-code row: {e}")))?;
+        if born {
+            out.insert(path, NewCodeMembership::Born);
+        } else if touched {
+            out.insert(path, NewCodeMembership::Touched);
+        }
+        // Outside the window ⇒ absent from the map ⇒ no disclosure line.
+    }
+    Ok(out)
+}
+
 /// Render the briefings deterministically. Pure over `briefings` / `opts` — no
 /// I/O, no fact-store access; two calls with equal inputs produce equal text.
 fn render(briefings: &[PathBriefing], merge_note: bool, opts: &Options) -> String {
@@ -329,10 +435,34 @@ fn render_block(briefing: &PathBriefing, opts: &Options) -> String {
         format!("  {}", owner_line(briefing, opts)),
         format!("  {}", recent_line(briefing, opts)),
     ];
+    // Optional `[new_code]` disclosure, before the action line so `→` stays
+    // last. Present only when the repo declares `[new_code]` and the path is in
+    // its window (see [`assemble`]).
+    if let Some((membership, window_days)) = briefing.new_code {
+        lines.push(format!("  {}", new_code_line(membership, window_days)));
+    }
     if let Some(action) = action_line(briefing, opts) {
         lines.push(format!("  {action}"));
     }
     lines.join("\n")
+}
+
+/// The `[new_code]` disclosure line: which band of the active working set the
+/// path sits in, and the obligation that implies. Rendered only when the repo
+/// declares a `[new_code]` section (so absence stays byte-identical).
+fn new_code_line(membership: NewCodeMembership, window_days: u32) -> String {
+    match membership {
+        NewCodeMembership::Born => {
+            format!(
+                "new-code: born in the last {window_days}d — new files must meet born_health_min"
+            )
+        }
+        NewCodeMembership::Touched => {
+            format!(
+                "new-code: touched in the last {window_days}d — must not degrade over the window"
+            )
+        }
+    }
 }
 
 /// One optional next-action line for a block, derived only from data already
@@ -465,6 +595,7 @@ mod tests {
             partners_total: 2,
             owner: Some(owner("Emre Camdere", 82.0, 12, 0)),
             recent: Some((4, 310)),
+            new_code: None,
         }
     }
 
@@ -480,6 +611,45 @@ mod tests {
              recent: 4 commits, 310 lines churned in last 90d\n  \
              \u{2192} historically co-changes with options.rs — consider the same edit there";
         assert_eq!(render(&[populated()], false, &opts()), expected);
+    }
+
+    #[test]
+    fn no_new_code_line_when_absent() {
+        // The absent case (new_code: None on the briefing) renders no disclosure
+        // — the byte-identical guarantee for repos without a `[new_code]` section
+        // (`renders_the_exact_block` pins the full byte output for this case).
+        let out = render(&[populated()], false, &opts());
+        assert!(
+            !out.contains("new-code:"),
+            "no [new_code] membership ⇒ no disclosure line: {out}"
+        );
+    }
+
+    #[test]
+    fn new_code_disclosure_renders_before_the_action_line() {
+        // populated() carries co-change partners, so `→` is last; the born/touched
+        // disclosure sits between `recent:` and `→`.
+        let mut born = populated();
+        born.new_code = Some((super::NewCodeMembership::Born, 90));
+        let out = render(&[born], false, &opts());
+        assert!(
+            out.contains("new-code: born in the last 90d — new files must meet born_health_min"),
+            "born disclosure renders: {out}"
+        );
+        let nc_at = out.find("new-code:").expect("disclosure present");
+        let action_at = out.find('\u{2192}').expect("action present");
+        assert!(
+            nc_at < action_at,
+            "disclosure precedes the action line: {out}"
+        );
+
+        let mut touched = populated();
+        touched.new_code = Some((super::NewCodeMembership::Touched, 30));
+        let out = render(&[touched], false, &opts());
+        assert!(
+            out.contains("new-code: touched in the last 30d — must not degrade over the window"),
+            "touched disclosure renders with its own window: {out}"
+        );
     }
 
     #[test]
@@ -547,6 +717,7 @@ mod tests {
             partners_total: 0,
             owner: None,
             recent: None,
+            new_code: None,
         };
         assert_eq!(
             render(&[briefing], false, &opts()),
@@ -565,6 +736,7 @@ mod tests {
             partners_total: 0,
             owner: Some(owner("Emre Camdere", 91.0, 30, 0)),
             recent: None,
+            new_code: None,
         };
         let out = render(&[briefing], false, &opts());
         assert!(
@@ -652,6 +824,7 @@ mod tests {
             partners_total: 5,
             owner: Some(owner("Some Long Author Name", 74.0, 365, 2)),
             recent: Some((41, 9310)),
+            new_code: None,
         };
         assert_eq!(make("a").partners.len(), MAX_PARTNERS);
         let briefings = [

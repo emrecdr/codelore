@@ -58,12 +58,16 @@ pub fn write_hotspots_markdown<W: Write>(rows: &[HotspotRow], w: &mut W) -> Resu
     //
     // The AI cell is the share of commits with AI-attribution signal
     // (ai-assisted | ai-authored), rendered as `X.X%` or `—`.
+    //
+    // `Score (anchored)` is `Score` with its cognitive terms anchored to the
+    // calibration corpus (see `HotspotRow::hotspot_score_anchored`); `—` when no
+    // corpus is active or the file's language is uncovered.
     writeln!(
         w,
-        "| Entity | Revisions | Cognitive | Cognitive Health | Score | MI | AI % |"
+        "| Entity | Revisions | Cognitive | Cognitive Health | Score | MI | AI % | Score (anchored) |"
     )
     .map_err(CodeLoreError::Io)?;
-    writeln!(w, "|---|---|---|---|---|---|---|").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---|---|---|---|---|---|---|").map_err(CodeLoreError::Io)?;
     for row in rows {
         let mi_cell = match (row.mi, row.mi_rank) {
             (Some(v), Some(rank)) if rank.is_finite() => {
@@ -80,16 +84,21 @@ pub fn write_hotspots_markdown<W: Write>(rows: &[HotspotRow], w: &mut W) -> Resu
             Some(v) if v.is_finite() => format!("{v:.1}%"),
             _ => "—".to_owned(),
         };
+        // Same `{:.4}` scale as the `Score` column; `—` when absent.
+        let anchored_cell = row
+            .hotspot_score_anchored
+            .map_or_else(|| "—".to_owned(), |v| format!("{v:.4}"));
         writeln!(
             w,
-            "| `{}` | {} | {:.2} | {:.2} | {:.4} | {} | {} |",
+            "| `{}` | {} | {:.2} | {:.2} | {:.4} | {} | {} | {} |",
             escape_md_cell(&row.path),
             row.revisions,
             row.cognitive,
             row.cognitive_health,
             row.hotspot_score,
             mi_cell,
-            ai_cell
+            ai_cell,
+            anchored_cell
         )
         .map_err(CodeLoreError::Io)?;
     }
@@ -100,10 +109,10 @@ pub fn write_code_health_markdown<W: Write>(rows: &[CodeHealthRow], w: &mut W) -
     header(w, "CodeLore code-health")?;
     writeln!(
         w,
-        "| Entity | Cognitive | Score | Structural risk | Percentile | Band | Corpus percentile |"
+        "| Entity | Cognitive | Score | Structural risk | Percentile | Band | Corpus percentile | Corpus 95% CI |"
     )
     .map_err(CodeLoreError::Io)?;
-    writeln!(w, "|---|---|---|---|---|---|---|").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---|---|---|---|---|---|---|").map_err(CodeLoreError::Io)?;
     for row in rows {
         let corpus_cell = match row.corpus_percentile {
             Some(v) => {
@@ -118,16 +127,28 @@ pub fn write_code_health_markdown<W: Write>(rows: &[CodeHealthRow], w: &mut W) -
             }
             None => "—".to_owned(),
         };
+        // Wilson 95% interval on the corpus percentile, as an integer-percent
+        // range. Present exactly when `corpus_percentile` is.
+        let corpus_ci_cell = match (row.corpus_percentile_ci_low, row.corpus_percentile_ci_high) {
+            (Some(lo), Some(hi)) => {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                // Both bounds are in [0.0, 1.0]; *100+round fits u32.
+                let (lo_pct, hi_pct) = ((lo * 100.0).round() as u32, (hi * 100.0).round() as u32);
+                format!("{lo_pct}–{hi_pct}%")
+            }
+            _ => "—".to_owned(),
+        };
         writeln!(
             w,
-            "| `{}` | {:.2} | {:.2} | {:.4} | {:.4} | {} | {} |",
+            "| `{}` | {:.2} | {:.2} | {:.4} | {:.4} | {} | {} | {} |",
             escape_md_cell(&row.path),
             row.cognitive,
             row.score,
             row.structural_risk,
             row.percentile,
             row.band,
-            corpus_cell
+            corpus_cell,
+            corpus_ci_cell
         )
         .map_err(CodeLoreError::Io)?;
     }
@@ -177,14 +198,22 @@ pub fn write_effort_exposure_markdown<W: Write>(
     }
     writeln!(
         w,
-        "| Band | Files | LOC share % | Commit share % | Churn share % | CI 95% low | CI 95% high |"
+        "| Band | Files | LOC share % | Commit share % | Churn share % | CI 95% low | CI 95% high | Improving churn % | Degrading churn % |"
     )
     .map_err(CodeLoreError::Io)?;
-    writeln!(w, "|---|---:|---:|---:|---:|---:|---:|").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---:|---:|---:|---:|---:|---:|---:|---:|").map_err(CodeLoreError::Io)?;
     for row in rows {
+        // The improving/degrading split is populated only for the red band when
+        // the decomposition ran (repo available); elsewhere it reads "—".
+        let improving = row
+            .churn_share_improving_pct
+            .map_or_else(|| "—".to_owned(), |v| format!("{v:.1}"));
+        let degrading = row
+            .churn_share_degrading_pct
+            .map_or_else(|| "—".to_owned(), |v| format!("{v:.1}"));
         writeln!(
             w,
-            "| {} | {} | {:.1} | {:.1} | {:.1} | {:.3} | {:.3} |",
+            "| {} | {} | {:.1} | {:.1} | {:.1} | {:.3} | {:.3} | {} | {} |",
             escape_md_cell(&row.band),
             row.files,
             row.loc_share_pct,
@@ -192,6 +221,8 @@ pub fn write_effort_exposure_markdown<W: Write>(
             row.churn_share_pct,
             row.commit_share_ci_low,
             row.commit_share_ci_high,
+            improving,
+            degrading,
         )
         .map_err(CodeLoreError::Io)?;
     }

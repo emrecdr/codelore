@@ -47,9 +47,15 @@ pub fn write_hotspots_csv<W: Write>(rows: &[HotspotRow], w: &mut W) -> Result<()
     // `ai-pct` is the share of commits touching this file that carry an
     // AI-attribution signal (ai-assisted | ai-authored per identity::bots).
     // Range [0, 100]; absolute interpretation is meaningful across repos.
+    //
+    // `hotspot-score-anchored` is `hotspot-score` with its cognitive terms
+    // anchored to the calibration corpus (see `HotspotRow::hotspot_score_anchored`).
+    // The cell is empty — never `0.00` — when no corpus is active or the file's
+    // language is uncovered, so appending the column leaves every existing
+    // column byte-identical.
     writeln!(
         w,
-        "entity,revisions,cognitive,cognitive-health,hotspot-score,mi,mi-rank,mi-band,ai-pct"
+        "entity,revisions,cognitive,cognitive-health,hotspot-score,mi,mi-rank,mi-band,ai-pct,hotspot-score-anchored"
     )
     .map_err(CodeLoreError::Io)?;
     for row in rows {
@@ -70,9 +76,13 @@ pub fn write_hotspots_csv<W: Write>(rows: &[HotspotRow], w: &mut W) -> Result<()
             Some(v) if v.is_finite() => format!("{v:.2}"),
             _ => String::new(),
         };
+        // Same `{:.4}` scale as `hotspot-score`; empty when absent.
+        let anchored_cell = row
+            .hotspot_score_anchored
+            .map_or_else(String::new, |v| format!("{v:.4}"));
         writeln!(
             w,
-            "{},{},{:.2},{:.2},{:.4},{},{},{},{}",
+            "{},{},{:.2},{:.2},{:.4},{},{},{},{},{}",
             quote_if_needed(&row.path),
             row.revisions,
             row.cognitive,
@@ -81,7 +91,8 @@ pub fn write_hotspots_csv<W: Write>(rows: &[HotspotRow], w: &mut W) -> Result<()
             mi_cell,
             rank_cell,
             band_cell,
-            ai_cell
+            ai_cell,
+            anchored_cell
         )
         .map_err(CodeLoreError::Io)?;
     }
@@ -91,24 +102,25 @@ pub fn write_hotspots_csv<W: Write>(rows: &[HotspotRow], w: &mut W) -> Result<()
 pub fn write_code_health_csv<W: Write>(rows: &[CodeHealthRow], w: &mut W) -> Result<()> {
     writeln!(
         w,
-        "entity,cognitive,score,structural_risk,percentile,band,corpus-pct"
+        "entity,cognitive,score,structural_risk,percentile,band,corpus-pct,corpus-pct-ci-low,corpus-pct-ci-high"
     )
     .map_err(CodeLoreError::Io)?;
+    // A cell holding a `{:.2}` fraction when present, else empty — the shared
+    // shape of the corpus percentile and its two Wilson bounds.
+    let cell = |v: Option<f64>| v.map_or_else(String::new, |v| format!("{v:.2}"));
     for row in rows {
-        let corpus_pct = match row.corpus_percentile {
-            Some(v) => format!("{v:.2}"),
-            None => String::new(),
-        };
         writeln!(
             w,
-            "{},{:.2},{:.2},{:.4},{:.4},{},{}",
+            "{},{:.2},{:.2},{:.4},{:.4},{},{},{},{}",
             quote_if_needed(&row.path),
             row.cognitive,
             row.score,
             row.structural_risk,
             row.percentile,
             row.band,
-            corpus_pct
+            cell(row.corpus_percentile),
+            cell(row.corpus_percentile_ci_low),
+            cell(row.corpus_percentile_ci_high),
         )
         .map_err(CodeLoreError::Io)?;
     }
@@ -150,13 +162,21 @@ pub fn write_effort_exposure_csv<W: Write>(
 ) -> Result<()> {
     writeln!(
         w,
-        "band,files,loc-share-pct,commit-share-pct,churn-share-pct,commit-share-ci-low,commit-share-ci-high"
+        "band,files,loc-share-pct,commit-share-pct,churn-share-pct,commit-share-ci-low,commit-share-ci-high,churn-share-improving-pct,churn-share-degrading-pct"
     )
     .map_err(CodeLoreError::Io)?;
     for row in rows {
+        // Improving/degrading split is populated only for the red band when the
+        // decomposition ran (repo available); other rows leave the cells empty.
+        let improving = row
+            .churn_share_improving_pct
+            .map_or_else(String::new, |v| format!("{v:.2}"));
+        let degrading = row
+            .churn_share_degrading_pct
+            .map_or_else(String::new, |v| format!("{v:.2}"));
         writeln!(
             w,
-            "{},{},{:.2},{:.2},{:.2},{:.4},{:.4}",
+            "{},{},{:.2},{:.2},{:.2},{:.4},{:.4},{},{}",
             quote_if_needed(&row.band),
             row.files,
             row.loc_share_pct,
@@ -164,6 +184,8 @@ pub fn write_effort_exposure_csv<W: Write>(
             row.churn_share_pct,
             row.commit_share_ci_low,
             row.commit_share_ci_high,
+            improving,
+            degrading,
         )
         .map_err(CodeLoreError::Io)?;
     }

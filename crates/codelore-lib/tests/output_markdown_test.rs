@@ -13,6 +13,7 @@ fn markdown_hotspots_table() {
         mi: Some(72.0),
         mi_rank: None,
         ai_pct: None,
+        hotspot_score_anchored: None,
     }];
     let mut buf = Vec::new();
     markdown::write_hotspots_markdown(&rows, &mut Cursor::new(&mut buf)).expect("write");

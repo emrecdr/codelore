@@ -558,6 +558,8 @@ mod tests {
             band: band.to_string(),
             corpus_percentile: None,
             beyond_corpus: false,
+            corpus_percentile_ci_low: None,
+            corpus_percentile_ci_high: None,
         }
     }
 

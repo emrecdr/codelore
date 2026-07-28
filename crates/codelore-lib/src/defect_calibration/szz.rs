@@ -18,11 +18,29 @@
 //!    commit last introduced each deleted line — queried at the fix's FIRST
 //!    PARENT (the revision immediately before the fix), since that's the
 //!    tree the deleted lines still existed in.
-//! 3. The **AG filter** drops candidates whose line is cosmetic — blank, or
+//! 3. The **tangled-commit guard** excludes an oversized fix from linkage
+//!    outright (see [`TANGLED_MAX_FILES`] / [`TANGLED_MAX_CHURN`]); the
+//!    **ghost guard** skips whole-file-deletion blame targets within an
+//!    otherwise-kept fix.
+//! 4. The **AG filter** drops candidates whose line is cosmetic — blank, or
 //!    comment-only for the file's Tier-1 language — see [`is_cosmetic_line`].
-//! 4. The **clock-skew guard** discards candidates that aren't strictly
+//! 5. The **clock-skew guard** discards candidates that aren't strictly
 //!    older than the fix itself.
-//! 5. Survivors dedupe into `(defect_rev, fix_rev, path)` [`SzzLink`]s.
+//! 6. Survivors dedupe into `(defect_rev, fix_rev, path)` [`SzzLink`]s.
+//!
+//! # Tangled and ghost guards
+//!
+//! AG-SZZ over-attributes on two shapes of fix commit. A **tangled** fix
+//! bundles the correction with unrelated edits, so most of its deleted lines
+//! are not the fix — Herzig, Just & Zeller ("The Impact of Tangled Code
+//! Changes on Defect Prediction Models", MSR 2013) show tangled changes
+//! distort defect attribution. A **ghost** fix's diff cannot carry a fix at
+//! all: a whole-file deletion removes code wholesale, so blaming its removed
+//! lines attributes the "defect" to everyone who ever touched the file —
+//! extending Kim, Zimmermann, Pan & Whitehead's AG-SZZ cosmetic filter (ASE
+//! 2006) from cosmetic *lines* to file-level removals. Both guards exclude
+//! rather than down-weight (links carry no weight field), and both disclose a
+//! mined-vs-excluded count in the command output — never in the artifact.
 //!
 //! Per-file blame failures are skip-with-log, never fatal — mining
 //! continues with the fix's other files and the remaining fixes; failures
@@ -37,6 +55,21 @@ use crate::repo::Repo;
 use crate::{CodeLoreError, Result};
 
 use super::MiningStats;
+
+/// Tangled-commit guard: a fix touching more than this many files is presumed
+/// to mix the fix with unrelated edits (Herzig, Just & Zeller, MSR 2013), so
+/// most of its deleted lines are not the fix and it is excluded from linkage.
+/// Deliberately generous — an ordinary multi-file fix passes; the bound drops
+/// only the mega-commits (sweeping refactors, mechanical renames, dependency
+/// bumps) that carry a `fix`-word yet fan across the tree.
+pub const TANGLED_MAX_FILES: u32 = 8;
+
+/// Tangled-commit guard: a fix changing more than this many lines
+/// (added + deleted, across all its files) is presumed too large to be a
+/// focused fix and is excluded from linkage. The churn companion to
+/// [`TANGLED_MAX_FILES`] — a fix concentrated in few files can still be a
+/// tree-wide mechanical change.
+pub const TANGLED_MAX_CHURN: u32 = 400;
 
 /// Pluggable line-origin seam (roadmap's "pluggable SZZ"). Given a file at a
 /// revision, returns for each requested 1-based line the commit that last
@@ -243,10 +276,13 @@ struct LinkAccumulator {
     seen: HashSet<(String, String, String)>,
 }
 
-/// The AG-SZZ engine: for each fix commit, blames its deleted pre-image
-/// lines at the fix's FIRST PARENT, drops cosmetic candidates (the AG
-/// filter), discards candidates that aren't strictly older than the fix
-/// (the clock-skew guard), and dedupes the survivors into
+/// The AG-SZZ engine: for each fix commit, excludes the tangled ones outright
+/// (tallied in `MiningStats::fixes_excluded_tangled`), then blames the
+/// remaining fixes' deleted pre-image lines at the fix's FIRST PARENT —
+/// skipping whole-file-deletion blame targets (the ghost guard, tallied in
+/// `MiningStats::ghost_files_skipped`), dropping cosmetic candidates (the AG
+/// filter), and discarding candidates that aren't strictly older than the fix
+/// (the clock-skew guard) — and dedupes the survivors into
 /// `(defect_rev, fix_rev, path)` links.
 ///
 /// `fixes` is `(rev, parent_rev, date)` for every commit the oracle already
@@ -311,24 +347,85 @@ fn link_one_fix<R: Repo>(
     commit_dates: &HashMap<String, String, impl std::hash::BuildHasher>,
     acc: &mut LinkAccumulator,
 ) -> Result<()> {
+    // Tangled-commit guard: an oversized fix is excluded from linkage
+    // outright, before any blame — most of its deleted lines are not the fix.
+    if fix_is_tangled(db, fix.fix_rev)? {
+        acc.stats.fixes_excluded_tangled += 1;
+        return Ok(());
+    }
+
     let deleted = deleted_ranges(db, fix.fix_rev)?;
     if deleted.is_empty() {
         acc.stats.pure_addition_fixes += 1;
         return Ok(());
     }
 
+    // Ghost guard: a file removed wholesale in this fix (change_type
+    // 'deleted') carries only removed lines, which cannot embody an in-place
+    // fix — skip its blame targets rather than over-attribute to every past
+    // author. Pure renames are already inert here (a content-free rename
+    // produces no deleted hunk), and whitespace / comment lines are handled
+    // downstream by the `-w` blame and the AG cosmetic filter.
+    let ghost_paths = whole_file_deletions(db, fix.fix_rev)?;
+
     let mut lines_by_path: HashMap<&str, Vec<u32>> = HashMap::new();
+    let mut ghost_skipped: HashSet<&str> = HashSet::new();
     for (path, start, count) in &deleted {
+        if ghost_paths.contains(path.as_str()) {
+            ghost_skipped.insert(path.as_str());
+            continue;
+        }
         lines_by_path
             .entry(path.as_str())
             .or_default()
             .extend(*start..start.saturating_add(*count));
     }
+    acc.stats.ghost_files_skipped += u32::try_from(ghost_skipped.len()).unwrap_or(u32::MAX);
 
     for (path, lines) in lines_by_path {
         blame_one_file(repo, origin, fix, path, &lines, commit_dates, acc);
     }
     Ok(())
+}
+
+/// Tangled-commit guard predicate: true when the fix touches more than
+/// [`TANGLED_MAX_FILES`] files OR changes more than [`TANGLED_MAX_CHURN`]
+/// lines (added + deleted) across the `changes` table — too large to be a
+/// focused fix. A fix with no `changes` rows (nothing recorded) is not
+/// tangled.
+///
+/// # Errors
+///
+/// [`CodeLoreError::Analysis`] on a `FactsDb` query failure.
+fn fix_is_tangled(db: &FactsDb, fix_rev: &str) -> Result<bool> {
+    let footprint: Vec<(i64, i64)> = query_map_collect(
+        db,
+        "SELECT COUNT(*), COALESCE(SUM(loc_added + loc_deleted), 0) \
+         FROM changes WHERE rev = ?",
+        duckdb::params![fix_rev],
+        "szz:fix-footprint",
+        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+    )?;
+    let (files, churn) = footprint.first().copied().unwrap_or((0, 0));
+    Ok(files > i64::from(TANGLED_MAX_FILES) || churn > i64::from(TANGLED_MAX_CHURN))
+}
+
+/// The ghost guard's skip set: the paths a fix removes wholesale
+/// (`change_type = 'deleted'`). Their removed lines can't carry an in-place
+/// fix, so blaming them over-attributes.
+///
+/// # Errors
+///
+/// [`CodeLoreError::Analysis`] on a `FactsDb` query failure.
+fn whole_file_deletions(db: &FactsDb, fix_rev: &str) -> Result<HashSet<String>> {
+    let paths: Vec<String> = query_map_collect(
+        db,
+        "SELECT path FROM changes WHERE rev = ? AND change_type = 'deleted'",
+        duckdb::params![fix_rev],
+        "szz:ghost-deletions",
+        |r| r.get::<_, String>(0),
+    )?;
+    Ok(paths.into_iter().collect())
 }
 
 /// Blame one `(fix, path)` pair's deleted lines at the fix's parent, then
@@ -747,6 +844,203 @@ e8486215e55737c14e0787394a0467e84b346e69 7 8 1
         assert_eq!(stats.lines_dropped_cosmetic, 1, "c.rs's comment-only line");
         assert_eq!(stats.blame_failures, 1, "d.rs's fake blame failure");
         assert_eq!(stats.pure_addition_fixes, 0);
+    }
+
+    /// Insert a `changes` row only (no hunk), with an explicit `change_type`
+    /// and churn — enough for the commit-footprint tangled guard, which reads
+    /// only the `changes` table. Requires [`seed_commit`] for `rev` first.
+    fn seed_change(
+        db: &FactsDb,
+        rev: &str,
+        path: &str,
+        change_type: &str,
+        loc_added: u32,
+        loc_deleted: u32,
+    ) {
+        db.conn()
+            .execute(
+                "INSERT INTO changes (rev, path, change_type, loc_added, loc_deleted) \
+                 VALUES (?, ?, ?, ?, ?)",
+                duckdb::params![rev, path, change_type, loc_added, loc_deleted],
+            )
+            .expect("insert change");
+    }
+
+    /// A `changes` + `hunks` pair with an explicit `change_type`, so both the
+    /// ghost guard (reads `change_type`) and `deleted_ranges` (reads `hunks`)
+    /// see it. The generalisation of [`seed_hunk`], which hard-codes
+    /// `'modified'`.
+    fn seed_typed_hunk(
+        db: &FactsDb,
+        rev: &str,
+        path: &str,
+        change_type: &str,
+        old_start: u32,
+        old_lines: u32,
+    ) {
+        seed_change(db, rev, path, change_type, 0, old_lines);
+        db.conn()
+            .execute(
+                "INSERT INTO hunks (rev, path, old_start, old_lines, new_start, new_lines) \
+                 VALUES (?, ?, ?, ?, 1, 0)",
+                duckdb::params![rev, path, old_start, old_lines],
+            )
+            .expect("insert hunk");
+    }
+
+    #[test]
+    fn link_defects_excludes_tangled_fixes() {
+        let db = FactsDb::new_in_memory().expect("in-memory db");
+
+        // fix-wide touches 9 files (> TANGLED_MAX_FILES = 8); f0 alone carries
+        // a hunk + an older origin that WOULD link absent the guard. The
+        // whole fix is excluded before any blame.
+        seed_commit(&db, "fix-wide");
+        seed_typed_hunk(&db, "fix-wide", "src/f0.rs", "modified", 1, 1);
+        for i in 1..9 {
+            seed_change(&db, "fix-wide", &format!("src/f{i}.rs"), "modified", 1, 1);
+        }
+        // fix-heavy touches one file but changes 500 lines (> TANGLED_MAX_CHURN
+        // = 400) — also excluded, and also given a would-link hunk + origin.
+        seed_commit(&db, "fix-heavy");
+        seed_change(&db, "fix-heavy", "src/big.rs", "modified", 500, 0);
+        db.conn()
+            .execute(
+                "INSERT INTO hunks (rev, path, old_start, old_lines, new_start, new_lines) \
+                 VALUES ('fix-heavy', 'src/big.rs', 1, 1, 1, 0)",
+                [],
+            )
+            .expect("insert hunk");
+
+        let repo = FakeRepo {
+            blobs: HashMap::from([
+                (
+                    ("parent-wide".to_string(), "src/f0.rs".to_string()),
+                    b"let x = 1;\n".to_vec(),
+                ),
+                (
+                    ("parent-heavy".to_string(), "src/big.rs".to_string()),
+                    b"let y = 2;\n".to_vec(),
+                ),
+            ]),
+        };
+        let origin = FakeOrigin {
+            table: HashMap::from([
+                (
+                    ("parent-wide".to_string(), "src/f0.rs".to_string()),
+                    vec![(1, "old1".to_string())],
+                ),
+                (
+                    ("parent-heavy".to_string(), "src/big.rs".to_string()),
+                    vec![(1, "old2".to_string())],
+                ),
+            ]),
+            fail_for: HashSet::new(),
+        };
+        let commit_dates = HashMap::from([
+            ("old1".to_string(), "2026-01-01T00:00:00Z".to_string()),
+            ("old2".to_string(), "2026-01-01T00:00:00Z".to_string()),
+        ]);
+        let fixes = vec![
+            (
+                "fix-wide".to_string(),
+                "parent-wide".to_string(),
+                "2026-03-01T00:00:00Z".to_string(),
+            ),
+            (
+                "fix-heavy".to_string(),
+                "parent-heavy".to_string(),
+                "2026-03-01T00:00:00Z".to_string(),
+            ),
+        ];
+
+        let (links, stats) =
+            link_defects(&db, &repo, &origin, &fixes, &commit_dates).expect("link_defects");
+
+        assert!(
+            links.is_empty(),
+            "both fixes are tangled → no links despite would-link origins: {links:?}"
+        );
+        assert_eq!(stats.fixes_excluded_tangled, 2, "one wide + one heavy");
+        assert_eq!(
+            stats.files_blamed, 0,
+            "tangled fixes are excluded before any blame"
+        );
+        assert_eq!(stats.ghost_files_skipped, 0);
+        assert_eq!(stats.links_found, 0);
+    }
+
+    #[test]
+    fn link_defects_skips_whole_file_deletion_ghosts() {
+        let db = FactsDb::new_in_memory().expect("in-memory db");
+
+        // fix-ghost removes src/gone.rs wholesale (change_type 'deleted') and
+        // edits src/kept.rs in place. Both have an older origin that would
+        // link; only the in-place edit must survive — the whole-file deletion
+        // is a ghost whose removed lines can't embody the fix.
+        seed_commit(&db, "fix-ghost");
+        seed_typed_hunk(&db, "fix-ghost", "src/gone.rs", "deleted", 1, 1);
+        seed_typed_hunk(&db, "fix-ghost", "src/kept.rs", "modified", 1, 1);
+
+        let repo = FakeRepo {
+            blobs: HashMap::from([
+                (
+                    ("parent-ghost".to_string(), "src/gone.rs".to_string()),
+                    b"let removed = 1;\n".to_vec(),
+                ),
+                (
+                    ("parent-ghost".to_string(), "src/kept.rs".to_string()),
+                    b"let fixed = 2;\n".to_vec(),
+                ),
+            ]),
+        };
+        let origin = FakeOrigin {
+            table: HashMap::from([
+                (
+                    ("parent-ghost".to_string(), "src/gone.rs".to_string()),
+                    vec![(1, "ghost-origin".to_string())],
+                ),
+                (
+                    ("parent-ghost".to_string(), "src/kept.rs".to_string()),
+                    vec![(1, "kept-origin".to_string())],
+                ),
+            ]),
+            fail_for: HashSet::new(),
+        };
+        let commit_dates = HashMap::from([
+            (
+                "ghost-origin".to_string(),
+                "2026-01-01T00:00:00Z".to_string(),
+            ),
+            (
+                "kept-origin".to_string(),
+                "2026-01-01T00:00:00Z".to_string(),
+            ),
+        ]);
+        let fixes = vec![(
+            "fix-ghost".to_string(),
+            "parent-ghost".to_string(),
+            "2026-03-01T00:00:00Z".to_string(),
+        )];
+
+        let (links, stats) =
+            link_defects(&db, &repo, &origin, &fixes, &commit_dates).expect("link_defects");
+
+        assert_eq!(
+            links,
+            vec![SzzLink {
+                defect_rev: "kept-origin".to_string(),
+                fix_rev: "fix-ghost".to_string(),
+                path: "src/kept.rs".to_string(),
+            }],
+            "only the in-place edit links; the whole-file deletion is skipped: {links:?}"
+        );
+        assert_eq!(stats.ghost_files_skipped, 1, "src/gone.rs skipped as ghost");
+        assert_eq!(
+            stats.files_blamed, 1,
+            "only src/kept.rs is blamed; the ghost is skipped before blame"
+        );
+        assert_eq!(stats.fixes_excluded_tangled, 0);
     }
 
     #[test]

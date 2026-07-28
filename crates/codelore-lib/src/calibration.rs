@@ -346,6 +346,21 @@ pub fn percentile(
     Some(interpolate_percentile(quantiles, value))
 }
 
+/// Pooled per-function sample size behind `language`'s breakpoints — the honest
+/// `n` for a Wilson confidence interval on a per-function corpus percentile.
+///
+/// `None` when the language is absent from the artifact or pooled below
+/// [`MIN_LANG_SAMPLE`] — the same trust floor [`percentile`] applies, so a
+/// percentile and its confidence interval appear (or vanish) together.
+#[must_use]
+pub fn language_sample_functions(art: &CalibrationArtifact, language: &str) -> Option<u64> {
+    art.languages
+        .iter()
+        .find(|l| l.language == language)
+        .filter(|l| l.sample_functions >= MIN_LANG_SAMPLE)
+        .map(|l| l.sample_functions)
+}
+
 /// Lossless `usize` → `f64` for the small, bounded counts this module casts:
 /// quantile-vector indices/lengths (`<= QUANTILE_POINTS`) and per-language
 /// sample sizes. All are orders of magnitude below `2^53`, so the conversion is

@@ -11,23 +11,45 @@
 # floor inside the metric's day-to-day noise band flags routine merges rather
 # than real decay.
 code_health_min = 32.5
-# Worst hotspot-row cognitive complexity today: 139 (the SPA drawer module).
+# Worst hotspot-row cognitive complexity today: 40 (import_graph.rs) — the
+# per-file MAX over its functions. The SPA drawer builds each detail section
+# through its own small function, so the drawer file's largest single function
+# is its radar renderer at 28 — below today's worst, and far below this
+# ceiling. The ceiling sits well above the measured worst and is a candidate
+# to tighten in a separate gate retune.
 cognitive_max = 150.0
-# Highest hotspot score today: 2.97 (crates/codelore-cli/src/main.rs).
-hotspot_score_max = 4.0
+# Corpus-anchored hotspot ceiling, replacing the repo-relative hotspot_score_max
+# whose denominator moved every time the worst file changed (improving the worst
+# file inflated every other file's score, so the ceiling could only ever track
+# "the worst we currently measure"). The anchored score ranks each file's
+# cognitive complexity against the calibration corpus for its language instead of
+# the repo maximum; only the churn term stays repo-relative. Removing or
+# refactoring the worst file therefore leaves every other file's anchored score
+# unchanged, so this ceiling is stable under improvement — an absolute standard,
+# not a moving target.
+#
+# Highest anchored score today: 9.76 (crates/codelore-cli/src/main.rs), the
+# heavily-changed CLI entry point. Anchored scores run high across this repo
+# because its files sit in the top percentiles of the corpus's cognitive
+# distribution (the corpus pools mostly trivial functions), so the score is
+# churn-weighted here and the worst file is the most-churned one. The ceiling
+# sits just above that worst; it binds when a file grows both hotter and more
+# complex, never when the repo refactors its current worst offender.
+hotspot_anchored_max = 9.9
 # Exactly one import cycle exists (the nine-file codelore-rca cluster).
 # Introducing a second cycle fails the gate.
 max_dependency_cycles = 1
 # Propagation cost today: 0.0131 — a change reaches ~1.3% of the system
 # (computed over all 308 live source files, isolated files included).
 max_propagation_cost = 0.10
-# Share of recent churn landing in red-band files. Temporarily widened while
-# the hardening campaign refactors the red-band files themselves — that churn
-# lands IN red files by design, which this metric cannot distinguish from
-# risk concentration. Restore toward the steady state (was ~9.6%, ceiling
-# 15.0) once the campaign's churn rolls out of the window; the durable fix is
-# an improving-churn exemption in the gate itself.
-max_red_effort_pct = 25.0
+# Share of recent churn landing in red-band files, with health-improving
+# churn exempt: each red file's window churn is classified by its own net
+# health movement, and only the degrading share counts against the ceiling
+# (both numbers are disclosed in the gate message). This lets a deliberate
+# remediation campaign refactor red files without tripping the gate, while
+# still catching genuine risk concentration. Degrading share today: ~9.8%.
+max_red_effort_pct = 15.0
+red_effort_exempt_improving = true
 
 [diff]
 # A pull request may not introduce a new import cycle.

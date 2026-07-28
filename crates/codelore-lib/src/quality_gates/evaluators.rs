@@ -333,6 +333,40 @@ pub fn evaluate_full_tree(
     out
 }
 
+/// Pure inner comparison for the `hotspot_anchored_max` gate.
+///
+/// One violation per file whose `hotspot_score_anchored` exceeds `max` (strictly
+/// greater — equal-to-ceiling passes, mirroring the other `_max` gates). Rows
+/// with no anchored score (uncovered language, or no calibration artifact
+/// active) carry no comparison and never violate.
+///
+/// Kept out of [`evaluate_full_tree`] — which evaluates the always-on
+/// `cognitive_max` / `hotspot_score_max` gates — because the anchored gate is
+/// corpus-dependent and skippable. The **skip** path (no calibration active ⇒
+/// every row is `None`) lives in the CLI layer; this function's all-`None`
+/// result is simply an empty violation set, mirroring
+/// [`evaluate_corpus_percentile_rows`].
+#[must_use]
+pub fn evaluate_hotspot_anchored_rows(
+    max: f64,
+    rows: &[crate::analyses::hotspots::HotspotRow],
+) -> Vec<GateViolation> {
+    let mut out = Vec::new();
+    for row in rows {
+        if let Some(score) = row.hotspot_score_anchored
+            && score > max
+        {
+            out.push(GateViolation {
+                gate: "hotspot_anchored_max".into(),
+                path: row.path.clone(),
+                actual: format!("{score:.2}"),
+                threshold: format!("{max:.2}"),
+            });
+        }
+    }
+    out
+}
+
 /// Evaluate the `code_health_min` gate against the COMPOSITE `code-health`
 /// score (`run_code_health`), not the hotspots inline cognitive-only proxy.
 /// This is the score `--analysis code-health` reports, so a file the analysis
@@ -408,20 +442,58 @@ pub fn evaluate_effort_exposure_rows(
     threshold: f64,
     rows: &[crate::analyses::effort_exposure::EffortExposureRow],
 ) -> Vec<GateViolation> {
-    let actual = rows
-        .iter()
-        .find(|r| r.band == "red")
-        .map_or(0.0, |r| r.churn_share_pct);
-    if actual > threshold {
-        vec![GateViolation {
-            gate: "max_red_effort_pct".into(),
-            path: "(repo-wide)".into(),
-            actual: format!("{actual:.2}"),
-            threshold: format!("{threshold:.2}"),
-        }]
-    } else {
-        Vec::new()
+    evaluate_effort_exposure_rows_exempt(threshold, false, rows)
+}
+
+/// [`evaluate_effort_exposure_rows`] with the improving-churn exemption.
+///
+/// When `exempt_improving` is `false` this is byte-for-byte identical to
+/// [`evaluate_effort_exposure_rows`] — the red band's full `churn_share_pct` is
+/// compared against `threshold`, and the violation's `actual` is that value.
+///
+/// When `exempt_improving` is `true` AND the red row carries a decomposition
+/// ([`churn_share_degrading_pct`] populated — see
+/// [`run_effort_exposure_decomposed`]), only the *degrading* share is compared:
+/// churn that landed in red files whose own health did not improve over the
+/// window. The violation message discloses all three numbers ("red churn 18.30%
+/// of which improving 12.10% exempt → 6.20% vs ceiling 15.00") so the exemption
+/// is never silent. If the exemption is requested but the row has no
+/// decomposition (analysis run without repo access), the gate falls back to the
+/// full red share — the safe direction (no unearned exemption).
+///
+/// [`churn_share_degrading_pct`]: crate::analyses::effort_exposure::EffortExposureRow::churn_share_degrading_pct
+/// [`run_effort_exposure_decomposed`]: crate::analyses::effort_exposure::run_effort_exposure_decomposed
+#[must_use]
+pub fn evaluate_effort_exposure_rows_exempt(
+    threshold: f64,
+    exempt_improving: bool,
+    rows: &[crate::analyses::effort_exposure::EffortExposureRow],
+) -> Vec<GateViolation> {
+    let red = rows.iter().find(|r| r.band == "red");
+    let total = red.map_or(0.0, |r| r.churn_share_pct);
+    // The decomposed degrading share is only used when the exemption is on and
+    // the row actually carries it; otherwise the comparison stays on `total`,
+    // keeping the default path byte-identical to the pre-exemption behaviour.
+    let degrading = red.and_then(|r| r.churn_share_degrading_pct);
+    let (effective, decomposed) = match (exempt_improving, degrading) {
+        (true, Some(d)) => (d, true),
+        _ => (total, false),
+    };
+    if effective <= threshold {
+        return Vec::new();
     }
+    let actual = if decomposed {
+        let improving = red.and_then(|r| r.churn_share_improving_pct).unwrap_or(0.0);
+        format!("{effective:.2} (red {total:.2}, improving {improving:.2} exempt)")
+    } else {
+        format!("{effective:.2}")
+    };
+    vec![GateViolation {
+        gate: "max_red_effort_pct".into(),
+        path: "(repo-wide)".into(),
+        actual,
+        threshold: format!("{threshold:.2}"),
+    }]
 }
 
 /// Evaluate the `max_red_effort_pct` gate: fails when the `red`
@@ -525,6 +597,63 @@ pub fn evaluate_finding_overlap_rows(
     }
 }
 
+/// Pure inner comparison for the two-band `[new_code]` gate over a
+/// [`NewCodeScope`](crate::analyses::new_code::NewCodeScope).
+///
+/// Two independent bands, each evaluated only when the config enables it:
+///
+/// - **`born_health_min`** — one violation per born-in-window file whose HEAD
+///   code-health score is below the floor (strict `<`, mirroring
+///   `code_health_min`). Skipped when `born_health_min` is absent.
+/// - **`touched_no_degradation`** — one violation per touched-but-not-born file
+///   whose net window health movement is negative. The fail test is
+///   `net < -f64::EPSILON`, so a file that held steady — the typo-fix case that
+///   nets exactly zero — passes; only a genuine net-degradation fails. The
+///   `f64::EPSILON` guard is the gate layer's established float-noise band (the
+///   same one [`ratchet`](super::ratchet) uses); the *semantic* noise immunity
+///   comes from the delta-health banding upstream, which nets sub-risk-band
+///   churn to zero. Skipped when `touched_no_degradation` is off.
+///
+/// Each violation's `gate` names its band, so the rendered message discloses
+/// which obligation a file missed ("born in window" vs "net … over Nd"). A noop
+/// (empty) when neither band is enabled or the scope is empty (including the
+/// shallow-history skip, which yields empty `born`/`touched`).
+#[must_use]
+pub fn evaluate_new_code_rows(
+    cfg: &super::config::NewCodeGates,
+    scope: &crate::analyses::new_code::NewCodeScope,
+) -> Vec<GateViolation> {
+    let mut out = Vec::new();
+    // Born band: HEAD score floor on files first seen inside the window.
+    if let Some(floor) = cfg.born_health_min {
+        for (path, score) in &scope.born {
+            if *score < floor {
+                out.push(GateViolation {
+                    gate: "born_health_min".into(),
+                    path: path.clone(),
+                    actual: format!("{score:.1} (born in window)"),
+                    threshold: format!("{floor:.1}"),
+                });
+            }
+        }
+    }
+    // Touched band: non-degradation of net window health movement on files
+    // touched (but not born) inside the window.
+    if cfg.touched_no_degradation {
+        for (path, net) in &scope.touched {
+            if *net < -f64::EPSILON {
+                out.push(GateViolation {
+                    gate: "touched_no_degradation".into(),
+                    path: path.clone(),
+                    actual: format!("net {net:+.1} over {}d", cfg.window_days),
+                    threshold: "\u{2265} 0".into(),
+                });
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -544,6 +673,7 @@ mod tests {
             mi: None,
             mi_rank: None,
             ai_pct: None,
+            hotspot_score_anchored: None,
         }
     }
 
@@ -571,6 +701,8 @@ mod tests {
             band: "green".to_string(),
             corpus_percentile: None,
             beyond_corpus: false,
+            corpus_percentile_ci_low: None,
+            corpus_percentile_ci_high: None,
         }
     }
 
@@ -607,6 +739,8 @@ mod tests {
             band: "green".to_string(),
             corpus_percentile,
             beyond_corpus: false,
+            corpus_percentile_ci_low: None,
+            corpus_percentile_ci_high: None,
         }
     }
 
@@ -640,6 +774,57 @@ mod tests {
         // never violates, no matter how low the ceiling.
         let rows = vec![make_corpus_row("unknown.rs", None)];
         assert!(evaluate_corpus_percentile_rows(0.0, &rows).is_empty());
+    }
+
+    /// A hotspot row carrying a given anchored score (other fields inert).
+    fn make_anchored_row(
+        path: &str,
+        anchored: Option<f64>,
+    ) -> crate::analyses::hotspots::HotspotRow {
+        crate::analyses::hotspots::HotspotRow {
+            path: path.into(),
+            revisions: 1,
+            cognitive: 0.0,
+            cognitive_health: 100.0,
+            hotspot_score: 0.0,
+            mi: None,
+            mi_rank: None,
+            ai_pct: None,
+            hotspot_score_anchored: anchored,
+        }
+    }
+
+    #[test]
+    fn hotspot_anchored_max_flags_file_above_ceiling() {
+        // Above / at / below the ceiling, plus an uncovered (None) row.
+        let rows = vec![
+            make_anchored_row("hot.rs", Some(9.50)),
+            make_anchored_row("edge.rs", Some(9.00)),
+            make_anchored_row("cool.rs", Some(1.00)),
+            make_anchored_row("uncovered.rs", None),
+        ];
+        let v = evaluate_hotspot_anchored_rows(9.0, &rows);
+        assert_eq!(v.len(), 1, "only the strictly-above file violates: {v:?}");
+        assert_eq!(v[0].path, "hot.rs");
+        assert_eq!(v[0].gate, "hotspot_anchored_max");
+        assert_eq!(v[0].actual, "9.50");
+        assert_eq!(v[0].threshold, "9.00");
+    }
+
+    #[test]
+    fn hotspot_anchored_max_boundary_is_strictly_greater() {
+        // Equal-to-ceiling passes (`> max`, not `>= max`).
+        let rows = vec![make_anchored_row("edge.rs", Some(9.0))];
+        assert!(evaluate_hotspot_anchored_rows(9.0, &rows).is_empty());
+    }
+
+    #[test]
+    fn hotspot_anchored_max_ignores_none_rows() {
+        // A file with no anchored score (uncovered language / no calibration)
+        // never violates, no matter how low the ceiling — this is the skip
+        // contract's data half; the CLI layer turns all-None into a skip.
+        let rows = vec![make_anchored_row("uncovered.rs", None)];
+        assert!(evaluate_hotspot_anchored_rows(0.0, &rows).is_empty());
     }
 
     #[test]
@@ -1028,6 +1213,28 @@ mod tests {
             churn_share_pct,
             commit_share_ci_low: 0.0,
             commit_share_ci_high: 0.0,
+            churn_share_improving_pct: None,
+            churn_share_degrading_pct: None,
+        }
+    }
+
+    /// A red-band row carrying the improving/degrading decomposition, for the
+    /// exemption evaluator tests.
+    fn make_decomposed_red_row(
+        churn_share_pct: f64,
+        improving: f64,
+        degrading: f64,
+    ) -> crate::analyses::effort_exposure::EffortExposureRow {
+        crate::analyses::effort_exposure::EffortExposureRow {
+            band: "red".to_string(),
+            files: 1,
+            loc_share_pct: 0.0,
+            commit_share_pct: 0.0,
+            churn_share_pct,
+            commit_share_ci_low: 0.0,
+            commit_share_ci_high: 0.0,
+            churn_share_improving_pct: Some(improving),
+            churn_share_degrading_pct: Some(degrading),
         }
     }
 
@@ -1082,6 +1289,58 @@ mod tests {
         // 100 % ceiling is the upper bound — even a 100% red-band repo passes.
         let rows = vec![make_effort_row("red", 100.0)];
         assert!(evaluate_effort_exposure_rows(100.0, &rows).is_empty());
+    }
+
+    // ───────── improving-churn exemption ─────────
+
+    #[test]
+    fn exempt_off_is_byte_identical_to_plain_evaluator() {
+        // With the exemption off, the exempt evaluator must reproduce the plain
+        // one exactly, even when a decomposition is present on the row.
+        let rows = vec![make_decomposed_red_row(50.0, 40.0, 10.0)];
+        let plain = evaluate_effort_exposure_rows(30.0, &rows);
+        let exempt_off = evaluate_effort_exposure_rows_exempt(30.0, false, &rows);
+        assert_eq!(format!("{plain:?}"), format!("{exempt_off:?}"));
+        // Full 50 % share compared (not the 10 % degrading share) → fails at 30.
+        assert_eq!(exempt_off.len(), 1);
+        assert_eq!(exempt_off[0].actual, "50.00");
+    }
+
+    #[test]
+    fn exempt_on_gates_only_the_degrading_share() {
+        // red 50 %, of which 40 % improving / 10 % degrading. Ceiling 30 %:
+        // total (50) would fail, but the degrading share (10) passes.
+        let rows = vec![make_decomposed_red_row(50.0, 40.0, 10.0)];
+        assert!(
+            evaluate_effort_exposure_rows_exempt(30.0, true, &rows).is_empty(),
+            "degrading share 10 % ≤ ceiling 30 % must pass under the exemption"
+        );
+    }
+
+    #[test]
+    fn exempt_on_violation_discloses_all_three_numbers() {
+        // Degrading share above the ceiling still fails; the message carries the
+        // degrading, total, and improving shares so the exemption is not silent.
+        let rows = vec![make_decomposed_red_row(50.0, 10.0, 40.0)];
+        let v = evaluate_effort_exposure_rows_exempt(30.0, true, &rows);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].gate, "max_red_effort_pct");
+        assert_eq!(v[0].threshold, "30.00");
+        assert_eq!(v[0].actual, "40.00 (red 50.00, improving 10.00 exempt)");
+    }
+
+    #[test]
+    fn exempt_on_without_decomposition_falls_back_to_total() {
+        // Exemption requested but the row carries no split (analysis ran without
+        // repo access) → the gate compares the full red share, the safe
+        // direction, and the message stays the plain single-number form.
+        let rows = vec![make_effort_row("red", 50.0)];
+        let v = evaluate_effort_exposure_rows_exempt(30.0, true, &rows);
+        assert_eq!(v.len(), 1);
+        assert_eq!(
+            v[0].actual, "50.00",
+            "no unearned exemption without a split"
+        );
     }
 
     // ───────── code_familiarity_min gate ─────────
@@ -1260,5 +1519,185 @@ mod tests {
             Thresholds::from_text("[gates]\nmax_red_effort_pct = 100.0\n").expect("parse");
         let v = evaluate_effort_exposure_gate(&thresholds, &db, &opts).expect("evaluate gate");
         assert!(v.is_empty(), "threshold 100 must pass: {v:?}");
+    }
+
+    // ───────── evaluate_new_code_rows (two-band [new_code] gate) ─────────
+
+    use crate::analyses::new_code::NewCodeScope;
+    use crate::quality_gates::NewCodeGates;
+
+    /// A config with both bands active: born floor 60, touched non-degradation
+    /// on, over a 90-day window.
+    fn nc_cfg() -> NewCodeGates {
+        NewCodeGates {
+            window_days: 90,
+            born_health_min: Some(60.0),
+            touched_no_degradation: true,
+        }
+    }
+
+    #[test]
+    fn new_code_born_below_floor_violates_with_born_message() {
+        let scope = NewCodeScope {
+            window_start_present: true,
+            born: vec![("src/fresh.rs".into(), 41.2)],
+            touched: vec![],
+        };
+        let v = evaluate_new_code_rows(&nc_cfg(), &scope);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].gate, "born_health_min");
+        assert_eq!(v[0].path, "src/fresh.rs");
+        assert!(
+            v[0].actual.contains("born in window") && v[0].actual.contains("41.2"),
+            "born violation discloses the band + score: {}",
+            v[0].actual
+        );
+        assert_eq!(v[0].threshold, "60.0");
+    }
+
+    #[test]
+    fn new_code_born_at_or_above_floor_passes() {
+        // Boundary: score == floor passes (strict `<`), and a healthy born file
+        // passes.
+        let scope = NewCodeScope {
+            window_start_present: true,
+            born: vec![("at.rs".into(), 60.0), ("above.rs".into(), 80.0)],
+            touched: vec![],
+        };
+        assert!(evaluate_new_code_rows(&nc_cfg(), &scope).is_empty());
+    }
+
+    #[test]
+    fn new_code_born_band_skipped_when_floor_absent() {
+        // No born_health_min ⇒ even a low-health born file is not flagged (only
+        // the touched band would apply).
+        let cfg = NewCodeGates {
+            born_health_min: None,
+            ..nc_cfg()
+        };
+        let scope = NewCodeScope {
+            window_start_present: true,
+            born: vec![("low.rs".into(), 3.0)],
+            touched: vec![],
+        };
+        assert!(evaluate_new_code_rows(&cfg, &scope).is_empty());
+    }
+
+    #[test]
+    fn new_code_touched_net_negative_violates_with_touched_message() {
+        let scope = NewCodeScope {
+            window_start_present: true,
+            born: vec![],
+            touched: vec![("src/legacy.rs".into(), -30.0)],
+        };
+        let v = evaluate_new_code_rows(&nc_cfg(), &scope);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].gate, "touched_no_degradation");
+        assert_eq!(v[0].path, "src/legacy.rs");
+        assert!(
+            v[0].actual.contains("net -30.0") && v[0].actual.contains("90d"),
+            "touched violation discloses net movement + window: {}",
+            v[0].actual
+        );
+    }
+
+    #[test]
+    fn new_code_touched_net_zero_passes_typo_fix() {
+        // A window that touched a file without moving any function across a risk
+        // band nets exactly zero (the delta-health banding is the noise filter)
+        // and must pass — the typo-fix-in-a-monolith case.
+        let scope = NewCodeScope {
+            window_start_present: true,
+            born: vec![],
+            touched: vec![("mono.rs".into(), 0.0)],
+        };
+        assert!(evaluate_new_code_rows(&nc_cfg(), &scope).is_empty());
+    }
+
+    #[test]
+    fn new_code_touched_net_positive_passes() {
+        let scope = NewCodeScope {
+            window_start_present: true,
+            born: vec![],
+            touched: vec![("improved.rs".into(), 42.0)],
+        };
+        assert!(evaluate_new_code_rows(&nc_cfg(), &scope).is_empty());
+    }
+
+    #[test]
+    fn new_code_touched_epsilon_boundary() {
+        // The fail test is `net < -f64::EPSILON`: a float-noise-scale negative
+        // passes (inside the gate layer's established noise band), while any real
+        // degradation — the smallest possible being a single one-line function
+        // crossing a band — fails. Net movement is a sum of exact-integer LOC
+        // weights, so in practice the only "inside epsilon" value is zero.
+        let inside = NewCodeScope {
+            window_start_present: true,
+            born: vec![],
+            touched: vec![("noise.rs".into(), -f64::EPSILON * 0.5)],
+        };
+        assert!(
+            evaluate_new_code_rows(&nc_cfg(), &inside).is_empty(),
+            "a sub-epsilon negative is float noise and passes"
+        );
+        let real = NewCodeScope {
+            window_start_present: true,
+            born: vec![],
+            touched: vec![("real.rs".into(), -1.0)],
+        };
+        assert_eq!(
+            evaluate_new_code_rows(&nc_cfg(), &real).len(),
+            1,
+            "a real net degradation fails"
+        );
+    }
+
+    #[test]
+    fn new_code_touched_band_skipped_when_off() {
+        let cfg = NewCodeGates {
+            touched_no_degradation: false,
+            ..nc_cfg()
+        };
+        let scope = NewCodeScope {
+            window_start_present: true,
+            born: vec![],
+            touched: vec![("rotting.rs".into(), -99.0)],
+        };
+        assert!(evaluate_new_code_rows(&cfg, &scope).is_empty());
+    }
+
+    #[test]
+    fn new_code_both_bands_flag_independently() {
+        // A born-unhealthy file and a touched-degraded file each surface their
+        // own band's violation; an untouched legacy file never enters the scope
+        // (run_new_code_scope only carries born/touched), so it is exempt here by
+        // construction.
+        let scope = NewCodeScope {
+            window_start_present: true,
+            born: vec![("new_bad.rs".into(), 20.0), ("new_ok.rs".into(), 90.0)],
+            touched: vec![
+                ("touched_bad.rs".into(), -12.0),
+                ("touched_ok.rs".into(), 5.0),
+            ],
+        };
+        let v = evaluate_new_code_rows(&nc_cfg(), &scope);
+        assert_eq!(v.len(), 2);
+        assert!(
+            v.iter()
+                .any(|x| x.gate == "born_health_min" && x.path == "new_bad.rs")
+        );
+        assert!(
+            v.iter()
+                .any(|x| x.gate == "touched_no_degradation" && x.path == "touched_bad.rs")
+        );
+    }
+
+    #[test]
+    fn new_code_shallow_history_scope_yields_no_violations() {
+        // The shallow-history skip: run_new_code_scope reports empty born/touched
+        // with window_start_present=false; the evaluator has nothing to flag.
+        let scope = NewCodeScope::default();
+        assert!(!scope.window_start_present);
+        assert!(evaluate_new_code_rows(&nc_cfg(), &scope).is_empty());
     }
 }

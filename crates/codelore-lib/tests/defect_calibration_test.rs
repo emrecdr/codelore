@@ -42,6 +42,10 @@ fn sample_artifact(repo_identity: &str) -> DefectArtifact {
             lines_dropped_cosmetic: 60,
             blame_failures: 2,
             pure_addition_fixes: 5,
+            // The tangled/ghost guard tallies are `#[serde(skip)]` (command
+            // output only, never in the artifact), so they are left at 0 here:
+            // the round-trip assertions below cover only the persisted fields.
+            ..MiningStats::default()
         },
         validation: ValidationMetrics {
             band_table: vec![

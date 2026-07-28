@@ -304,6 +304,60 @@ pub fn bh_fdr_threshold(pvalues: &[f64], q: f64) -> f64 {
     f64::NEG_INFINITY
 }
 
+/// Wilson score 95% confidence interval for a proportion `k / n`.
+///
+/// Returns `(low, high)` in `[0.0, 1.0]`. Returns `(0.0, 0.0)` when `n = 0`
+/// (undefined proportion). Edge cases `k = 0` and `k = n` are handled correctly
+/// by the formula without special-casing.
+///
+/// A thin wrapper over [`wilson_ci_from_proportion`] that forms the point
+/// estimate `p_hat = k / n` from an integer success count — the interval a
+/// `k`-of-`n` binomial proportion carries. Standard Wilson score interval
+/// (Wilson 1927); z = 1.96 for 95% coverage.
+///
+/// Parameters are `u32` (not `u64`) to avoid precision-loss on the f64
+/// conversion — all realistic counts fit comfortably in 32 bits.
+#[must_use]
+pub fn wilson_ci(k: u32, n: u32) -> (f64, f64) {
+    if n == 0 {
+        return (0.0, 0.0);
+    }
+    let p_hat = f64::from(k) / f64::from(n);
+    wilson_ci_from_proportion(p_hat, n)
+}
+
+/// Wilson score 95% confidence interval around an already-computed proportion
+/// `p_hat` observed over a pool of `n`.
+///
+/// Unlike [`wilson_ci`], the point estimate is supplied directly rather than
+/// formed from an integer `k / n`. This is the entry point the corpus-percentile
+/// lens uses: the reported percentile is a midpoint-rank (or breakpoint-
+/// interpolated) empirical-CDF estimate, not an integer success count, and the
+/// interval must wrap that SAME estimate so `low <= p_hat <= high` holds. `n` is
+/// the honest pool size behind the estimate — the number of corpus repos in a
+/// repo-level pool, or a language's pooled per-function sample count.
+///
+/// Returns `(low, high)` clamped to `[0.0, 1.0]`; `(0.0, 0.0)` when `n = 0`.
+/// `p_hat` is assumed in `[0.0, 1.0]` (every caller's estimator is a percentile),
+/// which keeps the radicand non-negative so the result is never `NaN`. Standard
+/// Wilson score interval (Wilson 1927); z = 1.96 for 95% coverage.
+#[must_use]
+pub fn wilson_ci_from_proportion(p_hat: f64, n: u32) -> (f64, f64) {
+    if n == 0 {
+        return (0.0, 0.0);
+    }
+    let n = f64::from(n);
+    let z = 1.96_f64;
+    let z2 = z * z;
+    let denom = 1.0 + z2 / n;
+    let centre = (p_hat + z2 / (2.0 * n)) / denom;
+    let radius = (z / denom) * (p_hat * (1.0 - p_hat) / n + z2 / (4.0 * n * n)).sqrt();
+    (
+        f64::max(0.0, centre - radius),
+        f64::min(1.0, centre + radius),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -537,6 +591,107 @@ mod tests {
         bits_eq(
             bh_fdr_threshold(&shuffled, 0.05),
             bh_fdr_threshold(&p, 0.05),
+        );
+    }
+
+    #[test]
+    fn wilson_ci_k_zero() {
+        let (lo, hi) = wilson_ci(0, 100);
+        assert!(lo >= 0.0, "lo must be ≥ 0: {lo}");
+        assert!(
+            hi > 0.0 && hi < 0.05,
+            "hi for k=0/n=100 should be small: {hi}"
+        );
+    }
+
+    #[test]
+    fn wilson_ci_k_equals_n() {
+        let (lo, hi) = wilson_ci(100, 100);
+        assert!(lo > 0.95 && lo <= 1.0, "lo for k=n should be near 1: {lo}");
+        assert!(
+            (hi - 1.0).abs() < 1e-9,
+            "hi for k=n should be exactly 1: {hi}"
+        );
+    }
+
+    #[test]
+    fn wilson_ci_half() {
+        let (lo, hi) = wilson_ci(50, 100);
+        // p_hat = 0.5; Wilson CI for 0.5 with n=100, z=1.96 ≈ [0.401, 0.599]
+        assert!(lo > 0.39 && lo < 0.50, "lo for k=50/n=100: {lo}");
+        assert!(hi > 0.50 && hi < 0.61, "hi for k=50/n=100: {hi}");
+        assert!(lo < hi, "interval must be non-empty");
+    }
+
+    #[test]
+    fn wilson_ci_n_zero_returns_zeros() {
+        let (lo, hi) = wilson_ci(0, 0);
+        assert_eq!((lo, hi), (0.0, 0.0));
+    }
+
+    #[test]
+    fn wilson_ci_interval_contains_p_hat() {
+        let k = 30_u32;
+        let n = 100_u32;
+        let (lo, hi) = wilson_ci(k, n);
+        let p_hat = f64::from(k) / f64::from(n);
+        assert!(
+            lo <= p_hat && p_hat <= hi,
+            "interval must contain p_hat={p_hat}: [{lo}, {hi}]"
+        );
+    }
+
+    #[test]
+    fn wilson_ci_from_proportion_matches_integer_form() {
+        // Supplying p_hat = k/n directly must reproduce the integer-`k` form
+        // exactly — `wilson_ci` is defined as this call with `p_hat = k/n`.
+        let (a_lo, a_hi) = wilson_ci(30, 100);
+        let (b_lo, b_hi) = wilson_ci_from_proportion(0.30, 100);
+        assert!((a_lo - b_lo).abs() < 1e-12, "{a_lo} vs {b_lo}");
+        assert!((a_hi - b_hi).abs() < 1e-12, "{a_hi} vs {b_hi}");
+    }
+
+    #[test]
+    fn wilson_ci_from_proportion_wraps_midpoint_rank_small_n() {
+        // The corpus-lens case: p_hat is a midpoint-rank percentile (2/3),
+        // n is tiny (3 corpus repos), so the interval is wide and must still
+        // straddle the point estimate. Hand-computed: centre ≈ 0.5731,
+        // radius ≈ 0.3654 → [0.2077, 0.9385].
+        let p_hat = 2.0_f64 / 3.0;
+        let (lo, hi) = wilson_ci_from_proportion(p_hat, 3);
+        assert!(
+            lo <= p_hat && p_hat <= hi,
+            "must contain p_hat: [{lo}, {hi}]"
+        );
+        assert!((0.20..0.22).contains(&lo), "lo ≈ 0.208: {lo}");
+        assert!((0.93..0.95).contains(&hi), "hi ≈ 0.939: {hi}");
+        assert!(hi - lo > 0.6, "n=3 interval must be wide: {}", hi - lo);
+    }
+
+    #[test]
+    fn wilson_ci_from_proportion_saturates_at_one() {
+        // p_hat = 1.0 (value above every pool member), n = 2. Hand-computed:
+        // centre ≈ 0.6712, radius ≈ 0.3288 → lo ≈ 0.3424, hi clamps to 1.0.
+        let (lo, hi) = wilson_ci_from_proportion(1.0, 2);
+        assert!((0.33..0.35).contains(&lo), "lo ≈ 0.342: {lo}");
+        assert!((hi - 1.0).abs() < 1e-9, "hi must clamp to 1.0: {hi}");
+    }
+
+    #[test]
+    fn wilson_ci_from_proportion_n_zero_returns_zeros() {
+        assert_eq!(wilson_ci_from_proportion(0.5, 0), (0.0, 0.0));
+    }
+
+    #[test]
+    fn wilson_ci_from_proportion_wider_for_smaller_n() {
+        // Same point estimate, fewer observations → strictly wider interval.
+        let (lo_small, hi_small) = wilson_ci_from_proportion(0.5, 10);
+        let (lo_big, hi_big) = wilson_ci_from_proportion(0.5, 1000);
+        assert!(
+            (hi_small - lo_small) > (hi_big - lo_big),
+            "n=10 width {} must exceed n=1000 width {}",
+            hi_small - lo_small,
+            hi_big - lo_big
         );
     }
 }
