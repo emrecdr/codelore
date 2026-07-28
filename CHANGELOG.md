@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-07-28
+
 ### Added
 
 - **Corpus-relative percentiles carry a Wilson 95% confidence interval.** A corpus percentile such as `0.38`, computed against a finite reference pool (99 repos in the embedded world corpus), reads as false precision — it is a sample estimate, not a population fact. Every corpus-percentile surface now emits a paired lower/upper bound so the uncertainty is visible. `architecture-metrics` gains `corpus_percentile:<metric>:ci_low` / `:ci_high` rows beside each `corpus_percentile:*` row, with `n` = that metric's pool of corpus repos (so a 99-repo pool reads far tighter than a 3-repo one). `code-health` rows gain `corpus_percentile_ci_low` / `corpus_percentile_ci_high` fields, with `n` = the file language's pooled per-function sample count — surfaced as two columns in the CSV, a `Corpus 95% CI` column in the Markdown, a `corpus_percentile_ci` fact in `explain`, and inline in the SPA drawer. The interval is the Wilson score interval (z = 1.96) wrapping the SAME percentile the lens already reports — so `low ≤ percentile ≤ high` always holds — and reflects the reference pool's sampling uncertainty, not measurement error in the analysed file. The bounds appear exactly when the percentile does, so a run with no active calibration artifact is byte-identical to before.
