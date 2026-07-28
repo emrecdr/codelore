@@ -393,7 +393,7 @@ fn mcp_check_gates_returns_verdict() {
         .as_array()
         .expect("check_gates: skipped_gates array")
         .iter()
-        .filter_map(|v| v.as_str())
+        .filter_map(|v| v["gate"].as_str())
         .collect();
     assert_eq!(
         skipped,
@@ -428,7 +428,7 @@ fn mcp_check_gates_discloses_skipped_gates() {
         .as_array()
         .expect("check_gates: skipped_gates array")
         .iter()
-        .filter_map(|v| v.as_str())
+        .filter_map(|v| v["gate"].as_str())
         .collect();
     assert!(
         skipped.contains(&"max_findings_in_hot_files"),
@@ -441,6 +441,16 @@ fn mcp_check_gates_discloses_skipped_gates() {
     assert!(
         !skipped.contains(&"fail_on_degraded"),
         "explicitly disabled degraded semantics must not be disclosed as skipped: {parsed}"
+    );
+    // Every disclosed skip carries a non-empty reason string, so a caller can
+    // tell an empty `violations` list ("all gates passed") from "did not run".
+    assert!(
+        parsed["skipped_gates"]
+            .as_array()
+            .expect("skipped_gates array")
+            .iter()
+            .all(|v| v["reason"].as_str().is_some_and(|r| !r.is_empty())),
+        "each skipped gate must carry a reason: {parsed}"
     );
 
     drop(stdin);
