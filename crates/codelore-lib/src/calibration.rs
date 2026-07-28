@@ -22,6 +22,11 @@
 //! [`MIN_LANG_SAMPLE`] — too thin to trust — is treated as absent, as is an
 //! unknown language or metric; those all return `None`.
 //!
+//! [`conditional_tail_percentile`] is the companion lookup for pools dominated
+//! by trivial (zero-complexity) functions: it conditions the percentile on the
+//! non-trivial tail so a real file's complexity does not saturate the top of a
+//! mostly-zero distribution.
+//!
 //! # Building
 //!
 //! [`build_from_observations`] pools raw per-function metric values per language
@@ -53,6 +58,14 @@ pub const MIN_LANG_SAMPLE: u64 = 500;
 /// Length of every quantile-breakpoint vector: q0.000 … q1.000 inclusive at a
 /// 0.001 step.
 pub const QUANTILE_POINTS: usize = 1001;
+
+/// Triviality threshold for [`conditional_tail_percentile`]: a per-function
+/// complexity metric at or below this value carries no decision structure, so
+/// the function is excluded from the non-trivial tail the conditional lookup
+/// spreads across `[0, 1]`. Zero — "has any branching at all" — is the natural
+/// boundary and is resolvable *exactly* from the stored breakpoints, so no
+/// tunable magnitude enters the model.
+const TRIVIALITY_THRESHOLD: f64 = 0.0;
 
 /// Vintage prefix marking a not-yet-built (placeholder) embedded artifact.
 /// [`embedded_world`] returns `None` for such an artifact so the corpus lens
@@ -307,6 +320,31 @@ pub fn active_vintage(opts: &crate::Options) -> Result<Option<String>> {
 
 // ─── percentile lookup ───────────────────────────────────────────────────────
 
+/// The non-decreasing breakpoint vector for `(language, metric)`, or `None`
+/// when the language is unknown, pooled below [`MIN_LANG_SAMPLE`], or does not
+/// carry the metric. The single lookup behind both [`percentile`] and
+/// [`conditional_tail_percentile`], so the two can never disagree on which
+/// `(language, metric)` pairs resolve.
+///
+/// v1 tables carry a single stratum; every stratum's metrics are searched and
+/// the first match returned, so this stays correct if a later version adds
+/// SLOC-bounded strata.
+fn metric_breakpoints<'a>(
+    art: &'a CalibrationArtifact,
+    language: &str,
+    metric: &str,
+) -> Option<&'a [f64]> {
+    let lang = art.languages.iter().find(|l| l.language == language)?;
+    if lang.sample_functions < MIN_LANG_SAMPLE {
+        return None;
+    }
+    lang.strata
+        .iter()
+        .flat_map(|s| &s.metrics)
+        .find(|m| m.metric == metric)
+        .map(|m| m.quantiles.as_slice())
+}
+
 /// Corpus-relative percentile of `value` for `(language, metric)`.
 ///
 /// Binary-searches the metric's non-decreasing breakpoint vector and linearly
@@ -330,20 +368,79 @@ pub fn percentile(
     metric: &str,
     value: f64,
 ) -> Option<CorpusPercentile> {
-    let lang = art.languages.iter().find(|l| l.language == language)?;
-    if lang.sample_functions < MIN_LANG_SAMPLE {
-        return None;
-    }
-    // v1: a single stratum. Search every stratum's matching metric and take the
-    // first hit, so this stays correct if later versions add SLOC strata.
-    let quantiles = lang
-        .strata
-        .iter()
-        .flat_map(|s| &s.metrics)
-        .find(|m| m.metric == metric)
-        .map(|m| m.quantiles.as_slice())?;
+    Some(interpolate_percentile(
+        metric_breakpoints(art, language, metric)?,
+        value,
+    ))
+}
 
-    Some(interpolate_percentile(quantiles, value))
+/// Percentile of `value` within the corpus's **non-trivial** tail for
+/// `(language, metric)` — the conditional lookup the anchored hotspot score
+/// uses in place of [`percentile`].
+///
+/// The plain [`percentile`] compares against the whole pool, which for a
+/// complexity metric is dominated by trivial functions — the corpus median
+/// cognitive is `0` — so every real file saturates the top percentiles and the
+/// anchored score stops discriminating. This conditions the comparison on the
+/// functions that carry any decision structure (metric value above
+/// [`TRIVIALITY_THRESHOLD`]), re-spreading the informative upper tail across
+/// `[0, 1]`:
+///
+/// ```text
+/// p0      = corpus fraction of the pool at value <= 0   (the trivial share)
+/// cp_tail = clamp((cp - p0) / (1 - p0), 0, 1)            for value above 0
+///         = 0                                            for value <= 0
+/// ```
+///
+/// where `cp` is the plain [`percentile`]. `p0` is read straight off the stored
+/// breakpoints by [`trivial_share`] as the highest index still holding a
+/// trivial value — the percentile the lookup itself assigns to the top of the
+/// zero plateau — so a value just above the plateau maps to `cp_tail ≈ 0` and
+/// the corpus maximum to `cp_tail = 1`. It is pure arithmetic on breakpoints
+/// every artifact already carries: no format change, no corpus rebuild.
+///
+/// Returns `None` under the same conditions as [`percentile`] (unknown
+/// language / metric, or the language pooled below [`MIN_LANG_SAMPLE`]) **and**
+/// when the pool is entirely trivial (`p0 == 1`, an empty tail with no
+/// informative content) — an honest omission, never a fabricated value,
+/// matching the no-anchor path the caller already handles.
+#[must_use]
+pub fn conditional_tail_percentile(
+    art: &CalibrationArtifact,
+    language: &str,
+    metric: &str,
+    value: f64,
+) -> Option<f64> {
+    let quantiles = metric_breakpoints(art, language, metric)?;
+    let p0 = trivial_share(quantiles);
+    let span = 1.0 - p0;
+    if span <= 0.0 {
+        return None; // All-trivial pool → no informative tail → no anchor.
+    }
+    if value <= TRIVIALITY_THRESHOLD {
+        return Some(0.0); // Trivial file → the bottom of the tail.
+    }
+    let cp = interpolate_percentile(quantiles, value).p;
+    Some(((cp - p0) / span).clamp(0.0, 1.0))
+}
+
+/// The corpus **trivial share** `p0` of a breakpoint vector: the fraction of
+/// the pool at or below [`TRIVIALITY_THRESHOLD`], read as the highest
+/// breakpoint index still holding a trivial value, normalised to `[0, 1]`.
+///
+/// `q` is non-decreasing (validated), so the trivial values are a prefix and
+/// the highest such index is `partition_point(<= T) - 1`. That index's quantile
+/// `i_max / (len - 1)` is exactly the percentile [`interpolate_percentile`]
+/// assigns to a value just above the plateau, so subtracting it in
+/// [`conditional_tail_percentile`] sends the bottom of the non-trivial tail to
+/// zero. A pool with no trivial values yields `0.0`; an all-trivial pool yields
+/// `1.0` (every breakpoint index holds a trivial value).
+fn trivial_share(q: &[f64]) -> f64 {
+    let trivial_count = q.partition_point(|&b| b <= TRIVIALITY_THRESHOLD);
+    if trivial_count == 0 {
+        return 0.0; // No trivial functions in the pool.
+    }
+    count_to_f64(trivial_count - 1) / count_to_f64(q.len() - 1)
 }
 
 /// Pooled per-function sample size behind `language`'s breakpoints — the honest
@@ -850,5 +947,135 @@ mod tests {
         let bytes = serde_json::to_vec(&art).expect("serialize");
         let back = CalibrationArtifact::from_slice(&bytes).expect("valid real-vintage artifact");
         assert_eq!(back.corpus_vintage, "world-2026-07");
+    }
+
+    // ── conditional-tail transform ──────────────────────────────────────────
+
+    /// A single-language artifact carrying `cognitive` breakpoints verbatim, so
+    /// a test controls the exact zeros share and tail shape.
+    fn cognitive_artifact(
+        language: &str,
+        sample_functions: u64,
+        q: Vec<f64>,
+    ) -> CalibrationArtifact {
+        CalibrationArtifact {
+            format_version: CALIBRATION_FORMAT_VERSION,
+            corpus_vintage: "test-fixture".into(),
+            generated_at: "2026-01-01T00:00:00Z".into(),
+            repos_included: 1,
+            repos_attempted: 1,
+            languages: vec![LanguageTable {
+                language: language.into(),
+                sample_functions,
+                strata: vec![Stratum {
+                    sloc_min: 0,
+                    sloc_max: u64::MAX,
+                    metrics: vec![MetricQuantiles {
+                        metric: "cognitive".into(),
+                        quantiles: q,
+                    }],
+                }],
+            }],
+            repo_metrics: None,
+        }
+    }
+
+    /// Breakpoints with a controlled trivial (zero) prefix: indices `0..=zeros`
+    /// hold `0`, then a unit ramp. With `zeros = 300` the trivial share is
+    /// exactly `300 / 1000 = 0.30`, hand-verified below.
+    fn zeros_prefix_breakpoints(zeros: usize) -> Vec<f64> {
+        (0..QUANTILE_POINTS)
+            .map(|i| {
+                if i <= zeros {
+                    0.0
+                } else {
+                    count_to_f64(i - zeros)
+                }
+            })
+            .collect()
+    }
+
+    /// `trivial_share` reads `p0` off the breakpoints as the highest index still
+    /// holding a trivial value, normalised to `[0, 1]` — hand-verified against
+    /// fixtures whose zeros share is known exactly, including the 0% and 100%
+    /// endpoints.
+    #[test]
+    fn trivial_share_matches_controlled_zeros_prefix() {
+        // 30% zeros: breakpoints 0..=300 are 0 ⇒ i_max = 300 ⇒ p0 = 0.30.
+        assert!((trivial_share(&zeros_prefix_breakpoints(300)) - 0.30).abs() < 1e-12);
+        // 50% zeros: breakpoints 0..=500 are 0 ⇒ p0 = 0.50.
+        assert!((trivial_share(&zeros_prefix_breakpoints(500)) - 0.50).abs() < 1e-12);
+        // 0% zeros: all breakpoints strictly positive ⇒ p0 = 0.0.
+        let all_positive: Vec<f64> = (0..QUANTILE_POINTS).map(|i| count_to_f64(i + 1)).collect();
+        assert!(trivial_share(&all_positive).abs() < 1e-12);
+        // 100% zeros: every breakpoint index holds 0 ⇒ p0 = 1.0.
+        assert!((trivial_share(&vec![0.0; QUANTILE_POINTS]) - 1.0).abs() < 1e-12);
+    }
+
+    /// The conditional-tail lookup re-spreads the non-trivial tail across
+    /// `[0, 1]`: on the 30%-zeros fixture a value just above the plateau maps to
+    /// ~0, the corpus maximum to 1, and a hand-computed mid-tail value to 0.5.
+    #[test]
+    fn conditional_tail_percentile_spreads_the_tail() {
+        // p0 = 0.30, so the ramp value that sits at raw percentile 0.65 maps to
+        // (0.65 − 0.30) / 0.70 = 0.50. That value is `q[650] = 650 − 300 = 350`.
+        let art = cognitive_artifact("rust", 1000, zeros_prefix_breakpoints(300));
+        let ct = |v: f64| conditional_tail_percentile(&art, "rust", "cognitive", v).unwrap();
+        assert!((ct(350.0) - 0.50).abs() < 1e-9, "mid-tail value halves");
+        // A value just above the zero plateau lands at the bottom of the tail.
+        assert!(ct(0.5) < 1e-3, "just above the plateau ⇒ ~0");
+        // The corpus maximum (q[1000] = 700) saturates the tail at 1.
+        assert!((ct(700.0) - 1.0).abs() < 1e-12, "corpus max ⇒ 1");
+        // A larger-than-corpus value clamps to 1 (never above).
+        assert!((ct(10_000.0) - 1.0).abs() < 1e-12);
+    }
+
+    /// Edges of the transform: a trivial file (value ≤ 0) reads exactly 0 on a
+    /// covered pool; an all-trivial pool, a below-floor language, and an unknown
+    /// language / metric all omit the anchor (`None`), never a fabricated value.
+    #[test]
+    fn conditional_tail_percentile_edges_and_omissions() {
+        let art = cognitive_artifact("rust", 1000, zeros_prefix_breakpoints(300));
+        // Trivial file (cognitive 0) on a covered, non-empty tail ⇒ Some(0.0).
+        assert_eq!(
+            conditional_tail_percentile(&art, "rust", "cognitive", 0.0),
+            Some(0.0)
+        );
+        // All-trivial pool (empty tail) ⇒ None, matching the no-anchor path.
+        let all_trivial = cognitive_artifact("rust", 1000, vec![0.0; QUANTILE_POINTS]);
+        assert_eq!(
+            conditional_tail_percentile(&all_trivial, "rust", "cognitive", 5.0),
+            None
+        );
+        // Language pooled below the sample floor ⇒ None (same floor as `percentile`).
+        let thin = cognitive_artifact("rust", MIN_LANG_SAMPLE - 1, zeros_prefix_breakpoints(300));
+        assert_eq!(
+            conditional_tail_percentile(&thin, "rust", "cognitive", 350.0),
+            None
+        );
+        // Unknown language and unknown metric ⇒ None.
+        assert_eq!(
+            conditional_tail_percentile(&art, "cobol", "cognitive", 350.0),
+            None
+        );
+        assert_eq!(
+            conditional_tail_percentile(&art, "rust", "cyclomatic", 350.0),
+            None
+        );
+    }
+
+    /// With no trivial mass (`p0 = 0`) the transform is the identity: `cp_tail`
+    /// equals the raw [`percentile`], so a corpus without a zero plateau is
+    /// unaffected by the conditioning.
+    #[test]
+    fn conditional_tail_percentile_is_identity_without_trivial_mass() {
+        let q: Vec<f64> = (0..QUANTILE_POINTS).map(|i| count_to_f64(i + 1)).collect();
+        let art = cognitive_artifact("rust", 1000, q);
+        // Raw percentile of `q[500] = 501` is 0.5; with p0 = 0 the tail lookup
+        // returns the same value.
+        let raw = percentile(&art, "rust", "cognitive", 501.0).unwrap().p;
+        let tail = conditional_tail_percentile(&art, "rust", "cognitive", 501.0).unwrap();
+        assert!((raw - 0.5).abs() < 1e-12);
+        assert!((tail - raw).abs() < 1e-12);
     }
 }
