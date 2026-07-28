@@ -66,7 +66,11 @@ jobs:
           # .head.sha must still equal the SHA CI validated: if Dependabot
           # force-pushed meanwhile, this green run is stale and must not
           # merge the moved PR (its own fresh CI run will handle it).
-          pr=$(gh api "repos/$REPO/commits/$HEAD_SHA/pulls" --jq --arg sha "$HEAD_SHA" \
+          # gh api's --jq flag takes only the query (no --arg), so the JSON
+          # goes through the real jq binary to keep the SHA out of the
+          # query string.
+          pr=$(gh api "repos/$REPO/commits/$HEAD_SHA/pulls" |
+            jq -r --arg sha "$HEAD_SHA" \
             '[.[] | select(.user.login == "dependabot[bot]"
                            and .state == "open"
                            and .head.sha == $sha
