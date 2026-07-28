@@ -22,20 +22,20 @@ cognitive_max = 150.0
 # whose denominator moved every time the worst file changed (improving the worst
 # file inflated every other file's score, so the ceiling could only ever track
 # "the worst we currently measure"). The anchored score ranks each file's
-# cognitive complexity against the calibration corpus for its language instead of
-# the repo maximum; only the churn term stays repo-relative. Removing or
-# refactoring the worst file therefore leaves every other file's anchored score
-# unchanged, so this ceiling is stable under improvement — an absolute standard,
-# not a moving target.
+# cognitive complexity against the calibration corpus for its language —
+# conditioned on the corpus's NON-TRIVIAL tail, so a real file's complexity is
+# spread across the informative upper percentiles instead of saturating a
+# mostly-zero distribution — with only the churn term left repo-relative.
+# Removing or refactoring the worst file therefore leaves every other file's
+# anchored score unchanged, so this ceiling is stable under improvement — an
+# absolute standard, not a moving target.
 #
-# Highest anchored score today: 9.76 (crates/codelore-cli/src/main.rs), the
-# heavily-changed CLI entry point. Anchored scores run high across this repo
-# because its files sit in the top percentiles of the corpus's cognitive
-# distribution (the corpus pools mostly trivial functions), so the score is
-# churn-weighted here and the worst file is the most-churned one. The ceiling
-# sits just above that worst; it binds when a file grows both hotter and more
-# complex, never when the repo refactors its current worst offender.
-hotspot_anchored_max = 9.9
+# Highest anchored score today: 9.08 (crates/codelore-cli/src/main.rs), the
+# heavily-changed CLI entry point; the runner-up sits at 8.48, so the worst is a
+# clear outlier. The ceiling sits just above that worst (the same ~1.4% margin
+# the pre-tail 9.9/9.76 pair carried); it binds when a file grows both hotter and
+# more complex, never when the repo refactors its current worst offender.
+hotspot_anchored_max = 9.2
 # Exactly one import cycle exists (the nine-file codelore-rca cluster).
 # Introducing a second cycle fails the gate.
 max_dependency_cycles = 1

@@ -87,19 +87,25 @@ pub struct HotspotRow {
     /// Corpus-anchored hotspot score. The `hotspot_score` formula with its two
     /// repo-relative *cognitive* terms — the complexity percentile rank and the
     /// inline `cognitive_health` proxy's max-normalisation — both replaced by
-    /// the file's cognitive-complexity percentile against the calibration
-    /// corpus for its language. The revisions percentile stays repo-relative
-    /// *by design* (churn is a within-repo concentration signal, not comparable
-    /// across repos), so only the complexity coupling is anchored. Unlike
-    /// `hotspot_score`, improving or removing another file leaves this value
-    /// unchanged — the property that lets an absolute ceiling
-    /// (`hotspot_anchored_max`) stay stable under improvement.
+    /// the file's cognitive complexity percentile within the calibration
+    /// corpus's **non-trivial tail** for its language. The corpus pools are
+    /// dominated by zero-complexity functions, so a raw percentile saturates
+    /// every real file near the top; conditioning on the functions that carry
+    /// any decision structure re-spreads the informative tail (see
+    /// [`crate::calibration::conditional_tail_percentile`]). The revisions
+    /// percentile stays repo-relative *by design* (churn is a within-repo
+    /// concentration signal, not comparable across repos), so only the
+    /// complexity coupling is anchored. Unlike `hotspot_score`, improving or
+    /// removing another file leaves this value unchanged — the property that
+    /// lets an absolute ceiling (`hotspot_anchored_max`) stay stable under
+    /// improvement.
     ///
     /// `None` — omitted from every surface, never rendered as `0.00` — when no
-    /// calibration artifact is active, or the file's language is absent from the
-    /// corpus / pooled below the sample floor. Populated by
-    /// [`apply_hotspot_anchor`]; `run_hotspots` alone leaves it `None`, so the
-    /// SPA payload and the internal hotspot consumers stay byte-identical.
+    /// calibration artifact is active, the file's language is absent from the
+    /// corpus / pooled below the sample floor, or that language's corpus pool is
+    /// entirely trivial (an empty tail). Populated by [`apply_hotspot_anchor`];
+    /// `run_hotspots` alone leaves it `None`, so the SPA payload and the
+    /// internal hotspot consumers stay byte-identical.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hotspot_score_anchored: Option<f64>,
 }
@@ -363,11 +369,12 @@ const PR_REV_SQL: &str = "
 ///
 /// The anchored score is the `hotspot_score` formula with both cognitive terms
 /// (the `pr_cx` complexity rank and the `norm_cx` max-normalisation inside
-/// `cognitive_health`) replaced by `cp`, the file's cognitive-complexity
-/// percentile against the corpus — the same lookup the code-health lens uses.
-/// `pr_rev` stays repo-relative. With `cp` doing both jobs the closed form is
-/// `pr_rev · cp · (100 − 100·(1 − 0.40·cp)) / 4`, i.e. `10 · pr_rev · cp²`, on
-/// the same `[0, 10]` scale as `hotspot_score`.
+/// `cognitive_health`) replaced by `cp_tail`, the file's cognitive-complexity
+/// percentile within the corpus's non-trivial tail
+/// ([`crate::calibration::conditional_tail_percentile`]). `pr_rev` stays
+/// repo-relative. With `cp_tail` doing both jobs the closed form is
+/// `pr_rev · cp_tail · (100 − 100·(1 − 0.40·cp_tail)) / 4`, i.e.
+/// `10 · pr_rev · cp_tail²`, on the same `[0, 10]` scale as `hotspot_score`.
 ///
 /// # Errors
 ///
@@ -401,34 +408,38 @@ pub fn apply_hotspot_anchor(db: &FactsDb, opts: &Options, rows: &mut [HotspotRow
         let Some(language) = crate::complexity::Tier1Language::from_path(&row.path) else {
             continue; // Not a Tier-1 language → no corpus comparison.
         };
-        // `cognitive` is the file's per-function MAX, located against the
-        // per-language corpus breakpoints — `None` (no anchor) when the
-        // language is uncovered or pooled below the sample floor.
-        let Some(cp) =
-            crate::calibration::percentile(&art, language.as_str(), "cognitive", row.cognitive)
-        else {
+        // `cognitive` is the file's per-function MAX, mapped to its percentile
+        // within the per-language corpus's NON-TRIVIAL tail — `None` (no anchor)
+        // when the language is uncovered, pooled below the sample floor, or its
+        // pool is entirely trivial (an empty tail).
+        let Some(cp_tail) = crate::calibration::conditional_tail_percentile(
+            &art,
+            language.as_str(),
+            "cognitive",
+            row.cognitive,
+        ) else {
             continue;
         };
         let Some(&pr_rev) = pr_rev_by_path.get(&row.path) else {
             continue; // Defensive: every hotspot path is in `file_revs`.
         };
-        row.hotspot_score_anchored = Some(anchored_score(pr_rev, cp.p));
+        row.hotspot_score_anchored = Some(anchored_score(pr_rev, cp_tail));
     }
     Ok(())
 }
 
 /// The corpus-anchored hotspot score for a file with churn percentile `pr_rev`
-/// and corpus cognitive percentile `cp` (both in `[0, 1]`).
+/// and non-trivial-tail cognitive percentile `cp_tail` (both in `[0, 1]`).
 ///
 /// The `hotspot_score` SQL formula with `pr_cx` and `norm_cx` — its two
-/// repo-relative cognitive terms — both replaced by `cp`, and the
+/// repo-relative cognitive terms — both replaced by `cp_tail`, and the
 /// `cognitive_health` deduction clamped to `[0, 100]` exactly as the SQL clamps
-/// it. Closed form `10 · pr_rev · cp²`, on the same `[0, 10]` scale as
+/// it. Closed form `10 · pr_rev · cp_tail²`, on the same `[0, 10]` scale as
 /// `hotspot_score`.
 #[must_use]
-fn anchored_score(pr_rev: f64, cp: f64) -> f64 {
-    let health = (100.0 * (1.0 - 0.40 * cp)).clamp(0.0, 100.0);
-    pr_rev * cp * (100.0 - health) / 4.0
+fn anchored_score(pr_rev: f64, cp_tail: f64) -> f64 {
+    let health = (100.0 * (1.0 - 0.40 * cp_tail)).clamp(0.0, 100.0);
+    pr_rev * cp_tail * (100.0 - health) / 4.0
 }
 
 /// [`run_hotspots`] with the additive corpus anchor applied. The entry the
@@ -456,20 +467,21 @@ mod anchor_tests {
     use crate::facts::FactsDb;
 
     /// The anchored score is the SQL formula with `pr_cx` and `norm_cx` both
-    /// swapped for the corpus percentile — closed form `10 · pr_rev · cp²`.
+    /// swapped for the corpus non-trivial-tail percentile — closed form
+    /// `10 · pr_rev · cp_tail²`.
     #[test]
     fn anchored_score_matches_closed_form() {
         // Hand-computed: 10 · 0.5 · 0.9² = 4.05.
         assert!((anchored_score(0.5, 0.9) - 4.05).abs() < 1e-12);
         // No churn ⇒ zero, regardless of complexity.
         assert!(anchored_score(0.0, 1.0).abs() < 1e-12);
-        // Zero corpus percentile ⇒ zero (health deduction is zero).
+        // Zero tail percentile ⇒ zero (health deduction is zero).
         assert!(anchored_score(1.0, 0.0).abs() < 1e-12);
         // Upper bound of the [0, 10] range.
         assert!((anchored_score(1.0, 1.0) - 10.0).abs() < 1e-12);
         // Closed form holds across the range.
-        for &(pr, cp) in &[(0.3, 0.7), (0.8, 0.25), (1.0, 0.997)] {
-            assert!((anchored_score(pr, cp) - 10.0 * pr * cp * cp).abs() < 1e-12);
+        for &(pr, cp_tail) in &[(0.3, 0.7), (0.8, 0.25), (1.0, 0.997)] {
+            assert!((anchored_score(pr, cp_tail) - 10.0 * pr * cp_tail * cp_tail).abs() < 1e-12);
         }
     }
 
@@ -510,7 +522,14 @@ mod anchor_tests {
             (cp.p - 0.5).abs() < 1e-9,
             "cognitive 5.0 is the ramp median"
         );
-        assert!((anchored_score(1.0, cp.p) - 2.5).abs() < 1e-9);
+        // The ramp carries no trivial mass (only `q[0] = 0`), so p0 ≈ 0 and the
+        // conditional-tail lookup — the one the anchored path actually uses — is
+        // the identity here, returning the same 0.5 the raw percentile does.
+        let cp_tail =
+            crate::calibration::conditional_tail_percentile(&art, "rust", "cognitive", 5.0)
+                .expect("covered, non-empty tail");
+        assert!((cp_tail - 0.5).abs() < 1e-9, "p0 ≈ 0 ⇒ cp_tail == cp");
+        assert!((anchored_score(1.0, cp_tail) - 2.5).abs() < 1e-9);
     }
 
     #[test]
