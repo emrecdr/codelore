@@ -275,6 +275,12 @@
   // health bands stay separable for deuteranopia/protanopia (amber-leaning
   // yellows keep the middle row well below the green row in lightness).
   // Indexed [health*3 + activity].
+  //
+  // Load-order constraint: this is IIFE-scope state in a later-concatenated
+  // file, so it is in its temporal dead zone during the synchronous boot
+  // pass. Its readers (bivariateColor, renderBivariateLegend) must stay off
+  // that path — they run only after the boot loop's first yield, once every
+  // file has evaluated. A boot-time read would throw before this line runs.
   const BIVARIATE_PALETTE = [
     '#d4efd0', '#a3d99b', '#6bbf6b', // green  × low/med/high (lightest row)
     '#d9b74a', '#c19a2e', '#a37d18', // yellow × low/med/high (amber, mid lightness)
@@ -371,25 +377,32 @@
   // References:
   // - https://developer.chrome.com/blog/use-scheduler-yield
   //
-  // The MessageChannel fallback is lazy-initialized inside the function
-  // so browsers with `scheduler.yield()` (Chrome 129+, the common case
-  // for this dashboard's audience) never allocate one at module load.
-  let _yieldFallbackChannel = null;
-  let _yieldFallbackInitialized = false;
+  // The MessageChannel fallback is lazy-initialized on first use, and its
+  // state is stored on the function object (`yieldToMain._channel`) rather
+  // than in outer `let` bindings. This is load-order-safe by construction:
+  // all these files concatenate into one IIFE, so `yieldToMain` — a hoisted
+  // function declaration — is callable from the IIFE's first statement, but
+  // an outer `let`/`const` would sit in its temporal dead zone until this
+  // line ran. The cooperative boot loop lives in an earlier-concatenated
+  // file and calls `yieldToMain` before this line is reached, so reading
+  // outer bindings here would throw. Function properties are created at call
+  // time, so no dead-zone read can occur under any concatenation order.
+  // Browsers with `scheduler.yield()` (Chrome 129+) return before the
+  // fallback and never allocate a channel.
   function yieldToMain() {
     if (typeof scheduler === 'object' && scheduler && typeof scheduler.yield === 'function') {
       return scheduler.yield();
     }
-    if (!_yieldFallbackInitialized) {
-      _yieldFallbackInitialized = true;
+    if (!yieldToMain._initialized) {
+      yieldToMain._initialized = true;
       if (typeof MessageChannel === 'function') {
-        _yieldFallbackChannel = new MessageChannel();
+        yieldToMain._channel = new MessageChannel();
       }
     }
-    if (_yieldFallbackChannel) {
+    if (yieldToMain._channel) {
       return new Promise(function (resolve) {
-        _yieldFallbackChannel.port1.onmessage = function () { resolve(); };
-        _yieldFallbackChannel.port2.postMessage(0);
+        yieldToMain._channel.port1.onmessage = function () { resolve(); };
+        yieldToMain._channel.port2.postMessage(0);
       });
     }
     return Promise.resolve();

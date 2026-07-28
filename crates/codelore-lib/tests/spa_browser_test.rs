@@ -42,6 +42,7 @@ use codelore_lib::test_support::{
 };
 use headless_chrome::Browser;
 use headless_chrome::protocol::cdp::Emulation;
+use headless_chrome::protocol::cdp::Page;
 use headless_chrome::protocol::cdp::types::Event;
 
 // Row types used to populate otherwise-dark SpaDashboard fields so their
@@ -885,6 +886,119 @@ fn rendered_spa_boots_without_console_errors() {
         0,
         "after Exit tour the brush should be cleared; exitTour() called bs.clear() \
          but the Alpine store still reports paths"
+    );
+}
+
+/// Boot the SPA in a browser with NO `scheduler.yield` — the state of every
+/// Safari / iOS Safari, Chrome/Edge below 129, and Firefox below 142 — and
+/// assert the full widget set still renders.
+///
+/// The cooperative boot loop yields between widgets via `yieldToMain`, whose
+/// `MessageChannel` fallback path runs on exactly these browsers. That path
+/// must not read any binding that is still in its temporal dead zone when the
+/// loop makes its first `yieldToMain` call during the synchronous boot pass:
+/// if it does, the un-awaited boot IIFE rejects and every widget after the
+/// first stays blank. On the maintainers' own Chrome (>= 129) the
+/// `scheduler.yield()` early return jumps clean over the fallback, so that
+/// regression is invisible there — which is why this variant deletes
+/// `scheduler` before any page script runs and drives the fallback directly.
+#[test]
+fn rendered_spa_boots_without_scheduler_yield() {
+    // -- Step 1: produce a full-widget SPA (every body should populate). ---
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let html_path = tmp.path().join("codelore.html");
+    write_smoke_spa(&html_path, "CodeLore No-Scheduler Boot");
+
+    // -- Step 2: launch headless Chrome (skip cleanly if unavailable). -----
+    let browser = match Browser::default() {
+        Ok(b) => b,
+        Err(e) => {
+            println!(
+                "spa_browser_test: skipping — could not launch Chrome ({e}). \
+                 Install Chrome / Chromium and retry."
+            );
+            return;
+        }
+    };
+    let tab = browser.new_tab().expect("new tab");
+
+    // -- Step 3: remove `scheduler` BEFORE the page's own scripts run. -----
+    // `addScriptToEvaluateOnNewDocument` runs in the main world after the
+    // document is created but before any of its scripts execute, so the
+    // dashboard boots exactly as it would on a browser that never shipped
+    // `scheduler.yield`. Redefine it to `undefined` (falling back to `delete`
+    // if the global is non-configurable); Step 6 proves the override took.
+    tab.call_method(Page::AddScriptToEvaluateOnNewDocument {
+        source: "try { Object.defineProperty(window, 'scheduler', \
+                 { value: undefined, configurable: true, writable: true }); } \
+                 catch (e) { try { delete window.scheduler; } catch (e2) {} }"
+            .to_string(),
+        world_name: None,
+        include_command_line_api: None,
+        run_immediately: None,
+    })
+    .expect("register scheduler-removal script");
+
+    // -- Step 4: collect uncaught exceptions / unhandled rejections. -------
+    let console_errors = attach_exception_sink(&tab);
+
+    // -- Step 5: navigate + let the cooperative boot loop run. -------------
+    let url = format!("file://{}", html_path.display());
+    tab.navigate_to(&url).expect("navigate");
+    tab.wait_until_navigated().expect("wait navigation");
+    std::thread::sleep(Duration::from_secs(2));
+
+    // -- Step 6: vacuity guard — the no-scheduler path was actually taken. --
+    // Without this, a browser that already lacks `scheduler` (or a silently
+    // failed override) would let the test pass for the wrong reason.
+    let scheduler_absent: bool = eval_json(&tab, "typeof scheduler === 'undefined'");
+    assert!(
+        scheduler_absent,
+        "`scheduler` was still defined after the override — the no-scheduler \
+         boot path was not exercised, so this test would pass vacuously"
+    );
+
+    // -- Step 7: every widget body rendered. -------------------------------
+    // The loop renders the first widget, then yields before each of the rest.
+    // If the first `yieldToMain` throws, the loop dies after widget 0 and only
+    // `factor-header` has content. The selector matches every
+    // `#widget-<name>-body` container regardless of its per-widget class.
+    let total: i64 = eval_json(
+        &tab,
+        "document.querySelectorAll('[id^=\"widget-\"][id$=\"-body\"]').length",
+    );
+    assert_eq!(
+        total, 23,
+        "expected 23 widget-body containers in the template; got {total} \
+         (template / WIDGETS drift — reconcile the count with the boot array)"
+    );
+    let rendered: i64 = eval_json(
+        &tab,
+        "(function () { \
+             var bodies = document.querySelectorAll('[id^=\"widget-\"][id$=\"-body\"]'); \
+             var n = 0; \
+             for (var i = 0; i < bodies.length; i++) { \
+                 if (bodies[i].innerHTML.trim().length > 0) n++; \
+             } \
+             return n; \
+         })()",
+    );
+    assert_eq!(
+        rendered, total,
+        "only {rendered} of {total} widget bodies rendered with `scheduler.yield` \
+         absent — the cooperative boot loop died on its first yield instead of \
+         completing (a dead-zone read in the yieldToMain fallback)"
+    );
+
+    // -- Step 8: no uncaught exception / unhandled rejection fired. ---------
+    // The dead-zone read surfaces as a rejection out of the un-awaited boot
+    // IIFE; a clean fallback boot produces none.
+    let errors = console_errors.lock().expect("console mutex").clone();
+    assert!(
+        errors.is_empty(),
+        "SPA produced {} browser error(s) during no-scheduler boot:\n  {}",
+        errors.len(),
+        errors.join("\n  "),
     );
 }
 
