@@ -28,6 +28,8 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  # merge-on-green re-dispatches main's CI after a merge (see below).
+  actions: write
 
 jobs:
   mark-eligible:
@@ -78,6 +80,12 @@ jobs:
              | first | .number // empty')
           if [ -n "$pr" ]; then
             gh pr merge "$pr" --squash --delete-branch --repo "$REPO"
+            # A push made with GITHUB_TOKEN does not fire on:push workflows
+            # (recursion guard), so the merge commit would land on main with
+            # no CI — no self-gate stamp, no dogfood demo publish. Explicit
+            # workflow_dispatch is exempt from the guard; dispatch main's CI
+            # so auto-merged commits get the same coverage as every other.
+            gh workflow run ci.yml --ref main --repo "$REPO"
           else
             echo "no open labeled Dependabot PR for $HEAD_SHA — nothing to merge"
           fi
