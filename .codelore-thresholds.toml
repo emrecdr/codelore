@@ -11,20 +11,22 @@
 # floor inside the metric's day-to-day noise band flags routine merges rather
 # than real decay.
 code_health_min = 32.5
-# Worst hotspot-row cognitive complexity today: 40. The SPA drawer's
-# 141-cognitive function lives in a freshly split file that re-enters the
-# hotspot set as it accrues revisions; the ceiling is sized for that
-# re-entry until the function itself is decomposed.
+# Worst hotspot-row cognitive complexity today: 40 (import_graph.rs) — the
+# per-file MAX over its functions. The SPA drawer builds each detail section
+# through its own small function, so the drawer file's largest single function
+# is its radar renderer at 28 — below today's worst, and far below this
+# ceiling. The ceiling sits well above the measured worst and is a candidate
+# to tighten in a separate gate retune.
 cognitive_max = 150.0
 # Highest hotspot score today: 5.24 (import_graph.rs), with diff_output.rs
-# at 5.11. Neither file changed: the score normalizes cognitive complexity
-# against the repo's maximum over hotspot files, so splitting the drawer
-# module out of the set re-normalized every other score upward — improving
-# the worst file inflates the rest by construction. The ceiling therefore
-# tracks the measured worst with margin rather than an absolute standard.
-# It can return to a meaningful steady state (~4.0) once the drawer's
-# single 141-cognitive function is decomposed so it never re-enters the
-# set at that weight, and tightens durably only if the normalization gains
+# at 5.11. The score normalizes cognitive complexity against the repo's
+# maximum over hotspot files, so the ceiling tracks the measured worst with
+# margin rather than an absolute standard. The SPA drawer builds each detail
+# section through its own small function (drawer-file max 28, below the
+# current worst of 40), so if that file accrues revisions it re-enters the
+# set at a weight comparable to today's members rather than dominating the
+# normalization. The ceiling can return to a meaningful steady state (~4.0)
+# in a separate retune, and tightens durably only if the normalization gains
 # a repo-independent anchor.
 hotspot_score_max = 5.5
 # Exactly one import cycle exists (the nine-file codelore-rca cluster).

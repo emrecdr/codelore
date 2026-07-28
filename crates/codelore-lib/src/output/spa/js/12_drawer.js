@@ -90,254 +90,31 @@
     var overviewHtml = '';
     var couplingHtml = '';
     var peopleHtml = '';
-    var healthHtml = '';
-    var xrayHtml = '';
-
-    // Build per-file health sparkline from file_health_series.
-    const fileSeries = (d.file_health_series || []).filter(function (r) { return r.path === path; });
-    if (fileSeries.length) {
-      // Sort oldest-first for sparkline rendering order.
-      fileSeries.sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
-      healthHtml += '<h4>Health over time</h4>';
-      healthHtml += '<div id="drawer-health-sparkline" style="height: 140px; margin-bottom: 12px;"></div>';
-      healthHtml += '<table class="table table-xs"><thead><tr><th>Date</th><th>Score</th><th>Band</th></tr></thead><tbody>';
-      for (var hi = fileSeries.length - 1; hi >= 0; hi--) {
-        const fs = fileSeries[hi];
-        healthHtml += '<tr><td>' + escapeHtml(fs.date) + '</td><td>' + fmtNumberFlex(fs.score, 1) +
-          '</td><td>' + escapeHtml(fs.band) + '</td></tr>';
-      }
-      healthHtml += '</tbody></table>';
-    }
-
-    // Build the X-Ray tab content from function_xray data for this path.
-    // `function_xray` is an array of {path, rows} objects where rows are
-    // FunctionXrayRow values: {function, change_freq, loc, cyclomatic, last_changed}.
-    // The tab only appears when the backend computed xray rows for this path
-    // (top-10 hotspot, Tier-1 language); otherwise the tab is omitted and
-    // the Overview "Functions" section (from d.xray cognitive data) remains.
-    var xrayEntry = (d.function_xray || []).find(function (e) { return e.path === path; });
-    if (xrayEntry && xrayEntry.rows && xrayEntry.rows.length) {
-      var xrows = xrayEntry.rows;
-      // Max change_freq for proportional inline bar widths.
-      var maxFreq = 0;
-      for (var xri = 0; xri < xrows.length; xri++) {
-        if ((xrows[xri].change_freq || 0) > maxFreq) maxFreq = xrows[xri].change_freq;
-      }
-      xrayHtml += '<table class="table table-xs" style="width:100%">' +
-        '<thead><tr>' +
-          '<th>Function</th>' +
-          '<th style="min-width:90px">Change freq</th>' +
-          '<th class="num">LOC</th>' +
-          '<th class="num">CC</th>' +
-        '</tr></thead><tbody>';
-      for (var xfi = 0; xfi < xrows.length; xfi++) {
-        var xr = xrows[xfi];
-        var freqPct = maxFreq ? Math.round(((xr.change_freq || 0) / maxFreq) * 100) : 0;
-        var barColor = freqPct >= 80 ? token('--color-error')
-                     : freqPct >= 40 ? token('--color-warning')
-                     : token('--color-base-content');
-        xrayHtml += '<tr>' +
-          '<td><code>' + escapeHtml(xr.function || '(anonymous)') + '</code></td>' +
-          '<td>' +
-            '<div style="display:flex;align-items:center;gap:4px;">' +
-              '<div style="flex:1;height:6px;background:var(--color-base-200,#e5e7eb);border-radius:3px;overflow:hidden;">' +
-                '<div style="width:' + freqPct + '%;height:100%;background:' + barColor + ';"></div>' +
-              '</div>' +
-              '<span style="min-width:22px;text-align:right;font-size:0.75em;">' + fmtInt(xr.change_freq) + '</span>' +
-            '</div>' +
-          '</td>' +
-          '<td class="num">' + (xr.loc != null ? fmtInt(xr.loc) : '—') + '</td>' +
-          '<td class="num">' + (xr.cyclomatic != null ? fmtInt(xr.cyclomatic) : '—') + '</td>' +
-          '</tr>';
-      }
-      xrayHtml += '</tbody></table>';
-    }
+    const healthHtml = drawerHealthSeriesHtml(path, d);
+    const xrayHtml = drawerXrayHtml(path, d);
 
     // All section lookups are wrapped so one row's malformed data can't
     // blank the drawer: partial html built before any throw is still shown,
-    // and the underlying error is surfaced to the console for diagnosis.
+    // and the underlying error is surfaced to the console for diagnosis. Each
+    // section is a pure `(path, d) → html` builder; the target accumulator at
+    // the call site keeps its Overview / Coupling / People routing, and the
+    // original build order is preserved.
     try {
-    // Section: hotspot row
-    const hot = (d.hotspots || []).find(function (r) { return r.path === path; });
-    if (hot) {
-      overviewHtml += '<h4>Hotspot</h4><dl>' +
-        '<dt>Revisions</dt><dd>' + fmtInt(hot.revisions) + '</dd>' +
-        '<dt>Cognitive</dt><dd>' + fmtNumberFlex(hot.cognitive, 0) + '</dd>' +
-        '<dt>Cognitive health</dt><dd>' + fmtNumberFlex(hot.cognitive_health, 1) + '</dd>' +
-        '<dt>Hotspot score</dt><dd>' + fmtNumberFlex(hot.hotspot_score, 2) + '</dd>' +
-        '</dl>';
-    }
-
-    // Section: knowledge island. Payload uses `entity` here (not
-    // `path` like the other tables) — check both so the lookup
-    // succeeds regardless of which field carries the path.
-    const ki = (d.knowledge_islands || []).find(function (r) {
-      return (r.path || r.entity) === path;
-    });
-    if (ki) {
-      peopleHtml += '<h4>Knowledge island</h4><dl>' +
-        '<dt>Primary author</dt><dd>' + escapeHtml(ki.main_author || '') + '</dd>' +
-        '<dt>Ownership</dt><dd>' + fmtNumberFlex(ki.ownership_pct, 1) + ' %</dd>' +
-        '<dt>Days since active</dt><dd>' + fmtInt(ki.days_since_main_active) + '</dd>' +
-        '<dt>Total LoC</dt><dd>' + fmtInt(ki.total_loc) + '</dd>' +
-        '</dl>';
-    }
-
-    // Section: coupling partners. Each partner is annotated with
-    // its primary author and (when scenario.departed contains that
-    // author) a knowledge-loss badge — same reactive signal the
-    // hotspot table + KI list use. Authors are looked up from the
-    // window-global map populated at boot.
-    const primaryAuthorByPath = window._codelorePrimaryAuthorByPath || {};
-    const departedSet = (window.Alpine && window.Alpine.store && window.Alpine.store('scenario'))
-      ? new Set(window.Alpine.store('scenario').departed)
-      : new Set();
-    const partners = (d.coupling || []).filter(function (r) {
-      return r.entity_a === path || r.entity_b === path;
-    });
-    if (partners.length) {
-      couplingHtml += '<h4>Coupling partners</h4><ul class="drawer-partners">';
-      for (var i = 0; i < Math.min(partners.length, 20); i++) {
-        const p = partners[i];
-        const other = (p.entity_a === path) ? p.entity_b : p.entity_a;
-        const partnerAuthor = primaryAuthorByPath[other] || '';
-        const isDeparted = partnerAuthor && departedSet.has(partnerAuthor);
-        couplingHtml += '<li' + (isDeparted ? ' class="drawer-partner-departed"' : '') + '>' +
-          '<code>' + escapeHtml(other) + '</code>' +
-          ' — ' + fmtInt(p.shared) + ' shared revs' +
-          (p.degree != null ? (' (' + fmtNumberFlex(p.degree, 1) + '% coupling)') : '') +
-          (partnerAuthor ? ' <span class="drawer-author">' + escapeHtml(partnerAuthor) + '</span>' : '') +
-          (isDeparted ? ' <span class="ki-knowledge-loss-badge">knowledge-loss</span>' : '') +
-          '</li>';
-      }
-      if (partners.length > 20) {
-        couplingHtml += '<li>… ' + (partners.length - 20) + ' more</li>';
-      }
-      couplingHtml += '</ul>';
-    }
-
-    // Section: top contributors. Aggregates entity_ownership rows
-    // for the file by author and ranks by total LoC contribution.
-    // Useful for "who else has touched this besides the primary
-    // author?" — answers the bus-factor recovery question without
-    // leaving the drawer.
-    const contribRows = (d.entity_ownership || []).filter(function (r) {
-      return r.entity === path;
-    });
-    if (contribRows.length) {
-      const byAuthor = {};
-      for (var ci = 0; ci < contribRows.length; ci++) {
-        const r = contribRows[ci];
-        if (!byAuthor[r.author]) byAuthor[r.author] = { added: 0, deleted: 0 };
-        byAuthor[r.author].added += (r.added || 0);
-        byAuthor[r.author].deleted += (r.deleted || 0);
-      }
-      // Drop zero-contribution entries. Entity_ownership keeps a row
-      // for any commit that touched the path; renames / reverts can
-      // net to 0 added + 0 deleted and produce misleading "0%"
-      // contributors (especially when flagged as knowledge-loss —
-      // if they didn't contribute lines, their departure doesn't
-      // actually lose knowledge of this file). Only show authors
-      // with substantive contribution.
-      const contribList = Object.keys(byAuthor)
-        .filter(function (a) { return (byAuthor[a].added + byAuthor[a].deleted) > 0; })
-        .map(function (a) {
-          return { author: a, added: byAuthor[a].added, deleted: byAuthor[a].deleted };
-        })
-        .sort(function (a, b) {
-          return (b.added + b.deleted) - (a.added + a.deleted);
-        });
-      if (contribList.length) {
-        const total = contribList.reduce(function (acc, r) { return acc + r.added + r.deleted; }, 0) || 1;
-        peopleHtml += '<h4>Top contributors</h4><ul class="drawer-partners">';
-        for (var pi = 0; pi < Math.min(contribList.length, 5); pi++) {
-          const c = contribList[pi];
-          const pct = Math.round(((c.added + c.deleted) / total) * 100);
-          const cDeparted = departedSet.has(c.author);
-          peopleHtml += '<li' + (cDeparted ? ' class="drawer-partner-departed"' : '') + '>' +
-            escapeHtml(c.author) +
-            ' — ' + pct + '% (<span class="drawer-author">+' + fmtInt(c.added) + ' / -' + fmtInt(c.deleted) + '</span>)' +
-            (cDeparted ? ' <span class="ki-knowledge-loss-badge">knowledge-loss</span>' : '') +
-            '</li>';
-        }
-        if (contribList.length > 5) {
-          peopleHtml += '<li>… ' + (contribList.length - 5) + ' more contributors</li>';
-        }
-        peopleHtml += '</ul>';
-      }
-    }
-
-    // Section: functions (from X-ray complexity scan). Lists the
-    // file's top-complexity functions inline so the user doesn't
-    // have to drill into the sunburst widget separately.
-    const fileFunctions = (d.xray || [])
-      .filter(function (r) { return r.path === path; })
-      .sort(function (a, b) {
-        const ca = (typeof a.cognitive === 'number') ? a.cognitive : 0;
-        const cb = (typeof b.cognitive === 'number') ? b.cognitive : 0;
-        return cb - ca;
-      });
-    if (fileFunctions.length) {
-      overviewHtml += '<h4>Functions</h4><ul class="drawer-partners">';
-      for (var fi = 0; fi < Math.min(fileFunctions.length, 8); fi++) {
-        const f = fileFunctions[fi];
-        overviewHtml += '<li><code>' + escapeHtml(f.function || '(anonymous)') + '</code>' +
-          ' — cognitive <b>' + fmtNumberFlex(f.cognitive, 0) + '</b>' +
-          (typeof f.start_line === 'number' ? ' <span class="drawer-author">L' + f.start_line + '</span>' : '') +
-          '</li>';
-      }
-      if (fileFunctions.length > 8) {
-        overviewHtml += '<li>… ' + (fileFunctions.length - 8) + ' more functions</li>';
-      }
-      overviewHtml += '</ul>';
-    }
-
-    // Section: clone groups. If the file appears in any clone
-    // family, surface the count + group IDs so the user can
-    // cross-reference with the Clones color mode in the hotspot
-    // circle-pack.
-    const cloneRow = (d.clones || []).find(function (r) { return r.path === path; });
-    if (cloneRow && (cloneRow.groups || cloneRow.group_count || cloneRow.clone_groups)) {
-      const groupCount = cloneRow.groups || cloneRow.group_count || cloneRow.clone_groups;
-      overviewHtml += '<h4>Clones</h4><dl>' +
-        '<dt>Clone groups</dt><dd>' + fmtInt(groupCount) + '</dd>' +
-        '</dl>';
-    }
-
-    // Section: code health
-    const ch = (d.code_health || []).find(function (r) { return r.path === path; });
-    if (ch) {
-      var corpusPctCell;
-      if (ch.corpus_percentile != null) {
-        var pct = Math.round(ch.corpus_percentile * 100);
-        corpusPctCell = pct + '%' + (ch.beyond_corpus ? '+' : '');
-        // Wilson 95% interval, when present — the corpus pool's sampling
-        // uncertainty on the percentile, appended to the same line.
-        if (ch.corpus_percentile_ci_low != null && ch.corpus_percentile_ci_high != null) {
-          corpusPctCell += ' [' + Math.round(ch.corpus_percentile_ci_low * 100) + '–' +
-            Math.round(ch.corpus_percentile_ci_high * 100) + '%]';
-        }
-      } else {
-        corpusPctCell = '—';
-      }
-      overviewHtml += '<h4>Code health</h4><dl>' +
-        '<dt>Score</dt><dd>' + fmtNumberFlex(ch.score, 1) + '</dd>' +
-        '<dt>Cognitive</dt><dd>' + fmtNumberFlex(ch.cognitive, 0) + '</dd>' +
-        '<dt>Health band</dt><dd>' + (ch.band || '—') + '</dd>' +
-        '<dt>Corpus percentile</dt><dd>' + corpusPctCell + '</dd>' +
-        '</dl>';
-    }
-
-    // Section: marginal-owner risk chip (ownership × health signal)
-    const mor = (d.marginal_owner_risk || []).find(function (r) { return r.path === path; });
-    if (mor) {
-      var morLabel = mor.risk === 'high' ? '⚠ High owner risk' : '⚠ Elevated owner risk';
-      // Reuses ki-knowledge-loss-badge styling intentionally — same visual weight as the knowledge-loss chip.
-      overviewHtml += '<div class="ki-knowledge-loss-badge" title="' + mor.note + '">' +
-        morLabel + ' — top active share ' + fmtNumberFlex(mor.top_active_share, 2) +
-        '</div>';
-    }
-
+      overviewHtml += drawerHotspotHtml(path, d);
+      peopleHtml += drawerKnowledgeIslandHtml(path, d);
+      // Partner + contributor rows share the departed-author signal and the
+      // window-global primary-author map; compute both once, at their original
+      // position, and pass them down explicitly.
+      const primaryAuthorByPath = window._codelorePrimaryAuthorByPath || {};
+      const departedSet = (window.Alpine && window.Alpine.store && window.Alpine.store('scenario'))
+        ? new Set(window.Alpine.store('scenario').departed)
+        : new Set();
+      couplingHtml += drawerCouplingHtml(path, d, primaryAuthorByPath, departedSet);
+      peopleHtml += drawerContributorsHtml(path, d, departedSet);
+      overviewHtml += drawerFunctionsHtml(path, d);
+      overviewHtml += drawerClonesHtml(path, d);
+      overviewHtml += drawerCodeHealthHtml(path, d);
+      overviewHtml += drawerMarginalOwnerRiskHtml(path, d);
     } catch (e) {
       console.error('codelore: drawer section render failed for', path, e);
     }
@@ -529,6 +306,264 @@
         }],
       }],
     });
+  }
+
+  // ─── Drawer section builders ──────────────────────────────────────
+  // Each is a pure `(path, d) → html` function extracted from
+  // showFileDetailDrawer so no single unit carries the whole drawer's
+  // complexity. They hold no state and append to nothing: the parent owns
+  // the accumulators and the Overview / Coupling / People routing. An empty
+  // section returns '' (the parent's panel builder then renders the muted
+  // empty-state message).
+
+  // Health-over-time table + sparkline mount. Built outside the section
+  // try/catch, exactly as before, so its failure semantics are unchanged.
+  // A non-empty return is what drives the Health tab's presence.
+  function drawerHealthSeriesHtml(path, d) {
+    const fileSeries = (d.file_health_series || []).filter(function (r) { return r.path === path; });
+    if (!fileSeries.length) return '';
+    // Sort oldest-first for sparkline rendering order.
+    fileSeries.sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
+    var html = '<h4>Health over time</h4>';
+    html += '<div id="drawer-health-sparkline" style="height: 140px; margin-bottom: 12px;"></div>';
+    html += '<table class="table table-xs"><thead><tr><th>Date</th><th>Score</th><th>Band</th></tr></thead><tbody>';
+    for (var hi = fileSeries.length - 1; hi >= 0; hi--) {
+      const fs = fileSeries[hi];
+      html += '<tr><td>' + escapeHtml(fs.date) + '</td><td>' + fmtNumberFlex(fs.score, 1) +
+        '</td><td>' + escapeHtml(fs.band) + '</td></tr>';
+    }
+    html += '</tbody></table>';
+    return html;
+  }
+
+  // X-Ray tab content from function_xray for this path. `function_xray` is
+  // an array of {path, rows} objects where rows are FunctionXrayRow values:
+  // {function, change_freq, loc, cyclomatic, last_changed}. Returns '' unless
+  // the backend computed xray rows for this path (top-10 hotspot, Tier-1
+  // language); the Overview "Functions" section (from d.xray cognitive data)
+  // renders separately regardless.
+  function drawerXrayHtml(path, d) {
+    var xrayEntry = (d.function_xray || []).find(function (e) { return e.path === path; });
+    if (!xrayEntry || !xrayEntry.rows || !xrayEntry.rows.length) return '';
+    var xrows = xrayEntry.rows;
+    // Max change_freq for proportional inline bar widths.
+    var maxFreq = 0;
+    for (var xri = 0; xri < xrows.length; xri++) {
+      if ((xrows[xri].change_freq || 0) > maxFreq) maxFreq = xrows[xri].change_freq;
+    }
+    var html = '<table class="table table-xs" style="width:100%">' +
+      '<thead><tr>' +
+        '<th>Function</th>' +
+        '<th style="min-width:90px">Change freq</th>' +
+        '<th class="num">LOC</th>' +
+        '<th class="num">CC</th>' +
+      '</tr></thead><tbody>';
+    for (var xfi = 0; xfi < xrows.length; xfi++) {
+      var xr = xrows[xfi];
+      var freqPct = maxFreq ? Math.round(((xr.change_freq || 0) / maxFreq) * 100) : 0;
+      var barColor = freqPct >= 80 ? token('--color-error')
+                   : freqPct >= 40 ? token('--color-warning')
+                   : token('--color-base-content');
+      html += '<tr>' +
+        '<td><code>' + escapeHtml(xr.function || '(anonymous)') + '</code></td>' +
+        '<td>' +
+          '<div style="display:flex;align-items:center;gap:4px;">' +
+            '<div style="flex:1;height:6px;background:var(--color-base-200,#e5e7eb);border-radius:3px;overflow:hidden;">' +
+              '<div style="width:' + freqPct + '%;height:100%;background:' + barColor + ';"></div>' +
+            '</div>' +
+            '<span style="min-width:22px;text-align:right;font-size:0.75em;">' + fmtInt(xr.change_freq) + '</span>' +
+          '</div>' +
+        '</td>' +
+        '<td class="num">' + (xr.loc != null ? fmtInt(xr.loc) : '—') + '</td>' +
+        '<td class="num">' + (xr.cyclomatic != null ? fmtInt(xr.cyclomatic) : '—') + '</td>' +
+        '</tr>';
+    }
+    html += '</tbody></table>';
+    return html;
+  }
+
+  // Overview: hotspot row.
+  function drawerHotspotHtml(path, d) {
+    const hot = (d.hotspots || []).find(function (r) { return r.path === path; });
+    if (!hot) return '';
+    return '<h4>Hotspot</h4><dl>' +
+      '<dt>Revisions</dt><dd>' + fmtInt(hot.revisions) + '</dd>' +
+      '<dt>Cognitive</dt><dd>' + fmtNumberFlex(hot.cognitive, 0) + '</dd>' +
+      '<dt>Cognitive health</dt><dd>' + fmtNumberFlex(hot.cognitive_health, 1) + '</dd>' +
+      '<dt>Hotspot score</dt><dd>' + fmtNumberFlex(hot.hotspot_score, 2) + '</dd>' +
+      '</dl>';
+  }
+
+  // People: knowledge island. Payload uses `entity` here (not `path` like
+  // the other tables) — check both so the lookup succeeds regardless of
+  // which field carries the path.
+  function drawerKnowledgeIslandHtml(path, d) {
+    const ki = (d.knowledge_islands || []).find(function (r) {
+      return (r.path || r.entity) === path;
+    });
+    if (!ki) return '';
+    return '<h4>Knowledge island</h4><dl>' +
+      '<dt>Primary author</dt><dd>' + escapeHtml(ki.main_author || '') + '</dd>' +
+      '<dt>Ownership</dt><dd>' + fmtNumberFlex(ki.ownership_pct, 1) + ' %</dd>' +
+      '<dt>Days since active</dt><dd>' + fmtInt(ki.days_since_main_active) + '</dd>' +
+      '<dt>Total LoC</dt><dd>' + fmtInt(ki.total_loc) + '</dd>' +
+      '</dl>';
+  }
+
+  // Coupling: change-coupling partners. Each partner is annotated with its
+  // primary author and (when scenario.departed contains that author) a
+  // knowledge-loss badge — the same reactive signal the hotspot table + KI
+  // list use. The primary-author map and departed set are computed once by
+  // the caller and passed in.
+  function drawerCouplingHtml(path, d, primaryAuthorByPath, departedSet) {
+    const partners = (d.coupling || []).filter(function (r) {
+      return r.entity_a === path || r.entity_b === path;
+    });
+    if (!partners.length) return '';
+    var html = '<h4>Coupling partners</h4><ul class="drawer-partners">';
+    for (var i = 0; i < Math.min(partners.length, 20); i++) {
+      const p = partners[i];
+      const other = (p.entity_a === path) ? p.entity_b : p.entity_a;
+      const partnerAuthor = primaryAuthorByPath[other] || '';
+      const isDeparted = partnerAuthor && departedSet.has(partnerAuthor);
+      html += '<li' + (isDeparted ? ' class="drawer-partner-departed"' : '') + '>' +
+        '<code>' + escapeHtml(other) + '</code>' +
+        ' — ' + fmtInt(p.shared) + ' shared revs' +
+        (p.degree != null ? (' (' + fmtNumberFlex(p.degree, 1) + '% coupling)') : '') +
+        (partnerAuthor ? ' <span class="drawer-author">' + escapeHtml(partnerAuthor) + '</span>' : '') +
+        (isDeparted ? ' <span class="ki-knowledge-loss-badge">knowledge-loss</span>' : '') +
+        '</li>';
+    }
+    if (partners.length > 20) {
+      html += '<li>… ' + (partners.length - 20) + ' more</li>';
+    }
+    html += '</ul>';
+    return html;
+  }
+
+  // People: top contributors. Aggregates entity_ownership rows for the file
+  // by author and ranks by total LoC contribution. Answers "who else has
+  // touched this besides the primary author?" — the bus-factor recovery
+  // question — without leaving the drawer.
+  function drawerContributorsHtml(path, d, departedSet) {
+    const contribRows = (d.entity_ownership || []).filter(function (r) {
+      return r.entity === path;
+    });
+    if (!contribRows.length) return '';
+    const byAuthor = {};
+    for (var ci = 0; ci < contribRows.length; ci++) {
+      const r = contribRows[ci];
+      if (!byAuthor[r.author]) byAuthor[r.author] = { added: 0, deleted: 0 };
+      byAuthor[r.author].added += (r.added || 0);
+      byAuthor[r.author].deleted += (r.deleted || 0);
+    }
+    // Drop zero-contribution entries. Entity_ownership keeps a row for any
+    // commit that touched the path; renames / reverts can net to 0 added +
+    // 0 deleted and produce misleading "0%" contributors (especially when
+    // flagged as knowledge-loss — if they didn't contribute lines, their
+    // departure doesn't actually lose knowledge of this file). Only show
+    // authors with substantive contribution.
+    const contribList = Object.keys(byAuthor)
+      .filter(function (a) { return (byAuthor[a].added + byAuthor[a].deleted) > 0; })
+      .map(function (a) {
+        return { author: a, added: byAuthor[a].added, deleted: byAuthor[a].deleted };
+      })
+      .sort(function (a, b) {
+        return (b.added + b.deleted) - (a.added + a.deleted);
+      });
+    if (!contribList.length) return '';
+    const total = contribList.reduce(function (acc, r) { return acc + r.added + r.deleted; }, 0) || 1;
+    var html = '<h4>Top contributors</h4><ul class="drawer-partners">';
+    for (var pi = 0; pi < Math.min(contribList.length, 5); pi++) {
+      const c = contribList[pi];
+      const pct = Math.round(((c.added + c.deleted) / total) * 100);
+      const cDeparted = departedSet.has(c.author);
+      html += '<li' + (cDeparted ? ' class="drawer-partner-departed"' : '') + '>' +
+        escapeHtml(c.author) +
+        ' — ' + pct + '% (<span class="drawer-author">+' + fmtInt(c.added) + ' / -' + fmtInt(c.deleted) + '</span>)' +
+        (cDeparted ? ' <span class="ki-knowledge-loss-badge">knowledge-loss</span>' : '') +
+        '</li>';
+    }
+    if (contribList.length > 5) {
+      html += '<li>… ' + (contribList.length - 5) + ' more contributors</li>';
+    }
+    html += '</ul>';
+    return html;
+  }
+
+  // Overview: functions (from X-ray complexity scan). Lists the file's
+  // top-complexity functions inline so the user doesn't have to drill into
+  // the sunburst widget separately.
+  function drawerFunctionsHtml(path, d) {
+    const fileFunctions = (d.xray || [])
+      .filter(function (r) { return r.path === path; })
+      .sort(function (a, b) {
+        const ca = (typeof a.cognitive === 'number') ? a.cognitive : 0;
+        const cb = (typeof b.cognitive === 'number') ? b.cognitive : 0;
+        return cb - ca;
+      });
+    if (!fileFunctions.length) return '';
+    var html = '<h4>Functions</h4><ul class="drawer-partners">';
+    for (var fi = 0; fi < Math.min(fileFunctions.length, 8); fi++) {
+      const f = fileFunctions[fi];
+      html += '<li><code>' + escapeHtml(f.function || '(anonymous)') + '</code>' +
+        ' — cognitive <b>' + fmtNumberFlex(f.cognitive, 0) + '</b>' +
+        (typeof f.start_line === 'number' ? ' <span class="drawer-author">L' + f.start_line + '</span>' : '') +
+        '</li>';
+    }
+    if (fileFunctions.length > 8) {
+      html += '<li>… ' + (fileFunctions.length - 8) + ' more functions</li>';
+    }
+    html += '</ul>';
+    return html;
+  }
+
+  // Overview: clone groups. If the file appears in any clone family, surface
+  // the count so the user can cross-reference with the Clones color mode in
+  // the hotspot circle-pack.
+  function drawerClonesHtml(path, d) {
+    const cloneRow = (d.clones || []).find(function (r) { return r.path === path; });
+    if (!cloneRow || !(cloneRow.groups || cloneRow.group_count || cloneRow.clone_groups)) return '';
+    const groupCount = cloneRow.groups || cloneRow.group_count || cloneRow.clone_groups;
+    return '<h4>Clones</h4><dl>' +
+      '<dt>Clone groups</dt><dd>' + fmtInt(groupCount) + '</dd>' +
+      '</dl>';
+  }
+
+  // Overview: code health.
+  function drawerCodeHealthHtml(path, d) {
+    const ch = (d.code_health || []).find(function (r) { return r.path === path; });
+    if (!ch) return '';
+    var corpusPctCell;
+    if (ch.corpus_percentile != null) {
+      var pct = Math.round(ch.corpus_percentile * 100);
+      corpusPctCell = pct + '%' + (ch.beyond_corpus ? '+' : '');
+      // Wilson 95% interval, when present — the corpus pool's sampling
+      // uncertainty on the percentile, appended to the same line.
+      if (ch.corpus_percentile_ci_low != null && ch.corpus_percentile_ci_high != null) {
+        corpusPctCell += ' [' + Math.round(ch.corpus_percentile_ci_low * 100) + '–' +
+          Math.round(ch.corpus_percentile_ci_high * 100) + '%]';
+      }
+    } else {
+      corpusPctCell = '—';
+    }
+    return '<h4>Code health</h4><dl>' +
+      '<dt>Score</dt><dd>' + fmtNumberFlex(ch.score, 1) + '</dd>' +
+      '<dt>Cognitive</dt><dd>' + fmtNumberFlex(ch.cognitive, 0) + '</dd>' +
+      '<dt>Health band</dt><dd>' + (ch.band || '—') + '</dd>' +
+      '<dt>Corpus percentile</dt><dd>' + corpusPctCell + '</dd>' +
+      '</dl>';
+  }
+
+  // Overview: marginal-owner risk chip (ownership × health signal).
+  function drawerMarginalOwnerRiskHtml(path, d) {
+    const mor = (d.marginal_owner_risk || []).find(function (r) { return r.path === path; });
+    if (!mor) return '';
+    var morLabel = mor.risk === 'high' ? '⚠ High owner risk' : '⚠ Elevated owner risk';
+    // Reuses ki-knowledge-loss-badge styling intentionally — same visual weight as the knowledge-loss chip.
+    return '<div class="ki-knowledge-loss-badge" title="' + mor.note + '">' +
+      morLabel + ' — top active share ' + fmtNumberFlex(mor.top_active_share, 2) +
+      '</div>';
   }
 
 
