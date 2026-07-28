@@ -46,7 +46,7 @@ termcolor   = "1"
 aho-corasick = "1"
 num-format  = "0.4"
 num         = { version = "0.4", features = ["std"] }
-num-derive  = "0.4"
+num-derive  = "0.5"
 num-traits  = "0.2"
 rayon       = "1"
 
