@@ -4,6 +4,10 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **The SPA dashboard's largest JavaScript module is split by concern into four files (internal refactor, no behaviour change).** `10_helpers_drawer.js` had grown to 1,670 lines — the dashboard's most complex script — by concentrating the shared render helpers, the file-detail drawer, and six widget renderers in one file. Its contents are relocated verbatim into `10_helpers.js` (shared formatting / theme-token / ECharts-lifecycle / view-transition helpers and the guided-tour renderer), `12_drawer.js` (the file-detail drawer and its radar / health-sparkline renderers), `14_widgets_summary.js` (the KPI-tile, knowledge-island, improvements-feed, and factor-header widgets), and `16_widgets_bars.js` (the share-bar and knowledge-surface widgets). The four files are concatenated in that order into the same single shared IIFE, so load order and module-scope state are preserved. The move is byte-for-byte: the emitted dashboard bundle is identical apart from one cross-reference comment updated to name the new file. No function, signature, or behaviour changes.
+
 ## [0.23.0] - 2026-07-28
 
 ### Added
