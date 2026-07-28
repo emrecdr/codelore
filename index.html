@@ -5,9 +5,9 @@
   <title>CodeLore — Read the lore of your codebase.</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
-  <meta name="description" content="CodeLore mines your git history into dozens of behavioral analyses — hotspots, change-coupling, ownership, code health — fused with the static import graph and calibrated against a reference corpus. SARIF, an interactive dashboard, and a local MCP server. A Rust drop-in successor to code-maat.">
+  <meta name="description" content="CodeLore mines your git history into dozens of behavioral analyses — hotspots, change-coupling, ownership, code health — fused with the static import graph and calibrated against a reference corpus with confidence intervals. SARIF output, an interactive dashboard, a quality gate for the AI agent loop, and a local MCP server. A Rust drop-in successor to code-maat.">
   <meta property="og:title" content="CodeLore — Read the lore of your codebase.">
-  <meta property="og:description" content="Behavioral, git-history code analysis fused with static structure: SARIF output, an interactive dashboard, corpus-relative percentiles, and a local MCP server. A Rust drop-in successor to code-maat.">
+  <meta property="og:description" content="Behavioral, git-history code analysis fused with static structure: SARIF output, an interactive dashboard, corpus-relative percentiles with confidence intervals, and an in-agent-loop quality gate. A Rust drop-in successor to code-maat.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://emrecdr.github.io/codelore/">
   <meta property="og:image" content="https://emrecdr.github.io/codelore/assets/dashboard-hotspots.png">
@@ -184,8 +184,9 @@
         your repository's git history and projects it into <strong>dozens of behavioral analyses</strong>
         — hotspots, change-coupling, ownership maps, knowledge fragmentation, code-health scores —
         fused with the static import graph and calibrated against a reference corpus, then
-        surfaced as SARIF for your CI dashboard, a single-file interactive dashboard, and a
-        local MCP server for AI agents. Fully local: no account, no telemetry, every formula published.
+        surfaced as SARIF for your CI dashboard, a single-file interactive dashboard, a quality
+        gate inside the AI agent loop, and a local MCP server. Fully local: no account, no
+        telemetry, every formula published.
       </p>
       <div class="ctas">
         <a class="btn btn-primary" href="demo/">Live demo</a>
@@ -232,7 +233,7 @@
         </li>
         <li>
           <strong>"Is a 78 actually good?"</strong>
-          <span>How does this file's complexity — and this repo's architecture — compare to a reference corpus of real OSS projects, or to your own org's portfolio?</span>
+          <span>How does this file's complexity — and this repo's architecture — compare to a reference corpus of real OSS projects, or your own org's portfolio? And because that corpus is finite, every percentile carries a 95% confidence interval.</span>
         </li>
       </ul>
     </section>
@@ -246,15 +247,41 @@
       <ul class="answers">
         <li>
           <strong>CI &amp; pull requests</strong>
-          <span>Native SARIF 2.1.0 for GitHub Code Scanning and friends, <code class="inline">codelore diff</code> PR-mode deltas, and <code class="inline">codelore check</code> quality gates with commit evidence chains.</span>
+          <span>Native SARIF 2.1.0 for GitHub Code Scanning and friends, <code class="inline">codelore diff</code> PR-mode deltas, and <code class="inline">codelore check</code> quality gates with commit evidence chains — gates that tell refactoring from rot, exempting health-improving churn from the red-band effort ceiling so a hardening campaign doesn't trip its own gate.</span>
         </li>
         <li>
-          <strong>AI agents</strong>
-          <span><code class="inline">codelore mcp</code> serves behavioral analysis to Claude, Cursor, and any MCP client over stdio — fully local.</span>
+          <strong>AI coding agents</strong>
+          <span><code class="inline">codelore gate</code> and its MCP twin <code class="inline">gate_changes</code> weigh your uncommitted working tree against HEAD <em>before</em> you commit — projected code-health delta, newly-introduced import cycles, working-tree-only clones. <code class="inline">change_context</code> briefs the agent on a file's owners, co-change partners, and calibrated risk before it writes. And <code class="inline">codelore mcp</code> serves every analysis over stdio — fully local.</span>
         </li>
         <li>
           <strong>Humans</strong>
-          <span>One self-contained HTML dashboard — six navigable sections from hotspots to delivery flow, linked brushing across every widget, off-boarding simulation — shareable as a single file.</span>
+          <span>One self-contained HTML dashboard — six navigable sections from hotspots to delivery flow, a dependency matrix with a structure&times;history fusion mode, linked brushing across every widget, an off-boarding simulation — shareable as a single file.</span>
+        </li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Calibrated, and honest about it</h2>
+      <p class="lead">
+        Every score is a published, deterministic formula — no opaque ML. And where a number
+        is an estimate rather than a fact, CodeLore shows you the uncertainty instead of hiding it.
+      </p>
+      <ul class="answers">
+        <li>
+          <strong>Confidence intervals on the benchmark</strong>
+          <span>Corpus-relative percentiles carry a Wilson 95% confidence interval. A percentile drawn from a finite reference corpus is a sample estimate, not a population fact — so every one ships its lower and upper bound. We're not aware of another tool that shows the uncertainty in its benchmarks.</span>
+        </li>
+        <li>
+          <strong>Validated against your own bugs</strong>
+          <span><code class="inline">codelore calibrate-defects</code> mines this repository's own fix history and reports whether the health score predicts where defects actually land — ROC AUC and precision@k against the defect-implicated files. The SZZ blame that links each fix to its origin is guarded against tangled and whole-file-deletion (ghost) fixes, so the labels stay sharp. Association, not causation; every figure carries its sample size.</span>
+        </li>
+        <li>
+          <strong>Honest about graph coverage</strong>
+          <span>The architecture metrics disclose how much of the import graph actually resolved. A repo whose imports mostly point at third-party code has a sparse dependency graph — CodeLore reports the low coverage rather than rendering a deceptively clean architecture.</span>
+        </li>
+        <li>
+          <strong>A receipt for every run</strong>
+          <span>Each run emits a provenance sidecar recording every threshold, version pin, and config knob — so "we got different numbers because we silently used different settings" stops being a mystery.</span>
         </li>
       </ul>
     </section>
@@ -278,6 +305,10 @@
     <li>
       <strong>Cost model</strong>
       <span>Per-committer subscription plus metered CI compute and AI credits versus free and open source.</span>
+    </li>
+    <li>
+      <strong>In the agent loop</strong>
+      <span>No pre-commit gate versus <code class="inline">codelore gate</code> with the <code class="inline">gate_changes</code> and <code class="inline">change_context</code> MCP tools — a behavioral verdict on uncommitted changes before they land.</span>
     </li>
     <li>
       <strong>Agent surface</strong>
