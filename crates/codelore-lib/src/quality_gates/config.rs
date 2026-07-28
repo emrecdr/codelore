@@ -46,6 +46,19 @@ pub struct Gates {
     pub code_health_min: Option<f64>,
     /// Maximum hotspot score per file.
     pub hotspot_score_max: Option<f64>,
+    /// Maximum corpus-anchored hotspot score per file (the `hotspot-score-anchored`
+    /// column). Same `[0, 10]` scale as `hotspot_score_max`, but the file's
+    /// complexity is ranked against the calibration corpus rather than the repo,
+    /// so this ceiling is stable under improvement — removing or refactoring the
+    /// repo's worst file does not shift any other file's anchored score.
+    ///
+    /// The gate is **skipped** (not failed, not passed) when no calibration
+    /// artifact is active — no embedded world corpus and no `--calibration`
+    /// override means hotspot rows carry no `hotspot_score_anchored`, so there is
+    /// nothing to compare against. The skip is recorded in the ledger with
+    /// `verdict = "skipped"` and printed as a distinct warning line; it does not
+    /// affect the exit code — mirroring `corpus_percentile_max`.
+    pub hotspot_anchored_max: Option<f64>,
     /// Disallow ANY Type-1 clone families.
     #[serde(default)]
     pub disallow_clone_type_1: bool,
@@ -232,6 +245,7 @@ impl Thresholds {
         self.gates.cognitive_max.is_none()
             && self.gates.code_health_min.is_none()
             && self.gates.hotspot_score_max.is_none()
+            && self.gates.hotspot_anchored_max.is_none()
             && !self.gates.disallow_clone_type_1
             && self.gates.max_dependency_cycles.is_none()
             && self.gates.max_propagation_cost.is_none()
@@ -268,8 +282,9 @@ impl Thresholds {
     /// Each field's domain is derived from its own documented semantics:
     /// scores and percentages on `[0, 100]`, ratios on `[0, 1]`, health
     /// *deltas* on `[-100, 100]` (a `[0, 100]` score can move at most a full
-    /// span either way), and the two open-topped ceilings (`cognitive_max`,
-    /// `hotspot_score_max`) require only finiteness and non-negativity.
+    /// span either way), and the three open-topped ceilings (`cognitive_max`,
+    /// `hotspot_score_max`, `hotspot_anchored_max`) require only finiteness and
+    /// non-negativity.
     /// `u32` counts (`max_dependency_cycles`, `new_hotspot_max`,
     /// `max_findings_in_hot_files`) cannot express a non-finite or negative
     /// value, so the type already guards them.
@@ -315,6 +330,12 @@ impl Thresholds {
             100.0,
         );
         finite_min(&mut problems, "hotspot_score_max", g.hotspot_score_max, 0.0);
+        finite_min(
+            &mut problems,
+            "hotspot_anchored_max",
+            g.hotspot_anchored_max,
+            0.0,
+        );
         finite_in(
             &mut problems,
             "max_propagation_cost",
@@ -735,6 +756,26 @@ no_new_cycles = true
             err.contains("hotspot_score_max") && err.contains("finite"),
             "message names the key and the finiteness requirement: {err}"
         );
+    }
+
+    #[test]
+    fn validate_rejects_negative_hotspot_anchored_max() {
+        // Open-topped ceiling like hotspot_score_max: finite and non-negative.
+        let err = Thresholds::from_text("[gates]\nhotspot_anchored_max = -1.0\n")
+            .unwrap()
+            .validate()
+            .expect_err("negative anchored ceiling must be rejected");
+        assert!(
+            err.contains("hotspot_anchored_max") && err.contains(">= 0"),
+            "message names the key and the non-negativity requirement: {err}"
+        );
+    }
+
+    #[test]
+    fn is_empty_false_when_only_hotspot_anchored_max_set() {
+        // A lone anchored ceiling is a real gate — `check` must not short-circuit.
+        let t = Thresholds::from_text("[gates]\nhotspot_anchored_max = 9.9\n").unwrap();
+        assert!(!t.is_empty());
     }
 
     #[test]

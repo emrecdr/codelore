@@ -327,6 +327,9 @@ fn emit_gate_notices(
             ("corpus_percentile_max", "skipped") => eprintln!(
                 "  ⚠ corpus_percentile_max: skipped — no corpus percentile data (no calibration artifact active, or no analyzed file resolved a percentile)"
             ),
+            ("hotspot_anchored_max", "skipped") => eprintln!(
+                "  ⚠ hotspot_anchored_max: skipped — no anchored hotspot data (no calibration artifact active, or no analyzed file's language is covered by the corpus)"
+            ),
             ("code_health_min", "degraded") => eprintln!(
                 "  ⚠ code_health_min: degraded — health scan returned no rows on a non-empty repo"
             ),
@@ -375,13 +378,18 @@ fn eval_hotspot_gates(
     GateGroupResult,
     Vec<codelore_lib::cli_api::analyses::hotspots::HotspotRow>,
 )> {
-    use codelore_lib::cli_api::analyses::hotspots::run_hotspots;
+    use codelore_lib::cli_api::analyses::hotspots::run_hotspots_anchored;
     use codelore_lib::cli_api::quality_gates::evaluate_full_tree;
     // The gate must see the whole population — a `--rows` display cap must
     // never change which files the gate evaluates. `with_no_row_limit` is a
     // no-op when no cap is set, so the gate outcome is unaffected today and
     // stays correct if a row cap is ever threaded into this path.
-    let hotspots = run_hotspots(db, &opts.with_no_row_limit()).context("run hotspots")?;
+    //
+    // `run_hotspots_anchored` also fills `hotspot_score_anchored` so the
+    // `hotspot_anchored_max` gate (evaluated in `evaluate_all_gates`) reads it
+    // off these same rows; the always-on `cognitive_max` / `hotspot_score_max`
+    // gates below are unaffected by the additive field.
+    let hotspots = run_hotspots_anchored(db, &opts.with_no_row_limit()).context("run hotspots")?;
     let hs_violations = evaluate_full_tree(thresholds, &hotspots);
     let g = &thresholds.gates;
     let mut recs = Vec::new();
@@ -746,6 +754,49 @@ fn evaluate_all_gates(
                 ts: ts.to_owned(),
                 head_sha: head_sha.to_owned(),
                 gate: "corpus_percentile_max".into(),
+                threshold: max,
+                value: 0.0,
+                verdict: "skipped".into(),
+                mode: "check".into(),
+            });
+        }
+    }
+
+    // ── hotspot_anchored_max gate ────────────────────────────────────────────
+    if let Some(max) = g.hotspot_anchored_max {
+        // Reuse the hotspot rows already computed for the hotspot gates —
+        // `eval_hotspot_gates` runs them through `run_hotspots_anchored`, so the
+        // anchor is populated exactly when a calibration artifact is active
+        // (`--calibration` or the embedded world corpus). Without one every row
+        // carries `hotspot_score_anchored = None`, which is a SKIP (not a pass,
+        // not a fail): there is no reference corpus to compare against. Mirrors
+        // the corpus_percentile_max skip above.
+        let has_anchor = hotspot_rows
+            .iter()
+            .any(|r| r.hotspot_score_anchored.is_some());
+        if has_anchor {
+            let anchored_v = codelore_lib::cli_api::quality_gates::evaluate_hotspot_anchored_rows(
+                max,
+                &hotspot_rows,
+            );
+            let value = hotspot_rows
+                .iter()
+                .filter_map(|r| r.hotspot_score_anchored)
+                .fold(0.0, f64::max);
+            recs.push(make_rec(
+                "hotspot_anchored_max",
+                max,
+                value,
+                !anchored_v.is_empty(),
+                ts,
+                head_sha,
+            ));
+            violations.extend(anchored_v);
+        } else {
+            recs.push(GateRunRecord {
+                ts: ts.to_owned(),
+                head_sha: head_sha.to_owned(),
+                gate: "hotspot_anchored_max".into(),
                 threshold: max,
                 value: 0.0,
                 verdict: "skipped".into(),

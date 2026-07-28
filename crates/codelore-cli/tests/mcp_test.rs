@@ -416,7 +416,7 @@ fn mcp_check_gates_discloses_skipped_gates() {
     // semantics are explicitly switched off to prove the disclosure honors it.
     std::fs::write(
         repo.dir.path().join(".codelore-thresholds.toml"),
-        "[gates]\ncode_health_min = 0.0\nmax_findings_in_hot_files = 100\nfail_on_degraded = false\n",
+        "[gates]\ncode_health_min = 0.0\nmax_findings_in_hot_files = 100\nhotspot_anchored_max = 9.0\nfail_on_degraded = false\n",
     )
     .unwrap();
 
@@ -433,6 +433,10 @@ fn mcp_check_gates_discloses_skipped_gates() {
     assert!(
         skipped.contains(&"max_findings_in_hot_files"),
         "a configured check-only gate must be disclosed under skipped_gates: {parsed}"
+    );
+    assert!(
+        skipped.contains(&"hotspot_anchored_max"),
+        "the corpus-dependent anchored gate is check-only here and must be disclosed: {parsed}"
     );
     assert!(
         !skipped.contains(&"fail_on_degraded"),

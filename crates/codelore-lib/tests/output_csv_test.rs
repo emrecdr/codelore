@@ -69,3 +69,44 @@ clone-group,fingerprint,entity,function,start-line,end-line,node-count,similarit
 ";
     assert_eq!(s, expected);
 }
+
+#[test]
+fn csv_hotspots_appends_anchored_column() {
+    use codelore_lib::analyses::hotspots::HotspotRow;
+    use codelore_lib::output::csv::write_hotspots_csv;
+
+    let mk = |path: &str, anchored: Option<f64>| HotspotRow {
+        path: path.into(),
+        revisions: 3,
+        cognitive: 20.0,
+        cognitive_health: 80.0,
+        hotspot_score: 1.5,
+        mi: None,
+        mi_rank: None,
+        ai_pct: None,
+        hotspot_score_anchored: anchored,
+    };
+    let rows = vec![
+        mk("src/covered.rs", Some(3.5)),
+        mk("src/uncovered.rs", None),
+    ];
+    let mut buf = Vec::new();
+    write_hotspots_csv(&rows, &mut Cursor::new(&mut buf)).expect("write");
+    let csv = String::from_utf8(buf).expect("utf8");
+    let lines: Vec<&str> = csv.lines().collect();
+
+    // The new column is appended last, leaving the shipped nine unchanged.
+    assert!(
+        lines[0].ends_with(",ai-pct,hotspot-score-anchored"),
+        "header: {}",
+        lines[0]
+    );
+    // Covered file: value on the same {:.4} scale as hotspot-score.
+    assert!(lines[1].ends_with(",3.5000"), "covered row: {}", lines[1]);
+    // Uncovered file: empty trailing cell — never 0.00.
+    assert!(
+        lines[2].ends_with(',') && !lines[2].ends_with(",0.0000"),
+        "uncovered row must have an empty anchored cell: {}",
+        lines[2]
+    );
+}
