@@ -502,6 +502,7 @@ fn skipped_check_gates(thresholds: &Thresholds) -> Vec<&'static str> {
         cognitive_max,
         code_health_min,
         hotspot_score_max,
+        hotspot_anchored_max,
         disallow_clone_type_1,
         max_dependency_cycles,
         max_propagation_cost,
@@ -515,9 +516,10 @@ fn skipped_check_gates(thresholds: &Thresholds) -> Vec<&'static str> {
         // it is neither reported as an evaluated gate nor as skipped.
         red_effort_exempt_improving: _,
     } = &thresholds.gates;
-    let configured: [(&'static str, bool); 11] = [
+    let configured: [(&'static str, bool); 12] = [
         ("cognitive_max", cognitive_max.is_some()),
         ("hotspot_score_max", hotspot_score_max.is_some()),
+        ("hotspot_anchored_max", hotspot_anchored_max.is_some()),
         ("code_health_min", code_health_min.is_some()),
         ("disallow_clone_type_1", *disallow_clone_type_1),
         ("max_dependency_cycles", max_dependency_cycles.is_some()),
@@ -965,11 +967,12 @@ impl CodeLoreServer {
             }
 
             // architecture + familiarity gates. This tool evaluates a subset
-            // of `codelore check`: the `max_findings_in_hot_files` and
-            // `corpus_percentile_max` gates, degraded-gate semantics, and
-            // `--ratchet` remain check-only — `skipped_gates` (below) names any
-            // that this config configured, so a client sees where this verdict
-            // can diverge from a CI run. `codelore check` is authoritative.
+            // of `codelore check`: the `max_findings_in_hot_files`,
+            // `corpus_percentile_max`, and `hotspot_anchored_max` gates,
+            // degraded-gate semantics, and `--ratchet` remain check-only —
+            // `skipped_gates` (below) names any that this config configured, so
+            // a client sees where this verdict can diverge from a CI run.
+            // `codelore check` is authoritative.
             violations.extend(
                 codelore_lib::cli_api::quality_gates::evaluate_architecture_gate(&thresholds, &db)
                     .map_err(|e| map_lib_err(&e))?,

@@ -58,12 +58,16 @@ pub fn write_hotspots_markdown<W: Write>(rows: &[HotspotRow], w: &mut W) -> Resu
     //
     // The AI cell is the share of commits with AI-attribution signal
     // (ai-assisted | ai-authored), rendered as `X.X%` or `—`.
+    //
+    // `Score (anchored)` is `Score` with its cognitive terms anchored to the
+    // calibration corpus (see `HotspotRow::hotspot_score_anchored`); `—` when no
+    // corpus is active or the file's language is uncovered.
     writeln!(
         w,
-        "| Entity | Revisions | Cognitive | Cognitive Health | Score | MI | AI % |"
+        "| Entity | Revisions | Cognitive | Cognitive Health | Score | MI | AI % | Score (anchored) |"
     )
     .map_err(CodeLoreError::Io)?;
-    writeln!(w, "|---|---|---|---|---|---|---|").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---|---|---|---|---|---|---|").map_err(CodeLoreError::Io)?;
     for row in rows {
         let mi_cell = match (row.mi, row.mi_rank) {
             (Some(v), Some(rank)) if rank.is_finite() => {
@@ -80,16 +84,21 @@ pub fn write_hotspots_markdown<W: Write>(rows: &[HotspotRow], w: &mut W) -> Resu
             Some(v) if v.is_finite() => format!("{v:.1}%"),
             _ => "—".to_owned(),
         };
+        // Same `{:.4}` scale as the `Score` column; `—` when absent.
+        let anchored_cell = row
+            .hotspot_score_anchored
+            .map_or_else(|| "—".to_owned(), |v| format!("{v:.4}"));
         writeln!(
             w,
-            "| `{}` | {} | {:.2} | {:.2} | {:.4} | {} | {} |",
+            "| `{}` | {} | {:.2} | {:.2} | {:.4} | {} | {} | {} |",
             escape_md_cell(&row.path),
             row.revisions,
             row.cognitive,
             row.cognitive_health,
             row.hotspot_score,
             mi_cell,
-            ai_cell
+            ai_cell,
+            anchored_cell
         )
         .map_err(CodeLoreError::Io)?;
     }

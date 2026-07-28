@@ -47,9 +47,15 @@ pub fn write_hotspots_csv<W: Write>(rows: &[HotspotRow], w: &mut W) -> Result<()
     // `ai-pct` is the share of commits touching this file that carry an
     // AI-attribution signal (ai-assisted | ai-authored per identity::bots).
     // Range [0, 100]; absolute interpretation is meaningful across repos.
+    //
+    // `hotspot-score-anchored` is `hotspot-score` with its cognitive terms
+    // anchored to the calibration corpus (see `HotspotRow::hotspot_score_anchored`).
+    // The cell is empty — never `0.00` — when no corpus is active or the file's
+    // language is uncovered, so appending the column leaves every existing
+    // column byte-identical.
     writeln!(
         w,
-        "entity,revisions,cognitive,cognitive-health,hotspot-score,mi,mi-rank,mi-band,ai-pct"
+        "entity,revisions,cognitive,cognitive-health,hotspot-score,mi,mi-rank,mi-band,ai-pct,hotspot-score-anchored"
     )
     .map_err(CodeLoreError::Io)?;
     for row in rows {
@@ -70,9 +76,13 @@ pub fn write_hotspots_csv<W: Write>(rows: &[HotspotRow], w: &mut W) -> Result<()
             Some(v) if v.is_finite() => format!("{v:.2}"),
             _ => String::new(),
         };
+        // Same `{:.4}` scale as `hotspot-score`; empty when absent.
+        let anchored_cell = row
+            .hotspot_score_anchored
+            .map_or_else(String::new, |v| format!("{v:.4}"));
         writeln!(
             w,
-            "{},{},{:.2},{:.2},{:.4},{},{},{},{}",
+            "{},{},{:.2},{:.2},{:.4},{},{},{},{},{}",
             quote_if_needed(&row.path),
             row.revisions,
             row.cognitive,
@@ -81,7 +91,8 @@ pub fn write_hotspots_csv<W: Write>(rows: &[HotspotRow], w: &mut W) -> Result<()
             mi_cell,
             rank_cell,
             band_cell,
-            ai_cell
+            ai_cell,
+            anchored_cell
         )
         .map_err(CodeLoreError::Io)?;
     }

@@ -611,7 +611,12 @@ fn run_streaming_dispatch(
 ) -> Result<()> {
     match ctx.analysis {
         AnalysisName::Hotspots => dispatch!(ctx, format, out,
-        analyses::hotspots::run_hotspots(db, opts),
+        // `run_hotspots_anchored` = `run_hotspots` + the additive corpus anchor,
+        // so the csv/json/markdown surfaces carry `hotspot-score-anchored`. The
+        // SPA composite (build_spa_dashboard) keeps calling plain `run_hotspots`,
+        // so its payload stays byte-identical — the anchor is a report/gate
+        // reading, not part of the dashboard.
+        analyses::hotspots::run_hotspots_anchored(db, opts),
         {
             "csv" => output::csv::write_hotspots_csv,
             "json" => output::json::write_json,

@@ -333,6 +333,40 @@ pub fn evaluate_full_tree(
     out
 }
 
+/// Pure inner comparison for the `hotspot_anchored_max` gate.
+///
+/// One violation per file whose `hotspot_score_anchored` exceeds `max` (strictly
+/// greater — equal-to-ceiling passes, mirroring the other `_max` gates). Rows
+/// with no anchored score (uncovered language, or no calibration artifact
+/// active) carry no comparison and never violate.
+///
+/// Kept out of [`evaluate_full_tree`] — which evaluates the always-on
+/// `cognitive_max` / `hotspot_score_max` gates — because the anchored gate is
+/// corpus-dependent and skippable. The **skip** path (no calibration active ⇒
+/// every row is `None`) lives in the CLI layer; this function's all-`None`
+/// result is simply an empty violation set, mirroring
+/// [`evaluate_corpus_percentile_rows`].
+#[must_use]
+pub fn evaluate_hotspot_anchored_rows(
+    max: f64,
+    rows: &[crate::analyses::hotspots::HotspotRow],
+) -> Vec<GateViolation> {
+    let mut out = Vec::new();
+    for row in rows {
+        if let Some(score) = row.hotspot_score_anchored
+            && score > max
+        {
+            out.push(GateViolation {
+                gate: "hotspot_anchored_max".into(),
+                path: row.path.clone(),
+                actual: format!("{score:.2}"),
+                threshold: format!("{max:.2}"),
+            });
+        }
+    }
+    out
+}
+
 /// Evaluate the `code_health_min` gate against the COMPOSITE `code-health`
 /// score (`run_code_health`), not the hotspots inline cognitive-only proxy.
 /// This is the score `--analysis code-health` reports, so a file the analysis
@@ -582,6 +616,7 @@ mod tests {
             mi: None,
             mi_rank: None,
             ai_pct: None,
+            hotspot_score_anchored: None,
         }
     }
 
@@ -682,6 +717,57 @@ mod tests {
         // never violates, no matter how low the ceiling.
         let rows = vec![make_corpus_row("unknown.rs", None)];
         assert!(evaluate_corpus_percentile_rows(0.0, &rows).is_empty());
+    }
+
+    /// A hotspot row carrying a given anchored score (other fields inert).
+    fn make_anchored_row(
+        path: &str,
+        anchored: Option<f64>,
+    ) -> crate::analyses::hotspots::HotspotRow {
+        crate::analyses::hotspots::HotspotRow {
+            path: path.into(),
+            revisions: 1,
+            cognitive: 0.0,
+            cognitive_health: 100.0,
+            hotspot_score: 0.0,
+            mi: None,
+            mi_rank: None,
+            ai_pct: None,
+            hotspot_score_anchored: anchored,
+        }
+    }
+
+    #[test]
+    fn hotspot_anchored_max_flags_file_above_ceiling() {
+        // Above / at / below the ceiling, plus an uncovered (None) row.
+        let rows = vec![
+            make_anchored_row("hot.rs", Some(9.50)),
+            make_anchored_row("edge.rs", Some(9.00)),
+            make_anchored_row("cool.rs", Some(1.00)),
+            make_anchored_row("uncovered.rs", None),
+        ];
+        let v = evaluate_hotspot_anchored_rows(9.0, &rows);
+        assert_eq!(v.len(), 1, "only the strictly-above file violates: {v:?}");
+        assert_eq!(v[0].path, "hot.rs");
+        assert_eq!(v[0].gate, "hotspot_anchored_max");
+        assert_eq!(v[0].actual, "9.50");
+        assert_eq!(v[0].threshold, "9.00");
+    }
+
+    #[test]
+    fn hotspot_anchored_max_boundary_is_strictly_greater() {
+        // Equal-to-ceiling passes (`> max`, not `>= max`).
+        let rows = vec![make_anchored_row("edge.rs", Some(9.0))];
+        assert!(evaluate_hotspot_anchored_rows(9.0, &rows).is_empty());
+    }
+
+    #[test]
+    fn hotspot_anchored_max_ignores_none_rows() {
+        // A file with no anchored score (uncovered language / no calibration)
+        // never violates, no matter how low the ceiling — this is the skip
+        // contract's data half; the CLI layer turns all-None into a skip.
+        let rows = vec![make_anchored_row("uncovered.rs", None)];
+        assert!(evaluate_hotspot_anchored_rows(0.0, &rows).is_empty());
     }
 
     #[test]
