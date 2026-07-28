@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>CodeLore — Read the lore of your codebase.</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+  <meta name="description" content="CodeLore mines your git history into dozens of behavioral analyses — hotspots, change-coupling, ownership, code health — fused with the static import graph and calibrated against a reference corpus with confidence intervals. SARIF output, an interactive dashboard, a quality gate for the AI agent loop, and a local MCP server. A Rust drop-in successor to code-maat.">
+  <meta property="og:title" content="CodeLore — Read the lore of your codebase.">
+  <meta property="og:description" content="Behavioral, git-history code analysis fused with static structure: SARIF output, an interactive dashboard, corpus-relative percentiles with confidence intervals, and an in-agent-loop quality gate. A Rust drop-in successor to code-maat.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://emrecdr.github.io/codelore/">
+  <meta property="og:image" content="https://emrecdr.github.io/codelore/assets/dashboard-hotspots.png">
+  <style>
+    :root {
+      --bg: #fdfbf7;
+      --surface: #ffffff;
+      --border: #ece5da;
+      --text: #2b2622;
+      --muted: #6a6058;
+      --accent: #c2410c;
+      --accent-soft: #f59e0b;
+      --link: #b3540a;
+      --code-bg: #f6f1e9;
+      --code-text: #3a332c;
+      --hero-glow: rgba(245, 158, 11, 0.14);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #16130f;
+        --surface: #1e1a15;
+        --border: #322c24;
+        --text: #ece5da;
+        --muted: #a89e91;
+        --accent: #f59e0b;
+        --accent-soft: #fbbf24;
+        --link: #f5b342;
+        --code-bg: #241f19;
+        --code-text: #e8dfd2;
+        --hero-glow: rgba(245, 158, 11, 0.10);
+      }
+    }
+    * { box-sizing: border-box; }
+    html { -webkit-text-size-adjust: 100%; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.6;
+      color: var(--text);
+      background: var(--bg);
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: var(--link); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .wrap { max-width: 60rem; margin: 0 auto; padding: 0 1.25rem; }
+    header {
+      background: radial-gradient(ellipse 80% 60% at 50% -10%, var(--hero-glow), transparent 70%);
+      padding: 4rem 0 2.5rem;
+      text-align: center;
+    }
+    .brand {
+      font-size: clamp(2.75rem, 8vw, 4.25rem);
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      margin: 0;
+      background: linear-gradient(120deg, var(--accent), var(--accent-soft));
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+    .tagline {
+      font-size: clamp(1.15rem, 3vw, 1.5rem);
+      font-weight: 600;
+      margin: 0.75rem 0 0;
+      color: var(--text);
+    }
+    .pitch {
+      max-width: 44rem;
+      margin: 1.25rem auto 0;
+      color: var(--muted);
+      font-size: 1.05rem;
+    }
+    .ctas {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 0.75rem;
+      margin: 2rem 0 0;
+    }
+    .btn {
+      display: inline-block;
+      padding: 0.6rem 1.3rem;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 0.98rem;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+    }
+    .btn:hover { text-decoration: none; border-color: var(--accent-soft); }
+    .btn-primary {
+      background: linear-gradient(120deg, var(--accent), var(--accent-soft));
+      color: #fff;
+      border-color: transparent;
+    }
+    @media (prefers-color-scheme: dark) {
+      .btn-primary { color: #1a1510; }
+    }
+    .btn-primary:hover { filter: brightness(1.05); }
+    .shot {
+      display: block;
+      margin: 3rem auto 0;
+      max-width: 100%;
+      height: auto;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      box-shadow: 0 12px 40px -18px rgba(120, 60, 10, 0.35);
+    }
+    .shot-caption {
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin: 0.85rem 0 0;
+    }
+    section { padding: 3rem 0; border-top: 1px solid var(--border); }
+    h2 {
+      font-size: 1.6rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin: 0 0 1.25rem;
+    }
+    .answers { list-style: none; padding: 0; margin: 0; display: grid; gap: 1rem; }
+    @media (min-width: 40rem) {
+      .answers { grid-template-columns: 1fr 1fr; gap: 1.25rem; }
+    }
+    .answers li {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.1rem 1.25rem;
+    }
+    .answers strong { color: var(--accent); display: block; margin-bottom: 0.2rem; }
+    .answers span { color: var(--muted); }
+    pre {
+      background: var(--code-bg);
+      color: var(--code-text);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem 1.15rem;
+      overflow-x: auto;
+      font-size: 0.9rem;
+      margin: 0 0 1rem;
+      font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    }
+    pre .cmt { color: var(--muted); }
+    .install-note { color: var(--muted); font-size: 0.95rem; margin-top: 0.5rem; }
+    .lead { color: var(--muted); margin-top: -0.5rem; margin-bottom: 1.5rem; }
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 2.5rem 0 3rem;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+    footer a { color: var(--link); }
+    code.inline {
+      background: var(--code-bg);
+      color: var(--code-text);
+      padding: 0.12em 0.4em;
+      border-radius: 5px;
+      font-size: 0.88em;
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <h1 class="brand">CodeLore</h1>
+      <p class="tagline">Read the lore of your codebase.</p>
+      <p class="pitch">
+        Behind every codebase is a human narrative your linter cannot see: who wrote this,
+        who still understands it, and where the historical scars are buried. CodeLore mines
+        your repository's git history and projects it into <strong>dozens of behavioral analyses</strong>
+        — hotspots, change-coupling, ownership maps, knowledge fragmentation, code-health scores —
+        fused with the static import graph and calibrated against a reference corpus, then
+        surfaced as SARIF for your CI dashboard, a single-file interactive dashboard, a quality
+        gate inside the AI agent loop, and a local MCP server. Fully local: no account, no
+        telemetry, every formula published.
+      </p>
+      <div class="ctas">
+        <a class="btn btn-primary" href="demo/">Live demo</a>
+        <a class="btn" href="https://github.com/emrecdr/codelore">GitHub</a>
+        <a class="btn" href="#install">Install</a>
+        <a class="btn" href="https://github.com/emrecdr/codelore/releases">Releases</a>
+      </div>
+      <a href="demo/">
+        <img class="shot" src="assets/dashboard-hotspots.png"
+             alt="The CodeLore interactive dashboard: a bivariate hotspot map where file size encodes churn and colour encodes health times activity, with switchable behavioural lenses and an off-boarding simulation."
+             loading="eager">
+      </a>
+      <p class="shot-caption">The interactive dashboard's hotspot map, analyzing CodeLore's own repository — regenerated on every push to main. Click to open the live demo &rarr;</p>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section>
+      <h2>What it answers</h2>
+      <p class="lead">
+        Static analyzers read your code at a single point in time. CodeLore reads its
+        <em>history</em> — and that history answers questions static tools can't.
+      </p>
+      <ul class="answers">
+        <li>
+          <strong>Bus-factor risk</strong>
+          <span>Which complex hotspots are owned by a single contributor — what happens when they go on leave?</span>
+        </li>
+        <li>
+          <strong>Hidden architectural debt</strong>
+          <span>Which files are implicitly coupled — always modified together — but live in different subsystems?</span>
+        </li>
+        <li>
+          <strong>Refactoring ROI</strong>
+          <span>Which highly complex files are actively changing (refactor!) versus stable (leave them alone)?</span>
+        </li>
+        <li>
+          <strong>Live clones</strong>
+          <span>Which copy-pasted blocks keep being edited in lockstep (real debt) versus dead patterns nobody touches (noise)?</span>
+        </li>
+        <li>
+          <strong>Tangles worth untangling</strong>
+          <span>Which dependency cycles are live and hot versus fossils nobody touches — and which single file is the best extraction point?</span>
+        </li>
+        <li>
+          <strong>"Is a 78 actually good?"</strong>
+          <span>How does this file's complexity — and this repo's architecture — compare to a reference corpus of real OSS projects, or your own org's portfolio? And because that corpus is finite, every percentile carries a 95% confidence interval.</span>
+        </li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>In your workflow</h2>
+      <p class="lead">
+        Every number comes from a published, deterministic formula — no opaque ML — and
+        everything runs against the repository on your disk: no account, no server, no telemetry.
+      </p>
+      <ul class="answers">
+        <li>
+          <strong>CI &amp; pull requests</strong>
+          <span>Native SARIF 2.1.0 for GitHub Code Scanning and friends, <code class="inline">codelore diff</code> PR-mode deltas, and <code class="inline">codelore check</code> quality gates with commit evidence chains — gates that tell refactoring from rot, exempting health-improving churn from the red-band effort ceiling so a hardening campaign doesn't trip its own gate.</span>
+        </li>
+        <li>
+          <strong>AI coding agents</strong>
+          <span><code class="inline">codelore gate</code> and its MCP twin <code class="inline">gate_changes</code> weigh your uncommitted working tree against HEAD <em>before</em> you commit — projected code-health delta, newly-introduced import cycles, working-tree-only clones. <code class="inline">change_context</code> briefs the agent on a file's owners, co-change partners, and calibrated risk before it writes. And <code class="inline">codelore mcp</code> serves every analysis over stdio — fully local.</span>
+        </li>
+        <li>
+          <strong>Humans</strong>
+          <span>One self-contained HTML dashboard — six navigable sections from hotspots to delivery flow, a dependency matrix with a structure&times;history fusion mode, linked brushing across every widget, an off-boarding simulation — shareable as a single file.</span>
+        </li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Calibrated, and honest about it</h2>
+      <p class="lead">
+        Every score is a published, deterministic formula — no opaque ML. And where a number
+        is an estimate rather than a fact, CodeLore shows you the uncertainty instead of hiding it.
+      </p>
+      <ul class="answers">
+        <li>
+          <strong>Confidence intervals on the benchmark</strong>
+          <span>Corpus-relative percentiles carry a Wilson 95% confidence interval. A percentile drawn from a finite reference corpus is a sample estimate, not a population fact — so every one ships its lower and upper bound. We're not aware of another tool that shows the uncertainty in its benchmarks.</span>
+        </li>
+        <li>
+          <strong>Validated against your own bugs</strong>
+          <span><code class="inline">codelore calibrate-defects</code> mines this repository's own fix history and reports whether the health score predicts where defects actually land — ROC AUC and precision@k against the defect-implicated files. The SZZ blame that links each fix to its origin is guarded against tangled and whole-file-deletion (ghost) fixes, so the labels stay sharp. Association, not causation; every figure carries its sample size.</span>
+        </li>
+        <li>
+          <strong>Honest about graph coverage</strong>
+          <span>The architecture metrics disclose how much of the import graph actually resolved. A repo whose imports mostly point at third-party code has a sparse dependency graph — CodeLore reports the low coverage rather than rendering a deceptively clean architecture.</span>
+        </li>
+        <li>
+          <strong>A receipt for every run</strong>
+          <span>Each run emits a provenance sidecar recording every threshold, version pin, and config knob — so "we got different numbers because we silently used different settings" stops being a mystery.</span>
+        </li>
+      </ul>
+    </section>
+
+    <section>
+  <h2>How it compares</h2>
+  <p class="lead">
+    GitHub Code Quality brings native PR integration, zero setup on GitHub-hosted
+    repos, and CodeQL's rule depth to point-in-time static analysis. CodeLore's
+    angle is different — and complementary.
+  </p>
+  <ul class="answers">
+    <li>
+      <strong>Analysis signal</strong>
+      <span>Point-in-time static findings versus git-history behavioral signal: hotspots, change coupling, ownership, defect-calibrated risk.</span>
+    </li>
+    <li>
+      <strong>Where it runs</strong>
+      <span>Hosted CI on GitHub's infrastructure versus a single portable binary, offline-capable — the same one gates this repository's own CI.</span>
+    </li>
+    <li>
+      <strong>Cost model</strong>
+      <span>Per-committer subscription plus metered CI compute and AI credits versus free and open source.</span>
+    </li>
+    <li>
+      <strong>In the agent loop</strong>
+      <span>No pre-commit gate versus <code class="inline">codelore gate</code> with the <code class="inline">gate_changes</code> and <code class="inline">change_context</code> MCP tools — a behavioral verdict on uncommitted changes before they land.</span>
+    </li>
+    <li>
+      <strong>Agent surface</strong>
+      <span>None versus a local MCP server exposing every analysis as an agent tool.</span>
+    </li>
+    <li>
+      <strong>Data residency</strong>
+      <span>Code analyzed in GitHub's cloud versus nothing leaving the machine.</span>
+    </li>
+  </ul>
+  <p class="install-note">
+    This is a comparison with the Code Quality product, not the Code Scanning
+    integration above — CodeLore's SARIF output feeds GitHub Code Scanning
+    directly; the two sit side by side rather than competing.
+  </p>
+</section>
+
+
+    <section id="install">
+      <h2>Install</h2>
+      <p class="lead">Pick whichever fits your machine.</p>
+      <pre><span class="cmt"># Homebrew (macOS or Linuxbrew, arm64 or x86_64):</span>
+brew install emrecdr/codelore/codelore</pre>
+      <pre><span class="cmt"># Prebuilt binary via cargo-binstall (any Rust dev environment):</span>
+cargo binstall codelore</pre>
+      <pre><span class="cmt"># Container (distroless; the entrypoint is the codelore binary):</span>
+docker run --rm -v "$PWD":/repo ghcr.io/emrecdr/codelore:latest analyze --analysis hotspots --repo /repo</pre>
+      <pre><span class="cmt"># From source (Rust 1.96+ toolchain required):</span>
+cargo install --git https://github.com/emrecdr/codelore codelore-cli</pre>
+      <p class="install-note">
+        Add <code class="inline">--features spa</code> to the source build for the optional
+        interactive dashboard emitter, or grab a prebuilt archive from a
+        <a href="https://github.com/emrecdr/codelore/releases/latest">GitHub Release</a>
+        (five targets per tag, each with SLSA L3 build provenance).
+      </p>
+    </section>
+
+    <section>
+      <h2>Benchmarks</h2>
+      <p class="lead">
+        A weekly workflow runs CodeLore's end-to-end benchmarks and publishes the
+        performance trend over time.
+      </p>
+      <p>
+        <a href="dev/bench/">Benchmark trends &rarr;</a> — regression tracking across
+        releases, updated as each weekly run lands.
+      </p>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <p>
+        CodeLore is free software under the
+        <a href="https://github.com/emrecdr/codelore/blob/main/LICENSE">GPL-3.0-only</a> license.
+      </p>
+      <p>
+        <a href="https://github.com/emrecdr/codelore">Source on GitHub</a> ·
+        <a href="demo/">Live demo</a> ·
+        <a href="dev/bench/">Benchmarks</a> ·
+        <a href="https://github.com/emrecdr/codelore/blob/main/docs/advanced-usage.md">Docs</a> ·
+        <a href="https://github.com/emrecdr/codelore/releases">Releases</a>
+      </p>
+    </div>
+  </footer>
+</body>
+</html>
