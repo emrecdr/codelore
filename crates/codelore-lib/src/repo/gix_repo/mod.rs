@@ -277,6 +277,13 @@ impl Repo for GixRepo {
         repo.is_dirty().unwrap_or(false)
     }
 
+    fn is_shallow(&self) -> bool {
+        // `Repository::is_shallow()` reports a non-empty `shallow` grafts file in
+        // the repository's common git dir (worktree-correct via `common_dir()`),
+        // exactly the truncated-history signal a `fetch-depth` clone leaves.
+        self.inner.to_thread_local().is_shallow()
+    }
+
     fn merge_or_rebase_in_progress(&self) -> bool {
         // `Repository::state()` reproduces git's own `wt-status` probe: it
         // inspects `rebase-apply/`, `rebase-merge/`, `CHERRY_PICK_HEAD`,

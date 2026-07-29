@@ -546,6 +546,53 @@ impl FactsDb {
             .map_err(|e| CodeLoreError::Analysis(format!("query_row: {e}")))
     }
 
+    /// Number of commits in the fact store — the persisted, cache-safe form of
+    /// [`ingest::IngestStats::commits_ingested`] (one row per ingested commit).
+    /// Unlike that in-memory counter it is readable after a cache HIT as well as
+    /// a fresh ingest; and unlike `complexity_metrics` / `changes` it is the raw
+    /// output of the commit walk — it does not derive from the `changes ⋈
+    /// commits` join, so a blind walk that empties that join still leaves this
+    /// readable (and zero). That independence is what makes it a witness.
+    ///
+    /// # Errors
+    ///
+    /// [`CodeLoreError::Analysis`] on query failure.
+    pub fn commit_count(&self) -> Result<i64> {
+        self.query_row("SELECT COUNT(*) FROM commits", [], |r| r.get::<_, i64>(0))
+    }
+
+    /// Fail loudly when the walk ingested no commits while HEAD names a real
+    /// commit — the signature of a truncated checkout. A shallow `fetch-depth`
+    /// clone whose tip is a merge commit ingests zero commits under the default
+    /// merge filter, leaving an empty fact store on which every quality gate
+    /// finds nothing to violate and `codelore check` reports a green pass over
+    /// no data. Gating on the ingest count turns that silent pass into a hard,
+    /// distinct error.
+    ///
+    /// An empty `head_sha` (an unborn HEAD — `git init` with nothing committed)
+    /// is deliberately not this case and passes through: that is a genuinely
+    /// empty repository, the province of the empty-repository preflight, not a
+    /// truncated one.
+    ///
+    /// # Errors
+    ///
+    /// [`CodeLoreError::Repo`] (spec §6.6 exit 3 — the shallow/corrupted-repo
+    /// bucket that [`CodeLoreError::BlobNotFound`] also occupies) when HEAD is
+    /// real but no commits were ingested.
+    pub fn ensure_ingest_witnessed(&self, head_sha: &str) -> Result<()> {
+        if !head_sha.is_empty() && self.commit_count()? == 0 {
+            return Err(CodeLoreError::Repo(
+                "HEAD names a real commit but the walk ingested no history — the repository \
+                 checkout is truncated. A shallow clone (git fetch-depth, e.g. \
+                 actions/checkout's default fetch-depth: 1) whose tip is a merge commit ingests \
+                 zero commits under the default merge filter, so every quality gate would pass \
+                 over an empty fact store. Re-run against full history (fetch-depth: 0)."
+                    .to_string(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Internal raw-connection accessor. `pub(crate)` so the rest of
     /// `codelore-lib` (kamei, `quality_gates`, `output::spa`, ingest, etc.)
     /// can still reach the underlying `duckdb::Connection` for
@@ -557,5 +604,77 @@ impl FactsDb {
     /// connection.
     pub(crate) fn conn(&self) -> &Connection {
         &self.conn
+    }
+}
+
+#[cfg(test)]
+mod ingest_witness_tests {
+    use super::FactsDb;
+
+    /// Insert one inert commit row — the witness reads only the row count.
+    fn seed_commit(db: &FactsDb, rev: &str) {
+        db.conn()
+            .execute(
+                &format!(
+                    "INSERT INTO commits (rev, author_email, author_name, committer_email, \
+                     canonical_author, date, committer_date, message, is_merge, parent_count) \
+                     VALUES ('{rev}', 'a@b.com', 'A', 'a@b.com', 'A', \
+                     TIMESTAMP '2026-01-01', TIMESTAMP '2026-01-01', 'm', false, 1)"
+                ),
+                [],
+            )
+            .expect("insert commit");
+    }
+
+    #[test]
+    fn commit_count_reflects_ingested_rows() {
+        let db = FactsDb::new_in_memory().expect("db");
+        assert_eq!(db.commit_count().expect("count"), 0);
+        seed_commit(&db, "c1");
+        seed_commit(&db, "c2");
+        assert_eq!(db.commit_count().expect("count"), 2);
+    }
+
+    #[test]
+    fn witness_errors_on_real_head_with_zero_commits() {
+        // The truncated-checkout signature: HEAD resolves to a real commit but
+        // the walk ingested nothing (a shallow merge-tip checkout under the
+        // default merge filter). Must be a hard repo error, never a pass.
+        let db = FactsDb::new_in_memory().expect("db");
+        let err = db
+            .ensure_ingest_witnessed("af53d17d1e3d64679d1691e75f82b65a2edb397a")
+            .expect_err("zero commits + real HEAD must be a hard error");
+        assert_eq!(
+            err.exit_code(),
+            3,
+            "a truncated checkout maps to the repo-error exit bucket"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("fetch-depth"),
+            "the message must name the likely cause: {msg}"
+        );
+        assert!(
+            msg.contains("truncated"),
+            "the message must name the condition: {msg}"
+        );
+    }
+
+    #[test]
+    fn witness_passes_when_commits_present() {
+        let db = FactsDb::new_in_memory().expect("db");
+        seed_commit(&db, "c1");
+        db.ensure_ingest_witnessed("af53d17d")
+            .expect("a store with history passes the witness");
+    }
+
+    #[test]
+    fn witness_ignores_unborn_head() {
+        // An empty head_sha is an unborn HEAD (git init, nothing committed) — a
+        // genuinely empty repository, not a truncated one. The witness must not
+        // fire so the empty-repository preflight owns that case.
+        let db = FactsDb::new_in_memory().expect("db");
+        db.ensure_ingest_witnessed("")
+            .expect("an unborn HEAD is not a truncated checkout");
     }
 }

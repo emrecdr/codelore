@@ -398,6 +398,45 @@ pub fn evaluate_code_health_gate(
     out
 }
 
+/// Whether the HEAD tree carries at least one Tier-1 source file the code-health
+/// scan should have scored — the independent witness for the `code_health_min`
+/// degraded sentinel.
+///
+/// The sentinel fires when the scan returned nothing yet the repository actually
+/// carries analyzable source. It must decide "carries source" from a signal that
+/// does NOT share the scan's failure mode: `complexity_metrics` (the obvious
+/// proxy) is populated from the same `changes ⋈ commits` join the health rows
+/// derive from, so a blind ingest empties it in lockstep with the health set and
+/// a count over it cannot witness the very blindness the sentinel exists to
+/// catch. Reading the HEAD tree straight from the repository sidesteps that: it
+/// is non-zero whenever real source exists, and legitimately zero for a
+/// source-less tree (docs / config only), which stays the honest vacuous pass it
+/// should be rather than a spurious degraded verdict.
+///
+/// The same `--exclude` / gitignore / git-metadata filter the ingest applies is
+/// used here so the witnessed file universe matches the scan's own. Any read
+/// failure yields `false` (treated as no scorable source): a missed degraded
+/// flag beats a hard failure on a tree-walk edge case, matching the repo layer's
+/// hint-not-contract convention for [`crate::repo::Repo::is_worktree_dirty`].
+///
+/// Call it only on the empty-health path — the caller's `&&` short-circuit keeps
+/// the tree walk off every healthy run.
+#[must_use]
+pub fn head_has_scorable_source<R: crate::repo::Repo>(repo: &R, opts: &crate::Options) -> bool {
+    let Ok(paths) = repo.tracked_paths_at_head() else {
+        return false;
+    };
+    let Ok(filter) = crate::paths_filter::PathsFilter::from_opts(opts) else {
+        return false;
+    };
+    paths.iter().any(|p| {
+        let rel = std::path::Path::new(p);
+        !crate::paths_filter::is_git_metadata(rel)
+            && !filter.is_excluded(rel, false)
+            && crate::complexity::Tier1Language::from_path(p).is_some()
+    })
+}
+
 /// Pure inner comparison for the `corpus_percentile_max` gate.
 ///
 /// One violation per file whose `corpus_percentile` exceeds `max` (strictly

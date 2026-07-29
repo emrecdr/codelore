@@ -128,6 +128,25 @@ pub fn read_snapshot(repo_root: &Path) -> Result<Option<RatchetSnapshot>> {
     let raw = fs::read_to_string(&path).map_err(|e| {
         CodeLoreError::Analysis(format!("read ratchet file {}: {e}", path.display()))
     })?;
+    // A present-but-empty file is corrupt, not absent. An empty string parses
+    // cleanly to an all-`None` snapshot (every field is `#[serde(default)]`),
+    // which `evaluate_ratchet` reads as "everything improved" and then silently
+    // rebaselines the committed floor from the current — possibly regressed —
+    // run. Three states must stay distinct: NO file (`Ok(None)`, initialize); a
+    // DESTROYED file (0-byte or whitespace — a torn write, an empty merge
+    // resolution, manual truncation — the loud error here); and a well-formed
+    // file (parsed below, where an empty `[ratchet]` table legitimately means
+    // "no floors configured"). "The floors were destroyed" must never look like
+    // "no floors were configured".
+    if raw.trim().is_empty() {
+        return Err(CodeLoreError::Analysis(format!(
+            "ratchet file {} is present but empty — the committed baseline was destroyed \
+             (a truncated write, an empty merge resolution, or manual truncation). An empty \
+             ratchet must not silently rebaseline the gate: restore the file from version \
+             control, or delete it to re-initialize the baseline from this run.",
+            path.display()
+        )));
+    }
     // The typed parse rejects truncated/corrupt TOML and schema mismatches
     // alike — no separate untyped pre-parse is needed.
     let snap = toml::from_str::<RatchetSnapshot>(&raw).map_err(|e| {
@@ -150,8 +169,19 @@ pub fn write_snapshot(repo_root: &Path, snap: &RatchetSnapshot) -> Result<()> {
                   # Ratchet tightens automatically on improvement; edit manually to relax.\n\n";
     let body = toml::to_string_pretty(snap)
         .map_err(|e| CodeLoreError::Analysis(format!("serialize ratchet snapshot: {e}")))?;
-    fs::write(&path, format!("{header}{body}"))
-        .map_err(|e| CodeLoreError::Analysis(format!("write ratchet file {}: {e}", path.display())))
+    let payload = format!("{header}{body}");
+    // A committed baseline is a shared floor for the whole team, so the write
+    // must be all-or-nothing. Plain `fs::write` truncates then writes; a crash,
+    // OOM kill, or ENOSPC between the two would leave a 0-byte file that parses
+    // back to "everything improved" and silently rebaselines the gate. Route
+    // through the same write-to-temp + fsync + atomic-rename helper every
+    // analyze output uses, so an interrupted write leaves the previous good file
+    // untouched rather than a torn one.
+    crate::output::atomic_publish(&path, |tmp| {
+        fs::write(tmp, payload.as_bytes()).map_err(|e| {
+            CodeLoreError::Analysis(format!("write ratchet file {}: {e}", path.display()))
+        })
+    })
 }
 
 /// Compare current metrics against the snapshot and determine the outcome.
@@ -312,6 +342,73 @@ mod tests {
             msg.contains("not valid TOML"),
             "expected TOML error, got: {msg}"
         );
+    }
+
+    // ── destroyed baseline: 0-byte / whitespace-only → corrupt, not improved ──
+
+    #[test]
+    fn empty_ratchet_file_is_corrupt_not_improved() {
+        // The torn-write signature: a 0-byte file. It parses to an all-`None`
+        // snapshot that would read as "everything improved" and silently
+        // rebaseline the committed floor. read_snapshot must instead fail loudly
+        // — distinct from a missing file (which legitimately initializes) and a
+        // well-formed no-floors file.
+        let dir = tmp();
+        fs::write(dir.path().join(RATCHET_FILENAME), b"").unwrap();
+        let err = read_snapshot(dir.path()).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("empty") && msg.contains("destroyed"),
+            "expected a loud destroyed-baseline error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn whitespace_only_ratchet_file_is_corrupt() {
+        // Whitespace-only content trims to empty and parses to all-`None` just
+        // like a 0-byte file — same corruption, same loud error.
+        let dir = tmp();
+        fs::write(dir.path().join(RATCHET_FILENAME), b"\n  \n").unwrap();
+        assert!(
+            read_snapshot(dir.path()).is_err(),
+            "a whitespace-only ratchet file must be rejected as corrupt"
+        );
+    }
+
+    #[test]
+    fn well_formed_empty_table_is_no_floors_not_corrupt() {
+        // A serialized snapshot with no metrics set is the legitimate "no floors
+        // configured" state — distinct from destroyed — and must round-trip as
+        // an all-`None` snapshot rather than erroring.
+        let dir = tmp();
+        fs::write(dir.path().join(RATCHET_FILENAME), b"[ratchet]\n").unwrap();
+        let snap = read_snapshot(dir.path())
+            .expect("a well-formed empty table must not be corrupt")
+            .expect("a present file returns Some");
+        assert!(snap.ratchet.code_health_min_observed.is_none());
+        assert!(snap.ratchet.red_effort_pct_observed.is_none());
+        assert!(snap.ratchet.dependency_cycles_observed.is_none());
+    }
+
+    #[test]
+    fn write_snapshot_leaves_no_temp_stray() {
+        // Proves the write routes through atomic_publish: its write-to-temp +
+        // rename contract removes the process-unique `.tmp.<pid>` sibling on
+        // success, so a completed write leaves only the destination.
+        let dir = tmp();
+        write_snapshot(dir.path(), &snapshot_from_metrics(&metrics_good())).unwrap();
+        let strays: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".tmp."))
+            .collect();
+        assert!(
+            strays.is_empty(),
+            "an atomic write must not orphan a temp file: {strays:?}"
+        );
+        // And the published file is the real snapshot, readable back.
+        assert!(read_snapshot(dir.path()).unwrap().is_some());
     }
 
     // ── regression: snapshot has BETTER values than current → exit-1 scenario ─
