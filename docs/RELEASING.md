@@ -181,6 +181,20 @@ Once accepted, three workflows fire in parallel on `vX.Y.Z`:
 
 Use SemVer suffix conventions on the tag (`v0.2.0-alpha.1`, `v0.2.0-beta.2`, `v0.2.0-rc.1`). `softprops/action-gh-release@v3` does NOT automatically mark these as pre-release — if you want the GitHub Release flagged as "Pre-release", either add `prerelease: true` to the `release` step temporarily for that tag, or edit the Release on the GitHub UI after publish. The Homebrew tap formula is unconditionally overwritten on every tag push, so a pre-release tag will move the tap to the pre-release version — if you want the tap to stay on the last stable, either skip the homebrew-publish job for pre-release tags (add an `if: !contains(needs.plan.outputs.tag, '-')` guard) or roll back the formula manually.
 
+### Publishing to crates.io
+
+The `crates-publish` job in `release.yml` runs after `plan`, `build`, and `release` have all succeeded, and publishes the three workspace crates to crates.io in dependency order — `codelore-rca`, then `codelore-lib`, then `codelore` — leaning on `cargo publish`'s own wait for each crate to propagate through the index before the next one starts. The publish step is guarded on the `CRATES_IO_TOKEN` repository secret; that guard sits on the step rather than the job, because GitHub Actions doesn't expose the `secrets` context to a job-level `if`. Without the secret configured, the job still runs but the publish step is skipped, so the GitHub Release and Homebrew tap publish normally regardless.
+
+If the job fails partway through, finish the remaining crates by hand, in the same order:
+
+```bash
+cargo publish -p codelore-rca   # no-ops if this version already published
+cargo publish -p codelore-lib
+cargo publish -p codelore
+```
+
+`cargo publish` refuses to re-publish a version that's already on the index, so re-running the workflow (or the commands above) is safe — it just skips whatever already landed.
+
 ### Yanking a release
 
 If a release ships with a critical bug:

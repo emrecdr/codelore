@@ -4,6 +4,10 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **The release workflow publishes `codelore-rca` → `codelore-lib` → `codelore` to crates.io on `v*` tag pushes when the `CRATES_IO_TOKEN` secret is configured.** A new `crates-publish` job runs after the GitHub Release succeeds and publishes the three crates in that dependency order, relying on `cargo publish`'s own index-propagation wait between each. Without the secret set, the job still runs but the publish step is skipped, so the rest of the release pipeline is unaffected.
+
 ### Changed
 
 - **The CLI package is renamed `codelore-cli` → `codelore` for the crates.io publish.** The binary name (`codelore`) and the crate directory (`crates/codelore-cli`) are unchanged — only the Cargo package identifier moves, so `cargo install codelore` now resolves directly instead of requiring `cargo install codelore-cli`. `cargo install` instructions across the README and landing page are updated to the crates.io form, with a `--git` variant kept for development builds. The workspace's `keywords` and `categories` are now inherited by all three crates (`codelore`, `codelore-lib`, `codelore-rca`) via `keywords.workspace = true` / `categories.workspace = true`, so each surfaces them on its crates.io package page; the `behavioral-code-analysis` keyword is shortened to `behavioral-analysis` to clear crates.io's 20-character keyword limit. The CLI crate also adds `readme = "../../README.md"` so crates.io renders the project README as its package page.

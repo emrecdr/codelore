@@ -298,3 +298,31 @@ jobs:
           fi
           git commit -m "codelore ${TAG#v}"
           git push
+
+  # Publishes the three workspace crates to crates.io in dependency order —
+  # codelore-rca has no internal dependents, codelore-lib depends on it, and
+  # codelore depends on codelore-lib — relying on `cargo publish` to wait for
+  # each crate to propagate through the index before the next one starts.
+  # The publish step is skipped (not the job) when the CRATES_IO_TOKEN repo
+  # secret is absent, so forks and unconfigured checkouts still get a green
+  # release. A partial failure (registry hiccup mid-sequence) needs manual
+  # completion: `cargo publish` rejects a version that's already live, so
+  # re-running the remaining `-p` commands by hand in the same rca → lib →
+  # codelore order is safe.
+  crates-publish:
+    needs: [plan, build, release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@1.96.0
+
+      - name: Publish to crates.io
+        if: ${{ secrets.CRATES_IO_TOKEN != '' }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: |
+          cargo publish -p codelore-rca
+          cargo publish -p codelore-lib
+          cargo publish -p codelore
