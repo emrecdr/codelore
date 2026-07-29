@@ -55,8 +55,9 @@ pub struct TopCommittersRow {
     pub is_bot: bool,
 }
 
-const SQL: &str = "
-    WITH per_author AS (
+const SQL_TEMPLATE: &str = "
+    WITH {human_aliases},
+    per_author AS (
         SELECT
             commits.canonical_author AS author,
             COUNT(DISTINCT commits.rev) AS commits,
@@ -75,18 +76,14 @@ const SQL: &str = "
         pa.loc_deleted,
         CAST(CAST(pa.first_at AS DATE) AS TEXT) AS first_commit,
         CAST(CAST(pa.last_at AS DATE) AS TEXT) AS last_commit,
-        COALESCE(aa.is_bot, FALSE) AS is_bot
+        (aa.canonical IS NULL) AS is_bot
     FROM per_author pa
-    LEFT JOIN (
-        -- Dedupe by canonical (author_aliases is keyed on
-        -- (raw_name, raw_email); canonical is N:1 for authors with several
-        -- name+email identities). Without this the join produced duplicate
-        -- rows per author, draining the `LIMIT N` row budget on duplicates
-        -- instead of distinct top committers.
-        SELECT canonical, BOOL_OR(is_bot) AS is_bot
-        FROM author_aliases
-        GROUP BY canonical
-    ) aa ON aa.canonical = pa.author
+    -- Pair-granular: a canonical is bot ONLY when it has NO human alias at
+    -- all (author_aliases is keyed on (raw_name, raw_email); a canonical
+    -- with at least one human alias stays eligible through that alias, even
+    -- if it ALSO owns a bot-classified alias). DISTINCT dedupes the lookup
+    -- to one row per canonical so the join can't multiply per_author rows.
+    LEFT JOIN (SELECT DISTINCT canonical FROM human_aliases) aa ON aa.canonical = pa.author
     ORDER BY commits DESC, author ASC
     LIMIT ?
 ";
@@ -94,8 +91,9 @@ const SQL: &str = "
 #[tracing::instrument(name = "top-committers", skip_all, fields(min_revs = opts.min_revs))]
 pub fn run_top_committers(db: &FactsDb, opts: &Options) -> Result<Vec<TopCommittersRow>> {
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
-    super::query::explain_if_requested(db, SQL, params![row_limit], "top-committers", opts)?;
-    super::query::query_map_collect(db, SQL, params![row_limit], "top-committers", |r| {
+    let sql = SQL_TEMPLATE.replace("{human_aliases}", super::query::HUMAN_ALIASES_CTE);
+    super::query::explain_if_requested(db, &sql, params![row_limit], "top-committers", opts)?;
+    super::query::query_map_collect(db, &sql, params![row_limit], "top-committers", |r| {
         Ok(TopCommittersRow {
             author: r.get::<_, String>(0)?,
             commits: r.get::<_, u32>(1)?,
