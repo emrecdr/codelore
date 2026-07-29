@@ -394,7 +394,9 @@ mod tests {
         // after it, never leading the hint.
         assert!(out.contains("repository root"));
         assert!(out.contains("--repo <repo-root>"));
-        let repo_root_idx = out.find("repository root").expect("mentions repository root");
+        let repo_root_idx = out
+            .find("repository root")
+            .expect("mentions repository root");
         let git_init_idx = out.find("git init").expect("still mentions git init");
         assert!(
             repo_root_idx < git_init_idx,
