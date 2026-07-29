@@ -18,6 +18,8 @@ Conventional Commits format. All notable changes documented here.
 
 - **The `crates-publish` job's publish-step guard referenced the `secrets` context in a step-level `if`, which GitHub Actions does not provide there — the next tag push would have hard-errored the job before ever reaching `cargo publish`.** The `secrets` context is unavailable in any `if` expression, job- or step-level; the job now maps `CRATES_IO_TOKEN` through job-level `env` and the step's guard tests `env.CRATES_IO_TOKEN` instead, which is a documented-legal context for `if`.
 
+- **`cut-release.sh`'s workflow_dispatch fallback could adopt a CI run from an unrelated commit and declare it green for the release SHA.** When the release commit didn't auto-trigger CI (a `paths-ignore` match) and the script dispatched CI manually, the fallback selected the most recent `workflow_dispatch` run on `main` by event type alone, with no `headSha` comparison — ahead of the irreversible crates.io publish this job gates. The fallback now polls (bounded retry, matching the primary path's `headSha` filter) until a `workflow_dispatch` run on the exact release SHA registers, and `die`s if none appears in the window; a run is never adopted without its `headSha` compared.
+
 ## [0.24.0] - 2026-07-29
 
 ### Added
