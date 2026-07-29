@@ -154,7 +154,16 @@ impl Banner<'_> {
                 "✗",
                 "not a git repository".to_string(),
                 Some(format!(
-                    "run `git init` in {repo_path}, or pass --repo to a git-managed directory"
+                    // `GixRepo::open` does not search parent directories and
+                    // `--repo` defaults to `.`, so this state is most often
+                    // hit by running from a subdirectory of a real
+                    // repository — where `git init` is actively harmful
+                    // advice (it creates a nested repo). Lead with the fix
+                    // that is right in that common case; `git init` stays
+                    // available but demoted to last, for the case where
+                    // {repo_path} genuinely isn't a repository yet.
+                    "run codelore from the repository root, or pass --repo <repo-root>; \
+                     only run `git init` in {repo_path} if it truly isn't a git repository yet"
                 )),
             ),
             Preflight::EmptyRepository => (
@@ -377,7 +386,20 @@ mod tests {
         assert!(out.contains("✗"), "missing fail mark");
         assert!(out.contains("not a git repository"));
         assert!(out.contains("Hint:"));
-        assert!(out.contains("git init"));
+        // The remedy must lead with the common-case fix (run from the repo
+        // root, or --repo <repo-root>) — codelore does not search parent
+        // directories, so the overwhelmingly common trigger is running from
+        // a subdirectory of a real repository, not a missing repository.
+        // `git init` is still mentioned as a fallback but must be demoted
+        // after it, never leading the hint.
+        assert!(out.contains("repository root"));
+        assert!(out.contains("--repo <repo-root>"));
+        let repo_root_idx = out.find("repository root").expect("mentions repository root");
+        let git_init_idx = out.find("git init").expect("still mentions git init");
+        assert!(
+            repo_root_idx < git_init_idx,
+            "the repository-root remedy must lead; git init must be demoted after it: {out}"
+        );
     }
 
     #[test]
