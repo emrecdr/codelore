@@ -32,16 +32,7 @@ use crate::{CodeLoreError, Options, Result};
 /// `knowledge-islands` already resolve their wall-clock anchor.
 #[must_use]
 pub fn wall_clock_utc_literal() -> String {
-    let n = time::OffsetDateTime::now_utc();
-    format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-        n.year(),
-        u8::from(n.month()),
-        n.day(),
-        n.hour(),
-        n.minute(),
-        n.second(),
-    )
+    crate::facts::ingest::consumer::format_timestamp(time::OffsetDateTime::now_utc())
 }
 
 /// SQL expression for the repository's window anchor — the "now" that every

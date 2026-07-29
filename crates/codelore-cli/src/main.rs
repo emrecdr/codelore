@@ -211,6 +211,30 @@ pub(crate) fn write_github_output(key: &str, value: &str) {
     }
 }
 
+/// The discriminating reason a `[new_code]` gate skipped at runtime. A shallow
+/// checkout (fetch-depth truncated the pre-window history) and a genuinely young
+/// repository both leave the window with no pre-window baseline and read
+/// identically at the window-start query — but they are different causes with
+/// different fixes, so the reason names fetch-depth when the checkout is shallow.
+/// Shared between `codelore check`'s `eprintln!` notice and the MCP `[new_code]`
+/// gate's `reason` field so the wording never drifts between the two surfaces.
+pub(crate) fn new_code_skip_reason(window_days: f64, shallow_checkout: bool) -> String {
+    if shallow_checkout {
+        format!(
+            "the checkout is shallow (fetch-depth): its history is truncated to within the \
+             {window_days:.0}-day window, so there is no pre-window baseline to contrast the \
+             working set against. This is the checkout, not the repository — re-run against \
+             full history (fetch-depth: 0)."
+        )
+    } else {
+        format!(
+            "the repository's history is shallower than the {window_days:.0}-day window (a \
+             genuinely young repository), so there is no pre-window baseline to contrast the \
+             working set against."
+        )
+    }
+}
+
 /// Operational telemetry. Prints what `CodeLore` ships under the
 /// hood — schema version, pinned dependency versions, supported
 /// analysis count, supported output format count. Useful for triage

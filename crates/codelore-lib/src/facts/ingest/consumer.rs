@@ -192,7 +192,7 @@ pub(super) fn ingest_loop(
 /// The input is converted to UTC before formatting — the original tz
 /// offset is discarded at the schema boundary (schema v2 doc explains the
 /// tz-preservation roadmap).
-fn format_timestamp(ts: time::OffsetDateTime) -> String {
+pub(crate) fn format_timestamp(ts: time::OffsetDateTime) -> String {
     let utc = ts.to_offset(time::UtcOffset::UTC);
     let y = utc.year();
     let m = utc.month() as u8;
