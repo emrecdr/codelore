@@ -382,11 +382,13 @@ fn check_squash_workflow(db: &FactsDb) -> Result<()> {
 ///
 /// Returns `None` when no hunks fall inside the window (empty history or
 /// all commits predate the window floor).
+#[allow(clippy::too_many_lines)]
 fn compute_rework_pct(db: &FactsDb, rework_window_days: u32) -> Result<Option<DeliveryMetricsRow>> {
     // windowed_hunks: hunks whose commit author-date falls within the trailing
     // rework_window_days of the repo's most recent commit. Both sides of the
     // self-join are drawn from this CTE, so the pre-filter genuinely bounds
     // the cross-product (not just the join predicate).
+    let now_anchor = crate::analyses::query::clamped_now_anchor("date");
     let sql = format!(
         "
         WITH windowed_hunks AS (
@@ -401,7 +403,7 @@ fn compute_rework_pct(db: &FactsDb, rework_window_days: u32) -> Result<Option<De
             FROM hunks h
             JOIN commits co ON co.rev = h.rev
             WHERE co.date IS NOT NULL
-              AND co.date >= (SELECT MAX(date) FROM commits)
+              AND co.date >= (SELECT {now_anchor} FROM commits)
                              - INTERVAL '{rework_window_days}' DAY
         ),
         rework_pairs AS (
