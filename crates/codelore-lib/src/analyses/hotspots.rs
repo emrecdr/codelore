@@ -95,10 +95,18 @@ pub struct HotspotRow {
     /// [`crate::calibration::conditional_tail_percentile`]). The revisions
     /// percentile stays repo-relative *by design* (churn is a within-repo
     /// concentration signal, not comparable across repos), so only the
-    /// complexity coupling is anchored. Unlike `hotspot_score`, improving or
-    /// removing another file leaves this value unchanged — the property that
-    /// lets an absolute ceiling (`hotspot_anchored_max`) stay stable under
-    /// improvement.
+    /// complexity coupling is anchored. So — *holding the revision population
+    /// fixed* — improving a file in place (dropping its complexity without
+    /// adding or removing a revision) leaves every other file's anchored score
+    /// bit-for-bit unchanged, because the `cp_tail` term cannot see another
+    /// file. The revisions term does NOT share that property: `pr_rev =
+    /// PERCENT_RANK() OVER (ORDER BY revs)` is repo-relative, so a change to the
+    /// revision population itself — a new file clearing `min_revs`, or a
+    /// refactor commit that reorders the churn ranks — still moves untouched
+    /// files' scores through it. The absolute ceiling (`hotspot_anchored_max`)
+    /// carries margin above the measured worst to absorb that; anchoring
+    /// `pr_rev` against the corpus too is a recorded design decision,
+    /// deliberately not taken.
     ///
     /// `None` — omitted from every surface, never rendered as `0.00` — when no
     /// calibration artifact is active, the file's language is absent from the
@@ -584,25 +592,79 @@ mod anchor_tests {
         }
     }
 
-    /// THE STABILITY PIN: improving the repo's worst file (dropping its cognitive
-    /// complexity, revisions untouched) must leave every OTHER file's anchored
-    /// score bit-for-bit unchanged, while the legacy score — coupled through the
-    /// repo-max normalisation — moves. This is the property the whole feature
-    /// exists to provide.
+    /// `pr_rev` per path from the shipped `PR_REV_SQL` over the raw `changes`
+    /// table at `min_revs = 1` — exactly the population percentile
+    /// [`apply_hotspot_anchor`] feeds into [`anchored_score`], so a test can
+    /// observe the churn term directly against a real, shifting population.
+    fn pr_rev_by_path(db: &FactsDb) -> std::collections::HashMap<String, f64> {
+        crate::analyses::query::query_map_collect(
+            db,
+            PR_REV_SQL,
+            duckdb::params![1u32],
+            "pr-rev-test",
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)),
+        )
+        .expect("pr_rev query")
+        .into_iter()
+        .collect()
+    }
+
+    /// THE STABILITY PIN — honestly scoped to the property that actually holds.
+    ///
+    /// The corpus anchor makes the *complexity* coupling absolute: a file's
+    /// `cp_tail` term is a pure function of its own cognitive complexity and the
+    /// calibration corpus, so nothing another file does can move it. That is the
+    /// invariant this pin guards. It does NOT make the whole anchored score
+    /// invariant under improvement, because the churn term
+    /// `pr_rev = PERCENT_RANK() OVER (ORDER BY revs)` is repo-relative BY DESIGN
+    /// (a recorded decision — churn is a within-repo signal, deliberately not
+    /// anchored). So the honest claim is "stable under improvement *holding the
+    /// revision population fixed*", and this pin exercises BOTH sides against the
+    /// surface a real user changes — the `changes` table:
+    ///
+    /// (a) improving a file *in place* (dropping its complexity, the revision
+    ///     population untouched) leaves every other file's anchored score
+    ///     bit-for-bit unchanged, while the legacy score — coupled through the
+    ///     repo-max normalisation — moves; and
+    /// (b) a real improving *commit* that shifts the revision population (here a
+    ///     refactor extracting a helper file that clears `min_revs`) DOES move an
+    ///     untouched file's anchored score, through `pr_rev` alone — its
+    ///     `cp_tail` term is provably unchanged.
+    ///
+    /// [`anchored_score_untouched_file_moves_when_the_churn_population_shifts`]
+    /// pins the magnitude of that (b) movement numerically against a controlled
+    /// corpus.
     #[test]
     fn anchored_score_is_stable_when_worst_file_improves() {
         let db = FactsDb::new_in_memory().expect("db");
         seed(&db);
         let opts = opts();
 
+        // The untouched witness is src/b.rs (revisions 2, cognitive 20). Its
+        // corpus term is a pure function of its own complexity and the active
+        // corpus, so it is identical before and after every perturbation below.
+        // Loaded the same way the pipeline loads it, so the pin and the code
+        // agree on which artifact is active.
+        let art = crate::calibration::load_active_artifact(&opts)
+            .expect("load artifact")
+            .expect("embedded world corpus is active by default");
+        let cp_tail_b =
+            crate::calibration::conditional_tail_percentile(&art, "rust", "cognitive", 20.0)
+                .expect("src/b.rs is rust, covered above the sample floor");
+        assert!(cp_tail_b > 0.0, "the pin must be non-trivial");
+
+        // ── (a) population fixed: improving another file in place moves nothing ──
         let before = run_hotspots_anchored(&db, &opts).expect("run before");
         let b_before = before.iter().find(|r| r.path == "src/b.rs").expect("b.rs");
         let b_anchored_before = b_before
             .hotspot_score_anchored
             .expect("b.rs is rust, covered by the embedded corpus");
+        // src/b.rs sits at revisions rank 0.5 over {worst 3, b 2, c 1}; its
+        // anchored score is exactly anchored_score(pr_rev, cp_tail) with pr_rev
+        // held at 0.5 — the corpus term carries the rest.
+        assert!((b_anchored_before - anchored_score(0.5, cp_tail_b)).abs() < 1e-9);
         // Deterministic legacy value: pr_rev 0.5 · pr_cx 0.5 · (100−80)/4.
         assert!((b_before.hotspot_score - 1.25).abs() < 1e-9);
-        assert!(b_anchored_before > 0.0, "the pin must be non-trivial");
 
         // Improve the worst file in place: cognitive 40 → 5, revisions unchanged.
         db.conn()
@@ -612,24 +674,178 @@ mod anchor_tests {
             )
             .expect("improve worst");
 
-        let after = run_hotspots_anchored(&db, &opts).expect("run after");
-        let b_after = after.iter().find(|r| r.path == "src/b.rs").expect("b.rs");
-
-        // Anchored: b.rs cognitive (20) and revisions are untouched, and its
-        // corpus percentile does not depend on the worst file → the score is
-        // bit-identical (same inputs), so the difference is exactly zero.
-        let b_anchored_after = b_after.hotspot_score_anchored.expect("still covered");
+        let after_inplace = run_hotspots_anchored(&db, &opts).expect("run after in-place");
+        let b_inplace = after_inplace
+            .iter()
+            .find(|r| r.path == "src/b.rs")
+            .expect("b.rs");
+        // Anchored: src/b.rs's revision population and its own cognitive are both
+        // untouched, and cp_tail cannot see another file → bit-identical.
+        let b_anchored_inplace = b_inplace.hotspot_score_anchored.expect("still covered");
         assert!(
-            (b_anchored_before - b_anchored_after).abs() < 1e-12,
-            "anchored score must not move when an unrelated file improves \
-             (before {b_anchored_before}, after {b_anchored_after})"
+            (b_anchored_before - b_anchored_inplace).abs() < 1e-12,
+            "an in-place improvement must not move the anchored score \
+             (before {b_anchored_before}, after {b_anchored_inplace})"
         );
-        // Legacy: the repo max collapsed 40 → 20, so b.rs's norm_cx and pr_cx
+        // Legacy: the repo max collapsed 40 → 20, so src/b.rs's norm_cx and pr_cx
         // both rose → pr_rev 0.5 · pr_cx 1.0 · (100−60)/4 = 5.0.
         assert!(
-            (b_after.hotspot_score - 5.0).abs() < 1e-9,
+            (b_inplace.hotspot_score - 5.0).abs() < 1e-9,
             "legacy score MUST move (got {})",
-            b_after.hotspot_score
+            b_inplace.hotspot_score
+        );
+
+        // ── (b) population shifted by a real commit: the score DOES move ──
+        // Refactor the worst file by extracting a helper. The refactor is a
+        // commit, and the extracted file clears min_revs (1) at once, so the
+        // revision population grows and src/b.rs's PERCENT_RANK rises 0.5 → 2/3
+        // even though src/b.rs itself is untouched. This is the boundary the
+        // "holding the revision population fixed" qualifier names.
+        db.conn()
+            .execute(
+                "INSERT INTO commits (rev, author_email, author_name, committer_email, \
+                 canonical_author, date, committer_date, message, is_merge, parent_count) \
+                 VALUES ('c4', 'a@b.com', 'A', 'a@b.com', 'A', TIMESTAMPTZ '2026-01-01', \
+                 TIMESTAMPTZ '2026-01-01', 'extract helper', false, 1)",
+                [],
+            )
+            .expect("insert refactor commit");
+        db.conn()
+            .execute(
+                "INSERT INTO changes (rev, path, change_type) \
+                 VALUES ('c4', 'src/worst_helper.rs', 'added')",
+                [],
+            )
+            .expect("insert extracted file");
+
+        let after_shift = run_hotspots_anchored(&db, &opts).expect("run after shift");
+        let b_shift = after_shift
+            .iter()
+            .find(|r| r.path == "src/b.rs")
+            .expect("b.rs");
+        let b_anchored_shift = b_shift.hotspot_score_anchored.expect("still covered");
+        // src/b.rs's own inputs (revisions 2, cognitive 20) never changed, so
+        // cp_tail_b is unchanged — the corpus term is exactly what stays stable.
+        // The score still moves, through pr_rev alone: 0.5 → 2/3.
+        assert!(
+            (b_anchored_shift - anchored_score(2.0 / 3.0, cp_tail_b)).abs() < 1e-9,
+            "the anchored score tracks the repo-relative pr_rev (got {b_anchored_shift})"
+        );
+        assert!(
+            b_anchored_shift > b_anchored_before,
+            "an untouched file's anchored score DOES move when the revision \
+             population shifts — pr_rev is repo-relative by design \
+             (before {b_anchored_before}, after {b_anchored_shift})"
+        );
+    }
+
+    /// A worked counterexample to any unqualified "stable under improvement"
+    /// claim, driven through the shipped `pr_rev` machinery: a real improving
+    /// commit lands on `src/a.rs` (29 → 30
+    /// revisions), tying it with the untouched `src/c.rs` at 30, which drops
+    /// `src/c.rs`'s revisions percentile from 2/3 to 1/3 and so HALVES its
+    /// anchored score — 5.40 → 2.70 — even though `src/c.rs` was never touched.
+    /// `pr_rev` is repo-relative by design, and the anchored score inherits that
+    /// population dependence through it. The corpus (`cp_tail`) term is pinned
+    /// exactly by a ramp corpus whose trivial share is zero (its tail lookup is
+    /// the identity), so every movement here is `pr_rev`'s alone. This is the
+    /// limitation the "holding the revision population fixed" qualifier names —
+    /// pinned numerically rather than hidden.
+    #[test]
+    fn anchored_score_untouched_file_moves_when_the_churn_population_shifts() {
+        let db = FactsDb::new_in_memory().expect("db");
+
+        // 40 commits; each file is touched by a prefix of them, so its revision
+        // count is exactly what the counterexample needs — b 20, a 29, c 30,
+        // d 40. (rev, path) is
+        // the changes PK, so N distinct commits on a path == N revisions.
+        let commit_rows: Vec<String> = (0..40)
+            .map(|i| {
+                format!(
+                    "('r{i}', 'a@b.com', 'A', 'a@b.com', 'A', TIMESTAMPTZ '2026-01-01', \
+                     TIMESTAMPTZ '2026-01-01', 'm', false, 1)"
+                )
+            })
+            .collect();
+        db.conn()
+            .execute(
+                &format!(
+                    "INSERT INTO commits (rev, author_email, author_name, committer_email, \
+                     canonical_author, date, committer_date, message, is_merge, parent_count) \
+                     VALUES {}",
+                    commit_rows.join(", ")
+                ),
+                [],
+            )
+            .expect("insert 40 commits");
+        for (count, path) in [
+            (20, "src/b.rs"),
+            (29, "src/a.rs"),
+            (30, "src/c.rs"),
+            (40, "src/d.rs"),
+        ] {
+            let change_rows: Vec<String> = (0..count)
+                .map(|i| format!("('r{i}', '{path}', 'modified')"))
+                .collect();
+            db.conn()
+                .execute(
+                    &format!(
+                        "INSERT INTO changes (rev, path, change_type) VALUES {}",
+                        change_rows.join(", ")
+                    ),
+                    [],
+                )
+                .expect("insert changes prefix");
+        }
+
+        // Ramp corpus: trivial share ≈ 0, so the non-trivial-tail lookup is the
+        // identity and cognitive 9.0 maps to cp_tail 0.90 exactly (the chosen
+        // cp for src/c.rs). Only src/c.rs, the untouched witness, is anchored.
+        let ramp = ramp_artifact("rust", 1000);
+        let cp_c = crate::calibration::conditional_tail_percentile(&ramp, "rust", "cognitive", 9.0)
+            .expect("rust covered, non-empty tail");
+        assert!(
+            (cp_c - 0.90).abs() < 1e-9,
+            "the ramp's tail lookup is the identity"
+        );
+
+        // BEFORE — real pr_rev from PR_REV_SQL over the seeded population.
+        let pr_before = pr_rev_by_path(&db);
+        assert!(
+            (pr_before["src/c.rs"] - 2.0 / 3.0).abs() < 1e-9,
+            "src/c.rs starts at revisions rank 2/3 over {{20, 29, 30, 40}}"
+        );
+        let c_before = anchored_score(pr_before["src/c.rs"], cp_c);
+        assert!(
+            (c_before - 5.40).abs() < 1e-9,
+            "src/c.rs anchored 5.40 before the improving commit"
+        );
+
+        // The improving commit: src/a.rs gains one revision (29 → 30), catching
+        // up to src/c.rs. src/c.rs is NOT touched.
+        db.conn()
+            .execute(
+                "INSERT INTO changes (rev, path, change_type) VALUES ('r29', 'src/a.rs', 'modified')",
+                [],
+            )
+            .expect("src/a.rs gains a revision");
+
+        // AFTER — src/c.rs untouched, but its percentile and score both drop.
+        let pr_after = pr_rev_by_path(&db);
+        assert!(
+            (pr_after["src/c.rs"] - 1.0 / 3.0).abs() < 1e-9,
+            "src/a.rs caught up, so src/c.rs's rank drops to 1/3"
+        );
+        let c_after = anchored_score(pr_after["src/c.rs"], cp_c);
+        assert!(
+            (c_after - 2.70).abs() < 1e-9,
+            "src/c.rs anchored 2.70 after the commit, still untouched"
+        );
+
+        assert!(
+            c_before - c_after > 2.6,
+            "an untouched file's anchored score moved by ~2.70 \
+             (before {c_before}, after {c_after})"
         );
     }
 

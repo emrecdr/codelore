@@ -26,15 +26,21 @@ cognitive_max = 150.0
 # conditioned on the corpus's NON-TRIVIAL tail, so a real file's complexity is
 # spread across the informative upper percentiles instead of saturating a
 # mostly-zero distribution — with only the churn term left repo-relative.
-# Removing or refactoring the worst file therefore leaves every other file's
-# anchored score unchanged, so this ceiling is stable under improvement — an
-# absolute standard, not a moving target.
+# Improving the worst file in place — dropping its complexity — therefore
+# leaves every other file's anchored score unchanged, because the cognitive term
+# is corpus-anchored. The revisions term stays repo-relative by design, so a
+# change to the revision population itself (a new file clearing min_revs, or a
+# refactor commit that reorders the churn ranks) CAN still move an untouched
+# file's score; this ceiling carries margin above the measured worst to absorb
+# that rather than tracking it exactly — an absolute standard, not a moving
+# target held to the last decimal.
 #
 # Highest anchored score today: 9.08 (crates/codelore-cli/src/main.rs), the
 # heavily-changed CLI entry point; the runner-up sits at 8.48, so the worst is a
 # clear outlier. The ceiling sits just above that worst (the same ~1.4% margin
 # the pre-tail 9.9/9.76 pair carried); it binds when a file grows both hotter and
-# more complex, never when the repo refactors its current worst offender.
+# more complex against the corpus, and its margin absorbs the repo-relative
+# churn-rank movement a refactor of the current worst offender produces.
 hotspot_anchored_max = 9.2
 # Exactly one import cycle exists (the nine-file codelore-rca cluster).
 # Introducing a second cycle fails the gate.
