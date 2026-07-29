@@ -14,6 +14,10 @@ Conventional Commits format. All notable changes documented here.
 
 - **Three small internal duplications collapsed onto their existing canonical implementation; no output or behavior change.** `effort-exposure`'s four window-scoped denominator CTEs (`band_commits`, `band_churn`, `total_commits`, `total_churn`) now share one `band_activity` CTE for the repeated `{src} ⋈ win ⋈ eh_bands_v1` join instead of each re-running it — proven byte-identical against a pre-change baseline. The `[new_code]` gate's skip-reason prose, which had drifted between `codelore check`'s stderr notice and the `check_gates` MCP tool's `reason` field, is now a single shared message (the fuller wording, "…to contrast the working set against", wins). Timestamp formatting duplicated across `wall_clock_utc_literal` and two test helpers now calls the canonical ingest formatter instead of re-implementing it.
 
+### Fixed
+
+- **`codelore gate`'s three change-set-scoped `[diff]` gates (`delta_code_health_min_per_file`, `new_file_health_min`, `no_new_cycles`) no longer report a silent pass when nothing was measured.** Each is a `for` loop over a report collection (`health.deltas` / `newly_cyclic_paths`) that is empty both when the change-set genuinely has nothing to flag *and* when the change-set itself carried no files — the two cases were indistinguishable, so the gate-run ledger and stderr notices recorded `"passed"` for both. `change_set_gate_verdict` now reads `report.changes` — the honest "was anything measured" signal — and records `"skipped"` with a reason (`no files in the change-set`) when it is empty, matching the existing `[new_code]` gate's skip convention (verdict recorded, exit code unaffected). A populated change-set is unaffected: a real change-set with zero violations still records a genuine `"passed"`.
+
 ## [0.24.0] - 2026-07-29
 
 ### Added
