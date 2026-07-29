@@ -188,12 +188,12 @@ The `crates-publish` job in `release.yml` runs after `plan`, `build`, and `relea
 If the job fails partway through, finish the remaining crates by hand, in the same order:
 
 ```bash
-cargo publish -p codelore-rca   # no-ops if this version already published
+cargo publish -p codelore-rca   # hard error if this version is already published — expected, skip to the next line
 cargo publish -p codelore-lib
 cargo publish -p codelore
 ```
 
-`cargo publish` refuses to re-publish a version that's already on the index, so re-running the workflow (or the commands above) is safe — it just skips whatever already landed.
+`cargo publish` errors (does not silently skip) on a version that's already live on the index, so re-triggering the `crates-publish` job itself does not recover from a partial failure — the step re-runs `cargo publish -p codelore-rca` first under the workflow's default `bash -eo pipefail` shell, that call errors on the crate that already succeeded, and `-e` halts the script before `codelore-lib` or `codelore` are ever attempted. Running the remaining commands by hand, in order, and skipping whichever crate(s) already succeeded, is the only way to finish a partial publish.
 
 ### Yanking a release
 
