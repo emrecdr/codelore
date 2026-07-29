@@ -91,20 +91,15 @@ pub struct TeamCompositionRow {
 /// buckets, `total_commits`, the 80%-core set, or `core_median_paths`.
 const SQL_AUTHOR_METRICS: &str = "
 WITH
+{human_aliases},
 anchor AS (
     SELECT {now_anchor} AS max_d, MIN(date) AS min_d FROM commits
 ),
--- One row per canonical author (a canonical may own several name+email
--- identities in author_aliases; a direct JOIN would multiply commit counts
--- by that alias count). Bot canonicals are dropped here so they never enter tenure
--- buckets, the core set, or the __summary__ percentages.
-canon_authors AS (
-    SELECT canonical FROM author_aliases
-    GROUP BY canonical
-    HAVING NOT BOOL_OR(is_bot)
-),
--- Per-author first/last commit and total commit count. Bots excluded via
--- the canon_authors join.
+-- Per-author first/last commit and total commit count. Bots excluded
+-- pair-granularly: the join is on the exact (raw_name, raw_email) that made
+-- each commit, so a human sharing a canonical with a bot keeps their own
+-- commits counted while the bot pair's are dropped row-wise, and they never
+-- inflate tenure buckets, the core set, or the __summary__ percentages.
 author_stats AS (
     SELECT
         c.canonical_author                   AS author,
@@ -112,7 +107,7 @@ author_stats AS (
         MAX(c.date)                          AS last_commit,
         COUNT(*)                             AS commits
     FROM commits c
-    JOIN canon_authors ca ON ca.canonical = c.canonical_author
+    JOIN human_aliases ha ON ha.raw_name = c.author_name AND ha.raw_email = c.author_email
     GROUP BY c.canonical_author
 ),
 -- Active = any commit within trailing window.
@@ -223,6 +218,7 @@ ORDER BY ab.tenure_days DESC, ab.commits DESC, ab.author ASC
 /// threshold real authors are measured against.
 const SQL_ONBOARDING: &str = "
 WITH
+{human_aliases},
 anchor AS (
     SELECT MIN(date) AS project_start FROM commits
 ),
@@ -234,22 +230,18 @@ project_week AS (
 founder_cutoff AS (
     SELECT pw + INTERVAL '{fw} weeks' AS cutoff FROM project_week
 ),
--- Bot canonicals excluded (see SQL_AUTHOR_METRICS::canon_authors): a bot's
--- commits must not inflate the weekly grand_total used to compute the
--- 80%-core threshold, or they'd shift real authors' onboarding_weeks.
-canon_authors AS (
-    SELECT canonical FROM author_aliases
-    GROUP BY canonical
-    HAVING NOT BOOL_OR(is_bot)
-),
--- Per-author weekly commit counts. Bots excluded via the canon_authors join.
+-- Per-author weekly commit counts. Bots excluded pair-granularly (see
+-- SQL_AUTHOR_METRICS::author_stats): a bot's commits must not inflate the
+-- weekly grand_total used to compute the 80%-core threshold, or they'd
+-- shift real authors' onboarding_weeks — but a human sharing a canonical
+-- with a bot keeps their own commits counted.
 weekly_counts AS (
     SELECT
         c.canonical_author            AS author,
         date_trunc('week', c.date)    AS week,
         COUNT(*)                      AS week_commits
     FROM commits c
-    JOIN canon_authors ca ON ca.canonical = c.canonical_author
+    JOIN human_aliases ha ON ha.raw_name = c.author_name AND ha.raw_email = c.author_email
     GROUP BY c.canonical_author, date_trunc('week', c.date)
 ),
 -- Cumulative commits per author up to (and including) each week they
@@ -311,11 +303,12 @@ core_membership AS (
         (running_core_total - cum_commits) < grand_total * 0.8 AS in_core
     FROM week_ranked
 ),
--- First commit per author. Bots excluded via the canon_authors join.
+-- First commit per author. Bots excluded pair-granularly (see
+-- weekly_counts above).
 author_first AS (
     SELECT c.canonical_author AS author, MIN(c.date) AS first_commit
     FROM commits c
-    JOIN canon_authors ca ON ca.canonical = c.canonical_author
+    JOIN human_aliases ha ON ha.raw_name = c.author_name AND ha.raw_email = c.author_email
     GROUP BY c.canonical_author
 ),
 -- First week each author enters core (NULL if never).
@@ -367,6 +360,7 @@ pub fn run_team_composition(db: &FactsDb, opts: &Options) -> Result<Vec<TeamComp
     let src = lineage::source_table(opts);
 
     let author_sql = SQL_AUTHOR_METRICS
+        .replace("{human_aliases}", crate::analyses::query::HUMAN_ALIASES_CTE)
         .replace(
             "{now_anchor}",
             &crate::analyses::query::clamped_now_anchor("date"),
@@ -374,7 +368,9 @@ pub fn run_team_composition(db: &FactsDb, opts: &Options) -> Result<Vec<TeamComp
         .replace("{wd}", &wd.to_string())
         .replace("{src}", src);
 
-    let onboarding_sql = SQL_ONBOARDING.replace("{fw}", &FOUNDER_WEEKS.to_string());
+    let onboarding_sql = SQL_ONBOARDING
+        .replace("{human_aliases}", crate::analyses::query::HUMAN_ALIASES_CTE)
+        .replace("{fw}", &FOUNDER_WEEKS.to_string());
 
     let conn = db.conn();
 

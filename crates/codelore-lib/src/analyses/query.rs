@@ -82,6 +82,35 @@ pub fn clamped_now_anchor(col: &str) -> String {
     )
 }
 
+/// CTE body: every `(raw_name, raw_email)` alias row that is NOT
+/// bot-classified, alongside the canonical it resolves to.
+///
+/// `author_aliases` is keyed on the exact `(name, email)` pair a commit
+/// shipped with, and `is_bot` rides that same pair (see the schema comment
+/// on `author_aliases` in `schema_v1.sql`) — so a human and a bot sharing
+/// one canonical identity (a `--team-map` fold, a `bots.rs` name-or-email
+/// pattern hit, or the raw-email canonical fallback landing two different
+/// names on one email) classify independently. A consumer that needs "was
+/// THIS commit authored by a human" joins its `commits` row to this CTE on
+/// the exact pair — `commits.author_name = raw_name AND commits.author_email
+/// = raw_email` — rather than testing a canonical-level flag.
+/// `author_aliases` is `PRIMARY KEY (raw_name, raw_email)`, so that join is
+/// always 1:1 and never fans out.
+///
+/// Replaces the `canonical`-level `SELECT canonical, BOOL_OR(is_bot) ...
+/// GROUP BY canonical` lookup and `... HAVING NOT BOOL_OR(is_bot)` filter
+/// that used to collapse bot classification to the canonical: either flag
+/// (`BOOL_OR`) marks a canonical bot the instant ANY alias sharing it is
+/// bot-classified, or `HAVING NOT BOOL_OR` drops the canonical's rows
+/// entirely — both erase a mixed canonical's human commits alongside the
+/// bot's. Joining on the pair instead excludes bot-classified rows
+/// row-wise; a canonical stays eligible through its human rows.
+pub const HUMAN_ALIASES_CTE: &str = "human_aliases AS (
+    SELECT raw_name, raw_email, canonical
+    FROM author_aliases
+    WHERE NOT is_bot
+)";
+
 /// Prepare + `query_map` + collect, with uniform `CodeLoreError::Analysis`
 /// error context at each step. `label` is interpolated into the error
 /// messages so debug output identifies which analysis failed.

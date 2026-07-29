@@ -97,20 +97,16 @@ pub fn materialize_knowledge_shares(db: &FactsDb, opts: &Options) -> Result<()> 
     // Decay = exp(−Δdays / 220): Jabrayilzade et al., ICSE-SEIP 2022 §3.1.
     // AI weight: W_AI_AUTHORED=0.3, W_AI_ASSISTED=0.7, human=1.0 per
     // arXiv 2507.08160 (AI commits distort expertise models).
-    // Bot rows are excluded via the JOIN on author_aliases (NOT a.is_bot).
+    // Bot rows are excluded pair-granularly via the JOIN on human_aliases:
+    // a human sharing a canonical with a bot keeps their own commits'
+    // knowledge weight counted while the bot pair's is dropped row-wise.
     // Deleted paths are excluded (change_type != 'deleted').
     let now_anchor = crate::analyses::query::clamped_now_anchor("date");
+    let human_aliases = crate::analyses::query::HUMAN_ALIASES_CTE;
     let base_sql = format!(
         "CREATE OR REPLACE TEMP TABLE knowledge_shares AS
          WITH anchor AS (SELECT {now_anchor} AS max_d FROM commits),
-         -- One row per canonical author (a canonical may own several
-         -- name+email identities in author_aliases; a direct JOIN would
-         -- multiply k by that alias count). Bot canonicals are dropped here.
-         canon_authors AS (
-           SELECT canonical FROM author_aliases
-           GROUP BY canonical
-           HAVING NOT BOOL_OR(is_bot)
-         ),
+         {human_aliases},
          contrib AS (
            SELECT c.path,
                   co.canonical_author AS author,
@@ -129,7 +125,7 @@ pub fn materialize_knowledge_shares(db: &FactsDb, opts: &Options) -> Result<()> 
                   ) AS k
            FROM {src} c
            JOIN commits co USING (rev)
-           JOIN canon_authors a ON a.canonical = co.canonical_author
+           JOIN human_aliases ha ON ha.raw_name = co.author_name AND ha.raw_email = co.author_email
            WHERE c.change_type != 'deleted'
            GROUP BY c.path, co.canonical_author
          )
@@ -208,8 +204,10 @@ fn collect_reviewer_rows(db: &FactsDb, src: &str) -> Result<Vec<ReviewerRow>> {
     // The k_weight column is per-path (loc_added × ai_weight × decay),
     // matching the granularity of the base knowledge_shares CTE.
     let now_anchor = crate::analyses::query::clamped_now_anchor("date");
+    let human_aliases = crate::analyses::query::HUMAN_ALIASES_CTE;
     let query = format!(
-        "SELECT c.path,
+        "WITH {human_aliases}
+         SELECT c.path,
                 co.message,
                 c.loc_added
                 * CASE co.ai_attribution
@@ -223,10 +221,10 @@ fn collect_reviewer_rows(db: &FactsDb, src: &str) -> Result<Vec<ReviewerRow>> {
                 AS k_path
          FROM {src} c
          JOIN commits co USING (rev)
-         JOIN (SELECT canonical FROM author_aliases
-               GROUP BY canonical
-               HAVING NOT BOOL_OR(is_bot)) a
-           ON a.canonical = co.canonical_author
+         -- Pair-granular: a human sharing a canonical with a bot keeps
+         -- their own reviewer-credit contribution counted (see contrib
+         -- above in materialize_knowledge_shares).
+         JOIN human_aliases ha ON ha.raw_name = co.author_name AND ha.raw_email = co.author_email
          WHERE c.change_type != 'deleted'
            AND co.nf <= 10",
     );
@@ -297,12 +295,14 @@ fn collect_reviewer_rows(db: &FactsDb, src: &str) -> Result<Vec<ReviewerRow>> {
 /// cannot disambiguate them; `ORDER BY` makes the collapse deterministic
 /// (highest canonical wins) rather than dependent on scan order.
 fn build_alias_map(db: &FactsDb) -> Result<HashMap<String, String>> {
+    let query = format!(
+        "WITH {human_aliases} \
+         SELECT raw_email, canonical FROM human_aliases ORDER BY raw_email, canonical",
+        human_aliases = crate::analyses::query::HUMAN_ALIASES_CTE
+    );
     let mut stmt = db
         .conn()
-        .prepare(
-            "SELECT raw_email, canonical FROM author_aliases \
-             WHERE NOT is_bot ORDER BY raw_email, canonical",
-        )
+        .prepare(&query)
         .map_err(|e| CodeLoreError::Analysis(format!("prepare alias_map: {e}")))?;
     let rows = stmt
         .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
@@ -350,18 +350,14 @@ fn insert_reviewer_rows(db: &FactsDb, rows: &[ReviewerRow]) -> Result<()> {
 /// documented here as adopted convention).
 fn materialize_doe_scores(db: &FactsDb, src: &str) -> Result<()> {
     let now_anchor = crate::analyses::query::clamped_now_anchor("date");
+    let human_aliases = crate::analyses::query::HUMAN_ALIASES_CTE;
     let sql = format!(
         "CREATE OR REPLACE TEMP TABLE doe_scores AS
          WITH anchor AS (SELECT {now_anchor} AS max_d FROM commits),
-         -- One row per canonical author (a canonical may own several
-         -- name+email identities in author_aliases; a direct JOIN would
-         -- multiply k by that alias count). Bot canonicals are dropped here.
-         canon_authors AS (
-           SELECT canonical FROM author_aliases
-           GROUP BY canonical
-           HAVING NOT BOOL_OR(is_bot)
-         ),
+         {human_aliases},
          -- Who first added each file (fa = 1 if this author created it).
+         -- Bots excluded pair-granularly: a human sharing a canonical with
+         -- a bot keeps their own 'added' commits counted (see agg below).
          -- DISTINCT: a path deleted and re-added by the same author would
          -- otherwise yield duplicate rows here, and the LEFT JOIN below
          -- would then duplicate that author's doe_scores row.
@@ -370,7 +366,7 @@ fn materialize_doe_scores(db: &FactsDb, src: &str) -> Result<()> {
                   co.canonical_author AS author
            FROM {src} c
            JOIN commits co USING (rev)
-           JOIN canon_authors a ON a.canonical = co.canonical_author
+           JOIN human_aliases ha ON ha.raw_name = co.author_name AND ha.raw_email = co.author_email
            WHERE c.change_type = 'added'
          ),
          -- HEAD SLOC per path. `complexity_metrics` holds only the HEAD-time
@@ -395,7 +391,7 @@ fn materialize_doe_scores(db: &FactsDb, src: &str) -> Result<()> {
                   ), 0) AS num_days
            FROM {src} c
            JOIN commits co USING (rev)
-           JOIN canon_authors a ON a.canonical = co.canonical_author
+           JOIN human_aliases ha ON ha.raw_name = co.author_name AND ha.raw_email = co.author_email
            WHERE c.change_type != 'deleted'
            GROUP BY c.path, co.canonical_author
          ),
