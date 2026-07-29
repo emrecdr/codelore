@@ -21,8 +21,17 @@
 //!      per band (percentages across bands can therefore sum > 100%).
 //!    - `churn_share_pct` — percentage of window LOC churn (added + deleted)
 //!      in the band.
+//!
+//!    `commit_share_pct` and `churn_share_pct` are shares of *banded* activity:
+//!    both denominators (`total_commits`, `total_churn`) join `eh_bands_v1`, so
+//!    commits and churn on unscored paths — lockfiles, generated code, docs,
+//!    anything without a code-health row — are excluded from denominator as
+//!    well as numerator. Otherwise those paths would inflate the denominator
+//!    alone, understating every share and making the `max_red_effort_pct` gate
+//!    monotonically more permissive on repositories with heavy non-code churn.
+//!    `loc_share_pct` is already banded (SLOC comes from `eh_bands_v1`).
 //! 4. Wilson 95% CI on `commit_share` (k = commits touching band,
-//!    n = total window commits) is appended per row.
+//!    n = banded window commits) is appended per row.
 
 use std::collections::{HashMap, HashSet};
 
@@ -44,12 +53,21 @@ pub struct EffortExposureRow {
     pub files: u32,
     /// Percentage of total SLOC (source lines of code) in this band.
     pub loc_share_pct: f64,
-    /// Percentage of trailing-window commits that touched ≥1 file in this
-    /// band. A commit touching files in multiple bands is counted once per
-    /// band it touches, so percentages across bands can sum > 100%.
+    /// Percentage of trailing-window commits — counting only commits that
+    /// touched a code-health-banded file — that touched ≥1 file in this band.
+    /// The denominator is banded (scorable) commits, not every window commit:
+    /// a commit touching only unscored paths (lockfiles, generated code, docs)
+    /// is in neither numerator nor denominator, so the share is of scorable
+    /// engineering activity. A commit touching files in multiple bands is
+    /// counted once per band it touches, so percentages across bands can sum
+    /// > 100%.
     pub commit_share_pct: f64,
     /// Percentage of trailing-window churn (lines added + deleted) in this
-    /// band's files.
+    /// band's files, as a share of churn on code-health-banded files only —
+    /// not raw repo churn. Churn on unscored paths (lockfiles, generated code,
+    /// docs) is excluded from the denominator, matching the band-restricted
+    /// numerator; counting it would understate every band's share and let the
+    /// `max_red_effort_pct` gate drift more permissive as non-code churn grows.
     pub churn_share_pct: f64,
     /// Wilson 95% CI lower bound for `commit_share_pct / 100`.
     pub commit_share_ci_low: f64,
@@ -204,10 +222,19 @@ pub fn run_effort_exposure_with_health(
             GROUP BY b.band
         ),
         total_sloc    AS (SELECT COALESCE(SUM(sloc), 0) AS v FROM eh_bands_v1),
-        total_commits AS (SELECT COUNT(*)               AS v FROM win),
+        -- total_commits/total_churn join eh_bands_v1 so their denominators cover
+        -- the same banded population as the numerators (see this module's docs).
+        total_commits AS (
+            SELECT COUNT(DISTINCT c.rev) AS v
+            FROM {src} c
+            INNER JOIN win          USING (rev)
+            INNER JOIN eh_bands_v1 b ON b.path = c.path
+        ),
         total_churn   AS (
             SELECT COALESCE(SUM(c.loc_added + c.loc_deleted), 0) AS v
-            FROM {src} c INNER JOIN win USING (rev)
+            FROM {src} c
+            INNER JOIN win          USING (rev)
+            INNER JOIN eh_bands_v1 b ON b.path = c.path
         )
         SELECT
             bf.band,
@@ -352,12 +379,16 @@ pub fn run_effort_exposure_decomposed_scan<R: Repo>(
 }
 
 /// Total window churn (added + deleted LOC) across every band's files — the
-/// shared denominator, identical to the `total_churn` CTE in
-/// [`run_effort_exposure_with_health`].
+/// shared decomposition denominator. Restricted to `eh_bands_v1` (code-health-
+/// banded files) so it stays byte-identical to the `total_churn` CTE in
+/// [`run_effort_exposure_with_health`]; the reconciliation
+/// `improving_pct + degrading_pct == churn_share_pct` holds only when both
+/// denominators cover the same banded population.
 fn window_total_churn(db: &FactsDb, src: &str, wd: u32) -> Result<f64> {
     let sql = format!(
         "SELECT COALESCE(SUM(c.loc_added + c.loc_deleted), 0)::DOUBLE
          FROM {src} c
+         INNER JOIN eh_bands_v1 b ON b.path = c.path
          WHERE c.rev IN (
              SELECT rev FROM commits
              WHERE date >= (SELECT MAX(date) FROM commits) - INTERVAL '{wd} days'
@@ -743,10 +774,17 @@ mod tests {
                 GROUP BY b.band
             ),
             total_sloc    AS (SELECT COALESCE(SUM(sloc), 0) AS v FROM eh_bands_v1),
-            total_commits AS (SELECT COUNT(*) AS v FROM win),
+            total_commits AS (
+                SELECT COUNT(DISTINCT c.rev) AS v
+                FROM changes c
+                INNER JOIN win          USING (rev)
+                INNER JOIN eh_bands_v1 b ON b.path = c.path
+            ),
             total_churn   AS (
                 SELECT COALESCE(SUM(c.loc_added + c.loc_deleted), 0) AS v
-                FROM changes c INNER JOIN win USING (rev)
+                FROM changes c
+                INNER JOIN win          USING (rev)
+                INNER JOIN eh_bands_v1 b ON b.path = c.path
             )
             SELECT bf.band,
                    100.0 * COALESCE(bc.n_commits, 0)
@@ -839,6 +877,144 @@ mod tests {
         assert!(
             (reported_actual - red_churn_share).abs() < 0.01,
             "reported actual ({reported_actual:.2}) must match red churn share ({red_churn_share:.2})"
+        );
+    }
+
+    /// Minimal `CodeHealthRow` for a path in a band — the effort-exposure SQL
+    /// reads only `path` and `band` off each row; the scoring fields are inert.
+    fn band_row(path: &str, band: &str) -> CodeHealthRow {
+        CodeHealthRow {
+            path: path.into(),
+            band: band.into(),
+            cognitive: 0.0,
+            score: 0.0,
+            structural_risk: 0.0,
+            percentile: 0.0,
+            corpus_percentile: None,
+            beyond_corpus: false,
+            corpus_percentile_ci_low: None,
+            corpus_percentile_ci_high: None,
+        }
+    }
+
+    /// Heavy churn on unscored paths (a lockfile and a markdown doc) must not
+    /// dilute the band shares: with the band-restricted denominators the red
+    /// band reads 60.0 % of *scorable* churn and trips a 30 % ceiling. Under an
+    /// unrestricted (raw-repo) denominator the same red band read 6.0 % and
+    /// slipped the ceiling — the regression this exercises. Runs the real
+    /// `run_effort_exposure_with_health` SQL, not an inline copy.
+    #[test]
+    fn shares_exclude_churn_on_unbanded_paths() {
+        use super::run_effort_exposure_with_health;
+        use crate::Options;
+        use crate::facts::FactsDb;
+
+        let db = FactsDb::new_in_memory().expect("in-memory db");
+
+        // Three in-window commits on one date (inside any positive window):
+        //   c1 → a red code file, c2 → a green code file,
+        //   c3 → a lockfile + a markdown doc (neither is code-health-scored).
+        db.conn()
+            .execute(
+                "INSERT INTO commits (rev, author_email, author_name, \
+                 committer_email, canonical_author, date, committer_date, \
+                 message, is_merge, parent_count) VALUES \
+                 ('c1','a@b.com','A','a@b.com','A',TIMESTAMPTZ '2026-01-01',TIMESTAMPTZ '2026-01-01','red',false,1), \
+                 ('c2','a@b.com','A','a@b.com','A',TIMESTAMPTZ '2026-01-01',TIMESTAMPTZ '2026-01-01','green',false,1), \
+                 ('c3','a@b.com','A','a@b.com','A',TIMESTAMPTZ '2026-01-01',TIMESTAMPTZ '2026-01-01','deps',false,1)",
+                [],
+            )
+            .expect("insert commits");
+
+        // Red 300 churn, green 200 churn (both banded); lockfile + markdown
+        // 4500 churn (unbanded). Raw window churn 5000; banded churn 500.
+        db.conn()
+            .execute(
+                "INSERT INTO changes (rev, path, change_type, loc_added, loc_deleted) VALUES \
+                 ('c1','src/bad.rs','modified',200,100), \
+                 ('c2','src/good.rs','modified',150,50), \
+                 ('c3','Cargo.lock','modified',3000,0), \
+                 ('c3','README.md','modified',1500,0)",
+                [],
+            )
+            .expect("insert changes");
+
+        // SLOC only for the two scored code files (unscored paths have none).
+        db.conn()
+            .execute(
+                "INSERT INTO complexity_metrics (path, name, rev, sloc) VALUES \
+                 ('src/bad.rs','f','c1',500), \
+                 ('src/good.rs','f','c2',200)",
+                [],
+            )
+            .expect("insert complexity");
+
+        // Health rows exist ONLY for the code files — the lockfile and the doc
+        // are structurally absent from eh_bands_v1.
+        let health = vec![
+            band_row("src/bad.rs", "red"),
+            band_row("src/good.rs", "green"),
+        ];
+
+        let opts = Options {
+            // src = "changes"; the fix is independent of the source table.
+            use_canonical_lineage: false,
+            ..Options::default()
+        };
+        let rows = run_effort_exposure_with_health(&db, &opts, &health)
+            .expect("run effort-exposure with synthetic health");
+
+        let red = rows.iter().find(|r| r.band == "red").expect("red row");
+        let green = rows.iter().find(|r| r.band == "green").expect("green row");
+
+        // Band-consistent churn shares: 300/500 and 200/500 — NOT x/5000.
+        assert!(
+            (red.churn_share_pct - 60.0).abs() < 1e-6,
+            "red churn share must be 60.0 (300 of 500 banded churn), got {}",
+            red.churn_share_pct
+        );
+        assert!(
+            (green.churn_share_pct - 40.0).abs() < 1e-6,
+            "green churn share must be 40.0, got {}",
+            green.churn_share_pct
+        );
+        assert!(
+            (red.churn_share_pct + green.churn_share_pct - 100.0).abs() < 1e-6,
+            "banded churn shares must sum to 100, got {}",
+            red.churn_share_pct + green.churn_share_pct
+        );
+
+        // Commit shares carry the same fix: c3 (lockfile + doc only) is not a
+        // banded commit, so the denominator is 2, not 3 → 50/50, not 33/33.
+        assert!(
+            (red.commit_share_pct - 50.0).abs() < 1e-6,
+            "red commit share must be 50.0 (1 of 2 banded commits), got {}",
+            red.commit_share_pct
+        );
+        assert!(
+            (green.commit_share_pct - 50.0).abs() < 1e-6,
+            "green commit share must be 50.0, got {}",
+            green.commit_share_pct
+        );
+
+        // Wilson CI stays coherent — it must bracket the banded commit share.
+        let red_share = red.commit_share_pct / 100.0;
+        assert!(
+            red.commit_share_ci_low <= red_share + 1e-9
+                && red.commit_share_ci_high >= red_share - 1e-9,
+            "Wilson CI [{}, {}] must contain commit share {red_share}",
+            red.commit_share_ci_low,
+            red.commit_share_ci_high
+        );
+
+        // The gate now fires: 60.0 % red churn exceeds a 30 % ceiling.
+        let violations = evaluate_effort_exposure_rows(30.0, &rows);
+        assert_eq!(violations.len(), 1, "red 60 % must trip the 30 % ceiling");
+        assert_eq!(violations[0].gate, "max_red_effort_pct");
+        let reported: f64 = violations[0].actual.parse().expect("actual is f64");
+        assert!(
+            (reported - 60.0).abs() < 1e-6,
+            "violation must report the band-consistent 60.0, got {reported}"
         );
     }
 
