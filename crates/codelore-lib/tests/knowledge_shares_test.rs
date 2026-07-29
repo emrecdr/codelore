@@ -621,3 +621,124 @@ fn reviewer_and_contributor_shares_merge_into_one_row_per_path() {
          not dropped, when merging into one row"
     );
 }
+
+/// Two authors that share one commit email but carry different names, with a
+/// `.mailmap` whose two name+email rules resolve them to distinct canonicals.
+///
+/// The alias table is keyed on `(raw_name, raw_email)`, so it can hold both
+/// resolutions; an email-only key would keep only the first-walked identity
+/// and silently drop the other's commits from every canonical-set consumer.
+/// The discriminating assertion is on a file BOTH authors touch: with both
+/// canonicals present it is co-owned (neither `k_norm` reaches the 0.8 island
+/// threshold); had the loser's commits been dropped, the survivor would own
+/// 100% of it — a spurious knowledge island.
+#[test]
+fn shared_commit_email_with_name_mailmap_keeps_both_canonicals() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path();
+    let date = "2026-01-01T10:00:00Z";
+    let git = |args: &[&str], author: &str, email: &str| {
+        git_as(path, args, author, email, date);
+    };
+
+    git(&["init", "--quiet"], "Alice", "shared@c");
+    git(&["config", "gc.auto", "0"], "Alice", "shared@c");
+
+    // 4-token rules: "Alice <shared@c>" → alice@c, "Bob <shared@c>" → bob@c.
+    // Same commit email, different names, different canonicals.
+    std::fs::write(
+        path.join(".mailmap"),
+        "Alice Smith <alice@c> Alice <shared@c>\nBob Jones <bob@c> Bob <shared@c>\n",
+    )
+    .expect("write mailmap");
+
+    // Commit 1 — Alice creates shared.rs (2 lines added).
+    std::fs::write(
+        path.join("shared.rs"),
+        "pub fn a() -> u32 { 1 }\npub fn a2() -> u32 { 11 }\n",
+    )
+    .expect("write");
+    git(&["add", ".mailmap", "shared.rs"], "Alice", "shared@c");
+    git(
+        &["commit", "--quiet", "-m", "feat: alice"],
+        "Alice",
+        "shared@c",
+    );
+
+    // Commit 2 — Bob extends shared.rs (2 lines added), same date so the
+    // decayed weights are equal and the split is ~0.5/0.5.
+    std::fs::write(
+        path.join("shared.rs"),
+        "pub fn a() -> u32 { 1 }\npub fn a2() -> u32 { 11 }\n\
+         pub fn b() -> u32 { 2 }\npub fn b2() -> u32 { 22 }\n",
+    )
+    .expect("write");
+    git(&["add", "shared.rs"], "Bob", "shared@c");
+    git(&["commit", "--quiet", "-m", "feat: bob"], "Bob", "shared@c");
+
+    let repo = GixRepo::open(path).expect("GixRepo::open");
+    let db = FactsDb::new_in_memory().expect("new_in_memory");
+    let opts = Options {
+        repo_path: path.to_path_buf(),
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+
+    // The alias table represents BOTH resolved canonicals, each non-bot.
+    let aliases: Vec<(String, bool)> = db
+        .prepare("SELECT canonical, is_bot FROM author_aliases ORDER BY canonical")
+        .expect("prepare")
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?)))
+        .expect("query_map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect");
+    assert_eq!(
+        aliases,
+        vec![("alice@c".to_string(), false), ("bob@c".to_string(), false)],
+        "both name+email identities must resolve to their own canonical row; \
+         an email-only key would keep only one"
+    );
+
+    // Both canonicals reach the commits table.
+    let commit_canons: Vec<String> = db
+        .prepare("SELECT DISTINCT canonical_author FROM commits ORDER BY canonical_author")
+        .expect("prepare")
+        .query_map([], |r| r.get::<_, String>(0))
+        .expect("query_map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect");
+    assert_eq!(commit_canons, vec!["alice@c", "bob@c"]);
+
+    materialize_knowledge_shares(&db, &opts).expect("materialize");
+
+    // shared.rs is co-owned: one row per canonical, neither an island.
+    let shares: Vec<(String, f64)> = db
+        .prepare(
+            "SELECT author, k_norm FROM knowledge_shares \
+             WHERE path = 'shared.rs' ORDER BY author",
+        )
+        .expect("prepare")
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))
+        .expect("query_map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect");
+    assert_eq!(
+        shares.len(),
+        2,
+        "shared.rs must be co-owned by both canonicals — the loser's commits \
+         must not vanish; got {shares:?}"
+    );
+    assert_eq!(shares[0].0, "alice@c");
+    assert_eq!(shares[1].0, "bob@c");
+    let max_share = shares[0].1.max(shares[1].1);
+    assert!(
+        max_share < 0.8,
+        "neither author may cross the 0.8 island threshold on a co-owned \
+         file; got {shares:?}"
+    );
+    let total: f64 = shares[0].1 + shares[1].1;
+    assert!(
+        (total - 1.0).abs() < 1e-9,
+        "k_norm must sum to 1.0 for shared.rs; got {total}"
+    );
+}

@@ -85,8 +85,12 @@ pub(super) fn ingest_loop(
     let mut change_appends: u64 = 0;
     let mut hunk_appends: u64 = 0;
 
-    // Collect unique (raw_email, canonical, is_bot) for deferred author_aliases insert.
-    let mut alias_map: HashMap<String, (String, bool)> = HashMap::new();
+    // Collect unique (raw_name, raw_email) → (canonical, is_bot) for the
+    // deferred author_aliases insert. The key is the full identity pair
+    // because mailmap resolves on name+email: two authors sharing one commit
+    // email but carrying different names resolve to different canonicals, and
+    // an email-only key would collapse them first-wins, dropping the loser.
+    let mut alias_map: HashMap<(String, String), (String, bool)> = HashMap::new();
 
     for mut event in rx {
         // Resolve canonical author, then apply the team-map projection.
@@ -119,7 +123,7 @@ pub(super) fn ingest_loop(
             .to_string(),
         );
         alias_map
-            .entry(event.author_email.clone())
+            .entry((event.author_name.clone(), event.author_email.clone()))
             .or_insert((canonical, bot));
 
         append_commit(&mut commits_app, &event)?;
@@ -168,10 +172,10 @@ pub(super) fn ingest_loop(
         .conn()
         .appender("author_aliases")
         .map_err(|e| CodeLoreError::Analysis(format!("appender author_aliases: {e}")))?;
-    for (raw_email, (canonical, is_bot)) in &alias_map {
+    for ((raw_name, raw_email), (canonical, is_bot)) in &alias_map {
         use duckdb::params;
         aliases_app
-            .append_row(params![raw_email, canonical, is_bot])
+            .append_row(params![raw_name, raw_email, canonical, is_bot])
             .map_err(|e| CodeLoreError::Analysis(format!("append author_alias: {e}")))?;
     }
     aliases_app

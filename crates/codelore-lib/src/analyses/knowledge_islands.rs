@@ -225,10 +225,11 @@ fn per_path_author_cte(restrict_to: &str) -> String {
         INNER JOIN commits ON changes.rev = commits.rev
         INNER JOIN {restrict_to} USING (path)
         LEFT JOIN (
-            -- Dedupe by canonical: author_aliases primary key is
-            -- raw_email; canonical is N:1 (multi-email authors). The
-            -- LEFT JOIN tolerates authors without an author_aliases row
-            -- (legacy / pattern-only classifications).
+            -- Dedupe by canonical: author_aliases is keyed on
+            -- (raw_name, raw_email); canonical is N:1 (one person owns
+            -- several name+email identities). The LEFT JOIN tolerates
+            -- authors without an author_aliases row (legacy / pattern-only
+            -- classifications).
             SELECT canonical, BOOL_OR(is_bot) AS is_bot
             FROM author_aliases
             GROUP BY canonical

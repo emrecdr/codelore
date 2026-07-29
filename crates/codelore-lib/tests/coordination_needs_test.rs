@@ -233,8 +233,8 @@ fn binary_only_path_all_zero_loc_added_does_not_crash_and_has_zero_fragmentation
     // defensive intent.
     let db = FactsDb::new_in_memory().expect("in-memory db");
     db.execute_batch(
-        "INSERT INTO author_aliases (raw_email, canonical, is_bot) \
-         VALUES ('alice@x.com', 'Alice', false)",
+        "INSERT INTO author_aliases (raw_name, raw_email, canonical, is_bot) \
+         VALUES ('Alice', 'alice@x.com', 'Alice', false)",
     )
     .expect("insert author_aliases");
     db.execute_batch(
@@ -288,9 +288,9 @@ fn dormant_multi_author_file_is_not_classified_high() {
     // `single`-tier check straight into the `high` rule.
     let db = FactsDb::new_in_memory().expect("in-memory db");
     db.execute_batch(
-        "INSERT INTO author_aliases (raw_email, canonical, is_bot) VALUES \
-         ('alice@x.com', 'Alice', false), \
-         ('bob@x.com', 'Bob', false)",
+        "INSERT INTO author_aliases (raw_name, raw_email, canonical, is_bot) VALUES \
+         ('Alice', 'alice@x.com', 'Alice', false), \
+         ('Bob', 'bob@x.com', 'Bob', false)",
     )
     .expect("insert author_aliases");
     db.execute_batch(
@@ -361,8 +361,8 @@ fn equal_fragmentation_rows_are_ordered_deterministically_by_entity() {
     // fully determined by `path ASC` regardless of insertion/incoming order.
     let db = FactsDb::new_in_memory().expect("in-memory db");
     db.execute_batch(
-        "INSERT INTO author_aliases (raw_email, canonical, is_bot) \
-         VALUES ('solo@x.com', 'Solo', false)",
+        "INSERT INTO author_aliases (raw_name, raw_email, canonical, is_bot) \
+         VALUES ('Solo', 'solo@x.com', 'Solo', false)",
     )
     .expect("insert author_aliases");
     db.execute_batch(

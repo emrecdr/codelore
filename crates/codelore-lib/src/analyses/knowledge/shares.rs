@@ -103,9 +103,9 @@ pub fn materialize_knowledge_shares(db: &FactsDb, opts: &Options) -> Result<()> 
     let base_sql = format!(
         "CREATE OR REPLACE TEMP TABLE knowledge_shares AS
          WITH anchor AS (SELECT {now_anchor} AS max_d FROM commits),
-         -- One row per canonical author (a canonical may own several raw
-         -- emails in author_aliases; a direct JOIN would multiply k by that
-         -- alias count). Bot canonicals are dropped here.
+         -- One row per canonical author (a canonical may own several
+         -- name+email identities in author_aliases; a direct JOIN would
+         -- multiply k by that alias count). Bot canonicals are dropped here.
          canon_authors AS (
            SELECT canonical FROM author_aliases
            GROUP BY canonical
@@ -286,10 +286,23 @@ fn collect_reviewer_rows(db: &FactsDb, src: &str) -> Result<Vec<ReviewerRow>> {
 }
 
 /// Build a `raw_email_lowercase → canonical_author` map from `author_aliases`.
+///
+/// This is a deliberately email-keyed lookup: trailer extraction
+/// ([`trailers`]) yields only the `<email>` of a `Co-Authored-By:` /
+/// `Reviewed-By:` line — the display name is discarded there because the
+/// email is the more identity-stable half — so there is no name to resolve
+/// on. For every author except the shared-commit-email case each email maps
+/// to one canonical, so the map is unaffected by the `(raw_name, raw_email)`
+/// re-key. When two identities do share a commit email a bare trailer email
+/// cannot disambiguate them; `ORDER BY` makes the collapse deterministic
+/// (highest canonical wins) rather than dependent on scan order.
 fn build_alias_map(db: &FactsDb) -> Result<HashMap<String, String>> {
     let mut stmt = db
         .conn()
-        .prepare("SELECT raw_email, canonical FROM author_aliases WHERE NOT is_bot")
+        .prepare(
+            "SELECT raw_email, canonical FROM author_aliases \
+             WHERE NOT is_bot ORDER BY raw_email, canonical",
+        )
         .map_err(|e| CodeLoreError::Analysis(format!("prepare alias_map: {e}")))?;
     let rows = stmt
         .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
@@ -340,9 +353,9 @@ fn materialize_doe_scores(db: &FactsDb, src: &str) -> Result<()> {
     let sql = format!(
         "CREATE OR REPLACE TEMP TABLE doe_scores AS
          WITH anchor AS (SELECT {now_anchor} AS max_d FROM commits),
-         -- One row per canonical author (a canonical may own several raw
-         -- emails in author_aliases; a direct JOIN would multiply k by that
-         -- alias count). Bot canonicals are dropped here.
+         -- One row per canonical author (a canonical may own several
+         -- name+email identities in author_aliases; a direct JOIN would
+         -- multiply k by that alias count). Bot canonicals are dropped here.
          canon_authors AS (
            SELECT canonical FROM author_aliases
            GROUP BY canonical

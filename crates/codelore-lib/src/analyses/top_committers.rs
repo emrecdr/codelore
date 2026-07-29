@@ -78,10 +78,11 @@ const SQL: &str = "
         COALESCE(aa.is_bot, FALSE) AS is_bot
     FROM per_author pa
     LEFT JOIN (
-        -- F31: dedupe by canonical (raw_email is the PK; canonical is
-        -- N:1 for multi-email authors). Without this the join produced
-        -- duplicate rows per author, draining the `LIMIT N` row budget
-        -- on duplicates instead of distinct top committers.
+        -- Dedupe by canonical (author_aliases is keyed on
+        -- (raw_name, raw_email); canonical is N:1 for authors with several
+        -- name+email identities). Without this the join produced duplicate
+        -- rows per author, draining the `LIMIT N` row budget on duplicates
+        -- instead of distinct top committers.
         SELECT canonical, BOOL_OR(is_bot) AS is_bot
         FROM author_aliases
         GROUP BY canonical

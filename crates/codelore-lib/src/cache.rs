@@ -23,14 +23,14 @@ use crate::Options;
 /// schema version, and the historical `schema_v` prefix on the value is
 /// retained so older cache files stay invalidated.
 ///
-/// The current epoch (`schema_v16`) invalidates caches whose clone facts
-/// predate the comment-skipping, kind-name digest: clone fingerprints now
-/// drop comment nodes (a lone `// TODO` no longer defeats a match) and hash
-/// stable node-kind names rather than grammar-local numeric kind ids (so
-/// `.ts`/`.tsx` and parameterless `.js`/`.ts` clones compare across
-/// dialects). A stale hit would serve wrong clone counts and digests, which
-/// feed the code-health DRY smell.
-const CACHE_EPOCH: &str = "schema_v16";
+/// The current epoch (`schema_v17`) invalidates caches whose `author_aliases`
+/// table predates the `(raw_name, raw_email)` re-key. The old email-only key
+/// collapsed two name+email identities that share one commit email into a
+/// single first-wins row, dropping the loser's commits from every
+/// canonical-set consumer (knowledge shares, familiarity, bus factor). A
+/// stale hit would serve those collapsed rows, so the epoch bump forces the
+/// fact store to be rebuilt with the pair-keyed table.
+const CACHE_EPOCH: &str = "schema_v17";
 
 /// Compute a 32-byte SHA-256 cache key from:
 ///   `canonical_repo_path || NUL || head_sha || NUL || CARGO_PKG_VERSION || NUL`
