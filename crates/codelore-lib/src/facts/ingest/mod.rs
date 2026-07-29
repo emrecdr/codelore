@@ -133,6 +133,16 @@ impl FactsDb {
             Ok(stats)
         })?;
 
+        // A single future-dated commit would otherwise anchor every trailing
+        // window and time-decay term at that date; the analyses clamp the
+        // anchor to the wall clock, and this surfaces the underlying data
+        // problem once per ingest.
+        match future_dated_commit_warning(self) {
+            Ok(Some(msg)) => tracing::warn!("{msg}"),
+            Ok(None) => {}
+            Err(e) => tracing::debug!("future-date ingest check skipped: {e}"),
+        }
+
         // Hoist HEAD-time context shared across all four HEAD-time passes.
         // `query_live_paths` runs a CTE + arg_max across `commits ⋈ changes`
         // and `current_head_rev` walks `commits` ordered by date — both are
@@ -319,6 +329,38 @@ fn query_live_paths(db: &FactsDb) -> Result<Vec<String>> {
         .map_err(|e| CodeLoreError::Analysis(format!("collect paths: {e}")))
 }
 
+/// The once-per-ingest warning text when the fact store holds commits dated
+/// after the current wall clock, or `None` when every commit predates now.
+///
+/// A future-dated commit (a bad `GIT_AUTHOR_DATE`, contributor clock skew, or
+/// a mis-imported history) would otherwise become the `MAX(commits.date)`
+/// "now" that every trailing window and time-decay term is anchored on. The
+/// analyses clamp that anchor to the wall clock (see
+/// [`crate::analyses::query::clamped_now_anchor`]); this surfaces the
+/// underlying data problem the clamp is defending against. Returned rather
+/// than logged inline so the trigger and wording stay unit-testable. The wall
+/// clock comes from [`crate::analyses::query::wall_clock_utc_literal`] — the
+/// same UTC-naive frame the anchor clamp and the stored commit dates use.
+fn future_dated_commit_warning(db: &FactsDb) -> Result<Option<String>> {
+    let now = crate::analyses::query::wall_clock_utc_literal();
+    let (count, latest) = db.query_row(
+        &format!(
+            "SELECT COUNT(*), CAST(MAX(date) AS TEXT) \
+             FROM commits WHERE date > TIMESTAMP '{now}'"
+        ),
+        [],
+        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?)),
+    )?;
+    Ok((count > 0).then(|| {
+        format!(
+            "ingest: {count} commit(s) are dated after the current wall clock \
+             (latest {}); window anchors are clamped to now — check for a bad \
+             commit date or contributor clock skew",
+            latest.as_deref().unwrap_or("unknown")
+        )
+    }))
+}
+
 /// Format a `Box<dyn Any + Send>` panic payload (the value
 /// `std::thread::JoinHandle::join` returns on `Err`) into a stable
 /// human-readable string. The two canonical concrete types `panic!`
@@ -366,6 +408,74 @@ mod panic_payload_tests {
         assert_eq!(
             msg,
             "commit walker thread panicked: <non-string panic payload>"
+        );
+    }
+}
+
+#[cfg(test)]
+mod future_date_warning_tests {
+    use super::future_dated_commit_warning;
+    use crate::facts::FactsDb;
+
+    /// UTC now minus `days`, formatted as the stored `YYYY-MM-DD HH:MM:SS`
+    /// frame so the clamp can be exercised relative to the real wall clock,
+    /// deterministically whatever day the suite runs.
+    fn ts_days_ago(days: i64) -> String {
+        let t = time::OffsetDateTime::now_utc() - time::Duration::days(days);
+        format!(
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+            t.year(),
+            u8::from(t.month()),
+            t.day(),
+            t.hour(),
+            t.minute(),
+            t.second(),
+        )
+    }
+
+    fn seed(db: &FactsDb, rev: &str, date: &str) {
+        db.execute_batch(&format!(
+            "INSERT INTO commits (rev, author_email, author_name, committer_email, \
+             canonical_author, date, committer_date, message, is_merge, parent_count) \
+             VALUES ('{rev}', 'a@b.c', 'A', 'a@b.c', 'A', TIMESTAMP '{date}', TIMESTAMP '{date}', 'm', false, 1)"
+        ))
+        .expect("seed commit");
+    }
+
+    #[test]
+    fn warns_naming_count_and_extent_for_a_future_dated_commit() {
+        let db = FactsDb::new_in_memory().expect("db");
+        seed(&db, "r1", &ts_days_ago(5));
+        seed(&db, "r2", &ts_days_ago(1));
+        seed(&db, "r3", "2099-01-01 00:00:00");
+        let msg = future_dated_commit_warning(&db)
+            .expect("query ok")
+            .expect("a future-dated commit must warn");
+        assert!(msg.contains("1 commit"), "names the count: {msg}");
+        assert!(msg.contains("2099-01-01"), "names the extent: {msg}");
+        assert!(msg.contains("clamped to now"), "explains the clamp: {msg}");
+    }
+
+    #[test]
+    fn silent_when_every_commit_predates_now() {
+        let db = FactsDb::new_in_memory().expect("db");
+        seed(&db, "r1", &ts_days_ago(5));
+        seed(&db, "r2", &ts_days_ago(400));
+        assert!(
+            future_dated_commit_warning(&db)
+                .expect("query ok")
+                .is_none(),
+            "no future-dated commit ⇒ no warning"
+        );
+    }
+
+    #[test]
+    fn silent_on_an_empty_store() {
+        let db = FactsDb::new_in_memory().expect("db");
+        assert!(
+            future_dated_commit_warning(&db)
+                .expect("query ok")
+                .is_none()
         );
     }
 }

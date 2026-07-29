@@ -99,9 +99,10 @@ pub fn materialize_knowledge_shares(db: &FactsDb, opts: &Options) -> Result<()> 
     // arXiv 2507.08160 (AI commits distort expertise models).
     // Bot rows are excluded via the JOIN on author_aliases (NOT a.is_bot).
     // Deleted paths are excluded (change_type != 'deleted').
+    let now_anchor = crate::analyses::query::clamped_now_anchor("date");
     let base_sql = format!(
         "CREATE OR REPLACE TEMP TABLE knowledge_shares AS
-         WITH anchor AS (SELECT MAX(date) AS max_d FROM commits),
+         WITH anchor AS (SELECT {now_anchor} AS max_d FROM commits),
          -- One row per canonical author (a canonical may own several
          -- name+email identities in author_aliases; a direct JOIN would
          -- multiply k by that alias count). Bot canonicals are dropped here.
@@ -120,7 +121,10 @@ pub fn materialize_knowledge_shares(db: &FactsDb, opts: &Options) -> Result<()> 
                         WHEN 'ai-assisted'  THEN {W_AI_ASSISTED}
                         ELSE 1.0
                       END
-                    * EXP(-date_diff('day', co.date, (SELECT max_d FROM anchor))
+                    -- GREATEST floors the age at 0: a commit dated after the
+                    -- clamped anchor (clock skew, a future date) reads as the
+                    -- present, never a negative age that would invert the decay.
+                    * EXP(-GREATEST(date_diff('day', co.date, (SELECT max_d FROM anchor)), 0)
                           / {DECAY_DAYS})
                   ) AS k
            FROM {src} c
@@ -203,6 +207,7 @@ fn collect_reviewer_rows(db: &FactsDb, src: &str) -> Result<Vec<ReviewerRow>> {
     // Query returns one row per (rev, path) so no ARRAY_AGG is needed.
     // The k_weight column is per-path (loc_added × ai_weight × decay),
     // matching the granularity of the base knowledge_shares CTE.
+    let now_anchor = crate::analyses::query::clamped_now_anchor("date");
     let query = format!(
         "SELECT c.path,
                 co.message,
@@ -212,8 +217,8 @@ fn collect_reviewer_rows(db: &FactsDb, src: &str) -> Result<Vec<ReviewerRow>> {
                     WHEN 'ai-assisted'  THEN {W_AI_ASSISTED}
                     ELSE 1.0
                   END
-                * EXP(-date_diff('day', co.date,
-                      (SELECT MAX(date) FROM commits))
+                * EXP(-GREATEST(date_diff('day', co.date,
+                      (SELECT {now_anchor} FROM commits)), 0)
                       / {DECAY_DAYS})
                 AS k_path
          FROM {src} c
@@ -344,9 +349,10 @@ fn insert_reviewer_rows(db: &FactsDb, rows: &[ReviewerRow]) -> Result<()> {
 /// (Avelino DOA normalization convention; threshold unstated in DOE paper —
 /// documented here as adopted convention).
 fn materialize_doe_scores(db: &FactsDb, src: &str) -> Result<()> {
+    let now_anchor = crate::analyses::query::clamped_now_anchor("date");
     let sql = format!(
         "CREATE OR REPLACE TEMP TABLE doe_scores AS
-         WITH anchor AS (SELECT MAX(date) AS max_d FROM commits),
+         WITH anchor AS (SELECT {now_anchor} AS max_d FROM commits),
          -- One row per canonical author (a canonical may own several
          -- name+email identities in author_aliases; a direct JOIN would
          -- multiply k by that alias count). Bot canonicals are dropped here.
@@ -381,10 +387,12 @@ fn materialize_doe_scores(db: &FactsDb, src: &str) -> Result<()> {
            SELECT c.path,
                   co.canonical_author AS author,
                   SUM(c.loc_added) AS adds,
-                  date_diff('day',
+                  -- GREATEST floors the age at 0 so a commit dated after the
+                  -- clamped anchor cannot drive LN(1 + num_days) negative.
+                  GREATEST(date_diff('day',
                     MAX(co.date),
                     (SELECT max_d FROM anchor)
-                  ) AS num_days
+                  ), 0) AS num_days
            FROM {src} c
            JOIN commits co USING (rev)
            JOIN canon_authors a ON a.canonical = co.canonical_author

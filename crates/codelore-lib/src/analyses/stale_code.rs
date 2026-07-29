@@ -153,12 +153,17 @@ fn anchor_str(db: &FactsDb, opts: &Options) -> Result<String> {
             d.day()
         ));
     }
-    // `MAX(date)` is the newest commit; cast to TEXT for a parseable
-    // anchor. An empty store yields NULL → fall back to the Unix epoch
-    // so the timestamp cast in the query still parses (the result is an
-    // empty stale-code set either way).
+    // The newest commit date, capped at the wall clock so a single
+    // future-dated commit cannot inflate every file's months-since-touch
+    // (`--age-time-now`, handled above, still wins outright). Cast to TEXT
+    // for a parseable anchor; an empty store yields NULL → fall back to the
+    // Unix epoch so the timestamp cast in the query still parses (the result
+    // is an empty stale-code set either way).
     db.query_row(
-        "SELECT COALESCE(CAST(MAX(date) AS TEXT), '1970-01-01 00:00:00') FROM commits",
+        &format!(
+            "SELECT COALESCE(CAST({now_anchor} AS TEXT), '1970-01-01 00:00:00') FROM commits",
+            now_anchor = crate::analyses::query::clamped_now_anchor("date")
+        ),
         [],
         |r| r.get::<_, String>(0),
     )

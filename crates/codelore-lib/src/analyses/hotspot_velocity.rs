@@ -74,7 +74,7 @@ pub struct HotspotVelocityRow {
 // `{boundary}` = RECENT_DAYS + BASELINE_DAYS, the baseline window's far edge.
 const SQL_TEMPLATE: &str = "
     WITH anchor AS (
-        SELECT COALESCE(CAST(? AS TIMESTAMP), MAX(date)) AS now_ts
+        SELECT COALESCE(CAST(? AS TIMESTAMP), {now_anchor}) AS now_ts
         FROM commits
     ),
     win AS (
@@ -121,6 +121,10 @@ const SQL_TEMPLATE: &str = "
 /// `RECENT_DAYS + BASELINE_DAYS` days back from the anchor.
 fn build_sql() -> String {
     SQL_TEMPLATE
+        .replace(
+            "{now_anchor}",
+            &crate::analyses::query::clamped_now_anchor("date"),
+        )
         .replace("{recent}", &RECENT_DAYS.to_string())
         .replace("{baseline}", &BASELINE_DAYS.to_string())
         .replace("{boundary}", &(RECENT_DAYS + BASELINE_DAYS).to_string())

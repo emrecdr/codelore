@@ -168,6 +168,7 @@ pub fn run_effort_exposure(db: &FactsDb, opts: &Options) -> Result<Vec<EffortExp
 /// # Errors
 ///
 /// Returns [`crate::CodeLoreError::Analysis`] on SQL or row-mapping failure.
+#[allow(clippy::too_many_lines)]
 pub fn run_effort_exposure_with_health(
     db: &FactsDb,
     opts: &Options,
@@ -193,10 +194,11 @@ pub fn run_effort_exposure_with_health(
     // band_churn) to avoid the cross-product inflation that arises when
     // joining eh_bands (one row per file) directly against the touch results
     // (one row per rev×path) in the outer SELECT.
+    let now_anchor = crate::analyses::query::clamped_now_anchor("date");
     let sql = format!("
         WITH win AS (
             SELECT rev FROM commits
-            WHERE date >= (SELECT MAX(date) FROM commits) - INTERVAL '{wd} days'
+            WHERE date >= (SELECT {now_anchor} FROM commits) - INTERVAL '{wd} days'
         ),
         band_files AS (
             SELECT band,
@@ -385,13 +387,14 @@ pub fn run_effort_exposure_decomposed_scan<R: Repo>(
 /// `improving_pct + degrading_pct == churn_share_pct` holds only when both
 /// denominators cover the same banded population.
 fn window_total_churn(db: &FactsDb, src: &str, wd: u32) -> Result<f64> {
+    let now_anchor = crate::analyses::query::clamped_now_anchor("date");
     let sql = format!(
         "SELECT COALESCE(SUM(c.loc_added + c.loc_deleted), 0)::DOUBLE
          FROM {src} c
          INNER JOIN eh_bands_v1 b ON b.path = c.path
          WHERE c.rev IN (
              SELECT rev FROM commits
-             WHERE date >= (SELECT MAX(date) FROM commits) - INTERVAL '{wd} days'
+             WHERE date >= (SELECT {now_anchor} FROM commits) - INTERVAL '{wd} days'
          )"
     );
     db.conn()
@@ -404,13 +407,14 @@ fn window_total_churn(db: &FactsDb, src: &str, wd: u32) -> Result<f64> {
 /// to the `red` band, so the summed value equals the red-band `churn` the base
 /// analysis reports.
 fn red_window_churn(db: &FactsDb, src: &str, wd: u32) -> Result<HashMap<String, f64>> {
+    let now_anchor = crate::analyses::query::clamped_now_anchor("date");
     let sql = format!(
         "SELECT c.path, COALESCE(SUM(c.loc_added + c.loc_deleted), 0)::DOUBLE AS churn
          FROM {src} c
          INNER JOIN eh_bands_v1 b ON b.path = c.path AND b.band = 'red'
          WHERE c.rev IN (
              SELECT rev FROM commits
-             WHERE date >= (SELECT MAX(date) FROM commits) - INTERVAL '{wd} days'
+             WHERE date >= (SELECT {now_anchor} FROM commits) - INTERVAL '{wd} days'
          )
          GROUP BY c.path"
     );
@@ -435,9 +439,10 @@ fn red_window_churn(db: &FactsDb, src: &str, wd: u32) -> Result<HashMap<String, 
 /// the same rev; the caller passes the window length (the effort view uses
 /// `opts.window_days`, the new-code gate its own `[new_code] window_days`).
 pub fn window_start_rev(db: &FactsDb, wd: u32) -> Result<Option<String>> {
+    let now_anchor = crate::analyses::query::clamped_now_anchor("date");
     let sql = format!(
         "SELECT rev FROM commits
-         WHERE date < (SELECT MAX(date) FROM commits) - INTERVAL '{wd} days'
+         WHERE date < (SELECT {now_anchor} FROM commits) - INTERVAL '{wd} days'
          ORDER BY date DESC, rev DESC
          LIMIT 1"
     );

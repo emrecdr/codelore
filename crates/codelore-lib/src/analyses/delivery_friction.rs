@@ -202,11 +202,16 @@ fn anchor_str(db: &FactsDb, opts: &Options) -> Result<String> {
         ));
     }
     // `wip_age_days` is measured against `MAX(committer_date)`, so the
-    // default anchor is the newest committer date. An empty store yields
-    // NULL → fall back to the Unix epoch so the timestamp cast in the
+    // default anchor is the newest committer date, capped at the wall clock
+    // so a single future-dated commit cannot skew every file's age
+    // (`--age-time-now`, handled above, still wins outright). An empty store
+    // yields NULL → fall back to the Unix epoch so the timestamp cast in the
     // query still parses.
     db.query_row(
-        "SELECT COALESCE(CAST(MAX(committer_date) AS TEXT), '1970-01-01 00:00:00') FROM commits",
+        &format!(
+            "SELECT COALESCE(CAST({now_anchor} AS TEXT), '1970-01-01 00:00:00') FROM commits",
+            now_anchor = crate::analyses::query::clamped_now_anchor("committer_date")
+        ),
         [],
         |r| r.get::<_, String>(0),
     )

@@ -135,10 +135,11 @@ pub fn run_new_code_scope<R: Repo>(
 /// boundary is the repo's last commit date minus `wd` days — identical to the
 /// effort-exposure window anchor.
 fn born_touched_flags(db: &FactsDb, src: &str, wd: u32) -> Result<Vec<(String, bool, bool)>> {
+    let now_anchor = crate::analyses::query::clamped_now_anchor("date");
     let sql = format!(
         "SELECT c.path,
-                (MIN(ci.date) >= (SELECT MAX(date) FROM commits) - INTERVAL '{wd} days') AS born,
-                (MAX(ci.date) >= (SELECT MAX(date) FROM commits) - INTERVAL '{wd} days') AS touched
+                (MIN(ci.date) >= (SELECT {now_anchor} FROM commits) - INTERVAL '{wd} days') AS born,
+                (MAX(ci.date) >= (SELECT {now_anchor} FROM commits) - INTERVAL '{wd} days') AS touched
          FROM {src} c
          JOIN commits ci ON ci.rev = c.rev
          GROUP BY c.path"
@@ -234,6 +235,77 @@ mod tests {
             window_start_rev(&db, 90).expect("query").as_deref(),
             Some("c0"),
             "the newest pre-window commit anchors the window start"
+        );
+    }
+
+    /// UTC now offset by `days` (negative = past, positive = future),
+    /// formatted as the stored `YYYY-MM-DD HH:MM:SS` frame, so the wall-clock
+    /// clamp can be exercised deterministically whatever day the suite runs.
+    fn ts_offset_days(days: i64) -> String {
+        let t = time::OffsetDateTime::now_utc() + time::Duration::days(days);
+        format!(
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+            t.year(),
+            u8::from(t.month()),
+            t.day(),
+            t.hour(),
+            t.minute(),
+            t.second(),
+        )
+    }
+
+    #[test]
+    fn born_touched_anchor_ignores_a_future_dated_commit_as_now() {
+        // A far-future commit must not become "now". Clamped, the 90-day
+        // window opens ~90 days ago, so a file touched 10 days ago stays in
+        // it; a raw MAX(date) anchor would open the window in the far future
+        // and drop every real file out of it.
+        let db = FactsDb::new_in_memory().expect("db");
+        seed_commit(&db, "recent", &ts_offset_days(-10));
+        seed_commit(&db, "old", &ts_offset_days(-200));
+        seed_commit(&db, "future", "2099-01-01 00:00:00");
+        seed_change(&db, "recent", "recent.rs", "modified");
+        seed_change(&db, "old", "old.rs", "modified");
+        seed_change(&db, "future", "future.rs", "added");
+
+        let flags: HashMap<String, (bool, bool)> = born_touched_flags(&db, "changes", 90)
+            .expect("partition")
+            .into_iter()
+            .map(|(p, born, touched)| (p, (born, touched)))
+            .collect();
+
+        assert_eq!(
+            flags["recent.rs"],
+            (true, true),
+            "the recent file stays in-window despite the future-dated commit"
+        );
+        assert_eq!(
+            flags["old.rs"],
+            (false, false),
+            "200 days back is outside the 90-day window"
+        );
+        assert_eq!(
+            flags["future.rs"],
+            (true, true),
+            "the future row is still its own born/touched; the clamp guards the anchor, not membership"
+        );
+    }
+
+    #[test]
+    fn window_start_rev_anchors_on_the_wall_clock_not_a_future_commit() {
+        // The window-start baseline is the newest commit strictly before the
+        // window opens. A future-dated commit must not drag that anchor
+        // forward: clamped, the 90-day window opens ~90 days ago, so the
+        // baseline is the 120-day-old commit, not the 10-day-old one (which a
+        // raw MAX(date) anchor would pick).
+        let db = FactsDb::new_in_memory().expect("db");
+        seed_commit(&db, "baseline", &ts_offset_days(-120));
+        seed_commit(&db, "inwindow", &ts_offset_days(-10));
+        seed_commit(&db, "future", "2099-01-01 00:00:00");
+        assert_eq!(
+            window_start_rev(&db, 90).expect("query").as_deref(),
+            Some("baseline"),
+            "a raw MAX(date) anchor would instead pick the 10-day-old commit"
         );
     }
 }
