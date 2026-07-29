@@ -1,16 +1,7 @@
 use codelore_lib::AnalysisName;
 use codelore_lib::CodeLoreError;
-use codelore_lib::types::{ChangeType, CommitEvent, FileChange, Hunk, SCHEMA_VERSION};
+use codelore_lib::types::{ChangeType, CommitEvent, FileChange, Hunk};
 use time::macros::datetime;
-
-#[test]
-fn schema_version_is_six() {
-    // Schema v6: drops `imports.rev`'s `REFERENCES commits(rev)` foreign
-    // key so head-only ingest can populate `imports` without a walked
-    // `commits` table. Cache key includes this sentinel so v5 caches are
-    // naturally invalidated on next open.
-    assert_eq!(SCHEMA_VERSION, 6);
-}
 
 #[test]
 fn commit_event_construction() {

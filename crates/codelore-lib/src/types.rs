@@ -4,39 +4,6 @@
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-/// Bumped on any breaking change to facts or output schemas.
-///
-/// Schema 3 adds `commits.committer_date TIMESTAMP NOT NULL` alongside
-/// the author-date `commits.date`. The delta `(committer_date - date)`
-/// is the in-flight time the `lead-time` and `delivery-friction`
-/// analyses surface; without the separate column, `lead-time` silently
-/// emitted zero rows for every commit.
-///
-/// Schema 2 promoted `commits.date` from `DATE` to `TIMESTAMP` so HEAD
-/// resolution and same-day chronology are precise — no more lexicographical
-/// rev tiebreaks deciding which commit "is" HEAD when multiple commits
-/// share a calendar day. `CommitEvent.date` carries a full `OffsetDateTime`
-/// (stored as UTC; tz offset is currently discarded at the schema boundary).
-///
-/// Schema 4 made every `Hunk` row actually reach the `hunks` table
-/// (previously parsed by `Repo::diff_hunks` and attached to
-/// `FileChange.hunks` but dropped on the floor) and tightened the
-/// schema to NOT NULL on all four offsets, composite PRIMARY KEY
-/// `(rev, path, old_start, new_start)`, and a `(rev, path)` index
-/// for hunk lookups keyed by change row (used by `apply_grouping`'s
-/// surviving-hunk snapshot).
-///
-/// Schema 5 added `nargs INTEGER` and `bool_ops INTEGER` to
-/// `complexity_metrics` and wired the previously-extracted nesting,
-/// argument-count, and boolean-conditional metrics through to the
-/// persisted table.
-///
-/// Schema 6 dropped `imports.rev`'s `REFERENCES commits(rev)` foreign
-/// key so head-only ingest (which populates `imports` at HEAD but
-/// never runs the commit walk, leaving `commits` empty) can write
-/// import rows without violating referential integrity.
-pub const SCHEMA_VERSION: u8 = 6;
-
 /// One commit, as observed by the parser stage. Immutable event.
 // Eq removed: CommitEvent contains Option<KameiFeatures> which has f64 fields (not Eq).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
