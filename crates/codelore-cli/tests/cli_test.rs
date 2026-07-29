@@ -1642,6 +1642,160 @@ fn diff_docs_only_change_is_no_code_change() {
     assert!(json["delta_health"]["ratio"].is_null());
 }
 
+/// Two-commit repo where `src/lib.rs` is identical at base and head (only
+/// `README.md` changes between them) — the "populated-unchanged" fixture:
+/// real commit history, real (non-empty) hotspot rows at both revisions,
+/// zero code delta. Distinct from a blind ingest, which empties the hotspot
+/// row SET itself rather than just the delta between two populated sets.
+fn unchanged_code_fixture() -> (tempfile::TempDir, String, String) {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    git(&["init", "-q"]);
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(
+        repo.join("src/lib.rs"),
+        "pub fn tiny() -> i32 {\n    1\n}\n",
+    )
+    .unwrap();
+    std::fs::write(repo.join("README.md"), "hello\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "base"]);
+    let base = git(&["rev-parse", "HEAD"]);
+    std::fs::write(repo.join("README.md"), "hello world\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "docs"]);
+    let head = git(&["rev-parse", "HEAD"]);
+    (dir, base, head)
+}
+
+#[test]
+fn diff_gate_passes_on_populated_unchanged_range() {
+    // A genuinely unchanged range with REAL (non-empty) hotspot rows at both
+    // revisions must keep today's verdict byte-identical: no violations, and
+    // — the case this fix must not regress — no skip disclosure either, since
+    // real data was measured on both sides.
+    let (dir, base, head) = unchanged_code_fixture();
+    let thresholds = dir.path().join("gates.toml");
+    std::fs::write(&thresholds, "[diff]\nno_new_cycles = true\n").unwrap();
+    let output = codelore_cmd()
+        .args([
+            "diff",
+            "--repo",
+            dir.path().to_str().unwrap(),
+            "--min-revs",
+            "1",
+            "--thresholds-file",
+            thresholds.to_str().unwrap(),
+            "--format",
+            "json",
+            &format!("{base}..{head}"),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    // `gate_violations` is omitted from the JSON document entirely when
+    // empty (`skip_serializing_if = "Vec::is_empty"`), so its absence IS the
+    // empty-violations case.
+    assert!(
+        json.get("gate_violations").is_none(),
+        "unchanged code ⇒ no violations: {json}"
+    );
+    assert!(
+        json.get("gate_skip_reason").is_none(),
+        "real rows on both sides ⇒ never a skip: {json}"
+    );
+}
+
+#[test]
+fn diff_gate_skipped_when_neither_revision_measures_any_hotspot_row() {
+    // A `--min-revs` floor above every file's revision count empties the
+    // hotspot row set at BOTH revisions — the same shape a blind ingest (a
+    // shallow checkout) produces. Every scalar evaluate_diff_gate would see
+    // (new_hotspot_count, delta_code_health, cycle counts) reads identically
+    // to a genuinely unchanged repo; the gate must disclose a skip instead of
+    // a silent pass, and must not fail the run (exit code unaffected).
+    let (dir, base, head) = unchanged_code_fixture();
+    let thresholds = dir.path().join("gates.toml");
+    std::fs::write(&thresholds, "[diff]\nno_new_cycles = true\n").unwrap();
+    let output = codelore_cmd()
+        .args([
+            "diff",
+            "--repo",
+            dir.path().to_str().unwrap(),
+            "--min-revs",
+            "50",
+            "--thresholds-file",
+            thresholds.to_str().unwrap(),
+            "--format",
+            "json",
+            &format!("{base}..{head}"),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "a skip must not fail the run — stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    // Omitted entirely when empty — see the sibling test's comment.
+    assert!(
+        json.get("gate_violations").is_none(),
+        "nothing measured ⇒ no violations either: {json}"
+    );
+    let reason = json["gate_skip_reason"]
+        .as_str()
+        .expect("gate_skip_reason must be a disclosed string, not null");
+    assert!(
+        reason.contains("blind ingest"),
+        "reason must name the cause: {reason}"
+    );
+
+    // The text format must surface the same skip, not silence.
+    let text_output = codelore_cmd()
+        .args([
+            "diff",
+            "--repo",
+            dir.path().to_str().unwrap(),
+            "--min-revs",
+            "50",
+            "--thresholds-file",
+            thresholds.to_str().unwrap(),
+            &format!("{base}..{head}"),
+        ])
+        .output()
+        .unwrap();
+    assert!(text_output.status.success());
+    let stdout = String::from_utf8(text_output.stdout).unwrap();
+    assert!(
+        stdout.contains("SKIPPED"),
+        "text format must disclose the skip: {stdout}"
+    );
+    assert!(
+        !stdout.contains("VIOLATION"),
+        "a skip is not a violation: {stdout}"
+    );
+}
+
 #[test]
 fn diff_sarif_schema_url_and_info_uri_use_canonical_constants() {
     // The diff SARIF schema URL and informationUri must use the constants from

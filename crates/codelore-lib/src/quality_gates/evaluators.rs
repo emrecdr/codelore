@@ -205,6 +205,38 @@ pub fn evaluate_diff_gate(
     out
 }
 
+/// The `"passed"` / `"failed"` / `"skipped"` verdict for the whole `[diff]`
+/// gate family [`evaluate_diff_gate`] evaluates, given whether each side of
+/// the range actually measured anything.
+///
+/// `evaluate_diff_gate` only receives scalars already reduced from the base
+/// and head hotspot row sets (`new_hotspot_count`, `delta_code_health`,
+/// `base_cycles`/`head_cycles`, `delta_health_ratio`) — it has no way to tell
+/// "reduced from real rows, genuinely unchanged" apart from "reduced from
+/// nothing, because neither revision measured anything" (a blind ingest: a
+/// shallow checkout, or any other zero-commit ingest, leaves
+/// `RevAnalyses::hotspots` empty at both revisions, which zeroes every one
+/// of those scalars identically to a real no-op diff). `"skipped"` when
+/// `base_measured` and `head_measured` are both `false` — the caller passes
+/// `!RevAnalyses::hotspots.is_empty()` for each side. A genuinely unchanged
+/// repository with real (non-empty) hotspot rows at both revisions stays a
+/// real `"passed"`. Mirrors [`change_set_gate_verdict`]'s verdict-string
+/// convention for the analogous ambiguity on the working-tree gate family.
+#[must_use]
+pub fn diff_gate_verdict(
+    base_measured: bool,
+    head_measured: bool,
+    violation_count: usize,
+) -> &'static str {
+    if !base_measured && !head_measured {
+        "skipped"
+    } else if violation_count == 0 {
+        "passed"
+    } else {
+        "failed"
+    }
+}
+
 /// Evaluate the `[diff]` gates that apply to a working-tree change-set report
 /// (`codelore gate` / the `gate_changes` MCP tool).
 ///
@@ -1016,6 +1048,38 @@ mod tests {
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].gate, "deny_degrading_verdict");
         assert!(evaluate_diff_gate(&t, 0, 0.0, 0, 0, Some(60.0), Some("indeterminate")).is_empty());
+    }
+
+    // ───────── diff_gate_verdict (blind-ingest skip semantics) ─────────
+
+    #[test]
+    fn diff_gate_verdict_skipped_when_neither_side_measured() {
+        // Blind ingest: both revisions' hotspot row sets are empty, so every
+        // scalar evaluate_diff_gate saw (new_hotspot_count=0,
+        // delta_code_health=0.0, cycles=0/0, ratio=None) reads identically to
+        // a genuinely unchanged repo. The verdict must be skipped, not passed.
+        assert_eq!(diff_gate_verdict(false, false, 0), "skipped");
+    }
+
+    #[test]
+    fn diff_gate_verdict_passes_when_measured_and_clean() {
+        // A real, non-empty range on both sides with zero violations is a
+        // genuine pass — the blind-ingest case must not swallow this one.
+        assert_eq!(diff_gate_verdict(true, true, 0), "passed");
+    }
+
+    #[test]
+    fn diff_gate_verdict_fails_when_measured_with_violations() {
+        assert_eq!(diff_gate_verdict(true, true, 3), "failed");
+    }
+
+    #[test]
+    fn diff_gate_verdict_treats_one_sided_measurement_as_measured() {
+        // Only one side reading empty (e.g. a brand-new file at head with no
+        // base counterpart) is not the blind-ingest case — the family still
+        // renders a real verdict from whatever violations were found.
+        assert_eq!(diff_gate_verdict(true, false, 0), "passed");
+        assert_eq!(diff_gate_verdict(false, true, 1), "failed");
     }
 
     // ───────────────── gate (working-tree) evaluator ─────────────────
