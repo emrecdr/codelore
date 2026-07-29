@@ -174,7 +174,7 @@
       core: token('--color-error') || '#dc2626',
       control: token('--color-warning') || '#d97706',
       shared: token('--color-info') || '#2563eb',
-      periphery: token('--color-neutral') || '#6b7280',
+      periphery: token('--fg-dim') || '#6b7280',
     };
     const violColor = roleColors.control;
     const cycleRing = getCssVar('--fg') || '#111827';
