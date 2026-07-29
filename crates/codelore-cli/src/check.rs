@@ -9,7 +9,7 @@
 use anyhow::{Context, Result};
 
 use crate::args::{self, CheckFormat};
-use crate::{notice_corpus_lens_absent, write_github_output};
+use crate::{new_code_skip_reason, notice_corpus_lens_absent, write_github_output};
 
 /// Quality-gate check. Loads thresholds, runs the hotspots analysis
 /// against the repo, evaluates each row against the gates, and
@@ -356,13 +356,9 @@ fn emit_gate_notices(
             ("code_health_min", "degraded") => eprintln!(
                 "  ⚠ code_health_min: degraded — health scan returned no rows on a non-empty repo"
             ),
-            ("new_code", "skipped") if shallow_checkout => eprintln!(
-                "  ⚠ new_code: skipped — the checkout is shallow (fetch-depth): its history is truncated to within the {:.0}-day window, so there is no pre-window baseline to contrast the working set against. This is the checkout, not the repository — re-run against full history (fetch-depth: 0).",
-                r.threshold
-            ),
             ("new_code", "skipped") => eprintln!(
-                "  ⚠ new_code: skipped — the repository's history is shallower than the {:.0}-day window (a genuinely young repository), so there is no pre-window baseline to contrast the working set against.",
-                r.threshold
+                "  ⚠ new_code: skipped — {}",
+                new_code_skip_reason(r.threshold, shallow_checkout)
             ),
             _ => {}
         }

@@ -579,26 +579,6 @@ fn structural_skip_reason(gate: &str) -> &'static str {
     }
 }
 
-/// The discriminating reason a `[new_code]` gate skipped at runtime. A shallow
-/// checkout (fetch-depth truncated the pre-window history) and a genuinely young
-/// repository both leave the window with no pre-window baseline and read
-/// identically at the window-start query — but they are different causes with
-/// different fixes, so the reason names fetch-depth when the checkout is shallow.
-fn new_code_skip_reason(window_days: u32, shallow_checkout: bool) -> String {
-    if shallow_checkout {
-        format!(
-            "the checkout is shallow (fetch-depth): history is truncated to within the \
-             {window_days}-day window, so there is no pre-window baseline. This is the checkout, \
-             not the repository — re-run against full history (fetch-depth: 0)."
-        )
-    } else {
-        format!(
-            "the repository's history is shallower than the {window_days}-day window (a genuinely \
-             young repository), so there is no pre-window baseline."
-        )
-    }
-}
-
 #[tool_router]
 impl CodeLoreServer {
     // ── repo_overview ─────────────────────────────────────────────────────────
@@ -1051,7 +1031,10 @@ impl CodeLoreServer {
                 } else {
                     new_code_skip = Some(SkippedGate {
                         gate: "new_code",
-                        reason: new_code_skip_reason(nc.window_days, repo.is_shallow()),
+                        reason: crate::new_code_skip_reason(
+                            f64::from(nc.window_days),
+                            repo.is_shallow(),
+                        ),
                     });
                 }
             }
@@ -1580,9 +1563,10 @@ pub fn run_mcp_server(
 mod tests {
     use super::{
         CodeHealthParams, DEFAULT_ROW_CAP, DeltaHealthParams, MAX_ROW_CAP, MEMO_CAPACITY,
-        ResultMemo, map_lib_err, memo_key, new_code_skip_reason, resolve_row_cap,
-        serialize_capped_rows, skipped_check_gates,
+        ResultMemo, map_lib_err, memo_key, resolve_row_cap, serialize_capped_rows,
+        skipped_check_gates,
     };
+    use crate::new_code_skip_reason;
     use codelore_lib::CodeLoreError;
     use codelore_lib::cli_api::quality_gates::Thresholds;
     use serde_json::{Value, json};
@@ -1788,12 +1772,12 @@ mod tests {
         // window without a baseline, but the disclosure must tell them apart:
         // only the shallow case is about the checkout (fetch-depth), and only
         // it should advise re-fetching full history.
-        let shallow = new_code_skip_reason(90, true);
+        let shallow = new_code_skip_reason(90.0, true);
         assert!(
             shallow.contains("fetch-depth") && shallow.contains("shallow"),
             "shallow-checkout reason must name fetch-depth: {shallow}"
         );
-        let young = new_code_skip_reason(90, false);
+        let young = new_code_skip_reason(90.0, false);
         assert!(
             young.contains("young repository") && !young.contains("fetch-depth"),
             "young-repository reason must not blame fetch-depth: {young}"
