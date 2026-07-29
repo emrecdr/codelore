@@ -469,10 +469,26 @@ struct GateSummary {
     violation_count: usize,
     /// Individual gate violations, if any.
     violations: Vec<GateViolation>,
-    /// Configured `[gates]` gates that this tool did NOT evaluate, so its
-    /// verdict is a subset of `codelore check` (which evaluates all of them).
-    /// Empty when nothing is skipped. See [`skipped_check_gates`].
-    skipped_gates: Vec<&'static str>,
+    /// Configured gates that produced no verdict in this response, each with the
+    /// reason — so an empty `violations` list is distinguishable from "did not
+    /// run". Empty when nothing is skipped. See [`SkippedGate`].
+    skipped_gates: Vec<SkippedGate>,
+}
+
+/// One gate `check_gates` produced no verdict for, paired with why. A skip is
+/// either *structural* — a gate this tool never evaluates because its
+/// committed-tree input (the corpus lens, the external-findings sidecar,
+/// degraded-gate handling) is `codelore check`-only — or *runtime*: a
+/// `[new_code]` gate with no pre-window baseline in this checkout. Carrying the
+/// reason beside the name is what lets a caller tell an empty `violations` list
+/// ("all gates passed") apart from "this gate did not run".
+#[derive(Debug, Serialize)]
+struct SkippedGate {
+    /// The gate that produced no verdict.
+    gate: &'static str,
+    /// Why it produced none — a structural limit of this tool, or a runtime
+    /// condition of this repository.
+    reason: String,
 }
 
 /// The `[gates]` gates configured in `thresholds` that `check_gates` does not
@@ -481,7 +497,7 @@ struct GateSummary {
 /// the corpus lens), so the disclosure is (configured gates) − (the set
 /// evaluated here). Returned in a stable declaration order; empty when nothing
 /// is skipped.
-fn skipped_check_gates(thresholds: &Thresholds) -> Vec<&'static str> {
+fn skipped_check_gates(thresholds: &Thresholds) -> Vec<SkippedGate> {
     // Gates this tool evaluates, kept beside the evaluation calls in
     // `check_gates`. A configured `[gates]` gate absent from this set is
     // disclosed as skipped, so a gate added to the config surfaces here until
@@ -539,8 +555,48 @@ fn skipped_check_gates(thresholds: &Thresholds) -> Vec<&'static str> {
     configured
         .into_iter()
         .filter(|(name, set)| *set && !EVALUATED_HERE.contains(name))
-        .map(|(name, _)| name)
+        .map(|(gate, _)| SkippedGate {
+            gate,
+            reason: structural_skip_reason(gate).to_owned(),
+        })
         .collect()
+}
+
+/// Why a configured `[gates]` gate is not evaluated by `check_gates`: its
+/// committed-tree input is `codelore check`-only.
+fn structural_skip_reason(gate: &str) -> &'static str {
+    match gate {
+        "max_findings_in_hot_files" => {
+            "reads the external-findings sidecar, which is `codelore check`-only \
+             (run `codelore ingest-sarif`, then `codelore check`)"
+        }
+        "corpus_percentile_max" | "hotspot_anchored_max" => {
+            "depends on the calibration-corpus lens, which this tool does not carry; \
+             `codelore check` is authoritative"
+        }
+        "fail_on_degraded" => "degraded-gate handling is `codelore check`-only",
+        _ => "evaluated only by `codelore check`, which is authoritative for it",
+    }
+}
+
+/// The discriminating reason a `[new_code]` gate skipped at runtime. A shallow
+/// checkout (fetch-depth truncated the pre-window history) and a genuinely young
+/// repository both leave the window with no pre-window baseline and read
+/// identically at the window-start query — but they are different causes with
+/// different fixes, so the reason names fetch-depth when the checkout is shallow.
+fn new_code_skip_reason(window_days: u32, shallow_checkout: bool) -> String {
+    if shallow_checkout {
+        format!(
+            "the checkout is shallow (fetch-depth): history is truncated to within the \
+             {window_days}-day window, so there is no pre-window baseline. This is the checkout, \
+             not the repository — re-run against full history (fetch-depth: 0)."
+        )
+    } else {
+        format!(
+            "the repository's history is shallower than the {window_days}-day window (a genuinely \
+             young repository), so there is no pre-window baseline."
+        )
+    }
 }
 
 #[tool_router]
@@ -888,10 +944,14 @@ impl CodeLoreServer {
         name = "check_gates",
         description = "Evaluate `.codelore-thresholds.toml` quality gates at HEAD and return a JSON \
             summary with verdict (pass/fail/no_thresholds), violation count, individual violations, \
-            and a `skipped_gates` array naming any configured gate this tool did not evaluate. \
+            and a `skipped_gates` array of `{gate, reason}` for every configured gate that produced \
+            no verdict — so an empty `violations` list is distinguishable from a gate that did not run. \
             This tool evaluates a subset of `codelore check`: the `max_findings_in_hot_files` and \
             `corpus_percentile_max` gates, `--ratchet`, and degraded-gate handling remain check-only, \
             so a config using those can make this verdict diverge — `codelore check` is authoritative. \
+            A configured `[new_code]` gate that finds no pre-window baseline (a young repository, or a \
+            shallow fetch-depth checkout) is reported here too, with a reason that names fetch-depth \
+            when the checkout is shallow. \
             Returns `no_thresholds` verdict when no config file is found. \
             First call on a cold cache triggers history ingest."
     )]
@@ -929,6 +989,12 @@ impl CodeLoreServer {
             };
             let repo = GixRepo::open(&repo_path).map_err(|e| map_lib_err(&e))?;
             let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
+                .map_err(|e| map_lib_err(&e))?;
+            // Same ingest witness as `codelore check`: a real HEAD over an empty
+            // commit store is a truncated checkout on which every gate passes over
+            // no data. An agent must get a hard error, never a spurious green.
+            let head_sha = repo.head_sha().map_err(|e| map_lib_err(&e))?;
+            db.ensure_ingest_witnessed(&head_sha)
                 .map_err(|e| map_lib_err(&e))?;
 
             let mut violations: Vec<GateViolation> = Vec::new();
@@ -969,9 +1035,11 @@ impl CodeLoreServer {
             // [new_code] two-band period gate — mirrors `codelore check`: reuses
             // the code-health rows and the effort-exposure window-start
             // machinery, evaluating the born + touched bands over the committed
-            // HEAD. A run whose history is shallower than the window produces no
-            // new_code violations here; the authoritative `codelore check`
-            // discloses that skip.
+            // HEAD. A run whose history is shallower than the window is disclosed
+            // as a runtime skip in `skipped_gates` below, with a reason that names
+            // fetch-depth when the checkout is shallow — so an empty violations
+            // list is never mistaken for "the new-code gate passed".
+            let mut new_code_skip: Option<SkippedGate> = None;
             if let Some(nc) = &thresholds.new_code {
                 use codelore_lib::cli_api::analyses::new_code;
                 let scope = new_code::run_new_code_scope(&db, &repo, &opts, nc.window_days, &ch)
@@ -980,6 +1048,11 @@ impl CodeLoreServer {
                     violations.extend(
                         codelore_lib::cli_api::quality_gates::evaluate_new_code_rows(nc, &scope),
                     );
+                } else {
+                    new_code_skip = Some(SkippedGate {
+                        gate: "new_code",
+                        reason: new_code_skip_reason(nc.window_days, repo.is_shallow()),
+                    });
                 }
             }
 
@@ -1008,11 +1081,13 @@ impl CodeLoreServer {
             } else {
                 "fail"
             };
+            let mut skipped_gates = skipped_check_gates(&thresholds);
+            skipped_gates.extend(new_code_skip);
             let summary = GateSummary {
                 verdict: verdict.into(),
                 violation_count: violations.len(),
                 violations,
-                skipped_gates: skipped_check_gates(&thresholds),
+                skipped_gates,
             };
             serde_json::to_string(&summary).map_err(internal)
         })
@@ -1505,8 +1580,8 @@ pub fn run_mcp_server(
 mod tests {
     use super::{
         CodeHealthParams, DEFAULT_ROW_CAP, DeltaHealthParams, MAX_ROW_CAP, MEMO_CAPACITY,
-        ResultMemo, map_lib_err, memo_key, resolve_row_cap, serialize_capped_rows,
-        skipped_check_gates,
+        ResultMemo, map_lib_err, memo_key, new_code_skip_reason, resolve_row_cap,
+        serialize_capped_rows, skipped_check_gates,
     };
     use codelore_lib::CodeLoreError;
     use codelore_lib::cli_api::quality_gates::Thresholds;
@@ -1662,13 +1737,20 @@ mod tests {
             "[gates]\ncode_health_min = 50.0\nmax_findings_in_hot_files = 5\ncorpus_percentile_max = 0.9\n",
         )
         .expect("parse thresholds");
+        let skipped = skipped_check_gates(&thresholds);
         assert_eq!(
-            skipped_check_gates(&thresholds),
+            skipped.iter().map(|s| s.gate).collect::<Vec<_>>(),
             vec![
                 "max_findings_in_hot_files",
                 "corpus_percentile_max",
                 "fail_on_degraded"
             ],
+        );
+        // Every skip carries a non-empty reason, so an empty violation list is
+        // distinguishable from "did not run".
+        assert!(
+            skipped.iter().all(|s| !s.reason.is_empty()),
+            "each skipped gate must disclose a reason"
         );
     }
 
@@ -1693,7 +1775,29 @@ mod tests {
         // pass here is never mistaken for a full `codelore check` pass.
         let thresholds =
             Thresholds::from_text("[gates]\ncode_health_min = 50.0\n").expect("parse thresholds");
-        assert_eq!(skipped_check_gates(&thresholds), vec!["fail_on_degraded"]);
+        let skipped = skipped_check_gates(&thresholds);
+        assert_eq!(
+            skipped.iter().map(|s| s.gate).collect::<Vec<_>>(),
+            vec!["fail_on_degraded"]
+        );
+    }
+
+    #[test]
+    fn new_code_skip_reason_names_fetch_depth_only_when_shallow() {
+        // A shallow checkout and a genuinely young repository both leave the
+        // window without a baseline, but the disclosure must tell them apart:
+        // only the shallow case is about the checkout (fetch-depth), and only
+        // it should advise re-fetching full history.
+        let shallow = new_code_skip_reason(90, true);
+        assert!(
+            shallow.contains("fetch-depth") && shallow.contains("shallow"),
+            "shallow-checkout reason must name fetch-depth: {shallow}"
+        );
+        let young = new_code_skip_reason(90, false);
+        assert!(
+            young.contains("young repository") && !young.contains("fetch-depth"),
+            "young-repository reason must not blame fetch-depth: {young}"
+        );
     }
 
     #[test]

@@ -101,6 +101,28 @@ pub(crate) fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
     let head_sha = repo.head_sha().context("get HEAD sha")?;
     let db =
         FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &cache_root).context("ingest")?;
+    // Witness the ingest before any gate runs: a real HEAD over an empty commit
+    // store is the truncated-checkout signature (a shallow merge-tip fetch under
+    // the default merge filter ingests zero history), on which every gate would
+    // pass over no data. Turn that silent green into a hard, distinct error.
+    db.ensure_ingest_witnessed(&head_sha)?;
+    // Defence in depth: a shallow checkout that DID ingest a commit or two still
+    // carries only partial history, which quietly weakens every behavioral gate.
+    // Warn loudly and name the cause; SARIF mode keeps stdout a clean document.
+    // The same signal discriminates the `new_code` skip disclosure below (a
+    // truncated checkout reads identically to a young repository at that query).
+    let shallow_checkout = repo.is_shallow();
+    if shallow_checkout {
+        let warning = "⚠ codelore check: shallow checkout detected (.git/shallow present) — \
+             history is truncated by fetch-depth, so the behavioral gates (hotspots, \
+             effort-exposure, new-code) evaluate only partial history. Re-run against full \
+             history (fetch-depth: 0) for an authoritative verdict.";
+        if matches!(args.format, CheckFormat::Sarif) {
+            eprintln!("{warning}");
+        } else {
+            println!("{warning}");
+        }
+    }
     let ts = now_utc_ts();
 
     // Open the external-findings sidecar without creating it, only when it
@@ -131,7 +153,7 @@ pub(crate) fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
     // branches so both paths surface them; stderr keeps stdout a clean SARIF
     // document in --format sarif; suppressed under --quiet.
     if !args.quiet {
-        emit_gate_notices(&ledger_records);
+        emit_gate_notices(&ledger_records, shallow_checkout);
     }
     // One-per-run hint when the corpus lens is inactive — the check path always
     // computes code-health rows, which carry no corpus_percentile without an
@@ -318,6 +340,7 @@ pub(crate) fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
 /// beside the rest of `run_check_cmd`'s reporting.
 fn emit_gate_notices(
     ledger_records: &[codelore_lib::cli_api::quality_gates::ledger::GateRunRecord],
+    shallow_checkout: bool,
 ) {
     for r in ledger_records {
         match (r.gate.as_str(), r.verdict.as_str()) {
@@ -333,8 +356,12 @@ fn emit_gate_notices(
             ("code_health_min", "degraded") => eprintln!(
                 "  ⚠ code_health_min: degraded — health scan returned no rows on a non-empty repo"
             ),
+            ("new_code", "skipped") if shallow_checkout => eprintln!(
+                "  ⚠ new_code: skipped — the checkout is shallow (fetch-depth): its history is truncated to within the {:.0}-day window, so there is no pre-window baseline to contrast the working set against. This is the checkout, not the repository — re-run against full history (fetch-depth: 0).",
+                r.threshold
+            ),
             ("new_code", "skipped") => eprintln!(
-                "  ⚠ new_code: skipped — repository history is shallower than the {:.0}-day window (no pre-window baseline to contrast the working set against)",
+                "  ⚠ new_code: skipped — the repository's history is shallower than the {:.0}-day window (a genuinely young repository), so there is no pre-window baseline to contrast the working set against.",
                 r.threshold
             ),
             _ => {}
@@ -435,6 +462,7 @@ fn eval_hotspot_gates(
 fn eval_code_health_gate(
     thresholds: &codelore_lib::cli_api::quality_gates::Thresholds,
     db: &codelore_lib::cli_api::facts::FactsDb,
+    repo: &impl codelore_lib::cli_api::repo::Repo,
     opts: &codelore_lib::cli_api::Options,
     ts: &str,
     head_sha: &str,
@@ -457,14 +485,15 @@ fn eval_code_health_gate(
         return Ok(((Vec::new(), Vec::new()), code_health));
     };
     let ch_violations = evaluate_code_health_gate(thresholds, &code_health);
-    // Degraded: empty result when the repo has scorable files.
-    let degraded = code_health.is_empty() && {
-        db.query_row("SELECT COUNT(*) FROM complexity_metrics", [], |r| {
-            r.get::<_, i64>(0)
-        })
-        .unwrap_or(0)
-            > 0
-    };
+    // Degraded: the health scan returned nothing, yet the repository actually
+    // carries analyzable source. The witness reads the HEAD tree directly rather
+    // than counting `complexity_metrics`, which derives from the same
+    // changes⋈commits join as the (empty) health set and so empties in lockstep
+    // — it cannot witness an ingest that went blind. A source-less tree (docs or
+    // config only) legitimately yields no rows and stays a vacuous pass. The `&&`
+    // short-circuit keeps the tree walk off every healthy run.
+    let degraded = code_health.is_empty()
+        && codelore_lib::cli_api::quality_gates::head_has_scorable_source(repo, opts);
     let worst = code_health
         .iter()
         .map(|r| r.score)
@@ -576,7 +605,8 @@ fn evaluate_all_gates(
     violations.extend(hs_v);
     recs.extend(hs_r);
 
-    let ((ch_v, ch_r), code_health) = eval_code_health_gate(thresholds, db, opts, ts, head_sha)?;
+    let ((ch_v, ch_r), code_health) =
+        eval_code_health_gate(thresholds, db, repo, opts, ts, head_sha)?;
     violations.extend(ch_v);
     recs.extend(ch_r);
 

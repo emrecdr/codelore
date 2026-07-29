@@ -90,6 +90,23 @@ pub trait Repo: Send + Sync {
         false
     }
 
+    /// Whether the repository is a shallow clone — history truncated at a depth
+    /// boundary, with a non-empty `.git/shallow` grafts list, so commits beyond
+    /// the boundary (and the parents of the boundary commits) are absent.
+    ///
+    /// The gate paths consult this to warn that a verdict was computed over
+    /// partial history: a shallow `fetch-depth` checkout can leave the fact
+    /// store empty, or the new-code window without a pre-window baseline, and
+    /// the operator otherwise has no signal that the *checkout* — not the
+    /// repository — is the cause.
+    ///
+    /// Default impl returns `false` so backends without a cheap check can opt
+    /// out, mirroring [`is_worktree_dirty`](Self::is_worktree_dirty): a missed
+    /// warning is better than a hard failure on a detection edge case.
+    fn is_shallow(&self) -> bool {
+        false
+    }
+
     /// Read the blob bytes at revision `rev` for `path` (POSIX-
     /// separated, repo-relative). `rev` is any git revision the backend
     /// can resolve — a commit SHA, `"HEAD"`, a tag, etc. Returns
