@@ -104,8 +104,9 @@ const SQL: &str = "
             ) AS is_bot_for_entity
         FROM per_file_author pfa
         LEFT JOIN (
-            -- F31: dedupe by canonical (raw_email is the PK; canonical
-            -- is N:1 for multi-email authors). Without this the join
+            -- Dedupe by canonical (author_aliases is keyed on
+            -- (raw_name, raw_email); canonical is N:1 for authors with
+            -- several name+email identities). Without this the join
             -- multiplied per_file_author rows by N, inflating COUNT and
             -- SUM aggregates downstream.
             SELECT canonical, BOOL_OR(is_bot) AS is_bot

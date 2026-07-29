@@ -94,9 +94,9 @@ WITH
 anchor AS (
     SELECT MAX(date) AS max_d, MIN(date) AS min_d FROM commits
 ),
--- One row per canonical author (a canonical may own several raw emails in
--- author_aliases; a direct JOIN would multiply commit counts by that alias
--- count). Bot canonicals are dropped here so they never enter tenure
+-- One row per canonical author (a canonical may own several name+email
+-- identities in author_aliases; a direct JOIN would multiply commit counts
+-- by that alias count). Bot canonicals are dropped here so they never enter tenure
 -- buckets, the core set, or the __summary__ percentages.
 canon_authors AS (
     SELECT canonical FROM author_aliases

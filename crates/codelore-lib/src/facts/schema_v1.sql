@@ -111,10 +111,19 @@ CREATE TABLE IF NOT EXISTS complexity_metrics (
     PRIMARY KEY (path, name, rev)
 );
 
+-- Keyed on (raw_name, raw_email), not raw_email alone: mailmap resolution
+-- matches on the Name+Email pair, so one commit email can resolve to
+-- different canonicals depending on the name it ships with (the 4-token
+-- `.mailmap` rule form). An email-only key collapses those distinct
+-- identities to a first-wins single row, silently dropping the loser's
+-- commits from every canonical-set consumer. is_bot rides the pair too, so
+-- a human and a bot sharing one email classify independently.
 CREATE TABLE IF NOT EXISTS author_aliases (
-    raw_email TEXT PRIMARY KEY,
+    raw_name TEXT NOT NULL,
+    raw_email TEXT NOT NULL,
     canonical TEXT NOT NULL,
-    is_bot BOOLEAN NOT NULL DEFAULT FALSE
+    is_bot BOOLEAN NOT NULL DEFAULT FALSE,
+    PRIMARY KEY (raw_name, raw_email)
 );
 
 CREATE TABLE IF NOT EXISTS provenance (
