@@ -37,7 +37,8 @@ use codelore_lib::cli_api::{
     facts::FactsDb,
     quality_gates::{
         GateViolation, Gates, Thresholds, evaluate_clone_gate, evaluate_code_health_gate,
-        evaluate_full_tree, evaluate_gate_thresholds, resolve_defect_calibration,
+        evaluate_corpus_percentile_rows, evaluate_full_tree, evaluate_gate_thresholds,
+        resolve_defect_calibration,
     },
     repo::{GixRepo, Repo as _},
 };
@@ -511,6 +512,12 @@ fn skipped_check_gates(thresholds: &Thresholds) -> Vec<SkippedGate> {
         "max_propagation_cost",
         "max_red_effort_pct",
         "code_familiarity_min",
+        // Reuses the code-health rows already computed for `code_health_min` —
+        // the corpus lens fills `corpus_percentile` on those rows whenever a
+        // calibration artifact is active (the embedded world artifact by
+        // default), so this tool needs no extra data to evaluate it for real.
+        // See the runtime skip in `check_gates` for the no-artifact-active case.
+        "corpus_percentile_max",
     ];
     // Exhaustive destructuring: adding a field to `Gates` fails to compile
     // here until the new gate is classified as evaluated or skipped.
@@ -570,9 +577,12 @@ fn structural_skip_reason(gate: &str) -> &'static str {
             "reads the external-findings sidecar, which is `codelore check`-only \
              (run `codelore ingest-sarif`, then `codelore check`)"
         }
-        "corpus_percentile_max" | "hotspot_anchored_max" => {
-            "depends on the calibration-corpus lens, which this tool does not carry; \
-             `codelore check` is authoritative"
+        // `corpus_percentile_max` is NOT here — this tool evaluates it for
+        // real (see `EVALUATED_HERE` above); its own runtime skip (no
+        // calibration artifact active) is reported directly from `check_gates`.
+        "hotspot_anchored_max" => {
+            "depends on the calibration-corpus lens, which this tool does not carry \
+             (it uses the plain, unanchored hotspot scan); `codelore check` is authoritative"
         }
         "fail_on_degraded" => "degraded-gate handling is `codelore check`-only",
         _ => "evaluated only by `codelore check`, which is authoritative for it",
@@ -927,7 +937,7 @@ impl CodeLoreServer {
             and a `skipped_gates` array of `{gate, reason}` for every configured gate that produced \
             no verdict — so an empty `violations` list is distinguishable from a gate that did not run. \
             This tool evaluates a subset of `codelore check`: the `max_findings_in_hot_files` and \
-            `corpus_percentile_max` gates, `--ratchet`, and degraded-gate handling remain check-only, \
+            `hotspot_anchored_max` gates, `--ratchet`, and degraded-gate handling remain check-only, \
             so a config using those can make this verdict diverge — `codelore check` is authoritative. \
             A configured `[new_code]` gate that finds no pre-window baseline (a young repository, or a \
             shallow fetch-depth checkout) is reported here too, with a reason that names fetch-depth \
@@ -987,6 +997,28 @@ impl CodeLoreServer {
             let ch = code_health::run_code_health(&db, &opts).map_err(|e| map_lib_err(&e))?;
             violations.extend(evaluate_code_health_gate(&thresholds, &ch));
 
+            // corpus_percentile_max gate — reuses `ch`: `run_code_health` always
+            // runs the corpus lens (a no-op without an active artifact), so
+            // `corpus_percentile` is already populated on these rows whenever a
+            // calibration artifact is active (the embedded world artifact by
+            // default, or `--calibration`). Mirrors `codelore check`'s own
+            // `evaluate_corpus_percentile_rows` call and its skip convention
+            // (`check.rs`): a SKIP, not a pass, when no artifact is active at all.
+            let mut corpus_skip: Option<SkippedGate> = None;
+            if let Some(max) = thresholds.gates.corpus_percentile_max {
+                let has_calibration = ch.iter().any(|r| r.corpus_percentile.is_some());
+                if has_calibration {
+                    violations.extend(evaluate_corpus_percentile_rows(max, &ch));
+                } else {
+                    corpus_skip = Some(SkippedGate {
+                        gate: "corpus_percentile_max",
+                        reason: "no corpus percentile data (no calibration artifact active, \
+                                 or no analyzed file resolved a percentile)"
+                            .into(),
+                    });
+                }
+            }
+
             // clone gate
             violations.extend(evaluate_clone_gate(&thresholds, &db).map_err(|e| map_lib_err(&e))?);
 
@@ -1040,12 +1072,11 @@ impl CodeLoreServer {
             }
 
             // architecture + familiarity gates. This tool evaluates a subset
-            // of `codelore check`: the `max_findings_in_hot_files`,
-            // `corpus_percentile_max`, and `hotspot_anchored_max` gates,
-            // degraded-gate semantics, and `--ratchet` remain check-only —
-            // `skipped_gates` (below) names any that this config configured, so
-            // a client sees where this verdict can diverge from a CI run.
-            // `codelore check` is authoritative.
+            // of `codelore check`: the `max_findings_in_hot_files` and
+            // `hotspot_anchored_max` gates, degraded-gate semantics, and
+            // `--ratchet` remain check-only — `skipped_gates` (below) names any
+            // that this config configured, so a client sees where this verdict
+            // can diverge from a CI run. `codelore check` is authoritative.
             violations.extend(
                 codelore_lib::cli_api::quality_gates::evaluate_architecture_gate(&thresholds, &db)
                     .map_err(|e| map_lib_err(&e))?,
@@ -1066,6 +1097,7 @@ impl CodeLoreServer {
             };
             let mut skipped_gates = skipped_check_gates(&thresholds);
             skipped_gates.extend(new_code_skip);
+            skipped_gates.extend(corpus_skip);
             let summary = GateSummary {
                 verdict: verdict.into(),
                 violation_count: violations.len(),
@@ -1717,16 +1749,20 @@ mod tests {
         // A config mixing an evaluated gate with the two check-only gates:
         // the check-only ones are disclosed as skipped, and so is the
         // default-on degraded handling (check-only, active unless disabled).
+        // `corpus_percentile_max` is deliberately NOT one of the check-only
+        // examples here — this tool evaluates it for real (see
+        // `EVALUATED_HERE`); `hotspot_anchored_max` remains check-only because
+        // this tool's hotspot scan is the plain, unanchored variant.
         let thresholds = Thresholds::from_text(
-            "[gates]\ncode_health_min = 50.0\nmax_findings_in_hot_files = 5\ncorpus_percentile_max = 0.9\n",
+            "[gates]\ncode_health_min = 50.0\nmax_findings_in_hot_files = 5\nhotspot_anchored_max = 9.0\n",
         )
         .expect("parse thresholds");
         let skipped = skipped_check_gates(&thresholds);
         assert_eq!(
             skipped.iter().map(|s| s.gate).collect::<Vec<_>>(),
             vec![
+                "hotspot_anchored_max",
                 "max_findings_in_hot_files",
-                "corpus_percentile_max",
                 "fail_on_degraded"
             ],
         );
