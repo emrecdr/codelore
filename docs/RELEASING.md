@@ -184,7 +184,7 @@ Use SemVer suffix conventions on the tag (`v0.2.0-alpha.1`, `v0.2.0-beta.2`, `v0
 
 ### Publishing to crates.io
 
-The `crates-publish` job in `release.yml` runs after `plan`, `build`, and `release` have all succeeded, and publishes the three workspace crates to crates.io in dependency order — `codelore-rca`, then `codelore-lib`, then `codelore` — leaning on `cargo publish`'s own wait for each crate to propagate through the index before the next one starts. The publish step is guarded on the `CRATES_IO_TOKEN` repository secret; that guard sits on the step rather than the job, because GitHub Actions doesn't expose the `secrets` context to a job-level `if`. Without the secret configured, the job still runs but the publish step is skipped, so the GitHub Release and Homebrew tap publish normally regardless.
+The `crates-publish` job (see the tag-push job list above for the order and the secret gate) runs only after `plan`, `build`, and `release` have all succeeded, leaning on `cargo publish`'s own wait for each crate to propagate through the index before the next one starts. The `CRATES_IO_TOKEN` guard sits on the publish step rather than the job because GitHub Actions doesn't expose the `secrets` context to a job-level `if`.
 
 If the job fails partway through, finish the remaining crates by hand, in the same order:
 
@@ -194,7 +194,7 @@ cargo publish -p codelore-lib
 cargo publish -p codelore
 ```
 
-`cargo publish` errors (does not silently skip) on a version that's already live on the index, so re-triggering the `crates-publish` job itself does not recover from a partial failure — the step re-runs `cargo publish -p codelore-rca` first under the workflow's default `bash -e` shell (no explicit `shell: bash`, so no `pipefail`), that call errors on the crate that already succeeded, and `-e` halts the script before `codelore-lib` or `codelore` are ever attempted. Running the remaining commands by hand, in order, and skipping whichever crate(s) already succeeded, is the only way to finish a partial publish.
+`cargo publish` hard-errors (does not skip) on a version that's already live, and the step's `bash -e` shell exits at that first failing command — so re-triggering the `crates-publish` job after a partial failure never reaches the later crates. Finishing by hand with the commands above, skipping whichever crate(s) already succeeded, is the only recovery.
 
 ### Yanking a release
 

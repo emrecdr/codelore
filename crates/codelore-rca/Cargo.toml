@@ -8,6 +8,9 @@ rust-version.workspace = true
 license = "MPL-2.0 AND GPL-3.0-only"
 repository.workspace = true
 description = "Vendored fork of Mozilla rust-code-analysis for CodeLore"
+# The fork-provenance doc, not the project README — the crates.io page for
+# this crate should explain what is vendored and why.
+readme = "UPSTREAM.md"
 keywords.workspace = true
 categories.workspace = true
 

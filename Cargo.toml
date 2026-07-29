@@ -8,6 +8,7 @@ edition = "2024"
 rust-version = "1.96"
 license = "GPL-3.0-only"
 repository = "https://github.com/emrecdr/codelore"
+readme = "README.md"
 # crates.io discovery — surfaces in search results + on the package page.
 # Mirrors the GitHub topic tags configured on the repository (see README
 # badges + docs/CONTRIBUTING for the same tag list), except one keyword is

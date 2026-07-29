@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "CodeLore — Behavioral Code Analyzer CLI"
-readme = "../../README.md"
+readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
