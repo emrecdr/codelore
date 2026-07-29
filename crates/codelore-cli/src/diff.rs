@@ -501,19 +501,32 @@ fn list_pr_files(
         .collect())
 }
 
-/// Fingerprint of the `DiffArgs` fields that shape a base-rev `RevAnalyses`.
-/// Only `min_revs` and `exclude` flow into the `Options` that
-/// `analyze_at_rev` builds; everything else comes from `Options::default()`.
-/// The base tree's own content is pinned by the cached `sha`, so it needs no
-/// representation here. Any new `args.*` field folded into `analyze_at_rev`'s
-/// `Options` must be added here too.
+/// Fingerprint of the `DiffArgs` fields that shape a base-rev `RevAnalyses`,
+/// plus the binary version, cache epoch, and fact-schema version. Only
+/// `min_revs` and `exclude` flow into the `Options` that `analyze_at_rev`
+/// builds; everything else comes from `Options::default()`. The base tree's
+/// own content is pinned by the cached `sha`, so it needs no representation
+/// here. Any new `args.*` field folded into `analyze_at_rev`'s `Options` must
+/// be added here too.
+///
+/// The version/epoch/schema trio mirrors what the main fact-store cache key
+/// hashes (`cache.rs::cache_key`) — a `--base-cache` file is itself a cache,
+/// and without these components a base written by an older binary, an older
+/// `CACHE_EPOCH`, or an older fact schema would be silently reused by a
+/// newer one that no longer agrees on what the cached values mean.
 fn base_cache_opts_digest(min_revs: u32, exclude: &[String]) -> String {
     let mut exclude = exclude.to_vec();
     exclude.sort();
     // Separate patterns with NUL, which cannot appear in a path glob or CLI
     // argument, so a pattern that itself contains the separator (e.g. a brace
     // glob `src/{gen,vendor}/**`) can never collide with a different set.
-    format!("min_revs={min_revs}|exclude=[{}]", exclude.join("\0"))
+    format!(
+        "min_revs={min_revs}|exclude=[{}]|version={}|cache_epoch={}|schema={}",
+        exclude.join("\0"),
+        env!("CARGO_PKG_VERSION"),
+        codelore_lib::cli_api::cache::CACHE_EPOCH,
+        codelore_lib::cli_api::facts::schema::CURRENT_SCHEMA_VERSION,
+    )
 }
 
 /// A base cache is reusable only when it was built at the same base SHA AND
@@ -1081,6 +1094,29 @@ mod prune_tests {
         assert_eq!(
             base_cache_opts_digest(2, &["a".to_string(), "b".to_string()]),
             base_cache_opts_digest(2, &["b".to_string(), "a".to_string()])
+        );
+    }
+
+    /// The consts folded in below are fixed at compile time, so there is no
+    /// before/after run to diff against within a single test binary (unlike
+    /// `min_revs`/`exclude`, which vary per call). Instead assert the digest
+    /// contains each component — proving they are actually folded in, which
+    /// is what makes a base cache written by an older binary/epoch/schema
+    /// distinguishable from one written by this one.
+    #[test]
+    fn base_cache_opts_digest_incorporates_version_epoch_and_schema() {
+        let digest = base_cache_opts_digest(2, &[]);
+        assert!(
+            digest.contains(env!("CARGO_PKG_VERSION")),
+            "digest must incorporate the binary version: {digest}"
+        );
+        assert!(
+            digest.contains(codelore_lib::cli_api::cache::CACHE_EPOCH),
+            "digest must incorporate the cache epoch: {digest}"
+        );
+        assert!(
+            digest.contains(codelore_lib::cli_api::facts::schema::CURRENT_SCHEMA_VERSION),
+            "digest must incorporate the fact-schema version: {digest}"
         );
     }
 
