@@ -381,7 +381,7 @@ PY
   ok "flipped CHANGELOG [Unreleased] → [${VERSION}] - ${TODAY}"
 
   # Sync the lockfile so cargo update doesn't churn it later.
-  cargo update -p codelore-lib -p codelore-cli -p codelore-rca --quiet
+  cargo update -p codelore-lib -p codelore -p codelore-rca --quiet
   ok "Cargo.lock synced to workspace ${VERSION}"
 else
   log "[dry-run] would: bump Cargo.toml + flip CHANGELOG + cargo update"
@@ -390,7 +390,7 @@ fi
 # Sanity build (catches CHANGELOG flip / Cargo.toml typos before commit)
 log "running local gate (matching CI's exact invocation)..."
 # v0.1.3 cut failed because the script's narrower local gate
-# (`cargo build --release -p codelore-cli`) didn't run clippy with the
+# (`cargo build --release -p codelore`) didn't run clippy with the
 # same flags CI uses, so a `clippy::useless_conversion` lint surfaced
 # in code that local was happy with. Now we run the EXACT CI clippy
 # command so the local gate is at least as strict as CI's. Tests stay
@@ -398,7 +398,7 @@ log "running local gate (matching CI's exact invocation)..."
 # ran during the dev cycle that landed [Unreleased]).
 run cargo clippy --workspace --all-targets --all-features -- -D warnings
 run cargo fmt --all --check
-run cargo build --release --quiet -p codelore-cli
+run cargo build --release --quiet -p codelore
 if [[ "${DRY_RUN}" != "true" ]]; then
   ACTUAL_VERSION="$(./target/release/codelore --version | awk '{print $2}')"
   if [[ "${ACTUAL_VERSION}" != "${VERSION}" ]]; then

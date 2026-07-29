@@ -282,11 +282,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           # Shares `dogfood`'s cache slot: both are `--release -p
-          # codelore-cli` builds, just with a different feature set.
+          # codelore` builds, just with a different feature set.
           # cargo layers the non-spa artifacts onto the same target dir.
           shared-key: release-dogfood
       - name: Build release codelore
-        run: cargo build --release -p codelore-cli
+        run: cargo build --release -p codelore
       - name: Quality gate
         run: ./target/release/codelore check --repo .
 
@@ -329,7 +329,7 @@ jobs:
           # artifacts under one key would thrash both.
           shared-key: release-dogfood
       - name: Build release codelore
-        run: cargo build --release -p codelore-cli --features spa
+        run: cargo build --release -p codelore --features spa
       - name: Analyze hotspots, code-health, knowledge-islands (GHA annotations)
         # `--format gha` surfaces hotspots as inline annotations on the
         # PR diff via the workflow-command lines printed to stdout.

@@ -59,7 +59,7 @@ COPY --from=planner /src/recipe.json recipe.json
 # dashboard out of the box.
 RUN cargo chef cook --release --features spa --recipe-path recipe.json
 COPY . .
-RUN cargo build --release --features spa -p codelore-cli && \
+RUN cargo build --release --features spa -p codelore && \
     strip target/release/codelore
 
 #─── runtime stage ──────────────────────────────────────────────────────────

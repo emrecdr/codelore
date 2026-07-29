@@ -170,6 +170,7 @@ Once accepted, three workflows fire in parallel on `vX.Y.Z`:
    - `build` — matrix of 5 targets (aarch64-darwin, x86_64-darwin, x86_64-linux-gnu, aarch64-linux-gnu, x86_64-windows-msvc), each running `cargo build --release --locked --target $TARGET` and packaging the artifact into a versioned tarball/zip (`actions/attest-build-provenance` attaches SLSA L3 attestation here)
    - `release` — downloads all 5 build artifacts and publishes the GitHub Release via `softprops/action-gh-release@v3`, with `generate_release_notes: true` pulling the CHANGELOG section automatically
    - `homebrew-publish` — downloads the same build artifacts (bit-identical to what end-users `brew install`), computes SHA256 of each, renders `Formula/codelore.rb`, checks out `emrecdr/homebrew-codelore` via the `HOMEBREW_TAP_DEPLOY_KEY` SSH deploy key, and pushes the regenerated formula if it changed
+   - `crates-publish` — publishes `codelore-rca` → `codelore-lib` → `codelore` to crates.io in that dependency order; skipped (the publish step, not the job) unless the `CRATES_IO_TOKEN` repository secret is configured, so forks and unconfigured checkouts still get a green release
 
 2. **`.github/workflows/container.yml`** publishes a distroless container image to `ghcr.io/emrecdr/codelore:vX.Y.Z` (and `:latest` for non-pre-release tags).
 
@@ -180,6 +181,20 @@ Once accepted, three workflows fire in parallel on `vX.Y.Z`:
 ### Pre-release vs stable
 
 Use SemVer suffix conventions on the tag (`v0.2.0-alpha.1`, `v0.2.0-beta.2`, `v0.2.0-rc.1`). `softprops/action-gh-release@v3` does NOT automatically mark these as pre-release — if you want the GitHub Release flagged as "Pre-release", either add `prerelease: true` to the `release` step temporarily for that tag, or edit the Release on the GitHub UI after publish. The Homebrew tap formula is unconditionally overwritten on every tag push, so a pre-release tag will move the tap to the pre-release version — if you want the tap to stay on the last stable, either skip the homebrew-publish job for pre-release tags (add an `if: !contains(needs.plan.outputs.tag, '-')` guard) or roll back the formula manually.
+
+### Publishing to crates.io
+
+The `crates-publish` job (see the tag-push job list above for the order and the secret gate) runs only after `plan`, `build`, and `release` have all succeeded, leaning on `cargo publish`'s own wait for each crate to propagate through the index before the next one starts. The `CRATES_IO_TOKEN` guard sits on the publish step rather than the job because GitHub Actions doesn't expose the `secrets` context to a job-level `if`.
+
+If the job fails partway through, finish the remaining crates by hand, in the same order:
+
+```bash
+cargo publish -p codelore-rca   # hard error if this version is already published — expected, skip to the next line
+cargo publish -p codelore-lib
+cargo publish -p codelore
+```
+
+`cargo publish` hard-errors (does not skip) on a version that's already live, and the step's `bash -e` shell exits at that first failing command — so re-triggering the `crates-publish` job after a partial failure never reaches the later crates. Finishing by hand with the commands above, skipping whichever crate(s) already succeeded, is the only recovery.
 
 ### Yanking a release
 

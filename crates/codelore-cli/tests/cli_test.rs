@@ -4072,7 +4072,7 @@ mod llm_flag_scope {
 ///
 /// ```text
 /// CODELORE_LLM_MODEL=<model from `ollama list`> \
-///   cargo test -p codelore-cli --test cli_test -- --ignored explain_file_llm_live
+///   cargo test -p codelore --test cli_test -- --ignored explain_file_llm_live
 /// ```
 ///
 /// Ignored by default: CI performs no live network calls, and the assertion

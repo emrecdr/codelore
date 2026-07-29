@@ -834,7 +834,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "codelore-cli"
+name = "codelore"
 version = "0.24.0"
 dependencies = [
  "anyhow",
