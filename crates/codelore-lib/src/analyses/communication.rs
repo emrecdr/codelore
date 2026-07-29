@@ -62,20 +62,22 @@ fn build_communication_sql(code_maat_compat: bool) -> String {
         // Float with two-decimal CSV formatting.
         "100.0 * p.shared / NULLIF((ta.commits + tb.commits) / 2.0, 0)"
     };
+    let human_aliases = crate::analyses::query::HUMAN_ALIASES_CTE;
     format!(
         "
-    WITH canon_authors AS (
-        SELECT canonical FROM author_aliases
-        GROUP BY canonical
-        HAVING NOT BOOL_OR(is_bot)
-    ),
+    WITH {human_aliases},
     author_files AS (
+        -- Pair-granular: joins on the exact (raw_name, raw_email) that
+        -- made the commit, so a human sharing a canonical with a bot keeps
+        -- their own file touches counted while the bot pair's are dropped
+        -- row-wise.
         SELECT DISTINCT
             changes.path,
             commits.canonical_author AS author
         FROM commits
         INNER JOIN changes ON changes.rev = commits.rev
-        INNER JOIN canon_authors a ON a.canonical = commits.canonical_author
+        INNER JOIN human_aliases ha
+            ON ha.raw_name = commits.author_name AND ha.raw_email = commits.author_email
     ),
     pairs AS (
         SELECT
@@ -102,7 +104,8 @@ fn build_communication_sql(code_maat_compat: bool) -> String {
             -- skips DuckDB's distinct-tracking overhead.
             COUNT(rev) AS commits
         FROM commits
-        INNER JOIN canon_authors a ON a.canonical = commits.canonical_author
+        INNER JOIN human_aliases ha
+            ON ha.raw_name = commits.author_name AND ha.raw_email = commits.author_email
         GROUP BY canonical_author
     )
     SELECT

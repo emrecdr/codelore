@@ -30,7 +30,11 @@ use crate::Options;
 /// canonical-set consumer (knowledge shares, familiarity, bus factor). A
 /// stale hit would serve those collapsed rows, so the epoch bump forces the
 /// fact store to be rebuilt with the pair-keyed table.
-const CACHE_EPOCH: &str = "schema_v17";
+///
+/// Public so other cache-like artifacts (e.g. `codelore diff`'s
+/// `--base-cache`) can fold this epoch into their own freshness keys instead
+/// of duplicating the literal — see `codelore-cli/src/diff.rs::base_cache_opts_digest`.
+pub const CACHE_EPOCH: &str = "schema_v17";
 
 /// Compute a 32-byte SHA-256 cache key from:
 ///   `canonical_repo_path || NUL || head_sha || NUL || CARGO_PKG_VERSION || NUL`

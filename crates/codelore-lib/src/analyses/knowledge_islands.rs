@@ -217,6 +217,11 @@ fn per_path_author_cte(restrict_to: &str) -> String {
         -- renovate, etc.) don't have knowledge to lose — flagging a
         -- dependabot-dominated lockfile as a 'knowledge island' is
         -- exactly the false positive that destroys signal credibility.
+        -- Pair-granular: joins on the exact (raw_name, raw_email) that
+        -- made the commit, so a human sharing a canonical with a bot
+        -- (a --team-map fold, a name/email pattern hit, or the raw-email
+        -- canonical fallback) keeps their own commits' LoC counted while
+        -- the bot pair's LoC is dropped row-wise.
         SELECT
             changes.path,
             commits.canonical_author AS author,
@@ -224,18 +229,10 @@ fn per_path_author_cte(restrict_to: &str) -> String {
         FROM changes
         INNER JOIN commits ON changes.rev = commits.rev
         INNER JOIN {restrict_to} USING (path)
-        LEFT JOIN (
-            -- Dedupe by canonical: author_aliases is keyed on
-            -- (raw_name, raw_email); canonical is N:1 (one person owns
-            -- several name+email identities). The LEFT JOIN tolerates
-            -- authors without an author_aliases row (legacy / pattern-only
-            -- classifications).
-            SELECT canonical, BOOL_OR(is_bot) AS is_bot
-            FROM author_aliases
-            GROUP BY canonical
-        ) aa ON aa.canonical = commits.canonical_author
-        WHERE COALESCE(aa.is_bot, FALSE) = FALSE
-          AND commits.date <= CAST(? AS TIMESTAMP)
+        INNER JOIN human_aliases ha
+            ON ha.raw_name = commits.author_name
+           AND ha.raw_email = commits.author_email
+        WHERE commits.date <= CAST(? AS TIMESTAMP)
         GROUP BY changes.path, commits.canonical_author
     )"
     )
@@ -258,8 +255,10 @@ fn per_path_author_cte(restrict_to: &str) -> String {
 /// anchor, anchor, departed_threshold_days, row_limit]`.
 fn knowledge_islands_sql() -> String {
     let per_path_author = per_path_author_cte("live_paths");
+    let human_aliases = super::query::HUMAN_ALIASES_CTE;
     format!(
-        "WITH {AUTHOR_LAST_COMMIT_CTE},
+        "WITH {human_aliases},
+        {AUTHOR_LAST_COMMIT_CTE},
         live_paths AS (
             -- (rev, path) is the changes PK, so COUNT(c.rev) ==
             -- COUNT(DISTINCT c.rev) per path — the same `--min-revs`
@@ -413,8 +412,10 @@ pub fn owner_activity_for_paths(
         .collect::<Vec<_>>()
         .join(",");
     let per_path_author = per_path_author_cte("requested_paths");
+    let human_aliases = super::query::HUMAN_ALIASES_CTE;
     let sql = format!(
         "WITH requested_paths(path) AS (VALUES {placeholders}),
+        {human_aliases},
         {AUTHOR_LAST_COMMIT_CTE},
         {per_path_author},
         {TOTALS_CTE},

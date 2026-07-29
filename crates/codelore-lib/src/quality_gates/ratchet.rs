@@ -13,6 +13,12 @@
 //! The design follows the Betterer pattern: the ratchet file is the contract
 //! and git history is the audit trail — commit the file; your gate history is
 //! then minable from git.
+//!
+//! The file also carries a `ratchet_schema` key (see [`RATCHET_SCHEMA`]) so a
+//! baseline written under one definition of a gated metric is never silently
+//! compared against a later, redefined one — a schema mismatch (including a
+//! pre-fix file with no key at all) is treated as case 1, with a one-time
+//! warning explaining the reset.
 
 use std::fmt::Write as FmtWrite;
 use std::fs;
@@ -24,6 +30,21 @@ use crate::{CodeLoreError, Result};
 
 /// Filename of the ratchet snapshot, written to the repo root.
 pub const RATCHET_FILENAME: &str = ".codelore-ratchet.toml";
+
+/// Ratchet-file schema version — a manual cache-buster for the committed
+/// `.codelore-ratchet.toml`, written into the file as the `ratchet_schema`
+/// key on every save. Bump this when a gated metric's scale or meaning
+/// changes (e.g. the hotspot/code-health scoring formula is re-anchored),
+/// so a baseline written under the old definition is discarded rather than
+/// silently compared against the redefined metric. Mirrors
+/// `cache.rs::CACHE_EPOCH`'s manual-bump pattern, but scoped to ratchet
+/// gate-metric redefinitions rather than fact-store correctness fixes.
+///
+/// Files written before this key existed deserialize `ratchet_schema` via
+/// `#[serde(default)]` to `0`, which never equals a real schema version
+/// (starting at `1`) — so pre-fix files take the same discard-and-reset
+/// path as a genuine mismatch, exactly once.
+const RATCHET_SCHEMA: u32 = 1;
 
 /// Per-metric direction: which direction is "better"?
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +90,9 @@ pub struct RatchetMetrics {
 /// the corresponding metric check so users can opt individual metrics in/out.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RatchetSnapshot {
+    /// Schema version this snapshot was written under. See [`RATCHET_SCHEMA`].
+    #[serde(default)]
+    pub ratchet_schema: u32,
     #[serde(default)]
     pub ratchet: RatchetTable,
 }
@@ -103,6 +127,7 @@ pub struct RatchetRegression {
 #[must_use]
 pub fn snapshot_from_metrics(metrics: &RatchetMetrics) -> RatchetSnapshot {
     RatchetSnapshot {
+        ratchet_schema: RATCHET_SCHEMA,
         ratchet: RatchetTable {
             code_health_min_observed: metrics.code_health_min_observed,
             red_effort_pct_observed: metrics.red_effort_pct_observed,
@@ -147,14 +172,33 @@ pub fn read_snapshot(repo_root: &Path) -> Result<Option<RatchetSnapshot>> {
             path.display()
         )));
     }
-    // The typed parse rejects truncated/corrupt TOML and schema mismatches
-    // alike — no separate untyped pre-parse is needed.
+    // The typed parse rejects truncated/corrupt TOML alike — no separate
+    // untyped pre-parse is needed.
     let snap = toml::from_str::<RatchetSnapshot>(&raw).map_err(|e| {
         CodeLoreError::Analysis(format!(
             "ratchet file is not valid TOML ({}): {e}",
             path.display()
         ))
     })?;
+    // A well-formed file written under a different (or absent, i.e. pre-fix)
+    // `ratchet_schema` compared a gated metric against a baseline that no
+    // longer means the same thing — e.g. a re-anchored hotspot/code-health
+    // formula. Unlike the destroyed-file case above, this is not corrupt: it
+    // is a legitimate file that is simply stale relative to the current
+    // metric definitions. Discard it (return as if absent) so the caller's
+    // existing "no snapshot" path re-initializes the baseline from this run,
+    // and say so once so the reset isn't mysterious.
+    if snap.ratchet_schema != RATCHET_SCHEMA {
+        tracing::warn!(
+            "ratchet reset: {} was written under gate-metric schema {} (current {}); gate \
+             metric definitions changed since that baseline was recorded, so it is discarded \
+             and baselines re-establish on this run.",
+            path.display(),
+            snap.ratchet_schema,
+            RATCHET_SCHEMA
+        );
+        return Ok(None);
+    }
     Ok(Some(snap))
 }
 
@@ -377,17 +421,81 @@ mod tests {
 
     #[test]
     fn well_formed_empty_table_is_no_floors_not_corrupt() {
-        // A serialized snapshot with no metrics set is the legitimate "no floors
-        // configured" state — distinct from destroyed — and must round-trip as
-        // an all-`None` snapshot rather than erroring.
+        // A serialized snapshot with no metrics set (and the current schema
+        // key, so it isn't treated as a pre-fix legacy file) is the legitimate
+        // "no floors configured" state — distinct from destroyed — and must
+        // round-trip as an all-`None` snapshot rather than erroring.
         let dir = tmp();
-        fs::write(dir.path().join(RATCHET_FILENAME), b"[ratchet]\n").unwrap();
+        fs::write(
+            dir.path().join(RATCHET_FILENAME),
+            format!("ratchet_schema = {RATCHET_SCHEMA}\n\n[ratchet]\n"),
+        )
+        .unwrap();
         let snap = read_snapshot(dir.path())
             .expect("a well-formed empty table must not be corrupt")
-            .expect("a present file returns Some");
+            .expect("a present file at the current schema returns Some");
         assert!(snap.ratchet.code_health_min_observed.is_none());
         assert!(snap.ratchet.red_effort_pct_observed.is_none());
         assert!(snap.ratchet.dependency_cycles_observed.is_none());
+    }
+
+    // ── ratchet_schema: reset on missing/stale key, accept on current key ────
+
+    #[test]
+    fn ratchet_schema_round_trips_through_write_and_read() {
+        let dir = tmp();
+        let snap = snapshot_from_metrics(&metrics_good());
+        write_snapshot(dir.path(), &snap).unwrap();
+        let read_back = read_snapshot(dir.path()).unwrap().unwrap();
+        assert_eq!(read_back.ratchet_schema, RATCHET_SCHEMA);
+    }
+
+    #[test]
+    fn missing_ratchet_schema_key_discards_snapshot() {
+        // A file written before the `ratchet_schema` key existed — the exact
+        // shape `well_formed_empty_table_is_no_floors_not_corrupt` used to
+        // write. It must now be discarded (treated as absent) rather than
+        // silently compared against redefined metrics.
+        let dir = tmp();
+        fs::write(
+            dir.path().join(RATCHET_FILENAME),
+            b"[ratchet]\ncode_health_min_observed = 65.0\n",
+        )
+        .unwrap();
+        assert!(
+            read_snapshot(dir.path()).unwrap().is_none(),
+            "a file with no ratchet_schema key must be discarded, not served"
+        );
+    }
+
+    #[test]
+    fn stale_ratchet_schema_key_discards_snapshot() {
+        let dir = tmp();
+        fs::write(
+            dir.path().join(RATCHET_FILENAME),
+            b"ratchet_schema = 999\n\n[ratchet]\ncode_health_min_observed = 65.0\n",
+        )
+        .unwrap();
+        assert!(
+            read_snapshot(dir.path()).unwrap().is_none(),
+            "a file with a stale ratchet_schema key must be discarded, not served"
+        );
+    }
+
+    #[test]
+    fn current_ratchet_schema_key_is_accepted() {
+        let dir = tmp();
+        fs::write(
+            dir.path().join(RATCHET_FILENAME),
+            format!(
+                "ratchet_schema = {RATCHET_SCHEMA}\n\n[ratchet]\ncode_health_min_observed = 65.0\n"
+            ),
+        )
+        .unwrap();
+        let snap = read_snapshot(dir.path())
+            .unwrap()
+            .expect("a file at the current schema must be served");
+        assert!((snap.ratchet.code_health_min_observed.unwrap() - 65.0).abs() < 0.01);
     }
 
     #[test]
@@ -422,6 +530,7 @@ mod tests {
                 red_effort_pct_observed: Some(5.0),
                 dependency_cycles_observed: Some(0.0),
             },
+            ..Default::default()
         };
         let outcome = evaluate_ratchet(&snap, &metrics_good());
         let RatchetOutcome::Regressed { regressions } = outcome else {
@@ -447,6 +556,7 @@ mod tests {
                 red_effort_pct_observed: Some(20.0),
                 dependency_cycles_observed: Some(5.0),
             },
+            ..Default::default()
         };
         let outcome = evaluate_ratchet(&snap, &metrics_good());
         let RatchetOutcome::Improved { tightened } = outcome else {
@@ -465,6 +575,7 @@ mod tests {
                 red_effort_pct_observed: None,        // not ratcheted
                 dependency_cycles_observed: None,     // not ratcheted
             },
+            ..Default::default()
         };
         let outcome = evaluate_ratchet(&snap, &metrics_good());
         let RatchetOutcome::Regressed { regressions } = outcome else {
@@ -484,6 +595,7 @@ mod tests {
                 code_health_min_observed: Some(60.0),
                 ..Default::default()
             },
+            ..Default::default()
         };
         let metrics = RatchetMetrics {
             code_health_min_observed: Some(70.0),
@@ -504,6 +616,7 @@ mod tests {
                 dependency_cycles_observed: Some(3.0),
                 ..Default::default()
             },
+            ..Default::default()
         };
         let metrics = RatchetMetrics {
             dependency_cycles_observed: Some(1.0),
@@ -525,6 +638,7 @@ mod tests {
                 code_health_min_observed: Some(65.0),
                 ..Default::default()
             },
+            ..Default::default()
         };
         let metrics = RatchetMetrics {
             code_health_min_observed: None, // degraded
