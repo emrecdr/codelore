@@ -92,7 +92,7 @@ pub struct TeamCompositionRow {
 const SQL_AUTHOR_METRICS: &str = "
 WITH
 anchor AS (
-    SELECT MAX(date) AS max_d, MIN(date) AS min_d FROM commits
+    SELECT {now_anchor} AS max_d, MIN(date) AS min_d FROM commits
 ),
 -- One row per canonical author (a canonical may own several raw emails in
 -- author_aliases; a direct JOIN would multiply commit counts by that alias
@@ -367,6 +367,10 @@ pub fn run_team_composition(db: &FactsDb, opts: &Options) -> Result<Vec<TeamComp
     let src = lineage::source_table(opts);
 
     let author_sql = SQL_AUTHOR_METRICS
+        .replace(
+            "{now_anchor}",
+            &crate::analyses::query::clamped_now_anchor("date"),
+        )
         .replace("{wd}", &wd.to_string())
         .replace("{src}", src);
 

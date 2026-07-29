@@ -106,9 +106,10 @@ pub fn run_coordination_needs(db: &FactsDb, opts: &Options) -> Result<Vec<Coordi
     // `fragmentation` = HHI complement over ALL knowledge holders (decayed
     // shares may be > 0 for historical authors, even if inactive this window).
     // `authors` = distinct active-window contributors only.
+    let now_anchor = crate::analyses::query::clamped_now_anchor("date");
     let frag_sql = format!(
         "WITH window_cutoff AS (
-             SELECT MAX(date) - INTERVAL ({wd}) DAY AS cutoff FROM commits
+             SELECT {now_anchor} - INTERVAL ({wd}) DAY AS cutoff FROM commits
          ),
          active AS (
              SELECT DISTINCT ch.path, co.canonical_author
@@ -206,11 +207,12 @@ pub fn run_coordination_needs(db: &FactsDb, opts: &Options) -> Result<Vec<Coordi
     // Restrict to commits touching ≤30 files in the trailing window.
     // p'_k = deg(k) / (2|E|); H'(S) = −Σ p'_k · ln(p'_k); H'_a = p'_a · H'.
     // Log base = ln (natural); ranks invariant to base choice.
+    let now_anchor = crate::analyses::query::clamped_now_anchor("date");
     let entropy_sql = format!(
         "WITH win AS (
              SELECT co.rev FROM commits co
              WHERE co.nf <= 30
-               AND co.date >= (SELECT MAX(date) FROM commits) - INTERVAL ({wd}) DAY
+               AND co.date >= (SELECT {now_anchor} FROM commits) - INTERVAL ({wd}) DAY
          ),
          edges AS (
              SELECT DISTINCT

@@ -66,10 +66,11 @@ pub fn run_code_familiarity(db: &FactsDb, opts: &Options) -> Result<Vec<CodeFami
     // path_familiarity sums k_norm for active authors per file, weighted by SLOC.
     // path_rank assigns rank 1 (top) and rank 2 (second) by k_norm per path.
     // island_paths selects files where top ≥ 0.8 and second < 0.2 (or absent).
+    let now_anchor = crate::analyses::query::clamped_now_anchor("date");
     let sql = format!(
         "
         WITH anchor AS (
-            SELECT MAX(date) AS max_d FROM commits
+            SELECT {now_anchor} AS max_d FROM commits
         ),
         active_authors AS (
             SELECT DISTINCT canonical_author

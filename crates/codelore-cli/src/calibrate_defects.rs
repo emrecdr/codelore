@@ -280,8 +280,9 @@ fn mine_fix_links(
 /// against the same-format dates [`collect_fixes`] reads. `None` when the
 /// mining store has no commits at all (empty repo — `MAX(date)` is `NULL`).
 fn window_cutoff_date(db: &FactsDb, days: u32) -> Result<Option<String>> {
+    let now_anchor = codelore_lib::cli_api::analyses::query::clamped_now_anchor("date");
     let sql =
-        format!("SELECT CAST((SELECT MAX(date) FROM commits) - INTERVAL '{days} days' AS TEXT)");
+        format!("SELECT CAST((SELECT {now_anchor} FROM commits) - INTERVAL '{days} days' AS TEXT)");
     db.query_row(&sql, [], |r| r.get::<_, Option<String>>(0))
         .context("query window cutoff")
 }

@@ -188,13 +188,14 @@ fn members_preview(paths: &[&str]) -> String {
 fn window_activity(db: &FactsDb, opts: &Options) -> Result<HashMap<String, WindowActivity>> {
     lineage::materialize_if_needed(db, opts)?;
     let src = lineage::source_table(opts);
+    let now_anchor = crate::analyses::query::clamped_now_anchor("date");
     let sql = format!(
         "SELECT ch.path,
                 CAST(COALESCE(SUM(ch.loc_added + ch.loc_deleted), 0) AS DOUBLE) AS churn,
                 COUNT(ch.rev) AS revs
          FROM {src} ch
          JOIN commits co ON co.rev = ch.rev
-         WHERE co.date >= (SELECT MAX(date) FROM commits) - INTERVAL (?) DAY
+         WHERE co.date >= (SELECT {now_anchor} FROM commits) - INTERVAL (?) DAY
          GROUP BY ch.path"
     );
     let rows: Vec<(String, f64, i64)> = query_map_collect(

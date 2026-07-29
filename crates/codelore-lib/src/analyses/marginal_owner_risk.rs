@@ -154,9 +154,10 @@ fn top_active_shares_by_path(
     let placeholders = std::iter::repeat_n("(?)", paths.len())
         .collect::<Vec<_>>()
         .join(",");
+    let now_anchor = crate::analyses::query::clamped_now_anchor("date");
     let sql = format!(
         "WITH repo_end AS (
-             SELECT MAX(date) AS end_date FROM commits
+             SELECT {now_anchor} AS end_date FROM commits
          ),
          active_authors AS (
              SELECT DISTINCT co.canonical_author

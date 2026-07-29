@@ -291,13 +291,14 @@ fn window_churn_for_paths(
     let placeholders = std::iter::repeat_n("(?)", paths.len())
         .collect::<Vec<_>>()
         .join(",");
+    let now_anchor = crate::analyses::query::clamped_now_anchor("date");
     let sql = format!(
         "SELECT ch.path,
                 CAST(COUNT(ch.rev) AS BIGINT) AS revs,
                 CAST(COALESCE(SUM(ch.loc_added + ch.loc_deleted), 0) AS BIGINT) AS churn
          FROM {src} ch
          JOIN commits co ON co.rev = ch.rev
-         WHERE co.date >= (SELECT MAX(date) FROM commits) - INTERVAL (?) DAY
+         WHERE co.date >= (SELECT {now_anchor} FROM commits) - INTERVAL (?) DAY
            AND ch.path IN (VALUES {placeholders})
          GROUP BY ch.path"
     );
@@ -348,10 +349,11 @@ fn new_code_membership_for_paths(
     let placeholders = std::iter::repeat_n("(?)", paths.len())
         .collect::<Vec<_>>()
         .join(",");
+    let now_anchor = crate::analyses::query::clamped_now_anchor("date");
     let sql = format!(
         "SELECT ch.path,
-                (MIN(co.date) >= (SELECT MAX(date) FROM commits) - INTERVAL (?) DAY) AS born,
-                (MAX(co.date) >= (SELECT MAX(date) FROM commits) - INTERVAL (?) DAY) AS touched
+                (MIN(co.date) >= (SELECT {now_anchor} FROM commits) - INTERVAL (?) DAY) AS born,
+                (MAX(co.date) >= (SELECT {now_anchor} FROM commits) - INTERVAL (?) DAY) AS touched
          FROM {src} ch
          JOIN commits co ON co.rev = ch.rev
          WHERE ch.path IN (VALUES {placeholders})
