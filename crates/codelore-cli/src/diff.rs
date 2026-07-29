@@ -1165,6 +1165,7 @@ mod median_code_health_tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)] // exact integral literals; the whole point is equality
     fn median_code_health_reads_cognitive_health_field() {
         // Three rows: cognitive_health median is 70.0; every sibling numeric
         // field is held constant (or set to a value whose own median would be
@@ -1174,6 +1175,7 @@ mod median_code_health_tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)] // exact integral literals; the whole point is equality
     fn median_code_health_even_count_averages_the_middle_pair() {
         let rows = vec![
             row("a.rs", 60.0),
