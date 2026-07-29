@@ -28,9 +28,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use codelore_lib::Options;
-use codelore_lib::analyses::code_health::run_code_health;
+use codelore_lib::analyses::code_health::{CodeHealthRow, run_code_health};
 use codelore_lib::analyses::coupling::run_coupling;
-use codelore_lib::analyses::hotspots::run_hotspots;
+use codelore_lib::analyses::hotspots::{HotspotRow, run_hotspots};
 use codelore_lib::analyses::knowledge_islands::run_knowledge_islands;
 use codelore_lib::analyses::summary::run_summary;
 use codelore_lib::analyses::team_composition::run_team_composition;
@@ -2149,6 +2149,307 @@ fn hotspot_tree_arrow_keys_move_focus_and_enter_opens_drawer() {
     assert!(
         errors.is_empty(),
         "tree keyboard nav produced {} browser-console error(s):\n{}",
+        errors.len(),
+        errors.join("\n  "),
+    );
+}
+
+/// Minimal `HotspotRow` for the badge/tree tests: only the fields the keyboard
+/// list and circle-pack read. `cognitive_health` is the inline `[60, 100]`
+/// proxy that the badge must NOT be sourced from.
+fn synth_hotspot(path: &str, cognitive_health: f64, hotspot_score: f64) -> HotspotRow {
+    HotspotRow {
+        path: path.to_string(),
+        revisions: 5,
+        cognitive: 10.0,
+        cognitive_health,
+        hotspot_score,
+        mi: None,
+        mi_rank: None,
+        ai_pct: None,
+        hotspot_score_anchored: None,
+    }
+}
+
+/// Minimal `CodeHealthRow` carrying the composite `band` + `score` the keyboard
+/// list must badge from. `band` is the authoritative composite signal; `score`
+/// is the 0–100 health number shown as the badge text.
+fn synth_code_health(path: &str, band: &str, score: f64, structural_risk: f64) -> CodeHealthRow {
+    CodeHealthRow {
+        path: path.to_string(),
+        cognitive: 10.0,
+        score,
+        structural_risk,
+        percentile: 0.5,
+        band: band.to_string(),
+        corpus_percentile: None,
+        beyond_corpus: false,
+        corpus_percentile_ci_low: None,
+        corpus_percentile_ci_high: None,
+    }
+}
+
+/// The keyboard-accessible file list is the declared a11y alternative to the
+/// canvas health lens, which colours by the COMPOSITE `code_health` band. The
+/// list must badge from that same band — not the `cognitive_health` proxy,
+/// which is arithmetically bounded to `[60, 100]`, so a proxy `≤ 40 → red`
+/// branch is unreachable and screen-reader users would never see a red file
+/// the sighted lens shows. This payload is built so the composite band and the
+/// proxy DISAGREE: every file's `cognitive_health` sits in `[60, 100]` (the old
+/// cut could only ever emit warning/success, never error), while the composite
+/// bands include a red file, two yellow, two green, and one hotspot with no
+/// composite row at all. The rendered badge distribution must follow the
+/// composite, and the red file's badge text must be the composite score, not
+/// the proxy — the exact reading the old code structurally could not produce.
+#[test]
+#[allow(clippy::too_many_lines)] // mirror of the other browser tests' payload + assertion shape
+fn hotspot_tree_badges_composite_code_health_band_not_cognitive_proxy() {
+    let fixture = differential_repo::build();
+    let repo = GixRepo::open(fixture.dir.path()).expect("open fixture repo");
+    let db = FactsDb::new_in_memory().expect("in-memory facts db");
+    let opts = Options {
+        repo_path: fixture.dir.path().to_path_buf(),
+        min_revs: 1,
+        min_shared_revs: 1,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest fixture");
+
+    // Real summary / coupling / knowledge-islands give a clean-booting baseline
+    // (four other browser tests boot this same fixture without console errors);
+    // only hotspots + code_health are overridden so the badge source is under
+    // full control.
+    let summary = run_summary(&db, &opts).expect("summary");
+    let coupling = run_coupling(&db, &opts).expect("coupling");
+    let knowledge_islands = run_knowledge_islands(&db, &opts).expect("knowledge-islands");
+
+    // Every cognitive_health in [60, 100]: the OLD proxy cut
+    // (≤40 error / ≤70 warning / else success) can only emit warning or
+    // success here — never error. Any badge-error the list shows is
+    // structurally impossible under the old code.
+    let hotspots = vec![
+        synth_hotspot("src/pkg/red_file.rs", 62.0, 9.0),
+        synth_hotspot("src/pkg/yellow_one.rs", 75.0, 8.0),
+        synth_hotspot("src/pkg/yellow_two.rs", 80.0, 7.0),
+        synth_hotspot("src/pkg/green_one.rs", 95.0, 6.0),
+        synth_hotspot("src/pkg/green_two.rs", 90.0, 5.0),
+        synth_hotspot("src/pkg/no_composite.rs", 70.0, 4.0),
+    ];
+    // Composite bands DISAGREE with the proxy: one red, two yellow, two green.
+    // src/pkg/no_composite.rs is deliberately ABSENT here → "no data" badge.
+    let code_health = vec![
+        synth_code_health("src/pkg/red_file.rs", "red", 30.0, 0.80),
+        synth_code_health("src/pkg/yellow_one.rs", "yellow", 55.0, 0.40),
+        synth_code_health("src/pkg/yellow_two.rs", "yellow", 60.0, 0.35),
+        synth_code_health("src/pkg/green_one.rs", "green", 85.0, 0.10),
+        synth_code_health("src/pkg/green_two.rs", "green", 90.0, 0.05),
+    ];
+
+    let dash = SpaDashboard {
+        hotspots,
+        summary,
+        code_health,
+        coupling,
+        knowledge_islands,
+        ..SpaDashboard::default()
+    };
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let html_path = tmp.path().join("codelore-tree-badge.html");
+    let mut f = std::fs::File::create(&html_path).expect("create html");
+    write_spa(
+        &dash,
+        "CodeLore Tree Badge Test",
+        &fixture.dir.path().display().to_string(),
+        "2026-06-16 00:00:00 UTC",
+        &mut f,
+    )
+    .expect("write_spa");
+    drop(f);
+
+    let Some((_browser, tab)) = boot_spa_tab(&html_path) else {
+        return;
+    };
+    let console_errors = attach_exception_sink(&tab);
+
+    // Open the collapsed <details> so the tree content is live, then settle.
+    tab.evaluate(
+        "(() => { const menu = document.querySelector('[role=\"tree\"]'); \
+             const d = menu && menu.closest('details'); if (d) d.open = true; })()",
+        false,
+    )
+    .expect("open tree details");
+    std::thread::sleep(Duration::from_millis(200));
+
+    let counts_json: String = eval_json(
+        &tab,
+        "(function () { \
+             var menu = document.querySelector('[role=\"tree\"]'); \
+             if (!menu) return JSON.stringify({ rows: -1 }); \
+             var badges = menu.querySelectorAll('[role=\"treeitem\"] span.badge'); \
+             var c = { error: 0, warning: 0, success: 0, ghost: 0, other: 0, rows: badges.length }; \
+             for (var i = 0; i < badges.length; i++) { \
+                 var cl = badges[i].classList; \
+                 if (cl.contains('badge-error')) c.error++; \
+                 else if (cl.contains('badge-warning')) c.warning++; \
+                 else if (cl.contains('badge-success')) c.success++; \
+                 else if (cl.contains('badge-ghost')) c.ghost++; \
+                 else c.other++; \
+             } \
+             return JSON.stringify(c); \
+         })()",
+    );
+    let counts: serde_json::Value = serde_json::from_str(&counts_json).expect("counts json");
+
+    // Distribution must match the COMPOSITE bands embedded above, not the proxy.
+    assert_eq!(
+        counts["rows"], 6,
+        "expected 6 keyboard-list rows (top-50 by hotspot_score); counts={counts}"
+    );
+    assert_eq!(
+        counts["error"], 1,
+        "the composite band has exactly one red file, so the keyboard list must \
+         show one badge-error. The old cognitive_health proxy (bounded [60,100]) \
+         could NEVER emit badge-error; counts={counts}"
+    );
+    assert_eq!(
+        counts["warning"], 2,
+        "the composite band has two yellow files; counts={counts}"
+    );
+    assert_eq!(
+        counts["success"], 2,
+        "the composite band has two green files; counts={counts}"
+    );
+    assert_eq!(
+        counts["ghost"], 1,
+        "the hotspot with no composite code_health row must badge as 'no data' \
+         (badge-ghost); counts={counts}"
+    );
+    assert_eq!(
+        counts["other"], 0,
+        "every badge must be one of error/warning/success/ghost; counts={counts}"
+    );
+
+    // The red file's badge TEXT must be the composite score (30), not the
+    // cognitive_health proxy (62) — proving both colour AND number now come
+    // from data.code_health.
+    let red_badge_text: String = eval_json(
+        &tab,
+        "(function () { \
+             var items = document.querySelectorAll('[role=\"treeitem\"]'); \
+             for (var i = 0; i < items.length; i++) { \
+                 var pathEl = items[i].querySelector('.truncate'); \
+                 if (pathEl && pathEl.textContent.indexOf('red_file.rs') >= 0) { \
+                     var b = items[i].querySelector('span.badge'); \
+                     return b ? b.textContent.trim() : ''; \
+                 } \
+             } \
+             return ''; \
+         })()",
+    );
+    assert_eq!(
+        red_badge_text, "30",
+        "the red file's badge text must be the composite health score (30), not \
+         the cognitive_health proxy (62); got {red_badge_text:?}"
+    );
+
+    let errors = console_errors.lock().expect("console mutex").clone();
+    assert!(
+        errors.is_empty(),
+        "tree badge test produced {} uncaught browser exception(s):\n  {}",
+        errors.len(),
+        errors.join("\n  "),
+    );
+}
+
+/// A missing or truncated `#codelore-data` block must not render as a
+/// confident, fully-chromed, entirely EMPTY dashboard — the state that reads
+/// as "this repo has no findings" when the truth is "the data never arrived".
+/// Both boot guards must replace `<main>` with a `role="alert"` banner that
+/// names the condition and the remedy, leaving zero widget bodies behind.
+/// Covers BOTH guard paths: unparseable JSON and an absent data block.
+#[test]
+fn broken_data_block_shows_alert_banner_and_no_widgets() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let good = tmp.path().join("codelore-good.html");
+    write_smoke_spa(&good, "CodeLore Broken Data Test");
+    let html = std::fs::read_to_string(&good).expect("read good html");
+
+    // -- Case A: truncated payload → JSON.parse throws (parse-failure guard). --
+    // Replace the data block's inner JSON with an unterminated fragment, exactly
+    // as a half-written CI upload or a truncated download would leave it.
+    let open = "id=\"codelore-data\">";
+    let start = html.find(open).expect("data block open tag") + open.len();
+    let close_rel = html[start..]
+        .find("</script>")
+        .expect("data block close tag");
+    let truncated = format!(
+        "{}\n{{\"partial\": true, \"data\":\n  {}",
+        &html[..start],
+        &html[start + close_rel..],
+    );
+    let trunc_path = tmp.path().join("codelore-truncated.html");
+    std::fs::write(&trunc_path, &truncated).expect("write truncated html");
+    assert_banner_and_no_widgets(&trunc_path, "truncated or corrupt");
+
+    // -- Case B: absent data block → getElementById returns null (missing guard). --
+    // Rename the id so #codelore-data no longer resolves.
+    let missing = html.replace("id=\"codelore-data\"", "id=\"codelore-data-removed\"");
+    let missing_path = tmp.path().join("codelore-missing.html");
+    std::fs::write(&missing_path, &missing).expect("write missing html");
+    assert_banner_and_no_widgets(&missing_path, "missing");
+}
+
+/// Boot `html_path` and assert the boot-failure UX: a `role="alert"` banner
+/// inside `<main>` whose text contains `condition_phrase` and the regenerate
+/// remedy, and ZERO widget-body containers (the banner replaced main's content,
+/// so the empty-but-chromed dashboard is gone). Skips cleanly without Chrome.
+fn assert_banner_and_no_widgets(html_path: &std::path::Path, condition_phrase: &str) {
+    let Some((_browser, tab)) = boot_spa_tab(html_path) else {
+        return;
+    };
+    let console_errors = attach_exception_sink(&tab);
+
+    let banner_present: bool = eval_json(
+        &tab,
+        "!!document.querySelector('main [role=\"alert\"].codelore-boot-error')",
+    );
+    assert!(
+        banner_present,
+        "no role=alert boot-error banner inside <main> for a broken data block — \
+         the dashboard rendered empty chrome with no visible failure"
+    );
+
+    let banner_text: String = eval_json(
+        &tab,
+        "(function () { var b = document.querySelector('main [role=\"alert\"]'); \
+             return b ? b.textContent : ''; })()",
+    );
+    assert!(
+        banner_text.contains(condition_phrase),
+        "boot-error banner did not name the condition ({condition_phrase:?}); \
+         text={banner_text:?}"
+    );
+    assert!(
+        banner_text.contains("Regenerate") && banner_text.contains("--format spa"),
+        "boot-error banner did not state the regenerate remedy; text={banner_text:?}"
+    );
+
+    let widget_bodies: i64 = eval_json(
+        &tab,
+        "document.querySelectorAll('[id^=\"widget-\"][id$=\"-body\"]').length",
+    );
+    assert_eq!(
+        widget_bodies, 0,
+        "broken data block still left {widget_bodies} widget-body container(s) in \
+         the DOM — the banner must REPLACE main's content, not sit above a \
+         chromed-but-empty dashboard"
+    );
+
+    let errors = console_errors.lock().expect("console mutex").clone();
+    assert!(
+        errors.is_empty(),
+        "boot-error path produced {} uncaught browser exception(s):\n  {}",
         errors.len(),
         errors.join("\n  "),
     );

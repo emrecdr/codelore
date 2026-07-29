@@ -871,6 +871,28 @@
       border-radius: 4px;
       letter-spacing: 0.02em;
     }
+    /* Boot-failure banner. Written into <main> by the widget script when
+       the embedded data block is missing or unparseable, in place of the
+       empty-but-fully-chromed dashboard that is otherwise indistinguishable
+       from "no findings". Hand-written here (not a DaisyUI `alert`) because
+       the inlined Tailwind bundle is pre-built and semantic-colour alert
+       classes added after the last `tailwindcss` run aren't in it. */
+    .codelore-boot-error {
+      margin: 24px auto;
+      max-width: 640px;
+      padding: 16px 20px;
+      border-left: 4px solid var(--color-error, #e0584e);
+      background: rgba(224, 88, 78, 0.10);
+      border-radius: 6px;
+      color: var(--color-base-content, currentColor);
+    }
+    .codelore-boot-error-title {
+      display: block;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .codelore-boot-error p { margin: 4px 0 0 0; }
+    .codelore-boot-error-remedy { opacity: 0.85; font-size: 0.9em; }
     /* Drawer enhancement lists — coupling partners, top contributors,
        functions. Tighter density than the default <ul>; .drawer-author
        provides the secondary metadata greyed-out so the primary
@@ -1504,7 +1526,7 @@
           Keyboard-accessible file list
           (<span x-text="$store.dashboard.hotspots.length"></span>)
           <span class="tooltip-trigger" aria-hidden="true">?</span>
-          <span class="tooltip-popup" role="tooltip">A screen-reader-friendly textual alternative to the canvas circle-pack above. Same top-50 hotspot files, browsable with arrow keys and selectable with Enter / Space. Useful for WAI-ARIA accessibility and for users who prefer scanning a list to clicking circles. Each row shows the path plus a colour-coded cognitive-health badge.</span>
+          <span class="tooltip-popup" role="tooltip">A screen-reader-friendly textual alternative to the canvas circle-pack above. Same top-50 hotspot files, browsable with arrow keys and selectable with Enter / Space. Useful for WAI-ARIA accessibility and for users who prefer scanning a list to clicking circles. Each row shows the path plus a colour-coded composite code-health badge — the same red/yellow/green bands as the health-lens map above.</span>
         </summary>
         <div class="collapse-content">
           <menu role="tree" aria-label="Hotspot files"
@@ -1535,17 +1557,24 @@
                         class="ki-knowledge-loss-badge">
                     knowledge-loss
                   </span>
-                  <!-- Cognitive-health badge — DaisyUI semantic classes
-                       are complete literals so Tailwind v4 @source
-                       sees them. The 3-band cut (≤40 / 41-70 / ≥71)
-                       colours the cognitive-health proxy shown here;
-                       the composite-band lens uses data.code_health. -->
+                  <!-- Composite code-health badge — coloured by the file's
+                       code-health band (red/yellow/green) from
+                       data.code_health, the SAME source the canvas health
+                       lens and bivariate legend key off, so this keyboard
+                       surface tells the identical story rather than the
+                       over-optimistic one the [60,100]-bounded
+                       cognitive_health proxy gave. Badge text is the composite
+                       health score (0-100), pairing colour and number from
+                       one source the way the detail drawer does. DaisyUI
+                       semantic classes are complete literals so Tailwind v4
+                       @source sees them; a path with no composite row badges
+                       as "no data". -->
                   <span class="badge badge-sm flex-shrink-0"
-                        :class="file.cognitive_health == null ? 'badge-ghost'
-                              : file.cognitive_health <= 40 ? 'badge-error'
-                              : file.cognitive_health <= 70 ? 'badge-warning'
+                        :class="file.code_health_band == null ? 'badge-ghost'
+                              : file.code_health_band === 'red' ? 'badge-error'
+                              : file.code_health_band === 'yellow' ? 'badge-warning'
                               : 'badge-success'"
-                        x-text="file.cognitive_health != null ? file.cognitive_health.toFixed(0) : '?'">
+                        x-text="file.code_health_score != null ? file.code_health_score.toFixed(0) : '?'">
                   </span>
                 </a>
               </li>
@@ -2567,7 +2596,7 @@
       // keyboard-accessible surface IS this DOM tree, parented to
       // the same data the chart shows.
       Alpine.store('dashboard', {
-        hotspots: [],   // [{path, cognitive_health, hotspot_score}], top-N sorted
+        hotspots: [],   // [{path, hotspot_score, primary_author, code_health_band, code_health_score}], top-N sorted
       });
       // Cross-widget selection: tracks the currently focused file
       // path so the trends chart, parallel-coords, and any other

@@ -51,9 +51,44 @@
   //  §1  Data load & IIFE setup
   // ═════════════════════════════════════════════════════════════════
 
+  // Boot-failure banner. When the embedded data block is missing or
+  // unparseable there is nothing to render, and the guards below return
+  // before the widget loop ever runs — leaving a fully-chromed but empty
+  // dashboard that reads as "this repo has no findings" rather than as a
+  // failure. Both guards call this to replace <main> with a visible,
+  // screen-reader-announced error that names the actual condition and the
+  // remedy. Function declaration + plain DOM writes only, reading no
+  // module-scope binding, so it is safe to call during the synchronous
+  // boot pass before the later-concatenated files have evaluated.
+  function renderBootError(detail) {
+    const host = document.querySelector('main') || document.body;
+    if (!host) return;
+    const banner = document.createElement('div');
+    banner.className = 'codelore-boot-error';
+    banner.setAttribute('role', 'alert');
+    const title = document.createElement('strong');
+    title.className = 'codelore-boot-error-title';
+    title.textContent = 'CodeLore dashboard could not load its data';
+    const what = document.createElement('p');
+    what.textContent = detail;
+    const remedy = document.createElement('p');
+    remedy.className = 'codelore-boot-error-remedy';
+    remedy.textContent =
+      'Regenerate this dashboard file — re-run the codelore analysis with ' +
+      '--format spa to produce a fresh copy.';
+    banner.appendChild(title);
+    banner.appendChild(what);
+    banner.appendChild(remedy);
+    host.innerHTML = '';
+    host.appendChild(banner);
+  }
+
   const dataBlock = document.getElementById('codelore-data');
   if (!dataBlock) {
     console.error('CodeLore: data block not found');
+    renderBootError(
+      'The embedded data block (#codelore-data) is missing from this file.'
+    );
     return;
   }
   let data;
@@ -61,6 +96,9 @@
     data = JSON.parse(dataBlock.textContent);
   } catch (e) {
     console.error('CodeLore: failed to parse data block:', e);
+    renderBootError(
+      'The embedded data block is truncated or corrupt and could not be parsed.'
+    );
     return;
   }
 
@@ -1063,6 +1101,18 @@
       // call site, no shared closure) can stamp `data-primary-author`
       // on each row for the off-boarding reactive class toggle.
       window._codelorePrimaryAuthorByPath = listPrimaryAuthorByPath;
+      // Composite code-health band + score per path, keyed exactly as the
+      // canvas health lens and bivariate legend key `bandByPath` — sourced
+      // from data.code_health, NOT the [60, 100]-bounded cognitive_health
+      // proxy. The keyboard list badges from this so screen-reader users get
+      // the same red/yellow/green story the canvas shows; a path with no
+      // composite row (non-Tier-1 source, or the analysis was skipped) badges
+      // as "no data". The proxy still names itself honestly on the table,
+      // drawer, and tooltip surfaces that read data.hotspots directly.
+      const codeHealthByPath = {};
+      (data.code_health || []).forEach(function (r) {
+        codeHealthByPath[r.path] = r;
+      });
       const sorted = (data.hotspots || [])
         .slice()
         .sort(function (a, b) {
@@ -1072,11 +1122,13 @@
         })
         .slice(0, HOTSPOT_TREE_LIMIT)
         .map(function (r) {
+          const ch = codeHealthByPath[r.path];
           return {
             path: r.path,
-            cognitive_health: r.cognitive_health,
             hotspot_score: r.hotspot_score,
             primary_author: listPrimaryAuthorByPath[r.path] || null,
+            code_health_band: ch ? ch.band : null,
+            code_health_score: (ch && typeof ch.score === 'number') ? ch.score : null,
           };
         });
       dashboardStore.hotspots = sorted;
