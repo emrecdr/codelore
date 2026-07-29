@@ -305,21 +305,23 @@ jobs:
   # each crate to propagate through the index before the next one starts.
   # The publish step is skipped (not the job) when the CRATES_IO_TOKEN repo
   # secret is absent, so forks and unconfigured checkouts still get a green
-  # release. A partial failure (registry hiccup mid-sequence) needs manual
-  # completion: `cargo publish` rejects a version that's already live, so
-  # re-running the remaining `-p` commands by hand in the same rca → lib →
-  # codelore order is safe.
+  # release. It's also gated to tag-triggered runs only: this workflow also
+  # runs on workflow_dispatch test runs, and `cargo publish` is permanent
+  # (yank-only), so a manual test run must never publish. A partial failure
+  # (registry hiccup mid-sequence) needs manual completion: `cargo publish`
+  # rejects a version that's already live, so re-running the remaining `-p`
+  # commands by hand in the same rca → lib → codelore order is safe.
   crates-publish:
     needs: [plan, build, release]
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@1.96.0
 
       - name: Publish to crates.io
-        if: ${{ secrets.CRATES_IO_TOKEN != '' }}
+        if: ${{ github.ref_type == 'tag' && secrets.CRATES_IO_TOKEN != '' }}
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
         run: |

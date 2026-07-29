@@ -170,6 +170,7 @@ Once accepted, three workflows fire in parallel on `vX.Y.Z`:
    - `build` — matrix of 5 targets (aarch64-darwin, x86_64-darwin, x86_64-linux-gnu, aarch64-linux-gnu, x86_64-windows-msvc), each running `cargo build --release --locked --target $TARGET` and packaging the artifact into a versioned tarball/zip (`actions/attest-build-provenance` attaches SLSA L3 attestation here)
    - `release` — downloads all 5 build artifacts and publishes the GitHub Release via `softprops/action-gh-release@v3`, with `generate_release_notes: true` pulling the CHANGELOG section automatically
    - `homebrew-publish` — downloads the same build artifacts (bit-identical to what end-users `brew install`), computes SHA256 of each, renders `Formula/codelore.rb`, checks out `emrecdr/homebrew-codelore` via the `HOMEBREW_TAP_DEPLOY_KEY` SSH deploy key, and pushes the regenerated formula if it changed
+   - `crates-publish` — publishes `codelore-rca` → `codelore-lib` → `codelore` to crates.io in that dependency order; skipped (the publish step, not the job) unless the `CRATES_IO_TOKEN` repository secret is configured, so forks and unconfigured checkouts still get a green release
 
 2. **`.github/workflows/container.yml`** publishes a distroless container image to `ghcr.io/emrecdr/codelore:vX.Y.Z` (and `:latest` for non-pre-release tags).
 
@@ -193,7 +194,7 @@ cargo publish -p codelore-lib
 cargo publish -p codelore
 ```
 
-`cargo publish` errors (does not silently skip) on a version that's already live on the index, so re-triggering the `crates-publish` job itself does not recover from a partial failure — the step re-runs `cargo publish -p codelore-rca` first under the workflow's default `bash -eo pipefail` shell, that call errors on the crate that already succeeded, and `-e` halts the script before `codelore-lib` or `codelore` are ever attempted. Running the remaining commands by hand, in order, and skipping whichever crate(s) already succeeded, is the only way to finish a partial publish.
+`cargo publish` errors (does not silently skip) on a version that's already live on the index, so re-triggering the `crates-publish` job itself does not recover from a partial failure — the step re-runs `cargo publish -p codelore-rca` first under the workflow's default `bash -e` shell (no explicit `shell: bash`, so no `pipefail`), that call errors on the crate that already succeeded, and `-e` halts the script before `codelore-lib` or `codelore` are ever attempted. Running the remaining commands by hand, in order, and skipping whichever crate(s) already succeeded, is the only way to finish a partial publish.
 
 ### Yanking a release
 
