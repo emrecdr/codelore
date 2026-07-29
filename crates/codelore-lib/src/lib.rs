@@ -43,4 +43,4 @@ pub use error::{CodeLoreError, Result};
 pub use facts::FactsDb;
 pub use options::Options;
 pub use repo::{Repo, TagInfo};
-pub use types::{ChangeType, CommitEvent, FileChange, Hunk, KameiFeatures, SCHEMA_VERSION};
+pub use types::{ChangeType, CommitEvent, FileChange, Hunk, KameiFeatures};

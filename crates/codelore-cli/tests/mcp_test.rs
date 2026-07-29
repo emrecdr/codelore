@@ -457,6 +457,56 @@ fn mcp_check_gates_discloses_skipped_gates() {
     let _ = child.wait();
 }
 
+/// `corpus_percentile_max` must be evaluated for real, not reported as
+/// structurally skipped: `check_gates` already computes `code_health` (for
+/// `code_health_min`), and the corpus lens fills `corpus_percentile` on those
+/// rows whenever a calibration artifact is active — the embedded world
+/// artifact by default, with no `--calibration` flag needed. A very low
+/// ceiling must therefore fail with real violations, and the gate must never
+/// appear in `skipped_gates` for this repo.
+#[test]
+fn mcp_check_gates_evaluates_corpus_percentile_max_for_real() {
+    let repo = delivery_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+
+    std::fs::write(
+        repo.dir.path().join(".codelore-thresholds.toml"),
+        "[gates]\ncorpus_percentile_max = 0.0\n",
+    )
+    .unwrap();
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
+    let resp = call_tool(&mut stdin, &mut reader, 1, "check_gates", &json!({}));
+    let parsed = assert_tool_ok(&resp, "check_gates");
+
+    assert_eq!(
+        parsed["verdict"], "fail",
+        "a 0.0 ceiling must fail against delivery_repo's real corpus percentiles: {parsed}"
+    );
+    let violations = parsed["violations"]
+        .as_array()
+        .expect("check_gates: violations array");
+    assert!(
+        violations
+            .iter()
+            .any(|v| v["gate"] == "corpus_percentile_max"),
+        "corpus_percentile_max must produce real violations, not a skip: {parsed}"
+    );
+    let skipped: Vec<&str> = parsed["skipped_gates"]
+        .as_array()
+        .expect("check_gates: skipped_gates array")
+        .iter()
+        .filter_map(|v| v["gate"].as_str())
+        .collect();
+    assert!(
+        !skipped.contains(&"corpus_percentile_max"),
+        "corpus_percentile_max must not be disclosed as skipped when it was actually evaluated: {parsed}"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
 #[test]
 fn mcp_function_xray_errors_on_unknown_path() {
     let repo = delivery_repo::build();

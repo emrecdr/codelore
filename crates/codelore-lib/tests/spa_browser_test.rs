@@ -2353,6 +2353,52 @@ fn hotspot_tree_badges_composite_code_health_band_not_cognitive_proxy() {
          the cognitive_health proxy (62); got {red_badge_text:?}"
     );
 
+    // The legacy hand-rolled `.badge` rule in `template.html` is unlayered
+    // while DaisyUI's own badge styles are `@layer`ed — per CSS Cascade 5,
+    // ANY property the unlayered rule declares beats DaisyUI's semantic
+    // `badge-error` / `badge-warning` / `badge-success` regardless of
+    // specificity, so a legacy rule that painted color/background/border
+    // would render every badge identically, no matter its modifier class.
+    // Prove the fix by comparing the red file's `badge-error` element's
+    // computed background against a freshly-injected PLAIN `.badge` (no
+    // color modifier, DaisyUI's own default): under the bug this fixed,
+    // both were forced to the same hardcoded green and would compare equal.
+    let badge_colors_json: String = eval_json(
+        &tab,
+        "(function () { \
+             var errorBadge = null; \
+             var items = document.querySelectorAll('[role=\"treeitem\"]'); \
+             for (var i = 0; i < items.length; i++) { \
+                 var pathEl = items[i].querySelector('.truncate'); \
+                 if (pathEl && pathEl.textContent.indexOf('red_file.rs') >= 0) { \
+                     errorBadge = items[i].querySelector('span.badge'); \
+                     break; \
+                 } \
+             } \
+             if (!errorBadge) return JSON.stringify({ ok: false }); \
+             var probe = document.createElement('span'); \
+             probe.className = 'badge'; \
+             document.body.appendChild(probe); \
+             var errorBg = getComputedStyle(errorBadge).backgroundColor; \
+             var plainBg = getComputedStyle(probe).backgroundColor; \
+             probe.remove(); \
+             return JSON.stringify({ ok: true, errorBg: errorBg, plainBg: plainBg }); \
+         })()",
+    );
+    let badge_colors: serde_json::Value =
+        serde_json::from_str(&badge_colors_json).expect("badge colors json");
+    assert_eq!(
+        badge_colors["ok"], true,
+        "must locate the red file's badge-error element: {badge_colors}"
+    );
+    assert_ne!(
+        badge_colors["errorBg"], badge_colors["plainBg"],
+        "a badge-error badge must NOT render the same computed background as a \
+         plain, unmodified .badge — an unlayered legacy rule painting color \
+         regardless of the DaisyUI modifier class would make every badge the \
+         same colour: {badge_colors}"
+    );
+
     let errors = console_errors.lock().expect("console mutex").clone();
     assert!(
         errors.is_empty(),

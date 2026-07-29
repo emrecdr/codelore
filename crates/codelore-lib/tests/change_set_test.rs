@@ -94,6 +94,67 @@ fn modified_file_gets_baseline_and_projected_scores() {
     );
 }
 
+/// `HealthProjection::baseline_median` — what `[diff] delta_code_health_min`
+/// reads on the `codelore gate` / `gate_changes` MCP surface — must derive
+/// from `code_health::CodeHealthRow::score` (the composite `code-health`
+/// score, `[0, 100]`), NOT from `hotspots::HotspotRow::cognitive_health` (the
+/// hotspots analysis's inline structural proxy, `[60, 100]`, which the SAME
+/// threshold key instead reads on the `codelore diff` surface — see
+/// `diff.rs`'s `median_code_health`). Pinned by independently recomputing
+/// both medians over the identical `min_revs = 1`, uncapped population
+/// `project_health` scans, and asserting `baseline_median` matches the
+/// code-health one and diverges from the hotspots one — so a future
+/// unification of the two surfaces is a deliberate edit, not a silent drift.
+#[test]
+fn baseline_median_reads_code_health_score_not_hotspots_cognitive_health() {
+    let (_fx, repo, db, opts) = fresh();
+
+    let projection = project_health(&db, &repo, &opts, &[]).expect("project_health");
+    let baseline_median = projection
+        .baseline_median
+        .expect("delivery-scale fixture has scoreable files");
+
+    let opts_scan = {
+        let mut o = opts.with_no_row_limit();
+        o.min_revs = 1;
+        o
+    };
+
+    let health_rows = codelore_lib::analyses::code_health::run_code_health(&db, &opts_scan)
+        .expect("run_code_health");
+    let code_health_median = median_of(health_rows.iter().map(|r| r.score));
+    assert!(
+        (baseline_median - code_health_median).abs() < 1e-9,
+        "baseline_median must equal the code-health composite score median: \
+         baseline_median={baseline_median}, code_health_median={code_health_median}"
+    );
+
+    let hotspot_rows =
+        codelore_lib::analyses::hotspots::run_hotspots(&db, &opts_scan).expect("run_hotspots");
+    let hotspots_median = median_of(hotspot_rows.iter().map(|r| r.cognitive_health));
+    assert!(
+        (baseline_median - hotspots_median).abs() > 1e-6,
+        "baseline_median must NOT equal the hotspots cognitive_health median — \
+         the two are different metrics on different scales, and coincidental \
+         equality here would hide a future accidental field swap: \
+         baseline_median={baseline_median}, hotspots_median={hotspots_median}"
+    );
+}
+
+/// Plain median over an f64 iterator, mirroring `change_set::median`'s
+/// even/odd handling — kept local to the test so it does not depend on the
+/// crate's private helper.
+fn median_of(values: impl Iterator<Item = f64>) -> f64 {
+    let mut v: Vec<f64> = values.collect();
+    v.sort_by(|a, b| a.partial_cmp(b).expect("no NaNs in health scores"));
+    let mid = v.len() / 2;
+    if v.len() % 2 == 1 {
+        v[mid]
+    } else {
+        f64::midpoint(v[mid - 1], v[mid])
+    }
+}
+
 #[test]
 fn unchanged_repo_projects_zero_delta() {
     let (fx, repo, db, opts) = fresh();
