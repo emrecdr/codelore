@@ -207,36 +207,33 @@ pub fn run_effort_exposure_with_health(
             FROM eh_bands_v1
             GROUP BY band
         ),
-        band_commits AS (
-            SELECT b.band,
-                   COUNT(DISTINCT c.rev) AS n_commits
+        band_activity AS (
+            SELECT b.band, c.rev, c.loc_added, c.loc_deleted
             FROM {src} c
             INNER JOIN win          USING (rev)
             INNER JOIN eh_bands_v1 b ON b.path = c.path
-            GROUP BY b.band
+        ),
+        band_commits AS (
+            SELECT band,
+                   COUNT(DISTINCT rev) AS n_commits
+            FROM band_activity
+            GROUP BY band
         ),
         band_churn AS (
-            SELECT b.band,
-                   COALESCE(SUM(c.loc_added + c.loc_deleted), 0) AS churn
-            FROM {src} c
-            INNER JOIN win          USING (rev)
-            INNER JOIN eh_bands_v1 b ON b.path = c.path
-            GROUP BY b.band
+            SELECT band,
+                   COALESCE(SUM(loc_added + loc_deleted), 0) AS churn
+            FROM band_activity
+            GROUP BY band
         ),
         total_sloc    AS (SELECT COALESCE(SUM(sloc), 0) AS v FROM eh_bands_v1),
-        -- total_commits/total_churn join eh_bands_v1 so their denominators cover
-        -- the same banded population as the numerators (see this module's docs).
+        -- total_commits/total_churn read band_activity (itself joined against
+        -- eh_bands_v1) so their denominators cover the same banded population
+        -- as the numerators (see this module's docs).
         total_commits AS (
-            SELECT COUNT(DISTINCT c.rev) AS v
-            FROM {src} c
-            INNER JOIN win          USING (rev)
-            INNER JOIN eh_bands_v1 b ON b.path = c.path
+            SELECT COUNT(DISTINCT rev) AS v FROM band_activity
         ),
         total_churn   AS (
-            SELECT COALESCE(SUM(c.loc_added + c.loc_deleted), 0) AS v
-            FROM {src} c
-            INNER JOIN win          USING (rev)
-            INNER JOIN eh_bands_v1 b ON b.path = c.path
+            SELECT COALESCE(SUM(loc_added + loc_deleted), 0) AS v FROM band_activity
         )
         SELECT
             bf.band,
