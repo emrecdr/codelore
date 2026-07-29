@@ -184,6 +184,19 @@ fn resolve_alias_matches() {
         // rules, the parity invariant (identical output) must still hold.
         ("Alice Old", "alice-old@example.com"),
         ("Bob Bot", "bob-aliased@example.com"),
+        // MATCHING-name probes for the fixture's two 4-token rules (confirmed
+        // against the bundle's committed .mailmap: `Alice Canonical
+        // <canonical-alice@example.com> Alice <alice-old@example.com>` and
+        // `Carol Lee <carol@example.com> Carol <c.lee@example.com>` — both
+        // gate on commit name AND email, unlike Bob's 3-token, email-only
+        // rule). Every probe above pairs a non-matching name with an aliased
+        // email, so both backends only ever exercised the NO-MATCH path —
+        // an email-only resolution regression (e.g. a backend that passes
+        // only the email to its mailmap lookup, ignoring name) would be
+        // invisible. These two probes use the exact commit name each rule
+        // requires, so a genuine 4-token match is exercised on both backends.
+        ("Alice", "alice-old@example.com"),
+        ("Carol", "c.lee@example.com"),
     ];
 
     for (name, email) in probes {
