@@ -226,13 +226,18 @@ brew install emrecdr/codelore/codelore
 # Prebuilt binary via cargo-binstall (any Rust dev environment):
 cargo binstall codelore
 
-# From source (Rust 1.96+ toolchain required):
-cargo install --git https://github.com/emrecdr/codelore codelore-cli
+# From crates.io (Rust 1.96+ toolchain required). Compiles the bundled
+# DuckDB from source, so it's slower than Homebrew or cargo-binstall
+# above — those stay the recommended fast path:
+cargo install codelore
 
-# From source WITH the optional interactive dashboard emitter
-# (`--format spa` — Apache ECharts + d3-hierarchy fetched once at
-# build time, SHA-pinned). Requires internet on first build:
-cargo install --git https://github.com/emrecdr/codelore codelore-cli --features spa
+# ...WITH the optional interactive dashboard emitter (`--format spa` —
+# Apache ECharts + d3-hierarchy fetched once at build time, SHA-pinned).
+# Requires internet on first build:
+cargo install codelore --features spa
+
+# Development build straight from the repo (same from-source compile):
+cargo install --git https://github.com/emrecdr/codelore codelore
 
 # Container (distroless; the entrypoint is the codelore binary):
 docker run --rm -v "$PWD":/repo ghcr.io/emrecdr/codelore:latest \
@@ -535,7 +540,7 @@ What we deliberately don't ship: no async runtime, no libgit2 binding, no LLM-ba
 
 ## Status
 
-Released and under active development (pre-1.0; SemVer policy in [`docs/RELEASING.md`](docs/RELEASING.md)). **A full behavioral-analysis catalogue × 11 output formats × `codelore diff` PR-mode × `codelore check` + `codelore gate` quality gates × an 11-tool local MCP server × 5 SARIF rules.** Full test suite (`codelore-lib` unit + integration, `codelore-cli` integration, differential `GixRepo` vs `GitCliRepo` cross-walker parity, headless-browser SPA smoke) passes on Rust 1.96.0 on Linux and macOS in CI, and the Windows MSVC target runs a curated platform-sensitive test subset (path handling, process spawning, git-backend parity, filesystem semantics) plus full compile-and-link verification on every push (hosted Windows runners cannot fit the full suite's per-test process overhead inside a practical CI ceiling, so the subset targets where Windows can actually diverge); `clippy -D warnings`, `rustfmt --check`, and `cargo deny check` all gate every push. Each tagged release ships prebuilt binaries for five targets (macOS arm64/x86_64, Linux arm64/x86_64-gnu, Windows x86_64-msvc), each with SLSA L3 build provenance attached, a distroless OCI container at `ghcr.io/emrecdr/codelore`, an auto-regenerated formula in the `emrecdr/codelore` Homebrew tap, and a `cargo binstall`-compatible asset layout — all produced by `.github/workflows/release.yml` on every `v*` tag push, gated by the `protect-release-tags` ruleset that requires green CI on the target commit before the tag is accepted.
+Released and under active development (pre-1.0; SemVer policy in [`docs/RELEASING.md`](docs/RELEASING.md)). **A full behavioral-analysis catalogue × 11 output formats × `codelore diff` PR-mode × `codelore check` + `codelore gate` quality gates × an 11-tool local MCP server × 5 SARIF rules.** Full test suite (`codelore-lib` unit + integration, CLI-crate integration, differential `GixRepo` vs `GitCliRepo` cross-walker parity, headless-browser SPA smoke) passes on Rust 1.96.0 on Linux and macOS in CI, and the Windows MSVC target runs a curated platform-sensitive test subset (path handling, process spawning, git-backend parity, filesystem semantics) plus full compile-and-link verification on every push (hosted Windows runners cannot fit the full suite's per-test process overhead inside a practical CI ceiling, so the subset targets where Windows can actually diverge); `clippy -D warnings`, `rustfmt --check`, and `cargo deny check` all gate every push. Each tagged release ships prebuilt binaries for five targets (macOS arm64/x86_64, Linux arm64/x86_64-gnu, Windows x86_64-msvc), each with SLSA L3 build provenance attached, a distroless OCI container at `ghcr.io/emrecdr/codelore`, an auto-regenerated formula in the `emrecdr/codelore` Homebrew tap, and a `cargo binstall`-compatible asset layout — all produced by `.github/workflows/release.yml` on every `v*` tag push, gated by the `protect-release-tags` ruleset that requires green CI on the target commit before the tag is accepted.
 
 Known limitations (the honest list, validated against the current codebase):
 
@@ -569,7 +574,7 @@ just codelore -- analyze --analysis hotspots --repo /path/to/repo
 The interactive dashboard (`--format spa`) needs the optional `spa` feature, which inlines Apache ECharts + d3-hierarchy at build time. `just codelore` does **not** enable it, so build/run the CLI with the feature explicitly:
 
 ```bash
-cargo run --release -p codelore-cli --features spa -- \
+cargo run --release -p codelore --features spa -- \
     analyze --format spa --output codelore.html --repo .
 # then open codelore.html in a browser
 ```

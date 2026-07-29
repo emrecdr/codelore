@@ -4,6 +4,10 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **The CLI package is renamed `codelore-cli` → `codelore` for the crates.io publish.** The binary name (`codelore`) and the crate directory (`crates/codelore-cli`) are unchanged — only the Cargo package identifier moves, so `cargo install codelore` now resolves directly instead of requiring `cargo install codelore-cli`. `cargo install` instructions across the README and landing page are updated to the crates.io form, with a `--git` variant kept for development builds. The workspace's `keywords` and `categories` are now inherited by all three crates (`codelore`, `codelore-lib`, `codelore-rca`) via `keywords.workspace = true` / `categories.workspace = true`, so each surfaces them on its crates.io package page; the `behavioral-code-analysis` keyword is shortened to `behavioral-analysis` to clear crates.io's 20-character keyword limit. The CLI crate also adds `readme = "../../README.md"` so crates.io renders the project README as its package page.
+
 ## [0.24.0] - 2026-07-29
 
 ### Added

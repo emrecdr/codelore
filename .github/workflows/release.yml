@@ -117,7 +117,7 @@ jobs:
         # so end-users get the dashboard out of the box; source
         # installs (`cargo install codelore`) default OFF.
         # See `crates/codelore-lib/build.rs` for the JS-dep fetch.
-        run: cargo build --release -p codelore-cli --target ${{ matrix.target }} --features spa
+        run: cargo build --release -p codelore --target ${{ matrix.target }} --features spa
 
       - name: Stage artifact
         id: stage

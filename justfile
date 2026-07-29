@@ -51,7 +51,7 @@ ci: fmt-check lint deny test
 
 # Run the binary
 codelore *ARGS:
-    cargo run --release -p codelore-cli -- "$@"
+    cargo run --release -p codelore -- "$@"
 
 # Recompile the SPA's Tailwind v4 + DaisyUI 5 CSS asset.
 # Requires the Tailwind v4 standalone CLI on $PATH (see

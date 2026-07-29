@@ -64,7 +64,7 @@ absent at lookup time.
 Run the build from the repo root, writing straight into the embedded path:
 
 ```sh
-cargo build --release -p codelore-cli
+cargo build --release -p codelore
 
 ./target/release/codelore calibrate \
   --repos calibration/corpus.toml \

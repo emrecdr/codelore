@@ -337,7 +337,7 @@ cargo binstall codelore</pre>
       <pre><span class="cmt"># Container (distroless; the entrypoint is the codelore binary):</span>
 docker run --rm -v "$PWD":/repo ghcr.io/emrecdr/codelore:latest analyze --analysis hotspots --repo /repo</pre>
       <pre><span class="cmt"># From source (Rust 1.96+ toolchain required):</span>
-cargo install --git https://github.com/emrecdr/codelore codelore-cli</pre>
+cargo install codelore</pre>
       <p class="install-note">
         Add <code class="inline">--features spa</code> to the source build for the optional
         interactive dashboard emitter, or grab a prebuilt archive from a

@@ -6,6 +6,8 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "CodeLore — Behavioral Code Analyzer library"
+keywords.workspace = true
+categories.workspace = true
 
 [lints]
 workspace = true

@@ -12,7 +12,7 @@ repository = "https://github.com/emrecdr/codelore"
 # Mirrors the GitHub topic tags configured on the repository (see README
 # badges + docs/CONTRIBUTING for the same tag list).
 keywords = [
-    "behavioral-code-analysis",
+    "behavioral-analysis",
     "code-analysis",
     "repository-mining",
     "technical-debt",

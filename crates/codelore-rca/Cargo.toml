@@ -8,6 +8,8 @@ rust-version.workspace = true
 license = "MPL-2.0 AND GPL-3.0-only"
 repository.workspace = true
 description = "Vendored fork of Mozilla rust-code-analysis for CodeLore"
+keywords.workspace = true
+categories.workspace = true
 
 # Don't apply workspace lints to vendored MPL files — keeps upstream-merge friction low.
 # See UPSTREAM.md for rationale.
