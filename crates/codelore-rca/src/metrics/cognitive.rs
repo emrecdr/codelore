@@ -305,6 +305,11 @@ impl Cognitive for PythonCode {
                 // by the if construct. `finally` is not a branch and does not
                 // increment.
                 increment_by_one(stats);
+                // The else body starts a fresh boolean sequence, so its
+                // operators must not merge with the preceding branch
+                // condition's. Reset at the `else` boundary, exactly as
+                // `ElifClause` and the sibling languages' `Else` arms do.
+                stats.boolean_seq.reset();
             }
             ExceptClause => {
                 // `except` pays a structural increment plus the nesting penalty
@@ -2356,6 +2361,41 @@ mod tests {
                  }
              }",
             "foo.tsx",
+            |metric| {
+                insta::assert_json_snapshot!(
+                    metric.cognitive,
+                    @r###"
+                    {
+                      "sum": 4.0,
+                      "average": 4.0,
+                      "min": 0.0,
+                      "max": 4.0
+                    }"###
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn python_boolean_sequence_across_else_if() {
+        // Python's `elif` is its own grammar node (`ElifClause`) and already
+        // resets the boolean sequence, so an `elif` here would not exercise the
+        // defect. The reset that was missing is on the plain `else`
+        // (`ElseClause`): the `and` in the `else` body is its own boolean
+        // sequence, not a continuation of the `if` condition's `and`. Without a
+        // reset at the `else` boundary the two runs merge and the else-body
+        // operator is dropped, undercounting by 1 — 3 where every sibling
+        // language scores 4 for the same shape. `return` (not an expression
+        // statement) keeps the body's operator off the `ExpressionStatement`
+        // reset, isolating the `else` boundary the way the JS test's empty
+        // bodies do.
+        check_metrics::<PythonParser>(
+            "def f(a, b, c, d):
+                 if a and b:  # +2 (+1 if, +1 and)
+                     pass
+                 else:  # +1 else
+                     return c and d  # +1 and",
+            "foo.py",
             |metric| {
                 insta::assert_json_snapshot!(
                     metric.cognitive,

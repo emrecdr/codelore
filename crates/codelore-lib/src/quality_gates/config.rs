@@ -54,8 +54,13 @@ pub struct Gates {
     /// Maximum corpus-anchored hotspot score per file (the `hotspot-score-anchored`
     /// column). Same `[0, 10]` scale as `hotspot_score_max`, but the file's
     /// complexity is ranked against the calibration corpus rather than the repo,
-    /// so this ceiling is stable under improvement — removing or refactoring the
-    /// repo's worst file does not shift any other file's anchored score.
+    /// so improving a file *in place* does not shift any other file's anchored
+    /// score — the complexity term is corpus-anchored. The revisions term stays
+    /// repo-relative by design, so a change to the revision population itself (a
+    /// new file clearing `min_revs`, a refactor commit that reorders the churn
+    /// ranks) can still move an untouched file's score; this ceiling carries
+    /// margin above the measured worst to absorb that, keeping it an absolute
+    /// standard rather than a moving target.
     ///
     /// The gate is **skipped** (not failed, not passed) when no calibration
     /// artifact is active — no embedded world corpus and no `--calibration`
