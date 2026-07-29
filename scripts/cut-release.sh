@@ -435,9 +435,25 @@ else
       warn "no CI run auto-triggered for ${RELEASE_SHA:0:7} (paths-ignore likely matched)."
       warn "dispatching CI manually via workflow_dispatch..."
       gh workflow run CI --ref main
-      sleep 5
-      RUN_ID="$(gh run list --limit 3 --branch main --workflow CI --json databaseId,event,headSha \
-                --jq '.[] | select(.event == "workflow_dispatch") | .databaseId' | head -1)"
+      # The dispatched run takes a few seconds to register with a matching
+      # headSha. Retry with a bounded window instead of a single sleep+read
+      # — a run must NEVER be adopted without comparing headSha, since
+      # accepting a stale workflow_dispatch run from an unrelated commit
+      # would let an unchecked SHA reach the irreversible crates.io publish.
+      DISPATCH_ATTEMPTS=12
+      DISPATCH_INTERVAL=10
+      for (( attempt = 1; attempt <= DISPATCH_ATTEMPTS; attempt++ )); do
+        sleep "${DISPATCH_INTERVAL}"
+        RUN_ID="$(gh run list --limit 5 --branch main --workflow CI --json databaseId,event,headSha \
+                  --jq ".[] | select(.event == \"workflow_dispatch\" and .headSha == \"${RELEASE_SHA}\") | .databaseId" | head -1)"
+        if [[ -n "${RUN_ID}" ]]; then
+          break
+        fi
+        log "  waiting for dispatched CI run on ${RELEASE_SHA:0:7} (${attempt}/${DISPATCH_ATTEMPTS})..."
+      done
+      if [[ -z "${RUN_ID}" ]]; then
+        die "dispatched CI run for ${RELEASE_SHA:0:7} did not register within $(( DISPATCH_ATTEMPTS * DISPATCH_INTERVAL ))s. Check 'gh run list' manually — never adopt a run without a matching headSha."
+      fi
     fi
     if [[ -z "${RUN_ID}" ]]; then
       die "could not locate a CI run for ${RELEASE_SHA:0:7}. Check 'gh run list' manually."
