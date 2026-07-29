@@ -22,6 +22,8 @@ Conventional Commits format. All notable changes documented here.
 
 - **The committed `.codelore-ratchet.toml` now carries a schema key and resets with one clear notice when gate metrics are redefined.** The ratchet file persisted its three observed floors with no version marker, so a metric redefinition (e.g. a re-anchored hotspot/code-health scoring formula) had every carrying repo silently comparing new-scale observations against old-scale floors. A `ratchet_schema` key is now written on every save; a missing (pre-fix file) or stale key discards the baseline and re-establishes it from the current run, logging one `tracing::warn!` explaining the reset.
 
+- **`codelore diff`'s `--base-cache` digest now includes the binary version, cache epoch, and fact-schema version, matching the main fact-store cache key.** The digest previously folded in only `min_revs` and `--exclude`, so a base cache written by an older binary or fact-schema version was silently reused by a newer one that no longer agreed on what the cached values meant. Existing base caches invalidate once on upgrade — the intended effect of the fix.
+
 ## [0.24.0] - 2026-07-29
 
 ### Added
