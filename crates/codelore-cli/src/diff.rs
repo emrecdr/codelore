@@ -845,9 +845,20 @@ pub fn run_diff(args: &DiffArgs) -> Result<(DiffOutput, FactsDb, Options)> {
     ))
 }
 
-/// Median of `code_health` across a hotspots row vector. Returns 0.0
+/// Median of `HotspotRow::cognitive_health` (the `hotspots` analysis's inline
+/// structural proxy, `[60, 100]`) across a hotspots row vector. Returns 0.0
 /// for empty inputs — consistent with the "vacuous" branch in the
 /// caller, where no data means no signal means no violation.
+///
+/// This feeds `[diff] delta_code_health_min` on the `codelore diff` surface.
+/// The SAME threshold key on `codelore gate` / MCP `gate_changes`
+/// (`evaluate_gate_thresholds` in `quality_gates/evaluators.rs`) instead
+/// compares `code_health::CodeHealthRow::score` — the composite `code-health`
+/// score, `[0, 100]` — via `change_set.rs`'s `HealthProjection::baseline_median`
+/// / `projected_median`. The two metrics are NOT interchangeable (a file can
+/// read healthy under one and unhealthy under the other); this divergence is
+/// documented, not a bug — see `docs/advanced-usage.md`'s gate-surface
+/// comparison table.
 fn median_code_health(rows: &[HotspotRow]) -> f64 {
     if rows.is_empty() {
         return 0.0;
@@ -1125,5 +1136,51 @@ mod prune_tests {
             "abc",
             &base_cache_opts_digest(2, &[])
         ));
+    }
+}
+
+#[cfg(test)]
+mod median_code_health_tests {
+    use super::*;
+
+    fn row(path: &str, cognitive_health: f64) -> HotspotRow {
+        // `cognitive`, `hotspot_score` and `revisions` are deliberately set to
+        // values that would give a DIFFERENT median than `cognitive_health`
+        // does — pinning that `median_code_health` (and therefore
+        // `[diff] delta_code_health_min` on the `codelore diff` surface) reads
+        // `cognitive_health` specifically, not a sibling numeric field on the
+        // same row. See the field's doc comment for why `codelore gate` /
+        // `gate_changes` compares a different metric under the same key.
+        HotspotRow {
+            path: path.to_string(),
+            revisions: 1,
+            cognitive: 999.0,
+            cognitive_health,
+            hotspot_score: 0.0,
+            mi: None,
+            mi_rank: None,
+            ai_pct: None,
+            hotspot_score_anchored: None,
+        }
+    }
+
+    #[test]
+    fn median_code_health_reads_cognitive_health_field() {
+        // Three rows: cognitive_health median is 70.0; every sibling numeric
+        // field is held constant (or set to a value whose own median would be
+        // 999.0 / 0.0 / 1.0), so a swap to the wrong field would fail loudly.
+        let rows = vec![row("a.rs", 60.0), row("b.rs", 70.0), row("c.rs", 100.0)];
+        assert_eq!(median_code_health(&rows), 70.0);
+    }
+
+    #[test]
+    fn median_code_health_even_count_averages_the_middle_pair() {
+        let rows = vec![
+            row("a.rs", 60.0),
+            row("b.rs", 70.0),
+            row("c.rs", 80.0),
+            row("d.rs", 100.0),
+        ];
+        assert_eq!(median_code_health(&rows), 75.0);
     }
 }

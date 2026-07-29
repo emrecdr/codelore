@@ -332,6 +332,15 @@ pub fn project_health<R: crate::Repo>(
         .collect();
     sort_deltas(&mut deltas);
 
+    // `.score` is `CodeHealthRow`'s composite `code-health` score, `[0, 100]` —
+    // this is what `[diff] delta_code_health_min` reads on the `codelore gate`
+    // / MCP `gate_changes` surface (`evaluate_gate_thresholds` in
+    // `quality_gates/evaluators.rs`). The SAME threshold key on `codelore diff`
+    // instead compares `hotspots::HotspotRow::cognitive_health` — the
+    // hotspots analysis's inline structural proxy, `[60, 100]` — via
+    // `diff.rs`'s `median_code_health`. The two metrics are NOT
+    // interchangeable; this divergence is documented, not a bug — see
+    // `docs/advanced-usage.md`'s gate-surface comparison table.
     Ok(HealthProjection {
         deltas,
         baseline_median: median(baseline_rows.iter().map(|r| r.score)),

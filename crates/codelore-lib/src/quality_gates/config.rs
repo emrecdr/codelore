@@ -147,6 +147,14 @@ fn default_fail_on_degraded() -> bool {
 pub struct DiffGates {
     /// Maximum allowed drop in median code-health between base and
     /// head. A drop of more than this magnitude fails the gate.
+    ///
+    /// The same key is evaluated against a DIFFERENT metric depending on the
+    /// surface: `codelore diff` compares `hotspots::HotspotRow::cognitive_health`
+    /// (`[60, 100]`, `diff.rs`'s `median_code_health`); `codelore gate` /
+    /// `gate_changes` compares `code_health::CodeHealthRow::score` (`[0, 100]`,
+    /// `change_set.rs`'s `HealthProjection::baseline_median`/`projected_median`).
+    /// This is a documented, deliberate divergence — see `docs/advanced-usage.md`'s
+    /// gate-surface comparison table.
     pub delta_code_health_min: Option<f64>,
     /// Maximum number of NEW hotspots a PR may introduce.
     pub new_hotspot_max: Option<u32>,
