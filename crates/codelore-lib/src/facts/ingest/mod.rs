@@ -422,15 +422,7 @@ mod future_date_warning_tests {
     /// deterministically whatever day the suite runs.
     fn ts_days_ago(days: i64) -> String {
         let t = time::OffsetDateTime::now_utc() - time::Duration::days(days);
-        format!(
-            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-            t.year(),
-            u8::from(t.month()),
-            t.day(),
-            t.hour(),
-            t.minute(),
-            t.second(),
-        )
+        crate::facts::ingest::consumer::format_timestamp(t)
     }
 
     fn seed(db: &FactsDb, rev: &str, date: &str) {
