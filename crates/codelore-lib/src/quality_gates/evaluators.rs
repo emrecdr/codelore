@@ -205,6 +205,38 @@ pub fn evaluate_diff_gate(
     out
 }
 
+/// The `"passed"` / `"failed"` / `"skipped"` verdict for the whole `[diff]`
+/// gate family [`evaluate_diff_gate`] evaluates, given whether each side of
+/// the range actually measured anything.
+///
+/// `evaluate_diff_gate` only receives scalars already reduced from the base
+/// and head hotspot row sets (`new_hotspot_count`, `delta_code_health`,
+/// `base_cycles`/`head_cycles`, `delta_health_ratio`) — it has no way to tell
+/// "reduced from real rows, genuinely unchanged" apart from "reduced from
+/// nothing, because neither revision measured anything" (a blind ingest: a
+/// shallow checkout, or any other zero-commit ingest, leaves
+/// `RevAnalyses::hotspots` empty at both revisions, which zeroes every one
+/// of those scalars identically to a real no-op diff). `"skipped"` when
+/// `base_measured` and `head_measured` are both `false` — the caller passes
+/// `!RevAnalyses::hotspots.is_empty()` for each side. A genuinely unchanged
+/// repository with real (non-empty) hotspot rows at both revisions stays a
+/// real `"passed"`. Mirrors [`change_set_gate_verdict`]'s verdict-string
+/// convention for the analogous ambiguity on the working-tree gate family.
+#[must_use]
+pub fn diff_gate_verdict(
+    base_measured: bool,
+    head_measured: bool,
+    violation_count: usize,
+) -> &'static str {
+    if !base_measured && !head_measured {
+        "skipped"
+    } else if violation_count == 0 {
+        "passed"
+    } else {
+        "failed"
+    }
+}
+
 /// Evaluate the `[diff]` gates that apply to a working-tree change-set report
 /// (`codelore gate` / the `gate_changes` MCP tool).
 ///
@@ -230,6 +262,14 @@ pub fn evaluate_diff_gate(
 ///
 /// The remaining `[diff]` keys (`new_hotspot_max`, `delta_health_min`,
 /// `deny_degrading_verdict`) are diff-only and never evaluated here.
+///
+/// The three collection-driven gates above (`delta_code_health_min_per_file`,
+/// `new_file_health_min`, `no_new_cycles`) return zero violations — not a
+/// verdict — whenever their source collection is empty, which is ambiguous on
+/// its own: it means either "measured, found nothing to flag" (a real pass)
+/// or "the change-set carried no files, so nothing was measured" (a skip).
+/// [`change_set_gate_verdict`] resolves the ambiguity from `report.changes`
+/// for callers building a ledger record or a skip notice.
 #[must_use]
 pub fn evaluate_gate_thresholds(
     thresholds: &Thresholds,
@@ -297,6 +337,36 @@ pub fn evaluate_gate_thresholds(
         }
     }
     out
+}
+
+/// The `"passed"` / `"failed"` / `"skipped"` verdict for one of
+/// [`evaluate_gate_thresholds`]'s three collection-driven gates
+/// (`delta_code_health_min_per_file`, `new_file_health_min`, `no_new_cycles`),
+/// given that gate's violation count.
+///
+/// `"skipped"` when `report.changes` is empty: the change-set itself carried
+/// no files, so the gate measured nothing — an empty `violation_count` there
+/// means "did not evaluate", not "evaluated and found clean". A non-empty
+/// change-set with `violation_count == 0` is a genuine `"passed"` (e.g.
+/// `no_new_cycles` legitimately finding no newly-cyclic paths among real
+/// changes stays a pass, not a skip). Mirrors the `[new_code]` gate's
+/// `NewCodeScope::window_start_present` skip signal and reuses the ledger's
+/// existing `"passed"`/`"failed"`/`"skipped"` string convention
+/// ([`GateRunRecord::verdict`](super::ledger::GateRunRecord::verdict)) — callers
+/// record the result verbatim rather than re-deriving it from the raw
+/// violation count.
+#[must_use]
+pub fn change_set_gate_verdict(
+    report: &crate::change_set::ChangeSetReport,
+    violation_count: usize,
+) -> &'static str {
+    if report.changes.is_empty() {
+        "skipped"
+    } else if violation_count == 0 {
+        "passed"
+    } else {
+        "failed"
+    }
 }
 
 /// Evaluate the `[gates]` section against a hotspots result set.
@@ -980,6 +1050,38 @@ mod tests {
         assert!(evaluate_diff_gate(&t, 0, 0.0, 0, 0, Some(60.0), Some("indeterminate")).is_empty());
     }
 
+    // ───────── diff_gate_verdict (blind-ingest skip semantics) ─────────
+
+    #[test]
+    fn diff_gate_verdict_skipped_when_neither_side_measured() {
+        // Blind ingest: both revisions' hotspot row sets are empty, so every
+        // scalar evaluate_diff_gate saw (new_hotspot_count=0,
+        // delta_code_health=0.0, cycles=0/0, ratio=None) reads identically to
+        // a genuinely unchanged repo. The verdict must be skipped, not passed.
+        assert_eq!(diff_gate_verdict(false, false, 0), "skipped");
+    }
+
+    #[test]
+    fn diff_gate_verdict_passes_when_measured_and_clean() {
+        // A real, non-empty range on both sides with zero violations is a
+        // genuine pass — the blind-ingest case must not swallow this one.
+        assert_eq!(diff_gate_verdict(true, true, 0), "passed");
+    }
+
+    #[test]
+    fn diff_gate_verdict_fails_when_measured_with_violations() {
+        assert_eq!(diff_gate_verdict(true, true, 3), "failed");
+    }
+
+    #[test]
+    fn diff_gate_verdict_treats_one_sided_measurement_as_measured() {
+        // Only one side reading empty (e.g. a brand-new file at head with no
+        // base counterpart) is not the blind-ingest case — the family still
+        // renders a real verdict from whatever violations were found.
+        assert_eq!(diff_gate_verdict(true, false, 0), "passed");
+        assert_eq!(diff_gate_verdict(false, true, 1), "failed");
+    }
+
     // ───────────────── gate (working-tree) evaluator ─────────────────
 
     fn make_gate_delta(path: &str, delta: Option<f64>) -> crate::change_set::FileDelta {
@@ -995,16 +1097,51 @@ mod tests {
         }
     }
 
+    /// Derives `changes` from the delta rows plus any newly-cyclic paths not
+    /// already covered by a delta — mirroring the engine's own invariant
+    /// (`project_health` maps `changes` 1:1 into `deltas`) closely enough that
+    /// `report.changes.is_empty()` (the [`change_set_gate_verdict`] skip
+    /// predicate) reads the same way it would on a real report, without every
+    /// call site having to spell out a redundant `WorktreeChange` list.
+    fn derive_gate_report_changes(
+        deltas: &[crate::change_set::FileDelta],
+        newly_cyclic: &[String],
+    ) -> Vec<crate::repo::WorktreeChange> {
+        let mut changes: Vec<crate::repo::WorktreeChange> = deltas
+            .iter()
+            .map(|d| crate::repo::WorktreeChange {
+                path: d.path.clone(),
+                kind: match d.kind.as_str() {
+                    "added" => crate::repo::WorktreeChangeKind::Added,
+                    "deleted" => crate::repo::WorktreeChangeKind::Deleted,
+                    _ => crate::repo::WorktreeChangeKind::Modified,
+                },
+                rename_from: None,
+            })
+            .collect();
+        for path in newly_cyclic {
+            if !changes.iter().any(|c| &c.path == path) {
+                changes.push(crate::repo::WorktreeChange {
+                    path: path.clone(),
+                    kind: crate::repo::WorktreeChangeKind::Modified,
+                    rename_from: None,
+                });
+            }
+        }
+        changes
+    }
+
     fn make_gate_report(
         deltas: Vec<crate::change_set::FileDelta>,
         baseline_median: Option<f64>,
         projected_median: Option<f64>,
         newly_cyclic: Vec<String>,
     ) -> crate::change_set::ChangeSetReport {
+        let changes = derive_gate_report_changes(&deltas, &newly_cyclic);
         crate::change_set::ChangeSetReport {
             head_sha: "0123456789abcdef0123456789abcdef01234567".to_string(),
             merge_in_progress: false,
-            changes: Vec::new(),
+            changes,
             health: crate::change_set::HealthProjection {
                 deltas,
                 baseline_median,
@@ -1090,6 +1227,7 @@ mod tests {
         assert_eq!(v[0].actual, "-2.50");
         assert_eq!(v[0].threshold, "+0.00");
         assert_eq!(v[1].path, "b.rs");
+        assert_eq!(change_set_gate_verdict(&report, v.len()), "failed");
     }
 
     #[test]
@@ -1121,6 +1259,7 @@ mod tests {
         assert!(v.iter().all(|x| x.gate == "no_new_cycles"));
         assert_eq!(v[0].path, "src/a.rs");
         assert_eq!(v[1].path, "src/b.rs");
+        assert_eq!(change_set_gate_verdict(&report, v.len()), "failed");
         // No newly cyclic paths ⇒ clean, even with the gate on.
         let clean = make_gate_report(Vec::new(), Some(50.0), Some(50.0), Vec::new());
         assert!(evaluate_gate_thresholds(&t, &clean).is_empty());
@@ -1187,6 +1326,7 @@ mod tests {
         assert_eq!(v[0].path, "src/god_class.rs");
         assert_eq!(v[0].actual, "20.0");
         assert_eq!(v[0].threshold, "50.0");
+        assert_eq!(change_set_gate_verdict(&report, v.len()), "failed");
     }
 
     #[test]
@@ -1236,6 +1376,90 @@ mod tests {
             evaluate_gate_thresholds(&t, &report).is_empty(),
             "deleted files never trip the new-file floor"
         );
+    }
+
+    // ───────── change_set_gate_verdict (empty-change-set skip semantics) ─────────
+
+    #[test]
+    fn gate_per_file_floor_skipped_on_empty_change_set() {
+        // No files in the change-set at all: nothing was measured, so the
+        // per-file floor must be reported skipped, not a silent pass.
+        let mut t = Thresholds::default();
+        t.diff.delta_code_health_min_per_file = Some(0.0);
+        let report = make_gate_report(Vec::new(), None, None, Vec::new());
+        assert!(evaluate_gate_thresholds(&t, &report).is_empty());
+        assert_eq!(change_set_gate_verdict(&report, 0), "skipped");
+    }
+
+    #[test]
+    fn gate_per_file_floor_passes_on_measured_clean_change_set() {
+        // A real, non-empty change-set where every file clears the floor is a
+        // genuine pass, not a skip — behavior stays byte-identical to before.
+        let mut t = Thresholds::default();
+        t.diff.delta_code_health_min_per_file = Some(-5.0);
+        let report = make_gate_report(
+            vec![make_gate_delta("a.rs", Some(1.0))],
+            Some(50.0),
+            Some(51.0),
+            Vec::new(),
+        );
+        let v = evaluate_gate_thresholds(&t, &report);
+        assert!(v.is_empty());
+        assert_eq!(change_set_gate_verdict(&report, v.len()), "passed");
+    }
+
+    #[test]
+    fn gate_new_file_floor_skipped_on_empty_change_set() {
+        let mut t = Thresholds::default();
+        t.diff.new_file_health_min = Some(50.0);
+        let report = make_gate_report(Vec::new(), None, None, Vec::new());
+        assert!(evaluate_gate_thresholds(&t, &report).is_empty());
+        assert_eq!(change_set_gate_verdict(&report, 0), "skipped");
+    }
+
+    #[test]
+    fn gate_new_file_floor_passes_on_measured_clean_change_set() {
+        // A real, non-empty change-set with no low-health added files is a
+        // genuine pass, not a skip.
+        let mut t = Thresholds::default();
+        t.diff.new_file_health_min = Some(50.0);
+        let report = make_gate_report(
+            vec![make_added_delta("src/tidy.rs", 80.0)],
+            Some(60.0),
+            Some(60.0),
+            Vec::new(),
+        );
+        let v = evaluate_gate_thresholds(&t, &report);
+        assert!(v.is_empty());
+        assert_eq!(change_set_gate_verdict(&report, v.len()), "passed");
+    }
+
+    #[test]
+    fn gate_no_new_cycles_skipped_on_empty_change_set() {
+        let mut t = Thresholds::default();
+        t.diff.no_new_cycles = true;
+        let report = make_gate_report(Vec::new(), None, None, Vec::new());
+        assert!(evaluate_gate_thresholds(&t, &report).is_empty());
+        assert_eq!(change_set_gate_verdict(&report, 0), "skipped");
+    }
+
+    #[test]
+    fn gate_no_new_cycles_passes_on_measured_change_set_with_no_new_cycles() {
+        // A real, non-empty change-set that introduces no new cycles is a
+        // genuine pass — the case the audit explicitly calls out to protect:
+        // a populated change-set with zero new cycles must stay PASS, not
+        // collapse into the same "skipped" bucket as an unmeasured one.
+        let mut t = Thresholds::default();
+        t.diff.no_new_cycles = true;
+        let report = make_gate_report(
+            vec![make_gate_delta("a.rs", Some(1.0))],
+            Some(50.0),
+            Some(51.0),
+            Vec::new(),
+        );
+        let v = evaluate_gate_thresholds(&t, &report);
+        assert!(v.is_empty());
+        assert_eq!(change_set_gate_verdict(&report, v.len()), "passed");
     }
 
     // ───────── max_red_effort_pct gate ─────────

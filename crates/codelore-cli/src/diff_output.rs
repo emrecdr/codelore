@@ -101,6 +101,11 @@ fn emit_text(
         writeln!(out)?;
     }
 
+    if let Some(reason) = &output.gate_skip_reason {
+        writeln!(out, "⚠ [diff] quality gate SKIPPED — {reason}")?;
+        writeln!(out)?;
+    }
+
     if let Some(dh) = &output.delta_health {
         match dh.ratio {
             Some(ratio) => writeln!(
@@ -275,6 +280,17 @@ fn emit_markdown(
                 codelore_lib::cli_api::output::markdown::escape_md_cell(&v.threshold),
             )?;
         }
+        writeln!(out)?;
+    }
+
+    if let Some(reason) = &output.gate_skip_reason {
+        writeln!(out, "## ⚠️ Quality gate SKIPPED")?;
+        writeln!(out)?;
+        writeln!(
+            out,
+            "{}",
+            codelore_lib::cli_api::output::markdown::escape_md_cell(reason)
+        )?;
         writeln!(out)?;
     }
 
