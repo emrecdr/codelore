@@ -20,6 +20,8 @@ Conventional Commits format. All notable changes documented here.
 
 - **`cut-release.sh`'s workflow_dispatch fallback could adopt a CI run from an unrelated commit and declare it green for the release SHA.** When the release commit didn't auto-trigger CI (a `paths-ignore` match) and the script dispatched CI manually, the fallback selected the most recent `workflow_dispatch` run on `main` by event type alone, with no `headSha` comparison — ahead of the irreversible crates.io publish this job gates. The fallback now polls (bounded retry, matching the primary path's `headSha` filter) until a `workflow_dispatch` run on the exact release SHA registers, and `die`s if none appears in the window; a run is never adopted without its `headSha` compared.
 
+- **The committed `.codelore-ratchet.toml` now carries a schema key and resets with one clear notice when gate metrics are redefined.** The ratchet file persisted its three observed floors with no version marker, so a metric redefinition (e.g. a re-anchored hotspot/code-health scoring formula) had every carrying repo silently comparing new-scale observations against old-scale floors. A `ratchet_schema` key is now written on every save; a missing (pre-fix file) or stale key discards the baseline and re-establishes it from the current run, logging one `tracing::warn!` explaining the reset.
+
 ## [0.24.0] - 2026-07-29
 
 ### Added
