@@ -14,6 +14,10 @@ Conventional Commits format. All notable changes documented here.
 
 - **Three small internal duplications collapsed onto their existing canonical implementation; no output or behavior change.** `effort-exposure`'s four window-scoped denominator CTEs (`band_commits`, `band_churn`, `total_commits`, `total_churn`) now share one `band_activity` CTE for the repeated `{src} ⋈ win ⋈ eh_bands_v1` join instead of each re-running it — proven byte-identical against a pre-change baseline. The `[new_code]` gate's skip-reason prose, which had drifted between `codelore check`'s stderr notice and the `check_gates` MCP tool's `reason` field, is now a single shared message (the fuller wording, "…to contrast the working set against", wins). Timestamp formatting duplicated across `wall_clock_utc_literal` and two test helpers now calls the canonical ingest formatter instead of re-implementing it.
 
+### Fixed
+
+- **The `crates-publish` job's publish-step guard referenced the `secrets` context in a step-level `if`, which GitHub Actions does not provide there — the next tag push would have hard-errored the job before ever reaching `cargo publish`.** The `secrets` context is unavailable in any `if` expression, job- or step-level; the job now maps `CRATES_IO_TOKEN` through job-level `env` and the step's guard tests `env.CRATES_IO_TOKEN` instead, which is a documented-legal context for `if`.
+
 ## [0.24.0] - 2026-07-29
 
 ### Added

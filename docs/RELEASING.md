@@ -184,7 +184,7 @@ Use SemVer suffix conventions on the tag (`v0.2.0-alpha.1`, `v0.2.0-beta.2`, `v0
 
 ### Publishing to crates.io
 
-The `crates-publish` job (see the tag-push job list above for the order and the secret gate) runs only after `plan`, `build`, and `release` have all succeeded, leaning on `cargo publish`'s own wait for each crate to propagate through the index before the next one starts. The `CRATES_IO_TOKEN` guard sits on the publish step rather than the job because GitHub Actions doesn't expose the `secrets` context to a job-level `if`.
+The `crates-publish` job (see the tag-push job list above for the order and the secret gate) runs only after `plan`, `build`, and `release` have all succeeded, leaning on `cargo publish`'s own wait for each crate to propagate through the index before the next one starts. GitHub Actions doesn't expose the `secrets` context to *any* `if` expression (job- or step-level), so the job maps `CRATES_IO_TOKEN` through job-level `env` and the publish step's guard tests `env.CRATES_IO_TOKEN` instead.
 
 If the job fails partway through, finish the remaining crates by hand, in the same order:
 
