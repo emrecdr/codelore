@@ -1028,6 +1028,15 @@
       align-items: center;
       justify-content: center;
     }
+    /* Layout only — no color/background/border here. This unlayered legacy
+       rule sits above DaisyUI's `@layer`ed styles, so per CSS Cascade 5 any
+       property it declares beats DaisyUI's `badge-error` / `badge-warning` /
+       `badge-success` regardless of specificity or source order. Every badge
+       in this dashboard is rendered with a DaisyUI color/semantic modifier
+       class alongside the plain `badge` class (see template.html / js/), so
+       letting DaisyUI's `--badge-color` indirection paint color/background/
+       border here is what makes those modifiers visually distinct instead of
+       every badge rendering identically green. */
     .badge {
       display: inline-block;
       margin-left: 6px;
@@ -1035,9 +1044,6 @@
       font-size: 10px;
       font-weight: 500;
       letter-spacing: 0.02em;
-      color: var(--accent);
-      background: rgba(46, 164, 79, 0.12);
-      border: 1px solid rgba(46, 164, 79, 0.3);
       border-radius: 3px;
       vertical-align: 1px;
     }
