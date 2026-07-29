@@ -127,9 +127,11 @@ fn report_gate_clean_tree(args: &args::GateArgs) {
 }
 
 /// Emit the gate run's stderr notices (suppressed under `--quiet`): the
-/// merge-in-progress note, and the skip notice when `delta_code_health_min`
-/// is configured but a whole-repo code-health median is unavailable on
-/// either side (no scoreable files) — skipped, not failed.
+/// merge-in-progress note, the skip notice when `delta_code_health_min` is
+/// configured but a whole-repo code-health median is unavailable on either
+/// side (no scoreable files), and the same skip notice for the three
+/// change-set-scoped gates when `report.changes` itself is empty — nothing
+/// was measured, so the run reports skipped rather than a silent pass.
 fn emit_gate_run_notices(
     args: &args::GateArgs,
     thresholds: &codelore_lib::cli_api::quality_gates::Thresholds,
@@ -147,6 +149,17 @@ fn emit_gate_run_notices(
         eprintln!(
             "  ⚠ delta_code_health_min: skipped — no whole-repo code-health median to compare"
         );
+    }
+    if report.changes.is_empty() {
+        if thresholds.diff.delta_code_health_min_per_file.is_some() {
+            eprintln!("  ⚠ delta_code_health_min_per_file: skipped — no files in the change-set");
+        }
+        if thresholds.diff.new_file_health_min.is_some() {
+            eprintln!("  ⚠ new_file_health_min: skipped — no files in the change-set");
+        }
+        if thresholds.diff.no_new_cycles {
+            eprintln!("  ⚠ no_new_cycles: skipped — no files in the change-set");
+        }
     }
 }
 
@@ -275,6 +288,7 @@ fn gate_ledger_records(
     violations: &[codelore_lib::cli_api::quality_gates::GateViolation],
     ts: &str,
 ) -> Vec<codelore_lib::cli_api::quality_gates::ledger::GateRunRecord> {
+    use codelore_lib::cli_api::quality_gates::change_set_gate_verdict;
     use codelore_lib::cli_api::quality_gates::ledger::GateRunRecord;
     let rec = |gate: &str, threshold: f64, value: f64, verdict: &str| GateRunRecord {
         ts: ts.to_owned(),
@@ -311,7 +325,7 @@ fn gate_ledger_records(
             "delta_code_health_min_per_file",
             min,
             count_f64("delta_code_health_min_per_file"),
-            verdict("delta_code_health_min_per_file"),
+            change_set_gate_verdict(report, count("delta_code_health_min_per_file")),
         ));
     }
     if let Some(min) = d.new_file_health_min {
@@ -319,7 +333,7 @@ fn gate_ledger_records(
             "new_file_health_min",
             min,
             count_f64("new_file_health_min"),
-            verdict("new_file_health_min"),
+            change_set_gate_verdict(report, count("new_file_health_min")),
         ));
     }
     if d.no_new_cycles {
@@ -327,7 +341,7 @@ fn gate_ledger_records(
             "no_new_cycles",
             0.0,
             count_f64("no_new_cycles"),
-            verdict("no_new_cycles"),
+            change_set_gate_verdict(report, count("no_new_cycles")),
         ));
     }
     records

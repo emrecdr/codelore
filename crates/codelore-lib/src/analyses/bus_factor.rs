@@ -70,13 +70,13 @@ pub struct BusFactorRow {
 // files (no `/`) fall into a `<root>` bucket so they are counted rather
 // than silently dropped — every commit contributes to some module's
 // bus-factor risk.
-const SQL_COMMITS: &str = "
-        WITH canon_authors AS (
-            SELECT canonical FROM author_aliases
-            GROUP BY canonical
-            HAVING NOT BOOL_OR(is_bot)
-        ),
+const SQL_COMMITS_TEMPLATE: &str = "
+        WITH {human_aliases},
         per_module_author AS (
+            -- Pair-granular: joins on the exact (raw_name, raw_email) that
+            -- made the commit, so a human sharing a canonical with a bot
+            -- keeps their own commits counted while the bot pair's commits
+            -- are dropped row-wise.
             SELECT
                 CASE
                     WHEN c.path LIKE '%/%' THEN regexp_extract(c.path, '^[^/]+', 0)
@@ -86,7 +86,8 @@ const SQL_COMMITS: &str = "
                 COUNT(DISTINCT c.rev) AS commits
             FROM changes c
             INNER JOIN commits co ON co.rev = c.rev
-            INNER JOIN canon_authors a ON a.canonical = co.canonical_author
+            INNER JOIN human_aliases ha
+                ON ha.raw_name = co.author_name AND ha.raw_email = co.author_email
             WHERE co.is_merge = FALSE
             GROUP BY module, co.canonical_author
         ),
@@ -156,13 +157,10 @@ const SQL_DOE_EXPERTS: &str = "
     ORDER BY module, author, path
 ";
 
-const SQL_DOE_MODULE_COMMITS: &str = "
-    WITH canon_authors AS (
-        SELECT canonical FROM author_aliases
-        GROUP BY canonical
-        HAVING NOT BOOL_OR(is_bot)
-    ),
+const SQL_DOE_MODULE_COMMITS_TEMPLATE: &str = "
+    WITH {human_aliases},
     per_module AS (
+        -- Pair-granular (see SQL_COMMITS_TEMPLATE::per_module_author).
         SELECT
             CASE
                 WHEN c.path LIKE '%/%' THEN regexp_extract(c.path, '^[^/]+', 0)
@@ -171,7 +169,8 @@ const SQL_DOE_MODULE_COMMITS: &str = "
             COUNT(DISTINCT c.rev) AS total_commits
         FROM changes c
         INNER JOIN commits co ON co.rev = c.rev
-        INNER JOIN canon_authors a ON a.canonical = co.canonical_author
+        INNER JOIN human_aliases ha
+            ON ha.raw_name = co.author_name AND ha.raw_email = co.author_email
         WHERE co.is_merge = FALSE
         GROUP BY module
     )
@@ -202,7 +201,9 @@ pub fn run_bus_factor(db: &FactsDb, opts: &Options) -> Result<Vec<BusFactorRow>>
 
 fn run_bus_factor_commits(db: &FactsDb, opts: &Options) -> Result<Vec<BusFactorRow>> {
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
-    let sql = crate::analyses::lineage::rewrite(SQL_COMMITS, opts);
+    let sql =
+        SQL_COMMITS_TEMPLATE.replace("{human_aliases}", crate::analyses::query::HUMAN_ALIASES_CTE);
+    let sql = crate::analyses::lineage::rewrite(&sql, opts);
 
     let mut stmt = db
         .conn()
@@ -249,7 +250,9 @@ fn run_bus_factor_doe(db: &FactsDb, opts: &Options) -> Result<Vec<BusFactorRow>>
     crate::analyses::knowledge::shares::materialize_knowledge_shares(db, opts)?;
 
     // Fetch module-level commit totals for the `total_commits` field.
-    let commit_sql = crate::analyses::lineage::rewrite(SQL_DOE_MODULE_COMMITS, opts);
+    let commit_sql = SQL_DOE_MODULE_COMMITS_TEMPLATE
+        .replace("{human_aliases}", crate::analyses::query::HUMAN_ALIASES_CTE);
+    let commit_sql = crate::analyses::lineage::rewrite(&commit_sql, opts);
     let mut commit_stmt = db
         .conn()
         .prepare(&commit_sql)

@@ -57,10 +57,20 @@ pub struct DiffOutput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub head_median_code_health: Option<f64>,
     /// `[diff]` quality-gate violations. Empty when the gate is
-    /// vacuous (no `--thresholds-file` or no `[diff]` section) OR
-    /// when both gates pass.
+    /// vacuous (no `--thresholds-file` or no `[diff]` section), when the
+    /// gate family was skipped (see `gate_skip_reason`), OR when a real,
+    /// measured range passed cleanly.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gate_violations: Vec<GateViolationOut>,
+    /// Set when the `[diff]` gate family was configured but skipped rather
+    /// than evaluated: neither the base nor the head revision measured any
+    /// hotspot rows (a blind ingest — e.g. a shallow checkout — not a
+    /// genuinely unchanged repository, which still carries real rows on both
+    /// sides). `None` when the gate is vacuous (not configured) or ran
+    /// against real, measured data — including a real, measured range that
+    /// passed with zero violations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate_skip_reason: Option<String>,
     /// Change-level health verdict. `None` when the base analysis lacks
     /// function metrics (stale `--base-cache` written by an older binary).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -782,35 +792,52 @@ pub fn run_diff(args: &DiffArgs) -> Result<(DiffOutput, FactsDb, Options)> {
             Some(discovered)
         }
     };
-    let (base_median_code_health, head_median_code_health, gate_violations) = if let Some(t) =
-        thresholds_opt.as_ref()
-        && (t.diff.delta_code_health_min.is_some()
-            || t.diff.new_hotspot_max.is_some()
-            || t.diff.no_new_cycles
-            || t.diff.delta_health_min.is_some()
-            || t.diff.deny_degrading_verdict)
-    {
-        let base_med = median_code_health(&base_analyses.hotspots);
-        let head_med = median_code_health(&head_analyses.hotspots);
-        let delta = head_med - base_med;
-        let new_hotspot_count = u32::try_from(hotspots.rank_entrants.len()).unwrap_or(u32::MAX);
-        let violations: Vec<GateViolationOut> =
-            codelore_lib::cli_api::quality_gates::evaluate_diff_gate(
-                t,
-                new_hotspot_count,
-                delta,
-                base_analyses.dependency_cycles,
-                head_analyses.dependency_cycles,
-                delta_health.as_ref().and_then(|d| d.ratio),
-                delta_health.as_ref().map(|d| d.verdict.as_str()),
-            )
-            .into_iter()
-            .map(Into::into)
-            .collect();
-        (Some(base_med), Some(head_med), violations)
-    } else {
-        (None, None, Vec::new())
-    };
+    let (base_median_code_health, head_median_code_health, gate_violations, gate_skip_reason) =
+        if let Some(t) = thresholds_opt.as_ref()
+            && (t.diff.delta_code_health_min.is_some()
+                || t.diff.new_hotspot_max.is_some()
+                || t.diff.no_new_cycles
+                || t.diff.delta_health_min.is_some()
+                || t.diff.deny_degrading_verdict)
+        {
+            let base_med = median_code_health(&base_analyses.hotspots);
+            let head_med = median_code_health(&head_analyses.hotspots);
+            let delta = head_med - base_med;
+            let new_hotspot_count = u32::try_from(hotspots.rank_entrants.len()).unwrap_or(u32::MAX);
+            let violations: Vec<GateViolationOut> =
+                codelore_lib::cli_api::quality_gates::evaluate_diff_gate(
+                    t,
+                    new_hotspot_count,
+                    delta,
+                    base_analyses.dependency_cycles,
+                    head_analyses.dependency_cycles,
+                    delta_health.as_ref().and_then(|d| d.ratio),
+                    delta_health.as_ref().map(|d| d.verdict.as_str()),
+                )
+                .into_iter()
+                .map(Into::into)
+                .collect();
+            // Neither revision measured any hotspot rows: a blind ingest (e.g.
+            // a shallow checkout) zeroes every scalar evaluate_diff_gate saw —
+            // new_hotspot_count, delta, both cycle counts, delta_health_ratio —
+            // identically to a genuinely unchanged repository, which stays a
+            // real "passed" because it carries real (non-empty) rows on both
+            // sides. Disclose the skip rather than let an empty violations
+            // list read as a silent pass.
+            let verdict = codelore_lib::cli_api::quality_gates::diff_gate_verdict(
+                !base_analyses.hotspots.is_empty(),
+                !head_analyses.hotspots.is_empty(),
+                violations.len(),
+            );
+            let skip_reason = (verdict == "skipped").then(|| {
+                "no hotspot rows measured at either revision (blind ingest — check for a \
+                 shallow checkout / fetch-depth truncation, not a genuinely unchanged range)"
+                    .to_string()
+            });
+            (Some(base_med), Some(head_med), violations, skip_reason)
+        } else {
+            (None, None, Vec::new(), None)
+        };
 
     Ok((
         DiffOutput {
@@ -823,6 +850,7 @@ pub fn run_diff(args: &DiffArgs) -> Result<(DiffOutput, FactsDb, Options)> {
             base_median_code_health,
             head_median_code_health,
             gate_violations,
+            gate_skip_reason,
             delta_health,
         },
         head_db,

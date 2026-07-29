@@ -32,8 +32,15 @@ pub fn run_summary(db: &FactsDb, opts: &Options) -> Result<Vec<SummaryRow>> {
         UNION ALL
         SELECT 'number-of-authors', COUNT(DISTINCT canonical_author) FROM commits;
     "
+        .to_string()
     } else {
-        "
+        // Pair-granular: joins on the exact (raw_name, raw_email) that made
+        // the commit, so a human sharing a canonical with a bot keeps their
+        // own commits counted while the bot pair's are dropped row-wise.
+        let human_aliases = crate::analyses::query::HUMAN_ALIASES_CTE;
+        format!(
+            "
+        WITH {human_aliases}
         SELECT 'commits' AS metric, COUNT(*) AS value FROM commits
         UNION ALL
         SELECT 'changes', COUNT(*) FROM changes
@@ -42,13 +49,13 @@ pub fn run_summary(db: &FactsDb, opts: &Options) -> Result<Vec<SummaryRow>> {
         UNION ALL
         SELECT 'authors', COUNT(DISTINCT co.canonical_author)
         FROM commits co
-        JOIN (
-            SELECT canonical FROM author_aliases GROUP BY canonical HAVING NOT BOOL_OR(is_bot)
-        ) canon ON canon.canonical = co.canonical_author;
+        JOIN human_aliases ha
+            ON ha.raw_name = co.author_name AND ha.raw_email = co.author_email;
     "
+        )
     };
-    crate::analyses::query::explain_if_requested(db, sql, [], "summary", opts)?;
-    crate::analyses::query::query_map_collect(db, sql, [], "summary", |r| {
+    crate::analyses::query::explain_if_requested(db, &sql, [], "summary", opts)?;
+    crate::analyses::query::query_map_collect(db, &sql, [], "summary", |r| {
         Ok(SummaryRow {
             metric: r.get::<_, String>(0)?,
             value: r.get::<_, i64>(1)?,

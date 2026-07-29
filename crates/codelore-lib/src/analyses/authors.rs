@@ -71,16 +71,17 @@ pub struct AuthorsRow {
 /// 1. `per_file_author` — for each `(path, author)`, the commit count
 ///    on that file, how many of those commits were `ai-authored`, and
 ///    the latest timestamp.
-/// 2. `classified` — joins in `author_aliases.is_bot` and flags an
-///    author as "bot for THIS entity" if either the alias is a bot
-///    OR every commit by that author on this file was classified
-///    as `ai-authored`. The `LEFT JOIN` tolerates authors that don't
-///    have an alias row (legacy data or pattern-only classifications).
+/// 2. `classified` — looks up `human_aliases` and flags an author as
+///    "bot for THIS entity" if either the canonical has NO human alias at
+///    all OR every commit by that author on this file was classified as
+///    `ai-authored`. The `LEFT JOIN` tolerates authors that don't have any
+///    alias row (legacy data or pattern-only classifications).
 /// 3. The outer SELECT aggregates back to per-entity, splits authors
 ///    into human/bot via the classified flag, picks the latest author
 ///    using a window function, and renders the latest date as `YYYY-MM-DD`.
-const SQL: &str = "
-    WITH per_file_author AS (
+const SQL_TEMPLATE: &str = "
+    WITH {human_aliases},
+    per_file_author AS (
         SELECT
             changes.path,
             commits.canonical_author AS author,
@@ -99,20 +100,17 @@ const SQL: &str = "
             pfa.n_commits,
             pfa.last_at,
             (
-                COALESCE(aa.is_bot, FALSE)
+                aa.canonical IS NULL
                 OR pfa.n_ai = pfa.n_commits
             ) AS is_bot_for_entity
         FROM per_file_author pfa
-        LEFT JOIN (
-            -- Dedupe by canonical (author_aliases is keyed on
-            -- (raw_name, raw_email); canonical is N:1 for authors with
-            -- several name+email identities). Without this the join
-            -- multiplied per_file_author rows by N, inflating COUNT and
-            -- SUM aggregates downstream.
-            SELECT canonical, BOOL_OR(is_bot) AS is_bot
-            FROM author_aliases
-            GROUP BY canonical
-        ) aa ON aa.canonical = pfa.author
+        -- Pair-granular: a canonical is bot for this entity ONLY when it
+        -- has NO human alias at all (author_aliases is keyed on
+        -- (raw_name, raw_email); a canonical with at least one human alias
+        -- stays eligible through that alias, even if it ALSO owns a
+        -- bot-classified alias). DISTINCT dedupes the lookup to one row per
+        -- canonical so the join can't multiply per_file_author rows.
+        LEFT JOIN (SELECT DISTINCT canonical FROM human_aliases) aa ON aa.canonical = pfa.author
     )
     SELECT
         cls.path AS entity,
@@ -151,7 +149,8 @@ const SQL: &str = "
 pub fn run_authors(db: &FactsDb, opts: &Options) -> Result<Vec<AuthorsRow>> {
     let row_limit: i64 = opts.rows_limit.map_or(i64::MAX, i64::from);
     crate::analyses::lineage::materialize_if_needed(db, opts)?;
-    let sql = crate::analyses::lineage::rewrite(SQL, opts);
+    let sql = SQL_TEMPLATE.replace("{human_aliases}", super::query::HUMAN_ALIASES_CTE);
+    let sql = crate::analyses::lineage::rewrite(&sql, opts);
     super::query::explain_if_requested(
         db,
         &sql,
