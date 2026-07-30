@@ -235,6 +235,13 @@ pub(crate) fn new_code_skip_reason(window_days: f64, shallow_checkout: bool) -> 
     }
 }
 
+/// The reason the `corpus_percentile_max` gate skipped: no calibration artifact
+/// is active, or no analyzed file resolved a corpus percentile. Shared between
+/// `codelore check`'s `eprintln!` notice and the MCP `check_gates` tool's
+/// `SkippedGate.reason` field so the wording never drifts between the two
+/// surfaces — the same one-definition guarantee as `new_code_skip_reason`.
+pub(crate) const CORPUS_PERCENTILE_SKIP_REASON: &str = "no corpus percentile data (no calibration artifact active, or no analyzed file resolved a percentile)";
+
 /// Operational telemetry. Prints what `CodeLore` ships under the
 /// hood — schema version, pinned dependency versions, supported
 /// analysis count, supported output format count. Useful for triage
