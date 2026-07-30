@@ -205,6 +205,19 @@ pub fn evaluate_diff_gate(
     out
 }
 
+/// Shared three-way classification behind [`diff_gate_verdict`] and
+/// [`change_set_gate_verdict`]: `"skipped"` when the caller reports nothing
+/// was measured, else `"passed"`/`"failed"` on `violation_count`.
+fn verdict_from(measured: bool, violation_count: usize) -> &'static str {
+    if !measured {
+        "skipped"
+    } else if violation_count == 0 {
+        "passed"
+    } else {
+        "failed"
+    }
+}
+
 /// The `"passed"` / `"failed"` / `"skipped"` verdict for the whole `[diff]`
 /// gate family [`evaluate_diff_gate`] evaluates, given whether each side of
 /// the range actually measured anything.
@@ -228,13 +241,7 @@ pub fn diff_gate_verdict(
     head_measured: bool,
     violation_count: usize,
 ) -> &'static str {
-    if !base_measured && !head_measured {
-        "skipped"
-    } else if violation_count == 0 {
-        "passed"
-    } else {
-        "failed"
-    }
+    verdict_from(base_measured || head_measured, violation_count)
 }
 
 /// Evaluate the `[diff]` gates that apply to a working-tree change-set report
@@ -360,13 +367,7 @@ pub fn change_set_gate_verdict(
     report: &crate::change_set::ChangeSetReport,
     violation_count: usize,
 ) -> &'static str {
-    if report.changes.is_empty() {
-        "skipped"
-    } else if violation_count == 0 {
-        "passed"
-    } else {
-        "failed"
-    }
+    verdict_from(!report.changes.is_empty(), violation_count)
 }
 
 /// Evaluate the `[gates]` section against a hotspots result set.
