@@ -434,6 +434,7 @@ mod tests {
             days_since_main_active: 200,
             last_main_author_commit: "abc".into(),
             n_substantial_others: 0,
+            total_loc: 100,
         }
     }
 

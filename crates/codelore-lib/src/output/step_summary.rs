@@ -377,6 +377,7 @@ mod tests {
                 days_since_main_active: 412,
                 last_main_author_commit: "2025-01-15".into(),
                 n_substantial_others: 0,
+                total_loc: 120,
             }],
             ..SpaDashboard::default()
         }

@@ -195,19 +195,29 @@ pub(crate) const GATE_DELTA_TABLE_ROWS: usize = 10;
 pub(crate) const GATE_FINDINGS_ROWS: usize = 10;
 
 /// Write a single `key=value` line to `$GITHUB_OUTPUT` when the env
-/// var is set. No-op outside GitHub Actions.
+/// var is set. No-op outside GitHub Actions. An open or write failure
+/// logs a `tracing::warn!` rather than failing silently.
 pub(crate) fn write_github_output(key: &str, value: &str) {
-    if let Ok(path) = std::env::var("GITHUB_OUTPUT")
-        && let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
+    let Ok(path) = std::env::var("GITHUB_OUTPUT") else {
+        // Unset is the normal local/non-CI case — not an error, no warning.
+        return;
+    };
+    let mut f = match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
     {
-        use std::io::Write;
-        // Pre-assemble the whole `key=value\n` line and emit it with one
-        // `write_all`, matching the gate-run ledger's single-write append.
-        let line = format!("{key}={value}\n");
-        let _ = f.write_all(line.as_bytes());
+        Ok(f) => f,
+        Err(e) => {
+            tracing::warn!("write_github_output: could not open {path}: {e}");
+            return;
+        }
+    };
+    // Pre-assemble the whole `key=value\n` line and emit it with one
+    // `write_all`, matching the gate-run ledger's single-write append.
+    let line = format!("{key}={value}\n");
+    if let Err(e) = f.write_all(line.as_bytes()) {
+        tracing::warn!("write_github_output: write failed for key={key}: {e}");
     }
 }
 
