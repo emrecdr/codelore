@@ -91,3 +91,49 @@ fn binary_blob_reports_zero_loc_under_gix() {
         blob.loc_deleted
     );
 }
+
+/// `git clone --depth=1` a `source` repo (a local path) into a fresh tempdir.
+///
+/// `--depth` on a *local path* clone source silently degrades to git's
+/// default hardlink-based local-clone optimization and ignores the flag
+/// entirely — `git` prints `--depth is ignored in local clones; use file://
+/// instead` on stderr and produces a full, non-shallow clone. A genuine
+/// shallow clone from a local fixture therefore requires the `file://` URL
+/// form, which forces the real transport-level clone path `--depth` needs
+/// (verified empirically against the git version this suite runs under).
+fn shallow_clone(source: &std::path::Path) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source_url = format!("file://{}", source.display());
+    let status = std::process::Command::new("git")
+        .args(["clone", "--quiet", "--depth=1"])
+        .arg(&source_url)
+        .arg(dir.path())
+        .status()
+        .expect("spawn git clone --depth=1");
+    assert!(
+        status.success(),
+        "shallow git clone from {source_url} failed"
+    );
+    dir
+}
+
+#[test]
+fn is_shallow_true_for_a_depth_one_clone() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let shallow = shallow_clone(tiny.dir.path());
+    let repo = GixRepo::open(shallow.path()).expect("open shallow clone");
+    assert!(
+        repo.is_shallow(),
+        "a --depth=1 clone must report is_shallow() == true"
+    );
+}
+
+#[test]
+fn is_shallow_false_for_a_full_clone() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let repo = GixRepo::open(tiny.dir.path()).expect("open full clone");
+    assert!(
+        !repo.is_shallow(),
+        "a full (non-shallow) clone must report is_shallow() == false"
+    );
+}

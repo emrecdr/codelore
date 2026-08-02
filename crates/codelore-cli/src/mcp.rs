@@ -612,7 +612,7 @@ impl CodeLoreServer {
                 &repo_path,
                 "repo_overview",
                 &params_json,
-                |repo, _head| {
+                |repo, head| {
                     let opts = Options {
                         repo_path: repo_path.clone(),
                         ..Options::default()
@@ -620,6 +620,11 @@ impl CodeLoreServer {
                     let db =
                         FactsDb::open_or_ingest_with_cache_root(&opts, repo, &default_cache_root())
                             .map_err(|e| map_lib_err(&e))?;
+                    // Same ingest witness as `check_gates`: a real HEAD over an
+                    // empty commit store is a truncated checkout, not a genuinely
+                    // empty repo.
+                    db.ensure_ingest_witnessed(head)
+                        .map_err(|e| map_lib_err(&e))?;
                     let rows = summary::run_summary(&db, &opts).map_err(|e| map_lib_err(&e))?;
                     let out = serde_json::json!({
                         "summary": rows,
@@ -647,24 +652,23 @@ impl CodeLoreServer {
         let limit = params.0.limit.unwrap_or(20);
         let params_json = serde_json::to_string(&params.0).map_err(internal)?;
         tokio::task::spawn_blocking(move || {
-            memoized(
-                &memo,
-                &repo_path,
-                "hotspots",
-                &params_json,
-                |repo, _head| {
-                    let mut opts = Options {
-                        repo_path: repo_path.clone(),
-                        ..Options::default()
-                    };
-                    opts.rows_limit = Some(limit);
-                    let db =
-                        FactsDb::open_or_ingest_with_cache_root(&opts, repo, &default_cache_root())
-                            .map_err(|e| map_lib_err(&e))?;
-                    let rows = hotspots::run_hotspots(&db, &opts).map_err(|e| map_lib_err(&e))?;
-                    serde_json::to_string(&rows).map_err(internal)
-                },
-            )
+            memoized(&memo, &repo_path, "hotspots", &params_json, |repo, head| {
+                let mut opts = Options {
+                    repo_path: repo_path.clone(),
+                    ..Options::default()
+                };
+                opts.rows_limit = Some(limit);
+                let db =
+                    FactsDb::open_or_ingest_with_cache_root(&opts, repo, &default_cache_root())
+                        .map_err(|e| map_lib_err(&e))?;
+                // Same ingest witness as `check_gates`: a real HEAD over an
+                // empty commit store is a truncated checkout, not a genuinely
+                // empty repo.
+                db.ensure_ingest_witnessed(head)
+                    .map_err(|e| map_lib_err(&e))?;
+                let rows = hotspots::run_hotspots(&db, &opts).map_err(|e| map_lib_err(&e))?;
+                serde_json::to_string(&rows).map_err(internal)
+            })
         })
         .await
         .map_err(internal)?
@@ -688,7 +692,7 @@ impl CodeLoreServer {
         let cap = resolve_row_cap(params.0.limit);
         let params_json = serde_json::to_string(&params.0).map_err(internal)?;
         tokio::task::spawn_blocking(move || {
-            memoized(&memo, &repo_path, "code_health", &params_json, |repo, _head| {
+            memoized(&memo, &repo_path, "code_health", &params_json, |repo, head| {
                 let opts = Options {
                     repo_path: repo_path.clone(),
                     ..Options::default()
@@ -703,6 +707,9 @@ impl CodeLoreServer {
                 let db =
                     FactsDb::open_or_ingest_with_cache_root(&opts, repo, &default_cache_root())
                         .map_err(|e| map_lib_err(&e))?;
+                // Same ingest witness as `check_gates`: a real HEAD over an empty
+                // commit store is a truncated checkout, not a genuinely empty repo.
+                db.ensure_ingest_witnessed(head).map_err(|e| map_lib_err(&e))?;
                 let mut rows =
                     code_health::run_code_health(&db, &opts).map_err(|e| map_lib_err(&e))?;
                 if let Some(p) = &filter_path {
@@ -846,7 +853,7 @@ impl CodeLoreServer {
                 &repo_path,
                 "refactoring_targets",
                 &params_json,
-                |repo, _head| {
+                |repo, head| {
                     let opts = Options {
                         repo_path: repo_path.clone(),
                         ..Options::default()
@@ -854,6 +861,10 @@ impl CodeLoreServer {
                     let db =
                         FactsDb::open_or_ingest_with_cache_root(&opts, repo, &default_cache_root())
                             .map_err(|e| map_lib_err(&e))?;
+                    // Same ingest witness as `check_gates`: a real HEAD over an
+                    // empty commit store is a truncated checkout, not a genuinely
+                    // empty repo.
+                    db.ensure_ingest_witnessed(head).map_err(|e| map_lib_err(&e))?;
                     // Run unbounded so the true total is known, then cap in-tool
                     // with the omitted disclosure (the analysis ranks over the
                     // full set either way).
@@ -893,7 +904,7 @@ impl CodeLoreServer {
         let target = params.0.path.clone();
         let params_json = serde_json::to_string(&params.0).map_err(internal)?;
         tokio::task::spawn_blocking(move || {
-            memoized(&memo, &repo_path, "function_xray", &params_json, |repo, _head| {
+            memoized(&memo, &repo_path, "function_xray", &params_json, |repo, head| {
                 let opts = Options {
                     repo_path: repo_path.clone(),
                     ..Options::default()
@@ -919,6 +930,9 @@ impl CodeLoreServer {
                 let db =
                     FactsDb::open_or_ingest_with_cache_root(&opts, repo, &default_cache_root())
                         .map_err(|e| map_lib_err(&e))?;
+                // Same ingest witness as `check_gates`: a real HEAD over an empty
+                // commit store is a truncated checkout, not a genuinely empty repo.
+                db.ensure_ingest_witnessed(head).map_err(|e| map_lib_err(&e))?;
                 let rows = function_xray::run_function_xray(&db, repo, &opts, &target)
                     .map_err(|e| map_lib_err(&e))?;
                 serde_json::to_string(&rows).map_err(internal)
@@ -1155,6 +1169,11 @@ impl CodeLoreServer {
             let repo = GixRepo::open(&repo_path).map_err(|e| map_lib_err(&e))?;
             let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &cache_root)
                 .map_err(|e| map_lib_err(&e))?;
+            // Same ingest witness as `check_gates`: a real HEAD over an empty
+            // commit store is a truncated checkout, not a genuinely empty repo.
+            let head_sha = repo.head_sha().map_err(|e| map_lib_err(&e))?;
+            db.ensure_ingest_witnessed(&head_sha)
+                .map_err(|e| map_lib_err(&e))?;
 
             let mut rows = finding_hotspot_overlap::run_finding_hotspot_overlap(&db, &opts, &store)
                 .map_err(|e| map_lib_err(&e))?;
@@ -1231,6 +1250,10 @@ impl CodeLoreServer {
                 ..Options::default()
             };
             let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
+                .map_err(|e| map_lib_err(&e))?;
+            // Same ingest witness as `check_gates`: a real HEAD over an empty
+            // commit store is a truncated checkout, not a genuinely empty repo.
+            db.ensure_ingest_witnessed(&head)
                 .map_err(|e| map_lib_err(&e))?;
             let sheet =
                 FileFactSheet::build(&db, &repo, &opts, &target).map_err(|e| map_lib_err(&e))?;
@@ -1346,6 +1369,10 @@ impl CodeLoreServer {
             };
             let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &default_cache_root())
                 .map_err(|e| map_lib_err(&e))?;
+            // Same ingest witness as `check_gates`: a real HEAD over an empty
+            // commit store is a truncated checkout, not a genuinely empty repo.
+            db.ensure_ingest_witnessed(&head)
+                .map_err(|e| map_lib_err(&e))?;
             // An empty or oversized path list surfaces as `InvalidOptions` (the
             // CLI's exit-2 config/param bucket), which `map_lib_err` routes to a
             // JSON-RPC `invalid_params` so the client sees it as bad input rather
@@ -1399,6 +1426,14 @@ impl CodeLoreServer {
             }
             let cache_root = default_cache_root();
             let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &cache_root)
+                .map_err(|e| map_lib_err(&e))?;
+            // Same ingest witness as `check_gates`: a shallow checkout WITH
+            // uncommitted edits reaches this point (the empty-tree early return
+            // above only guards a clean shallow checkout), so a real HEAD over an
+            // empty commit store must still be caught here rather than reported
+            // as a confident PASS over no history.
+            let head_sha = repo.head_sha().map_err(|e| map_lib_err(&e))?;
+            db.ensure_ingest_witnessed(&head_sha)
                 .map_err(|e| map_lib_err(&e))?;
             let report = change_set::build_change_set_report(&db, &repo, &opts, &cache_root)
                 .map_err(|e| map_lib_err(&e))?;
