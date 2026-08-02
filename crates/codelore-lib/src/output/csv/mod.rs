@@ -32,8 +32,9 @@ pub use history::{
 };
 pub use hotspots::{
     write_code_health_csv, write_defect_validation_csv, write_effort_exposure_csv,
-    write_finding_hotspot_overlap_csv, write_function_xray_csv, write_health_trend_csv,
-    write_hotspot_velocity_csv, write_hotspots_csv, write_refactoring_targets_csv,
+    write_finding_hotspot_overlap_csv, write_function_hotspots_csv, write_function_xray_csv,
+    write_health_trend_csv, write_hotspot_velocity_csv, write_hotspots_csv,
+    write_refactoring_targets_csv,
 };
 pub use knowledge::{
     write_authors_csv, write_bus_factor_csv, write_code_familiarity_csv, write_communication_csv,

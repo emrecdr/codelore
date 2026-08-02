@@ -204,6 +204,14 @@ pub enum AnalysisName {
     // is more accurate than blame (it captures the state at change time, not at
     // HEAD). Research: HistoryFinder (Gall et al. ICSM 2003).
     FunctionXray,
+    // Function-hotspots — repo-wide function-level hotspot ranking: HEAD-live
+    // functions/methods ranked by the same revs × cognitive-style score
+    // `hotspots` uses, computed at function instead of file granularity.
+    // Reuses function-xray's hunk↔span overlap predicate (transliterated to
+    // SQL) against `entities` × `hunks` — no tree-sitter reparse. Research:
+    // Gall et al. ICSM 2003 (function-level churn) + Tornhill 2018 (the
+    // hotspot score this mirrors).
+    FunctionHotspots,
     // Function-coupling — per-function-pair co-change frequency with Fisher
     // significance for a single target file (`--target <path>`). Identifies
     // which functions always change together. Research: Adams et al. ICSM 2006.
@@ -287,6 +295,7 @@ impl AnalysisName {
             Self::MarginalOwnerRisk => "marginal-owner-risk",
             Self::ReleaseCadence => "release-cadence",
             Self::FunctionXray => "function-xray",
+            Self::FunctionHotspots => "function-hotspots",
             Self::FunctionCoupling => "function-coupling",
             Self::FindingHotspotOverlap => "finding-hotspot-overlap",
             Self::CycleHealth => "cycle-health",
@@ -377,6 +386,7 @@ impl AnalysisName {
             MarginalOwnerRisk,
             ReleaseCadence,
             FunctionXray,
+            FunctionHotspots,
             FunctionCoupling,
             FindingHotspotOverlap,
             CycleHealth,

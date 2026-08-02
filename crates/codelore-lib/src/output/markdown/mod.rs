@@ -39,9 +39,9 @@ pub use history::{
 };
 pub use hotspots::{
     write_code_health_markdown, write_defect_validation_markdown, write_effort_exposure_markdown,
-    write_finding_hotspot_overlap_markdown, write_function_xray_markdown,
-    write_health_trend_markdown, write_hotspot_velocity_markdown, write_hotspots_markdown,
-    write_refactoring_targets_markdown,
+    write_finding_hotspot_overlap_markdown, write_function_hotspots_markdown,
+    write_function_xray_markdown, write_health_trend_markdown, write_hotspot_velocity_markdown,
+    write_hotspots_markdown, write_refactoring_targets_markdown,
 };
 pub use knowledge::{
     write_authors_markdown, write_bus_factor_markdown, write_code_familiarity_markdown,

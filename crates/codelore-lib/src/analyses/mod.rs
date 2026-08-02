@@ -33,6 +33,7 @@ pub mod entity_ownership;
 pub mod factors;
 pub mod finding_hotspot_overlap;
 pub mod function_coupling;
+pub mod function_hotspots;
 pub mod function_xray;
 pub mod god_classes;
 pub mod grouped_complexity;
