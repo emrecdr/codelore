@@ -329,6 +329,10 @@ name = "effort_exposure_test"
 required-features = ["test-support"]
 
 [[test]]
+name = "new_code_test"
+required-features = ["test-support"]
+
+[[test]]
 name = "commit_parents_test"
 required-features = ["test-support"]
 

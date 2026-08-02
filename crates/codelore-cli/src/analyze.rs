@@ -235,6 +235,28 @@ pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         }
     };
 
+    // Witness the ingest: a real HEAD over an empty commit store is the
+    // truncated-checkout signature (see `check.rs` / `FactsDb::
+    // ensure_ingest_witnessed`) — a shallow `fetch-depth` clone whose tip is
+    // a merge commit ingests zero commits under the default merge filter, so
+    // every analysis would silently report empty rows over no data. Unlike
+    // `check`/`explain`/`gate`, `analyze` exposes `--after`/`--before`
+    // walk-time filters: an all-excluding date window also legitimately
+    // ingests zero commits on a healthy full clone, which is NOT a truncated
+    // checkout, so branch rather than misdiagnosing it as one.
+    let head_sha = repo.head_sha().context("get HEAD sha")?;
+    if opts.after.is_some() || opts.before.is_some() {
+        if !head_sha.is_empty() && db.commit_count().context("count ingested commits")? == 0 {
+            tracing::warn!(
+                "no commits were ingested — either the --after/--before window excludes all \
+                 history, or the checkout is truncated (shallow fetch-depth). The analysis \
+                 below is over an empty history."
+            );
+        }
+    } else {
+        db.ensure_ingest_witnessed(&head_sha)?;
+    }
+
     // Parquet + SQLite write to file directly through DuckDB, not via Write trait.
     if format == "parquet" {
         let path = args.output.as_ref().expect("validated above");

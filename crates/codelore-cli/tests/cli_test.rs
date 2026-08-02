@@ -183,6 +183,52 @@ fn invalid_repo_exits_with_code_3() {
     assert_eq!(output.status.code(), Some(3));
 }
 
+/// A `--depth=1` clone of a merge-commit HEAD ingests zero commits: the merge
+/// tip is the only object present locally, and the default
+/// `include_merges = false` walk filter drops it, leaving an empty fact
+/// store over a real HEAD — the exact truncated-checkout signature
+/// `FactsDb::ensure_ingest_witnessed` exists to catch. No `--after`/
+/// `--before` filter is passed, so the hard-error branch applies (an empty
+/// store from a genuine date-window skip only warns; see the `analyze`
+/// witness comment).
+///
+/// `git clone --depth` on a *local path* source silently ignores the flag
+/// (git falls back to its hardlink-based local-clone optimization, which
+/// cannot produce a shallow repo) — the `file://` URL form is required to
+/// force the real, depth-respecting clone transport.
+#[test]
+fn analyze_exits_3_on_truncated_shallow_checkout() {
+    let full = codelore_lib::test_support::mainline_advance_repo::build();
+    let shallow = tempfile::tempdir().unwrap();
+    let source_url = format!("file://{}", full.dir.path().display());
+    let status = std::process::Command::new("git")
+        .args(["clone", "--quiet", "--depth=1"])
+        .arg(&source_url)
+        .arg(shallow.path())
+        .status()
+        .unwrap();
+    assert!(status.success(), "shallow clone from {source_url} failed");
+
+    let output = codelore_cmd()
+        .args([
+            "analyze",
+            "--analysis",
+            "hotspots",
+            "--repo",
+            shallow.path().to_str().unwrap(),
+            "--no-cache",
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // CodeLoreError::Repo → exit 3 per spec §6.6
+    assert_eq!(output.status.code(), Some(3), "stderr: {stderr}");
+    assert!(
+        stderr.contains("truncated") && stderr.contains("shallow"),
+        "expected the truncated-checkout witness message, got stderr: {stderr}"
+    );
+}
+
 #[test]
 fn invalid_options_exit_with_code_2() {
     // Inverted coupling range (`--min-coupling` > `--max-coupling`) is a

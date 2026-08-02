@@ -9,7 +9,7 @@ use std::io::Write as _;
 
 use anyhow::{Context, Result};
 use codelore_lib::cli_api::facts::FactsDb;
-use codelore_lib::cli_api::repo::GixRepo;
+use codelore_lib::cli_api::repo::{GixRepo, Repo as _};
 use codelore_lib::cli_api::{CodeLoreError, Options};
 
 use crate::args;
@@ -477,6 +477,11 @@ fn run_explain_file(args: &args::ExplainArgs, repo_relative: &str) -> Result<()>
         .with_context(|| format!("open git repo at {}", args.repo.display()))?;
     let db = FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &cache_root)
         .context("open or ingest the fact store")?;
+    // Witness the ingest: a real HEAD over an empty commit store is the
+    // truncated-checkout signature (see `check.rs`). No date filter is
+    // exposed here, so an empty store is unambiguously that case.
+    let head_sha = repo.head_sha().context("get HEAD sha")?;
+    db.ensure_ingest_witnessed(&head_sha)?;
     let sheet = FileFactSheet::build(&db, &repo, &opts, repo_relative)
         .with_context(|| format!("build the evidence dossier for {repo_relative}"))?;
 
