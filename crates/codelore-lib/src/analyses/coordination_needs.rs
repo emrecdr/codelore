@@ -207,7 +207,8 @@ pub fn run_coordination_needs(db: &FactsDb, opts: &Options) -> Result<Vec<Coordi
     // Restrict to commits touching ≤30 files in the trailing window.
     // p'_k = deg(k) / (2|E|); H'(S) = −Σ p'_k · ln(p'_k); H'_a = p'_a · H'.
     // Log base = ln (natural); ranks invariant to base choice.
-    let now_anchor = crate::analyses::query::clamped_now_anchor("date");
+    // Reuses the `now_anchor` computed for the fragmentation query above so both
+    // window queries clamp to a single wall-clock anchor.
     let entropy_sql = format!(
         "WITH win AS (
              SELECT co.rev FROM commits co

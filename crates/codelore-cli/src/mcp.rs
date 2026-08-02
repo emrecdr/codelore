@@ -1012,9 +1012,7 @@ impl CodeLoreServer {
                 } else {
                     corpus_skip = Some(SkippedGate {
                         gate: "corpus_percentile_max",
-                        reason: "no corpus percentile data (no calibration artifact active, \
-                                 or no analyzed file resolved a percentile)"
-                            .into(),
+                        reason: crate::CORPUS_PERCENTILE_SKIP_REASON.into(),
                     });
                 }
             }

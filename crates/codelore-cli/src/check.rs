@@ -9,7 +9,10 @@
 use anyhow::{Context, Result};
 
 use crate::args::{self, CheckFormat};
-use crate::{new_code_skip_reason, notice_corpus_lens_absent, write_github_output};
+use crate::{
+    CORPUS_PERCENTILE_SKIP_REASON, new_code_skip_reason, notice_corpus_lens_absent,
+    write_github_output,
+};
 
 /// Quality-gate check. Loads thresholds, runs the hotspots analysis
 /// against the repo, evaluates each row against the gates, and
@@ -347,9 +350,9 @@ fn emit_gate_notices(
             ("max_findings_in_hot_files", "skipped") => eprintln!(
                 "  ⚠ max_findings_in_hot_files: skipped — run `codelore ingest-sarif` first"
             ),
-            ("corpus_percentile_max", "skipped") => eprintln!(
-                "  ⚠ corpus_percentile_max: skipped — no corpus percentile data (no calibration artifact active, or no analyzed file resolved a percentile)"
-            ),
+            ("corpus_percentile_max", "skipped") => {
+                eprintln!("  ⚠ corpus_percentile_max: skipped — {CORPUS_PERCENTILE_SKIP_REASON}");
+            }
             ("hotspot_anchored_max", "skipped") => eprintln!(
                 "  ⚠ hotspot_anchored_max: skipped — no anchored hotspot data (no calibration artifact active, or no analyzed file's language is covered by the corpus)"
             ),
