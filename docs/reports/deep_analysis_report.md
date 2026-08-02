@@ -457,7 +457,7 @@ scenario, proposed direction, value/effort, verification status, invariant touch
 | F-ID | Subject | Sev | Status |
 |---|---|---|---|
 | F249 | `ensure_ingest_witnessed` guards only 2 of ~13 ingest entry points — `analyze`, `gate`, `gate_changes`, `explain`, 8 MCP tools render confident empty reports over a blind (fetch-depth:1 / all-excluded) ingest. ✅ grep-verified; convergent (5 signals). Gotcha: `analyze`'s `--after/--before` also empties `commits` → message must branch. | HIGH | Active |
-| F250 | `codelore explain delivery-friction` 404s on a shipped, fully-documented metric. ✅ verified | LOW | Active |
+| F250 | `codelore explain delivery-friction` 404s on a shipped, fully-documented metric. ✅ verified | LOW | Fixed (Unreleased) |
 | F251 | `coordination-needs` / `knowledge-islands` classify `high` tier / 100% ownership off n=2–5 with no denominator field (unlike `bus_factor`/`ownership`). ✅ verified | MED | Active |
 | F252 | `write_github_output` silently swallows the open+write `Err` (`let _ =`). ✅ verified | LOW | Active |
 | F253 | HEAD-scan blob I/O Phase-1 (refines F173/F206): blocker smaller than tracked (blob-read handling already identical; divergence is downstream AST-parse). One warm-ODB reader per rayon worker via the existing `map_init` idiom; also fixes `architecture-trend`/`cycle-origins` (never cached, re-paid per `analyze`). | HIGH | Active |
@@ -465,8 +465,8 @@ scenario, proposed direction, value/effort, verification status, invariant touch
 | F255 | `panic = "abort"` × long-lived `codelore mcp`: one panicking `spawn_blocking` tool call SIGABRTs the server for every client. ✅ verified (profile scope). Add an MCP-only `catch_unwind` boundary. | HIGH | Active |
 | F256 | Small per-language cohorts collapse biomarker intensities to near-binary → false `structural_risk` red-bands; disclose cohort `n` (refines F236 residual — verify the "corpus lens addresses this" claim first). | MED | Active |
 | F257 | Repo-wide function-level hotspots via `entities × hunks × commits` (no tree-sitter reparse — columns ✅ verified present). New capability. | HIGH | Fixed (Unreleased) |
-| F258 | `first_party_import_share` wildcard misclassification (`use crate::foo::*` tagged Wildcard→excluded) + a `wildcard_import_share` row. ✅ verified (`classify` branch order). | MED-HIGH | Active |
-| F259 | Dead `commits.committer_email` (all refs are test `INSERT`s ✅) → a `landed_by_other_pct` gatekeeper metric; must ship the no-`committer_name`-mailmap caveat. | MED | Active |
+| F258 | `first_party_import_share` wildcard misclassification (`use crate::foo::*` tagged Wildcard→excluded) + a `wildcard_import_share` row. ✅ verified (`classify` branch order). | MED-HIGH | Fixed (Unreleased) |
+| F259 | Dead `commits.committer_email` (all refs are test `INSERT`s ✅) → a `landed_by_other_pct` gatekeeper metric; must ship the no-`committer_name`-mailmap caveat. | MED | Fixed (Unreleased) |
 | F260 | `hotspot-velocity` combined-window floor lets a single-window burst out-rank steadier activity; `RECENT/BASELINE_DAYS` + `EA_Z_FLOOR` uncited & unoverridable (bypass the `constants.rs` convention). | MED | Active |
 | F261 | Dead `changes.similarity` (rename %) → an `avg_rename_similarity` / low-similarity-rename signal. | LOW | Active |
 | F262 | Survival analysis on hotspots (Kaplan-Meier over hot-episodes) — re-scope of the roadmap Tier-1 item; no new ingest, but needs a design pass (stateful episode extraction + KM). | — | Active (design) |

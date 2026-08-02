@@ -1,6 +1,6 @@
 //! `delivery-metrics` analysis — repo-level delivery flow distributions.
 //!
-//! Computes five percentile distributions that describe how code moves from
+//! Computes six percentile distributions that describe how code moves from
 //! branch to mainline, sliced as percentile-first (p50/p75/p90) summaries
 //! (DORA 2025 convention). The analysis requires the `commit_parents` table
 //! (schema v4) which records parent revisions and their position; merge
@@ -29,6 +29,17 @@
 //!   commit entered mainline. On squash-merge workflows the delta is small;
 //!   on merge-via-merge-commit + review workflows it reflects the in-review
 //!   time.
+//! - **`landed_by_other_pct`** — percentage of non-merge commits where
+//!   `committer_email` (case-normalized) differs from `author_email`: a
+//!   validated proxy for "someone other than the author landed this" —
+//!   peer-applied patch, rebase-merge, or bot landing (Rigby & German 2008;
+//!   later pull-based-development gatekeeper studies). Single-aggregate row
+//!   (`p50 == p75 == p90`), mirroring `rework_pct`'s shape. **Caveat**:
+//!   `commits` carries `author_name` but no `committer_name`, so unlike
+//!   `canonical_author` the committer side cannot be mailmap-resolved — a
+//!   person authoring and landing under two emails they both own registers
+//!   as a false "gatekept" commit. Not ownership-grade signal; see the row's
+//!   `caveat` field.
 //!
 //! ## Squash detection
 //!
@@ -57,7 +68,8 @@ use crate::{CodeLoreError, Options, Result};
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DeliveryMetricsRow {
     /// Metric name: one of `batch_size_files`, `batch_size_loc`,
-    /// `branch_duration_hours`, `rework_pct`, `lead_proxy_hours`.
+    /// `branch_duration_hours`, `rework_pct`, `lead_proxy_hours`,
+    /// `landed_by_other_pct`.
     pub metric: String,
     /// 50th-percentile value (median).
     pub p50: f64,
@@ -291,6 +303,10 @@ pub fn run_delivery_metrics(db: &FactsDb, opts: &Options) -> Result<Vec<Delivery
         "author→committer date gap; proxy only — does not include waiting time before first review",
     )?;
 
+    if let Some(row) = compute_landed_by_other_pct(db)? {
+        result.push(row);
+    }
+
     Ok(result)
 }
 
@@ -491,6 +507,63 @@ fn compute_rework_pct(db: &FactsDb, rework_window_days: u32) -> Result<Option<De
         p90: pct,
         n,
         caveat: "approximate — line drift between commits not tracked; window-anchored to HEAD"
+            .to_string(),
+    }))
+}
+
+/// Compute the `landed_by_other_pct` metric: the percentage of non-merge
+/// commits whose `committer_email` (case-normalized) differs from their
+/// `author_email` — a proxy for "someone other than the author landed this"
+/// (peer-applied patch, rebase-merge, or bot landing).
+///
+/// Returns `None` when the repo has no non-merge commits.
+fn compute_landed_by_other_pct(db: &FactsDb) -> Result<Option<DeliveryMetricsRow>> {
+    let sql = "
+        SELECT
+            CASE WHEN COUNT(*) > 0
+                 THEN 100.0 * COUNT(*) FILTER (
+                          WHERE LOWER(committer_email) <> LOWER(author_email)
+                      ) / COUNT(*)
+                 ELSE 0.0 END AS landed_by_other_pct,
+            COUNT(*) AS n
+        FROM commits
+        WHERE is_merge = FALSE
+    ";
+    let mut stmt = db
+        .conn()
+        .prepare(sql)
+        .map_err(|e| CodeLoreError::Analysis(format!("prepare landed_by_other_pct: {e}")))?;
+    let mut rows = stmt
+        .query([])
+        .map_err(|e| CodeLoreError::Analysis(format!("query landed_by_other_pct: {e}")))?;
+    let Some(row) = rows
+        .next()
+        .map_err(|e| CodeLoreError::Analysis(format!("fetch landed_by_other_pct row: {e}")))?
+    else {
+        return Ok(None);
+    };
+    let pct: f64 = row
+        .get(0)
+        .map_err(|e| CodeLoreError::Analysis(format!("get landed_by_other_pct value: {e}")))?;
+    let n: u64 = row
+        .get(1)
+        .map_err(|e| CodeLoreError::Analysis(format!("get landed_by_other_pct n: {e}")))?;
+    if n == 0 {
+        return Ok(None);
+    }
+    Ok(Some(DeliveryMetricsRow {
+        metric: "landed_by_other_pct".to_string(),
+        // Single aggregate; p50=p75=p90=pct — mirrors rework_pct's shape.
+        p50: pct,
+        p75: pct,
+        p90: pct,
+        n,
+        caveat: "author≠committer email divergence — proxy for peer-applied patches, \
+                 rebase-merges, or bot landings (Rigby & German 2008); commits carries \
+                 author_name but no committer_name, so unlike canonical_author the \
+                 committer side cannot be mailmap-resolved — a person authoring and \
+                 landing under two emails they both own registers as a false \
+                 \"gatekept\" commit; not ownership-grade signal"
             .to_string(),
     }))
 }

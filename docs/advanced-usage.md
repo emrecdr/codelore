@@ -88,7 +88,7 @@ CodeLore ships **57 behavioral analyses** across four tiers. The table below is 
 | `pair-programming` ★★ | "Who pair-programs with whom?" | `Co-Authored-By:` trailer aggregation per author pair | Team-topology / mentoring signal |
 | `lead-time` ★★ | "How long does code sit before shipping?" | Per-commit author-date → committer-date delta (DORA Accelerate) | Cycle-time monitoring |
 | `bus-factor` ★★ | "What's our per-module bus factor?" | Filatov 2010 — minimum N authors covering ≥80% of a module's commits | Module-level Key Personnel (CodeScene shows file-level; this is the actionable view) |
-| `delivery-metrics` ★★ | "What do our batch size, rework, branch lifetime, and lead-time proxies look like?" | Percentile distributions (p50/p75/p90) of five flow metrics derived from git topology and hunk overlap; requires `--include-merges` | Git-only proxy snapshot of flow-metric distributions — run before deciding whether full DORA tooling is warranted |
+| `delivery-metrics` ★★ | "What do our batch size, rework, branch lifetime, lead-time, and gatekeeping proxies look like?" | Percentile distributions (p50/p75/p90) of six flow metrics derived from git topology and hunk overlap; requires `--include-merges` | Git-only proxy snapshot of flow-metric distributions — run before deciding whether full DORA tooling is warranted |
 | `release-cadence` ★★ | "How often do we ship, and is the pace changing?" | Inter-release tag gaps (days), median, IQR, OLS trend; tags filtered by `--release-tag-glob` (default `v*`) | Release-velocity monitoring without a deployment system; trend direction (`accelerating` / `stable` / `slowing`) at a glance |
 | `architecture-trend` ★★ | "Is the architecture getting better or worse over time?" | Propagation cost / cycle count / largest tangle recomputed at sampled historical revisions (the same metrics as `architecture-metrics`, time-sliced) | Structural decay detector — see when a tangle started growing or a refactor paid off |
 | `cycle-origins` ★★ | "When and where did each dependency cycle start?" | Bisects history to find the commit each HEAD dependency cycle first appeared | Commit-level archaeology: pinpoints the change that introduced a cycle so the root cause (not just the symptom) can be fixed |
@@ -1007,6 +1007,7 @@ codelore analyze --analysis delivery-metrics --include-merges
 | `branch_duration_hours` | Time from first branch commit to merge | Detects main parents via commit-parent topology; squash/rebase workflows undercount |
 | `rework_pct` | Rework: fraction of added hunks re-touched within `--rework-window-days` | Hunk-pair text overlap; line drift between commits is not tracked |
 | `lead_proxy_hours` | Author-date → committer-date gap per commit | Proxy only — does not include time waiting before first review or in CI queues |
+| `landed_by_other_pct` | Share of non-merge commits where the committer differs from the author (case-normalized email) — a peer-review/gatekeeper proxy | `commits` has no `committer_name`, so unlike `canonical_author` the committer side can't be mailmap-resolved; a person authoring and landing under two emails they own reads as a false "gatekept" commit — not ownership-grade signal |
 
 **Rework band thresholds** (from Pluralsight Flow's published benchmarks — correlational, not causal): green < 9 %, yellow 9–14 %, red ≥ 15 %.
 

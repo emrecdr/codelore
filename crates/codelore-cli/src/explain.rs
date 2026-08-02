@@ -209,16 +209,26 @@ pub(crate) fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
         ),
         (
             "delivery-metrics",
-            "Repo-level delivery flow distributions: batch size, branch duration, rework, and lead-proxy (p50/p75/p90)",
-            "Five percentile distributions over merge units and commits: batch_size_files \
+            "Repo-level delivery flow distributions: batch size, branch duration, rework, lead-proxy, and landed-by-other (p50/p75/p90)",
+            "Six percentile distributions over merge units and commits: batch_size_files \
              (distinct paths per merge), batch_size_loc (LOC churn per merge), \
              branch_duration_hours (merge date − earliest branch-side author date), \
-             rework_pct (hunk-overlap within --rework-window-days, approximate), and \
-             lead_proxy_hours (author→committer date gap, positive only, non-merge commits). \
+             rework_pct (hunk-overlap within --rework-window-days, approximate), \
+             lead_proxy_hours (author→committer date gap, positive only, non-merge commits), \
+             and landed_by_other_pct (share of non-merge commits where committer_email != \
+             author_email, case-normalized — a peer-review/gatekeeper proxy; commits carry \
+             no committer_name, so unlike canonical_author the committer side is not \
+             mailmap-resolved — see the row's caveat). \
              Requires commit_parents table (schema v4) and merges ingested with \
              include_merges=true. Branch metrics are unreliable on squash/rebase workflows \
              (emits a warning when merge count < 3 and commit count > 50).",
             "See analyses/delivery_metrics.rs.",
+        ),
+        (
+            "delivery-friction",
+            "Where technical debt actively slows delivery: churn × review lead time × complexity",
+            "friction_score = pr(revisions) × pr(median_lead_time_days) × pr(cognitive) × 100, in [0, 100]. All three percentile ranks must be elevated — one dominant signal alone does not light up the score. `wip_age_days` (days since last commit) is reported alongside so a high-friction file can be told apart as stale-but-still-touched vs hot-but-recently-active.",
+            "See analyses/delivery_friction.rs.",
         ),
         (
             "function-xray",

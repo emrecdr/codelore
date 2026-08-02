@@ -1121,7 +1121,6 @@ const EXPLAIN_UNCOVERED: &[&str] = &[
     "entity-effort",
     "entity-ownership",
     "top-committers",
-    "delivery-friction",
     // Newly added analysis: explain topic not yet wired
     "finding-hotspot-overlap",
 ];
