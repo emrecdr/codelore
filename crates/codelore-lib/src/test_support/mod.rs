@@ -352,6 +352,87 @@ pub mod function_xray_repo {
     }
 }
 
+/// Fixture for `function-hotspots`.
+///
+/// Contains a single Rust file `src/target.rs` with two functions,
+/// deliberately far enough apart (4 blank lines) that default `git diff`
+/// 3-line context never bridges a hunk from one function's span into the
+/// other's:
+/// - `hot` — a 7-line function with a real `if`/`else` branch (non-zero
+///   cognitive complexity), edited on its line 3 in 6 separate commits.
+/// - `stable` — a 3-line function with no branching (cognitive complexity
+///   zero), edited on its line 2 in 2 separate commits.
+///
+/// Commit history (one calendar day apart, deterministic across
+/// regenerations):
+///   seed          2026-01-01  — writes both functions (an Add carries no
+///                                hunks — see `repo::gix_repo::history`'s
+///                                `GixChange::Addition` arm — so it
+///                                contributes 0 to either function's revs)
+///   hot-tweak-1..6   2026-01-02..07  — single-hunk edits of `hot`'s
+///                                       branch return value; each hunk's
+///                                       `@@ -1,6 +1,6 @@` stays within
+///                                       `hot`'s span
+///   stable-tweak-1..2 2026-01-08..09 — single-hunk edits of `stable`'s
+///                                       body; each hunk's `@@ -10,5 +10,5
+///                                       @@` stays within `stable`'s span
+///
+/// `hot`'s non-zero cognitive complexity (the `if`/`else`) is deliberate:
+/// with every function tied at cognitive = 0, `PERCENT_RANK() OVER (ORDER
+/// BY cognitive)` ties every row at rank 0, collapsing
+/// `function_hotspot_score` to 0 for everyone and making the sort fall back
+/// to `(path, function)` — a real but degenerate corner of the reused
+/// `hotspots` formula that a flat-complexity fixture would trigger. Giving
+/// `hot` real complexity (and `stable` none) instead produces a real,
+/// non-degenerate score gap so `hot` ranks first on the score, not merely on
+/// a tiebreak.
+///
+/// ## Regenerating the bundle
+///
+/// The fixture is captured once into a checked-in git bundle
+/// (`src/test_support/data/function-hotspots-repo.bundle`; HEAD
+/// `ef364922b7bd34599753d4f8c286da1feac764a1`, deterministic across
+/// regenerations because every author / date / file content is fixed). To
+/// regenerate (e.g. when the commit shape must change), build a fresh repo
+/// with `git init -b main`, `Fixture Bot <fixture@example.com>` as both
+/// author and committer, the file/commit shape documented above (one
+/// `GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE` per calendar day starting
+/// 2026-01-01), then capture:
+///
+/// ```text
+/// git -C <fresh-repo> bundle create \
+///     crates/codelore-lib/src/test_support/data/function-hotspots-repo.bundle --all
+/// ```
+///
+/// Commit the updated bundle.
+#[cfg(feature = "test-support")]
+pub mod function_hotspots_repo {
+    use tempfile::TempDir;
+
+    /// The fixture's git bundle, captured once and embedded at compile time.
+    static BUNDLE: &[u8] = include_bytes!("data/function-hotspots-repo.bundle");
+
+    pub struct FunctionHotspotsRepo {
+        pub dir: TempDir,
+    }
+
+    /// Extract the function-hotspots fixture from the embedded bundle into a
+    /// fresh tempdir. Single atomic `git clone` — no multi-process race
+    /// surface.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `tempfile::tempdir` fails or if `git clone` from the bundle
+    /// fails (either case indicates a broken local git install, not a
+    /// fixture issue).
+    #[must_use]
+    pub fn build() -> FunctionHotspotsRepo {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _head_sha = super::clone_bundle(BUNDLE, dir.path());
+        FunctionHotspotsRepo { dir }
+    }
+}
+
 #[cfg(feature = "test-support")]
 pub mod differential_repo {
     //! 50-commit fixture exercising every `Repo`-trait method's edge cases:

@@ -464,7 +464,7 @@ scenario, proposed direction, value/effort, verification status, invariant touch
 | F254 | Cache-hit path runs a full O(tracked-files) `is_worktree_dirty()` walk on every invocation, just to maybe warn — defeats the cache on the agent-loop/CI hot path. ✅ verified | MED | Active |
 | F255 | `panic = "abort"` × long-lived `codelore mcp`: one panicking `spawn_blocking` tool call SIGABRTs the server for every client. ✅ verified (profile scope). Add an MCP-only `catch_unwind` boundary. | HIGH | Active |
 | F256 | Small per-language cohorts collapse biomarker intensities to near-binary → false `structural_risk` red-bands; disclose cohort `n` (refines F236 residual — verify the "corpus lens addresses this" claim first). | MED | Active |
-| F257 | Repo-wide function-level hotspots via `entities × hunks × commits` (no tree-sitter reparse — columns ✅ verified present). New capability. | HIGH | Active |
+| F257 | Repo-wide function-level hotspots via `entities × hunks × commits` (no tree-sitter reparse — columns ✅ verified present). New capability. | HIGH | Fixed (Unreleased) |
 | F258 | `first_party_import_share` wildcard misclassification (`use crate::foo::*` tagged Wildcard→excluded) + a `wildcard_import_share` row. ✅ verified (`classify` branch order). | MED-HIGH | Fixed (Unreleased) |
 | F259 | Dead `commits.committer_email` (all refs are test `INSERT`s ✅) → a `landed_by_other_pct` gatekeeper metric; must ship the no-`committer_name`-mailmap caveat. | MED | Fixed (Unreleased) |
 | F260 | `hotspot-velocity` combined-window floor lets a single-window burst out-rank steadier activity; `RECENT/BASELINE_DAYS` + `EA_Z_FLOOR` uncited & unoverridable (bypass the `constants.rs` convention). | MED | Active |

@@ -340,6 +340,41 @@ pub fn write_function_xray_markdown<W: Write>(
     Ok(())
 }
 
+/// `function-hotspots` markdown emitter — repo-wide function-level hotspot
+/// ranking (revs × cognitive, the `hotspots` scoring shape at function
+/// granularity).
+pub fn write_function_hotspots_markdown<W: Write>(
+    rows: &[crate::analyses::function_hotspots::FunctionHotspotRow],
+    w: &mut W,
+) -> Result<()> {
+    header(w, "CodeLore function-hotspots")?;
+    if rows.is_empty() {
+        writeln!(w, "_No HEAD-alive functions cleared `--min-revs`._")
+            .map_err(CodeLoreError::Io)?;
+        return Ok(());
+    }
+    writeln!(
+        w,
+        "| Path | Function | Revs | Cognitive | Cognitive Health | Score |"
+    )
+    .map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---|---:|---:|---:|---:|").map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "| `{}` | {} | {} | {:.2} | {:.2} | {:.4} |",
+            escape_md_cell(&row.path),
+            escape_md_cell(&row.function),
+            row.revs,
+            row.cognitive,
+            row.cognitive_health,
+            row.function_hotspot_score,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_finding_hotspot_overlap_markdown<W: Write>(
     rows: &[crate::analyses::finding_hotspot_overlap::FindingHotspotOverlapRow],
     w: &mut W,

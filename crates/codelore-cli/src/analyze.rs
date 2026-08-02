@@ -457,8 +457,8 @@ fn supported_formats(name: AnalysisName) -> &'static [&'static str] {
         CodeFamiliarity, CodeHealth, Communication, Communities, CoordinationNeeds, Coupling,
         Crossing, CycleHealth, CycleOrigins, DefectValidation, DeliveryFriction, DeliveryMetrics,
         DependencyCycles, EffortExposure, EntityChurn, EntityEffort, EntityOwnership,
-        FindingHotspotOverlap, FunctionCoupling, FunctionXray, GodClasses, HealthTrend,
-        HotspotVelocity, Hotspots, Instability, KnowledgeIslands, LeadTime, MainDev,
+        FindingHotspotOverlap, FunctionCoupling, FunctionHotspots, FunctionXray, GodClasses,
+        HealthTrend, HotspotVelocity, Hotspots, Instability, KnowledgeIslands, LeadTime, MainDev,
         MainDevByDeletions, MainDevByRevs, MarginalOwnerRisk, Messages, ModularityViolations,
         Ownership, PairProgramming, RefactoringTargets, ReleaseCadence, Revisions, Soc, StaleCode,
         Summary, TeamComposition, TopCommitters, UnstableInterface,
@@ -515,6 +515,7 @@ fn supported_formats(name: AnalysisName) -> &'static [&'static str] {
         | MarginalOwnerRisk
         | ReleaseCadence
         | FunctionXray
+        | FunctionHotspots
         | FunctionCoupling
         | FindingHotspotOverlap
         | CycleHealth
@@ -1040,6 +1041,13 @@ fn run_streaming_dispatch(
             "csv" => output::csv::write_delivery_metrics_csv,
             "json" => output::json::write_json,
             "markdown" => output::markdown::write_delivery_metrics_markdown,
+        }),
+        AnalysisName::FunctionHotspots => dispatch!(ctx, format, out,
+        analyses::function_hotspots::run_function_hotspots(db, opts),
+        {
+            "csv" => output::csv::write_function_hotspots_csv,
+            "json" => output::json::write_json,
+            "markdown" => output::markdown::write_function_hotspots_markdown,
         }),
         AnalysisName::FunctionXray => {
             let target = opts.target.as_deref().ok_or_else(|| {
@@ -2016,11 +2024,12 @@ mod registration_surfaces {
             CodeFamiliarity, CodeHealth, Communication, Communities, CoordinationNeeds, Coupling,
             Crossing, CycleHealth, CycleOrigins, DefectValidation, DeliveryFriction,
             DeliveryMetrics, DependencyCycles, EffortExposure, EntityChurn, EntityEffort,
-            EntityOwnership, FindingHotspotOverlap, FunctionCoupling, FunctionXray, GodClasses,
-            HealthTrend, HotspotVelocity, Hotspots, Instability, KnowledgeIslands, LeadTime,
-            MainDev, MainDevByDeletions, MainDevByRevs, MarginalOwnerRisk, Messages,
-            ModularityViolations, Ownership, PairProgramming, RefactoringTargets, ReleaseCadence,
-            Revisions, Soc, StaleCode, Summary, TeamComposition, TopCommitters, UnstableInterface,
+            EntityOwnership, FindingHotspotOverlap, FunctionCoupling, FunctionHotspots,
+            FunctionXray, GodClasses, HealthTrend, HotspotVelocity, Hotspots, Instability,
+            KnowledgeIslands, LeadTime, MainDev, MainDevByDeletions, MainDevByRevs,
+            MarginalOwnerRisk, Messages, ModularityViolations, Ownership, PairProgramming,
+            RefactoringTargets, ReleaseCadence, Revisions, Soc, StaleCode, Summary,
+            TeamComposition, TopCommitters, UnstableInterface,
         };
         match name {
             Hotspots | Coupling | CodeHealth | Summary | Clones | EntityOwnership
@@ -2059,6 +2068,7 @@ mod registration_surfaces {
             | LeadTime
             | BusFactor
             | FunctionCoupling
+            | FunctionHotspots
             | FindingHotspotOverlap
             | CycleHealth
             | DefectValidation => false,
@@ -2195,6 +2205,10 @@ mod registration_surfaces {
         (
             AnalysisName::FunctionCoupling,
             "no widget; per-function-pair co-change needs a --target file",
+        ),
+        (
+            AnalysisName::FunctionHotspots,
+            "no widget; repo-wide function-level ranking is CLI-only",
         ),
         (
             AnalysisName::FindingHotspotOverlap,

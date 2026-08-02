@@ -270,6 +270,34 @@ pub fn write_function_xray_csv<W: Write>(
     Ok(())
 }
 
+/// `function-hotspots` CSV emitter — repo-wide function-level hotspot
+/// ranking (revs × cognitive, the `hotspots` scoring shape at function
+/// granularity).
+pub fn write_function_hotspots_csv<W: Write>(
+    rows: &[crate::analyses::function_hotspots::FunctionHotspotRow],
+    w: &mut W,
+) -> Result<()> {
+    writeln!(
+        w,
+        "path,function,revs,cognitive,cognitive-health,function-hotspot-score"
+    )
+    .map_err(CodeLoreError::Io)?;
+    for row in rows {
+        writeln!(
+            w,
+            "{},{},{},{:.2},{:.2},{:.4}",
+            quote_if_needed(&row.path),
+            quote_if_needed(&row.function),
+            row.revs,
+            row.cognitive,
+            row.cognitive_health,
+            row.function_hotspot_score,
+        )
+        .map_err(CodeLoreError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn write_finding_hotspot_overlap_csv<W: Write>(
     rows: &[crate::analyses::finding_hotspot_overlap::FindingHotspotOverlapRow],
     w: &mut W,

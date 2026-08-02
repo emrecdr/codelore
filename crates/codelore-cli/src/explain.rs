@@ -252,6 +252,23 @@ pub(crate) fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
             "See analyses/function_coupling.rs.",
         ),
         (
+            "function-hotspots",
+            "Repo-wide function-level hotspot ranking (Gall et al. ICSM 2003 HistoryFinder + Tornhill 2018 the hotspot score this mirrors)",
+            "percentile_rank(revs) × percentile_rank(cognitive) × (100 − cognitive_health) / 4, \
+             range [0, 10] — the same formula `hotspots` uses, computed per HEAD-live \
+             function/method instead of per file. `revs` = distinct revisions where a hunk \
+             overlapped the function's HEAD span (`entities`), gated by --min-revs; the overlap \
+             predicate is `function-xray`'s hunk↔span test, transliterated to SQL to run \
+             repo-wide instead of per --target file. Approximate, not an exact replay: hunk line \
+             numbers are historical while the span is the function's CURRENT (HEAD) location, so \
+             attribution drifts as intervening commits shift line numbers — same caveat \
+             `function-xray` documents. Answers \"hot now,\" not \"was hot historically\": \
+             `entities.rev_introduced`/`rev_last_seen` are degenerate (always head_rev). Hunk \
+             attribution keys on the literal path recorded at commit time, so a file's \
+             pre-rename history is not attributed (same rename limitation as `function-xray`).",
+            "See analyses/function_hotspots.rs + analyses/function_xray.rs (the overlap predicate).",
+        ),
+        (
             "cycle-origins",
             "Commit-level archaeology for dependency cycles",
             "For each dependency cycle at HEAD, binary-searches history (reading + resolving source at past revisions) to find the earliest commit where that cycle existed — the commit that closed the loop. Reports the forming commit's SHA + date per cycle. Assumes a cycle, once formed, stays formed; traces the largest cycles first to bound cost.",
