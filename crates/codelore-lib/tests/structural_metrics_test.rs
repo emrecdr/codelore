@@ -234,6 +234,91 @@ fn architecture_metrics_splits_resolution_into_first_party_signals() {
     );
 }
 
+/// Fixture isolating the first-party-wildcard undercount fix: a resolved
+/// relative import, an unresolved first-party GLOB (`use crate::missing::*;`
+/// — `classify` tags this `Wildcard`, not `Relative`, since the trailing-glob
+/// test runs before the relative-root test), and a genuinely external import.
+/// So: resolved = 1 (`crate::b`), first-party candidates = 2 (the resolved
+/// `crate::b` + the unresolved-but-unambiguously-in-repo `crate::missing::*`
+/// glob), total = 3, of which 1 is a wildcard.
+fn ingested_first_party_wildcard_repo() -> (tempfile::TempDir, FactsDb, codelore_lib::Options) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let p = dir.path();
+    git(p, &["init", "-b", "main", "--quiet"]);
+    git(p, &["config", "user.email", "m@example.com"]);
+    git(p, &["config", "user.name", "M"]);
+    write(
+        p,
+        "Cargo.toml",
+        "[package]\nname=\"m\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
+    );
+    write(p, "src/lib.rs", "pub mod a;\npub mod b;\n");
+    write(
+        p,
+        "src/a.rs",
+        // crate::b resolves (relative); crate::missing::* is a first-party
+        // GLOB the resolver can't map to a single tracked file (kind =
+        // 'wildcard', not 'relative'); std::fmt is genuinely external.
+        "use crate::b;\nuse crate::missing::*;\nuse std::fmt;\npub fn a() { b::b(); }\n",
+    );
+    write(p, "src/b.rs", "pub fn b() {}\n");
+    git(p, &["add", "."]);
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(p)
+        .args(["commit", "-m", "init", "--quiet"])
+        .env("GIT_AUTHOR_DATE", "2026-01-01T10:00:00Z")
+        .env("GIT_COMMITTER_DATE", "2026-01-01T10:00:00Z")
+        .status()
+        .expect("spawn git commit");
+    assert!(status.success(), "git commit failed");
+
+    let repo = GixRepo::open(p).expect("open repo");
+    let db = FactsDb::new_in_memory().expect("in-memory db");
+    let opts = permissive_coupling_opts(p.to_path_buf());
+    db.ingest(&repo, &opts).expect("ingest repo");
+    (dir, db, opts)
+}
+
+/// `first_party_import_share` must count an unresolved first-party glob
+/// (`use crate::missing::*;`) — pre-fix it fell entirely out of the
+/// numerator because `classify` tags it `Wildcard`, not `Relative`, and the
+/// old predicate only recognised `kind = 'relative'`. Also pins the new
+/// `wildcard_import_share` disclosure row.
+#[test]
+fn architecture_metrics_counts_first_party_wildcard_and_reports_wildcard_share() {
+    let (_dir, db, opts) = ingested_first_party_wildcard_repo();
+    let rows = run_architecture_metrics(&db, &opts).expect("run architecture-metrics");
+    let m: HashMap<&str, &str> = rows
+        .iter()
+        .map(|r| (r.metric.as_str(), r.value.as_str()))
+        .collect();
+
+    assert_eq!(
+        m.get("import_resolution_rate"),
+        Some(&"0.3333"),
+        "resolved 1 / total 3: {m:?}"
+    );
+    // Fixed value: 2/3 = 0.6667 (crate::b resolved + the crate::missing::*
+    // glob counted as first-party despite kind='wildcard'). Pre-fix this
+    // read 0.3333 — the glob silently fell out of the numerator.
+    assert_eq!(
+        m.get("first_party_import_share"),
+        Some(&"0.6667"),
+        "first-party candidates 2 / total 3, including the unresolved glob: {m:?}"
+    );
+    assert_eq!(
+        m.get("resolution_rate_first_party"),
+        Some(&"0.5000"),
+        "resolved 1 / first-party candidates 2: {m:?}"
+    );
+    assert_eq!(
+        m.get("wildcard_import_share"),
+        Some(&"0.3333"),
+        "one wildcard (crate::missing::*) / total 3: {m:?}"
+    );
+}
+
 /// When a repo has imports but none are first-party candidates (every import
 /// is an unresolved absolute — external crates / stdlib only), the
 /// `resolution_rate_first_party` rate is undefined (0/0) and must be OMITTED
@@ -341,8 +426,9 @@ fn architecture_metrics_additivity_without_repo_metrics_pool() {
             "import_resolution_rate",
             "first_party_import_share",
             "resolution_rate_first_party",
+            "wildcard_import_share",
         ],
-        "no active repo_metrics pool -> the base rows plus the three \
+        "no active repo_metrics pool -> the base rows plus the four \
          import-resolution disclosure rows, no corpus rows: {names:?}"
     );
 }
@@ -475,6 +561,7 @@ fn architecture_metrics_emits_corpus_percentiles_when_pool_active() {
             "import_resolution_rate",
             "first_party_import_share",
             "resolution_rate_first_party",
+            "wildcard_import_share",
             "corpus_percentile:propagation_cost",
             "corpus_percentile:propagation_cost:ci_low",
             "corpus_percentile:propagation_cost:ci_high",
@@ -484,7 +571,7 @@ fn architecture_metrics_emits_corpus_percentiles_when_pool_active() {
             "corpus_n",
         ],
         "the corpus rows (percentile + its paired Wilson CI) must append, in \
-         order, after the base rows and the three import-resolution \
+         order, after the base rows and the four import-resolution \
          disclosure rows: {names:?}"
     );
 
