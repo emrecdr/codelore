@@ -438,8 +438,51 @@ A five-dimension architecture review (four parallel read-only analysts: architec
 
 **2026-07-04 architecture-review pass**: **F243** (html un-advertised in 4 dispatchers — Fixed `acd9568`) and **F231** (Plan-N markers — Fixed via self-enforcing hygiene guard `52c427c`) closed; clippy-allow justification + SPA listener-bus + browser-fixture coverage landed. New own-slice: **F244** (analysis registry / `enum Format` + `TabularRow`, absorbs F215/F148/F119), **F245** (widgets.js module split), **F246** (canvas keyboard a11y).
 
-The next sweep should re-open with F-IDs starting at **F249**.
+The 2026-08-02 discovery pass logged **F249–F268** (see §6). The next sweep should re-open with F-IDs starting at **F269**.
 
 **F248 (Active) — no integration coverage that `health-trend`'s `arch_health` falls as the import graph decays.** The `health-trend` analysis (`analyses/health_trend.rs`) computes `arch_health` from per-rev `GraphMetrics`, and the unit tests cover the pure function (empty/acyclic/fully-tangled/clamp). But the integration test (`tests/health_trend_test.rs`) only asserts shape/ranges/oldest-first, not the spec's "degrading architecture ⇒ `arch_health` decreasing" case — because the only ≥2-commit fixture, `biomarker_repo`, is six independent Rust files with no inter-file imports, so its import graph is empty and `arch_health` is pinned at 100 across every sample. Fix: add an import-structured fixture whose later commits introduce a dependency cycle (mirror `architecture_trend`'s `trend_captures_cycle_introduction_over_time`), then assert the newest sample's `arch_health` is below an earlier sample's. Surfaced by the whole-branch review of the Repo Health Timeline (piece 2).
 
 **F247 (Active) — `run_coupling_scoped` cutoff ignores lineage/time-bucket source in `good_commits`.** The rev-parameterizable `code_health` history cutoff (`HealthScanCtx::history_cutoff`) routes coupling through `run_coupling_scoped(db, opts, "changes_at_ts")`, which overrides only the pair-source + Fisher-denominator tables. The internal `good_commits_cte(bucket, use_lineage)` still reads the opt-derived `changes_lineage`/`changes`. For the primary path (no lineage, no time-bucket) this is equivalent — the cutoff-window revset equals full-history ∩ window. But `history_cutoff` combined with `--use-canonical-lineage` yields coupling pairs keyed on pre-rename path names, and combined with `--time-bucket` aggregates buckets over full history. The **same class** applies to code-health's own churn / revs / author-fragmentation CTEs: under a cutoff `{src}` becomes the raw, non-lineage `changes_at_ts` view, so those terms also lose rename-awareness when a cutoff is combined with `--use-canonical-lineage`. Neither combination is exercised (the timeline consumer uses the primary path — cutoff without lineage/bucket) nor required by the spec; documented in the `run_coupling_scoped` and `CHANGES_AT_TS_DDL` doc comments. Fix if a future consumer needs cutoff + lineage/bucket: build `changes_at_ts` from the lineage-rewritten source and thread `changes_source` into `good_commits_cte`. Surfaced by the Task-4 review + the whole-branch review of the rev-parameterizable code-health branch.
+
+---
+
+## 6. Discovery pass — 2026-08-02 (F249–F268)
+
+A six-dimension read-only research fan-out (robustness / rigor / performance / feature-deepening /
+error-handling / testing), each grounded in source and adjudicated against the tracked baseline;
+the controller then verified the load-bearing items directly. Full narrative — location, failure
+scenario, proposed direction, value/effort, verification status, invariant touches — in
+[`2026-08-02-discovery-pass-f249-f267.md`](./2026-08-02-discovery-pass-f249-f267.md). Index:
+
+| F-ID | Subject | Sev | Status |
+|---|---|---|---|
+| F249 | `ensure_ingest_witnessed` guards only 2 of ~13 ingest entry points — `analyze`, `gate`, `gate_changes`, `explain`, 8 MCP tools render confident empty reports over a blind (fetch-depth:1 / all-excluded) ingest. ✅ grep-verified; convergent (5 signals). Gotcha: `analyze`'s `--after/--before` also empties `commits` → message must branch. | HIGH | Active |
+| F250 | `codelore explain delivery-friction` 404s on a shipped, fully-documented metric. ✅ verified | LOW | Active |
+| F251 | `coordination-needs` / `knowledge-islands` classify `high` tier / 100% ownership off n=2–5 with no denominator field (unlike `bus_factor`/`ownership`). ✅ verified | MED | Active |
+| F252 | `write_github_output` silently swallows the open+write `Err` (`let _ =`). ✅ verified | LOW | Active |
+| F253 | HEAD-scan blob I/O Phase-1 (refines F173/F206): blocker smaller than tracked (blob-read handling already identical; divergence is downstream AST-parse). One warm-ODB reader per rayon worker via the existing `map_init` idiom; also fixes `architecture-trend`/`cycle-origins` (never cached, re-paid per `analyze`). | HIGH | Active |
+| F254 | Cache-hit path runs a full O(tracked-files) `is_worktree_dirty()` walk on every invocation, just to maybe warn — defeats the cache on the agent-loop/CI hot path. ✅ verified | MED | Active |
+| F255 | `panic = "abort"` × long-lived `codelore mcp`: one panicking `spawn_blocking` tool call SIGABRTs the server for every client. ✅ verified (profile scope). Add an MCP-only `catch_unwind` boundary. | HIGH | Active |
+| F256 | Small per-language cohorts collapse biomarker intensities to near-binary → false `structural_risk` red-bands; disclose cohort `n` (refines F236 residual — verify the "corpus lens addresses this" claim first). | MED | Active |
+| F257 | Repo-wide function-level hotspots via `entities × hunks × commits` (no tree-sitter reparse — columns ✅ verified present). New capability. | HIGH | Active |
+| F258 | `first_party_import_share` wildcard misclassification (`use crate::foo::*` tagged Wildcard→excluded) + a `wildcard_import_share` row. ✅ verified (`classify` branch order). | MED-HIGH | Active |
+| F259 | Dead `commits.committer_email` (all refs are test `INSERT`s ✅) → a `landed_by_other_pct` gatekeeper metric; must ship the no-`committer_name`-mailmap caveat. | MED | Active |
+| F260 | `hotspot-velocity` combined-window floor lets a single-window burst out-rank steadier activity; `RECENT/BASELINE_DAYS` + `EA_Z_FLOOR` uncited & unoverridable (bypass the `constants.rs` convention). | MED | Active |
+| F261 | Dead `changes.similarity` (rename %) → an `avg_rename_similarity` / low-similarity-rename signal. | LOW | Active |
+| F262 | Survival analysis on hotspots (Kaplan-Meier over hot-episodes) — re-scope of the roadmap Tier-1 item; no new ingest, but needs a design pass (stateful episode extraction + KM). | — | Active (design) |
+| F263 | `[new_code]` gate `run_new_code_scope` has zero test coverage (only the pure evaluator is tested). Pairs with F249. | HIGH | Active |
+| F264 | `is_shallow()` has zero tests — the primitive behind cycles 2/3/4's top finding. Pairs with F249. | HIGH | Active |
+| F265 | `calibrate` total-failure (0-of-N) exit path untested (only partial-failure is) — would red-flag cycle-2's G2 bug. | MED | Active |
+| F266 | Differential harness missing binary / non-ASCII / submodule probes (fixture documents its own boundary). Touches the two-backend-parity invariant. | HIGH | Active |
+| F267 | MCP `hotspots` never invoked via `tools/call`; `entity-effort`/`entity-ownership` have zero behavioral coverage. | MED | Active |
+| F268 | CI `Build test binaries` link exhausts runner disk (SIGBUS in `ld`, different binary each run) linking 100+ fat test binaries. | MED | **Fixed (#196)** — Linux-only disk-reclaim step before checkout |
+
+**Correction logged (not a finding):** Type-3 near-miss clones is *not* a latent-data quick win —
+`clones/fingerprint.rs` stores a single SHA-256 digest (zero similarity signal); MinHash+LSH needs a
+shingled representation = new ingest. Re-scope the roadmap's "~100 LOC" estimate before scheduling.
+
+**Pointer:** `calibrate_defects` temporal train/validation positive-leakage (fully diagnosed in
+`2026-07-28-hardening-cycle-3.md` §A2-1, reconfirmed HIGH cycle-4) remains open — a rigor defect
+inside the calibration-honesty machinery; don't drop it when triaging.
+
+The next sweep re-opens at **F269**.
