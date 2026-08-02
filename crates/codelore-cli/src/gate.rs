@@ -81,12 +81,6 @@ pub(crate) fn run_gate_cmd(args: &args::GateArgs) -> Result<()> {
     let head_sha = repo.head_sha().context("get HEAD sha")?;
     let db =
         FactsDb::open_or_ingest_with_cache_root(&opts, &repo, &cache_root).context("ingest")?;
-    // Witness the ingest before evaluating any gate: a real HEAD over an
-    // empty commit store is the truncated-checkout signature (see
-    // `check.rs`). `gate` has no `--after`/`--before` walk filter, so an
-    // empty store is unambiguously the shallow-checkout case, never a
-    // legitimate date-window skip.
-    db.ensure_ingest_witnessed(&head_sha)?;
 
     let changes = repo
         .worktree_changes()
@@ -95,6 +89,16 @@ pub(crate) fn run_gate_cmd(args: &args::GateArgs) -> Result<()> {
         report_gate_clean_tree(args);
         return Ok(());
     }
+
+    // Witness the ingest before scoring the change-set against history: a real
+    // HEAD over an empty commit store is the truncated-checkout signature (see
+    // `check.rs`). Placed after the clean-tree early return — matching MCP
+    // `gate_changes` — so a clean worktree on a shallow checkout still reports
+    // cleanly; the hazard is a NON-empty change-set scored against blind
+    // history, which is exactly this path. `gate` has no `--after`/`--before`
+    // walk filter, so an empty store here is unambiguously the shallow-checkout
+    // case, never a legitimate date-window skip.
+    db.ensure_ingest_witnessed(&head_sha)?;
 
     let report = build_change_set_report(&db, &repo, &opts, &cache_root)
         .context("build change-set report")?;
