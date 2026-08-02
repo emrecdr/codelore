@@ -146,6 +146,23 @@ jobs:
               binary(code_age_test) | binary(stale_code_test) | binary(mcp_test) |
               (binary(cli_test) & test(/sarif|check_|ingest_sarif|analyze_hotspots_emits_csv|cache_dir|provenance_sidecar|skips_sidecar/))
     steps:
+      # The full workspace test build links 100+ integration-test binaries,
+      # each statically linking duckdb + arrow + gix + tree-sitter. On the
+      # hosted Linux runner (~14 GB free) that can exhaust the disk backing
+      # the linker's mmap'd output, and `ld` dies with SIGBUS mid-link — a
+      # different binary each run. Reclaim the preinstalled SDKs we never use
+      # (~25 GB) so the target dir + the restored cache fit. Linux-only; the
+      # macOS and Windows legs have the headroom. The df lines bracket the
+      # reclaim so a recurrence shows whether disk was actually the cause.
+      - name: Reclaim runner disk (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+                      /usr/share/dotnet /opt/hostedtoolcache/CodeQL \
+                      /usr/local/share/powershell /usr/share/swift || true
+          sudo docker image prune --all --force >/dev/null 2>&1 || true
+          df -h /
       - uses: actions/checkout@v7
         with:
           # CodeLore's integration tests walk this repo's own history (e.g.
