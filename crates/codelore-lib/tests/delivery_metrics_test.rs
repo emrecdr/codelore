@@ -298,7 +298,7 @@ fn batch_size_files_p50_is_one() {
 }
 
 #[test]
-fn all_five_metrics_present() {
+fn all_six_metrics_present() {
     let fixture = codelore_lib::test_support::delivery_repo::build();
     let repo = GixRepo::open(fixture.dir.path()).expect("open repo");
     let db = FactsDb::new_in_memory().expect("db");
@@ -314,6 +314,7 @@ fn all_five_metrics_present() {
         "branch_duration_hours",
         "rework_pct",
         "lead_proxy_hours",
+        "landed_by_other_pct",
     ] {
         assert!(
             metric_names.contains(expected),
@@ -325,6 +326,46 @@ fn all_five_metrics_present() {
     for row in &rows {
         assert!(!row.caveat.is_empty(), "caveat empty for {}", row.metric);
     }
+}
+
+#[test]
+fn landed_by_other_pct_is_100_pct_on_delivery_fixture() {
+    // Every non-merge commit in the delivery_repo bundle was authored by
+    // alice/bob/carol but committed under a shared `delivery@example.com`
+    // identity (the fixture-generation script's committer), so
+    // committer_email != author_email on all 13 non-merge commits — the
+    // 2 merge commits ARE self-committed by their merger and are excluded
+    // by `is_merge = FALSE`. Hand-verified via `git log --all --format`.
+    let fixture = codelore_lib::test_support::delivery_repo::build();
+    let repo = GixRepo::open(fixture.dir.path()).expect("open repo");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = base_opts(fixture.dir.path());
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let rows = run_delivery_metrics(&db, &opts).expect("run delivery-metrics");
+
+    let row = rows
+        .iter()
+        .find(|r| r.metric == "landed_by_other_pct")
+        .expect("landed_by_other_pct row present");
+
+    assert_eq!(row.n, 13, "13 non-merge commits in the fixture");
+    assert!(
+        (row.p50 - 100.0_f64).abs() < 1e-6,
+        "landed_by_other_pct expected 100.0 (every non-merge commit has a \
+         distinct author/committer email in this fixture), got {:.4}",
+        row.p50
+    );
+    assert!(
+        (row.p50 - row.p75).abs() < 1e-9 && (row.p75 - row.p90).abs() < 1e-9,
+        "single-aggregate row: p50 == p75 == p90"
+    );
+    // The mandatory no-committer_name-mailmap caveat must ship on the row.
+    assert!(
+        row.caveat.contains("committer_name"),
+        "caveat must disclose that the committer side cannot be mailmap-resolved: {}",
+        row.caveat
+    );
 }
 
 #[test]

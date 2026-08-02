@@ -20,7 +20,7 @@
 //! reachability), so this adds no new query cost beyond building the
 //! graph. Accuracy follows the import resolver's language coverage.
 //!
-//! Three further rows disclose how much of the import surface the graph
+//! Four further rows disclose how much of the import surface the graph
 //! above actually covers — *coverage* transparency, not defect scores, so
 //! that a sparse graph can't read as a clean one. The structural metrics
 //! only ever see the resolved edges (`target_path IS NOT NULL`); these
@@ -35,11 +35,18 @@
 //! - **`first_party_import_share`** — fraction of import statements that are
 //!   first-party by intent: either already resolved, or a *relative* import
 //!   (`use crate::…`, `from .mod import …`, `./foo`) naming an in-repo path
-//!   even when the resolver missed it.
+//!   even when the resolver missed it — including a first-party *glob*
+//!   (`use crate::foo::*;`, bare `use super::*;`), which `imports.kind`
+//!   tags `wildcard` rather than `relative` (see the "Definition caveat"
+//!   below) but which is still unambiguously in-repo by its
+//!   `crate::`/`self::`/`super::` prefix.
 //! - **`resolution_rate_first_party`** — of those first-party imports, the
 //!   fraction that resolved. It drops external imports from the denominator,
 //!   isolating resolver coverage from third-party-dependency density: a low
 //!   value points at a genuine resolver gap rather than many external deps.
+//! - **`wildcard_import_share`** — fraction of all import statements that
+//!   are glob imports (`imports.kind = 'wildcard'`), first-party or not.
+//!   Purely informational (a glob names a module, not a symbol).
 //!
 //! When an active calibration artifact ([`crate::calibration::load_active_artifact`])
 //! carries a `repo_metrics` section (corpus pools populated by `codelore
@@ -214,24 +221,56 @@ pub fn run_architecture_metrics(
 ///   isolated from the third-party mix that drags the headline rate down.
 ///   Omitted when there are no first-party candidates (the rate is undefined,
 ///   and a `0.00` would misread as "resolved none of them").
+/// - **`wildcard_import_share`** — glob imports (`kind = 'wildcard'`: Rust
+///   `use foo::*`, Java `import foo.*;`, Python `from foo import *`) ÷ all
+///   imports. Purely informational — a glob names a module, not a symbol, so
+///   it is inherently harder for the resolver to check against an in-repo
+///   path than a named import.
 ///
 /// Definition caveat (documented, not hidden): an absolute import that fails
 /// to resolve is counted as external, so a genuinely first-party absolute
 /// import the resolver *missed* is under-counted; and for a language with no
 /// syntactic relative marker (Java), first-party candidates reduce to the
 /// resolved imports, making `resolution_rate_first_party` optimistic there.
+/// A second, narrower instance of the same undercount: `classify` tests for a
+/// trailing glob (`ends_with('*')`) BEFORE it tests for a relative root, so a
+/// first-party glob (`use crate::foo::*;`, bare `use super::*;`) is tagged
+/// `Wildcard`, not `Relative` — `imports.kind` keeps that distinction (Java's
+/// `import foo.*;` has no relative form to fall back to, so blending the two
+/// kinds would erase real signal there). `first_party_import_share` instead
+/// widens its first-party predicate to recognise a `Wildcard` row whose raw
+/// `target` carries the same `crate::`/`self::`/`super::` prefix `classify`
+/// itself uses for Rust relative imports, counting it as first-party without
+/// touching the stored `kind`.
 fn import_resolution_rows(db: &FactsDb) -> Result<Vec<ArchitectureMetricRow>> {
     // One pass over `imports`. The `rate` expression is kept verbatim from the
     // original single-row query so `import_resolution_rate` stays byte-for-byte
-    // identical; the two new rows derive from the raw counts alongside it.
-    let counts: Vec<(f64, i64, i64, i64)> = crate::analyses::query::query_map_collect(
+    // identical; the other rows derive from the raw counts alongside it. The
+    // first-party `COUNT(*) FILTER` widens the plain `kind = 'relative'` test
+    // with a first-party-glob carve-out: a `Wildcard`-kind row whose `target`
+    // starts with the same `crate::`/`self::`/`super::` prefixes `classify`
+    // (`imports/extractor.rs`) uses to detect a Rust relative import. Those
+    // prefixes are unambiguously in-repo regardless of the trailing `::*`, so
+    // an unresolved first-party glob (e.g. bare `use super::*;`, which the
+    // resolver can't map to a single file) no longer silently falls out of
+    // the first-party count the way it did when only `kind = 'relative'` was
+    // checked. Java's `import foo.*;` never matches this prefix set (Java has
+    // no syntactic relative-import marker), so it stays correctly excluded.
+    let counts: Vec<(f64, i64, i64, i64, i64)> = crate::analyses::query::query_map_collect(
         db,
         "SELECT \
            COALESCE(COUNT(*) FILTER (WHERE target_path IS NOT NULL) * 1.0 \
                     / NULLIF(COUNT(*), 0), 0.0), \
            COUNT(*) FILTER (WHERE target_path IS NOT NULL), \
-           COUNT(*) FILTER (WHERE target_path IS NOT NULL OR kind = 'relative'), \
-           COUNT(*) \
+           COUNT(*) FILTER (WHERE target_path IS NOT NULL \
+                              OR kind = 'relative' \
+                              OR (kind = 'wildcard' AND ( \
+                                     target LIKE 'crate::%' \
+                                     OR target LIKE 'self::%' \
+                                     OR target LIKE 'super::%' \
+                                  ))), \
+           COUNT(*), \
+           COUNT(*) FILTER (WHERE kind = 'wildcard') \
          FROM imports",
         [],
         "import-resolution-rate",
@@ -241,10 +280,11 @@ fn import_resolution_rows(db: &FactsDb) -> Result<Vec<ArchitectureMetricRow>> {
                 r.get::<_, i64>(1)?,
                 r.get::<_, i64>(2)?,
                 r.get::<_, i64>(3)?,
+                r.get::<_, i64>(4)?,
             ))
         },
     )?;
-    let Some(&(rate, resolved, first_party, total)) = counts.first() else {
+    let Some(&(rate, resolved, first_party, total, wildcard)) = counts.first() else {
         return Ok(Vec::new());
     };
     if total == 0 {
@@ -254,8 +294,12 @@ fn import_resolution_rows(db: &FactsDb) -> Result<Vec<ArchitectureMetricRow>> {
     // idiom (as used for `n_f` above) keeps the division lossless and away
     // from the precision-loss lint without an `unwrap`.
     let as_f64 = |n: i64| f64::from(u32::try_from(n).unwrap_or(u32::MAX));
-    let (resolved_f, first_party_f, total_f) =
-        (as_f64(resolved), as_f64(first_party), as_f64(total));
+    let (resolved_f, first_party_f, total_f, wildcard_f) = (
+        as_f64(resolved),
+        as_f64(first_party),
+        as_f64(total),
+        as_f64(wildcard),
+    );
     let mut rows = vec![
         row("import_resolution_rate", format!("{rate:.4}")),
         row(
@@ -269,6 +313,10 @@ fn import_resolution_rows(db: &FactsDb) -> Result<Vec<ArchitectureMetricRow>> {
             format!("{:.4}", resolved_f / first_party_f),
         ));
     }
+    rows.push(row(
+        "wildcard_import_share",
+        format!("{:.4}", wildcard_f / total_f),
+    ));
     Ok(rows)
 }
 
