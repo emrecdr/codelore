@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785148011185,
+  "lastUpdate": 1785752453236,
   "repoUrl": "https://github.com/emrecdr/codelore",
   "entries": {
     "Benchmark": [
@@ -279,6 +279,76 @@ window.BENCHMARK_DATA = {
             "name": "ingest_capacity_sweep/1024",
             "value": 97040735,
             "range": "± 9051268",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Emre Camdere",
+            "username": "emrecdr",
+            "email": "cemre79@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "66e0a0252a18328d94374fad8fc531904d4ec2c1",
+          "message": "test: cover calibrate total-failure exit, MCP hotspots call, entity-effort/ownership (#204)\n\ncalibrate: a manifest where every repo is unreachable (0-of-N included) now\nhas a regression test locking in the existing total-failure guard —\ncalibrate.rs already hard-errors via CodeLoreError::Analysis (exit 4) and\nwrites no artifact; this was previously covered only for partial failure.\n\nmcp: hotspots was the one tools/list entry never exercised via tools/call;\nadd a call test asserting the capped bare-array response shape, mirroring\nthe existing code_health call test.\n\nentity-ownership / entity-effort: neither analysis had any behavioral\ncoverage beyond dispatch-metadata loops. New per-analysis test files build a\nsmall 2-author, 2-file fixture (one file renamed partway through) and assert\nexact per-(entity, author) added/deleted churn and revision counts, both\nwith canonical lineage off (pre/post-rename entities stay split) and on\n(the renamed entity's pre-rename history merges into the canonical path) —\nexercising the changes_lineage rewrite both analyses opt into.\n\nCo-authored-by: Emre Camdere <emre@valocom.nl>",
+          "timestamp": "2026-08-03T10:15:47Z",
+          "url": "https://github.com/emrecdr/codelore/commit/66e0a0252a18328d94374fad8fc531904d4ec2c1"
+        },
+        "date": 1785752451591,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "ingest_tiny",
+            "value": 52410966,
+            "range": "± 2420711",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest/medium_500_commits",
+            "value": 92541558,
+            "range": "± 2177341",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "complexity_extraction/parallel_default_threads",
+            "value": 92654085,
+            "range": "± 2195833",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "complexity_extraction/serial_1_thread",
+            "value": 92922629,
+            "range": "± 2018388",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/16",
+            "value": 93547957,
+            "range": "± 1394184",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/64",
+            "value": 92528400,
+            "range": "± 1466567",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/256",
+            "value": 91904735,
+            "range": "± 2124089",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "ingest_capacity_sweep/1024",
+            "value": 92380779,
+            "range": "± 2315786",
             "unit": "ns/iter"
           }
         ]
