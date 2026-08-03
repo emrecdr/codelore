@@ -151,14 +151,14 @@ pub fn write_coordination_needs_markdown<W: Write>(
     }
     writeln!(
         w,
-        "| Path | Authors | Fragmentation | Interleave | Co-change Entropy | Tier | Health Band |"
+        "| Path | Authors | Fragmentation | Interleave | Co-change Entropy | Tier | Health Band | Total Commits |"
     )
     .map_err(CodeLoreError::Io)?;
-    writeln!(w, "|---|---:|---:|---:|---:|---|---|").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---:|---:|---:|---:|---|---|---:|").map_err(CodeLoreError::Io)?;
     for row in rows {
         writeln!(
             w,
-            "| {} | {} | {:.2} | {:.2} | {:.4} | {} | {} |",
+            "| {} | {} | {:.2} | {:.2} | {:.4} | {} | {} | {} |",
             escape_md_cell(&row.path),
             row.authors,
             row.fragmentation,
@@ -166,6 +166,7 @@ pub fn write_coordination_needs_markdown<W: Write>(
             row.cochange_entropy,
             escape_md_cell(&row.tier),
             escape_md_cell(&row.health_band),
+            row.total_commits,
         )
         .map_err(CodeLoreError::Io)?;
     }
@@ -228,20 +229,21 @@ pub fn write_knowledge_islands_markdown<W: Write>(
     header(w, "CodeLore knowledge-islands (bus-factor risk)")?;
     writeln!(
         w,
-        "| Entity | Main author | Ownership % | Days since main active | Last main commit | Substantial others |"
+        "| Entity | Main author | Ownership % | Days since main active | Last main commit | Substantial others | Total LoC |"
     )
     .map_err(CodeLoreError::Io)?;
-    writeln!(w, "|---|---|---:|---:|---|---:|").map_err(CodeLoreError::Io)?;
+    writeln!(w, "|---|---|---:|---:|---|---:|---:|").map_err(CodeLoreError::Io)?;
     for row in rows {
         writeln!(
             w,
-            "| `{}` | {} | {:.2} | {} | {} | {} |",
+            "| `{}` | {} | {:.2} | {} | {} | {} | {} |",
             escape_md_cell(&row.entity),
             escape_md_cell(&row.main_author),
             row.ownership_pct,
             row.days_since_main_active,
             row.last_main_author_commit,
             row.n_substantial_others,
+            row.total_loc,
         )
         .map_err(CodeLoreError::Io)?;
     }

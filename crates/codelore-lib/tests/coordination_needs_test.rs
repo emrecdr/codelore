@@ -141,6 +141,11 @@ fn coupling_repo_entropy_positive_for_coupled_files() {
         "src/alpha/util.rs: 3 commits by same author → 0 switches → interleave=0.0, got {}",
         alpha_util.interleave
     );
+    assert_eq!(
+        alpha_util.total_commits, 3,
+        "total_commits must disclose the interleave denominator's n, got {}",
+        alpha_util.total_commits
+    );
 }
 
 // ── 3. delivery_repo: multi-author fragmentation and non-single tiers ────────
@@ -207,6 +212,11 @@ fn delivery_repo_fragmentation_and_nonsingle_tier() {
         (rework.interleave - 0.5_f64).abs() < 1e-9,
         "src/rework.rs: [Alice, Alice, Bob] → 1 switch / 2 intervals = 0.5, got {}",
         rework.interleave
+    );
+    assert_eq!(
+        rework.total_commits, 3,
+        "src/rework.rs: 3 commits total, got {}",
+        rework.total_commits
     );
 }
 
@@ -348,6 +358,12 @@ fn dormant_multi_author_file_is_not_classified_high() {
         "a dormant file (authors=0, no CURRENT coordination activity) must fold into \
          the 'single' tier, not be misclassified 'high' from stale historical signal, \
          got {dormant:?}"
+    );
+    assert_eq!(
+        dormant.total_commits, 2,
+        "dormant.rs has exactly 2 historical commits (c1, c2) — total_commits must \
+         disclose that thin sample, got {}",
+        dormant.total_commits
     );
 }
 

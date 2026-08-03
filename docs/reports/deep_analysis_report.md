@@ -458,8 +458,8 @@ scenario, proposed direction, value/effort, verification status, invariant touch
 |---|---|---|---|
 | F249 | `ensure_ingest_witnessed` guards only 2 of ~13 ingest entry points — `analyze`, `gate`, `gate_changes`, `explain`, 8 MCP tools render confident empty reports over a blind (fetch-depth:1 / all-excluded) ingest. ✅ grep-verified; convergent (5 signals). Gotcha: `analyze`'s `--after/--before` also empties `commits` → message must branch. | HIGH | Active |
 | F250 | `codelore explain delivery-friction` 404s on a shipped, fully-documented metric. ✅ verified | LOW | Fixed (Unreleased) |
-| F251 | `coordination-needs` / `knowledge-islands` classify `high` tier / 100% ownership off n=2–5 with no denominator field (unlike `bus_factor`/`ownership`). ✅ verified | MED | Active |
-| F252 | `write_github_output` silently swallows the open+write `Err` (`let _ =`). ✅ verified | LOW | Active |
+| F251 | `coordination-needs` / `knowledge-islands` classify `high` tier / 100% ownership off n=2–5 with no denominator field (unlike `bus_factor`/`ownership`). ✅ verified | MED | Fixed (Unreleased) |
+| F252 | `write_github_output` silently swallows the open+write `Err` (`let _ =`). ✅ verified | LOW | Fixed (Unreleased) |
 | F253 | HEAD-scan blob I/O Phase-1 (refines F173/F206): blocker smaller than tracked (blob-read handling already identical; divergence is downstream AST-parse). One warm-ODB reader per rayon worker via the existing `map_init` idiom; also fixes `architecture-trend`/`cycle-origins` (never cached, re-paid per `analyze`). | HIGH | Active |
 | F254 | Cache-hit path runs a full O(tracked-files) `is_worktree_dirty()` walk on every invocation, just to maybe warn — defeats the cache on the agent-loop/CI hot path. ✅ verified | MED | Active |
 | F255 | `panic = "abort"` × long-lived `codelore mcp`: one panicking `spawn_blocking` tool call SIGABRTs the server for every client. ✅ verified (profile scope). Add an MCP-only `catch_unwind` boundary. | HIGH | Active |

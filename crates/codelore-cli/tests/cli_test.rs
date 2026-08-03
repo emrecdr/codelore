@@ -2258,7 +2258,7 @@ fn coordination_needs_csv_has_header_and_rows() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "path,authors,fragmentation,interleave,cochange-entropy,tier,health-band",
+            "path,authors,fragmentation,interleave,cochange-entropy,tier,health-band,total-commits",
         ))
         // Header alone would pass on empty output — require at least one data row.
         .stdout(predicate::function(|out: &str| {

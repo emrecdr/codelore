@@ -50,6 +50,9 @@
 //!   most-recent commit.
 //! - `n_substantial_others` — count of other authors with ≥ 10%
 //!   LoC share on this file. Zero is the actionable signal.
+//! - `total_loc` — total LoC across all (non-bot) authors on this path,
+//!   the `ownership_pct` denominator. Lets a consumer judge whether e.g.
+//!   `ownership_pct: 100.0` comes from a thin sample.
 //!
 //! Sort: `ownership_pct DESC, days_since_main_active DESC, entity ASC`.
 //! Highest-concentration-then-longest-departed first — exactly the
@@ -87,6 +90,11 @@ pub struct KnowledgeIslandRow {
     pub days_since_main_active: i32,
     pub last_main_author_commit: String,
     pub n_substantial_others: u32,
+    /// Total LoC across all (non-bot) authors on this path — the
+    /// `ownership_pct` denominator. Lets a consumer judge whether e.g.
+    /// `ownership_pct: 100.0` comes from a thin sample (5 one-line commits
+    /// are enough to hit 100% ownership).
+    pub total_loc: u32,
 }
 
 /// Un-thresholded per-path owner-activity snapshot — the same
@@ -200,7 +208,8 @@ const OWNER_ACTIVITY_SELECT_CORE: &str = "SELECT
         100.0 * m.loc / NULLIF(t.total_loc, 0) AS ownership_pct,
         DATE_DIFF('day', alc.last_at, CAST(? AS TIMESTAMP)) AS days_since_main_active,
         CAST(CAST(alc.last_at AS DATE) AS TEXT) AS last_main_author_commit,
-        so.n_others AS n_substantial_others
+        so.n_others AS n_substantial_others,
+        CAST(t.total_loc AS UINTEGER) AS total_loc
     FROM main_per_path m
     INNER JOIN totals t ON t.path = m.path
     INNER JOIN author_last_commit alc ON alc.author = m.author
@@ -338,6 +347,7 @@ pub fn run_knowledge_islands(db: &FactsDb, opts: &Options) -> Result<Vec<Knowled
                 days_since_main_active: i32::try_from(r.get::<_, i64>(3)?).unwrap_or(i32::MAX),
                 last_main_author_commit: r.get::<_, String>(4)?,
                 n_substantial_others: r.get::<_, u32>(5)?,
+                total_loc: r.get::<_, u32>(6)?,
             })
         },
     )

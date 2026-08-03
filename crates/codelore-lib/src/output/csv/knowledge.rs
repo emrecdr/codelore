@@ -192,13 +192,13 @@ pub fn write_coordination_needs_csv<W: Write>(
 ) -> Result<()> {
     writeln!(
         w,
-        "path,authors,fragmentation,interleave,cochange-entropy,tier,health-band"
+        "path,authors,fragmentation,interleave,cochange-entropy,tier,health-band,total-commits"
     )
     .map_err(CodeLoreError::Io)?;
     for row in rows {
         writeln!(
             w,
-            "{},{},{:.4},{:.4},{:.4},{},{}",
+            "{},{},{:.4},{:.4},{:.4},{},{},{}",
             quote_if_needed(&row.path),
             row.authors,
             row.fragmentation,
@@ -206,6 +206,7 @@ pub fn write_coordination_needs_csv<W: Write>(
             row.cochange_entropy,
             quote_if_needed(&row.tier),
             quote_if_needed(&row.health_band),
+            row.total_commits,
         )
         .map_err(CodeLoreError::Io)?;
     }
@@ -266,19 +267,20 @@ pub fn write_knowledge_islands_csv<W: Write>(
 ) -> Result<()> {
     writeln!(
         w,
-        "entity,main_author,ownership_pct,days_since_main_active,last_main_author_commit,n_substantial_others"
+        "entity,main_author,ownership_pct,days_since_main_active,last_main_author_commit,n_substantial_others,total_loc"
     )
     .map_err(CodeLoreError::Io)?;
     for row in rows {
         writeln!(
             w,
-            "{},{},{:.2},{},{},{}",
+            "{},{},{:.2},{},{},{},{}",
             quote_if_needed(&row.entity),
             quote_if_needed(&row.main_author),
             row.ownership_pct,
             row.days_since_main_active,
             row.last_main_author_commit,
             row.n_substantial_others,
+            row.total_loc,
         )
         .map_err(CodeLoreError::Io)?;
     }

@@ -78,6 +78,11 @@ pub struct CoordinationNeedsRow {
     /// Composite code-health band at HEAD: `red` | `yellow` | `green` |
     /// `unknown` (when no complexity metrics exist for the file).
     pub health_band: String,
+    /// Total commits touching this path (the `interleave` denominator's
+    /// `n`, and the sample size behind `tier`) — lets a consumer judge
+    /// whether e.g. a `tier: "high"` classification comes from a thin
+    /// sample (a file can hit `interleave = 1.0` off as few as 2 commits).
+    pub total_commits: u32,
 }
 
 /// Compute coordination-needs metrics for every path that appears in the
@@ -190,15 +195,23 @@ pub fn run_coordination_needs(db: &FactsDb, opts: &Options) -> Result<Vec<Coordi
          SELECT path,
                 CASE WHEN n_commits < 2 THEN 0.0
                      ELSE switches * 1.0 / (n_commits - 1)
-                END AS interleave
+                END AS interleave,
+                n_commits
          FROM stats",
     );
     let mut il_stmt = db
         .conn()
         .prepare(&interleave_sql)
         .map_err(|e| CodeLoreError::Analysis(format!("prepare interleave query: {e}")))?;
-    let interleave_map: HashMap<String, f64> = il_stmt
-        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))
+    // (interleave, n_commits) per path — n_commits is the denominator
+    // disclosed as `total_commits` on the assembled row.
+    let interleave_map: HashMap<String, (f64, u32)> = il_stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                (r.get::<_, f64>(1)?, r.get::<_, u32>(2)?),
+            ))
+        })
         .map_err(|e| CodeLoreError::Analysis(format!("query interleave: {e}")))?
         .collect::<std::result::Result<HashMap<_, _>, _>>()
         .map_err(|e| CodeLoreError::Analysis(format!("collect interleave: {e}")))?;
@@ -274,7 +287,8 @@ pub fn run_coordination_needs(db: &FactsDb, opts: &Options) -> Result<Vec<Coordi
     let mut rows: Vec<CoordinationNeedsRow> = frag_rows
         .into_iter()
         .map(|(path, authors, fragmentation)| {
-            let interleave = interleave_map.get(&path).copied().unwrap_or(0.0);
+            let (interleave, total_commits) =
+                interleave_map.get(&path).copied().unwrap_or((0.0, 0));
             let cochange_entropy = entropy_map.get(&path).copied().unwrap_or(0.0);
             let health_band = band_map
                 .get(&path)
@@ -289,6 +303,7 @@ pub fn run_coordination_needs(db: &FactsDb, opts: &Options) -> Result<Vec<Coordi
                 cochange_entropy,
                 tier,
                 health_band,
+                total_commits,
             }
         })
         .collect();

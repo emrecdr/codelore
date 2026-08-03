@@ -144,6 +144,11 @@ fn knowledge_islands_surfaces_departed_main_author_solo_owner() {
         "should reflect ~822-day gap; got {}",
         alice_row.days_since_main_active,
     );
+    assert_eq!(
+        alice_row.total_loc, 11,
+        "total_loc must disclose the ownership_pct denominator (10 Alice + 1 Bob), got {}",
+        alice_row.total_loc,
+    );
 
     // Bob's solo file should NOT appear — Bob isn't departed at the anchor.
     assert!(
@@ -425,5 +430,11 @@ fn knowledge_islands_min_revs_gates_single_commit_files() {
         (solo_row.ownership_pct - 100.0).abs() < f64::EPSILON,
         "solo author owns 100%; got {}",
         solo_row.ownership_pct,
+    );
+    assert_eq!(
+        solo_row.total_loc, 3,
+        "solo.txt's single commit adds exactly 3 lines; total_loc must disclose that \
+         thin denominator behind the 100% ownership figure, got {}",
+        solo_row.total_loc,
     );
 }
