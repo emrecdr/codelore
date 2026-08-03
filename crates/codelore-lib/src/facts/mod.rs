@@ -352,8 +352,14 @@ impl FactsDb {
             // history and are unaffected, but the user can't tell from
             // looking at the output which kind of analysis they're running.
             // Surface the situation so they know to pass `--no-cache` if it
-            // matters.
-            if repo.is_worktree_dirty() {
+            // matters. Gate on an interactive stderr first: `is_worktree_dirty()`
+            // is an O(tracked-files) status walk, and on the non-interactive
+            // agent-loop / CI path the persistent cache is built to serve — a
+            // near-O(1) "open a file" fast path — nobody reads this warning, so
+            // skip the scan entirely there rather than pay it on every hit. A
+            // missed hint on a piped/redirected stderr is within the `Repo`
+            // trait's best-effort-hint contract for `is_worktree_dirty`.
+            if std::io::IsTerminal::is_terminal(&std::io::stderr()) && repo.is_worktree_dirty() {
                 tracing::warn!(
                     "cache hit on a working tree with uncommitted changes; \
                      HEAD-time metrics (hotspots' complexity, clones) may be \
