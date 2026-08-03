@@ -182,7 +182,7 @@ jobs:
       # (smarter parallelism, faster process spawning, better failure
       # aggregation). Doesn't run doc tests — those still need `cargo test
       # --doc` separately.
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@v2.85.5
         if: matrix.run_tests
         with:
           tool: cargo-nextest
