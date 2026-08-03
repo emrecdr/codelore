@@ -3337,6 +3337,50 @@ fn calibrate_skips_unreachable_repo_and_exits_zero() {
     assert_eq!(art.repos_included, 1);
 }
 
+/// A manifest where EVERY repo is unreachable (0-of-N included): `calibrate.rs`
+/// hard-errors via `CodeLoreError::Analysis` rather than silently writing a
+/// data-free artifact — spec §6.6 exit 4 — and no output file lands at all
+/// (the atomic-publish write never runs). Locks in the existing total-failure
+/// guard (`calibrate.rs`'s `attempted > 0 && included == 0` check).
+#[test]
+fn calibrate_all_repos_unreachable_exits_analysis_error() {
+    let work = tempfile::tempdir().expect("tempdir");
+    let cache = tempfile::tempdir().expect("cache tempdir");
+
+    let missing_one = work.path().join("does-not-exist-1");
+    let missing_two = work.path().join("does-not-exist-2");
+    let manifest = write_calibrate_manifest(
+        work.path(),
+        &[
+            (missing_one.to_str().unwrap(), "deadbeef"),
+            (missing_two.to_str().unwrap(), "deadbeef"),
+        ],
+    );
+    let out = work.path().join("world.calib.json");
+
+    codelore_cmd()
+        .args([
+            "calibrate",
+            "--repos",
+            manifest.to_str().unwrap(),
+            "--output",
+            out.to_str().unwrap(),
+            "--cache-dir",
+            cache.path().to_str().unwrap(),
+        ])
+        .assert()
+        .code(4)
+        .stderr(predicate::str::contains("skip"))
+        .stderr(predicate::str::contains(
+            "failed to fetch or ingest — no calibration data pooled",
+        ));
+
+    assert!(
+        !out.exists(),
+        "a total-failure run must not write an artifact file"
+    );
+}
+
 /// `--merge` folds a prior artifact into a fresh build over the same repo, so
 /// the pooled rust sample count doubles versus the standalone build.
 #[test]
