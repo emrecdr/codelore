@@ -225,29 +225,39 @@ fn resolve_imports_at_rev<R: Repo>(
         })
         .collect();
 
-    // Parallel blob-read + extract + per-language resolve. A read/parse
-    // failure on one file skips that file (a corrupt blob mustn't sink
-    // the whole sample point), matching the HEAD scan's tolerance.
+    // Parallel blob-read + extract + per-language resolve. One `BlobReader`
+    // per rayon worker (`map_init`) resolves `rev`'s root tree once and
+    // reuses a warm object-decode cache for every file that worker reads —
+    // `resolve_imports_at_rev` runs once per `architecture-trend` sample
+    // point (and repeatedly during `cycle-origins`' bisection), so this is
+    // the "worse offender" the per-call `read_blob_at` path used to re-pay
+    // in full every time. A read/parse failure on one file skips that file
+    // (a corrupt blob mustn't sink the whole sample point), matching the
+    // HEAD scan's tolerance.
     let edges: Vec<(String, String)> = candidates
         .into_par_iter()
-        .flat_map_iter(|(rel, lang)| {
-            let mut out: Vec<(String, String)> = Vec::new();
-            let Ok(Some(code)) = repo.read_blob_at(rev, &rel) else {
-                return out.into_iter();
-            };
-            if code.len() > crate::constants::DEFAULT_MAX_AST_FILE_BYTES {
-                return out.into_iter();
-            }
-            let Ok(imports) = extract_imports(&code, lang) else {
-                return out.into_iter();
-            };
-            for imp in imports {
-                if let Some(target_path) = resolve_by_extension(&rel, &imp.target, &live_set) {
-                    out.push((rel.clone(), target_path));
+        .map_init(
+            || repo.blob_reader_at(rev),
+            |reader, (rel, lang)| -> Vec<(String, String)> {
+                let mut out: Vec<(String, String)> = Vec::new();
+                let Ok(Some(code)) = reader.read(&rel) else {
+                    return out;
+                };
+                if code.len() > crate::constants::DEFAULT_MAX_AST_FILE_BYTES {
+                    return out;
                 }
-            }
-            out.into_iter()
-        })
+                let Ok(imports) = extract_imports(&code, lang) else {
+                    return out;
+                };
+                for imp in imports {
+                    if let Some(target_path) = resolve_by_extension(&rel, &imp.target, &live_set) {
+                        out.push((rel.clone(), target_path));
+                    }
+                }
+                out
+            },
+        )
+        .flatten_iter()
         .collect();
     edges
 }

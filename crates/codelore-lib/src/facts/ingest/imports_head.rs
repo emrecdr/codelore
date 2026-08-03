@@ -51,41 +51,45 @@ impl FactsDb {
         // a single malformed file shouldn't fail the whole ingest.
         let per_file: Vec<(String, Vec<RawImport>)> = candidates
             .into_par_iter()
-            .filter_map(|(rel, lang)| {
-                let code = match repo.read_blob_at_head(&rel) {
-                    Ok(Some(code)) => code,
-                    Ok(None) => {
-                        // Path not tracked at HEAD; skip (non-fatal, the
-                        // rest of the scan continues).
-                        tracing::debug!("imports: {rel} not tracked at HEAD; skipping");
+            .map_init(
+                || repo.blob_reader_at("HEAD"),
+                |reader, (rel, lang)| {
+                    let code = match reader.read(&rel) {
+                        Ok(Some(code)) => code,
+                        Ok(None) => {
+                            // Path not tracked at HEAD; skip (non-fatal, the
+                            // rest of the scan continues).
+                            tracing::debug!("imports: {rel} not tracked at HEAD; skipping");
+                            return None;
+                        }
+                        Err(e) => {
+                            // Object-database error (corrupted pack, missing
+                            // shallow object). Surface as a warning and skip
+                            // — the rest of the scan can still complete.
+                            tracing::warn!("imports: blob read failed for {rel}: {e}");
+                            return None;
+                        }
+                    };
+                    if code.len() > crate::constants::DEFAULT_MAX_AST_FILE_BYTES {
+                        tracing::debug!(
+                            "imports: skipping {rel} ({size} bytes > {cap}-byte AST cap)",
+                            size = code.len(),
+                            cap = crate::constants::DEFAULT_MAX_AST_FILE_BYTES,
+                        );
                         return None;
                     }
-                    Err(e) => {
-                        // Object-database error (corrupted pack, missing
-                        // shallow object). Surface as a warning and skip
-                        // — the rest of the scan can still complete.
-                        tracing::warn!("imports: blob read failed for {rel}: {e}");
-                        return None;
-                    }
-                };
-                if code.len() > crate::constants::DEFAULT_MAX_AST_FILE_BYTES {
-                    tracing::debug!(
-                        "imports: skipping {rel} ({size} bytes > {cap}-byte AST cap)",
-                        size = code.len(),
-                        cap = crate::constants::DEFAULT_MAX_AST_FILE_BYTES,
-                    );
-                    return None;
-                }
-                let imports = match extract_imports(&code, lang) {
-                    Ok(v) if !v.is_empty() => v,
-                    Ok(_) => return None,
-                    Err(e) => {
-                        tracing::warn!("imports: extract failed for {rel}: {e}");
-                        return None;
-                    }
-                };
-                Some((rel, imports))
-            })
+                    let imports = match extract_imports(&code, lang) {
+                        Ok(v) if !v.is_empty() => v,
+                        Ok(_) => return None,
+                        Err(e) => {
+                            tracing::warn!("imports: extract failed for {rel}: {e}");
+                            return None;
+                        }
+                    };
+                    Some((rel, imports))
+                },
+            )
+            .flatten_iter()
             .collect();
 
         // Phase 3 (serial drain): bulk-insert via the DuckDB Appender

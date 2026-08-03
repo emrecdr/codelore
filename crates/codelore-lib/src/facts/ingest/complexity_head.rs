@@ -13,8 +13,8 @@ impl FactsDb {
         repo: &R,
         // Because the complexity pass reads blobs instead of disk, it
         // no longer needs `opts.repo_path` — every file is sourced via
-        // `repo.read_blob_at_head`. Kept on the signature for forward
-        // compatibility (future per-language flags may need it).
+        // a `Repo::blob_reader_at("HEAD")` reader. Kept on the signature
+        // for forward compatibility (future per-language flags may need it).
         _opts: &Options,
         live_paths: &[String],
         head_rev: &str,
@@ -29,10 +29,10 @@ impl FactsDb {
         let live_paths: Vec<String> = live_paths.to_vec();
 
         // ── Parallel pass ────────────────────────────────────────────────────────
-        // Each worker thread reads the file, dispatches the tree-sitter parser,
-        // and de-duplicates entities.  `map_init(|| (), ...)` matches the plan's
-        // design: no per-thread state is needed because `Parser::new()` is ~3 µs
-        // and tree-sitter 0.25.x is both `Send + Sync`.
+        // Each worker thread builds one `BlobReader` via `map_init` (resolves
+        // HEAD's root tree once, then reuses a warm object-decode cache for
+        // every file that worker reads) and uses it to read the blob,
+        // dispatch the tree-sitter parser, and de-duplicate entities.
         // Per-file failures are logged via `tracing::warn!` but do NOT abort the
         // parallel scan; they surface as `None` entries that the serial drain skips.
         //
@@ -42,8 +42,8 @@ impl FactsDb {
         let batches: Vec<Option<(String, Vec<crate::complexity::ComplexityEntity>)>> = live_paths
             .into_par_iter()
             .map_init(
-                || (),
-                |_state, path| {
+                || repo.blob_reader_at("HEAD"),
+                |reader, path| {
                     let lang = Tier1Language::from_path(&path)?;
                     // Prefer the blob at HEAD (works on bare repos, ignores
                     // dirty-tree edits). Fall back to disk if the Repo
@@ -51,7 +51,7 @@ impl FactsDb {
                     // exists on disk but isn't tracked at HEAD (a freshly
                     // ingested commit may have added paths not yet in any
                     // tree the backend has cached).
-                    let source = match repo.read_blob_at_head(&path) {
+                    let source = match reader.read(&path) {
                         Ok(Some(b)) => b,
                         Ok(None) => {
                             // Path not tracked at HEAD; skip (matches the

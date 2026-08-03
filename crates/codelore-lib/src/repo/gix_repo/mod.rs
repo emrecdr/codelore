@@ -4,11 +4,13 @@ use std::path::Path;
 
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
-use crate::repo::Repo;
+use crate::repo::{BlobReader, Repo};
 use crate::{CodeLoreError, CommitEvent, FileChange, Hunk, Options, Result};
 
+mod blob_reader;
 mod history;
 
+use blob_reader::GixBlobReader;
 use history::{
     WalkerStream, blob_at_path, compute_changed_files, count_loc_and_hunks, process_commit_oid,
 };
@@ -337,6 +339,10 @@ impl Repo for GixRepo {
         // implements Drop so partial-move isn't permitted). Avoids
         // re-allocating + memcpy'ing up to MAX_DIFF_BLOB_BYTES per file.
         Ok(Some(std::mem::take(&mut obj.data)))
+    }
+
+    fn blob_reader_at<'a>(&'a self, rev: &str) -> Box<dyn BlobReader + 'a> {
+        Box::new(GixBlobReader::new(&self.inner, rev))
     }
 
     fn worktree_changes(&self) -> Result<Vec<super::WorktreeChange>> {
