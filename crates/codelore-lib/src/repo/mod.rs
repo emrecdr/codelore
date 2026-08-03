@@ -139,6 +139,24 @@ pub trait Repo: Send + Sync {
         self.read_blob_at("HEAD", path)
     }
 
+    /// Open a reader for many blobs at `rev` without re-resolving
+    /// rev→commit→root-tree on every call. Construction is INFALLIBLE
+    /// (resolution happens lazily on the first [`BlobReader::read`]) so it
+    /// slots directly into `rayon`'s `map_init` idiom — the HEAD-time scans
+    /// build one per worker thread and reuse it across every file that
+    /// worker processes.
+    ///
+    /// Default impl: a thin per-call forwarder to
+    /// [`read_blob_at`](Self::read_blob_at), so every backend that doesn't
+    /// override this (`GitCliRepo` — the differential-test oracle — and any
+    /// future non-gix backend) keeps its exact current per-call behavior.
+    fn blob_reader_at<'a>(&'a self, rev: &str) -> Box<dyn BlobReader + 'a> {
+        Box::new(PerCallBlobReader {
+            repo: self,
+            rev: rev.to_string(),
+        })
+    }
+
     /// Enumerate tracked working-tree changes vs HEAD (union of staged and
     /// unstaged, net-classified; untracked files excluded; symlinks and
     /// submodule pointers excluded; sorted by path). Errors on unmerged
@@ -175,6 +193,31 @@ pub trait Repo: Send + Sync {
     /// annotated tags this is the commit the tag object ultimately points at,
     /// not the tag object's own OID.
     fn tags(&self) -> Result<Vec<TagInfo>>;
+}
+
+/// Reads many blobs at one revision without re-resolving rev→commit→
+/// root-tree per call. The HEAD-time scans build one per rayon worker via
+/// `map_init`; it holds thread-local state, is NOT `Send`, and must stay on
+/// its worker thread.
+pub trait BlobReader {
+    /// Same bytes as `Repo::read_blob_at(rev, path)` — `Ok(None)` means the
+    /// path isn't a tracked blob at this reader's revision.
+    fn read(&mut self, path: &str) -> Result<Option<Vec<u8>>>;
+}
+
+/// [`Repo::blob_reader_at`]'s default implementation: forwards every
+/// [`BlobReader::read`] straight to `Repo::read_blob_at(rev, path)`, i.e. no
+/// caching at all. Used by every backend that doesn't override
+/// `blob_reader_at` (`GitCliRepo` included), so their behavior is unchanged.
+struct PerCallBlobReader<'a, R: Repo + ?Sized> {
+    repo: &'a R,
+    rev: String,
+}
+
+impl<R: Repo + ?Sized> BlobReader for PerCallBlobReader<'_, R> {
+    fn read(&mut self, path: &str) -> Result<Option<Vec<u8>>> {
+        self.repo.read_blob_at(&self.rev, path)
+    }
 }
 
 /// The error message both backends return from `worktree_changes` when the

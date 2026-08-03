@@ -44,41 +44,45 @@ impl FactsDb {
         // via `collect::<Result<_>>`.
         let per_file: Vec<Vec<_>> = candidates
             .into_par_iter()
-            .map(|(rel, lang)| -> Result<Vec<_>> {
-                // Read the blob at HEAD via the Repo trait. Bare-repo safe
-                // and ignores dirty-tree edits. Backends without blob
-                // support return Ok(None) — same skip behaviour as the
-                // disk-not-found case the previous let-Ok-else handled.
-                let code = match repo.read_blob_at_head(&rel) {
-                    Ok(Some(code)) => code,
-                    Ok(None) => {
-                        // Path not tracked at HEAD; skip (non-fatal, the
-                        // rest of the scan continues).
-                        tracing::debug!("clones: {rel} not tracked at HEAD; skipping");
+            .map_init(
+                || repo.blob_reader_at("HEAD"),
+                |reader, (rel, lang)| -> Result<Vec<_>> {
+                    // Read the blob at HEAD via the Repo trait. Bare-repo
+                    // safe and ignores dirty-tree edits. Backends without
+                    // blob support return Ok(None) — same skip behaviour as
+                    // the disk-not-found case the previous let-Ok-else
+                    // handled.
+                    let code = match reader.read(&rel) {
+                        Ok(Some(code)) => code,
+                        Ok(None) => {
+                            // Path not tracked at HEAD; skip (non-fatal, the
+                            // rest of the scan continues).
+                            tracing::debug!("clones: {rel} not tracked at HEAD; skipping");
+                            return Ok(Vec::new());
+                        }
+                        Err(e) => {
+                            // Object-database error (corrupted pack, missing
+                            // shallow object). Surface as a warning and skip
+                            // — the rest of the scan can still complete.
+                            tracing::warn!("clones: blob read failed for {rel}: {e}");
+                            return Ok(Vec::new());
+                        }
+                    };
+                    // Skip oversized files (generated / minified) before
+                    // tree-sitter to avoid OOM / stack-overflow on deeply
+                    // nested generated code. Same cap as complexity pass.
+                    if code.len() > crate::constants::DEFAULT_MAX_AST_FILE_BYTES {
+                        tracing::debug!(
+                            "clones: skipping {rel} ({size} bytes > {cap}-byte AST cap)",
+                            size = code.len(),
+                            cap = crate::constants::DEFAULT_MAX_AST_FILE_BYTES,
+                        );
                         return Ok(Vec::new());
                     }
-                    Err(e) => {
-                        // Object-database error (corrupted pack, missing
-                        // shallow object). Surface as a warning and skip
-                        // — the rest of the scan can still complete.
-                        tracing::warn!("clones: blob read failed for {rel}: {e}");
-                        return Ok(Vec::new());
-                    }
-                };
-                // Skip oversized files (generated / minified) before
-                // tree-sitter to avoid OOM / stack-overflow on deeply
-                // nested generated code. Same cap as complexity pass.
-                if code.len() > crate::constants::DEFAULT_MAX_AST_FILE_BYTES {
-                    tracing::debug!(
-                        "clones: skipping {rel} ({size} bytes > {cap}-byte AST cap)",
-                        size = code.len(),
-                        cap = crate::constants::DEFAULT_MAX_AST_FILE_BYTES,
-                    );
-                    return Ok(Vec::new());
-                }
-                extract_functions(&rel, &code, lang)
-                    .map_err(|e| CodeLoreError::Analysis(format!("clones: extract {rel}: {e}")))
-            })
+                    extract_functions(&rel, &code, lang)
+                        .map_err(|e| CodeLoreError::Analysis(format!("clones: extract {rel}: {e}")))
+                },
+            )
             .collect::<Result<Vec<_>>>()?;
         let all_fns: Vec<_> = per_file.into_iter().flatten().collect();
 
