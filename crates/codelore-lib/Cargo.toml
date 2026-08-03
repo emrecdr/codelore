@@ -103,7 +103,7 @@ regex = "1"
 # lookaround patterns like `^src\/((?!.*Test.*).).*$` — the standard
 # Rust `regex` crate doesn't support lookaround. fancy-regex wraps
 # `regex` with a backtracking engine for non-regular features.
-fancy-regex = "0.18"
+fancy-regex = "0.19"
 # TOML parser for `.codelore-arch-rules.toml` and the thresholds
 # config. `toml` 1.x split `parse` (low-level parser) from `serde`
 # (`from_str` / `Deserialize` glue). We need both: `parse` for the
