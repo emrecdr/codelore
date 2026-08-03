@@ -472,9 +472,9 @@ scenario, proposed direction, value/effort, verification status, invariant touch
 | F262 | Survival analysis on hotspots (Kaplan-Meier over hot-episodes) — re-scope of the roadmap Tier-1 item; no new ingest, but needs a design pass (stateful episode extraction + KM). | — | Active (design) |
 | F263 | `[new_code]` gate `run_new_code_scope` has zero test coverage (only the pure evaluator is tested). Pairs with F249. | HIGH | Active |
 | F264 | `is_shallow()` has zero tests — the primitive behind cycles 2/3/4's top finding. Pairs with F249. | HIGH | Active |
-| F265 | `calibrate` total-failure (0-of-N) exit path untested (only partial-failure is) — would red-flag cycle-2's G2 bug. | MED | Active |
+| F265 | `calibrate` total-failure (0-of-N) exit path untested (only partial-failure is) — would red-flag cycle-2's G2 bug. ✅ verified: G2 was already fixed (`calibrate.rs` hard-errors on 0-of-N with `CodeLoreError::Analysis`, exit 4); this was a coverage gap, not a live bug. Regression test locks in the existing behavior. | MED | Fixed (Unreleased) |
 | F266 | Differential harness missing binary / non-ASCII / submodule probes (fixture documents its own boundary). Touches the two-backend-parity invariant. | HIGH | Active |
-| F267 | MCP `hotspots` never invoked via `tools/call`; `entity-effort`/`entity-ownership` have zero behavioral coverage. | MED | Active |
+| F267 | MCP `hotspots` never invoked via `tools/call`; `entity-effort`/`entity-ownership` have zero behavioral coverage. | MED | Fixed (Unreleased) |
 | F268 | CI `Build test binaries` link exhausts runner disk (SIGBUS in `ld`, different binary each run) linking 100+ fat test binaries. | MED | **Fixed (#196)** — Linux-only disk-reclaim step before checkout |
 
 **Correction logged (not a finding):** Type-3 near-miss clones is *not* a latent-data quick win —

@@ -308,6 +308,53 @@ fn mcp_code_health_returns_scored_rows() {
     let _ = child.wait();
 }
 
+/// `tools/call hotspots` with a `limit` returns a bare JSON array (no
+/// `code_health`-style `omitted` summary object — `hotspots` serializes
+/// `Vec<HotspotRow>` directly) capped at `limit` rows, each row carrying the
+/// `path`/`revisions`/`hotspot_score` fields `HotspotRow` always populates.
+#[test]
+fn mcp_hotspots_returns_capped_rows() {
+    let repo = delivery_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
+    let resp = call_tool(
+        &mut stdin,
+        &mut reader,
+        1,
+        "hotspots",
+        &json!({ "limit": 1 }),
+    );
+    let parsed = assert_tool_ok(&resp, "hotspots");
+
+    let rows = parsed.as_array().expect("hotspots: expected JSON array");
+    assert!(
+        !rows.is_empty(),
+        "hotspots returned no rows for delivery_repo"
+    );
+    assert!(
+        rows.len() <= 1,
+        "limit=1 must cap hotspots rows at one, got {}: {parsed}",
+        rows.len()
+    );
+    let first = &rows[0];
+    assert!(
+        first["path"].is_string(),
+        "row missing `path` field: {first}"
+    );
+    assert!(
+        first["revisions"].is_number(),
+        "row missing numeric `revisions` field: {first}"
+    );
+    assert!(
+        first["hotspot_score"].is_number(),
+        "row missing numeric `hotspot_score` field: {first}"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
 #[test]
 fn mcp_refactoring_targets_returns_array() {
     let repo = delivery_repo::build();

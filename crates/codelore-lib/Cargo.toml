@@ -374,3 +374,11 @@ required-features = ["test-support"]
 [[test]]
 name = "enrichment_fact_sheet_test"
 required-features = ["test-support"]
+
+[[test]]
+name = "entity_ownership_test"
+required-features = ["test-support"]
+
+[[test]]
+name = "entity_effort_test"
+required-features = ["test-support"]
