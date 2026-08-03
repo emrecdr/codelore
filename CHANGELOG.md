@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.25.1] - 2026-08-03
+
 ### Fixed
 
 - **The SPA's "Health improvements & regressions" feed now surfaces `green → yellow` degradations, not just files that entered the red band.** The band-transition classifier was asymmetric: an *improvement* counted any move toward green (including the mild `yellow → green`), but a *regression* counted only *entering red* — so a file sliding `green → yellow` (worse, but not yet red) was recorded as neither, leaving the "Regressions ↓" list empty on a repo with no red-entries. `health_trend`'s classifier is now the exact mirror across the red↔green axis — `regressed` = *entered red* **or** *left green*; `improved` = *left red* **or** *entered green* — so every cross-band move is captured and the regressions list populates symmetrically. SPA-only signal; the health-trend CSV/Markdown `trend` output is unchanged.
