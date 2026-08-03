@@ -52,7 +52,8 @@ set -euo pipefail
 # Configuration
 # ──────────────────────────────────────────────────────────────────────
 REPO="emrecdr/codelore"
-RULESET_ID=17437461                  # protect-release-tags
+RULESET_ID=17437461                  # protect-release-tags (gates the tag push)
+MAIN_RULESET_ID=17437460             # protect-main (gates the release-commit push)
 GH_ACTIONS_APP_ID=15368              # for required_status_checks integration_id
 
 # ──────────────────────────────────────────────────────────────────────
@@ -115,7 +116,46 @@ run()  {
 # when present, falling back to GNU `timeout` on Linux.
 TIMEOUT_BIN="$(command -v gtimeout || command -v timeout || true)"
 
+# Canonical protect-main ruleset body — PUT it with $1 as the enforcement value
+# ("active" | "disabled"). Hardcoded (like protect-release-tags below) so a
+# restore never depends on a captured backup body; verified against the live
+# ruleset at cut time. Keep the 9 contexts in sync if protect-main changes.
+main_ruleset_put() {
+  ${TIMEOUT_BIN:+${TIMEOUT_BIN} 30s} gh api -X PUT "repos/${REPO}/rulesets/${MAIN_RULESET_ID}" --input - >/dev/null <<MAINRULESET
+{
+  "name": "protect-main",
+  "target": "branch",
+  "enforcement": "$1",
+  "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] } },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    { "type": "required_linear_history" },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "do_not_enforce_on_create": false,
+        "strict_required_status_checks_policy": false,
+        "required_status_checks": [
+          { "context": "cargo-deny" },
+          { "context": "clippy" },
+          { "context": "dogfood" },
+          { "context": "rustfmt" },
+          { "context": "self-gate" },
+          { "context": "spa-browser" },
+          { "context": "test (macos-latest)" },
+          { "context": "test (ubuntu-latest)" },
+          { "context": "test (windows-latest)" }
+        ]
+      }
+    }
+  ]
+}
+MAINRULESET
+}
+
 RULESET_DISABLED=false
+MAIN_RULESET_DISABLED=false
 restore_ruleset() {
   local exit_code=$?
   if [[ "${RULESET_DISABLED}" == "true" ]]; then
@@ -161,6 +201,16 @@ RULESET
       warn "  then PUT with the canonical config (see the heredoc above in this script)"
       warn "If the ruleset shows enforcement=disabled, the repo is unprotected"
       warn "for tag pushes until restored — restore as soon as possible."
+    fi
+  fi
+  if [[ "${MAIN_RULESET_DISABLED}" == "true" ]]; then
+    warn "restoring protect-main ruleset to active enforcement..."
+    if main_ruleset_put active; then
+      ok "protect-main ruleset restored to active enforcement"
+    else
+      warn "protect-main restore FAILED (or timed out) — run manually:"
+      warn "  gh api repos/${REPO}/rulesets/${MAIN_RULESET_ID}  # inspect current state"
+      warn "  If it shows enforcement=disabled, main is UNPROTECTED until restored."
     fi
   fi
   exit "${exit_code}"
@@ -414,8 +464,31 @@ ok "release commit created"
 # ──────────────────────────────────────────────────────────────────────
 # Push release commit + wait for CI green
 # ──────────────────────────────────────────────────────────────────────
+# protect-main requires 9 status checks on EVERY push to main, which a direct
+# release-commit push cannot carry — GitHub rejects it. Disable protect-main
+# for just this push (mirroring the tag dance's ruleset disable below), then
+# re-enable it immediately after, so main is unprotected only for the push
+# itself, not through the CI wait that follows. The EXIT trap re-enables it if
+# the push aborts before the inline restore runs.
+if [[ "${DRY_RUN}" != "true" ]]; then
+  log "disabling protect-main ruleset for the release-commit push..."
+  main_ruleset_put disabled
+  MAIN_RULESET_DISABLED=true
+  ok "protect-main disabled — release-commit push window OPEN"
+else
+  log "[dry-run] would: PUT protect-main ruleset with enforcement=disabled"
+fi
 run git push origin main
 ok "release commit pushed to origin"
+if [[ "${DRY_RUN}" != "true" ]]; then
+  log "re-enabling protect-main ruleset..."
+  if main_ruleset_put active; then
+    MAIN_RULESET_DISABLED=false
+    ok "protect-main re-enabled"
+  else
+    warn "protect-main re-enable FAILED — the EXIT trap will retry on exit"
+  fi
+fi
 fi  # end of: if RESUME_MODE then skip-prep else prep+commit+push
 
 if [[ "${SKIP_CI_WAIT}" == "true" ]]; then
