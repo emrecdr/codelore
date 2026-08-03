@@ -93,15 +93,13 @@ pub struct FileHealthPoint {
 /// A signal-bearing band transition for one file between two consecutive
 /// sampled revisions.
 ///
-/// Only two directions are emitted:
-/// - `"regressed"` — file **entered** the red band (prev band was not red,
-///   current band is red).
-/// - `"improved"` — file **left** red or **entered** green (prev was red and
-///   current is not, OR prev was not green and current is green).
+/// The two directions are mirror images across the red↔green axis (see
+/// [`classify_band_transition`]):
+/// - `"regressed"` — moved toward worse: **entered** red or **left** green.
+/// - `"improved"` — moved toward better: **left** red or **entered** green.
 ///
-/// Transitions that stay within the same band, or move between yellow↔green
-/// without crossing a meaningful threshold, are not emitted (signal noise
-/// without actionable meaning).
+/// Only same-band stays carry no signal and are dropped; every cross-band move
+/// among the three bands (`red`/`yellow`/`green`) is emitted.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct HealthTransitionRow {
     /// Repo-relative file path.
@@ -187,11 +185,38 @@ fn top_hotspot_paths(db: &FactsDb, opts: &Options, cap: usize) -> Result<HashSet
         .map_err(|e| CodeLoreError::Analysis(format!("collect top-hotspot-paths: {e}")))
 }
 
-/// Detect signal-bearing band transitions between consecutive samples.
+/// Classify a per-file band change between two consecutive samples into the
+/// signal-bearing direction shown in the SPA improvements/regressions feed, or
+/// `None` when it carries no signal (same band, or an unrecognised band).
 ///
-/// `"regressed"` — file enters red (was not red, now is red).
-/// `"improved"`  — file leaves red (was red, now is not red) OR
-///                  file enters green (was not green, now is green).
+/// The two directions mirror each other across the red↔green axis:
+/// - `"improved"` — moved toward better: **left red** (`red→yellow`/`red→green`)
+///   OR **entered green** (`yellow→green`).
+/// - `"regressed"` — moved toward worse: **entered red** (`yellow→red`/
+///   `green→red`) OR **left green** (`green→yellow`).
+///
+/// Only same-band stays are dropped; every cross-band move among the three
+/// `code_health` bands (`red`/`yellow`/`green`) is classified. An unrecognised
+/// band (which `code_health` never emits — its `CASE` yields only those three)
+/// yields `None` rather than a misclassification.
+fn classify_band_transition(prev: &str, curr: &str) -> Option<&'static str> {
+    const BANDS: [&str; 3] = ["red", "yellow", "green"];
+    if prev == curr || !BANDS.contains(&prev) || !BANDS.contains(&curr) {
+        return None;
+    }
+    if (curr == "red" && prev != "red") || (prev == "green" && curr != "green") {
+        // Entered red or left green — moved toward worse.
+        Some("regressed")
+    } else {
+        // The only remaining moves among the three bands are toward better:
+        // left red or entered green.
+        Some("improved")
+    }
+}
+
+/// Detect signal-bearing band transitions between consecutive samples, one row
+/// per file whose band changed. See [`classify_band_transition`] for the
+/// improved/regressed classification (symmetric across the red↔green axis).
 fn detect_transitions(
     prev_bands: &HashMap<String, String>,
     code_rows: &[CodeHealthRow],
@@ -203,14 +228,7 @@ fn detect_transitions(
             continue;
         };
         let curr = &row.band;
-        if prev == curr {
-            continue;
-        }
-        let direction = if curr == "red" && prev != "red" {
-            "regressed"
-        } else if (prev == "red" && curr != "red") || (curr == "green" && prev != "green") {
-            "improved"
-        } else {
+        let Some(direction) = classify_band_transition(prev, curr) else {
             continue;
         };
         out.push(HealthTransitionRow {
@@ -394,6 +412,32 @@ pub fn run_health_trend<R: Repo>(
 mod tests {
     use super::*;
     use crate::analyses::import_graph::GraphMetrics;
+
+    #[test]
+    fn band_transition_classification_is_symmetric() {
+        // Same band → no signal.
+        for b in ["red", "yellow", "green"] {
+            assert_eq!(classify_band_transition(b, b), None, "same band {b}");
+        }
+        // Toward worse → "regressed": entered red OR left green.
+        // green → yellow (left green) is the symmetric fix — previously dropped.
+        assert_eq!(
+            classify_band_transition("green", "yellow"),
+            Some("regressed")
+        );
+        assert_eq!(classify_band_transition("green", "red"), Some("regressed"));
+        assert_eq!(classify_band_transition("yellow", "red"), Some("regressed"));
+        // Toward better → "improved": left red OR entered green (the mirror).
+        assert_eq!(
+            classify_band_transition("yellow", "green"),
+            Some("improved")
+        );
+        assert_eq!(classify_band_transition("red", "yellow"), Some("improved"));
+        assert_eq!(classify_band_transition("red", "green"), Some("improved"));
+        // Unrecognised band → no signal (defensive; code_health emits only 3 bands).
+        assert_eq!(classify_band_transition("green", "unknown"), None);
+        assert_eq!(classify_band_transition("unknown", "red"), None);
+    }
 
     fn metrics(n: usize, pc: f64, cyclic: u32, largest: u32) -> GraphMetrics {
         GraphMetrics {
