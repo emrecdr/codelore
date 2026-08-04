@@ -185,11 +185,20 @@ jobs:
       - name: Generate SHA256SUMS
         run: |
           set -euo pipefail
+          shopt -s nullglob
           cd dist
           # Checksum every published archive so consumers can verify their
           # download. The manifest itself is excluded by the archive globs
           # and is uploaded to the release by the `files: dist/**` glob below.
-          sha256sum codelore-*.tar.gz codelore-*.zip > SHA256SUMS
+          # `nullglob` drops a non-matching glob rather than passing it
+          # literally, so a future matrix that emits only one archive type
+          # doesn't fail the step; guard against zero archives explicitly.
+          archives=(codelore-*.tar.gz codelore-*.zip)
+          if [ ${#archives[@]} -eq 0 ]; then
+            echo "::error::no release archives found in dist/ to checksum"
+            exit 1
+          fi
+          sha256sum "${archives[@]}" > SHA256SUMS
           cat SHA256SUMS
 
       - name: Create / update GitHub Release
