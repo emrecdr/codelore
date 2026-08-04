@@ -788,7 +788,7 @@ impl CodeLoreServer {
             let (base_path, _base_wt) = temp_worktree(&repo_path, &base_sha)?;
             let (head_path, _head_wt) = temp_worktree(&repo_path, &head_sha)?;
 
-            let ingest_at = |wt: &Path| -> std::result::Result<
+            let ingest_at = |wt: &Path, sha: &str| -> std::result::Result<
                 Vec<codelore_lib::cli_api::analyses::delta_health::FunctionMetricRow>,
                 ErrorData,
             > {
@@ -799,11 +799,16 @@ impl CodeLoreServer {
                 let repo = GixRepo::open(wt).map_err(|e| map_lib_err(&e))?;
                 let db = FactsDb::new_in_memory().map_err(|e| map_lib_err(&e))?;
                 db.ingest(&repo, &opts).map_err(|e| map_lib_err(&e))?;
+                // Witness the populated store before deriving metrics: a detached
+                // worktree over a shallow/truncated checkout can walk zero commits
+                // and yield a well-formed but vacuous delta of plausible zeroes.
+                // Error out (exit 3) rather than building and memoizing that.
+                db.ensure_ingest_witnessed(sha).map_err(|e| map_lib_err(&e))?;
                 run_function_metrics(&db).map_err(|e| map_lib_err(&e))
             };
 
-            let base_fns = ingest_at(&base_path)?;
-            let head_fns = ingest_at(&head_path)?;
+            let base_fns = ingest_at(&base_path, &base_sha)?;
+            let head_fns = ingest_at(&head_path, &head_sha)?;
 
             // All files touched between the two revs count as "PR files".
             let pr_files: HashSet<String> = head_fns.iter().map(|r| r.path.clone()).collect();
