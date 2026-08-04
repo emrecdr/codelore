@@ -1,7 +1,7 @@
 # CodeLore — Discovery Pass 2026-08-02 (F249–F267)
 
 Read-only research pass. Findings are candidate F-IDs for the next audit cycle
-(`deep_analysis_report.md` re-opened at F249). **Nothing here is implemented.**
+(`deep_analysis_report.md` re-opened at F249). **Nothing here was implemented at the time of this pass** (2026-08-02); several of these findings have since shipped (many in v0.25.0) — see `deep_analysis_report.md` for each finding's current status.
 Each finding is marked with its verification status:
 
 - **✅ verified** — the controller re-checked the claim against `main` source directly.
