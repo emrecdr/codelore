@@ -68,7 +68,7 @@ For future major-version cuts (`1.0`, `2.0`, …), revive the `alpha → beta �
 
 **Pre-1.0 stance: MSRV tracks the toolchain channel verbatim. No N-2 buffer.**
 
-The workspace's `Cargo.toml` `rust-version` field and `rust-toolchain.toml`'s `channel` are pinned to the same stable release (currently `1.96` / `1.96.0`). A Rust toolchain bump and an MSRV bump are the same operation — coordinated atomically by `scripts/cut-release.sh` across the four pin sites (`rust-toolchain.toml`, workspace `rust-version`, the `dtolnay/rust-toolchain` action invocations, `CHANGELOG.md`).
+The workspace's `Cargo.toml` `rust-version` field and `rust-toolchain.toml`'s `channel` are pinned to the same stable release (currently `1.96` / `1.96.0`). A Rust toolchain bump and an MSRV bump are the same operation — every pin site moves together in the release-cut commit. There are six of them: `rust-toolchain.toml`'s `channel`, the workspace `rust-version` in `Cargo.toml`, `clippy.toml`'s `msrv`, `Containerfile`'s `ARG RUST_VERSION` (and the `rust:<ver>-bookworm` build-stage comment above it), the `dtolnay/rust-toolchain` action invocations, and the `CHANGELOG.md` entry. `scripts/cut-release.sh` performs the package-version bump and CHANGELOG flip; the toolchain/MSRV pins are edited by hand as part of the same commit.
 
 ### Why no buffer
 
@@ -82,7 +82,7 @@ Once we hit `1.0`, the binary will likely grow a stable library surface (`codelo
 
 ### How to bump MSRV
 
-Run `scripts/cut-release.sh` for the coordinated update. Never hand-edit a single pin site — the four-way coordination is what `cut-release.sh` exists to guarantee.
+Move every one of the six pin sites listed above together in the release-cut commit — never bump one in isolation (a lone `rust-toolchain.toml` bump is silently overridden by `rust-version`, and a lone `rust-version` bump breaks the build). `scripts/cut-release.sh` handles the package-version bump and CHANGELOG flip; the toolchain/MSRV pins (`rust-toolchain.toml`, workspace `rust-version`, `clippy.toml`, `Containerfile`, the `dtolnay/rust-toolchain` action invocations) are updated by hand alongside it in the same commit.
 
 ## Release Procedure
 

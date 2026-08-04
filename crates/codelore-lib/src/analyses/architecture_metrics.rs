@@ -222,7 +222,7 @@ pub fn run_architecture_metrics(
 ///   Omitted when there are no first-party candidates (the rate is undefined,
 ///   and a `0.00` would misread as "resolved none of them").
 /// - **`wildcard_import_share`** — glob imports (`kind = 'wildcard'`: Rust
-///   `use foo::*`, Java `import foo.*;`, Python `from foo import *`) ÷ all
+///   `use foo::*`, Java `import foo.*;`) ÷ all
 ///   imports. Purely informational — a glob names a module, not a symbol, so
 ///   it is inherently harder for the resolver to check against an in-repo
 ///   path than a named import.

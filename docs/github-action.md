@@ -32,7 +32,7 @@ jobs:
           category: codelore-hotspots
 ```
 
-The findings appear in the PR's **Security** tab and the **Files changed** view, with severity derived from each row's `(100 − code_health) / 4` band.
+The findings appear in the PR's **Security** tab and the **Files changed** view, with severity derived from each row's `(100 − cognitive_health) / 10` band.
 
 ## Inputs
 
