@@ -247,11 +247,20 @@ pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
     let head_sha = repo.head_sha().context("get HEAD sha")?;
     if opts.after.is_some() || opts.before.is_some() {
         if !head_sha.is_empty() && db.commit_count().context("count ingested commits")? == 0 {
-            tracing::warn!(
-                "no commits were ingested — either the --after/--before window excludes all \
-                 history, or the checkout is truncated (shallow fetch-depth). The analysis \
-                 below is over an empty history."
-            );
+            // A date window can legitimately select nothing on a full clone, but a
+            // shallow/truncated checkout's missing history reads identically — and
+            // there it is a truncated checkout, not an empty selection. Keep the
+            // hard witness error (exit 3) when the checkout is shallow; only
+            // warn-and-continue on a full clone. Same shallow discrimination as
+            // `check`.
+            if repo.is_shallow() {
+                db.ensure_ingest_witnessed(&head_sha)?;
+            } else {
+                tracing::warn!(
+                    "no commits were ingested — the --after/--before window excludes all \
+                     history on this full clone. The analysis below is over an empty history."
+                );
+            }
         }
     } else {
         db.ensure_ingest_witnessed(&head_sha)?;

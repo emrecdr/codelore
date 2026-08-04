@@ -229,6 +229,49 @@ fn analyze_exits_3_on_truncated_shallow_checkout() {
     );
 }
 
+/// The shallow-checkout witness must survive a date filter. Under
+/// `--after`/`--before`, a zero-commit walk on a FULL clone is a legitimate
+/// empty selection (warn + exit 0), but on a shallow/truncated checkout it is
+/// still a truncated checkout and must hard-error (exit 3). Same fixture as
+/// [`analyze_exits_3_on_truncated_shallow_checkout`]; the wide-open `--after`
+/// window includes all history, so the only cause of the empty store is the
+/// shallow truncation, not the date filter.
+#[test]
+fn analyze_exits_3_on_shallow_checkout_even_under_date_filter() {
+    let full = codelore_lib::test_support::mainline_advance_repo::build();
+    let shallow = tempfile::tempdir().unwrap();
+    let source_url = format!("file://{}", full.dir.path().display());
+    let status = std::process::Command::new("git")
+        .args(["clone", "--quiet", "--depth=1"])
+        .arg(&source_url)
+        .arg(shallow.path())
+        .status()
+        .unwrap();
+    assert!(status.success(), "shallow clone from {source_url} failed");
+
+    let output = codelore_cmd()
+        .args([
+            "analyze",
+            "--analysis",
+            "hotspots",
+            "--repo",
+            shallow.path().to_str().unwrap(),
+            "--after",
+            "1970-01-01",
+            "--no-cache",
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // Shallow + date filter is still a truncated checkout → exit 3, not a
+    // warn-and-exit-0 empty date selection.
+    assert_eq!(output.status.code(), Some(3), "stderr: {stderr}");
+    assert!(
+        stderr.contains("truncated") && stderr.contains("shallow"),
+        "expected the truncated-checkout witness message, got stderr: {stderr}"
+    );
+}
+
 #[test]
 fn invalid_options_exit_with_code_2() {
     // Inverted coupling range (`--min-coupling` > `--max-coupling`) is a
