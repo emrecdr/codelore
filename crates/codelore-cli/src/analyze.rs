@@ -60,7 +60,7 @@ pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         )
     {
         return Err(CodeLoreError::Analysis(
-            "--format sarif currently supports --analysis hotspots, clones, and clone-coupling (other analyses land in Plan 9)"
+            "--format sarif currently supports --analysis hotspots, clones, and clone-coupling"
                 .to_string(),
         )
         .into());
@@ -1370,8 +1370,8 @@ fn write_parquet(
                 .context("write parquet")
         }
         other => anyhow::bail!(
-            "--format parquet currently supports hotspots, revisions, summary only \
-             (Plan 5 scope); got {other:?}"
+            "--format parquet currently supports hotspots, revisions, summary only; \
+             got {other:?}"
         ),
     }
 }
