@@ -50,14 +50,18 @@ runs:
       id: resolve
       shell: bash
       env:
-        # F21.2 fix: authenticate the GitHub API request to avoid
-        # rate-limit failures on shared GHA runner IPs. `github.token`
-        # is provided by the workflow context and grants read-only API
-        # access by default.
+        # Authenticate the GitHub API request to avoid rate-limit
+        # failures on shared GHA runner IPs. `github.token` is provided
+        # by the workflow context and grants read-only API access by
+        # default.
         GH_TOKEN: ${{ github.token }}
+        # Caller-controlled input passed through the environment (not
+        # spliced into the script text at render time) so a crafted
+        # value cannot break out of the shell command.
+        INPUT_VERSION: ${{ inputs.version }}
       run: |
         set -euo pipefail
-        VERSION="${{ inputs.version }}"
+        VERSION="$INPUT_VERSION"
         if [ "$VERSION" = "latest" ]; then
           # Resolve the latest v* tag via the GitHub API. Authenticated
           # via $GH_TOKEN to avoid IP-based rate limits.
@@ -143,6 +147,32 @@ runs:
         mkdir -p "$DEST"
         echo "Downloading $URL"
         curl -fsSL --retry 3 --retry-delay 2 -o "$DEST/$ARCHIVE" "$URL"
+        # Verify the download against the release's SHA256SUMS manifest.
+        # Backward-compatible: releases cut before the manifest existed have
+        # no such file, so a 404 (or a manifest lacking this archive's entry)
+        # warns and proceeds; a present entry that fails to match is a hard
+        # failure.
+        SUMS_URL="https://github.com/emrecdr/codelore/releases/download/${TAG}/SHA256SUMS"
+        if curl -fsSL --retry 3 --retry-delay 2 -o "$DEST/SHA256SUMS" "$SUMS_URL" 2>/dev/null \
+          && grep -q " ${ARCHIVE}\$" "$DEST/SHA256SUMS"; then
+          # Prefer sha256sum (Linux runners, Git-Bash on Windows); fall back
+          # to `shasum -a 256` on runners that ship only the Perl tool.
+          if command -v sha256sum >/dev/null 2>&1; then
+            SHA_CHECK=(sha256sum -c -)
+          else
+            SHA_CHECK=(shasum -a 256 -c -)
+          fi
+          # SHA256SUMS lists bare archive names, so check from $DEST where the
+          # archive was downloaded to match those names.
+          if (cd "$DEST" && grep " ${ARCHIVE}\$" SHA256SUMS | "${SHA_CHECK[@]}"); then
+            echo "checksum verified: $ARCHIVE"
+          else
+            echo "::error::checksum verification failed for $ARCHIVE"
+            exit 1
+          fi
+        else
+          echo "::warning::no SHA256SUMS published for ${TAG}; skipping checksum verification (older release)"
+        fi
         case "$EXT" in
           tar.gz) tar -xzf "$DEST/$ARCHIVE" -C "$DEST" ;;
           zip)    unzip -q "$DEST/$ARCHIVE" -d "$DEST" ;;
@@ -168,32 +198,44 @@ runs:
     - name: Run codelore analyze
       id: run
       shell: bash
+      env:
+        # Caller-controlled inputs passed through the environment (not
+        # spliced into the script text at render time) so a crafted
+        # value cannot break out of the shell command.
+        INPUT_ANALYSIS: ${{ inputs.analysis }}
+        INPUT_FORMAT: ${{ inputs.format }}
+        INPUT_OUTPUT: ${{ inputs.output }}
+        INPUT_REPO: ${{ inputs.repo }}
+        INPUT_ARGS: ${{ inputs.args }}
       run: |
         set -euo pipefail
-        ANALYSIS="${{ inputs.analysis }}"
-        FORMAT="${{ inputs.format }}"
-        OUTPUT="${{ inputs.output }}"
-        REPO="${{ inputs.repo }}"
-        EXTRA_ARGS="${{ inputs.args }}"
+        ANALYSIS="$INPUT_ANALYSIS"
+        FORMAT="$INPUT_FORMAT"
+        OUTPUT="$INPUT_OUTPUT"
+        REPO="$INPUT_REPO"
+        EXTRA_ARGS="$INPUT_ARGS"
 
         CMD=(codelore analyze --analysis "$ANALYSIS" --format "$FORMAT" --repo "$REPO" --no-banner)
         if [ -n "$OUTPUT" ]; then
           CMD+=(--output "$OUTPUT")
         fi
+        # Word-split the extra args (users pass multiple flags) with
+        # globbing disabled so a bare `*` cannot expand to the workspace
+        # file list.
+        set -f
         # shellcheck disable=SC2206
         EXTRA_ARRAY=($EXTRA_ARGS)
+        set +f
         CMD+=("${EXTRA_ARRAY[@]}")
 
         echo "Running: ${CMD[*]}"
         "${CMD[@]}"
 
         if [ -n "$OUTPUT" ]; then
-          # F21.3 fix: pure-bash absolute-path resolution. macOS's BSD
-          # `readlink` lacks the `-f` flag (GNU extension), so the
-          # previous `readlink -f || python3 …` fallback was always
-          # taking the python3 path on macOS — fragile if the runner
-          # image ever drops Python from its preinstalled toolchain.
-          # Bash absolute-path resolution is portable and dependency-free.
+          # Pure-bash absolute-path resolution — portable and
+          # dependency-free. macOS's BSD `readlink` lacks the `-f` flag
+          # (a GNU extension), so resolving the path in bash avoids
+          # depending on GNU coreutils or a preinstalled Python.
           if [[ "$OUTPUT" = /* ]]; then
             ABS_OUTPUT="$OUTPUT"
           else

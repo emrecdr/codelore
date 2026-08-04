@@ -23,18 +23,18 @@ use crate::Options;
 /// schema version, and the historical `schema_v` prefix on the value is
 /// retained so older cache files stay invalidated.
 ///
-/// The current epoch (`schema_v17`) invalidates caches whose `author_aliases`
-/// table predates the `(raw_name, raw_email)` re-key. The old email-only key
-/// collapsed two name+email identities that share one commit email into a
-/// single first-wins row, dropping the loser's commits from every
-/// canonical-set consumer (knowledge shares, familiarity, bus factor). A
-/// stale hit would serve those collapsed rows, so the epoch bump forces the
-/// fact store to be rebuilt with the pair-keyed table.
+/// The current epoch (`schema_v18`) orphans any cache file that persisted an
+/// empty fact store. A shallow / merge-tip checkout ingests zero commits under
+/// the default merge filter, and the HEAD-scoped cache key does not fold shallow
+/// state — so a run that cached that empty store poisoned the key a later
+/// repaired (unshallowed) clone recomputes, turning the ingest-witness failure
+/// into a sticky one no re-fetch could clear. Bumping the epoch discards those
+/// poisoned entries so the repaired clone rebuilds from full history.
 ///
 /// Public so other cache-like artifacts (e.g. `codelore diff`'s
 /// `--base-cache`) can fold this epoch into their own freshness keys instead
 /// of duplicating the literal — see `codelore-cli/src/diff.rs::base_cache_opts_digest`.
-pub const CACHE_EPOCH: &str = "schema_v17";
+pub const CACHE_EPOCH: &str = "schema_v18";
 
 /// Compute a 32-byte SHA-256 cache key from:
 ///   `canonical_repo_path || NUL || head_sha || NUL || CARGO_PKG_VERSION || NUL`

@@ -229,6 +229,49 @@ fn analyze_exits_3_on_truncated_shallow_checkout() {
     );
 }
 
+/// The shallow-checkout witness must survive a date filter. Under
+/// `--after`/`--before`, a zero-commit walk on a FULL clone is a legitimate
+/// empty selection (warn + exit 0), but on a shallow/truncated checkout it is
+/// still a truncated checkout and must hard-error (exit 3). Same fixture as
+/// [`analyze_exits_3_on_truncated_shallow_checkout`]; the wide-open `--after`
+/// window includes all history, so the only cause of the empty store is the
+/// shallow truncation, not the date filter.
+#[test]
+fn analyze_exits_3_on_shallow_checkout_even_under_date_filter() {
+    let full = codelore_lib::test_support::mainline_advance_repo::build();
+    let shallow = tempfile::tempdir().unwrap();
+    let source_url = format!("file://{}", full.dir.path().display());
+    let status = std::process::Command::new("git")
+        .args(["clone", "--quiet", "--depth=1"])
+        .arg(&source_url)
+        .arg(shallow.path())
+        .status()
+        .unwrap();
+    assert!(status.success(), "shallow clone from {source_url} failed");
+
+    let output = codelore_cmd()
+        .args([
+            "analyze",
+            "--analysis",
+            "hotspots",
+            "--repo",
+            shallow.path().to_str().unwrap(),
+            "--after",
+            "1970-01-01",
+            "--no-cache",
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // Shallow + date filter is still a truncated checkout → exit 3, not a
+    // warn-and-exit-0 empty date selection.
+    assert_eq!(output.status.code(), Some(3), "stderr: {stderr}");
+    assert!(
+        stderr.contains("truncated") && stderr.contains("shallow"),
+        "expected the truncated-checkout witness message, got stderr: {stderr}"
+    );
+}
+
 #[test]
 fn invalid_options_exit_with_code_2() {
     // Inverted coupling range (`--min-coupling` > `--max-coupling`) is a
@@ -947,6 +990,40 @@ fn time_bucket_rejected_for_incompatible_analysis() {
         ));
 }
 
+/// `--group-file` combined with `function-hotspots` must be rejected at the
+/// CLI boundary. Grouping rewrites the `changes` table but discards the hunks
+/// of collapsed paths, and `function-hotspots` ranks over the raw `hunks`
+/// table — so the ranking would be silently incomplete. Reject loudly (exit 2,
+/// `InvalidOptions`) instead.
+#[test]
+fn group_file_rejected_for_function_hotspots() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let group_file = tiny.dir.path().join("groups.txt");
+    std::fs::write(&group_file, "src/.* => src\n").unwrap();
+    let output = codelore_cmd()
+        .args([
+            "analyze",
+            "--analysis",
+            "function-hotspots",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "csv",
+            "--no-banner",
+            "--no-cache",
+            "--group-file",
+            group_file.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--group-file is not supported for analysis function-hotspots"),
+        "expected the group-file rejection message, got stderr: {stderr}"
+    );
+}
+
 /// Control case: `--time-bucket` on a compatible analysis
 /// (coupling) must succeed.
 #[test]
@@ -979,9 +1056,10 @@ fn unsupported_format_bails_cleanly_instead_of_panicking() {
     // `--format ndjson`/`gha` pass top-level format validation but are only
     // wired for a few analyses. For the rest, the dispatch must bail with a
     // clean, descriptive error — NOT panic through a reachable
-    // `unreachable!` (exit 101). The per-analysis format mismatch carries
-    // CodeLoreError::Analysis → spec §6.6 exit 4 (was the generic 1 before
-    // the dispatch bails grew typed error buckets). Cover ndjson and gha.
+    // `unreachable!` (exit 101). An invalid format×analysis combination is a
+    // CLI/argument mistake, so it carries CodeLoreError::InvalidOptions → exit
+    // 2 (the CLI/arg-error code, unified with an unrecognised `--format`
+    // value). Cover ndjson and gha.
     let tiny = codelore_lib::test_support::tiny_repo::build();
     for fmt in ["ndjson", "gha"] {
         codelore_cmd()
@@ -998,7 +1076,7 @@ fn unsupported_format_bails_cleanly_instead_of_panicking() {
                 "1",
             ])
             .assert()
-            .code(4)
+            .code(2)
             .stderr(predicate::str::contains("abs-churn"))
             .stderr(predicate::str::contains("panicked").not())
             .stderr(predicate::str::contains("unreachable").not());
@@ -1595,9 +1673,11 @@ fn diff_delta_health_gate_fails_the_run() {
         ])
         .output()
         .unwrap();
-    assert!(
-        !output.status.success(),
-        "deny_degrading_verdict should fail the run"
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "deny_degrading_verdict should fail the run via a gate violation (exit 1); stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert!(
@@ -1839,6 +1919,221 @@ fn diff_gate_skipped_when_neither_revision_measures_any_hotspot_row() {
         !stdout.contains("VIOLATION"),
         "a skip is not a violation: {stdout}"
     );
+}
+
+#[test]
+fn gate_delta_per_file_records_skipped_when_no_delta_is_measured() {
+    // A working tree whose only change is a non-source file carries no
+    // computable per-file health delta, so `delta_code_health_min_per_file`
+    // measured nothing. Its gate-run verdict must be recorded "skipped" — not
+    // the "passed" that keying "measured" off a merely-non-empty change-set
+    // would wrongly record. Observed through the gate-run ledger via
+    // `codelore check --history` over a shared `--cache-dir`.
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    let cache = repo.join("cache");
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    };
+    git(&["init", "-q"]);
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(
+        repo.join("src/lib.rs"),
+        "pub fn tiny() -> i32 {\n    1\n}\n",
+    )
+    .unwrap();
+    std::fs::write(repo.join("README.md"), "hello\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "base"]);
+    // Uncommitted modification to a tracked non-source file: the change-set is
+    // non-empty, yet the file yields no code-health delta (delta = None).
+    std::fs::write(repo.join("README.md"), "hello world\n").unwrap();
+    std::fs::write(
+        repo.join(".codelore-thresholds.toml"),
+        "[diff]\ndelta_code_health_min_per_file = 0.0\n",
+    )
+    .unwrap();
+
+    // The gate passes (no violation) but records the ledger verdict.
+    codelore_cmd()
+        .args([
+            "gate",
+            "--repo",
+            repo.to_str().unwrap(),
+            "--cache-dir",
+            cache.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let history = codelore_cmd()
+        .args([
+            "check",
+            "--history",
+            "--repo",
+            repo.to_str().unwrap(),
+            "--cache-dir",
+            cache.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(history.status.success());
+    let text = String::from_utf8_lossy(&history.stdout);
+    assert!(
+        text.contains("delta_code_health_min_per_file"),
+        "the configured gate must appear in the ledger: {text}"
+    );
+    assert!(
+        text.contains("skipped"),
+        "an all-None change-set measures nothing, so the verdict is skipped: {text}"
+    );
+    assert!(
+        !text.contains("passed"),
+        "the pre-fix behaviour wrongly recorded passed here: {text}"
+    );
+}
+
+#[test]
+fn diff_fail_on_skipped_fails_a_skipped_gate_family() {
+    // The blind-ingest skip from `diff_gate_skipped_when_neither_revision_...`
+    // (a `--min-revs` floor above every file empties the hotspot set at both
+    // revisions), but with `fail_on_skipped = true`: the skipped `[diff]` gate
+    // family must now fail the run through diff's violation exit (code 1)
+    // instead of passing. The default-false counterpart (exit 0) is that
+    // sibling test, which runs the identical range without the policy.
+    let (dir, base, head) = unchanged_code_fixture();
+    let thresholds = dir.path().join("gates.toml");
+    std::fs::write(
+        &thresholds,
+        "[gates]\nfail_on_skipped = true\n[diff]\nno_new_cycles = true\n",
+    )
+    .unwrap();
+    let output = codelore_cmd()
+        .args([
+            "diff",
+            "--repo",
+            dir.path().to_str().unwrap(),
+            "--min-revs",
+            "50",
+            "--thresholds-file",
+            thresholds.to_str().unwrap(),
+            "--format",
+            "json",
+            &format!("{base}..{head}"),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "fail_on_skipped must fail a skipped gate via diff's exit 1; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // The skip stays disclosed in the (already-emitted) JSON document.
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        json["gate_skip_reason"].as_str().is_some(),
+        "the skip stays disclosed even when it now fails: {json}"
+    );
+}
+
+#[test]
+fn check_fail_on_skipped_fails_a_skipped_gate() {
+    // `max_findings_in_hot_files` with no external-findings sidecar is recorded
+    // "skipped". By default that skip does not fail the run; with
+    // `fail_on_skipped = true` it must (check's exit 1).
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let thresholds = tiny.dir.path().join(".codelore-thresholds.toml");
+
+    // Default: the skipped gate does not fail the run.
+    std::fs::write(&thresholds, "[gates]\nmax_findings_in_hot_files = 0\n").unwrap();
+    codelore_cmd()
+        .args(["check", "--repo", tiny.dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    // fail_on_skipped=true: the same skipped gate now fails.
+    std::fs::write(
+        &thresholds,
+        "[gates]\nmax_findings_in_hot_files = 0\nfail_on_skipped = true\n",
+    )
+    .unwrap();
+    codelore_cmd()
+        .args(["check", "--repo", tiny.dir.path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("FAIL"));
+}
+
+#[test]
+fn gate_fail_on_skipped_fails_an_all_none_change_set() {
+    // The M4 scenario (a non-source change yields no per-file delta →
+    // delta_code_health_min_per_file is "skipped") combined with
+    // `fail_on_skipped = true`: the gate must now fail (exit 1) instead of
+    // passing. Without the policy the identical change-set passes (exit 0),
+    // asserted first.
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    };
+    git(&["init", "-q"]);
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(
+        repo.join("src/lib.rs"),
+        "pub fn tiny() -> i32 {\n    1\n}\n",
+    )
+    .unwrap();
+    std::fs::write(repo.join("README.md"), "hello\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "base"]);
+    // Uncommitted non-source change: change-set non-empty, delta = None.
+    std::fs::write(repo.join("README.md"), "hello world\n").unwrap();
+    let thresholds = repo.join(".codelore-thresholds.toml");
+
+    // Default: the skipped per-file gate does not fail the run.
+    std::fs::write(
+        &thresholds,
+        "[diff]\ndelta_code_health_min_per_file = 0.0\n",
+    )
+    .unwrap();
+    codelore_cmd()
+        .args(["gate", "--repo", repo.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // fail_on_skipped=true: the same skip now fails the gate.
+    std::fs::write(
+        &thresholds,
+        "[gates]\nfail_on_skipped = true\n[diff]\ndelta_code_health_min_per_file = 0.0\n",
+    )
+    .unwrap();
+    codelore_cmd()
+        .args(["gate", "--repo", repo.to_str().unwrap()])
+        .assert()
+        .failure()
+        .code(1);
 }
 
 #[test]

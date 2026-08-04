@@ -259,10 +259,13 @@ pub fn worker(a: i32, b: i32, c: i32, d: i32, e: i32, f: i32, g: i32, h: i32) ->
 }
 ";
 
-/// Build a repo with six trivial filler files plus one `target.rs` whose sole
+/// Build a repo with nine trivial filler files plus one `target.rs` whose sole
 /// function is `baseline` at an out-of-window commit, then `head` at a recent
-/// in-window commit. The target is the unique complexity maximum, so it is the
-/// only red file; the recent commit is the only window churn.
+/// in-window commit. Ten Rust files put the language cohort at the code-health
+/// per-language structural-biomarker floor, so the percent-rank is meaningful; a
+/// thinner cohort produces no structural biomarkers at all. The target is the
+/// unique complexity maximum, so it is the only red file; the recent commit is
+/// the only window churn.
 fn build_temporal_repo(baseline: &str, head: &str) -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path();
@@ -270,7 +273,7 @@ fn build_temporal_repo(baseline: &str, head: &str) -> tempfile::TempDir {
     run_git(path, &["config", "user.email", "t@e.com"]);
     run_git(path, &["config", "user.name", "T"]);
 
-    for i in 0..6 {
+    for i in 0..9 {
         std::fs::write(
             path.join(format!("filler{i}.rs")),
             format!("pub fn a{i}() -> i32 {{ {i} }}\n"),

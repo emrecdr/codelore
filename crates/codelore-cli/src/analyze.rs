@@ -60,7 +60,7 @@ pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         )
     {
         return Err(CodeLoreError::Analysis(
-            "--format sarif currently supports --analysis hotspots, clones, and clone-coupling (other analyses land in Plan 9)"
+            "--format sarif currently supports --analysis hotspots, clones, and clone-coupling"
                 .to_string(),
         )
         .into());
@@ -146,6 +146,23 @@ pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
              or switch to one of those analyses.",
             analysis.as_str()
         ))
+        .into());
+    }
+
+    // `--group-file` collapses/drops paths in the `changes` table, but
+    // `function-hotspots` ranks over the raw `hunks` table, whose rows are
+    // NOT path-rewritten by grouping (line-range semantics don't translate to
+    // the group level). Under grouping the hunks of collapsed or dropped paths
+    // are discarded, so the ranking would be silently incomplete. Reject the
+    // combination rather than emit a partial ranking.
+    if opts.group_file.is_some() && matches!(analysis, AnalysisName::FunctionHotspots) {
+        return Err(CodeLoreError::InvalidOptions(
+            "--group-file is not supported for analysis function-hotspots \
+             (grouping discards the hunks of collapsed paths, which \
+             function-hotspots ranks over — the result would be silently \
+             incomplete). Run function-hotspots without --group-file."
+                .to_string(),
+        )
         .into());
     }
 
@@ -247,11 +264,20 @@ pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
     let head_sha = repo.head_sha().context("get HEAD sha")?;
     if opts.after.is_some() || opts.before.is_some() {
         if !head_sha.is_empty() && db.commit_count().context("count ingested commits")? == 0 {
-            tracing::warn!(
-                "no commits were ingested — either the --after/--before window excludes all \
-                 history, or the checkout is truncated (shallow fetch-depth). The analysis \
-                 below is over an empty history."
-            );
+            // A date window can legitimately select nothing on a full clone, but a
+            // shallow/truncated checkout's missing history reads identically — and
+            // there it is a truncated checkout, not an empty selection. Keep the
+            // hard witness error (exit 3) when the checkout is shallow; only
+            // warn-and-continue on a full clone. Same shallow discrimination as
+            // `check`.
+            if repo.is_shallow() {
+                db.ensure_ingest_witnessed(&head_sha)?;
+            } else {
+                tracing::warn!(
+                    "no commits were ingested — the --after/--before window excludes all \
+                     history on this full clone. The analysis below is over an empty history."
+                );
+            }
         }
     } else {
         db.ensure_ingest_witnessed(&head_sha)?;
@@ -548,7 +574,7 @@ fn html_not_wired(analysis_name: &str) -> anyhow::Error {
         .map(|a| a.as_str())
         .collect::<Vec<_>>()
         .join(", ");
-    CodeLoreError::Analysis(format!(
+    CodeLoreError::InvalidOptions(format!(
         "--format html for analysis `{analysis_name}` not yet wired (covered: {covered} — file an issue if you need another)"
     ))
     .into()
@@ -557,10 +583,11 @@ fn html_not_wired(analysis_name: &str) -> anyhow::Error {
 /// The verbatim error for an output `--format` a given analysis's dispatch
 /// doesn't wire. The advertised list is derived from [`supported_formats`] — the
 /// one source of truth for what each analysis emits — so the message and the
-/// wiring cannot drift, and the `CodeLoreError::Analysis` shape keeps the
-/// analysis-failure exit code uniform.
+/// wiring cannot drift. An invalid format×analysis combination is a CLI/argument
+/// mistake, so the `CodeLoreError::InvalidOptions` shape lands it in the exit-2
+/// bucket, matching an unrecognised `--format` value rejected at the parser.
 fn unsupported_format(analysis: AnalysisName, fmt: &str) -> anyhow::Error {
-    CodeLoreError::Analysis(format!(
+    CodeLoreError::InvalidOptions(format!(
         "{} analysis supports {}; got {fmt:?}",
         analysis.as_str(),
         supported_formats(analysis).join("|"),
@@ -1343,8 +1370,8 @@ fn write_parquet(
                 .context("write parquet")
         }
         other => anyhow::bail!(
-            "--format parquet currently supports hotspots, revisions, summary only \
-             (Plan 5 scope); got {other:?}"
+            "--format parquet currently supports hotspots, revisions, summary only; \
+             got {other:?}"
         ),
     }
 }

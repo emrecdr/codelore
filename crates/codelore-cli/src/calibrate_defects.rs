@@ -366,10 +366,17 @@ type TrainValidationSplit = (Vec<(String, bool)>, Vec<(String, bool)>);
 /// — deliberately NOT deduplicated by path, matching `tune_weights`'s own
 /// honesty-floor semantics (it counts `(defect, file)` incidences, not
 /// distinct files: a file hit by three separate defects contributes three
-/// rows). They are ordered by the FIX commit's date — the spec's "temporal
-/// split ... by fix date" — so the older 60% trains and the newer 40%
-/// validates: a leakage guard asking "would tuning generalize to the NEXT
-/// defect", not "does it fit today's".
+/// rows). Every incidence for a given path is assigned WHOLLY to one side of
+/// the split: paths are grouped, keyed by their EARLIEST fix date, ordered by
+/// that date, and filled into train up to ~60% of the total positive rows
+/// (the rest into validation) with all of a path's rows landing together on
+/// train XOR validation. The older paths therefore train and the newer
+/// validate — the spec's "temporal split ... by fix date", a leakage guard
+/// asking "would tuning generalize to the NEXT defect", not "does it fit
+/// today's". Because a path's biomarker intensity vector is constant across
+/// its incidences, keeping every path on a single side stops that same
+/// constant feature vector from being scored on both — the disjointness the
+/// negatives below also hold to.
 ///
 /// This is deliberately independent of `ValidationMetrics::linked_defects`
 /// (the distinct-defect-rev count `validate()` reports) — that field and
@@ -390,15 +397,28 @@ fn build_train_validation_split(
     commit_dates: &std::collections::HashMap<String, String>,
     intensities: &std::collections::HashMap<String, [f64; 8]>,
 ) -> TrainValidationSplit {
-    let mut positives: Vec<(&str, &str)> = links
-        .iter()
-        .filter_map(|link| {
-            commit_dates
-                .get(&link.fix_rev)
-                .map(|date| (date.as_str(), link.path.as_str()))
-        })
-        .collect();
-    positives.sort_unstable();
+    // Group positive incidences by path -> (row_count, earliest_fix_date),
+    // keeping one row per SzzLink (a file hit by N defects contributes N rows).
+    // Grouping lets each path be assigned wholly to one side of the split.
+    let mut incidences: std::collections::HashMap<&str, (usize, &str)> =
+        std::collections::HashMap::new();
+    let mut total_positive_rows = 0usize;
+    for link in links {
+        let Some(date) = commit_dates.get(&link.fix_rev) else {
+            continue;
+        };
+        let (path, date) = (link.path.as_str(), date.as_str());
+        incidences
+            .entry(path)
+            .and_modify(|(count, earliest)| {
+                *count += 1;
+                if date < *earliest {
+                    *earliest = date;
+                }
+            })
+            .or_insert((1, date));
+        total_positive_rows += 1;
+    }
 
     let implicated: std::collections::HashSet<&str> =
         links.iter().map(|l| l.path.as_str()).collect();
@@ -410,19 +430,33 @@ fn build_train_validation_split(
     negatives.sort_unstable();
 
     let train_share = |n: usize| n * 60 / 100;
-    let (pos_train, pos_val) = positives.split_at(train_share(positives.len()));
+
+    // Order paths by earliest fix date (older paths train, newer validate),
+    // path-tie-broken for determinism, then fill train up to ~60% of the total
+    // positive ROWS — every incidence of a path lands together on one side, so
+    // its constant intensity vector is never scored across both splits.
+    let mut positive_paths: Vec<(&str, usize, &str)> = incidences
+        .into_iter()
+        .map(|(path, (count, earliest))| (path, count, earliest))
+        .collect();
+    positive_paths.sort_unstable_by(|a, b| a.2.cmp(b.2).then_with(|| a.0.cmp(b.0)));
+
+    let positive_train_target = train_share(total_positive_rows);
+    let mut train: Vec<(String, bool)> = Vec::new();
+    let mut validation: Vec<(String, bool)> = Vec::new();
+    let mut assigned = 0usize;
+    for (path, count, _earliest) in positive_paths {
+        let dest = if assigned < positive_train_target {
+            &mut train
+        } else {
+            &mut validation
+        };
+        dest.extend(std::iter::repeat_n((path.to_string(), true), count));
+        assigned += count;
+    }
+
     let (neg_train, neg_val) = negatives.split_at(train_share(negatives.len()));
-
-    let mut train: Vec<(String, bool)> = pos_train
-        .iter()
-        .map(|&(_, path)| (path.to_string(), true))
-        .collect();
     train.extend(neg_train.iter().map(|&path| (path.to_string(), false)));
-
-    let mut validation: Vec<(String, bool)> = pos_val
-        .iter()
-        .map(|&(_, path)| (path.to_string(), true))
-        .collect();
     validation.extend(neg_val.iter().map(|&path| (path.to_string(), false)));
 
     (train, validation)
@@ -646,6 +680,81 @@ mod tests {
                 fix_rev: c,
                 path: "src/lib.rs".to_string(),
             }],
+        );
+    }
+
+    // ─── train/validation split ──────────────────────────────────────────────
+
+    /// A path hit by several defects whose fix dates straddle the 60/40
+    /// temporal boundary must still land wholly on ONE side of the split: its
+    /// per-path intensity vector is constant across incidences, so a straddling
+    /// path would be the same memorized answer key on both sides. The fixture
+    /// hits `hot.rs` three times across the boundary and asserts (a) its
+    /// incidence rows are all preserved, (b) no path appears in both halves,
+    /// and (c) all of `hot.rs`'s rows stay together on one side.
+    #[test]
+    fn train_validation_split_keeps_each_path_wholly_on_one_side() {
+        use std::collections::{HashMap, HashSet};
+
+        let link = |fix_rev: &str, path: &str| SzzLink {
+            defect_rev: format!("d-{fix_rev}-{path}"),
+            fix_rev: fix_rev.to_string(),
+            path: path.to_string(),
+        };
+        // hot.rs is hit by three separate defects whose fix dates fall on both
+        // sides of the row-count boundary (six positive rows → target 3).
+        let links = vec![
+            link("fx1", "a.rs"),
+            link("fx2", "b.rs"),
+            link("fx3", "hot.rs"),
+            link("fx5", "hot.rs"),
+            link("fx9", "hot.rs"),
+            link("fx10", "z.rs"),
+        ];
+        let commit_dates: HashMap<String, String> = [
+            ("fx1", "2026-01-01"),
+            ("fx2", "2026-01-02"),
+            ("fx3", "2026-01-03"),
+            ("fx5", "2026-01-05"),
+            ("fx9", "2026-01-09"),
+            ("fx10", "2026-01-10"),
+        ]
+        .into_iter()
+        .map(|(rev, date)| (rev.to_string(), date.to_string()))
+        .collect();
+        // Two never-implicated files supply the negative class.
+        let intensities: HashMap<String, [f64; 8]> = ["clean1.rs", "clean2.rs"]
+            .into_iter()
+            .map(|p| (p.to_string(), [0.0; 8]))
+            .collect();
+
+        let (train, validation) = build_train_validation_split(&links, &commit_dates, &intensities);
+
+        // Incidence counts are preserved: hot.rs keeps one row per defect.
+        let hot_rows = train
+            .iter()
+            .chain(&validation)
+            .filter(|(p, label)| *label && p.as_str() == "hot.rs")
+            .count();
+        assert_eq!(hot_rows, 3, "hot.rs must keep one row per defect incidence");
+
+        // No path straddles the split: train and validation paths are disjoint.
+        let train_paths: HashSet<&str> = train.iter().map(|(p, _)| p.as_str()).collect();
+        let val_paths: HashSet<&str> = validation.iter().map(|(p, _)| p.as_str()).collect();
+        assert!(
+            train_paths.is_disjoint(&val_paths),
+            "a path appears in both splits: train={train_paths:?} val={val_paths:?}",
+        );
+
+        // hot.rs's three rows land together on exactly one side.
+        let hot_in_train = train.iter().filter(|(p, _)| p.as_str() == "hot.rs").count();
+        let hot_in_val = validation
+            .iter()
+            .filter(|(p, _)| p.as_str() == "hot.rs")
+            .count();
+        assert!(
+            (hot_in_train, hot_in_val) == (3, 0) || (hot_in_train, hot_in_val) == (0, 3),
+            "hot.rs incidence rows split across sides: train={hot_in_train} val={hot_in_val}",
         );
     }
 

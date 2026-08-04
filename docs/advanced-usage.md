@@ -164,7 +164,7 @@ The dashboard composes its widgets in one HTML file — grouped into the six tit
 10. **Architecture-trend** — propagation-cost and cycle-count decay over the sampled revisions.
 11. **Factor header** — four headline tiles (Code, Architecture, Knowledge, Delivery) above the KPI grid. Each tile shows a 0–100 composite score; an XmR attention badge fires when the trailing signal is statistically unlikely to be noise (see [Factor header and XmR attention](#factor-header-and-xmr-attention) below).
 12. **Effort-exposure share bars** — banded commit-share and LOC-share bars plus a 20-dot effort strip showing the fraction of engineering activity that fell in each code-health band (red / yellow / green) over the trailing window (see [Effort-exposure analysis](#effort-exposure-analysis) below).
-13. **Health improvements & regressions feed** — two clickable lists of signal-bearing band transitions (entering red / leaving red / entering green) across the top hotspot files, newest-first; clicking a row brushes the file across all widgets.
+13. **Health improvements & regressions feed** — two clickable lists of signal-bearing band transitions (entering red or leaving green = regressed; leaving red or entering green = improved) across the top hotspot files, newest-first; clicking a row brushes the file across all widgets.
 14. **Guided tour** — a four-step walkthrough over the hero circle-pack map that sets the colour lens and optional brush for each step (see [Guided tour](#guided-tour) below).
 
 **Linked brushing:** selecting a file in any of these views highlights it across all of them at once (and announces it to screen readers); the health×activity legend also supports a set-brush. The **file detail drawer** groups its sections into Overview / Coupling / People tabs (keyboard-navigable). One shared focus; highlight, not hide.
@@ -329,7 +329,7 @@ The ownership × code-quality interaction is correlational: a low top-active sha
 
 The SPA's improvements feed is populated by the health-trend scan that runs as part of `--format spa`. It records signal-bearing band transitions across the top hotspot files at each sampled historical revision. Two transition types appear in the feed:
 
-- **Regressed** — a file crossed from yellow or green into red. Signal: the file's composite code-health crossed the red threshold (structural risk ≥ 0.55).
+- **Regressed** — a file crossed into red (from yellow or green), or left green for yellow. Signal: the file's composite code-health moved toward worse — its structural risk rose into red (≥ 0.55) or out of the green band (≥ 0.28). The classification is symmetric with **Improved**: entering red and leaving green are both regressions.
 - **Improved** — a file left red (entered yellow or green), or entered green from yellow. Signal: structural health crossed out of the at-risk zone.
 
 Transitions that move entirely within yellow (yellow → yellow re-sampling with no band change) are filtered out; only boundary crossings appear. The feed is ordered newest-first. Clicking a row brushes the file across all widgets and opens its drawer.
@@ -546,7 +546,7 @@ The step summary appears at the bottom of the workflow run page in the GitHub Ac
 
 | Rule ID | Tags | When it fires |
 |---|---|---|
-| `CODELORE-HOTSPOT` | `behavioral`, `hotspot` | One result per hotspot row; `security-severity = (100 − cognitive_health) / 4`; `level` derived from severity band (≥7 = error, ≥4 = warning, else note) |
+| `CODELORE-HOTSPOT` | `behavioral`, `hotspot` | One result per hotspot row; `security-severity = (100 − cognitive_health) / 10` (range 0–10); `level` derived from severity band (≥7 = error, ≥4 = warning, else note) |
 | `CODELORE-CLONE` | `behavioral`, `clone`, `type-1`, `type-2` | One result per clone family; `security-severity = 3 + family_size`, capped at 6 |
 | `CODELORE-LIVE-CLONE` | `behavioral`, `clone`, `live-clone`, `co-change`, `x-ray` | One result per `(clone_group_id, file_a, file_b)`; `security-severity = combined_score × 10` |
 | `CODELORE-MISSING-COCHANGE` | `behavioral`, `coupling`, `diff` | One result per absence: a historically-Fisher-significant coupling pair where this PR touched only one side. Surfaces missing partner-file edits |
@@ -575,8 +575,9 @@ codelore analyze [OPTIONS]
       --min-revs N              Min revisions per entity [default: 5]
       --rows N                  Cap output to N rows
       --complexity-sample STRATEGY
-                                head (default) | adaptive | full
-                                (only `head` is wired up today; the other two parse but warn)
+                                head (the only accepted value, and the default;
+                                any other value — e.g. `adaptive`/`full` — is
+                                rejected at the parser with exit 2)
       --window-days N           Trailing-window length in days for activity-scoped
                                 analyses (effort-exposure, team-composition, etc.)
                                 [default: 90]; anchored to the repo's last commit date
@@ -851,11 +852,13 @@ Three surfaces evaluate this file, each against a different input: `codelore che
 | Keys evaluated | `[gates]` (all, plus degraded-gate semantics and `--ratchet`) | `[diff]`: `delta_code_health_min`, `delta_code_health_min_per_file`, `new_file_health_min`, `no_new_cycles` | `[diff]`: `delta_code_health_min`, `new_hotspot_max`, `no_new_cycles`, `delta_health_min`, `deny_degrading_verdict` |
 | `delta_code_health_min` metric | not evaluated | `code-health`'s composite `score`, range `[0, 100]` — whole-repo median over all scoreable files (1-revision floor) | `hotspots`' inline `cognitive_health` proxy, range `[60, 100]` — whole-repo median over the min-revs-filtered hotspot rows |
 | Cycle semantics | `max_dependency_cycles`: cycle count at HEAD | `no_new_cycles`: cyclic-node *membership* — one violation naming each newly cyclic file; still fires when two existing cycles merge into one | `no_new_cycles`: cycle-*count* comparison — fails when head has more cycles than base |
-| Exit code on violation | 1 | `gate` exits 1; `gate_changes` reports, never exits | 4 |
+| Exit code on violation | 1 | `gate` exits 1; `gate_changes` reports, never exits | 1 |
 
 **`delta_code_health_min` compares two different metrics depending on the surface.** The same `[diff]` config key is evaluated against `code-health`'s composite `score` (`[0, 100]`, the field `--analysis code-health` reports and `code_health_min` gates) on `codelore gate` / `gate_changes`, but against the `hotspots` analysis's inline `cognitive_health` proxy (`[60, 100]`, structural-complexity-only — see the module doc in `hotspots.rs` for why the two scores never claim to agree) on `codelore diff`. A file can read healthy under one metric and unhealthy under the other, and the same numeric threshold (e.g. `-5.0`) represents a different-sized health movement on each surface. This is a **documented, deliberate divergence** — not a bug — carried forward until unifying the two metrics is made as an explicit decision; do not assume the two surfaces agree just because they share a config key.
 
 `delta_code_health_min_per_file` and `new_file_health_min` are evaluated only by the working-tree gate surfaces — `codelore diff` ignores both. Conversely, `new_hotspot_max`, `delta_health_min`, and `deny_degrading_verdict` are diff-only and never evaluated by the working-tree gate.
+
+A gate can also report **skipped** — its underlying analysis had nothing to evaluate (no external-findings sidecar, no calibration artifact, a history shallower than a `[new_code]` window, or a change-set that measured no per-file delta). By default a skipped gate does not affect the exit code, so a gate that silently stopped evaluating is indistinguishable at the exit code from one that evaluated and passed. Set `fail_on_skipped = true` in `[gates]` to treat any skipped gate as a failure — honoured by `codelore check`, `codelore gate`, and `codelore diff` (exit 1 on all three), with the ledger still recording the honest `skipped` verdict. It defaults to `false` (behaviour unchanged) and, like `fail_on_degraded`, is a policy modifier that configures no gate on its own.
 
 #### The `[new_code]` period gate
 
@@ -1071,7 +1074,7 @@ Eviction: 5 entries per repo + 2 GB global cap (LRU). Pruning runs after every s
 
 The cache key includes `head_sha` but NOT the working tree. That's correct for analyses that read only committed history (`revisions`, `coupling`, `ownership`, `churn`, `messages`, ...), but `hotspots`-style HEAD-time metrics computed by `ingest_complexity_at_head` and `populate_clones_at_head` read files from disk at ingest time. If you change files without committing and then re-run codelore, the cache hits on `head_sha` — and you get the previous run's metrics computed from the previous worktree state, not your current edits.
 
-To surface this, codelore emits a `tracing::warn!` whenever a cache hit lands on a working tree with uncommitted changes to a tracked file (untracked files don't count — they can't affect a HEAD-time scan):
+To surface this, codelore emits a `tracing::warn!` on a cache hit that lands on a working tree with uncommitted changes to a tracked file (untracked files don't count — they can't affect a HEAD-time scan). The read-time warning fires only when stderr is an interactive terminal: on a non-interactive or redirected stderr (CI, the agent-loop, a pipe) the dirty-tree status walk is skipped entirely — nobody would read the hint, and the scan isn't free. Separately, on a cache *miss* against a dirty tree the persistent cache write is skipped **unconditionally** (regardless of stderr), so dirty HEAD-time metrics never get persisted under the clean `head_sha` key:
 
 ```
 WARN cache hit on a working tree with uncommitted changes; HEAD-time metrics
@@ -1315,6 +1318,11 @@ The `--quiet` flag suppresses diagnostic noise (per-violation detail lines, inli
 | 4 | Analysis error |
 | 5 | Output/I/O error |
 
+Two out-of-band terminations sit outside this 0–5 contract:
+
+- **Broken pipe → exit 0.** A reader closing stdout early (`codelore … | head`, or quitting a pager) surfaces as a `BrokenPipe` I/O error on the next write. That is a normal way to consume partial output, not a failure, so codelore recognises it in its cause chain and exits **0** silently (no error line).
+- **Unexpected panic → abort.** Release binaries are built with `panic = "abort"`, so an internal panic terminates the process via `SIGABRT` (exit **134** on Unix) rather than unwinding through the exit-code mapping above. (Debug and test builds unwind instead and exit **101**, Rust's default panic status.) A panic is always a bug — report it.
+
 ### Warm-cache performance
 
 The first `codelore check` run on a repo ingests the full git history into a DuckDB cache file. Subsequent runs (same HEAD SHA, same options) read from the cache in milliseconds. The cache lives at `<XDG_CACHE_HOME>/codelore/<repo_hash>/` and is keyed on HEAD SHA + package version, so a push that changes HEAD re-ingests only when the cache entry is cold.
@@ -1545,7 +1553,7 @@ Cost: **high** — ingests history twice (once per revision) using temporary git
 Returns the highest-priority refactoring candidates, ranked by a risk-to-LOC ratio that combines hotspot score (frequency × recency) with code health. The files at the top of this list carry the highest maintenance burden relative to their size.
 
 Parameters:
-- `limit` *(optional, u32)* — cap the number of rows. Default: all.
+- `limit` *(optional, u32)* — cap the number of rows. Default: 50, clamped to 1..=500; a trailing summary object discloses how many rows were suppressed.
 
 Cost: warm-cache fast. Cold-cache triggers ingest.
 
@@ -1588,7 +1596,8 @@ When the external findings sidecar is absent or empty (no prior `codelore ingest
 { "findings": [], "note": "run codelore ingest-sarif first" }
 ```
 
-Parameters: none.
+Parameters:
+- `limit` *(optional, u32)* — cap the number of rows (highest-priority first). Default: 50, clamped to 1..=500; a trailing summary object discloses suppressed rows.
 
 Cost: warm-cache fast after `ingest-sarif`; does not trigger history re-ingest.
 
@@ -1654,7 +1663,7 @@ Cost: warm-cache fast; the measured change-set report is additionally memoised b
 
 ### Architecture note
 
-Each tool call opens its own `FactsDb` connection via the warm-cache path. This is intentional: `duckdb::Connection` is `!Send + !Sync` and cannot cross thread or async boundaries, so each call runs entirely on a dedicated blocking thread (`tokio::task::spawn_blocking`) from connection open to result serialization. The connection is dropped before the future resolves. All tools are read-only with respect to the repository and the fact store; the only writes any tool performs are best-effort sidecar caches — `explain_file` persisting its advisory narrative, and `gate_changes` memoising its measured change-set report.
+Each tool call opens its own `FactsDb` connection via the warm-cache path. This is intentional: `duckdb::Connection` is `!Send + !Sync` and cannot cross thread or async boundaries, so each call runs entirely on a dedicated blocking thread (`tokio::task::spawn_blocking`) from connection open to result serialization. The connection is dropped before the future resolves. No tool modifies tracked repository content or the fact store; the writes any tool performs are best-effort sidecar caches — `explain_file` persisting its advisory narrative, and `gate_changes` memoising its measured change-set report — plus `delta_health`, which creates and then removes a temporary detached git worktree per revision it compares (registered and torn down via an RAII guard).
 
 ### Troubleshooting
 

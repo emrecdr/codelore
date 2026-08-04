@@ -326,7 +326,7 @@
     fileSeries.sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
     var html = '<h4>Health over time</h4>';
     html += '<div id="drawer-health-sparkline" style="height: 140px; margin-bottom: 12px;"></div>';
-    html += '<table class="table table-xs"><thead><tr><th>Date</th><th>Score</th><th>Band</th></tr></thead><tbody>';
+    html += '<table class="table table-xs"><thead><tr><th scope="col">Date</th><th scope="col">Score</th><th scope="col">Band</th></tr></thead><tbody>';
     for (var hi = fileSeries.length - 1; hi >= 0; hi--) {
       const fs = fileSeries[hi];
       html += '<tr><td>' + escapeHtml(fs.date) + '</td><td>' + fmtNumberFlex(fs.score, 1) +
@@ -353,10 +353,10 @@
     }
     var html = '<table class="table table-xs" style="width:100%">' +
       '<thead><tr>' +
-        '<th>Function</th>' +
-        '<th style="min-width:90px">Change freq</th>' +
-        '<th class="num">LOC</th>' +
-        '<th class="num">CC</th>' +
+        '<th scope="col">Function</th>' +
+        '<th scope="col" style="min-width:90px">Change freq</th>' +
+        '<th scope="col" class="num">LOC</th>' +
+        '<th scope="col" class="num">CC</th>' +
       '</tr></thead><tbody>';
     for (var xfi = 0; xfi < xrows.length; xfi++) {
       var xr = xrows[xfi];

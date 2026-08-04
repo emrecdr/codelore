@@ -1,17 +1,31 @@
 //! Guard: no internal finding/task IDs (an `F` followed by digits) in `.rs`
-//! code comments.
+//! code comments, and no `Plan <N>` phase markers anywhere in `.rs`/`.sql`
+//! source — comment, string literal, or DDL.
 //!
-//! Code comments must describe the current contract directly; audit and
-//! finding history lives only in `CHANGELOG.md` and the findings report. A
-//! bare audit-ID token in a comment rots as findings close and means nothing
-//! to a reader without the report. This test fails the gate if any such token
-//! reappears in library or CLI comments, so the convention can't silently
-//! regress (it was re-introduced repeatedly before this guard existed).
+//! Code comments (and user-facing strings) must describe the current contract
+//! directly; audit and finding history lives only in `CHANGELOG.md` and the
+//! findings report. A bare audit-ID or phase marker rots as work ships and
+//! means nothing to a reader without the report. This test fails the gate if
+//! any such token reappears, so the convention can't silently regress (it was
+//! re-introduced repeatedly before this guard existed).
 //!
-//! Scope: `crates/codelore-(lib|cli)/(src|tests)`. The vendored
-//! `codelore-rca` MPL fork is intentionally excluded — it tracks upstream and
-//! is hands-off. `CHANGELOG.md`, the findings report, and other Markdown are
-//! out of scope: those are the sanctioned homes for audit IDs.
+//! Scope: `.rs` and `.sql` under `crates/codelore-(lib|cli)/(src|tests)`. The
+//! `.sql` schema (`facts/schema_v1.sql`) is code too and once carried the same
+//! markers. The vendored `codelore-rca` MPL fork is intentionally excluded — it
+//! tracks upstream and is hands-off. `CHANGELOG.md`, the findings report, and
+//! other Markdown are out of scope: those are the sanctioned homes for audit
+//! IDs.
+//!
+//! Two checks, deliberately asymmetric in reach:
+//!   * `Plan <N>` phase markers are scanned over the WHOLE line, so they are
+//!     caught in comments, string literals (`anyhow::bail!("… Plan N")`), and
+//!     multi-line string continuations alike. The `Plan`+digit shape is
+//!     specific enough that a whole-line scan carries no false-positive risk.
+//!   * `F<NN>` task IDs stay comment-scoped. Bare `F<NN>` tokens appear
+//!     legitimately in test fixtures and assertion labels (git config names,
+//!     regression-message prefixes), so scanning string literals for them would
+//!     false-fire. Those string/filename-embedded test labels are a separate,
+//!     broader hygiene item, tracked in the findings report — not this guard.
 
 use std::path::{Path, PathBuf};
 
@@ -33,26 +47,35 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
+/// Collect `.rs` and `.sql` source files. SQL is included because the
+/// fact-store schema is code and can carry the same banned phase markers.
+fn collect_source_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return; // a missing root is fine — just nothing to scan
     };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            collect_rs_files(&path, out);
-        } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+            collect_source_files(&path, out);
+        } else if matches!(
+            path.extension().and_then(|e| e.to_str()),
+            Some("rs" | "sql")
+        ) {
             out.push(path);
         }
     }
 }
 
-/// The comment region of a line: text from the first `//`, or the whole line
-/// when it is a block-comment continuation (`*` / `/*`). `None` if the line
-/// carries no comment. Line-based, matching the verification grep — a `//`
-/// inside a string literal counts, but the codebase has no such case.
-fn comment_region(line: &str) -> Option<&str> {
-    if let Some(idx) = line.find("//") {
+fn is_sql(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()) == Some("sql")
+}
+
+/// The comment region of a line: text from the first line-comment delimiter
+/// (`//` for Rust, `--` for SQL), or the whole line when it is a block-comment
+/// continuation (`*` / `/*`). `None` when the line carries no comment.
+fn comment_region(line: &str, sql: bool) -> Option<&str> {
+    let delim = if sql { "--" } else { "//" };
+    if let Some(idx) = line.find(delim) {
         return Some(&line[idx..]);
     }
     let trimmed = line.trim_start();
@@ -66,8 +89,8 @@ fn is_task_id(token: &str) -> bool {
     matches!(bytes.len(), 2..=4) && bytes[0] == b'F' && bytes[1..].iter().all(u8::is_ascii_digit)
 }
 
-fn comment_has_task_id(line: &str) -> bool {
-    let Some(region) = comment_region(line) else {
+fn comment_has_task_id(line: &str, sql: bool) -> bool {
+    let Some(region) = comment_region(line, sql) else {
         return false;
     };
     // Split on non-identifier chars so `_` stays part of a token (mirrors the
@@ -79,19 +102,16 @@ fn comment_has_task_id(line: &str) -> bool {
         .any(is_task_id)
 }
 
-/// True if the comment carries a phase-number marker: the capitalised word
-/// `Plan` at a word boundary, directly followed by optional spaces then an
-/// ASCII digit. These name development history (the sequence a feature shipped
-/// in), not the current contract — the same banned class as finding IDs. A
-/// whole-region scan is required because such a marker splits into two tokens,
-/// so the per-token check above cannot see it.
-fn comment_has_plan_marker(line: &str) -> bool {
-    let Some(region) = comment_region(line) else {
-        return false;
-    };
-    let bytes = region.as_bytes();
+/// True if the line carries a phase-number marker: the capitalised word `Plan`
+/// at a word boundary, directly followed by optional spaces then an ASCII
+/// digit. These name development history (the sequence a feature shipped in),
+/// not the current contract — the same banned class as finding IDs. Scanned
+/// over the whole line so comment, string-literal, and DDL markers are all
+/// caught (see the module doc for why this is safe here but not for `F<NN>`).
+fn line_has_plan_marker(line: &str) -> bool {
+    let bytes = line.as_bytes();
     let mut search_from = 0;
-    while let Some(pos) = region[search_from..].find("Plan") {
+    while let Some(pos) = line[search_from..].find("Plan") {
         let start = search_from + pos;
         // Word boundary before the keyword so a longer identifier ending in
         // "Plan" (e.g. inside a path segment) doesn't false-match.
@@ -109,23 +129,30 @@ fn comment_has_plan_marker(line: &str) -> bool {
     false
 }
 
-#[test]
-fn no_task_id_references_in_code_comments() {
+fn scanned_files() -> Vec<PathBuf> {
     let root = workspace_root();
     let mut files = Vec::new();
     for rel in SCANNED {
-        collect_rs_files(&root.join(rel), &mut files);
+        collect_source_files(&root.join(rel), &mut files);
     }
     assert!(
         !files.is_empty(),
-        "scanned zero .rs files — source-path resolution is broken"
+        "scanned zero source files — source-path resolution is broken"
     );
+    files
+}
+
+#[test]
+fn no_task_id_references_in_code_comments() {
+    let root = workspace_root();
+    let files = scanned_files();
 
     let mut violations = Vec::new();
     for file in &files {
+        let sql = is_sql(file);
         let text = std::fs::read_to_string(file).expect("read source file");
         for (line_idx, line) in text.lines().enumerate() {
-            if comment_has_task_id(line) {
+            if comment_has_task_id(line, sql) {
                 let rel = file.strip_prefix(&root).unwrap_or(file);
                 violations.push(format!(
                     "{}:{}: {}",
@@ -148,22 +175,15 @@ fn no_task_id_references_in_code_comments() {
 }
 
 #[test]
-fn no_plan_phase_markers_in_code_comments() {
+fn no_plan_phase_markers_in_code() {
     let root = workspace_root();
-    let mut files = Vec::new();
-    for rel in SCANNED {
-        collect_rs_files(&root.join(rel), &mut files);
-    }
-    assert!(
-        !files.is_empty(),
-        "scanned zero .rs files — source-path resolution is broken"
-    );
+    let files = scanned_files();
 
     let mut violations = Vec::new();
     for file in &files {
         let text = std::fs::read_to_string(file).expect("read source file");
         for (line_idx, line) in text.lines().enumerate() {
-            if comment_has_plan_marker(line) {
+            if line_has_plan_marker(line) {
                 let rel = file.strip_prefix(&root).unwrap_or(file);
                 violations.push(format!(
                     "{}:{}: {}",
@@ -177,9 +197,9 @@ fn no_plan_phase_markers_in_code_comments() {
 
     assert!(
         violations.is_empty(),
-        "found {} phase-number marker(s) in code comments. Describe the current state \
-         and drop the marker — which release a feature shipped in is history for \
-         CHANGELOG.md, not the code comment:\n{}",
+        "found {} phase-number marker(s) in .rs/.sql source (comment, string, or DDL). \
+         Describe the current state and drop the marker — which release a feature shipped \
+         in is history for CHANGELOG.md, not the code:\n{}",
         violations.len(),
         violations.join("\n"),
     );

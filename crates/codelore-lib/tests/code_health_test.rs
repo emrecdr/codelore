@@ -134,25 +134,28 @@ fn code_health_reports_band_and_percentile() {
 
 #[test]
 fn biomarkers_flag_complex_functions() {
-    let tiny = codelore_lib::test_support::tiny_repo::build();
-    let repo = codelore_lib::repo::GixRepo::open(tiny.dir.path()).expect("open");
-    let db = codelore_lib::facts::FactsDb::new_in_memory().expect("db");
-    let opts = codelore_lib::Options {
-        repo_path: tiny.dir.path().to_path_buf(),
-        min_revs: 1,
-        ..codelore_lib::Options::default()
-    };
+    // Needs a language cohort at or above `MIN_COHORT_FILES` so the per-language
+    // PERCENT_RANK produces structural-biomarker rows. tiny_repo's two-file Rust
+    // cohort is below that floor and (correctly) yields none, so this uses
+    // biomarker_repo, whose ten Rust files sit at the floor.
+    let fx = codelore_lib::test_support::biomarker_repo::build();
+    let repo = GixRepo::open(fx.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = biomarker_opts(fx.dir.path());
     db.ingest(&repo, &opts).expect("ingest");
 
     // Running code-health materializes the biomarker table as a side effect.
-    let _ = codelore_lib::analyses::code_health::run_code_health(&db, &opts).expect("run");
+    let _ = run_code_health(&db, &opts).expect("run");
 
     let count: i64 = db
         .query_row("SELECT COUNT(*) FROM code_health_biomarkers_v1", [], |r| {
             r.get(0)
         })
         .expect("query biomarkers");
-    assert!(count >= 1, "tiny_repo should produce >=1 biomarker row");
+    assert!(
+        count >= 1,
+        "biomarker_repo should produce >=1 biomarker row"
+    );
 
     // intensities are valid probabilities
     let bad: i64 = db
@@ -162,6 +165,59 @@ fn biomarkers_flag_complex_functions() {
         )
         .expect("query range");
     assert_eq!(bad, 0, "all intensities must be in [0,1]");
+}
+
+/// The per-language cohort floor: a language contributing fewer than
+/// `MIN_COHORT_FILES` files to the HEAD complexity scan is too thin for a
+/// `PERCENT_RANK` to mean anything — at two files it emits exactly `{0.0, 1.0}`,
+/// which would pin the larger file to MAX intensity on every structural
+/// biomarker regardless of its absolute complexity. Such a cohort must instead
+/// produce NO per-language structural-biomarker rows, while a cohort at/above
+/// the floor ranks normally. `tiny_repo`'s two Rust files are below the floor;
+/// `biomarker_repo`'s ten sit at it.
+#[test]
+fn tiny_language_cohort_is_not_pinned_to_red() {
+    const STRUCTURAL_IN: &str = "smell IN \
+         ('complex-method','large-method','deep-nesting','many-args','complex-conditional')";
+
+    let structural_count = |db: &FactsDb| -> i64 {
+        db.query_row(
+            &format!("SELECT COUNT(*) FROM code_health_biomarkers_v1 WHERE {STRUCTURAL_IN}"),
+            [],
+            |r| r.get(0),
+        )
+        .expect("count structural biomarker rows")
+    };
+
+    // Below-floor cohort (2 Rust files): no structural-biomarker rows at all, so
+    // nothing is pinned to intensity 1.0 by a degenerate two-point percent-rank.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let repo = GixRepo::open(tiny.dir.path()).expect("open");
+    let db = FactsDb::new_in_memory().expect("db");
+    let opts = Options {
+        repo_path: tiny.dir.path().to_path_buf(),
+        min_revs: 1,
+        ..Options::default()
+    };
+    db.ingest(&repo, &opts).expect("ingest");
+    let _ = run_code_health(&db, &opts).expect("run tiny");
+    assert_eq!(
+        structural_count(&db),
+        0,
+        "a below-floor language cohort must yield no per-language structural biomarkers"
+    );
+
+    // At-floor cohort (10 Rust files): the same biomarkers rank normally.
+    let fx = codelore_lib::test_support::biomarker_repo::build();
+    let repo2 = GixRepo::open(fx.dir.path()).expect("open");
+    let db2 = FactsDb::new_in_memory().expect("db");
+    let opts2 = biomarker_opts(fx.dir.path());
+    db2.ingest(&repo2, &opts2).expect("ingest");
+    let _ = run_code_health(&db2, &opts2).expect("run biomarker");
+    assert!(
+        structural_count(&db2) >= 1,
+        "an at-floor language cohort must still produce per-language structural biomarkers"
+    );
 }
 
 #[test]

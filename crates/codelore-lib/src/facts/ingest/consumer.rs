@@ -270,17 +270,16 @@ fn append_change(
     ch: &crate::FileChange,
 ) -> Result<()> {
     use duckdb::params;
-    let (type_str, rename_from, similarity) = match &ch.change_type {
-        ChangeType::Added => ("added", None, None),
-        ChangeType::Modified => ("modified", None, None),
-        ChangeType::Deleted => ("deleted", None, None),
-        ChangeType::Renamed { from, similarity } => {
-            ("renamed", Some(from.as_str()), Some(i32::from(*similarity)))
-        }
-        ChangeType::Copied { from, similarity } => {
-            ("copied", Some(from.as_str()), Some(i32::from(*similarity)))
-        }
-        ChangeType::BinaryOrUnknown => ("binary", None, None),
+    // The event stream still carries per-rename/-copy `similarity` (both `Repo`
+    // backends compute it and the differential test cross-checks it); the fact
+    // store just doesn't persist it — no analysis reads it as a signal.
+    let (type_str, rename_from) = match &ch.change_type {
+        ChangeType::Added => ("added", None),
+        ChangeType::Modified => ("modified", None),
+        ChangeType::Deleted => ("deleted", None),
+        ChangeType::Renamed { from, .. } => ("renamed", Some(from.as_str())),
+        ChangeType::Copied { from, .. } => ("copied", Some(from.as_str())),
+        ChangeType::BinaryOrUnknown => ("binary", None),
     };
     // FK-flush guard for `changes.rev` → `commits(rev)`. Every
     // `STANDARD_VECTOR_SIZE` change appends, flush `commits` so its buffered
@@ -300,7 +299,6 @@ fn append_change(
             ch.path,
             type_str,
             rename_from,
-            similarity,
             i32::try_from(ch.loc_added).unwrap_or(i32::MAX),
             i32::try_from(ch.loc_deleted).unwrap_or(i32::MAX),
         ])

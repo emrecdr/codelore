@@ -71,6 +71,13 @@ pub struct DiffOutput {
     /// passed with zero violations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gate_skip_reason: Option<String>,
+    /// Whether the resolved thresholds set the `fail_on_skipped` policy. Not
+    /// serialized — it is exit-code policy, not diff data. [`should_fail`]
+    /// combines it with [`gate_skip_reason`](Self::gate_skip_reason) so a run
+    /// whose only non-pass signal is a skipped `[diff]` gate family fails
+    /// (diff's violation exit) instead of passing.
+    #[serde(skip)]
+    pub gate_fail_on_skipped: bool,
     /// Change-level health verdict. `None` when the base analysis lacks
     /// function metrics (stale `--base-cache` written by an older binary).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -152,12 +159,13 @@ pub struct RevAnalyses {
     /// the delta-health context multiplier.
     #[serde(default)]
     pub red_files: Vec<String>,
-    /// Digest of the analysis-affecting options (`min_revs`, `exclude`) that
-    /// produced this base cache. Compared alongside `sha` on `--base-cache`
-    /// reuse so a cache built under one option set is never served to a run
-    /// with different options. `#[serde(default)]` so a pre-existing cache
-    /// lacking the field deserialises to "" and is treated as a mismatch —
-    /// recomputed once, never served.
+    /// Digest of the whole base-rev `Options` set (via `canonical_json`, the
+    /// same hashing the main fact-store cache key uses) that produced this base
+    /// cache. Compared alongside `sha` on `--base-cache` reuse so a cache built
+    /// under one option set is never served to a run with different options.
+    /// `#[serde(default)]` so a pre-existing cache lacking the field
+    /// deserialises to "" and is treated as a mismatch — recomputed once, never
+    /// served.
     #[serde(default)]
     pub opts_digest: String,
 }
@@ -330,12 +338,7 @@ fn analyze_at_rev(
     want_red_files: bool,
 ) -> Result<(RevAnalyses, FactsDb, Options)> {
     let wt = add_worktree(repo, sha)?;
-    let opts = Options {
-        repo_path: wt.path.clone(),
-        min_revs: args.min_revs,
-        exclude_patterns: args.exclude.clone(),
-        ..Options::default()
-    };
+    let opts = base_rev_options(wt.path.clone(), args);
     let gix = GixRepo::open(&wt.path).context("open gix repo in worktree")?;
     let db = FactsDb::new_in_memory().context("open in-memory fact store")?;
     db.ingest(&gix, &opts).context("ingest in worktree")?;
@@ -372,7 +375,10 @@ fn analyze_at_rev(
         dependency_cycles,
         functions,
         red_files,
-        opts_digest: base_cache_opts_digest(args.min_revs, &args.exclude),
+        // Fingerprint against the STABLE repo path, not the throwaway worktree
+        // `opts` ingested above — `canonical_json` bakes in `repo_path`, and the
+        // worktree path differs every run.
+        opts_digest: base_cache_opts_digest(&base_rev_options(repo.to_path_buf(), args)),
     };
     Ok((analyses, db, opts))
 }
@@ -501,28 +507,42 @@ fn list_pr_files(
         .collect())
 }
 
-/// Fingerprint of the `DiffArgs` fields that shape a base-rev `RevAnalyses`,
-/// plus the binary version, cache epoch, and fact-schema version. Only
-/// `min_revs` and `exclude` flow into the `Options` that `analyze_at_rev`
-/// builds; everything else comes from `Options::default()`. The base tree's
-/// own content is pinned by the cached `sha`, so it needs no representation
-/// here. Any new `args.*` field folded into `analyze_at_rev`'s `Options` must
-/// be added here too.
+/// Build the `Options` that shape a base-rev analysis. Single source of truth
+/// for which knobs flow into the base analysis, shared by `analyze_at_rev`
+/// (which runs it against a throwaway worktree) and [`base_cache_opts_digest`]
+/// (which fingerprints it against the stable repo path) so the two can never
+/// drift — adding a knob here automatically reaches both.
+fn base_rev_options(repo_path: PathBuf, args: &DiffArgs) -> Options {
+    Options {
+        repo_path,
+        min_revs: args.min_revs,
+        exclude_patterns: args.exclude.clone(),
+        ..Options::default()
+    }
+}
+
+/// Fingerprint of the base-rev analysis options, plus the binary version,
+/// cache epoch, and fact-schema version. Folds the WHOLE base-rev `Options`
+/// through `canonical_json` — the same whole-`Options` hashing the main
+/// fact-store cache key uses (`cache.rs::cache_key`) — so every knob that
+/// shapes the base analysis is captured automatically. Because it derives from
+/// [`base_rev_options`], a knob added there needs no change here.
+///
+/// Callers pass an `Options` built against the STABLE repo path (not the
+/// per-run throwaway worktree `analyze_at_rev` ingests): `canonical_json`
+/// serializes `repo_path` verbatim, so a volatile worktree path would make the
+/// digest differ every run and the base cache never hit. The base tree's own
+/// content is pinned by the cached `sha`.
 ///
 /// The version/epoch/schema trio mirrors what the main fact-store cache key
-/// hashes (`cache.rs::cache_key`) — a `--base-cache` file is itself a cache,
-/// and without these components a base written by an older binary, an older
-/// `CACHE_EPOCH`, or an older fact schema would be silently reused by a
-/// newer one that no longer agrees on what the cached values mean.
-fn base_cache_opts_digest(min_revs: u32, exclude: &[String]) -> String {
-    let mut exclude = exclude.to_vec();
-    exclude.sort();
-    // Separate patterns with NUL, which cannot appear in a path glob or CLI
-    // argument, so a pattern that itself contains the separator (e.g. a brace
-    // glob `src/{gen,vendor}/**`) can never collide with a different set.
+/// hashes — a `--base-cache` file is itself a cache, and without these
+/// components a base written by an older binary, an older `CACHE_EPOCH`, or an
+/// older fact schema would be silently reused by a newer one that no longer
+/// agrees on what the cached values mean.
+fn base_cache_opts_digest(opts: &Options) -> String {
     format!(
-        "min_revs={min_revs}|exclude=[{}]|version={}|cache_epoch={}|schema={}",
-        exclude.join("\0"),
+        "opts={}|version={}|cache_epoch={}|schema={}",
+        opts.canonical_json(),
         env!("CARGO_PKG_VERSION"),
         codelore_lib::cli_api::cache::CACHE_EPOCH,
         codelore_lib::cli_api::facts::schema::CURRENT_SCHEMA_VERSION,
@@ -651,7 +671,7 @@ pub fn run_diff(args: &DiffArgs) -> Result<(DiffOutput, FactsDb, Options)> {
     // hotspot entrants, false coupling absences, and wrong clones delta —
     // without any warning. On mismatch: warn, recompute, overwrite.
     let base_analyses = if let Some(cache_path) = args.base_cache.as_ref() {
-        let expected_digest = base_cache_opts_digest(args.min_revs, &args.exclude);
+        let expected_digest = base_cache_opts_digest(&base_rev_options(args.repo.clone(), args));
         match cache_path.exists().then(|| load_base_cache(cache_path)) {
             Some(Ok(cached)) if base_cache_is_fresh(&cached, &base_sha, &expected_digest) => {
                 tracing::info!("loading base analysis from {}", cache_path.display());
@@ -851,6 +871,9 @@ pub fn run_diff(args: &DiffArgs) -> Result<(DiffOutput, FactsDb, Options)> {
             head_median_code_health,
             gate_violations,
             gate_skip_reason,
+            gate_fail_on_skipped: thresholds_opt
+                .as_ref()
+                .is_some_and(|t| t.gates.fail_on_skipped),
             delta_health,
         },
         head_db,
@@ -896,9 +919,17 @@ fn median_code_health(rows: &[HotspotRow]) -> f64 {
 /// the case where "do nothing" is the wrong default. The `--fail-on`
 /// knob continues to gate the OTHER signals (rank entrants, score
 /// increase, etc.) as a separate axis.
+///
+/// The `fail_on_skipped` policy folds in here too: when it is set and the
+/// `[diff]` gate family was skipped (a blind ingest measured nothing on either
+/// side), the run fails through the same violation exit rather than passing on a
+/// gate that never evaluated.
 pub fn should_fail(args: &DiffArgs, output: &DiffOutput) -> bool {
     use crate::args::DiffFailOn;
     if !output.gate_violations.is_empty() {
+        return true;
+    }
+    if output.gate_fail_on_skipped && output.gate_skip_reason.is_some() {
         return true;
     }
     match args.fail_on {
@@ -1078,13 +1109,24 @@ mod prune_tests {
         );
     }
 
+    /// Build a base-rev `Options` fingerprint input from the two knobs the
+    /// base analysis currently varies on. Mirrors what `base_rev_options`
+    /// produces, without needing a full `DiffArgs`.
+    fn digest_opts(min_revs: u32, exclude: &[String]) -> Options {
+        Options {
+            min_revs,
+            exclude_patterns: exclude.to_vec(),
+            ..Options::default()
+        }
+    }
+
     /// A different `--min-revs` shapes a different base cache, so the digest
     /// must fold it in.
     #[test]
     fn base_cache_opts_digest_folds_in_min_revs() {
         assert_ne!(
-            base_cache_opts_digest(2, &[]),
-            base_cache_opts_digest(10, &[])
+            base_cache_opts_digest(&digest_opts(2, &[])),
+            base_cache_opts_digest(&digest_opts(10, &[]))
         );
     }
 
@@ -1093,18 +1135,18 @@ mod prune_tests {
     #[test]
     fn base_cache_opts_digest_folds_in_exclude() {
         assert_ne!(
-            base_cache_opts_digest(2, &["src/gen/**".to_string()]),
-            base_cache_opts_digest(2, &[])
+            base_cache_opts_digest(&digest_opts(2, &["src/gen/**".to_string()])),
+            base_cache_opts_digest(&digest_opts(2, &[]))
         );
     }
 
     /// `--exclude` order does not change the resulting analysis, so the
-    /// digest must be order-stable.
+    /// digest must be order-stable (`canonical_json` sorts the patterns).
     #[test]
     fn base_cache_opts_digest_is_exclude_order_stable() {
         assert_eq!(
-            base_cache_opts_digest(2, &["a".to_string(), "b".to_string()]),
-            base_cache_opts_digest(2, &["b".to_string(), "a".to_string()])
+            base_cache_opts_digest(&digest_opts(2, &["a".to_string(), "b".to_string()])),
+            base_cache_opts_digest(&digest_opts(2, &["b".to_string(), "a".to_string()]))
         );
     }
 
@@ -1116,7 +1158,7 @@ mod prune_tests {
     /// distinguishable from one written by this one.
     #[test]
     fn base_cache_opts_digest_incorporates_version_epoch_and_schema() {
-        let digest = base_cache_opts_digest(2, &[]);
+        let digest = base_cache_opts_digest(&digest_opts(2, &[]));
         assert!(
             digest.contains(env!("CARGO_PKG_VERSION")),
             "digest must incorporate the binary version: {digest}"
@@ -1138,23 +1180,23 @@ mod prune_tests {
     fn base_cache_not_fresh_when_opts_digest_differs() {
         let cached = RevAnalyses {
             sha: "abc123".to_string(),
-            opts_digest: base_cache_opts_digest(2, &[]),
+            opts_digest: base_cache_opts_digest(&digest_opts(2, &[])),
             ..Default::default()
         };
         assert!(!base_cache_is_fresh(
             &cached,
             "abc123",
-            &base_cache_opts_digest(10, &[])
+            &base_cache_opts_digest(&digest_opts(10, &[]))
         ));
         assert!(base_cache_is_fresh(
             &cached,
             "abc123",
-            &base_cache_opts_digest(2, &[])
+            &base_cache_opts_digest(&digest_opts(2, &[]))
         ));
         assert!(!base_cache_is_fresh(
             &cached,
             "def456",
-            &base_cache_opts_digest(2, &[])
+            &base_cache_opts_digest(&digest_opts(2, &[]))
         ));
     }
 
@@ -1170,7 +1212,7 @@ mod prune_tests {
         assert!(!base_cache_is_fresh(
             &parsed,
             "abc",
-            &base_cache_opts_digest(2, &[])
+            &base_cache_opts_digest(&digest_opts(2, &[]))
         ));
     }
 }

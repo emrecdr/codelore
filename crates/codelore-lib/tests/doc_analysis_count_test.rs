@@ -11,6 +11,8 @@
 //! Scope: every `.md` file under `docs/`, excluding documents that
 //! legitimately narrate a point-in-time count rather than a claim about
 //! the current registry: `docs/superpowers/` (dated plans and specs),
+//! `docs/reports/` (dated audit reports that quote whatever counts a doc
+//! held at audit time — including stale ones, as findings to reconcile),
 //! `docs/RELEASING.md` (its "how we got here" section narrates past
 //! release milestones, changelog-style), and `docs/maximum-feature-plan.md`
 //! (marked fully shipped — a frozen plan that predates the
@@ -21,7 +23,7 @@ use std::path::{Path, PathBuf};
 use codelore_lib::analysis::AnalysisName;
 
 /// Path prefixes excluded from the scan (see module doc for rationale).
-const EXCLUDED_PREFIXES: &[&str] = &["docs/superpowers/"];
+const EXCLUDED_PREFIXES: &[&str] = &["docs/superpowers/", "docs/reports/"];
 
 /// Exact file paths excluded from the scan (see module doc for rationale).
 const EXCLUDED_FILES: &[&str] = &["docs/RELEASING.md", "docs/maximum-feature-plan.md"];

@@ -42,8 +42,9 @@ pub enum ImportKind {
     /// Path-relative — Rust `use crate::foo` / `use super::foo`,
     /// Python `from . import foo`, JS `from './foo'` / `from '../foo'`.
     Relative,
-    /// Glob import — Rust `use foo::*`, Java `import foo.*;`,
-    /// Python `from foo import *`.
+    /// Glob import — Rust `use foo::*`, Java `import foo.*;`. Python
+    /// `from foo import *` is recorded as an `Absolute` edge to the `foo`
+    /// package, not `Wildcard` — the extractor keys the package, not the glob.
     Wildcard,
     /// Couldn't determine — empty / malformed / unparseable target.
     /// Surfaces as a row so analyses can flag parse-quality issues.

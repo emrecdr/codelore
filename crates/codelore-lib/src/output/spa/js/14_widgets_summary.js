@@ -163,11 +163,11 @@
     });
 
     var html = '<table><thead><tr>' +
-      '<th>Path</th>' +
-      '<th>Departed author</th>' +
-      '<th class="num">Ownership %</th>' +
-      '<th class="num">Days since active</th>' +
-      '<th class="num">LOC</th>' +
+      '<th scope="col">Path</th>' +
+      '<th scope="col">Departed author</th>' +
+      '<th scope="col" class="num">Ownership %</th>' +
+      '<th scope="col" class="num">Days since active</th>' +
+      '<th scope="col" class="num">LOC</th>' +
       '</tr></thead><tbody>';
     for (var i = 0; i < sorted.length; i++) {
       const r = sorted[i];
@@ -217,9 +217,44 @@
       container.innerHTML = '<div class="empty">No band transitions detected across the sampled history.</div>';
       return;
     }
-    // `transitions` is newest-first from the Rust emitter.
-    const improved = transitions.filter(function (r) { return r.direction === 'improved'; }).slice(0, 8);
-    const regressed = transitions.filter(function (r) { return r.direction === 'regressed'; }).slice(0, 8);
+    // `transitions` is newest-first from the Rust emitter. Collapse to
+    // one row per path (keeping that path's most severe transition) and
+    // order worst-first, so the eight shown slots are the highest-signal
+    // moves rather than merely the newest. Without this a newer mild
+    // transition could evict an older severe one, and a path with
+    // several transitions could occupy multiple slots. Bands are red /
+    // yellow / green; a red-involving move outranks a yellow-involving
+    // one.
+    function bandSeverity(b) {
+      return b === 'red' ? 3 : b === 'yellow' ? 2 : b === 'green' ? 1 : 0;
+    }
+    function transitionSeverity(r) {
+      return Math.max(bandSeverity(r.from_band), bandSeverity(r.to_band));
+    }
+    function topTransitions(direction) {
+      const bestByPath = {};
+      const order = [];
+      for (var i = 0; i < transitions.length; i++) {
+        const r = transitions[i];
+        if (r.direction !== direction) continue;
+        const prev = bestByPath[r.path];
+        if (!prev) {
+          bestByPath[r.path] = r;
+          order.push(r.path);
+        } else if (transitionSeverity(r) > transitionSeverity(prev)) {
+          // Newest-first input: the first-seen row per path is the most
+          // recent, so replace only for a strictly more severe move.
+          bestByPath[r.path] = r;
+        }
+      }
+      // Stable sort preserves the newest-first order within equal severity.
+      return order
+        .map(function (p) { return bestByPath[p]; })
+        .sort(function (a, b) { return transitionSeverity(b) - transitionSeverity(a); })
+        .slice(0, 8);
+    }
+    const improved = topTransitions('improved');
+    const regressed = topTransitions('regressed');
 
     function makeList(rows, label, icon) {
       if (!rows.length) return '';

@@ -385,7 +385,7 @@ pub struct RepoOverviewParams {}
 /// Parameters for the `hotspots` tool.
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Default)]
 pub struct HotspotsParams {
-    /// Maximum rows to return (default: 20).
+    /// Maximum rows to return (default 50, max 500).
     pub limit: Option<u32>,
 }
 
@@ -534,12 +534,16 @@ fn skipped_check_gates(thresholds: &Thresholds) -> Vec<SkippedGate> {
         max_findings_in_hot_files,
         corpus_percentile_max,
         fail_on_degraded,
+        // Cross-surface exit-code policy (`codelore check` / `gate` / `diff`),
+        // not a gate this tool applies — disclosed as skipped when the user
+        // enables it, so a pass here is never mistaken for a full run's verdict.
+        fail_on_skipped,
         // A modifier of max_red_effort_pct, not a standalone gate. This tool
         // DOES honor it (the effort-exposure gate above decomposes when set), so
         // it is neither reported as an evaluated gate nor as skipped.
         red_effort_exempt_improving: _,
     } = &thresholds.gates;
-    let configured: [(&'static str, bool); 12] = [
+    let configured: [(&'static str, bool); 13] = [
         ("cognitive_max", cognitive_max.is_some()),
         ("hotspot_score_max", hotspot_score_max.is_some()),
         ("hotspot_anchored_max", hotspot_anchored_max.is_some()),
@@ -558,6 +562,9 @@ fn skipped_check_gates(thresholds: &Thresholds) -> Vec<SkippedGate> {
         // every `codelore check` run while this tool never applies them —
         // disclosed whenever active.
         ("fail_on_degraded", *fail_on_degraded),
+        // Opt-in exit-code policy this tool never applies — disclosed only when
+        // the user sets it (defaults false).
+        ("fail_on_skipped", *fail_on_skipped),
     ];
     configured
         .into_iter()
@@ -585,6 +592,7 @@ fn structural_skip_reason(gate: &str) -> &'static str {
              (it uses the plain, unanchored hotspot scan); `codelore check` is authoritative"
         }
         "fail_on_degraded" => "degraded-gate handling is `codelore check`-only",
+        "fail_on_skipped" => "skipped-gate handling is `codelore check` / `gate` / `diff`-only",
         _ => "evaluated only by `codelore check`, which is authoritative for it",
     }
 }
@@ -643,21 +651,22 @@ impl CodeLoreServer {
     #[tool(
         name = "hotspots",
         description = "Return the top hotspot files ranked by revision count as JSON. \
-            Pass `limit` to cap rows (default: 20). \
+            Pass `limit` to cap rows (default 50, max 500). \
             First call on a cold cache triggers history ingest."
     )]
     async fn hotspots(&self, params: Parameters<HotspotsParams>) -> Result<String, ErrorData> {
         let repo_path = self.repo.clone();
         let memo = self.memo.clone();
-        let limit = params.0.limit.unwrap_or(20);
+        // Clamp through the shared row cap (1..=500) like every other list tool so
+        // an oversized `limit` cannot blow the caller's token budget.
+        let cap = resolve_row_cap(params.0.limit);
         let params_json = serde_json::to_string(&params.0).map_err(internal)?;
         tokio::task::spawn_blocking(move || {
             memoized(&memo, &repo_path, "hotspots", &params_json, |repo, head| {
-                let mut opts = Options {
+                let opts = Options {
                     repo_path: repo_path.clone(),
                     ..Options::default()
                 };
-                opts.rows_limit = Some(limit);
                 let db =
                     FactsDb::open_or_ingest_with_cache_root(&opts, repo, &default_cache_root())
                         .map_err(|e| map_lib_err(&e))?;
@@ -666,7 +675,11 @@ impl CodeLoreServer {
                 // empty repo.
                 db.ensure_ingest_witnessed(head)
                     .map_err(|e| map_lib_err(&e))?;
-                let rows = hotspots::run_hotspots(&db, &opts).map_err(|e| map_lib_err(&e))?;
+                // Run unbounded (the ranking spans the full population either way)
+                // and cap in-tool, matching the sibling list tools; the row slice
+                // serializes as a bare array with no omitted-summary object.
+                let mut rows = hotspots::run_hotspots(&db, &opts).map_err(|e| map_lib_err(&e))?;
+                rows.truncate(cap);
                 serde_json::to_string(&rows).map_err(internal)
             })
         })
@@ -783,7 +796,9 @@ impl CodeLoreServer {
             let (base_path, _base_wt) = temp_worktree(&repo_path, &base_sha)?;
             let (head_path, _head_wt) = temp_worktree(&repo_path, &head_sha)?;
 
-            let ingest_at = |wt: &Path| -> std::result::Result<
+            let ingest_at = |wt: &Path,
+                             sha: &str|
+             -> std::result::Result<
                 Vec<codelore_lib::cli_api::analyses::delta_health::FunctionMetricRow>,
                 ErrorData,
             > {
@@ -794,11 +809,17 @@ impl CodeLoreServer {
                 let repo = GixRepo::open(wt).map_err(|e| map_lib_err(&e))?;
                 let db = FactsDb::new_in_memory().map_err(|e| map_lib_err(&e))?;
                 db.ingest(&repo, &opts).map_err(|e| map_lib_err(&e))?;
+                // Witness the populated store before deriving metrics: a detached
+                // worktree over a shallow/truncated checkout can walk zero commits
+                // and yield a well-formed but vacuous delta of plausible zeroes.
+                // Error out (exit 3) rather than building and memoizing that.
+                db.ensure_ingest_witnessed(sha)
+                    .map_err(|e| map_lib_err(&e))?;
                 run_function_metrics(&db).map_err(|e| map_lib_err(&e))
             };
 
-            let base_fns = ingest_at(&base_path)?;
-            let head_fns = ingest_at(&head_path)?;
+            let base_fns = ingest_at(&base_path, &base_sha)?;
+            let head_fns = ingest_at(&head_path, &head_sha)?;
 
             // All files touched between the two revs count as "PR files".
             let pr_files: HashSet<String> = head_fns.iter().map(|r| r.path.clone()).collect();
@@ -1239,6 +1260,12 @@ impl CodeLoreServer {
             if memoizable && let Some(hit) = memo.get(&head, &key) {
                 return Ok(hit);
             }
+
+            // A path outside the analyzed-file universe is a caller error, not an
+            // empty dossier — reject it before the ingest so the response is an
+            // actionable invalid_params naming the path (propagated un-memoized),
+            // mirroring code_health and function_xray.
+            require_tracked_path(&repo, &target)?;
 
             // min_revs = 1 so any single named file resolves in its own dossier,
             // matching the `explain <path>` CLI surface.

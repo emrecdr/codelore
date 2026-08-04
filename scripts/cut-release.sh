@@ -274,42 +274,66 @@ if ! gh auth status >/dev/null 2>&1; then die "gh CLI not authenticated. Run 'gh
 ok "gh CLI authenticated"
 
 # ──────────────────────────────────────────────────────────────────────
-# Ruleset-drift check (best-effort, NON-FATAL)
+# Ruleset-drift check (best-effort)
 # ──────────────────────────────────────────────────────────────────────
-# The disable + restore heredocs further down hardcode the canonical
-# `required_status_checks` contexts (rustfmt / clippy / cargo-deny / test×3).
-# CI has since grown jobs (spa-browser, dogfood); if the LIVE ruleset was
-# ever updated to require any context this script doesn't know about, the
-# trap-driven restore would silently rewrite the ruleset back to this stale
-# list — dropping the newer required checks. Surface that drift HERE, before
-# the dance touches anything, so the maintainer reconciles the heredocs
-# first. This is read-only and never aborts the cut (the load-bearing
-# disable/restore logic is untouched).
-EXPECTED_CONTEXTS="$(printf '%s\n' \
+# The disable + restore heredocs (protect-release-tags below) and the
+# main_ruleset_put heredoc (protect-main above) each hardcode a canonical
+# `required_status_checks` context list. If a LIVE ruleset was ever updated
+# to require a context this script doesn't know about, the trap-driven
+# restore would silently rewrite the ruleset back to the stale list —
+# dropping the newer required checks. Surface that drift HERE, before the
+# dance touches anything, so the maintainer reconciles the heredocs first.
+# protect-release-tags drift is NON-FATAL (a stale tag-gate is recoverable);
+# protect-main drift is FATAL — silently dropping a required check from the
+# default branch is not something a release cut should ever do. If a live
+# ruleset can't be read (gh/jq outage), skip that check rather than abort on
+# an unrelated failure.
+#
+# $1 = ruleset id, $2 = human name, $3 = "fatal"|"warn",
+# $4 = expected contexts (newline-separated, pre-sorted).
+check_ruleset_drift() {
+  local ruleset_id="$1" name="$2" severity="$3" expected="$4"
+  local live
+  live="$( { gh api "repos/${REPO}/rulesets/${ruleset_id}" 2>/dev/null \
+    | jq -r '.rules[]? | select(.type=="required_status_checks")
+              | .parameters.required_status_checks[]?.context' 2>/dev/null \
+    | sort; } || true )"
+  if [[ -z "${live}" ]]; then
+    warn "could not read live ruleset ${ruleset_id} (${name}) required_status_checks"
+    warn "  (gh/jq returned nothing) — skipping drift check. Eyeball the restore"
+    warn "  heredoc by hand if you suspect the ruleset changed."
+    return 0
+  fi
+  if [[ "${live}" == "${expected}" ]]; then
+    ok "${name} required_status_checks match the script's hardcoded restore body"
+    return 0
+  fi
+  warn "RULESET DRIFT: live ${name} required_status_checks differ from this"
+  warn "  script's hardcoded heredocs."
+  warn "  live ruleset requires:"
+  printf '%s\n' "${live}"     | sed 's/^/[cut-release]       - /' >&2
+  warn "  this script hardcodes:"
+  printf '%s\n' "${expected}" | sed 's/^/[cut-release]       - /' >&2
+  if [[ "${severity}" == "fatal" ]]; then
+    die "${name} drift is fatal — reconcile the heredoc (and its expected-context list below) before cutting; proceeding would let the trap silently drop a required check from the default branch."
+  fi
+  warn "  RECONCILE the heredoc (and its expected-context list below) before"
+  warn "  trusting the auto-restore — otherwise the trap will rewrite the ruleset"
+  warn "  to the stale list. Proceeding anyway (non-fatal)."
+  return 0
+}
+
+RELEASE_TAGS_EXPECTED_CONTEXTS="$(printf '%s\n' \
   "rustfmt" "clippy" "cargo-deny" \
   "test (ubuntu-latest)" "test (macos-latest)" "test (windows-latest)" \
   | sort)"
-LIVE_CONTEXTS="$( { gh api "repos/${REPO}/rulesets/${RULESET_ID}" 2>/dev/null \
-  | jq -r '.rules[]? | select(.type=="required_status_checks")
-            | .parameters.required_status_checks[]?.context' 2>/dev/null \
-  | sort; } || true )"
-if [[ -z "${LIVE_CONTEXTS}" ]]; then
-  warn "could not read live ruleset ${RULESET_ID} required_status_checks (gh/jq"
-  warn "  returned nothing) — skipping drift check. Eyeball the restore heredoc"
-  warn "  by hand if you suspect the ruleset changed."
-elif [[ "${LIVE_CONTEXTS}" != "${EXPECTED_CONTEXTS}" ]]; then
-  warn "RULESET DRIFT: live protect-release-tags required_status_checks differ"
-  warn "  from this script's hardcoded disable/restore heredocs."
-  warn "  live ruleset requires:"
-  printf '%s\n' "${LIVE_CONTEXTS}"   | sed 's/^/[cut-release]       - /' >&2
-  warn "  this script hardcodes:"
-  printf '%s\n' "${EXPECTED_CONTEXTS}" | sed 's/^/[cut-release]       - /' >&2
-  warn "  RECONCILE the heredocs (and EXPECTED_CONTEXTS above) before trusting"
-  warn "  the auto-restore — otherwise the trap will rewrite the ruleset to the"
-  warn "  stale list. Proceeding anyway (non-fatal)."
-else
-  ok "ruleset required_status_checks match the script's hardcoded restore body"
-fi
+# Mirrors the protect-main main_ruleset_put heredoc above (9 contexts).
+MAIN_EXPECTED_CONTEXTS="$(printf '%s\n' \
+  "cargo-deny" "clippy" "dogfood" "rustfmt" "self-gate" "spa-browser" \
+  "test (macos-latest)" "test (ubuntu-latest)" "test (windows-latest)" \
+  | sort)"
+check_ruleset_drift "${RULESET_ID}"      "protect-release-tags" "warn"  "${RELEASE_TAGS_EXPECTED_CONTEXTS}"
+check_ruleset_drift "${MAIN_RULESET_ID}" "protect-main"         "fatal" "${MAIN_EXPECTED_CONTEXTS}"
 
 # Idempotent resume: if any commit in recent history (up to 20 back) is a
 # `chore(release): vX.Y.Z` commit AND Cargo.toml workspace version matches
@@ -497,15 +521,29 @@ if [[ "${SKIP_CI_WAIT}" == "true" ]]; then
 else
   log "waiting for CI to go green on the release commit (typical: 8–12 min)..."
   if [[ "${DRY_RUN}" != "true" ]]; then
-    # Find the most recent CI run on main triggered by THIS push.
-    sleep 5  # give GitHub a moment to register the run
+    # Find the most recent CI run on main triggered by THIS push. A run
+    # can take several seconds to register after the push, and a
+    # not-yet-registered auto run looks identical to a paths-ignored commit
+    # (both yield no match). Poll a bounded window before concluding
+    # paths-ignore matched, so a slow-to-register auto run is never mistaken
+    # for "no CI" and duplicated by a spurious manual dispatch.
     RELEASE_SHA="$(git rev-parse HEAD)"
-    RUN_ID="$(gh run list --limit 5 --branch main --workflow CI --json databaseId,headSha \
-              --jq ".[] | select(.headSha == \"${RELEASE_SHA}\") | .databaseId" | head -1)"
+    AUTO_ATTEMPTS=6
+    AUTO_INTERVAL=10
+    RUN_ID=""
+    for (( attempt = 1; attempt <= AUTO_ATTEMPTS; attempt++ )); do
+      sleep "${AUTO_INTERVAL}"
+      RUN_ID="$(gh run list --limit 5 --branch main --workflow CI --json databaseId,headSha \
+                --jq ".[] | select(.headSha == \"${RELEASE_SHA}\") | .databaseId" | head -1)"
+      if [[ -n "${RUN_ID}" ]]; then
+        break
+      fi
+      log "  waiting for auto-triggered CI run on ${RELEASE_SHA:0:7} (${attempt}/${AUTO_ATTEMPTS})..."
+    done
     if [[ -z "${RUN_ID}" ]]; then
       # README-only or other paths-ignored commit. Manually dispatch CI so
       # the ruleset has the required status checks on this commit.
-      warn "no CI run auto-triggered for ${RELEASE_SHA:0:7} (paths-ignore likely matched)."
+      warn "no CI run auto-triggered for ${RELEASE_SHA:0:7} after $(( AUTO_ATTEMPTS * AUTO_INTERVAL ))s (paths-ignore likely matched)."
       warn "dispatching CI manually via workflow_dispatch..."
       gh workflow run CI --ref main
       # The dispatched run takes a few seconds to register with a matching

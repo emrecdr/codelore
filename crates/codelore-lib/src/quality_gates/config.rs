@@ -43,6 +43,7 @@ pub struct Thresholds {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[allow(clippy::struct_excessive_bools)] // gate config bag: independent policy toggles, not a state machine
 pub struct Gates {
     /// Maximum cognitive complexity per file. Files exceeding fail
     /// the gate.
@@ -136,6 +137,19 @@ pub struct Gates {
     /// makes the difference explicit.
     #[serde(default = "default_fail_on_degraded")]
     pub fail_on_degraded: bool,
+    /// When `true`, a gate recorded `verdict = "skipped"` — its underlying
+    /// analysis had nothing to evaluate (no external-findings sidecar, no
+    /// calibration artifact, a history shallower than a window, or a change-set
+    /// that measured no delta) — is treated as a failure, so a gate that
+    /// silently stopped evaluating is no longer indistinguishable at the exit
+    /// code from one that evaluated and passed. Default `false` leaves a skipped
+    /// gate exit-0 (behaviour unchanged). Honoured by `codelore check`,
+    /// `codelore gate`, and `codelore diff`; like `fail_on_degraded` it is a
+    /// policy modifier, not a gate, so it never makes the thresholds non-empty
+    /// on its own, and the ledger keeps the honest `"skipped"` verdict either
+    /// way.
+    #[serde(default)]
+    pub fail_on_skipped: bool,
 }
 
 fn default_fail_on_degraded() -> bool {
@@ -219,7 +233,11 @@ pub struct NewCodeGates {
     /// repo's most recent commit date (not wall-clock), so the born/touched
     /// partition is reproducible on archived repos. Defaults to
     /// [`DEFAULT_WINDOW_DAYS`](crate::constants::DEFAULT_WINDOW_DAYS) — the same
-    /// window the effort-exposure view uses, so both describe one working set.
+    /// default the effort-exposure view's window uses. The two are nonetheless
+    /// independent knobs that can diverge: this gate reads its own
+    /// `[new_code] window_days`, while the effort-exposure view reads
+    /// `opts.window_days` (the CLI `--window-days`). Sharing a default does not
+    /// make them one working set.
     #[serde(default = "default_new_code_window_days")]
     pub window_days: u32,
     /// Floor a file *born* inside the window must meet at HEAD, on the `[0, 100]`
@@ -379,8 +397,10 @@ impl Thresholds {
         // threshold non-empty by itself — it only affects how degraded
         // verdicts from other gates are handled. red_effort_exempt_improving is
         // excluded for the same reason: it only reshapes the max_red_effort_pct
-        // comparison, so a file setting it alone configures no gate. Likewise
-        // `[calibration]`
+        // comparison, so a file setting it alone configures no gate.
+        // fail_on_skipped is excluded too: it only changes how a skipped
+        // verdict maps to the exit code, configuring no gate on its own.
+        // Likewise `[calibration]`
         // is deliberately excluded from this expression: it selects a
         // defect-calibration artifact for analyses to consume, it does not
         // configure a gate, so a thresholds file containing only
@@ -744,6 +764,38 @@ new_hotspot_max = 0
     fn fail_on_degraded_defaults_to_true_when_omitted() {
         let t = Thresholds::from_text("[gates]\ncode_health_min = 50.0\n").unwrap();
         assert!(t.gates.fail_on_degraded);
+    }
+
+    // ───────── fail_on_skipped modifier ─────────
+
+    #[test]
+    fn fail_on_skipped_parses_and_defaults_false() {
+        let on = Thresholds::from_text("[gates]\nfail_on_skipped = true\n").unwrap();
+        assert!(on.gates.fail_on_skipped);
+        // Omitted ⇒ default false (behaviour unchanged).
+        let off = Thresholds::from_text("[gates]\ncode_health_min = 50.0\n").unwrap();
+        assert!(!off.gates.fail_on_skipped);
+    }
+
+    #[test]
+    fn fail_on_skipped_alone_does_not_configure_a_gate() {
+        // A modifier, not a gate: like fail_on_degraded it must leave the
+        // thresholds vacuously empty when it is the only key present, and it
+        // must still validate.
+        let t = Thresholds::from_text("[gates]\nfail_on_skipped = true\n").unwrap();
+        assert!(t.is_empty(), "the modifier alone configures no gate");
+        t.validate().expect("bool modifier is always valid");
+    }
+
+    #[test]
+    fn fail_on_skipped_unknown_key_rejected() {
+        // Typo guard: a near-miss must reject, not silently disable the policy.
+        let raw = "[gates]\nfail_on_skiped = true\n";
+        let err = Thresholds::from_text(raw).expect_err("typo'd key should reject");
+        assert!(
+            err.contains("unknown field") || err.contains("fail_on_skiped"),
+            "expected 'unknown field' in error: {err}"
+        );
     }
 
     // ───────── [calibration] section ─────────

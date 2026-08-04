@@ -139,7 +139,7 @@ pub(crate) fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
         None
     };
 
-    let (violations, mut ledger_records, hotspot_count, code_health) = evaluate_all_gates(
+    let (mut violations, mut ledger_records, hotspot_count, code_health) = evaluate_all_gates(
         &thresholds,
         &db,
         &repo,
@@ -273,6 +273,17 @@ pub(crate) fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
 
     // ── Ledger write (IO errors warn, never alter exit code) ─────────────────
     append_gate_runs(&cache_root, &args.repo, &ledger_records);
+
+    // ── fail_on_skipped policy ───────────────────────────────────────────────
+    // A gate recorded "skipped" becomes a violation so the run fails rather than
+    // greening on a gate that never evaluated. The ledger write above keeps the
+    // honest "skipped" verdict; only the exit-facing set gains rows. Placed
+    // after the ratchet block (whose exit is regression-driven) so the policy
+    // scopes to the normal check exit path.
+    violations.extend(crate::skipped_gate_violations(
+        &ledger_records,
+        thresholds.gates.fail_on_skipped,
+    ));
 
     // ── SARIF emission (when --format sarif) ─────────────────────────────────
     emit_check_sarif_when_requested(args, &db, &opts, &head_sha, &violations)?;
@@ -950,7 +961,7 @@ fn emit_check_sarif_when_requested(
     let mut evidence_map: HashMap<String, Vec<EvidenceCommit>> = HashMap::new();
     let mut evidence_warned = false;
     for v in violations {
-        if v.path != "(repo-wide)" && v.path != "(degraded)" {
+        if v.path != "(repo-wide)" && v.path != "(degraded)" && v.path != "(skipped)" {
             evidence_map.entry(v.path.clone()).or_insert_with(|| {
                 evidence_for_path(db, opts, &v.path, 5).unwrap_or_else(|e| {
                     if !evidence_warned {

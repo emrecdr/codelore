@@ -30,6 +30,13 @@ use crate::{Options, Result};
 /// EA-Z-style effort floor: files smaller than this are treated as this many
 /// lines when dividing risk by effort, so a 3-line file cannot dominate the
 /// ranking on a near-zero denominator.
+///
+/// 25 lines is roughly the size below which a "file" is typically a stub, a
+/// re-export, a small constants/config module, or a trivial wrapper — units
+/// where line count is a poor proxy for inspection effort. Flooring the
+/// denominator there neutralises the `risk / tiny_loc` blow-up for such
+/// micro-files while staying small enough not to distort genuinely small but
+/// real modules (whose LOC already exceeds the floor).
 const EA_Z_FLOOR: u32 = 25;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

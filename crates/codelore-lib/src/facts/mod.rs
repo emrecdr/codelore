@@ -418,6 +418,20 @@ impl FactsDb {
         db.ingest(repo, opts)?;
         // CHECKPOINT flushes DuckDB's WAL to the file before we open() it.
         db.flush()?;
+        // Never persist a zero-commit store. The cache key is HEAD-scoped and does
+        // not fold shallow/worktree state, so a later run on a repaired (unshallowed)
+        // clone would hit this same file, load the empty store, and re-fail the
+        // ingest witness on healthy history — a sticky failure the witness message's
+        // own remedy cannot clear. Serve this run from memory instead, exactly like
+        // the dirty-tree bail.
+        if db.commit_count()? == 0 {
+            drop(db);
+            let _ = std::fs::remove_file(&tmp);
+            let mem = Self::new_in_memory_with_temp_dir(Some(&spill_dir))?;
+            mem.create_schema()?;
+            mem.ingest(repo, opts)?;
+            return Ok(mem);
+        }
         // Drop the connection before rename so DuckDB releases the file lock.
         drop(db);
         // sync_all forces the file's data and metadata to disk before the
@@ -592,7 +606,10 @@ impl FactsDb {
                  checkout is truncated. A shallow clone (git fetch-depth, e.g. \
                  actions/checkout's default fetch-depth: 1) whose tip is a merge commit ingests \
                  zero commits under the default merge filter, so every quality gate would pass \
-                 over an empty fact store. Re-run against full history (fetch-depth: 0)."
+                 over an empty fact store. Re-run against full history (fetch-depth: 0). If this \
+                 keeps failing from a stale cache after the history is repaired and the command \
+                 (check, gate, explain) offers no --no-cache flag, point it at a fresh cache with \
+                 --cache-dir <scratch-path>."
                     .to_string(),
             ));
         }

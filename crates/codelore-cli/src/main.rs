@@ -221,6 +221,35 @@ pub(crate) fn write_github_output(key: &str, value: &str) {
     }
 }
 
+/// Map the `fail_on_skipped` policy onto a run's ledger records: when the policy
+/// is on, every gate recorded `"skipped"` becomes a synthetic [`GateViolation`]
+/// so the surface's normal violation-exit path fails the run; off (the default)
+/// yields none, so a skipped gate stays exit-0. The ledger keeps the honest
+/// `"skipped"` verdict — only the exit-facing violation set gains a row, tagged
+/// with the `(skipped)` pseudo-path so the SARIF/GHA emitters skip the
+/// commit-evidence lookup on it. Shared by `codelore check` and `codelore gate`;
+/// `codelore diff` has no ledger and honours the policy through
+/// [`diff::should_fail`] instead.
+pub(crate) fn skipped_gate_violations(
+    records: &[codelore_lib::cli_api::quality_gates::ledger::GateRunRecord],
+    fail_on_skipped: bool,
+) -> Vec<codelore_lib::cli_api::quality_gates::GateViolation> {
+    use codelore_lib::cli_api::quality_gates::GateViolation;
+    if !fail_on_skipped {
+        return Vec::new();
+    }
+    records
+        .iter()
+        .filter(|r| r.verdict == "skipped")
+        .map(|r| GateViolation {
+            gate: r.gate.clone(),
+            path: "(skipped)".into(),
+            actual: "skipped".into(),
+            threshold: "fail_on_skipped".into(),
+        })
+        .collect()
+}
+
 /// The discriminating reason a `[new_code]` gate skipped at runtime. A shallow
 /// checkout (fetch-depth truncated the pre-window history) and a genuinely young
 /// repository both leave the window with no pre-window baseline and read
@@ -441,8 +470,10 @@ fn run_diff_cmd(args: &DiffArgs) -> Result<()> {
     drop(out);
 
     if diff::should_fail(args, &output) {
-        // Per spec §6.6: analysis-failure exit code is 4.
-        std::process::exit(4);
+        // A `[diff]` gate violation (or a skip failed under `fail_on_skipped`)
+        // is a gate failure, not an analysis crash — exit 1, matching the
+        // `bail!` path in `check`/`gate`.
+        std::process::exit(1);
     }
     Ok(())
 }
