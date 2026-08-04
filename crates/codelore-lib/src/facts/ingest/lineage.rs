@@ -110,7 +110,6 @@ pub fn materialize_changes_lineage(db: &FactsDb) -> Result<()> {
             COALESCE(pl.canonical_path, c.path) AS path,
             c.change_type,
             c.rename_from,
-            c.similarity,
             c.loc_added,
             c.loc_deleted
         FROM changes c

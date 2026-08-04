@@ -54,7 +54,6 @@ CREATE TABLE IF NOT EXISTS changes (
         'added', 'modified', 'deleted', 'renamed', 'copied', 'binary'
     )),
     rename_from TEXT,
-    similarity INTEGER,
     loc_added INTEGER NOT NULL DEFAULT 0,
     loc_deleted INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (rev, path)

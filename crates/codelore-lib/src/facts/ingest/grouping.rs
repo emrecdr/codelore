@@ -55,7 +55,6 @@ pub fn materialize_changes_bucketed(
              c.path, \
              MAX(c.change_type) AS change_type, \
              arg_max(c.rename_from, ROW(m.date, -m.rowid)) AS rename_from, \
-             arg_max(c.similarity, ROW(m.date, -m.rowid)) AS similarity, \
              SUM(c.loc_added)::INTEGER AS loc_added, \
              SUM(c.loc_deleted)::INTEGER AS loc_deleted \
          FROM {src} c \
@@ -184,7 +183,6 @@ pub fn apply_grouping(db: &FactsDb, group_map: &GroupMap) -> Result<()> {
              g.group_name AS path, \
              MAX(c.change_type) AS change_type, \
              arg_max(c.rename_from, c.path) AS rename_from, \
-             arg_max(c.similarity, c.path) AS similarity, \
              SUM(c.loc_added)::INTEGER AS loc_added, \
              SUM(c.loc_deleted)::INTEGER AS loc_deleted \
          FROM changes c \
@@ -275,8 +273,8 @@ fn swap_grouped_tables(conn: &duckdb::Connection) -> Result<()> {
         .map_err(|e| CodeLoreError::Analysis(format!("recreate swapped tables: {e}")))?;
 
     conn.execute(
-        "INSERT INTO changes (rev, path, change_type, rename_from, similarity, loc_added, loc_deleted) \
-         SELECT rev, path, change_type, rename_from, similarity, loc_added, loc_deleted \
+        "INSERT INTO changes (rev, path, change_type, rename_from, loc_added, loc_deleted) \
+         SELECT rev, path, change_type, rename_from, loc_added, loc_deleted \
          FROM _changes_grouped",
         [],
     )
