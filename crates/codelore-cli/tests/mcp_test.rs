@@ -605,6 +605,33 @@ fn mcp_code_health_errors_on_unknown_path() {
 }
 
 #[test]
+fn mcp_explain_file_errors_on_unknown_path() {
+    let repo = delivery_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
+    let resp = call_tool(
+        &mut stdin,
+        &mut reader,
+        1,
+        "explain_file",
+        &json!({ "path": "src/does_not_exist.rs" }),
+    );
+    assert_eq!(resp["jsonrpc"], "2.0");
+    // A typo path is caller input, not an empty dossier: invalid_params (-32602),
+    // so an agent re-reads params rather than retrying a transient -32603. The
+    // message names the offending path.
+    assert_rpc_error_code(&resp, -32602, "explain_file unknown path");
+    assert!(
+        resp.to_string().contains("src/does_not_exist.rs"),
+        "the error must name the unknown path: {resp}"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
 fn mcp_code_health_limit_is_honored() {
     let repo = delivery_repo::build();
     let repo_path = repo.dir.path().to_str().unwrap();

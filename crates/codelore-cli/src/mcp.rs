@@ -1245,6 +1245,12 @@ impl CodeLoreServer {
                 return Ok(hit);
             }
 
+            // A path outside the analyzed-file universe is a caller error, not an
+            // empty dossier — reject it before the ingest so the response is an
+            // actionable invalid_params naming the path (propagated un-memoized),
+            // mirroring code_health and function_xray.
+            require_tracked_path(&repo, &target)?;
+
             // min_revs = 1 so any single named file resolves in its own dossier,
             // matching the `explain <path>` CLI surface.
             let opts = Options {
