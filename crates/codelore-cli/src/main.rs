@@ -470,8 +470,10 @@ fn run_diff_cmd(args: &DiffArgs) -> Result<()> {
     drop(out);
 
     if diff::should_fail(args, &output) {
-        // Per spec §6.6: analysis-failure exit code is 4.
-        std::process::exit(4);
+        // A `[diff]` gate violation (or a skip failed under `fail_on_skipped`)
+        // is a gate failure, not an analysis crash — exit 1, matching the
+        // `bail!` path in `check`/`gate`.
+        std::process::exit(1);
     }
     Ok(())
 }

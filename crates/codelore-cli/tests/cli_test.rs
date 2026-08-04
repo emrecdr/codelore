@@ -1672,9 +1672,11 @@ fn diff_delta_health_gate_fails_the_run() {
         ])
         .output()
         .unwrap();
-    assert!(
-        !output.status.success(),
-        "deny_degrading_verdict should fail the run"
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "deny_degrading_verdict should fail the run via a gate violation (exit 1); stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert!(
@@ -2005,7 +2007,7 @@ fn diff_fail_on_skipped_fails_a_skipped_gate_family() {
     // The blind-ingest skip from `diff_gate_skipped_when_neither_revision_...`
     // (a `--min-revs` floor above every file empties the hotspot set at both
     // revisions), but with `fail_on_skipped = true`: the skipped `[diff]` gate
-    // family must now fail the run through diff's violation exit (code 4)
+    // family must now fail the run through diff's violation exit (code 1)
     // instead of passing. The default-false counterpart (exit 0) is that
     // sibling test, which runs the identical range without the policy.
     let (dir, base, head) = unchanged_code_fixture();
@@ -2032,8 +2034,8 @@ fn diff_fail_on_skipped_fails_a_skipped_gate_family() {
         .unwrap();
     assert_eq!(
         output.status.code(),
-        Some(4),
-        "fail_on_skipped must fail a skipped gate via diff's exit 4; stderr: {}",
+        Some(1),
+        "fail_on_skipped must fail a skipped gate via diff's exit 1; stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     // The skip stays disclosed in the (already-emitted) JSON document.
