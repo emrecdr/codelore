@@ -385,7 +385,7 @@ pub struct RepoOverviewParams {}
 /// Parameters for the `hotspots` tool.
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Default)]
 pub struct HotspotsParams {
-    /// Maximum rows to return (default: 20).
+    /// Maximum rows to return (default 50, max 500).
     pub limit: Option<u32>,
 }
 
@@ -643,21 +643,22 @@ impl CodeLoreServer {
     #[tool(
         name = "hotspots",
         description = "Return the top hotspot files ranked by revision count as JSON. \
-            Pass `limit` to cap rows (default: 20). \
+            Pass `limit` to cap rows (default 50, max 500). \
             First call on a cold cache triggers history ingest."
     )]
     async fn hotspots(&self, params: Parameters<HotspotsParams>) -> Result<String, ErrorData> {
         let repo_path = self.repo.clone();
         let memo = self.memo.clone();
-        let limit = params.0.limit.unwrap_or(20);
+        // Clamp through the shared row cap (1..=500) like every other list tool so
+        // an oversized `limit` cannot blow the caller's token budget.
+        let cap = resolve_row_cap(params.0.limit);
         let params_json = serde_json::to_string(&params.0).map_err(internal)?;
         tokio::task::spawn_blocking(move || {
             memoized(&memo, &repo_path, "hotspots", &params_json, |repo, head| {
-                let mut opts = Options {
+                let opts = Options {
                     repo_path: repo_path.clone(),
                     ..Options::default()
                 };
-                opts.rows_limit = Some(limit);
                 let db =
                     FactsDb::open_or_ingest_with_cache_root(&opts, repo, &default_cache_root())
                         .map_err(|e| map_lib_err(&e))?;
@@ -666,7 +667,11 @@ impl CodeLoreServer {
                 // empty repo.
                 db.ensure_ingest_witnessed(head)
                     .map_err(|e| map_lib_err(&e))?;
-                let rows = hotspots::run_hotspots(&db, &opts).map_err(|e| map_lib_err(&e))?;
+                // Run unbounded (the ranking spans the full population either way)
+                // and cap in-tool, matching the sibling list tools; the row slice
+                // serializes as a bare array with no omitted-summary object.
+                let mut rows = hotspots::run_hotspots(&db, &opts).map_err(|e| map_lib_err(&e))?;
+                rows.truncate(cap);
                 serde_json::to_string(&rows).map_err(internal)
             })
         })
