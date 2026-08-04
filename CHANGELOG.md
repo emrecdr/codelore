@@ -4,6 +4,10 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A shallow / merge-tip checkout no longer poisons the persistent cache with an empty fact store.** Such a checkout ingests zero commits under the default merge filter, and the HEAD-scoped cache key folds neither shallow nor worktree state — so the empty store was persisted under the very key a later repaired (`git fetch --unshallow`) clone recomputes. That poisoned entry made `FactsDb::ensure_ingest_witnessed` re-fail with exit 3 forever, even over healthy history, and the witness message's own remedy ("re-run against full history") could not clear it. `FactsDb::open_or_ingest_with_cache_root` now checks the commit count after ingest and, when it is zero, serves the run from an in-memory store and skips the cache write entirely (mirroring the existing dirty-worktree bail) so the empty store is never cached. `CACHE_EPOCH` is bumped so caches already poisoned in the wild are invalidated on upgrade, and the ingest-witness error now notes that a stuck cache on a command without `--no-cache` (`check`, `gate`, `explain`) can be bypassed with `--cache-dir <scratch-path>`.
+
 ## [0.25.1] - 2026-08-03
 
 ### Fixed

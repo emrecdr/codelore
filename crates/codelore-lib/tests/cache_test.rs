@@ -7,7 +7,7 @@ use codelore_lib::cache::{
 };
 use codelore_lib::facts::FactsDb;
 use codelore_lib::repo::GixRepo;
-use codelore_lib::test_support::tiny_repo;
+use codelore_lib::test_support::{mainline_advance_repo, tiny_repo};
 use codelore_lib::{Options, Repo};
 
 /// Verify that the cache hit path is exercised by the second `open_or_ingest`
@@ -254,6 +254,84 @@ fn cache_path_with_root_canonicalises_repo_path() {
         p1, p2,
         "F33: cache_path_with_root must canonicalise the repo_path so \
          relative-vs-absolute invocations land in the same cache file"
+    );
+}
+
+/// A shallow / merge-tip checkout ingests zero commits under the default merge
+/// filter (the truncated-checkout signature). The persistent cache key is
+/// HEAD-scoped and does not fold shallow state, so persisting that empty store
+/// would poison the cache: a later run on the same HEAD (after
+/// `git fetch --unshallow`) would hit the empty file and re-fail the ingest
+/// witness forever, a sticky failure the witness message's own remedy cannot
+/// clear. `open_or_ingest_with_cache_root` must therefore serve the zero-commit
+/// run from memory and never write the cache file; a healthy repo still writes
+/// and reads a populated one.
+#[test]
+fn zero_commit_ingest_is_never_persisted() {
+    // Full repo → shallow --depth=1 clone whose tip is a merge commit: ingests
+    // zero commits under the default merge filter. `git clone --depth` needs the
+    // file:// transport — a local-path source silently ignores the flag via
+    // git's hardlink clone optimization, producing a full (non-shallow) clone.
+    let full = mainline_advance_repo::build();
+    let shallow = tempfile::tempdir().expect("tempdir for shallow clone");
+    let source_url = format!("file://{}", full.dir.path().display());
+    let status = std::process::Command::new("git")
+        .args(["clone", "--quiet", "--depth=1"])
+        .arg(&source_url)
+        .arg(shallow.path())
+        .status()
+        .expect("git clone");
+    assert!(status.success(), "shallow clone from {source_url} failed");
+
+    let cache_root = tempfile::tempdir().expect("tempdir for cache root");
+    let shallow_path = shallow.path().to_path_buf();
+    let opts = Options {
+        repo_path: shallow_path.clone(),
+        min_revs: 1,
+        ..Options::default()
+    };
+    let gix = GixRepo::open(&shallow_path).expect("open shallow gix repo");
+
+    let db = FactsDb::open_or_ingest_with_cache_root(&opts, &gix, cache_root.path())
+        .expect("open_or_ingest on a zero-commit shallow clone");
+    assert_eq!(
+        db.commit_count().expect("commit_count"),
+        0,
+        "the shallow merge-tip clone must ingest zero commits"
+    );
+
+    let head_sha = gix.head_sha().expect("head_sha");
+    let key = cache_key(&shallow_path, &head_sha, &opts);
+    let cache_file = cache_path_with_root(&key, &shallow_path, cache_root.path());
+    assert!(
+        !cache_file.exists(),
+        "an empty fact store must NOT be persisted to the cache: {}",
+        cache_file.display()
+    );
+
+    // Sanity: a healthy repo still writes and reads a populated cache file, so
+    // the guard suppresses only the empty case, not caching in general.
+    let healthy_root = full.dir.path().to_path_buf();
+    let healthy_opts = Options {
+        repo_path: healthy_root.clone(),
+        min_revs: 1,
+        ..Options::default()
+    };
+    let healthy_gix = GixRepo::open(&healthy_root).expect("open full gix repo");
+    let healthy_db =
+        FactsDb::open_or_ingest_with_cache_root(&healthy_opts, &healthy_gix, cache_root.path())
+            .expect("open_or_ingest on full history");
+    assert!(
+        healthy_db.commit_count().expect("commit_count") > 0,
+        "a repo with real history must ingest commits"
+    );
+    let healthy_head = healthy_gix.head_sha().expect("head_sha");
+    let healthy_key = cache_key(&healthy_root, &healthy_head, &healthy_opts);
+    let healthy_file = cache_path_with_root(&healthy_key, &healthy_root, cache_root.path());
+    assert!(
+        healthy_file.exists(),
+        "a populated fact store must still be cached: {}",
+        healthy_file.display()
     );
 }
 
