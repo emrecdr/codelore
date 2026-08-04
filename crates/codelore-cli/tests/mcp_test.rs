@@ -1332,6 +1332,45 @@ fn worsen_file(repo_root: &std::path::Path, rel_path: &str) {
     std::fs::write(&path, content).expect("write fixture file");
 }
 
+/// Commit `n` trivial single-function Rust files into the fixture clone so its
+/// Rust language cohort clears the code-health per-language structural-biomarker
+/// floor. `delivery_repo` ships five Rust files; the per-language percent-rank
+/// only ranks a cohort at or above the floor, so below it an appended monster
+/// moves no biomarker and the projected health never drops.
+fn commit_cohort_fillers(repo_root: &std::path::Path, n: usize) {
+    for i in 0..n {
+        std::fs::write(
+            repo_root.join(format!("src/cohort_filler_{i}.rs")),
+            format!("pub fn cohort_filler_{i}() -> i32 {{ {i} }}\n"),
+        )
+        .expect("write cohort filler");
+    }
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(repo_root)
+            .output()
+            .expect("run git");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&["add", "."]);
+    // Cloned bundles carry no committer identity, so pin one for this commit.
+    git(&[
+        "-c",
+        "user.email=cohort@example.com",
+        "-c",
+        "user.name=Cohort",
+        "commit",
+        "--quiet",
+        "-m",
+        "cohort fillers",
+    ]);
+}
+
 #[test]
 fn gate_changes_reports_clean_tree() {
     let repo = delivery_repo::build();
@@ -1357,6 +1396,10 @@ fn gate_changes_reports_clean_tree() {
 #[test]
 fn gate_changes_flags_working_tree_edit() {
     let repo = delivery_repo::build();
+    // delivery_repo ships five Rust files; commit more so the language cohort
+    // clears the code-health per-language biomarker floor and the appended
+    // monster can actually lower src/core.rs's projected health.
+    commit_cohort_fillers(repo.dir.path(), 9);
     let repo_path = repo.dir.path().to_str().unwrap();
 
     // A per-file floor of 0.0 (no changed file may lower its own health) at

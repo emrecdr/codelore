@@ -140,6 +140,21 @@ pub(crate) const SMELL_WEIGHTS: &[(&str, f64)] = &[
 /// the divisor from the active DRY weight instead.
 const STRUCTURAL_SCALE_NO_DRY: &str = " / 0.88";
 
+/// Minimum number of files a language must contribute to the HEAD complexity
+/// scan before its per-language structural biomarkers (`complex-method`,
+/// `large-method`, `deep-nesting`, `many-args`, `complex-conditional`,
+/// `god-class`, `dry`) are computed from a `PERCENT_RANK`. Below this floor the
+/// rank is degenerate: at two files it emits exactly `{0.0, 1.0}`, pinning the
+/// worse file to MAX intensity on every biomarker regardless of its absolute
+/// complexity — so a small file in a two- or three-file language would score
+/// RED purely from being the larger of a tiny cohort. A below-floor cohort
+/// therefore produces no structural-biomarker rows, mirroring the corpus lens,
+/// which treats a language pooled below [`crate::calibration::MIN_LANG_SAMPLE`]
+/// as absent rather than speaking from too thin a sample. Such a file still
+/// receives non-language-partitioned signals (e.g. `shotgun-surgery`) and so
+/// still gets a health score — just not a fabricated one from a degenerate rank.
+const MIN_COHORT_FILES: usize = 10;
+
 /// [`SMELL_WEIGHTS`] as owned `(name, weight)` tuples — the default argument
 /// for [`smell_weights_case`], and (via
 /// `defect_calibration::validate::default_weights`) the baseline the weight
@@ -422,22 +437,34 @@ const BIOMARKERS_INSERT: &str = "
     ranked AS (
         SELECT
             path,
+            COUNT(*) OVER (PARTITION BY lang) AS lang_n,
             PERCENT_RANK() OVER (PARTITION BY lang ORDER BY file_cx) AS cx_i,
             PERCENT_RANK() OVER (PARTITION BY lang ORDER BY file_loc) AS loc_i,
             PERCENT_RANK() OVER (PARTITION BY lang ORDER BY file_nesting) AS nesting_i,
             PERCENT_RANK() OVER (PARTITION BY lang ORDER BY file_nargs) AS nargs_i,
             PERCENT_RANK() OVER (PARTITION BY lang ORDER BY file_bool_ops) AS bool_ops_i
         FROM file_metric
+    ),
+    -- A per-language cohort thinner than the file floor is too small for a
+    -- percent-rank to carry meaning: at two files PERCENT_RANK emits exactly
+    -- {0.0, 1.0}, pinning the worse of the pair to MAX intensity on every
+    -- biomarker regardless of its absolute complexity. Drop below-floor cohorts
+    -- entirely — they yield no structural-biomarker rows — mirroring the corpus
+    -- lens, which treats a language pooled below its sample floor as absent
+    -- rather than speaking from too thin a sample. The floor is bound from the
+    -- MIN_COHORT_FILES constant.
+    floored AS (
+        SELECT * FROM ranked WHERE lang_n >= {min_cohort_files}
     )
-    SELECT path, 'complex-method' AS smell, cx_i AS intensity FROM ranked
+    SELECT path, 'complex-method' AS smell, cx_i AS intensity FROM floored
     UNION ALL
-    SELECT path, 'large-method' AS smell, loc_i AS intensity FROM ranked
+    SELECT path, 'large-method' AS smell, loc_i AS intensity FROM floored
     UNION ALL
-    SELECT path, 'deep-nesting' AS smell, nesting_i AS intensity FROM ranked
+    SELECT path, 'deep-nesting' AS smell, nesting_i AS intensity FROM floored
     UNION ALL
-    SELECT path, 'many-args' AS smell, nargs_i AS intensity FROM ranked
+    SELECT path, 'many-args' AS smell, nargs_i AS intensity FROM floored
     UNION ALL
-    SELECT path, 'complex-conditional' AS smell, bool_ops_i AS intensity FROM ranked
+    SELECT path, 'complex-conditional' AS smell, bool_ops_i AS intensity FROM floored
 ";
 
 /// Shotgun Surgery / Divergent Change: a file that co-changes with many
@@ -455,7 +482,9 @@ fn materialize_biomarkers(db: &FactsDb, opts: &Options, cx: &HealthScanCtx) -> R
     db.conn()
         .execute(BIOMARKERS_DDL, [])
         .map_err(|e| CodeLoreError::Analysis(format!("create biomarker temp table: {e}")))?;
-    let biomarkers_insert = BIOMARKERS_INSERT.replace("{cm_src}", &cx.complexity_source);
+    let biomarkers_insert = BIOMARKERS_INSERT
+        .replace("{cm_src}", &cx.complexity_source)
+        .replace("{min_cohort_files}", &MIN_COHORT_FILES.to_string());
     db.conn()
         .execute(&biomarkers_insert, [])
         .map_err(|e| CodeLoreError::Analysis(format!("insert complexity biomarkers: {e}")))?;
@@ -528,8 +557,8 @@ fn materialize_biomarkers(db: &FactsDb, opts: &Options, cx: &HealthScanCtx) -> R
         .prepare("INSERT INTO code_health_biomarkers_v1 (path, smell, intensity) VALUES (?, ?, ?)")
         .map_err(|e| CodeLoreError::Analysis(format!("prepare biomarker insert: {e}")))?;
     for files in by_lang.values() {
-        if files.len() <= 1 {
-            continue; // PERCENT_RANK is degenerate for a single-file language
+        if files.len() < MIN_COHORT_FILES {
+            continue; // cohort too thin for a per-language rank — see MIN_COHORT_FILES
         }
         let denom = f64::from(u32::try_from(files.len() - 1).unwrap_or(u32::MAX));
         let smells: &[&str] = if cx.include_clones {
