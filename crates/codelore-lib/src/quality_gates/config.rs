@@ -233,7 +233,11 @@ pub struct NewCodeGates {
     /// repo's most recent commit date (not wall-clock), so the born/touched
     /// partition is reproducible on archived repos. Defaults to
     /// [`DEFAULT_WINDOW_DAYS`](crate::constants::DEFAULT_WINDOW_DAYS) — the same
-    /// window the effort-exposure view uses, so both describe one working set.
+    /// default the effort-exposure view's window uses. The two are nonetheless
+    /// independent knobs that can diverge: this gate reads its own
+    /// `[new_code] window_days`, while the effort-exposure view reads
+    /// `opts.window_days` (the CLI `--window-days`). Sharing a default does not
+    /// make them one working set.
     #[serde(default = "default_new_code_window_days")]
     pub window_days: u32,
     /// Floor a file *born* inside the window must meet at HEAD, on the `[0, 100]`
