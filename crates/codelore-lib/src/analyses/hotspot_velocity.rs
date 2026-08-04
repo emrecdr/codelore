@@ -33,8 +33,21 @@ use crate::facts::FactsDb;
 use crate::{Options, Result};
 
 /// Length of the "recent" window in days.
+///
+/// A ~monthly horizon is the shortest window that smooths week-to-week commit
+/// noise (weekend lulls, single-PR bursts) while still being recent enough to
+/// flag an acceleration early — before the all-time revision count catches up.
+/// It matches the common "last 30 days" activity horizon reviewers reason in.
 pub const RECENT_DAYS: u32 = 30;
 /// Length of the "baseline" window (immediately preceding recent) in days.
+///
+/// A quarter — three times [`RECENT_DAYS`] — gives a stable estimate of the
+/// file's "normal" change cadence to compare the recent rate against: long
+/// enough to average out release-cycle and vacation gaps, short enough that a
+/// file which cooled off long ago is not judged against ancient churn. 90 days
+/// is also the project's prevailing recent-activity horizon
+/// ([`DEFAULT_WINDOW_DAYS`](crate::constants::DEFAULT_WINDOW_DAYS),
+/// [`DEFAULT_DEPARTED_THRESHOLD_DAYS`](crate::constants::DEFAULT_DEPARTED_THRESHOLD_DAYS)).
 pub const BASELINE_DAYS: u32 = 90;
 
 /// One hotspot-velocity finding.
