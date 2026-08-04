@@ -262,7 +262,7 @@
         var cr = coordRows[ci];
         var name = (cr.path || '').split('/').pop();
         rows +=
-          '<tr class="hover" style="cursor:pointer;" onclick="window._codeloreShowDetail && window._codeloreShowDetail(' + JSON.stringify(cr.path) + ')">' +
+          '<tr class="hover coord-row" data-path="' + escapeHtml(cr.path || '') + '">' +
             '<td class="coord-path" title="' + escapeHtml(cr.path || '') + '">' + escapeHtml(name) + '</td>' +
             '<td>' + tierBadge(cr.tier || 'single') + '</td>' +
             '<td>' + fmtNumberFlex(cr.fragmentation, 2) + '</td>' +
@@ -285,5 +285,17 @@
     }
 
     mount.innerHTML = html;
+
+    // Wire coordination rows to the file-detail drawer for linked
+    // brushing — same data-path + _codeloreShowDetail pattern the
+    // knowledge-islands and improvements-feed rows use.
+    var coordRowEls = mount.querySelectorAll('tr.coord-row');
+    for (var cw = 0; cw < coordRowEls.length; cw++) {
+      coordRowEls[cw].addEventListener('click', function (evt) {
+        var p = evt.currentTarget.getAttribute('data-path');
+        if (window._codeloreShowDetail) window._codeloreShowDetail(p);
+      });
+      coordRowEls[cw].style.cursor = 'pointer';
+    }
   }
 
