@@ -3,7 +3,7 @@
 Read-only audit log. Findings are immutable F-IDs; the status field tracks state.
 Shipped/fixed findings are condensed to a one-line closure row once validated against `main` (full history in `CHANGELOG.md` + git); refuted findings stay documented to prevent rediscovery.
 
-**Last pass: 2026-07-02.** The 2026-07-01 validation + 5-dimension discovery pass added **F200–F230**; the 2026-07-02 implementation pass landed 28 of them on `main` (PRs #71, #74) and refuted F188/F202. See §3 "Implemented" tables + §5 for the current disposition.
+**Last pass: 2026-07-02.** The 2026-07-01 validation + 5-dimension discovery pass added **F200–F230**; the 2026-07-02 implementation pass landed 28 of them on `main` (PRs #71, #74) and refuted F188/F202. See §3 "Implemented" tables + §6 for the current disposition.
 
 ---
 
@@ -252,16 +252,16 @@ F84, F88 (silent ODB skip rationale), F95 (window filter at ingest level), F116 
 
 ### 4.2 Discovery pass — 2026-07-01 (deferred remainder)
 
-The 5-dimension fan-out logged F200–F230; 25 landed in the 2026-07-01 pass and F200 (+ F188/F202 refutations) in the 2026-07-02 pass (see the §3 "Implemented" tables). The entries below are the deferred remainder — each is a large refactor with regression surface, a dependency-migration needing CI validation, or a low-value mechanical sweep, not a quick safe change.
+The 5-dimension fan-out logged F200–F230; 25 landed in the 2026-07-01 pass and F200 (+ F188/F202 refutations) in the 2026-07-02 pass (see the §3 "Implemented" tables). The entries below are the deferred remainder — each is a large refactor with regression surface, a dependency-migration needing CI validation, or a low-value mechanical sweep, not a quick safe change. Since then F206 (HEAD-scan blob I/O) and F230 (gix bump) have shipped — marked Fixed inline below; F215 and F218 are the open remainder.
 
 #### Backend performance
 
 ##### F206 — `read_blob_at` re-resolves HEAD→commit→root-tree per file and discards the gix object cache each call
 *   **Location**: `repo/gix_repo.rs:293-329` (`to_thread_local()` per call → `rev_parse_single` → `find_commit` → `commit.tree()` → `lookup_entry_by_path`); default wrapper `repo/mod.rs:99-101`
-*   **Severity**: HIGH · **Category**: blob I/O / redundant recomputation · **Status**: Deferred (own perf pass)
+*   **Severity**: HIGH · **Category**: blob I/O / redundant recomputation · **Status**: **Fixed (v0.25.0)**
 *   **Description**: Every HEAD-time blob read mints a fresh thread-local `Repository` (cold object cache), re-resolves `HEAD`, re-decodes the commit + root tree, and re-walks + re-decodes every intermediate directory tree — for *each* file. A file at depth `d` re-decodes `d` tree objects; every sibling re-decodes its parent tree again. Three HEAD passes × F live files = 3F redundant resolves. This is distinct from and **deeper than** F173 (which only dedups the blob across passes — the per-file HEAD/commit/tree re-decode remains even in one deduped pass). Dominant cost of HEAD scans on large deep-nested monorepos.
 *   **Suggested improvement**: Resolve HEAD → root tree once per pass and reuse it (batch `read_blobs_at_head(paths)` walking a single cached tree), or hold one `to_thread_local()` repo with `object_cache_size` enabled across the file loop. Same bytes returned — output-neutral, faster.
-*   **Deferral reason**: Restructures the hot HEAD-scan loop and overlaps the F173 blocker (divergent extractor error contracts); wants its own focused perf pass rather than riding this batch.
+*   **Outcome (v0.25.0)**: shipped as this finding's suggested improvement — `Repo::blob_reader_at(rev)` returns a `BlobReader` whose `read(path)` is byte-identical to `read_blob_at`, and `GixRepo` overrides it (`repo/gix_repo/mod.rs`) to resolve the root tree once per `rayon` worker (via the existing `map_init` idiom) and reuse a warm `gix` object cache for every file that worker subsequently reads. The differential oracle (`GitCliRepo`) uses the default per-call forwarder, so the two-backend parity is unchanged (byte-identical ingested facts proven before/after). Landed with the F173/F253 Phase-1 HEAD-scan work; the remaining three-pass blob dedup (F173) stays open.
 
 #### Rust idioms / error handling
 
@@ -280,14 +280,6 @@ The 5-dimension fan-out logged F200–F230; 25 landed in the 2026-07-01 pass and
 *   **Partial fix**: Split the monolithic `Alpine.effect` into (a) a pure theme effect that reads only `store.theme.isDark` and fires `_codeloreRerenderers` with cooperative yield (F135), and (b) a separate layout/offboarding effect that reads `store.layout.*` and `store.scenario.departed` — so theme toggles no longer chain through layout/scenario subscriptions or trigger the CSS-token invalidation pass from unrelated clicks. The cross-widget selection and brush effects were already separate.
 *   **Residual (open)**: layout/scenario changes still fire ALL registered rerenderers — the headline Kamei-window scenario above is unchanged. Remaining follow-on: key the rerenderer registry by the store fields each widget depends on, so a layout change re-renders only its subscribers.
 
-#### Code hygiene
-
-##### F231 — Comprehensive `Plan N` version-phase marker sweep (comment rule violation)
-*   **Location**: **62 comment sites across 25 files** (validated 2026-07-02 via `grep -rn "Plan [0-9]" crates/codelore-lib/src crates/codelore-cli/src` → 62; files include `types.rs`, `analysis.rs`, `constants.rs`, `options.rs`, `output/{mod,sarif,parquet}.rs`, `provenance/mod.rs`, `clones/*`, `complexity/*`, `repo/{mod,git_cli_repo,gix_repo}.rs`, `facts/{schema_v1.sql,ingest/*}`, `arrow_facade.rs`, `codelore-cli/src/{args,diff,diff_output,main}.rs`)
-*   **Severity**: LOW · **Category**: comment rule violation (no version/task markers) · **Status**: Active (deferred — dedicated scripted sweep)
-*   **Description**: F164 swept `F<NN>` finding-IDs out of comments but left `Plan N` phase markers, which are the same banned class under the project's no-version/task-markers-in-comments hard rule. F205 fixed the one *factually-wrong* instance (`gix_repo.rs:355-356`); 62 more remain, several also stale (e.g. `repo/mod.rs:1-2` "the default impl is `gix` in Plan 1; a `GitCliRepo` … lands in Plan 6"). Deferred as a dedicated scripted sweep (like F164) rather than 62 hand-edits riding an unrelated branch — mixing prefixes, parentheticals, and stale future-tense claims, so a blind `sed` would mangle grammar.
-*   **Suggested improvement**: A mechanical comment-only sweep like F164's — drop each `Plan N` marker, keep or correct the surrounding rationale (some are false future-tense claims, e.g. "Plan 4 will add X" for X already shipped). Leave vendored `codelore-rca` (MPL fork) untouched.
-
 #### Dependency currency (verify latest before acting — assessed offline from declared/resolved versions)
 
 Overall hygiene is strong: `thiserror 2`, `toml 1`, `ureq 3`, `anyhow`/`serde`/`clap`/`rayon`/`time`/`percent-encoding` all current. `tree-sitter*` + `petgraph` are deliberately pinned (CLAUDE.md) — out of scope. Two items worth active tracking:
@@ -297,7 +289,16 @@ Overall hygiene is strong: `thiserror 2`, `toml 1`, `ureq 3`, `anyhow`/`serde`/`
 *   **Severity**: LOW · **Category**: dependency currency (routine) · **Status**: **Fixed (merged via #74)**
 *   **Outcome (2026-07-02)**: bumped `gix 0.84 → 0.85` (latest, published 2026-06-22) with `provenance::GIX_VERSION` + banner refs. API-compatible — the two-backend differential harness (`differential_repo_test.rs`) passed unchanged, so `GixRepo` still matches the `git`-CLI oracle. Consolidated Dependabot #68 (whose only failure was the drift guard) into #74; full CI matrix green. Related closed dep PRs: #69 (arrow 58→59 — deferred, would desync from duckdb's pinned arrow 58), #70 (duckdb group — superseded by F229).
 
-### 4.3 Code-health composite score — design observation (2026-07-02)
+---
+
+## 5. Recent closure logs (2026-07-02 → 2026-07-04)
+
+The dated sub-sections below record closed findings (Fixed / Refuted) from the
+2026-07-02 → 2026-07-04 passes, kept out of §4 so *Active Findings* lists only
+open work. Exception: §5.4's 2026-07-04 pass also logs two still-open own-slice
+follow-ups (F244, F246), carried in the next-cycle backlog (§6).
+
+### 5.1 Code-health composite score — design observation (2026-07-02)
 
 #### F232 — Coupling centrality counted twice in the composite code-health score
 
@@ -306,7 +307,7 @@ Overall hygiene is strong: `thiserror 2`, `toml 1`, `ureq 3`, `anyhow`/`serde`/`
 *   **State on main**: `coupling_centrality_v1` previously fed the composite score via two independent paths: (1) the `shotgun-surgery` biomarker (`intensity = PERCENT_RANK(ORDER BY centrality)`) flowing into `structural_risk`; and (2) directly as `n_cp = normalize(centrality)`. A high-centrality file was penalised through both at once — a double-count of the same signal.
 *   **Fix**: the `n_cp` term and its centrality join were removed from the score SQL; coupling now enters the composite once, as the shotgun-surgery biomarker inside `structural_risk`. Score reweighted to `w_sr = 0.50, w_cn = 0.30, w_au = 0.20` (sum 1.0). `CACHE_EPOCH` bumped.
 
-### 4.4 Refactoring-targets analysis — cross-analysis contract and display fidelity (2026-07-03)
+### 5.2 Refactoring-targets analysis — cross-analysis contract and display fidelity (2026-07-03)
 
 #### F233 — Implicit cross-analysis contract: `refactoring-targets` consumes `code_health_biomarkers_v1` temp table as a side-effect
 
@@ -343,9 +344,9 @@ Overall hygiene is strong: `thiserror 2`, `toml 1`, `ureq 3`, `anyhow`/`serde`/`
 *   **Description**: A five-stream adversarial audit of the Phase-1/2 changes confirmed the core computations correct (bounded, NaN-free, deterministic) but surfaced: (a) HIGH — `codelore explain code-health` printed the pre-F232 formula (`0.40/0.25/0.15` + a separate coupling term, `0.66/0.33` bands); (b) HIGH — the `check` gate `code_health_min` evaluated the hotspots inline cognitive-only proxy (floored 60), not the composite, so a red file (composite ~20) silently passed a `code_health_min = 70` gate; (c) MED — `refactoring-targets` claimed `html` support but its dispatch returned `html_not_wired`; (d) LOW — `dominant_type` reported a biomarker at intensity 0 (should be "none"); (e) LOW — the module doc overstated per-language-percentile uniformity (shotgun excepted); plus several weak/tautological tests and untested contracts (weights, band thresholds, code-health CSV columns).
 *   **Fix**: (a) explain tuple updated to the current formula/weights/thresholds; (b) `code_health_min` rewired to the composite via a new `evaluate_code_health_gate(&[CodeHealthRow])` (breaking change, noted in CHANGELOG); (c) `html` wired via the generic `write_html`; (d) `WHERE intensity > 0` added to the dominant-type query; (e) module doc scoped. Tests: reframed the architecturally-invalid `structural_risk_rewards_multiple_cooccurring_smells`, hardened the silent-skip in `code_health_penalizes_churn`, removed the tautological `god_class_and_dry_are_biomarkers`, fixed the `min_by_key(loc)` tie in the ManualUp test, and added `code_health_csv_column_contract` + `code_health_band_matches_thresholds`. Residual (deferred): exact-weight assertion (needs exposing `n_cn`/`n_au`), god-class biomarker firing (needs a fan-in fixture), and churn/ownership global-vs-per-language normalization (a Phase-2 tuning consideration).
 
-### 4.5 SPA linked-brushing — publish-side + subscriber deep validation (2026-07-03)
+### 5.3 SPA linked-brushing — publish-side + subscriber deep validation (2026-07-03)
 
-A post-slice deep validation of Plan 3b (four selection subscribers) ran three parallel source-level validators (subscribe correctness / publish completeness / test integrity) plus a validation-spec pass. The subscribe side was confirmed fully correct; the findings below are on the publish side and two subscriber edge cases. F239–F241 were fixed together in `0a41b1d`; F238 is the one that needs a design decision (tracked for Plan 3c).
+A post-slice deep validation of Plan 3b (four selection subscribers) ran three parallel source-level validators (subscribe correctness / publish completeness / test integrity) plus a validation-spec pass. The subscribe side was confirmed fully correct; the findings below are on the publish side and two subscriber edge cases. F239–F241 were fixed together in `0a41b1d`; F238 — initially expected to need a design decision — was also fixed, via a direct per-item `lineStyle` restyle (`dd9cfad`).
 
 #### F238 — parallel-coords cross-widget highlight is visually inert (`emphasis.disabled`)
 
@@ -382,7 +383,7 @@ A post-slice deep validation of Plan 3b (four selection subscribers) ran three p
 *   **Description**: The original Step 13 (inside `rendered_spa_boots_without_console_errors`) asserted the coupling subscriber highlights a selected file's `modulePathSeg(path, 2)` module prefix in module-depth sankey view. The production mapping is correct (verified by source review), but that test's only fixture — `differential_repo::build()` — has near-zero co-changes, so at depth 2 the change-coupling sankey had no cross-module links and no qualifying node; the step always SKIPPED. Net: the guard executed no assertion in CI and provided zero live regression protection, and it spun a ~3s re-render poll to no effect on every run.
 *   **Fix (`373747e`, `9030159`)**: added a dedicated `coupling_repo` fixture (`test_support/mod.rs`) — three 2-segment modules (`src/alpha`, `src/beta`, `src/gamma`), with `alpha/svc.rs`↔`beta/svc.rs` co-changed across 6 commits so a `src/alpha`↔`src/beta` depth-2 edge is guaranteed under any coupling threshold, plus per-file solo churn for hotspot rows — and moved the assertion into its own test `sankey_module_depth_highlights_mapped_node` rendered from that fixture with `permissive_coupling_opts`. The inert Step 13 was removed from the smoke test. The new test FAILS (not skips) if the depth-2 sankey has no qualifying node, and asserts the captured highlight name equals the module prefix (not the raw path). Independently verified: `spa_browser_test` 9/9 (was 8), the new test exercises its assert (full-boot run, ~9.3s), `spa_integration_test` 4/4.
 
-### 4.6 Whole-codebase architecture review + hygiene pass (2026-07-04)
+### 5.4 Whole-codebase architecture review + hygiene pass (2026-07-04)
 
 A five-dimension architecture review (four parallel read-only analysts: architecture/boundaries, coding-structure/patterns, performance, SPA; plus two validation-and-spec passes) surveyed the engine + SPA for improvement leverage. Headline: the codebase is genuinely well-built — error handling exemplary (3 non-test `unwrap`s, all justified), the `Repo` two-backend abstraction + `!Send` ingest pipeline + cross-crate boundaries clean, CSV-injection closed, test quality high. The real structural debt concentrates in one place: the analysis→output **dispatch fan-out** (43 stringly-typed dispatchers × per-format arms + 43+43 tabular emitter fns). The low-risk validated wins were fixed this pass; the large refactors are logged own-slice below.
 
@@ -403,13 +404,13 @@ A five-dimension architecture review (four parallel read-only analysts: architec
 *   **Clippy `#[allow]` justification** (`356efc9`) — 19 previously-unjustified `#[allow(clippy::…)]` sites gained a true per-site technical reason (Golden Rule #14). The tempting "consolidate casts to a workspace allow" was validated and REJECTED — it would disable the lint repo-wide.
 *   **SPA listener-bus unification** (`1d645af`) — the two byte-identical registries (`selection` + `brush`) collapsed to a `makeListenerBus(arrayName)` factory (behavior-preserving; browser tests green).
 *   **SPA browser-test coverage** (`e4ec986`) — the main browser test's dashboard fixture was broadened so previously-dark widget render branches (arch-trend, fusion overlays, MI tile, ownership/clones colour maps) now execute under the no-console-error / exception gate. No latent render bug surfaced.
+*   **F245 — SPA `widgets.js` build-time module split** — the 4588-line single IIFE was split into seven ordered `spa/js/*.js` source modules concatenated at compile time via `concat!` into the `{{WIDGETS_JS}}` placeholder in `spa.rs`, fitting the offline-single-file constraint (no build step, one output file). Byte-identical assembly proven via `cmp`; full browser suite green; files named to match their contents. (Was logged own-slice; landed this pass.)
 
 #### Logged own-slice (validated REAL, each warrants its own byte-identical/benchmark-gated slice)
 
 *   **F244 — Central analysis registry / `enum Format` + `TabularRow` (root cause behind the dispatch fan-out).** Refines/absorbs **F215** (stringly-typed dispatch), **F148** (no shared tabular-row trait; 88 csv/markdown `write_*` fns), **F119** (hand-rolled CSV). Validated true scope: 43 dispatchers + ~137 match arms; a clap `ValueEnum` `Format` is the minimal first increment (deletes the hand-maintained master-list `match`, adds parse-time validation + completions) — but carries an exit-2-vs-exit-4 contract delta for invalid `--format` and does NOT alone fix the per-dispatcher advertised-string drift (needs a `supported_formats()` source of truth). `main.rs` (3283 LOC) splits into `commands/`+`dispatch/` after the enum lands. L, byte-identical-gated. Sequence AHEAD of the output-emitter cluster.
-*   **F245 — SPA `widgets.js` build-time module split.** 4588-line single IIFE; split into topical source `.js` fragments concatenated into the `{{WIDGETS_JS}}` placeholder in `spa.rs` (fits the offline-single-file constraint — no build step, one output file). **Fixed (Unreleased)**: implemented as a compile-time `concat!` of seven ordered `spa/js/*.js` modules (byte-identical assembly proven via `cmp`; full browser suite green), files named to match contents.
 *   **F246 — SPA canvas-chart keyboard operability.** The arch-graph/DSM/module-chord/X-Ray/treemap have `role="img"`+`aria-label` but no keyboard-navigable data equivalent (only the circle-pack has its `role="tree"`). Largest remaining a11y gap; scope to the 1-2 highest-value widgets. M.
-*   **Still tracked:** F206/F173 (HEAD-scan I/O — the one big perf lever, benchmark-gated), F218 residual (per-widget layout-change routing — the theme-path split landed; see the finding).
+*   **Still tracked:** F173 (the remaining HEAD-scan lever — deduping the blob across the three sequential passes, benchmark-gated; F206's per-worker warm reader shipped in v0.25.0, see §4.2), F218 residual (per-widget layout-change routing — the theme-path split landed; see the finding).
 
 #### Validated and REJECTED (do NOT act)
 
@@ -418,7 +419,7 @@ A five-dimension architecture review (four parallel read-only analysts: architec
 
 ---
 
-## 5. Next Audit Cycle
+## 6. Next Audit Cycle
 
 **State after the 2026-07-01 + 2026-07-02 implementation sessions (all merged to `main`):**
 
@@ -430,23 +431,22 @@ A five-dimension architecture review (four parallel read-only analysts: architec
 - **Fixed (Unreleased) 2026-07-03**: F232 (coupling double-count — `n_cp` removed, score reweighted), F233 (`code_health_biomarkers_v1` cross-analysis contract — documented at the DDL), F234 (`loc` display floor — reports true value), **F235 (`structural_risk` saturation — rank files not functions + weighted sum; 67/69-at-1.0 → 8/32/31 band split)**, **F236 (biomarker normalization unified on full-universe per-file percentile; `biomarker_repo` fixture + distribution/vocabulary/dominant-type tests)**, **F237 (deep-validation audit: stale explain, check-gate composite rewiring, refactoring-targets html, dominant-type intensity>0, test hardening)**, **F239 (trends A→B stale highlight — downplay-first)**, **F240 (SPA linked-brushing publish symmetry — map/sankey/treemap/X-Ray now broadcast)**, **F241 (coupling-sankey highlight fires in module-depth view)** (all `0a41b1d`), **F238 (parallel-coords highlight made visible via a direct per-item `lineStyle` restyle — `dd9cfad`)**.
 
 **Highest-leverage work remaining:**
-1. **HEAD-scan I/O** (F206 + F173) — resolve HEAD→tree once per pass with a per-worker cached repo; benchmark via `ingest_capacity_sweep`. Biggest large-repo wall-clock lever.
+1. **HEAD-scan I/O** (F173) — F206's per-worker warm reader (resolve HEAD→tree once per worker) shipped in v0.25.0; the remaining lever is deduping the blob across the three sequential HEAD passes (F173), benchmark via `ingest_capacity_sweep`. Biggest large-repo wall-clock lever.
 2. **Output-emitter cluster** (F119 / F148 / F161) — csv-crate migration (preserve the F170 injection guard + `\n` endings), `TabularEmit` dedup, `EmitterStream` streaming, in one coordinated byte-identical pass.
-3. **`Plan N` marker sweep** (F231) — 62-site scripted comment cleanup (a hard-rule violation).
 
 **F242 (module-depth coupling-subscriber browser test made live — new `coupling_repo` fixture + dedicated test; `373747e`, `9030159`)** closed the last SPA linked-brushing follow-up.
 
-**2026-07-04 architecture-review pass**: **F243** (html un-advertised in 4 dispatchers — Fixed `acd9568`) and **F231** (Plan-N markers — Fixed via self-enforcing hygiene guard `52c427c`) closed; clippy-allow justification + SPA listener-bus + browser-fixture coverage landed. New own-slice: **F244** (analysis registry / `enum Format` + `TabularRow`, absorbs F215/F148/F119), **F245** (widgets.js module split), **F246** (canvas keyboard a11y).
+**2026-07-04 architecture-review pass**: **F243** (html un-advertised in 4 dispatchers — Fixed `acd9568`) and **F231** (Plan-N markers — Fixed via self-enforcing hygiene guard `52c427c`) closed; clippy-allow justification + SPA listener-bus + browser-fixture coverage landed. New own-slice: **F244** (analysis registry / `enum Format` + `TabularRow`, absorbs F215/F148/F119) and **F246** (canvas keyboard a11y); **F245** (widgets.js module split) landed this pass.
 
-The 2026-08-02 discovery pass logged **F249–F268** (see §6). The next sweep should re-open with F-IDs starting at **F269**.
-
-**F248 (Active) — no integration coverage that `health-trend`'s `arch_health` falls as the import graph decays.** The `health-trend` analysis (`analyses/health_trend.rs`) computes `arch_health` from per-rev `GraphMetrics`, and the unit tests cover the pure function (empty/acyclic/fully-tangled/clamp). But the integration test (`tests/health_trend_test.rs`) only asserts shape/ranges/oldest-first, not the spec's "degrading architecture ⇒ `arch_health` decreasing" case — because the only ≥2-commit fixture, `biomarker_repo`, is six independent Rust files with no inter-file imports, so its import graph is empty and `arch_health` is pinned at 100 across every sample. Fix: add an import-structured fixture whose later commits introduce a dependency cycle (mirror `architecture_trend`'s `trend_captures_cycle_introduction_over_time`), then assert the newest sample's `arch_health` is below an earlier sample's. Surfaced by the whole-branch review of the Repo Health Timeline (piece 2).
+The 2026-08-02 discovery pass logged **F249–F268** (see §7). The next sweep should re-open with F-IDs starting at **F269**.
 
 **F247 (Active) — `run_coupling_scoped` cutoff ignores lineage/time-bucket source in `good_commits`.** The rev-parameterizable `code_health` history cutoff (`HealthScanCtx::history_cutoff`) routes coupling through `run_coupling_scoped(db, opts, "changes_at_ts")`, which overrides only the pair-source + Fisher-denominator tables. The internal `good_commits_cte(bucket, use_lineage)` still reads the opt-derived `changes_lineage`/`changes`. For the primary path (no lineage, no time-bucket) this is equivalent — the cutoff-window revset equals full-history ∩ window. But `history_cutoff` combined with `--use-canonical-lineage` yields coupling pairs keyed on pre-rename path names, and combined with `--time-bucket` aggregates buckets over full history. The **same class** applies to code-health's own churn / revs / author-fragmentation CTEs: under a cutoff `{src}` becomes the raw, non-lineage `changes_at_ts` view, so those terms also lose rename-awareness when a cutoff is combined with `--use-canonical-lineage`. Neither combination is exercised (the timeline consumer uses the primary path — cutoff without lineage/bucket) nor required by the spec; documented in the `run_coupling_scoped` and `CHANGES_AT_TS_DDL` doc comments. Fix if a future consumer needs cutoff + lineage/bucket: build `changes_at_ts` from the lineage-rewritten source and thread `changes_source` into `good_commits_cte`. Surfaced by the Task-4 review + the whole-branch review of the rev-parameterizable code-health branch.
 
+**F248 (Active) — no integration coverage that `health-trend`'s `arch_health` falls as the import graph decays.** The `health-trend` analysis (`analyses/health_trend.rs`) computes `arch_health` from per-rev `GraphMetrics`, and the unit tests cover the pure function (empty/acyclic/fully-tangled/clamp). But the integration test (`tests/health_trend_test.rs`) only asserts shape/ranges/oldest-first, not the spec's "degrading architecture ⇒ `arch_health` decreasing" case — because the only ≥2-commit fixture, `biomarker_repo`, is six independent Rust files with no inter-file imports, so its import graph is empty and `arch_health` is pinned at 100 across every sample. Fix: add an import-structured fixture whose later commits introduce a dependency cycle (mirror `architecture_trend`'s `trend_captures_cycle_introduction_over_time`), then assert the newest sample's `arch_health` is below an earlier sample's. Surfaced by the whole-branch review of the Repo Health Timeline (piece 2).
+
 ---
 
-## 6. Discovery pass — 2026-08-02 (F249–F268)
+## 7. Discovery pass — 2026-08-02 (F249–F268)
 
 A six-dimension read-only research fan-out (robustness / rigor / performance / feature-deepening /
 error-handling / testing), each grounded in source and adjudicated against the tracked baseline;
@@ -456,7 +456,7 @@ scenario, proposed direction, value/effort, verification status, invariant touch
 
 | F-ID | Subject | Sev | Status |
 |---|---|---|---|
-| F249 | `ensure_ingest_witnessed` guards only 2 of ~13 ingest entry points — `analyze`, `gate`, `gate_changes`, `explain`, 8 MCP tools render confident empty reports over a blind (fetch-depth:1 / all-excluded) ingest. ✅ grep-verified; convergent (5 signals). Gotcha: `analyze`'s `--after/--before` also empties `commits` → message must branch. | HIGH | Active |
+| F249 | `ensure_ingest_witnessed` guards only 2 of ~13 ingest entry points — `analyze`, `gate`, `gate_changes`, `explain`, 8 MCP tools render confident empty reports over a blind (fetch-depth:1 / all-excluded) ingest. ✅ grep-verified; convergent (5 signals). Gotcha: `analyze`'s `--after/--before` also empties `commits` → message must branch. | HIGH | Fixed (v0.25.0) |
 | F250 | `codelore explain delivery-friction` 404s on a shipped, fully-documented metric. ✅ verified | LOW | Fixed (Unreleased) |
 | F251 | `coordination-needs` / `knowledge-islands` classify `high` tier / 100% ownership off n=2–5 with no denominator field (unlike `bus_factor`/`ownership`). ✅ verified | MED | Fixed (Unreleased) |
 | F252 | `write_github_output` silently swallows the open+write `Err` (`let _ =`). ✅ verified | LOW | Fixed (Unreleased) |
@@ -470,8 +470,8 @@ scenario, proposed direction, value/effort, verification status, invariant touch
 | F260 | `hotspot-velocity` combined-window floor lets a single-window burst out-rank steadier activity; `RECENT/BASELINE_DAYS` + `EA_Z_FLOOR` uncited & unoverridable (bypass the `constants.rs` convention). | MED | Active |
 | F261 | Dead `changes.similarity` (rename %) → an `avg_rename_similarity` / low-similarity-rename signal. | LOW | Active |
 | F262 | Survival analysis on hotspots (Kaplan-Meier over hot-episodes) — re-scope of the roadmap Tier-1 item; no new ingest, but needs a design pass (stateful episode extraction + KM). | — | Active (design) |
-| F263 | `[new_code]` gate `run_new_code_scope` has zero test coverage (only the pure evaluator is tested). Pairs with F249. | HIGH | Active |
-| F264 | `is_shallow()` has zero tests — the primitive behind cycles 2/3/4's top finding. Pairs with F249. | HIGH | Active |
+| F263 | `[new_code]` gate `run_new_code_scope` has zero test coverage (only the pure evaluator is tested). Pairs with F249. | HIGH | Fixed (v0.25.0) |
+| F264 | `is_shallow()` has zero tests — the primitive behind cycles 2/3/4's top finding. Pairs with F249. | HIGH | Fixed (v0.25.0) |
 | F265 | `calibrate` total-failure (0-of-N) exit path untested (only partial-failure is) — would red-flag cycle-2's G2 bug. ✅ verified: G2 was already fixed (`calibrate.rs` hard-errors on 0-of-N with `CodeLoreError::Analysis`, exit 4); this was a coverage gap, not a live bug. Regression test locks in the existing behavior. | MED | Fixed (Unreleased) |
 | F266 | Differential harness missing binary / non-ASCII / submodule probes (fixture documents its own boundary). Touches the two-backend-parity invariant. | HIGH | Active |
 | F267 | MCP `hotspots` never invoked via `tools/call`; `entity-effort`/`entity-ownership` have zero behavioral coverage. | MED | Fixed (Unreleased) |
