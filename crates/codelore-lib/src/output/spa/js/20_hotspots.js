@@ -648,7 +648,7 @@
           ? (sortDir > 0 ? '▲' : '▼')
           : '';
         const tip = c.defKey ? buildTooltipHtml(c.defKey) : '';
-        html += '<th class="' + (active ? 'active' : '') + '"' +
+        html += '<th scope="col" class="' + (active ? 'active' : '') + '"' +
           ' data-key="' + escapeHtml(c.key) + '">' +
           escapeHtml(c.label) + tip +
           ' <span class="sort-indicator">' + indicator + '</span>' +

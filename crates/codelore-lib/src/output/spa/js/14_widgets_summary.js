@@ -163,11 +163,11 @@
     });
 
     var html = '<table><thead><tr>' +
-      '<th>Path</th>' +
-      '<th>Departed author</th>' +
-      '<th class="num">Ownership %</th>' +
-      '<th class="num">Days since active</th>' +
-      '<th class="num">LOC</th>' +
+      '<th scope="col">Path</th>' +
+      '<th scope="col">Departed author</th>' +
+      '<th scope="col" class="num">Ownership %</th>' +
+      '<th scope="col" class="num">Days since active</th>' +
+      '<th scope="col" class="num">LOC</th>' +
       '</tr></thead><tbody>';
     for (var i = 0; i < sorted.length; i++) {
       const r = sorted[i];

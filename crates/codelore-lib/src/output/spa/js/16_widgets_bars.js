@@ -273,7 +273,7 @@
         '<div class="table-container coordination-table">' +
           '<table class="table table-xs">' +
             '<thead><tr>' +
-              '<th>File</th><th>Tier</th><th>Fragmentation</th><th>Entropy</th>' +
+              '<th scope="col">File</th><th scope="col">Tier</th><th scope="col">Fragmentation</th><th scope="col">Entropy</th>' +
             '</tr></thead>' +
             '<tbody>' + rows + '</tbody>' +
           '</table>' +
@@ -296,6 +296,7 @@
         if (window._codeloreShowDetail) window._codeloreShowDetail(p);
       });
       coordRowEls[cw].style.cursor = 'pointer';
+      wireRowKbActivation(coordRowEls[cw]);
     }
   }
 
