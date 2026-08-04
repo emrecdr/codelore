@@ -990,6 +990,40 @@ fn time_bucket_rejected_for_incompatible_analysis() {
         ));
 }
 
+/// `--group-file` combined with `function-hotspots` must be rejected at the
+/// CLI boundary. Grouping rewrites the `changes` table but discards the hunks
+/// of collapsed paths, and `function-hotspots` ranks over the raw `hunks`
+/// table — so the ranking would be silently incomplete. Reject loudly (exit 2,
+/// `InvalidOptions`) instead.
+#[test]
+fn group_file_rejected_for_function_hotspots() {
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let group_file = tiny.dir.path().join("groups.txt");
+    std::fs::write(&group_file, "src/.* => src\n").unwrap();
+    let output = codelore_cmd()
+        .args([
+            "analyze",
+            "--analysis",
+            "function-hotspots",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--format",
+            "csv",
+            "--no-banner",
+            "--no-cache",
+            "--group-file",
+            group_file.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--group-file is not supported for analysis function-hotspots"),
+        "expected the group-file rejection message, got stderr: {stderr}"
+    );
+}
+
 /// Control case: `--time-bucket` on a compatible analysis
 /// (coupling) must succeed.
 #[test]

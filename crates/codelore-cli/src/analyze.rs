@@ -149,6 +149,23 @@ pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         .into());
     }
 
+    // `--group-file` collapses/drops paths in the `changes` table, but
+    // `function-hotspots` ranks over the raw `hunks` table, whose rows are
+    // NOT path-rewritten by grouping (line-range semantics don't translate to
+    // the group level). Under grouping the hunks of collapsed or dropped paths
+    // are discarded, so the ranking would be silently incomplete. Reject the
+    // combination rather than emit a partial ranking.
+    if opts.group_file.is_some() && matches!(analysis, AnalysisName::FunctionHotspots) {
+        return Err(CodeLoreError::InvalidOptions(
+            "--group-file is not supported for analysis function-hotspots \
+             (grouping discards the hunks of collapsed paths, which \
+             function-hotspots ranks over — the result would be silently \
+             incomplete). Run function-hotspots without --group-file."
+                .to_string(),
+        )
+        .into());
+    }
+
     let analysis_name = args.analysis.as_str();
 
     // clones is a HEAD-only filesystem + tree-sitter walk — no git
