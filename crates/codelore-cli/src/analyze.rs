@@ -574,7 +574,7 @@ fn html_not_wired(analysis_name: &str) -> anyhow::Error {
         .map(|a| a.as_str())
         .collect::<Vec<_>>()
         .join(", ");
-    CodeLoreError::Analysis(format!(
+    CodeLoreError::InvalidOptions(format!(
         "--format html for analysis `{analysis_name}` not yet wired (covered: {covered} — file an issue if you need another)"
     ))
     .into()
@@ -583,10 +583,11 @@ fn html_not_wired(analysis_name: &str) -> anyhow::Error {
 /// The verbatim error for an output `--format` a given analysis's dispatch
 /// doesn't wire. The advertised list is derived from [`supported_formats`] — the
 /// one source of truth for what each analysis emits — so the message and the
-/// wiring cannot drift, and the `CodeLoreError::Analysis` shape keeps the
-/// analysis-failure exit code uniform.
+/// wiring cannot drift. An invalid format×analysis combination is a CLI/argument
+/// mistake, so the `CodeLoreError::InvalidOptions` shape lands it in the exit-2
+/// bucket, matching an unrecognised `--format` value rejected at the parser.
 fn unsupported_format(analysis: AnalysisName, fmt: &str) -> anyhow::Error {
-    CodeLoreError::Analysis(format!(
+    CodeLoreError::InvalidOptions(format!(
         "{} analysis supports {}; got {fmt:?}",
         analysis.as_str(),
         supported_formats(analysis).join("|"),

@@ -1056,9 +1056,10 @@ fn unsupported_format_bails_cleanly_instead_of_panicking() {
     // `--format ndjson`/`gha` pass top-level format validation but are only
     // wired for a few analyses. For the rest, the dispatch must bail with a
     // clean, descriptive error — NOT panic through a reachable
-    // `unreachable!` (exit 101). The per-analysis format mismatch carries
-    // CodeLoreError::Analysis → spec §6.6 exit 4 (was the generic 1 before
-    // the dispatch bails grew typed error buckets). Cover ndjson and gha.
+    // `unreachable!` (exit 101). An invalid format×analysis combination is a
+    // CLI/argument mistake, so it carries CodeLoreError::InvalidOptions → exit
+    // 2 (the CLI/arg-error code, unified with an unrecognised `--format`
+    // value). Cover ndjson and gha.
     let tiny = codelore_lib::test_support::tiny_repo::build();
     for fmt in ["ndjson", "gha"] {
         codelore_cmd()
@@ -1075,7 +1076,7 @@ fn unsupported_format_bails_cleanly_instead_of_panicking() {
                 "1",
             ])
             .assert()
-            .code(4)
+            .code(2)
             .stderr(predicate::str::contains("abs-churn"))
             .stderr(predicate::str::contains("panicked").not())
             .stderr(predicate::str::contains("unreachable").not());
