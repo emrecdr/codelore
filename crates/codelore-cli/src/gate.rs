@@ -102,14 +102,18 @@ pub(crate) fn run_gate_cmd(args: &args::GateArgs) -> Result<()> {
 
     let report = build_change_set_report(&db, &repo, &opts, &cache_root)
         .context("build change-set report")?;
-    let violations = evaluate_gate_thresholds(&thresholds, &report);
+    let mut violations = evaluate_gate_thresholds(&thresholds, &report);
 
     let ts = now_utc_ts();
-    append_gate_runs(
-        &cache_root,
-        &args.repo,
-        &gate_ledger_records(&thresholds, &report, &violations, &ts),
-    );
+    let records = gate_ledger_records(&thresholds, &report, &violations, &ts);
+    append_gate_runs(&cache_root, &args.repo, &records);
+    // fail_on_skipped policy: a gate recorded "skipped" becomes a violation so
+    // the run fails its exit rather than passing on a gate that never
+    // evaluated. The ledger above keeps the honest "skipped" verdict.
+    violations.extend(crate::skipped_gate_violations(
+        &records,
+        thresholds.gates.fail_on_skipped,
+    ));
 
     emit_gate_run_notices(args, &thresholds, &report);
     if matches!(args.format, GateFormat::Json) {
@@ -138,11 +142,9 @@ fn report_gate_clean_tree(args: &args::GateArgs) {
 }
 
 /// Emit the gate run's stderr notices (suppressed under `--quiet`): the
-/// merge-in-progress note, the skip notice when `delta_code_health_min` is
-/// configured but a whole-repo code-health median is unavailable on either
-/// side (no scoreable files), and the same skip notice for the three
-/// change-set-scoped gates when `report.changes` itself is empty — nothing
-/// was measured, so the run reports skipped rather than a silent pass.
+/// merge-in-progress note, and the skip notice when `delta_code_health_min` is
+/// configured but a whole-repo code-health median is unavailable on either side
+/// (no scoreable files).
 fn emit_gate_run_notices(
     args: &args::GateArgs,
     thresholds: &codelore_lib::cli_api::quality_gates::Thresholds,
@@ -160,17 +162,6 @@ fn emit_gate_run_notices(
         eprintln!(
             "  ⚠ delta_code_health_min: skipped — no whole-repo code-health median to compare"
         );
-    }
-    if report.changes.is_empty() {
-        if thresholds.diff.delta_code_health_min_per_file.is_some() {
-            eprintln!("  ⚠ delta_code_health_min_per_file: skipped — no files in the change-set");
-        }
-        if thresholds.diff.new_file_health_min.is_some() {
-            eprintln!("  ⚠ new_file_health_min: skipped — no files in the change-set");
-        }
-        if thresholds.diff.no_new_cycles {
-            eprintln!("  ⚠ no_new_cycles: skipped — no files in the change-set");
-        }
     }
 }
 

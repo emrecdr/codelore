@@ -1967,6 +1967,139 @@ fn gate_delta_per_file_records_skipped_when_no_delta_is_measured() {
 }
 
 #[test]
+fn diff_fail_on_skipped_fails_a_skipped_gate_family() {
+    // The blind-ingest skip from `diff_gate_skipped_when_neither_revision_...`
+    // (a `--min-revs` floor above every file empties the hotspot set at both
+    // revisions), but with `fail_on_skipped = true`: the skipped `[diff]` gate
+    // family must now fail the run through diff's violation exit (code 4)
+    // instead of passing. The default-false counterpart (exit 0) is that
+    // sibling test, which runs the identical range without the policy.
+    let (dir, base, head) = unchanged_code_fixture();
+    let thresholds = dir.path().join("gates.toml");
+    std::fs::write(
+        &thresholds,
+        "[gates]\nfail_on_skipped = true\n[diff]\nno_new_cycles = true\n",
+    )
+    .unwrap();
+    let output = codelore_cmd()
+        .args([
+            "diff",
+            "--repo",
+            dir.path().to_str().unwrap(),
+            "--min-revs",
+            "50",
+            "--thresholds-file",
+            thresholds.to_str().unwrap(),
+            "--format",
+            "json",
+            &format!("{base}..{head}"),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "fail_on_skipped must fail a skipped gate via diff's exit 4; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // The skip stays disclosed in the (already-emitted) JSON document.
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        json["gate_skip_reason"].as_str().is_some(),
+        "the skip stays disclosed even when it now fails: {json}"
+    );
+}
+
+#[test]
+fn check_fail_on_skipped_fails_a_skipped_gate() {
+    // `max_findings_in_hot_files` with no external-findings sidecar is recorded
+    // "skipped". By default that skip does not fail the run; with
+    // `fail_on_skipped = true` it must (check's exit 1).
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let thresholds = tiny.dir.path().join(".codelore-thresholds.toml");
+
+    // Default: the skipped gate does not fail the run.
+    std::fs::write(&thresholds, "[gates]\nmax_findings_in_hot_files = 0\n").unwrap();
+    codelore_cmd()
+        .args(["check", "--repo", tiny.dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    // fail_on_skipped=true: the same skipped gate now fails.
+    std::fs::write(
+        &thresholds,
+        "[gates]\nmax_findings_in_hot_files = 0\nfail_on_skipped = true\n",
+    )
+    .unwrap();
+    codelore_cmd()
+        .args(["check", "--repo", tiny.dir.path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("FAIL"));
+}
+
+#[test]
+fn gate_fail_on_skipped_fails_an_all_none_change_set() {
+    // The M4 scenario (a non-source change yields no per-file delta →
+    // delta_code_health_min_per_file is "skipped") combined with
+    // `fail_on_skipped = true`: the gate must now fail (exit 1) instead of
+    // passing. Without the policy the identical change-set passes (exit 0),
+    // asserted first.
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    };
+    git(&["init", "-q"]);
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(
+        repo.join("src/lib.rs"),
+        "pub fn tiny() -> i32 {\n    1\n}\n",
+    )
+    .unwrap();
+    std::fs::write(repo.join("README.md"), "hello\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "base"]);
+    // Uncommitted non-source change: change-set non-empty, delta = None.
+    std::fs::write(repo.join("README.md"), "hello world\n").unwrap();
+    let thresholds = repo.join(".codelore-thresholds.toml");
+
+    // Default: the skipped per-file gate does not fail the run.
+    std::fs::write(
+        &thresholds,
+        "[diff]\ndelta_code_health_min_per_file = 0.0\n",
+    )
+    .unwrap();
+    codelore_cmd()
+        .args(["gate", "--repo", repo.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // fail_on_skipped=true: the same skip now fails the gate.
+    std::fs::write(
+        &thresholds,
+        "[gates]\nfail_on_skipped = true\n[diff]\ndelta_code_health_min_per_file = 0.0\n",
+    )
+    .unwrap();
+    codelore_cmd()
+        .args(["gate", "--repo", repo.to_str().unwrap()])
+        .assert()
+        .failure()
+        .code(1);
+}
+
+#[test]
 fn diff_sarif_schema_url_and_info_uri_use_canonical_constants() {
     // The diff SARIF schema URL and informationUri must use the constants from
     // codelore_lib::output::sarif, and degrading delta-health results must carry

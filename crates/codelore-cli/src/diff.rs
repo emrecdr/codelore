@@ -71,6 +71,13 @@ pub struct DiffOutput {
     /// passed with zero violations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gate_skip_reason: Option<String>,
+    /// Whether the resolved thresholds set the `fail_on_skipped` policy. Not
+    /// serialized — it is exit-code policy, not diff data. [`should_fail`]
+    /// combines it with [`gate_skip_reason`](Self::gate_skip_reason) so a run
+    /// whose only non-pass signal is a skipped `[diff]` gate family fails
+    /// (diff's violation exit) instead of passing.
+    #[serde(skip)]
+    pub gate_fail_on_skipped: bool,
     /// Change-level health verdict. `None` when the base analysis lacks
     /// function metrics (stale `--base-cache` written by an older binary).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -851,6 +858,9 @@ pub fn run_diff(args: &DiffArgs) -> Result<(DiffOutput, FactsDb, Options)> {
             head_median_code_health,
             gate_violations,
             gate_skip_reason,
+            gate_fail_on_skipped: thresholds_opt
+                .as_ref()
+                .is_some_and(|t| t.gates.fail_on_skipped),
             delta_health,
         },
         head_db,
@@ -896,9 +906,17 @@ fn median_code_health(rows: &[HotspotRow]) -> f64 {
 /// the case where "do nothing" is the wrong default. The `--fail-on`
 /// knob continues to gate the OTHER signals (rank entrants, score
 /// increase, etc.) as a separate axis.
+///
+/// The `fail_on_skipped` policy folds in here too: when it is set and the
+/// `[diff]` gate family was skipped (a blind ingest measured nothing on either
+/// side), the run fails through the same violation exit rather than passing on a
+/// gate that never evaluated.
 pub fn should_fail(args: &DiffArgs, output: &DiffOutput) -> bool {
     use crate::args::DiffFailOn;
     if !output.gate_violations.is_empty() {
+        return true;
+    }
+    if output.gate_fail_on_skipped && output.gate_skip_reason.is_some() {
         return true;
     }
     match args.fail_on {

@@ -534,12 +534,16 @@ fn skipped_check_gates(thresholds: &Thresholds) -> Vec<SkippedGate> {
         max_findings_in_hot_files,
         corpus_percentile_max,
         fail_on_degraded,
+        // Cross-surface exit-code policy (`codelore check` / `gate` / `diff`),
+        // not a gate this tool applies — disclosed as skipped when the user
+        // enables it, so a pass here is never mistaken for a full run's verdict.
+        fail_on_skipped,
         // A modifier of max_red_effort_pct, not a standalone gate. This tool
         // DOES honor it (the effort-exposure gate above decomposes when set), so
         // it is neither reported as an evaluated gate nor as skipped.
         red_effort_exempt_improving: _,
     } = &thresholds.gates;
-    let configured: [(&'static str, bool); 12] = [
+    let configured: [(&'static str, bool); 13] = [
         ("cognitive_max", cognitive_max.is_some()),
         ("hotspot_score_max", hotspot_score_max.is_some()),
         ("hotspot_anchored_max", hotspot_anchored_max.is_some()),
@@ -558,6 +562,9 @@ fn skipped_check_gates(thresholds: &Thresholds) -> Vec<SkippedGate> {
         // every `codelore check` run while this tool never applies them —
         // disclosed whenever active.
         ("fail_on_degraded", *fail_on_degraded),
+        // Opt-in exit-code policy this tool never applies — disclosed only when
+        // the user sets it (defaults false).
+        ("fail_on_skipped", *fail_on_skipped),
     ];
     configured
         .into_iter()
@@ -585,6 +592,7 @@ fn structural_skip_reason(gate: &str) -> &'static str {
              (it uses the plain, unanchored hotspot scan); `codelore check` is authoritative"
         }
         "fail_on_degraded" => "degraded-gate handling is `codelore check`-only",
+        "fail_on_skipped" => "skipped-gate handling is `codelore check` / `gate` / `diff`-only",
         _ => "evaluated only by `codelore check`, which is authoritative for it",
     }
 }

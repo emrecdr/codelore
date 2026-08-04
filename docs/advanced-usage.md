@@ -858,6 +858,8 @@ Three surfaces evaluate this file, each against a different input: `codelore che
 
 `delta_code_health_min_per_file` and `new_file_health_min` are evaluated only by the working-tree gate surfaces — `codelore diff` ignores both. Conversely, `new_hotspot_max`, `delta_health_min`, and `deny_degrading_verdict` are diff-only and never evaluated by the working-tree gate.
 
+A gate can also report **skipped** — its underlying analysis had nothing to evaluate (no external-findings sidecar, no calibration artifact, a history shallower than a `[new_code]` window, or a change-set that measured no per-file delta). By default a skipped gate does not affect the exit code, so a gate that silently stopped evaluating is indistinguishable at the exit code from one that evaluated and passed. Set `fail_on_skipped = true` in `[gates]` to treat any skipped gate as a failure — honoured by `codelore check`, `codelore gate`, and `codelore diff` (exit 1 on `check`/`gate`, exit 4 on `diff`), with the ledger still recording the honest `skipped` verdict. It defaults to `false` (behaviour unchanged) and, like `fail_on_degraded`, is a policy modifier that configures no gate on its own.
+
 #### The `[new_code]` period gate
 
 `[gates]`' absolute floors bind on the legacy tail: a `code_health_min` must sit below the worst old file, so it says nothing about whether the code being written *this quarter* is healthy, and it ratchets only when someone re-bases it by hand. `[diff]`'s `new_file_health_min` floors new files, but only within *one pull request*. `[new_code]` fills the period-scoped gap — "new and recently-touched code is held to a strict standard; legacy code is only required not to degrade" — over a rolling window rather than a single PR:
