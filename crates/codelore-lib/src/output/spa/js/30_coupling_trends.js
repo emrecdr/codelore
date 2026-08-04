@@ -660,7 +660,10 @@
       tooltip: {
         formatter: function (params) {
           const d = params.data || {};
-          if (!d.cognitive) return '<b>' + escapeHtml(d.name || '') + '</b><br/>directory';
+          // Directory nodes carry `children`; file leaves don't. A
+          // genuine zero-cognitive file is still a file, so branch on
+          // the structural marker rather than on `cognitive`.
+          if (d.children) return '<b>' + escapeHtml(d.name || '') + '</b><br/>directory';
           return '<b>' + escapeHtml(d.name) + '</b>' +
             '<br/>revisions: ' + (d.value || 0) +
             '<br/>cognitive: ' + d.cognitive.toFixed(0) +
