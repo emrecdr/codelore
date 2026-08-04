@@ -299,8 +299,8 @@ fn gate_ledger_records(
     violations: &[codelore_lib::cli_api::quality_gates::GateViolation],
     ts: &str,
 ) -> Vec<codelore_lib::cli_api::quality_gates::ledger::GateRunRecord> {
-    use codelore_lib::cli_api::quality_gates::change_set_gate_verdict;
     use codelore_lib::cli_api::quality_gates::ledger::GateRunRecord;
+    use codelore_lib::cli_api::quality_gates::{change_set_gate_verdict, verdict_from};
     let rec = |gate: &str, threshold: f64, value: f64, verdict: &str| GateRunRecord {
         ts: ts.to_owned(),
         head_sha: report.head_sha.clone(),
@@ -332,11 +332,17 @@ fn gate_ledger_records(
         records.push(record);
     }
     if let Some(min) = d.delta_code_health_min_per_file {
+        // "Measured" for the per-file floor is "at least one changed file
+        // yielded a computable delta". A non-empty change-set whose files are
+        // all added / deleted / non-source carries no delta to compare, so the
+        // honest verdict is "skipped" rather than the "passed" a merely
+        // non-empty change-set would imply.
+        let measured = report.health.deltas.iter().any(|r| r.delta.is_some());
         records.push(rec(
             "delta_code_health_min_per_file",
             min,
             count_f64("delta_code_health_min_per_file"),
-            change_set_gate_verdict(report, count("delta_code_health_min_per_file")),
+            verdict_from(measured, count("delta_code_health_min_per_file")),
         ));
     }
     if let Some(min) = d.new_file_health_min {

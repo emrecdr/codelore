@@ -208,7 +208,12 @@ pub fn evaluate_diff_gate(
 /// Shared three-way classification behind [`diff_gate_verdict`] and
 /// [`change_set_gate_verdict`]: `"skipped"` when the caller reports nothing
 /// was measured, else `"passed"`/`"failed"` on `violation_count`.
-fn verdict_from(measured: bool, violation_count: usize) -> &'static str {
+///
+/// Public so a caller that computes its own gate-specific "measured" signal —
+/// rather than the whole-change-set signal [`change_set_gate_verdict`] wraps —
+/// can classify against the same three-way convention.
+#[must_use]
+pub fn verdict_from(measured: bool, violation_count: usize) -> &'static str {
     if !measured {
         "skipped"
     } else if violation_count == 0 {

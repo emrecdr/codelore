@@ -52,5 +52,5 @@ pub use evaluators::{
     evaluate_effort_exposure_gate, evaluate_effort_exposure_rows,
     evaluate_effort_exposure_rows_exempt, evaluate_familiarity_gate, evaluate_familiarity_rows,
     evaluate_finding_overlap_rows, evaluate_full_tree, evaluate_gate_thresholds,
-    evaluate_hotspot_anchored_rows, evaluate_new_code_rows, head_has_scorable_source,
+    evaluate_hotspot_anchored_rows, evaluate_new_code_rows, head_has_scorable_source, verdict_from,
 };

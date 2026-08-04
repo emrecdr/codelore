@@ -1885,6 +1885,88 @@ fn diff_gate_skipped_when_neither_revision_measures_any_hotspot_row() {
 }
 
 #[test]
+fn gate_delta_per_file_records_skipped_when_no_delta_is_measured() {
+    // A working tree whose only change is a non-source file carries no
+    // computable per-file health delta, so `delta_code_health_min_per_file`
+    // measured nothing. Its gate-run verdict must be recorded "skipped" — not
+    // the "passed" that keying "measured" off a merely-non-empty change-set
+    // would wrongly record. Observed through the gate-run ledger via
+    // `codelore check --history` over a shared `--cache-dir`.
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    let cache = repo.join("cache");
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    };
+    git(&["init", "-q"]);
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(
+        repo.join("src/lib.rs"),
+        "pub fn tiny() -> i32 {\n    1\n}\n",
+    )
+    .unwrap();
+    std::fs::write(repo.join("README.md"), "hello\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "base"]);
+    // Uncommitted modification to a tracked non-source file: the change-set is
+    // non-empty, yet the file yields no code-health delta (delta = None).
+    std::fs::write(repo.join("README.md"), "hello world\n").unwrap();
+    std::fs::write(
+        repo.join(".codelore-thresholds.toml"),
+        "[diff]\ndelta_code_health_min_per_file = 0.0\n",
+    )
+    .unwrap();
+
+    // The gate passes (no violation) but records the ledger verdict.
+    codelore_cmd()
+        .args([
+            "gate",
+            "--repo",
+            repo.to_str().unwrap(),
+            "--cache-dir",
+            cache.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let history = codelore_cmd()
+        .args([
+            "check",
+            "--history",
+            "--repo",
+            repo.to_str().unwrap(),
+            "--cache-dir",
+            cache.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(history.status.success());
+    let text = String::from_utf8_lossy(&history.stdout);
+    assert!(
+        text.contains("delta_code_health_min_per_file"),
+        "the configured gate must appear in the ledger: {text}"
+    );
+    assert!(
+        text.contains("skipped"),
+        "an all-None change-set measures nothing, so the verdict is skipped: {text}"
+    );
+    assert!(
+        !text.contains("passed"),
+        "the pre-fix behaviour wrongly recorded passed here: {text}"
+    );
+}
+
+#[test]
 fn diff_sarif_schema_url_and_info_uri_use_canonical_constants() {
     // The diff SARIF schema URL and informationUri must use the constants from
     // codelore_lib::output::sarif, and degrading delta-health results must carry
