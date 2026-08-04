@@ -521,15 +521,29 @@ if [[ "${SKIP_CI_WAIT}" == "true" ]]; then
 else
   log "waiting for CI to go green on the release commit (typical: 8–12 min)..."
   if [[ "${DRY_RUN}" != "true" ]]; then
-    # Find the most recent CI run on main triggered by THIS push.
-    sleep 5  # give GitHub a moment to register the run
+    # Find the most recent CI run on main triggered by THIS push. A run
+    # can take several seconds to register after the push, and a
+    # not-yet-registered auto run looks identical to a paths-ignored commit
+    # (both yield no match). Poll a bounded window before concluding
+    # paths-ignore matched, so a slow-to-register auto run is never mistaken
+    # for "no CI" and duplicated by a spurious manual dispatch.
     RELEASE_SHA="$(git rev-parse HEAD)"
-    RUN_ID="$(gh run list --limit 5 --branch main --workflow CI --json databaseId,headSha \
-              --jq ".[] | select(.headSha == \"${RELEASE_SHA}\") | .databaseId" | head -1)"
+    AUTO_ATTEMPTS=6
+    AUTO_INTERVAL=10
+    RUN_ID=""
+    for (( attempt = 1; attempt <= AUTO_ATTEMPTS; attempt++ )); do
+      sleep "${AUTO_INTERVAL}"
+      RUN_ID="$(gh run list --limit 5 --branch main --workflow CI --json databaseId,headSha \
+                --jq ".[] | select(.headSha == \"${RELEASE_SHA}\") | .databaseId" | head -1)"
+      if [[ -n "${RUN_ID}" ]]; then
+        break
+      fi
+      log "  waiting for auto-triggered CI run on ${RELEASE_SHA:0:7} (${attempt}/${AUTO_ATTEMPTS})..."
+    done
     if [[ -z "${RUN_ID}" ]]; then
       # README-only or other paths-ignored commit. Manually dispatch CI so
       # the ruleset has the required status checks on this commit.
-      warn "no CI run auto-triggered for ${RELEASE_SHA:0:7} (paths-ignore likely matched)."
+      warn "no CI run auto-triggered for ${RELEASE_SHA:0:7} after $(( AUTO_ATTEMPTS * AUTO_INTERVAL ))s (paths-ignore likely matched)."
       warn "dispatching CI manually via workflow_dispatch..."
       gh workflow run CI --ref main
       # The dispatched run takes a few seconds to register with a matching
