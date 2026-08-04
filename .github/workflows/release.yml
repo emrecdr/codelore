@@ -310,10 +310,11 @@ jobs:
   # unconfigured checkouts still get a green release. It's also gated to
   # tag-triggered runs only: this workflow also runs on workflow_dispatch
   # test runs, and `cargo publish` is permanent (yank-only), so a manual
-  # test run must never publish. A partial failure (registry hiccup
-  # mid-sequence) needs manual completion: `cargo publish` rejects a
-  # version that's already live, so re-running the remaining `-p` commands
-  # by hand in the same rca → lib → codelore order is safe.
+  # test run must never publish. Each publish is idempotent: the step
+  # queries crates.io for the crate@version first and skips it when the
+  # version is already live, so a re-run after a mid-sequence registry
+  # hiccup completes the remaining crates in the same rca → lib → codelore
+  # order without tripping over `cargo publish`'s already-exists rejection.
   crates-publish:
     needs: [plan, build, release]
     runs-on: ubuntu-latest
@@ -330,6 +331,23 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ env.CRATES_IO_TOKEN }}
         run: |
-          cargo publish -p codelore-rca
-          cargo publish -p codelore-lib
-          cargo publish -p codelore
+          set -euo pipefail
+          # crates.io answers requests without a User-Agent with HTTP 403,
+          # which would make the presence check silently fail-open and
+          # re-attempt an already-published version — always send a UA.
+          UA="codelore-release (github-actions)"
+          publish_if_absent() {
+            local crate="$1" version
+            version="$(cargo metadata --no-deps --format-version 1 \
+              | jq -r --arg c "$crate" '.packages[] | select(.name == $c) | .version')"
+            if curl -sSf -H "User-Agent: $UA" \
+                "https://crates.io/api/v1/crates/${crate}/${version}" >/dev/null 2>&1; then
+              echo "${crate} ${version} already on crates.io — skipping."
+            else
+              echo "Publishing ${crate} ${version}..."
+              cargo publish -p "$crate"
+            fi
+          }
+          publish_if_absent codelore-rca
+          publish_if_absent codelore-lib
+          publish_if_absent codelore
