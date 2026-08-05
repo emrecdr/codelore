@@ -10,16 +10,20 @@ branding:
   color: 'purple'
 
 inputs:
+  command:
+    description: 'Which codelore subcommand to run: analyze (default) | check | gate | diff. The analysis/format/output inputs apply to analyze only; for check/gate/diff pass command-specific flags (and diff''s <base>..<head> range) via `args`.'
+    required: false
+    default: 'analyze'
   analysis:
-    description: 'Which analysis to run (e.g. hotspots, knowledge-islands, clone-coupling, code-health, summary).'
+    description: 'Which analysis to run (e.g. hotspots, knowledge-islands, clone-coupling, code-health, summary). Applies to `command: analyze` only.'
     required: false
     default: 'hotspots'
   format:
-    description: 'Output format (csv | json | sarif | markdown | parquet | sqlite | html).'
+    description: 'Output format (csv | json | sarif | markdown | parquet | sqlite | html). Applies to `command: analyze` only.'
     required: false
     default: 'sarif'
   output:
-    description: 'Output file path (relative to GITHUB_WORKSPACE). Empty = stdout.'
+    description: 'Output file path (relative to GITHUB_WORKSPACE). Empty = stdout. Applies to `command: analyze` only.'
     required: false
     default: 'codelore-result'
   repo:
@@ -27,7 +31,7 @@ inputs:
     required: false
     default: '.'
   args:
-    description: 'Additional CLI flags appended verbatim to the `codelore analyze` invocation. Use for --rows, --min-revs, --departed-threshold-days, --code-maat-compat, --age-time-now, etc.'
+    description: 'Additional CLI flags appended verbatim to the codelore invocation. For analyze: --rows, --min-revs, --departed-threshold-days, --code-maat-compat, --age-time-now, etc. For check/gate/diff this carries the command-specific flags (--thresholds-file, --ratchet, --fail-on, and diff''s <base>..<head> range).'
     required: false
     default: ''
   version:
@@ -37,7 +41,7 @@ inputs:
 
 outputs:
   result-path:
-    description: 'Absolute path to the generated output file (empty when --format streams to stdout).'
+    description: 'Absolute path to the generated output file (empty when --format streams to stdout, and always empty for command: check/gate/diff, which have no output file).'
     value: ${{ steps.run.outputs.result-path }}
   version-used:
     description: 'The actual codelore version that was downloaded (resolved from `latest` or pinned).'
@@ -195,13 +199,14 @@ runs:
         echo "version=$VERSION" >> "$GITHUB_OUTPUT"
         "$BIN" --version
 
-    - name: Run codelore analyze
+    - name: Run codelore
       id: run
       shell: bash
       env:
         # Caller-controlled inputs passed through the environment (not
         # spliced into the script text at render time) so a crafted
         # value cannot break out of the shell command.
+        INPUT_COMMAND: ${{ inputs.command }}
         INPUT_ANALYSIS: ${{ inputs.analysis }}
         INPUT_FORMAT: ${{ inputs.format }}
         INPUT_OUTPUT: ${{ inputs.output }}
@@ -209,16 +214,21 @@ runs:
         INPUT_ARGS: ${{ inputs.args }}
       run: |
         set -euo pipefail
+        COMMAND="$INPUT_COMMAND"
         ANALYSIS="$INPUT_ANALYSIS"
         FORMAT="$INPUT_FORMAT"
         OUTPUT="$INPUT_OUTPUT"
         REPO="$INPUT_REPO"
         EXTRA_ARGS="$INPUT_ARGS"
 
-        CMD=(codelore analyze --analysis "$ANALYSIS" --format "$FORMAT" --repo "$REPO" --no-banner)
-        if [ -n "$OUTPUT" ]; then
-          CMD+=(--output "$OUTPUT")
-        fi
+        case "$COMMAND" in
+          analyze|check|gate|diff) ;;
+          *)
+            echo "::error::unknown command: $COMMAND (expected analyze|check|gate|diff)"
+            exit 1
+            ;;
+        esac
+
         # Word-split the extra args (users pass multiple flags) with
         # globbing disabled so a bare `*` cannot expand to the workspace
         # file list.
@@ -226,12 +236,26 @@ runs:
         # shellcheck disable=SC2206
         EXTRA_ARRAY=($EXTRA_ARGS)
         set +f
-        CMD+=("${EXTRA_ARRAY[@]}")
+
+        if [ "$COMMAND" = "analyze" ]; then
+          CMD=(codelore analyze --analysis "$ANALYSIS" --format "$FORMAT" --repo "$REPO" --no-banner)
+          if [ -n "$OUTPUT" ]; then
+            CMD+=(--output "$OUTPUT")
+          fi
+          CMD+=("${EXTRA_ARRAY[@]}")
+        else
+          # check / gate / diff have no analysis/format/output surface — the
+          # format input defaults to sarif, which gate rejects — so those are
+          # analyze-only. The command-specific flags (and diff's
+          # <base>..<head> range) arrive verbatim through the args escape hatch.
+          CMD=(codelore "$COMMAND" --repo "$REPO" --no-banner)
+          CMD+=("${EXTRA_ARRAY[@]}")
+        fi
 
         echo "Running: ${CMD[*]}"
         "${CMD[@]}"
 
-        if [ -n "$OUTPUT" ]; then
+        if [ "$COMMAND" = "analyze" ] && [ -n "$OUTPUT" ]; then
           # Pure-bash absolute-path resolution — portable and
           # dependency-free. macOS's BSD `readlink` lacks the `-f` flag
           # (a GNU extension), so resolving the path in bash avoids
