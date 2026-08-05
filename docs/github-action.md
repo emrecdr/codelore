@@ -38,18 +38,19 @@ The findings appear in the PR's **Security** tab and the **Files changed** view,
 
 | Input | Default | Description |
 |---|---|---|
-| `analysis` | `hotspots` | Any codelore analysis name (see `codelore analyze --help` or `docs/research-foundations.md`) |
-| `format` | `sarif` | `csv \| json \| sarif \| markdown \| parquet \| sqlite \| html` |
-| `output` | `codelore-result` | Output file path relative to `GITHUB_WORKSPACE`. Empty string = stdout |
+| `command` | `analyze` | Which subcommand to run: `analyze` \| `check` \| `gate` \| `diff`. `analysis`/`format`/`output` apply to `analyze` only; for `check`/`gate`/`diff` pass command-specific flags (and diff's `<base>..<head>` range) via `args` |
+| `analysis` | `hotspots` | Any codelore analysis name (see `codelore analyze --help` or `docs/research-foundations.md`). Applies to `command: analyze` only |
+| `format` | `sarif` | `csv \| json \| sarif \| markdown \| parquet \| sqlite \| html`. Applies to `command: analyze` only |
+| `output` | `codelore-result` | Output file path relative to `GITHUB_WORKSPACE`. Empty string = stdout. Applies to `command: analyze` only |
 | `repo` | `.` | Path to repository to analyse (defaults to the checked-out workspace) |
-| `args` | (empty) | Extra CLI flags appended verbatim (`--rows`, `--min-revs`, `--departed-threshold-days`, etc.) |
+| `args` | (empty) | Extra CLI flags appended verbatim. For `analyze`: `--rows`, `--min-revs`, `--departed-threshold-days`, etc. For `check`/`gate`/`diff`: the command-specific flags (`--thresholds-file`, `--ratchet`, `--fail-on`, and diff's `<base>..<head>` range) |
 | `version` | `latest` | `latest` follows the most recent v* release; `vX.Y.Z` pins to a specific version |
 
 ## Outputs
 
 | Output | Description |
 |---|---|
-| `result-path` | Absolute path to the generated file (empty when streaming to stdout) |
+| `result-path` | Absolute path to the generated file (empty when streaming to stdout, and always empty for `command: check`/`gate`/`diff`, which have no output file) |
 | `version-used` | The actual codelore version downloaded (resolved from `latest` or pinned) |
 
 ## Common patterns
@@ -132,6 +133,54 @@ steps:
 
 CSV columns and row formatting match code-maat's verbose-mode output exactly. Drop-in for existing code-maat-targeted dashboards.
 
+## Running quality gates in CI
+
+Set `command:` to run codelore's quality-gate subcommands instead of `analyze`. A gate violation exits non-zero, which fails the step and therefore the workflow — the intended CI signal. These commands take their flags through `args` (the `analysis`/`format`/`output` inputs are analyze-only, and `format` defaults to `sarif`, which `gate` rejects — so they are not injected for the gate commands). They stream their report to stdout and set no `result-path`.
+
+### Fail the build on a threshold violation (`check`)
+
+```yaml
+name: codelore-gate
+on:
+  pull_request:
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: emrecdr/codelore@v1
+        with:
+          command: check
+          args: '--thresholds-file .codelore-thresholds.toml'
+```
+
+`check` reads `.codelore-thresholds.toml`, prints the gate table, and exits non-zero on any violation — failing the workflow. Add `--ratchet` to fail only on regressions against the recorded baseline, or `--format json` for a machine-readable report. (`check` also writes `result=pass|fail` to `$GITHUB_OUTPUT`.)
+
+### Gate the current working tree (`gate`)
+
+```yaml
+- uses: emrecdr/codelore@v1
+  with:
+    command: gate
+    args: '--thresholds-file .codelore-thresholds.toml'
+```
+
+`gate` accepts `--format text|json` only (not `sarif`).
+
+### Gate a PR range (`diff`)
+
+```yaml
+- uses: emrecdr/codelore@v1
+  with:
+    command: diff
+    # diff takes a positional <base>..<head> range plus its flags, all via args.
+    args: '${{ github.event.pull_request.base.sha }}..${{ github.sha }} --fail-on any'
+```
+
+`diff` compares the two revisions and fails the step when the PR crosses the `--fail-on` boundary (`none | rank-entrant | score-increase | any`).
+
 ## Supported runners
 
 The action works on every GitHub-hosted runner family + their self-hosted equivalents:
@@ -150,7 +199,7 @@ The action works on every GitHub-hosted runner family + their self-hosted equiva
 2. Detects the runner OS+arch and computes the target triple.
 3. Downloads + extracts the matching binary archive from GitHub Releases.
 4. Adds the install dir to `$GITHUB_PATH`.
-5. Runs `codelore analyze` with the requested flags.
+5. Runs the requested `codelore` subcommand (`analyze` by default; `check`/`gate`/`diff` when `command:` is set) with the requested flags.
 6. Exposes `result-path` (and `version-used`) as outputs.
 
 The action's startup cost is essentially the download (≈ 200-300 ms on warm GitHub CDN). No Docker pull, no Node bootstrap.
