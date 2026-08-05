@@ -4,6 +4,8 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-08-05
+
 ### Added
 
 - **`[gates].fail_on_skipped` — a policy that fails a run when any gate is skipped.** Default `false` (no behavior change). When set, `check`, `gate`, and `diff` map any `"skipped"` gate verdict to their violation exit code, so a gate that silently stopped evaluating (empty change-set, absent data) is no longer indistinguishable at the exit code from one that evaluated and passed. (`codelore check --ratchet` is exempt: its exit is driven by regression against the recorded baseline, not by the threshold verdicts.)
