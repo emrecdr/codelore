@@ -13,12 +13,22 @@
 //! hardening; query-time extraction over O(N) commits is fast
 //! enough on `DuckDB` for the row counts users hit.
 //!
-//! ## Note on trailer noise
+//! ## Note on bot filtering
 //!
-//! Bots are already filtered from `commits.canonical_author`, but
-//! `Co-Authored-By:` trailers may still reference bot identities
-//! (Renovate has historically added itself). The post-processing
-//! drops any pair where either side matches the known-bot list.
+//! Ingest appends every commit to `commits` regardless of authorship —
+//! bot classification lives per-alias on `author_aliases`, and the
+//! SQL analyses exclude bots by joining through `HUMAN_ALIASES_CTE`.
+//! This analysis reads `commits` directly, so the `is_bot` checks below
+//! are the only thing keeping bots out of the pair counts, on both
+//! sides: the commit's own author, and each `Co-Authored-By:` trailer
+//! (Renovate has historically added itself as one). Removing either
+//! check starts counting bots as pair participants.
+//!
+//! The author-side check tests the resolved canonical identity rather
+//! than the raw alias. A `.mailmap` that merges a bot alias and a human
+//! alias into one canonical therefore classifies the pair by whichever
+//! identity the canonical carries — mailmap intent wins, which is the
+//! behaviour we want here.
 
 use std::collections::HashMap;
 
