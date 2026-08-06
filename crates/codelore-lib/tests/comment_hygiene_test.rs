@@ -1,6 +1,6 @@
-//! Guard: no internal finding/task IDs (an `F` followed by digits) in `.rs`
-//! code comments, and no `Plan <N>` phase markers anywhere in `.rs`/`.sql`
-//! source — comment, string literal, or DDL.
+//! Guard: no internal finding/task IDs (an `F` followed by digits) and no
+//! `Plan <N>` phase markers anywhere in `.rs`/`.sql` source — comment, string
+//! literal, DDL, or file name.
 //!
 //! Code comments (and user-facing strings) must describe the current contract
 //! directly; audit and finding history lives only in `CHANGELOG.md` and the
@@ -16,16 +16,17 @@
 //! other Markdown are out of scope: those are the sanctioned homes for audit
 //! IDs.
 //!
-//! Two checks, deliberately asymmetric in reach:
-//!   * `Plan <N>` phase markers are scanned over the WHOLE line, so they are
-//!     caught in comments, string literals (`anyhow::bail!("… Plan N")`), and
-//!     multi-line string continuations alike. The `Plan`+digit shape is
-//!     specific enough that a whole-line scan carries no false-positive risk.
-//!   * `F<NN>` task IDs stay comment-scoped. Bare `F<NN>` tokens appear
-//!     legitimately in test fixtures and assertion labels (git config names,
-//!     regression-message prefixes), so scanning string literals for them would
-//!     false-fire. Those string/filename-embedded test labels are a separate,
-//!     broader hygiene item, tracked in the findings report — not this guard.
+//! Both checks scan the WHOLE line, so a marker is caught in a comment, a
+//! string literal (`anyhow::bail!("… Plan N")`, an assertion label), a
+//! multi-line string continuation, or DDL alike. Neither shape occurs
+//! incidentally: `Plan`+digit and a standalone `F`+digits token are both
+//! specific enough that a whole-line scan carries no false-positive risk over
+//! this source tree. Tokenisation keeps `_` inside a token, so an identifier
+//! such as `_F12` or a hex-ish `0xF12` is a single token and is not flagged;
+//! only a standalone token of that shape is.
+//!
+//! Task IDs also can't hide in a FILE NAME, where no content scanner would
+//! reach them — the scanned file stems are checked against the same rule.
 
 use std::path::{Path, PathBuf};
 
@@ -66,22 +67,6 @@ fn collect_source_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-fn is_sql(path: &Path) -> bool {
-    path.extension().and_then(|e| e.to_str()) == Some("sql")
-}
-
-/// The comment region of a line: text from the first line-comment delimiter
-/// (`//` for Rust, `--` for SQL), or the whole line when it is a block-comment
-/// continuation (`*` / `/*`). `None` when the line carries no comment.
-fn comment_region(line: &str, sql: bool) -> Option<&str> {
-    let delim = if sql { "--" } else { "//" };
-    if let Some(idx) = line.find(delim) {
-        return Some(&line[idx..]);
-    }
-    let trimmed = line.trim_start();
-    (trimmed.starts_with('*') || trimmed.starts_with("/*")).then_some(line)
-}
-
 /// True if `token` is a finding/task ID: an `F` followed by one to three
 /// digits and nothing else.
 fn is_task_id(token: &str) -> bool {
@@ -89,17 +74,27 @@ fn is_task_id(token: &str) -> bool {
     matches!(bytes.len(), 2..=4) && bytes[0] == b'F' && bytes[1..].iter().all(u8::is_ascii_digit)
 }
 
-fn comment_has_task_id(line: &str, sql: bool) -> bool {
-    let Some(region) = comment_region(line, sql) else {
-        return false;
-    };
+/// True if the line carries a bare task-ID token anywhere — comment, string
+/// literal, or DDL.
+fn line_has_task_id(line: &str) -> bool {
     // Split on non-identifier chars so `_` stays part of a token (mirrors the
     // `\b` word boundary): an underscored identifier stays a single token and
     // is NOT flagged, while parenthesised, hyphen-joined, or slash-joined IDs
     // split into bare ID tokens that ARE flagged.
-    region
-        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+    line.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
         .any(is_task_id)
+}
+
+/// True if the file stem opens with a task-ID segment (`f69_window_spike`).
+/// Stems are snake_case, so the leading `_`-delimited segment is the only
+/// place the prefix convention puts one, and it is the one position no
+/// content scan can reach. Matched case-insensitively because file names are
+/// lowercase; a stem legitimately opening with a float-width segment
+/// (`f64_…`) would need renaming or an exemption here, which no file in this
+/// tree currently requires.
+fn stem_opens_with_task_id(stem: &str) -> bool {
+    let head = stem.split('_').next().unwrap_or(stem);
+    is_task_id(&head.to_ascii_uppercase())
 }
 
 /// True if the line carries a phase-number marker: the capitalised word `Plan`
@@ -143,17 +138,21 @@ fn scanned_files() -> Vec<PathBuf> {
 }
 
 #[test]
-fn no_task_id_references_in_code_comments() {
+fn no_task_id_references_in_code() {
     let root = workspace_root();
     let files = scanned_files();
 
     let mut violations = Vec::new();
     for file in &files {
-        let sql = is_sql(file);
+        let rel = file.strip_prefix(&root).unwrap_or(file);
+        if let Some(stem) = file.file_stem().and_then(|s| s.to_str())
+            && stem_opens_with_task_id(stem)
+        {
+            violations.push(format!("{}: task ID in the file name", rel.display()));
+        }
         let text = std::fs::read_to_string(file).expect("read source file");
         for (line_idx, line) in text.lines().enumerate() {
-            if comment_has_task_id(line, sql) {
-                let rel = file.strip_prefix(&root).unwrap_or(file);
+            if line_has_task_id(line) {
                 violations.push(format!(
                     "{}:{}: {}",
                     rel.display(),
@@ -166,9 +165,9 @@ fn no_task_id_references_in_code_comments() {
 
     assert!(
         violations.is_empty(),
-        "found {} finding/task-ID reference(s) in code comments. Drop the ID and keep \
-         the rationale — audit history lives in CHANGELOG.md and the findings report, \
-         not in code comments:\n{}",
+        "found {} finding/task-ID reference(s) in .rs/.sql source (comment, string, DDL, \
+         or file name). Drop the ID and keep the rationale — audit history lives in \
+         CHANGELOG.md and the findings report, not in the code:\n{}",
         violations.len(),
         violations.join("\n"),
     );

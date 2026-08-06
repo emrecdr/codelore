@@ -228,7 +228,7 @@ fn cte_and_window_return_byte_identical_rows() {
     // so these numbers are largely indicative; the real bench-gate runs
     // on the kernel snapshot in CI. Tests pipe stdout to nextest's
     // per-test buffer, visible with `cargo test -- --nocapture`.
-    eprintln!("[F69 spike] inline-fixture timings:");
+    eprintln!("[hhi-window spike] inline-fixture timings:");
     eprintln!("  CTE-totals:       {dur_cte:?}");
     eprintln!("  window function:  {dur_win:?}");
     eprintln!(

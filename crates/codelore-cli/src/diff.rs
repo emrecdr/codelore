@@ -1061,7 +1061,7 @@ mod prune_tests {
         let new_entries: Vec<_> = after.difference(&before).collect();
         assert!(
             new_entries.is_empty(),
-            "F6 regression: add_worktree leaked a tempdir on git failure: {new_entries:?}",
+            "regression: add_worktree leaked a tempdir on git failure: {new_entries:?}",
         );
     }
 
