@@ -88,6 +88,21 @@ pub struct CommunitiesResult {
     pub community_count: u32,
 }
 
+impl CommunitiesResult {
+    /// Rows produced, so this result answers the same "did the analysis
+    /// find anything?" question as the `Vec` every other analysis returns.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    /// Whether the analysis produced no rows.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+}
+
 /// Run Leiden community detection on the Fisher-significant coupling
 /// pairs.
 ///
