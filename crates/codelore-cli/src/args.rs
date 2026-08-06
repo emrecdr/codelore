@@ -237,15 +237,15 @@ pub enum Command {
     /// completion directory.
     Completions(CompletionsArgs),
     /// Print the formula + citation + SQL for any metric or analysis
-    /// `CodeLore` exposes. Makes the auditable-formulas brand
+    /// CodeLore exposes. Makes the auditable-formulas brand
     /// promise tactile on the CLI side.
     Explain(ExplainArgs),
-    /// Emit JSON Schema 2020-12 for any `CodeLore` output row type.
+    /// Emit JSON Schema 2020-12 for any CodeLore output row type.
     /// Integrates with downstream tools (Stoplight, Spectral,
-    /// Postman, `OpenAPI` registries).
+    /// Postman, OpenAPI registries).
     Schema(SchemaArgs),
     /// Print operational telemetry — cache size, schema version, and
-    /// per-analysis SQL preview. The "what's `CodeLore` doing under
+    /// per-analysis SQL preview. The "what's CodeLore doing under
     /// the hood?" subcommand.
     Profile,
     /// Emit a markdown documentation dump covering every supported
@@ -264,13 +264,13 @@ pub enum Command {
     /// pass, 1 on any violation — the same exit contract as `check`.
     Gate(GateArgs),
     /// Start a Model Context Protocol (MCP) server over stdio. Exposes
-    /// `CodeLore` analyses as MCP tools for use by AI assistants and
+    /// CodeLore analyses as MCP tools for use by AI assistants and
     /// agent frameworks. Read-only — no network, no account, no
     /// telemetry. Warm-cache calls are cheap; first call on a cold
     /// cache pays the ingest cost.
     Mcp(McpArgs),
     /// Ingest one or more SARIF 2.1.0 files produced by external scanners
-    /// (Semgrep, Clippy, `CodeQL`, etc.) into the per-repo external-findings
+    /// (Semgrep, Clippy, CodeQL, etc.) into the per-repo external-findings
     /// sidecar store. Re-ingesting the same file is idempotent — findings
     /// are replaced per engine so the stored count is always the current
     /// scanner run, never an accumulation of duplicates.
