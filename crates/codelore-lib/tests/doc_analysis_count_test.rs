@@ -59,13 +59,33 @@ fn is_excluded(rel: &Path) -> bool {
         || EXCLUDED_FILES.iter().any(|f| rel_str == *f)
 }
 
+/// Byte offset just past a single `adjective ` token starting at `from`,
+/// or `from` unchanged when what follows is not a plain word followed by a
+/// space. Lets the scan see the noun through one qualifier.
+fn skip_one_word(line: &str, from: usize) -> usize {
+    let bytes = line.as_bytes();
+    let mut k = from;
+    while k < bytes.len() && (bytes[k].is_ascii_alphabetic() || bytes[k] == b'-') {
+        k += 1;
+    }
+    if k == from || bytes.get(k) != Some(&b' ') {
+        return from;
+    }
+    while k < bytes.len() && bytes[k] == b' ' {
+        k += 1;
+    }
+    k
+}
+
 /// If `line` contains a hard-coded "<digits> analyses" count that
 /// disagrees with `real_count`, returns a description for the violation
-/// report. Matches a run of ASCII digits, optional spaces, then the word
-/// "analyses" (case-insensitive) at a word boundary — this catches both
-/// plain prose ("the 54 analyses") and Markdown emphasis
-/// ("**54 analyses**"), since the `**` markers sit outside the matched
-/// span.
+/// report. Matches a run of ASCII digits, optional spaces, an optional
+/// single qualifier, then the word "analyses" (case-insensitive) at a word
+/// boundary — this catches plain prose ("the 54 analyses"), Markdown
+/// emphasis ("**54 analyses**") since the `**` markers sit outside the
+/// matched span, and the qualified form the architecture diagrams use
+/// ("54 behavioral analyses"), which is how a stale count previously
+/// survived a sweep that only corrected the number.
 fn stale_count_in_line(line: &str, real_count: usize) -> Option<String> {
     const WORD: &str = "analyses";
     let bytes = line.as_bytes();
@@ -84,27 +104,32 @@ fn stale_count_in_line(line: &str, real_count: usize) -> Option<String> {
         while j < bytes.len() && bytes[j] == b' ' {
             j += 1;
         }
-        let rest = &line[j..];
-        // `.get()`, not byte-index slicing: `rest` may put the WORD.len()
-        // cut point inside a multi-byte UTF-8 character (docs use math
-        // symbols like 'σ'), which would panic on a raw `&rest[..N]`.
-        let matches_word = rest
-            .get(..WORD.len())
-            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(WORD));
-        // Word boundary: the char after "analyses" must not be alphanumeric
-        // (so "analyses" matches but "analysesx" does not).
-        let boundary_ok = rest
-            .as_bytes()
-            .get(WORD.len())
-            .is_none_or(|b| !b.is_ascii_alphanumeric());
-        if matches_word && boundary_ok {
-            match digits.parse::<usize>() {
-                Ok(n) if n != real_count => {
-                    return Some(format!(
-                        "\"{digits} analyses\" (registry currently has {real_count})"
-                    ));
+        // Probe the noun directly, then again past one qualifier, so both
+        // "57 analyses" and "57 behavioral analyses" are seen.
+        for probe in [j, skip_one_word(line, j)] {
+            let rest = &line[probe..];
+            // `.get()`, not byte-index slicing: `rest` may put the WORD.len()
+            // cut point inside a multi-byte UTF-8 character (docs use math
+            // symbols like 'σ'), which would panic on a raw `&rest[..N]`.
+            let matches_word = rest
+                .get(..WORD.len())
+                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(WORD));
+            // Word boundary: the char after "analyses" must not be alphanumeric
+            // (so "analyses" matches but "analysesx" does not).
+            let boundary_ok = rest
+                .as_bytes()
+                .get(WORD.len())
+                .is_none_or(|b| !b.is_ascii_alphanumeric());
+            if matches_word && boundary_ok {
+                match digits.parse::<usize>() {
+                    Ok(n) if n != real_count => {
+                        let matched = &line[start..probe + WORD.len()];
+                        return Some(format!(
+                            "\"{matched}\" (registry currently has {real_count})"
+                        ));
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
     }
