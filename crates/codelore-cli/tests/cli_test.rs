@@ -2844,6 +2844,34 @@ fn gate_vacuous_passes_without_thresholds() {
 }
 
 #[test]
+fn vacuous_pass_writes_both_github_output_keys() {
+    // A vacuous pass is a completed run, so a workflow reading
+    // `outputs.violations` must get a count rather than an empty string —
+    // every other exit path writes both keys. Checked for both subcommands
+    // because each vacuous pass is its own early return. The output file
+    // lives outside the repo so it cannot dirty the tree `gate` projects.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let out_dir = tempfile::tempdir().unwrap();
+    for command in ["check", "gate"] {
+        let out = out_dir.path().join(format!("github-output-{command}"));
+        codelore_cmd()
+            .env("GITHUB_OUTPUT", &out)
+            .args([command, "--repo", tiny.dir.path().to_str().unwrap()])
+            .assert()
+            .success();
+        let written = std::fs::read_to_string(&out).expect("github output file written");
+        assert!(
+            written.contains("result=pass"),
+            "{command} vacuous pass omitted result=pass; wrote {written:?}"
+        );
+        assert!(
+            written.contains("violations=0"),
+            "{command} vacuous pass omitted violations=0; wrote {written:?}"
+        );
+    }
+}
+
+#[test]
 fn gate_passes_on_clean_tree_with_thresholds() {
     // A fresh clone has no working-tree changes: with gates configured the
     // run still passes (exit 0) and says so explicitly — a clean tree is a

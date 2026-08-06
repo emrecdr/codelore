@@ -221,6 +221,20 @@ pub(crate) fn write_github_output(key: &str, value: &str) {
     }
 }
 
+/// The advisory `check` and `gate` print when no thresholds file exists.
+/// Both exit 0 in that state, so without naming what is missing the line is
+/// indistinguishable from a gate that ran and found nothing — which for
+/// someone wiring CI is a green build measuring nothing. Names gates worth
+/// starting from, the way the ratchet's initialization message does.
+/// `command` is the subcommand's own name so the line names what was run.
+pub(crate) fn vacuous_pass_notice(command: &str) -> String {
+    format!(
+        "codelore {command}: no thresholds configured (no `.codelore-thresholds.toml` at repo \
+         root); vacuously passing. Add a [gates] section with code_health_min / \
+         max_dependency_cycles / max_red_effort_pct to make it bind on regressions."
+    )
+}
+
 /// Map the `fail_on_skipped` policy onto a run's ledger records: when the policy
 /// is on, every gate recorded `"skipped"` becomes a synthetic [`GateViolation`]
 /// so the surface's normal violation-exit path fails the run; off (the default)
