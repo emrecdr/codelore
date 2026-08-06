@@ -4,8 +4,10 @@
 //!   `$XDG_CACHE_HOME/codelore/<repo_hash_8>/<cache_key_16>.duckdb`
 //!
 //! Cache key covers: `canonical_repo_path`, HEAD SHA, crate version, options
-//! thresholds, cache epoch. Excludes: `rows_limit`, `repo_path` (already
-//! folded into `repo_hash_8`), cosmetic flags.
+//! thresholds, cache epoch. Excludes: `rows_limit`, `repo_path` (repository
+//! identity is established by the canonical path hashed as the key's first
+//! component, so the raw spelling must not enter the options hash), cosmetic
+//! flags.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -71,13 +73,14 @@ pub fn cache_path(key: &[u8; 32], repo_path: &Path) -> PathBuf {
 
 /// Same as [`cache_path`] but with an explicit root (for `--cache-dir` override).
 ///
-/// `repo_path` is canonicalised before hashing the
-/// per-repo subdirectory name so this function and [`cache_key`] (which
-/// already canonicalises) stay in lockstep. Without this, calling
-/// `codelore analyze .` and `codelore analyze $(pwd)` produced identical
-/// cache keys but different cache subdirectories — neither call could
-/// see the other's cache file, forcing a redundant ingest every time the
-/// user alternated invocation styles.
+/// `repo_path` is canonicalised before hashing the per-repo subdirectory
+/// name so this function and [`cache_key`] (which already canonicalises)
+/// stay in lockstep: `codelore analyze .` and `codelore analyze $(pwd)`
+/// name one repository, so they must resolve to one cache file. Holding
+/// that property takes agreement on both halves of the path — the
+/// directory here, and the key itself, which is why `Options::repo_path`
+/// is excluded from the options hash rather than riding into it as the
+/// user happened to spell it.
 #[must_use]
 pub fn cache_path_with_root(key: &[u8; 32], repo_path: &Path, root: &Path) -> PathBuf {
     let repo_short = repo_hash_short(repo_path);

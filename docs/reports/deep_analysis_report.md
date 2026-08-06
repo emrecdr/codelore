@@ -439,7 +439,7 @@ A five-dimension architecture review (four parallel read-only analysts: architec
 
 **2026-07-04 architecture-review pass**: **F243** (html un-advertised in 4 dispatchers — Fixed `acd9568`) and **F231** (Plan-N markers — Fixed via self-enforcing hygiene guard `52c427c`) closed; clippy-allow justification + SPA listener-bus + browser-fixture coverage landed. New own-slice: **F244** (analysis registry / `enum Format` + `TabularRow`, absorbs F215/F148/F119) and **F246** (canvas keyboard a11y); **F245** (widgets.js module split) landed this pass.
 
-The 2026-08-02 discovery pass logged **F249–F268** (see §7); F269 was logged this pass (below). The post-v0.26.0 deferred-backlog pass logged **F270–F272** and closed F255/F269 (see §8). The next sweep should re-open with F-IDs starting at **F273**.
+The 2026-08-02 discovery pass logged **F249–F268** (see §7); F269 was logged this pass (below). The post-v0.26.0 deferred-backlog pass logged **F270–F272** and closed F255/F269 (see §8). The post-v0.26.0 first-run UX pass logged **F273–F283** (see §9). The next sweep should re-open with F-IDs starting at **F284**.
 
 **F247 (Active) — `run_coupling_scoped` cutoff ignores lineage/time-bucket source in `good_commits`.** The rev-parameterizable `code_health` history cutoff (`HealthScanCtx::history_cutoff`) routes coupling through `run_coupling_scoped(db, opts, "changes_at_ts")`, which overrides only the pair-source + Fisher-denominator tables. The internal `good_commits_cte(bucket, use_lineage)` still reads the opt-derived `changes_lineage`/`changes`. For the primary path (no lineage, no time-bucket) this is equivalent — the cutoff-window revset equals full-history ∩ window. But `history_cutoff` combined with `--use-canonical-lineage` yields coupling pairs keyed on pre-rename path names, and combined with `--time-bucket` aggregates buckets over full history. The **same class** applies to code-health's own churn / revs / author-fragmentation CTEs: under a cutoff `{src}` becomes the raw, non-lineage `changes_at_ts` view, so those terms also lose rename-awareness when a cutoff is combined with `--use-canonical-lineage`. Neither combination is exercised (the timeline consumer uses the primary path — cutoff without lineage/bucket) nor required by the spec; documented in the `run_coupling_scoped` and `CHANGES_AT_TS_DDL` doc comments. Fix if a future consumer needs cutoff + lineage/bucket: build `changes_at_ts` from the lineage-rewritten source and thread `changes_source` into `good_commits_cte`. Surfaced by the Task-4 review + the whole-branch review of the rev-parameterizable code-health branch.
 
@@ -624,4 +624,183 @@ turned out to be mis-stated by the reports that logged them.
     injecting drift into both a file pin and a workflow tag and confirming the
     guard names both — a drift guard that cannot fail is worth nothing.
 
-The next sweep re-opens at **F273**.
+## 9. First-run UX pass (F273–F283)
+
+Validated against the shipped 0.26.0 binary, not inferred. The narrative
+sits in `2026-08-06-first-run-ux-review.md`; this section is the F-ledger.
+
+### F273 (Fixed — Unreleased) — the cache key carried the repo path as the user typed it
+
+*   **Location**: `options.rs::canonical_json` (classification guard + snapshot), `cache.rs` module header and `cache_path_with_root` doc
+*   **Severity**: MED · **Category**: cache correctness / performance
+*   **Description**: `cache.rs` documented `repo_path` as excluded from the key.
+    It was on the *included* side of the classification guard and flowed into
+    `opts_hash` un-canonicalised. One repository at one HEAD with identical
+    flags therefore derived a different key per spelling. Measured on a clean
+    cache root: absolute, symlinked, trailing-`/.`, and `../`-relative
+    spellings produced four entries in one directory, every one a miss.
+*   **Sharpest detail**: the guard's own comment warns that "an absolute-path
+    or per-invocation field would silently make every cache key
+    machine-specific". `repo_path` is exactly that field, classified onto the
+    hazardous side by the guard built to prevent it.
+*   **Outcome**: normalised on the snapshot beside the other per-invocation
+    selectors — `map.remove` is reserved for paths replaced by a content
+    digest, and `repo_path` has none. Identity is untouched: `cache_key`
+    hashes the canonical path as its first component, so the raw copy was
+    redundant rather than load-bearing. No `CACHE_EPOCH` bump — the preimage
+    changed, so old entries are unreachable by construction, and a bump would
+    additionally orphan every `diff --base-cache` file for no gain.
+
+### F274 (Active) — eviction is documented as LRU and behaves as FIFO
+
+*   **Location**: `cache.rs` (banner comment, `prune_global_cache` doc), `facts/mod.rs`, `external/store.rs`, `quality_gates/ledger.rs`, `docs/advanced-usage.md`
+*   **Severity**: LOW · **Category**: documentation accuracy
+*   **Description**: both pruners sort ascending by **mtime**, and a cache hit
+    opens the fact store read-only — mtime and atime are byte-identical across
+    a hit — so mtime is frozen at ingest-completion forever. The policy is
+    FIFO by ingest time. An entry hit daily is evicted ahead of a newer one
+    never reused. Five code sites plus one user-facing doc line call it LRU.
+*   **Suggested improvement**: relabel; do not implement true LRU. That needs
+    either a new dependency (`std` cannot set mtime, and `libc::utimensat` is
+    barred by `unsafe_code = "forbid"`) or a per-hit sidecar write on the
+    deliberately near-O(1) read path. Disproportionate to an eviction-order
+    difference inside a 5-entry cap.
+
+### F275 (Active) — emptied per-repo cache directories are never removed
+
+*   **Location**: `cache.rs::prune_repo_cache` / `prune_global_cache`
+*   **Severity**: LOW · **Category**: cache hygiene / cache-miss latency
+*   **Description**: both pruners delete `.duckdb` files (and `.wal`
+    companions) and nothing else — `cache.rs` contains no `remove_dir`. On the
+    development machine: 7,990 per-repo directories, 6,643 of them completely
+    empty. `codelore calibrate` is the dominant producer, ingesting ~99
+    throwaway corpus checkouts through the default root per run.
+*   **Why it is not purely cosmetic**: the bytes are ~0, but
+    `prune_global_cache` walks the whole tree **twice** on every cache miss
+    (stale-tmp sweep, then the `.duckdb` collection). A warm walk of the
+    current tree measures ~0.34 s, ~79% of it empty directories, and it grows
+    monotonically.
+*   **Suggested improvement**: an age-gated sweep at the tail of
+    `prune_global_cache`, gated on **total** emptiness
+    (`read_dir().next().is_none()`, not "no `.duckdb`") and using
+    non-recursive `fs::remove_dir` as a second net. Five sidecar families
+    share that directory — gate ledger, external findings, change-sets,
+    enrichment, in-flight tmp — so a `remove_dir_all` would destroy them.
+
+### F276 (Active) — `evaluate_all_gates` discards measured values it already computed
+
+*   **Location**: `codelore-cli/src/check.rs::evaluate_all_gates`
+*   **Severity**: LOW · **Category**: reusability
+*   **Description**: `eval_hotspot_gates` runs the hotspot scan
+    unconditionally, but only `hotspot_rows.len()` is returned, so the measured
+    values behind `cognitive_max`, `hotspot_score_max` and
+    `hotspot_anchored_max` are computed and thrown away. Code-health rows *are*
+    returned, so `code_health_min` and `corpus_percentile_max` are already
+    available.
+*   **Why it matters**: this is the gate on any measured thresholds scaffold.
+    Widening the return unlocks six gates cheaply. The remaining gates are a
+    different problem — `evaluators.rs` skips **building the import graph at
+    all** unless `max_dependency_cycles` or `max_propagation_cost` is already
+    configured, so a scaffold cannot measure what it is meant to propose.
+
+### F277 (Fixed — Unreleased) — the cache canonicalisation test pinned an invariance that could not fail
+
+*   **Location**: `codelore-lib/tests/cache_test.rs`
+*   **Severity**: MED · **Category**: test quality
+*   **Description**: the test passed one `Options::default()` (whose
+    `repo_path` is `"."`) to both `cache_key` calls and varied only the free
+    `repo_path` argument. Production always passes `&opts.repo_path`, so the
+    two co-vary — the test asserted something that could not break, and was
+    structurally blind to F273 sitting directly under it.
+*   **Outcome**: varies both, compares two spellings that differ textually on
+    every platform (comparing against the tempdir path is vacuous on systems
+    where it is already canonical), and asserts they differ *before* asserting
+    the keys match. Verified to fail against the pre-fix behaviour.
+
+### F278 (Active) — the hygiene guard's ID vocabulary is `F`-plus-digits only
+
+*   **Location**: `codelore-lib/tests/comment_hygiene_test.rs::is_task_id`
+*   **Severity**: LOW · **Category**: guard coverage
+*   **Description**: `is_task_id` matches a token of `F` followed by 1–3
+    digits. `T8:` and `(Task 13)` are both live in the tree and both invisible
+    to it; the `T8:` instance had reached published `--help` output.
+*   **Constraint that makes this non-trivial** (validated, not assumed): a
+    naive `T<N>` rule collides with the domain vocabulary. `T1`/`T2`/`T3` are
+    the clone-type names (`clone_coupling.rs`: "1.0 for T1+T2 exact matches"),
+    and every ISO-8601 timestamp in the test fixtures contains `T00:`/`T10:`.
+    A usable rule has to be anchored — e.g. `T<digits>:` opening a comment or
+    doc line — rather than a bare token match. Widening the vocabulary without
+    that anchor produces false positives on correct code.
+
+### F279 (Fixed — Unreleased, partial) — a ticket ID shipped in user-facing help
+
+*   **Location**: `args.rs` (fixed); `analyze.rs`, `explain.rs`, `options.rs`, `clone_coupling.rs` (remaining)
+*   **Severity**: LOW · **Category**: convention violation
+*   **Description**: `codelore analyze --help` printed `T8: An author is
+    considered "departed"…`. The project forbids ticket IDs in code, and this
+    one reached the published binary.
+*   **Outcome**: the help-text instance is removed. Instances remaining in
+    library doc comments and inline comments are not user-facing but are the
+    same violation; clearing them is gated on F278's anchored rule, so they are
+    fixed and guarded together rather than piecemeal.
+
+### F280 (Fixed — Unreleased) — a vacuous gate pass wrote `result` without `violations`
+
+*   **Location**: `check.rs`, `gate.rs`
+*   **Severity**: LOW · **Category**: CI contract
+*   **Description**: both vacuous-pass paths wrote `result=pass` to
+    `$GITHUB_OUTPUT` and stopped; all five other exit paths across the two
+    commands write `violations` too. A workflow reading `outputs.violations`
+    received an empty string rather than a count.
+*   **Outcome**: both write `violations=0`, guarded by a test shown to fail
+    against the previous behaviour.
+
+### F281 (Fixed — Unreleased) — `check --help` rendered `auto- discovered`
+
+*   **Location**: `args.rs` `thresholds_file` doc comment
+*   **Severity**: LOW · **Category**: help-text rendering
+*   **Description**: the doc comment split `auto-discovered` across two lines;
+    clap re-joins doc lines with a space, so both `check --help` and
+    `gate --help` printed the hyphen and the remainder separated.
+
+### F282 (Active) — a filtered-to-empty analysis reports success and explains nothing
+
+*   **Location**: `analyze.rs` (`dispatch!` macro, `run_streaming_dispatch`, the footer's unused `Footer.rows`)
+*   **Severity**: MED · **Category**: honest-absence convention
+*   **Description**: the README's own first command carries `--min-revs 5`, the
+    documented default. On a young repository nothing clears it, so the run
+    prints one CSV header row, exits 0, writes nothing to stderr, and under a
+    TTY frames it with `Status: ✓ ready` and `✓ hotspots completed`. `gha` and
+    `ndjson` emit **zero bytes**, which in CI reads as "no findings".
+    `ensure_ingest_witnessed` correctly does not fire — ingest saw everything;
+    the emptiness is introduced downstream by the predicate.
+*   **Scope note**: the convention already exists ~28 times (24 of 57 markdown
+    emitters carry an `rows.is_empty()` branch, 13 of which print a message,
+    plus the HTML empty state) and **zero** times across the CSV emitters —
+    the default path.
+*   **Implementation constraints** (validated): the `dispatch!` macro binds
+    `rows` at three sites and covers 185 of 189 streaming pairs, but
+    `macro_rules!` hygiene means `opts` is unreachable from the macro body and
+    absent from `EmitCtx`, so the message cannot be composed there. It belongs
+    in `analyze()` beside the existing empty-window `tracing::warn!`, which is
+    the same shape of advisory. `CommunitiesResult` has no `len()`. The footer
+    is TTY-gated, so a fix hung off it dies exactly where silence is most
+    dangerous. Message should state the filters in effect, not assert a cause:
+    `min_revs` is read by 40 of 57 analyses, and the rest return zero rows for
+    unrelated reasons.
+
+### F283 (Active) — complexity metrics are computed on partially-parsed trees
+
+*   **Location**: `codelore-lib/src/complexity`, vendored `codelore-rca` grammars
+*   **Severity**: MED (unverified impact) · **Category**: metric correctness
+*   **Description**: every `codelore check` run logs `complexity: parse errors
+    in <file> — metrics computed on a partial tree` for roughly a dozen source
+    files, `crates/codelore-cli/src/main.rs` among them. Those files'
+    complexity feeds `code-health`, the hotspot score, and this repository's
+    own self-gate, so a partial parse understates the metric wherever it hits.
+*   **Next step**: confirm the cause before proposing anything — the plausible
+    one is recently-adopted syntax the pinned tree-sitter grammar does not
+    accept, which would make this grow with each edition feature adopted.
+    Quantify the delta on one affected file before deciding whether it matters.
+
+The next sweep re-opens at **F284**.
