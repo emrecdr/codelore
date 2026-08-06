@@ -1177,6 +1177,22 @@ fn schema_lists_every_registered_analysis() {
     }
 }
 
+#[test]
+fn profile_reports_cache_size_against_its_cap() {
+    // `profile`'s help promised a cache size the output never printed, and
+    // nothing here noticed for as long as the promise stood. The size alone
+    // would not be enough: the cache sits at its ceiling by design, so a
+    // bare figure reads as a leak unless the cap it is held to is beside it.
+    codelore_cmd()
+        .arg("profile")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("**Cache root**:"))
+        .stdout(predicate::str::contains("**Cache size**:"))
+        .stdout(predicate::str::contains("cap"))
+        .stdout(predicate::str::contains("per repository"));
+}
+
 /// Analyses that intentionally have NO `codelore explain` topic yet —
 /// either the formula is too involved to state accurately in one line, or
 /// the analysis is low-value for the explain surface. Anti-drift contract:

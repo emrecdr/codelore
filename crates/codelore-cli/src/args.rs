@@ -244,9 +244,9 @@ pub enum Command {
     /// Integrates with downstream tools (Stoplight, Spectral,
     /// Postman, OpenAPI registries).
     Schema(SchemaArgs),
-    /// Print operational telemetry — cache size, schema version, and
-    /// per-analysis SQL preview. The "what's CodeLore doing under
-    /// the hood?" subcommand.
+    /// Print operational telemetry — version, schema, registered analyses,
+    /// output formats, pinned dependencies, and cache size against its
+    /// caps. The "what's CodeLore doing under the hood?" subcommand.
     Profile,
     /// Emit a markdown documentation dump covering every supported
     /// analysis, formula, and citation. The seed of the planned full
