@@ -6,6 +6,11 @@ Conventional Commits format. All notable changes documented here.
 
 ### Fixed
 
+- **`delta_health` no longer misses deletions or score renames as new code.** The touched-file set was built from head-side rows alone, so a file with no rows at head never entered it and its base rows were filtered out before the comparison ran. Deleting a large complex file — the most decisive health improvement a change can make — returned `no-code-change` with every count at zero. The same omission made a rename read as pure addition: the functions existed under the old path at base and the new path at head, and with only the new path in the set the base side vanished, so moving a file unchanged produced a *degrading* verdict. The set is now the union of both revisions. A rename still reads as a removal plus an addition rather than a paired move — pairing needs git's rename detection, which `codelore diff` has and this path does not.
+
+
+### Fixed
+
 - **The zero-row notice no longer prescribes a remedy that most analyses cannot use.** It closed by suggesting `--min-revs 1`, but `min_revs` is a genuine filter in only 17 of the analysis modules — 23 more name it solely in a tracing span and 23 never mention it. On `defect-validation` the effect was self-contradictory: the analysis printed the correct instruction to build a calibration artifact, and the notice immediately advised lowering a threshold it does not read. The notice now states the analysis, the zero, and the options that were set, and stops. The options summary still carries `min-revs=<n>`, so where it *is* the cause the number sits beside the zero; §12 of the advanced-usage guide covers the header-only case explicitly.
 
 - **The README's "Tracking health over time" gate example now includes `max_red_effort_pct`,** the third key `check` recommends when no thresholds are configured. It was the only one of the three absent from the README, and the subtlest — churn share landing in red-band files, counted against health-scored churn only, with health-improving churn exempt — so it was the one a reader could not look up where the CLI had just sent them.
