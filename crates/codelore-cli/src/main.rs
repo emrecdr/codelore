@@ -221,6 +221,20 @@ pub(crate) fn write_github_output(key: &str, value: &str) {
     }
 }
 
+/// The advisory `check` and `gate` print when no thresholds file exists.
+/// Both exit 0 in that state, so without naming what is missing the line is
+/// indistinguishable from a gate that ran and found nothing — which for
+/// someone wiring CI is a green build measuring nothing. Names gates worth
+/// starting from, the way the ratchet's initialization message does.
+/// `command` is the subcommand's own name so the line names what was run.
+pub(crate) fn vacuous_pass_notice(command: &str) -> String {
+    format!(
+        "codelore {command}: no thresholds configured (no `.codelore-thresholds.toml` at repo \
+         root); vacuously passing. Add a [gates] section with code_health_min / \
+         max_dependency_cycles / max_red_effort_pct to make it bind on regressions."
+    )
+}
+
 /// Map the `fail_on_skipped` policy onto a run's ledger records: when the policy
 /// is on, every gate recorded `"skipped"` becomes a synthetic [`GateViolation`]
 /// so the surface's normal violation-exit path fails the run; off (the default)
@@ -281,9 +295,23 @@ pub(crate) fn new_code_skip_reason(window_days: f64, shallow_checkout: bool) -> 
 /// surfaces — the same one-definition guarantee as `new_code_skip_reason`.
 pub(crate) const CORPUS_PERCENTILE_SKIP_REASON: &str = "no corpus percentile data (no calibration artifact active, or no analyzed file resolved a percentile)";
 
+/// A byte count rendered in the unit its cap is stated in, so a cache
+/// sitting at its ceiling reads as such rather than as a bare number. All
+/// integer math — a display rounding does not justify a lossy cast.
+fn human_bytes(n: u64) -> String {
+    const MIB: u64 = 1024 * 1024;
+    const GIB: u64 = 1024 * MIB;
+    if n >= GIB {
+        format!("{}.{} GiB", n / GIB, (n % GIB) * 10 / GIB)
+    } else {
+        format!("{}.{} MiB", n / MIB, (n % MIB) * 10 / MIB)
+    }
+}
+
 /// Operational telemetry. Prints what `CodeLore` ships under the
 /// hood — schema version, pinned dependency versions, supported
-/// analysis count, supported output format count. Useful for triage
+/// analysis count, supported output format count, and the cache's
+/// current size against the caps it is evicted to. Useful for triage
 /// when behaviour surprises a user.
 fn run_profile_cmd() -> Result<()> {
     use codelore_lib::cli_api::analysis::AnalysisName;
@@ -315,12 +343,20 @@ fn run_profile_cmd() -> Result<()> {
         gix = codelore_lib::cli_api::provenance::GIX_VERSION,
         duckdb = codelore_lib::cli_api::provenance::DUCKDB_VERSION,
     )?;
+    // Resolve through `default_cache_root` rather than `dirs::cache_dir`
+    // directly: where the platform offers no cache dir, codelore still
+    // caches — under a user-namespaced /tmp fallback — and reporting
+    // "unavailable" there sent anyone triaging disk use to the wrong place.
+    let cache_root = codelore_lib::cli_api::cache::default_cache_root();
     writeln!(out, "\n**Cache root**:")?;
-    if let Some(dir) = dirs::cache_dir() {
-        writeln!(out, "  {}/codelore/", dir.display())?;
-    } else {
-        writeln!(out, "  <unavailable on this platform>")?;
-    }
+    writeln!(out, "  {}/codelore/", cache_root.display())?;
+    writeln!(
+        out,
+        "**Cache size**: {} / {} cap ({} fact stores kept per repository, oldest evicted first)",
+        human_bytes(codelore_lib::cli_api::cache::cached_bytes(&cache_root)),
+        human_bytes(codelore_lib::cli_api::cache::GLOBAL_CACHE_MAX_BYTES),
+        codelore_lib::cli_api::cache::MAX_REPO_CACHE_ENTRIES,
+    )?;
     writeln!(
         out,
         "\n**SPA feature**: {}",

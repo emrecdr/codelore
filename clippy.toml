@@ -1,2 +1,8 @@
 msrv = "1.96"
 cognitive-complexity-threshold = 30
+# Proper nouns that `doc_markdown` would otherwise demand be backticked.
+# Many doc comments in codelore-cli double as clap help text, where a
+# literal backtick is noise every user sees on `--help`; backticking a
+# product name to satisfy a rustdoc lint is not worth that. The trailing
+# ".." extends clippy's default ident list instead of replacing it.
+doc-valid-idents = ["CodeLore", "OpenAPI", "CodeQL", "DuckDB", "SoC", ".."]

@@ -454,10 +454,12 @@ impl FactsDb {
         std::fs::rename(&tmp, &cache_p)
             .map_err(|e| CodeLoreError::Analysis(format!("rename .tmp → .duckdb: {e}")))?;
 
-        // LRU eviction: prune this repo's cache dir (max 5), then the global cap (2 GB).
+        // Evict this repo's cache dir past its entry cap, then enforce the
+        // global byte cap. Both bounds are named in `cache` so the values
+        // enforced here and the ones `codelore profile` reports agree.
         if let Some(repo_dir) = cache_p.parent() {
-            cache::prune_repo_cache(repo_dir, 5);
-            cache::prune_global_cache(cache_root, 2 * 1024 * 1024 * 1024);
+            cache::prune_repo_cache(repo_dir, cache::MAX_REPO_CACHE_ENTRIES);
+            cache::prune_global_cache(cache_root, cache::GLOBAL_CACHE_MAX_BYTES);
         }
 
         Self::open_read_only_with_temp_dir(&cache_p, Some(&spill_dir))

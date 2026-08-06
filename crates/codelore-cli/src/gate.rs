@@ -14,7 +14,7 @@ use codelore_lib::cli_api::facts::FactsDb;
 use codelore_lib::cli_api::repo::{GixRepo, Repo as _};
 
 use crate::args::{self, GateFormat};
-use crate::{GATE_DELTA_TABLE_ROWS, GATE_FINDINGS_ROWS, write_github_output};
+use crate::{GATE_DELTA_TABLE_ROWS, GATE_FINDINGS_ROWS, vacuous_pass_notice, write_github_output};
 
 /// Working-tree quality gate. Projects what the uncommitted edits do to code
 /// health and the import graph vs HEAD (the change-set engine), evaluates the
@@ -38,9 +38,7 @@ pub(crate) fn run_gate_cmd(args: &args::GateArgs) -> Result<()> {
 
     if thresholds.is_empty() {
         if !args.quiet {
-            eprintln!(
-                "codelore gate: no thresholds configured (no `.codelore-thresholds.toml` at repo root); vacuously passing."
-            );
+            eprintln!("{}", vacuous_pass_notice("gate"));
         }
         // A JSON consumer still gets one contract document on stdout — the same
         // empty shape a clean tree emits — so an agent hook that always runs
@@ -53,6 +51,10 @@ pub(crate) fn run_gate_cmd(args: &args::GateArgs) -> Result<()> {
             );
         }
         write_github_output("result", "pass");
+        // Every other exit path writes both keys; a vacuous pass had been
+        // writing only `result`, so a workflow reading `outputs.violations`
+        // got an empty string instead of a count.
+        write_github_output("violations", "0");
         return Ok(());
     }
 

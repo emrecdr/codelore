@@ -10,10 +10,26 @@ Conventional Commits format. All notable changes documented here.
 
 - **Every MCP tool now publishes its behavioural annotations**, so a client can reason about a tool before calling it rather than assuming the spec defaults ("may modify anything, may reach the network"). Nine tools declare `readOnlyHint: true` with a closed world; `delta_health` declares `readOnlyHint: false` (it checks revisions out into throwaway `git worktree`s) with `destructiveHint: false` and `idempotentHint: true`; `explain_file` declares an open world because it calls the optional `CODELORE_LLM_*` endpoint when one is configured. The hint is scoped to the repository and the user's files — populating the persistent cache on a cold call does not count against it.
 
+- **`codelore profile` now reports the cache's size against the caps it is held to** — `Cache size: 1.9 GiB / 2.0 GiB cap (5 fact stores kept per repository, oldest evicted first)`. The cache holds itself at its ceiling by design, so the directory looks alarming on inspection and the one command built to explain it printed only a path. The size is summed on exactly the basis the pruner evicts against, and both bounds are now named constants beside the pruners, so the enforced value and the reported one cannot drift. The reported root also resolves through the same fallback the rest of the CLI uses, instead of announcing "unavailable on this platform" on hosts where codelore does cache.
+
+- **A new "Tracking health over time" section in the README** walks the loop from a first baseline to an enforced gate: `health-trend` / `architecture-trend`, deriving bounds from measured worsts, `codelore check` in CI, then `--ratchet`. Every part already shipped; no document assembled them. The Action guide gains the matching trend pattern.
+
 ### Changed
+
+- **`check` and `gate` now name the gates that would make an unconfigured run bind.** Both exit 0 with no `.codelore-thresholds.toml`, which is the documented contract and unchanged — but the message gave no way to tell that apart from a gate that ran and found nothing, so a CI step could stay green while measuring nothing. The notice now ends the way `check --ratchet`'s already did, naming `code_health_min` / `max_dependency_cycles` / `max_red_effort_pct`.
 
 - **The MCP server bounds how many tool calls occupy the blocking pool at once.** A tool call can ingest an entire history and fan out over `rayon`, so an agent issuing calls in parallel previously started that many heavyweight jobs simultaneously, each with its own connection and thread pool, and they contended instead of finishing. Calls now take one of four permits and queue for the rest.
 - **Release binaries unwind on panic instead of aborting, so a panicking MCP tool no longer kills the server.** `codelore mcp` is long-lived and runs each tool on a blocking task; under `panic = "abort"` any tool panic terminated the whole process via `SIGABRT`, dropping the client's connection and — because aborting skips destructors — leaving `delta_health`'s `git worktree` checkout registered on disk. Unwinding lets the existing handler report the panic as an MCP error and keeps the server serving, and lets the worktree's cleanup run. An unexpected panic in any other subcommand now exits **101** (Rust's default panic status) rather than 134; the documented 0–5 exit-code contract is unaffected. Cost is ~2.4 MiB of unwind tables on a ~48 MiB binary.
+
+### Fixed
+
+- **Maintainer notes no longer ship in `--help`.** `codelore analyze --help` opened its `--departed-threshold-days` entry with a bare ticket ID (`T8: ...`); `--explain` promised support in "subsequent point releases"; `--strict-grouping` carried a dated design justification; and `analyze`'s one-line description spent two of its three sentences explaining why the clap variant is boxed. Doc comments on the `Command` enum and on `#[arg]` fields *are* clap's help text, so anything written for a maintainer is read by every user. `--thresholds-file` also split "auto-discovered" across two doc lines, which clap re-joined as `auto- discovered` in both `check --help` and `gate --help`.
+
+- **Product names no longer appear backticked in `--help`.** `clippy::pedantic` enables `doc_markdown`, which requires `CodeLore`, `OpenAPI` and `CodeQL` to be backticked — right for rustdoc, but these doc comments double as help text, so ten of the fourteen command lines rendered literal backticks. The names are registered in `clippy.toml`'s `doc-valid-idents` instead. Literals a user can act on (`.codelore-thresholds.toml`, `$GITHUB_OUTPUT`, `--merge`) keep their markup.
+
+- **A vacuous `check`/`gate` pass now writes `violations=0` to `$GITHUB_OUTPUT`.** Both wrote only `result`, while every other exit path in the two commands writes both keys, so a workflow reading `outputs.violations` received an empty string rather than a count.
+
+- **The stale-analysis-count guard now sees a count written through a qualifier.** It matched digits followed directly by "analyses", so `54 behavioral analyses` — the phrasing the architecture diagrams use — went unseen, and two counts had drifted behind it against a registry of 57. Widening the scan surfaced a third in the topic rationale.
 
 ## [0.26.0] - 2026-08-05
 

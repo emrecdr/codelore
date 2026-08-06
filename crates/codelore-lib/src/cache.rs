@@ -194,6 +194,27 @@ fn canonicalize_with_fallback_log(repo_path: &Path, call_site: &str) -> PathBuf 
 // LRU eviction (Task 13)
 // ---------------------------------------------------------------------------
 
+/// Cache entries kept per repository before the oldest are evicted. Named
+/// so the eviction bound and the number `codelore profile` reports to the
+/// user come from one place.
+pub const MAX_REPO_CACHE_ENTRIES: usize = 5;
+
+/// Ceiling on total `.duckdb` bytes across every repository's cache.
+/// Companion `.wal` files and the JSON sidecars are outside this total —
+/// only the fact stores are counted and evicted.
+pub const GLOBAL_CACHE_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// Total bytes of cached fact stores under `root`, on the same basis
+/// [`prune_global_cache`] evicts against, so a reported size and the cap it
+/// is reported against always measure the same thing.
+#[must_use]
+pub fn cached_bytes(root: &Path) -> u64 {
+    collect_duckdb_files(&root.join("codelore"))
+        .iter()
+        .map(|(_, _, size)| *size)
+        .sum()
+}
+
 /// Remove `.duckdb` files from `repo_dir` beyond `max_entries`, deleting the
 /// oldest (by mtime) first. Also sweeps stale `.tmp.<pid>` and
 /// `.tmp.<pid>.wal` artifacts left behind by crashed runs.

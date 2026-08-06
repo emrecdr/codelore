@@ -1177,6 +1177,22 @@ fn schema_lists_every_registered_analysis() {
     }
 }
 
+#[test]
+fn profile_reports_cache_size_against_its_cap() {
+    // `profile`'s help promised a cache size the output never printed, and
+    // nothing here noticed for as long as the promise stood. The size alone
+    // would not be enough: the cache sits at its ceiling by design, so a
+    // bare figure reads as a leak unless the cap it is held to is beside it.
+    codelore_cmd()
+        .arg("profile")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("**Cache root**:"))
+        .stdout(predicate::str::contains("**Cache size**:"))
+        .stdout(predicate::str::contains("cap"))
+        .stdout(predicate::str::contains("per repository"));
+}
+
 /// Analyses that intentionally have NO `codelore explain` topic yet —
 /// either the formula is too involved to state accurately in one line, or
 /// the analysis is low-value for the explain surface. Anti-drift contract:
@@ -2841,6 +2857,34 @@ fn gate_vacuous_passes_without_thresholds() {
             "codelore gate: no thresholds configured",
         ))
         .stderr(predicate::str::contains("vacuously passing"));
+}
+
+#[test]
+fn vacuous_pass_writes_both_github_output_keys() {
+    // A vacuous pass is a completed run, so a workflow reading
+    // `outputs.violations` must get a count rather than an empty string —
+    // every other exit path writes both keys. Checked for both subcommands
+    // because each vacuous pass is its own early return. The output file
+    // lives outside the repo so it cannot dirty the tree `gate` projects.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    let out_dir = tempfile::tempdir().unwrap();
+    for command in ["check", "gate"] {
+        let out = out_dir.path().join(format!("github-output-{command}"));
+        codelore_cmd()
+            .env("GITHUB_OUTPUT", &out)
+            .args([command, "--repo", tiny.dir.path().to_str().unwrap()])
+            .assert()
+            .success();
+        let written = std::fs::read_to_string(&out).expect("github output file written");
+        assert!(
+            written.contains("result=pass"),
+            "{command} vacuous pass omitted result=pass; wrote {written:?}"
+        );
+        assert!(
+            written.contains("violations=0"),
+            "{command} vacuous pass omitted violations=0; wrote {written:?}"
+        );
+    }
 }
 
 #[test]
