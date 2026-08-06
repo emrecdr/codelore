@@ -241,13 +241,18 @@ runs:
           if [ -n "$OUTPUT" ]; then
             CMD+=(--output "$OUTPUT")
           fi
-          CMD+=("${EXTRA_ARRAY[@]}")
         else
           # check / gate / diff have no analysis/format/output surface — the
           # format input defaults to sarif, which gate rejects — so those are
           # analyze-only. The command-specific flags (and diff's
           # <base>..<head> range) arrive verbatim through the args escape hatch.
           CMD=(codelore "$COMMAND" --repo "$REPO" --no-banner)
+        fi
+
+        # Expanding an empty array as "${arr[@]}" is an unbound-variable
+        # error under `set -u` before bash 4.4, and `args` is empty by
+        # default — so append only when there is something to append.
+        if [ ${#EXTRA_ARRAY[@]} -gt 0 ]; then
           CMD+=("${EXTRA_ARRAY[@]}")
         fi
 
