@@ -7,7 +7,7 @@
 //! The path reuses the same `<repo_hash_8>` component that `cache.rs`
 //! derives for `.duckdb` files, placing history and cache entries under
 //! the same per-repo directory. `.jsonl` files are NOT touched by the
-//! LRU pruner (which matches `.duckdb` only).
+//! cache pruner (which matches `.duckdb` only).
 //!
 //! ## Write contract
 //!

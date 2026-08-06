@@ -191,7 +191,18 @@ fn canonicalize_with_fallback_log(repo_path: &Path, call_site: &str) -> PathBuf 
 }
 
 // ---------------------------------------------------------------------------
-// LRU eviction (Task 13)
+// Eviction — oldest-ingest-first, NOT least-recently-used
+//
+// Both pruners order by mtime, and a cache HIT opens the fact store read-only,
+// which never writes the file. An entry's mtime is therefore fixed at the
+// moment its ingest completed and is never refreshed by use, so the policy is
+// FIFO by ingest time: an entry read every day is evicted ahead of a newer one
+// that was never reused. That is a deliberate trade, not an oversight —
+// refreshing on hit would mean a write on the read fast path, and `std` cannot
+// set mtime without a new dependency (`utimensat` is out; the workspace
+// forbids `unsafe`). The practical exposure is bounded: keys are HEAD-scoped,
+// so the entry being hit is usually the most recently ingested one, and a
+// wrong eviction costs one re-ingest and never correctness.
 // ---------------------------------------------------------------------------
 
 /// Cache entries kept per repository before the oldest are evicted. Named
@@ -299,7 +310,7 @@ pub fn prune_global_cache(root: &Path, max_bytes: u64) {
 ///
 /// Individual subdirectory or entry errors (broken symlinks, permission
 /// denied) are logged and skipped — a single bad entry must not abort the
-/// entire walk, otherwise one inaccessible subdir would disable global LRU
+/// entire walk, otherwise one inaccessible subdir would disable global
 /// eviction and let the cache grow unbounded.
 fn collect_duckdb_files(dir: &Path) -> Vec<(PathBuf, u64, u64)> {
     let mut out = Vec::new();
