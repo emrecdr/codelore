@@ -82,10 +82,9 @@ runs:
             exit 1
           fi
         fi
-        # F21.1 fix: accept both `vX.Y.Z` and `X.Y.Z` inputs by
-        # normalising to the `vX.Y.Z` form. GitHub release tags are
-        # always v-prefixed, so `0.3.0` without normalisation would
-        # 404 on the download URL.
+        # Accept both `vX.Y.Z` and `X.Y.Z` inputs by normalising to the
+        # `vX.Y.Z` form. GitHub release tags are always v-prefixed, so an
+        # unprefixed version would 404 on the download URL.
         if [[ "$VERSION" != v* ]]; then
           VERSION="v$VERSION"
         fi
