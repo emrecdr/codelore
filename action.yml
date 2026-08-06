@@ -41,7 +41,7 @@ inputs:
 
 outputs:
   result-path:
-    description: 'Absolute path to the generated output file (empty when --format streams to stdout, and always empty for command: check/gate/diff, which have no output file).'
+    description: 'Absolute path to the generated output file (empty when --format streams to stdout). Always empty for command: check/gate/diff — check and gate stream their report and have no output file, and diff writes its own --output path, which this Action does not report back.'
     value: ${{ steps.run.outputs.result-path }}
   version-used:
     description: 'The actual codelore version that was downloaded (resolved from `latest` or pinned).'
@@ -242,10 +242,12 @@ runs:
             CMD+=(--output "$OUTPUT")
           fi
         else
-          # check / gate / diff have no analysis/format/output surface — the
-          # format input defaults to sarif, which gate rejects — so those are
-          # analyze-only. The command-specific flags (and diff's
-          # <base>..<head> range) arrive verbatim through the args escape hatch.
+          # check / gate / diff each carry their OWN --format (and diff its
+          # own --analysis and --output) over value sets that differ from the
+          # analyze-typed inputs above — the format input defaults to sarif,
+          # which gate rejects — so those inputs are not forwarded. The
+          # command-specific flags, and diff's <base>..<head> range, arrive
+          # verbatim through the args escape hatch.
           CMD=(codelore "$COMMAND" --repo "$REPO" --no-banner)
         fi
 

@@ -50,7 +50,7 @@ The findings appear in the PR's **Security** tab and the **Files changed** view,
 
 | Output | Description |
 |---|---|
-| `result-path` | Absolute path to the generated file (empty when streaming to stdout, and always empty for `command: check`/`gate`/`diff`, which have no output file) |
+| `result-path` | Absolute path to the generated file (empty when streaming to stdout). Always empty for `command: check`/`gate`/`diff` — `check` and `gate` stream their report and have no output file, and `diff` writes its own `--output` path, which the Action does not report back |
 | `version-used` | The actual codelore version downloaded (resolved from `latest` or pinned) |
 
 ## Common patterns
@@ -135,7 +135,9 @@ CSV columns and row formatting match code-maat's verbose-mode output exactly. Dr
 
 ## Running quality gates in CI
 
-Set `command:` to run codelore's quality-gate subcommands instead of `analyze`. A gate violation exits non-zero, which fails the step and therefore the workflow — the intended CI signal. These commands take their flags through `args` (the `analysis`/`format`/`output` inputs are analyze-only, and `format` defaults to `sarif`, which `gate` rejects — so they are not injected for the gate commands). They stream their report to stdout and set no `result-path`.
+Set `command:` to run codelore's quality-gate subcommands instead of `analyze`. A gate violation exits non-zero, which fails the step and therefore the workflow — the intended CI signal.
+
+These commands take their flags through `args`. The `analysis`/`format`/`output` inputs are analyze-only and are not injected for them: `check`, `gate`, and `diff` each accept their own `--format` over a different value set (and `diff` its own `--analysis` and `--output`), and the `format` default `sarif` is one `gate` rejects. Pass the command's own flags via `args` instead. All three stream their report to stdout and set no `result-path`, including `diff` when you give it an `--output` of its own.
 
 ### Fail the build on a threshold violation (`check`)
 

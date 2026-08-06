@@ -6,7 +6,7 @@ Conventional Commits format. All notable changes documented here.
 
 ### Added
 
-- **The GitHub Action gains a `command:` input so it can run the quality gates, not just `analyze`.** `command: analyze` (the default) is unchanged and fully backward-compatible; `command: check`, `gate`, or `diff` now route the Action to those subcommands, with the command-specific flags (and diff's `<base>..<head>` range) passed through the existing `args` escape hatch. The `analysis`/`format`/`output` inputs remain analyze-only — they are not injected for the gate commands (the `format` default `sarif` is one `gate` rejects), and `result-path` is empty for them since they have no output file. CI users can fail a build on a threshold violation without hand-rolling a separate install step.
+- **The GitHub Action gains a `command:` input so it can run the quality gates, not just `analyze`.** `command: analyze` (the default) is unchanged and fully backward-compatible; `command: check`, `gate`, or `diff` now route the Action to those subcommands, with the command-specific flags (and diff's `<base>..<head>` range) passed through the existing `args` escape hatch. The `analysis`/`format`/`output` inputs remain analyze-only — they are not injected for the gate commands, which accept their own `--format` over a different value set (the `format` default `sarif` is one `gate` rejects) — and `result-path` is empty for all three. CI users can fail a build on a threshold violation without hand-rolling a separate install step.
 
 ### Changed
 
