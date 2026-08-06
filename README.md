@@ -334,6 +334,55 @@ Once you've run those four, you have enough signal to triage. From here, [the ad
 
 ---
 
+## Tracking health over time
+
+Those four commands are snapshots. To *watch* a codebase rather than inspect it once, chain four shipped features into a loop that tightens as you improve.
+
+**1. Baseline — where are you now?**
+
+```bash
+codelore analyze --analysis health-trend --repo .
+codelore analyze --analysis architecture-trend --repo .
+```
+
+`health-trend` returns a per-commit series of `arch-health`, `code-health` and `combined-health` with green/yellow/red bands. `architecture-trend` tracks propagation cost, cycle count and largest cycle across the same history. Both run with no configuration and no flags — this is your before picture.
+
+**2. Write the bounds down**
+
+Gates live in `.codelore-thresholds.toml` at the repo root. The numbers are repo-specific, so derive them rather than copying them: **measure today's worst value, set the bound just past it, and record the measurement in a comment above it.**
+
+```toml
+[gates]
+# Worst file today: src/legacy/parser.rs at 41.2. The floor sits below it so
+# routine churn doesn't trip the gate — only real decay does.
+code_health_min = 38.0
+# Exactly one import cycle exists today. A second one fails the gate.
+max_dependency_cycles = 1
+```
+
+A bound that tracks today's worst gates on *regression*, not on the status quo. [This repository's own thresholds file](.codelore-thresholds.toml) is a worked example — every gate carries the measurement it came from and why its margin exists.
+
+**3. Enforce it in CI**
+
+```yaml
+- uses: emrecdr/codelore@v1
+  with:
+    command: check
+    args: '--thresholds-file .codelore-thresholds.toml'
+```
+
+`codelore check` exits non-zero on any violation, which fails the step and the build. With no thresholds file it passes vacuously — configured gates are what make it bind.
+
+**4. Ratchet, so the bar rises with you**
+
+```bash
+codelore check --repo . --ratchet
+```
+
+Commit the generated `.codelore-ratchet.toml`. The ratchet records today's measured values and tightens automatically when they improve, so a regression fails even when it stays inside the original threshold. It tracks a metric only when the matching gate is configured, so step 2 comes first.
+
+---
+
 ## Interactive dashboard (`--format spa`)
 
 **[Live demo →](https://emrecdr.github.io/codelore/demo/)** — codelore analyzing its own repository, regenerated on every push to main.

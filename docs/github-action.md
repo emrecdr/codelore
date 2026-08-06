@@ -133,6 +133,38 @@ steps:
 
 CSV columns and row formatting match code-maat's verbose-mode output exactly. Drop-in for existing code-maat-targeted dashboards.
 
+### Health over time, published on every push to main
+
+```yaml
+name: health-trend
+on:
+  push:
+    branches: [main]
+
+jobs:
+  trend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: emrecdr/codelore@v1
+        with:
+          analysis: health-trend
+          format: html
+          output: health-trend.html
+      - uses: emrecdr/codelore@v1
+        with:
+          analysis: architecture-trend
+          format: html
+          output: architecture-trend.html
+      - uses: actions/upload-artifact@v4
+        with:
+          name: health-over-time
+          path: '*-trend.html'
+```
+
+`health-trend` emits a per-commit series of `arch-health`, `code-health` and `combined-health` with green/yellow/red bands; `architecture-trend` tracks propagation cost, cycle count and largest cycle over the same history. Neither needs configuration. Pair them with the gate below and you have the full loop: trends show the direction, gates stop the regressions. The README's [Tracking health over time](../README.md#tracking-health-over-time) walks the whole loop end to end.
+
 ## Running quality gates in CI
 
 Set `command:` to run codelore's quality-gate subcommands instead of `analyze`. A gate violation exits non-zero, which fails the step and therefore the workflow — the intended CI signal.

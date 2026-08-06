@@ -1681,6 +1681,7 @@ Each tool call opens its own `FactsDb` connection via the warm-cache path. This 
 |---|---|---|
 | `error: ingest commits: repository error: find_parent_commit ... could not be found` | Shallow clone (`--depth=N`) is missing parent ancestry for analyses that walk back | Use a full clone or run only HEAD-only analyses (`clones` works on shallow clones — it short-circuits the ingest) |
 | Hotspot scores are all `0.0` | Repo has only one commit, OR `fetch-depth: 0` not set in CI | Set `fetch-depth: 0` in `actions/checkout` |
+| An analysis prints only its header row (no data) and exits 0 | A threshold filtered every entity out — most often `--min-revs` (default 5), which nothing meets on a young or small repo | Re-run with `--min-revs 1` to confirm the filter is the cause; the pre-flight banner's `Analysis:` line shows the filter values in effect for the run |
 | `codelore analyze --analysis bogus` errors with help-text | Typo on analysis name | The error message lists all supported analyses |
 | Same file appears twice in `revisions` output (e.g. `crates/bca-lib/foo.rs` AND `crates/codelore-lib/foo.rs`) | Git rename split — CodeLore doesn't follow renames yet | Known limitation; tracked in [`roadmap-v1.x-and-beyond.md`](roadmap-v1.x-and-beyond.md) (Tier 3, "Rename tracking") |
 | `clone-coupling` returns 0 rows on a small repo | Fisher exact test needs ≥ 3 shared commits AND non-degenerate contingency table | Verify with `--analysis coupling` first; if that's empty too, the repo doesn't have enough history |
