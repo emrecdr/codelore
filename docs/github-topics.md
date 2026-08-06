@@ -24,7 +24,7 @@ GitHub allows up to 20 topics per repository. We use 18 — leaves headroom for 
 | `sarif` | SARIF 2.1.0 is CodeLore's primary CI/CD output format (3 rules ship). |
 | `clone-detection` | We ship Type 1 + Type 2 clone detection via tree-sitter AST hashing. |
 | `hotspot-analysis` | Headline output of `hotspots` + `code-health` analyses. |
-| `change-coupling` | One of the 14 published analyses + the live-clone differentiator. |
+| `change-coupling` | A headline analysis in the published registry + the live-clone differentiator. |
 | `code-complexity` | Cyclomatic + cognitive + Halstead + MI metrics via vendored rust-code-analysis. |
 | `developer-tools` | Broadest umbrella for CLI dev tools. |
 | `cli` | Every CLI tool wants this. |
