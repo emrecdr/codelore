@@ -226,9 +226,9 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Run an analysis and emit results. Boxed because `AnalyzeArgs` carries the
-    /// widest flag surface of any subcommand — inlining it would bloat every
-    /// `Command` value to its size.
+    // Boxed because AnalyzeArgs carries the widest flag surface of any
+    // subcommand — inlining it would bloat every Command value to its size.
+    /// Run an analysis and emit results.
     Analyze(Box<AnalyzeArgs>),
     /// Run analyses at two revisions and emit the delta.
     Diff(DiffArgs),
@@ -322,10 +322,9 @@ pub struct CheckArgs {
     /// Path to the git repo (default: cwd).
     #[arg(short, long, default_value = ".")]
     pub repo: PathBuf,
-    /// Optional explicit thresholds file. When omitted,
-    /// `.codelore-thresholds.toml` at the repo root is auto-
-    /// discovered. Empty/missing file → empty rule set → check
-    /// passes vacuously.
+    /// Optional explicit thresholds file. When omitted, the
+    /// `.codelore-thresholds.toml` at the repo root is auto-discovered.
+    /// Empty/missing file → empty rule set → check passes vacuously.
     #[arg(long)]
     pub thresholds_file: Option<PathBuf>,
     /// Print the last 20 gate-run records from the local ledger, grouped
@@ -606,8 +605,7 @@ pub struct AnalyzeArgs {
     /// Print the `DuckDB` optimizer plan for the analysis's underlying
     /// SQL to stderr before running the query. Useful for debugging
     /// performance ("which join was the dominator?") or for verifying
-    /// that an index is being used. Wired for `hotspots` today;
-    /// other analyses gain support in subsequent point releases.
+    /// that an index is being used. Supported for `hotspots`.
     #[arg(long, default_value_t = false)]
     pub explain: bool,
 
@@ -706,8 +704,8 @@ pub struct AnalyzeArgs {
     /// Strict-grouping mode: paths that don't match any rule in the
     /// `--group-file` are DROPPED from analysis output (code-maat's
     /// behavior). Default: false — unmapped paths keep their raw names
-    /// (`CodeLore` safety divergence: silent data drop is a 2013 mistake).
-    /// `--code-maat-compat` implies `--strict-grouping`.
+    /// rather than being dropped without notice. `--code-maat-compat`
+    /// implies `--strict-grouping`.
     #[arg(long = "strict-grouping", default_value_t = false)]
     pub strict_grouping: bool,
 
@@ -726,7 +724,7 @@ pub struct AnalyzeArgs {
     #[arg(long = "time-bucket", value_enum)]
     pub time_bucket: Option<TimeBucketArg>,
 
-    /// T8: An author is considered "departed" if their most recent
+    /// An author is considered "departed" if their most recent
     /// commit anywhere in the repo is older than this many days at the
     /// anchor moment (used by `knowledge-islands` analysis).
     ///
