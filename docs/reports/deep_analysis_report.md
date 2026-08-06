@@ -576,7 +576,7 @@ turned out to be mis-stated by the reports that logged them.
     Logged rather than built, per the minimum-surface rule. Revisit only if a
     client actually rejects the text-block shape.
 
-### F272 (Active) — nothing enforces agreement between the six Rust-version pin sites
+### F272 (Fixed — Unreleased) — nothing enforces agreement between the six Rust-version pin sites
 
 *   **Location**: `rust-toolchain.toml`, workspace `rust-version`, `clippy.toml`, `Containerfile` (`ARG RUST_VERSION` and the `FROM` digest), the `dtolnay/rust-toolchain` action tags, `CHANGELOG.md`
 *   **Severity**: LOW · **Category**: release plumbing / drift guard
@@ -596,5 +596,14 @@ turned out to be mis-stated by the reports that logged them.
     digest bump silently keeps building on the old toolchain, and no textual
     agreement check can see that. Call it out in the test's failure message
     rather than pretending it is covered.
+*   **Outcome**: shipped as `tests/rust_version_pins_test.rs`, following
+    `dep_versions_drift_test.rs`. `rust-toolchain.toml` is the source of truth;
+    the other three file pins are embedded with `include_str!` and the action
+    tags are read at run time from the workflows directory, so a workflow added
+    later is covered without editing the test. Agreement is checked on
+    major.minor because the sites are written at different precisions on
+    purpose. The digest blind spot is named in the failure message. Verified by
+    injecting drift into both a file pin and a workflow tag and confirming the
+    guard names both — a drift guard that cannot fail is worth nothing.
 
 The next sweep re-opens at **F273**.
