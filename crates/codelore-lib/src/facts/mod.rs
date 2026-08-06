@@ -254,8 +254,13 @@ impl FactsDb {
         match stored {
             Ok(v) if v == schema::CURRENT_SCHEMA_VERSION => Ok(()),
             Ok(v) => Err(CodeLoreError::Analysis(format!(
+                // Reachable from every command that opens the cache, and most
+                // of them have no `--no-cache` — that flag exists only on
+                // `analyze`. Name the escape hatch that works everywhere.
                 "fact store {} has schema_version={v}, this binary expects {} — \
-                 re-ingest with `--no-cache` or upgrade/downgrade codelore",
+                 point this run at a fresh cache with `--cache-dir <scratch>` \
+                 (or `--no-cache` on `analyze`), or use a codelore version \
+                 matching the stored schema",
                 path.display(),
                 schema::CURRENT_SCHEMA_VERSION,
             ))),
@@ -363,8 +368,9 @@ impl FactsDb {
                 tracing::warn!(
                     "cache hit on a working tree with uncommitted changes; \
                      HEAD-time metrics (hotspots' complexity, clones) may be \
-                     stale relative to disk. Pass `--no-cache` to recompute \
-                     against the current working tree."
+                     stale relative to disk. Recompute against the working \
+                     tree with `--cache-dir <scratch>` (or `--no-cache` on \
+                     `analyze`, which is the only surface carrying that flag)."
                 );
             }
             return Self::open_read_only_with_temp_dir(&cache_p, Some(&spill_dir));
@@ -388,7 +394,8 @@ impl FactsDb {
                 "working tree has uncommitted changes; skipping persistent \
                  cache write to avoid caching dirty HEAD-time metrics \
                  (complexity, clones) under the clean head_sha key. \
-                 Commit changes or pass `--no-cache` to suppress this notice."
+                 Commit the changes to silence this, or pass `--no-cache` on \
+                 `analyze` (the only surface carrying that flag)."
             );
             let mem = Self::new_in_memory_with_temp_dir(Some(&spill_dir))?;
             mem.create_schema()?;
