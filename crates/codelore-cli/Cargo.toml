@@ -28,7 +28,7 @@ default = []
 spa = ["codelore-lib/spa"]
 
 [dependencies]
-codelore-lib = { path = "../codelore-lib", version = "0.26.0" }
+codelore-lib = { path = "../codelore-lib", version = "0.27.0" }
 clap = { version = "4", features = ["derive"] }
 # F-X3 (Tier 2 Day 12): shell completion generation for bash / zsh /
 # fish / PowerShell / elvish. Derives the spec from the existing
@@ -62,4 +62,4 @@ assert_cmd = "2"
 predicates = "3"
 tempfile = "3"
 walkdir = "2"
-codelore-lib = { path = "../codelore-lib", version = "0.26.0", features = ["test-support"] }
+codelore-lib = { path = "../codelore-lib", version = "0.27.0", features = ["test-support"] }
