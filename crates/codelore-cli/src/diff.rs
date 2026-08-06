@@ -376,8 +376,10 @@ fn analyze_at_rev(
         functions,
         red_files,
         // Fingerprint against the STABLE repo path, not the throwaway worktree
-        // `opts` ingested above — `canonical_json` bakes in `repo_path`, and the
-        // worktree path differs every run.
+        // `opts` ingested above. `canonical_json` no longer carries `repo_path`
+        // at all, so this no longer guards the digest against a per-run
+        // worktree path — it is kept because the digest should describe the
+        // repository being diffed rather than wherever a worktree landed.
         opts_digest: base_cache_opts_digest(&base_rev_options(repo.to_path_buf(), args)),
     };
     Ok((analyses, db, opts))
@@ -529,9 +531,10 @@ fn base_rev_options(repo_path: PathBuf, args: &DiffArgs) -> Options {
 /// [`base_rev_options`], a knob added there needs no change here.
 ///
 /// Callers pass an `Options` built against the STABLE repo path (not the
-/// per-run throwaway worktree `analyze_at_rev` ingests): `canonical_json`
-/// serializes `repo_path` verbatim, so a volatile worktree path would make the
-/// digest differ every run and the base cache never hit. The base tree's own
+/// per-run throwaway worktree `analyze_at_rev` ingests). `canonical_json`
+/// excludes `repo_path`, so the digest is already stable across worktree
+/// paths; passing the stable path keeps the value describing the repository
+/// under diff rather than resting on that exclusion. The base tree's own
 /// content is pinned by the cached `sha`.
 ///
 /// The version/epoch/schema trio mirrors what the main fact-store cache key
