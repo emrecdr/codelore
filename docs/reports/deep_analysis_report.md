@@ -813,7 +813,7 @@ sits in `2026-08-06-first-run-ux-review.md`; this section is the F-ledger.
     `CommunitiesResult` gained `len`/`is_empty` as the one dispatched result
     that is not a `Vec`.
 
-### F283 (Active) — complexity metrics are computed on partially-parsed trees
+### F283 (Refuted as a metric defect; LOW as log noise) — the partial-tree warning fires on a grammar quirk, not on lost structure
 
 *   **Location**: `codelore-lib/src/complexity`, vendored `codelore-rca` grammars
 *   **Severity**: MED (unverified impact) · **Category**: metric correctness
@@ -822,9 +822,31 @@ sits in `2026-08-06-first-run-ux-review.md`; this section is the F-ledger.
     files, `crates/codelore-cli/src/main.rs` among them. Those files'
     complexity feeds `code-health`, the hotspot score, and this repository's
     own self-gate, so a partial parse understates the metric wherever it hits.
-*   **Next step**: confirm the cause before proposing anything — the plausible
-    one is recently-adopted syntax the pinned tree-sitter grammar does not
-    accept, which would make this grow with each edition feature adopted.
-    Quantify the delta on one affected file before deciding whether it matters.
+*   **Cause, located**: every affected Rust file contains the token `&raw`.
+    `&raw const` / `&raw mut` is Rust 2024's raw-borrow operator, so the pinned
+    tree-sitter grammar commits to a raw borrow on seeing `&raw`, then errors
+    when the next token is neither `const` nor `mut`. The codebase has a
+    dozen locals named `raw` (`&raw` passed to a parse helper). Correlation is
+    exact: 12 of 12 warned-about `.rs` files contain the token; sampled files
+    that do not contain it never warn.
+*   **Impact, measured — none.** Renaming the identifier so the token
+    disappears flips `has_error()` from true to false, and every metric is
+    byte-identical either way: cognitive, cyclomatic, nexits, nargs and the
+    space count all match exactly across four sampled files, including
+    `main.rs` (cognitive 63.00, cyclomatic 132.00, 24 spaces on both sides).
+    Tree-sitter's error recovery confines the ERROR node to the `&raw`
+    expression without swallowing any enclosing structure, so `code-health`,
+    the hotspot score and the self-gate read the same numbers they would on a
+    clean parse.
+*   **What is left is log noise**, not a correctness defect: 14 WARN lines on
+    every `check` run, which trains a reader to skim past warnings that do
+    matter. The honest fix is not to touch the metrics but to stop crying wolf
+    — either demote this to `debug!`, or keep `warn!` only where the error
+    region actually overlaps a measured entity. Deliberately not fixed here:
+    the earlier severity was assigned before measurement, and the correction
+    is the finding.
+*   **Note for whoever revisits the JS side**: two `.js` files warn as well
+    (`00_setup_boot.js`, `90_toggles_utils.js`) and cannot share this cause.
+    They were not investigated; assume nothing from the Rust result.
 
 The next sweep re-opens at **F284**.
