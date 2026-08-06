@@ -268,6 +268,7 @@ impl Options {
             explain: _,            // dropped — cosmetic (stderr query plan)
             target: _,             // dropped — per-invocation file selector
             temp_dir: _,           // dropped — env/spill selector
+            repo_path: _,          // normalised — `cache_key` hashes the CANONICAL path
             calibration: _,        // path dropped; content → calibration_digest
             defect_calibration: _, // path dropped; content → defect_calibration_digest
             group_file: _,         // path dropped; content → group_file_digest
@@ -275,7 +276,6 @@ impl Options {
             // ----- Included in the cache key: serialized verbatim into `canon`
             // (exclude_patterns is sorted first; every other field flows as-is).
             // Any change to one of these must invalidate the cache. -----
-            repo_path: _,
             after: _,
             before: _,
             min_revs: _,
@@ -318,6 +318,15 @@ impl Options {
         // the ingest writes.
         snapshot.rows_limit = None; // cosmetic — output truncation
         snapshot.explain = false; // cosmetic — help text
+        // `repo_path` is a per-invocation selector in the strictest sense: it
+        // names WHICH repository to read, and `cache_key` already establishes
+        // that identity by hashing the CANONICALISED path as its first
+        // component. What arrives here is the spelling the user typed, so
+        // leaving it in meant `--repo .` and `--repo $(pwd)` derived different
+        // keys for one repository at one HEAD — each paying a full ingest and
+        // each consuming one of the five per-repo cache slots. Normalised to a
+        // constant rather than dropped, so the key's field set stays fixed.
+        snapshot.repo_path = PathBuf::new();
         // `target` is a per-invocation selector: it picks which file the
         // function analyses read, but ingest never sees it — caching
         // per-target would produce a full-size duplicate DB file for every
@@ -843,10 +852,16 @@ mod tests {
             Some(false),
             "explain must be neutralised"
         );
+        assert_eq!(
+            obj["repo_path"].as_str(),
+            Some(""),
+            "repo_path must be neutralised — identity comes from the canonical \
+             path `cache_key` hashes, not from how the user spelled it"
+        );
 
         let digest = hex::encode(Sha256::digest(canon.to_string().as_bytes()));
         assert_eq!(
-            digest, "fd97ba3da81292be838811545a9ea1eac49a99987705e7159c5d696001a6aa20",
+            digest, "1d4205a4bf72624e0f7b804e82447d5b0dae0009f22624c4127869c3d45c5dfb",
             "cache-key classification changed:\n{canon}"
         );
     }

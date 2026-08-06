@@ -238,18 +238,41 @@ fn cache_path_with_root_canonicalises_repo_path() {
     let root = dir.path();
     let canonical_root = std::fs::canonicalize(root).expect("canonicalize tempdir for assertion");
 
-    let opts = Options::default();
+    // A second spelling of the same directory. `root.join(".")` differs
+    // textually on every platform yet canonicalises to `root`, unlike
+    // comparing against the tempdir path itself — which is already canonical
+    // on some systems, and there the assertions below would hold trivially.
+    let spelled = root.join(".");
+    assert_ne!(
+        spelled.as_os_str(),
+        canonical_root.as_os_str(),
+        "the two spellings must differ textually or this test proves nothing"
+    );
+
+    // Production always passes `&opts.repo_path` as the free argument, so the
+    // two co-vary. Holding `opts` fixed while varying only the argument pinned
+    // an invariance that could not fail, and could not see a raw `repo_path`
+    // reaching the key through the options hash.
     let head = "deadbeef".to_string();
-    let key1 = cache_key(&canonical_root, &head, &opts);
-    let key2 = cache_key(root, &head, &opts);
+    let opts_canonical = Options {
+        repo_path: canonical_root.clone(),
+        ..Options::default()
+    };
+    let opts_spelled = Options {
+        repo_path: spelled.clone(),
+        ..Options::default()
+    };
+    let key1 = cache_key(&canonical_root, &head, &opts_canonical);
+    let key2 = cache_key(&spelled, &head, &opts_spelled);
     assert_eq!(
         key1, key2,
-        "cache_key must be invariant under canonicalisation"
+        "cache_key must be invariant under how the repo path was spelled — \
+         one repository at one HEAD is one cache entry"
     );
 
     let cache_dir = tempfile::tempdir().expect("cache root");
     let p1 = cache_path_with_root(&key1, &canonical_root, cache_dir.path());
-    let p2 = cache_path_with_root(&key2, root, cache_dir.path());
+    let p2 = cache_path_with_root(&key2, &spelled, cache_dir.path());
     assert_eq!(
         p1, p2,
         "cache_path_with_root must canonicalise the repo_path so \
