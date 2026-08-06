@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use crate::args::{self, CheckFormat};
 use crate::{
     CORPUS_PERCENTILE_SKIP_REASON, new_code_skip_reason, notice_corpus_lens_absent,
-    write_github_output,
+    vacuous_pass_notice, write_github_output,
 };
 
 /// Quality-gate check. Loads thresholds, runs the hotspots analysis
@@ -56,11 +56,13 @@ pub(crate) fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
 
     if thresholds.is_empty() && !args.ratchet {
         if !args.quiet {
-            eprintln!(
-                "codelore check: no thresholds configured (no `.codelore-thresholds.toml` at repo root); vacuously passing."
-            );
+            eprintln!("{}", vacuous_pass_notice("check"));
         }
         write_github_output("result", "pass");
+        // Every other exit path writes both keys; a vacuous pass had been
+        // writing only `result`, so a workflow reading `outputs.violations`
+        // got an empty string instead of a count.
+        write_github_output("violations", "0");
         // A vacuous pass under `--format sarif` must still emit a valid
         // zero-result SARIF document to stdout — the documented upload-sarif
         // pipeline (docs/advanced-usage.md §11.8) breaks if a run prints
