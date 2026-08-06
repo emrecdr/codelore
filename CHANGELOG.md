@@ -6,6 +6,17 @@ Conventional Commits format. All notable changes documented here.
 
 ### Fixed
 
+- **The MCP `hotspots` tool now discloses truncation like every sibling list tool.** It capped the ranking and returned a bare array — and the file's convention is that a bare array means the list is complete, so an agent read a cut-off ranking as the whole population and could conclude a file was not a hotspot when it had merely fallen past the cap. It now appends the same `{omitted, total, note}` summary `delta_health` and `function_hotspots` already use.
+
+- **The MCP server no longer tells operators it is read-only.** The `instructions` string clients display still opened with "Read-only.", while `delta_health` creates and removes throwaway `git worktree` checkouts — which the module docstring, the tool's own comment and its `readOnlyHint: false` annotation all acknowledge. The code knew; the string the operator sees did not. It now states that no tool modifies tracked content and names what `delta_health` does.
+
+### Changed
+
+- **The MCP test suite pins the negotiated protocol revision, not the requested one.** It asserted only the value the test client sent, which says nothing about the server: an rmcp bump that shifted the supported revision, or a downgrade during negotiation, would have left every test passing while clients pinned to the old revision broke. Verified by handshake against the running server.
+
+
+### Fixed
+
 - **The zero-row notice no longer prescribes a remedy that most analyses cannot use.** It closed by suggesting `--min-revs 1`, but `min_revs` is a genuine filter in only 17 of the analysis modules — 23 more name it solely in a tracing span and 23 never mention it. On `defect-validation` the effect was self-contradictory: the analysis printed the correct instruction to build a calibration artifact, and the notice immediately advised lowering a threshold it does not read. The notice now states the analysis, the zero, and the options that were set, and stops. The options summary still carries `min-revs=<n>`, so where it *is* the cause the number sits beside the zero; §12 of the advanced-usage guide covers the header-only case explicitly.
 
 - **The README's "Tracking health over time" gate example now includes `max_red_effort_pct`,** the third key `check` recommends when no thresholds are configured. It was the only one of the three absent from the README, and the subtlest — churn share landing in red-band files, counted against health-scored churn only, with health-improving churn exempt — so it was the one a reader could not look up where the CLI had just sent them.
