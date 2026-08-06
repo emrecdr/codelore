@@ -813,7 +813,7 @@ sits in `2026-08-06-first-run-ux-review.md`; this section is the F-ledger.
     `CommunitiesResult` gained `len`/`is_empty` as the one dispatched result
     that is not a `Vec`.
 
-### F283 (Refuted as a metric defect; LOW as log noise) — the partial-tree warning fires on a grammar quirk, not on lost structure
+### F283 (Refuted as a metric defect; log noise Fixed — Unreleased) — the partial-tree warning fires on a grammar quirk, not on lost structure
 
 *   **Location**: `codelore-lib/src/complexity`, vendored `codelore-rca` grammars
 *   **Severity**: MED (unverified impact) · **Category**: metric correctness
@@ -842,9 +842,12 @@ sits in `2026-08-06-first-run-ux-review.md`; this section is the F-ledger.
     every `check` run, which trains a reader to skim past warnings that do
     matter. The honest fix is not to touch the metrics but to stop crying wolf
     — either demote this to `debug!`, or keep `warn!` only where the error
-    region actually overlaps a measured entity. Deliberately not fixed here:
-    the earlier severity was assigned before measurement, and the correction
-    is the finding.
+    region actually overlaps a measured entity.
+*   **Outcome**: demoted to `debug!`. The narrower option was checked and
+    discarded: the `&raw` sites sit inside the functions being measured, so
+    gating on overlap would fire anyway. Default runs are now silent; `-v` (or
+    `RUST_LOG`) still surfaces all 14 for anyone investigating a genuinely
+    suspect file, verified both ways.
 *   **Note for whoever revisits the JS side**: two `.js` files warn as well
     (`00_setup_boot.js`, `90_toggles_utils.js`) and cannot share this cause.
     They were not investigated; assume nothing from the Rust result.
