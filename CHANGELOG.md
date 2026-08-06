@@ -8,6 +8,10 @@ Conventional Commits format. All notable changes documented here.
 
 - **The GitHub Action gains a `command:` input so it can run the quality gates, not just `analyze`.** `command: analyze` (the default) is unchanged and fully backward-compatible; `command: check`, `gate`, or `diff` now route the Action to those subcommands, with the command-specific flags (and diff's `<base>..<head>` range) passed through the existing `args` escape hatch. The `analysis`/`format`/`output` inputs remain analyze-only — they are not injected for the gate commands (the `format` default `sarif` is one `gate` rejects), and `result-path` is empty for them since they have no output file. CI users can fail a build on a threshold violation without hand-rolling a separate install step.
 
+### Changed
+
+- **Release binaries unwind on panic instead of aborting, so a panicking MCP tool no longer kills the server.** `codelore mcp` is long-lived and runs each tool on a blocking task; under `panic = "abort"` any tool panic terminated the whole process via `SIGABRT`, dropping the client's connection and — because aborting skips destructors — leaving `delta_health`'s `git worktree` checkout registered on disk. Unwinding lets the existing handler report the panic as an MCP error and keeps the server serving, and lets the worktree's cleanup run. An unexpected panic in any other subcommand now exits **101** (Rust's default panic status) rather than 134; the documented 0–5 exit-code contract is unaffected. Cost is ~2.4 MiB of unwind tables on a ~48 MiB binary.
+
 ## [0.26.0] - 2026-08-05
 
 ### Added
