@@ -183,3 +183,117 @@ fn shared_driver_matches_standalone_trends() {
         "transitions length"
     );
 }
+
+// ---------------------------------------------------------------------------
+// arch_health must actually FALL as the import graph decays.
+//
+// Every other test here runs on `biomarker_repo`, which is six independent
+// Rust files with no inter-file imports. Its import graph is empty, so
+// `arch_health` is pinned at 100 in every sample and no assertion over that
+// fixture can distinguish a working architecture score from a constant. This
+// fixture introduces a dependency cycle partway through history — the same
+// shape `architecture_trend`'s `trend_captures_cycle_introduction_over_time`
+// uses — so the column is exercised where it is supposed to move.
+// ---------------------------------------------------------------------------
+
+fn git_in(dir: &std::path::Path, args: &[&str]) {
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .status()
+        .expect("spawn git");
+    assert!(status.success(), "git {args:?} failed");
+}
+
+fn write_file(root: &std::path::Path, rel: &str, content: &str) {
+    let p = root.join(rel);
+    std::fs::create_dir_all(p.parent().expect("parent")).expect("mkdir");
+    std::fs::write(p, content).expect("write");
+}
+
+fn commit_on(dir: &std::path::Path, day: u32, msg: &str) {
+    git_in(dir, &["add", "."]);
+    let stamp = format!("2026-02-{day:02}T12:00:00Z");
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["commit", "-m", msg, "--quiet"])
+        .env("GIT_AUTHOR_DATE", &stamp)
+        .env("GIT_COMMITTER_DATE", &stamp)
+        .status()
+        .expect("spawn git commit");
+    assert!(status.success(), "git commit {msg} failed");
+}
+
+#[test]
+fn arch_health_falls_when_a_cycle_enters_the_import_graph() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let p = dir.path();
+    git_in(p, &["init", "-b", "main", "--quiet"]);
+    git_in(p, &["config", "user.email", "t@example.com"]);
+    git_in(p, &["config", "user.name", "T"]);
+
+    write_file(
+        p,
+        "Cargo.toml",
+        "[package]\nname=\"t\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
+    );
+    write_file(p, "src/lib.rs", "pub mod a;\npub mod b;\n");
+    // Acyclic: a depends on b, b depends on nothing.
+    write_file(p, "src/a.rs", "use crate::b;\npub fn a() { b::b(); }\n");
+    write_file(p, "src/b.rs", "pub fn b() {}\n");
+    commit_on(p, 1, "acyclic");
+
+    // Pad the acyclic era so the even sampler lands at least one point
+    // before the cycle exists.
+    for (i, day) in [2u32, 3, 4, 5].iter().enumerate() {
+        write_file(
+            p,
+            "src/a.rs",
+            &format!("use crate::b;\npub fn a() {{ let _ = {i}; b::b(); }}\n"),
+        );
+        commit_on(p, *day, "edit a (still acyclic)");
+    }
+
+    // Close the loop: b now depends on a.
+    write_file(p, "src/b.rs", "use crate::a;\npub fn b() { a::a(); }\n");
+    commit_on(p, 6, "introduce a<->b cycle");
+    for (i, day) in [7u32, 8, 9, 10].iter().enumerate() {
+        write_file(
+            p,
+            "src/b.rs",
+            &format!("use crate::a;\npub fn b() {{ let _ = {i}; a::a(); }}\n"),
+        );
+        commit_on(p, *day, "edit b (cyclic)");
+    }
+
+    let repo = codelore_lib::repo::GixRepo::open(p).expect("open repo");
+    let db = codelore_lib::facts::FactsDb::new_in_memory().expect("db");
+    let opts = codelore_lib::test_support::permissive_coupling_opts(p.to_path_buf());
+    db.ingest(&repo, &opts).expect("ingest");
+
+    let rows = run_health_trend(&db, &repo, &opts).expect("run health-trend");
+    assert!(rows.len() >= 4, "expected several sample points: {rows:?}");
+    all_scores_in_range(&rows);
+
+    // The point of the fixture: the score must not be constant. On
+    // `biomarker_repo` this assertion passes vacuously, which is why it needs
+    // a graph-bearing repo to mean anything.
+    let best = rows.iter().map(|r| r.arch_health).fold(f64::MIN, f64::max);
+    let worst = rows.iter().map(|r| r.arch_health).fold(f64::MAX, f64::min);
+    assert!(
+        best > worst,
+        "arch_health is constant across the trend, so a decaying import graph \
+         would be invisible: {rows:?}"
+    );
+
+    // Direction: the cycle lands partway through and never leaves, so the
+    // final sample must be no healthier than the healthiest earlier one.
+    let last = rows.last().expect("non-empty");
+    assert!(
+        last.arch_health < best,
+        "final arch_health {} should sit below the acyclic peak {best}: {rows:?}",
+        last.arch_health
+    );
+}

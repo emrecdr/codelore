@@ -4,6 +4,14 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The zero-row notice no longer prescribes a remedy that most analyses cannot use.** It closed by suggesting `--min-revs 1`, but `min_revs` is a genuine filter in only 17 of the analysis modules — 23 more name it solely in a tracing span and 23 never mention it. On `defect-validation` the effect was self-contradictory: the analysis printed the correct instruction to build a calibration artifact, and the notice immediately advised lowering a threshold it does not read. The notice now states the analysis, the zero, and the options that were set, and stops. The options summary still carries `min-revs=<n>`, so where it *is* the cause the number sits beside the zero; §12 of the advanced-usage guide covers the header-only case explicitly.
+
+- **The README's "Tracking health over time" gate example now includes `max_red_effort_pct`,** the third key `check` recommends when no thresholds are configured. It was the only one of the three absent from the README, and the subtlest — churn share landing in red-band files, counted against health-scored churn only, with health-improving churn exempt — so it was the one a reader could not look up where the CLI had just sent them.
+
+- **"Your first 5 minutes" now points at the next section before the reference guide.** It handed off to the 1,700-line advanced guide four lines above the section written to answer the question a reader has at that moment.
+
 ## [0.27.0] - 2026-08-06
 
 ### Added
