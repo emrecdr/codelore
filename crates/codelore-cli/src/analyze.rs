@@ -419,15 +419,18 @@ pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
     // and a piped or CI run is exactly where a confident empty answer does
     // the most damage.
     //
-    // State the filters in effect rather than blaming one: `min_revs` is the
-    // usual cause but is read by only 40 of the analyses, and several return
-    // zero rows for reasons entirely their own (no rules file, no target
-    // match, no releases in range).
+    // Report the options that were set, and stop there. `min_revs` is the
+    // usual cause but is read by only 40 of the analyses, so calling the
+    // summary "filters in effect" would overstate it for the rest — several
+    // return zero rows for reasons entirely their own (no rules file, no
+    // target match, no releases in range). Naming a cause would be a
+    // confident lie on a meaningful subset; naming the settings is true for
+    // all of them and still points at the thing worth changing first.
     if row_count == 0 {
         tracing::warn!(
             "{analysis_name}: 0 rows — the analysis ran and matched nothing. \
-             Filters in effect: {}. If that is unexpected, relax them \
-             (e.g. `--min-revs 1`) and re-run.",
+             Options in effect: {}. If that is unexpected, relax the \
+             thresholds (e.g. `--min-revs 1`) and re-run.",
             format_options_summary(&opts)
         );
     }
