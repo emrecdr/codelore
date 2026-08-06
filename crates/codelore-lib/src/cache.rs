@@ -280,6 +280,10 @@ pub fn prune_repo_cache(repo_dir: &Path, max_entries: usize) {
 pub fn prune_global_cache(root: &Path, max_bytes: u64) {
     let codelore_dir = root.join("codelore");
     cleanup_stale_tmp_files_recursive(&codelore_dir);
+    // Before the size walk, not after it: this function returns early when
+    // the cache is under cap, which is the common case, and directories
+    // accumulate regardless of whether the cap binds.
+    remove_empty_repo_dirs(&codelore_dir, STALE_TMP_AGE_SECS);
 
     let walk = collect_duckdb_files(&codelore_dir);
 
@@ -301,6 +305,73 @@ pub fn prune_global_cache(root: &Path, max_bytes: u64) {
         delete_duckdb_with_companion(&path, "prune_global_cache");
         if existed && !path.exists() {
             remaining = remaining.saturating_sub(size);
+        }
+    }
+}
+
+/// Remove per-repo directories that pruning has left completely empty.
+///
+/// Evicting a `.duckdb` file leaves its directory behind, so the tree gains
+/// one directory per repository ever analysed and never loses one. On a
+/// machine that runs `codelore calibrate` — which ingests a corpus of
+/// throwaway checkouts through the default root, one directory each — that
+/// dominates the tree. The bytes are negligible; the cost is the walk, which
+/// [`prune_global_cache`] pays on every cache miss.
+///
+/// This deletes, so it is deliberately timid on three counts:
+///
+/// * **Total emptiness**, not "no `.duckdb` files". Five other artifact
+///   families share this directory — the gate-run ledger, the external-findings
+///   store, change-set reports, LLM enrichment, and in-flight `.tmp` writes —
+///   and none of them is visible to the `.duckdb` filter the pruners use.
+/// * **[`fs::remove_dir`], never `remove_dir_all`.** If a file appears between
+///   the emptiness check and the call, the syscall fails with `ENOTEMPTY`
+///   rather than destroying it — the race loses safely.
+/// * **Age-gated** by `min_age_secs`, the same idiom the stale-`.tmp` sweep
+///   uses, so a directory a concurrent run has created but not yet written
+///   into is left alone. Production passes [`STALE_TMP_AGE_SECS`]; it is a
+///   parameter because a directory's mtime cannot be back-dated portably,
+///   so a test that could not lower the threshold could only ever assert
+///   that nothing was swept.
+fn remove_empty_repo_dirs(codelore_dir: &Path, min_age_secs: u64) {
+    let Ok(entries) = fs::read_dir(codelore_dir) else {
+        return; // absent root, or unreadable — nothing to sweep
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        // `spill/` is DuckDB's shared scratch area, not a per-repo directory,
+        // and a live query may be writing into it.
+        if path.file_name().is_some_and(|name| name == "spill") {
+            continue;
+        }
+        let Ok(meta) = fs::metadata(&path) else {
+            continue;
+        };
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
+        let Ok(age) = modified.elapsed() else {
+            continue;
+        };
+        if age.as_secs() < min_age_secs {
+            continue;
+        }
+        match fs::read_dir(&path) {
+            Ok(mut contents) => {
+                if contents.next().is_some() {
+                    continue; // holds a sidecar, a cache entry, or a subdirectory
+                }
+            }
+            Err(_) => continue,
+        }
+        if let Err(e) = fs::remove_dir(&path) {
+            tracing::debug!(
+                "remove_empty_repo_dirs: leaving {} in place ({e})",
+                path.display()
+            );
         }
     }
 }
@@ -454,6 +525,70 @@ mod tests {
             repo_path: PathBuf::from("/tmp/test-repo"),
             ..Options::default()
         }
+    }
+
+    /// The sweep must reclaim directories pruning emptied, and must not
+    /// touch a directory holding anything else. The `.duckdb` filter the
+    /// pruners use cannot see the five sidecar families that share these
+    /// directories, so "no cache entries" and "safe to remove" are different
+    /// questions — this pins that they are asked separately.
+    #[test]
+    fn empty_repo_dirs_are_swept_and_occupied_ones_survive() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let codelore_dir = root.path().join("codelore");
+
+        let empty = codelore_dir.join("aaaaaaaa");
+        let with_ledger = codelore_dir.join("bbbbbbbb");
+        let with_entry = codelore_dir.join("cccccccc");
+        let with_subdir = codelore_dir.join("dddddddd");
+        let spill = codelore_dir.join("spill");
+        for d in [&empty, &with_ledger, &with_entry, &with_subdir, &spill] {
+            std::fs::create_dir_all(d).expect("create dir");
+        }
+        // A sidecar the pruners' `.duckdb` filter is blind to; the gate-run
+        // ledger is the one users would notice losing.
+        std::fs::write(with_ledger.join("gate_runs.jsonl"), b"{}\n").expect("write ledger");
+        std::fs::write(with_entry.join("0123456789abcdef.duckdb"), b"x").expect("write entry");
+        // Nested artifacts (change-set reports, enrichment) leave the parent
+        // non-empty without leaving a file directly in it.
+        std::fs::create_dir_all(with_subdir.join("change-set")).expect("create subdir");
+
+        // Age threshold 0: a directory's mtime cannot be back-dated
+        // portably, so the parameter is how this becomes assertable at all.
+        remove_empty_repo_dirs(&codelore_dir, 0);
+
+        assert!(!empty.exists(), "an empty per-repo directory must be swept");
+        assert!(
+            with_ledger.exists(),
+            "a directory holding a gate-run ledger must survive — the sidecar \
+             is invisible to the .duckdb filter, not absent"
+        );
+        assert!(
+            with_entry.exists(),
+            "a directory holding a live cache entry must survive"
+        );
+        assert!(
+            with_subdir.exists(),
+            "a directory holding only a subdirectory must survive"
+        );
+        assert!(spill.exists(), "the shared spill directory must survive");
+    }
+
+    /// The age gate is the guard against racing a concurrent run that has
+    /// created its directory but not yet written into it.
+    #[test]
+    fn freshly_created_empty_dirs_are_left_alone() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let codelore_dir = root.path().join("codelore");
+        let fresh = codelore_dir.join("eeeeeeee");
+        std::fs::create_dir_all(&fresh).expect("create dir");
+
+        remove_empty_repo_dirs(&codelore_dir, STALE_TMP_AGE_SECS);
+
+        assert!(
+            fresh.exists(),
+            "a directory younger than the age gate must be left alone"
+        );
     }
 
     /// Non-tempfile tests (no feature gate required).
