@@ -651,7 +651,7 @@ sits in `2026-08-06-first-run-ux-review.md`; this section is the F-ledger.
     changed, so old entries are unreachable by construction, and a bump would
     additionally orphan every `diff --base-cache` file for no gain.
 
-### F274 (Active) — eviction is documented as LRU and behaves as FIFO
+### F274 (Fixed — Unreleased) — eviction is documented as LRU and behaves as FIFO
 
 *   **Location**: `cache.rs` (banner comment, `prune_global_cache` doc), `facts/mod.rs`, `external/store.rs`, `quality_gates/ledger.rs`, `docs/advanced-usage.md`
 *   **Severity**: LOW · **Category**: documentation accuracy
@@ -665,8 +665,13 @@ sits in `2026-08-06-first-run-ux-review.md`; this section is the F-ledger.
     barred by `unsafe_code = "forbid"`) or a per-hit sidecar write on the
     deliberately near-O(1) read path. Disproportionate to an eviction-order
     difference inside a 5-entry cap.
+*   **Outcome**: all six sites relabelled. The banner comment now records why
+    the trade is acceptable rather than only what the policy is — keys are
+    HEAD-scoped, so the entry being hit is usually the most recently ingested
+    one, and a wrong eviction costs one re-ingest and never correctness. The
+    user-facing guide states the consequence, since it is observable.
 
-### F275 (Active) — emptied per-repo cache directories are never removed
+### F275 (Fixed — Unreleased) — emptied per-repo cache directories are never removed
 
 *   **Location**: `cache.rs::prune_repo_cache` / `prune_global_cache`
 *   **Severity**: LOW · **Category**: cache hygiene / cache-miss latency
@@ -686,6 +691,14 @@ sits in `2026-08-06-first-run-ux-review.md`; this section is the F-ledger.
     non-recursive `fs::remove_dir` as a second net. Five sidecar families
     share that directory — gate ledger, external findings, change-sets,
     enrichment, in-flight tmp — so a `remove_dir_all` would destroy them.
+*   **Outcome**: implemented as specified, and placed BEFORE the size walk
+    rather than after it — `prune_global_cache` returns early when the cache is
+    under cap, which is the common case, and directories accumulate whether or
+    not the cap binds. The age threshold is a parameter, not the constant,
+    because a directory's mtime cannot be back-dated portably: a test unable to
+    lower it could only ever assert that nothing was swept. Both halves are
+    pinned — a directory holding a ledger, a live entry, or only a
+    subdirectory survives; a fresh empty one is left alone.
 
 ### F276 (Active) — `evaluate_all_gates` discards measured values it already computed
 

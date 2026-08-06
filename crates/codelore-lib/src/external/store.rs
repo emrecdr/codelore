@@ -3,7 +3,7 @@
 //! The store lives at
 //! `<cache_root>/codelore/<repo_hash_8>/external-findings.duckdb-ext`
 //! alongside the main `.duckdb` cache entries. The `.duckdb-ext` extension
-//! is intentional: the LRU pruner in `cache.rs` matches files whose
+//! is intentional: the cache pruner in `cache.rs` matches files whose
 //! `.extension()` equals `"duckdb"` exactly, so `.duckdb-ext` is never
 //! touched by automatic eviction.
 //!

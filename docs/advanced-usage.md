@@ -1066,7 +1066,7 @@ codelore analyze --analysis hotspots --cache-dir /tmp/codelore-cache
 ls "$(dirs -c codelore 2>/dev/null || echo $XDG_CACHE_HOME)/codelore/"
 ```
 
-Eviction: 5 entries per repo + 2 GB global cap (LRU). Pruning runs after every successful miss-and-write.
+Eviction: 5 entries per repo + 2 GB global cap, oldest-ingest-first. Pruning runs after every successful miss-and-write. Note this is FIFO, not LRU: a cache hit opens the store read-only and so never refreshes its mtime, meaning a frequently-read entry can be evicted ahead of a newer one that was never reused.
 
 **Parquet + SQLite formats bypass the cache** by design — they need a writable DuckDB connection to run `INSTALL/LOAD sqlite` and `COPY TO parquet`.
 
@@ -1423,7 +1423,7 @@ codelore ingest-sarif --repo . scan.sarif
 codelore ingest-sarif --repo . clippy.sarif semgrep.sarif  # multiple files in one call
 ```
 
-Findings are stored in a per-repo sidecar at `<cache_root>/codelore/<repo_hash>/external-findings.duckdb-ext`. The `.duckdb-ext` extension is intentional — the LRU pruner skips it, so the sidecar survives fact-store eviction.
+Findings are stored in a per-repo sidecar at `<cache_root>/codelore/<repo_hash>/external-findings.duckdb-ext`. The `.duckdb-ext` extension is intentional — the cache pruner skips it, so the sidecar survives fact-store eviction.
 
 Re-ingesting a file is **idempotent**: findings are replaced per engine, so two passes with the same file produce the same row count as one pass.
 
