@@ -6,7 +6,7 @@
 //!
 //! Every tool carries MCP annotations so a client can reason about it without
 //! calling it. `read_only_hint` is scoped to the user's repository and files:
-//! every tool may populate the persistent DuckDB cache on a cold call, which
+//! every tool may populate the persistent `DuckDB` cache on a cold call, which
 //! does not count against the hint. `delta_health` is the one tool that is not
 //! read-only — it checks revisions out into throwaway `git worktree`s.
 //! `explain_file` is the one open-world tool, and only when the optional

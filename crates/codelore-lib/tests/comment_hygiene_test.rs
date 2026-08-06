@@ -86,7 +86,7 @@ fn line_has_task_id(line: &str) -> bool {
 }
 
 /// True if the file stem opens with a task-ID segment (`f69_window_spike`).
-/// Stems are snake_case, so the leading `_`-delimited segment is the only
+/// Stems are `snake_case`, so the leading `_`-delimited segment is the only
 /// place the prefix convention puts one, and it is the one position no
 /// content scan can reach. Matched case-insensitively because file names are
 /// lowercase; a stem legitimately opening with a float-width segment
