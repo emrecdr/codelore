@@ -406,3 +406,59 @@ jobs:
             git -C ../ghp push origin gh-pages
           fi
           git worktree remove --force ../ghp
+
+  action:
+    # Exercise the composite Action itself (`action.yml`). Without this job
+    # it is the one significant shipped surface outside every gate: the
+    # comment-hygiene guard scans Rust and SQL under `crates/`, clippy scans
+    # Rust, and nothing executes the Action — so its defects can only be
+    # caught by reading it.
+    #
+    # The Action installs a published RELEASE binary, so this job does not
+    # test the code in the PR; it tests the Action's own mechanics — version
+    # resolution, checksum verification against SHA256SUMS, extraction, and
+    # both command-routing branches. macOS is in the matrix because the
+    # routing script's argument handling is the part most likely to differ
+    # across bash versions, and the runner images differ there.
+    #
+    # Both steps deliberately leave `args` empty, which is the default and
+    # therefore the path most users hit first.
+    name: action (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # `check` walks this repo's history for its churn-based gates, so
+          # the gix walker needs full ancestry — same reason as `self-gate`.
+          fetch-depth: 0
+      - name: Analyze via the Action
+        id: analyze
+        uses: ./
+        with:
+          analysis: hotspots
+          format: json
+          output: action-smoke.json
+      - name: Assert the analyze branch produced its output
+        shell: bash
+        run: |
+          set -euo pipefail
+          path='${{ steps.analyze.outputs.result-path }}'
+          test -n "$path" || { echo "::error::result-path output was empty"; exit 1; }
+          test -s "$path" || { echo "::error::no output written at $path"; exit 1; }
+          echo "wrote $(wc -c <"$path") bytes to $path"
+      - name: Check via the Action
+        # Routes to `codelore check` and must NOT inject the analyze-only
+        # analysis/format/output inputs. A failure here is normally a routing
+        # bug — but note this runs the RELEASED binary against the CURRENT
+        # `.codelore-thresholds.toml`, so a genuine threshold verdict can also
+        # surface if the two ever drift apart. `self-gate` runs the same gate
+        # with a binary built from the PR, so compare the two before assuming
+        # the Action is at fault.
+        uses: ./
+        with:
+          command: check

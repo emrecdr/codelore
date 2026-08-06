@@ -541,7 +541,7 @@ turned out to be mis-stated by the reports that logged them.
     `assert_rpc_error_code` helper. The claim that it cannot detect protocol
     or error drift does not survive reading it.
 
-### F270 (Active) — the composite GitHub Action has no CI coverage at all
+### F270 (Fixed — Unreleased) — the composite GitHub Action has no CI coverage at all
 
 *   **Location**: `action.yml`; no workflow under `.github/workflows/` references it
 *   **Severity**: MED · **Category**: test coverage / shipped-surface risk
@@ -559,6 +559,22 @@ turned out to be mis-stated by the reports that logged them.
     resolution, checksum verification, extraction, and both routing branches.
     Keep it to the two commands with real branch coverage; do not matrix the
     whole input surface.
+*   **Outcome**: shipped as the `action` job in `ci.yml`, exactly at the scope
+    above. Two steps — `analyze` (asserting `result-path` is set and the file
+    is non-empty) and `check` (the non-analyze routing branch) — over
+    `ubuntu-latest` + `macos-latest`, both leaving `args` empty because that is
+    the default and therefore the path most users hit first. The macOS entry
+    also settles empirically what the empty-`args` fix could only be reasoned
+    about: whether the runner image's bash tolerates expanding an empty array
+    under `set -u`.
+*   **Known coupling, documented in the job**: the Action installs a *published
+    release* binary, so this job cannot test the code in the PR — it tests the
+    Action's own mechanics. Its `check` step therefore runs the released binary
+    against the *current* thresholds file, and a genuine verdict can surface if
+    those drift apart. `self-gate` runs the same gate with a binary built from
+    the PR, so the two together distinguish "the Action is broken" from "the
+    release disagrees with current thresholds". Deliberately not marked
+    `continue-on-error`, which would make the job decorative.
 
 ### F271 (Active) — MCP tools hand-roll JSON into a text block instead of declaring structured output
 
