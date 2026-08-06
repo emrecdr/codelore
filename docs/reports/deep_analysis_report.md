@@ -563,10 +563,12 @@ turned out to be mis-stated by the reports that logged them.
     above. Two steps — `analyze` (asserting `result-path` is set and the file
     is non-empty) and `check` (the non-analyze routing branch) — over
     `ubuntu-latest` + `macos-latest`, both leaving `args` empty because that is
-    the default and therefore the path most users hit first. The macOS entry
-    also settles empirically what the empty-`args` fix could only be reasoned
-    about: whether the runner image's bash tolerates expanding an empty array
-    under `set -u`.
+    the default and therefore the path most users hit first — which is also the
+    path the empty-array guard protects, so the matrix confirms that guard
+    holds on both runner images. It does **not** establish what the unguarded
+    expansion would have done there: the guard ships ahead of this job, so the
+    bare `"${arr[@]}"` form is never executed. That question is moot, not
+    answered.
 *   **Known coupling, documented in the job**: the Action installs a *published
     release* binary, so this job cannot test the code in the PR — it tests the
     Action's own mechanics. Its `check` step therefore runs the released binary
