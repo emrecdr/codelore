@@ -75,5 +75,5 @@ codegen-units = 1
 # { workspace = true } — keeps version constraints in one place.
 [workspace.dependencies]
 rmcp = { version = "3.1", features = ["server", "transport-io"] }
-tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros", "sync"] }
 schemars = "1"
