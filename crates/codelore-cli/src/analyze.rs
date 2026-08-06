@@ -355,6 +355,9 @@ pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
     }
 
     // csv / json / sarif / markdown / html: stream through Write
+    // Rows the streaming dispatch emitted. Read after the block for the
+    // footer's row fragment and for the zero-row advisory below.
+    let mut row_count = 0usize;
     {
         let _span =
             tracing::info_span!(target: "codelore::bench", "bench.analyze_and_emit").entered();
@@ -387,7 +390,10 @@ pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         // Atomic when writing to a file: an interrupted or failing run never
         // truncates a previous good output (it lands in a temp sibling first).
         emit_to_output_or_stdout(args.output.as_deref(), |out| {
-            run_streaming_dispatch(
+            // Captured by `&mut` rather than widening the helper's
+            // `FnOnce(..) -> Result<()>` bound, which every other caller
+            // already satisfies.
+            row_count = run_streaming_dispatch(
                 &db,
                 &repo,
                 &opts,
@@ -395,7 +401,8 @@ pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
                 format,
                 &ctx,
                 out,
-            )
+            )?;
+            Ok(())
         })?;
     } // the writer is dropped inside the helper, flushing before the rename
 
@@ -403,18 +410,40 @@ pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         write_provenance_sidecar(&db, &opts, analysis_name, path)?;
     }
 
+    // A run whose filters matched nothing exits 0 over an empty body — a bare
+    // CSV header, an empty JSON array, or for `gha`/`ndjson` no bytes at all,
+    // which in CI reads as "nothing to report". Say so explicitly, and say it
+    // regardless of whether stderr is a terminal: the banner and footer are
+    // run decoration and are suppressed off a TTY, but this is the same class
+    // as the ignored-flag and empty-window advisories above, which are not —
+    // and a piped or CI run is exactly where a confident empty answer does
+    // the most damage.
+    //
+    // Report the options that were set, and stop there. `min_revs` is the
+    // usual cause but is read by only 40 of the analyses, so calling the
+    // summary "filters in effect" would overstate it for the rest — several
+    // return zero rows for reasons entirely their own (no rules file, no
+    // target match, no releases in range). Naming a cause would be a
+    // confident lie on a meaningful subset; naming the settings is true for
+    // all of them and still points at the thing worth changing first.
+    if row_count == 0 {
+        tracing::warn!(
+            "{analysis_name}: 0 rows — the analysis ran and matched nothing. \
+             Options in effect: {}. If that is unexpected, relax the \
+             thresholds (e.g. `--min-revs 1`) and re-run.",
+            format_options_summary(&opts)
+        );
+    }
+
     // Footer: closes the bracket opened by the pre-flight banner. Shows total
-    // wall-clock time (humanised: "234ms" / "4.3s" / "2m 34s"). Suppressed
-    // under the same conditions as the header — same `should_print` policy
-    // ensures piped invocations stay clean.
+    // wall-clock time (humanised: "234ms" / "4.3s" / "2m 34s") and the row
+    // count. Suppressed under the same conditions as the header — same
+    // `should_print` policy ensures piped invocations stay clean.
     if banner::should_print(false, no_banner) {
         let footer = banner::Footer {
             analysis: analysis_name,
             elapsed: started_at.elapsed(),
-            // Row counts plumbed through every (format, analysis) match arm
-            // is a bigger refactor; deferred. The duration + analysis-name
-            // line carries the bulk of the post-run UX value.
-            rows: None,
+            rows: Some(row_count),
         };
         eprint!("{}", footer.render(banner::should_color()));
     }
@@ -617,11 +646,13 @@ macro_rules! dispatch {
                 let rows = $run.with_context(|| format!("run {}", $ctx.analysis.as_str()))?;
                 let emit = $w;
                 emit(&rows, $out).with_context(|| format!("write {}", $fmt))?;
+                rows.len()
             } )+
             "html" => {
                 let rows = $run.with_context(|| format!("run {}", $ctx.analysis.as_str()))?;
                 output::html::write_html(&rows, $out, &$ctx.title, &$ctx.repo_root, &$ctx.generated_at)
                     .context("write html")?;
+                rows.len()
             }
             other => return Err(unsupported_format($ctx.analysis, other)),
         }
@@ -636,6 +667,7 @@ macro_rules! dispatch {
                 let rows = $run.with_context(|| format!("run {}", $ctx.analysis.as_str()))?;
                 let emit = $w;
                 emit(&rows, $out).with_context(|| format!("write {}", $fmt))?;
+                rows.len()
             } )+
             "html" => return Err(html_not_wired($ctx.analysis.as_str())),
             other => return Err(unsupported_format($ctx.analysis, other)),
@@ -649,6 +681,11 @@ macro_rules! dispatch {
 /// that need a repository, a `--target`, or an external findings store keep that
 /// setup explicit before the shared core. The `parquet`/`sqlite`/`spa`/
 /// `step-summary` surfaces are composites handled by the caller, not here.
+///
+/// Returns the number of rows emitted. Every arm routes through [`dispatch!`],
+/// which binds the analysis result before handing it to an emitter, so the
+/// count is available in one place for all of them rather than needing to be
+/// threaded through each (analysis, format) pair separately.
 #[allow(clippy::too_many_lines)] // one declarative arm per analysis — a dispatch table, linear by construction
 fn run_streaming_dispatch(
     db: &FactsDb,
@@ -658,8 +695,8 @@ fn run_streaming_dispatch(
     format: &str,
     ctx: &EmitCtx,
     out: &mut Box<dyn Write>,
-) -> Result<()> {
-    match ctx.analysis {
+) -> Result<usize> {
+    let rows = match ctx.analysis {
         AnalysisName::Hotspots => dispatch!(ctx, format, out,
         // `run_hotspots_anchored` = `run_hotspots` + the additive corpus anchor,
         // so the csv/json/markdown surfaces carry `hotspot-score-anchored`. The
@@ -694,7 +731,7 @@ fn run_streaming_dispatch(
                 "markdown" => output::markdown::write_code_health_markdown,
                 "ndjson" => output::ndjson::write_ndjson,
                 html,
-            });
+            })
         }
         AnalysisName::CodeAge => dispatch!(ctx, format, out,
         analyses::code_age::run_code_age(db, opts),
@@ -1086,7 +1123,7 @@ fn run_streaming_dispatch(
                 "csv" => output::csv::write_function_xray_csv,
                 "json" => output::json::write_json,
                 "markdown" => |r, o| output::markdown::write_function_xray_markdown(r, target, o),
-            });
+            })
         }
         AnalysisName::FunctionCoupling => {
             let target = opts.target.as_deref().ok_or_else(|| {
@@ -1100,7 +1137,7 @@ fn run_streaming_dispatch(
                 "csv" => output::csv::write_function_coupling_csv,
                 "json" => output::json::write_json,
                 "markdown" => |r, o| output::markdown::write_function_coupling_markdown(r, target, o),
-            });
+            })
         }
         AnalysisName::FindingHotspotOverlap => {
             // Requires the external sidecar: open it read-only from the cache
@@ -1131,10 +1168,10 @@ fn run_streaming_dispatch(
                 "csv" => output::csv::write_finding_hotspot_overlap_csv,
                 "json" => output::json::write_json,
                 "markdown" => output::markdown::write_finding_hotspot_overlap_markdown,
-            });
+            })
         }
-    }
-    Ok(())
+    };
+    Ok(rows)
 }
 
 /// Pre-flight: cheap validations BEFORE the expensive ingest. Builds the

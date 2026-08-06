@@ -763,7 +763,7 @@ sits in `2026-08-06-first-run-ux-review.md`; this section is the F-ledger.
     clap re-joins doc lines with a space, so both `check --help` and
     `gate --help` printed the hyphen and the remainder separated.
 
-### F282 (Active) — a filtered-to-empty analysis reports success and explains nothing
+### F282 (Fixed — Unreleased) — a filtered-to-empty analysis reports success and explains nothing
 
 *   **Location**: `analyze.rs` (`dispatch!` macro, `run_streaming_dispatch`, the footer's unused `Footer.rows`)
 *   **Severity**: MED · **Category**: honest-absence convention
@@ -788,6 +788,17 @@ sits in `2026-08-06-first-run-ux-review.md`; this section is the F-ledger.
     dangerous. Message should state the filters in effect, not assert a cause:
     `min_revs` is read by 40 of 57 analyses, and the rest return zero rows for
     unrelated reasons.
+*   **Outcome**: the count escapes the macro (three bind sites, one per rule
+    plus the HTML arm) and the advisory is emitted in `analyze()` where `opts`
+    is in scope, beside the empty-window warning it mirrors. `Footer.rows` is
+    populated, closing the deferral the comment described rather than working
+    around it — the premise had gone stale when the arms were folded into the
+    macro. Not TTY-gated, which is both the point and what makes it assertable
+    from an integration test. Wording says "options in effect", not "filters":
+    testing `release-cadence`, which never reads `min_revs`, showed the
+    stronger phrasing overstated it for the analyses that ignore the knob.
+    `CommunitiesResult` gained `len`/`is_empty` as the one dispatched result
+    that is not a `Vec`.
 
 ### F283 (Active) — complexity metrics are computed on partially-parsed trees
 
