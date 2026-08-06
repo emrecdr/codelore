@@ -41,6 +41,53 @@ fn analyze_revisions_emits_csv() {
         .stdout(predicate::str::contains("src/lib.rs,1"));
 }
 
+#[test]
+fn filtered_to_empty_analysis_says_so_and_names_the_filters() {
+    // A threshold that matches nothing produces a bare header row and exit 0.
+    // Piped — which is what `assert_cmd` gives, and what CI gives — there is
+    // no banner and no footer, so without this line the result is
+    // indistinguishable from a clean one. That is the case the advisory
+    // exists for, so it is deliberately not TTY-gated, which is also what
+    // makes it assertable here.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    codelore_cmd()
+        .args([
+            "analyze",
+            "--analysis",
+            "hotspots",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--min-revs",
+            "500",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("0 rows"))
+        // The filters are reported, not blamed: `min_revs` is the usual cause
+        // but most analyses have others, and some ignore it entirely.
+        .stderr(predicate::str::contains("min-revs=500"));
+}
+
+#[test]
+fn analysis_with_rows_emits_no_empty_result_advisory() {
+    // The other half of the contract: an advisory that fires on a healthy run
+    // is noise, and noise gets filtered out — taking the real signal with it.
+    let tiny = codelore_lib::test_support::tiny_repo::build();
+    codelore_cmd()
+        .args([
+            "analyze",
+            "--analysis",
+            "hotspots",
+            "--repo",
+            tiny.dir.path().to_str().unwrap(),
+            "--min-revs",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("0 rows").not());
+}
+
 /// A reader closing our stdout early (`codelore … | head`, or a pager quit)
 /// must exit 0 quietly — never erroring (exit 5) or panicking.
 ///
