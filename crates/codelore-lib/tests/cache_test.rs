@@ -252,7 +252,7 @@ fn cache_path_with_root_canonicalises_repo_path() {
     let p2 = cache_path_with_root(&key2, root, cache_dir.path());
     assert_eq!(
         p1, p2,
-        "F33: cache_path_with_root must canonicalise the repo_path so \
+        "cache_path_with_root must canonicalise the repo_path so \
          relative-vs-absolute invocations land in the same cache file"
     );
 }

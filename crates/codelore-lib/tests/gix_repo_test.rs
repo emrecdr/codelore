@@ -50,8 +50,8 @@ fn binary_blob_reports_zero_loc_under_gix() {
         assert!(ok, "git {args:?} failed");
     };
     git(&["init", "-b", "main", "--quiet"]);
-    git(&["config", "user.email", "f34@example.com"]);
-    git(&["config", "user.name", "F34"]);
+    git(&["config", "user.email", "binary-fixture@example.com"]);
+    git(&["config", "user.name", "Binary Fixture"]);
 
     std::fs::write(path.join("readme.txt"), "hello\n").unwrap();
     git(&["add", "."]);
@@ -84,7 +84,7 @@ fn binary_blob_reports_zero_loc_under_gix() {
     assert_eq!(
         (blob.loc_added, blob.loc_deleted),
         (0, 0),
-        "F34: binary blob (NUL bytes in first 8KB) must report \
+        "binary blob (NUL bytes in first 8KB) must report \
          loc_added=0, loc_deleted=0 (git's `- -` convention). Got: \
          loc_added={}, loc_deleted={}",
         blob.loc_added,

@@ -1321,7 +1321,7 @@ The `--quiet` flag suppresses diagnostic noise (per-violation detail lines, inli
 Two out-of-band terminations sit outside this 0–5 contract:
 
 - **Broken pipe → exit 0.** A reader closing stdout early (`codelore … | head`, or quitting a pager) surfaces as a `BrokenPipe` I/O error on the next write. That is a normal way to consume partial output, not a failure, so codelore recognises it in its cause chain and exits **0** silently (no error line).
-- **Unexpected panic → abort.** Release binaries are built with `panic = "abort"`, so an internal panic terminates the process via `SIGABRT` (exit **134** on Unix) rather than unwinding through the exit-code mapping above. (Debug and test builds unwind instead and exit **101**, Rust's default panic status.) A panic is always a bug — report it.
+- **Unexpected panic → exit 101.** An internal panic unwinds past the exit-code mapping above and terminates with **101**, Rust's default panic status, in every build profile. A panic is always a bug — report it. (`codelore mcp` is the exception by design: a tool that panics unwinds back into the server, which reports it as an MCP error and keeps serving rather than dropping the client's connection.)
 
 ### Warm-cache performance
 

@@ -183,16 +183,17 @@ fn time_bucket_with_max_changeset_keeps_active_day_with_many_small_commits() {
     // (they all "co-occur" in the collapsed day bucket).
     assert!(
         !rows.is_empty(),
-        "F29 regression: --time-bucket day + --max-changeset-size 5 dropped \
+        "regression: --time-bucket day + --max-changeset-size 5 dropped \
          the entire day-bucket even though every physical commit was tiny. \
-         Pre-fix: empty result. Post-fix: 8 entities with SoC>=1. Got: {rows:?}"
+         The cap applies per physical commit, not to the collapsed bucket, \
+         so all 8 entities must survive with SoC>=1. Got: {rows:?}"
     );
     let entities: Vec<&str> = rows.iter().map(|r| r.entity.as_str()).collect();
     for i in 0..8 {
         let name = format!("f{i}.rs");
         assert!(
             entities.iter().any(|e| *e == name),
-            "F29: f{i}.rs missing from bucket-collapsed SoC. Got entities: {entities:?}"
+            "f{i}.rs missing from bucket-collapsed SoC. Got entities: {entities:?}"
         );
     }
 }
@@ -248,7 +249,7 @@ fn time_bucket_with_max_changeset_drops_bucket_containing_giant_commit() {
     let rows = run_soc(&db, &opts).expect("soc");
     assert!(
         rows.is_empty(),
-        "F29 control: bucket containing a 10-file giant commit must be \
+        "control: bucket containing a 10-file giant commit must be \
          dropped under max_changeset_size=5. Got: {rows:?}"
     );
 }

@@ -439,13 +439,13 @@ A five-dimension architecture review (four parallel read-only analysts: architec
 
 **2026-07-04 architecture-review pass**: **F243** (html un-advertised in 4 dispatchers — Fixed `acd9568`) and **F231** (Plan-N markers — Fixed via self-enforcing hygiene guard `52c427c`) closed; clippy-allow justification + SPA listener-bus + browser-fixture coverage landed. New own-slice: **F244** (analysis registry / `enum Format` + `TabularRow`, absorbs F215/F148/F119) and **F246** (canvas keyboard a11y); **F245** (widgets.js module split) landed this pass.
 
-The 2026-08-02 discovery pass logged **F249–F268** (see §7); F269 was logged this pass (below). The next sweep should re-open with F-IDs starting at **F270**.
+The 2026-08-02 discovery pass logged **F249–F268** (see §7); F269 was logged this pass (below). The post-v0.26.0 deferred-backlog pass logged **F270–F272** and closed F255/F269 (see §8). The next sweep should re-open with F-IDs starting at **F273**.
 
 **F247 (Active) — `run_coupling_scoped` cutoff ignores lineage/time-bucket source in `good_commits`.** The rev-parameterizable `code_health` history cutoff (`HealthScanCtx::history_cutoff`) routes coupling through `run_coupling_scoped(db, opts, "changes_at_ts")`, which overrides only the pair-source + Fisher-denominator tables. The internal `good_commits_cte(bucket, use_lineage)` still reads the opt-derived `changes_lineage`/`changes`. For the primary path (no lineage, no time-bucket) this is equivalent — the cutoff-window revset equals full-history ∩ window. But `history_cutoff` combined with `--use-canonical-lineage` yields coupling pairs keyed on pre-rename path names, and combined with `--time-bucket` aggregates buckets over full history. The **same class** applies to code-health's own churn / revs / author-fragmentation CTEs: under a cutoff `{src}` becomes the raw, non-lineage `changes_at_ts` view, so those terms also lose rename-awareness when a cutoff is combined with `--use-canonical-lineage`. Neither combination is exercised (the timeline consumer uses the primary path — cutoff without lineage/bucket) nor required by the spec; documented in the `run_coupling_scoped` and `CHANGES_AT_TS_DDL` doc comments. Fix if a future consumer needs cutoff + lineage/bucket: build `changes_at_ts` from the lineage-rewritten source and thread `changes_source` into `good_commits_cte`. Surfaced by the Task-4 review + the whole-branch review of the rev-parameterizable code-health branch.
 
 **F248 (Active) — no integration coverage that `health-trend`'s `arch_health` falls as the import graph decays.** The `health-trend` analysis (`analyses/health_trend.rs`) computes `arch_health` from per-rev `GraphMetrics`, and the unit tests cover the pure function (empty/acyclic/fully-tangled/clamp). But the integration test (`tests/health_trend_test.rs`) only asserts shape/ranges/oldest-first, not the spec's "degrading architecture ⇒ `arch_health` decreasing" case — because the only ≥2-commit fixture, `biomarker_repo`, is six independent Rust files with no inter-file imports, so its import graph is empty and `arch_health` is pinned at 100 across every sample. Fix: add an import-structured fixture whose later commits introduce a dependency cycle (mirror `architecture_trend`'s `trend_captures_cycle_introduction_over_time`), then assert the newest sample's `arch_health` is below an earlier sample's. Surfaced by the whole-branch review of the Repo Health Timeline (piece 2).
 
-**F269 (Active) — `F<NN>` finding IDs embedded in test string literals and one test filename escape the comment-hygiene guard.** The `comment_hygiene_test` `Plan`-marker check now scans whole lines (comment + string + DDL), but the `F<NN>` task-ID check stays comment-scoped by design: bare `F<NN>` tokens appear as legitimate-looking test scaffolding — regression-message prefixes (`"F29 regression: …"` in `time_bucket_test.rs`, `"F33: …"` in `cache_test.rs`, `"F34: …"` in `gix_repo_test.rs`, `"F6 regression: …"` in `diff.rs`), an `eprintln!("[F69 spike] …")` label, and a git-config `user.name` fixture (`"F34"`) — so a whole-line/string scan would false-fire on all of them. These are the same banned class as comment F-IDs under the no-task-IDs-in-code rule, only in strings; and `tests/f69_window_spike_test.rs` carries the ID in its NAME, which a content scanner structurally cannot reach. Deferred as its own sweep (rename the file + rewrite the ~8 test labels to drop the ID while keeping each regression's description), distinct from the F231 `Plan N` sweep. Surfaced while extending the hygiene guard for F231.
+**F269 (Fixed — Unreleased; see §8) — `F<NN>` finding IDs embedded in test string literals and one test filename escape the comment-hygiene guard.** The `comment_hygiene_test` `Plan`-marker check now scans whole lines (comment + string + DDL), but the `F<NN>` task-ID check stays comment-scoped by design: bare `F<NN>` tokens appear as legitimate-looking test scaffolding — regression-message prefixes (`"F29 regression: …"` in `time_bucket_test.rs`, `"F33: …"` in `cache_test.rs`, `"F34: …"` in `gix_repo_test.rs`, `"F6 regression: …"` in `diff.rs`), an `eprintln!("[F69 spike] …")` label, and a git-config `user.name` fixture (`"F34"`) — so a whole-line/string scan would false-fire on all of them. These are the same banned class as comment F-IDs under the no-task-IDs-in-code rule, only in strings; and `tests/f69_window_spike_test.rs` carries the ID in its NAME, which a content scanner structurally cannot reach. Deferred as its own sweep (rename the file + rewrite the ~8 test labels to drop the ID while keeping each regression's description), distinct from the F231 `Plan N` sweep. Surfaced while extending the hygiene guard for F231.
 
 ---
 
@@ -465,7 +465,7 @@ scenario, proposed direction, value/effort, verification status, invariant touch
 | F252 | `write_github_output` silently swallows the open+write `Err` (`let _ =`). ✅ verified | LOW | Fixed (Unreleased) |
 | F253 | HEAD-scan blob I/O Phase-1 (refines F173/F206): blocker smaller than tracked (blob-read handling already identical; divergence is downstream AST-parse). One warm-ODB reader per rayon worker via the existing `map_init` idiom; also fixes `architecture-trend`/`cycle-origins` (never cached, re-paid per `analyze`). ✅ verified — byte-identical ingested facts + `architecture-trend` output before/after, differential suite unaffected (`GitCliRepo` untouched). | HIGH | Fixed (Unreleased) |
 | F254 | Cache-hit path runs a full O(tracked-files) `is_worktree_dirty()` walk on every invocation, just to maybe warn — defeats the cache on the agent-loop/CI hot path. ✅ verified | MED | Fixed (Unreleased) — TTY-gated |
-| F255 | `panic = "abort"` × long-lived `codelore mcp`: one panicking `spawn_blocking` tool call SIGABRTs the server for every client. ✅ verified (profile scope). Add an MCP-only `catch_unwind` boundary. | HIGH | Active |
+| F255 | `panic = "abort"` × long-lived `codelore mcp`: one panicking `spawn_blocking` tool call SIGABRTs the server for every client. ✅ verified (profile scope). **The proposed `catch_unwind` boundary was the wrong fix — it is a no-op under `abort`.** | HIGH | Fixed (Unreleased) — see §8 |
 | F256 | Small per-language cohorts collapse biomarker intensities to near-binary → false `structural_risk` red-bands; disclose cohort `n` (refines F236 residual — verify the "corpus lens addresses this" claim first). | MED | Active |
 | F257 | Repo-wide function-level hotspots via `entities × hunks × commits` (no tree-sitter reparse — columns ✅ verified present). New capability. | HIGH | Fixed (Unreleased) |
 | F258 | `first_party_import_share` wildcard misclassification (`use crate::foo::*` tagged Wildcard→excluded) + a `wildcard_import_share` row. ✅ verified (`classify` branch order). | MED-HIGH | Fixed (Unreleased) |
@@ -488,4 +488,113 @@ shingled representation = new ingest. Re-scope the roadmap's "~100 LOC" estimate
 `2026-07-28-hardening-cycle-3.md` §A2-1, reconfirmed HIGH cycle-4) remains open — a rigor defect
 inside the calibration-honesty machinery; don't drop it when triaging.
 
-The next sweep re-opens at **F270**.
+---
+
+## 8. Post-v0.26.0 deferred-backlog pass (F270–F272)
+
+A verification pass over the deferred backlog carried into this cycle, plus a
+sweep of the newest unaudited surface (the composite GitHub Action). Every
+anchor was re-read against source before acting; two of the carried items
+turned out to be mis-stated by the reports that logged them.
+
+### Closed this pass
+
+*   **F255 / the `panic = "abort"` MCP finding — Fixed.** The decision was made
+    data-first: two fat-LTO stripped release builds of the shipped shape
+    (`--features spa`) measured **50,830,224 B (48.48 MiB) under `abort` vs
+    53,343,872 B (50.87 MiB) under `unwind` — +2.40 MiB, +4.95 %**. The flip
+    took effect (the unwind binary imports `_Unwind_RaiseException` /
+    `_Unwind_DeleteException`; the abort binary carries only the
+    backtrace-side unwind symbols). Crucially the fix needed **no code**: the
+    tool bodies already ran `spawn_blocking(…).await.map_err(internal)?`, so
+    under unwinding a panicking tool becomes an MCP error response rather than
+    a SIGABRT, and `diff`'s `Worktree` destructor runs again, closing the
+    leaked-`git worktree` half. The report's `catch_unwind` prescription would
+    have compiled and done nothing.
+*   **F269 — Fixed.** A whole-line scan of the guard's own roots found exactly
+    eight bare IDs, all in string literals, plus one in a file name. Scrubbed
+    the labels (keeping each regression's description), renamed the spike file
+    to say what it measures, and widened the guard's task-ID check to
+    whole-line — it is now symmetric with the phase-marker check instead of
+    deliberately asymmetric, and additionally rejects a file stem opening with
+    a task-ID segment. Verified by the widened check first failing on its own
+    module doc.
+*   **The MCP tool-annotation and concurrency-bound items — Fixed.** All
+    eleven tools now publish `readOnlyHint`/`openWorldHint`; `delta_health` is
+    declared not-read-only (throwaway worktrees) and `explain_file`
+    open-world (the optional `CODELORE_LLM_*` endpoint). Tool bodies route
+    through one bounded `blocking` helper instead of calling `spawn_blocking`
+    directly. `tools/list` now asserts the hints, so an unannotated tool fails
+    the gate.
+*   **The `pair_programming` bot-filter item — Refuted as a defect, but it sat
+    on a false comment.** The Rust-side filter runs per participant and is
+    invisible to the SQL bot-filter guard, which is correct: the guard bans a
+    canonical-level `BOOL_OR(is_bot)` collapse in SQL, and this code does not
+    do that. What *was* wrong is the module doc's claim that bots are already
+    filtered from `commits.canonical_author` — `append_commit` writes every
+    commit unconditionally, and bot exclusion happens per analysis through
+    `HUMAN_ALIASES_CTE`. The claim made the analysis's own `is_bot` checks
+    read as redundant. Corrected.
+*   **The MCP protocol/error-drift test-coverage item — Refuted.**
+    `mcp_test.rs` already asserts an exact tool count, the full name set,
+    `inputSchema` presence on every tool, and carries a dedicated
+    `assert_rpc_error_code` helper. The claim that it cannot detect protocol
+    or error drift does not survive reading it.
+
+### F270 (Active) — the composite GitHub Action has no CI coverage at all
+
+*   **Location**: `action.yml`; no workflow under `.github/workflows/` references it
+*   **Severity**: MED · **Category**: test coverage / shipped-surface risk
+*   **Description**: `action.yml` is a published user-facing surface and the
+    only significant part of the repo outside every automated gate — the
+    hygiene guard scans `.rs`/`.sql` under `crates/`, clippy scans Rust, and
+    nothing executes the action. That gap is not theoretical: a single recent
+    60-line diff to it accumulated a banned task-ID marker, two doc claims
+    contradicted by the CLI's own argument definitions, and a bash
+    portability trap, none of which any gate could see. All four were fixed
+    this pass by reading the file, not by a failing check.
+*   **Suggested improvement**: one workflow job that runs the action against
+    this repo with `command: analyze` and again with `command: check`,
+    matrixed over `ubuntu-latest` and `macos-latest`. That exercises version
+    resolution, checksum verification, extraction, and both routing branches.
+    Keep it to the two commands with real branch coverage; do not matrix the
+    whole input surface.
+
+### F271 (Active) — MCP tools hand-roll JSON into a text block instead of declaring structured output
+
+*   **Location**: `codelore-cli/src/mcp.rs` — all eleven `#[tool]` bodies return `Result<String, ErrorData>`
+*   **Severity**: LOW-MED · **Category**: protocol fidelity (optional)
+*   **Description**: Each tool serialises its rows itself and returns the JSON
+    as text, so clients get no `outputSchema` and no structured-content block.
+    An agent must parse the text and cannot validate it.
+*   **Why it is not built**: rmcp supports this via `Json<T>` + `output_schema`,
+    but taking it means inventing an output struct for each of eleven tools
+    whose current returns are heterogeneous (bare arrays, objects, arrays with
+    a trailing `{omitted, total, note}` summary, and a plain-text briefing from
+    `change_context`). That is a type-surface expansion well past the value,
+    and the trailing-summary shape would have to be redesigned to fit a schema.
+    Logged rather than built, per the minimum-surface rule. Revisit only if a
+    client actually rejects the text-block shape.
+
+### F272 (Active) — nothing enforces agreement between the six Rust-version pin sites
+
+*   **Location**: `rust-toolchain.toml`, workspace `rust-version`, `clippy.toml`, `Containerfile` (`ARG RUST_VERSION` and the `FROM` digest), the `dtolnay/rust-toolchain` action tags, `CHANGELOG.md`
+*   **Severity**: LOW · **Category**: release plumbing / drift guard
+*   **Description**: `cut-release.sh` does not bump these (the doc wording that
+    claimed it did was already corrected), and no test asserts they agree. All
+    six currently read 1.96, so this is a guard against future drift, not a
+    live defect. A bump that misses a site fails in a way that is hard to
+    attribute: the workflow tag alone is a silent no-op because
+    `rust-toolchain.toml` overrides it.
+*   **Suggested improvement**: prefer a test over automation. Every pin lives
+    at a static path, so an `include_str!` agreement test — a sibling to
+    `dep_versions_drift_test.rs`, which is the established pattern for exactly
+    this — needs no globbing and cannot rot.
+*   **Known blind spot the test cannot cover**: `Containerfile`'s builder base
+    is pinned as `rust:${RUST_VERSION}-${DEBIAN_RELEASE}@sha256:…`, and the
+    digest wins over the tag. Bumping `ARG RUST_VERSION` without a matching
+    digest bump silently keeps building on the old toolchain, and no textual
+    agreement check can see that. Call it out in the test's failure message
+    rather than pretending it is covered.
+
+The next sweep re-opens at **F273**.

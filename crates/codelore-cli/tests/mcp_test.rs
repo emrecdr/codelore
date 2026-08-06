@@ -217,14 +217,45 @@ fn mcp_tools_list_and_repo_overview() {
         );
     }
 
-    // Every tool must carry an inputSchema object (MCP spec requirement).
+    // Every tool must carry an inputSchema object (MCP spec requirement) and
+    // the annotations a client reasons about before calling it. A tool added
+    // without annotations reads to an agent as "may modify anything, may reach
+    // the network", so the hints are part of the contract, not decoration.
     for tool in tools {
         assert!(
             tool["inputSchema"].is_object(),
             "tool {:?} missing inputSchema: {tool}",
             tool["name"]
         );
+        let ann = &tool["annotations"];
+        assert!(
+            ann["readOnlyHint"].is_boolean(),
+            "tool {:?} missing annotations.readOnlyHint: {tool}",
+            tool["name"]
+        );
+        assert!(
+            ann["openWorldHint"].is_boolean(),
+            "tool {:?} missing annotations.openWorldHint: {tool}",
+            tool["name"]
+        );
     }
+
+    // The two tools whose hints are not the read-only/closed-world default.
+    // delta_health checks revisions out into throwaway git worktrees;
+    // explain_file calls the configured CODELORE_LLM_* endpoint when present.
+    let hint = |name: &str, field: &str| -> Option<bool> {
+        tools.iter().find(|t| t["name"] == name)?["annotations"][field].as_bool()
+    };
+    assert_eq!(
+        hint("delta_health", "readOnlyHint"),
+        Some(false),
+        "delta_health writes git worktrees and must not claim to be read-only"
+    );
+    assert_eq!(
+        hint("explain_file", "openWorldHint"),
+        Some(true),
+        "explain_file can call an external LLM endpoint and must declare an open world"
+    );
 
     // tools/call repo_overview — now returns {summary: [...], options: {...}}
     let resp = call_tool(&mut stdin, &mut reader, 2, "repo_overview", &json!({}));

@@ -47,11 +47,19 @@ pedantic = { level = "warn", priority = -1 }
 module_name_repetitions = "allow"
 missing_errors_doc = "allow"
 
+# Panics unwind rather than abort. `codelore mcp` is a long-lived server
+# whose tools run on `spawn_blocking`; unwinding turns a panicking tool into
+# a `JoinError` the handler reports as an MCP error, so one bad tool call no
+# longer takes the whole server (and the client's pipe) down. Unwinding also
+# keeps destructors running, so `diff`'s `Worktree` still removes its
+# `git worktree` checkout on the panic path instead of leaking it. The cost
+# is ~2.4 MiB of landing pads on a ~48 MiB binary; `lto`/`strip` below
+# recover far more than that.
 [profile.release]
 lto = "fat"
 codegen-units = 1
 strip = true
-panic = "abort"
+panic = "unwind"
 
 # PGO scaffolding (spec §6.5: campaign deferred to v1.1).
 # Run `scripts/pgo.sh` against a representative workload (Linux kernel snapshot)
@@ -67,5 +75,5 @@ codegen-units = 1
 # { workspace = true } — keeps version constraints in one place.
 [workspace.dependencies]
 rmcp = { version = "3.1", features = ["server", "transport-io"] }
-tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros", "sync"] }
 schemars = "1"

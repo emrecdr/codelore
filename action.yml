@@ -41,7 +41,7 @@ inputs:
 
 outputs:
   result-path:
-    description: 'Absolute path to the generated output file (empty when --format streams to stdout, and always empty for command: check/gate/diff, which have no output file).'
+    description: 'Absolute path to the generated output file (empty when --format streams to stdout). Always empty for command: check/gate/diff — check and gate stream their report and have no output file, and diff writes its own --output path, which this Action does not report back.'
     value: ${{ steps.run.outputs.result-path }}
   version-used:
     description: 'The actual codelore version that was downloaded (resolved from `latest` or pinned).'
@@ -82,10 +82,9 @@ runs:
             exit 1
           fi
         fi
-        # F21.1 fix: accept both `vX.Y.Z` and `X.Y.Z` inputs by
-        # normalising to the `vX.Y.Z` form. GitHub release tags are
-        # always v-prefixed, so `0.3.0` without normalisation would
-        # 404 on the download URL.
+        # Accept both `vX.Y.Z` and `X.Y.Z` inputs by normalising to the
+        # `vX.Y.Z` form. GitHub release tags are always v-prefixed, so an
+        # unprefixed version would 404 on the download URL.
         if [[ "$VERSION" != v* ]]; then
           VERSION="v$VERSION"
         fi
@@ -242,13 +241,20 @@ runs:
           if [ -n "$OUTPUT" ]; then
             CMD+=(--output "$OUTPUT")
           fi
-          CMD+=("${EXTRA_ARRAY[@]}")
         else
-          # check / gate / diff have no analysis/format/output surface — the
-          # format input defaults to sarif, which gate rejects — so those are
-          # analyze-only. The command-specific flags (and diff's
-          # <base>..<head> range) arrive verbatim through the args escape hatch.
+          # check / gate / diff each carry their OWN --format (and diff its
+          # own --analysis and --output) over value sets that differ from the
+          # analyze-typed inputs above — the format input defaults to sarif,
+          # which gate rejects — so those inputs are not forwarded. The
+          # command-specific flags, and diff's <base>..<head> range, arrive
+          # verbatim through the args escape hatch.
           CMD=(codelore "$COMMAND" --repo "$REPO" --no-banner)
+        fi
+
+        # Expanding an empty array as "${arr[@]}" is an unbound-variable
+        # error under `set -u` before bash 4.4, and `args` is empty by
+        # default — so append only when there is something to append.
+        if [ ${#EXTRA_ARRAY[@]} -gt 0 ]; then
           CMD+=("${EXTRA_ARRAY[@]}")
         fi
 

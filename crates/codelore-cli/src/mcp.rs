@@ -1,8 +1,16 @@
 //! MCP server for `CodeLore` (`codelore mcp`).
 //!
-//! Exposes `CodeLore` analyses as MCP tools over stdio. All tools are read-only.
-//! Each tool call opens its own [`FactsDb`] via the warm-cache path so the
-//! `!Send + !Sync` `DuckDB` connection never crosses thread or await boundaries.
+//! Exposes `CodeLore` analyses as MCP tools over stdio. Each tool call opens
+//! its own [`FactsDb`] via the warm-cache path so the `!Send + !Sync` `DuckDB`
+//! connection never crosses thread or await boundaries.
+//!
+//! Every tool carries MCP annotations so a client can reason about it without
+//! calling it. `read_only_hint` is scoped to the user's repository and files:
+//! every tool may populate the persistent `DuckDB` cache on a cold call, which
+//! does not count against the hint. `delta_health` is the one tool that is not
+//! read-only — it checks revisions out into throwaway `git worktree`s.
+//! `explain_file` is the one open-world tool, and only when the optional
+//! `CODELORE_LLM_*` endpoint is configured.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -15,6 +23,7 @@ use rmcp::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use tokio::sync::Semaphore;
 
 use codelore_lib::CodeLoreError;
 use codelore_lib::change_context;
@@ -365,6 +374,16 @@ where
     Ok(out)
 }
 
+/// How many tool calls may occupy the blocking pool at once.
+///
+/// A tool call is not a cheap request: a cold one ingests the whole history
+/// into `DuckDB` and fans out over `rayon`. Without a bound, an agent issuing
+/// N calls in parallel starts N of those at once, each with its own connection
+/// and its own thread pool, and they contend rather than finish. Four keeps a
+/// burst of tool calls making progress while leaving the machine usable; the
+/// rest queue and run as permits free up.
+const MAX_CONCURRENT_CALLS: usize = 4;
+
 /// MCP server state — the repo path and defect-calibration configuration
 /// fixed at server startup, plus the process-lifetime result memo.
 #[derive(Clone)]
@@ -374,6 +393,35 @@ pub struct CodeLoreServer {
     allow_foreign_calibration: bool,
     /// Shared across every concurrent tool call (hence `Arc`); see [`ResultMemo`].
     memo: Arc<ResultMemo>,
+    /// Shared admission control for the blocking pool; see [`MAX_CONCURRENT_CALLS`].
+    limit: Arc<Semaphore>,
+}
+
+impl CodeLoreServer {
+    /// Run `work` on the blocking pool, holding one concurrency permit for its
+    /// whole duration.
+    ///
+    /// Every tool body goes through here rather than calling `spawn_blocking`
+    /// directly, so the bound cannot be forgotten by a tool added later. The
+    /// permit is moved into the closure, so it is released when the blocking
+    /// work finishes — including when it panics, since the release rides the
+    /// unwind.
+    async fn blocking<T, W>(&self, work: W) -> Result<T, ErrorData>
+    where
+        W: FnOnce() -> Result<T, ErrorData> + Send + 'static,
+        T: Send + 'static,
+    {
+        let permit = Arc::clone(&self.limit)
+            .acquire_owned()
+            .await
+            .map_err(internal)?;
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            work()
+        })
+        .await
+        .map_err(internal)?
+    }
 }
 
 // ── Parameter structs (one per tool) ─────────────────────────────────────────
@@ -603,6 +651,7 @@ impl CodeLoreServer {
 
     #[tool(
         name = "repo_overview",
+        annotations(read_only_hint = true, open_world_hint = false),
         description = "Return a JSON object with `summary` (commit count, authors, files, date range) \
             and `options` (the active analysis options snapshot used for cache-keying). \
             First call on a cold cache triggers history ingest; warm-cache calls are fast."
@@ -614,7 +663,7 @@ impl CodeLoreServer {
         let repo_path = self.repo.clone();
         let memo = self.memo.clone();
         let params_json = serde_json::to_string(&params.0).map_err(internal)?;
-        tokio::task::spawn_blocking(move || {
+        self.blocking(move || {
             memoized(
                 &memo,
                 &repo_path,
@@ -643,13 +692,13 @@ impl CodeLoreServer {
             )
         })
         .await
-        .map_err(internal)?
     }
 
     // ── hotspots ──────────────────────────────────────────────────────────────
 
     #[tool(
         name = "hotspots",
+        annotations(read_only_hint = true, open_world_hint = false),
         description = "Return the top hotspot files ranked by revision count as JSON. \
             Pass `limit` to cap rows (default 50, max 500). \
             First call on a cold cache triggers history ingest."
@@ -661,7 +710,7 @@ impl CodeLoreServer {
         // an oversized `limit` cannot blow the caller's token budget.
         let cap = resolve_row_cap(params.0.limit);
         let params_json = serde_json::to_string(&params.0).map_err(internal)?;
-        tokio::task::spawn_blocking(move || {
+        self.blocking(move || {
             memoized(&memo, &repo_path, "hotspots", &params_json, |repo, head| {
                 let opts = Options {
                     repo_path: repo_path.clone(),
@@ -684,13 +733,13 @@ impl CodeLoreServer {
             })
         })
         .await
-        .map_err(internal)?
     }
 
     // ── code_health ───────────────────────────────────────────────────────────
 
     #[tool(
         name = "code_health",
+        annotations(read_only_hint = true, open_world_hint = false),
         description = "Return per-file composite code-health scores (band: red/yellow/green, score 0–100) as JSON. \
             Pass `path` to filter to a single file; an unknown path returns an error naming it, \
             not an empty result. Otherwise the list is worst-health first, capped by `limit` \
@@ -704,7 +753,7 @@ impl CodeLoreServer {
         let filter_path = params.0.path.clone();
         let cap = resolve_row_cap(params.0.limit);
         let params_json = serde_json::to_string(&params.0).map_err(internal)?;
-        tokio::task::spawn_blocking(move || {
+        self.blocking(move || {
             memoized(&memo, &repo_path, "code_health", &params_json, |repo, head| {
                 let opts = Options {
                     repo_path: repo_path.clone(),
@@ -740,13 +789,21 @@ impl CodeLoreServer {
             })
         })
         .await
-        .map_err(internal)?
     }
 
     // ── delta_health ──────────────────────────────────────────────────────────
 
     #[tool(
         name = "delta_health",
+        // Not read-only: this is the one tool that writes outside the cache,
+        // checking each rev out into a throwaway `git worktree` it then
+        // removes. Additive and repeatable, hence the two hints below.
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
         description = "Return a function-level health delta between two revisions as JSON. \
             `base` and `head` are any rev-parse-able strings (branch, tag, SHA). \
             Returns verdict (improved/neutral/degraded), ratio, and per-function breakdown. \
@@ -778,7 +835,7 @@ impl CodeLoreServer {
             ));
         }
 
-        tokio::task::spawn_blocking(move || {
+        self.blocking(move || {
             // Scope the memo to the repo's current HEAD (uniform with the other
             // tools); the diff endpoints are the resolved base/head SHAs, so the
             // result is stable regardless of HEAD — a HEAD move only over-evicts.
@@ -848,13 +905,13 @@ impl CodeLoreServer {
             Ok(out)
         })
         .await
-        .map_err(internal)?
     }
 
     // ── refactoring_targets ───────────────────────────────────────────────────
 
     #[tool(
         name = "refactoring_targets",
+        annotations(read_only_hint = true, open_world_hint = false),
         description = "Return the highest-priority refactoring candidates ranked by risk÷LOC as JSON. \
             Pass `limit` to cap rows (default 50, max 500); a trailing `{omitted, total, note}` \
             summary object discloses any suppressed rows. \
@@ -868,7 +925,7 @@ impl CodeLoreServer {
         let memo = self.memo.clone();
         let cap = resolve_row_cap(params.0.limit);
         let params_json = serde_json::to_string(&params.0).map_err(internal)?;
-        tokio::task::spawn_blocking(move || {
+        self.blocking(move || {
             memoized(
                 &memo,
                 &repo_path,
@@ -902,13 +959,13 @@ impl CodeLoreServer {
             )
         })
         .await
-        .map_err(internal)?
     }
 
     // ── function_xray ─────────────────────────────────────────────────────────
 
     #[tool(
         name = "function_xray",
+        annotations(read_only_hint = true, open_world_hint = false),
         description = "Return per-function change-frequency and complexity for a file as a JSON array. \
             `path` is the file path relative to the repo root (e.g. \"src/main.rs\"). \
             A path not tracked at HEAD returns an error naming it, not an empty array; \
@@ -924,7 +981,7 @@ impl CodeLoreServer {
         let memo = self.memo.clone();
         let target = params.0.path.clone();
         let params_json = serde_json::to_string(&params.0).map_err(internal)?;
-        tokio::task::spawn_blocking(move || {
+        self.blocking(move || {
             memoized(&memo, &repo_path, "function_xray", &params_json, |repo, head| {
                 let opts = Options {
                     repo_path: repo_path.clone(),
@@ -960,13 +1017,13 @@ impl CodeLoreServer {
             })
         })
         .await
-        .map_err(internal)?
     }
 
     // ── check_gates ───────────────────────────────────────────────────────────
 
     #[tool(
         name = "check_gates",
+        annotations(read_only_hint = true, open_world_hint = false),
         description = "Evaluate `.codelore-thresholds.toml` quality gates at HEAD and return a JSON \
             summary with verdict (pass/fail/no_thresholds), violation count, individual violations, \
             and a `skipped_gates` array of `{gate, reason}` for every configured gate that produced \
@@ -991,7 +1048,7 @@ impl CodeLoreServer {
         // of `.codelore-thresholds.toml`, an on-disk config re-discovered every
         // call that can be edited (or created) without a commit, so a HEAD-keyed
         // entry could serve a stale verdict after a threshold edit.
-        tokio::task::spawn_blocking(move || {
+        self.blocking(move || {
             let thresholds = Thresholds::discover(&repo_path).map_err(|e| map_lib_err(&e))?;
             if thresholds.is_empty() {
                 let summary = GateSummary {
@@ -1140,13 +1197,13 @@ impl CodeLoreServer {
             serde_json::to_string(&summary).map_err(internal)
         })
         .await
-        .map_err(internal)?
     }
 
     // ── finding_hotspot_overlap ───────────────────────────────────────────────
 
     #[tool(
         name = "finding_hotspot_overlap",
+        annotations(read_only_hint = true, open_world_hint = false),
         description = "Return the behavioral×static fusion table: external scanner findings \
             joined with hotspot rank and code-health band, producing an `act-now` / `plan` / `note` \
             priority for each flagged file. Requires a prior `codelore ingest-sarif` run to populate \
@@ -1166,7 +1223,7 @@ impl CodeLoreServer {
         // change to HEAD, and the DuckDB-backed sidecar exposes no cheap content
         // digest to key on (its mtime is unreliable under read-time journaling),
         // so a HEAD-only key could serve stale fusion after a re-ingest.
-        tokio::task::spawn_blocking(move || {
+        self.blocking(move || {
             let cache_root = default_cache_root();
 
             // open_nonempty returns None when the sidecar is absent OR
@@ -1207,13 +1264,15 @@ impl CodeLoreServer {
             )
         })
         .await
-        .map_err(internal)?
     }
 
     // ── explain_file ──────────────────────────────────────────────────────────
 
     #[tool(
         name = "explain_file",
+        // Open-world: the advisory narrative is off by default, but when
+        // CODELORE_LLM_* is configured this tool calls that endpoint.
+        annotations(read_only_hint = true, open_world_hint = true),
         description = "Return a deterministic per-file evidence dossier for one repo-relative file \
             path. `fact_sheet` is always present: the ordered analysis sections (code-health, \
             biomarkers, hotspots, coupling, ownership, functions, and import cycles) as \
@@ -1235,7 +1294,7 @@ impl CodeLoreServer {
         let params_json = serde_json::to_string(&params.0).map_err(internal)?;
         let defect_calibration = self.defect_calibration.clone();
         let allow_foreign_calibration = self.allow_foreign_calibration;
-        tokio::task::spawn_blocking(move || {
+        self.blocking(move || {
             let repo = GixRepo::open(&repo_path).map_err(|e| map_lib_err(&e))?;
             let head = repo.head_sha().map_err(|e| map_lib_err(&e))?;
             // Fold the calibration-artifact identity into the key: the dossier's
@@ -1342,13 +1401,13 @@ impl CodeLoreServer {
             Ok(serialized)
         })
         .await
-        .map_err(internal)?
     }
 
     // ── change_context ────────────────────────────────────────────────────────
 
     #[tool(
         name = "change_context",
+        annotations(read_only_hint = true, open_world_hint = false),
         description = "Temporal pre-write briefing for files you are about to modify: \
             code-health band, hotspot standing, historically co-changed partners \
             (edit those too), owner concentration incl. a departed-owner flag, \
@@ -1371,7 +1430,7 @@ impl CodeLoreServer {
         // committed-state inputs that change without moving HEAD: an in-progress
         // merge/rebase (which the briefing's leading note reflects) and a
         // regenerated calibration artifact (which its defect evidence reflects).
-        tokio::task::spawn_blocking(move || {
+        self.blocking(move || {
             let repo = GixRepo::open(&repo_path).map_err(|e| map_lib_err(&e))?;
             let head = repo.head_sha().map_err(|e| map_lib_err(&e))?;
             // Both probes are cheap (a git-dir stat and a file stat) and run
@@ -1410,13 +1469,13 @@ impl CodeLoreServer {
             Ok(out)
         })
         .await
-        .map_err(internal)?
     }
 
     // ── gate_changes ──────────────────────────────────────────────────────────
 
     #[tool(
         name = "gate_changes",
+        annotations(read_only_hint = true, open_world_hint = false),
         description = "Working-tree quality verdict for the agent loop: projects what the \
             current uncommitted edits do to code health and the import graph vs HEAD, \
             evaluates the repo's working-tree `[diff]` gates against the projection, \
@@ -1439,7 +1498,7 @@ impl CodeLoreServer {
         // uncommitted edits in `worktree_changes()` against HEAD, so its output
         // changes with every unstaged keystroke and is never a function of the
         // committed state alone.
-        tokio::task::spawn_blocking(move || {
+        self.blocking(move || {
             let opts = Options {
                 repo_path: repo_path.clone(),
                 defect_calibration,
@@ -1475,7 +1534,6 @@ impl CodeLoreServer {
             Ok(render_gate_changes(&report, violations.as_deref()))
         })
         .await
-        .map_err(internal)?
     }
 }
 
@@ -1638,6 +1696,7 @@ pub fn run_mcp_server(
                 defect_calibration,
                 allow_foreign_calibration,
                 memo: Arc::new(ResultMemo::default()),
+                limit: Arc::new(Semaphore::new(MAX_CONCURRENT_CALLS)),
             };
             let transport = rmcp::transport::io::stdio();
             let running = rmcp::service::serve_server(server, transport)
