@@ -743,7 +743,7 @@ codelore diff <RANGE> [OPTIONS]
                             (cuts dual-analysis cost in half across PRs)
   -f, --format FORMAT       text | json | sarif | markdown [default: text]
   -o, --output PATH         Write to file instead of stdout
-      --fail-on CONDITION   Exit non-zero (4) when condition fires:
+      --fail-on CONDITION   Exit 1 (gate violation) when condition fires:
                             none (default) | rank-entrant | score-increase | any
       --absence-min-shared N
                             Min historical shared-revs for a coupling-absence
@@ -818,7 +818,7 @@ codelore diff origin/main...HEAD --fail-on score-increase # block PRs that worse
 codelore diff origin/main...HEAD --fail-on any            # block on any finding
 ```
 
-Exit 4 (the analysis-failure code) when the condition fires. Start with `--fail-on none` for a sprint to calibrate the noise floor, then raise the bar.
+Exit 1 (the gate-violation code, shared with `check` and `gate`) when the condition fires — exit 4 stays reserved for a genuine analysis error, so a CI script can tell "the gate caught something" from "codelore fell over". Start with `--fail-on none` for a sprint to calibrate the noise floor, then raise the bar.
 
 The thresholds file (`.codelore-thresholds.toml`, auto-discovered at the repo root) gates on structure too, not just per-file metrics:
 
@@ -1079,10 +1079,11 @@ To surface this, codelore emits a `tracing::warn!` on a cache hit that lands on 
 ```
 WARN cache hit on a working tree with uncommitted changes; HEAD-time metrics
      (hotspots' complexity, clones) may be stale relative to disk.
-     Pass `--no-cache` to recompute against the current working tree.
+     Recompute against the working tree with `--cache-dir <scratch>` (or
+     `--no-cache` on `analyze`, the only surface carrying that flag).
 ```
 
-Detection is cheap (gix `Repository::is_dirty` for the pure-Rust walker, `git status --porcelain --untracked-files=no` for the CLI walker). Pass `--no-cache` if the dirty state matters for your analysis. The warning is informational — codelore still serves the cached result by default to preserve the 10–100× speedup on clean repeated runs. Auto-invalidation via worktree-content hashing was considered and rejected: hashing every tracked file on every invocation costs 100ms–1s on large trees, which would erase the cache's perf win for the majority case where the cache is correct.
+Detection is cheap (gix `Repository::is_dirty` for the pure-Rust walker, `git status --porcelain --untracked-files=no` for the CLI walker). Pass `--cache-dir <scratch>` (or `--no-cache` on `analyze`) if the dirty state matters for your analysis — `--no-cache` exists only on `analyze`, so `check`/`gate`/`explain` use the cache-dir form. The warning is informational — codelore still serves the cached result by default to preserve the 10–100× speedup on clean repeated runs. Auto-invalidation via worktree-content hashing was considered and rejected: hashing every tracked file on every invocation costs 100ms–1s on large trees, which would erase the cache's perf win for the majority case where the cache is correct.
 
 ### Memory ceiling and disk spill
 
