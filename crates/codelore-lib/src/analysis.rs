@@ -22,7 +22,7 @@ pub enum AnalysisName {
     // code-maat parity (computed as side-data on hotspots, addressable standalone)
     Revisions,
     Authors,
-    // Clone detection (T1+T2 via AST structural hashing)
+    // Clone detection (Type 1 + Type 2 via AST structural hashing)
     Clones,
     // Live-clone × Fisher-significant co-change intersection
     CloneCoupling,

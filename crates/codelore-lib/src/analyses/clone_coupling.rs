@@ -53,7 +53,7 @@ pub struct CloneCouplingRow {
     /// Number of AST nodes in each member's fingerprint (shared by both —
     /// they're in the same clone family).
     pub node_count: u32,
-    /// 1.0 for T1+T2 exact matches; < 1.0 for Type-3 near-miss.
+    /// 1.0 for Type 1 + Type 2 exact matches; < 1.0 for Type 3 near-miss.
     pub similarity: f64,
     /// Commits where both files co-changed.
     pub shared_revs: u32,

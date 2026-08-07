@@ -194,14 +194,12 @@ pub(crate) const GATE_DELTA_TABLE_ROWS: usize = 10;
 /// of added files can never blow the token budget.
 pub(crate) const GATE_FINDINGS_ROWS: usize = 10;
 
-/// Number of gate-violation rows the text render shows; the rest fold into a
-/// `(+n more violations)` tail. The third render-only cap alongside
-/// [`GATE_DELTA_TABLE_ROWS`] and [`GATE_FINDINGS_ROWS`], and the one that was
-/// missing: a wide refactor against a tight gate produced one line per
-/// violating file with no bound, which is whole-population output into an
-/// agent's context. The verdict line above the list already carries the true
-/// count, so the tail discloses the truncation rather than introducing the
-/// only signal that it happened.
+/// Number of gate-violation rows the MCP text render shows; the rest fold into
+/// a `(+n more violations)` tail. Same render-only policy as
+/// [`GATE_DELTA_TABLE_ROWS`] and [`GATE_FINDINGS_ROWS`], and kept beside them
+/// so the three section caps read as one decision — but consumed only by the
+/// MCP renderer: `check` and `gate` still print every violation, because their
+/// output is a terminal or a file rather than an agent's context window.
 pub(crate) const GATE_VIOLATION_ROWS: usize = 10;
 
 /// Write a single `key=value` line to `$GITHUB_OUTPUT` when the env

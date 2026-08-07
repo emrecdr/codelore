@@ -119,7 +119,8 @@ pub struct Options {
     pub min_clone_shared_revs: u32,
     /// Minimum similarity for a clone pair to enter the coupling intersection.
     /// `SourcererCC`'s BCB benchmark found precision/recall optimum at 0.70.
-    /// Default 0.70. T1+T2 always = 1.0 today; this matters once T3 (`MinHash`) lands.
+    /// Default 0.70. Type 1 + Type 2 always = 1.0 today; this matters once
+    /// Type 3 (`MinHash`) lands.
     pub clone_similarity_floor: f64,
     /// Skip clone pairs whose two files share the same parent directory
     /// (intentional structural mirroring like `foo_test.rs` ↔ `foo.rs`).

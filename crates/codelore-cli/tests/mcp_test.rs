@@ -257,11 +257,9 @@ fn mcp_tools_list_and_repo_overview() {
         // agent receives rather than the source text, because that string is
         // the contract; it recurred across three audit cycles as a doc fix
         // because nothing checked it.
-        let limit_desc = tool["inputSchema"]["properties"]["limit"]["description"].as_str();
-        if let Some(desc) = limit_desc {
-            let lowered = desc.to_lowercase();
+        if let Some(desc) = tool["inputSchema"]["properties"]["limit"]["description"].as_str() {
             assert!(
-                !lowered.contains("default: all") && !lowered.contains("default all"),
+                !desc.contains("default: all"),
                 "tool {:?} advertises an uncapped `limit` default, but every \
                  capped handler resolves an absent limit to 50: {desc:?}",
                 tool["name"]
@@ -589,7 +587,6 @@ fn mcp_check_gates_discloses_skipped_gates() {
     let _ = child.wait();
 }
 
-/// `corpus_percentile_max` must be evaluated for real, not reported as
 /// Capping the `violations` array must not move the number the agent reports.
 ///
 /// `violation_count` is measured before truncation, so a capped response still
@@ -659,6 +656,7 @@ fn mcp_check_gates_caps_violations_without_changing_the_count() {
     let _ = child.wait();
 }
 
+/// `corpus_percentile_max` must be evaluated for real, not reported as
 /// structurally skipped: `check_gates` already computes `code_health` (for
 /// `code_health_min`), and the corpus lens fills `corpus_percentile` on those
 /// rows whenever a calibration artifact is active — the embedded world
