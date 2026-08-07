@@ -1044,4 +1044,58 @@ the deferred thresholds scaffold that F276 blocks.
     a check that spans both files, because no reviewer reading either file
     alone can see the hazard.
 
-The next sweep re-opens at **F290**.
+### F290 (Fixed — Unreleased) — the two remaining MCP tools that returned unbounded violation lists
+
+*   **Location**: `codelore-cli/src/mcp.rs` — `check_gates` (JSON `violations`),
+    `render_gate_changes` (text violation loop)
+*   **Severity**: MEDIUM · **Category**: agent-context budget
+*   **Description**: the cap-and-disclose regime reached every list tool except
+    these two, which emitted one row per violation with no bound. A wide
+    refactor against a tight gate is whole-population output into the context
+    window.
+*   **What the audit's framing missed** (checked against source, not taken on
+    the report's word): the two tools do not share an output shape, so a single
+    prescription does not fit. `check_gates` returns a JSON struct — the
+    `serialize_capped_rows` helper serializes a *slice*, so it does not apply to
+    a struct field. `gate_changes` returns rendered text, where that helper does
+    not apply at all. And in `render_gate_changes` two of the three loops were
+    *already* capped (`GATE_FINDINGS_ROWS`, `GATE_DELTA_TABLE_ROWS`); only the
+    violation loop was not. The finding was one missing constant plus one
+    missing struct-field cap, not "unbounded arrays" as a class.
+*   **Resolution**: `check_gates` takes a `limit` (default 50, the file's
+    `resolve_row_cap` convention) and truncates `violations`, with
+    `violation_count` measured *before* truncation so it stays the true total —
+    the verdict and the number an agent reports are invariant under the cap, so
+    lowering `limit` can never resemble fixing violations. `gate_changes` gains
+    `GATE_VIOLATION_ROWS`, the third render-only cap beside its two siblings,
+    with the matching `(+n more violations)` tail.
+*   **Deliberately not changed**: the `codelore gate` JSON document still
+    carries every row. `GATE_FINDINGS_ROWS`'s own comment records that as a
+    design decision (spec §6) — that document is a file artifact, whereas an
+    MCP response is context-window budget. Applying the render cap there would
+    have contradicted a documented invariant.
+*   **Durable half**: a test asserts `violation_count` is identical across a
+    capped and an uncapped call while the row counts differ. Verified
+    discriminating — removing the `truncate` fails it.
+
+### F291 (Fixed — Unreleased) — a `limit` schema description contradicted the handler for three cycles
+
+*   **Location**: `codelore-cli/src/mcp.rs::RefactoringTargetsParams::limit`
+*   **Severity**: LOW · **Category**: agent-facing contract accuracy
+*   **Description**: the doc comment — which becomes the JSON-Schema
+    description an agent reads — said "Maximum rows to return (default: all)"
+    while the handler resolved an absent limit to 50 via `resolve_row_cap`. An
+    agent had no reason to pass `limit` and no reason to suspect the list was
+    cut. The trailing disclosure object did fire, so the output was not a lie;
+    the *contract* was.
+*   **Why three cycles**: it was reported and fixed as prose each time. Nothing
+    compared the advertised default against the resolved one, so the next
+    parameter added could reintroduce it.
+*   **Durable half**: the `tools/list` smoke test now walks every tool's
+    `inputSchema`, and for any `limit` property asserts the description neither
+    promises "all" nor omits the real default. It runs against the schema the
+    agent receives over the wire rather than the source text, because that
+    string is the contract. Verified discriminating — restoring the old wording
+    fails it by name.
+
+The next sweep re-opens at **F292**.

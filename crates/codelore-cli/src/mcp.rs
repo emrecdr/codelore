@@ -464,7 +464,8 @@ pub struct DeltaHealthParams {
 /// Parameters for the `refactoring_targets` tool.
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Default)]
 pub struct RefactoringTargetsParams {
-    /// Maximum rows to return (default: all).
+    /// Maximum rows to return, highest-priority first (default: 50, clamped to
+    /// 1..=500). A trailing summary object discloses suppressed rows.
     pub limit: Option<u32>,
 }
 
@@ -477,7 +478,12 @@ pub struct FunctionXrayParams {
 
 /// Parameters for the `check_gates` tool (none required).
 #[derive(Debug, Deserialize, JsonSchema, Default)]
-pub struct CheckGatesParams {}
+pub struct CheckGatesParams {
+    /// Maximum violation rows to return (default: 50, clamped to 1..=500).
+    /// `violation_count` always reports the true total, so a capped list never
+    /// changes the verdict or the number an agent reports.
+    pub limit: Option<u32>,
+}
 
 /// Parameters for the `finding_hotspot_overlap` tool.
 #[derive(Debug, Deserialize, JsonSchema, Default)]
@@ -1069,12 +1075,13 @@ impl CodeLoreServer {
             shallow fetch-depth checkout) is reported here too, with a reason that names fetch-depth \
             when the checkout is shallow. \
             Returns `no_thresholds` verdict when no config file is found. \
+            The `violations` array is capped (default: 50, raise `limit` for more) while \
+            `violation_count` always reports the true total, so the verdict and the count \
+            are never affected by the cap. \
             First call on a cold cache triggers history ingest."
     )]
-    async fn check_gates(
-        &self,
-        _params: Parameters<CheckGatesParams>,
-    ) -> Result<String, ErrorData> {
+    async fn check_gates(&self, params: Parameters<CheckGatesParams>) -> Result<String, ErrorData> {
+        let cap = resolve_row_cap(params.0.limit);
         let repo_path = self.repo.clone();
         let defect_calibration = self.defect_calibration.clone();
         let allow_foreign_calibration = self.allow_foreign_calibration;
@@ -1222,9 +1229,20 @@ impl CodeLoreServer {
             let mut skipped_gates = skipped_check_gates(&thresholds);
             skipped_gates.extend(new_code_skip);
             skipped_gates.extend(corpus_skip);
+            // `violation_count` is measured BEFORE truncation and stays the true
+            // total, so the verdict and the count an agent reports are never
+            // affected by the cap — only how many rows it reads. A wide refactor
+            // against a tight gate otherwise emitted one row per violating file
+            // into the agent's context with no bound.
+            //
+            // Capped here, unlike the `codelore gate` JSON document which carries
+            // every row by design (see GATE_FINDINGS_ROWS): that document is a
+            // file artifact, this response is context-window budget.
+            let violation_count = violations.len();
+            violations.truncate(cap);
             let summary = GateSummary {
                 verdict: verdict.into(),
-                violation_count: violations.len(),
+                violation_count,
                 violations,
                 skipped_gates,
             };
@@ -1594,7 +1612,8 @@ fn render_gate_changes(
                 .to_string(),
         );
     }
-    for v in violations.unwrap_or_default() {
+    let all_violations = violations.unwrap_or_default();
+    for v in all_violations.iter().take(crate::GATE_VIOLATION_ROWS) {
         lines.push(format!(
             "  - {gate}: {path} — actual {actual} vs threshold {threshold}",
             gate = v.gate,
@@ -1602,6 +1621,12 @@ fn render_gate_changes(
             actual = v.actual,
             threshold = v.threshold,
         ));
+    }
+    let hidden_violations = all_violations
+        .len()
+        .saturating_sub(crate::GATE_VIOLATION_ROWS);
+    if hidden_violations > 0 {
+        lines.push(format!("(+{hidden_violations} more violations)"));
     }
     for f in report.findings.iter().take(crate::GATE_FINDINGS_ROWS) {
         lines.push(format!("[{}] {}: {}", f.kind, f.path, f.detail));
