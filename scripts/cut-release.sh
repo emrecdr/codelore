@@ -365,7 +365,25 @@ if [[ -n "${RELEASE_TARGET_SHA}" ]] \
   RESUME_MODE=true
   ok "detected existing release commit at ${RELEASE_TARGET_SHA:0:7} — resuming from CI wait"
   if [[ "$(git rev-parse HEAD)" != "${RELEASE_TARGET_SHA}" ]]; then
-    warn "  HEAD has advanced past the release commit; tag will target ${RELEASE_TARGET_SHA:0:7} specifically"
+    # Retarget to HEAD rather than the historical release commit.
+    #
+    # Resuming after a TRANSIENT failure, the two are interchangeable. But a
+    # cut can also fail because the release commit itself was wrong — the
+    # v0.27.1 attempt failed CI because the commit omitted a file its own
+    # re-stamp step had rewritten — and then the fix necessarily lands AFTER
+    # it. Tagging the original commit there publishes the tree whose CI is
+    # red, which is the one thing the CI gate below exists to prevent; it
+    # would wait for a green that commit can never reach.
+    #
+    # HEAD is safe to target because the preconditions above already
+    # established it carries the release state: Cargo.toml reads ${VERSION}
+    # and CHANGELOG has its section. What HEAD adds beyond the release commit
+    # is whatever landed since, so the operator is told exactly what that is
+    # rather than it being folded in silently.
+    warn "  HEAD has advanced past the release commit ${RELEASE_TARGET_SHA:0:7}"
+    warn "  tag will target HEAD ($(git rev-parse --short HEAD)) so the release includes:"
+    git log --oneline "${RELEASE_TARGET_SHA}..HEAD" | sed 's/^/    /' >&2
+    RELEASE_TARGET_SHA="$(git rev-parse HEAD)"
   fi
   warn "  prep section (version bump, CHANGELOG flip, cargo update, commit, push) will be SKIPPED"
 fi
