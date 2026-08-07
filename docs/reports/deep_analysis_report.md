@@ -1005,4 +1005,43 @@ the deferred thresholds scaffold that F276 blocks.
     archives. They are digest-bound and harmless, and signing is the part most
     worth exercising, so this is accepted rather than suppressed.
 
-The next sweep re-opens at **F289**.
+### F289 (Fixed — v0.27.2) — publishing workflows triggered on the Action's floating major tag
+
+*   **Location**: `.github/workflows/release.yml`, `.github/workflows/container.yml`
+    (`on: push: tags`), coupled to `scripts/cut-release.sh::ACTION_MAJOR_TAG`
+*   **Severity**: HIGH · **Category**: cross-file coupling / published-surface breakage
+*   **Description**: both workflows triggered on `tags: ['v*']`. F287's fix
+    added a `v1` tag that `cut-release.sh` re-points on every release — and
+    `v1` is a `v*` tag. Pushing it ran the full release pipeline a second
+    time and published a GitHub Release named `v1`. GitHub's
+    `releases/latest` then returned `v1`; the Action's own `version: latest`
+    resolution rejected it against `^v[0-9]+\.[0-9]+\.[0-9]+...$` and exited
+    1, so **every consumer of the published Action failed**. The Homebrew tap
+    was regenerated as "codelore 1" pointing at that release. crates.io was
+    untouched — the idempotent `publish_if_absent` probe saw the versions
+    already live and skipped, which is the only reason the irreversible
+    surface survived.
+*   **How it was introduced**: by the F287 fix itself, in this repository,
+    and caught by the release cut that followed minutes later — the release
+    commit's own CI went red on the `action` jobs, and `cut-release.sh`
+    aborted before tagging. The abort ordering (CI gate strictly before the
+    tag dance) is what kept it recoverable.
+*   **Why it was missed**: the `v1` design was validated against
+    `protect-release-tags`, whose condition is `refs/tags/v*` — the
+    non-fast-forward constraint was found and handled. The *workflow trigger*
+    uses the same `v*` pattern in a different file and was never checked. One
+    `v*` was reasoned about carefully; the other was not looked at.
+*   **Resolution**: both workflows trigger on `v*.*.*`, which matches every
+    real release tag including pre-release suffixes (`v1.0.0-rc.1`,
+    `v0.1.0-alpha.2`) and no bare major. The bogus `v1` Release was deleted
+    (the *tag* kept, so `uses: @v1` still resolves) and the tap restored to
+    0.27.1.
+*   **Durable half**: a guard reads `ACTION_MAJOR_TAG` out of `cut-release.sh`
+    and asserts no workflow tag-trigger glob matches it, tying the two files
+    together. Verified discriminating: restoring `v*` fails it with the exact
+    diagnosis. The general lesson is the one the guard encodes — two settings
+    that are individually reasonable and destructive only in combination need
+    a check that spans both files, because no reviewer reading either file
+    alone can see the hazard.
+
+The next sweep re-opens at **F290**.
