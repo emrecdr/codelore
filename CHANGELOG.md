@@ -4,6 +4,15 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Security
+
+- **Every third-party GitHub Action is now pinned to a commit SHA.** `Swatinem/rust-cache`, `benchmark-action/github-action-benchmark` and `taiki-e/install-action` floated on tags while the rest of the repository pinned by SHA — and `rust-cache` runs in the dogfood job, which carries `contents: write`. A tag is a mutable pointer its owner controls, so the exposure is whatever that owner repoints it at later. A guard now enforces the policy rather than leaving it to whoever remembers it, exempting GitHub's first-party namespace and `dtolnay/rust-toolchain` (whose tag names the toolchain to install, not a release of the action).
+
+### Fixed
+
+- **The crates.io publish probe no longer treats a registry hiccup as "not published".** It used `curl -sSf`, which fails on any non-2xx — so a transient 5xx or a timeout read as absent and fell through to publish. If the crate *was* already there, `cargo publish` then fails on "already exists" and `set -e` aborts the job mid-sequence, which is the unrecoverable state the idempotence check exists to prevent. It now branches on the HTTP status: 200 skips, 404 publishes, and anything else retries and then fails closed rather than guessing.
+
+
 ### Fixed
 
 - **A head-only ingest now persists its cache entry.** The blind-ingest guard asked whether any commits were ingested — but a head-only ingest walks no commits by design, so that test was true on every healthy run: the store just written to disk was discarded and the expensive HEAD complexity scan re-run into memory. `codelore calibrate` takes this path once per corpus repository, so it paid the scan twice per repo and could never persist an entry to reuse on the next run. The witness now matches the ingest mode, testing the table the head-only scan actually fills. The full-ingest path is unchanged, and the guard that refuses to persist a truly blind ingest still holds.

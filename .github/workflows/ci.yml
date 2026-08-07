@@ -78,7 +78,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.96.0
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   test:
@@ -173,7 +173,7 @@ jobs:
           # users in advanced-usage §10 troubleshooting.
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@1.96.0
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # Save the cargo cache even when the job fails — a red test
           # run still warms the next attempt's compile.
@@ -182,7 +182,7 @@ jobs:
       # (smarter parallelism, faster process spawning, better failure
       # aggregation). Doesn't run doc tests — those still need `cargo test
       # --doc` separately.
-      - uses: taiki-e/install-action@v2.85.5
+      - uses: taiki-e/install-action@6a1bd70eaac3c8bdf093356838d7ee09fda951cf # v2.85.5
         if: matrix.run_tests
         with:
           tool: cargo-nextest
@@ -259,7 +259,7 @@ jobs:
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@1.96.0
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Run SPA browser smoke test
         # `--features browser-tests,spa,test-support` opts into all three:
         # the harness feature itself, the SPA emitter, and the in-process
@@ -296,7 +296,7 @@ jobs:
           # needs parent ancestry.
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@1.96.0
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # Shares `dogfood`'s cache slot: both are `--release -p
           # codelore` builds, just with a different feature set.
@@ -336,7 +336,7 @@ jobs:
           # own history, so the gix walker needs parent ancestry.
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@1.96.0
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # Stable, release-profile-scoped cache slot shared by the two
           # `--release` compiles in this workflow (dogfood and self-gate) —
