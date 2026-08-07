@@ -2,7 +2,10 @@ name: container
 
 on:
   push:
-    tags: ['v*']
+    # `v*.*.*`, NOT `v*` — see the note in release.yml. The Action's floating
+    # major tag `v1` is a `v*` tag that moves on every release, and under
+    # `v*` that push triggered a duplicate container build and publish.
+    tags: ['v*.*.*']
   workflow_dispatch:
 
 # Cancel any superseded run for the same tag — see release.yml for context.

@@ -38,7 +38,15 @@ name: release
 
 on:
   push:
-    tags: ['v*']
+    # `v*.*.*`, NOT `v*` — the Action's floating major tag `v1` is also a
+    # `v*` tag, and it is re-pointed on every release. Under `v*` that push
+    # triggered a second, bogus release run: it published a GitHub Release
+    # literally named `v1`, which made the `releases/latest` API return `v1`,
+    # which the Action's own `version: latest` resolution then rejected as
+    # not-a-semver — breaking the published Action for every consumer. This
+    # pattern still matches every real release tag, pre-release suffixes
+    # included (v0.27.2, v1.0.0-rc.1), and matches no bare major.
+    tags: ['v*.*.*']
   workflow_dispatch:
 
 # Cancel any superseded run for the same tag. Without this, retags during
