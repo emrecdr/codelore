@@ -394,3 +394,38 @@ fn different_opts_produce_different_cache_paths() {
         "same repo → same parent dir"
     );
 }
+
+/// A head-only ingest must persist its cache entry.
+///
+/// The blind-ingest guard bails when the store looks unwitnessed, and it used
+/// to ask `commit_count() == 0`. A head-only ingest walks no commits by
+/// design — its docstring says the history tables stay empty — so that test
+/// was true on every healthy run: the store just written to disk was thrown
+/// away and the expensive HEAD complexity scan re-run into memory.
+/// `codelore calibrate` takes this path once per corpus repository, so it paid
+/// the scan twice per repo and never persisted an entry to reuse.
+#[test]
+fn head_only_ingest_persists_its_cache_entry() {
+    let repo = tiny_repo::build();
+    let repo_path = repo.dir.path().to_path_buf();
+    let cache_root = tempfile::tempdir().expect("tempdir for cache root");
+
+    let opts = Options {
+        repo_path: repo_path.clone(),
+        head_only_ingest: true,
+        min_revs: 1,
+        ..Options::default()
+    };
+    let gix = GixRepo::open(&repo_path).expect("open gix repo");
+    let _db = FactsDb::open_or_ingest_with_cache_root(&opts, &gix, cache_root.path())
+        .expect("head-only open_or_ingest");
+
+    let head_sha = gix.head_sha().expect("head_sha");
+    let key = cache_key(&repo_path, &head_sha, &opts);
+    let cache_file = cache_path_with_root(&key, &repo_path, cache_root.path());
+    assert!(
+        cache_file.exists(),
+        "head-only ingest must persist a cache entry at {}",
+        cache_file.display()
+    );
+}

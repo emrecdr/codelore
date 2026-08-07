@@ -6,6 +6,13 @@ Conventional Commits format. All notable changes documented here.
 
 ### Fixed
 
+- **A head-only ingest now persists its cache entry.** The blind-ingest guard asked whether any commits were ingested — but a head-only ingest walks no commits by design, so that test was true on every healthy run: the store just written to disk was discarded and the expensive HEAD complexity scan re-run into memory. `codelore calibrate` takes this path once per corpus repository, so it paid the scan twice per repo and could never persist an entry to reuse on the next run. The witness now matches the ingest mode, testing the table the head-only scan actually fills. The full-ingest path is unchanged, and the guard that refuses to persist a truly blind ingest still holds.
+
+- **`check --ratchet` no longer records a code-health floor for a gate you never configured.** The ratchet is documented as tracking a metric only when its matching gate is configured — true of the effort and cycles metrics, which read ledger records that exist only if their gate ran. Code health was read straight off the scan, which runs unconditionally because other gates consume its rows, so a run with no `code_health_min` in the thresholds file still recorded a baseline. A later benign refactor that moved the worst file's score by recomputation noise then failed the run against a bound the user never set.
+
+
+### Fixed
+
 - **The zero-row notice no longer prescribes a remedy that most analyses cannot use.** It closed by suggesting `--min-revs 1`, but `min_revs` is a genuine filter in only 17 of the analysis modules — 23 more name it solely in a tracing span and 23 never mention it. On `defect-validation` the effect was self-contradictory: the analysis printed the correct instruction to build a calibration artifact, and the notice immediately advised lowering a threshold it does not read. The notice now states the analysis, the zero, and the options that were set, and stops. The options summary still carries `min-revs=<n>`, so where it *is* the cause the number sits beside the zero; §12 of the advanced-usage guide covers the header-only case explicitly.
 
 - **The README's "Tracking health over time" gate example now includes `max_red_effort_pct`,** the third key `check` recommends when no thresholds are configured. It was the only one of the three absent from the README, and the subtlest — churn share landing in red-band files, counted against health-scored churn only, with health-improving churn exempt — so it was the one a reader could not look up where the CLI had just sent them.
