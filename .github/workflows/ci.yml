@@ -462,3 +462,32 @@ jobs:
         uses: ./
         with:
           command: check
+      - name: Reject a crafted version input
+        # The `version` input reaches a step output, and a step output is
+        # spliced into the install step by a template expression at render
+        # carrying shell metacharacters used to execute in the job. Reading the
+        # input through the environment protects only the step that reads it;
+        # the guarantee has to hold one hop downstream too.
+        #
+        # `continue-on-error` because the assertion is that this FAILS: the
+        # step is expected to error, and the check below turns a success into
+        # the CI failure. Without this the smoke test only ever proves the
+        # happy path works, which is what let the gap ship.
+        id: injection
+        continue-on-error: true
+        uses: ./
+        with:
+          version: 'v1.0"; touch /tmp/codelore-action-injection; "'
+      - name: Assert the crafted version was rejected
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.injection.outcome }}" != "failure" ]; then
+            echo "::error::a crafted version input was accepted — the resolve step must reject anything that is not vX.Y.Z"
+            exit 1
+          fi
+          if [ -e /tmp/codelore-action-injection ]; then
+            echo "::error::crafted version input EXECUTED — shell injection is live"
+            exit 1
+          fi
+          echo "crafted version rejected, no command executed"
