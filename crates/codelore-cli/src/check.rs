@@ -978,7 +978,10 @@ fn emit_check_sarif_when_requested(
     let mut evidence_map: HashMap<String, Vec<EvidenceCommit>> = HashMap::new();
     let mut evidence_warned = false;
     for v in violations {
-        if v.path != "(repo-wide)" && v.path != "(degraded)" && v.path != "(skipped)" {
+        // Evidence is a per-file commit chain, so it is meaningless for a
+        // pseudo-path. Same canonical predicate the emitters use, rather than
+        // a third copy of the literal list.
+        if !codelore_lib::cli_api::quality_gates::evaluators::is_pseudo_path(&v.path) {
             evidence_map.entry(v.path.clone()).or_insert_with(|| {
                 evidence_for_path(db, opts, &v.path, 5).unwrap_or_else(|e| {
                     if !evidence_warned {

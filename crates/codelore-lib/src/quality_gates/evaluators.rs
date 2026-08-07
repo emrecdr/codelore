@@ -9,6 +9,38 @@
 
 use super::config::Thresholds;
 
+/// The pseudo-paths a violation's `path` carries when the finding is about the
+/// repository rather than a file.
+///
+/// These are minted here and consumed by every emitter, which is why they are
+/// named in one place. An emitter that special-cases them by comparing against
+/// its own literals holds a second copy of this list, and the copies drift the
+/// moment a seventh is added — the SARIF emitter carried exactly that, covering
+/// three of the six, and percent-encoded `(skipped)` into an artifact URI that
+/// anchored a Code Scanning alert to a file which does not exist.
+///
+/// `(none)` is included deliberately: it is a display placeholder rather than a
+/// violation path today, but it is the same shape, and an emitter asking "is
+/// this a real file path?" must answer no for it too.
+pub const PSEUDO_PATHS: &[&str] = &[
+    "(repo-wide)",
+    "(degraded)",
+    "(skipped)",
+    "(change-set)",
+    "(diff-summary)",
+    "(none)",
+];
+
+/// Whether `path` is a pseudo-path rather than a file in the repository.
+///
+/// Emitters use this to decide between the repository root and a real artifact
+/// URI. Ask here rather than comparing literals, so a new pseudo-path is
+/// handled by every consumer the day it is added.
+#[must_use]
+pub fn is_pseudo_path(path: &str) -> bool {
+    PSEUDO_PATHS.contains(&path)
+}
+
 /// One detected gate violation.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct GateViolation {
