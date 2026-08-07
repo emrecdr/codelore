@@ -98,6 +98,16 @@ fn spawn_mcp_with_args(
         instructions.contains("No network"),
         "instructions must state the local-only positioning, got: {instructions}"
     );
+    // Pin the NEGOTIATED revision, not the one we requested. Asserting only on
+    // the request proves nothing about the server: an rmcp bump that shifted
+    // the supported revision, or a downgrade during negotiation, would leave
+    // every test here passing while clients pinned to the old revision broke.
+    assert_eq!(
+        init_resp["result"]["protocolVersion"].as_str(),
+        Some("2024-11-05"),
+        "negotiated MCP protocol revision changed; update every client \
+         expectation deliberately rather than adopting the new value here"
+    );
 
     // initialized notification
     let notif = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
@@ -339,10 +349,14 @@ fn mcp_code_health_returns_scored_rows() {
     let _ = child.wait();
 }
 
-/// `tools/call hotspots` with a `limit` returns a bare JSON array (no
-/// `code_health`-style `omitted` summary object — `hotspots` serializes
-/// `Vec<HotspotRow>` directly) capped at `limit` rows, each row carrying the
-/// `path`/`revisions`/`hotspot_score` fields `HotspotRow` always populates.
+/// `tools/call hotspots` with a `limit` caps the ranking at `limit` rows and
+/// discloses the truncation, matching every sibling list tool: the array
+/// carries the capped rows followed by a `{omitted, total, note}` summary.
+///
+/// The disclosure is the point. `hotspots` used to truncate into a bare array,
+/// and the file's convention is that a bare array means the list is complete —
+/// so an agent read a cut-off ranking as the whole population and could
+/// conclude a file was not a hotspot when it simply fell past the cap.
 #[test]
 fn mcp_hotspots_returns_capped_rows() {
     let repo = delivery_repo::build();
@@ -358,16 +372,31 @@ fn mcp_hotspots_returns_capped_rows() {
     );
     let parsed = assert_tool_ok(&resp, "hotspots");
 
-    let rows = parsed.as_array().expect("hotspots: expected JSON array");
+    let entries = parsed.as_array().expect("hotspots: expected JSON array");
     assert!(
-        !rows.is_empty(),
+        !entries.is_empty(),
         "hotspots returned no rows for delivery_repo"
     );
+    // The trailing summary object, when present, is the disclosure — not a row.
+    let summary = entries.last().filter(|v| v.get("omitted").is_some());
+    let rows: Vec<_> = entries[..entries.len() - usize::from(summary.is_some())].to_vec();
     assert!(
         rows.len() <= 1,
         "limit=1 must cap hotspots rows at one, got {}: {parsed}",
         rows.len()
     );
+    if let Some(s) = summary {
+        let omitted = s["omitted"].as_u64().expect("omitted must be a number");
+        let total = s["total"].as_u64().expect("total must be a number");
+        assert!(omitted > 0, "a summary object implies rows were cut: {s}");
+        // Compare in u64 — the JSON values arrive as u64 and widening the
+        // row count is lossless, whereas narrowing them would not be.
+        assert_eq!(
+            total,
+            rows.len() as u64 + omitted,
+            "total must equal shown + omitted: {s}"
+        );
+    }
     let first = &rows[0];
     assert!(
         first["path"].is_string(),
