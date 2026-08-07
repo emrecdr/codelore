@@ -555,7 +555,10 @@ fn check_sarif_structure_and_fingerprints() {
 /// over the whole set so a fourth sentinel fails until it is handled.
 #[test]
 fn every_gate_sentinel_path_normalises_to_repo_root() {
-    for sentinel in ["(repo-wide)", "(degraded)", "(skipped)"] {
+    // Iterate the CANONICAL list, not a copy of it. A local array would pass
+    // forever while a seventh sentinel went unhandled — which is the drift
+    // that produced the phantom-URI bug this test was written for.
+    for sentinel in codelore_lib::quality_gates::evaluators::PSEUDO_PATHS {
         let violations = vec![make_violation("some_gate", sentinel, "1", "0")];
         let evidence: HashMap<String, Vec<EvidenceCommit>> = HashMap::new();
         let mut buf = Vec::new();

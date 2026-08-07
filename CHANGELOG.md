@@ -4,6 +4,11 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Gate pseudo-paths are defined once instead of copied into each emitter.** A violation whose finding is about the repository rather than a file carries a sentinel path, and the gate layer mints six of them — but the SARIF emitter tested against its own list of three, which is how `(skipped)` came to be percent-encoded into an artifact URI that anchored a Code Scanning alert to a file that does not exist. That instance was fixed; the second copy that caused it was not. Every minting site and both membership tests now consult one `is_pseudo_path`, and the regression test iterates the canonical list rather than a local copy — so a seventh sentinel is handled by every consumer the day it is added, verified by adding one and confirming the emitter picked it up with no other edit.
+
+
 ### Security
 
 - **Every third-party GitHub Action is now pinned to a commit SHA.** `Swatinem/rust-cache`, `benchmark-action/github-action-benchmark` and `taiki-e/install-action` floated on tags while the rest of the repository pinned by SHA — and `rust-cache` runs in the dogfood job, which carries `contents: write`. A tag is a mutable pointer its owner controls, so the exposure is whatever that owner repoints it at later. A guard now enforces the policy rather than leaving it to whoever remembers it, exempting GitHub's first-party namespace and `dtolnay/rust-toolchain` (whose tag names the toolchain to install, not a release of the action).

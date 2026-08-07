@@ -644,7 +644,7 @@ fn build_live_clone_result(row: &CloneCouplingRow, repo_root: &str) -> serde_jso
 //
 // One rule per distinct gate name; one result per GateViolation.
 // Per-file violations get relatedLocations + a codeFlow (≤5 evidence commits).
-// Repo-wide violations (path == "(repo-wide)" or "(degraded)") use uri "."
+// Violations carrying a pseudo-path (see `evaluators::PSEUDO_PATHS`) use uri "."
 // with no region.
 // =============================================================================
 
@@ -787,13 +787,13 @@ fn build_check_result<S: std::hash::BuildHasher>(
     // Repo-wide gates (e.g. clone count) emit a synthetic "." uri with no
     // region. Per-file gates emit the real path.
     //
-    // Every pseudo-path the gate layer mints belongs here. `(skipped)` — the
-    // sentinel `fail_on_skipped` attaches to a promoted skip — was added after
-    // its two siblings and not registered, so it fell through to the
-    // percent-encoding branch and anchored a Code Scanning alert to a
-    // nonexistent file at the repo root. These are repo-wide by nature: none
-    // of them names a file that exists.
-    let is_repo_wide = v.path == "(repo-wide)" || v.path == "(degraded)" || v.path == "(skipped)";
+    // Ask the gate layer rather than holding a local copy of its sentinel
+    // list. A copy is what caused the bug this replaced: `(skipped)` was
+    // minted after the two literals here and never added, so it fell to the
+    // percent-encoding branch and anchored a Code Scanning alert to a file
+    // that does not exist. The gate layer mints six of these; a local list
+    // covering three is a drift waiting for the seventh.
+    let is_repo_wide = crate::quality_gates::evaluators::is_pseudo_path(&v.path);
     let uri = if is_repo_wide {
         ".".to_owned()
     } else {
