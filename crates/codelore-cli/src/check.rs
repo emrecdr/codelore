@@ -168,10 +168,25 @@ pub(crate) fn run_check_cmd(args: &args::CheckArgs) -> Result<()> {
     // ── Ratchet ───────────────────────────────────────────────────────────────
     if args.ratchet {
         // Build ratchet metrics from already-computed gate outputs.
-        let worst_health = code_health
-            .iter()
-            .map(|r| r.score)
-            .fold(f64::INFINITY, f64::min);
+        //
+        // Every metric is tracked only when its gate is configured — the
+        // README states this, and it is what makes the ratchet a tightening
+        // of bounds the user chose rather than a new bound they did not.
+        // `red_effort_pct` and `dependency_cycles` get it for free by reading
+        // ledger records, which exist only if their gate ran. Code health does
+        // not: `run_code_health` runs unconditionally (other gates consume its
+        // rows), so reading the worst score straight off the scan recorded a
+        // floor for a gate that was never configured — and a later benign
+        // refactor that nudged that score down by recomputation noise failed
+        // the run against a bound the user never set.
+        let worst_health = if thresholds.gates.code_health_min.is_some() {
+            code_health
+                .iter()
+                .map(|r| r.score)
+                .fold(f64::INFINITY, f64::min)
+        } else {
+            f64::INFINITY
+        };
         // red_effort_pct: read from the effort-exposure ledger record if present.
         let red_effort_pct = ledger_records
             .iter()
