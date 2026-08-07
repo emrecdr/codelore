@@ -1130,4 +1130,40 @@ the deferred thresholds scaffold that F276 blocks.
     string is the contract. Verified discriminating — restoring the old wording
     fails it by name.
 
-The next sweep re-opens at **F292**.
+### F292 (Active — LOW) — a container tag from the `v1` incident survives in the registry
+
+*   **Location**: `ghcr.io/emrecdr/codelore:v1` (registry state, not source)
+*   **Severity**: LOW · **Category**: published-surface debris
+*   **Description**: the `v1` tag push that caused F289 triggered
+    `container.yml` as well as `release.yml`. Its `type=ref,event=tag` rule
+    minted a container tag literally named `v1`, which is still published. It
+    resolves to `sha256:0e753ae9…` — an image distinct from both `v0.27.1`
+    (`d491a776…`) and `v0.27.2` (`2d7677b1…`) — and it will never update
+    again, because `container.yml` no longer triggers on that ref.
+*   **Why it matters despite no references**: nothing in the repository points
+    at it (the docs use `:latest` and `:vX.Y.Z`), but the Action is documented
+    as `uses: emrecdr/codelore@v1`, so `docker pull ghcr.io/…:v1` is a natural
+    guess. A tag shaped like a floating major that is frozen forever is worse
+    than one that does not exist: the failure is silent.
+*   **Full incident inventory** (all four tag rules traced, not assumed):
+    `v1` — present, stale, the subject of this finding. `sha-243a85b` —
+    collateral: the incident rebuilt the `v0.27.1` commit and moved that
+    sha-tag off the genuine release image onto the rebuild, so it now names an
+    image that was never published as a release. `latest` — self-healed when
+    `v0.27.2` shipped (verified equal to `v0.27.2`'s digest). The two
+    `type=semver` rules did not fire, because `v1` is not a semver string.
+*   **The cause is already closed**: `container.yml` triggers on `v*.*.*` and
+    `tag_trigger_pattern_test` asserts no workflow tag-trigger glob matches the
+    Action's major tag. This finding is residue only — it cannot recur.
+*   **Deliberately NOT guarded further**: a test that queries the registry for
+    stray tags was considered and rejected. It would duplicate a guard that
+    already prevents the cause, and it would make a unit test depend on network
+    reachability and registry auth — a flaky check for an event that the
+    source-level guard makes impossible.
+*   **Remediation requires a token scope this project's tooling does not
+    carry**: GitHub Packages exposes version deletion, not tag deletion, so
+    removing `:v1` also removes `sha-243a85b` — acceptable, since both are
+    incident artifacts and the genuine `v0.27.1` image is a separate version
+    that is unaffected. Needs `read:packages` + `delete:packages`.
+
+The next sweep re-opens at **F293**.
