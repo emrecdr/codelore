@@ -68,7 +68,7 @@ pub struct CloneCouplingRow {
     /// `similarity × degree_pct × (1 − p_value)` ∈ [0, 1]. Ranks the row;
     /// SARIF `security-severity` is derived from this × 10.
     pub combined_score: f64,
-    /// T9: `true` when either `file_a` or `file_b` is currently a
+    /// `true` when either `file_a` or `file_b` is currently a
     /// knowledge-island file (departed primary author + no substantial
     /// other owners). Live clones AT-RISK files are the most actionable
     /// debt findings: the clone is already a refactoring liability and
@@ -256,7 +256,7 @@ pub fn run_clone_coupling(db: &FactsDb, opts: &Options) -> Result<Vec<CloneCoupl
         });
     }
 
-    // T9: intersect with knowledge-islands. Any clone-coupling row whose
+    // Intersect with knowledge-islands. Any clone-coupling row whose
     // file_a or file_b is in the knowledge-islands result set gets
     // at_risk = true. Failures are non-fatal — we degrade gracefully to
     // at_risk = false if the sub-analysis errors (the clone-coupling

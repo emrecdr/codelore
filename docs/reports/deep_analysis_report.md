@@ -732,7 +732,7 @@ the deferred thresholds scaffold that F276 blocks.
     where it is already canonical), and asserts they differ *before* asserting
     the keys match. Verified to fail against the pre-fix behaviour.
 
-### F278 (Active) — the hygiene guard's ID vocabulary is `F`-plus-digits only
+### F278 (Fixed — Unreleased) — the hygiene guard's ID vocabulary is `F`-plus-digits only
 
 *   **Location**: `codelore-lib/tests/comment_hygiene_test.rs::is_task_id`
 *   **Severity**: LOW · **Category**: guard coverage
@@ -746,8 +746,35 @@ the deferred thresholds scaffold that F276 blocks.
     A usable rule has to be anchored — e.g. `T<digits>:` opening a comment or
     doc line — rather than a bare token match. Widening the vocabulary without
     that anchor produces false positives on correct code.
+*   **The prescribed anchor was insufficient** (measured, not assumed): a
+    census of every standalone `T`-plus-digits token in scope returned 13 real
+    IDs across three series and 12 domain-vocabulary hits. Only 5 of the 13
+    are written as `T<digits>:`; the rest appear as a parenthesised aside, a
+    following word, an em-dash continuation, and one inside a string literal.
+    Anchoring on the colon would have missed most of them.
+*   **Rule that holds**: flag a standalone `T`-plus-digits token whose
+    preceding byte is not alphanumeric, `_`, or `}`. The brace and digit
+    exclusions drop every ISO-8601 timestamp — the separator is always glued
+    to a literal digit or a format placeholder's brace — without an exemption
+    list that would rot as fixtures change. The clone-type names are a
+    three-entry allowlist, whose stated cost is that a future task numbered
+    1-3 would not be caught. `Task <N>` reuses the existing `Plan <N>` matcher
+    rather than adding a parallel one.
+*   **Also fixed**: all 15 live violations, closing F279's remainder. One was
+    user-facing and not in that finding's list — `codelore explain
+    knowledge-islands` printed a task ID in its **Citation** field, beside real
+    sources like "DORA 2018 Accelerate"; it now reads "Bird et al. 2011
+    risk-author". Another was stale as well as banned: a test claimed its
+    integration coverage was still to come, when 34 differential tests and two
+    per-backend files had long since been written.
+*   **Durable half**: a self-test pins both directions on the shapes that
+    actually occur here — four ID spellings must flag, four domain-vocabulary
+    shapes must not. The guard scans its own file, so the rules are documented
+    by shape rather than by example; writing a literal ID as an illustration
+    fails the gate, which is the guard behaving correctly and was observed
+    twice while writing it.
 
-### F279 (Fixed — v0.27.1, partial) — a ticket ID shipped in user-facing help
+### F279 (Fixed — v0.27.2 + Unreleased) — a ticket ID shipped in user-facing help
 
 *   **Location**: `args.rs` (fixed); `analyze.rs`, `explain.rs`, `options.rs`, `clone_coupling.rs` (remaining)
 *   **Severity**: LOW · **Category**: convention violation
@@ -758,6 +785,11 @@ the deferred thresholds scaffold that F276 blocks.
     library doc comments and inline comments are not user-facing but are the
     same violation; clearing them is gated on F278's anchored rule, so they are
     fixed and guarded together rather than piecemeal.
+*   **Closed**: the remainder is cleared with F278's rule, as planned. The
+    sweep found one more user-facing instance than this finding listed —
+    `codelore explain knowledge-islands` printed a task ID in its **Citation**
+    field, which the original `--help` search did not reach because it looked
+    at argument help rather than every published string.
 
 ### F280 (Fixed — v0.27.1) — a vacuous gate pass wrote `result` without `violations`
 

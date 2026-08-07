@@ -112,7 +112,7 @@ pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
         strict_grouping: args.strict_grouping || args.code_maat_compat,
         // --time-bucket. Maps from the CLI's enum to the lib's enum.
         time_bucket: args.time_bucket.map(Into::into),
-        // T8: knowledge-islands analysis "departed author" threshold.
+        // knowledge-islands analysis "departed author" threshold.
         departed_threshold_days: args.departed_threshold_days,
         window_days: args.window_days,
         knowledge_model: args.knowledge_model.clone(),

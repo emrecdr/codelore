@@ -258,7 +258,7 @@ pub fn write_bus_factor_csv<W: Write>(
     Ok(())
 }
 
-/// T8: per-file knowledge-loss risk (`knowledge-islands` analysis).
+/// Per-file knowledge-loss risk (`knowledge-islands` analysis).
 /// No code-maat equivalent — strict `CodeLore` extension; no compat-mode
 /// header variant needed.
 pub fn write_knowledge_islands_csv<W: Write>(

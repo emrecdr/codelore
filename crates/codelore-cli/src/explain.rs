@@ -330,7 +330,7 @@ pub(crate) fn run_explain_cmd(args: &args::ExplainArgs) -> Result<()> {
         ),
         (
             "knowledge-islands",
-            "T8 design + Bird et al. 2011 risk-author",
+            "Bird et al. 2011 risk-author",
             "Per-file bus-factor risk: primary author hasn't committed in `--departed-threshold-days` days AND no substantial other owners.",
             "See analyses/knowledge_islands.rs.",
         ),

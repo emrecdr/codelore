@@ -1,4 +1,4 @@
-//! Static-HTML report emitter (T11). One self-contained HTML file per
+//! Static-HTML report emitter. One self-contained HTML file per
 //! analysis run — embedded CSS + vanilla JS, no external CDN, no
 //! framework dependency.
 //!

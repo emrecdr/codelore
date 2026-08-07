@@ -1,5 +1,8 @@
-//! Compile-time test: confirms Repo trait shape exists.
-//! Real integration tests against a fixture repo land in Task 9.
+//! Compile-time test: confirms the `Repo` trait shape exists.
+//!
+//! Behavioural coverage lives in `gix_repo_test.rs`, `git_cli_repo_test.rs`,
+//! and `differential_repo_test.rs`, which cross-checks the two backends
+//! against each other over a fixture repository.
 
 use codelore_lib::CommitEvent;
 use codelore_lib::Options;
