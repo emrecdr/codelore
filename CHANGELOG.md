@@ -4,6 +4,10 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Removed
+
+- **A stale `v1` container tag from the release-trigger incident.** Pushing the Action's floating major tag also matched `container.yml`'s trigger, so a container image was published under a tag literally named `v1`. It resolved to an image distinct from every release and could never update again once the trigger was narrowed, while looking exactly like a floating major — a tag someone might reasonably reach for by analogy with `uses: emrecdr/codelore@v1`, and get a frozen image with no signal. `ghcr.io/emrecdr/codelore:v1` is deleted. GitHub Packages removes versions rather than tags, so the incident's `sha-243a85b` tag went with it; that tag had been moved off the genuine `v0.27.1` image onto the incident rebuild, so its removal restores the release images as the only published builds. Every release tag, including `latest`, was verified to resolve to its original digest afterwards.
+
 ### Fixed
 
 - **An internal task ID no longer appears in `codelore explain` output.** `codelore explain knowledge-islands` printed its **Citation** as a task ID beside real sources — the sibling entries cite "DORA 2018 Accelerate" and "Leiden algorithm (Traag, Waltman, van Eck 2019)". It now reads "Bird et al. 2011 risk-author", the actual basis. This is the same class as the ticket ID previously removed from `--help`; that search covered argument help and so never reached this string.
