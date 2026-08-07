@@ -90,7 +90,7 @@ runs:
         fi
         # Validate before this value becomes a step output. Reading the input
         # through the environment protects THIS script, but a step output is
-        # consumed downstream by `${{ }}`, which splices into the script text
+        # consumed downstream by a template expression, which splices it into
         # at render time — so an unvalidated value would re-enter a shell one
         # hop later no matter how carefully it was read here. Anything that is
         # not a release tag is rejected at the boundary instead.
@@ -151,7 +151,7 @@ runs:
       env:
         # Step outputs carry caller-controlled values (`version` reaches
         # `resolve.outputs.tag`), so they are read through the environment for
-        # the same reason the inputs are: a `${{ }}` reference is spliced into
+        # the same reason the inputs are: a template expression is spliced into
         # the script text at render time, where a crafted value would close the
         # quote and run its own commands. The resolve step also rejects
         # anything that is not a `vX.Y.Z` tag, so this is the second of two
