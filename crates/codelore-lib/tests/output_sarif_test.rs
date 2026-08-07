@@ -541,6 +541,44 @@ fn check_sarif_structure_and_fingerprints() {
     assert_eq!(r1_uri, ".", "repo-wide violation must use uri \".\"");
 }
 
+/// Every pseudo-path the gate layer mints must normalise to the repo root.
+///
+/// These sentinels stand in for "this finding is about the repository, not a
+/// file": `(repo-wide)` for repo-scoped gates, `(degraded)` for a gate whose
+/// input was incomplete, `(skipped)` for a skip promoted to a violation by
+/// `fail_on_skipped`. Any that misses the normalisation is percent-encoded
+/// into an artifact URI, and GitHub Code Scanning anchors the alert to a file
+/// that does not exist — a malformed alert on a correct exit code.
+///
+/// `(skipped)` was minted after its two siblings and not registered here,
+/// which is exactly the drift this test exists to catch: the check is written
+/// over the whole set so a fourth sentinel fails until it is handled.
+#[test]
+fn every_gate_sentinel_path_normalises_to_repo_root() {
+    for sentinel in ["(repo-wide)", "(degraded)", "(skipped)"] {
+        let violations = vec![make_violation("some_gate", sentinel, "1", "0")];
+        let evidence: HashMap<String, Vec<EvidenceCommit>> = HashMap::new();
+        let mut buf = Vec::new();
+        write_check_sarif(
+            &violations,
+            &evidence,
+            Path::new("/repo/root"),
+            "cafebabe0000",
+            &mut Cursor::new(&mut buf),
+        )
+        .expect("write_check_sarif");
+        let v: serde_json::Value = serde_json::from_slice(&buf).expect("emitted SARIF must parse");
+        let uri = v["runs"][0]["results"][0]["locations"][0]["physicalLocation"]
+            ["artifactLocation"]["uri"]
+            .as_str()
+            .expect("result must carry an artifact uri");
+        assert_eq!(
+            uri, ".",
+            "sentinel {sentinel} must normalise to the repo root, not be encoded as a path"
+        );
+    }
+}
+
 /// Fingerprint stability regression guard.
 ///
 /// The `gateFinding/v1` hash is `sha256(gate|path|head_sha)`.

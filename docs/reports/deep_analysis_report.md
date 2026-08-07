@@ -439,11 +439,11 @@ A five-dimension architecture review (four parallel read-only analysts: architec
 
 **2026-07-04 architecture-review pass**: **F243** (html un-advertised in 4 dispatchers — Fixed `acd9568`) and **F231** (Plan-N markers — Fixed via self-enforcing hygiene guard `52c427c`) closed; clippy-allow justification + SPA listener-bus + browser-fixture coverage landed. New own-slice: **F244** (analysis registry / `enum Format` + `TabularRow`, absorbs F215/F148/F119) and **F246** (canvas keyboard a11y); **F245** (widgets.js module split) landed this pass.
 
-The 2026-08-02 discovery pass logged **F249–F268** (see §7); F269 was logged this pass (below). The post-v0.26.0 deferred-backlog pass logged **F270–F272** and closed F255/F269 (see §8). The post-v0.26.0 first-run UX pass logged **F273–F283** (see §9). The next sweep should re-open with F-IDs starting at **F284**.
+The 2026-08-02 discovery pass logged **F249–F268** (see §7); F269 was logged this pass (below). The post-v0.26.0 deferred-backlog pass logged **F270–F272** and closed F255/F269 (see §8). The post-v0.26.0 first-run UX pass logged **F273–F283** (see §9); its 0.27.0 re-verification added **F284–F286**. The next sweep should re-open with F-IDs starting at **F287**.
 
 **F247 (Active) — `run_coupling_scoped` cutoff ignores lineage/time-bucket source in `good_commits`.** The rev-parameterizable `code_health` history cutoff (`HealthScanCtx::history_cutoff`) routes coupling through `run_coupling_scoped(db, opts, "changes_at_ts")`, which overrides only the pair-source + Fisher-denominator tables. The internal `good_commits_cte(bucket, use_lineage)` still reads the opt-derived `changes_lineage`/`changes`. For the primary path (no lineage, no time-bucket) this is equivalent — the cutoff-window revset equals full-history ∩ window. But `history_cutoff` combined with `--use-canonical-lineage` yields coupling pairs keyed on pre-rename path names, and combined with `--time-bucket` aggregates buckets over full history. The **same class** applies to code-health's own churn / revs / author-fragmentation CTEs: under a cutoff `{src}` becomes the raw, non-lineage `changes_at_ts` view, so those terms also lose rename-awareness when a cutoff is combined with `--use-canonical-lineage`. Neither combination is exercised (the timeline consumer uses the primary path — cutoff without lineage/bucket) nor required by the spec; documented in the `run_coupling_scoped` and `CHANGES_AT_TS_DDL` doc comments. Fix if a future consumer needs cutoff + lineage/bucket: build `changes_at_ts` from the lineage-rewritten source and thread `changes_source` into `good_commits_cte`. Surfaced by the Task-4 review + the whole-branch review of the rev-parameterizable code-health branch.
 
-**F248 (Active) — no integration coverage that `health-trend`'s `arch_health` falls as the import graph decays.** The `health-trend` analysis (`analyses/health_trend.rs`) computes `arch_health` from per-rev `GraphMetrics`, and the unit tests cover the pure function (empty/acyclic/fully-tangled/clamp). But the integration test (`tests/health_trend_test.rs`) only asserts shape/ranges/oldest-first, not the spec's "degrading architecture ⇒ `arch_health` decreasing" case — because the only ≥2-commit fixture, `biomarker_repo`, is six independent Rust files with no inter-file imports, so its import graph is empty and `arch_health` is pinned at 100 across every sample. Fix: add an import-structured fixture whose later commits introduce a dependency cycle (mirror `architecture_trend`'s `trend_captures_cycle_introduction_over_time`), then assert the newest sample's `arch_health` is below an earlier sample's. Surfaced by the whole-branch review of the Repo Health Timeline (piece 2).
+**F248 (Fixed — Unreleased) — no integration coverage that `health-trend`'s `arch_health` falls as the import graph decays.** The `health-trend` analysis (`analyses/health_trend.rs`) computes `arch_health` from per-rev `GraphMetrics`, and the unit tests cover the pure function (empty/acyclic/fully-tangled/clamp). But the integration test (`tests/health_trend_test.rs`) only asserts shape/ranges/oldest-first, not the spec's "degrading architecture ⇒ `arch_health` decreasing" case — because the only ≥2-commit fixture, `biomarker_repo`, is six independent Rust files with no inter-file imports, so its import graph is empty and `arch_health` is pinned at 100 across every sample. Fix: add an import-structured fixture whose later commits introduce a dependency cycle (mirror `architecture_trend`'s `trend_captures_cycle_introduction_over_time`), then assert the newest sample's `arch_health` is below an earlier sample's. Surfaced by the whole-branch review of the Repo Health Timeline (piece 2). **Fixed** with `arch_health_falls_when_a_cycle_enters_the_import_graph`, mirroring `architecture_trend`'s cycle fixture: acyclic era, `a<->b` back-edge partway through, padded both sides so the even sampler lands on each. Asserts the score is not constant, then that the final sample sits below the acyclic peak. Proven non-vacuous before being trusted — on `biomarker_repo` the same assertion fails, because that fixture yields `[94.5 × 6]` (the finding said "pinned at 100"; the value is 94.5, constant either way). Priority rose because 0.27.0 promoted `health-trend` to step 1 of the README onboarding path, making an untestable column the first number a new user is told to trust.
 
 **F269 (Fixed — Unreleased; see §8) — `F<NN>` finding IDs embedded in test string literals and one test filename escape the comment-hygiene guard.** The `comment_hygiene_test` `Plan`-marker check now scans whole lines (comment + string + DDL), but the `F<NN>` task-ID check stays comment-scoped by design: bare `F<NN>` tokens appear as legitimate-looking test scaffolding — regression-message prefixes (`"F29 regression: …"` in `time_bucket_test.rs`, `"F33: …"` in `cache_test.rs`, `"F34: …"` in `gix_repo_test.rs`, `"F6 regression: …"` in `diff.rs`), an `eprintln!("[F69 spike] …")` label, and a git-config `user.name` fixture (`"F34"`) — so a whole-line/string scan would false-fire on all of them. These are the same banned class as comment F-IDs under the no-task-IDs-in-code rule, only in strings; and `tests/f69_window_spike_test.rs` carries the ID in its NAME, which a content scanner structurally cannot reach. Deferred as its own sweep (rename the file + rewrite the ~8 test labels to drop the ID while keeping each regression's description), distinct from the F231 `Plan N` sweep. Surfaced while extending the hygiene guard for F231.
 
@@ -852,4 +852,60 @@ sits in `2026-08-06-first-run-ux-review.md`; this section is the F-ledger.
     (`00_setup_boot.js`, `90_toggles_utils.js`) and cannot share this cause.
     They were not investigated; assume nothing from the Rust result.
 
-The next sweep re-opens at **F284**.
+### F284 (Fixed — Unreleased) — the zero-row notice prescribed a remedy most analyses cannot use
+
+*   **Location**: `codelore-cli/src/analyze.rs`, the F282 notice
+*   **Severity**: LOW-MED · **Category**: honest-absence convention
+*   **Description**: the notice closed with "relax the thresholds (e.g.
+    `--min-revs 1`)". Measured, `min_revs` is a genuine filter in **17** of the
+    modules under `analyses/`; **23** name it only inside a
+    `tracing::instrument` span and **23** never mention it. The suggestion is
+    therefore a dead end for most analyses. On `defect-validation` it was worse
+    than useless: the analysis prints the correct instruction to build a
+    calibration artifact, and the notice immediately advised lowering a
+    threshold that file does not reference at all.
+*   **Root cause of the error**: the "40 of the analyses read `min_revs`"
+    figure in F282's own comment counted `opts.min_revs` occurrences without
+    excluding the span-field idiom `fields(min_revs = opts.min_revs)`, which
+    23 modules carry purely for tracing. The number was measured, but with the
+    wrong predicate — a reminder that a count is only as good as what it
+    counts.
+*   **Outcome**: the remedy clause is removed; the notice states the analysis,
+    the zero and the options that were set. Deliberately no per-analysis
+    "does this filter on min_revs?" lookup: that knowledge exists nowhere
+    derivable at runtime, and hardcoding a 17-name list would rot the moment an
+    analysis is added — the exact parallel-knowledge trap the project's
+    conventions forbid. The options summary already carries `min-revs=<n>`, so
+    where it is the cause the number sits beside the zero, and §12 of the
+    advanced-usage guide covers the header-only case.
+*   **Rejected alternative**: pointing at `codelore explain <analysis>` instead.
+    Checked before proposing — `explain` returns citation, formula and source,
+    and discloses no filter thresholds, so the pointer would have been the same
+    class of false promise it was meant to replace.
+
+### F285 (Fixed — Unreleased) — `check` recommended a gate key the README never explained
+
+*   **Location**: `main.rs::vacuous_pass_notice` ↔ `README.md`
+*   **Severity**: LOW · **Category**: documentation coherence
+*   **Description**: the vacuous-pass notice names three starter keys.
+    README occurrences were `code_health_min` 1, `max_dependency_cycles` 1,
+    `max_red_effort_pct` **0** — and the missing one is the subtlest of the
+    three, so it was the one a reader could not look up where the CLI had just
+    sent them. It was documented only at `advanced-usage.md`'s
+    `#### max_red_effort_pct quality gate`.
+*   **Outcome**: added to the README's gate example with a one-line definition.
+    General rule worth keeping: every key a CLI message names should resolve
+    where that message points.
+
+### F286 (Fixed — Unreleased) — the onboarding path handed off past its own continuation
+
+*   **Location**: `README.md`, end of "Your first 5 minutes"
+*   **Severity**: LOW · **Category**: documentation flow
+*   **Description**: the section closed by sending the reader to the
+    1,700-line advanced guide — four lines above "Tracking health over time",
+    the section added specifically to answer the question a reader has at that
+    point. The pointer competed with its own continuation.
+*   **Outcome**: the handoff names the next section first and the reference
+    guide second.
+
+The next sweep re-opens at **F287**.

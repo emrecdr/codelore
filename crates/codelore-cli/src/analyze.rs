@@ -419,18 +419,25 @@ pub(crate) fn analyze(args: &AnalyzeArgs, no_banner: bool) -> Result<()> {
     // and a piped or CI run is exactly where a confident empty answer does
     // the most damage.
     //
-    // Report the options that were set, and stop there. `min_revs` is the
-    // usual cause but is read by only 40 of the analyses, so calling the
-    // summary "filters in effect" would overstate it for the rest — several
-    // return zero rows for reasons entirely their own (no rules file, no
-    // target match, no releases in range). Naming a cause would be a
-    // confident lie on a meaningful subset; naming the settings is true for
-    // all of them and still points at the thing worth changing first.
+    // Report the options that were set, and stop there — no remedy, because
+    // no remedy is true across the registry. `min_revs` is a genuine filter
+    // in 17 of the analysis modules; 23 more name it only in a
+    // `tracing::instrument` span, and 23 never mention it. So an example
+    // like "relax `--min-revs`" is a dead end for most analyses, and
+    // actively contradicts the ones that emit their own hint — a
+    // `defect-validation` run with no artifact would print the correct
+    // instruction to build one, then advise lowering a threshold it does not
+    // read.
+    //
+    // The options summary already carries `min-revs=<n>`, so a reader whose
+    // analysis does filter on it sees the number next to the zero and draws
+    // the inference; §12 of the advanced-usage guide covers the header-only
+    // case explicitly. Stating what was set is true for every analysis;
+    // prescribing a fix is true for a minority of them.
     if row_count == 0 {
         tracing::warn!(
             "{analysis_name}: 0 rows — the analysis ran and matched nothing. \
-             Options in effect: {}. If that is unexpected, relax the \
-             thresholds (e.g. `--min-revs 1`) and re-run.",
+             Options in effect: {}.",
             format_options_summary(&opts)
         );
     }

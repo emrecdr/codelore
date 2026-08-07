@@ -786,7 +786,14 @@ fn build_check_result<S: std::hash::BuildHasher>(
 
     // Repo-wide gates (e.g. clone count) emit a synthetic "." uri with no
     // region. Per-file gates emit the real path.
-    let is_repo_wide = v.path == "(repo-wide)" || v.path == "(degraded)";
+    //
+    // Every pseudo-path the gate layer mints belongs here. `(skipped)` — the
+    // sentinel `fail_on_skipped` attaches to a promoted skip — was added after
+    // its two siblings and not registered, so it fell through to the
+    // percent-encoding branch and anchored a Code Scanning alert to a
+    // nonexistent file at the repo root. These are repo-wide by nature: none
+    // of them names a file that exists.
+    let is_repo_wide = v.path == "(repo-wide)" || v.path == "(degraded)" || v.path == "(skipped)";
     let uri = if is_repo_wide {
         ".".to_owned()
     } else {

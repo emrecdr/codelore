@@ -330,7 +330,7 @@ codelore analyze --analysis clone-coupling --repo . --format markdown
 
 Live clones — function-level copy-paste families whose copies co-change at Fisher-significant rates. Real code-duplication debt: every change has to be made in N places, every bug has N variants. Dead clones (filtered out) are noise.
 
-Once you've run those four, you have enough signal to triage. From here, [the advanced guide](docs/advanced-usage.md) covers all analyses, every flag, configuration, CI integration, and tool-stack rationale.
+Once you've run those four, you have enough signal to triage. To watch these numbers over time rather than inspect them once, continue to the next section; for the full flag and analysis reference, see [the advanced guide](docs/advanced-usage.md).
 
 ---
 
@@ -358,6 +358,11 @@ Gates live in `.codelore-thresholds.toml` at the repo root. The numbers are repo
 code_health_min = 38.0
 # Exactly one import cycle exists today. A second one fails the gate.
 max_dependency_cycles = 1
+# Share of recent churn landing in red-band files, counted against
+# health-scored churn only and exempting churn that improves a file's health.
+# ~29% today while a refactor campaign is in flight; the ceiling tracks that
+# with margin. See docs/advanced-usage.md for the full definition.
+max_red_effort_pct = 30.0
 ```
 
 A bound that tracks today's worst gates on *regression*, not on the status quo. [This repository's own thresholds file](.codelore-thresholds.toml) is a worked example — every gate carries the measurement it came from and why its margin exists.

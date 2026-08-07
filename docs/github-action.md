@@ -105,7 +105,9 @@ Clones that intersect with knowledge-island files get a higher severity automati
 ```yaml
 strategy:
   matrix:
-    analysis: [hotspots, knowledge-islands, clone-coupling]
+    # SARIF is wired for hotspots, clones and clone-coupling only — an
+    # analysis without a SARIF rule exits 2, so it cannot ride this matrix.
+    analysis: [hotspots, clones, clone-coupling]
 steps:
   - uses: actions/checkout@v4
     with: { fetch-depth: 0 }
@@ -192,7 +194,7 @@ jobs:
           args: '--thresholds-file .codelore-thresholds.toml'
 ```
 
-`check` reads `.codelore-thresholds.toml`, prints the gate table, and exits non-zero on any violation — failing the workflow. Add `--ratchet` to fail only on regressions against the recorded baseline, or `--format json` for a machine-readable report. (`check` also writes `result=pass|fail` to `$GITHUB_OUTPUT`.)
+`check` reads `.codelore-thresholds.toml`, prints the gate table, and exits non-zero on any violation — failing the workflow. Add `--ratchet` to fail only on regressions against the recorded baseline, or `--format sarif` for a machine-readable report (`check` accepts `text | sarif`; `json` is a `gate` format, not a `check` one). (`check` also writes `result=pass|fail` to `$GITHUB_OUTPUT`.)
 
 ### Gate the current working tree (`gate`)
 

