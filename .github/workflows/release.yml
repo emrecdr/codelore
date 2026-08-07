@@ -359,13 +359,33 @@ jobs:
             local crate="$1" version
             version="$(cargo metadata --no-deps --format-version 1 \
               | jq -r --arg c "$crate" '.packages[] | select(.name == $c) | .version')"
-            if curl -sSf -H "User-Agent: $UA" \
-                "https://crates.io/api/v1/crates/${crate}/${version}" >/dev/null 2>&1; then
-              echo "${crate} ${version} already on crates.io — skipping."
-            else
-              echo "Publishing ${crate} ${version}..."
-              cargo publish -p "$crate"
-            fi
+            # Branch on the STATUS, not on curl's exit code. `-sSf` fails on
+            # any non-2xx, so a transient 5xx or a timeout read as "not
+            # published" and fell through to publish — and if the crate WAS
+            # already there, `cargo publish` fails on "already exists" and
+            # `set -e` aborts the job mid-sequence, which is the unrecoverable
+            # state this idempotence check exists to prevent. Only a 404 means
+            # absent; anything else unknown, so retry and then fail closed
+            # rather than guessing.
+            local status
+            status="$(curl -s -o /dev/null -w '%{http_code}' --retry 3 --retry-delay 2 \
+              --retry-all-errors -H "User-Agent: $UA" \
+              "https://crates.io/api/v1/crates/${crate}/${version}" || echo 000)"
+            case "$status" in
+              200)
+                echo "${crate} ${version} already on crates.io — skipping."
+                ;;
+              404)
+                echo "Publishing ${crate} ${version}..."
+                cargo publish -p "$crate"
+                ;;
+              *)
+                echo "::error::crates.io returned ${status} for ${crate} ${version};" \
+                  "cannot tell whether it is published. Refusing to publish blind —" \
+                  "re-run this job once the registry is reachable."
+                return 1
+                ;;
+            esac
           }
           publish_if_absent codelore-rca
           publish_if_absent codelore-lib
