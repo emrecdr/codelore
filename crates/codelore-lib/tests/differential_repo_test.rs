@@ -1361,6 +1361,16 @@ fn edge_path() -> &'static PathBuf {
         // Leave `core.quotepath` at its default: quoting non-ASCII paths is
         // exactly the divergence being tested, so overriding it here would
         // hide the bug this fixture exists to catch.
+        //
+        // Pin line-ending translation OFF, though. Windows git defaults
+        // `core.autocrlf` to true, which rewrites CRLF to LF on the way into
+        // the object store — so the CRLF file would be stored as LF and the
+        // byte-exactness this fixture asserts would be a property of the
+        // platform rather than of the backends. `.gitattributes` marking
+        // everything binary closes the same door via the `text` attribute,
+        // which `autocrlf` alone does not cover.
+        git(&["config", "core.autocrlf", "false"]);
+        std::fs::write(p.join(".gitattributes"), "* -text\n").expect("write gitattributes");
 
         // A real binary blob — NUL bytes and every high byte, so anything
         // treating content as UTF-8 fails loudly rather than subtly.
