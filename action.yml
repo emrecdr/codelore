@@ -88,6 +88,16 @@ runs:
         if [[ "$VERSION" != v* ]]; then
           VERSION="v$VERSION"
         fi
+        # Validate before this value becomes a step output. Reading the input
+        # through the environment protects THIS script, but a step output is
+        # consumed downstream by a template expression, which splices it into
+        # at render time — so an unvalidated value would re-enter a shell one
+        # hop later no matter how carefully it was read here. Anything that is
+        # not a release tag is rejected at the boundary instead.
+        if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+          echo "::error::invalid version input: expected vX.Y.Z (got '${VERSION}')" >&2
+          exit 1
+        fi
         TAG="$VERSION"
         VERSION_NO_V="${VERSION#v}"
         echo "tag=$TAG"            >> "$GITHUB_OUTPUT"
@@ -138,12 +148,24 @@ runs:
     - name: Download + extract codelore
       id: install
       shell: bash
+      env:
+        # Step outputs carry caller-controlled values (`version` reaches
+        # `resolve.outputs.tag`), so they are read through the environment for
+        # the same reason the inputs are: a template expression is spliced into
+        # the script text at render time, where a crafted value would close the
+        # quote and run its own commands. The resolve step also rejects
+        # anything that is not a `vX.Y.Z` tag, so this is the second of two
+        # independent barriers, not the only one.
+        STEP_TAG: ${{ steps.resolve.outputs.tag }}
+        STEP_VERSION: ${{ steps.resolve.outputs.version }}
+        STEP_TARGET: ${{ steps.target.outputs.target }}
+        STEP_EXT: ${{ steps.target.outputs.ext }}
       run: |
         set -euo pipefail
-        TAG="${{ steps.resolve.outputs.tag }}"
-        VERSION="${{ steps.resolve.outputs.version }}"
-        TARGET="${{ steps.target.outputs.target }}"
-        EXT="${{ steps.target.outputs.ext }}"
+        TAG="$STEP_TAG"
+        VERSION="$STEP_VERSION"
+        TARGET="$STEP_TARGET"
+        EXT="$STEP_EXT"
         ARCHIVE="codelore-${TAG}-${TARGET}.${EXT}"
         URL="https://github.com/emrecdr/codelore/releases/download/${TAG}/${ARCHIVE}"
         DEST="$RUNNER_TEMP/codelore"

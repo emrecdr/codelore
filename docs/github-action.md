@@ -152,18 +152,20 @@ jobs:
       - uses: emrecdr/codelore@v1
         with:
           analysis: health-trend
-          format: html
-          output: health-trend.html
+          format: markdown
+          output: health-trend.md
       - uses: emrecdr/codelore@v1
         with:
           analysis: architecture-trend
-          format: html
-          output: architecture-trend.html
+          format: markdown
+          output: architecture-trend.md
       - uses: actions/upload-artifact@v4
         with:
           name: health-over-time
-          path: '*-trend.html'
+          path: '*-trend.md'
 ```
+
+Both trends wire `csv | json | markdown`; neither has an HTML emitter, so `format: html` fails the step. Use `csv` if a dashboard is going to read the series rather than a person.
 
 `health-trend` emits a per-commit series of `arch-health`, `code-health` and `combined-health` with green/yellow/red bands; `architecture-trend` tracks propagation cost, cycle count and largest cycle over the same history. Neither needs configuration. Pair them with the gate below and you have the full loop: trends show the direction, gates stop the regressions. The README's [Tracking health over time](../README.md#tracking-health-over-time) walks the whole loop end to end.
 
