@@ -75,7 +75,7 @@ pub const DEFAULT_CLONE_SKIP_SAME_DIR: bool = true;
 /// code; the cap turns those failures into graceful skips.
 pub const DEFAULT_MAX_AST_FILE_BYTES: usize = 2 * 1024 * 1024;
 
-/// T8: An author is considered "departed" if their most recent commit
+/// An author is considered "departed" if their most recent commit
 /// anywhere in the repo is older than this many days at the anchor
 /// moment. 90 days is the default — chosen as the empirical
 /// "person has stopped contributing in a meaningful way" threshold
@@ -126,7 +126,7 @@ pub const DEFAULT_RELEASE_TAG_GLOB: &str = "v*";
 /// instead of growing unbounded and inviting the OS OOM killer.
 pub const DEFAULT_DUCKDB_MEMORY_LIMIT: &str = "4GB";
 
-/// T8: Threshold for "substantial author" — an author who isn't the
+/// Threshold for "substantial author" — an author who isn't the
 /// main author but owns at least this fraction of file's `LoC`. Used to
 /// count `n_substantial_others` per file in `knowledge-islands`. A
 /// file with 0 substantial other owners + departed main author is the

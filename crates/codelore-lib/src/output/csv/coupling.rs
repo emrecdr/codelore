@@ -111,7 +111,7 @@ pub fn write_soc_csv<W: Write>(rows: &[crate::analyses::soc::SocRow], w: &mut W)
 }
 
 pub fn write_clone_coupling_csv<W: Write>(rows: &[CloneCouplingRow], w: &mut W) -> Result<()> {
-    // 19 columns: 18 from CloneCouplingRow + T9 `at_risk`.
+    // 19 columns: 18 from CloneCouplingRow + `at_risk`.
     writeln!(
         w,
         "clone-group,fingerprint,file-a,file-b,entity-a,entity-b,\

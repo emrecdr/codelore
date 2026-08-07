@@ -48,7 +48,7 @@ pub enum AnalysisName {
     // is the "who commits the most overall" view, enriched with
     // LoC totals and first/last commit dates.
     TopCommitters,
-    // T8: knowledge-islands analysis. Per-file bus-factor risk —
+    // knowledge-islands analysis. Per-file bus-factor risk —
     // files whose primary author (by LoC) hasn't committed in
     // `--departed-threshold-days` days AND has no substantial other
     // owners. CodeLore's strategic differentiator vs CodeScene

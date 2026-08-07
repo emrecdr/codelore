@@ -1,5 +1,5 @@
 #![allow(clippy::doc_markdown, clippy::items_after_statements)]
-//! T8 — `knowledge-islands` analysis tests.
+//! `knowledge-islands` analysis tests.
 //!
 //! Tests the bus-factor / knowledge-loss risk indicator: per-file
 //! identification of cases where the primary author (by LoC) has

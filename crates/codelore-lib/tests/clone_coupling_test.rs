@@ -110,7 +110,7 @@ fn live_clone_pair_surfaces_in_clone_coupling() {
         r.similarity
     );
 
-    // T9 regression: `at_risk` defaults to false when no files surface as
+    // Regression: `at_risk` defaults to false when no files surface as
     // knowledge-islands. The Tiny fixture author is "active" at test
     // runtime (commits land at `now`) so they're never departed; the
     // knowledge-islands sub-analysis returns empty; every row's at_risk
@@ -127,7 +127,7 @@ fn live_clone_pair_surfaces_in_clone_coupling() {
     // Regression guard: p_value must carry the real Fisher exact test
     // result from the upstream CouplingRow, NOT a hard-coded 0.0.
     // (Earlier shipping code zeroed this out and shipped the fake value
-    // in every CSV/JSON/SARIF row — see bugfix sprint Task 1.)
+    // in every CSV/JSON/SARIF row.)
     assert!(
         r.p_value > 0.0,
         "p_value must be the real Fisher exact test result, not 0.0 — got {}",

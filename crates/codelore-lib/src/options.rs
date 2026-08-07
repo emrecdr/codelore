@@ -103,7 +103,7 @@ pub struct Options {
     /// files.
     pub include_ignored: bool,
 
-    /// T8 (knowledge-islands): an author is considered "departed" if
+    /// Knowledge-islands: an author is considered "departed" if
     /// their most recent commit anywhere in the repo is older than this
     /// many days at the anchor moment. Default 90.
     /// See `constants::DEFAULT_DEPARTED_THRESHOLD_DAYS` for the
