@@ -248,6 +248,31 @@ fn mcp_tools_list_and_repo_overview() {
             "tool {:?} missing annotations.openWorldHint: {tool}",
             tool["name"]
         );
+
+        // A `limit` description must state the cap the handler actually
+        // applies. `refactoring_targets` advertised "(default: all)" while its
+        // handler capped at 50 — an agent reading the schema had no reason to
+        // pass `limit`, believed it received the whole population, and silently
+        // reasoned over the top 50. This is asserted against the schema the
+        // agent receives rather than the source text, because that string is
+        // the contract; it recurred across three audit cycles as a doc fix
+        // because nothing checked it.
+        let limit_desc = tool["inputSchema"]["properties"]["limit"]["description"].as_str();
+        if let Some(desc) = limit_desc {
+            let lowered = desc.to_lowercase();
+            assert!(
+                !lowered.contains("default: all") && !lowered.contains("default all"),
+                "tool {:?} advertises an uncapped `limit` default, but every \
+                 capped handler resolves an absent limit to 50: {desc:?}",
+                tool["name"]
+            );
+            assert!(
+                desc.contains("50"),
+                "tool {:?} `limit` description must name the default the handler \
+                 applies (50) so an agent knows the list is capped: {desc:?}",
+                tool["name"]
+            );
+        }
     }
 
     // The two tools whose hints are not the read-only/closed-world default.
@@ -565,6 +590,75 @@ fn mcp_check_gates_discloses_skipped_gates() {
 }
 
 /// `corpus_percentile_max` must be evaluated for real, not reported as
+/// Capping the `violations` array must not move the number the agent reports.
+///
+/// `violation_count` is measured before truncation, so a capped response still
+/// says how many gates failed — an agent that reads only the count reaches the
+/// same conclusion at any `limit`. Without that, lowering `limit` would look
+/// like fixing violations.
+#[test]
+fn mcp_check_gates_caps_violations_without_changing_the_count() {
+    let repo = delivery_repo::build();
+    let repo_path = repo.dir.path().to_str().unwrap();
+
+    // Two gates that both fail on this fixture's single scored file, so the
+    // response carries more than one violation — `delivery_repo` has one
+    // analyzable source file, so a single per-file gate cannot exercise a cap.
+    std::fs::write(
+        repo.dir.path().join(".codelore-thresholds.toml"),
+        "[gates]\ncode_health_min = 100.0\ncorpus_percentile_max = 0.0\n",
+    )
+    .unwrap();
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp(repo_path);
+
+    let full = assert_tool_ok(
+        &call_tool(&mut stdin, &mut reader, 1, "check_gates", &json!({})),
+        "check_gates",
+    );
+    let full_count = full["violation_count"].as_u64().expect("violation_count");
+    let full_rows = full["violations"].as_array().expect("violations").len();
+    assert!(
+        full_count >= 2,
+        "fixture must produce at least two violations or this test cannot \
+         exercise the cap, got {full_count}: {full}"
+    );
+
+    let capped = assert_tool_ok(
+        &call_tool(
+            &mut stdin,
+            &mut reader,
+            2,
+            "check_gates",
+            &json!({ "limit": 1 }),
+        ),
+        "check_gates",
+    );
+    let capped_rows = capped["violations"].as_array().expect("violations").len();
+
+    assert_eq!(
+        capped_rows, 1,
+        "limit=1 must return exactly one violation row, got {capped_rows}: {capped}"
+    );
+    assert!(
+        full_rows > capped_rows,
+        "the uncapped call must return more rows than limit=1, else the cap is \
+         untested: {full_rows} vs {capped_rows}"
+    );
+    assert_eq!(
+        capped["violation_count"].as_u64(),
+        Some(full_count),
+        "violation_count must be the true total at any limit: {capped}"
+    );
+    assert_eq!(
+        capped["verdict"], full["verdict"],
+        "the verdict must not depend on how many rows were returned: {capped}"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
 /// structurally skipped: `check_gates` already computes `code_health` (for
 /// `code_health_min`), and the corpus lens fills `corpus_percentile` on those
 /// rows whenever a calibration artifact is active — the embedded world

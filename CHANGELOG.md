@@ -4,7 +4,11 @@ Conventional Commits format. All notable changes documented here.
 
 ## [Unreleased]
 
-## [0.27.2] - 2026-08-07
+### Fixed
+
+- **`refactoring_targets` no longer tells agents its list is uncapped.** The tool's `limit` schema description read "(default: all)" while the handler resolved an absent limit to 50, so an agent reading the schema had no reason to pass `limit`, believed it had the whole population, and silently reasoned over the top 50. The description now matches the sibling tools and names the real default. This surfaced as a documentation fix in three consecutive audit cycles because nothing checked it; the `tools/list` smoke test now asserts every `limit` description states the cap the handler applies, verified against the schema an agent actually receives rather than the source text.
+
+- **`check_gates` and `gate_changes` no longer emit unbounded violation lists into an agent's context.** Both returned one row per violation with no cap, so a wide refactor against a tight gate produced whole-population output — the two remaining uncapped surfaces after the cap-and-disclose regime covered the other tools. `check_gates` now caps its `violations` array (`limit`, default 50) while `violation_count` continues to report the true total measured before truncation, so neither the verdict nor the number an agent reports depends on how many rows came back — lowering `limit` can never look like fixing violations. `gate_changes` gains the render-only `(+n more violations)` tail its sibling sections already had, alongside the delta table and advisory findings; its verdict line already carried the true count. The `codelore gate` JSON document is deliberately unchanged and still carries every row: it is a file artifact, not context-window budget.
 
 ### Security
 
