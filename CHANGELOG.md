@@ -21,6 +21,14 @@ Conventional Commits format. All notable changes documented here.
 
 - **`delta_health` no longer misses deletions or score renames as new code.** The touched-file set was built from head-side rows alone, so a file with no rows at head never entered it and its base rows were filtered out before the comparison ran. Deleting a large complex file — the most decisive health improvement a change can make — returned `no-code-change` with every count at zero. The same omission made a rename read as pure addition: the functions existed under the old path at base and the new path at head, and with only the new path in the set the base side vanished, so moving a file unchanged produced a *degrading* verdict. The set is now the union of both revisions. A rename still reads as a removal plus an addition rather than a paired move — pairing needs git's rename detection, which `codelore diff` has and this path does not.
 
+- **The MCP `hotspots` tool now discloses truncation like every sibling list tool.** It capped the ranking and returned a bare array — and the file's convention is that a bare array means the list is complete, so an agent read a cut-off ranking as the whole population and could conclude a file was not a hotspot when it had merely fallen past the cap. It now appends the same `{omitted, total, note}` summary `delta_health` and `function_hotspots` already use.
+
+- **The MCP server no longer tells operators it is read-only.** The `instructions` string clients display still opened with "Read-only.", while `delta_health` creates and removes throwaway `git worktree` checkouts — which the module docstring, the tool's own comment and its `readOnlyHint: false` annotation all acknowledge. The code knew; the string the operator sees did not. It now states that no tool modifies tracked content and names what `delta_health` does.
+
+### Changed
+
+- **The MCP test suite pins the negotiated protocol revision, not the requested one.** It asserted only the value the test client sent, which says nothing about the server: an rmcp bump that shifted the supported revision, or a downgrade during negotiation, would have left every test passing while clients pinned to the old revision broke. Verified by handshake against the running server.
+
 
 ### Fixed
 

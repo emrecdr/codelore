@@ -724,12 +724,20 @@ impl CodeLoreServer {
                 // empty repo.
                 db.ensure_ingest_witnessed(head)
                     .map_err(|e| map_lib_err(&e))?;
-                // Run unbounded (the ranking spans the full population either way)
-                // and cap in-tool, matching the sibling list tools; the row slice
-                // serializes as a bare array with no omitted-summary object.
-                let mut rows = hotspots::run_hotspots(&db, &opts).map_err(|e| map_lib_err(&e))?;
-                rows.truncate(cap);
-                serde_json::to_string(&rows).map_err(internal)
+                // Run unbounded (the ranking spans the full population either
+                // way) and cap in-tool, matching the sibling list tools —
+                // including their disclosure. The file's convention is that a
+                // bare array means the list is complete, so truncating without
+                // the `{omitted, total}` object let an agent read a cut-off
+                // ranking as exhaustive.
+                let rows = hotspots::run_hotspots(&db, &opts).map_err(|e| map_lib_err(&e))?;
+                let total = rows.len();
+                let shown = &rows[..total.min(cap)];
+                serialize_capped_rows(
+                    shown,
+                    total,
+                    "hotspot rows beyond the row cap were omitted; raise `limit` to see more",
+                )
             })
         })
         .await
@@ -1678,7 +1686,9 @@ fn gate_changes_action(
 /// communicated at the protocol layer, not only in `--help`.
 #[tool_handler(
     instructions = "Local-only behavioral analysis of the git repository configured at startup. \
-        Read-only. No network, no account, no telemetry — beyond the optional CODELORE_LLM_* \
+        No tool modifies tracked content; delta_health creates and removes throwaway git \
+        worktrees to read two revisions, and every tool may populate the local cache. \
+        No network, no account, no telemetry — beyond the optional CODELORE_LLM_* \
         endpoint you configure for explain_file's advisory narrative (off by default, and \
         local-first when enabled). \
         First call on a cold cache pays a one-time history ingest (5–30 s for typical repos); \
