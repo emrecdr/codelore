@@ -910,7 +910,7 @@ the deferred thresholds scaffold that F276 blocks.
 *   **Outcome**: the handoff names the next section first and the reference
     guide second.
 
-### F287 (Fixed — Unreleased) — the documented way to use the published Action references a ref that does not exist
+### F287 (Fixed — v0.27.2) — the documented way to use the published Action references a ref that does not exist
 
 *   **Location**: `README.md`, `docs/github-action.md` (14 occurrences); no `v1`
     ref on origin; `scripts/cut-release.sh` and `release.yml` create none
@@ -967,7 +967,7 @@ the deferred thresholds scaffold that F276 blocks.
     `version:` pin — the old "pin to a specific release for reproducibility"
     example pinned only the binary while the Action itself still floated.
 
-### F288 (Fixed — Unreleased) — `workflow_dispatch` on `release.yml` is documented as a test run but publishes for real
+### F288 (Fixed — v0.27.2) — `workflow_dispatch` on `release.yml` is documented as a test run but publishes for real
 
 *   **Location**: `.github/workflows/release.yml` — header comment ("Manual
     workflow_dispatch (test runs)"), `release` and `homebrew-publish` jobs
