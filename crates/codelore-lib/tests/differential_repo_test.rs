@@ -1316,3 +1316,204 @@ fn tags_match_across_backends() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Edge-case fixture — the content classes the shared 50-commit bundle omits.
+//
+// Every historical parity bug between the two backends fell in a class this
+// harness did not probe: `track_rewrites(None)` split renames into Delete+Add,
+// `resolve_alias` passed only the email to `git check-mailmap`, and missing
+// `-c core.quotepath=false` split per-file aggregations on non-ASCII paths.
+// That last one is a path-encoding bug — precisely what these fixtures cover.
+//
+// Built separately rather than folded into the shared bundle: that bundle is a
+// checked-in artifact whose exact shape (50 commits, one merge, specific
+// authors) is asserted throughout this file, so extending it would rewrite
+// every count here for content unrelated to those assertions.
+// ---------------------------------------------------------------------------
+
+struct EdgeFixture {
+    _dir: tempfile::TempDir,
+    path: PathBuf,
+}
+
+static EDGE: OnceLock<EdgeFixture> = OnceLock::new();
+
+/// A repo carrying a binary blob, a non-ASCII path, a non-ASCII filename and
+/// a CRLF file — each committed so both backends must report it.
+fn edge_path() -> &'static PathBuf {
+    let f = EDGE.get_or_init(|| {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path().to_path_buf();
+        let git = |args: &[&str]| {
+            let ok = Command::new("git")
+                .arg("-C")
+                .arg(&p)
+                .args(args)
+                .status()
+                .expect("spawn git")
+                .success();
+            assert!(ok, "git {args:?} failed");
+        };
+        git(&["init", "-b", "main", "--quiet"]);
+        git(&["config", "user.email", "edge@example.com"]);
+        git(&["config", "user.name", "Edge Tester"]);
+        // Leave `core.quotepath` at its default: quoting non-ASCII paths is
+        // exactly the divergence being tested, so overriding it here would
+        // hide the bug this fixture exists to catch.
+
+        // A real binary blob — NUL bytes and every high byte, so anything
+        // treating content as UTF-8 fails loudly rather than subtly.
+        let bin: Vec<u8> = (u8::MIN..=u8::MAX).cycle().take(2048).collect();
+        std::fs::write(p.join("payload.bin"), &bin).expect("write binary");
+
+        // Non-ASCII in both a directory component and a file name.
+        std::fs::create_dir_all(p.join("документы")).expect("mkdir non-ascii");
+        std::fs::write(p.join("документы").join("ünïcodé.txt"), "naïve café\n")
+            .expect("write non-ascii");
+
+        // Explicit CRLF line endings, written as bytes so no filter rewrites
+        // them before git sees the blob.
+        std::fs::write(p.join("crlf.txt"), b"alpha\r\nbeta\r\ngamma\r\n").expect("write crlf");
+
+        git(&["add", "-A"]);
+        git(&["commit", "-m", "edge: binary, non-ascii, crlf", "--quiet"]);
+
+        // A second commit touching each, so `changed_files` has a non-initial
+        // revision to report and the paths round-trip more than once.
+        std::fs::write(p.join("payload.bin"), [&bin[..], &bin[..64]].concat())
+            .expect("append binary");
+        std::fs::write(p.join("crlf.txt"), b"alpha\r\nbeta\r\ngamma\r\ndelta\r\n")
+            .expect("extend crlf");
+        std::fs::write(
+            p.join("документы").join("ünïcodé.txt"),
+            "naïve café\nrésumé\n",
+        )
+        .expect("extend non-ascii");
+        git(&["add", "-A"]);
+        git(&["commit", "-m", "edge: touch each again", "--quiet"]);
+
+        EdgeFixture { _dir: dir, path: p }
+    });
+    &f.path
+}
+
+fn open_both_edge() -> (GixRepo, GitCliRepo) {
+    let path = edge_path();
+    (
+        GixRepo::open(path).expect("GixRepo::open edge"),
+        GitCliRepo::open(path).expect("GitCliRepo::open edge"),
+    )
+}
+
+/// Both backends must agree on the tracked-path set when it contains a binary
+/// blob, a non-ASCII directory, a non-ASCII filename and a CRLF file.
+///
+/// The non-ASCII half is the live regression risk: `git` quotes such paths by
+/// default (`"\320\264..."`), so a backend that forgets `core.quotepath=false`
+/// reports a different string than gix does for the same file, and every
+/// per-path aggregation splits in two.
+#[test]
+fn edge_content_classes_agree_on_tracked_paths() {
+    let (gix, cli) = open_both_edge();
+
+    let mut gix_paths = gix.tracked_paths_at_head().expect("gix tracked_paths");
+    let mut cli_paths = cli.tracked_paths_at_head().expect("cli tracked_paths");
+    gix_paths.sort();
+    cli_paths.sort();
+
+    assert_eq!(
+        gix_paths, cli_paths,
+        "tracked-path sets diverge on the edge fixture"
+    );
+    // Guard against a vacuous pass: if the fixture stopped producing these
+    // paths the equality above would hold trivially.
+    assert!(
+        gix_paths.iter().any(|p| p.contains("документы")),
+        "fixture lost its non-ASCII path: {gix_paths:?}"
+    );
+    assert!(
+        gix_paths.iter().any(|p| p.ends_with("payload.bin")),
+        "fixture lost its binary blob: {gix_paths:?}"
+    );
+    assert!(
+        gix_paths.iter().any(|p| p.ends_with("crlf.txt")),
+        "fixture lost its CRLF file: {gix_paths:?}"
+    );
+}
+
+/// Both backends must report the same changed-file set for every revision of
+/// the edge fixture, including the binary blob and the non-ASCII path.
+#[test]
+fn edge_content_classes_agree_on_changed_files() {
+    let (gix, cli) = open_both_edge();
+    let opts = Options {
+        repo_path: edge_path().clone(),
+        include_merges: true,
+        ..Options::default()
+    };
+
+    let revs: Vec<String> = gix
+        .walk_commits(&opts)
+        .expect("walk")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("events")
+        .iter()
+        .map(|e| e.rev.clone())
+        .collect();
+    assert!(
+        revs.len() >= 2,
+        "edge fixture must have both commits: {revs:?}"
+    );
+
+    for rev in &revs {
+        let mut g: Vec<String> = gix
+            .changed_files(rev)
+            .expect("gix changed_files")
+            .into_iter()
+            .map(|c| c.path)
+            .collect();
+        let mut c: Vec<String> = cli
+            .changed_files(rev)
+            .expect("cli changed_files")
+            .into_iter()
+            .map(|c| c.path)
+            .collect();
+        g.sort();
+        c.sort();
+        assert_eq!(g, c, "changed-file paths diverge at {rev}");
+    }
+}
+
+/// Both backends must return byte-identical blob content, including for a
+/// binary file and a CRLF file.
+///
+/// CRLF is the subtle one: a backend that reads through a working-tree filter
+/// rather than the object store would normalise the line endings and return
+/// different bytes than the other, silently changing every LOC and hash
+/// derived from it.
+#[test]
+fn edge_content_classes_agree_on_blob_bytes() {
+    let (gix, cli) = open_both_edge();
+
+    for path in ["payload.bin", "crlf.txt", "документы/ünïcodé.txt"] {
+        let g = gix.read_blob_at_head(path).expect("gix read_blob_at_head");
+        let c = cli.read_blob_at_head(path).expect("cli read_blob_at_head");
+        assert_eq!(g, c, "blob bytes diverge for {path}");
+        assert!(
+            g.is_some(),
+            "fixture lost {path}, so the equality is vacuous"
+        );
+    }
+
+    // The CRLF bytes must survive verbatim — proving the read goes through the
+    // object store, not a filtered checkout.
+    let crlf = gix
+        .read_blob_at_head("crlf.txt")
+        .expect("read crlf")
+        .expect("crlf present");
+    assert!(
+        crlf.windows(2).any(|w| w == b"\r\n"),
+        "CRLF was normalised away before the backend returned it"
+    );
+}
