@@ -946,4 +946,34 @@ the deferred thresholds scaffold that F276 blocks.
     repository's actual refs would have caught this on the day the docs were
     written, and would catch a floating `v1` that stops being moved.
 
-The next sweep re-opens at **F288**.
+### F288 (Active — MEDIUM) — `workflow_dispatch` on `release.yml` is documented as a test run but publishes for real
+
+*   **Location**: `.github/workflows/release.yml` — header comment ("Manual
+    workflow_dispatch (test runs)"), `release` and `homebrew-publish` jobs
+*   **Severity**: MEDIUM · **Category**: outward-facing side effect / misleading affordance
+*   **Description**: the workflow accepts `workflow_dispatch` and its header
+    presents that as the way to test-run the pipeline. No job carries an `if:`
+    guard. Exactly one *step* is guarded — `crates-publish`'s publish step,
+    on `github.ref_type == 'tag'` — so crates.io is safe. `release` and
+    `homebrew-publish` are not. A manual run therefore creates a real GitHub
+    Release tagged `manual-<timestamp>` (the `plan` job's non-tag fallback),
+    uploads five binaries to it, and pushes a regenerated formula pointing at
+    that release to `emrecdr/homebrew-codelore`. `brew install codelore` would
+    then resolve to a throwaway build.
+*   **Why it has not fired**: nobody has taken the header at its word. The
+    affordance is documented but unused, so the cost has stayed theoretical —
+    which is also why it survives review: the guard that exists on
+    `crates-publish` reads as evidence the case was handled.
+*   **Discovered**: while looking for a way to exercise the Build L3
+    attestation split without cutting a tag. The migration is structurally
+    verified and guarded, but genuinely unexercised until the next release,
+    and this is why.
+*   **Not prescribed**: the obvious fix — guard `release` and
+    `homebrew-publish` on `github.ref_type == 'tag'` — makes `workflow_dispatch`
+    build-and-attest-only, which is exactly the dry run the header promises and
+    would have validated the L3 change. But it is a behaviour change to the
+    release path and should be decided deliberately rather than folded into an
+    unrelated PR. The alternative is to drop the `workflow_dispatch` trigger and
+    the header claim, if manual runs were never wanted.
+
+The next sweep re-opens at **F289**.
