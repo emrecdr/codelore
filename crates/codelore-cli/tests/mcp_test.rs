@@ -815,6 +815,83 @@ fn mcp_delta_health_returns_section_for_valid_revs() {
     let _ = child.wait();
 }
 
+/// Deleting a file must register as a removal.
+///
+/// The touched-file set was built from head-side rows alone, so a file with
+/// no rows at head never entered it and its base rows were filtered out
+/// before the comparison ran — deleting the worst file in a repository, the
+/// single most decisive health improvement available, scored as no change.
+/// The same omission made a rename read as pure addition, because the old
+/// path's functions vanished with it.
+#[test]
+fn mcp_delta_health_sees_a_whole_file_deletion() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let p = dir.path();
+    let git = |args: &[&str]| {
+        let ok = std::process::Command::new("git")
+            .arg("-C")
+            .arg(p)
+            .args(args)
+            .status()
+            .expect("spawn git")
+            .success();
+        assert!(ok, "git {args:?} failed");
+    };
+    git(&["init", "-b", "main", "--quiet"]);
+    git(&["config", "user.email", "t@example.com"]);
+    git(&["config", "user.name", "T"]);
+
+    // A function big and branchy enough to classify, so its removal carries
+    // weight rather than reading as a neutral no-op.
+    let mut doomed = String::new();
+    for i in 0..40 {
+        use std::fmt::Write as _;
+        let _ = writeln!(doomed, "    if x == {i} {{ return {i}; }}");
+    }
+    std::fs::write(
+        p.join("doomed.rs"),
+        format!(
+            "pub fn doomed(x: i32) -> i32 {{
+{doomed}    0
+}}
+"
+        ),
+    )
+    .expect("write");
+    std::fs::write(
+        p.join("keep.rs"),
+        "pub fn keep() -> i32 { 1 }
+",
+    )
+    .expect("write");
+    git(&["add", "."]);
+    git(&["commit", "-m", "base: two files", "--quiet"]);
+
+    std::fs::remove_file(p.join("doomed.rs")).expect("remove");
+    git(&["add", "-A"]);
+    git(&["commit", "-m", "head: delete the complex file", "--quiet"]);
+
+    let (mut child, mut stdin, mut reader) = spawn_mcp(p.to_str().unwrap());
+    let resp = call_tool(
+        &mut stdin,
+        &mut reader,
+        1,
+        "delta_health",
+        &json!({ "base": "HEAD~1", "head": "HEAD" }),
+    );
+    let parsed = assert_tool_ok(&resp, "delta_health");
+
+    let removed = parsed["counts"]["removed"].as_u64().unwrap_or(0);
+    assert!(
+        removed >= 1,
+        "deleting a file must register as a removal, got counts {}: {parsed}",
+        parsed["counts"]
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
 #[test]
 fn mcp_finding_hotspot_overlap_returns_note_when_sidecar_absent() {
     // On a fresh tiny_repo the sidecar is never created, so the tool must
