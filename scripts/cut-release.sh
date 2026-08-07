@@ -533,6 +533,27 @@ fi
 # a step that edited a sixth file without adding it to a five-file list.
 run git add Cargo.toml Cargo.lock CHANGELOG.md crates/*/Cargo.toml \
   docs/reports/deep_analysis_report.md
+# Everything the prep phase touched must be in the commit. The `git add`
+# above is an explicit list, and every step that writes a file has to be
+# represented in it — a step added later without its file is silent: the
+# edit happens, the commit omits it, and the release ships a tree that
+# disagrees with what the script just did.
+#
+# That is not hypothetical. The ledger re-stamp shipped exactly this way,
+# rewriting a sixth file against a five-file list, so the v0.27.1 cut
+# drained CHANGELOG [Unreleased] while every ledger row still claimed to be
+# backed by it. Listing the file fixed that instance; this catches the next
+# one, whatever it edits.
+#
+# Untracked files are deliberately not considered — `git diff` ignores them,
+# so local scratch (HANDOFF.md, reports in progress) never trips this.
+if ! git diff --quiet; then
+  warn "the prep phase modified tracked files that are NOT staged for the release commit:"
+  git diff --name-only | sed 's/^/    /' >&2
+  die "add them to the 'git add' list above, or revert them, then re-run"
+fi
+ok "every file the prep phase modified is staged"
+
 run git commit -m "chore(release): ${TAG}"
 ok "release commit created"
 
