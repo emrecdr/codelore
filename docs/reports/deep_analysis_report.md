@@ -1005,7 +1005,7 @@ the deferred thresholds scaffold that F276 blocks.
     archives. They are digest-bound and harmless, and signing is the part most
     worth exercising, so this is accepted rather than suppressed.
 
-### F289 (Fixed — Unreleased) — publishing workflows triggered on the Action's floating major tag
+### F289 (Fixed — v0.27.2) — publishing workflows triggered on the Action's floating major tag
 
 *   **Location**: `.github/workflows/release.yml`, `.github/workflows/container.yml`
     (`on: push: tags`), coupled to `scripts/cut-release.sh::ACTION_MAJOR_TAG`
