@@ -6,6 +6,12 @@ Conventional Commits format. All notable changes documented here.
 
 ### Fixed
 
+- **The zero-row notice no longer prescribes a remedy that most analyses cannot use.** It closed by suggesting `--min-revs 1`, but `min_revs` is a genuine filter in only 17 of the analysis modules — 23 more name it solely in a tracing span and 23 never mention it. On `defect-validation` the effect was self-contradictory: the analysis printed the correct instruction to build a calibration artifact, and the notice immediately advised lowering a threshold it does not read. The notice now states the analysis, the zero, and the options that were set, and stops. The options summary still carries `min-revs=<n>`, so where it *is* the cause the number sits beside the zero; §12 of the advanced-usage guide covers the header-only case explicitly.
+
+- **The README's "Tracking health over time" gate example now includes `max_red_effort_pct`,** the third key `check` recommends when no thresholds are configured. It was the only one of the three absent from the README, and the subtlest — churn share landing in red-band files, counted against health-scored churn only, with health-improving churn exempt — so it was the one a reader could not look up where the CLI had just sent them.
+
+- **"Your first 5 minutes" now points at the next section before the reference guide.** It handed off to the 1,700-line advanced guide four lines above the section written to answer the question a reader has at that moment.
+
 - **`check --format sarif` no longer anchors an alert to a file that does not exist.** When `fail_on_skipped` promotes a skipped gate to a violation it carries the sentinel path `(skipped)`, but the SARIF emitter normalised only two of the three gate sentinels to the repository root — the third was minted later and never registered — so the alert pointed at a phantom `(skipped)` file. The exit code was always right; the published alert was not. The check now covers the whole sentinel set, guarded by a test that iterates every one of them so a fourth fails until it is handled.
 
 - **The `--fail-on` documentation now states the exit code the binary actually uses.** `diff` gate violations moved to exit 1 in 0.26.0, matching `check` and `gate`, but two lines still prescribed exit 4 — while the same document defines 4 as "analysis error" and states gate violations exit 1. A CI script written from those lines (`if [ $? -eq 4 ]`) has been silently disarmed since that release: the branch never fires and the violating PR merges green.
@@ -13,7 +19,6 @@ Conventional Commits format. All notable changes documented here.
 - **Cache remediation messages no longer prescribe a flag the calling surface lacks.** Three strings — the schema-version mismatch and both dirty-worktree notices — told the reader to pass `--no-cache`, which exists only on `analyze`. The schema mismatch is the sharp one: it is a hard failure reachable from `check` in CI whose only stated remedy is a flag `check` rejects. All three now name `--cache-dir <scratch>` and mark `--no-cache` as analyze-only.
 
 - **Two Action-guide examples that cannot run.** The SARIF matrix included `knowledge-islands`, which has no SARIF rule, so that leg exited 2 on every run while the guide presented it as a working pattern; it is replaced with `clones`. And `check --format json` was offered as the machine-readable option, but `check` accepts `text | sarif` — `json` is a `gate` format, so the documented command failed at parse time.
-
 
 ## [0.27.0] - 2026-08-06
 
