@@ -431,7 +431,21 @@ impl FactsDb {
         // ingest witness on healthy history — a sticky failure the witness message's
         // own remedy cannot clear. Serve this run from memory instead, exactly like
         // the dirty-tree bail.
-        if db.commit_count()? == 0 {
+        //
+        // The witness has to match the ingest mode. A head-only ingest walks
+        // no commits by design, so `commit_count` is zero on a completely
+        // healthy run — gating on it there fired every time, discarded the
+        // store that had just been built, and re-ran the expensive HEAD
+        // complexity scan into memory. `codelore calibrate` takes this path
+        // once per corpus repository, so it paid the scan twice per repo and
+        // could never persist an entry to reuse on the next run. For that
+        // mode the meaningful floor is the table the scan actually fills.
+        let witnessed = if opts.head_only_ingest {
+            db.complexity_row_count()? > 0
+        } else {
+            db.commit_count()? > 0
+        };
+        if !witnessed {
             drop(db);
             let _ = std::fs::remove_file(&tmp);
             let mem = Self::new_in_memory_with_temp_dir(Some(&spill_dir))?;
@@ -588,6 +602,25 @@ impl FactsDb {
     /// [`CodeLoreError::Analysis`] on query failure.
     pub fn commit_count(&self) -> Result<i64> {
         self.query_row("SELECT COUNT(*) FROM commits", [], |r| r.get::<_, i64>(0))
+    }
+
+    /// Rows the HEAD-state scan produced, for use as a witness where
+    /// [`Self::commit_count`] cannot be one.
+    ///
+    /// A head-only ingest deliberately leaves the history tables empty — it
+    /// scans complexity and imports at HEAD and walks no commits — so
+    /// `commit_count` is zero for a perfectly healthy run. Anything gating on
+    /// that count therefore fires unconditionally on this path. This counts
+    /// the table the head-only scan actually fills, so "did the ingest see
+    /// anything?" stays answerable in both modes.
+    ///
+    /// # Errors
+    ///
+    /// [`CodeLoreError::Analysis`] on query failure.
+    pub fn complexity_row_count(&self) -> Result<i64> {
+        self.query_row("SELECT COUNT(*) FROM complexity_metrics", [], |r| {
+            r.get::<_, i64>(0)
+        })
     }
 
     /// Fail loudly when the walk ingested no commits while HEAD names a real

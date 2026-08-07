@@ -3530,6 +3530,74 @@ fn check_format_sarif_vacuous_pass_emits_zero_result_document() {
     );
 }
 
+/// The ratchet tracks a metric only when its gate is configured.
+///
+/// That is the documented contract, and it is what keeps the ratchet a
+/// tightening of bounds the user chose rather than a new bound they did not.
+/// Two of the three metrics get it for free by reading ledger records, which
+/// exist only if their gate ran. Code health did not: `run_code_health` runs
+/// unconditionally because other gates consume its rows, so reading the worst
+/// score straight off the scan recorded a floor for an unconfigured gate — and
+/// a later benign refactor that moved that score by recomputation noise failed
+/// the run against a bound nobody set.
+#[test]
+fn ratchet_records_code_health_only_when_its_gate_is_configured() {
+    // The fixture must produce code-health rows, or the assertion is vacuous:
+    // with no rows the worst score is infinite and the metric is omitted for
+    // both configurations, so the test would pass against the defect. The
+    // default `min_revs` is 5, so one file needs six revisions.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path();
+    let git = |args: &[&str]| {
+        let ok = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .status()
+            .expect("spawn git")
+            .success();
+        assert!(ok, "git {args:?} failed");
+    };
+    git(&["init", "-b", "main", "--quiet"]);
+    git(&["config", "user.email", "t@example.com"]);
+    git(&["config", "user.name", "T"]);
+    for i in 1..=6 {
+        std::fs::write(
+            repo.join("a.rs"),
+            format!("pub fn a(x: i32) -> i32 {{\n    if x > {i} {{ return {i}; }}\n    0\n}}\n"),
+        )
+        .expect("write");
+        git(&["add", "-A"]);
+        git(&["commit", "-m", &format!("c{i}"), "--quiet"]);
+    }
+
+    let run_with = |gates: &str| -> String {
+        let _ = std::fs::remove_file(repo.join(".codelore-ratchet.toml"));
+        std::fs::write(repo.join(".codelore-thresholds.toml"), gates).expect("write thresholds");
+        codelore_cmd()
+            .args(["check", "--repo", repo.to_str().unwrap(), "--ratchet"])
+            .assert()
+            .success();
+        std::fs::read_to_string(repo.join(".codelore-ratchet.toml")).unwrap_or_default()
+    };
+
+    // Sanity: with the gate configured the metric IS recorded. This is what
+    // makes the negative assertion below meaningful rather than vacuous.
+    let with = run_with("[gates]\ncode_health_min = 10.0\nmax_dependency_cycles = 5\n");
+    assert!(
+        with.contains("code_health_min_observed"),
+        "fixture produced no code-health rows, so the negative case below \
+         would pass against the defect; got:\n{with}"
+    );
+
+    let without = run_with("[gates]\nmax_dependency_cycles = 5\n");
+    assert!(
+        !without.contains("code_health_min_observed"),
+        "no code_health_min gate is configured, so no code-health floor may be \
+         recorded; got:\n{without}"
+    );
+}
+
 /// `check --ratchet --format sarif` on a first run (no snapshot yet → the
 /// ratchet-init exit path) must still emit a valid SARIF document to stdout,
 /// exactly like every non-ratchet check path. Before the fix the init path
