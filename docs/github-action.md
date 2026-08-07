@@ -252,18 +252,35 @@ The action's startup cost is essentially the download (≈ 200-300 ms on warm Gi
 
 ## Versioning
 
-Following SemVer. Major-version pin recommended for production:
+There are **two independent pins** here, and it is worth being deliberate
+about both:
+
+| pin | selects | ref |
+|---|---|---|
+| `uses: emrecdr/codelore@<ref>` | the **Action** — the logic in `action.yml` | `v1` |
+| `version:` input | the **binary** the Action downloads | `vX.Y.Z` |
+
+`v1` tracks the Action's *interface* — its inputs, outputs, and behaviour. It
+is not codelore's SemVer major (codelore is still `0.x`); it moves onto each
+release the way `actions/checkout@v4` does, and only becomes `v2` if the
+Action's interface changes incompatibly.
+
+Recommended for production — the Action follows fixes, the binary is
+whatever that release shipped:
 
 ```yaml
 - uses: emrecdr/codelore@v1
 ```
 
-Pin to a specific release for reproducibility:
+For full reproducibility, pin **both**. Pinning only `version:` leaves the
+Action's own logic floating, so what runs around your pinned binary can still
+change:
 
 ```yaml
-- uses: emrecdr/codelore@v1
+# The Action is pinned to a commit; `v1` would still float.
+- uses: emrecdr/codelore@<full-40-char-commit-sha> # v1
   with:
-    # Pin to a specific release tag (see
+    # And the binary is pinned to a release tag (see
     # https://github.com/emrecdr/codelore/releases for the current list).
     version: vX.Y.Z
 ```

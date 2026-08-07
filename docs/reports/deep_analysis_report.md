@@ -910,7 +910,7 @@ the deferred thresholds scaffold that F276 blocks.
 *   **Outcome**: the handoff names the next section first and the reference
     guide second.
 
-### F287 (Active — HIGH) — the documented way to use the published Action references a ref that does not exist
+### F287 (Fixed — Unreleased) — the documented way to use the published Action references a ref that does not exist
 
 *   **Location**: `README.md`, `docs/github-action.md` (14 occurrences); no `v1`
     ref on origin; `scripts/cut-release.sh` and `release.yml` create none
@@ -945,6 +945,27 @@ the deferred thresholds scaffold that F276 blocks.
     resolves every `uses: emrecdr/codelore@<ref>` in the docs against the
     repository's actual refs would have caught this on the day the docs were
     written, and would catch a floating `v1` that stops being moved.
+*   **Resolution — publish `v1` and keep it moving.** The tag was created at
+    `v0.27.1` (verified: `action.yml` is byte-identical between that tag and
+    `main`, and carries the injection hardening, so the ordering constraint
+    above is satisfied — nothing vulnerable was published). `cut-release.sh`
+    now moves it onto each release inside the existing ruleset window, and the
+    documented-ref guard ships alongside.
+*   **Why the move had to go inside the ruleset window**: `protect-release-tags`
+    matches `refs/tags/v*`, which includes `v1`, and enforces
+    `non_fast_forward`. Re-pointing an existing `v1` is a non-fast-forward
+    update and is rejected while enforcement is active; `deletion` is blocked
+    too, so delete-and-recreate is not an escape hatch. A naive "just retag in
+    a release step" automation would have failed on the second release, not the
+    first — the worst time to discover it.
+*   **`v1` is a constant, not a derived major**: it versions the Action's
+    *interface*, independent of the crate version, the way `actions/checkout@v4`
+    tracks no product version. codelore is `0.x`, so deriving the major from
+    `VERSION` would yield `v0` and contradict every documented example. The
+    docs' "Following SemVer. Major-version pin recommended" phrasing conflated
+    the two and has been rewritten to separate the Action pin from the binary
+    `version:` pin — the old "pin to a specific release for reproducibility"
+    example pinned only the binary while the Action itself still floated.
 
 ### F288 (Fixed — Unreleased) — `workflow_dispatch` on `release.yml` is documented as a test run but publishes for real
 

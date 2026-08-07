@@ -737,6 +737,49 @@ ok "annotated tag ${TAG} created locally at ${TAG_TARGET:0:7}"
 run git push origin "${TAG}"
 ok "tag ${TAG} pushed to origin"
 
+# ──────────────────────────────────────────────────────────────────────
+# Move the Action's major-version tag onto this release
+# ──────────────────────────────────────────────────────────────────────
+# The composite Action is documented as `uses: emrecdr/codelore@v1`, so that
+# ref must exist and must resolve to the release consumers should get. It was
+# documented for a long time without ever being created, and every workflow
+# copied from the docs failed with "Unable to resolve action".
+#
+# ACTION_MAJOR_TAG is deliberately a CONSTANT, not derived from VERSION. It
+# versions the Action's INTERFACE — the inputs, outputs, and behaviour of
+# action.yml — which is independent of the crate version, exactly as
+# actions/checkout@v4 tracks no product version. codelore is 0.x, so a
+# semver-derived major would be `v0` and would contradict every documented
+# example. Bump this to v2 only when action.yml makes a breaking interface
+# change, and update the documented refs in the same commit.
+#
+# This must run inside the ruleset window opened above: protect-release-tags
+# matches refs/tags/v* — which includes v1 — and forbids non_fast_forward, so
+# moving an existing v1 is rejected while enforcement is active. `deletion` is
+# blocked too, so delete-and-recreate is not an escape hatch either.
+ACTION_MAJOR_TAG="v1"
+log "moving ${ACTION_MAJOR_TAG} (Action interface tag) onto ${TAG_TARGET:0:7}..."
+if [[ "${DRY_RUN}" == "true" ]]; then
+  log "[dry-run] would: git tag -f -a ${ACTION_MAJOR_TAG} ${TAG_TARGET} && git push --force origin ${ACTION_MAJOR_TAG}"
+elif git tag -f -a "${ACTION_MAJOR_TAG}" "${TAG_TARGET}" \
+       -m "${ACTION_MAJOR_TAG} — GitHub Action interface, currently ${TAG}" \
+     && git push --force origin "${ACTION_MAJOR_TAG}"; then
+  ok "${ACTION_MAJOR_TAG} now points at ${TAG}"
+else
+  # Deliberately non-fatal: the release tag is already pushed and its
+  # workflows are running, so aborting here would abandon a release
+  # mid-flight. Loud instead, with the exact repair — a stale v1 is quiet
+  # (consumers silently keep an old version) and that is the failure mode
+  # worth shouting about.
+  warn "FAILED to move ${ACTION_MAJOR_TAG} — consumers of \`uses: ${REPO}@${ACTION_MAJOR_TAG}\`"
+  warn "will keep resolving to the PREVIOUS release until this is repaired."
+  warn "Repair (the ruleset must be disabled for the push, as above):"
+  warn "  gh api -X PUT repos/${REPO}/rulesets/${RULESET_ID} ...  # enforcement=disabled"
+  warn "  git tag -f -a ${ACTION_MAJOR_TAG} ${TAG} -m '${ACTION_MAJOR_TAG}'"
+  warn "  git push --force origin ${ACTION_MAJOR_TAG}"
+  warn "  gh api -X PUT repos/${REPO}/rulesets/${RULESET_ID} ...  # enforcement=active"
+fi
+
 # The trap will re-enable the ruleset on exit. Explicit ack for clarity:
 log "tag push complete — ruleset will be re-enabled on script exit"
 
